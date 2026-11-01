@@ -3,7 +3,7 @@
 // browsers and notes they carry through the wiring, which are shared, and the
 // newest browser that stands beside the stack at group zoom. Pure, so pinned here.
 import { describe, expect, it } from 'vitest'
-import { buildZoomModel, ITEMS_SHOWN, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, COINS_PER_AGENT, ITEMS_SHOWN, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
 import { crewOf, type AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
@@ -116,7 +116,57 @@ describe('a workspace with hundreds of browsers and notes', () => {
     expect(m.items[0].id).toBe('kept')
     expect(m.browsers).toBe(41)
     expect(m.hiddenItems).toBe(41 - ITEMS_SHOWN)
-    expect(m.frame.links.every((l) => m.items.some((i) => i.id === l.item))).toBe(true)
+  })
+})
+
+// EVERY AGENT WEARS ITS OWN COINS (owner, 2026-11-01): the coins used to be
+// the thumbs grid's 12 newest items, so an agent whose browsers and notes were
+// all older than the workspace's 12 newest wore none (Forge 9+18, Tinker 3+14).
+describe('every agent wears its own coins, not the grid’s twelve', () => {
+  const many = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => browser(`${prefix}${i}`, `https://${prefix}${i}.dev`, `${prefix}${i}`))
+
+  it('an agent whose items are all older than the grid’s twelve still wears its newest wires', () => {
+    const old = many('old', 6)
+    const fresh = many('new', 20)
+    // Forge's six are made first; Velvet's twenty fill the grid.
+    const nodes: CanvasNode[] = [term('forge', 'Forge'), term('velvet', 'Velvet'), ...old, ...fresh]
+    const cables = [...old.map((b, i) => cable(`co${i}`, 'forge', b.id)), ...fresh.map((b, i) => cable(`cn${i}`, 'velvet', b.id))]
+    const m = fixture(nodes, cables)
+    expect(m.items).toHaveLength(ITEMS_SHOWN)
+    expect(m.items.some((i) => i.id.startsWith('old'))).toBe(false)
+    const forge = m.frame.links.filter((l) => l.agent === 'forge')
+    // Its newest wires first (old5 was cabled last), seats 0..3 in that order.
+    expect(forge.map((l) => [l.item, l.k])).toEqual([['old5', 0], ['old4', 1], ['old3', 2], ['old2', 3]])
+    // The coins outside the grid are drawn from their own views.
+    // Velvet's newest four are in the grid already: only Forge's need their own faces.
+    expect(m.frame.links.filter((l) => l.agent === 'velvet').map((l) => l.item)).toEqual(['new19', 'new18', 'new17', 'new16'])
+    expect(m.coinItems.map((i) => i.id)).toEqual(['old5', 'old4', 'old3', 'old2'])
+    expect(m.coinItems.find((i) => i.id === 'old5')).toMatchObject({ kind: 'browser', title: 'old5', owners: ['forge'] })
+  })
+
+  it('wears at most COINS_PER_AGENT, numbered from 0 over the ones it wears', () => {
+    const items = many('b', 9)
+    const nodes: CanvasNode[] = [term('t1', 'A'), ...items]
+    const m = fixture(nodes, items.map((b, i) => cable(`c${i}`, 't1', b.id)))
+    const mine = m.frame.links.filter((l) => l.agent === 't1')
+    expect(mine).toHaveLength(COINS_PER_AGENT)
+    expect(mine.map((l) => l.k)).toEqual([0, 1, 2, 3])
+  })
+
+  it('a coin item in the grid is not drawn twice', () => {
+    const nodes: CanvasNode[] = [term('t1', 'A'), browser('b1', 'https://x.dev', 'X')]
+    const m = fixture(nodes, [cable('c1', 't1', 'b1')])
+    expect(m.items.map((i) => i.id)).toEqual(['b1'])
+    expect(m.coinItems).toEqual([])
+  })
+
+  it('the newest browser points at a coin that is worn', () => {
+    const items = many('b', 6)
+    // Made last, but wired first: it is the agent's oldest wire, past its four seats.
+    const nodes: CanvasNode[] = [term('t1', 'A'), ...items, browser('top', 'https://top.dev', 'Top')]
+    const m = fixture(nodes, [cable('c0', 't1', 'top'), ...items.map((b, i) => cable(`c${i + 1}`, 't1', b.id))])
+    const keys = new Set(m.frame.links.map((l) => l.key))
+    expect(m.frame.newest === null || keys.has(m.frame.newest)).toBe(true)
   })
 })
 

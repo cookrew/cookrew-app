@@ -248,7 +248,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return () => thumbWants.release('zoom')
   }, [model.items])
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
-  const itemOf = useMemo(() => new Map(model.items.map((i) => [i.id, i])), [model.items])
+  // The grid's items and the coins' others: a coin's face is drawn either way.
+  const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
   const device = useMemo(() => deviceOf(model.frame.workspaces, size.w < 760), [model.frame.workspaces, size.w])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
   // The device stop's words grow to be read at the size the device is seen (zoom-frame.ts · deviceWords).

@@ -50,6 +50,8 @@ export interface ZoomModel {
   frame: FrameModel
   agents: AgentView[]
   items: ItemView[]
+  /** The items agents wear as coins that the thumbs grid does not draw: their coins need a face too. */
+  coinItems: ItemView[]
   marks: MarkView[]
   /** Every machine from the real fleet, this desktop first. */
   machines: MachineView[]
@@ -76,6 +78,14 @@ export interface MachineView {
 
 /** How many browsers and notes the thumbs grid draws. */
 export const ITEMS_SHOWN = 12
+
+/**
+ * How many coins an agent wears: its newest wires, the seats of its orbit
+ * (zoom-frame.ts · agentLink). Each agent's own, never the grid's twelve: an
+ * agent whose items were all older than the workspace's newest wore none
+ * (owner, 2026-11-01).
+ */
+export const COINS_PER_AGENT = 4
 
 /** One line of what an agent last said or does now. */
 export function lineOf(row: AgentRow | undefined, brief: string | null | undefined): string {
@@ -187,13 +197,15 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   // read for all of them; the full view is built for the few that are drawn.
   const all = [...input.nodes].reverse().filter((n) => n.kind === 'browser' || n.kind === 'note')
 
-  // A link per agent and item it carries, in the order the agent carries them.
+  // A link per coin an agent wears: its newest wires (the attachment index lists them newest first).
   const links: LinkModel[] = []
+  const worn = new Map<string, CanvasNode>()
   for (const a of agents) {
-    const list = input.attachIndex.get(a.id) ?? []
+    const list = (input.attachIndex.get(a.id) ?? []).slice(0, COINS_PER_AGENT)
     list.forEach((att, k) => {
       const o = owners.get(att.node.id) ?? []
       links.push({ key: `${a.id}|${att.node.id}`, agent: a.id, item: att.node.id, k, j: Math.max(0, o.indexOf(a.id)) })
+      worn.set(att.node.id, att.node)
     })
   }
   // The thumbs grid draws a screenful, not a board: a workspace can hold hundreds of
@@ -204,12 +216,12 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   const carried = (n: CanvasNode): boolean => (owners.get(n.id)?.length ?? 0) > 0
   const shown = [...all.filter(carried), ...all.filter((n) => !carried(n))].slice(0, ITEMS_SHOWN)
   const items: ItemView[] = shown.flatMap((n) => itemViewOf(n, owners.get(n.id) ?? []) ?? [])
-  const keep = new Set(items.map((i) => i.id))
-  const keptLinks = links.filter((l) => keep.has(l.item))
-  links.length = 0
-  links.push(...keptLinks)
-  const newestBrowser = items.find((i) => i.kind === 'browser' && i.owners.length > 0)
-  const newest = newestBrowser ? `${newestBrowser.owners[0]}|${newestBrowser.id}` : null
+  // A coin outside the grid still draws its item's face; it fades rather than docking in the thumbs.
+  const inGrid = new Set(items.map((i) => i.id))
+  const coinItems: ItemView[] = [...worn.values()].filter((n) => !inGrid.has(n.id)).flatMap((n) => itemViewOf(n, owners.get(n.id) ?? []) ?? [])
+  // The newest carried browser, on a coin somebody wears (an old wire to a new page can sit past the seats).
+  const newestBrowser = items.find((i) => i.kind === 'browser' && links.some((l) => l.item === i.id))
+  const newest = newestBrowser ? (links.find((l) => l.item === newestBrowser.id)?.key ?? null) : null
 
   const ties: TieModel[] = []
   for (const c of input.connections) {
@@ -239,6 +251,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     },
     agents,
     items,
+    coinItems,
     marks,
     machines: (input.machines ?? []).map((m) => ({
       id: m.id,
