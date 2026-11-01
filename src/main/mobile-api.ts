@@ -57,6 +57,8 @@ import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/rou
 import { ownerSubmit } from "./ask";
 import { BATCH_ID, createOnceByKey } from "./once-by-key";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
+import type { PromptImageReader } from "./prompt-image";
+import type { ImageRef } from "../shared/prompt-images";
 import type { SousDoor } from "./socket-server";
 import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
@@ -381,6 +383,8 @@ export interface MobileApiDeps {
   presets: readonly { name: string; command: string }[];
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string;
+  /** A prompt's pictures (prompt-image.ts), read for a view once they come into view. */
+  promptImage?: PromptImageReader;
   /**
    * Pairing token required on every MUTATING route (C1) as
    * `Authorization: Bearer <token>` (or `?token=`). Undefined =
@@ -1267,6 +1271,37 @@ export async function handleMobileApi(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    return true;
+  }
+
+  // A PROMPT'S PICTURES (prompt-image.ts), one at a time, as a view scrolls
+  // to them. Below the GET gate like every read; the reader itself keeps a
+  // path inside the attach store and an image block inside the card's own
+  // session files.
+  const imageMatch = p.match(/^\/api\/terminal\/([^/]+)\/image$/);
+  if (method === "GET" && (p === "/api/image" || imageMatch)) {
+    const q = url.searchParams;
+    const ref: ImageRef | null = imageMatch
+      ? /^[A-Za-z0-9-]{1,64}$/.test(q.get("uuid") ?? "") && /^\d{1,4}$/.test(q.get("i") ?? "") && q.get("file")
+        ? { terminalId: decodeURIComponent(imageMatch[1]), file: q.get("file") as string, uuid: q.get("uuid") as string, i: Number(q.get("i")) }
+        : null
+      : q.get("path")?.startsWith("/")
+        ? { path: q.get("path") as string }
+        : null;
+    const image = ref && deps.promptImage ? await deps.promptImage.read(ref, { trusted: false }) : null;
+    if (!image) {
+      respondJson(response, 404, { error: "No such picture" });
+      return true;
+    }
+    response.writeHead(200, {
+      "content-type": image.mime,
+      "content-length": String(image.bytes.length),
+      // A picture at an address never changes: a pasted image is part of an
+      // append-only record, an attachment is never overwritten (attachments.ts).
+      "cache-control": "private, max-age=86400",
+      "x-content-type-options": "nosniff",
+    });
+    response.end(Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.length));
     return true;
   }
 

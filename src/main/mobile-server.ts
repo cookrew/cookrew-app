@@ -277,6 +277,8 @@ export interface MobileServerDeps {
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string
+  /** A prompt's pictures, read as a view scrolls to them — see MobileApiDeps; passed through as-is. */
+  promptImage?: MobileApiDeps['promptImage']
   /** Latest card frame for a browser, whichever owner produced it. */
   browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */

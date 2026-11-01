@@ -352,6 +352,7 @@ export function createDemoApi(): CookrewApi {
     // No filesystem in the demo tab — attachments are a no-op.
     attachFiles: () => Promise.resolve([]),
     saveAttachmentBytes: () => Promise.resolve(''),
+    readImage: () => Promise.resolve(null),
     pickFiles: () => Promise.resolve([]),
 
     ptyInput: (terminalId, data) => {

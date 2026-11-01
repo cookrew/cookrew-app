@@ -355,6 +355,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+import { createPromptImageReader, imageRefOf } from './prompt-image'
 import { servedSessionKey } from './storage-gc-served'
 import { sweepStorageInWorker } from './storage-gc-worker'
 
@@ -2142,6 +2143,12 @@ turns.onMark = (terminalId, patch) => {
   const result = streamService.writeMark(terminalId, patch)
   if (!result.ok) console.error(`mark write for ${terminalId}: ${result.error ?? 'failed'}`)
 }
+
+/** A prompt's pictures, for the prompt box and the CHAT/LOG views (prompt-image.ts). */
+const promptImages = createPromptImageReader({
+  chainFiles: async (terminalId) => (await streamService.chain(terminalId)).files.map((f) => f.file),
+  attachmentsDir: defaultAttachmentsDir()
+})
 
 /** What the desktop's stream door reads through — the SAME service the HTTP
  *  routes use, and the same door/scrape provider the old routes use. */
@@ -6526,6 +6533,7 @@ app.whenReady().then(() => {
       roleDelete: (name: string) => roles.delete(name)
     },
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
+    promptImage: promptImages,
     browserThumb: (id) => browserThumbs.frame(id),
     interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
@@ -7520,6 +7528,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('attach:save', (_e, name: string, bytes: Uint8Array) =>
     saveAttachment(defaultAttachmentsDir(), name, Buffer.from(bytes))
   )
+  // A prompt's picture, as a view scrolls to it: the owner's own renderer reads any picture a prompt names.
+  ipcMain.handle('image:read', async (_e, raw: unknown) => {
+    const ref = imageRefOf(raw)
+    return ref ? promptImages.read(ref, { trusted: true }) : null
+  })
 
   // Terminal stream bridging renderer xterm <-> PTY
   const inputRefusalAnnounced = new Map<string, number>()

@@ -28,6 +28,7 @@ import type { TraceBlock } from '../../shared/trace-blocks'
 import { TranscriptFaceContext } from './transcript-face'
 import { TranscriptLookContext } from './transcript-look'
 import { chatFoldLabel, chatFoldOf, latestStepLine, type ChatStep } from './chat-fold'
+import { PictureStrip, picturesOfTurn } from './pictures/PictureStrip'
 
 export interface TranscriptRowProps {
   /** Checkpoint identity (TurnRecord.index). */
@@ -41,17 +42,21 @@ export interface TranscriptRowProps {
   titleMode: TitleMode
   /** The translation showing for THIS row, or null. Every other row's is null. */
   translated: CheckpointTranslation | null
+  /** The card the transcript is of: where its pasted pictures are read from. */
+  terminalId?: string | null
 }
 
 export const TranscriptRow = memo(
   forwardRef<HTMLDivElement, TranscriptRowProps>(function TranscriptRow(
-    { id, block, active, placeholderHeight, titleMode, translated },
+    { id, block, active, placeholderHeight, titleMode, translated, terminalId = null },
     ref
   ) {
     const face = useContext(TranscriptFaceContext)
     const look = useContext(TranscriptLookContext)
     const [open, setOpen] = useState(false)
     const fold = useMemo(() => (block ? chatFoldOf(block) : null), [block])
+    // The prompt's screenshots, drawn under its words (CHAT and LOG; LIVE keeps "[Image #N]").
+    const pictures = useMemo(() => (block ? picturesOfTurn(block, terminalId) : []), [block, terminalId])
     // A translation covers the whole reply: it is the answer, the steps stay as they ran.
     const answer = translated?.reply ?? fold?.answer ?? ''
     // The log prints every step, as the terminal does; the chat folds them until asked.
@@ -87,6 +92,7 @@ export const TranscriptRow = memo(
                 {(translated?.prompt ?? block.prompt) || '(empty prompt)'}
               </div>
             )}
+            <PictureStrip pictures={pictures} className="ctx-prompt-pics" expandable />
             {/* THE AGENT'S SIDE OF THE CHAT: its face, and one bubble with
                 what it ran and what it said (transcript-face.ts). */}
             {(block.activity.length > 0 || (block.thoughts?.length ?? 0) > 0 || block.reply) && (

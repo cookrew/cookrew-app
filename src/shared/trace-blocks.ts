@@ -14,6 +14,7 @@ import {
   type StreamingTurnParser
 } from './session-turns'
 import type { TurnRecord } from './turn'
+import type { TraceImage } from './prompt-images'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
 export interface TraceToolCall {
@@ -47,6 +48,12 @@ export interface TraceBlock {
   index: number
   /** Exact prompt text, newlines included. */
   prompt: string
+  /**
+   * The pictures Claude Code pasted into the prompt itself ("[Image #N]"):
+   * where their bytes sit in the session file, never the bytes. Absent when
+   * it carried none (and for codex and pi, which record no such thing).
+   */
+  images?: TraceImage[]
   /** Joined assistant text for the block. */
   reply: string
   /** Tool invocations in TUI order, with matched results. */
@@ -116,6 +123,8 @@ interface ClaudeEntry {
   type?: string
   subtype?: string
   isMeta?: boolean
+  /** The N of each "[Image #N]" Claude Code numbered, in the order of the record's image blocks. */
+  imagePasteIds?: unknown
   uuid?: string
   parentUuid?: string
   timestamp?: string
@@ -164,6 +173,20 @@ function claudeResultText(content: unknown): string {
     return head(texts.join('\n'), ACTIVITY_RESULT_CHARS)
   }
   return ''
+}
+
+/** The image blocks of a prompt record, as where they are: never their bytes. */
+function claudeImagesOf(entry: ClaudeEntry): TraceImage[] {
+  const content = entry.message?.content
+  if (typeof entry.uuid !== 'string' || !Array.isArray(content)) return []
+  const ids = Array.isArray(entry.imagePasteIds) ? entry.imagePasteIds : []
+  const images: TraceImage[] = []
+  for (const [i, raw] of (content as ClaudeContentBlock[]).entries()) {
+    if (raw?.type !== 'image') continue
+    const n = ids[images.length]
+    images.push({ uuid: entry.uuid, i, ...(typeof n === 'number' ? { n } : {}) })
+  }
+  return images
 }
 
 /**
@@ -265,11 +288,14 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
           })
         }
         if (step !== null) {
+          const images = claudeImagesOf(entry)
           if (step.sibling && current !== null) {
             // Same submission — collapse: adopt the continuation identity/prompt,
             // keep the accumulated reply/activity (siblings precede any reply).
             current.id = checkpointIdentity(step.id)
             current.prompt = step.id.prompt
+            // Claude writes the words and their pasted images as one more record of the same submission.
+            if (images.length > 0) current.images = [...(current.images ?? []), ...images]
             continue
           }
           const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
@@ -277,6 +303,7 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             id: checkpointIdentity(step.id),
             index: step.id.index,
             prompt: step.id.prompt,
+            ...(images.length > 0 ? { images } : {}),
             reply: '',
             activity: [],
             startedAt,
