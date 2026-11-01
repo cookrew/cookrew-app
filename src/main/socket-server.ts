@@ -1793,7 +1793,7 @@ function cmdPreset(): string {
 
 const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
-Usage:
+Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew list                                  List connected agents, notes, and browsers
   cookrew list --workspace [<name>]             Every card in your workspace (or the one named)
   cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
