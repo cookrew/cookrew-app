@@ -139,7 +139,7 @@ import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
-import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
@@ -243,6 +243,7 @@ import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profi
 import { reapOrphanChrome } from './orphan-chrome'
 import { staleAgentIds } from './agent-reconcile'
 import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
+import { AgentWaker } from './agent-wake'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -3238,56 +3239,47 @@ function putAgentToSleep(id: string): void {
   )
 }
 
-/** In-flight wakes, so two callers waking one agent share one boot. */
-const waking = new Map<string, Promise<PtySession | undefined>>()
+/**
+ * Wakes an agent that has no running mirror (agent-wake.ts): one the idle
+ * sweep slept, and any other card shown offline — the app restarted since it
+ * slept, its pane was closed, herdr restarted. A cold agent resumes its own
+ * session; a pane herdr still holds is only re-attached.
+ */
+const waker = new AgentWaker<PtySession>({
+  session: (id) => ptys.get(id),
+  isTerminal: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'terminal',
+  paneAlive: (id) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(id)
+    if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
+    return mux?.sessionExists(name) === true
+  },
+  boot: (id) => ensureTerminalMirror(id),
+  // A respawned TUI paints its resumed transcript and swallows the CRs sent
+  // meanwhile (ask-cold-start); Claude can also sit silent before drawing
+  // anything, so a Claude session waits for its input box as well.
+  ready: (session) =>
+    waitForReady(session, {
+      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined
+    }),
+  sleep: { take: (id) => idleSleep.takeAsleep(id), mark: (id) => idleSleep.markAsleep(id) },
+  // Never a silent drop (Sol r8): the words went nowhere, so say so.
+  lost: (id, chunks) => {
+    if (chunks.length === 0) return
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEvent('terminal.input-refused', id, node?.name ?? id, 'it is offline and would not start — the prompt was not delivered')
+    )
+  },
+  warn: (message) => console.warn(message)
+})
 
 /**
- * Bring back an agent THIS APP put to sleep, resolving with its session once
- * the pane has stopped painting the resumed transcript (a CR sent into that
- * window is swallowed — ask-cold-start, 2026-10-31). Anything else without a
- * session resolves undefined, so callers keep their old answer for it.
+ * Bring back an agent that is not running, resolving with its session once it
+ * takes input. Undefined when the id is no terminal card or it would not start.
  */
 function wakeAgent(id: string): Promise<PtySession | undefined> {
-  const live = ptys.get(id)
-  if (live) {
-    idleSleep.takeAsleep(id)
-    return Promise.resolve(live)
-  }
-  const pending = waking.get(id)
-  if (pending) return pending
-  if (!idleSleep.takeAsleep(id)) return Promise.resolve(undefined)
-  const run = (async (): Promise<PtySession | undefined> => {
-    try {
-      const session = ensureTerminalMirror(id) ? ptys.get(id) : undefined
-      if (!session) {
-        // Could not boot: still asleep, so the next caller tries again.
-        idleSleep.markAsleep(id)
-        return undefined
-      }
-      if (!(await waitForReady(session))) console.warn(`Agent ${id} was still booting when it was woken`)
-      return session
-    } finally {
-      waking.delete(id)
-    }
-  })()
-  waking.set(id, run)
-  return run
-}
-
-/** Keystrokes for a sleeping agent, held until it is awake, then sent in order. */
-const wakeInput = new Map<string, readonly string[]>()
-function writeWhenAwake(id: string, data: string): void {
-  const queued = wakeInput.get(id)
-  if (queued) {
-    wakeInput.set(id, [...queued, data])
-    return
-  }
-  wakeInput.set(id, [data])
-  void wakeAgent(id).then((session) => {
-    const chunks = wakeInput.get(id) ?? []
-    wakeInput.delete(id)
-    for (const chunk of chunks) session?.write(chunk)
-  })
+  return waker.wake(id)
 }
 
 const oracleSweep = setInterval(() => {
@@ -6428,6 +6420,7 @@ app.whenReady().then(() => {
     undoRestore,
     ptys,
     wakeAgent,
+    holdInput: (terminalId: string, data: string) => waker.hold(terminalId, data),
     voice,
     turns,
     presets: PRESETS,
@@ -7469,11 +7462,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   const inputRefusalAnnounced = new Map<string, number>()
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
     idleSleep.touch(terminalId, Date.now())
-    // A quick reply to a sleeping agent wakes it; the keys wait for it.
-    if (!ptys.get(terminalId) && (idleSleep.isAsleep(terminalId) || wakeInput.has(terminalId))) {
-      writeWhenAwake(terminalId, data)
-      return
-    }
+    // Keys for an offline agent wake it; they wait for it, then go in in order.
+    if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
     // A refused byte must be VISIBLE (Sol r8): silently vanishing keystrokes
     // during a delivery window or a contaminated box read as a broken app.

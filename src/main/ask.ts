@@ -813,10 +813,14 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
  * the caller reads, and it is the only signal that needs no backend. Returns
  * false at the deadline — a caller must never fail an ask because a slow boot
  * outlasted our patience; the delivery is attempted anyway.
+ *
+ * `drawn`, when given, must also hold: a pane can be quiet BEFORE its TUI has
+ * drawn anything (`clear; exec claude`, node silent for seconds — fork.ts ·
+ * claudeComposerDrawn), and keys typed then are lost with the mode switch.
  */
 export async function waitForReady(
   session: Pick<PtySession, 'fullText'>,
-  options: { minMs?: number; quietMs?: number; pollMs?: number; timeoutMs?: number } = {}
+  options: { minMs?: number; quietMs?: number; pollMs?: number; timeoutMs?: number; drawn?: () => boolean } = {}
 ): Promise<boolean> {
   const minMs = options.minMs ?? 800
   const quietMs = options.quietMs ?? 1200
@@ -835,7 +839,7 @@ export async function waitForReady(
     }
     const quietFor = Date.now() - quietSince
     const awakeFor = Date.now() - started
-    if (quietFor >= quietMs && awakeFor >= minMs) return true
+    if (quietFor >= quietMs && awakeFor >= minMs && (options.drawn?.() ?? true)) return true
   }
   return false
 }

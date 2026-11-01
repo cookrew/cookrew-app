@@ -429,6 +429,61 @@ describe('mobile /raw submits through the primitive', () => {
       lease.release('raw-2', holder)
     }
   })
+
+  it('hands keys for an offline agent to its wake and answers 200 at once (agent-wake.ts)', async () => {
+    const held: { id: string; data: string }[] = []
+    const deps = {
+      pairingToken: TOKEN,
+      ptys: { get: () => undefined },
+      holdInput: (id: string, data: string) => {
+        held.push({ id, data })
+        return true
+      }
+    } as unknown as MobileApiDeps
+    const { response, captured } = rawResponse()
+    await handleMobileApi(
+      rawRequest(JSON.stringify({ data: 'wake up\r' })),
+      response,
+      new URL('/api/terminal/raw-3/raw', 'http://lan.local'),
+      deps
+    )
+    expect(captured.status).toBe(200)
+    expect(held).toEqual([{ id: 'raw-3', data: 'wake up\r' }])
+  })
+
+  it('still answers 404 when there is nothing running and nothing to wake', async () => {
+    const deps = {
+      pairingToken: TOKEN,
+      ptys: { get: () => undefined },
+      holdInput: () => false
+    } as unknown as MobileApiDeps
+    const { response, captured } = rawResponse()
+    await handleMobileApi(
+      rawRequest(JSON.stringify({ data: 'x' })),
+      response,
+      new URL('/api/terminal/raw-4/raw', 'http://lan.local'),
+      deps
+    )
+    expect(captured.status).toBe(404)
+  })
+
+  it('a running agent the wake does not take still submits through the primitive', async () => {
+    const { session, owned } = fakeSession('raw-5')
+    const deps = {
+      pairingToken: TOKEN,
+      ptys: { get: () => session },
+      holdInput: () => false
+    } as unknown as MobileApiDeps
+    const { response, captured } = rawResponse()
+    await handleMobileApi(
+      rawRequest(JSON.stringify({ data: 'hi\r' })),
+      response,
+      new URL('/api/terminal/raw-5/raw', 'http://lan.local'),
+      deps
+    )
+    expect(captured.status).toBe(200)
+    expect(owned).toEqual([paste('hi'), '\r'])
+  })
 })
 
 describe('the remaining producers are structurally routed (source pins)', () => {
