@@ -73,8 +73,20 @@
 }
 
 .cr-prompt-new {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
   display: inline-flex;
+}
+
+/* The cap is the wrapper's (above): a percentage on the button itself was
+   read against that shrink-to-fit wrapper, i.e. against the chip's own text,
+   and drew a 51 px pill under "＋ Claude Code ▾" and "de" for "default ▾". */
+.cr-prompt-new > .cr-prompt-harness,
+.cr-prompt-new > .cr-prompt-tune {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .cr-prompt-harness {
@@ -209,19 +221,59 @@
   color: var(--sumi-wait, var(--danger, #c0392b));
 }
 
-/* A phone: the box takes its own row above the buttons, and the agent's keys
-   (arrows, paste, Esc) a row of their own inside it; the mic stays by Send. The width
-   gates it, not the class alone: the companion carries cookrew-mobile in a
-   desktop browser too, where the box belongs on the buttons' row. */
+/* A phone (owner, 2026-11-01, a Samsung screenshot): the box takes its own
+   row of the dock, and inside it the words take the whole first row; the
+   chips sit under them on the left, the mic and Send on the right, within
+   the thumb's reach. Squeezed into one row the words had 108 px, the tune
+   chip read "de" and Send fell to a row of its own. The agent's keys (arrows,
+   paste, Esc) keep a row of their own below. The width gates it, not the
+   class alone: the companion carries cookrew-mobile in a desktop browser too,
+   where the box belongs on the buttons' row. */
 @media (max-width: 700px) {
   body.cookrew-mobile .cr-prompt {
     order: -1;
     flex-basis: 100%;
     flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px;
   }
 
   body.cookrew-mobile .cr-prompt input {
+    order: -1;
+    flex: 1 1 100%;
+    height: 36px;
+    padding: 0 6px;
     font-size: 16px;
+  }
+
+  body.cookrew-mobile .cr-prompt-to {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 45%;
+  }
+
+  body.cookrew-mobile .cr-prompt-new {
+    max-width: 45%;
+  }
+
+  /* The thumb's two buttons: a real tap size, pushed to the row's end. */
+  body.cookrew-mobile .cr-prompt .voice-mic,
+  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+    flex: none;
+    min-width: 44px;
+    height: 36px;
+    margin-left: auto;
+    justify-content: center;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-mic + button[type='submit'] {
+    margin-left: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-mic .cr-icon,
+  body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
+    width: 16px;
+    height: 16px;
   }
 
   /* With an agent in the box, the tools step aside on a phone, as the old
@@ -230,12 +282,14 @@
     display: none;
   }
 
-  /* Sous's reply and an error get a line of their own under the box. */
+  /* Sous's reply, a note and an error get a line of their own under the box. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-note,
   body.cookrew-mobile .cr-prompt .cr-prompt-sous,
   body.cookrew-mobile .cr-prompt .cr-prompt-error {
     order: 4;
     flex-basis: 100%;
     max-width: 100%;
+    padding: 0 6px;
   }
 
   body.cookrew-mobile .cr-prompt .voice-bar {
@@ -373,11 +427,12 @@
 }
 
 @media (max-width: 700px) {
-  /* A phone box holds the left chip, this, the words and send: the chip
-     shows the model only, and gives up room first. */
-  .cr-prompt .cr-tune-menu,
-  .cr-prompt-tune {
-    max-width: 28%;
+  /* A phone box's second row holds the left chip, this, the mic and Send:
+     the chip shows the model only, and gives up room first. */
+  .cr-prompt .cr-tune-menu {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
   }
 
   .cr-prompt .cr-tune-menu-effort {

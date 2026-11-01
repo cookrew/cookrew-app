@@ -66,7 +66,7 @@ describe('the phone summons the box', () => {
   })
 })
 
-describe('the dock offers SOUS on the phone', () => {
+describe('the dock offers no SOUS key (owner, 2026-11-01: a useless search button)', () => {
   const props = {
     tool: 'terminal' as const,
     onSelect: () => undefined,
@@ -90,11 +90,10 @@ describe('the dock offers SOUS on the phone', () => {
     boardFor: null
   }
 
-  it('renders the summon button when given the act, and not otherwise', async () => {
+  it('renders no summon button and no tool row: the global prompt box is the way to talk to the crew', async () => {
     const { Dock } = await dock()
-    const withSous = renderToStaticMarkup(<Dock {...props} onSous={() => undefined} />)
-    expect(withSous).toContain('aria-label="SOUS"')
-    const without = renderToStaticMarkup(<Dock {...props} />)
-    expect(without).not.toContain('aria-label="SOUS"')
+    const html = renderToStaticMarkup(<Dock {...props} />)
+    expect(html).not.toContain('aria-label="SOUS"')
+    expect(html).not.toContain('cr-dock-tools')
   })
 })
