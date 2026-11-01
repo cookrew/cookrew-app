@@ -19,7 +19,7 @@ import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
-import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, viewKeyOf } from './prompt-target'
+import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, releaseAfter, zoomMoveKey, type Release } from './prompt-target'
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
@@ -99,10 +99,15 @@ function useCardAgent(): string | null {
   )
 }
 
+/** The zoom's deliberate moves, as one key (zoomMoveKey): a release lasts until the next one. */
+function useZoomMoveKey(): string {
+  return useSyncExternalStore(zoomStore.subscribe, () => zoomMoveKey(zoomStore.get()), () => '')
+}
+
 export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
   const viewed = fullAgentId ?? cardAgent
-  const viewKey = viewKeyOf(fullAgentId, cardAgent)
+  const moveKey = useZoomMoveKey()
   const known = (id: string): boolean => agents.some((a) => a.id === id)
   // While the box has focus, words showing in it hold its agent still: the
   // view may move on (a newly waiting agent takes the stage), the words being
@@ -111,10 +116,15 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const heldWords = useDraft(draftKey(held?.id ?? null))[0]
   // So do they while it listens: the words go where they were meant for.
   const [aim, setAim] = useState<{ id: string | null } | null>(null)
-  // Let go of @agent (in the view it was let go in) until the view moves.
-  const [released, setReleased] = useState<string | null>(null)
-  useEffect(() => setReleased(null), [viewKey])
-  const targetId = boxTargetId({ viewed, viewKey, pin: boxPin(aim, held, heldWords), released, known })
+  // Let go of @agent until the view moves: a deliberate move of the zoom, or
+  // another agent on show (prompt-target.ts · releaseAfter).
+  const [released, setReleased] = useState<Release | null>(null)
+  useEffect(() => setReleased(null), [moveKey])
+  const release = releaseAfter(released, viewed)
+  useEffect(() => {
+    if (release !== released) setReleased(release)
+  }, [release, released])
+  const targetId = boxTargetId({ viewed, pin: boxPin(aim, held, heldWords), released: release, known })
   const to = agents.find((a) => a.id === targetId) ?? null
   // An empty box's hold moves with it, so the words typed next stay put.
   useEffect(() => {
@@ -354,7 +364,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             type="button"
             aria-label={`Stop prompting ${to.name}`}
             title="Prompt nobody: a new agent takes it"
-            onClick={() => setReleased(viewKey)}
+            onClick={() => setReleased({ id: to.id, viewed })}
           >
             ×
           </button>
@@ -464,7 +474,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               return
             }
           }
-          if (e.key === 'Backspace' && !e.repeat && to && text === '') setReleased(viewKey)
+          if (e.key === 'Backspace' && !e.repeat && to && text === '') setReleased({ id: to.id, viewed })
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
