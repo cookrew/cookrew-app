@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
-import { dockedSpot, nearDock, PHONE_PX, sheetBox, sheetOf, stripPage, type Box } from './pet-dock'
+import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripPage, type Box } from './pet-dock'
 import './pets.css'
 
 /**
@@ -47,6 +47,20 @@ const fullViewNow = (): { full: Box; sheet: Box } | null => {
   const style = getComputedStyle(el)
   const lane = (name: string): number => Number.parseFloat(style.getPropertyValue(name)) || 0
   return { full, sheet: sheetBox(full, { left: lane('--fv-lane-left'), right: lane('--fv-lane-right') }) }
+}
+
+/**
+ * An agent's full view on a phone: its head row, where the troops stand beside
+ * its tools (pet-dock.ts · rowSpot) instead of in a strip of their own.
+ */
+const agentRowNow = (): (Box & { toolsLeft: number }) | null => {
+  if (window.innerWidth > PHONE_PX) return null
+  const head = document.querySelector<HTMLElement>('.zv-fullview.agent > .zv-fv-head')
+  if (!head) return null
+  const row = boxOf(head.getBoundingClientRect())
+  if (row.width <= 0 || row.height <= 0) return null
+  const tools = head.querySelector('.zv-fv-tools')?.getBoundingClientRect()
+  return { ...row, toolsLeft: tools && tools.width > 0 ? tools.left : row.left + row.width }
 }
 
 export interface TroopMember {
@@ -210,6 +224,7 @@ export function PetTroop({
     let retry: ReturnType<typeof setTimeout> | null = null
     let ro: ResizeObserver | null = null
     let watching: Element | null = null
+    let watchingTools: Element | null = null
     const measure = (): void => {
       const view = fullViewNow()
       const el = troopRef.current
@@ -223,7 +238,15 @@ export function PetTroop({
         watching = fullEl
       }
       const rect = el.getBoundingClientRect()
-      const next = dockedSpot(side, view.full, view.sheet, { width: rect.width, height: rect.height }, { width: window.innerWidth, height: window.innerHeight })
+      const tools = document.querySelector('.zv-fullview.agent .zv-fv-tools')
+      if (ro && tools && tools !== watchingTools) {
+        ro.observe(tools)
+        watchingTools = tools
+      }
+      const row = agentRowNow()
+      const size = { width: rect.width, height: rect.height }
+      const shared = side === 'right' && document.body.classList.contains('cr-docked-left')
+      const next = row ? rowSpot(side, row, size, { width: window.innerWidth }, shared) : dockedSpot(side, view.full, view.sheet, size, { width: window.innerWidth, height: window.innerHeight })
       setDockAt((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }
     ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measure()) : null

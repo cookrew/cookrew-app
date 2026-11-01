@@ -232,6 +232,14 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // Words held back while the agent asked a question go in once it is done asking.
   const asked = useRef<{ id: string | null; waiting: boolean }>({ id: null, waiting: false })
   const phase = activity?.phase
+  // THE AGENT'S KEYS FOLD ON A PHONE (owner, 2026-11-02): the arrows, paste
+  // and Esc are for answering the agent, so they open by themselves while it
+  // waits on you and otherwise sit behind ⌨. A tap on ⌨ overrides that until
+  // the agent starts or stops waiting, or another agent takes the box.
+  const waitingOnYou = phase === 'waiting'
+  const [keysPick, setKeysPick] = useState<boolean | null>(null)
+  useEffect(() => setKeysPick(null), [to?.id, waitingOnYou])
+  const keysFolded = to !== null && !(keysPick ?? waitingOnYou)
   useEffect(() => {
     const waiting = phase === 'waiting'
     const id = to?.id ?? null
@@ -342,7 +350,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   return (
     <form
       ref={formRef}
-      className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}${hearing ? ' listening' : ''}`}
+      className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}${hearing ? ' listening' : ''}${keysFolded ? ' keys-folded' : ''}`}
       onSubmit={(e) => {
         e.preventDefault()
         if (dictation.listening) return
@@ -422,7 +430,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(text, dictation.heard) : text}
         readOnly={hearing}
-        placeholder={hearing ? 'Listening…' : to ? `Prompt ${to.name}… # a note or browser` : 'Describe a task for a new agent…'}
+        placeholder={hearing ? 'Listening…' : to ? 'Reply… · # a note or browser' : 'Describe a task for a new agent…'}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: its path goes into the prompt"
         autoComplete="off"
@@ -483,6 +491,20 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           onClick={dictation.toggle}
         >
           <CrIcon name="mic" />
+        </button>
+      )}
+      {/* Phone only (global-prompt.css): the agent's keys, folded or open. */}
+      {to && (
+        <button
+          type="button"
+          className={`cr-btn sm cr-prompt-keys${keysFolded ? '' : ' open'}`}
+          title={keysFolded ? 'Show the agent\'s keys: arrows, paste, Esc' : 'Fold the agent\'s keys'}
+          aria-label="Agent keys"
+          aria-expanded={!keysFolded}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setKeysPick(keysFolded)}
+        >
+          <CrIcon name="keyboard" />
         </button>
       )}
       <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>

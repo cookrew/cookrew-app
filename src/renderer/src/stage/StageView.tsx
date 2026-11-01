@@ -9,6 +9,7 @@
 // on the bed this view keeps clear along its bottom. There is no canvas under
 // it any more either: it is not rendered, so it costs nothing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { activeBrowserTab, type CanvasNode, type TerminalNodeData, type WorkspaceState } from '../../../shared/model'
 import { attachView, useAttachView } from '../attach-view'
 import { NO_ATTACHMENTS, SideTabsContext, type AttachmentIndex } from '../terminal-attachments'
@@ -26,6 +27,8 @@ import { inkStatusOfRow, statusWord } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { itemInitial } from '../zoom/zoom-model'
 import '../zoom/full-views.css'
+import { useFullRouteSlot } from '../route-slot'
+import { fullRouteWords } from './full-route'
 
 /** How many of each kind an agent carries, for the head. */
 const tally = (list: readonly { kind: string }[]): { browsers: number; notes: number } => ({
@@ -132,6 +135,16 @@ export function StageView({
   // The full view wears the navigator's frame (zoom/full-views.css): a paper
   // panel with the agent's head on it, or the browser's or note's.
   const counts = tally(target ? (attachIndex.get(target.terminalId) ?? []) : [])
+  // AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02): who it is goes up to
+  // the bar (route-slot.ts), and the round ‹ steps aside for the bar's own ‹
+  // (full-views.css reads the body's class). Above a phone CSS hides the copy.
+  const routeSlot = useFullRouteSlot()
+  const agentFull = !pickedItem && target !== null
+  useEffect(() => {
+    if (!agentFull) return
+    document.body.classList.add('cr-full-agent')
+    return () => document.body.classList.remove('cr-full-agent')
+  }, [agentFull])
   return (
     <div className="cr-stage-view bedded" data-why={pickedItem ? 'item' : (target?.why ?? 'none')}>
       <div className="cr-stage-main" onPointerDownCapture={hold} onKeyDownCapture={hold}>
@@ -163,6 +176,26 @@ export function StageView({
           </div>
         ) : target ? (
           <div className="zv-fullview agent">
+            {shown &&
+              routeSlot &&
+              createPortal(
+                <>
+                  <span className="cr-route-face" aria-hidden="true">
+                    <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} status={shownStatus} />
+                  </span>
+                  <span className="cr-route-who" title={shown.name}>
+                    <b>{shown.name}</b>
+                    <small>
+                      {fullRouteWords(shownStatus, counts).map((word, i) => (
+                        <span key={word} className={i === 0 ? shownStatus : undefined}>
+                          {word}
+                        </span>
+                      ))}
+                    </small>
+                  </span>
+                </>,
+                routeSlot
+              )}
             <header className="zv-fv-head">
               {shown && (
                 <>

@@ -576,6 +576,36 @@ body.cr-docked-right .zv-fullview {
   }
 }
 
+/* AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02, the Samsung screenshot:
+   the bar, the head and the troop's strip were three rows saying who it is).
+   Row 1 is the bar (header.css · route-slot.ts): it names the agent and holds
+   the way back, so the head's own face and name step aside, and the round ‹
+   with them. Row 2 is the head: CHAT ✎+ ⊕+ at its right, the troops in the
+   same row (pet-dock.ts · rowSpot), no strip of their own. A browser's or a
+   note's full view keeps its head, its strip and its round ‹. */
+@media (max-width: 700px) {
+  body.cr-full-agent .zv-root[data-full='true'] .zv-controls {
+    display: none;
+  }
+  .zv-fullview.agent .zv-fv-ink,
+  .zv-fullview.agent .zv-fv-who {
+    display: none;
+  }
+  body.cr-docked-left .zv-fullview.agent,
+  body.cr-docked-right .zv-fullview.agent {
+    --fv-strip: 0px;
+  }
+  .zv-fullview.agent .zv-fv-head {
+    min-height: 40px;
+    margin-bottom: 0;
+    padding: 5px 0;
+  }
+  .zv-fullview.agent .zv-fv-tools {
+    align-self: center;
+    margin: 0 0 0 auto;
+  }
+}
+
 /* CLEAR OF THE WAY BACK OUT (UI/UX QA 2026-11-01: a long title ran under the
    centred "‹ browsers & notes" pill, zoom.css · data-full). Above a phone the
    pill stands at the middle of the top, over the head: each side of the head

@@ -17,6 +17,8 @@ import type { PathBadgeView } from '../../shared/path-badge'
 import { useActiveWorkspace } from './WorkspaceSwitcher'
 import { stageSelect } from './stage/stage-select'
 import { useZoomFull, zoomStore } from './zoom/zoom-store'
+import { stepOut } from './zoom/zoom-path'
+import { setFullRouteSlot } from './route-slot'
 
 /** "drej-mbp.local" → "drej-mbp": the `.local` is mDNS plumbing, not a name. */
 export function deviceLabel(name: string | null): string {
@@ -79,9 +81,27 @@ export function HeaderRoute({ view, workspaceName, dir, path, zoomedAgent, stage
   const toDevice = (): void => {
     zoomStore.go(zoomStore.get().v <= -1 ? -2 : -1, zoomStore.get().dir)
   }
+  // The full view's way out, the round ‹'s own step (ZoomView · stepBack).
+  const back = (): void => {
+    const z = zoomStore.get()
+    const next = stepOut(z.dir, z.v)
+    if (next !== z.v) zoomStore.go(next, z.dir)
+  }
 
   return (
-    <nav className="cr-route" aria-label="Route">
+    <nav className={`cr-route${agent !== null ? ' has-full' : ''}`} aria-label="Route">
+      {/* AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02): the bar is
+          "‹ face name · state" — the device and workspace steps fold into ‹,
+          and the full view draws who it is into the slot (route-slot.ts).
+          CSS shows these two at phone width only. */}
+      {agent !== null && (
+        <>
+          <button type="button" className="cr-route-back" aria-label="Back to the crew" title="Back to the crew" onClick={back}>
+            ‹
+          </button>
+          <span className="cr-route-full" ref={setFullRouteSlot} />
+        </>
+      )}
       <span className="cr-route-step cr-route-device">
         <button type="button" className="cr-route-here" title={device} onClick={toDevice}>
           {remote && <PathDot view={path} />}

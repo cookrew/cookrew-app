@@ -41,6 +41,13 @@
   :root:root .cr-route-emoji {
     font-size: var(--ph-control);
   }
+  /* An agent's full view: its name and state on the bar (header.css · route-slot.ts). */
+  :root:root .cr-route-who b {
+    font-size: var(--ph-title);
+  }
+  :root:root .cr-route-who small {
+    font-size: var(--ph-caption);
+  }
   :root:root .cr-acct-avatar {
     font-size: var(--ph-caption);
     letter-spacing: 0;
