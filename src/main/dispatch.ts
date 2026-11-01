@@ -298,9 +298,10 @@ export interface DispatchDeps {
    */
   ownerComposing?: (agentId: string) => boolean
   /**
-   * Bring back an agent this app put to sleep (agent-sleep.ts) — resolves
-   * true once its session is running and ready for input. Asked only when the
-   * session is absent; absent = no idle sleep, and absence stays `unreachable`.
+   * Bring back an agent that is not running — slept by the idle sweep or
+   * offline for any other reason (agent-wake.ts) — resolving true once its
+   * session is running and ready for input. Asked only when the session is
+   * absent; absent dep = nothing wakes, and absence stays `unreachable`.
    */
   wake?: (agentId: string) => Promise<boolean>
   /**
@@ -1413,9 +1414,9 @@ export class DispatchService {
     // (state 'failed', reason 'context-full'), not a sync 503.
     const sessionName = this.deps.sessionNameFor(agentId)
     if (!this.deps.sessionExists(sessionName)) {
-      // A sleeping agent is not an unreachable one: its conversation is on
-      // disk and the wake resumes it. Anything else without a session stays
-      // unreachable, exactly as before.
+      // An offline agent is not an unreachable one: its conversation is on
+      // disk and the wake resumes it. Only an agent that will not start is
+      // unreachable.
       const woke = (await this.deps.wake?.(agentId)) === true
       if (!woke) return { status: 503, body: { error: 'unreachable' } }
     }

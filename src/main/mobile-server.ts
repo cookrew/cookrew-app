@@ -174,11 +174,14 @@ export interface MobileServerDeps {
   appVersion?: () => string
   ptys: PtyManager
   /**
-   * Bring back an agent the app put to sleep (agent-sleep.ts), resolving with
-   * its session once it is ready for input; undefined when it was not asleep.
-   * Absent = no idle sleep (tests, embedders): a missing PTY stays a 404.
+   * Bring back an agent that is not running — slept by the idle sweep or
+   * offline for any other reason (agent-wake.ts) — resolving with its session
+   * once it is ready for input; undefined when it is no terminal card or would
+   * not start. Absent (tests, embedders): a missing PTY stays a 404.
    */
   wakeAgent?: (terminalId: string) => Promise<PtySession | undefined>
+  /** Keys for an offline or waking agent, held until it is up (agent-wake.ts · hold). */
+  holdInput?: (terminalId: string, data: string) => boolean
   voice: VoiceEngine
   turns: TurnTracker
   /** Observability event log + agent roster (mobile query endpoints). */
@@ -1669,8 +1672,9 @@ export async function handle(
 
   const inputMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/)
   if (request.method === 'POST' && inputMatch) {
-    // A sleeping agent is woken (resumed on its session) rather than refused.
-    const session = deps.ptys.get(inputMatch[1]) ?? (await deps.wakeAgent?.(inputMatch[1]))
+    // An offline agent is woken (resumed on its session) rather than refused;
+    // one still waking is waited for, so the words never beat its boot.
+    const session = deps.wakeAgent ? await deps.wakeAgent(inputMatch[1]) : deps.ptys.get(inputMatch[1])
     if (!session) {
       respondJson(response, 404, { error: 'Terminal not running' })
       return
