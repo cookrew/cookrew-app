@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { LOCAL_NETWORK_COPY } from './path-copy'
 import {
   acceptLocalNetwork,
+  localNetworkAsked,
   localNetworkGate,
   localNetworkOffered,
   subscribeLocalNetwork
@@ -30,6 +31,10 @@ import type { LocalNetworkState } from './local-network'
  * re-prompt for a site the reader refused, so a second ALLOW would do nothing
  * at all — worse than saying where the switch actually lives.
  *
+ * ONE PRESS, AND THE ROW IS GONE (2026-11-02). The press is recorded before the
+ * probe goes out (local-network-gate.ts), so the row leaves on the press; what
+ * the browser decides afterwards can only bring back the refusal sentence.
+ *
  * AND 'prompt' NO LONGER MEANS "ASK" ON ITS OWN. Chrome 152 behind a system
  * proxy (2026-09-08) leaves the permission at 'prompt' for ever while raising
  * no dialog at all, so the LAST RACE decides whether an ask is honest: the rule
@@ -38,20 +43,21 @@ import type { LocalNetworkState } from './local-network'
 export function LocalNetworkRow(): React.JSX.Element | null {
   const [state, setState] = useState<LocalNetworkState>(() => localNetworkGate())
   const [offered, setOffered] = useState(() => localNetworkOffered())
+  const [asked, setAsked] = useState(() => localNetworkAsked())
   const [race, setRace] = useState<PathAttempts>(() => pathAttempts())
-  const [asking, setAsking] = useState(false)
 
   useEffect(
     () =>
       subscribeLocalNetwork((next) => {
         setState(next)
         setOffered(localNetworkOffered())
+        setAsked(localNetworkAsked())
       }),
     []
   )
   useEffect(() => subscribePathAttempts(setRace), [])
 
-  const row = localNetworkAskRow({ permission: state, offered, attempts: race.attempts })
+  const row = localNetworkAskRow({ permission: state, offered, asked, attempts: race.attempts })
 
   if (row.kind === 'hidden') return null
   if (row.kind === 'denied') {
@@ -68,13 +74,10 @@ export function LocalNetworkRow(): React.JSX.Element | null {
       <button
         type="button"
         className="cr-btn cr-path-ask-allow"
-        disabled={asking}
         onClick={() => {
-          // One press, one probe. The store is updated by the handler with
-          // whatever the browser decided, and this row re-renders out of
-          // existence on a grant.
-          setAsking(true)
-          void acceptLocalNetwork().finally(() => setAsking(false))
+          // One press, one probe. The press itself takes the row away; the
+          // handler then records whatever the browser decided.
+          void acceptLocalNetwork()
         }}
       >
         {LOCAL_NETWORK_COPY.allow}
