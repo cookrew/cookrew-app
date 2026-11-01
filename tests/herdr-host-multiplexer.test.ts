@@ -851,6 +851,64 @@ describe('husk recovery — a restored label is not a recovered agent', () => {
   })
 })
 
+describe('a shell slow in its rc init — queued keys are not dropped keys', () => {
+  // 2026-11-01: an oh-my-zsh compinit held fresh panes for 10-30 s. The root
+  // stayed a bare shell, so the boot line was retyped every beat; the shell ran
+  // the first copy and the agent read the rest as its first message.
+  const BOOT_LINE = '% clear; exec sh /tmp/cli/boot-cookrew_abc.sh'
+  const slowShell = (screens: string[]): ReturnType<typeof fakeRunner> => {
+    const base = fakeRunner({
+      'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]),
+      'pane process-info': JSON.stringify({
+        result: {
+          process_info: {
+            shell_pid: 9,
+            foreground_processes: [{ argv: ['-zsh'], argv0: 'zsh', name: 'zsh', pid: 9 }]
+          }
+        }
+      }),
+      '-o args=': '-zsh'
+    })
+    let reads = 0
+    return {
+      ...base,
+      run: (file, args) => {
+        if (args[0] !== 'pane' || args[1] !== 'read') return base.run(file, args)
+        base.calls.push({ file, args })
+        return screens[Math.min(reads++, screens.length - 1)]
+      }
+    }
+  }
+  const boots = (screens: string[]): number => {
+    const runner = slowShell(screens)
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+      .ensureSession(SPEC)
+    return runner.calls.filter((c) => c.args[1] === 'send-text').length
+  }
+
+  it('types the boot line ONCE while it stands last on the screen, queued', () => {
+    expect(boots([`Last login: Sun Nov  1 19:40:00\n${BOOT_LINE}\n\n`])).toBe(1)
+  })
+
+  it('still retypes when the line never showed — those keys WERE dropped', () => {
+    expect(boots(['%'])).toBeGreaterThan(1)
+  })
+
+  it('retypes once a prompt stands under the line — the shell flushed what it queued', () => {
+    expect(boots([`${BOOT_LINE}\n%`])).toBeGreaterThan(1)
+  })
+
+  it('does not take a dead agent\'s boot line on a husk for this attempt\'s', () => {
+    expect(boots([`${BOOT_LINE}\nagent output\n%`])).toBeGreaterThan(1)
+  })
+
+  it('the boot script drops queued input before the agent can read it', () => {
+    const boot = bootCommand(SPEC)
+    expect(boot).toContain("perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null; exec claude")
+    expect(boot.endsWith('exec claude --permission-mode bypassPermissions')).toBe(true)
+  })
+})
+
 describe('attachSpawn never hands out an argv that exits instantly', () => {
   // `agent attach` on an unresolvable target prints agent_not_found and exits
   // within milliseconds — and near-instant PTY exits land in node-pty's known
