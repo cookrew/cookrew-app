@@ -958,7 +958,7 @@ window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
   const viewport = document.querySelector('meta[name="viewport"]')
-  if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content')
+  if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-visual')
 })
 </script>`
 
