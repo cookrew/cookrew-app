@@ -12,6 +12,7 @@ import { registerZoomMenuClose, setZoomMenuSlot } from './zoom-bar'
 import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
+import { setSoundsOn, useSoundsOn } from './chime-sound'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -40,6 +41,7 @@ export function HeaderMore({
   demo
 }: HeaderMoreProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const sounds = useSoundsOn()
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
@@ -129,6 +131,16 @@ export function HeaderMore({
           <button type="button" className="cr-more-item" onClick={onWall} aria-haspopup="dialog">
             <CrIcon name="canvas" />
             <span className="cr-more-label">Workspaces…</span>
+          </button>
+          <button
+            type="button"
+            className={`cr-more-item${sounds ? ' on' : ''}`}
+            aria-pressed={sounds}
+            title="A chime when an agent is done or needs you"
+            onClick={() => setSoundsOn(!sounds)}
+          >
+            <CrIcon name="speaker" />
+            <span className="cr-more-label">{sounds ? 'Sounds on' : 'Sounds off'}</span>
           </button>
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
