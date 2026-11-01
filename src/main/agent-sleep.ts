@@ -9,10 +9,14 @@
 //
 // This file is the clock and the ledger only. Deciding what "busy" means and
 // ending/booting processes is index.ts's job; keeping the timing pure is what
-// makes the ten minutes testable without waiting them out.
+// makes the window testable without waiting it out.
+//
+// Owner, 2026-11-01: ten minutes was unreasonable, and agents that were still
+// running were killed. The window is an hour now, and this clock only
+// NOMINATES: agent-sleep-evidence.ts asks Claude itself before anything ends.
 
-/** The owner's ruling: ten minutes of nothing. */
-export const DEFAULT_IDLE_SLEEP_MS = 10 * 60_000
+/** An hour of nothing (was ten minutes until the owner's 2026-11-01 ruling). */
+export const DEFAULT_IDLE_SLEEP_MS = 60 * 60_000
 
 export interface SleepFacts {
   id: string
@@ -69,6 +73,15 @@ export class IdleSleep {
     }
     for (const id of [...this.lastBusy.keys()]) if (!seen.has(id)) this.lastBusy.delete(id)
     return out
+  }
+
+  /**
+   * The evidence says the last sign of life was `at` (now, or a loop's wakeup
+   * still ahead): count the window from there, never from earlier.
+   */
+  restart(id: string, at: number): void {
+    const last = this.lastBusy.get(id)
+    if (last !== undefined) this.lastBusy.set(id, Math.max(last, at))
   }
 
   markAsleep(id: string): void {
