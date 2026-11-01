@@ -1,32 +1,49 @@
-import { LAUNCH_KNOBS, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
+import { LAUNCH_KNOBS, cleanLaunchTune, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
 
 /**
  * THE MODEL AND EFFORT A NEW AGENT STARTS ON (owner, 2026-11-01): the prompt
  * box's tune chip, with nobody targeted. Sticky like the harness chip
- * (harness-pref.ts): the next agent takes the last pick until another is made.
- * An absent knob means the harness's own default, and is never sent.
+ * (harness-pref.ts), and PER HARNESS: a codex model means nothing to claude,
+ * so each harness keeps its own last pick. An absent knob means the harness's
+ * own default, and is never sent.
+ *
+ * Stored as { [preset name]: pick }. The first version stored one flat pick
+ * when only claude had the chip; that is read as Claude Code's.
  */
 
 const KEY = 'cookrew.new-agent-tune'
+/** The preset the flat first-version pick belonged to (main/presets.ts). */
+const FIRST_HARNESS = 'Claude Code'
 
-export function lastLaunchTune(): LaunchTune {
+function asTune(raw: unknown): LaunchTune {
+  if (typeof raw !== 'object' || raw === null) return {}
+  const record = raw as Record<string, unknown>
+  return LAUNCH_KNOBS.reduce<LaunchTune>((out, knob) => {
+    const value = record[knob]
+    return typeof value === 'string' && value ? { ...out, [knob]: value } : out
+  }, {})
+}
+
+function readAll(): Record<string, LaunchTune> {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(KEY) ?? '{}')
-    if (typeof raw !== 'object' || raw === null) return {}
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
     const record = raw as Record<string, unknown>
-    return LAUNCH_KNOBS.reduce<LaunchTune>((out, knob) => {
-      const value = record[knob]
-      return typeof value === 'string' && value ? { ...out, [knob]: value } : out
-    }, {})
+    if (LAUNCH_KNOBS.some((knob) => knob in record)) return { [FIRST_HARNESS]: asTune(record) }
+    return Object.fromEntries(Object.entries(record).map(([name, tune]) => [name, asTune(tune)]))
   } catch {
     // private mode or a torn value: no pick, the harness's defaults stand
     return {}
   }
 }
 
-export function rememberLaunchTune(tune: LaunchTune): void {
+export function lastLaunchTune(harness: string): LaunchTune {
+  return readAll()[harness] ?? {}
+}
+
+export function rememberLaunchTune(harness: string, tune: LaunchTune): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(tune))
+    localStorage.setItem(KEY, JSON.stringify({ ...readAll(), [harness]: tune }))
   } catch {
     // private mode: not remembered
   }
@@ -38,11 +55,10 @@ export function withLaunchKnob(tune: LaunchTune, knob: LaunchKnob, value: string
   return value === null ? rest : { ...rest, [knob]: value }
 }
 
-/** What this harness would actually take of the pick: the rest waits for a harness that does. */
+/**
+ * What this harness would actually take of the pick — an effort checked
+ * against the model it rides with. The rest stays remembered, unsent.
+ */
 export function offeredPart(tune: LaunchTune, offer: LaunchOffer | null): LaunchTune {
-  if (offer === null) return {}
-  return LAUNCH_KNOBS.reduce<LaunchTune>((out, knob) => {
-    const value = tune[knob]
-    return value !== undefined && offer[knob].includes(value) ? { ...out, [knob]: value } : out
-  }, {})
+  return cleanLaunchTune(offer, tune)
 }

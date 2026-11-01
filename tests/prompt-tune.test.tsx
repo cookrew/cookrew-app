@@ -29,16 +29,34 @@ describe('the new agent’s pick, remembered', () => {
   })
 
   it('starts at the harness defaults, then keeps the last pick', () => {
-    expect(lastLaunchTune()).toEqual({})
-    rememberLaunchTune({ model: 'sonnet', effort: 'max' })
-    expect(lastLaunchTune()).toEqual({ model: 'sonnet', effort: 'max' })
+    expect(lastLaunchTune('Claude Code')).toEqual({})
+    rememberLaunchTune('Claude Code', { model: 'sonnet', effort: 'max' })
+    expect(lastLaunchTune('Claude Code')).toEqual({ model: 'sonnet', effort: 'max' })
+  })
+
+  // Owner 2026-11-01: every harness gets the chip. A codex model means nothing
+  // to claude, so a pick for one must not overwrite the other's.
+  it('keeps one pick per harness', () => {
+    rememberLaunchTune('Claude Code', { model: 'opus' })
+    rememberLaunchTune('Codex', { model: 'gpt-6-luna', effort: 'xhigh' })
+    expect(lastLaunchTune('Claude Code')).toEqual({ model: 'opus' })
+    expect(lastLaunchTune('Codex')).toEqual({ model: 'gpt-6-luna', effort: 'xhigh' })
+    expect(lastLaunchTune('Pi')).toEqual({})
+  })
+
+  it("reads the first version's flat pick as Claude Code's", () => {
+    localStorage.setItem('cookrew.new-agent-tune', JSON.stringify({ model: 'opus', effort: 'high' }))
+    expect(lastLaunchTune('Claude Code')).toEqual({ model: 'opus', effort: 'high' })
+    expect(lastLaunchTune('Codex')).toEqual({})
   })
 
   it('reads a torn value as no pick', () => {
     localStorage.setItem('cookrew.new-agent-tune', '{nope')
-    expect(lastLaunchTune()).toEqual({})
+    expect(lastLaunchTune('Claude Code')).toEqual({})
     localStorage.setItem('cookrew.new-agent-tune', JSON.stringify({ model: 7, effort: 'high' }))
-    expect(lastLaunchTune()).toEqual({ effort: 'high' })
+    expect(lastLaunchTune('Claude Code')).toEqual({ effort: 'high' })
+    localStorage.setItem('cookrew.new-agent-tune', JSON.stringify({ Codex: 'gpt' }))
+    expect(lastLaunchTune('Codex')).toEqual({})
   })
 
   it('sets one knob or clears it back to the default, without touching the old pick', () => {
@@ -51,6 +69,12 @@ describe('the new agent’s pick, remembered', () => {
   it('sends only what the harness takes', () => {
     expect(offeredPart({ model: 'opus', effort: 'ultracode' }, CLAUDE)).toEqual({ model: 'opus' })
     expect(offeredPart({ model: 'opus' }, null)).toEqual({})
+  })
+
+  it("sends an effort only when the picked model takes it", () => {
+    const codex = { harness: 'codex' as const, model: ['gpt-6.1-sol', 'openai/gpt-5-pro'], effort: ['low', 'high', 'ultra'], effortFor: { 'openai/gpt-5-pro': ['high'] } }
+    expect(offeredPart({ model: 'openai/gpt-5-pro', effort: 'ultra' }, codex)).toEqual({ model: 'openai/gpt-5-pro' })
+    expect(offeredPart({ model: 'gpt-6.1-sol', effort: 'ultra' }, codex)).toEqual({ model: 'gpt-6.1-sol', effort: 'ultra' })
   })
 })
 

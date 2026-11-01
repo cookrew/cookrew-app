@@ -137,6 +137,7 @@ import {
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
 import { launchCommand } from '../shared/launch-tune'
+import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
@@ -4525,7 +4526,10 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     id: randomUUID(),
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
-    command: opts.command ?? (role ? role.command : launchCommand(preset.command, opts.tune)),
+    // The catalogs are read only when a pick came with the ask: most terminals bring none.
+    command:
+      opts.command ??
+      (role ? role.command : opts.tune === undefined ? preset.command : launchCommand(preset.command, opts.tune, launchOfferFor(preset.command))),
     cwd: opts.cwd ?? store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
@@ -6485,7 +6489,8 @@ app.whenReady().then(() => {
     holdInput: (terminalId: string, data: string) => waker.hold(terminalId, data),
     voice,
     turns,
-    presets: PRESETS,
+    // Each preset's `launch` offer is read per request (launch-offers.ts).
+    presets: withLaunchOffers(PRESETS),
     ops: {
       addNode,
       updateNode,
@@ -7479,8 +7484,10 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Harness presets PLUS saved templates: a template is a terminal preset, so
   // placing it imports the crew as one orch terminal. Templates last, so a
   // built-in always wins a name clash (and createTerminal checks them last too).
+  // Each harness preset carries what a new agent of it can start on (the
+  // prompt box's tune chip, read off the harness's own catalog).
   ipcMain.handle('preset:list', () => [
-    ...PRESETS,
+    ...PRESETS.map((p) => ({ ...p, launch: launchOfferFor(p.command) })),
     ...teams.list().map((t) => ({ name: t.name, command: `cookrew call · ${t.name}` }))
   ])
 

@@ -7,13 +7,13 @@ import { speakSous } from '../sous-speak'
 import { VoiceBar } from '../VoiceBar'
 import { makeAgent } from '../zoom/make-card'
 import { CardTune } from '../nodes/CardTune'
-import { launchOffer, type LaunchKnob } from '../../../shared/launch-tune'
+import type { LaunchKnob } from '../../../shared/launch-tune'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from '../../../shared/agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
 import { lastLaunchTune, offeredPart, rememberLaunchTune, withLaunchKnob } from './launch-pref'
 import { NewAgentTune } from './NewAgentTune'
-import { usePresetCommands } from './use-preset-commands'
+import { usePresetOffers } from './use-preset-commands'
 import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
@@ -164,13 +164,14 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   }, [picking])
   // The new agent's model and effort: sticky like the harness, sent only as
   // far as the harness takes them (shared/launch-tune).
-  const commands = usePresetCommands()
-  const offer = launchOffer(commands.get(harness) ?? '')
-  const [launchTune, setLaunchTune] = useState(lastLaunchTune)
+  // Each harness keeps its own pick: a codex model means nothing to claude.
+  const offer = usePresetOffers().get(harness) ?? null
+  const [launchTune, setLaunchTune] = useState(() => lastLaunchTune(harness))
+  useEffect(() => setLaunchTune(lastLaunchTune(harness)), [harness])
   const pickLaunch = (knob: LaunchKnob, value: string | null): void => {
     const next = withLaunchKnob(launchTune, knob, value)
     setLaunchTune(next)
-    rememberLaunchTune(next)
+    rememberLaunchTune(harness, next)
   }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
