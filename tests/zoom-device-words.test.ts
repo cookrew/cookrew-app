@@ -48,11 +48,13 @@ describe('the device stop on a desktop', () => {
 })
 
 describe('the device stop on a phone', () => {
-  it("keeps the marks' labels as the phone evals set them (32px, 380 wide) and the open one at ~2.9", () => {
+  // The phone's type scale (phone-type.css, owner 2026-11-02): the 32px labels are pinned at
+  // caption on screen, a little under 1:1 here, as wide as before; the open one as large as theirs.
+  it("pins the marks' labels at caption on screen (32px, 380 wide) and the open one as large", () => {
     const words = deviceWords(deviceOf(ids(7), true), PHONE.w, PHONE.h, true)
-    expect(words.markK).toBe(1)
-    expect(words.markMax).toBeCloseTo(380, -1)
-    expect(words.openK).toBeCloseTo(2.9, 1)
+    expect(32 * words.markK * SWS * words.cam).toBeCloseTo(DEVICE_TEXT_PX, 3)
+    expect(words.markMax * words.markK).toBeCloseTo(380, -1)
+    expect(11 * words.openK * SWS * words.cam).toBeCloseTo(DEVICE_TEXT_PX, 3)
   })
 
   it('ends the title and its hint inside the screen: they wrap within the device', () => {

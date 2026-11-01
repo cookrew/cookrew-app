@@ -363,12 +363,17 @@
     padding: 0 2px;
   }
 
+  /* The names take the room the bar leaves them (owner, 2026-11-02: at the phone's
+     16px the workspace read "Cookr…" with half the bar free): the route's steps
+     shrink in their order (the workspace twice as fast as the agent), each down to a few letters. */
   .cr-route-workspace .cr-route-label {
-    max-width: 64px;
+    max-width: none;
+    min-width: 2.5em;
   }
 
   .cr-route-agent .cr-route-label {
-    max-width: 96px;
+    max-width: none;
+    min-width: 3em;
   }
 
   .cr-route-here {

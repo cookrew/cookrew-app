@@ -11,7 +11,7 @@ import { buildZoomModel } from './zoom-model'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
 import { PerRowPill } from './PerRowPill'
-import { deviceWords, SWS, type FrameEls } from './zoom-frame'
+import { deviceWords, layoutOf, SWS, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
@@ -145,7 +145,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       const card = get(`agent-card:${a.id}`)
       const cardl = get(`agent-cardl:${a.id}`)
       if (!node || !av || !nm || !st || !cnt || !card || !cardl) continue
-      agents.set(a.id, { node, av, nm, st, cnt, dft: get(`agent-dft:${a.id}`), body, reply, card, cardl, emp: get(`agent-emp:${a.id}`), dot: get(`agent-dot:${a.id}`), nmW: nm.offsetWidth, stW: st.offsetWidth, cntW: cnt.offsetWidth })
+      agents.set(a.id, { node, av, nm, st, cnt, dft: get(`agent-dft:${a.id}`), body, reply, card, cardl, emp: get(`agent-emp:${a.id}`), dot: get(`agent-dot:${a.id}`), nmW: nm.offsetWidth, stW: st.offsetWidth, cntW: cnt.offsetWidth, nmH: nm.offsetHeight, stH: st.offsetHeight })
     }
     for (const l of modelRef.current.frame.links) {
       const node = get(`link:${l.key}`), th = get(`link-th:${l.key}`), coin = get(`link-coin:${l.key}`)
@@ -179,6 +179,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     [model.frame, crewCols, deviceCols]
   )
   const motion = useZoomMotion(frame, collect, root, pan)
+  // THE PHONE'S WORDS (scene-words.ts): each stop's scale at rest, for the words seen at
+  // one stop only (phone-type.css), and the names' width; a new width is measured again.
+  const sceneVars = useMemo(() => wordsOf(layoutOf(frame, narrow), size.w, size.h, narrow).vars, [frame, narrow, size])
+  const varsSet = useRef<string[]>([])
+  useLayoutEffect(() => {
+    const el = root.current
+    if (!el) return
+    for (const k of varsSet.current) if (!(k in sceneVars)) el.style.removeProperty(k)
+    for (const [k, v] of Object.entries(sceneVars)) el.style.setProperty(k, v)
+    varsSet.current = Object.keys(sceneVars)
+    fontsVersion.current += 1
+    motion.wake()
+  }, [sceneVars, motion.wake])
   // The crew shows each agent's unsent words: keep them in step with its line (draft-follow.ts).
   useEffect(() => followDrafts(), [])
   // The crew and the thumbnails scroll apart: a side opened again starts at its top.
@@ -279,6 +292,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         label.style.transform = `translateX(-50%) scale(${words.markK.toFixed(4)})`
         label.style.maxWidth = `${Math.round(words.markMax)}px`
       }
+    }
+    // A phone's open label grows no wider than its neighbours' (deviceWords · openMax), so it is cut, never drawn smaller.
+    const openLabel = registry.current.get('label')
+    if (openLabel) {
+      openLabel.style.maxWidth = Number.isFinite(words.openMax) ? `${Math.floor(Math.min(130, words.openMax))}px` : ''
+      fontsVersion.current += 1
     }
     const machineEl = registry.current.get('machine')
     if (machineEl) {

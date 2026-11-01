@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 import './styles.css'
 import './night.css'
 import './zoom/ink-theme.css'
+// Last: the phone's one sheet of type sizes (it outranks the sheets above by its selectors, not its place).
+import './phone-type.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
 import { startCompanionPathSwitch } from './path/companion'
