@@ -805,6 +805,10 @@ export function createRemoteApi(): CookrewApi {
       req<Record<string, { src: string; at: number }>>(apiPath('/api/workspaces/shots')).catch(
         () => ({})
       ),
+    terminalSession: () =>
+      req<{ stale: boolean; serverPid: number | null; serverStartedAt: number | null; loginAt: number | null }>(apiPath('/api/terminal-session')).catch(
+        () => ({ stale: false, serverPid: null, serverStartedAt: null, loginAt: null })
+      ),
     quitApp: () => undefined
   }
 }

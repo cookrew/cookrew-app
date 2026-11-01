@@ -257,6 +257,8 @@ export interface MobileServerDeps {
   sousBus?: MobileApiDeps['sousBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
+  /** Whether the terminals' herdr server predates this macOS login — see MobileApiDeps; passed through as-is. */
+  terminalSession?: MobileApiDeps['terminalSession']
   /**
    * Where the reach publisher stands with the registry (reach.ts · state).
    * Absent reads as "never accepted", which withholds the trusted names —

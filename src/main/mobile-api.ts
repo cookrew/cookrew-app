@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { TerminalSession } from "./terminal-session";
 import { randomUUID } from "node:crypto";
 import { appendFile } from "node:fs";
 import { tmpdir } from "node:os";
@@ -356,6 +357,8 @@ export interface MobileApiDeps {
    * says NO SNAPSHOT YET for everything.
    */
   workspaceShots?: () => Record<string, { src: string; at: number }>;
+  /** Whether the terminals' herdr server predates this macOS login (terminal-session.ts). */
+  terminalSession?: () => Promise<TerminalSession>;
   /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
@@ -885,6 +888,15 @@ export async function handleMobileApi(
       return true;
     }
     respondJson(response, 200, deps.workspaceShots());
+    return true;
+  }
+  // Terminals from an earlier macOS login: the phone says so too (TerminalSessionNotice).
+  if (method === "GET" && p === "/api/terminal-session") {
+    if (!deps.terminalSession) {
+      respondJson(response, 503, { error: "terminal session not wired" });
+      return true;
+    }
+    respondJson(response, 200, await deps.terminalSession());
     return true;
   }
   if (method === "POST" && p === "/api/workspaces") {

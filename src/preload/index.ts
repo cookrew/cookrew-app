@@ -269,6 +269,8 @@ const api = {
   snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke('workspace:snap', rect),
   workspaceShots: () => ipcRenderer.invoke('workspace:shots'),
+  /** Whether the terminals' herdr server predates this macOS login (main/terminal-session.ts). */
+  terminalSession: () => ipcRenderer.invoke('terminals:session'),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   setWorkspaceBrief: (id: string, brief: string) => ipcRenderer.invoke('workspace:brief', id, brief),

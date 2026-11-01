@@ -302,6 +302,8 @@ export interface CookrewApi {
   snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
   /** Every workspace's picture, as data URLs, read on demand. */
   workspaceShots: () => Promise<Record<string, { src: string; at: number }>>;
+  /** Whether the terminals' herdr server predates this macOS login (main/terminal-session.ts). */
+  terminalSession?: () => Promise<{ stale: boolean; serverPid: number | null; serverStartedAt: number | null; loginAt: number | null }>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** The owner's one-line brief (shared/workspace-brief.ts); '' clears it. Rejects an invalid one. */
   setWorkspaceBrief: (id: string, brief: string) => Promise<WorkspaceList>;
