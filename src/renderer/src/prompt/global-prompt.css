@@ -293,6 +293,18 @@
   color: var(--sumi-ink, var(--ink));
 }
 
+/* The menu sits inside the prompt's form: undo the text box's own sizing. */
+.cr-prompt .cr-prompt-menu-orch input {
+  flex: none;
+  width: 13px;
+  min-width: 0;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--sumi-seal, var(--amber-deep));
+  cursor: pointer;
+}
+
 .cr-prompt-orch {
   padding: 1px 4px;
   border-radius: 4px;
