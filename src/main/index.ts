@@ -136,7 +136,7 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
-import { launchCommand } from '../shared/launch-tune'
+import { launchCommand, withoutRoutedPick } from '../shared/launch-tune'
 import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
@@ -2897,11 +2897,13 @@ function spawnTracked(t: {
   // claude's --mcp-config is variadic and must be last on the line.
   const mcpArgs = cardNode?.kind === 'terminal' && !served ? routeService.sharedMcpFor(cardNode) : []
   const spawnRoute = route && !served ? { env: route.env, args: [...route.args, ...mcpArgs] } : null
+  // A routed card runs the route's model: a launch pick's model gives way to it.
+  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : effective
   const fresh = !ptys.get(t.id)
   const session = ptys.spawn(
     {
       terminalId: t.id,
-      command: effective,
+      command: launched,
       cwd: t.cwd,
       card,
       served,

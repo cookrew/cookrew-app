@@ -66,7 +66,9 @@ export function launchOffer(command: string): LaunchOffer | null {
 
 /** The effort levels a pick of this model can take. */
 export function effortOffer(offer: LaunchOffer, model: string | undefined): readonly string[] {
-  return (model !== undefined ? offer.effortFor?.[model] : undefined) ?? offer.effort
+  // Own keys only: a slug named `constructor` must not read Object.prototype.
+  const own = model !== undefined && offer.effortFor !== undefined && Object.hasOwn(offer.effortFor, model)
+  return (own ? offer.effortFor?.[model] : undefined) ?? offer.effort
 }
 
 /**
@@ -135,6 +137,24 @@ export function launchCommand(command: string, raw: unknown, offer: LaunchOffer 
     const value = tune[knob]
     const spell = spelling[knob]
     return value === undefined || spell === undefined ? line : `${line.replace(spell.strip, '')} ${spell.flag(value)}`
+  }, command)
+}
+
+/**
+ * A ROUTED card's command, without the pick a route decides instead (review
+ * 2026-11-02). The route's args come after the command, and codex's `-m`
+ * outranks the route's `-c model=`, so a codex catalog slug would be sent to
+ * the Magpie provider; opencode would get `--model` twice; pi a thinking level
+ * picked for another model. Claude keeps its flags: `--model opus` resolves
+ * through the env the route sets.
+ */
+export function withoutRoutedPick(command: string, harness: string | null | undefined): string {
+  const knobs: readonly LaunchKnob[] =
+    harness === 'codex' || harness === 'opencode' ? ['model'] : harness === 'pi' ? ['model', 'effort'] : []
+  const spelling = harness ? SPELLING[harness as LaunchHarness] : undefined
+  return knobs.reduce((line, knob) => {
+    const strip = spelling?.[knob]?.strip
+    return strip ? line.replace(strip, '') : line
   }, command)
 }
 

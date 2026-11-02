@@ -79,6 +79,13 @@ describe('boxTargetId', () => {
   // Owner 2026-11-01: "clicking the x after @ does not let go of @agent". The
   // release was keyed to the view, so it never applied to an agent the box
   // carried by WORDS (a phone tap on x keeps the box focused, and its hold).
+  // Review 2026-11-02: the hold moves to nobody with the release, so once the
+  // release ends the box follows the view and never snaps back to the agent.
+  it('after a release ends, a hold handed to nobody leaves the box to the view', () => {
+    expect(box({ viewed: 'a3', pin: { id: null }, released: null })).toBeNull()
+    expect(box({ viewed: 'a3', pin: null, released: null })).toBe('a3')
+  })
+
   it('a release lets go of an agent held by words, whoever the view shows', () => {
     expect(box({ viewed: 'a2', pin: { id: 'a1' }, released: { id: 'a1', viewed: 'a2' } })).toBeNull()
     expect(box({ viewed: null, pin: { id: 'a1' }, released: { id: 'a1', viewed: null } })).toBeNull()

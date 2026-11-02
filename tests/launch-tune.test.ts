@@ -7,7 +7,7 @@
 // model. Each offer names its harness, which decides how the flags are spelled.
 
 import { describe, expect, it } from 'vitest'
-import { cleanLaunchTune, effortOffer, launchCommand, launchOffer, launchTuneLabel, type LaunchOffer } from '../src/shared/launch-tune'
+import { cleanLaunchTune, effortOffer, launchCommand, launchOffer, launchTuneLabel, withoutRoutedPick, type LaunchOffer } from '../src/shared/launch-tune'
 
 const CLAUDE = 'claude --permission-mode bypassPermissions'
 
@@ -123,5 +123,25 @@ describe('the chip reads the pick', () => {
     expect(launchTuneLabel({ model: 'opus', effort: 'high' })).toBe('opus · high')
     expect(launchTuneLabel({ effort: 'high' })).toBe('high')
     expect(launchTuneLabel({})).toBeNull()
+  })
+})
+
+// Review 2026-11-02: a routed card's route args come after the command, and
+// codex's -m outranks the route's -c model=.
+describe('a routed card gives the pick way to its route', () => {
+  it("drops codex's and opencode's model, pi's model and thinking, and keeps claude's", () => {
+    expect(withoutRoutedPick('codex -m gpt-6-luna -c model_reasoning_effort=high resume abc', 'codex')).toBe('codex -c model_reasoning_effort=high resume abc')
+    expect(withoutRoutedPick('opencode --model gemini/gemini-2.5-pro --session ses_1', 'opencode')).toBe('opencode --session ses_1')
+    expect(withoutRoutedPick('pi --model ifunk/k3 --thinking high', 'pi')).toBe('pi')
+    expect(withoutRoutedPick('claude --model opus --effort high', 'claude')).toBe('claude --model opus --effort high')
+    expect(withoutRoutedPick('zsh', null)).toBe('zsh')
+  })
+})
+
+describe('a catalog slug named like an object key', () => {
+  it('reads no prototype member as its levels', () => {
+    const offer: LaunchOffer = { harness: 'codex', model: ['constructor'], effort: ['low'], effortFor: {} }
+    expect(effortOffer(offer, 'constructor')).toEqual(['low'])
+    expect(cleanLaunchTune(offer, { model: 'constructor', effort: 'low' })).toEqual({ model: 'constructor', effort: 'low' })
   })
 })

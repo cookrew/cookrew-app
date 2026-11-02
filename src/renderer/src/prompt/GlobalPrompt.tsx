@@ -124,6 +124,15 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   useEffect(() => {
     if (release !== released) setReleased(release)
   }, [release, released])
+  /**
+   * Let go of an agent. The focused box's hold goes with it: a hold left on
+   * the agent (its words still drafted) would pin it back the moment the
+   * release ends, carrying its old words into the box.
+   */
+  const letGo = (id: string): void => {
+    setReleased({ id, viewed })
+    setHeld((h) => (h ? { id: null } : h))
+  }
   const targetId = boxTargetId({ viewed, pin: boxPin(aim, held, heldWords), released: release, known })
   const to = agents.find((a) => a.id === targetId) ?? null
   // An empty box's hold moves with it, so the words typed next stay put.
@@ -365,7 +374,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             type="button"
             aria-label={`Stop prompting ${to.name}`}
             title="Prompt nobody: a new agent takes it"
-            onClick={() => setReleased({ id: to.id, viewed })}
+            onClick={() => letGo(to.id)}
           >
             ×
           </button>
@@ -475,7 +484,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               return
             }
           }
-          if (e.key === 'Backspace' && !e.repeat && to && text === '') setReleased({ id: to.id, viewed })
+          if (e.key === 'Backspace' && !e.repeat && to && text === '') letGo(to.id)
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
