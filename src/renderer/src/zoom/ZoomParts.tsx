@@ -239,11 +239,6 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
         <div ref={bind(`agent-body:${agent.id}`)} className="zv-body" style={HIDDEN}>
           <CardWords agent={agent} sent={reply.sent} />
         </div>
-        {agent.browsers + agent.notes === 0 && (
-          <div ref={bind(`agent-emp:${agent.id}`)} className="zv-emp" style={HIDDEN}>
-            no browser or note
-          </div>
-        )}
         <QuickReply agent={agent} reply={reply} className="zv-reply" style={HIDDEN} formRef={bind(`agent-reply:${agent.id}`)} />
         </>
       )}

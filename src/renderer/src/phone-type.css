@@ -237,9 +237,6 @@
     font-size: inherit;
     line-height: inherit;
   }
-  :root:root .zv-emp {
-    font-size: calc(var(--ph-control) / var(--zv-k-card, 1));
-  }
   :root:root .zv-reply input {
     font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
   }

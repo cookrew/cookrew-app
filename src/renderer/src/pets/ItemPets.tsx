@@ -136,7 +136,7 @@ export function ItemPets({
     <PetTroop
       side="left"
       storageKey="cookrew.pets.items"
-      label="browsers and notes"
+      label="artifacts"
       members={shownMembers}
       more={moreMembers}
       dockable={dock !== null}

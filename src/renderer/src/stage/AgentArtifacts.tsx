@@ -1,6 +1,8 @@
-// THE AGENT'S BROWSERS AND NOTES, ON ITS SHEET (owner, 2026-11-01, after the
-// design drawn from group-motion-pivot.html): a column inside the full view's
-// paper, on the right, under "browsers & notes" — each one the navigator's
+// THE AGENT'S ARTIFACTS, ON ITS SHEET (owner, 2026-11-01, after the design
+// drawn from group-motion-pivot.html): a column inside the full view's paper,
+// on the right, under "artifacts" (its browsers and notes; renamed by the
+// owner 2026-11-03, when the head became the switch that hides and shows the
+// thumbnails, artifacts-shown.ts) — each one the navigator's
 // thumbnail, ×N when other agents share it. It is where an agent's artifacts
 // attach, and where new ones are made: the dock's NOTE and BROWSER moved here,
 // because a note or a browser is made inside an agent (zoom/make-card.ts ·
@@ -10,6 +12,10 @@
 // clicking the open one closes it. Its × removes the card, as the agent's own
 // × does (owner, 2026-11-01): through CanvasUi.requestClose, so the app's one
 // confirm dialog asks first.
+//
+// An agent with none draws no column and says nothing (owner, 2026-11-03: "no
+// browser or note" is not shown): the transcript takes the room, and the
+// make buttons still stand in the head.
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CanvasNode } from '../../../shared/model'
@@ -22,6 +28,7 @@ import type { TerminalAttachment } from '../terminal-attachments'
 import { makeItemFor } from '../zoom/make-card'
 import { itemViewOf, type ItemView } from '../zoom/zoom-model'
 import { Page } from '../zoom/ZoomParts'
+import { artifactsShown, useArtifactsShown } from './artifacts-shown'
 
 export function AgentArtifacts({
   agent,
@@ -41,6 +48,7 @@ export function AgentArtifacts({
   makeSlot?: HTMLElement | null
 }): React.JSX.Element {
   const { requestClose } = useCanvasUi()
+  const shown = useArtifactsShown()
   const open = useAttachView()
   const openId = open?.terminalId === agent.id ? open.itemId : null
   const [making, setMaking] = useState<'note' | 'browser' | null>(null)
@@ -55,8 +63,9 @@ export function AgentArtifacts({
       }),
     [items, owners]
   )
-  // Its pictures: the thumbnail producers photograph only what is wanted (pets/thumb-wants.ts).
-  const browserKey = views.filter((v) => v.kind === 'browser').map((v) => v.id).join(',')
+  // Its pictures: the thumbnail producers photograph only what is wanted (pets/thumb-wants.ts),
+  // and a hidden column wants none.
+  const browserKey = shown ? views.filter((v) => v.kind === 'browser').map((v) => v.id).join(',') : ''
   useEffect(() => {
     thumbWants.claim('fv-arts', browserKey ? browserKey.split(',') : [])
     return () => thumbWants.release('fv-arts')
@@ -104,28 +113,54 @@ export function AgentArtifacts({
     </span>
   )
 
+  const errorLine = error && (
+    <p className="zv-fv-arts-error" role="alert">
+      {error}
+    </p>
+  )
+
+  // None, and the head holds the make buttons: no column, only a failure to say.
+  if (views.length === 0 && makeSlot) {
+    return (
+      <>
+        {createPortal(makeButtons, makeSlot)}
+        {errorLine && <aside className="zv-fv-arts empty" aria-label={`${agent.name}'s artifacts`}>{errorLine}</aside>}
+      </>
+    )
+  }
+
   return (
-    <aside className="zv-fv-arts" aria-label={`${agent.name}'s browsers and notes`}>
+    <aside className={`zv-fv-arts${views.length === 0 ? ' empty' : shown ? '' : ' hidden'}`} aria-label={`${agent.name}'s artifacts`}>
       <header className="zv-fv-arts-head">
-        <span>{views.length ? 'browsers & notes' : 'no browser or note'}</span>
+        {views.length > 0 && (
+          <button
+            type="button"
+            className="zv-fv-arts-toggle"
+            aria-expanded={shown}
+            title={shown ? 'Hide the artifacts' : 'Show the artifacts'}
+            onClick={() => artifactsShown.toggle()}
+          >
+            <span className="zv-fv-arts-caret" aria-hidden="true" />
+            <span>artifacts</span>
+            <span className="zv-fv-arts-n">{views.length}</span>
+          </button>
+        )}
         {makeSlot ? createPortal(makeButtons, makeSlot) : makeButtons}
       </header>
-      {error && (
-        <p className="zv-fv-arts-error" role="alert">
-          {error}
-        </p>
+      {errorLine}
+      {shown && views.length > 0 && (
+        <div className="zv-fv-arts-list">
+          {views.map((view) => (
+            <ArtifactThumb
+              key={view.id}
+              view={view}
+              on={view.id === openId}
+              onOpen={() => attachView.toggle(agent.id, view.id, view.kind)}
+              onRemove={() => requestClose(view.id)}
+            />
+          ))}
+        </div>
       )}
-      <div className="zv-fv-arts-list">
-        {views.map((view) => (
-          <ArtifactThumb
-            key={view.id}
-            view={view}
-            on={view.id === openId}
-            onOpen={() => attachView.toggle(agent.id, view.id, view.kind)}
-            onRemove={() => requestClose(view.id)}
-          />
-        ))}
-      </div>
     </aside>
   )
 }

@@ -88,7 +88,7 @@ export function AgentCard({
       <div className="zv-body cr-pet-card-turn" style={at(body)}>
         <CardWords agent={agent} sent={reply.sent} />
       </div>
-      {items.length > 0 ? (
+      {items.length > 0 &&
         items.slice(0, CARD_THUMBS).map((item, k) => (
           <button key={item.id} type="button" className={`zv-lk ag-lk ${item.kind}`} style={at(thumb(k))} title={item.title} aria-label={`Open ${item.kind}: ${item.title}`} onClick={() => onItem(item.id)}>
             <span className={`zv-th ${item.kind}`}>
@@ -100,10 +100,7 @@ export function AgentCard({
               </span>
             </span>
           </button>
-        ))
-      ) : (
-        <div className="zv-emp">no browser or note</div>
-      )}
+        ))}
       <QuickReply agent={agent} reply={reply} className="zv-reply cr-pet-card-ask" />
     </div>
   )
