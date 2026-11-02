@@ -79,8 +79,12 @@ export interface MachineView {
   waiting: number | null
 }
 
-/** How many browsers and notes the thumbs grid draws. */
-export const ITEMS_SHOWN = 12
+/**
+ * How many browsers and notes the thumbs grid holds: every one (owner,
+ * 2026-11-02: the grid scrolls, so 12 hid the rest). The view mounts only the
+ * rows on screen (ZoomView · ROW_BUFFER); this bounds the model of a runaway board.
+ */
+export const ITEMS_SHOWN = 1000
 
 /**
  * How many coins an agent wears: its newest wires, the seats of its orbit
@@ -215,10 +219,10 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       worn.set(att.node.id, att.node)
     })
   }
-  // The thumbs grid draws a screenful, not a board: a workspace can hold hundreds of
-  // browsers and notes (292 on the owner's), and one tall strip of them is no view.
-  // The ones somebody carries come first, newest first within each; the totals
-  // still count them all, and the rest are said, not drawn.
+  // The thumbs grid holds them all and scrolls (owner, 2026-11-02); a workspace can
+  // hold hundreds (300 on the owner's), so the view mounts only the rows on screen.
+  // The ones somebody carries come first, newest first within each; past
+  // ITEMS_SHOWN the totals still count them, and the rest are said, not drawn.
   const totalCount = all.length
   const carried = (n: CanvasNode): boolean => (owners.get(n.id)?.length ?? 0) > 0
   const shown = [...all.filter(carried), ...all.filter((n) => !carried(n))].slice(0, ITEMS_SHOWN)

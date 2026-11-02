@@ -1,13 +1,33 @@
 /**
  * THE ZOOM'S CAMERAS (moved out of zoom-frame.ts, which re-exports all of
  * this): where the scene is framed at the desk and on a phone, the open
- * card's camera and the free spot for the workspace label at the card stop,
- * and the type scales the words are drawn at. Pure: zoom-frame.ts paints
- * with these, tests pin them.
+ * card's and the thumbnails' cameras, the free spot for the workspace label
+ * at the card stop, and the type scales the words are drawn at. Pure:
+ * zoom-frame.ts paints with these, tests pin them.
  */
 import { clamp01, ease, lerp } from './zoom-path'
 import { fitScale, type Box, type crewOf, type deviceOf, type Pos, type stackOf, type thumbsOf } from './zoom-layout'
 import { sceneWords, type RestScales, type SceneWords } from './scene-words'
+
+export const GROUP_BOX: Box = { w: 430, h: 320, cy: 0 }
+/** A workspace's mark on the device is its group at this scale. */
+export const SWS = 0.62
+
+export interface Layout {
+  stack: ReturnType<typeof stackOf>
+  crew: ReturnType<typeof crewOf>
+  cardBox: Box
+  thumbs: ReturnType<typeof thumbsOf>
+  device: ReturnType<typeof deviceOf>
+  devicesBox: Box
+}
+
+/** The scene's framing box at agent zoom z: the group, the crew, the card's room. */
+export function boxAt(L: Layout, z: number): Box {
+  const mix = (a: Box, b: Box, t: number): Box => ({ w: lerp(a.w, b.w, t), h: lerp(a.h, b.h, t), cy: lerp(a.cy, b.cy, t) })
+  if (z <= 1) return mix(GROUP_BOX, L.crew.box, ease(z))
+  return mix(L.crew.box, L.cardBox, ease(clamp01(z - 1)))
+}
 
 /** A face's reach around its anchor: its labels below, its coins to the right (zoom.css). */
 const FACE_REACH = { left: 100, right: 110, top: 56, bottom: 116 }
@@ -244,6 +264,27 @@ export function phoneCamera(L: Layout, z: number, focus: string | null, w: numbe
   return { ...lerpCam(crew, cardCam(L, focus, w, h, PHONE_MARGIN, CARD_MAX), ease(clamp01(z - 1))), panMax }
 }
 
+/**
+ * THE THUMBNAILS ON A DESKTOP (owner, 2026-11-02: every artifact, scrolled up
+ * and down, not the first twelve). The camera frames the shelf and the first
+ * DESK_THUMB_ROWS rows as it framed the twelve before; a taller grid keeps
+ * that scale and scrolls (pan, from its top), its end above the stop bar.
+ */
+const DESK_THUMB_ROWS = 4
+export function deskThumbs(T: Layout['thumbs'], w: number, h: number, pan: number): Camera {
+  const { box } = T
+  const viewH = 520 + (DESK_THUMB_ROWS - 1) * T.rowH
+  const S = fitScale({ ...box, h: Math.min(box.h, viewH) }, w, h)
+  const panMax = box.h <= viewH ? 0 : Math.max(0, DESK_MARGIN + box.h * S - (h - DESK_BAR))
+  if (panMax === 0) return { S, Ox: w / 2, Oy: h / 2 - box.cy * S, panMax }
+  const p = Math.min(Math.max(pan, 0), panMax)
+  return { S, Ox: w / 2, Oy: DESK_MARGIN - (box.cy - box.h / 2) * S - p, panMax }
+}
+
+/** The thumbnails' camera on this screen, scrolled `pan` px down. */
+export const thumbsCamera = (L: Layout, w: number, h: number, narrow: boolean, pan: number): Camera =>
+  narrow ? phoneThumbs(L.thumbs.box, w, h, pan) : deskThumbs(L.thumbs, w, h, pan)
+
 /** THE THUMBNAILS ON A PHONE: as the crew, the grid fills the screen's width and a taller grid scrolls (pan, from its top). */
 export function phoneThumbs(box: Box, w: number, h: number, pan: number): Camera {
   const S = Math.min(1, (w - PHONE_MARGIN * 2) / box.w)
@@ -262,7 +303,7 @@ export function restScales(L: Layout, w: number, h: number, narrow: boolean): Re
   return {
     crew: narrow ? phoneCamera(L, 1, null, w, h, 0).S : deskCamera(L, 1, null, w, h).S,
     card: cardStopCamera(L, null, w, h, narrow).S,
-    thumbs: narrow ? phoneThumbs(L.thumbs.box, w, h, 0).S : fitScale(L.thumbs.box, w, h),
+    thumbs: thumbsCamera(L, w, h, narrow, 0).S,
     devices: fitScale(L.devicesBox, w, h),
     marks: SWS * fitScale(L.device.box, w, h)
   }
@@ -278,22 +319,3 @@ export function wordsOf(L: Layout, w: number, h: number, narrow: boolean): Scene
   return words
 }
 
-export const GROUP_BOX: Box = { w: 430, h: 320, cy: 0 }
-/** A workspace's mark on the device is its group at this scale. */
-export const SWS = 0.62
-
-export interface Layout {
-  stack: ReturnType<typeof stackOf>
-  crew: ReturnType<typeof crewOf>
-  cardBox: Box
-  thumbs: ReturnType<typeof thumbsOf>
-  device: ReturnType<typeof deviceOf>
-  devicesBox: Box
-}
-
-/** The scene's framing box at agent zoom z: the group, the crew, the card's room. */
-export function boxAt(L: Layout, z: number): Box {
-  const mix = (a: Box, b: Box, t: number): Box => ({ w: lerp(a.w, b.w, t), h: lerp(a.h, b.h, t), cy: lerp(a.cy, b.cy, t) })
-  if (z <= 1) return mix(GROUP_BOX, L.crew.box, ease(z))
-  return mix(L.crew.box, L.cardBox, ease(clamp01(z - 1)))
-}

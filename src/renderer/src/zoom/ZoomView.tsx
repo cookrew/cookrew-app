@@ -11,7 +11,7 @@ import { buildZoomModel } from './zoom-model'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
 import { PerRowPill } from './PerRowPill'
-import { deviceWords, layoutOf, SWS, wordsOf, type FrameEls } from './zoom-frame'
+import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls, type ShelfOut } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
@@ -19,6 +19,9 @@ import { useZoomFleetView } from './use-zoom-fleet'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
+
+/** Rows of thumbnails mounted past each edge of the view, so a scroll shows them already drawn. */
+const ROW_BUFFER = 2
 
 /**
  * The real navigator, from devices through workspaces and crew to the real
@@ -162,15 +165,22 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
     return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead') }
   }, [])
-  // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera): the crew is
-  // drawn at a readable size, so a tall one scrolls (by a drag) instead of shrinking.
+  // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
+  // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
+  // one scrolls (a drag, the wheel) instead of shrinking. The shelf over the
+  // thumbnails is one row that scrolls sideways (shelfFrame).
   const panAt = useRef(0)
   const panMax = useRef(0)
+  const shelfAt = useRef(0)
+  const shelfOut = useRef<ShelfOut>({ max: 0, top: 0, bottom: 0 })
   const pan = useMemo(() => ({
     get: () => panAt.current,
-    setMax: (max: number) => {
+    shelf: () => shelfAt.current,
+    setMax: (max: number, shelf: ShelfOut) => {
       panMax.current = max
       if (panAt.current > max) panAt.current = max
+      shelfOut.current = shelf
+      if (shelfAt.current > shelf.max) shelfAt.current = shelf.max
     }
   }), [])
   // Agents and workspaces per row, as the owner picked them on this device (crew-cols.ts).
@@ -182,9 +192,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     [model.frame, crewCols, deviceCols]
   )
   const motion = useZoomMotion(frame, collect, root, pan)
+  const layout = useMemo(() => layoutOf(frame, narrow), [frame, narrow])
   // THE PHONE'S WORDS (scene-words.ts): each stop's scale at rest, for the words seen at
   // one stop only (phone-type.css), and the names' width; a new width is measured again.
-  const sceneVars = useMemo(() => wordsOf(layoutOf(frame, narrow), size.w, size.h, narrow).vars, [frame, narrow, size])
+  const sceneVars = useMemo(() => wordsOf(layout, size.w, size.h, narrow).vars, [layout, narrow, size])
   const varsSet = useRef<string[]>([])
   useLayoutEffect(() => {
     const el = root.current
@@ -197,20 +208,115 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   }, [sceneVars, motion.wake])
   // The crew shows each agent's unsent words: keep them in step with its line (draft-follow.ts).
   useEffect(() => followDrafts(), [])
+  // ONLY THE ROWS ON SCREEN ARE MOUNTED (owner, 2026-11-02: every artifact,
+  // scrolled up and down). A workspace holds hundreds of them, and each
+  // thumbnail rides a layer of its own (zoom-frame.ts · put: tile memory):
+  // the rows in view, ROW_BUFFER more each way, mounted before they show.
+  const [firstRow, setFirstRow] = useState(0)
+  const firstRowAt = (p: number): number => {
+    const cam = thumbsCamera(layout, size.w, size.h, narrow, p)
+    return Math.max(0, Math.floor(-cam.Oy / cam.S / layout.thumbs.rowH))
+  }
+  const rowsSeen = Math.ceil(size.h / (layout.thumbs.rowH * thumbsCamera(layout, size.w, size.h, narrow, 0).S)) + 1
+  const { shownItems, seenBrowsers } = useMemo(() => {
+    const rowOf = (id: string): number => Math.round((layout.thumbs.at[id]?.y ?? -1e9) / layout.thumbs.rowH)
+    const shown = model.items.filter((i) => rowOf(i.id) >= firstRow - ROW_BUFFER && rowOf(i.id) <= firstRow + rowsSeen + ROW_BUFFER)
+    // The pictures wanted: the browsers in view in the grid's order, then a row past each edge (thumb-wants.ts caps them).
+    const inRows = (lo: number, hi: number): string[] => layout.thumbs.order.filter((id) => rowOf(id) >= lo && rowOf(id) <= hi)
+    const seen = [...inRows(firstRow, firstRow + rowsSeen), ...inRows(firstRow + rowsSeen + 1, firstRow + rowsSeen + 1), ...inRows(firstRow - 1, firstRow - 1)]
+    const browsers = new Set(model.items.filter((i) => i.kind === 'browser').map((i) => i.id))
+    return { shownItems: shown, seenBrowsers: seen.filter((id) => browsers.has(id)).join(' ') }
+  }, [model.items, layout, firstRow, rowsSeen])
+  /** The scroll that shows an item's thumbnail: the current one when it is on screen, else one that puts it mid-screen. */
+  const panToItem = (id: string): number => {
+    const at = layout.thumbs.at[id]
+    if (!at) return 0
+    const now = thumbsCamera(layout, size.w, size.h, narrow, panAt.current)
+    const y = now.Oy + at.y * now.S
+    if (y > 0 && y < size.h) return panAt.current
+    const cam = thumbsCamera(layout, size.w, size.h, narrow, 0)
+    return Math.min(cam.panMax, Math.max(0, cam.Oy + at.y * cam.S - size.h / 2))
+  }
+  /** An item's full view stands over its own row: stepping out lands on the item it came from, not at the grid's top. */
+  const scrollToFullItem = (): boolean => {
+    const s = zoomStore.get()
+    if (s.dir !== 'items' || s.v <= 0.5 || !s.item) return false
+    panAt.current = panToItem(s.item)
+    setFirstRow(firstRowAt(panAt.current))
+    return true
+  }
   // The crew and the thumbnails scroll apart: a side opened again starts at its top.
   useEffect(() => {
+    shelfAt.current = 0
+    if (scrollToFullItem()) return
     panAt.current = 0
-  }, [zoom.dir])
-  /** The crew stop, or the thumbnails, on a narrow screen with more than fits: where a drag scrolls (no wheel: owner, 2026-10-31). */
+    setFirstRow(0)
+  }, [zoom.dir]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    scrollToFullItem()
+  }, [zoom.item]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A new size or grid keeps the scroll the painter clamps: the rows in view follow it
+  // (on the agents' side the scroll is the crew's, and the grid waits at its top).
+  useEffect(() => {
+    setFirstRow(zoomStore.get().dir === 'items' ? firstRowAt(panAt.current) : 0)
+  }, [layout, size, narrow]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** The crew stop on a narrow screen, or the thumbnails, with more than fits: where a drag or the wheel scrolls. */
   const canPan = (): boolean => {
     const z = zoomStore.get()
     return panMax.current > 0 && (z.dir === 'agents' ? z.v > 0.9 && z.v < 1.5 : z.v > -0.5 && z.v < 0.5)
   }
   const scrollBy = (dy: number): void => {
     panAt.current = Math.min(panMax.current, Math.max(0, panAt.current + dy))
+    if (zoomStore.get().dir === 'items') setFirstRow(firstRowAt(panAt.current))
     motion.wake()
   }
-  const drag = useRef<{ y: number; pan: number; on: boolean } | null>(null)
+  /** At the thumbnails with a shelf longer than the screen: a sideways wheel moves it. */
+  const canShelf = (): boolean => {
+    const z = zoomStore.get()
+    return z.dir === 'items' && z.v > -0.5 && z.v < 0.5 && shelfOut.current.max > 0
+  }
+  /** …and a sideways drag that starts on its band. */
+  const overShelf = (clientY: number): boolean => {
+    const y = clientY - (root.current?.getBoundingClientRect().top ?? 0)
+    return canShelf() && y >= shelfOut.current.top && y <= shelfOut.current.bottom
+  }
+  /** Moves the shelf by dx px; false when it is already at that end. */
+  const shelfBy = (dx: number): boolean => {
+    const next = Math.min(shelfOut.current.max, Math.max(0, shelfAt.current + dx))
+    if (next === shelfAt.current) return false
+    shelfAt.current = next
+    motion.wake()
+    return true
+  }
+  // THE WHEEL SCROLLS, IT NEVER ZOOMS (owner, 2026-10-31: the wheel is the
+  // page's, and a list's). Up and down it scrolls the thumbnails (or a narrow
+  // screen's crew), wherever the pointer is: the shelf never takes a page's
+  // scroll. Sideways (a trackpad's swipe, shift + wheel) it moves the shelf.
+  const onWheel = useRef<(e: WheelEvent) => void>(() => undefined)
+  onWheel.current = (e) => {
+    if (e.ctrlKey) return
+    if ((e.target as Element | null)?.closest?.('textarea, input, select, [role="dialog"]')) return
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? size.h : 1
+    const dx = e.deltaX * k
+    const dy = e.deltaY * k
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (canShelf() && shelfBy(dx)) e.preventDefault()
+      return
+    }
+    if (canPan()) {
+      scrollBy(dy)
+      e.preventDefault()
+    }
+  }
+  useEffect(() => {
+    const el = overview.current
+    if (!el) return
+    const wheel = (e: WheelEvent): void => onWheel.current(e)
+    el.addEventListener('wheel', wheel, { passive: false })
+    return () => el.removeEventListener('wheel', wheel)
+  }, [])
+  /** A press that may become a scroll: its axis is the first move's (sideways on the shelf's band, else up and down). */
+  const drag = useRef<{ x: number; y: number; pan: number; shelf: number; canX: boolean; canY: boolean; axis: 'x' | 'y' | null } | null>(null)
   const panned = useRef(false)
   // A web font that lands later changes every measured width: measure again.
   useEffect(() => {
@@ -236,7 +342,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   }, [focusId])
   const cardIds = useMemo(() => new Set([focusId, prevFocus].filter((id): id is string => id !== null)), [focusId, prevFocus])
   const cardKey = [...cardIds].join(' ')
-  useLayoutEffect(() => { motion.wake() }, [model, frame, size, cardKey, motion.wake])
+  useLayoutEffect(() => { motion.wake() }, [model, frame, size, cardKey, shownItems, motion.wake])
   // THE VIEW IS NEVER SCROLLED (zoom.css · .zv-overview): the painter draws
   // from its (0, 0). Where `overflow: clip` is not known, a scroll that
   // happens anyway is put back at once.
@@ -274,10 +380,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const moved = useRef(false)
   const swallowClick = useRef(false)
   useEffect(() => {
-    thumbWants.claim('zoom', model.items.filter((i) => i.kind === 'browser').slice(0, 12).map((i) => i.id))
+    thumbWants.claim('zoom', seenBrowsers ? seenBrowsers.split(' ') : [])
     return () => thumbWants.release('zoom')
-  }, [model.items])
+  }, [seenBrowsers])
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
+  // One names list per item, so a row scrolled into view does not draw every mounted thumbnail again (ItemNode is memo'd).
+  const namesOf = useMemo(() => new Map(model.items.map((i) => [i.id, i.owners.map((id) => agentOf.get(id)?.name ?? id)])), [model.items, agentOf])
   // The grid's items and the coins' others: a coin's face is drawn either way.
   const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
   const device = useMemo(() => deviceOf(model.frame.workspaces, narrow, model.frame.screenAspect, deviceCols ?? undefined), [model.frame.workspaces, model.frame.screenAspect, narrow, deviceCols])
@@ -354,7 +462,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           moved.current = false
           panned.current = false
-          drag.current = pointers.current.size === 1 && canPan() ? { y: e.clientY, pan: panAt.current, on: false } : null
+          const canX = overShelf(e.clientY)
+          const canY = canPan()
+          drag.current = pointers.current.size === 1 && (canX || canY)
+            ? { x: e.clientX, y: e.clientY, pan: panAt.current, shelf: shelfAt.current, canX, canY, axis: null }
+            : null
           if (pointers.current.size === 2) {
             pinch.current = { distance: distance(), v: zoomStore.get().v }
             moved.current = true
@@ -363,14 +475,27 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         onPointerMove={(e) => {
           const at = pointers.current.get(e.pointerId)
           if (!at) return
+          // A mouse let go outside the window never sent its pointerup: no button, no drag.
+          if (e.pointerType === 'mouse' && e.buttons === 0) {
+            pointers.current.delete(e.pointerId)
+            drag.current = null
+            return
+          }
           if (Math.hypot(e.clientX - at.x, e.clientY - at.y) > 6) moved.current = true
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           const d = drag.current
           if (d && pointers.current.size === 1) {
-            if (!d.on && Math.abs(e.clientY - d.y) > 6) d.on = true
-            if (d.on) {
+            const dx = d.x - e.clientX
+            const dy = d.y - e.clientY
+            // An axis is taken only by a move along one that scrolls: a click's sideways wobble is still a click.
+            if (d.axis === null) {
+              if (d.canX && Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) d.axis = 'x'
+              else if (d.canY && Math.abs(dy) > 6 && Math.abs(dy) >= Math.abs(dx)) d.axis = 'y'
+            }
+            if (d.axis !== null) {
               panned.current = true
-              scrollBy(d.pan + (d.y - e.clientY) - panAt.current)
+              if (d.axis === 'x') shelfBy(d.shelf + dx - shelfAt.current)
+              else scrollBy(d.pan + dy - panAt.current)
             }
           }
           const p = pinch.current
@@ -424,7 +549,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             const a = agentOf.get(l.agent), i = itemOf.get(l.item)
             return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? motion.agent(a.id) : motion.item(i.id)))} /> : null
           })}
-          {model.items.map((i) => <ItemNode key={i.id} item={i} names={i.owners.map((id) => agentOf.get(id)?.name ?? id)} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
+          {shownItems.map((i) => <ItemNode key={i.id} item={i} names={namesOf.get(i.id) ?? []} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
           {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => motion.agent(a.id))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
           {model.agents.filter((a) => a.phase === 'waiting').map((a) => <span key={a.id} className="zv-dot" ref={bind(`agent-dot:${a.id}`)} />)}
           <div className="zv-grp" ref={bind('label')}>

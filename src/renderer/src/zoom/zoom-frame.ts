@@ -9,9 +9,12 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machinesAt, stackOf, thumbsOf, type Box, type Pos } from './zoom-layout'
+import { crewOf, deviceOf, fitScale, machinesAt, shelfRow, stackOf, thumbsOf, type Box, type Pos } from './zoom-layout'
 import { sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
+/* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
+export * from './zoom-camera'
+import { GROUP_BOX, SWS, boxAt, cardStopLabel, crewLabelAt, deskCamera, deviceWords, keepOnScreen, phoneCamera, phoneThumbs, thumbsCamera, wordsOf, type Layout } from './zoom-camera'
 
 export interface AgentModel {
   id: string
@@ -113,16 +116,26 @@ export interface FrameState {
   w: number
   h: number
   narrow: boolean
-  /** How far the crew is scrolled down on a narrow screen, in px (phoneCamera clamps it). */
+  /** How far the crew (a narrow screen) or the thumbnails (any screen) are scrolled down, in px (the cameras clamp it). */
   pan?: number
+  /** How far the shelf over the thumbnails is scrolled sideways, in px from its left end (shelfFrame clamps it). */
+  shelf?: number
+}
+
+/** The shelf over the thumbnails on screen: how far it scrolls sideways (0 when it fits), and the band it is drawn in. */
+export interface ShelfOut {
+  max: number
+  top: number
+  bottom: number
 }
 
 /** What the view reports after a frame: how opaque it still is (it hands over to the real full view), and the scene's scale. */
 export interface FrameOut {
   cover: number
   scale: number
-  /** How far the crew can scroll on a narrow screen, in px: 0 when it fits. */
+  /** How far the crew (a narrow screen) or the thumbnails can scroll, in px: 0 when they fit. */
   panMax: number
+  shelf: ShelfOut
 }
 
 const f1 = (n: number): string => n.toFixed(1)
@@ -173,9 +186,49 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   }
 }
 
-/* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
-export * from './zoom-camera'
-import { GROUP_BOX, SWS, boxAt, cardStopLabel, crewLabelAt, deskCamera, deviceWords, keepOnScreen, phoneCamera, phoneThumbs, wordsOf, type Layout } from './zoom-camera'
+/** A coin docks under an item whose slot is on screen or this near it, in px (paint · the links). */
+const COIN_ROOM = 160
+/** The shelf's strip on screen: this far in from each side, and an agent past it fades over SHELF_FADE px (half out, half seen). */
+const SHELF_EDGE = { wide: 32, narrow: 12 }
+const SHELF_FADE = 48
+/** The shelf's band around its row, in scene px: the faces above, the names below (where a wheel or a drag scrolls it). */
+const SHELF_BAND = { top: 36, bottom: 60 }
+interface ShelfFrame {
+  /** Each agent's x on the shelf, in scene px, scrolled. */
+  x: Record<string, number>
+  /** Each agent's opacity at the strip's ends. */
+  o: Record<string, number>
+  max: number
+}
+/** The row is measured once per set of elements (their names' widths) and scale of the names. */
+const shelfMemo = new WeakMap<FrameEls, { L: Layout; k: number; row: ReturnType<typeof shelfRow> }>()
+/**
+ * THE SHELF ON SCREEN (owner, 2026-11-02): one row at the thumbnails' scale
+ * S. A row that fits is centred; a longer one starts at the strip's left end
+ * and scrolls sideways (`pan` px), its agents fading out past either end.
+ */
+function shelfFrame(L: Layout, els: FrameEls, nameK: number, w: number, S: number, narrow: boolean, pan: number): ShelfFrame {
+  const memo = shelfMemo.get(els)
+  const row = memo && memo.L === L && memo.k === nameK
+    ? memo.row
+    : shelfRow(L.thumbs.shelf, (id) => (els.agents.get(id)?.nmW ?? 0) * SHELF_NAME_S * nameK)
+  if (!memo || memo.row !== row) shelfMemo.set(els, { L, k: nameK, row })
+  const edge = narrow ? SHELF_EDGE.narrow : SHELF_EDGE.wide
+  const max = Math.max(0, row.w * S - (w - edge * 2))
+  const p = Math.min(Math.max(pan, 0), max)
+  // The camera puts scene x 0 at the screen's centre: the row's left end goes to the strip's, less the scroll.
+  const shift = max > 0 ? (edge - p - w / 2) / S + row.w / 2 : 0
+  const x: Record<string, number> = {}
+  const o: Record<string, number> = {}
+  for (const id of L.thumbs.shelf.order) {
+    x[id] = (row.x[id] ?? 0) + shift
+    const sx = w / 2 + x[id] * S
+    const half = ((row.slot[id] ?? 0) * S) / 2
+    const out = Math.max(0, edge - (sx - half), sx + half - (w - edge))
+    o[id] = clamp01(1 - out / SHELF_FADE)
+  }
+  return { x, o, max }
+}
 
 /** The camera box at agent zoom z ≥ 0. */
 
@@ -222,14 +275,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     dOy = aOy - dS * slot.y
   }
   const pk = ease(ramp(P, 0.15, 0.9))
-  let iS = fit(L.thumbs.box)
-  let iOy = h / 2 - L.thumbs.box.cy * iS
-  if (st.narrow) {
-    const cam = phoneThumbs(L.thumbs.box, w, h, st.pan ?? 0)
-    iS = cam.S
-    iOy = cam.Oy
-    panMax = lerp(panMax, cam.panMax, pk)
-  }
+  const tc = thumbsCamera(L, w, h, st.narrow, st.pan ?? 0)
+  const iS = tc.S
+  const iOy = tc.Oy
+  panMax = lerp(panMax, tc.panMax, pk)
   const S = lerp(aS, iS, pk)
   const Ox = lerp(aOx, w / 2, pk)
   const Oy = lerp(aOy, iOy, pk)
@@ -241,11 +290,13 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
 
   // ── the wash and the ring: the workspace's own ground ──
   const wb = zIn < 0 ? GROUP_BOX : bA
-  const wsx = lerp(lerp(0.2, wb.w / WASH.w, ease(z)), L.thumbs.box.w / WASH.w, pc)
-  const wsy = lerp(lerp(0.42, wb.h / WASH.h, ease(z)), L.thumbs.box.h / WASH.h, pc)
+  // A grid that scrolls has the screenful under it, not a sheet as tall as the grid: the grid slides over it.
+  const tb: Box = tc.panMax > 0 ? { w: L.thumbs.box.w, h: h / iS, cy: (h / 2 - iOy) / iS } : L.thumbs.box
+  const wsx = lerp(lerp(0.2, wb.w / WASH.w, ease(z)), tb.w / WASH.w, pc)
+  const wsy = lerp(lerp(0.42, wb.h / WASH.h, ease(z)), tb.h / WASH.h, pc)
   // The ground lies over the sheet now (the sheet is under the scene): it goes as a full view comes.
   const sheetIn = st.dir === 'agents' ? ramp(z, 2, 2.4) : ramp(I, 0, 0.4)
-  put(els.wash, `translate(0px, ${f1(lerp(lerp(-10, wb.cy, ease(z)), L.thumbs.box.cy, pc))}px) scale(${f4(wsx)}, ${f4(wsy)})`, lerp(0.6, 0.55, ease(z)) * (1 - sheetIn))
+  put(els.wash, `translate(0px, ${f1(lerp(lerp(-10, wb.cy, ease(z)), tb.cy, pc))}px) scale(${f4(wsx)}, ${f4(wsy)})`, lerp(0.6, 0.55, ease(z)) * (1 - sheetIn))
   const open = ease(clamp01(z))
   put(els.ring, `translate(0px, -10px) scale(${f4(1 + 1.7 * open)}) rotate(${(-18 * open).toFixed(2)}deg)`, (1 - ramp(z, 0.05, 0.75)) * (1 - ramp(P, 0, 0.3)))
 
@@ -267,6 +318,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const others = model.agents.filter((a) => a.id !== st.focus)
   const dockAt = new Map(others.map((a, k) => [a.id, k] as const))
   const headOut = FV.headFades ? 1 - ramp(z, 2.35, 2.75) : 1
+  const shelf = shelfFrame(L, els, sw.shelf.name, w, iS, st.narrow, st.shelf ?? 0)
   model.agents.forEach((a, i) => {
     const e = els.agents.get(a.id)
     if (!e) return
@@ -280,8 +332,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     let s = lerp(far.s, 1, t) * lerp(1, 0.62, ease(clamp01(zi - 1)))
     const r = lerp(far.r, 0, t)
     // To the shelf as the thumbs unfold.
-    const sh = L.thumbs.shelf[a.id] ?? { x: 0, y: L.thumbs.shelfY }
+    const sh = { x: shelf.x[a.id] ?? 0, y: L.thumbs.shelfY }
     const pm = ease(ramp(P, 0.02 * Math.min(i, 8), 0.44 + 0.02 * Math.min(i, 8)))
+    // Past the ends of the shelf's strip an agent fades out (it scrolls back in).
+    const onShelf = lerp(1, shelf.o[a.id] ?? 1, pm)
     x = lerp(x, sh.x, pm)
     y = lerp(y, sh.y, pm)
     s = lerp(s, 0.5, pm)
@@ -295,7 +349,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const docked = ease(ramp(z, 2, 2.5))
     const nodeX = dockP ? lerp(x, dockP.x, docked) : x
     const nodeY = dockP ? lerp(y, dockP.y, docked) : y
-    put(e.node, `translate(${f1(nodeX)}px, ${f1(nodeY)}px)`, dock ? lerp(1, dock.o, ramp(docked, 0, 0.6)) : 1)
+    put(e.node, `translate(${f1(nodeX)}px, ${f1(nodeY)}px)`, (dock ? lerp(1, dock.o, ramp(docked, 0, 0.6)) : 1) * onShelf)
     const avAt = focused && into > 0 ? local(FV.avatar.x, FV.avatar.y, x, y) : { x: 0, y: 0 }
     const avS = focused ? lerp(s, FV.avatar.size / (64 * S), into) : dock ? lerp(s, dock.size / (64 * S), docked) : s
     const avMove = focused && into > 0 ? `translate(${f1(avAt.x * into)}px, ${f1(avAt.y * into)}px) ` : ''
@@ -382,7 +436,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
       const k = ease(ramp(z, 0.15, 0.7))
       const dx = lerp(38, x + 22 * s, k)
       const dy = lerp(-52, y - 22 * s, k)
-      put(e.dot, `translate(${f1(dx)}px, ${f1(dy)}px)`, (1 - ramp(iz * pc, 0, 0.35)) * (focused ? 1 - toFull : 1 - ramp(z, 2, 2.2)))
+      put(e.dot, `translate(${f1(dx)}px, ${f1(dy)}px)`, (1 - ramp(iz * pc, 0, 0.35)) * onShelf * (focused ? 1 - toFull : 1 - ramp(z, 2, 2.2)))
     }
   })
 
@@ -438,9 +492,12 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const first = firstLink.get(l.item) ?? l
     const G = first === l ? A : agentLink(first, z)
     const gs = lerp(0.34, 0.42, G.grow)
-    // A coin whose item the grid does not draw stays with its agent and fades as the thumbs unfold.
-    const docks = l.item in L.thumbs.at
+    // A coin whose item the grid does not draw, or draws past the screen the
+    // thumbs open on, stays with its agent and fades as the thumbs unfold (it
+    // would streak off the screen); it is docked when its row is scrolled to.
     const home = L.thumbs.at[l.item] ?? { x: 0, y: 0 }
+    const homeY = tc.Oy + (home.y + 46) * iS
+    const docks = l.item in L.thumbs.at && homeY > -COIN_ROOM && homeY < h + COIN_ROOM
     const k1 = docks ? ease(ramp(P, 0.06 + l.j * 0.03, 0.46)) : 0
     const k2 = docks ? ease(ramp(P, 0.5, 0.94)) : 0
     const flip = docks ? ease(ramp(P, 0.12 + l.j * 0.03, 0.48)) : 0
@@ -601,5 +658,6 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   }
   put(els.fullHead, null, st.dir === 'items' && st.focusItem !== null ? ramp(I, 0.4, 0.7) : 0)
   const cover = st.dir === 'agents' ? 1 - ramp(z, 2.86, 2.99) : 1 - ramp(I, 0.86, 0.99)
-  return { cover, scale: S, panMax }
+  const band = { top: iOy + (L.thumbs.shelfY - SHELF_BAND.top) * iS, bottom: iOy + (L.thumbs.shelfY + SHELF_BAND.bottom) * iS }
+  return { cover, scale: S, panMax, shelf: { max: shelf.max, ...band } }
 }
