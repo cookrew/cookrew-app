@@ -110,6 +110,11 @@ describe('the root sheet', () => {
     expect(roster).toMatch(/\.attach-slot \{[^}]*background: var\(--cream\);/)
   })
 
+  it('draws a browser page picture with rounded corners', () => {
+    const styles = bare(readFileSync('src/renderer/src/styles.css', 'utf8'))
+    expect(styles).toMatch(/\.browser-frame-img \{[^}]*border-radius: 10px;/)
+  })
+
   it('recolours the logo without redrawing it', () => {
     expect(bare(sheet)).toMatch(/:root\[data-theme='root'\] :is\(\.cr-logo-mark, \.cr-hand-mark\) img \{[^}]*filter: invert\(1\)/)
   })
