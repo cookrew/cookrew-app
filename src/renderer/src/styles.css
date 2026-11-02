@@ -2260,6 +2260,9 @@ a.card-close {
   position: absolute;
   /* Velvet sets width/height/left/top from fitContain (letterbox, centered). */
   image-rendering: auto;
+  /* The page as a rounded sheet in its letterbox (owner 2026-11-03: rounded
+     corners are better than the square white block). */
+  border-radius: 10px;
   opacity: 0;
   transition: opacity 140ms ease;
 }
