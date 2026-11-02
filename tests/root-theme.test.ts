@@ -105,6 +105,11 @@ describe('the root sheet', () => {
     expect(css).toMatch(/:root\[data-theme='root'\] \.zv-overview \{[^}]*repeating-linear-gradient/)
   })
 
+  it('lays an attached browser on the theme ground, not a fixed cream (white corners at night)', () => {
+    const roster = bare(readFileSync('src/renderer/src/agent-roster.css', 'utf8'))
+    expect(roster).toMatch(/\.attach-slot \{[^}]*background: var\(--cream\);/)
+  })
+
   it('recolours the logo without redrawing it', () => {
     expect(bare(sheet)).toMatch(/:root\[data-theme='root'\] :is\(\.cr-logo-mark, \.cr-hand-mark\) img \{[^}]*filter: invert\(1\)/)
   })

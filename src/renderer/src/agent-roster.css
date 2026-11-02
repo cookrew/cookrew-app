@@ -2236,11 +2236,13 @@
   background: var(--cream-hi);
   min-height: 0;
 }
-/* The browser layer draws the page over this box; it only holds the space. */
+/* The browser layer draws the page over this box; it only holds the space.
+   The theme's ground, never a fixed cream: --paper was never defined, so the
+   fallback cream showed as white corners round the page on a dark theme. */
 .attach-slot {
   flex: 1;
   min-height: 0;
-  background: var(--paper, #f5f1e6);
+  background: var(--cream);
 }
 .attach-note-head {
   flex: 0 0 auto;
