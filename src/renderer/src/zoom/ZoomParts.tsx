@@ -210,7 +210,9 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
 }, sameProps)
 
 /** Another workspace on the device: its ring, its agents' stack, its seal and name. */
-export const MarkNode = memo(function MarkNode({ mark, bind, onOpen }: { mark: MarkView; bind: Bind; onOpen: () => void }): React.JSX.Element {
+export const MarkNode = memo(function MarkNode({ mark, bind, onOpen, onOpenItems }: { mark: MarkView; bind: Bind; onOpen: () => void; onOpenItems?: () => void }): React.JSX.Element {
+  // A workspace opens two ways (draft · group-motion-pivot.html): its agents → the crew, its browsers → their thumbnails.
+  const items = (mark.browsers ?? 0) + (mark.notes ?? 0)
   const n = mark.presets.length
   const shown = mark.presets.slice(0, 9)
   const mid = (shown.length - 1) / 2
@@ -233,6 +235,22 @@ export const MarkNode = memo(function MarkNode({ mark, bind, onOpen }: { mark: M
       <div className="zv-grp zv-mark-label">
         <span className="zv-seal">{n}</span>
         <span>{mark.name}</span>
+        {items > 0 && onOpenItems && (
+          <button
+            type="button"
+            className="zv-tot"
+            aria-label={`Open ${mark.name} artifacts`}
+            // The mark around it opens the crew on a click or Enter: this one is the other way in.
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenItems()
+            }}
+          >
+            <Counts browsers={mark.browsers ?? 0} notes={mark.notes ?? 0} />
+          </button>
+        )}
       </div>
     </div>
   )

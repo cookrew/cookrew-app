@@ -83,12 +83,23 @@ describe('what the agents carry', () => {
 })
 
 describe('the device', () => {
+  it("gives each other workspace its feed's totals, so its browsers can open it", () => {
+    const m = buildZoomModel({
+      nodes: [], connections: [], rows: [], crew: [], attachIndex: attachmentIndex([], []),
+      workspaces: [ws('w1', 'Dev'), ws('w2', 'Home')], activeId: 'w1', name: 'Dev',
+      counts: new Map([['w2', { browsers: 4, notes: 1 }]])
+    })
+    expect(m.marks.find((k) => k.id === 'w2')).toMatchObject({ browsers: 4, notes: 1 })
+  })
+
   it('lists the account’s other workspaces as marks with their agents and waiting dot, the open one included', () => {
     const m = fixture([term('t1', 'A')], [], [row('t1', 'waiting'), row('x1', 'working', { workspaceId: 'w2' })])
     expect(m.frame.workspaces).toEqual(['w1', 'w2'])
     expect(m.frame.active).toBe('w1')
     const home = m.marks.find((k) => k.id === 'w2')!
     expect(home).toMatchObject({ name: 'Home', presets: ['Claude Code'], waiting: false })
+    // No feed counts: none are made up.
+    expect(home).toMatchObject({ browsers: null, notes: null })
     expect(m.marks.some((k) => k.id === 'w1')).toBe(false)
     expect(m.browsers + m.notes).toBe(0)
   })

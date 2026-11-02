@@ -108,7 +108,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const model = useMemo(() => buildZoomModel({
     nodes: workspace?.nodes ?? [], connections: workspace?.connections ?? [], rows, crew: crew.crew, attachIndex,
     workspaces: fleetWorkspaces.length ? fleetWorkspaces.map((w) => ({ id: w.id, name: w.name, dir: '', dirs: [], icon: w.icon ?? '🗂' })) : (list?.workspaces ?? []), activeId: workspaceId ?? list?.activeId ?? 'local', name: workspace?.name ?? 'Workspace',
-    machines: fleet.machines
+    machines: fleet.machines,
+    counts: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, { browsers: w.counts.browsers, notes: w.counts.notes }] as const] : [])))
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model
@@ -318,13 +319,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
     })
   }, [device, words, model.marks, model.machines])
-  const switchWorkspace = useCallback(async (id: string) => {
+  const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents') => {
     setError(null)
     try {
       await cookrew().switchWorkspace(id)
       zoomStore.focusAgent(null)
       zoomStore.focusItem(null)
-      zoomStore.go(1, 'agents')
+      if (side === 'items') zoomStore.go(0, 'items')
+      else zoomStore.go(1, 'agents')
     } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
   }, [])
   const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
@@ -404,7 +406,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.titleBottom}px) scale(${words.titleK.toFixed(4)}) translateY(-100%)`, maxWidth: Math.round(words.titleMax) }}>
             <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span><small>agents open the crew · browsers open thumbnails</small>
           </div>
-          {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} />)}
+          {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} onOpenItems={stable(`mark-items:${m.id}`, () => void switchWorkspace(m.id, 'items'))} />)}
           <button className="zv-workspace-hit" type="button" style={{ transform: `translate(${activeSlot.x - 90}px, ${activeSlot.y - 90}px)` }} onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} agents`} />
         </div>
         {/* The full view's sheet, UNDER the scene: the open card's parts travel over it to their places (full-poses.ts). */}

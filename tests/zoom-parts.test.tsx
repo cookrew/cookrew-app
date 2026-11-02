@@ -138,11 +138,30 @@ describe('a link and an item', () => {
 
 describe('a workspace and a machine', () => {
   it('seals the agent count and names the workspace', () => {
-    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code', 'Codex'], waiting: true }
+    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code', 'Codex'], waiting: true, browsers: null, notes: null }
     const html = renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} />)
     expect(html).toContain('Home')
     expect(html).toContain('zv-seal">2<')
     expect(html).toContain('zv-mark-dot')
+  })
+
+  // Owner 2026-11-02, "like the draft": a workspace opens two ways, by its
+  // agents (the crew) or by its browsers (their thumbnails). The other
+  // workspaces' marks had no way in by their browsers, nor their totals.
+  it('wears its totals, and they open it by its browsers', () => {
+    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code'], waiting: false, browsers: 3, notes: 2 }
+    const html = renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
+    expect(html).toMatch(/<button type="button" class="zv-tot" aria-label="Open Home artifacts">/)
+    expect(html).toContain('3 browsers')
+    expect(html).toContain('2 notes')
+  })
+
+  it('draws no totals it does not know, and none for a workspace that holds nothing', () => {
+    const unknown: MarkView = { id: 'w3', name: 'Lab', presets: [], waiting: false, browsers: null, notes: null }
+    const empty: MarkView = { ...unknown, browsers: 0, notes: 0 }
+    for (const mark of [unknown, empty]) {
+      expect(renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)).not.toContain('zv-tot')
+    }
   })
 
   it('shows a machine’s workspaces, and says “listed only” when it cannot be read', () => {

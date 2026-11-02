@@ -45,6 +45,9 @@ export interface MarkView {
   name: string
   presets: string[]
   waiting: boolean
+  /** Its browsers and notes, from its desktop's feed; null when the feed has none (never a made-up zero). */
+  browsers: number | null
+  notes: number | null
 }
 export interface ZoomModel {
   frame: FrameModel
@@ -147,6 +150,8 @@ export interface ZoomInput {
   crew: readonly AgentRow[]
   attachIndex: AttachmentIndex
   workspaces: readonly WorkspaceMeta[]
+  /** Each workspace's browsers and notes, where its desktop's feed counts them (use-zoom-fleet.ts). */
+  counts?: ReadonlyMap<string, { browsers: number; notes: number }>
   activeId: string
   name: string
   /** The real fleet: this desktop and the account's others, from use-zoom-fleet.ts. */
@@ -235,7 +240,8 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     .filter((w) => w.id !== input.activeId)
     .map((w) => {
       const rows = input.rows.filter((r) => r.workspaceId === w.id)
-      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: rows.some((r) => r.phase === 'waiting') }
+      const counted = input.counts?.get(w.id)
+      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: rows.some((r) => r.phase === 'waiting'), browsers: counted?.browsers ?? null, notes: counted?.notes ?? null }
     })
   const order = input.workspaces.map((w) => w.id)
   if (!order.includes(input.activeId)) order.unshift(input.activeId)
