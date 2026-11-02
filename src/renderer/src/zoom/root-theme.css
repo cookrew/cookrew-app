@@ -223,18 +223,17 @@
   color: var(--ink);
 }
 
-/* A faint scanline over the whole page: static, one layer, never over input. */
-:root[data-theme='root'] body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 2147483000;
-  pointer-events: none;
-  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, 0.1) 2px 3px);
+/* SCANLINES ON THE GROUND ONLY (owner: never over text or a browser's
+   picture). They are a background layer of the surfaces the ground is drawn
+   on, so every card, line of text and page picture sits above them. */
+:root[data-theme='root'] :is(body.cr-ink, .cr-stage) {
+  background-image: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(220, 225, 219, 0.045) 2px 3px);
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  :root[data-theme='root'] body::after {
-    display: none;
-  }
+/* The zoom overview keeps its grain dots under the lines. */
+:root[data-theme='root'] .zv-overview {
+  background-image:
+    repeating-linear-gradient(to bottom, transparent 0 2px, rgba(220, 225, 219, 0.045) 2px 3px),
+    radial-gradient(var(--zv-grain) 1px, transparent 1px);
+  background-size: auto, 3px 3px;
 }
