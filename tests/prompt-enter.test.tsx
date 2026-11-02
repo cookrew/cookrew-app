@@ -56,7 +56,7 @@ describe("Enter in the agent's prompt box sends", () => {
 
   it('the box says a screenshot can be pasted or dropped into it, for an agent and for a new one', async () => {
     const html = await render({ id: 'a1', name: 'Gauge', remote: false })
-    expect(html).toMatch(/<input[^>]*title="Paste or drop a screenshot: its path goes into the prompt"/)
+    expect(html).toMatch(/<input[^>]*title="Paste or drop a screenshot: it goes into the prompt"/)
     expect(html).not.toContain('attaching…')
   })
 
