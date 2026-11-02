@@ -52,6 +52,8 @@ export interface ZoomFleetWorkspace {
   /** Notes and browsers wired to no agent. */
   loose: ZoomFleetAttachment[]
   counts: ZoomCounts | null
+  /** Its newest browser: the feed's, else the last one it lists. Null for a name only. */
+  newest: ZoomFleetAttachment | null
 }
 
 /**
@@ -143,8 +145,15 @@ const liveWorkspace = (workspace: LevelsWorkspace): ZoomFleetWorkspace => ({
   live: true,
   agents: workspace.agents,
   loose: workspace.loose,
-  counts: countsOf(workspace)
+  counts: countsOf(workspace),
+  newest: workspace.newest ?? lastBrowserOf(workspace)
 })
+
+/** A desktop older than the feed's `newest`: the last browser it lists, its tray before its agents'. */
+function lastBrowserOf(workspace: LevelsWorkspace): LevelsAttachment | null {
+  const listed = [...workspace.agents.flatMap((a) => a.attachments), ...workspace.loose]
+  return listed.findLast((a) => a.kind === 'browser') ?? null
+}
 
 const listedWorkspace = (workspace: { id: string; name: string }, focusedId: string | null): ZoomFleetWorkspace => ({
   id: workspace.id,
@@ -155,7 +164,8 @@ const listedWorkspace = (workspace: { id: string; name: string }, focusedId: str
   live: false,
   agents: [],
   loose: [],
-  counts: null
+  counts: null,
+  newest: null
 })
 
 const machineOf = (row: AccountMachine): ZoomFleetMachine => ({
@@ -479,7 +489,7 @@ export interface ZoomFleetView {
     online: boolean
     detail: ZoomMachineDetail
     display: MachineDisplay | null
-    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null }[]
+    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; newest: { id: string; title: string; host: string | null } | null }[]
   }[]
 }
 
@@ -492,7 +502,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       online: m.online,
       detail: m.detail,
       display: m.display ?? null,
-      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts }))
+      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, newest: w.newest ? { id: w.newest.id, title: w.newest.title, host: w.newest.host ?? null } : null }))
     }))
   }
 }

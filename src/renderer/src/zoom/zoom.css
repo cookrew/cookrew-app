@@ -1976,3 +1976,34 @@
   opacity: var(--zv-full-opacity, 1);
   pointer-events: var(--zv-full-pe, auto);
 }
+/* On the way into a full view the stop bar steps away: the full view has none,
+   and on a phone it lay over the row the thumbnails were flying to. */
+.zv-controls {
+  transition: opacity 160ms ease;
+}
+[data-going='full'] .zv-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+/* A workspace's newest browser beside its stack (ZoomParts · NewestThumb): a
+   thumbnail like a coin's, pressable. On a phone the marks are too small for
+   it (the open workspace's shows from the group out, never as specks). */
+.zv-wsnew {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.zv-wsnew > .zv-th {
+  transform: none;
+}
+.zv-wsnew-cap {
+  opacity: 1;
+}
+@media (max-width: 759px) {
+  .zv-mark .zv-wsnew,
+  .zv-mark .zv-wsnew-cap {
+    display: none;
+  }
+}

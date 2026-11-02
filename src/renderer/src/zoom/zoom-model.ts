@@ -48,11 +48,19 @@ export interface MarkView {
   /** Its browsers and notes, from its desktop's feed; null when the feed has none (never a made-up zero). */
   browsers: number | null
   notes: number | null
+  /** Its newest browser, drawn beside its stack as the way in by its browsers; null when the feed names none. */
+  newest: ItemView | null
 }
 export interface ZoomModel {
   frame: FrameModel
   agents: AgentView[]
   items: ItemView[]
+  /**
+   * The workspace's newest browser by creation. The draft stands it beside the
+   * stack whether or not an agent wears it; a carried one rides its coin there
+   * (frame.newest), any other is drawn on its own (ZoomView · zv-wsnew).
+   */
+  newestItem: ItemView | null
   /** The items agents wear as coins that the thumbs grid does not draw: their coins need a face too. */
   coinItems: ItemView[]
   marks: MarkView[]
@@ -156,6 +164,8 @@ export interface ZoomInput {
   workspaces: readonly WorkspaceMeta[]
   /** Each workspace's browsers and notes, where its desktop's feed counts them (use-zoom-fleet.ts). */
   counts?: ReadonlyMap<string, { browsers: number; notes: number }>
+  /** Each workspace's newest browser, where its desktop's feed names it. */
+  newest?: ReadonlyMap<string, { id: string; title: string; host: string | null }>
   activeId: string
   name: string
   /** The real fleet: this desktop and the account's others, from use-zoom-fleet.ts. */
@@ -245,7 +255,9 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     .map((w) => {
       const rows = input.rows.filter((r) => r.workspaceId === w.id)
       const counted = input.counts?.get(w.id)
-      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: rows.some((r) => r.phase === 'waiting'), browsers: counted?.browsers ?? null, notes: counted?.notes ?? null }
+      const nb = input.newest?.get(w.id)
+      const newest: ItemView | null = nb ? { id: nb.id, kind: 'browser', title: nb.title, host: nb.host ?? '', tint: tintOf(nb.id), initial: itemInitial(nb.title), line: '', owners: [] } : null
+      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: rows.some((r) => r.phase === 'waiting'), browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, newest }
     })
   const order = input.workspaces.map((w) => w.id)
   if (!order.includes(input.activeId)) order.unshift(input.activeId)
@@ -265,6 +277,10 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     agents,
     items,
     coinItems,
+    newestItem: (() => {
+      const node = input.nodes.findLast((n) => n.kind === 'browser')
+      return node ? itemViewOf(node, owners.get(node.id) ?? []) : null
+    })(),
     marks,
     machines: (input.machines ?? []).map((m) => ({
       id: m.id,

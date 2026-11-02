@@ -99,7 +99,10 @@ describe('the way in carries the card, never an empty sheet', () => {
     const f = r.face('a1')
     expect(Math.abs(f.x - F.dock(0, 7).x)).toBeLessThan(2)
     expect(Math.abs(f.y - F.dock(0, 7).y)).toBeLessThan(2)
-    expect(r.face('a0').o).toBeLessThan(0.05)
+    // Still seen on its way up (the review of 11-02: an empty sheet before the hand-over) …
+    expect(r.face('a0').o).toBeGreaterThan(0.3)
+    // … and gone as the real view comes in (zoom-frame · cover from 2.86).
+    expect(run(model, 2.87, 412, 801, true).face('a0').o).toBeLessThan(0.05)
   })
 
   it('the ground goes as the sheet comes', () => {

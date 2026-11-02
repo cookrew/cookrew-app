@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machinesAt, shelfRow, stackOf, thumbsOf, type Box, type Pos } from './zoom-layout'
+import { crewOf, deviceOf, fitScale, machinesAt, shelfRow, stackOf, thumbsOf, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -103,6 +103,8 @@ export interface FrameEls {
   next: Put | null
   /** An item's full-view head, crisp (ZoomView · zv-fv-ghost): the page's words arrive in it, never blown up. */
   fullHead?: Put | null
+  /** The newest browser beside the stack when no coin carries it (ZoomView · NewestThumb). */
+  newThumb?: Put | null
   machine: Put
 }
 
@@ -164,11 +166,11 @@ export function put(el: Put | null | undefined, transform: string | null, opacit
 /** The machine's screen holds the device view at this scale. */
 const SDEV = 0.5
 const WASH = { w: 1200, h: 540 }
-const NEW_POSE = { x: 132, y: 34, s: 1.5 }
 
 
 export function layoutOf(model: FrameModel, narrow: boolean): Layout {
-  const crew = crewOf(model.agents, narrow, model.crewCols)
+  // A tree under the leads, by the cables between agents (zoom-layout.ts · crewRows).
+  const crew = crewOf(model.agents, narrow, model.crewCols, model.ties)
   const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols)
   const screen = { w: device.screen.w * SDEV + 28, h: device.screen.h * SDEV + 28 }
   const machines = machinesAt(model.otherMachines, device.screen, narrow)
@@ -317,7 +319,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const local = (X: number, Y: number, x = 0, y = 0): Pos => ({ x: (X - Ox) / S - x, y: (Y - Oy) / S - y })
   const others = model.agents.filter((a) => a.id !== st.focus)
   const dockAt = new Map(others.map((a, k) => [a.id, k] as const))
-  const headOut = FV.headFades ? 1 - ramp(z, 2.35, 2.75) : 1
+  // A phone's head is the bar's, above this view: the face and words are seen rising to it, gone just as the real view arrives.
+  const headOut = FV.headFades ? 1 - ramp(z, 2.6, 2.86) : 1
   const shelf = shelfFrame(L, els, sw.shelf.name, w, iS, st.narrow, st.shelf ?? 0)
   model.agents.forEach((a, i) => {
     const e = els.agents.get(a.id)
@@ -425,7 +428,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const bodyCard = { x: -18, y: 32 + (1 - b) * 10 }
     const bx = bodyAt ? lerp(bodyCard.x, bodyAt.x, into) : bodyCard.x
     const by = bodyAt ? lerp(bodyCard.y, bodyAt.y, into) : bodyCard.y
-    put(e.body, `translate(${f1(bx)}px, ${f1(by)}px)${bodyK === 1 ? '' : ` scale(${f4(bodyK)})`}`, b * gone * (focused ? 1 - ramp(z, 2.8, 2.95) : words))
+    put(e.body, `translate(${f1(bx)}px, ${f1(by)}px)${bodyK === 1 ? '' : ` scale(${f4(bodyK)})`}`, b * gone * (focused ? 1 - ramp(z, 2.88, 2.99) : words))
     put(e.emp, null, ramp(zi, 1.6, 1.97) * gone * (focused ? 1 - toFull : words))
     const replyAt = focused && into > 0 ? local(FV.reply.x, FV.reply.y, x, y) : null
     const rk = replyAt ? lerp(1, 1 / S, into) : 1
@@ -507,7 +510,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const focusedAgent = l.agent === st.focus
     // The open card's thumbnails go to the browsers-and-notes column, and hand over to it.
     const cell = focusedAgent && into > 0 && A.grow > 0.5 ? FV.cell(l.k) : null
-    const fade = (cell ? cell.o * (1 - ramp(z, 2.7, 2.9)) : focusedAgent ? 1 - toFull : 1 - ramp(z, 2, 2.25)) * (1 - ramp(iz * pc, 0, 0.3))
+    const fade = (cell ? cell.o * (1 - ramp(z, 2.88, 2.99)) : focusedAgent ? 1 - toFull : 1 - ramp(z, 2, 2.25)) * (1 - ramp(iz * pc, 0, 0.3))
     const seen = docks ? lerp(A.o, 1, ramp(P, 0, 0.3)) : A.o * (1 - ramp(P, 0, 0.25))
     // The newest's thumbnail beside the stack, as its caption: on a phone, not as specks on the device's marks.
     const newIn = st.narrow && l.key === model.newest ? ramp(zIn, -0.6, -0.2) : 1
@@ -633,7 +636,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   put(els.label, `translate(${f1(labAt.x)}px, ${f1(labAt.y)}px)${Math.abs(lk - 1) < 1e-4 ? '' : ` scale(${f4(lk)})`}`, labSeen * (1 - toFull) * (1 - ramp(iz * pc, 0, 0.3)))
   // On a phone the caption shows from the group out of the device, never as specks on the device's marks.
   const capIn = st.narrow ? ramp(zIn, -0.6, -0.2) : 1
-  put(els.newCap, `translate(${f1(NEW_POSE.x - 52)}px, ${f1(NEW_POSE.y + 40)}px)`, model.newest ? (1 - ramp(z, 0.05, 0.3)) * (1 - pc) * capIn : 0)
+  const newSeen = (1 - ramp(z, 0.05, 0.3)) * (1 - pc) * capIn
+  put(els.newCap, `translate(${f1(NEW_POSE.x - 52)}px, ${f1(NEW_POSE.y + 40)}px)`, model.newest || els.newThumb ? newSeen : 0)
+  // Carried by nobody's coin, it stands there on its own and goes as the group opens (draft · newestPose).
+  put(els.newThumb, null, model.newest ? 0 : newSeen)
 
   // ── the full-view panel: in screen space, from the focused card (or thumbnail) to the whole view ──
   let fromRect: { x: number; y: number; w: number; h: number } | null = null

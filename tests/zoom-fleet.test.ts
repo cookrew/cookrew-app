@@ -82,7 +82,7 @@ describe('composeFleet', () => {
     const other = machines[1]
     expect(other).toMatchObject({ name: 'Laptop', online: true, lastSeenAt: 5, counts: null, focusedWorkspaceId: null })
     // Another Mac's agents are not readable from here: names only, never zeros.
-    expect(other.workspaces).toEqual([{ id: 'r1', name: 'remote ws', icon: null, traits: [], focused: false, live: false, agents: [], loose: [], counts: null }])
+    expect(other.workspaces).toEqual([{ id: 'r1', name: 'remote ws', icon: null, traits: [], focused: false, live: false, agents: [], loose: [], counts: null, newest: null }])
   })
 
   it('names this desktop from its workspace list while the feed is out, or where there is none', () => {
@@ -311,5 +311,27 @@ describe('relayAccountMachines (the phone, through cookrew.dev)', () => {
     expect(await relayAccountMachines(BASE, async () => new Response('{}', { status: 500 }))).toEqual({ ok: false, reason: 'refused' })
     expect(await relayAccountMachines(BASE, async () => Promise.reject(new TypeError('Load failed')))).toEqual({ ok: false, reason: 'offline' })
     expect(await relayAccountMachines(BASE, async () => new Response('not json', { status: 200 }))).toEqual({ ok: false, reason: 'malformed' })
+  })
+})
+
+// Owner 2026-11-02 (the draft's device stop): each workspace's newest browser,
+// beside its stack. The feed names it; a desktop older than that field gives
+// the last browser it lists.
+describe("a workspace's newest browser", () => {
+  const attachment = (id: string, kind: 'note' | 'browser') => ({ id, kind, title: id, host: kind === 'browser' ? `${id}.dev/` : null, shared: false })
+  const snapshot = (ws: Record<string, unknown>) => ({
+    v: 1, rev: 1, at: 0, focusedWorkspaceId: 'w1',
+    machine: { name: 'Mac', appVersion: null, profile: { kind: 'laptop', model: null, label: null, vendor: null, os: 'darwin', osVersion: null, arch: 'arm64', cpus: null, memoryGb: null, evidence: [] } },
+    workspaces: [{ id: 'w1', name: 'One', icon: null, state: 'focused', agents: [], loose: [], counts: { agents: 0, notes: 0, browsers: 0 }, ...ws }]
+  })
+  it('is the one the feed names', async () => {
+    const { composeFleet } = await import('../src/renderer/src/zoom/use-zoom-fleet')
+    const fleet = composeFleet({ levels: snapshot({ newest: attachment('fresh', 'browser'), loose: [attachment('old', 'browser')] }) } as never)
+    expect(fleet[0].workspaces[0].newest?.id).toBe('fresh')
+  })
+  it('is the last browser listed when the feed names none, and none for notes only', async () => {
+    const { composeFleet } = await import('../src/renderer/src/zoom/use-zoom-fleet')
+    expect(composeFleet({ levels: snapshot({ loose: [attachment('a', 'browser'), attachment('b', 'browser'), attachment('n', 'note')] }) } as never)[0].workspaces[0].newest?.id).toBe('b')
+    expect(composeFleet({ levels: snapshot({ loose: [attachment('n', 'note')] }) } as never)[0].workspaces[0].newest).toBeNull()
   })
 })

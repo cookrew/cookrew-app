@@ -32,6 +32,12 @@ export interface CrewItem {
 
 /** The crew's column and row pitch, in scene px (scene-words.ts reads them to fit the words under a face). */
 export const COL = 200
+/**
+ * Where a workspace's newest browser stands beside its agents' stack, and its
+ * scale (draft group-motion-pivot.html · NEW_POSE): the open workspace's and
+ * every other mark's alike.
+ */
+export const NEW_POSE = { x: 132, y: 34, s: 1.5 } as const
 export const ROW = 175
 
 /** The stack in the ring: drawn bottom → top, the first agent (an orchestrator if there is one) on top. */
@@ -60,19 +66,120 @@ export const CREW_COLS = { wide: [3, 4, 5], narrow: [2, 3, 4, 5] } as const
 export const defaultCrewCols = (narrow: boolean): number => (narrow ? 2 : 5)
 
 /** The crew: orchestrators in a row on top, everyone else in rows under them, `cols` to a row (the pick, else the default). */
-export function crewOf(agents: readonly CrewAgent[], narrow: boolean, picked?: number): { at: Record<string, Pos>; next: Pos; box: Box } {
-  const cols = picked ?? defaultCrewCols(narrow)
+/** A crew row: its agents, and empty slots that keep a child under its parent's column. */
+export type CrewSlot = CrewAgent | null
+/**
+ * One row of the crew. Slot c stands at column c - (width - 1) / 2: `width` is
+ * the row the slots are aligned to (its parent row's, for children), and slots
+ * past it continue to the right (the ones tied to nobody, as the draft's Scout).
+ */
+export interface CrewRow {
+  slots: CrewSlot[]
+  width: number
+}
+
+const rowOf = (slots: CrewSlot[]): CrewRow => ({ slots, width: slots.length })
+/** How far a row reaches from the crew's centre, in columns. */
+const reach = (r: CrewRow): number => Math.max((r.width - 1) / 2, r.slots.length - 1 - (r.width - 1) / 2)
+
+/**
+ * THE CREW AS A TREE (owner 2026-11-02, the draft group-motion-pivot.html):
+ * the leads on top, the agents tied to them in the row below, and each of
+ * theirs under them, in their parent's column. The ties are the cables
+ * between agents; the ones tied to nobody close the last row.
+ *
+ * It never takes more rows, nor a wider row, than creation order does (the
+ * leads, then everyone else, `cols` to a row): the camera frames the crew, so
+ * a taller crew would draw every word smaller. When the tree would, the crew
+ * keeps that shape and only takes the tree's order, which still brings tied
+ * agents together. Without a lead tied to anyone it is creation order.
+ */
+export function crewRows(agents: readonly CrewAgent[], ties: readonly { a: string; b: string }[], cols: number): CrewRow[] {
+  const chunk = (list: readonly CrewAgent[]): CrewRow[] => {
+    const out: CrewRow[] = []
+    for (let i = 0; i < list.length; i += cols) out.push(rowOf(list.slice(i, i + cols)))
+    return out
+  }
   const leads = agents.filter((a) => a.orch)
   const rest = agents.filter((a) => !a.orch)
-  const rows: CrewAgent[][] = []
-  if (leads.length) for (let i = 0; i < leads.length; i += cols) rows.push(leads.slice(i, i + cols))
-  for (let i = 0; i < rest.length; i += cols) rows.push(rest.slice(i, i + cols))
-  if (rows.length === 0) rows.push([])
+  const shaped = (order: readonly CrewAgent[]): CrewRow[] => {
+    const rows = [...chunk(leads), ...chunk(order)]
+    return rows.length ? rows : [rowOf([])]
+  }
+  const known = new Set(agents.map((a) => a.id))
+  const near = new Map<string, string[]>()
+  for (const t of ties) {
+    if (t.a === t.b || !known.has(t.a) || !known.has(t.b)) continue
+    near.set(t.a, [...(near.get(t.a) ?? []), t.b])
+    near.set(t.b, [...(near.get(t.b) ?? []), t.a])
+  }
+  if (!leads.some((l) => (near.get(l.id) ?? []).length > 0)) return shaped(rest)
+
+  const placed = new Set(leads.map((a) => a.id))
+  const tree: CrewRow[] = chunk(leads)
+  const bfs: CrewAgent[] = []
+  let level = tree.slice()
+  for (;;) {
+    // The level above, in reading order, and each of its agents' slot.
+    const order = new Map<string, number>()
+    const slotOf = new Map<string, number>()
+    level.forEach((row) => row.slots.forEach((a, c) => a && (order.set(a.id, order.size), slotOf.set(a.id, c))))
+    const parentOf = (a: CrewAgent): string | null =>
+      (near.get(a.id) ?? []).filter((p) => order.has(p)).sort((x, y) => order.get(x)! - order.get(y)!)[0] ?? null
+    const kids = rest
+      .filter((a) => !placed.has(a.id) && parentOf(a) !== null)
+      .map((a, i) => ({ a, p: parentOf(a)!, i }))
+      .sort((x, y) => order.get(x.p)! - order.get(y.p)! || x.i - y.i)
+    if (kids.length === 0) break
+    for (const k of kids) {
+      placed.add(k.a.id)
+      bfs.push(k.a)
+    }
+    const above = level.length === 1 ? level[0] : null
+    let next: CrewRow[]
+    if (above && above.width > 1 && kids.length <= above.width) {
+      // Under the parents: each child takes the free slot nearest its parent's.
+      const slots: CrewSlot[] = Array.from({ length: above.width }, () => null)
+      for (const { a, p } of kids) {
+        const want = slotOf.get(p) ?? 0
+        const free = [...slots.keys()].filter((c) => slots[c] === null).sort((x, y) => Math.abs(x - want) - Math.abs(y - want) || y - x)[0]
+        slots[free] = a
+      }
+      next = [{ slots, width: above.width }]
+    } else next = chunk(kids.map((k) => k.a))
+    tree.push(...next)
+    level = next
+  }
+  // Tied to nobody: at the end of the last row while it has room, then rows of their own.
+  const loose = rest.filter((a) => !placed.has(a.id))
+  const last = tree[tree.length - 1]
+  if (last && last !== tree[0] && last.slots.some((a) => a !== null)) {
+    // Its filled slots, then as many more as stay within a full row's reach of the centre.
+    const filled = last.slots.length - [...last.slots].reverse().findIndex((a) => a !== null)
+    const most = Math.floor((cols - 1) / 2 + (last.width - 1) / 2) + 1
+    const into = loose.splice(0, Math.max(0, most - filled))
+    last.slots = [...last.slots.slice(0, filled), ...into]
+  }
+  tree.push(...chunk(loose))
+
+  const plain = shaped(rest)
+  const fits = tree.length <= plain.length && Math.max(...tree.map(reach)) <= Math.max(...plain.map(reach))
+  return fits ? tree : shaped([...bfs, ...rest.filter((a) => !placed.has(a.id))])
+}
+
+export function crewOf(
+  agents: readonly CrewAgent[],
+  narrow: boolean,
+  picked?: number,
+  ties: readonly { a: string; b: string }[] = []
+): { at: Record<string, Pos>; next: Pos; box: Box } {
+  const cols = picked ?? defaultCrewCols(narrow)
+  const rows = crewRows(agents, ties, cols)
   const at: Record<string, Pos> = {}
   const top = -((rows.length - 1) * ROW) / 2 - 10
   rows.forEach((row, r) => {
-    row.forEach((a, c) => {
-      at[a.id] = { x: (c - (row.length - 1) / 2) * COL, y: top + r * ROW }
+    row.slots.forEach((a, c) => {
+      if (a) at[a.id] = { x: (c - (row.width - 1) / 2) * COL, y: top + r * ROW }
     })
   })
   // A seat at the end of the crew, for the agent that is not there yet: it is
@@ -83,12 +190,14 @@ export function crewOf(agents: readonly CrewAgent[], narrow: boolean, picked?: n
   // first column: beside the row it stood in a third column, and the phone's
   // camera, which frames every seat, drew the crew small and off-centre (Gauge,
   // 2026-11-01: 15 agents at 0.64, centred on x=139 of 412).
-  const next = lastRow.length < cols
-    ? { x: (lastRow.length - (lastRow.length - 1) / 2 - 0.5) * COL, y: top + last * ROW }
+  const lastLen = lastRow.slots.length
+  const lastMid = (lastRow.width - 1) / 2
+  const next = lastLen < cols
+    ? { x: (lastLen - lastMid - 0.5) * COL, y: top + last * ROW }
     : narrow
       ? { x: (-(cols - 1) / 2) * COL, y: top + (last + 1) * ROW }
-      : { x: ((lastRow.length - 1) / 2 + 1) * COL, y: top + last * ROW }
-  const wideRow = Math.max(1, ...rows.map((r) => r.length)) + (lastRow.length < cols ? 1 : 0)
+      : { x: (lastLen - 1 - lastMid + 1) * COL, y: top + last * ROW }
+  const wideRow = Math.max(1, ...rows.map((r) => 2 * reach(r) + 1)) + (lastLen < cols ? 1 : 0)
   // Room for the orbiting coins on the right and a card opening down and right.
   return { at, next, box: { w: Math.max(560, wideRow * COL + 360), h: Math.max(420, rows.length * ROW + 300), cy: 40 } }
 }
