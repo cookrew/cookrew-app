@@ -1293,7 +1293,8 @@
   position: absolute;
   left: 0;
   top: 0;
-  z-index: 1;
+  /* Under the scene (it comes first): the parts going to the full view ride over it. */
+  z-index: 0;
   width: calc(100% - 24px);
   height: calc(100% - 24px);
   border-radius: 16px;
@@ -1946,4 +1947,32 @@
 .zv-attach-note.failed {
   color: var(--sumi-wait, var(--danger, #c0392b));
   animation: zv-sent 5s ease forwards;
+}
+
+/* ── the way into a full view (full-poses.ts) ── */
+/* The item's crisp head: the full view's own head, laid over the same box, with no paper of its own. */
+.zv-fv-ghost {
+  z-index: 13;
+  background: none !important;
+  opacity: 0;
+  pointer-events: none;
+}
+.zv-fv-ghost::after {
+  display: none;
+}
+.zv-fv-ghost.laned {
+  --fv-lane-left: 56px;
+  --fv-lane-right: 56px;
+}
+/* Only the zoom's own marks, only while moving: the full view's own × stay (its artifacts'). */
+[data-going='full'] .zv-scene .zv-del {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* The live browser of an item's full view (BrowserLayer.tsx, outside the zoom's
+   root): it fades with the real full view, by the value the zoom sets on the
+   body; with no zoom mounted the value is absent and it shows as it always did. */
+.browser-lod.browser-embedded {
+  opacity: var(--zv-full-opacity, 1);
+  pointer-events: var(--zv-full-pe, auto);
 }

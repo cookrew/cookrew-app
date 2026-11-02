@@ -108,12 +108,21 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))
+      // A live browser in an item's full view is drawn by BrowserLayer, outside
+      // this root: it reads the same fade off the body, so it comes in and goes
+      // out with the zoom instead of popping over its motion (zoom.css).
+      document.body.style.setProperty('--zv-full-opacity', String(1 - out.cover))
+      document.body.style.setProperty('--zv-full-pe', out.cover > 0.5 ? 'none' : 'auto')
       env.dataset.full = out.cover < 0.02 ? 'true' : 'false'
+      // On the way into a full view: no hover mark rides a growing card or thumbnail.
+      const going = (at.dir === 'agents' && at.v > 2.05 && at.v < 2.99) || (at.dir === 'items' && at.v > 0.02 && at.v < 0.99) ? 'full' : ''
+      if (env.dataset.going !== going) env.dataset.going = going
       // Per-agent stacking order is changed only when the focus changes.
       for (const a of m.current.model.agents) {
         const el = els.agents.get(a.id)
         if (!el) continue
-        const open = a.id === focus && at.v > 1.2
+        // Open from the card stop until the way into the full view: its × must not ride along (full-poses.ts).
+        const open = a.id === focus && at.v > 1.2 && (at.dir !== 'agents' || at.v < 2.1)
         const flag = open ? 'open' : ''
         if (el.node.dataset.card !== flag) el.node.dataset.card = flag
         const level = a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10
@@ -143,6 +152,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
     if (root.current) observer.observe(root.current)
     kick.current()
     return () => {
+      document.body.style.removeProperty('--zv-full-opacity')
+      document.body.style.removeProperty('--zv-full-pe')
       alive = false
       rest.dispose()
       if (raf) cancelAnimationFrame(raf)

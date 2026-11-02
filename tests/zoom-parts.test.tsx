@@ -79,7 +79,7 @@ describe('an agent’s card', () => {
     const frame0 = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
     expect(frame0).toContain('lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny)')
     expect(frame0).toContain('lerp(stTop, -2, ny)')
-    expect(frame0).toContain('translate(-18px, ${f1(32')
+    expect(frame0).toContain('const bodyCard = { x: -18, y: 32 + (1 - b) * 10 }')
     expect(frame0).toContain('const slot = { x: 17 + 79 * l.k, y: 136 }')
     expect(frame0).toContain('cx: lerp(0, -27, grow),')
     expect(frame0).toContain('cs: lerp(1, 0.45, grow)')
@@ -138,11 +138,30 @@ describe('a link and an item', () => {
 
 describe('a workspace and a machine', () => {
   it('seals the agent count and names the workspace', () => {
-    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code', 'Codex'], waiting: true }
+    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code', 'Codex'], waiting: true, browsers: null, notes: null }
     const html = renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} />)
     expect(html).toContain('Home')
     expect(html).toContain('zv-seal">2<')
     expect(html).toContain('zv-mark-dot')
+  })
+
+  // Owner 2026-11-02, "like the draft": a workspace opens two ways, by its
+  // agents (the crew) or by its browsers (their thumbnails). The other
+  // workspaces' marks had no way in by their browsers, nor their totals.
+  it('wears its totals, and they open it by its browsers', () => {
+    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code'], waiting: false, browsers: 3, notes: 2 }
+    const html = renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
+    expect(html).toMatch(/<button type="button" class="zv-tot" aria-label="Open Home artifacts">/)
+    expect(html).toContain('3 browsers')
+    expect(html).toContain('2 notes')
+  })
+
+  it('draws no totals it does not know, and none for a workspace that holds nothing', () => {
+    const unknown: MarkView = { id: 'w3', name: 'Lab', presets: [], waiting: false, browsers: null, notes: null }
+    const empty: MarkView = { ...unknown, browsers: 0, notes: 0 }
+    for (const mark of [unknown, empty]) {
+      expect(renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)).not.toContain('zv-tot')
+    }
   })
 
   it('shows a machine’s workspaces, and says “listed only” when it cannot be read', () => {
