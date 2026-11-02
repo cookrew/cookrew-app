@@ -5,10 +5,10 @@
    already reads it follows: the app tokens through body.cr-ink, the zoom
    navigator through --zv-*, the avatars' ensō, rings and corner marks.
 
-   Black ground, pale ink, mono labels and sans names, phosphor green for
-   done and health and the agent's own seal, picked = reverse video (pale fill,
-   black text) where ink had amber, and red still for an agent waiting on you,
-   nothing else.
+   Black ground, pale ink, mono labels and sans names, and ONE accent: red
+   (owner: "green to red"), for done and health, the agent's own seal, the
+   status marks and an agent waiting on you. Picked = reverse video (pale
+   fill, black text) where ink had amber.
 
    One switch: `data-theme="root"` on <html> (color-scheme.ts, ⋯ → Theme).
    Root is always dark, so it draws night on the desktop too. Every rule here is
@@ -30,10 +30,10 @@
   --sumi-hair: rgba(220, 225, 219, 0.09);
   --sumi-hair-2: rgba(220, 225, 219, 0.15);
   --sumi-rule: rgba(220, 225, 219, 0.34);
-  /* The agent's own mark: phosphor, with black on it. */
-  --sumi-seal: #3be27f;
-  --sumi-seal-fill: #2fc46c;
-  --sumi-seal-text: #3be27f;
+  /* The agent's own mark: red, with black on it (5.9:1). */
+  --sumi-seal: #ff3b3b;
+  --sumi-seal-fill: #f0302f;
+  --sumi-seal-text: #ff4d4d;
   --sumi-on-seal: #050706;
   /* Picked / primary: reverse video, as a terminal selects. */
   --sumi-gold: #e6eae5;
@@ -41,12 +41,12 @@
   --sumi-on-gold: #050706;
   /* Red: an agent waiting on you, and nothing else (5.9:1). */
   --sumi-wait: #ff3b3b;
-  --sumi-moss: #3be27f;
+  --sumi-moss: #ff3b3b;
   --sumi-violet: #9d90ff;
   --sumi-violet-soft: #29244d;
   --sumi-note: #18160c;
   --sumi-note-text: #e3d9a6;
-  --sumi-wash: rgba(59, 226, 127, 0.07);
+  --sumi-wash: rgba(255, 59, 59, 0.07);
   --sumi-grain: rgba(220, 225, 219, 0.03);
   --sumi-scrim: rgba(0, 0, 0, 0.62);
   --sumi-shadow: rgba(0, 0, 0, 0.5);
@@ -56,10 +56,10 @@
   --font-serif: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   /* the header crumb and the full views name it --sumi-serif (Iowan by fallback) */
   --sumi-serif: var(--font-serif);
-  /* The CRT panels were amber phosphor; here they are green. */
-  --phos: #3be27f;
-  --phos-dim: #1f7a45;
-  --phos-glow: #7dffad;
+  /* The CRT panels were amber phosphor; here they are red. */
+  --phos: #ff3b3b;
+  --phos-dim: #8a2323;
+  --phos-glow: #ff8a8a;
   --phos-bg: #050706;
   background: #050706;
 }
@@ -200,23 +200,23 @@
 }
 
 /* The zoomed terminal's paper (transcript-paper.css) picked its emphasis for
-   cream: on black they come back as phosphor. */
+   cream: on black they come back red. */
 :root[data-theme='root'] .lod-overlay {
-  --phos-glow: #7dffad;
+  --phos-glow: #ff8a8a;
 }
 
 :root[data-theme='root'] .lod-overlay .ctx-block.active {
-  background: rgba(59, 226, 127, 0.08);
+  background: rgba(255, 59, 59, 0.09);
 }
 
 :root[data-theme='root'] .lod-overlay .ctx-live {
-  border-top-color: rgba(59, 226, 127, 0.4);
+  border-top-color: rgba(255, 59, 59, 0.42);
 }
 
 :root[data-theme='root'] .lod-overlay .ctx-live::before,
 :root[data-theme='root'] .lod-overlay .look-log .ctx-tool-call::before,
 :root[data-theme='root'] .stg-thumb-mid.replied span {
-  color: #3be27f;
+  color: #ff4d4d;
 }
 
 :root[data-theme='root'] .cr-wsw-actions button.danger {
