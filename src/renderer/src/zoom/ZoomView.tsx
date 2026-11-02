@@ -4,7 +4,7 @@ import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
-import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from './ZoomParts'
+import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind, NewestThumb } from './ZoomParts'
 import { followDrafts } from '../prompt/draft-follow'
 import { InkRing, InkTie } from './InkAvatar'
 import { buildZoomModel } from './zoom-model'
@@ -112,7 +112,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     nodes: workspace?.nodes ?? [], connections: workspace?.connections ?? [], rows, crew: crew.crew, attachIndex,
     workspaces: fleetWorkspaces.length ? fleetWorkspaces.map((w) => ({ id: w.id, name: w.name, dir: '', dirs: [], icon: w.icon ?? '🗂' })) : (list?.workspaces ?? []), activeId: workspaceId ?? list?.activeId ?? 'local', name: workspace?.name ?? 'Workspace',
     machines: fleet.machines,
-    counts: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, { browsers: w.counts.browsers, notes: w.counts.notes }] as const] : [])))
+    counts: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, { browsers: w.counts.browsers, notes: w.counts.notes }] as const] : []))),
+    newest: new Map(fleetWorkspaces.flatMap((w) => (w.newest ? [[w.id, w.newest] as const] : [])))
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model
@@ -163,7 +164,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead') }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb') }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
   // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
@@ -438,7 +439,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
   }, [])
   const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
-  const newest = model.items.find((i) => model.frame.links.some((l) => l.key === model.frame.newest && l.item === i.id))
+  // The newest browser beside the stack: on its carrier's coin when one wears it, else drawn on its own.
+  const newest = model.items.find((i) => model.frame.links.some((l) => l.key === model.frame.newest && l.item === i.id)) ?? model.newestItem
+  const newestAlone = model.frame.newest === null ? model.newestItem : null
   // The stops above the workspace are the same on both sides; the last is the switch.
   const stops = BAR_STOPS[zoom.dir].slice(0, -1)
   const names = BAR_NAMES[zoom.dir]
@@ -557,6 +560,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             <button type="button" className="zv-workspace-name" onClick={() => motion.go(1, 'agents')}>{model.name}</button>
             <button type="button" className="zv-tot" onClick={() => motion.go(0, 'items')} aria-label={`Open ${model.name} artifacts`} title={model.hiddenItems ? `${model.hiddenItems} more not drawn in the grid` : undefined}><Counts browsers={model.browsers} notes={model.notes} none="no items" /></button>
           </div>
+          {newestAlone && <NewestThumb item={newestAlone} workspace={model.name} onOpen={stable('newest-alone', () => motion.go(0, 'items'))} thumbRef={bind('newThumb')} caption={false} />}
           <div className="zv-newcap" ref={bind('newCap')}>{newest ? <>newest · {newest.title}</> : null}</div>
           {model.agents.length === 0 && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
         </div>

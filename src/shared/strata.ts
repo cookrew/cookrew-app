@@ -210,6 +210,13 @@ export interface LevelsWorkspace {
   agents: LevelsAgent[]
   /** Notes and browsers wired to no agent: the workspace's tray. */
   loose: LevelsAttachment[]
+  /**
+   * Its newest browser, by creation: the zoom's device stop draws it beside
+   * the workspace's agents, as the way in by its browsers (draft
+   * group-motion-pivot.html). Absent when it has none, and from a desktop
+   * older than this field.
+   */
+  newest?: LevelsAttachment
   counts: { agents: number; notes: number; browsers: number }
 }
 

@@ -87,6 +87,8 @@ const workspace = object({
   state: oneOf('focused', 'background'),
   agents: array(agent),
   loose: array(attachment),
+  // Its newest browser, by creation (the zoom's device stop); absent when it has none.
+  'newest?': attachment,
   counts: object({ agents: num, notes: num, browsers: num })
 })
 

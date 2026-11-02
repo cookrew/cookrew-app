@@ -201,6 +201,9 @@ function workspaceRow(
   })
   const loose = state.nodes.flatMap((node) => (isAttachment(node) && !wiring.terminalsOf.has(node.id) ? [attachment(node.id)!] : []))
   const traits = traitsFor(input, meta)
+  // Nodes are kept in creation order: the last browser is the newest.
+  const newestNode = state.nodes.findLast((node) => node.kind === 'browser')
+  const newest = newestNode ? attachment(newestNode.id) : null
   return {
     id: meta.id,
     name: line(meta.name, scrub) ?? meta.id,
@@ -210,6 +213,7 @@ function workspaceRow(
     state: meta.id === input.focusedWorkspaceId ? 'focused' : 'background',
     agents,
     loose,
+    ...(newest ? { newest } : {}),
     counts: {
       agents: terminals.length,
       notes: state.nodes.filter((node) => node.kind === 'note').length,

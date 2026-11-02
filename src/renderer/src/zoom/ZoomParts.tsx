@@ -6,6 +6,48 @@ import { CardWords, QuickReply, useQuickReply } from './quick-reply'
 import { typingOf } from './typing-line'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
+import { NEW_POSE } from './zoom-layout'
+
+/**
+ * A workspace's newest browser beside its agents' stack (draft
+ * group-motion-pivot.html): a thumbnail wearing its face as a coin, and a
+ * caption. A press on it opens the workspace by its browsers. Kept out of the
+ * stack's own button: the mark around it opens the crew on a click or Enter.
+ */
+export const NewestThumb = memo(function NewestThumb({ item, workspace, onOpen, thumbRef, caption = true }: { item: ItemView; workspace: string; onOpen: () => void; thumbRef?: (el: HTMLElement | null) => void; caption?: boolean }): React.JSX.Element {
+  return (
+    <>
+      <button
+        ref={thumbRef}
+        type="button"
+        className="zv-lk browser zv-wsnew"
+        style={{ transform: `translate(${NEW_POSE.x}px, ${NEW_POSE.y}px) scale(${NEW_POSE.s})` }}
+        title={`${item.title} · the newest browser of ${workspace}`}
+        aria-label={`Open ${workspace} artifacts, newest ${item.title}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpen()
+        }}
+      >
+        <div className="zv-th browser">
+          <Page item={item} />
+        </div>
+        <div className="zv-coin" style={{ transform: 'translate(-27px, -18px) scale(0.45)' }}>
+          <div className="zv-face zv-face-item" style={{ background: item.tint }}>
+            {item.initial}
+          </div>
+        </div>
+      </button>
+      {caption && (
+        <div className="zv-newcap zv-wsnew-cap" style={{ transform: `translate(${NEW_POSE.x - 52}px, ${NEW_POSE.y + 40}px)` }}>
+          newest · {item.title}
+        </div>
+      )}
+    </>
+  )
+}, sameProps)
 
 /**
  * The zoom's parts, drawn once; ZoomView's painter only moves them
@@ -231,6 +273,7 @@ export const MarkNode = memo(function MarkNode({ mark, bind, onOpen, onOpenItems
         )
       })}
       {n === 0 && <div className="zv-none zv-mark-none">no agents</div>}
+      {mark.newest && onOpenItems && <NewestThumb item={mark.newest} workspace={mark.name} onOpen={onOpenItems} />}
       {mark.waiting && <span className="zv-dot zv-mark-dot" />}
       <div className="zv-grp zv-mark-label">
         <span className="zv-seal">{n}</span>
