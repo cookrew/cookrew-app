@@ -108,14 +108,15 @@ describe('the device', () => {
 })
 
 describe('a workspace with hundreds of browsers and notes', () => {
-  it('draws a screenful in the thumbs grid, carried ones first, and still counts them all', () => {
+  // The grid scrolls (owner, 2026-11-02): it holds every one, not a screenful of twelve.
+  it('holds them all in the thumbs grid, carried ones first', () => {
     const loose = Array.from({ length: 40 }, (_, n) => browser(`l${n}`, `https://l${n}.dev`, `L${n}`))
     const nodes = [term('t1', 'A'), browser('kept', 'https://k.dev', 'Kept'), ...loose]
     const m = fixture(nodes, [cable('c1', 't1', 'kept')])
-    expect(m.items).toHaveLength(ITEMS_SHOWN)
+    expect(m.items).toHaveLength(41)
     expect(m.items[0].id).toBe('kept')
     expect(m.browsers).toBe(41)
-    expect(m.hiddenItems).toBe(41 - ITEMS_SHOWN)
+    expect(m.hiddenItems).toBe(0)
   })
 })
 
@@ -125,9 +126,9 @@ describe('a workspace with hundreds of browsers and notes', () => {
 describe('every agent wears its own coins, not the grid’s twelve', () => {
   const many = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => browser(`${prefix}${i}`, `https://${prefix}${i}.dev`, `${prefix}${i}`))
 
-  it('an agent whose items are all older than the grid’s twelve still wears its newest wires', () => {
+  it('an agent whose items are all older than the grid holds still wears its newest wires', () => {
     const old = many('old', 6)
-    const fresh = many('new', 20)
+    const fresh = many('new', ITEMS_SHOWN)
     // Forge's six are made first; Velvet's twenty fill the grid.
     const nodes: CanvasNode[] = [term('forge', 'Forge'), term('velvet', 'Velvet'), ...old, ...fresh]
     const cables = [...old.map((b, i) => cable(`co${i}`, 'forge', b.id)), ...fresh.map((b, i) => cable(`cn${i}`, 'velvet', b.id))]
@@ -139,7 +140,8 @@ describe('every agent wears its own coins, not the grid’s twelve', () => {
     expect(forge.map((l) => [l.item, l.k])).toEqual([['old5', 0], ['old4', 1], ['old3', 2], ['old2', 3]])
     // The coins outside the grid are drawn from their own views.
     // Velvet's newest four are in the grid already: only Forge's need their own faces.
-    expect(m.frame.links.filter((l) => l.agent === 'velvet').map((l) => l.item)).toEqual(['new19', 'new18', 'new17', 'new16'])
+    const last = ITEMS_SHOWN - 1
+    expect(m.frame.links.filter((l) => l.agent === 'velvet').map((l) => l.item)).toEqual([0, 1, 2, 3].map((k) => `new${last - k}`))
     expect(m.coinItems.map((i) => i.id)).toEqual(['old5', 'old4', 'old3', 'old2'])
     expect(m.coinItems.find((i) => i.id === 'old5')).toMatchObject({ kind: 'browser', title: 'old5', owners: ['forge'] })
   })
@@ -204,17 +206,18 @@ describe('the cost of a rebuild (a workspace holds hundreds of browsers and note
     return Object.defineProperty({ ...n }, key, { get: () => (reads.n++, value), enumerable: true }) as CanvasNode
   }
 
-  it('reads a URL or a note text only for the items the grid draws, and counts the rest', () => {
+  it('reads a URL or a note text only for the items the grid holds, and counts the rest', () => {
     const reads = { n: 0 }
+    const half = ITEMS_SHOWN / 2 + 150
     const nodes: CanvasNode[] = [term('t1', 'Forge')]
-    for (let i = 0; i < 150; i++) nodes.push(counted(browser(`b${i}`, `https://x.dev/${i}`, `Page ${i}`), reads))
-    for (let i = 0; i < 150; i++) nodes.push(counted(note(`n${i}`, `Note ${i}`, `# Note ${i}\nbody`), reads))
+    for (let i = 0; i < half; i++) nodes.push(counted(browser(`b${i}`, `https://x.dev/${i}`, `Page ${i}`), reads))
+    for (let i = 0; i < half; i++) nodes.push(counted(note(`n${i}`, `Note ${i}`, `# Note ${i}\nbody`), reads))
     const m = fixture(nodes, [cable('c1', 't1', 'b3')])
     expect(m.items).toHaveLength(ITEMS_SHOWN)
     expect(m.items[0].id).toBe('b3') // the carried one first
-    expect(m.browsers).toBe(150)
-    expect(m.notes).toBe(150)
-    expect(m.hiddenItems).toBe(300 - ITEMS_SHOWN)
+    expect(m.browsers).toBe(half)
+    expect(m.notes).toBe(half)
+    expect(m.hiddenItems).toBe(half * 2 - ITEMS_SHOWN)
     expect(reads.n).toBeLessThanOrEqual(ITEMS_SHOWN * 2)
   })
 

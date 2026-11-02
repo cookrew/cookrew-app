@@ -1,15 +1,16 @@
 import { useCallback, useLayoutEffect, useRef } from 'react'
 import { agentClick, derive, itemClick, settle, type ZoomDir } from './zoom-path'
-import { layoutOf, paint, type FrameEls, type FrameModel } from './zoom-frame'
+import { layoutOf, paint, type FrameEls, type FrameModel, type ShelfOut } from './zoom-frame'
 import { zoomStore } from './zoom-store'
 import { stageSelect } from '../stage/stage-select'
 import { createRestFlag } from './zoom-rest'
 
 /** The compositor-facing part of the navigator. React builds nodes; this owns the moving values. */
-/** The crew's scroll on a narrow screen: the view owns it (a drag, the wheel), the painter clamps it. */
+/** The crew's scroll on a narrow screen, the thumbnails' and their shelf's: the view owns them (a drag, the wheel), the painter clamps them. */
 export interface ZoomPan {
   get: () => number
-  setMax: (max: number) => void
+  shelf: () => number
+  setMax: (max: number, shelf: ShelfOut) => void
 }
 
 export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null, root: React.RefObject<HTMLDivElement>, pan?: ZoomPan) {
@@ -102,8 +103,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       } else if (lastSelection.current !== null) {
         lastSelection.current = null
       }
-      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0 })
-      m.current.pan?.setMax(out.panMax)
+      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0, shelf: m.current.pan?.shelf() ?? 0 })
+      m.current.pan?.setMax(out.panMax, out.shelf)
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))

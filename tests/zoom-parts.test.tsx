@@ -157,10 +157,14 @@ describe('a workspace and a machine', () => {
 
 describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () => {
   const source = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-  it('has no wheel zoom at all: no wheel listener, no deltaY, no ctrl-pinch', () => {
-    expect(source).not.toMatch(/addEventListener\('wheel'/)
-    expect(source).not.toContain('deltaY')
-    expect(source).not.toContain('ctrlKey')
+  // The wheel scrolls the thumbnails and their shelf (owner, 2026-11-02): it is the page's and a list's, never the zoom's.
+  it('has no wheel zoom at all: the one wheel listener only scrolls, and lets a ctrl-pinch go', () => {
+    expect(source.match(/addEventListener\('wheel'/g)).toHaveLength(1)
+    const wheel = source.slice(source.indexOf('onWheel.current = (e) => {'), source.indexOf("addEventListener('wheel'"))
+    expect(wheel).toContain('if (e.ctrlKey) return')
+    expect(wheel).toContain('scrollBy(dy)')
+    expect(wheel).toContain('shelfBy(dx)')
+    expect(wheel).not.toMatch(/\.go\(|jumpTo|stepBack|stepOut|focusAgent|focusItem/)
   })
 
   it('steps out on a click on the background, and not after a pinch or a drag', () => {
