@@ -17,6 +17,8 @@ import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
 import { useZoomFleetView } from './use-zoom-fleet'
 import './zoom.css'
+// The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
+import './full-views.css'
 
 /**
  * The real navigator, from devices through workspaces and crew to the real
@@ -157,7 +159,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat') }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead') }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera): the crew is
   // drawn at a readable size, so a tall one scrolls (by a drag) instead of shrinking.
@@ -325,6 +327,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       zoomStore.go(1, 'agents')
     } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
   }, [])
+  const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
   const newest = model.items.find((i) => model.frame.links.some((l) => l.key === model.frame.newest && l.item === i.id))
   // The stops above the workspace are the same on both sides; the last is the switch.
   const stops = BAR_STOPS[zoom.dir].slice(0, -1)
@@ -404,6 +407,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} />)}
           <button className="zv-workspace-hit" type="button" style={{ transform: `translate(${activeSlot.x - 90}px, ${activeSlot.y - 90}px)` }} onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} agents`} />
         </div>
+        {/* The full view's sheet, UNDER the scene: the open card's parts travel over it to their places (full-poses.ts). */}
+        <div className="zv-panel" ref={bind('panel')} />
         <div className="zv-scene" ref={bind('scene')}>
           <div className="zv-wash" ref={bind('wash')} />
           <div className="zv-ring" ref={bind('ring')}><InkRing /></div>
@@ -428,7 +433,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           <div className="zv-newcap" ref={bind('newCap')}>{newest ? <>newest · {newest.title}</> : null}</div>
           {model.agents.length === 0 && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
         </div>
-        <div className="zv-panel" ref={bind('panel')} />
+        {/* An item's full-view head, crisp, laid where the real one will be (StageView · zv-fv-head):
+            the grown thumbnail fades into it rather than blowing its words up. */}
+        <div className={`zv-fullview item zv-fv-ghost${narrow ? '' : ' laned'}`} ref={bind('fullHead')} aria-hidden="true">
+          {ghostItem && (
+            <header className="zv-fv-head">
+              <span className={`zv-fv-face ${ghostItem.kind}`}>{ghostItem.kind === 'note' ? '\u00b6' : ghostItem.initial}</span>
+              <span className="zv-fv-who">
+                <b>{ghostItem.title}</b>
+                <small>{ghostItem.kind} · {ghostItem.kind === 'browser' ? ghostItem.host : ghostItem.line}</small>
+              </span>
+            </header>
+          )}
+        </div>
       </div>
       {/* Per row: at the crew and at the workspaces, each where its row is seen (owner, 2026-11-01). */}
       {zoom.dir === 'agents' && !zoom.full && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0 && (

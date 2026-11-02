@@ -108,11 +108,15 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))
       env.dataset.full = out.cover < 0.02 ? 'true' : 'false'
+      // On the way into a full view: no hover mark rides a growing card or thumbnail.
+      const going = (at.dir === 'agents' && at.v > 2.05 && at.v < 2.99) || (at.dir === 'items' && at.v > 0.02 && at.v < 0.99) ? 'full' : ''
+      if (env.dataset.going !== going) env.dataset.going = going
       // Per-agent stacking order is changed only when the focus changes.
       for (const a of m.current.model.agents) {
         const el = els.agents.get(a.id)
         if (!el) continue
-        const open = a.id === focus && at.v > 1.2
+        // Open from the card stop until the way into the full view: its × must not ride along (full-poses.ts).
+        const open = a.id === focus && at.v > 1.2 && (at.dir !== 'agents' || at.v < 2.1)
         const flag = open ? 'open' : ''
         if (el.node.dataset.card !== flag) el.node.dataset.card = flag
         const level = a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10

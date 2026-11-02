@@ -79,7 +79,7 @@ describe('an agent’s card', () => {
     const frame0 = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
     expect(frame0).toContain('lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny)')
     expect(frame0).toContain('lerp(stTop, -2, ny)')
-    expect(frame0).toContain('translate(-18px, ${f1(32')
+    expect(frame0).toContain('const bodyCard = { x: -18, y: 32 + (1 - b) * 10 }')
     expect(frame0).toContain('const slot = { x: 17 + 79 * l.k, y: 136 }')
     expect(frame0).toContain('cx: lerp(0, -27, grow),')
     expect(frame0).toContain('cs: lerp(1, 0.45, grow)')
