@@ -4170,17 +4170,25 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     return Object.keys(rest).length > 0 ? store.updateNode(id, rest) : written
   }
   const updated = store.updateNode(id, patch)
-  if (updated?.kind === 'browser') {
+  // A rename is metadata: syncing would START a cold card's browser just to
+  // relabel it, and `cookrew rename` reaches every card of a workspace.
+  if (updated?.kind === 'browser' && Object.keys(patch).some((key) => key !== 'name')) {
     void browserManager.syncNode(updated).catch(() => undefined)
   }
   // A renamed/re-roled terminal re-binds its pane chrome (herdr only — the
   // method is absent elsewhere): the pane title, and on a rename its tab and
   // its entry in the agent directory. The name the pane wears comes from the
   // store, so this runs AFTER the patch lands.
+  // The live session keeps the new card too, or an in-place reattach (a
+  // dropped herdr client) would put the old name back on the pane.
   if (updated?.kind === 'terminal' && ('name' in patch || 'role' in patch)) {
-    multiplexer()?.reportPaneCard?.(sessionNameFor(id), paneCard(updated))
+    const card = paneCard(updated)
+    ptys.get(id)?.rebindCard(card)
+    const mux = multiplexer()
+    mux?.reportPaneCard?.(sessionNameFor(id), card)
     if ('name' in patch) {
-      multiplexer()?.renameTab?.(sessionNameFor(id), updated.name)
+      if (mux?.followRename) mux.followRename(sessionNameFor(id), updated.name)
+      else mux?.renameTab?.(sessionNameFor(id), updated.name)
       agents.rename(id, updated.name)
     }
   }
@@ -4192,13 +4200,15 @@ function workspaceName(id: string): string {
 }
 
 /**
- * Rename an agent (agent-rename.ts): checked against its workspace's other
- * cards, then through updateNode, so herdr's pane title and tab follow. Shared
- * by `cookrew rename`, `cookrew recruit` and a name Sous picks from a prompt.
+ * Rename a card (agent-rename.ts): checked against its workspace's other
+ * cards, then through updateNode, so an agent's herdr pane title, tab and
+ * agent name follow and a browser's page re-syncs. A note's new name is
+ * pinned (customName), as the card menu's RENAME does, or its next edit
+ * would name it from its content again. Shared by `cookrew rename`.
  */
-function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
   const hit = store.nodeAcrossWorkspaces(id)
-  if (!hit || hit.node.kind !== 'terminal') return { ok: false, error: 'That agent is not on any canvas.' }
+  if (!hit) return { ok: false, error: 'That card is not on any canvas.' }
   const plan = planRename({
     id,
     current: hit.node.name,
@@ -4206,8 +4216,16 @@ function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'
     siblings: store.workspaceState(hit.workspaceId).nodes,
     onClash
   })
-  if (plan.ok && plan.changed) updateNode(id, { name: plan.name })
+  if (plan.ok && plan.changed) {
+    updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name })
+  }
   return plan
+}
+
+/** renameCard for an agent only: `cookrew recruit`, Sous, and a name picked from a prompt. */
+function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+  if (store.nodeAcrossWorkspaces(id)?.node.kind !== 'terminal') return { ok: false, error: 'That agent is not on any canvas.' }
+  return renameCard(id, wanted, onClash)
 }
 
 /**
@@ -6256,7 +6274,7 @@ app.whenReady().then(() => {
     dispatch: dispatchService,
     // `cookrew rename` and `cookrew recruit --prompt`: the same rename the
     // prompt box's model-picked name goes through, herdr's chrome included.
-    renameTerminal,
+    renameCard,
     autoNameTerminal,
     // The cable between the asking pane and the agent it asks lights twice.
     signal: (moment) => void cableSignals.emit(moment),

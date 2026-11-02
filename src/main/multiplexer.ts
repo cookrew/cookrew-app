@@ -390,6 +390,16 @@ export interface Multiplexer {
   renameTab?(name: string, label: string): void
 
   /**
+   * The backend's own name for the session's agent follows the card's
+   * (herdr: `agent rename`, a slug unique among live agents; cleared when the
+   * card's name has no slug). Same display-only, best effort contract.
+   */
+  nameAgent?(name: string, cardName: string): void
+
+  /** renameTab and nameAgent together, off one lookup of the session (herdr). */
+  followRename?(name: string, label: string): void
+
+  /**
    * The workspace-level half of the binding: the backend's workspace wears
    * the ACTIVE Cookrew workspace's name, with tokens carrying the identity
    * (Cookrew's workspace id, primary dir). Same display-only, best-effort

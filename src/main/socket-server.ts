@@ -73,11 +73,12 @@ export interface SocketServerDeps {
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
   /**
-   * Rename an agent: checked against its workspace's other cards, then the
-   * store and herdr's pane title and tab (index.ts · renameTerminal). Absent in
-   * a test server that has none: `cookrew rename` then says so.
+   * Rename a card — agent, note or browser: checked against its workspace's
+   * other cards, then the store, and for an agent herdr's pane title, tab and
+   * agent name (index.ts · renameCard). Absent in a test server that has
+   * none: `cookrew rename` then says so.
    */
-  renameTerminal?: (id: string, wanted: string, onClash: 'refuse' | 'suffix') => RenameOutcome
+  renameCard?: (id: string, wanted: string, onClash: 'refuse' | 'suffix') => RenameOutcome
   /**
    * Sous's name for a card recruited from a prompt, once it answers (null: it
    * had none, or the card was renamed meanwhile). index.ts · autoNameTerminal.
@@ -1372,37 +1373,65 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
   return lines.join('\n')
 }
 
-/** The agent `cookrew rename "Agent" "New"` may rename: you, one wired to you, or (the Orch) any in its workspace. */
-function renameTarget(deps: SocketServerDeps, me: TerminalNodeData, name: string): TerminalNodeData {
+const RENAME_KINDS: Record<string, ReachKind> = { agent: 'terminal', terminal: 'terminal', note: 'note', browser: 'browser' }
+const KIND_WORD: Record<ReachKind, string> = { terminal: 'agent', note: 'note', browser: 'browser' }
+
+/**
+ * The card `cookrew rename "Card" "New"` may rename (owner, 2026-11-02): you,
+ * or any agent, note or browser the ask-anyone rule reaches (ask-reach.ts) —
+ * what you are wired to, wherever it lives, then every card on your own
+ * canvas. A served caller is held to its wires. Unlike an inquiry a rename
+ * lays no cable: it is an edit, not a conversation. Cards of different kinds
+ * wearing the name are refused; --kind picks one.
+ */
+function renameTarget(request: CliRequest, deps: SocketServerDeps, me: TerminalNodeData, name: string): CanvasNode {
+  const flag = request.flags.kind
+  const only = typeof flag === 'string' ? RENAME_KINDS[flag.trim().toLowerCase()] : undefined
+  if (flag !== undefined && only === undefined) throw new Error('--kind is one of: agent, note, browser')
   const wanted = name.trim().toLowerCase()
-  const named = (n: CanvasNode): n is TerminalNodeData => n.kind === 'terminal' && n.name.trim().toLowerCase() === wanted
-  if (me.name.trim().toLowerCase() === wanted) return me
-  const wired = connectedOf(deps.store, me.id).find((h) => named(h.node))
-  if (wired) return wired.node as TerminalNodeData
-  const home = deps.store.ownerOf(me.id)
-  const mine = me.orch && home ? deps.store.workspaceState(home).nodes.find(named) : undefined
-  if (mine) return mine
+  if ((only === undefined || only === 'terminal') && me.name.trim().toLowerCase() === wanted) return me
+  const named = (node: CanvasNode): boolean =>
+    node.id !== me.id &&
+    (node.kind === 'terminal' || node.kind === 'note' || node.kind === 'browser') &&
+    (only === undefined || node.kind === only) &&
+    node.name.trim().toLowerCase() === wanted
+  const canvas = ownCanvas(deps, me.id)
+  const sources = [connectedOf(deps.store, me.id).map((hit) => hit.node), canvas?.nodes ?? []]
+  for (const nodes of sources) {
+    const hits = nodes.filter(named)
+    const kinds = [...new Set(hits.map((h) => KIND_WORD[h.kind as ReachKind]))]
+    // Two of one kind (wired agents in two workspaces) resolve as ask does:
+    // the first wins. Only kinds --kind can tell apart are refused.
+    if (kinds.length === 1) return hits[0]
+    if (kinds.length > 1) {
+      throw new Error(
+        `${hits.length} cards are called '${name}' (${kinds.join(', ')}). ` +
+          `Pick one with --kind ${kinds.join('|')}.`
+      )
+    }
+  }
   throw new Error(
-    `'${name}' is not you or an agent wired to you${me.orch ? ' or in your workspace' : ''}. ` +
-      `Rename yourself with: cookrew rename "New name". Run 'cookrew list'.`
+    `'${name}' is not you or a card ${canvas ? 'in your workspace or ' : ''}wired to you. ` +
+      `Rename yourself with: cookrew rename "New name". Run 'cookrew list --workspace'.`
   )
 }
 
 /**
- * `cookrew rename ["Agent"] "New name"` (owner, 2026-11-01): one argument
- * renames the caller, the way /rename names the chat it is typed in. herdr's
- * pane title and tab follow. A name another card of the workspace wears is
- * refused, not suffixed: a name is the address `cookrew ask` resolves.
+ * `cookrew rename ["Card"] "New name"` (owner, 2026-11-01; any card of the
+ * workspace 2026-11-02): one argument renames the caller, the way /rename
+ * names the chat it is typed in. For an agent herdr's pane title, tab and
+ * agent name follow. A name another card of the workspace wears is refused,
+ * not suffixed: a name is the address `cookrew ask` resolves.
  */
 export function cmdRename(request: CliRequest, deps: SocketServerDeps): string {
-  const usage = 'Usage: cookrew rename "New name"  |  cookrew rename "Agent" "New name"'
+  const usage = 'Usage: cookrew rename "New name"  |  cookrew rename "Card" "New name" [--kind agent|note|browser]'
   if (request.flags.help) return usage
-  if (!deps.renameTerminal) throw new Error('This build cannot rename an agent.')
+  if (!deps.renameCard) throw new Error('This build cannot rename a card.')
   const me = self(request, deps)
   const [first, second] = request.args
   if (first === undefined || request.args.length > 2) throw new Error(usage)
-  const target = second === undefined ? me : renameTarget(deps, me, first)
-  const done = deps.renameTerminal(target.id, second ?? first, 'refuse')
+  const target = second === undefined ? me : renameTarget(request, deps, me, first)
+  const done = deps.renameCard(target.id, second ?? first, 'refuse')
   if (!done.ok) throw new Error(done.error)
   if (!done.changed) return `"${done.name}" is already called that.`
   return `Renamed "${target.name}" → "${done.name}"`
@@ -1832,7 +1861,9 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
                                                 Spawn a teammate wired to you, in your workspace (any agent);
                                                 --prompt is its first prompt, and with no name it is named
                                                 from the prompt (Sous). --dir elsewhere is Orch only
-  cookrew rename ["Agent"] "New name"           Rename yourself (or an agent wired to you); herdr follows
+  cookrew rename ["Card"] "New name"            Rename yourself, or any agent, note or browser of your
+                                                workspace (--kind agent|note|browser when two share a name);
+                                                for an agent herdr's pane title, tab and agent name follow
   cookrew dismiss "Name"                        (Orch) Remove a teammate
   cookrew orch "Name"                           Make this agent the workspace's orch (the door)
   cookrew fork "Agent" [--turn N]               (Orch) Fork a NEW agent from a past turn (original untouched)

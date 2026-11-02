@@ -1208,6 +1208,16 @@ describe('the card binding — Cookrew names in herdr chrome', () => {
     expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
   })
 
+  it('names herdr\'s agent after the card on every attach, after the agent is reported', () => {
+    const runner = fakeRunner({ ...LIVE_REPLIES, 'agent rename': '{"result":{}}' })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+      .ensureSession(SPEC_WITH_CARD)
+    const at = (pred: (c: Call) => boolean): number => runner.calls.findIndex(pred)
+    const rename = at((c) => c.args[0] === 'agent' && c.args[1] === 'rename')
+    expect(runner.calls[rename]?.args.slice(3)).toEqual(['reviewer'])
+    expect(rename).toBeGreaterThan(at((c) => c.args[1] === 'release-agent'))
+  })
+
   it('does NOT report when the spec carries no card — tmux/direct parity', () => {
     const runner = fakeRunner(LIVE_REPLIES)
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
@@ -1306,5 +1316,95 @@ describe('renameTab — the tab follows a rename when the pane has it to itself'
       new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: garbage }).renameTab('cookrew_abc', 'New')
     ).not.toThrow()
     expect(renames(garbage)).toEqual([])
+  })
+})
+
+describe('nameAgent — herdr\'s own agent name follows the card', () => {
+  const PANES = PANE_LIST([{ pane_id: 'w2:pA7', label: 'cookrew_abc' }])
+  const AGENTS = (agents: unknown[]): string => JSON.stringify({ id: 'cli:agent:list', result: { agents } })
+  const renames = (runner: { calls: Call[] }): string[][] =>
+    runner.calls.filter((c) => c.args[0] === 'agent' && c.args[1] === 'rename').map((c) => c.args.slice(2))
+
+  /** fakeRunner, but `agent rename` to a name in `taken` fails the way herdr does. */
+  function herdrWith(taken: string[], agents: unknown[]): CommandRunner & { calls: Call[] } {
+    const base = fakeRunner({ 'pane list': PANES, 'agent list': AGENTS(agents) })
+    return {
+      ...base,
+      run: (file, args) => {
+        if (args[0] === 'agent' && args[1] === 'rename') {
+          base.calls.push({ file, args })
+          if (taken.includes(args[3])) throw new Error('agent name already in use')
+          return '{"result":{}}'
+        }
+        return base.run(file, args)
+      }
+    }
+  }
+  const named = (runner: CommandRunner, card: string): void =>
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).nameAgent('cookrew_abc', card)
+
+  it('names the pane\'s agent with the card\'s slug in one call', () => {
+    const runner = herdrWith([], [])
+    named(runner, 'Rename Anyone')
+    expect(renames(runner)).toEqual([['w2:pA7', 'rename-anyone']])
+    expect(runner.calls.some((c) => c.args[0] === 'agent' && c.args[1] === 'list')).toBe(false)
+  })
+
+  it('suffixes past a name another live agent wears', () => {
+    const runner = herdrWith(['reviewer'], [
+      { pane_id: 'w2:pB1', name: 'reviewer' },
+      { pane_id: 'w2:pB2', name: 'reviewer-2' },
+      { pane_id: 'w2:pA7', name: 'old-name' }
+    ])
+    named(runner, 'Reviewer')
+    expect(renames(runner)).toEqual([['w2:pA7', 'reviewer'], ['w2:pA7', 'reviewer-3']])
+  })
+
+  it('tries the suffix it gave last time first, so a clash costs one call after the first', () => {
+    const runner = herdrWith(['reviewer'], [{ pane_id: 'w2:pB1', name: 'reviewer' }])
+    const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
+    mux.nameAgent('cookrew_abc', 'Reviewer')
+    runner.calls.length = 0
+    mux.nameAgent('cookrew_abc', 'Reviewer')
+    expect(renames(runner)).toEqual([['w2:pA7', 'reviewer-2']])
+    expect(runner.calls.some((c) => c.args[0] === 'agent' && c.args[1] === 'list')).toBe(false)
+  })
+
+  it('clears herdr\'s name when no name could be given, rather than keep the old one', () => {
+    const runner = herdrWith(['reviewer', 'reviewer-2'], [{ pane_id: 'w2:pB1', name: 'reviewer' }])
+    named(runner, 'Reviewer')
+    expect(renames(runner)).toEqual([['w2:pA7', 'reviewer'], ['w2:pA7', 'reviewer-2'], ['w2:pA7', '--clear']])
+  })
+
+  it('followRename moves the tab and the agent name off one pane listing', () => {
+    const base = herdrWith([], [])
+    const runner = {
+      ...base,
+      run: (file: string, args: string[]) =>
+        args[0] === 'tab' && args[1] === 'get'
+          ? (base.calls.push({ file, args }), JSON.stringify({ result: { tab: { label: 'Old', pane_count: 1 } } }))
+          : base.run(file, args)
+    }
+    const panes = PANE_LIST([{ pane_id: 'w2:pA7', label: 'cookrew_abc', tab_id: 'w2:t3' }])
+    const listed = { ...runner, run: (file: string, args: string[]) => (args[0] === 'pane' && args[1] === 'list' ? (base.calls.push({ file, args }), panes) : runner.run(file, args)) }
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: listed }).followRename('cookrew_abc', 'Rename Anyone')
+    expect(base.calls.filter((c) => c.args[0] === 'pane' && c.args[1] === 'list')).toHaveLength(1)
+    expect(base.calls.some((c) => c.args.join(' ') === 'tab rename w2:t3 Rename Anyone')).toBe(true)
+    expect(renames(base)).toEqual([['w2:pA7', 'rename-anyone']])
+  })
+
+  it('clears herdr\'s name when the card\'s has no slug, so it never keeps a stale one', () => {
+    const runner = herdrWith([], [])
+    named(runner, '顶栏模型切换')
+    expect(renames(runner)).toEqual([['w2:pA7', '--clear']])
+  })
+
+  it('does nothing when the pane is gone, and never throws on a broken herdr', () => {
+    const gone = fakeRunner({ 'pane list': PANE_LIST([]) })
+    named(gone, 'Reviewer')
+    expect(renames(gone)).toEqual([])
+
+    const broken = fakeRunner({ 'pane list': PANES, 'agent list': 'not json' })
+    expect(() => named(broken, 'Reviewer')).not.toThrow()
   })
 })

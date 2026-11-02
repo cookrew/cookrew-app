@@ -129,6 +129,17 @@ describe('live transcript recovery', () => {
     stable.dispose()
   })
 
+  it('a reattach carries the card\'s name after a rename, not the one it spawned with', async () => {
+    const seen: (string | undefined)[] = []
+    const stable = session((spec) => { seen.push(spec.card?.title) })
+    stable.rebindCard({ terminalId: 'term-1', title: 'Reviewer', agent: 'claude', workspace: 'Home', cwd: '/tmp' })
+    processes[0].emitData(EAGAIN)
+    processes[0].emitExit(1)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(seen).toEqual(['Reviewer'])
+    stable.dispose()
+  })
+
   it('recovers the disconnect even when the attach client exits zero', async () => {
     const stable = session()
     const exits: number[] = []

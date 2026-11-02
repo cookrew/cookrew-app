@@ -457,10 +457,19 @@ export class PtySession extends EventEmitter {
   private widenTimer: ReturnType<typeof setTimeout> | null = null
   /** Backend/spec are retained so a dropped herdr client can reattach in place. */
   private readonly mux: Multiplexer
-  private readonly attachSpec: AttachSpec
+  private attachSpec: AttachSpec
   private readonly paneEnvironment: Record<string, string>
   private readonly served: boolean
   private readonly servedProfilePath: string | null
+  /**
+   * The card this session's pane wears, after a rename or a new role. An
+   * in-place reattach replays the spec, so it must carry the card's CURRENT
+   * name, not the one it was spawned with.
+   */
+  rebindCard(card: PaneCardInfo): void {
+    this.attachSpec = { ...this.attachSpec, card }
+  }
+
   /** The served fact, as the socket server's secret verbs read it. */
   get isServed(): boolean {
     return this.served

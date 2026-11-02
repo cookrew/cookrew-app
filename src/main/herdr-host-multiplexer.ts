@@ -53,6 +53,7 @@ import path from 'node:path'
 import { commandWithArgs, routeExports } from './tmux-multiplexer'
 import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
+import { herdrAgentName, uniqueHerdrAgentName } from './herdr-agent-name'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -1070,7 +1071,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // re-reports for the same reason: herdr persists pane LAYOUT, not the
       // metadata a source reported.
       this.reportAgent(existing, spec)
-      if (spec.card) this.reportPaneCardTo(existing, spec.card)
+      if (spec.card) {
+        this.reportPaneCardTo(existing, spec.card)
+        this.nameAgentOn(existing.pane_id, spec.card.title)
+      }
       return
     }
 
@@ -1108,7 +1112,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
 
     // The card binding lands once the pane is labelled and booted: herdr's
     // chrome then shows Cookrew's card name and role instead of a raw shell.
-    if (spec.card) this.reportPaneCardTo(namedPane, spec.card)
+    if (spec.card) {
+      this.reportPaneCardTo(namedPane, spec.card)
+      this.nameAgentOn(namedPane.pane_id, spec.card.title)
+    }
   }
 
   /**
@@ -1146,7 +1153,22 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * shared, and names none of them. Display-only, best effort.
    */
   renameTab(name: string, label: string): void {
-    const tabId = this.paneFor(name)?.tab_id
+    this.renameTabOf(this.paneFor(name), label)
+  }
+
+  /**
+   * A rename's whole herdr half — the tab and herdr's agent name — off ONE
+   * pane listing: every herdr call is a synchronous fork on the main thread.
+   */
+  followRename(name: string, label: string): void {
+    const pane = this.paneFor(name)
+    if (!pane) return
+    this.renameTabOf(pane, label)
+    this.nameAgentOn(pane.pane_id, label)
+  }
+
+  private renameTabOf(pane: HerdrPane | null, label: string): void {
+    const tabId = pane?.tab_id
     if (!tabId || label.length === 0) return
     try {
       const tab = parseEnvelope(this.herdr(['tab', 'get', tabId]))?.tab as
@@ -1156,6 +1178,69 @@ export class HerdrHostMultiplexer implements Multiplexer {
       this.quiet(['tab', 'rename', tabId, label])
     } catch {
       // Best effort by contract — the label is chrome, never control flow.
+    }
+  }
+
+  /**
+   * herdr's own name for the agent follows the card's (herdr-agent-name.ts):
+   * `herdr agent get|prompt|wait <name>` then reach the card by the name it
+   * wears. A card name herdr cannot hold clears herdr's, so it never keeps a
+   * name the card gave up. Display-only, best effort, like the pane title.
+   */
+  nameAgent(name: string, cardName: string): void {
+    const pane = this.paneFor(name)
+    if (pane) this.nameAgentOn(pane.pane_id, cardName)
+  }
+
+  /** The name each pane's agent was last given, by the card name it came from. */
+  private readonly agentNames = new Map<string, { card: string; name: string }>()
+
+  /**
+   * One fork in the usual case. herdr refuses a name another live agent
+   * wears, and only then are the live names read for a free suffix. The name
+   * a pane was given last is tried first, so a card that lost a clash once
+   * keeps its suffix on every later attach instead of losing it again.
+   */
+  private nameAgentOn(paneId: string, cardName: string): void {
+    const base = herdrAgentName(cardName)
+    if (base === null) {
+      this.agentNames.delete(paneId)
+      this.quiet(['agent', 'rename', paneId, '--clear'])
+      return
+    }
+    const last = this.agentNames.get(paneId)
+    const first = last?.card === cardName ? last.name : base
+    if (this.tryAgentName(paneId, first)) {
+      this.agentNames.set(paneId, { card: cardName, name: first })
+      return
+    }
+    try {
+      const agents = (parseEnvelope(this.herdr(['agent', 'list']))?.agents ?? []) as {
+        pane_id?: string
+        name?: string | null
+      }[]
+      const taken = new Set(
+        agents.filter((a) => a.pane_id !== paneId && typeof a.name === 'string').map((a) => a.name as string)
+      )
+      const free = uniqueHerdrAgentName(base, taken)
+      if (free !== first && this.tryAgentName(paneId, free)) {
+        this.agentNames.set(paneId, { card: cardName, name: free })
+        return
+      }
+    } catch {
+      // Fall through: the name could not be given.
+    }
+    // Whatever refused it, the pane must not keep a name the card gave up.
+    this.agentNames.delete(paneId)
+    this.quiet(['agent', 'rename', paneId, '--clear'])
+  }
+
+  private tryAgentName(paneId: string, name: string): boolean {
+    try {
+      this.herdr(['agent', 'rename', paneId, name])
+      return true
+    } catch {
+      return false
     }
   }
 
