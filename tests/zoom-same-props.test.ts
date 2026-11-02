@@ -31,8 +31,9 @@ describe('the zoom scene hands its memoised nodes stable handlers', () => {
     const view = readFileSync(new URL('../src/renderer/src/zoom/ZoomView.tsx', import.meta.url), 'utf8')
     const scene = view.slice(view.indexOf('{model.marks.map((m) => <MarkNode'), view.indexOf('The seat for the agent that is not there yet'))
     // The memoised nodes only: plain buttons and divs may take arrows.
-    expect(scene).not.toMatch(/<(MarkNode|LinkNode|ItemNode|AgentNode) [^\n]*on(Open|Click|Delete)=\{\(\) =>/)
+    expect(scene).not.toMatch(/<(MarkNode|LinkNode|ItemNode|AgentNode) [^\n]*on(Open|OpenItems|Click|Delete)=\{\(\) =>/)
     expect(scene).not.toMatch(/\? \(\) => onDelete\(/)
-    expect((scene.match(/stable\(`/g) ?? []).length).toBe(6)
+    // Seven: a mark opens by its agents and by its browsers (2026-11-02).
+    expect((scene.match(/stable\(`/g) ?? []).length).toBe(7)
   })
 })
