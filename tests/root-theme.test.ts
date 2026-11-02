@@ -99,6 +99,12 @@ describe('the root sheet', () => {
     expect(onAccentList(sheet)).toEqual(onAccentList(night))
   })
 
+  it('draws its scanlines on the ground only, never a layer over text or a page picture', () => {
+    const css = bare(sheet)
+    expect(css).not.toMatch(/::(?:after|before)\s*\{[^}]*position:\s*fixed/)
+    expect(css).toMatch(/:root\[data-theme='root'\] \.zv-overview \{[^}]*repeating-linear-gradient/)
+  })
+
   it('recolours the logo without redrawing it', () => {
     expect(bare(sheet)).toMatch(/:root\[data-theme='root'\] :is\(\.cr-logo-mark, \.cr-hand-mark\) img \{[^}]*filter: invert\(1\)/)
   })
