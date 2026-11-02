@@ -47,70 +47,12 @@ import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
 import { closeZoomMenu, useZoomSlots } from './zoom-bar'
 import { CardTune } from './nodes/CardTune'
-import { isNight, useNight } from './color-scheme'
+import { isNight, themeNow, useNight, useTheme } from './color-scheme'
+import { PAPER_THEME, terminalTheme } from './terminal-theme'
 import { paperCursor } from './paper-cursor'
 import { createSizeOwner, openedAt, SETTLE_CHECK_MS, tookOthers, type PaneSize } from './pane-size'
 import { lastUserInputAt } from './user-input'
 import { createTurnRedraw } from './turn-redraw'
-
-/**
- * PAPER, not phosphor (2026-10-30): the live terminal is the app's own cream
- * and ink, like the transcript above it. A light ANSI palette — white and
- * bright white are greys and ink, or they would vanish — and a contrast floor
- * (minimumContrastRatio below) for the truecolor a dark-themed TUI still sends.
- */
-const PAPER_THEME = {
-  background: '#FFFEF5',
-  foreground: '#2D2A20',
-  cursor: '#2D2A20',
-  cursorAccent: '#FFFEF5',
-  selectionBackground: '#FFF3AD',
-  black: '#2D2A20',
-  red: '#B91C1C',
-  green: '#15803D',
-  yellow: '#A16207',
-  blue: '#1D4ED8',
-  magenta: '#A21CAF',
-  cyan: '#0E7490',
-  white: '#78716C',
-  brightBlack: '#78716C',
-  brightRed: '#DC2626',
-  brightGreen: '#16A34A',
-  brightYellow: '#CA8A04',
-  brightBlue: '#2563EB',
-  brightMagenta: '#C026D3',
-  brightCyan: '#0891B2',
-  brightWhite: '#2D2A20'
-}
-
-/**
- * The same paper at night (color-scheme.ts, night.css): the companion in a
- * phone's dark mode. Ground and ink are the night tokens; the colours are the
- * light steps of the palette, so they read on the dark ground.
- */
-const NIGHT_THEME = {
-  background: '#1D1A14',
-  foreground: '#ECE5D3',
-  cursor: '#ECE5D3',
-  cursorAccent: '#1D1A14',
-  selectionBackground: '#3B3212',
-  black: '#6F6859',
-  red: '#F87171',
-  green: '#4ADE80',
-  yellow: '#FACC15',
-  blue: '#93C5FD',
-  magenta: '#F0ABFC',
-  cyan: '#67E8F9',
-  white: '#A19887',
-  brightBlack: '#A19887',
-  brightRed: '#FCA5A5',
-  brightGreen: '#86EFAC',
-  brightYellow: '#FDE047',
-  brightBlue: '#BFDBFE',
-  brightMagenta: '#F5D0FE',
-  brightCyan: '#A5F3FC',
-  brightWhite: '#ECE5D3'
-}
 
 /**
  * Full views for terminal cards under semantic zoom: whenever a terminal
@@ -514,9 +456,10 @@ function TerminalOverlay({
 
   // The phone flipped between light and dark while this was open.
   const night = useNight()
+  const theme = useTheme()
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = night ? NIGHT_THEME : PAPER_THEME
-  }, [night])
+    if (termRef.current) termRef.current.options.theme = terminalTheme(theme, night)
+  }, [theme, night])
 
   // Owner ruling 2026-08-30: LIVE is PTY-DIRECT. CHAT and LOG are record
   // views: mounting xterm there kept a herdr mirror (and its agent process)
@@ -531,7 +474,7 @@ function TerminalOverlay({
     if (!container) return
 
     const term = new Terminal({
-      theme: isNight() ? NIGHT_THEME : PAPER_THEME,
+      theme: terminalTheme(themeNow(), isNight()),
       minimumContrastRatio: 4.5,
       fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
       fontSize: 13,
