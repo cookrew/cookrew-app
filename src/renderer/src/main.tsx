@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 import './styles.css'
 import './night.css'
 import './zoom/ink-theme.css'
+// The ink theme recoloured (Mr. Robot, owner 2026-11-03): after the sheet it recolours.
+import './zoom/root-theme.css'
 // Last: the phone's one sheet of type sizes (it outranks the sheets above by its selectors, not its place).
 import './phone-type.css'
 import { authStore } from './auth-gate'
@@ -13,7 +15,7 @@ import { watchBuild } from './build-watch'
 import { reloadForNewBuildNow } from './crash-report'
 import { scheduleWebglWarmup } from './gpu-warmup'
 import { bootEmbedMode } from './embed/embed-mode'
-import { applyColorScheme } from './color-scheme'
+import { applyColorScheme, applyTheme, storedTheme } from './color-scheme'
 import { watchUserInput } from './user-input'
 
 // STRATA EMBED MODE (`?embed=agent`, framed by cookrew.dev's shell only): one
@@ -26,6 +28,8 @@ const embed = bootEmbedMode()
 // Light or dark before the first paint: a browser follows the system, the
 // desktop app stays paper (color-scheme.ts).
 applyColorScheme(isRemoteMode())
+// The theme too (ink or root), so a root page never paints one paper frame.
+applyTheme(storedTheme())
 // The ink theme before the first paint: a passive effect in App would flash the
 // old tokens for a frame on every boot.
 document.body.classList.add('cr-ink')

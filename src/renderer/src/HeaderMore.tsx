@@ -13,6 +13,7 @@ import { StatusCoin } from './nodes/AgentAvatar'
 import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
+import { setTheme, useTheme } from './color-scheme'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -42,6 +43,7 @@ export function HeaderMore({
 }: HeaderMoreProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const sounds = useSoundsOn()
+  const theme = useTheme()
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
@@ -141,6 +143,16 @@ export function HeaderMore({
           >
             <CrIcon name="speaker" />
             <span className="cr-more-label">{sounds ? 'Sounds on' : 'Sounds off'}</span>
+          </button>
+          <button
+            type="button"
+            className={`cr-more-item${theme === 'root' ? ' on' : ''}`}
+            aria-pressed={theme === 'root'}
+            title="Root: the same app in black, phosphor green and one red"
+            onClick={() => setTheme(theme === 'root' ? 'ink' : 'root')}
+          >
+            <CrIcon name="terminal" />
+            <span className="cr-more-label">{theme === 'root' ? 'Theme: Root' : 'Theme: Ink'}</span>
           </button>
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
