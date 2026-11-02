@@ -8,7 +8,7 @@
  *   crew    — its agents in rows, the orchestrators on top (the app keeps no
  *             lead/member relation, so there is no tree to draw)
  *   thumbs  — its browsers and notes in a grid, the most shared first; the
- *             agents step up into a shelf above them
+ *             agents step up into a shelf above them, one row
  */
 
 export interface Pos {
@@ -94,11 +94,18 @@ export function crewOf(agents: readonly CrewAgent[], narrow: boolean, picked?: n
 }
 
 /** The items' grid, most shared first, and the shelf the agents step up into. */
-export function thumbsOf(
-  items: readonly CrewItem[],
-  agents: readonly CrewAgent[],
-  narrow: boolean
-): { order: string[]; at: Record<string, Pos>; shelf: Record<string, Pos>; box: Box; shelfY: number } {
+export interface Thumbs {
+  order: string[]
+  at: Record<string, Pos>
+  /** The grid's row pitch in scene px: the view mounts only the rows on screen (ZoomView). */
+  rowH: number
+  /** The shelf, one row: who stands on it in order, and where the ones that carry nothing start (shelfRow places them). */
+  shelf: { order: string[]; looseFrom: number }
+  shelfY: number
+  box: Box
+}
+
+export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[], narrow: boolean): Thumbs {
   const order = [...items].sort((a, b) => b.owners.length - a.owners.length).map((i) => i.id)
   const cols = narrow ? 2 : 3
   const dx = narrow ? 200 : 230
@@ -115,37 +122,45 @@ export function thumbsOf(
   const carrying = new Set(items.flatMap((i) => i.owners))
   const linked = agents.filter((a) => carrying.has(a.id))
   const loose = agents.filter((a) => !carrying.has(a.id))
-  if (narrow) return { order, at, ...phoneShelf([...linked, ...loose], rows, rowH, shelfY) }
-  const step = Math.min(80, 900 / Math.max(1, agents.length))
-  const slots = linked.length + (loose.length ? 0.6 + loose.length : 0)
-  const shelf: Record<string, Pos> = {}
-  linked.forEach((a, i) => (shelf[a.id] = { x: (i - (slots - 1) / 2) * step, y: shelfY }))
-  loose.forEach((a, i) => (shelf[a.id] = { x: (linked.length + 0.6 + i - (slots - 1) / 2) * step, y: shelfY }))
   const gridH = (rows - 1) * rowH
   return {
     order,
     at,
-    shelf,
+    rowH,
+    shelf: { order: [...linked, ...loose].map((a) => a.id), looseFrom: linked.length },
     shelfY,
-    box: { w: Math.max(820, slots * step + 120), h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
+    // The box is the grid's: a long shelf scrolls sideways (zoom-frame.ts · shelfFrame), it never widens the view.
+    box: { w: narrow ? 400 : 820, h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
   }
 }
 
-/** A phone's shelf: rows of SHELF_PER_ROW, a name's width apart (zoom.css caps a phone's names at 112px, 87 at the shelf's 0.78), stacked up from the grid (2026-11-01 phone evals). */
-const SHELF_PER_ROW = 4
+/** A phone's name on the shelf is cut to fit this pitch (scene-words.ts · nameMax: zoom.css caps it at 112px, 87 at the shelf's 0.78). */
 export const SHELF_DX = 88
-const SHELF_DY = 68
-function phoneShelf(agents: readonly CrewAgent[], rows: number, rowH: number, bottomY: number): { shelf: Record<string, Pos>; shelfY: number; box: Box } {
-  const shelfRows = Math.max(1, Math.ceil(agents.length / SHELF_PER_ROW))
-  const shelfY = bottomY - (shelfRows - 1) * SHELF_DY
-  const shelf: Record<string, Pos> = {}
-  agents.forEach((a, k) => {
-    const row = Math.floor(k / SHELF_PER_ROW)
-    const inRow = Math.min(SHELF_PER_ROW, agents.length - row * SHELF_PER_ROW)
-    shelf[a.id] = { x: ((k % SHELF_PER_ROW) - (inRow - 1) / 2) * SHELF_DX, y: shelfY + row * SHELF_DY }
-  })
-  const gridH = (rows - 1) * rowH
-  return { shelf, shelfY, box: { w: 400, h: gridH + 520 + (bottomY - shelfY), cy: (shelfY - 80 + gridH + 160) / 2 } }
+/** A face's room on the shelf (zoom.css · .zv-av, 64px drawn at the shelf's 0.5, plus air), and the air between two names. */
+export const SHELF_FACE = 44
+export const SHELF_GAP = 20
+/** More air before the agents that carry nothing. */
+const SHELF_LOOSE_GAP = 36
+
+/**
+ * THE SHELF IS ONE ROW (owner, 2026-11-02: the agents over the artifacts in a
+ * single row that scrolls sideways; packed into 900px, 21 names ran into each
+ * other). Each agent takes its own name's width as drawn on the shelf
+ * (`width`, scene px), at least a face's, so no two names touch. The row is
+ * centred on 0; `w` is its whole length.
+ */
+export function shelfRow(shelf: Thumbs['shelf'], width: (id: string) => number): { x: Record<string, number>; slot: Record<string, number>; w: number } {
+  const slots = shelf.order.map((id, i) => ({
+    id,
+    w: Math.max(SHELF_FACE, width(id) || 0),
+    before: i === 0 ? 0 : SHELF_GAP + (i === shelf.looseFrom ? SHELF_LOOSE_GAP : 0)
+  }))
+  const total = slots.reduce((sum, k) => sum + k.before + k.w, 0)
+  const centres = slots.reduce<{ left: number; at: [string, number][] }>(
+    (acc, k) => ({ left: acc.left + k.before + k.w, at: [...acc.at, [k.id, acc.left + k.before + k.w / 2]] }),
+    { left: -total / 2, at: [] }
+  )
+  return { x: Object.fromEntries(centres.at), slot: Object.fromEntries(slots.map((k) => [k.id, k.w])), w: total }
 }
 
 /** How far a mark's tile (its wash, zoom-frame.ts · SWS) reaches above its centre on the device. */

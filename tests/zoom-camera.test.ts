@@ -4,8 +4,8 @@
 // coins and a card, into 412px). On a narrow screen the crew fills the width
 // and scrolls; the open card fills the screen; neither goes past 1:1.
 import { describe, expect, it } from 'vitest'
-import { layoutOf, phoneCamera, phoneThumbs, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
-import { deviceOf, fitScale } from '../src/renderer/src/zoom/zoom-layout'
+import { deskThumbs, layoutOf, phoneCamera, phoneThumbs, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
+import { deviceOf, fitScale, shelfRow, SHELF_FACE, SHELF_GAP } from '../src/renderer/src/zoom/zoom-layout'
 
 const crewOf = (n: number): FrameModel => ({
   agents: Array.from({ length: n }, (_, i) => ({ id: `a${i}`, name: `A${i}`, preset: 'Claude Code', orch: false, waiting: false })),
@@ -89,18 +89,64 @@ describe('the thumbnails on a phone', () => {
     expect(cam.Oy - past.Oy).toBeCloseTo(cam.panMax)
   })
 
-  it('the shelf of agents wraps into rows a name can be read in, never a pile', () => {
-    const L = layoutOf(withItems(20, 4), true)
-    const rows = new Map<number, number[]>()
-    for (const p of Object.values(L.thumbs.shelf)) rows.set(p.y, [...(rows.get(p.y) ?? []), p.x])
-    for (const xs of rows.values()) {
-      const sorted = [...xs].sort((a, b) => a - b)
-      // A phone's name is at most 112px, drawn at 0.78 on the shelf.
-      for (let i = 1; i < sorted.length; i++) expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(112 * 0.78)
+})
+
+// THE SHELF IS ONE ROW (owner, 2026-11-02): over the artifacts the agents stand
+// in a single row that scrolls sideways; packed into 900px their names ran together.
+describe('the shelf of agents over the thumbnails', () => {
+  it('is one row in the crew’s order, those that carry something first', () => {
+    const L = layoutOf(withItems(20, 4), false)
+    // Four items carried by a0..a3: they lead, the sixteen others follow.
+    expect(L.thumbs.shelf.order.slice(0, 4)).toEqual(['a0', 'a1', 'a2', 'a3'])
+    expect(L.thumbs.shelf.order).toHaveLength(20)
+    expect(L.thumbs.shelf.looseFrom).toBe(4)
+  })
+
+  it('gives every name its own width, so no two names touch, however long', () => {
+    const L = layoutOf(withItems(21, 4), false)
+    const width = (id: string): number => (Number(id.slice(1)) % 3 === 0 ? 150 : 30)
+    const row = shelfRow(L.thumbs.shelf, width)
+    const xs = L.thumbs.shelf.order.map((id) => row.x[id])
+    for (let i = 1; i < xs.length; i++) {
+      const [a, b] = [L.thumbs.shelf.order[i - 1], L.thumbs.shelf.order[i]]
+      const room = Math.max(SHELF_FACE, width(a)) / 2 + Math.max(SHELF_FACE, width(b)) / 2 + SHELF_GAP
+      expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(room - 1e-9)
     }
-    expect(rows.size).toBeGreaterThan(1)
-    // The label stands above the shelf's top row.
-    expect(L.thumbs.shelfY).toBe(Math.min(...rows.keys()))
+    // Centred on the grid's middle, its length the sum of its places.
+    expect(xs[0] - Math.max(SHELF_FACE, width(L.thumbs.shelf.order[0])) / 2).toBeCloseTo(-row.w / 2)
+  })
+
+  it('never widens the view: the box is the grid’s, however many agents there are', () => {
+    expect(layoutOf(withItems(40, 4), false).thumbs.box.w).toBe(layoutOf(withItems(2, 4), false).thumbs.box.w)
+    expect(layoutOf(withItems(40, 4), true).thumbs.box.w).toBe(400)
+  })
+})
+
+// EVERY ARTIFACT, SCROLLED (owner, 2026-11-02): the desktop grid held twelve.
+describe('the thumbnails on a desktop', () => {
+  const DESK = { w: 1440, h: 860 }
+
+  it('frames a grid of four rows or fewer whole, as before, without a scroll', () => {
+    const L = layoutOf(withItems(4, 12), false)
+    const cam = deskThumbs(L.thumbs, DESK.w, DESK.h, 0)
+    expect(cam.panMax).toBe(0)
+    expect(cam.S).toBeCloseTo(fitScale(L.thumbs.box, DESK.w, DESK.h))
+    expect(cam.Oy).toBeCloseTo(DESK.h / 2 - L.thumbs.box.cy * cam.S)
+  })
+
+  it('draws three hundred at the scale of twelve and scrolls from the top to the last row, above the bar', () => {
+    const few = deskThumbs(layoutOf(withItems(4, 12), false).thumbs, DESK.w, DESK.h, 0)
+    const L = layoutOf(withItems(4, 300), false)
+    const top = deskThumbs(L.thumbs, DESK.w, DESK.h, 0)
+    expect(top.S).toBeCloseTo(few.S)
+    expect(top.panMax).toBeGreaterThan(0)
+    // At the top the shelf's label is on screen.
+    expect(top.Oy + (L.thumbs.shelfY - 70) * top.S).toBeGreaterThan(0)
+    const end = deskThumbs(L.thumbs, DESK.w, DESK.h, 1e9)
+    expect(top.Oy - end.Oy).toBeCloseTo(top.panMax)
+    // The last row's titles (54 + 60 below its centre) end above the stop bar (72 from the bottom).
+    const lastY = Math.max(...Object.values(L.thumbs.at).map((p) => p.y))
+    expect(end.Oy + (lastY + 114) * end.S).toBeLessThanOrEqual(DESK.h - 72)
   })
 })
 
