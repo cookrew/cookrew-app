@@ -3,6 +3,7 @@ import { cookrew } from '../api'
 import { getDraft } from './prompt-draft'
 import { pathsForFiles } from '../dropped-files'
 import { insertAttached, pastedImages, saveClipboardImages, type Caret } from './prompt-attach'
+import { withPictures } from './draft-pictures'
 
 /**
  * A prompt box's screenshots (prompt-attach.ts): ⌘V of an image, or a file
@@ -28,6 +29,11 @@ interface PromptAttachOptions {
   inputRef: React.RefObject<HTMLInputElement | null>
   /** Set when nothing may attach here: it says why. */
   refusal?: string | null
+  /**
+   * The box draws its pictures and shows only the words (draft-pictures.ts):
+   * the paths go to the end of the draft, and the caret stays in the words.
+   */
+  aside?: boolean
   onError: (message: string) => void
 }
 
@@ -38,7 +44,7 @@ const caretOf = (input: HTMLInputElement | null): Caret | null =>
     ? { start: input.selectionStart, end: input.selectionEnd ?? input.selectionStart }
     : null
 
-export function usePromptAttach({ draftKey, write, inputRef, refusal = null, onError }: PromptAttachOptions): PromptAttach {
+export function usePromptAttach({ draftKey, write, inputRef, refusal = null, aside = false, onError }: PromptAttachOptions): PromptAttach {
   const [saving, setSaving] = useState(0)
   const mounted = useRef(true)
   useEffect(() => {
@@ -55,6 +61,7 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, onE
     setSaving((n) => n + 1)
     save()
       .then((paths) => {
+        if (aside) return write(withPictures(getDraft(draftKey), paths))
         const { text, caret } = insertAttached(then, getDraft(draftKey), at, paths)
         write(text)
         const input = inputRef.current

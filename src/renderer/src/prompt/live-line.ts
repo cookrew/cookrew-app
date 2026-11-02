@@ -4,6 +4,7 @@ import { useActivity, activityStore } from '../activity-thumb-store'
 import { cookrew } from '../api'
 import { artifactRefs, expandRefs, pendingName, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
+import { shownWords, withShownWords } from './draft-pictures'
 
 /**
  * THE DRAFT IS THE AGENT'S OWN INPUT LINE (owner, 2026-11-01: the prompt box
@@ -66,11 +67,13 @@ export function lineTextFor(
   let body = text
   if (mention) body = mention.id === targetId ? mention.text : ''
   else {
-    const naming = /^\s*@(\S*)$/u.exec(text)
+    // The words, not the picture paths after them (draft-pictures.ts).
+    const naming = /^\s*@(\S*)$/u.exec(shownWords(text))
     if (naming && agentNames.some((name) => name.toLowerCase().startsWith(naming[1].toLowerCase()))) return ''
   }
-  const pending = pendingName(body, { '@': [], '#': artifacts.map((a) => a.name) })
-  if (pending) body = body.slice(0, pending.start)
+  const words = shownWords(body)
+  const pending = pendingName(words, { '@': [], '#': artifacts.map((a) => a.name) })
+  if (pending) body = withShownWords(body, words.slice(0, pending.start))
   return expandRefs(body, artifactRefs(body, artifacts))
 }
 

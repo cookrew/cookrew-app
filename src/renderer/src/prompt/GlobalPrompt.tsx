@@ -25,7 +25,7 @@ import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
 import { useDropZone } from './drop-zone'
 import { PictureStrip, picturesOfDraft } from '../pictures/PictureStrip'
-import { withoutImagePath } from '../../../shared/prompt-images'
+import { shownWords, withoutLastPicture, withoutPicture, withShownWords } from './draft-pictures'
 import { keyboardCoverNow, riseOver, type RiseAnchor } from './rise-anchor'
 import './global-prompt.css'
 
@@ -144,6 +144,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   })
 
   const [text, setText] = useDraft(draftKey(to?.id ?? null))
+  // The box shows the words; its pictures are drawn, their paths kept out of sight (draft-pictures.ts).
+  const shown = shownWords(text)
   // The harness last used — read again whenever the offered list changes (the
   // first render sees only a placeholder list), until a pick here overrides it.
   const picked = useRef<string | null>(null)
@@ -334,6 +336,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     write,
     inputRef,
     refusal: to?.remote ? `Screenshots stay on this machine: ${to.name} runs elsewhere.` : null,
+    aside: true,
     onError: setError
   })
   // The whole box takes a dropped screenshot, with the transcripts view's cue over it.
@@ -341,7 +344,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const dropOver = useDropZone(formRef, attach.dropFiles)
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [sel, setSel] = useState(0)
-  const pending = held ? pendingName(text, { '@': names, '#': artifacts.map((a) => a.name) }) : null
+  const pending = held ? pendingName(shown, { '@': names, '#': artifacts.map((a) => a.name) }) : null
   const options: Suggestion[] = !pending
     ? []
     : pending.sigil === '@'
@@ -352,7 +355,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   useEffect(() => setSel(0), [pending?.sigil, pending?.query])
   const choose = (name: string): void => {
     if (!pending) return
-    write(`${text.slice(0, pending.start)}${pending.sigil}${name} `)
+    write(withShownWords(text, `${shown.slice(0, pending.start)}${pending.sigil}${name} `))
     inputRef.current?.focus()
   }
   const anchor = suggesting ? inputRef.current?.getBoundingClientRect() : undefined
@@ -448,20 +451,20 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       <input
         ref={inputRef}
         type="text"
-        value={hearing ? withHeard(text, dictation.heard) : text}
+        value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
         placeholder={hearing ? 'Listening…' : to ? 'Reply… · # a note or browser' : 'Describe a task for a new agent…'}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
-        title="Paste or drop a screenshot: its path goes into the prompt"
+        title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"
         disabled={busy}
         onPaste={attach.onPaste}
         onChange={(e) => {
-          if (!hearing) write(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)
+          if (!hearing) write(withShownWords(text, e.target.value), (e.nativeEvent as InputEvent).isComposing === true)
         }}
         onCompositionEnd={(e) => {
           // The shown value carries the heard words while listening; they land once, from the ear.
-          if (!hearing) write(e.currentTarget.value)
+          if (!hearing) write(withShownWords(text, e.currentTarget.value))
         }}
         onFocus={() => setHeld({ id: to?.id ?? null })}
         onBlur={() => setHeld(null)}
@@ -493,6 +496,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               setDismissedAt(text)
               return
             }
+          }
+          // Backspace in a box with no words takes the last picture out, then lets go of the agent.
+          if (e.key === 'Backspace' && !e.repeat && shown === '' && text !== '') {
+            write(withoutLastPicture(text))
+            return
           }
           if (e.key === 'Backspace' && !e.repeat && to && text === '') letGo(to.id)
           if (e.key === 'Escape') e.currentTarget.blur()
@@ -553,7 +561,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       <PictureStrip
         pictures={picturesOfDraft(text)}
         className="cr-prompt-pics"
-        onRemove={(picture) => picture.path && write(withoutImagePath(text, picture.path))}
+        onRemove={(picture) => picture.path && write(withoutPicture(text, picture.path))}
       />
       {dropOver && (
         <div className="attach-drop-hint cr-prompt-drop">
