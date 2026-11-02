@@ -3,7 +3,7 @@ import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
 import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
-import type { LaunchTune } from '../../shared/launch-tune'
+import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -339,7 +339,8 @@ export interface CookrewApi {
   removeNode: (id: string) => Promise<void>;
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;
-  listPresets: () => Promise<{ name: string; command: string }[]>;
+  /** `launch`: what a new agent of the preset can start on (main/launch-offers.ts); absent from an older main. */
+  listPresets: () => Promise<{ name: string; command: string; launch?: LaunchOffer | null }[]>;
   /**
    * Version pins for a terminal (§10) — the rail's third marker class. Asked
    * per terminal because a pin belongs to a transcript, not to a workspace.

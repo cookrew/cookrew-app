@@ -20,35 +20,61 @@ export function promptTargetOf({ zoom, fullAgentId }: { zoom: TargetZoom; fullAg
   return null
 }
 
-/** What the view shows, as one key: an agent's card and its full view are two views. */
-export function viewKeyOf(fullAgentId: string | null, cardAgent: string | null): string {
-  return `${fullAgentId ?? ''}|${cardAgent ?? ''}`
+/**
+ * The view's DELIBERATE moves, as one key: a step, a side, a focused card, a
+ * jump. Read off the zoom store, which only the owner's hand moves. The
+ * agent a view SHOWS is derived (the stage's pick, the crew's rows) and can
+ * blink to nobody and back with no hand on anything, so it is not what ends a
+ * release (owner 2026-11-01: × did not let go of @agent).
+ */
+export function zoomMoveKey(zoom: TargetZoom & { readonly full?: string | null; readonly jump?: number }): string {
+  return `${zoom.dir}|${zoom.v}|${zoom.agent ?? ''}|${zoom.full ?? ''}|${zoom.jump ?? 0}`
 }
 
 /**
  * WHO THE BOX CARRIES (owner, 2026-11-01): the agent the view shows, unless
  * the box is pinned — by words showing in it, or by the ear while it listens —
  * so a view that moves on (a waiting agent taking the stage) never carries
- * them off. A release (× or Backspace on an empty box) lets go of the viewed
- * agent only while the view stays put: stepping into any agent's card or full
- * view brings @agent back.
+ * them off.
+ *
+ * A release (× or Backspace on an empty box) lets go of ONE AGENT, however the
+ * box came to carry it: by the view, or by words held in a focused box. It
+ * was once keyed to the view instead, and × then did nothing whenever words
+ * held the box on an agent the view was not showing (a phone tap on × keeps
+ * the box focused), and a view that blinked to nobody and back undid it.
  */
 export function boxTargetId({
   viewed,
-  viewKey,
   pin,
   released,
   known
 }: {
   viewed: string | null
-  viewKey: string
   pin: { id: string | null } | null
-  /** The view the box was let go in, if any. */
-  released: string | null
+  /** The release, if any (releaseAfter says how long it lasts). */
+  released: Release | null
   known: (id: string) => boolean
 }): string | null {
   const id = pin && (pin.id === null || known(pin.id)) ? pin.id : viewed
-  return id !== null && id === viewed && released === viewKey ? null : id
+  return id !== null && id === released?.id ? null : id
+}
+
+/** A let-go: the agent let go of, and who the view showed at that moment. */
+export interface Release {
+  readonly id: string
+  readonly viewed: string | null
+}
+
+/**
+ * How long a release lasts: until the view shows an agent it was NOT showing
+ * when the release was made. Nobody on show (a blink) and the same agent back
+ * keep it; the view already showing someone else (words held the box on
+ * another agent) is no move either. Stepping into any card or full view ends
+ * it outright through the zoom's move key (zoomMoveKey).
+ */
+export function releaseAfter(released: Release | null, viewed: string | null): Release | null {
+  if (released === null || viewed === null) return released
+  return viewed === released.viewed || viewed === released.id ? released : null
 }
 
 /** What pins the box: the ear while it listens, else the focused box's agent while words show in it. */

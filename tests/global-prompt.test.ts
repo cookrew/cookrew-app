@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { nameFromPrompt } from '../src/shared/agent-name'
-import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, viewKeyOf } from '../src/renderer/src/prompt/prompt-target'
+import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, releaseAfter, zoomMoveKey, type Release } from '../src/renderer/src/prompt/prompt-target'
 import { draftKey, getDraft, setDraft, subscribeDrafts } from '../src/renderer/src/prompt/prompt-draft'
 import { lastHarness, rememberHarness } from '../src/renderer/src/prompt/harness-pref'
 
@@ -54,37 +54,75 @@ describe('promptTargetOf', () => {
 // the focus hold pinned "nobody". Wanted: a release lasts only while the view
 // stays put, and only words showing in the box hold it still.
 describe('boxTargetId', () => {
-  const known = (id: string): boolean => ['a1', 'a2'].includes(id)
-  const card = (id: string | null): string => viewKeyOf(null, id)
-  const full = (id: string): string => viewKeyOf(id, id)
-  const box = (o: { viewed: string | null; view: string; pin?: { id: string | null } | null; released?: string | null }): string | null =>
-    boxTargetId({ viewed: o.viewed, viewKey: o.view, pin: o.pin ?? null, released: o.released ?? null, known })
+  const known = (id: string): boolean => ['a1', 'a2', 'a3'].includes(id)
+  const box = (o: { viewed: string | null; pin?: { id: string | null } | null; released?: Release | null }): string | null =>
+    boxTargetId({ viewed: o.viewed, pin: o.pin ?? null, released: o.released ?? null, known })
 
   it('with nothing typed, the box carries whoever the view shows', () => {
-    expect(box({ viewed: 'a1', view: card('a1') })).toBe('a1')
-    expect(box({ viewed: null, view: card(null) })).toBeNull()
+    expect(box({ viewed: 'a1' })).toBe('a1')
+    expect(box({ viewed: null })).toBeNull()
   })
 
-  it('a release lets go of the viewed agent while the view stays put', () => {
-    expect(box({ viewed: 'a1', view: card('a1'), released: card('a1') })).toBeNull()
-  })
-
-  it("a release ends when the view moves: another agent's card, or the same agent's full view", () => {
-    expect(box({ viewed: 'a2', view: card('a2'), released: card('a1') })).toBe('a2')
-    expect(box({ viewed: 'a1', view: full('a1'), released: card('a1') })).toBe('a1')
-  })
-
-  it('a card and the full view of one agent are different views', () => {
-    expect(viewKeyOf(null, 'a1')).not.toBe(viewKeyOf('a1', 'a1'))
+  it('a release lets go of the viewed agent', () => {
+    expect(box({ viewed: 'a1', released: { id: 'a1', viewed: 'a1' } })).toBeNull()
   })
 
   it('typed words hold the box still while the view moves on', () => {
-    expect(box({ viewed: 'a2', view: card('a2'), pin: { id: 'a1' } })).toBe('a1')
-    expect(box({ viewed: 'a2', view: card('a2'), pin: { id: null } })).toBeNull()
+    expect(box({ viewed: 'a2', pin: { id: 'a1' } })).toBe('a1')
+    expect(box({ viewed: 'a2', pin: { id: null } })).toBeNull()
   })
 
   it('a hold on an agent that is gone falls back to the view', () => {
-    expect(box({ viewed: 'a2', view: card('a2'), pin: { id: 'gone' } })).toBe('a2')
+    expect(box({ viewed: 'a2', pin: { id: 'gone' } })).toBe('a2')
+  })
+
+  // Owner 2026-11-01: "clicking the x after @ does not let go of @agent". The
+  // release was keyed to the view, so it never applied to an agent the box
+  // carried by WORDS (a phone tap on x keeps the box focused, and its hold).
+  // Review 2026-11-02: the hold moves to nobody with the release, so once the
+  // release ends the box follows the view and never snaps back to the agent.
+  it('after a release ends, a hold handed to nobody leaves the box to the view', () => {
+    expect(box({ viewed: 'a3', pin: { id: null }, released: null })).toBeNull()
+    expect(box({ viewed: 'a3', pin: null, released: null })).toBe('a3')
+  })
+
+  it('a release lets go of an agent held by words, whoever the view shows', () => {
+    expect(box({ viewed: 'a2', pin: { id: 'a1' }, released: { id: 'a1', viewed: 'a2' } })).toBeNull()
+    expect(box({ viewed: null, pin: { id: 'a1' }, released: { id: 'a1', viewed: null } })).toBeNull()
+  })
+})
+
+describe('how long a release lasts', () => {
+  const let1: Release = { id: 'a1', viewed: 'a1' }
+
+  it('the view blinking to nobody and back keeps it', () => {
+    expect(releaseAfter(let1, null)).toBe(let1)
+    expect(releaseAfter(let1, 'a1')).toBe(let1)
+  })
+
+  it('the view already showing someone else when it was made is no move', () => {
+    const held = { id: 'a1', viewed: 'a2' }
+    expect(releaseAfter(held, 'a2')).toBe(held)
+  })
+
+  it('another agent on show ends it', () => {
+    expect(releaseAfter(let1, 'a2')).toBeNull()
+    expect(releaseAfter({ id: 'a1', viewed: 'a2' }, 'a3')).toBeNull()
+  })
+
+  it('no release stays none', () => {
+    expect(releaseAfter(null, 'a1')).toBeNull()
+  })
+})
+
+describe("the zoom's move key", () => {
+  const at = { dir: 'agents' as const, v: 2, agent: 'a1', full: null, jump: 0 }
+  it('changes with each deliberate move: a step, the full view, another card, a jump', () => {
+    const key = zoomMoveKey(at)
+    expect(zoomMoveKey({ ...at, v: 3, full: 'agent' })).not.toBe(key)
+    expect(zoomMoveKey({ ...at, agent: 'a2' })).not.toBe(key)
+    expect(zoomMoveKey({ ...at, jump: 1 })).not.toBe(key)
+    expect(zoomMoveKey({ ...at })).toBe(key)
   })
 })
 

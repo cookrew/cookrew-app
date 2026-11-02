@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor } from './rise-anchor'
-import { LAUNCH_KNOBS, launchTuneLabel, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
+import { LAUNCH_KNOBS, effortOffer, launchTuneLabel, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
 
 /**
  * THE NEW AGENT'S TUNE CHIP (owner, 2026-11-01). With nobody targeted the
@@ -8,6 +8,10 @@ import { LAUNCH_KNOBS, launchTuneLabel, type LaunchKnob, type LaunchOffer, type 
  * model and effort it starts on. "default" leaves the knob to the harness.
  * The pick rides the launch command (shared/launch-tune), so nothing is typed
  * into a booting pane and nothing becomes the machine's default.
+ *
+ * Every harness that takes launch flags has one (claude, codex, pi,
+ * opencode), listing what its own catalog lists. The effort rows are the
+ * PICKED model's levels; a harness with no effort flag (opencode) shows none.
  *
  * Its menu is fixed over the chip, as the harness menu is: the dock clips
  * anything that hangs out of it. A pick keeps the menu open, so both knobs
@@ -73,25 +77,27 @@ export function NewAgentTune({
           role="menu"
           style={riseStyle(at, GAP)}
         >
-          {LAUNCH_KNOBS.map((knob) => (
-            <span key={knob} className="cr-prompt-tune-knob" role="group" aria-label={KNOB_LABEL[knob]}>
-              <span className="cr-prompt-menu-family" role="separator">
-                {KNOB_LABEL[knob]}
+          {LAUNCH_KNOBS.map((knob) => ({ knob, values: knob === 'model' ? offer.model : effortOffer(offer, tune.model) }))
+            .filter(({ values }) => values.length > 0)
+            .map(({ knob, values }) => (
+              <span key={knob} className="cr-prompt-tune-knob" role="group" aria-label={KNOB_LABEL[knob]}>
+                <span className="cr-prompt-menu-family" role="separator">
+                  {KNOB_LABEL[knob]}
+                </span>
+                {[null, ...values].map((value) => (
+                  <button
+                    key={value ?? 'default'}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={(tune[knob] ?? null) === value}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onPick(knob, value)}
+                  >
+                    {value ?? 'default'}
+                  </button>
+                ))}
               </span>
-              {[null, ...offer[knob]].map((value) => (
-                <button
-                  key={value ?? 'default'}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={(tune[knob] ?? null) === value}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => onPick(knob, value)}
-                >
-                  {value ?? 'default'}
-                </button>
-              ))}
-            </span>
-          ))}
+            ))}
         </span>
       )}
     </span>

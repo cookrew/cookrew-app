@@ -6,7 +6,8 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "cookrew": "./cli/cookrew.mjs"
+    "cookrew": "./cli/cookrew.mjs",
+    "crew": "./cli/cookrew.mjs"
   },
   "scripts": {
     "dev": "electron-vite dev",

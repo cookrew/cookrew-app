@@ -429,6 +429,9 @@ export interface PtySessionOptions {
   route?: { env: Record<string, string>; args: string[] }
 }
 
+/** The CLI's names on a pane's PATH: the full one and its short alias. */
+const CLI_NAMES = ['cookrew', 'crew'] as const
+
 /**
  * One PTY per terminal node. A headless xterm mirrors the screen so the
  * main process can answer `cookrew check` (current viewport text) and detect
@@ -1372,9 +1375,13 @@ export class PtyManager {
     }
     const script = path.join(this.runtimeDir, 'cookrew.mjs')
     copyFileSync(cliSource, script)
-    const wrapper = path.join(this.runtimeDir, 'cookrew')
-    writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
-    chmodSync(wrapper, 0o755)
+    // `crew` is the short name (owner, 2026-11-01): the same CLI, fewer keys.
+    // Briefs and docs keep spelling `cookrew`, so one grep still finds them.
+    for (const name of CLI_NAMES) {
+      const wrapper = path.join(this.runtimeDir, name)
+      writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
+      chmodSync(wrapper, 0o755)
+    }
   }
 
   /**

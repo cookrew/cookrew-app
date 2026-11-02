@@ -7,19 +7,19 @@ import { speakSous } from '../sous-speak'
 import { VoiceBar } from '../VoiceBar'
 import { makeAgent } from '../zoom/make-card'
 import { CardTune } from '../nodes/CardTune'
-import { launchOffer, type LaunchKnob } from '../../../shared/launch-tune'
+import type { LaunchKnob } from '../../../shared/launch-tune'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from '../../../shared/agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
 import { lastLaunchTune, offeredPart, rememberLaunchTune, withLaunchKnob } from './launch-pref'
 import { NewAgentTune } from './NewAgentTune'
-import { usePresetCommands } from './use-preset-commands'
+import { usePresetOffers } from './use-preset-commands'
 import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
-import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, viewKeyOf } from './prompt-target'
+import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, releaseAfter, zoomMoveKey, type Release } from './prompt-target'
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
@@ -101,10 +101,15 @@ function useCardAgent(): string | null {
   )
 }
 
+/** The zoom's deliberate moves, as one key (zoomMoveKey): a release lasts until the next one. */
+function useZoomMoveKey(): string {
+  return useSyncExternalStore(zoomStore.subscribe, () => zoomMoveKey(zoomStore.get()), () => '')
+}
+
 export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
   const viewed = fullAgentId ?? cardAgent
-  const viewKey = viewKeyOf(fullAgentId, cardAgent)
+  const moveKey = useZoomMoveKey()
   const known = (id: string): boolean => agents.some((a) => a.id === id)
   // While the box has focus, words showing in it hold its agent still: the
   // view may move on (a newly waiting agent takes the stage), the words being
@@ -113,10 +118,24 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const heldWords = useDraft(draftKey(held?.id ?? null))[0]
   // So do they while it listens: the words go where they were meant for.
   const [aim, setAim] = useState<{ id: string | null } | null>(null)
-  // Let go of @agent (in the view it was let go in) until the view moves.
-  const [released, setReleased] = useState<string | null>(null)
-  useEffect(() => setReleased(null), [viewKey])
-  const targetId = boxTargetId({ viewed, viewKey, pin: boxPin(aim, held, heldWords), released, known })
+  // Let go of @agent until the view moves: a deliberate move of the zoom, or
+  // another agent on show (prompt-target.ts · releaseAfter).
+  const [released, setReleased] = useState<Release | null>(null)
+  useEffect(() => setReleased(null), [moveKey])
+  const release = releaseAfter(released, viewed)
+  useEffect(() => {
+    if (release !== released) setReleased(release)
+  }, [release, released])
+  /**
+   * Let go of an agent. The focused box's hold goes with it: a hold left on
+   * the agent (its words still drafted) would pin it back the moment the
+   * release ends, carrying its old words into the box.
+   */
+  const letGo = (id: string): void => {
+    setReleased({ id, viewed })
+    setHeld((h) => (h ? { id: null } : h))
+  }
+  const targetId = boxTargetId({ viewed, pin: boxPin(aim, held, heldWords), released: release, known })
   const to = agents.find((a) => a.id === targetId) ?? null
   // An empty box's hold moves with it, so the words typed next stay put.
   useEffect(() => {
@@ -156,13 +175,14 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   }, [picking])
   // The new agent's model and effort: sticky like the harness, sent only as
   // far as the harness takes them (shared/launch-tune).
-  const commands = usePresetCommands()
-  const offer = launchOffer(commands.get(harness) ?? '')
-  const [launchTune, setLaunchTune] = useState(lastLaunchTune)
+  // Each harness keeps its own pick: a codex model means nothing to claude.
+  const offer = usePresetOffers().get(harness) ?? null
+  const [launchTune, setLaunchTune] = useState(() => lastLaunchTune(harness))
+  useEffect(() => setLaunchTune(lastLaunchTune(harness)), [harness])
   const pickLaunch = (knob: LaunchKnob, value: string | null): void => {
     const next = withLaunchKnob(launchTune, knob, value)
     setLaunchTune(next)
-    rememberLaunchTune(next)
+    rememberLaunchTune(harness, next)
   }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -364,7 +384,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             type="button"
             aria-label={`Stop prompting ${to.name}`}
             title="Prompt nobody: a new agent takes it"
-            onClick={() => setReleased(viewKey)}
+            onClick={() => letGo(to.id)}
           >
             ×
           </button>
@@ -474,7 +494,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               return
             }
           }
-          if (e.key === 'Backspace' && !e.repeat && to && text === '') setReleased(viewKey)
+          if (e.key === 'Backspace' && !e.repeat && to && text === '') letGo(to.id)
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
