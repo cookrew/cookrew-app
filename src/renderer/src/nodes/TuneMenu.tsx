@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { TuneRail, type TuneRailProps } from './TuneRail'
+import { searchHoldsEscape } from './ModelDial'
 import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor, topBarBottom } from '../prompt/rise-anchor'
 
 export interface TuneMenuProps extends Omit<TuneRailProps, 'bar' | 'menu' | 'knobs'> {
@@ -42,7 +43,7 @@ export function TuneMenu({ summary, rise = false, ...rail }: TuneMenuProps): Rea
     const onKey = (e: KeyboardEvent): void => {
       // Risen over the prompt box, the panel closes once the prompt is typed.
       if (rise && typesIntoBox(e)) return close()
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || searchHoldsEscape(e)) return
       // The menu's Esc, not the zoom-back behind it.
       e.stopPropagation()
       close()

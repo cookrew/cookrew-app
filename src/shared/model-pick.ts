@@ -130,3 +130,66 @@ export function effortLevelsFor(value: string | null | undefined, models: readon
 export function keptEffort(effort: string | null | undefined, levels: readonly string[]): string | null {
   return effort && levels.includes(effort) ? effort : null
 }
+
+/**
+ * THE LIST, FOLDED OR SEARCHED (owner 2026-11-04: 84 rows was too long).
+ *
+ * Folded, it shows the newest Claude model of each family, every group, one
+ * model per other provider (the first its catalog lists, which is its newest)
+ * and the direct rows; dated snapshots only ever show unfolded. A query
+ * searches every row: each word must appear in the id. The row the card
+ * stands on and an asked row always show, whatever the fold.
+ */
+export interface VisibleRows {
+  rows: ModelRow[]
+  /** Rows the fold hides (0 when searching or unfolded). */
+  hidden: number
+}
+
+/** A dated snapshot (`…-20251101`) or a version part too big to be one. */
+function dated(id: string): boolean {
+  return /-\d{8}$/.test(id)
+}
+
+/** `claude/claude-opus-5-5` → family `opus`, version [5, 5]; null for another shape. */
+function claudeVersion(id: string): { family: string; version: number[] } | null {
+  const m = /^claude\/claude-([a-z]+)-(\d+(?:-\d+)*)$/.exec(id)
+  return m ? { family: m[1], version: m[2].split('-').map(Number) } : null
+}
+
+function newerVersion(a: number[], b: number[]): boolean {
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const d = (a[i] ?? -1) - (b[i] ?? -1)
+    if (d !== 0) return d > 0
+  }
+  return false
+}
+
+export function visibleModelRows(
+  rows: readonly ModelRow[],
+  view: { query?: string; all?: boolean; keep?: readonly (string | null | undefined)[] }
+): VisibleRows {
+  const words = (view.query ?? '').toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length > 0) {
+    return { rows: rows.filter((row) => words.every((w) => `${row.value} ${row.label}`.toLowerCase().includes(w))), hidden: 0 }
+  }
+  if (view.all) return { rows: [...rows], hidden: 0 }
+  const newest = new Map<string, { value: string; version: number[] }>()
+  const firstOf = new Map<string, string>()
+  for (const row of rows) {
+    if (dated(row.value)) continue
+    if (row.section === 'claude') {
+      const v = claudeVersion(row.value)
+      if (!v) continue
+      const held = newest.get(v.family)
+      if (!held || newerVersion(v.version, held.version)) newest.set(v.family, { value: row.value, version: v.version })
+    } else if (row.section === 'other') {
+      const provider = row.value.slice(0, row.value.indexOf('/'))
+      if (!firstOf.has(provider)) firstOf.set(provider, row.value)
+    }
+  }
+  const shown = new Set<string>([...[...newest.values()].map((n) => n.value), ...firstOf.values()])
+  for (const value of view.keep ?? []) if (value) shown.add(value)
+  const kept = rows.filter((row) => row.section === 'group' || row.section === 'direct' || shown.has(row.value))
+  return { rows: kept, hidden: rows.length - kept.length }
+}
