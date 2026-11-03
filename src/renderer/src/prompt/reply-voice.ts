@@ -21,7 +21,9 @@ const listeners = new Set<Listener>()
 let element: HTMLAudioElement | null = null
 /** Ends whatever is sounding now: the playing chunk or the browser's queue. */
 let stopCurrent: (() => void) | null = null
-let fetches: AbortController | null = null
+/** Chunks asked of the Mac and not yet answered, by request id: a stop cancels them. */
+const asked = new Set<string>()
+let asks = 0
 /**
  * The browser voice's utterances, held until their reading settles: Chromium
  * drops `onend` for an utterance nothing references any more.
@@ -98,8 +100,8 @@ export function isPrimed(): boolean {
 function stopPlayback(): void {
   stopCurrent?.()
   stopCurrent = null
-  fetches?.abort()
-  fetches = null
+  for (const id of asked) cookrew().speakCancel?.(id)
+  asked.clear()
   element?.pause()
   if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel()
 }
@@ -140,11 +142,19 @@ function playBlob(blob: Blob): Promise<boolean> {
 async function playLocal(chunks: readonly string[], gen: number): Promise<readonly string[]> {
   const fetchAudio = cookrew().speakAudio
   if (!fetchAudio) return chunks
-  const controller = new AbortController()
-  fetches = controller
   // One voice for the whole reading: the English one only when none of it is Chinese.
   const lang = chunks.some(hasCjk) ? 'zh' : 'en'
-  const fetchChunk = (i: number): Promise<Blob> => fetchAudio(chunks[i], controller.signal, lang)
+  // Async, so even a throw before the request is a rejection: the browser's voice reads the rest.
+  const fetchChunk = async (i: number): Promise<Blob> => {
+    asks += 1
+    const id = `reply-${gen}-${asks}`
+    asked.add(id)
+    try {
+      return await fetchAudio(chunks[i], lang, id)
+    } finally {
+      asked.delete(id)
+    }
+  }
   let next = fetchChunk(0)
   for (let i = 0; i < chunks.length; i += 1) {
     let blob: Blob

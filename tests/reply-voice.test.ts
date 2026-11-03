@@ -75,13 +75,23 @@ const stub = (api: Record<string, unknown>): void => {
   ;(URL as unknown as Record<string, unknown>).revokeObjectURL = () => undefined
 }
 
-const mac = (fail: (text: string) => boolean = () => false) => ({
+/** Every argument the player handed the bridge, and every chunk it cancelled. */
+let bridged: unknown[][] = []
+let cancelled: string[] = []
+
+const mac = (fail: (text: string) => boolean = () => false, hold?: Promise<void>) => ({
   speakAvailable: async () => true,
-  speakAudio: async (text: string, _signal?: AbortSignal, lang?: string) => {
+  speakAudio: async (...args: unknown[]) => {
+    bridged = [...bridged, args]
+    const [text, lang] = args as [string, string | undefined]
     fetched = [...fetched, text]
     langs = [...langs, lang]
     if (fail(text)) throw new Error('voice down')
+    if (hold) await hold
     return Object.assign(new Blob(['mp3']), { said: text })
+  },
+  speakCancel: (id: string) => {
+    cancelled = [...cancelled, id]
   }
 })
 
@@ -94,6 +104,8 @@ beforeEach(() => {
   played.length = 0
   fetched = []
   langs = []
+  bridged = []
+  cancelled = []
   blobText.clear()
 })
 
@@ -201,6 +213,40 @@ describe('reading a reply', () => {
     langs = []
     await voice.readAloud('Merged it. Tests pass.')
     expect(new Set(langs)).toEqual(new Set(['en']))
+  })
+
+  it('hands the bridge strings only: Electron cannot carry an AbortSignal across it', async () => {
+    stub(mac())
+    const voice = await load()
+    await voice.readAloud(Array.from({ length: 12 }, (_, i) => `Sentence ${i} is here.`).join(' '))
+    expect(bridged.length).toBeGreaterThan(1)
+    for (const args of bridged) for (const arg of args) expect(['string', 'undefined']).toContain(typeof arg)
+    const ids = bridged.map((args) => args[2])
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('a stop cancels the chunk still being made, by its id', async () => {
+    let release: () => void = () => undefined
+    stub(mac(() => false, new Promise<void>((resolve) => { release = resolve })))
+    const voice = await load()
+    const reading = voice.readAloud('First part of it. Second part of it.')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    voice.stopReading()
+    release()
+    await reading
+    expect(cancelled).toEqual([bridged[0][2]])
+  })
+
+  it('a bridge that throws before it answers falls back to the browser, never escapes', async () => {
+    stub({
+      speakAvailable: async () => true,
+      speakAudio: () => {
+        throw new TypeError('signal?.addEventListener is not a function')
+      }
+    })
+    const voice = await load()
+    await expect(voice.readAloud('Done. All good.')).resolves.toBeUndefined()
+    expect(played).toEqual([{ kind: 'browser', text: 'Done. All good.' }])
   })
 
   it('only code: nothing is read', async () => {

@@ -635,15 +635,13 @@ const api = {
   listenStop: () => ipcRenderer.invoke('listen:stop'),
   // Spoken replies in the Mac's local voice: main runs it, the box gets audio.
   speakAvailable: () => ipcRenderer.invoke('speak:available'),
-  speakAudio: (text: string, signal?: AbortSignal, lang?: 'zh' | 'en') => {
-    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-    const cancel = (): void => ipcRenderer.send('speak:cancel', id)
-    signal?.addEventListener('abort', cancel, { once: true })
-    return ipcRenderer
-      .invoke('speak:audio', id, text, lang)
-      .then((spoken: { audio: Uint8Array; type: string }) => new Blob([new Uint8Array(spoken.audio)], { type: spoken.type }))
-      .finally(() => signal?.removeEventListener('abort', cancel))
-  },
+  // Strings only: the context bridge clones an AbortSignal into a plain
+  // object with no addEventListener, so cancelling is by request id.
+  speakAudio: (text: string, lang?: 'zh' | 'en', requestId?: string) =>
+    ipcRenderer
+      .invoke('speak:audio', requestId ?? null, text, lang)
+      .then((spoken: { audio: Uint8Array; type: string }) => new Blob([new Uint8Array(spoken.audio)], { type: spoken.type })),
+  speakCancel: (requestId: string) => ipcRenderer.send('speak:cancel', requestId),
   onListenEvent: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)
     ipcRenderer.on('listen:event', listener)
