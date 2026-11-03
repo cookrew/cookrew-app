@@ -48,7 +48,7 @@ const render = async (agent: { id: string; name: string; remote: boolean }): Pro
 describe("Enter in the agent's prompt box sends", () => {
   it('the box carries the agent, with its VoiceBar inside the form', async () => {
     const html = await render({ id: 'a1', name: 'Gauge', remote: false })
-    expect(html).toContain('<b>@Gauge</b>')
+    expect(html).toMatch(/<b>Gauge<\/b>/)
     expect(html).toMatch(/voice-attach/)
     expect(html).toMatch(/voice-mic/)
     expect(html).toMatch(/term-key/)

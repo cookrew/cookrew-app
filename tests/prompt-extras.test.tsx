@@ -64,7 +64,7 @@ describe('the extras stay for a new agent', () => {
 
   it('an agent gets them too, and its keys', async () => {
     const html = await render({ fullAgentId: 'a1' })
-    expect(html).toContain('<b>@Gauge</b>')
+    expect(html).toMatch(/<b>Gauge<\/b>/)
     expect(html).toContain('voice-attach')
     expect(html).toContain('voice-speak')
     expect(html).toContain('term-key')

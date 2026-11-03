@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import type { CanvasNode } from '../../../shared/model'
 import { addressedToSous } from '../../../shared/sous-intent'
@@ -36,11 +36,13 @@ import { keyboardCoverNow, riseOver, type RiseAnchor, topBarBottom } from './ris
 import { useCrewContext } from '../stage/crew-rows'
 import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
-import { facePlace, promptFold, usePromptOpen } from './prompt-fold'
+import { boxFold, facePlace, promptFold, usePromptOpen } from './prompt-fold'
+import { flyFace, popFace, type Box } from './face-flip'
 import { useFaceSlot } from './face-slot'
 import { enterOpensBox, keepsBoxOpen, pressOnCanvas } from './enter-opens'
 import { latestUser, pickerRows } from './item-user'
 import { PromptFace, type FaceAgent } from './PromptFace'
+import { InkAvatar } from '../zoom/InkAvatar'
 import { WhoPicker } from './WhoPicker'
 import './global-prompt.css'
 
@@ -200,6 +202,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const letGo = (id: string): void => {
     setReleased({ id, viewed })
     setHeld((h) => (h ? { id: null } : h))
+    // Let go, the box stays open for the new agent's words (a fold is a choice).
+    promptFold.open()
   }
   const targetId = boxTargetId({ viewed, pin: boxPin(aim, held, heldWords), released: release, known, picked: pickedAgent })
   const to = agents.find((a) => a.id === targetId) ?? null
@@ -454,9 +458,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // box open. With no bar mounted (the board), the box never folds.
   const faceSlot = useFaceSlot()
   const place = facePlace(zoomFull)
-  const foldable = place === 'corner' || (place === 'bar' && faceSlot !== null)
   const open = usePromptOpen()
-  const folded = foldable && !open
+  // An agent in the box holds it open, in place of the bar (prompt-fold.ts · boxFold).
+  const { canFold: foldable, folded, overBar } = boxFold({ place, slot: faceSlot !== null, pinned: to !== null, open })
   const [who, setWho] = useState(false)
   useEffect(() => setWho(false), [to?.id, folded])
   // The picker is for an empty box: words typed with it open close it, so a
@@ -484,17 +488,18 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     if (folded) setHeld(null)
   }, [folded])
   useEffect(() => promptFold.setFoldable(foldable), [foldable])
-  useEffect(() => {
+  // In the layout pass: the face's flight measures the open box, which these classes un-hide.
+  useLayoutEffect(() => {
     const body = document.body.classList
     body.toggle('cr-prompt-folded', folded)
-    body.toggle('cr-prompt-open', foldable && !folded && place === 'bar')
+    body.toggle('cr-prompt-open', overBar)
     body.toggle('cr-prompt-corner', place === 'corner')
     return () => {
       body.remove('cr-prompt-folded')
       body.remove('cr-prompt-open')
       body.remove('cr-prompt-corner')
     }
-  }, [folded, foldable, place])
+  }, [folded, overBar, place])
   /** Open, and the caret in the box in the same gesture (a phone raises its keyboard only then). */
   const openBox = (): void => {
     flushSync(() => promptFold.open())
@@ -560,6 +565,25 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   }, [error, sous, foldable])
 
   const face = to ? faceOf(to.id, to.name, crewRows, harness) : null
+  // THE FACE FLIES LEFT (face-flip.ts): where the folded face last stood, and
+  // the chip's face it becomes when the box opens; another agent pops in.
+  const faceRef = useRef<HTMLButtonElement>(null)
+  const lastFace = useRef<Box | null>(null)
+  const chipFace = useRef<HTMLSpanElement>(null)
+  const chipName = useRef<HTMLElement>(null)
+  const seen = useRef<{ folded: boolean; id: string | null }>({ folded, id: to?.id ?? null })
+  useLayoutEffect(() => {
+    if (folded && faceRef.current) lastFace.current = faceRef.current.getBoundingClientRect()
+  })
+  useLayoutEffect(() => {
+    const was = seen.current
+    const id = to?.id ?? null
+    seen.current = { folded, id }
+    const el = chipFace.current
+    if (folded || !el) return
+    if (was.folded && lastFace.current) flyFace(el, lastFace.current, { box: formRef.current, rest: [chipName.current] })
+    else if (was.id !== id) popFace(el)
+  }, [folded, to?.id])
   /** The box can send: words, or a bare Enter where the agent's terminal is in sight. */
   const canSend = text.trim() !== '' || (to !== null && to.id === fullAgentId)
   const hold = dictation.ear
@@ -572,6 +596,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     : {}
   const foldedFace = (
     <PromptFace
+      buttonRef={faceRef}
       agent={face}
       harness={harness}
       mode="folded"
@@ -594,7 +619,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     />
   )
   const picker = (() => {
-    if (!who || canSend) return null
+    if (!who) return null
     const pickable = crewRows.map((r) => ({ ...faceOf(r.id, r.name, crewRows, harness), lastActivityAt: r.lastActivityAt }))
     const lists = pickerRows(pickable, { current: to?.id ?? null, first: itemOwners })
     return (
@@ -656,9 +681,24 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         submit()
       }}
     >
+      {/* THE CHIP IS THE FACE (owner, 2026-11-04): the agent's own face and name,
+          flown here from the bar's end (face-flip.ts); a tap chooses who. */}
       {to ? (
-        <span className="cr-prompt-to" title={`Prompts go to ${to.name}`}>
-          <b>@{to.name}</b>
+        <span className="cr-prompt-to pf-chip" title={`Prompts go to ${to.name}`}>
+          <button
+            type="button"
+            className="pf-chip-who"
+            aria-haspopup="listbox"
+            aria-expanded={who}
+            aria-label={`${to.name} · choose who the words go to`}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setWho((w) => !w)}
+          >
+            <span className="pf-chip-face" ref={chipFace}>
+              <InkAvatar id={to.id} preset={face?.preset ?? harness} orch={face?.orch ?? false} status={face?.status ?? 'idle'} weight="regular" />
+            </span>
+            <b ref={chipName}>{to.name}</b>
+          </button>
           <button
             type="button"
             aria-label={`Stop prompting ${to.name}`}
@@ -681,7 +721,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               setPicking((open) => (open ? null : at))
             }}
           >
-            ＋ {harness} ▾
+            <span className="pf-chip-face pf-new" ref={chipFace}>
+              <InkAvatar id={`new:${harness}`} preset={harness} status="idle" weight="regular" />
+            </span>
+            <span ref={chipName}>＋ {harness} ▾</span>
           </button>
           {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} acts={acts} onDone={() => setPicking(null)} />}
         </span>
@@ -834,31 +877,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           <CrIcon name="mic" />
         </button>
       )}
-      {/* THE FACE IS THE SEND KEY: with words it sends; with none it asks who. */}
-      <PromptFace
-        type="submit"
-        agent={face}
-        harness={harness}
-        mode={canSend ? 'ready' : 'empty'}
-        listening={dictation.listening}
-        label="Send"
-        title={dictation.listening ? 'Stop: the words go into the prompt' : canSend ? (to ? `Send to ${to.name} (Enter)` : 'Make the agent (Enter)') : 'Who the words go to'}
-        disabled={busy}
-        keepFocus
-        expanded={canSend ? undefined : who}
-        onTap={(e) => {
-          if (dictation.listening) {
-            e.preventDefault()
-            dictation.stop()
-            return
-          }
-          if (canSend) return
-          e.preventDefault()
-          setWho((w) => !w)
-        }}
-        onHold={hold.onHold}
-        onHoldEnd={hold.onHoldEnd}
-      />
+      {/* Send, right of the mic (owner, 2026-11-04). */}
+      <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || !canSend}>
+        <CrIcon name="send" />
+      </button>
       {picker}
       {attach.attaching && (
         <span className="cr-prompt-note" role="status">

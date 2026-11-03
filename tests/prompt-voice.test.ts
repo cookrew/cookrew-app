@@ -51,7 +51,7 @@ const mics = (html: string): string[] => [...html.matchAll(/<button\b[^>]*voice-
 describe('the prompt box has the one mic', () => {
   it('one mic with an agent in the box, and it is not a submit button', async () => {
     const html = await render({ fullAgentId: 'a1' })
-    expect(html).toContain('<b>@Gauge</b>')
+    expect(html).toMatch(/<b>Gauge<\/b>/)
     expect(mics(html)).toHaveLength(1)
     expect(mics(html)[0]).toMatch(/type="button"/)
     expect(mics(html)[0]).toMatch(/aria-label="Dictate"/)
