@@ -2,9 +2,10 @@ import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
-const { sayableText, supplementLexicon } = require('../scripts/local-voice/kokoro-words.cjs') as {
+const { englishNumbers, sayableText, supplementLexicon } = require('../scripts/local-voice/kokoro-words.cjs') as {
   sayableText: (text: string, known: (w: string) => boolean) => string
   supplementLexicon: () => string
+  englishNumbers: (text: string) => string
 }
 
 const LEXICON = new Set(['merged', 'into', 'the', 'prompt', 'extras', 'work', 'tree', 'use', 'thing', 'server', 'ok', 'it', "it's", 'done', 'speak', 'able', 'git', 'and'])
@@ -49,5 +50,21 @@ describe('English the Kokoro voice can say', () => {
 
   it('the supplement is lexicon lines: word, then its phonemes', () => {
     for (const line of supplementLexicon().trim().split('\n')) expect(line).toMatch(/^[a-z]+( \S+)+$/)
+  })
+})
+
+describe('numbers for the English voice', () => {
+  it('amounts as words', () => {
+    expect(englishNumbers('all 86 tests pass')).toBe('all eighty six tests pass')
+    expect(englishNumbers('0 of 11,647 failed')).toBe('zero of eleven thousand six hundred forty seven failed')
+    expect(englishNumbers('in 100 ms, 2 times')).toBe('in one hundred ms, two times')
+  })
+  it('decimals, leading zeros and long runs digit by digit', () => {
+    expect(englishNumbers('about 1.5 s')).toBe('about one point five s')
+    expect(englishNumbers('port 08643')).toBe('port zero eight six four three')
+    expect(englishNumbers('id 1234567890')).toBe('id one two three four five six seven eight nine zero')
+  })
+  it('text with no digits is untouched', () => {
+    expect(englishNumbers('Merged into dev.')).toBe('Merged into dev.')
   })
 })

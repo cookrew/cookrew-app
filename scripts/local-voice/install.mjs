@@ -77,7 +77,7 @@ function installScripts() {
   // has no shell PATH to find one with.
   writeFileSync(path.join(HOME, 'runtime.json'), `${JSON.stringify({ node: stableNode() }, null, 2)}\n`)
   const config = path.join(HOME, 'voice.json')
-  if (!existsSync(config)) writeFileSync(config, `${JSON.stringify({ sid: 36, englishSid: 0, charsPerSecond: 5.2, englishSpeed: 1.1 }, null, 2)}\n`)
+  if (!existsSync(config)) writeFileSync(config, `${JSON.stringify({ sid: 20, englishSid: 0, charsPerSecond: 5.2, englishWordsPerMinute: 190 }, null, 2)}\n`)
 }
 
 function smokeTest() {
