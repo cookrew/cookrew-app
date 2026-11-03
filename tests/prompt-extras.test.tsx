@@ -87,12 +87,13 @@ describe('the extras stay for a new agent', () => {
 })
 
 describe('the ^ shows or hides them', () => {
-  it('a ^ before the extras, open on a desktop by default', async () => {
+  // 2026-11-04, later (the cut "Tray tools"): 📎 🔊 · [keys] · ^ · mic · Send.
+  it('a ^ after the extras, before the mic, open on a desktop by default', async () => {
     const html = await render({ fullAgentId: null })
     const more = tag(html, 'cr-prompt-more')
     expect(more).toMatch(/aria-expanded="true"/)
-    expect(html.indexOf('cr-prompt-more')).toBeLessThan(html.indexOf('voice-attach'))
-    expect(html.indexOf('voice-speak')).toBeLessThan(html.indexOf('voice-mic'))
+    expect(html.indexOf('voice-speak')).toBeLessThan(html.indexOf('cr-prompt-more'))
+    expect(html.indexOf('cr-prompt-more')).toBeLessThan(html.indexOf('voice-mic'))
   })
 
   it('folded by default on a phone, where they would take a row of their own', async () => {
@@ -180,10 +181,12 @@ describe('the paperclip puts any file in the draft', () => {
   })
 })
 
-describe('drawn flat, like the mic', () => {
-  it('on a wide screen every tool, the keys too, leaves the 30 px square for the mic\'s sm shape', () => {
-    const wide = css.slice(css.indexOf('@media (min-width: 701px) {'))
-    expect(wide).toMatch(/\.cr-prompt \.voice-bar \.cr-btn,\s*\.cr-prompt \.voice-bar \.voice-keys \.cr-btn\.term-key\s*\{[^}]*height: auto;[^}]*padding: 3px 8px;/)
+describe('drawn as the tray\'s pills', () => {
+  // 2026-11-04, later (the cut "Tray tools"): no longer flat like the mic, but
+  // the tray's one pill, 26px on a wide screen (tests/tray-tools.test.tsx).
+  it('on a wide screen every tool, the keys too, leaves the 30 px square for a 26 px pill', () => {
+    expect(css).toMatch(/^\.cr-prompt \{\s*--tray-h: 26px;/m)
+    expect(css).toMatch(/\.cr-app \.cr-prompt \.cr-btn\.cr-tray \{[^}]*height: calc\(var\(--tray-h\)/)
   })
 
   it('the keys are drawn in the box at every width, not only on a touch screen', () => {

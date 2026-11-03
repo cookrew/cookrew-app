@@ -10,6 +10,8 @@
 //   of its own, floating over the pill, and it SWIPES sideways (no scrollbar):
 //   wrapped, it grew a second and third line over the page. The swipe shows
 //   its last keys' edge, so they are never out of sight without a sign.
+// 2026-11-04, later (the cut "Tray tools"): the tray's tools are pills drawn
+// 28px tall inside a clear 2px border, so the thumb still gets 32px.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -58,11 +60,17 @@ describe('the tray above the words', () => {
 })
 
 describe("every control a thumb's size (32px or more)", () => {
-  it('the tools, the ^ and the keys', () => {
-    const one = rule('  body .cr-prompt .cr-prompt-tools .cr-btn')
-    expect(px(one, 'width')).toBeGreaterThanOrEqual(32)
-    expect(px(one, 'height')).toBeGreaterThanOrEqual(32)
-    expect(px(rule('  body .cr-prompt .voice-bar .cr-btn.term-key'), 'min-height')).toBeGreaterThanOrEqual(32)
+  /** The pill's reach on a phone: its drawn height and the clear border round it. */
+  const trayReach = (): number => {
+    const phone = rule('  body .cr-prompt')
+    return px(phone, '--tray-h') + 2 * px(phone, '--tray-reach')
+  }
+
+  it('the tools, the ^ and the keys: one pill, 32px with its reach', () => {
+    const pill = rule('.cr-app .cr-prompt .cr-btn.cr-tray')
+    expect(pill).toContain('height: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    expect(pill).toContain('min-width: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    expect(trayReach()).toBeGreaterThanOrEqual(32)
   })
 
   it('🎤 and Send', () => {
@@ -77,7 +85,8 @@ describe("every control a thumb's size (32px or more)", () => {
     expect(px(x, 'width')).toBeGreaterThanOrEqual(32)
     expect(px(x, 'height')).toBeGreaterThanOrEqual(32)
     expect(px(rule('  body .cr-prompt-new > .cr-prompt-harness'), 'height')).toBeGreaterThanOrEqual(32)
-    expect(px(rule('  .cr-prompt-tune,\n  .cr-prompt .cr-tune-menu-btn'), 'min-height')).toBeGreaterThanOrEqual(32)
+    expect(rule('.cr-prompt .cr-tune-menu-btn,\n.cr-prompt .cr-prompt-tune')).toContain('height: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    expect(trayReach()).toBeGreaterThanOrEqual(32)
   })
 
   it('the words row as tall as its buttons', () => {

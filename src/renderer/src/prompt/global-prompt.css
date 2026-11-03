@@ -236,35 +236,11 @@
 /* THE TOOLS (PromptExtras.tsx; owner, 2026-11-03): attach, 🔊 and the agent's
    keys sit behind the one ^, at every width: the keys are drawn whenever the
    tray is (styles.css hides .voice-keys on a wide screen elsewhere). A phone
-   lays them out flat in its tools row (below). */
+   lays them out in its tools row (below); every one is the tray's pill (THE
+   TRAY'S TOOLS, ONE FORM, at the end). */
 .cr-prompt .voice-keys {
   display: flex;
   align-items: center;
-}
-
-/* On a wide screen every tool is drawn flat, in the mic's shape beside them,
-   the keys too: their 30 px squares (styles.css) are the phone's. */
-@media (min-width: 701px) {
-  .cr-prompt .voice-bar .cr-btn,
-  .cr-prompt .voice-bar .voice-keys .cr-btn.term-key {
-    min-width: 0;
-    min-height: 0;
-    width: auto;
-    height: auto;
-    padding: 3px 8px;
-    font-size: 8.5px;
-  }
-
-  .cr-prompt .voice-bar .cr-btn .cr-icon {
-    width: 12px;
-    height: 12px;
-  }
-
-  /* ESC, the one word among the icons: a line as tall as an icon. */
-  .cr-prompt .voice-bar .voice-keys .cr-btn.term-key:not(.term-key-icon) {
-    font: 600 10px/12px var(--font-mono);
-    letter-spacing: 0.04em;
-  }
 }
 
 /* The tools after the chips (GlobalPrompt · cr-prompt-tools): no box of their
@@ -294,26 +270,6 @@
   .cr-prompt > .cr-prompt-pics {
     order: -2;
   }
-}
-
-/* The ^ that shows or hides them (extras-pref.ts): narrower than a tool,
-   pointing down while they show. */
-.cr-prompt .cr-btn.cr-prompt-more {
-  padding: 3px 5px;
-  color: var(--sumi-ink-soft, var(--ink-soft));
-}
-
-.cr-prompt .cr-btn.cr-prompt-more.speaking {
-  color: var(--sumi-seal, var(--amber-deep));
-  box-shadow: inset 0 -2px 0 var(--sumi-seal, var(--amber-deep));
-}
-
-.cr-prompt .cr-prompt-more .cr-icon {
-  transition: transform 140ms ease;
-}
-
-.cr-prompt .cr-prompt-more.open .cr-icon {
-  transform: rotate(180deg);
 }
 
 /* Dictating (use-dictation.ts): the words so far stand in the box, not yet
@@ -394,7 +350,6 @@
 
   /* The thumb's buttons, flat as the desktop's (owner, 2026-11-03: "flat icons, the same as the desktop"). Send ends the
      words' row; the mic ends the chips' row. */
-  body .cr-prompt .cr-prompt-more,
   body .cr-prompt .voice-mic,
   body .cr-prompt > button[type='submit'] {
     flex: none;
@@ -404,21 +359,11 @@
     justify-content: center;
   }
 
-  /* The ^ leads the right-hand group; what follows it sits beside it. */
-  body .cr-prompt .cr-prompt-more {
-    min-width: 36px;
-  }
-
-  body .cr-prompt .cr-prompt-more ~ .voice-mic {
-    margin-left: 0;
-  }
-
   body .cr-prompt > button[type='submit'] {
     order: -1;
     margin-left: 0;
   }
 
-  body .cr-prompt .cr-prompt-more .cr-icon,
   body .cr-prompt .voice-mic .cr-icon,
   body .cr-prompt > button[type='submit'] .cr-icon {
     width: 16px;
@@ -450,10 +395,20 @@
     display: contents;
   }
 
-  /* ^ first (the DOM's order), then what it opens: the tray's own buttons, so
-     each sits in the tools row. */
+  /* What the ^ opens: the tray's own buttons, so each sits in the tools row. */
   body .cr-prompt .cr-prompt-tools > .voice-bar {
     display: contents;
+  }
+
+  /* After model · effort (and the item), the ^ before what it opens: the DOM
+     puts it after the keys, for the wide screen's row. Here it stays put as
+     the tools come and go. */
+  body .cr-prompt .cr-prompt-tray > :not(.cr-prompt-tools) {
+    order: -2;
+  }
+
+  body .cr-prompt .cr-prompt-tools > .cr-prompt-more {
+    order: -1;
   }
 
   /* The agent's keys, the one group that wraps whole. */
@@ -464,34 +419,8 @@
     gap: 3px;
   }
 
-  /* A thumb's size, 32px (2026-11-04), flat as the desktop's: ^, 📎, 🔊 and
-     the keys (← ↓ ↑ → 📋 ESC) fit one line beside the tune chip at 412px,
-     and the keys take their own at 375px. */
-  body .cr-prompt .cr-prompt-tools .cr-btn {
-    flex: none;
-    min-width: 0;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    justify-content: center;
-  }
-
-  body .cr-prompt .cr-prompt-tools .cr-btn .cr-icon {
-    width: 16px;
-    height: 16px;
-  }
-
-  /* The arrows and paste are icons (VoiceBar.tsx); ESC is the one word. */
-  body .cr-prompt .voice-bar .cr-btn.term-key {
-    min-height: 32px;
-    font-size: var(--ph-control, 11px);
-    letter-spacing: 0.04em;
-  }
-
-  /* The groups part by a little more than the buttons do. */
-  body .cr-prompt .voice-bar > :first-child,
-  body .cr-prompt .voice-bar .voice-keys,
-  body .cr-prompt .voice-bar .cr-btn.term-key-lead {
+  /* The keys' group parts by a little more than the chips do. */
+  body .cr-prompt .voice-bar .voice-keys {
     margin-left: 3px;
   }
 }
@@ -526,30 +455,11 @@
   opacity: 0.5;
 }
 
-/* ---- THE TUNE CHIP (owner, 2026-11-01): beside the left chip, in its pill ----
+/* ---- THE TUNE CHIP (owner, 2026-11-01): beside the left chip ----
    Aimed at an agent it is that agent's own model · effort · route button
    (nodes/CardTune.tsx → TuneMenu, rising); with nobody targeted, the new
-   agent's pick (NewAgentTune.tsx). Both read as the harness chip does. */
-.cr-prompt-tune,
-.cr-prompt .cr-tune-menu-btn {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: auto;
-  max-width: 34%;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 999px;
-  box-shadow: none;
-  background: var(--sumi-paper-2, var(--cream-md));
-  white-space: nowrap;
-  cursor: pointer;
-  font: 600 11.5px/1 var(--font-mono);
-  letter-spacing: 0.02em;
-  color: var(--sumi-ink-soft, var(--ink-soft));
-}
-
+   agent's pick (NewAgentTune.tsx). Both are the tray's pill (THE TRAY'S
+   TOOLS, ONE FORM, at the end). */
 .cr-prompt .cr-tune-menu {
   flex: none;
   max-width: 34%;
@@ -557,13 +467,6 @@
 
 .cr-prompt .cr-tune-menu-btn {
   max-width: 100%;
-}
-
-.cr-prompt-tune:hover,
-.cr-prompt .cr-tune-menu-btn:hover,
-.cr-prompt .cr-tune-menu.open .cr-tune-menu-btn {
-  background: var(--sumi-paper-2, var(--cream-md));
-  color: var(--sumi-seal, var(--amber-deep));
 }
 
 /* The live agent's menu rises over the dock, fixed: the dock clips it otherwise. */
@@ -600,16 +503,6 @@
     overflow: hidden;
   }
 
-  /* A thumb's size (2026-11-04): as tall as the tools beside it. */
-  .cr-prompt-tune,
-  .cr-prompt .cr-tune-menu-btn {
-    min-height: 32px;
-  }
-
-  .cr-prompt .cr-tune-menu-effort {
-    display: none;
-  }
-
   .cr-prompt-tune {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -631,6 +524,182 @@
   padding: 6px 12px;
   text-align: center;
 }
+
+/* ---- THE TRAY'S TOOLS, ONE FORM (owner, 2026-11-04; the cut "Tray tools") ----
+   Model · effort, 📎, 🔊 and the agent's keys (Esc ← ↓ ↑ → paste) share one
+   pill on every width: 26px tall on a wide screen, 28px on a phone, the
+   radius half the height. The tools stand on the card's paper with a
+   hairline; the keys on paper-2 with no line, a 1px hairline between the
+   two. The ^ that folds them is the same pill, lit in ink while open. They
+   were flat 8px squares. Tokens only (--sumi-*), so Ink, its night and Root
+   draw it alike. Where the row stands is the box's own rules' (above); the
+   selectors outrank the ink theme's .cr-btn ones (0-3-1) and the key's own
+   (styles.css · .voice-keys .cr-btn.term-key.term-key-icon, 0-4-0).
+   --tray-reach is a clear border round the drawn pill: a phone's thumb gets
+   32px round a 28px pill (the inset hairline and the fill stop at the
+   pill's edge), where an ::after would be cut off by the tune chip's own
+   overflow (its words end in "…"). */
+.cr-prompt {
+  --tray-h: 26px;
+  --tray-reach: 0px;
+}
+
+.cr-prompt .voice-bar,
+.cr-prompt .voice-keys {
+  gap: 6px;
+}
+
+.cr-app .cr-prompt .cr-btn.cr-tray {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: auto;
+  height: calc(var(--tray-h) + 2 * var(--tray-reach));
+  min-width: calc(var(--tray-h) + 2 * var(--tray-reach));
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: var(--tray-reach) solid transparent;
+  border-radius: calc(var(--tray-h) / 2 + var(--tray-reach));
+  background-color: var(--sumi-card, var(--cream-hi));
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  color: var(--sumi-ink-soft, var(--ink-soft));
+  font: 600 11px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.cr-app .cr-prompt .cr-btn.cr-tray .cr-icon {
+  width: calc(var(--tray-h) / 2);
+  height: calc(var(--tray-h) / 2);
+  vertical-align: middle;
+}
+
+.cr-app .cr-prompt .cr-btn.cr-tray:hover {
+  background-color: var(--sumi-card, var(--cream-hi));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* The keys: paper-2, no line; Esc is the one word among them. */
+.cr-app .cr-prompt .cr-btn.cr-tray.term-key {
+  background-color: var(--sumi-paper-2, var(--cream-md));
+  box-shadow: none;
+  color: var(--sumi-ink, var(--ink));
+}
+
+.cr-app .cr-prompt .cr-btn.cr-tray.term-key:hover {
+  background-color: var(--sumi-paper-3, var(--cream-lo));
+}
+
+.cr-app .cr-prompt .cr-btn.cr-tray.term-key:not(.term-key-icon) {
+  padding: 0 9px;
+}
+
+/* The hairline between the tools and the keys. */
+.cr-prompt .voice-keys::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: calc(var(--tray-h) - 8px);
+  background-color: var(--sumi-hair-2, var(--line));
+}
+
+/* 🔊 on: lit in gold, as a pressed switch is everywhere in ink. */
+.cr-app .cr-prompt .cr-btn.cr-tray.voice-speak.on {
+  background-color: var(--sumi-gold, var(--amber));
+  box-shadow: none;
+  color: var(--sumi-on-gold, var(--ink));
+}
+
+/* The ^: lit in ink while what it folds is shown. */
+.cr-app .cr-prompt .cr-btn.cr-tray.cr-prompt-more.open {
+  background-color: var(--sumi-ink, var(--ink));
+  box-shadow: none;
+  color: var(--sumi-paper, var(--cream));
+}
+
+/* Folded, it still says spoken replies are on: a seal ring. */
+.cr-app .cr-prompt .cr-btn.cr-tray.cr-prompt-more.speaking {
+  box-shadow: inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* Model · effort: a seal dot for its route, then the words and ▾. Its width
+   is the box's rules' (Prompt Words); its look is the tray's. */
+.cr-prompt .cr-tune-menu-btn,
+.cr-prompt .cr-prompt-tune {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: calc(var(--tray-h) + 2 * var(--tray-reach));
+  min-height: 0;
+  padding: 0 10px 0 9px;
+  border: var(--tray-reach) solid transparent;
+  border-radius: calc(var(--tray-h) / 2 + var(--tray-reach));
+  background-color: var(--sumi-card, var(--cream-hi));
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  color: var(--sumi-ink, var(--ink));
+  font: 600 11px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cr-prompt .cr-tune-menu-btn::before,
+.cr-prompt .cr-prompt-tune::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt .cr-tune-menu-btn:hover,
+.cr-prompt .cr-tune-menu.open .cr-tune-menu-btn,
+.cr-prompt .cr-prompt-tune:hover,
+.cr-prompt .cr-prompt-tune[aria-expanded='true'] {
+  background-color: var(--sumi-card, var(--cream-hi));
+  /* header.css's open rule (0-3-0) sets the background shorthand, which
+     resets the clip: the fill would spread into the reach while open. */
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px var(--sumi-ink-soft, var(--ink-soft));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* 'model · effort', the effort on a phone too. */
+.cr-prompt .cr-tune-menu-effort {
+  display: inline;
+  opacity: 1;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt .cr-tune-menu-effort::before {
+  content: '· ';
+}
+
+.cr-prompt .cr-tune-menu-caret {
+  font-size: 8px;
+  opacity: 0.7;
+}
+
+@media (max-width: 700px) {
+  /* 28px drawn, 32px to the thumb (a pill and its clear border). */
+  body .cr-prompt {
+    --tray-h: 28px;
+    --tray-reach: 2px;
+  }
+}
+/* ---- END OF THE TRAY ---- */
 
 /* ---- THE BOX FLOATS AT EVERY WIDTH (owner, 2026-11-03: "the desktop and wide
    screens are not done yet") ----

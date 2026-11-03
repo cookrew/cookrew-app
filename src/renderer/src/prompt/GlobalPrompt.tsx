@@ -936,7 +936,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           the item riding the words and the tools (^, 📎, 🔊, the agent's keys).
           On a phone a see-through row of chips of its own, floating 8px over
           the pill and swiped sideways (global-prompt.css · .cr-prompt-tray);
-          on a wide screen no box at all, its chips in the box's one line. */}
+          on a wide screen no box at all, its chips in the box's one line.
+          One pill each, the ^ after the keys (owner, 2026-11-04: chip · model
+          · words · 📎 🔊 · keys · ^ · mic · Send; a phone draws it after model
+          · effort, global-prompt.css · THE TRAY'S TOOLS, ONE FORM). */}
       <div className="cr-prompt-tray">
         {/* The chip and the voice bar are siblings in this form: one key each,
             never the bare agent id twice, or a retarget leaves the old chip behind. */}
@@ -957,7 +960,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         )}
         {attachedItem && itemKey && <ItemRefChip item={attachedItem} onRemove={() => setItemLeftOut(itemKey)} />}
       <span className="cr-prompt-tools">
-      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       {browse.input}
       {toolsShown && (
         <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null}>
@@ -972,6 +974,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           />
         </VoiceBar>
       )}
+      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       </span>
       </div>
       {/* Beside Send, out of the tools: on a phone the box's one row at rest is
