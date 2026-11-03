@@ -17,21 +17,25 @@
  * THE PACE is a speaking rate, not a multiplier: each voice is timed once on
  * a calibration line at speed 1, and its speed is set so it says
  * `charsPerSecond` Chinese characters a second (about 5.2: a brisk,
- * conversational pace like Doubao's).
+ * conversational pace like Doubao's). English replies get the English voice
+ * at `englishWordsPerMinute` (about 190), timed the same way: at a fixed
+ * speed it ran 240 a minute, rushed next to the Chinese.
  */
 
 const fs = require('node:fs')
 const path = require('node:path')
 const readline = require('node:readline')
 const sherpa = require('sherpa-onnx-node')
-const { sayableText, supplementLexicon } = require('./kokoro-words.cjs')
+const { englishNumbers, sayableText, supplementLexicon } = require('./kokoro-words.cjs')
 
 const HOME = __dirname
 const MODEL = path.join(HOME, 'kokoro-multi-lang-v1_1')
 const SUPPLEMENT_FILE = path.join(HOME, 'lexicon-cookrew.txt')
 const CALIBRATION = '好的，我已经把这件事处理完了，测试也全部通过，你可以直接去看结果。'
+const EN_CALIBRATION = 'Done. I merged the branch, every test passes, and the change is ready for you to look at.'
+const EN_WORDS = EN_CALIBRATION.split(/\s+/).length
 
-const DEFAULTS = { sid: 36, englishSid: 0, charsPerSecond: 5.2, englishSpeed: 1.1 }
+const DEFAULTS = { sid: 20, englishSid: 0, charsPerSecond: 5.2, englishWordsPerMinute: 190 }
 
 function config() {
   try {
@@ -71,8 +75,14 @@ function wav(samples, rate) {
   return bytes
 }
 
+/**
+ * Resolves once the line has left for the app. A chunk's answer is hundreds
+ * of KB, more than the pipe holds, and the synchronous generate() of the next
+ * chunk would keep the rest of it here: awaited, each answer arrives as soon
+ * as it is made, not when the queue behind it is done.
+ */
 function send(message) {
-  process.stdout.write(`${JSON.stringify(message)}\n`)
+  return new Promise((resolve) => process.stdout.write(`${JSON.stringify(message)}\n`, () => resolve()))
 }
 
 async function main() {
@@ -103,16 +113,22 @@ async function main() {
   } catch {
     paces = {}
   }
-  const paceOf = (sid, charsPerSecond) => {
-    if (typeof paces[sid] !== 'number') {
-      const timed = tts.generate({ text: CALIBRATION, sid, speed: 1 })
-      paces = { ...paces, [sid]: CALIBRATION.length / (timed.samples.length / timed.sampleRate) }
+  // A voice's natural rate at speed 1: Chinese characters a second, or
+  // English words a minute (keyed `en:<sid>`).
+  const naturalRate = (key, sid, line, units, perSeconds) => {
+    if (typeof paces[key] !== 'number') {
+      const timed = tts.generate({ text: line, sid, speed: 1 })
+      paces = { ...paces, [key]: (units / (timed.samples.length / timed.sampleRate)) * perSeconds }
       fs.writeFileSync(PACE_FILE, `${JSON.stringify(paces, null, 2)}\n`)
     }
-    return Math.min(2, Math.max(0.6, charsPerSecond / paces[sid]))
+    return paces[key]
   }
+  const speedFor = (target, natural) => Math.min(2, Math.max(0.6, target / natural))
+  const paceOf = (sid, charsPerSecond) => speedFor(charsPerSecond, naturalRate(String(sid), sid, CALIBRATION, CALIBRATION.length, 1))
+  const englishPaceOf = (sid, wordsPerMinute) => speedFor(wordsPerMinute, naturalRate(`en:${sid}`, sid, EN_CALIBRATION, EN_WORDS, 60))
   // Before the first chunk is asked for, not during it.
   paceOf(config().sid, config().charsPerSecond)
+  englishPaceOf(config().englishSid, config().englishWordsPerMinute)
 
   const queue = []
   let busy = false
@@ -129,11 +145,11 @@ async function main() {
         const voice = config()
         const zh = job.lang !== 'en'
         const sid = zh ? voice.sid : voice.englishSid
-        const speed = zh ? paceOf(voice.sid, voice.charsPerSecond) : voice.englishSpeed
-        const audio = tts.generate({ text: sayableText(job.text, known), sid, speed })
-        send({ id: job.id, ok: true, wav: wav(audio.samples, audio.sampleRate).toString('base64') })
+        const speed = zh ? paceOf(voice.sid, voice.charsPerSecond) : englishPaceOf(voice.englishSid, voice.englishWordsPerMinute)
+        const audio = tts.generate({ text: sayableText(zh ? job.text : englishNumbers(job.text), known), sid, speed })
+        await send({ id: job.id, ok: true, wav: wav(audio.samples, audio.sampleRate).toString('base64') })
       } catch (error) {
-        send({ id: job.id, ok: false, error: error instanceof Error ? error.message : String(error) })
+        await send({ id: job.id, ok: false, error: error instanceof Error ? error.message : String(error) })
       }
     }
     busy = false

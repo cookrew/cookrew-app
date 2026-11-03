@@ -90,4 +90,41 @@ function sayableText(text, known) {
   })
 }
 
-module.exports = { SUPPLEMENT, supplementLexicon, sayableText }
+const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen']
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']
+const SCALES = [[1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand'], [100, 'hundred']]
+/** Digits past this are read one by one (a hash, a phone number), not as an amount. */
+const AMOUNT_DIGITS = 9
+
+function integerWords(n) {
+  if (n < 20) return ONES[n]
+  if (n < 100) return n % 10 === 0 ? TENS[Math.floor(n / 10)] : `${TENS[Math.floor(n / 10)]} ${ONES[n % 10]}`
+  for (const [size, name] of SCALES) {
+    if (n < size) continue
+    const rest = n % size
+    return `${integerWords(Math.floor(n / size))} ${name}${rest ? ` ${integerWords(rest)}` : ''}`
+  }
+  return String(n)
+}
+
+function digitWords(digits) {
+  return digits.split('').map((d) => ONES[Number(d)]).join(' ')
+}
+
+/**
+ * Numbers as English words, for the English voice: the model reads digits
+ * with its Chinese number rules, so "all 86 tests" came out as Chinese.
+ */
+function englishNumbers(text) {
+  return text
+    .replace(/(\d),(?=\d{3}\b)/g, '$1')
+    .replace(/\d+(?:\.\d+)?/g, (number) => {
+      const [whole, fraction] = number.split('.')
+      const head = whole.length > AMOUNT_DIGITS || (whole.length > 1 && whole.startsWith('0')) ? digitWords(whole) : integerWords(Number(whole))
+      return ` ${fraction ? `${head} point ${digitWords(fraction)}` : head} `
+    })
+    .replace(/ {2,}/g, ' ')
+    .trim()
+}
+
+module.exports = { SUPPLEMENT, supplementLexicon, sayableText, englishNumbers }
