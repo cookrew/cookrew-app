@@ -15,6 +15,7 @@ import {
   type RouteTurnFacts
 } from '../../shared/route'
 import type { HarnessId } from '../harness'
+import { withoutRoutedPick } from '../../shared/launch-tune'
 import { ROUTABLE, routeEnv, type RouteEnv } from '../route-env'
 import { fetchCatalog, fetchQuotas, providersOf, withLocalRows, type CatalogFetch } from './catalog'
 import { RouteDecisions, pushLive } from './decisions'
@@ -67,6 +68,11 @@ export interface RouteServiceDeps {
   isServed: (terminalId: string) => boolean
   harnessOf: (command: string) => HarnessId | null
   phaseOf: (terminalId: string) => TurnPhase | undefined
+  /**
+   * A prompt is on its way in, which the phase cannot show yet (QA
+   * 2026-11-03): a restart now loses it. Absent: nothing is in delivery.
+   */
+  delivering?: (terminalId: string) => boolean
   canRestoreExact: (node: TerminalNodeData) => boolean
   /** Kill and respawn the card in place with exact context; true when it did. */
   respawn: (terminalId: string) => Promise<boolean>
@@ -340,9 +346,12 @@ export class RouteService extends EventEmitter {
       if (!ROUTE_ID_RE.test(route)) return { error: 'not a route id' }
       if (this.models.length > 0 && !this.models.some((m) => m.id === route)) return { error: `not in the catalog: ${route}` }
     }
-    this.deps.updateNode(terminalId, { route })
+    // A routed claude card runs its route's model: a `--model` left on the
+    // card would outrank it once it went direct again, so it goes now.
+    const command = route !== DIRECT && this.deps.harnessOf(node.command) === 'claude' ? withoutRoutedPick(node.command, 'claude') : node.command
+    this.deps.updateNode(terminalId, command === node.command ? { route } : { route, command })
     const phase = this.deps.phaseOf(terminalId)
-    const idle = phase === undefined || phase === 'idle' || phase === 'replied'
+    const idle = (phase === undefined || phase === 'idle' || phase === 'replied') && !(this.deps.delivering?.(terminalId) ?? false)
     const after = this.deps.node(terminalId)
     if (idle && after && (after.routeEffective ?? null) !== route && this.restorable(after)) {
       await this.deps.respawn(terminalId)
@@ -470,6 +479,11 @@ export class RouteService extends EventEmitter {
       this.announcePending = false
       this.emit('route', this.state())
     }, ANNOUNCE_MS)
+  }
+
+  /** A card's route was saved elsewhere (a model pick, agent-relaunch.ts): the rail and the phone hear it. */
+  cardChanged(terminalId: string): void {
+    this.emitCard(terminalId)
   }
 
   private emitCard(terminalId: string): void {

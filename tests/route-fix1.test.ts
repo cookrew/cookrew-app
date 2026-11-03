@@ -301,3 +301,44 @@ describe('10 · 11 · the cached scan and the Keychain probe', () => {
     expect(scan.rows().find((r) => r.id === 'pi')?.signedIn).toBeNull()
   })
 })
+
+// QA 2026-11-03: claude's settings env outranks the route's, so a `--model`
+// left on a routed claude card ran group/smart; and an RTE restart while a
+// prompt was still being typed in lost it, as the model dial's did.
+describe('an RTE pick on a claude card', () => {
+  it('takes the --model the route would lose to, keeps the effort, and restarts', async () => {
+    const fake = await fakeGateway()
+    try {
+      const nodes = new Map<string, TerminalNodeData>([['c1', terminal('c1', 'claude --effort low --model opus')]])
+      const respawned: string[] = []
+      const { svc } = serviceFor(fake, nodes, { respawn: async (id) => (respawned.push(id), true) })
+      await svc.refresh()
+      await svc.setCardRoute('c1', 'claude/claude-sonnet-5-5')
+      expect(nodes.get('c1')).toMatchObject({ route: 'claude/claude-sonnet-5-5', command: 'claude --effort low' })
+      expect(respawned).toEqual(['c1'])
+      // Going direct keeps whatever the card carries: there is no route to outrank.
+      nodes.set('c2', terminal('c2', 'claude --model haiku'))
+      await svc.setCardRoute('c2', 'direct')
+      expect(nodes.get('c2')?.command).toBe('claude --model haiku')
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+
+  it('saves the route but does not restart while a prompt is on its way in', async () => {
+    const fake = await fakeGateway()
+    try {
+      const nodes = new Map<string, TerminalNodeData>([['c1', terminal('c1', 'claude')]])
+      const respawned: string[] = []
+      const { svc } = serviceFor(fake, nodes, { respawn: async (id) => (respawned.push(id), true), delivering: () => true })
+      await svc.refresh()
+      await svc.setCardRoute('c1', 'group/smart')
+      expect(nodes.get('c1')?.route).toBe('group/smart')
+      expect(respawned).toEqual([])
+      svc.dispose()
+    } finally {
+      await fake.close()
+    }
+  })
+})

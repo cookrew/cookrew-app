@@ -20,11 +20,16 @@
 //                 saved for the next start, but nothing is killed, because a
 //                 restart now would boot an empty conversation.
 //   restarted     saved, and the agent restarts on its own session.
+//   unchanged     the pick is what the card already carries: nothing to do.
+//
+// What is saved is a patch: the launch command, and for a routed claude card's
+// model the route too (claude-model-route.ts), so one restart takes both.
 
 import type { TerminalNodeData } from '../shared/model'
 import type { TurnPhase } from '../shared/turn'
+import type { LaunchPatch } from './claude-model-route'
 
-export type RelaunchVerdict = 'restarted' | 'asleep' | 'busy' | 'unrestorable' | 'gone'
+export type RelaunchVerdict = 'restarted' | 'unchanged' | 'asleep' | 'busy' | 'unrestorable' | 'gone'
 
 export interface RelaunchDeps {
   node: (id: string) => TerminalNodeData | null
@@ -35,8 +40,8 @@ export interface RelaunchDeps {
    * strands its dispatch's slot (QA 2026-11-03).
    */
   delivering: (id: string) => boolean
-  /** Save the launch command on the card (the next spawn of it boots this). */
-  setCommand: (id: string, command: string) => void
+  /** Save the patch on the card (the next spawn of it boots this). */
+  save: (id: string, patch: LaunchPatch) => void
   /** A process, or a pane the multiplexer still holds, is running for the card. */
   live: (id: string) => boolean
   /** A respawn loses nothing: exact resume, or nothing to lose (RouteService.restorable). */
@@ -50,13 +55,14 @@ function settled(phase: TurnPhase | undefined): boolean {
   return phase === undefined || phase === 'idle' || phase === 'replied'
 }
 
-export function relaunchInPlace(deps: RelaunchDeps, id: string, command: string): RelaunchVerdict {
+export function relaunchInPlace(deps: RelaunchDeps, id: string, patch: LaunchPatch): RelaunchVerdict {
   const node = deps.node(id)
   if (node === null) return 'gone'
+  if (patch.command === node.command && (patch.route === undefined || patch.route === node.route)) return 'unchanged'
   if (!settled(deps.phaseOf(id)) || deps.delivering(id)) return 'busy'
-  deps.setCommand(id, command)
+  deps.save(id, patch)
   if (!deps.live(id)) return 'asleep'
-  if (!deps.restorable({ ...node, command })) return 'unrestorable'
+  if (!deps.restorable({ ...node, ...patch })) return 'unrestorable'
   deps.respawn(id)
   return 'restarted'
 }

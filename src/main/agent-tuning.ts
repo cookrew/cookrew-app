@@ -20,9 +20,10 @@ import {
   type TuneAsk,
   type TuneKnob,
 } from '../shared/agent-tuning'
-import { launchCommand, launchOffer } from '../shared/launch-tune'
+import { launchOffer } from '../shared/launch-tune'
 import type { TerminalNodeData } from '../shared/model'
 import type { RelaunchVerdict } from './agent-relaunch'
+import { launchPick, type LaunchPatch } from './claude-model-route'
 import { harnessFor, type HarnessWatchOptions } from './harness'
 
 export type { RelaunchVerdict } from './agent-relaunch'
@@ -375,7 +376,12 @@ export interface TuneDeps {
    * it, when that is safe (agent-relaunch.ts). For a harness whose dials are
    * launch flags (HarnessTuning.relaunch); absent, its line is typed instead.
    */
-  relaunch?: (terminalId: string, command: string) => RelaunchVerdict
+  relaunch?: (terminalId: string, patch: LaunchPatch) => RelaunchVerdict
+  /**
+   * Where the card's turns go, for a model pick (claude-model-route.ts): a
+   * routed card's model is its route. Absent: direct, no catalog.
+   */
+  routeFor?: (node: TerminalNodeData) => { routed: boolean; catalog: readonly string[] }
 }
 
 export type TuneResult = { ok: true; ask: TuneAsk } | { ok: false; reason: string }
@@ -481,7 +487,11 @@ const RELAUNCH_REFUSAL: Partial<Record<RelaunchVerdict, string>> = {
  * the agent restarted or will wake on it; the next reply confirms it.
  */
 function relaunchTuning(deps: TuneDeps, node: TerminalNodeData, knob: TuneKnob, value: string): TuneResult {
-  const verdict = deps.relaunch?.(node.id, launchCommand(node.command, { [knob]: value })) ?? 'gone'
+  // The route knob never comes here (applyTuning refuses it before), so the knob is a launch flag.
+  const where = deps.routeFor?.(node) ?? { routed: false, catalog: [] }
+  const plan = launchPick({ command: node.command, knob: knob as 'model' | 'effort', value, ...where })
+  if ('error' in plan) return { ok: false, reason: plan.error }
+  const verdict = deps.relaunch?.(node.id, plan) ?? 'gone'
   const refusal = RELAUNCH_REFUSAL[verdict]
   if (refusal !== undefined) return { ok: false, reason: refusal }
   const ask: TuneAsk = { knob, value, at: (deps.now ?? Date.now)() }

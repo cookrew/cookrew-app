@@ -49,8 +49,8 @@ function tuneDeps(over: { command?: string; verdict?: RelaunchVerdict } = {}): {
         typed.push(data)
         return 'allow'
       },
-      relaunch: (_id, command) => {
-        relaunched.push(command)
+      relaunch: (_id, patch) => {
+        relaunched.push(patch.command)
         return over.verdict ?? 'restarted'
       },
       asks,
@@ -129,7 +129,7 @@ describe('when main may restart an agent in place', () => {
         node: () => (over.gone ? null : node()),
         phaseOf: () => over.phase,
         delivering: () => over.delivering ?? false,
-        setCommand: (_id, command) => saved.push(command),
+        save: (_id, patch) => saved.push(patch.command),
         live: () => over.live ?? true,
         restorable: () => over.restorable ?? true,
         respawn: (id) => respawned.push(id)
@@ -140,7 +140,7 @@ describe('when main may restart an agent in place', () => {
   it('saves the command and restarts an idle agent that can resume its session', () => {
     for (const phase of [undefined, 'idle', 'replied'] as const) {
       const d = relaunchDeps({ phase })
-      expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('restarted')
+      expect(relaunchInPlace(d.deps, 'term-1', { command: 'claude --model opus' })).toBe('restarted')
       expect(d.saved).toEqual(['claude --model opus'])
       expect(d.respawned).toEqual(['term-1'])
     }
@@ -149,7 +149,7 @@ describe('when main may restart an agent in place', () => {
   it('touches nothing while the agent is working or waiting for an answer', () => {
     for (const phase of ['thinking', 'waiting'] as const) {
       const d = relaunchDeps({ phase })
-      expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('busy')
+      expect(relaunchInPlace(d.deps, 'term-1', { command: 'claude --model opus' })).toBe('busy')
       expect(d.saved).toEqual([])
       expect(d.respawned).toEqual([])
     }
@@ -162,28 +162,92 @@ describe('when main may restart an agent in place', () => {
   // ask answered busy.
   it('touches nothing while a prompt is being delivered, though no turn has started yet', () => {
     const d = relaunchDeps({ phase: 'replied', delivering: true })
-    expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('busy')
+    expect(relaunchInPlace(d.deps, 'term-1', { command: 'claude --model opus' })).toBe('busy')
     expect(d.saved).toEqual([])
     expect(d.respawned).toEqual([])
   })
 
   it('saves but does not restart an agent with no process: it wakes on the new command', () => {
     const d = relaunchDeps({ live: false })
-    expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('asleep')
+    expect(relaunchInPlace(d.deps, 'term-1', { command: 'claude --model opus' })).toBe('asleep')
     expect(d.saved).toEqual(['claude --model opus'])
     expect(d.respawned).toEqual([])
   })
 
   it('saves but does not restart when the session could not be resumed', () => {
     const d = relaunchDeps({ restorable: false })
-    expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('unrestorable')
+    expect(relaunchInPlace(d.deps, 'term-1', { command: 'claude --model opus' })).toBe('unrestorable')
     expect(d.saved).toEqual(['claude --model opus'])
     expect(d.respawned).toEqual([])
   })
 
   it('answers gone for a card that is not there', () => {
     const d = relaunchDeps({ gone: true })
-    expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('gone')
+    expect(relaunchInPlace(d.deps, 'term-1', { command: 'claude --model opus' })).toBe('gone')
     expect(d.saved).toEqual([])
+  })
+})
+
+// QA 2026-11-03: `--model sonnet` on a card routed to claude-opus-5-5 ran
+// group/smart (claude's settings env outranks the route's). A routed card's
+// model is its route, so the pick moves the route (claude-model-route.ts).
+describe('a model pick on a routed card moves its route', () => {
+  const CATALOG = ['group/smart', 'claude/claude-haiku-5-5', 'claude/claude-sonnet-5-5', 'claude/claude-opus-5-5']
+  function routedDeps(over: { routed: boolean; command?: string; route?: string }): { deps: TuneDeps; patches: unknown[] } {
+    const patches: unknown[] = []
+    return {
+      patches,
+      deps: {
+        node: (id) => (id === 'term-1' ? node({ command: over.command ?? 'claude --effort low', ...(over.route ? { route: over.route } : {}) }) : null),
+        write: () => 'allow',
+        relaunch: (_id, patch) => {
+          patches.push(patch)
+          return 'restarted'
+        },
+        routeFor: () => ({ routed: over.routed, catalog: CATALOG }),
+        asks: new TuneAsks(),
+        now: () => 1_793_000_000_000
+      }
+    }
+  }
+
+  it("routes to the gateway's model and drops the flag that would outrank it", () => {
+    const d = routedDeps({ routed: true, command: 'claude --effort low --model opus' })
+    expect(applyTuning(d.deps, 'term-1', 'model', 'sonnet').ok).toBe(true)
+    expect(d.patches).toEqual([{ command: 'claude --effort low', route: 'claude/claude-sonnet-5-5' }])
+  })
+
+  it('says so when the gateway lists no such model, and restarts nothing', () => {
+    const d = routedDeps({ routed: true })
+    const result = applyTuning(d.deps, 'term-1', 'model', 'fable')
+    expect(result.ok ? '' : result.reason).toMatch(/gateway lists no fable/)
+    expect(d.patches).toEqual([])
+  })
+
+  it('keeps effort a flag on a routed card, and a direct card its alias', () => {
+    const routed = routedDeps({ routed: true })
+    applyTuning(routed.deps, 'term-1', 'effort', 'max')
+    const direct = routedDeps({ routed: false })
+    applyTuning(direct.deps, 'term-1', 'model', 'haiku')
+    expect(routed.patches).toEqual([{ command: 'claude --effort max' }])
+    expect(direct.patches).toEqual([{ command: 'claude --effort low --model haiku' }])
+  })
+})
+
+describe('a pick the card already carries', () => {
+  it('restarts nothing, even mid-turn', () => {
+    const saved: unknown[] = []
+    const deps: RelaunchDeps = {
+      node: () => node({ command: 'claude --effort low', route: 'claude/claude-opus-5-5' }),
+      phaseOf: () => 'thinking',
+      delivering: () => false,
+      save: (_id, patch) => saved.push(patch),
+      live: () => true,
+      restorable: () => true,
+      respawn: () => saved.push('respawn')
+    }
+    expect(relaunchInPlace(deps, 'term-1', { command: 'claude --effort low' })).toBe('unchanged')
+    expect(relaunchInPlace(deps, 'term-1', { command: 'claude --effort low', route: 'claude/claude-opus-5-5' })).toBe('unchanged')
+    expect(saved).toEqual([])
   })
 })
