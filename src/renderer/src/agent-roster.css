@@ -1975,6 +1975,39 @@
   letter-spacing: 0.12em;
   opacity: 0.55;
 }
+/* Its search box and fold (owner 2026-11-04): the box sits at the list's
+   head while the rows scroll under it; "N more" reads as a quiet row. */
+.cr-model-search-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  padding: 2px 2px 4px;
+  background: inherit;
+}
+.cr-model-search {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid rgba(233, 185, 73, 0.3);
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.cr-model-more { opacity: 0.7; font-style: italic }
+.cr-model-none {
+  display: block;
+  padding: 6px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+/* A phone zooms the page into a field under 16px: the box reads 16px there. */
+@media (max-width: 700px) {
+  .cr-model-search { font-size: 16px }
+}
 .cr-tune-list.models {
   width: 220px;
   max-height: 320px;

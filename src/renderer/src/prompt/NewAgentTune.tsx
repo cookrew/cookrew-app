@@ -3,7 +3,7 @@ import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor, t
 import { LAUNCH_KNOBS, effortOffer, launchTuneLabel, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
 import { effortLevelsFor, modelChipText, modelRows } from '../../../shared/model-pick'
 import { shortRoute } from '../../../shared/route-view'
-import { ModelList, centerCurrent } from '../nodes/ModelDial'
+import { ModelList, centerCurrent, searchHoldsEscape } from '../nodes/ModelDial'
 
 /**
  * The gateway, for THE ONE MODEL LIST (owner 2026-11-04): a new claude agent
@@ -62,6 +62,7 @@ export function NewAgentTune({
     if (!at) return
     const close = (e: Event): void => {
       if (e instanceof KeyboardEvent) {
+        if (searchHoldsEscape(e)) return
         if (e.key === 'Escape') {
           // The menu's Esc: the box keeps the caret a pick put there.
           e.stopPropagation()
