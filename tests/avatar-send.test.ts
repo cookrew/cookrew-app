@@ -133,10 +133,10 @@ describe("an item's latest user", () => {
 describe('the who-picker', () => {
   const r = (id: string, status: string, at: number) => ({ id, name: id, status, lastActivityAt: at })
   const rows = [r('w', 'waiting', 1), r('x', 'idle', 50), r('y', 'working', 90), r('z', 'idle', 70), r('cur', 'idle', 99)]
-  it('puts who waits first, then the most recent, leaving out the one in the box', () => {
+  it('puts who waits first, then the most recent, the one in the box where it stands (cut 2026-11-04)', () => {
     const out = pickerRows(rows, { current: 'cur', recent: 2 })
     expect(out.waiting.map((x) => x.id)).toEqual(['w'])
-    expect(out.recent.map((x) => x.id)).toEqual(['y', 'z'])
+    expect(out.recent.map((x) => x.id)).toEqual(['cur', 'y'])
   })
   it("leads with an item's users in its full view", () => {
     expect(pickerRows(rows, { current: null, first: ['x'], recent: 2 }).recent.map((x) => x.id)).toEqual(['x', 'cur'])
@@ -179,6 +179,6 @@ describe('the CSS contract', () => {
   it('the zoom bar keeps the slot and asks the box before Esc steps out', () => {
     const zoom = read('zoom', 'ZoomView.tsx')
     expect(zoom).toMatch(/ref=\{setFaceSlot\}/)
-    expect(zoom).toMatch(/promptFold\.foldFirst\(\)/)
+    expect(zoom).toMatch(/takeBack\(stepBack\)/)
   })
 })

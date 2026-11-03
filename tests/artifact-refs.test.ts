@@ -68,9 +68,9 @@ describe("the agent's line", () => {
 describe('the box', () => {
   const box = readFileSync('src/renderer/src/prompt/GlobalPrompt.tsx', 'utf8')
   it('sends a reference as what it is and wires it to the agent it goes to', () => {
-    expect(box).toMatch(/submitLine\(to\.id, out\.words\.trim\(\) \? out\.words : ''\)\s+wireRefs\(to\.id, out\.refs\)/)
-    expect(box).toMatch(/sendToAgent\(mention\.id, out\.words\)\s+wireRefs\(mention\.id, out\.refs\)/)
-    expect(box).toMatch(/if \(made\.id\) wireRefs\(made\.id, refs\)/)
+    expect(box).toMatch(/submitLine\(plan\.id, out\.words\.trim\(\) \? out\.words : ''\)\s+wireRefs\(plan\.id, out\.refs\)/)
+    expect(box).toMatch(/sendToAgent\(plan\.id, out\.words\)\s+wireRefs\(plan\.id, out\.refs\)/)
+    expect(box).toMatch(/if \(made\.id\) \{\s+wireRefs\(made\.id, refs\)/)
     expect(box).toMatch(/artifact\.owners\.includes\(agentId\)\) continue/)
   })
 

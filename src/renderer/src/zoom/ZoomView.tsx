@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceList, WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
-import { cookrew } from '../api'
+import { cookrew, isDemoMode, isRemoteMode } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind, NewestThumb } from './ZoomParts'
@@ -21,7 +21,8 @@ import { BarGroups } from './BarGroups'
 import { barCard } from './bar-pick'
 import { setFaceSlot } from '../prompt/face-slot'
 import { CrIcon } from '../icons'
-import { promptFold } from '../prompt/prompt-fold'
+import { promptFold, takeBack } from '../prompt/prompt-fold'
+import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
@@ -386,24 +387,28 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
   // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
   // in, the background and the back button for out), plus the stops and Esc.
-  const stepBack = useCallback(() => {
+  /** One stop out; false at the outermost, where there is nowhere further. */
+  const stepBack = useCallback((): boolean => {
     const z = zoomStore.get()
     const next = stepOut(z.dir, z.v)
-    if (next !== z.v) motion.go(next, z.dir)
+    if (next === z.v) return false
+    motion.go(next, z.dir)
+    return true
   }, [motion.go])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       // A bar group's card (BarGroups.tsx) closes first, before the box or the view.
-      if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input')) {
+      if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
         barCard.close()
         return
       }
       // An agent's card over the artifacts closes first, from its reply box too;
       // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
-      // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card.
-      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input')) {
+      // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card;
+      // the who-picker's field (WhoPicker.tsx) closes the picker first.
+      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
         closeShelfCard()
         return
@@ -412,16 +417,51 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm, .cr-board-search, .cr-board-pop')) return
       // The box's own buttons and picker keep their Esc while the box can fold
       // or its picker is open; in an agent's full view it steps out as before.
-      if ((e.target as Element | null)?.closest?.('.cr-prompt') && (promptFold.get().foldable || document.querySelector('.pf-who'))) return
+      if ((e.target as Element | null)?.closest?.('.cr-prompt') && (promptFold.get().foldable || promptFold.get().picker)) return
       e.preventDefault()
-      // An open prompt box folds first; the view stays (prompt/prompt-fold.ts).
-      if (promptFold.foldFirst()) return
-      stepBack()
+      // The picker closes first, then an open prompt box folds; the view
+      // stays. Only then does the zoom step out (prompt/prompt-fold.ts · takeBack).
+      takeBack(stepBack)
     }
     // Capture, so a card that stops Escape on its way up does not keep us zoomed.
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [stepBack, closeShelfCard])
+  // BACK ON A WEB PAGE (the phone companion; prompt/back-guard.ts): Android's
+  // back and the browser's take the Esc order, one step a press: an agent's
+  // card over the artifacts, the picker, a box open for nobody, then the zoom
+  // one stop out. At the outermost stop back leaves the page, as it always did.
+  // The desktop app has no back, so it keeps no entries. Nothing is pushed
+  // before the owner's first touch: Chrome skips history entries a page adds
+  // without one, and back would then skip past the page.
+  const backSteps = useRef({ stepBack, closeShelfCard })
+  backSteps.current = { stepBack, closeShelfCard }
+  useEffect(() => {
+    if (!isRemoteMode() && !isDemoMode()) return
+    const holder = backHolder(window, window.history)
+    const release = holder.hold({
+      wants: () => {
+        if ((navigator as { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) return false
+        const z = zoomStore.get()
+        return barCard.get() !== null || shelfCardOpen.current || promptFold.wantsBack() || stepOut(z.dir, z.v) !== z.v
+      },
+      back: () => {
+        // A bar group's card first (BarGroups.tsx), as Esc closes it first.
+        if (barCard.get()) return barCard.close()
+        if (shelfCardOpen.current) return backSteps.current.closeShelfCard()
+        takeBack(backSteps.current.stepBack)
+      }
+    })
+    const offFold = promptFold.subscribe(holder.sync)
+    const offZoom = zoomStore.subscribe(holder.sync)
+    const offBar = barCard.subscribe(holder.sync)
+    return () => {
+      offFold()
+      offZoom()
+      offBar()
+      release()
+    }
+  }, [])
   // A press that turned into a pinch or a drag is not the click that steps out.
   const moved = useRef(false)
   const swallowClick = useRef(false)

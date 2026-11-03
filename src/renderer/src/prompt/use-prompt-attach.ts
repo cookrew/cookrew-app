@@ -17,6 +17,8 @@ export interface PromptAttach {
   readonly onDrop: (e: React.DragEvent) => void
   /** Files dropped somewhere else that this box takes (page-drop.ts), or a phone's picker chose. */
   readonly dropFiles: (files: File[]) => void
+  /** Pictures pasted somewhere else that this box takes (the folded face's ⌘V). */
+  readonly takeImages: (images: File[]) => void
   /** The paperclip on a desktop: the native file dialog, its picks into the draft. */
   readonly pickFiles: () => void
   /** A screenshot is being saved. */
@@ -82,12 +84,16 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, asi
     if (files.length > 0) attach(() => pathsForFiles(files, cookrew()))
   }
 
+  const takeImages = (images: File[]): void => {
+    if (images.length > 0) attach(() => saveClipboardImages(images, cookrew()))
+  }
+
   return {
     onPaste: (e) => {
       const images = pastedImages(e.clipboardData)
       if (images.length === 0) return
       e.preventDefault()
-      attach(() => saveClipboardImages(images, cookrew()))
+      takeImages(images)
     },
     onDragOver: (e) => {
       if (!carrying(e)) return
@@ -102,6 +108,7 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, asi
       dropFiles(Array.from(e.dataTransfer.files))
     },
     dropFiles,
+    takeImages,
     // The dialog first: "attaching…" is for the saving, not the choosing.
     // A dialog closed with nothing picked hands back [] and leaves the draft be.
     pickFiles: () => {

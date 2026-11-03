@@ -95,6 +95,8 @@ interface DockProps {
   nodes: readonly CanvasNode[]
   /** The workspace's notes and browsers, for the prompt's "#Name". */
   artifacts?: readonly PromptArtifact[]
+  /** The active workspace's name, for the prompt's words at the outer stops. */
+  workspaceName?: string | null
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -141,6 +143,7 @@ export function Dock({
   agents,
   nodes,
   artifacts,
+  workspaceName = null,
   browserFor,
   boardFor
 }: DockProps): React.JSX.Element {
@@ -211,7 +214,7 @@ export function Dock({
             ))}
           </div>
         )}
-        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} />}
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.

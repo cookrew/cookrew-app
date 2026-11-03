@@ -65,3 +65,13 @@ const TYPING = 'input, textarea, select, [contenteditable=""], [contenteditable=
 export function takesTyping(target: Element | null): boolean {
   return !!target?.closest?.(TYPING)
 }
+
+/**
+ * A PICTURE PASTED WITH THE BOX FOLDED (task "Face inputs", 2026-11-04): ⌘V
+ * with no field taking it (the page, the canvas, a button) opens the box with
+ * the picture attached. A field, a terminal or a note being written keeps its
+ * own paste, and so does anything in a dialog.
+ */
+export function pasteOpensBox(target: Element | null): boolean {
+  return !takesTyping(target) && !target?.closest?.(MODAL)
+}
