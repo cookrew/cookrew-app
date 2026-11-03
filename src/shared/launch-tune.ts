@@ -3,11 +3,12 @@
  * the tune switch sits in the prompt box; with nobody targeted it picks what
  * the new agent starts on).
  *
- * A live agent is tuned by typing `/model` or `/effort` into its pane
- * (agent-tuning.ts). A new one is not typed into: its pane is still booting,
- * and claude's slash commands also save the pick as the machine's default for
- * every later session. So a new agent takes its pick as LAUNCH FLAGS instead,
- * which apply to that session only.
+ * A new agent is not typed into: its pane is still booting, and claude's
+ * slash commands also save the pick as the machine's default for every later
+ * session. So a new agent takes its pick as LAUNCH FLAGS instead, which apply
+ * to that session only. A live claude agent is tuned the same way since
+ * 2026-11-01: launchCommand rewrites its card's command and it restarts in
+ * place on its own session (main/agent-relaunch).
  *
  * EVERY HARNESS THAT TAKES THE FLAGS gets the pick (owner 2026-11-01), each
  * spelled its own way:

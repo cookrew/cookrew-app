@@ -1,5 +1,7 @@
 // Reading and turning an agent's two dials (shared/agent-tuning) — the main
-// half: the session file is the readout, the PTY is the control.
+// half: the session file is the readout; the control is a line typed into the
+// PTY, or for a harness whose dials are launch flags (claude) a restart in
+// place on the new command (agent-relaunch.ts).
 //
 // Nothing here knows about Electron. The PTY table and the node store arrive
 // as two functions, so the whole path — refuse mid-turn, type one line,
@@ -18,8 +20,12 @@ import {
   type TuneAsk,
   type TuneKnob,
 } from '../shared/agent-tuning'
+import { launchCommand, launchOffer } from '../shared/launch-tune'
 import type { TerminalNodeData } from '../shared/model'
+import type { RelaunchVerdict } from './agent-relaunch'
 import { harnessFor, type HarnessWatchOptions } from './harness'
+
+export type { RelaunchVerdict } from './agent-relaunch'
 
 /**
  * How far back a COLD read looks, in escalating steps.
@@ -364,6 +370,12 @@ export interface TuneDeps {
    * no RTE dial, exactly the rail before the program.
    */
   routeChoices?: (terminalId: string) => readonly string[] | null
+  /**
+   * Save this launch command on the card and restart the agent in place on
+   * it, when that is safe (agent-relaunch.ts). For a harness whose dials are
+   * launch flags (HarnessTuning.relaunch); absent, its line is typed instead.
+   */
+  relaunch?: (terminalId: string, command: string) => RelaunchVerdict
 }
 
 export type TuneResult = { ok: true; ask: TuneAsk } | { ok: false; reason: string }
@@ -434,6 +446,11 @@ export function applyTuning(
     harness.tuning.values?.(knob, readTuning(subjectOf(node), deps.watch ?? {})) ?? null
   const allowed = offered === null ? tuneValueOk(knob, value) : offered.includes(value)
   if (!allowed) return { ok: false, reason: `not a ${knob} this agent offers` }
+  // A command the flag cannot ride (launch-tune.launchOffer) would restart on
+  // nothing new: its line is typed instead, as before.
+  if (harness.tuning.relaunch && deps.relaunch && launchOffer(node.command) !== null) {
+    return relaunchTuning(deps, node, knob, value)
+  }
   const line = harness.tuning.line(knob, value)
   if (line === null) return { ok: false, reason: `this agent has no ${knob} dial` }
 
@@ -448,5 +465,26 @@ export function applyTuning(
 
   const ask: TuneAsk = { knob, value, at: (deps.now ?? Date.now)() }
   deps.asks.record(terminalId, ask)
+  return { ok: true, ask }
+}
+
+/** Why a relaunch did not take the pick now, in the rail's words. */
+const RELAUNCH_REFUSAL: Partial<Record<RelaunchVerdict, string>> = {
+  busy: 'mid-turn or waiting for an answer — pick again once it replies',
+  unrestorable: 'saved for its next start — a restart now would lose its conversation',
+  gone: 'no such terminal'
+}
+
+/**
+ * Turn a dial that is a launch flag: the card's command takes the flag (an old
+ * one replaced) and main restarts the agent on it. The ask is remembered when
+ * the agent restarted or will wake on it; the next reply confirms it.
+ */
+function relaunchTuning(deps: TuneDeps, node: TerminalNodeData, knob: TuneKnob, value: string): TuneResult {
+  const verdict = deps.relaunch?.(node.id, launchCommand(node.command, { [knob]: value })) ?? 'gone'
+  const refusal = RELAUNCH_REFUSAL[verdict]
+  if (refusal !== undefined) return { ok: false, reason: refusal }
+  const ask: TuneAsk = { knob, value, at: (deps.now ?? Date.now)() }
+  deps.asks.record(node.id, ask)
   return { ok: true, ask }
 }
