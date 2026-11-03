@@ -176,13 +176,14 @@ describe('a workspace and a machine', () => {
 
 describe('the zoom is driven by clicks, not the wheel (owner, 2026-10-31)', () => {
   const source = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-  // The wheel scrolls the thumbnails and their shelf (owner, 2026-11-02): it is the page's and a list's, never the zoom's.
+  // The wheel scrolls the thumbnails (owner, 2026-11-02): it is the page's and a list's, never the zoom's.
+  // The shelf over them turns pages by its "+N" chip (owner, 2026-11-03), not by a sideways wheel.
   it('has no wheel zoom at all: the one wheel listener only scrolls, and lets a ctrl-pinch go', () => {
     expect(source.match(/addEventListener\('wheel'/g)).toHaveLength(1)
     const wheel = source.slice(source.indexOf('onWheel.current = (e) => {'), source.indexOf("addEventListener('wheel'"))
     expect(wheel).toContain('if (e.ctrlKey) return')
     expect(wheel).toContain('scrollBy(dy)')
-    expect(wheel).toContain('shelfBy(dx)')
+    expect(wheel).not.toContain('shelf')
     expect(wheel).not.toMatch(/\.go\(|jumpTo|stepBack|stepOut|focusAgent|focusItem/)
   })
 
@@ -214,5 +215,22 @@ describe('removing an agent (owner, 2026-10-31; making one is the global prompt 
     expect(withIt).toContain('Remove Forge')
     const thumb = renderToStaticMarkup(<ItemNode item={item()} names={[]} bind={bind} onClick={() => undefined} onDelete={() => undefined} />)
     expect(thumb).toContain('Remove PR #82')
+  })
+})
+
+// THE SHELF STACKS BY Z-INDEX (review, 2026-11-03): moving a keyed AgentNode
+// in the DOM drops the focus of the reply box it holds, and changes which face
+// lies on top in the workspace's pile and on the way into a full view.
+describe('the shelf’s faces lie over each other without moving their nodes', () => {
+  const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
+  const motion = readFileSync('src/renderer/src/zoom/use-zoom-motion.ts', 'utf8')
+  it('mounts the agents in the crew’s order', () => {
+    expect(view).toContain('{model.agents.map((a) => <AgentNode')
+    expect(view).not.toContain('shelfAgents')
+  })
+  it('stacks a shelf page by z-index, under the waiting dots', () => {
+    expect(motion).toMatch(/shelfPage\(layout\.thumbs\.shelf/)
+    expect(motion).toMatch(/rank !== undefined \? 10 \+ rank/)
+    expect(Number(motion.match(/const SHELF_RANKS = (\d+)/)?.[1]) + 12).toBeLessThan(44)
   })
 })

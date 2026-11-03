@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machinesAt, shelfRow, stackOf, thumbsOf, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { crewOf, deviceOf, fitScale, machinesAt, shelfPage, stackOf, thumbsOf, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -105,6 +105,8 @@ export interface FrameEls {
   fullHead?: Put | null
   /** The newest browser beside the stack when no coin carries it (ZoomView · NewestThumb). */
   newThumb?: Put | null
+  /** The shelf's "+N" chip, which turns its page (ZoomView). */
+  shelfMore?: Put | null
   machine: Put
 }
 
@@ -120,15 +122,8 @@ export interface FrameState {
   narrow: boolean
   /** How far the crew (a narrow screen) or the thumbnails (any screen) are scrolled down, in px (the cameras clamp it). */
   pan?: number
-  /** How far the shelf over the thumbnails is scrolled sideways, in px from its left end (shelfFrame clamps it). */
+  /** The page of the shelf over the thumbnails: taps on its "+N" chip, wrapping (zoom-layout.ts · shelfPage). */
   shelf?: number
-}
-
-/** The shelf over the thumbnails on screen: how far it scrolls sideways (0 when it fits), and the band it is drawn in. */
-export interface ShelfOut {
-  max: number
-  top: number
-  bottom: number
 }
 
 /** What the view reports after a frame: how opaque it still is (it hands over to the real full view), and the scene's scale. */
@@ -137,7 +132,6 @@ export interface FrameOut {
   scale: number
   /** How far the crew (a narrow screen) or the thumbnails can scroll, in px: 0 when they fit. */
   panMax: number
-  shelf: ShelfOut
 }
 
 const f1 = (n: number): string => n.toFixed(1)
@@ -190,48 +184,6 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
 
 /** A coin docks under an item whose slot is on screen or this near it, in px (paint · the links). */
 const COIN_ROOM = 160
-/** The shelf's strip on screen: this far in from each side, and an agent past it fades over SHELF_FADE px (half out, half seen). */
-const SHELF_EDGE = { wide: 32, narrow: 12 }
-const SHELF_FADE = 48
-/** The shelf's band around its row, in scene px: the faces above, the names below (where a wheel or a drag scrolls it). */
-const SHELF_BAND = { top: 36, bottom: 60 }
-interface ShelfFrame {
-  /** Each agent's x on the shelf, in scene px, scrolled. */
-  x: Record<string, number>
-  /** Each agent's opacity at the strip's ends. */
-  o: Record<string, number>
-  max: number
-}
-/** The row is measured once per set of elements (their names' widths) and scale of the names. */
-const shelfMemo = new WeakMap<FrameEls, { L: Layout; k: number; row: ReturnType<typeof shelfRow> }>()
-/**
- * THE SHELF ON SCREEN (owner, 2026-11-02): one row at the thumbnails' scale
- * S. A row that fits is centred; a longer one starts at the strip's left end
- * and scrolls sideways (`pan` px), its agents fading out past either end.
- */
-function shelfFrame(L: Layout, els: FrameEls, nameK: number, w: number, S: number, narrow: boolean, pan: number): ShelfFrame {
-  const memo = shelfMemo.get(els)
-  const row = memo && memo.L === L && memo.k === nameK
-    ? memo.row
-    : shelfRow(L.thumbs.shelf, (id) => (els.agents.get(id)?.nmW ?? 0) * SHELF_NAME_S * nameK)
-  if (!memo || memo.row !== row) shelfMemo.set(els, { L, k: nameK, row })
-  const edge = narrow ? SHELF_EDGE.narrow : SHELF_EDGE.wide
-  const max = Math.max(0, row.w * S - (w - edge * 2))
-  const p = Math.min(Math.max(pan, 0), max)
-  // The camera puts scene x 0 at the screen's centre: the row's left end goes to the strip's, less the scroll.
-  const shift = max > 0 ? (edge - p - w / 2) / S + row.w / 2 : 0
-  const x: Record<string, number> = {}
-  const o: Record<string, number> = {}
-  for (const id of L.thumbs.shelf.order) {
-    x[id] = (row.x[id] ?? 0) + shift
-    const sx = w / 2 + x[id] * S
-    const half = ((row.slot[id] ?? 0) * S) / 2
-    const out = Math.max(0, edge - (sx - half), sx + half - (w - edge))
-    o[id] = clamp01(1 - out / SHELF_FADE)
-  }
-  return { x, o, max }
-}
-
 /** The camera box at agent zoom z ≥ 0. */
 
 export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameState): FrameOut {
@@ -321,7 +273,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const dockAt = new Map(others.map((a, k) => [a.id, k] as const))
   // A phone's head is the bar's, above this view: the face and words are seen rising to it, gone just as the real view arrives.
   const headOut = FV.headFades ? 1 - ramp(z, 2.6, 2.86) : 1
-  const shelf = shelfFrame(L, els, sw.shelf.name, w, iS, st.narrow, st.shelf ?? 0)
+  // The shelf's page: the faces it shows, and where the others wait (behind its "+N" chip).
+  const shelf = shelfPage(L.thumbs.shelf, st.shelf ?? 0)
   model.agents.forEach((a, i) => {
     const e = els.agents.get(a.id)
     if (!e) return
@@ -335,10 +288,11 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     let s = lerp(far.s, 1, t) * lerp(1, 0.62, ease(clamp01(zi - 1)))
     const r = lerp(far.r, 0, t)
     // To the shelf as the thumbs unfold.
-    const sh = { x: shelf.x[a.id] ?? 0, y: L.thumbs.shelfY }
+    const shown = a.id in shelf.x
+    const sh = { x: shown ? shelf.x[a.id] : shelf.more?.x ?? 0, y: L.thumbs.shelf.y }
     const pm = ease(ramp(P, 0.02 * Math.min(i, 8), 0.44 + 0.02 * Math.min(i, 8)))
-    // Past the ends of the shelf's strip an agent fades out (it scrolls back in).
-    const onShelf = lerp(1, shelf.o[a.id] ?? 1, pm)
+    // Off this page an agent goes into the "+N" chip and fades (a tap on the chip brings it).
+    const onShelf = lerp(1, shown ? 1 : 0, pm)
     x = lerp(x, sh.x, pm)
     y = lerp(y, sh.y, pm)
     s = lerp(s, 0.5, pm)
@@ -377,7 +331,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const stTop = U.nameTop + U.toStatus * fN
     const cntTop = stTop + U.toCounts * fS
     const nA = { x: lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny) + (1 - nmIn) * -14, s: lerp(0.7, 1, nmIn), o: nmIn * words }
-    const nB = { x: -e.nmW / 2, y: 22, s: SHELF_NAME_S, o: 1 - ramp(iz * pc, 0, 0.35) }
+    // The troop's faces carry no names: a face's title says who it is (ZoomParts · AgentNode).
+    const nB = { x: -e.nmW / 2, y: 22, s: SHELF_NAME_S, o: 0 }
     const ns = lerp(nA.s, nB.s, pm)
     const ng = grow(fN, ns, e.nmW, e.nmH ?? 18, nx)
     const nm = { x: lerp(nA.x, nB.x, pm) + ng.dx, y: lerp(nA.y, nB.y, pm) + ng.dy, k: ns * fN }
@@ -664,6 +619,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   }
   put(els.fullHead, null, st.dir === 'items' && st.focusItem !== null ? ramp(I, 0.4, 0.7) : 0)
   const cover = st.dir === 'agents' ? 1 - ramp(z, 2.86, 2.99) : 1 - ramp(I, 0.86, 0.99)
-  const band = { top: iOy + (L.thumbs.shelfY - SHELF_BAND.top) * iS, bottom: iOy + (L.thumbs.shelfY + SHELF_BAND.bottom) * iS }
-  return { cover, scale: S, panMax, shelf: { max: shelf.max, ...band } }
+  // The shelf's "+N" chip: after its page's last face, as the thumbnails unfold, gone into an item's full view.
+  const more = shelf.more
+  put(els.shelfMore, more ? `translate(${f1(more.x - SHELF_FACE / 2)}px, ${f1(L.thumbs.shelf.y - SHELF_FACE / 2)}px)` : null, more ? ease(ramp(P, 0.4, 0.9)) * (1 - ramp(iz * pc, 0, 0.35)) : 0)
+  return { cover, scale: S, panMax }
 }
