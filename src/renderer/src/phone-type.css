@@ -3,18 +3,21 @@
    A census of every word on every phone surface (scratchpad/phone-type)
    measured 22 different CSS sizes, 9.4 to 13px for the controls alone, 3px
    words at the overview stops and a 22px reply box on the open card. A phone
-   app reads at a few sizes, each for one role, and never under 11 (iOS HIG
-   caption 2, Material label small). This sheet is the phone's ONE place for
-   type sizes. The owner found the first scale too big on a 360px Samsung
-   (2026-11-03: names cut to "Fix…", the bar's stops cut, the crew all
-   words), so it is one step smaller, the 11 floor kept:
+   app reads at a few sizes, each for one role. This sheet is the phone's
+   ONE place for type sizes. The owner found it too big on a 360px Samsung
+   twice (2026-11-03) and asked for the desktop's look, flat buttons
+   included: these are the sizes the desktop sets (its census at 1440: 10
+   for small words, 10-11.5 for its controls, 13.5 for reading, 13-14 for
+   its fields and names):
 
-     caption   11   counts, states, badges, kickers, section heads
-     control   12   buttons, chips, tabs, stops, menu rows
-     body      14   reading text, transcripts, every name, the route
-     title     16   a machine's name
-     display   20   a stop's own heading
-     input     16   every text field: iOS zooms into a field under 16
+     caption   10   counts, states, badges, kickers, section heads
+     control   11   buttons, chips, tabs, stops, menu rows
+     body      13   reading text, transcripts, every name, the route
+     title     14   a machine's name, a sheet's title
+     display   18   a stop's own heading
+     input     13   every text field, as the desktop's; the viewport's
+                    maximum-scale=1 (index.html, mobile-server.ts) keeps
+                    iOS from zooming into it
 
    Chrome is unscaled: its words take the role's size here. The zoom's scene
    is drawn at each stop's camera scale: its words are pinned on SCREEN, the
@@ -28,12 +31,12 @@
    icons, and are not listed. */
 
 :root {
-  --ph-caption: 11px;
-  --ph-control: 12px;
-  --ph-body: 14px;
-  --ph-title: 16px;
-  --ph-display: 20px;
-  --ph-input: 16px;
+  --ph-caption: 10px;
+  --ph-control: 11px;
+  --ph-body: 13px;
+  --ph-title: 14px;
+  --ph-display: 18px;
+  --ph-input: 13px;
 }
 
 @media (max-width: 700px) {
@@ -252,9 +255,9 @@
   /* The open card: its latest at body, its reply box at body (iOS keeps the
      page's scale: index.html · maximum-scale=1), its thumbnails' words at control and caption. */
   :root:root .zv-body {
-    max-height: min(80px, calc(88px / var(--zv-k-card, 1)));
+    max-height: calc(72px / var(--zv-k-card, 1));
     font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
-    line-height: calc(20px / var(--zv-k-card, 1));
+    line-height: calc(18px / var(--zv-k-card, 1));
   }
   :root:root .zv-body .ag-latest {
     font-size: inherit;
@@ -314,9 +317,17 @@
   :root:root .zv-scene .zv-grp .zv-seal {
     font-size: var(--ph-control);
   }
-  /* The machine's name over its marks as under its screen: title. */
+  /* The machine's name over its marks as under its screen: title; its counts and hint, caption
+     (drawn 1:1 on screen at the workspaces stop: zoom-camera.ts · deviceWords). */
   :root:root .zv-device-label b {
     font-size: var(--ph-title);
+  }
+  :root:root .zv-device-label :is(span, small) {
+    font-size: var(--ph-caption);
+  }
+  /* The voice bar's keys (ESC, the arrows' row) as the prompt's other buttons. */
+  :root:root .voice-keys .cr-btn.term-key {
+    font-size: var(--ph-control);
   }
   /* A picture's words (a thumbnail's title, line, host, count) show only where the camera
      draws them at their size: --zv-wo, from the painter (zoom-frame.ts · wordsSeen). */

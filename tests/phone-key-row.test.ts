@@ -49,8 +49,9 @@ describe("the phone's tools: one row after the chips", () => {
   it('draws every button in it at one size', () => {
     const one = rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn')
     expect(one).toContain('flex: none;')
-    expect(one).toContain('width: 34px;')
-    expect(one).toContain('height: 36px;')
+    // Flat, as the desktop's (owner, 2026-11-03).
+    expect(one).toContain('width: 30px;')
+    expect(one).toContain('height: 28px;')
     expect(css).toMatch(/body\.cookrew-mobile \.cr-prompt \.voice-keys \{\s*display: contents;/)
   })
 

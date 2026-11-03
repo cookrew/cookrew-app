@@ -10,12 +10,12 @@
  * its size ON SCREEN on every frame, as a map draws its labels, and a word
  * that has no room at that size fades instead of shrinking.
  *
- *   a name        14 (body): under a face at every per-row pick, in the open
+ *   a name        13 (body): under a face at every per-row pick, in the open
  *                 card's head, in the full view's head
- *   a small word  11 (caption): a state, counts, a workspace's label, the
+ *   a small word  10 (caption): a state, counts, a workspace's label, the
  *                 newest's caption, a machine's counts
- *   a machine     16 (title): its name at the devices stop and over its marks
- * (2026-11-03, a 360px Samsung: 16 / 18 read too big, one step down.)
+ *   a machine     14 (title): its name at the devices stop and over its marks
+ * (2026-11-03, a 360px Samsung: too big twice; now the desktop's own sizes.)
  *
  * The painter (zoom-frame.ts · paint) draws the moving words at `pinned()`:
  * their size over the camera's scale on this frame. Words inside a picture (a
@@ -28,7 +28,7 @@ import { COL, ROW } from './zoom-layout'
 import { ramp } from './zoom-path'
 
 /** The phone's type scale, on screen, in CSS px (phone-type.css mirrors it). */
-export const PHONE_TYPE = { caption: 11, control: 12, body: 14, title: 16, display: 20, input: 16 } as const
+export const PHONE_TYPE = { caption: 10, control: 11, body: 13, title: 14, display: 18, input: 13 } as const
 
 /** Each stop's camera scale at rest (zoom-frame.ts · restScales). */
 export interface RestScales {

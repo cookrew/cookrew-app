@@ -7,7 +7,7 @@
  */
 import { clamp01, ease, lerp } from './zoom-path'
 import { fitScale, type Box, type crewOf, type deviceOf, type Pos, type stackOf, type thumbsOf } from './zoom-layout'
-import { sceneWords, type RestScales, type SceneWords } from './scene-words'
+import { PHONE_TYPE, sceneWords, type RestScales, type SceneWords } from './scene-words'
 
 export const GROUP_BOX: Box = { w: 430, h: 320, cy: 0 }
 /** A workspace's mark on the device is its group at this scale. */
@@ -52,12 +52,13 @@ const CARD_SEEN = { x: CARD_RECT.x, y: -46, w: 244 - CARD_RECT.x, h: CARD_RECT.y
  * A mark is drawn at SWS inside a device the camera fits into the window, so
  * a label set in CSS px is seen smaller by both: each grows back until it
  * reads at DEVICE_TEXT_PX at least, and is cut short before a neighbour's.
- *   markK, markMax    the other workspaces' labels (zoom.css · .zv-mark-label, 11px; 32px on a phone)
+ *   markK, markMax    the other workspaces' labels (zoom.css · .zv-mark-label, 11px)
  *   openK, openW      the open workspace's own label (11px type), as large and as wide as theirs
  *   titleK, titleMax  the machine's name and hint over the marks (11px words), wrapping inside the device
+ * A phone draws both 1:1 on screen at the workspaces stop, in its own type
+ * (phone-type.css: caption, title); the painter keeps them so as it zooms.
  */
 export const DEVICE_TEXT_PX = 11
-const MARK_LABEL_PX = { wide: 11, narrow: 32 }
 /** Room left between two marks' labels, in a mark's units. */
 const MARK_LABEL_GAP = 40
 export interface DeviceWords {
@@ -73,13 +74,13 @@ export interface DeviceWords {
 }
 export function deviceWords(device: { box: Box; dx: number }, w: number, h: number, narrow: boolean): DeviceWords {
   const cam = fitScale(device.box, w, h)
-  const px = narrow ? MARK_LABEL_PX.narrow : MARK_LABEL_PX.wide
-  // A phone pins them at the caption size exactly (scene-words.ts); a desk only grows them to it.
-  const markK = narrow ? DEVICE_TEXT_PX / (px * SWS * cam) : Math.max(1, DEVICE_TEXT_PX / (px * SWS * cam))
+  // A phone draws them 1:1 on screen, at its own type; a desk only grows its 11px words to DEVICE_TEXT_PX.
+  const markK = narrow ? 1 / (SWS * cam) : Math.max(1, DEVICE_TEXT_PX / (11 * SWS * cam))
   // The next mark stands dx away on the device: dx / SWS in a mark's own units.
   const markMax = (device.dx / SWS - MARK_LABEL_GAP) / markK
-  const titleK = Math.max(1, DEVICE_TEXT_PX / (11 * cam))
-  const openK = (px / 11) * markK
+  const titleK = narrow ? 1 / cam : Math.max(1, DEVICE_TEXT_PX / (11 * cam))
+  // The open label is 11px type: on a phone drawn at caption, as large as its neighbours'.
+  const openK = narrow ? (PHONE_TYPE.caption / 11) * markK : markK
   const openW = markMax * markK
   return { cam, markK, markMax, openK, openW, titleK, titleMax: (device.box.w - 100) / titleK, openMax: narrow ? openW / openK : Infinity }
 }
