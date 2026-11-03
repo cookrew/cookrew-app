@@ -6,6 +6,10 @@
 //   narrow as a phone); the tray above the words wraps what does not fit onto
 //   a line of its own instead of swiping it out of sight; and every control
 //   is a thumb's size, 32px or more, the type untouched.
+// Later that day (task "Phone tray chips float"): the tray is a row of chips
+//   of its own, floating over the pill, and it SWIPES sideways (no scrollbar):
+//   wrapped, it grew a second and third line over the page. The swipe shows
+//   its last keys' edge, so they are never out of sight without a sign.
 // 2026-11-04, later (the cut "Tray tools"): the tray's tools are pills drawn
 // 28px tall inside a clear 2px border, so the thumb still gets 32px.
 import { readFileSync } from 'node:fs'
@@ -32,14 +36,15 @@ describe('the width alone lays the box out as the phone', () => {
 })
 
 describe('the tray above the words', () => {
-  it('wraps onto a line of its own instead of swiping out of sight', () => {
-    const row = rule('  body .cr-prompt .cr-prompt-tools')
-    expect(row).toContain('flex-wrap: wrap;')
-    expect(row).not.toContain('overflow-x: auto;')
-    expect(row).toContain('min-width: 0;')
+  it('swipes sideways on one line instead of wrapping over the page', () => {
+    const row = rule('  body .cr-prompt .cr-prompt-tray')
+    expect(row).toContain('flex-wrap: nowrap;')
+    expect(row).toContain('overflow-x: auto;')
+    expect(row).not.toContain('flex-wrap: wrap;')
   })
 
-  it("lays the tray's buttons out in the row, and wraps the agent's keys as one group", () => {
+  it("lays the tray's buttons out in the row, the agent's keys as one group", () => {
+    expect(rule('  body .cr-prompt .cr-prompt-tools')).toContain('display: contents;')
     expect(rule('  body .cr-prompt .cr-prompt-tools > .voice-bar')).toContain('display: contents;')
     const keys = rule('  body .cr-prompt .voice-keys')
     expect(keys).toContain('display: flex;')
@@ -47,8 +52,10 @@ describe('the tray above the words', () => {
     expect(keys).toContain('flex-wrap: nowrap;')
   })
 
-  it('never scrolls, so nothing swipes it', () => {
-    expect(read('prompt', 'GlobalPrompt.tsx')).not.toContain('scrollLeft')
+  it('reaches past the pill to the screen edges, so the swipe has room and a cut chip shows there is more', () => {
+    const row = rule('  body .cr-prompt .cr-prompt-tray')
+    expect(row).toContain('left: -8px;')
+    expect(row).toContain('right: -8px;')
   })
 })
 

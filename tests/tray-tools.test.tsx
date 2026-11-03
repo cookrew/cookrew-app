@@ -162,6 +162,8 @@ describe('on a phone', () => {
   it('keeps the ^ first in its row, as before: it opens what follows it', () => {
     const box = css.slice(0, css.indexOf("THE TRAY'S TOOLS, ONE FORM"))
     expect(rule(box, '  body .cr-prompt .cr-prompt-tools > .cr-prompt-more')).toContain('order: -1;')
+    // model · effort and the item first (Float Chips' row), then the ^.
+    expect(rule(box, '  body .cr-prompt .cr-prompt-tray > :not(.cr-prompt-tools)')).toContain('order: -2;')
   })
 
   it("a thumb's reach round a 28 px pill: 32 px with its clear border", () => {

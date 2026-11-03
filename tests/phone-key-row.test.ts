@@ -36,13 +36,13 @@ describe("the phone's tools: one row after the chips", () => {
     expect(rule('.cr-prompt-tools')).toContain('display: contents;')
   })
 
-  it('on a phone is a row at the right that wraps what does not fit, never swiped past the edge', () => {
-    const row = rule('  body .cr-prompt .cr-prompt-tools')
+  // 2026-11-04 (task "Phone tray chips float"): the tools are chips of the
+  // tray, a row of its own floating over the pill (tests/phone-float-box.test.ts).
+  it("on a phone lays its chips into the floating tray's one row", () => {
+    expect(rule('  body .cr-prompt .cr-prompt-tools')).toContain('display: contents;')
+    const row = rule('  body .cr-prompt .cr-prompt-tray')
     expect(row).toContain('display: flex;')
-    expect(row).toContain('flex-wrap: wrap;')
-    expect(row).toContain('justify-content: flex-end;')
-    expect(row).not.toContain('overflow-x')
-    expect(row).toContain('min-width: 0;')
+    expect(row).toContain('flex-wrap: nowrap;')
     // The key tray is not a row of its own any more.
     expect(css).not.toMatch(/\.cr-prompt \.voice-bar \{[^}]*flex-basis: 100%/)
   })
@@ -78,23 +78,15 @@ describe("the phone's tools: one row after the chips", () => {
 
   // Owner, 2026-11-03: "the arrows and ESC seem gone". Beside two chips the row
   // showed ⌄ 🎤 ⌨ ← ↓ and the rest was past the edge, with nothing saying so.
-  // It was swiped to them; now nothing is past the edge to swipe to.
-  it('never swipes: the keys wrap into view instead', () => {
+  // 2026-11-04: the tray floats and swipes again, but runs to the screen's
+  // edges past the pill (left/right -8px), so its last chip shows cut there:
+  // the sign that there is more. No script scrolls it.
+  it('swipes to its last key, the cut chip at the edge saying there is more', () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
     expect(box).toContain('<span className="cr-prompt-tools">')
     expect(box).not.toContain('scrollLeft')
-  })
-
-  // A 360px phone: the dock's 8px sides and the pill's 4px leave 336px. The
-  // keys wrap as one group: a hairline, Esc (a word, ~42px) and five icons.
-  it('fits the keys on a line of their own at 360px', () => {
-    const phone = css.slice(css.indexOf("THE TRAY'S TOOLS, ONE FORM"))
-    const h = Number(phone.match(/--tray-h: 28px;/) ? 28 : NaN)
-    const reach = Number(phone.match(/--tray-reach: (\d+)px;/)?.[1])
-    const width = h + 2 * reach
-    const keyGap = Number(rule('  body .cr-prompt .voice-keys').match(/gap: (\d+)px;/)?.[1])
-    const part = Number(css.match(/body \.cr-prompt \.voice-bar \.voice-keys \{\s*margin-left: (\d+)px;/)?.[1])
-    // the hairline (1) and six keys: six gaps; the group parts from the rest.
-    expect(1 + 42 + 5 * width + 6 * keyGap + part).toBeLessThanOrEqual(336)
+    const row = rule('  body .cr-prompt .cr-prompt-tray')
+    expect(row).toContain('overflow-x: auto;')
+    expect(row).toContain('right: -8px;')
   })
 })

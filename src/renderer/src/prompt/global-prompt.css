@@ -250,6 +250,28 @@
   display: contents;
 }
 
+/* The tray (GlobalPrompt · cr-prompt-tray, 2026-11-04): model · effort, the
+   item riding the words, and the tools. No box of its own on a wide screen:
+   its chips sit in the box's one line, model · effort and the item before
+   the words as they always stood (the tray follows the words in the DOM, so
+   they are ordered back; a picture strip still leads). A phone floats it
+   over the pill (THE TRAY FLOATS, below). */
+.cr-prompt-tray {
+  display: contents;
+}
+
+@media (min-width: 701px) {
+  .cr-prompt > .cr-prompt-to,
+  .cr-prompt > .cr-prompt-new,
+  .cr-prompt-tray > :not(.cr-prompt-tools) {
+    order: -1;
+  }
+
+  .cr-prompt > .cr-prompt-pics {
+    order: -2;
+  }
+}
+
 /* Dictating (use-dictation.ts): the words so far stand in the box, not yet
    the draft, until the ear closes. */
 .cr-prompt.listening input {
@@ -364,20 +386,13 @@
     padding: 0 6px;
   }
 
-  /* ONE ROW UNDER THE WORDS (owner, 2026-11-03): the chips, then ^ and what
-     it shows (attach, 🔊, the agent's keys), every button one size, side by
-     side, at the row's right. The ^ folds them all. What does not fit WRAPS
-     (2026-11-04): a swiped row hid its last keys past the edge, and at 32px
-     a button the tune chip, ^ 📎 🔊 and six keys need ~385px. The keys go
-     as one group, onto a line of their own under the rest. */
+  /* ONE ROW (owner, 2026-11-03): ^ and what it shows (attach, 🔊, the
+     agent's keys), every button one size, side by side; the ^ folds them
+     all. Since 2026-11-04 they are chips of the tray, a row of its own that
+     floats over the pill and swipes sideways (THE TRAY FLOATS, below): no
+     box of their own here, the keys one group in it. */
   body .cr-prompt .cr-prompt-tools {
-    display: flex;
-    flex: 1 1 0;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 4px 3px;
-    min-width: 0;
+    display: contents;
   }
 
   /* What the ^ opens: the tray's own buttons, so each sits in the tools row. */
@@ -385,8 +400,13 @@
     display: contents;
   }
 
-  /* The ^ first here, as before (the DOM puts it after the keys, for the wide
-     screen's row): it opens what follows it. */
+  /* After model · effort (and the item), the ^ before what it opens: the DOM
+     puts it after the keys, for the wide screen's row. Here it stays put as
+     the tools come and go. */
+  body .cr-prompt .cr-prompt-tray > :not(.cr-prompt-tools) {
+    order: -2;
+  }
+
   body .cr-prompt .cr-prompt-tools > .cr-prompt-more {
     order: -1;
   }
@@ -399,9 +419,7 @@
     gap: 3px;
   }
 
-  /* The groups part by a little more than the buttons do (the first tool
-     outranks the tray pill's own margin: 0). */
-  .cr-app .cr-prompt .voice-bar > .cr-tray:first-child,
+  /* The keys' group parts by a little more than the chips do. */
   body .cr-prompt .voice-bar .voice-keys {
     margin-left: 3px;
   }
@@ -759,15 +777,22 @@
    value here; every width's above, THE BOX FLOATS AT EVERY WIDTH): the full view's sheet (zoom/full-views.css), the zoom's bar
    (zoom/zoom.css), the pets' bed (pets/stage-floor.ts reads the pill's top).
 
-   At rest the pill is ONE row: the left chip (@agent or ＋ harness), the
-   words, 🎤, Send. The model chip and the tools (^ and what it shows) float as
-   a row ABOVE it while the box has focus, the agent waits on you, the ear
-   listens or the extras are open — the pill grows upward, so the row typed in
-   never moves. Sous's word and an error stand on top of it all. */
+   The pill is ONE row, 48px: the left chip (@agent or ＋ harness), the
+   words, 🎤, Send. The tray (model · effort and the tools: ^ and what it
+   shows) floats as a row of chips of its own 8px ABOVE it while the box has
+   focus, the agent waits on you, the ear listens or the extras are open
+   (THE TRAY FLOATS, below). Sous's word and an error stand in the pill, on
+   top of the row typed in, which never moves. */
 @media (max-width: 700px) {
   body .cr-app:not(.cr-embed) {
-    /* The pill (40 + 2 × 4), its foot, and 8px of air above it. */
+    /* The pill (48) and 8px of air above it, then its foot. */
     --cr-float-h: calc(56px + max(8px, env(safe-area-inset-bottom, 0px)));
+  }
+
+  /* The tray's chips (a thumb's size) and the room their shadows get inside its scroller. */
+  body .cr-app {
+    --cr-tray-h: 32px;
+    --cr-tray-pad: 6px;
   }
 
   body .cr-app:not(.cr-embed) > .cr-dock.cr-dock {
@@ -791,10 +816,12 @@
   }
 
   body .cr-prompt {
+    /* What stands above the box (the who-picker, the choice box) stands this much higher while the tray shows. */
+    --cr-tray-lift: 0px;
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
-    min-height: 0;
+    min-height: 48px;
     padding: 4px;
     border-radius: 24px;
     box-shadow:
@@ -810,30 +837,12 @@
       0 1px 3px rgba(40, 30, 15, 0.1);
   }
 
-  /* Top to bottom: what was said, the tray, a break, then the one row. */
+  /* Top to bottom: what was said, then the one row. */
   body .cr-prompt .cr-prompt-note,
   body .cr-prompt .cr-prompt-sous,
   body .cr-prompt .cr-prompt-error {
     order: -5;
     padding: 2px 10px 0;
-  }
-
-  body .cr-prompt .cr-tune-menu,
-  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune) {
-    order: -4;
-  }
-
-  body .cr-prompt .cr-prompt-tools {
-    order: -4;
-    flex: 1 1 0;
-  }
-
-  body .cr-prompt::before {
-    content: '';
-    order: -3;
-    flex: 0 0 100%;
-    height: 0;
-    margin-bottom: -4px;
   }
 
   /* The chip's name has room at 360 px (2026-11-04: it read "Con…"): a 6-8
@@ -846,10 +855,9 @@
     max-width: 46%;
   }
 
-  /* The item riding the words sits with the tools, above them: the words'
-     row has no room for a third chip at 360 px. Its × a thumb's square. */
+  /* The item riding the words is a chip of the tray: the words' row has no
+     room for a third chip at 360 px. Its × a thumb's square. */
   body .cr-prompt .cr-prompt-ref {
-    order: -4;
     max-width: 60%;
     min-height: 32px;
   }
@@ -924,25 +932,88 @@
     height: 16px;
   }
 
-  /* At rest: one row. */
-  body .cr-prompt .cr-prompt-tools,
-  body .cr-prompt .cr-tune-menu,
-  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune),
-  body .cr-prompt::before {
+  /* THE TRAY FLOATS (task "Phone tray chips float", 2026-11-04): model ·
+     effort, the item and the tools are chips of a row of their own, 8px over
+     the pill and out of its flow, never a row inside it: the pill stays one
+     row, 48px. The row is see-through and lets taps through its gaps to the
+     page; each chip is its own card (its look is the chips' own rules, task
+     "Tray tools"), with a small shadow over whatever is under it. It swipes
+     sideways, no scrollbar, and runs past the pill to the screen's edges, so
+     a chip cut there says there is more. Inside the dock it rides the
+     keyboard with the box (--kb-inset). Above it stand the who-picker strip
+     and the choice box (--cr-tray-lift); the clearance every surface reads
+     (--cr-float-h) and the pets' floor (pets/stage-floor.ts) grow by it
+     while it shows. */
+  body .cr-prompt .cr-prompt-tray {
+    position: absolute;
+    left: -8px;
+    right: -8px;
+    bottom: calc(100% + 8px - var(--cr-tray-pad));
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 6px;
+    padding: var(--cr-tray-pad) 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    background: none;
+    pointer-events: none;
+  }
+
+  body .cr-prompt .cr-prompt-tray::-webkit-scrollbar {
     display: none;
   }
 
-  /* The tray, while it is wanted. */
-  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-tools {
+  /* Every chip its own width: the row swipes, it never squeezes one. */
+  body .cr-prompt .cr-prompt-tray > * {
+    flex: none;
+  }
+
+  /* Packed from the left, after model · effort, as the design draws it: the
+     ^ no longer pushes the tools to the row's end (it led the right-hand
+     group when the tools shared a row with the chips). */
+  body .cr-prompt .cr-prompt-tray .cr-prompt-more {
+    margin-left: 0;
+  }
+
+  body .cr-prompt .cr-prompt-tray * {
+    pointer-events: auto;
+  }
+
+  /* The keys' group is a box with gaps of its own: those let taps through too. */
+  body .cr-prompt .cr-prompt-tray .voice-keys {
+    pointer-events: none;
+  }
+
+  /* A drop shadow, so it adds to the chip's own line whatever draws it; on the
+     buttons only, never a wrapper (a filter would hold a rising menu inside it). */
+  body .cr-prompt .cr-prompt-tray .cr-btn,
+  body .cr-prompt .cr-prompt-tray .cr-tune-menu-btn,
+  body .cr-prompt .cr-prompt-tray .cr-prompt-tune,
+  body .cr-prompt .cr-prompt-tray .cr-prompt-ref {
+    filter: drop-shadow(0 1px 2px rgba(40, 30, 15, 0.16)) drop-shadow(0 3px 8px rgba(40, 30, 15, 0.1));
+  }
+
+  /* At rest: one row, no tray. */
+  body .cr-prompt .cr-prompt-tray {
+    display: none;
+  }
+
+  /* The tray, while it is wanted; what stands above the box steps up over it. */
+  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-tray {
     display: flex;
   }
 
-  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-tune-menu,
-  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-new:has(> .cr-prompt-tune) {
-    display: inline-flex;
+  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) {
+    --cr-tray-lift: calc(var(--cr-tray-h) + 8px);
   }
 
-  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open))::before {
-    display: block;
+  /* The clearance grows by the tray while it shows (never folded: the box is
+     the face then). Two selectors, as a has-inside-a-has is no selector. */
+  body .cr-app:not(.cr-embed):has(.cr-prompt:not(.folded):is(:focus-within, .listening)),
+  body .cr-app:not(.cr-embed):has(.cr-prompt:not(.folded) .cr-prompt-more.open) {
+    --cr-float-h: calc(56px + var(--cr-tray-h) + 8px + max(8px, env(safe-area-inset-bottom, 0px)));
   }
 }
