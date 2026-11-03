@@ -20,6 +20,7 @@ import { TRANSLATE_MAX_CHARS } from "../shared/translate";
 import { translateBody } from "./sous-translate";
 import { remoteSousHost } from "./sous-remote-config";
 import type { AgentRegistry } from "./agent-registry";
+import type { RenameOutcome } from "../shared/rename-plan";
 import type { TraceReader } from "./trace";
 import {
   boardWindowMs,
@@ -134,6 +135,11 @@ export interface MobileOps {
     id: string,
     patch: Partial<CanvasNode>,
   ) => CanvasNode | undefined;
+  /**
+   * The owner's rename by hand (main/agent-rename.ts · renameByHand): the
+   * same path as IPC node:rename and `cookrew rename`. Checks its arguments.
+   */
+  renameNode: (id: string, name: unknown) => RenameOutcome;
   removeNode: (id: string) => void | Promise<void>;
   createTerminal: (opts: {
     name: string;
@@ -1087,6 +1093,16 @@ export async function handleMobileApi(
   if (method === "POST" && p === "/api/nodes") {
     const node = await readJson<CanvasNode>(request);
     respondJson(response, 200, ops.addNode(node));
+    return true;
+  }
+  // A rename from the phone's bar: the desktop's own path, its refusal (a
+  // clash, an empty name) a 400 in the same words.
+  const renameMatch = p.match(/^\/api\/nodes\/([^/]+)\/rename$/);
+  if (renameMatch && method === "POST") {
+    const body = await readJson<{ name?: unknown } | null>(request);
+    const name = body !== null && typeof body === "object" ? body.name : undefined;
+    const outcome = ops.renameNode(renameMatch[1], name);
+    respondJson(response, outcome.ok ? 200 : 400, outcome);
     return true;
   }
   const nodeMatch = p.match(/^\/api\/nodes\/([^/]+)$/);

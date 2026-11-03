@@ -7,6 +7,7 @@ import { typingOf } from './typing-line'
 import './agent-card.css'
 import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
 import { NEW_POSE } from './zoom-layout'
+import { useNameEdit } from './NameEdit'
 
 /**
  * A workspace's newest browser beside its agents' stack (draft
@@ -207,13 +208,15 @@ export const ItemNode = memo(function ItemNode({ item, names, bind, onClick, onD
 export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
   const reply = useQuickReply(agent.id, undefined, card)
   const typing = typingOf(reply.draft, agent.turn?.pendingInput, agent.name)
+  // A click on the name opens, as the face does; a double-click renames it in place (NameEdit.tsx).
+  const title = useNameEdit(agent.id, agent.name, { onPress: onOpen })
   return (
     <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>
-      <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)}>
-        {agent.name}
+      <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)} {...title.hostProps}>
+        {title.view}
       </div>
       {onDelete && (
         // Deletion is a small mark on the open card, never a stray click: the

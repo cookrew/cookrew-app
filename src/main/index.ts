@@ -12,7 +12,7 @@ import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
 import { deliverToRecruit, type RecruitWitness } from './recruit-delivery'
 import { nameAgent } from './agent-namer'
-import { planRename, stillStandIn, type RenameOutcome } from './agent-rename'
+import { autoNameIn, renameByHand, renameCardIn, type RenameDeps, type RenameOutcome } from './agent-rename'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
 import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
 import { SousLedger } from './sous-ledger'
@@ -4257,26 +4257,26 @@ function workspaceName(id: string): string {
 }
 
 /**
- * Rename a card (agent-rename.ts): checked against its workspace's other
- * cards, then through updateNode, so an agent's herdr pane title, tab and
- * agent name follow and a browser's page re-syncs. A note's new name is
- * pinned (customName), as the card menu's RENAME does, or its next edit
- * would name it from its content again. Shared by `cookrew rename`.
+ * The one rename path (agent-rename.ts) on this process's store: every
+ * rename lands through updateNode, so an agent's herdr pane title, tab and
+ * agent name follow and the rename is recorded.
+ */
+const renameDeps: RenameDeps = {
+  find: (id) => store.nodeAcrossWorkspaces(id),
+  siblings: (workspaceId) => store.workspaceState(workspaceId).nodes,
+  update: (id, patch, by) => updateNode(id, patch, by),
+  pin: (id) => store.updateNodeUnsafe(id, { nameByHand: true })
+}
+
+/**
+ * Rename a card (agent-rename.ts · renameCardIn): checked against its
+ * workspace's other cards; a note's new name is pinned against its content,
+ * a chosen agent name against Sous. Shared by `cookrew rename`, the voice,
+ * and the owner's hands (renameByHand: IPC node:rename, the phone's route).
  */
 function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string): RenameOutcome {
-  const hit = store.nodeAcrossWorkspaces(id)
-  if (!hit) return { ok: false, error: 'That card is not on any canvas.' }
-  const plan = planRename({
-    id,
-    current: hit.node.name,
-    wanted,
-    siblings: store.workspaceState(hit.workspaceId).nodes,
-    onClash
-  })
-  if (plan.ok && plan.changed) {
-    updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name }, by)
-  }
-  return plan
+  // A name refused on a clash is one somebody chose (`cookrew rename`, the voice): it is pinned.
+  return renameCardIn(renameDeps, id, wanted, onClash, onClash === 'refuse', by)
 }
 
 /** renameCard for an agent only: `cookrew recruit`, Sous, and a name picked from a prompt. */
@@ -4287,15 +4287,12 @@ function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'
 
 /**
  * The name Sous picks for a card made from a prompt (agent-namer.ts), once it
- * answers. Null when it has nothing better, or when the card was renamed
- * while it thought: the card then wears a choice, and a guess never
+ * answers. Null when it has nothing better, or when the card wears a choice
+ * by then (renamed while it thought, or pinned by hand): a guess never
  * overwrites one.
  */
 async function autoNameTerminal(id: string, standIn: string, prompt: string): Promise<RenameOutcome | null> {
-  const picked = await nameAgent(prompt)
-  if (!picked) return null
-  if (!stillStandIn(store.nodeAcrossWorkspaces(id)?.node.name, standIn)) return null
-  return renameTerminal(id, picked, 'suffix', 'Sous (named from the prompt)')
+  return autoNameIn({ ...renameDeps, pick: nameAgent }, id, standIn, prompt)
 }
 
 /**
@@ -6763,6 +6760,7 @@ app.whenReady().then(() => {
     ops: {
       addNode,
       updateNode,
+      renameNode: (id, name) => renameByHand(renameDeps, id, name),
       removeNode,
       createTerminal,
       forkTerminal,
@@ -7760,6 +7758,9 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('node:update', (_e, id: string, patch: Partial<CanvasNode>) =>
     updateNode(id, patch)
   )
+  // The owner's rename by hand (zoom card, full view head): the same path as
+  // `cookrew rename`, so a clash is answered in the same words, and pinned.
+  ipcMain.handle('node:rename', (_e, id: unknown, name: unknown) => renameByHand(renameDeps, id, name))
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)

@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { cmdRecruit, cmdRename } from '../src/main/socket-server'
 import type { SocketServerDeps } from '../src/main/socket-server'
 import { WorkspaceStore } from '../src/main/store'
-import { planRename } from '../src/main/agent-rename'
+import { renameCardIn } from '../src/main/agent-rename'
 import type { CanvasNode, CliRequest, TerminalNodeData } from '../src/shared/model'
 
 const terminal = (id: string, name: string, orch = false): TerminalNodeData => ({
@@ -25,15 +25,22 @@ function setup(options: { sousName?: string | null; deliver?: 'ok' | 'refused'; 
   store.createWorkspace('Other', '/tmp/other-repo')
   const spawnTerminal = vi.fn()
   const addWorkspaceDir = vi.fn()
-  const renameCard = vi.fn((id: string, wanted: string, onClash: 'refuse' | 'suffix') => {
-    const hit = store.nodeAcrossWorkspaces(id)
-    if (!hit) return { ok: false as const, error: 'gone' }
-    const plan = planRename({ id, current: hit.node.name, wanted, siblings: store.workspaceState(hit.workspaceId).nodes, onClash })
-    if (plan.ok && plan.changed) {
-      store.updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name })
-    }
-    return plan
-  })
+  // The app's own rename path (agent-rename.ts), on this store.
+  const renameCard = vi.fn((id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string) =>
+    renameCardIn(
+      {
+        find: (nodeId) => store.nodeAcrossWorkspaces(nodeId),
+        siblings: (workspaceId) => store.workspaceState(workspaceId).nodes,
+        update: (nodeId, patch) => store.updateNode(nodeId, patch),
+        pin: (nodeId) => store.updateNodeUnsafe(nodeId, { nameByHand: true })
+      },
+      id,
+      wanted,
+      onClash,
+      onClash === 'refuse',
+      by
+    )
+  )
   const autoNameTerminal = vi.fn(async (id: string) =>
     options.sousName ? renameCard(id, options.sousName, 'suffix') : null
   )
