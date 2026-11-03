@@ -1,10 +1,13 @@
+import { readdirSync } from 'node:fs'
 import path from 'node:path'
+import { sessionIdentity } from './session-identity'
 import { sandboxRoot, serviceRoot, sessionSegment } from './session-sandbox'
 import type {
   ConductorRoute,
   Ender,
   InstantiatorDeps,
   Minter,
+  OrdinalHistory,
   TemplateSource
 } from './session-instantiator'
 
@@ -191,6 +194,56 @@ export function makeEnder(config: {
   }
 }
 
+// ── OrdinalHistory ───────────────────────────────────────────────────────────
+
+/** A decimal ordinal as `sessionIdentity` writes it: digits, nothing else. */
+const ORDINAL = /^\d+$/
+
+/**
+ * The ordinals a previous run left under `sessions/<service>/` for one account
+ * (see OrdinalHistory). Every entry the retention sweep could still be holding
+ * counts: a session's own sandbox, and a copy of one (`ana-3.bak-20260807` —
+ * the residue naming). `safeSegment` never emits a dot, so the part of a name
+ * before its first dot is the session segment it is a copy of.
+ *
+ * A name counts only if it ROUND-TRIPS: the ordinal parsed out of it, fed back
+ * through `sessionIdentity` + `sessionSegment` (the rule `sandboxRoot` and the
+ * Ender build paths by), must give the same segment. So the layout is never
+ * spelled a second time here, and `ana-1-5` (account `ana-1`, ordinal 5) is
+ * never read as account `ana`'s ordinal 1.
+ *
+ * Read-only, and a service directory that exists but cannot be read THROWS:
+ * answering "no ordinals" for a store you cannot see is how ordinal 1 lands
+ * on an old sandbox. A missing directory is a service never served here.
+ */
+export function makeOrdinalHistory(config: { base: string }): OrdinalHistory {
+  return {
+    onDisk(serviceId, accountId) {
+      let names: string[]
+      try {
+        names = readdirSync(serviceRoot(config.base, serviceId))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw error
+      }
+      const segmentOf = (ordinal: number): string =>
+        sessionSegment(serviceId, sessionIdentity(serviceId, accountId, ordinal).sessionId)
+      // A set: a sandbox and its backup copy name the same ordinal.
+      const ordinals = new Set<number>()
+      for (const name of names) {
+        const dot = name.indexOf('.')
+        const segment = dot === -1 ? name : name.slice(0, dot)
+        const tail = segment.slice(segment.lastIndexOf('-') + 1)
+        if (!ORDINAL.test(tail)) continue
+        const ordinal = Number(tail)
+        if (!Number.isSafeInteger(ordinal)) continue
+        if (segmentOf(ordinal) === segment) ordinals.add(ordinal)
+      }
+      return [...ordinals]
+    }
+  }
+}
+
 // ── Composition ──────────────────────────────────────────────────────────────
 
 /**
@@ -202,6 +255,7 @@ export function instantiatorDeps(parts: {
   minter: Minter
   route: ConductorRoute
   ender: Ender
+  history: OrdinalHistory
 }): InstantiatorDeps {
   return parts
 }
