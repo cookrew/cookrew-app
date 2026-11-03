@@ -14,7 +14,7 @@ import { jpegSize } from '../src/main/jpeg-size'
  * the desktop drives it — through the port viewer (browser-cast-ipc.ts), the
  * shared viewer core and the closed vocabulary (cast-input.ts). Each line here
  * was a thing the old wire could not do: drag-select, ⌘A, a CJK word, an IME
- * composition, sideways scroll, a trackpad pinch, a crisp 2x frame.
+ * composition, sideways scroll, a trackpad pinch, a field report, a paste, a copy.
  */
 
 const chrome = findChrome()
@@ -59,7 +59,7 @@ describe.skipIf(!enabled)('desktop input through the port viewer, real Chromium'
     rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
-  it('drags, selects, types CJK, composes, scrolls sideways and pinches — at 2x', async () => {
+  it('drags, selects, types CJK, composes, scrolls sideways and pinches', async () => {
     const instance = new HeadlessInstance({
       executablePath: chrome as string,
       profileDir,
@@ -106,16 +106,12 @@ describe.skipIf(!enabled)('desktop input through the port viewer, real Chromium'
       ipc.open('card', port)
       await waitFor(() => lastFrame() !== undefined)
 
-      // CRISP: the desktop owner asks for 2x, and the frames are 2x.
-      onMessage({ data: { t: 'viewport-claim', width: 800, height: 600, mobile: false, scale: 2 } })
-      await waitFor(() => instance.viewportState.revision >= 2 && meta()?.revision === instance.viewportState.revision)
-      await waitFor(() => (jpegSize(Buffer.from(lastFrame()?.jpeg as Uint8Array))?.width ?? 0) >= 1600)
-      expect(meta().displayScale).toBeCloseTo(2)
-      expect(await evaluate('devicePixelRatio')).toBe(2)
-
-      // The card's picture stays 1x: it goes to the phone over the relay too.
-      const still = await instance.snapshot()
-      expect(jpegSize(Buffer.from(still as string, 'base64'))?.width).toBe(800)
+      // ONE FRAME SIZE: headless Chrome's screencast ignores deviceScaleFactor
+      // (measured 2026-11-03: 1x screencast frames, 2x still frames), so a 2x
+      // ask would mix frame sizes. The desktop asks for none; every frame is 1x.
+      onMessage({ data: { t: 'viewport-claim', width: 800, height: 600, mobile: false } })
+      await waitFor(() => meta()?.revision === instance.viewportState.revision)
+      expect(jpegSize(Buffer.from(lastFrame()?.jpeg as Uint8Array))?.width).toBe(800)
 
       // DRAG-SELECT: the moves name the held button.
       send({ t: 'down', x: 15, y: 211 })
