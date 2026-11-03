@@ -1191,6 +1191,13 @@
   pointer-events: none;
 }
 
+/* CHAT and LOG keep only the tag (owner, 2026-11-03): the rail's column is
+   empty there, so it takes no press and the transcript's own scrollbar under
+   it is the one being dragged. The tag's rows opt back in (above). */
+.cr-ckpt-rail.tag-only {
+  pointer-events: none;
+}
+
 /* ---- F3: the full-range reveal, laid ALONG the bar -------------------------
    Not a scroll panel and not a fan: a full-height overlay whose rows each sit
    at their own fraction of T1→newest, so the reveal IS the range. The focused

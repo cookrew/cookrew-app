@@ -14,34 +14,42 @@ const rule = (css: string, selector: string): string => {
   return css.slice(at, css.indexOf('}', at))
 }
 
-describe('CHAT is a plain conversation', () => {
-  const paper = src('transcript-paper.css')
+// LOG the same way (owner, 2026-11-03): both record looks read as plain
+// text; only LIVE, the terminal itself, keeps the rail and the checkpoint row.
+for (const look of ['chat', 'log'] as const) {
+  describe(`${look.toUpperCase()} is plain reading`, () => {
+    const paper = src('transcript-paper.css')
 
-  it('draws no gold edge or tint on the turn the reader is at', () => {
-    const active = rule(paper, '.lod-overlay .look-chat .ctx-block.active')
-    expect(active).toContain('box-shadow: none;')
-    expect(active).toContain('background: transparent;')
+    it('draws no gold edge or tint on the turn the reader is at', () => {
+      const active = rule(paper, `.lod-overlay .look-${look} .ctx-block.active`)
+      expect(active).toContain('box-shadow: none;')
+      expect(active).toContain('background: transparent;')
+    })
+
+    it('sets no checkpoint heading over an exchange', () => {
+      expect(rule(paper, `.lod-overlay .look-${look} .ctx-block-head`)).toContain('display: none;')
+    })
+
+    it('gives the record its own scrollbar, so dragging it moves the conversation', () => {
+      const bar = rule(paper, `.lod-overlay .look-${look} > .ctx-transcript`)
+      expect(bar).toContain('scrollbar-width: thin;')
+      expect(bar).toMatch(/scrollbar-color: \S/)
+      // The webkit pseudo the trace surface hides is shown again (Safari reads only that).
+      expect(rule(paper, `.lod-overlay .look-${look} > .ctx-transcript::-webkit-scrollbar`)).toContain('display: block;')
+    })
+  })
+}
+
+describe('only LIVE keeps the checkpoints', () => {
+  const overlay = src('TerminalOverlay.tsx')
+
+  it('draws the whole rail in LIVE only; CHAT and LOG keep just its tag while scrolling', () => {
+    expect(overlay).not.toMatch(/\{look === 'live' && \(\s*<CheckpointTimeline/)
+    const rail = overlay.slice(overlay.indexOf('<CheckpointTimeline'), overlay.indexOf('/>', overlay.indexOf('<CheckpointTimeline')))
+    expect(rail).toContain("tagOnly={look !== 'live'}")
   })
 
-  it('sets no checkpoint heading over an exchange', () => {
-    expect(rule(paper, '.lod-overlay .look-chat .ctx-block-head')).toContain('display: none;')
-  })
-
-  it('mounts no checkpoint rail in CHAT, and keeps it for LOG and LIVE', () => {
-    const overlay = src('TerminalOverlay.tsx')
-    expect(overlay).toMatch(/\{look !== 'chat' && \(\s*<CheckpointTimeline/)
-  })
-
-  it('gives the chat its own scrollbar, so dragging it moves the conversation', () => {
-    const bar = rule(paper, '.lod-overlay .look-chat > .ctx-transcript')
-    expect(bar).toContain('scrollbar-width: thin;')
-    expect(bar).toMatch(/scrollbar-color: \S/)
-    // The webkit pseudo the trace surface hides is shown again for the chat (Safari reads only that).
-    expect(rule(paper, '.lod-overlay .look-chat > .ctx-transcript::-webkit-scrollbar')).toContain('display: block;')
-  })
-
-  it('shows no CHECKPOINT row and no LIVE button over the chat when the reader scrolls back', () => {
-    const overlay = src('TerminalOverlay.tsx')
-    expect(overlay).toMatch(/\{selectedIndex !== null && look !== 'chat' && \(\s*<div className="popout-ask"/)
+  it('shows the CHECKPOINT row and its LIVE button in LIVE only', () => {
+    expect(overlay).toMatch(/\{selectedIndex !== null && look === 'live' && \(\s*<div className="popout-ask"/)
   })
 })

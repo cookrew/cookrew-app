@@ -84,6 +84,7 @@ export function CheckpointTimeline({
   lineageReach = true,
   ended = false,
   anomalyNote = null,
+  tagOnly = false,
   onGoto,
   onLive,
   onScrub,
@@ -112,6 +113,12 @@ export function CheckpointTimeline({
   loadingIndex?: number | null
   /** Exact marker fraction (true position over the combined trace+tail extent). */
   markerFrac?: number
+  /**
+   * CHAT and LOG (owner, 2026-11-03): only the tag that names the turn in view
+   * while scrolling, with its ROLE / FORK / REWIND. No bar, ticks, count or
+   * live dot, and no full list; the transcript's own scrollbar moves it.
+   */
+  tagOnly?: boolean
   /** Guards the mutating rail actions (rewind); read-only embedders opt out. */
   allowActions?: boolean
   /**
@@ -722,7 +729,7 @@ export function CheckpointTimeline({
       // the full fan; a plain transcript scroll shows only the single tag.
       className={`cr-ckpt-rail${fanned ? ' fanned' : ''}${scrubbing ? ' dragging' : ''}${
         loadingIndex != null ? ' loading' : ''
-      }${showIdle ? ' idle' : ''}`}
+      }${showIdle ? ' idle' : ''}${tagOnly ? ' tag-only' : ''}`}
       // F1 — approaching or moving over the rail is movement: it wakes the tag
       // and restarts the timer, so resting on the rail keeps the tag alive.
       // Throttled, because a raw pointermove would re-render on every pixel.
@@ -731,7 +738,8 @@ export function CheckpointTimeline({
     >
       {/* always-present line + count + here-marker (rides the PRECISE identity
           fraction) + live dot; the line/marker is the scroll indicator + scrub
-          handle. */}
+          handle. Not on a tag-only rail. */}
+      {!tagOnly && (
       <div
         ref={miniRef}
         className="cr-ckpt-mini"
@@ -814,12 +822,13 @@ export function CheckpointTimeline({
           title={ended ? 'session ended' : undefined}
         />
       </div>
+      )}
 
       {/* F3 — the full-range reveal, laid ALONG the bar. Every row sits at its
           own fraction of T1→newest, so the reveal genuinely represents the whole
           conversation instead of a window around the focus. Pointer-through by
           default (HIGH-2 register in agent-roster.css); the rows opt back in. */}
-      {fanned && laid.length > 0 && (
+      {fanned && !tagOnly && laid.length > 0 && (
         <div className="cr-ckpt-list" role="list" aria-label="All checkpoints">
           {laid.map((entry) =>
             entry.row === null ? (

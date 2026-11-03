@@ -1354,9 +1354,9 @@ function TerminalOverlay({
       )}
       {/* Only while a checkpoint is picked: then it says which one and is the way
           back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31).
-          Never in CHAT: a plain conversation has no checkpoints to name, and
-          scrolling back is just reading (owner 2026-11-03). */}
-      {selectedIndex !== null && look !== 'chat' && (
+          LIVE only: CHAT and LOG are plain reading with no checkpoints to name,
+          and scrolling back is just reading (owner 2026-11-03). */}
+      {selectedIndex !== null && look === 'live' && (
         <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {/* Identity, not array position: T-number matches transcript + rail. */}
@@ -1525,9 +1525,9 @@ function TerminalOverlay({
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
         {primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
         </div>
-        {/* CHAT is a plain conversation with its own scrollbar (transcript-paper.css,
-            owner 2026-11-01); LOG and LIVE keep the checkpoint rail. */}
-        {look !== 'chat' && (
+        {/* CHAT and LOG are plain reading with their own scrollbar (transcript-paper.css,
+            owner 2026-11-01 and 11-03): of the rail they keep only the tag that names
+            the turn in view while scrolling, with ROLE / FORK / REWIND. LIVE keeps it all. */}
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -1542,12 +1542,12 @@ function TerminalOverlay({
           lineageReach={!remote}
           ended={doorState?.kind === 'ended'}
           anomalyNote={stream.anomalyNote}
+          tagOnly={look !== 'live'}
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
           onReach={stream.reach}
         />
-        )}
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
