@@ -408,15 +408,7 @@
   opacity: 0.8;
 }
 
-.cr-prompt-menu-teams {
-  display: grid;
-  max-height: 168px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.cr-prompt-menu button small,
-.cr-prompt-menu-orch small {
+.cr-prompt-menu button small {
   margin-left: 6px;
   font-size: 10px;
   color: var(--sumi-ink-soft, var(--ink-soft));
@@ -425,39 +417,6 @@
 .cr-prompt-menu button:disabled {
   cursor: default;
   opacity: 0.5;
-}
-
-.cr-prompt-menu-orch {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 8px 10px 5px;
-  border-top: 1px solid var(--sumi-hair-2, var(--line));
-  cursor: pointer;
-  font: 600 11px/1 var(--font-mono);
-  color: var(--sumi-ink, var(--ink));
-}
-
-/* The menu sits inside the prompt's form: undo the text box's own sizing. */
-.cr-prompt .cr-prompt-menu-orch input {
-  flex: none;
-  width: 13px;
-  min-width: 0;
-  height: 13px;
-  margin: 0;
-  padding: 0;
-  accent-color: var(--sumi-seal, var(--amber-deep));
-  cursor: pointer;
-}
-
-.cr-prompt-orch {
-  padding: 1px 4px;
-  border-radius: 4px;
-  background: var(--sumi-seal, var(--amber-deep));
-  color: var(--sumi-card, var(--cream-hi));
-  font: 700 9px/1.2 var(--font-mono);
-  letter-spacing: 0.04em;
 }
 
 /* ---- THE TUNE CHIP (owner, 2026-11-01): beside the left chip, in its pill ----
