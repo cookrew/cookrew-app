@@ -73,6 +73,8 @@ export interface RouteServiceDeps {
    * 2026-11-03): a restart now loses it. Absent: nothing is in delivery.
    */
   delivering?: (terminalId: string) => boolean
+  /** A card's route was set: what the model dial asked of it before is superseded (TuneAsks.forgetKnob). */
+  onRouteSet?: (terminalId: string) => void
   canRestoreExact: (node: TerminalNodeData) => boolean
   /** Kill and respawn the card in place with exact context; true when it did. */
   respawn: (terminalId: string) => Promise<boolean>
@@ -350,6 +352,7 @@ export class RouteService extends EventEmitter {
     // card would outrank it once it went direct again, so it goes now.
     const command = route !== DIRECT && this.deps.harnessOf(node.command) === 'claude' ? withoutRoutedPick(node.command, 'claude') : node.command
     this.deps.updateNode(terminalId, command === node.command ? { route } : { route, command })
+    this.deps.onRouteSet?.(terminalId)
     const phase = this.deps.phaseOf(terminalId)
     const idle = (phase === undefined || phase === 'idle' || phase === 'replied') && !(this.deps.delivering?.(terminalId) ?? false)
     const after = this.deps.node(terminalId)

@@ -742,6 +742,7 @@ const routeService = new RouteService({
   harnessOf: (command) => harnessFor(command)?.id ?? null,
   phaseOf: (id) => turns.phaseOf(id),
   delivering: (id) => turnUnseen(id),
+  onRouteSet: (id) => tuneAsks.forgetKnob(id, 'model'),
   canRestoreExact: (node) => canRestoreExact(node),
   respawn: async (id) => respawnInPlace(id),
   dockCommands: () => PRESETS.map((p) => p.command),

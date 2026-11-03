@@ -251,3 +251,29 @@ describe('a pick the card already carries', () => {
     expect(saved).toEqual([])
   })
 })
+
+// QA 2026-11-03: the rail read `group/smart ! opus` — an MDL ask, settled
+// once, then outlived by an RTE pick, and a re-pick that sent nothing.
+describe('asks the rail should not be holding', () => {
+  it('records none for a pick the card already carries', () => {
+    const asks = new TuneAsks()
+    const deps: TuneDeps = {
+      node: () => node({ command: 'claude --effort low' }),
+      write: () => 'allow',
+      relaunch: () => 'unchanged',
+      asks
+    }
+    expect(applyTuning(deps, 'term-1', 'effort', 'low').ok).toBe(true)
+    expect(asks.of('term-1')).toEqual([])
+  })
+
+  it('forgets one knob and keeps the other', () => {
+    const asks = new TuneAsks()
+    asks.record('term-1', { knob: 'model', value: 'opus', at: 1 })
+    asks.record('term-1', { knob: 'effort', value: 'low', at: 2 })
+    asks.forgetKnob('term-1', 'model')
+    expect(asks.of('term-1')).toEqual([{ knob: 'effort', value: 'low', at: 2 }])
+    asks.forgetKnob('term-1', 'effort')
+    expect(asks.of('term-1')).toEqual([])
+  })
+})

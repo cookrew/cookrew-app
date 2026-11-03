@@ -311,9 +311,11 @@ describe('an RTE pick on a claude card', () => {
     try {
       const nodes = new Map<string, TerminalNodeData>([['c1', terminal('c1', 'claude --effort low --model opus')]])
       const respawned: string[] = []
-      const { svc } = serviceFor(fake, nodes, { respawn: async (id) => (respawned.push(id), true) })
+      const routeSet: string[] = []
+      const { svc } = serviceFor(fake, nodes, { respawn: async (id) => (respawned.push(id), true), onRouteSet: (id) => routeSet.push(id) })
       await svc.refresh()
       await svc.setCardRoute('c1', 'claude/claude-sonnet-5-5')
+      expect(routeSet).toEqual(['c1'])
       expect(nodes.get('c1')).toMatchObject({ route: 'claude/claude-sonnet-5-5', command: 'claude --effort low' })
       expect(respawned).toEqual(['c1'])
       // Going direct keeps whatever the card carries: there is no route to outrank.

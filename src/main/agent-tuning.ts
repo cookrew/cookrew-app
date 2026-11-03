@@ -349,6 +349,17 @@ export class TuneAsks {
   forget(terminalId: string): void {
     this.byTerminal.delete(terminalId)
   }
+
+  /**
+   * One knob's asks, superseded: an RTE pick decides a routed card's model,
+   * so an older MDL ask — settled once — would read as refused against the
+   * new route's replies (QA 2026-11-03: `group/smart ! opus`).
+   */
+  forgetKnob(terminalId: string, knob: TuneKnob): void {
+    const kept = (this.byTerminal.get(terminalId) ?? []).filter((ask) => ask.knob !== knob)
+    if (kept.length > 0) this.byTerminal.set(terminalId, kept)
+    else this.byTerminal.delete(terminalId)
+  }
 }
 
 export interface TuneDeps {
@@ -495,6 +506,7 @@ function relaunchTuning(deps: TuneDeps, node: TerminalNodeData, knob: TuneKnob, 
   const refusal = RELAUNCH_REFUSAL[verdict]
   if (refusal !== undefined) return { ok: false, reason: refusal }
   const ask: TuneAsk = { knob, value, at: (deps.now ?? Date.now)() }
-  deps.asks.record(node.id, ask)
+  // Nothing was sent, so there is nothing for a reply to confirm.
+  if (verdict !== 'unchanged') deps.asks.record(node.id, ask)
   return { ok: true, ask }
 }
