@@ -208,6 +208,13 @@
   }
 }
 
+/* The tools after the chips (GlobalPrompt · cr-prompt-tools): no box of their
+   own on a wide screen, where they sit in the box's one line as before. A
+   phone makes them a row (below). */
+.cr-prompt-tools {
+  display: contents;
+}
+
 /* The ^ that shows or hides them (extras-pref.ts): narrower than a tool,
    pointing down while they show. */
 .cr-prompt .cr-btn.cr-prompt-more {
@@ -381,33 +388,66 @@
     padding: 0 6px;
   }
 
-  body.cookrew-mobile .cr-prompt .voice-bar {
-    order: 3;
-    flex-basis: 100%;
+  /* ONE ROW UNDER THE WORDS (owner, 2026-11-03): the chips, then ⌄ 🎤 ⌨ and
+     the agent's keys, every button one size, side by side; what does not fit
+     is swiped to. ⌨ hides the terminal keys (keys-folded, above). */
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools {
+    display: flex;
+    flex: 1 1 0;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
     overflow-x: auto;
+    overscroll-behavior-x: contain;
     scrollbar-width: none;
   }
 
-  /* THE KEY ROW, LAID OUT (owner, 2026-11-03). It sat right-aligned with an
-     empty left third, its keys 30px squares under the 36px mic and ⌨. Now the
-     keys share the box's width evenly in three groups, [attach speak]
-     [← ↓ ↑ →] [paste ESC], each as tall as the buttons above; capped, so the
-     two extras alone (keys folded) stay buttons at the right, not halves. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ⌄ 🎤 ⌨ first, then what they open. The first one's auto margin keeps the
+     row at the right while it fits, and gives way (to 0) when it overflows, so
+     its start is never cut off where a swipe cannot reach. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .cr-prompt-more {
+    order: 1;
+    margin-left: auto;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-mic {
+    order: 2;
+    margin-left: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .cr-prompt-keys {
+    order: 3;
+    margin-left: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar {
+    order: 4;
+    flex: none;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow: visible;
+  }
+
   body.cookrew-mobile .cr-prompt .voice-keys {
     display: contents;
   }
 
-  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn {
-    flex: 1 1 0;
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn {
+    flex: none;
     min-width: 0;
-    max-width: 64px;
-    width: auto;
+    width: 40px;
     height: 36px;
     padding: 0;
     justify-content: center;
   }
 
-  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn .cr-icon {
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn .cr-icon {
     width: 16px;
     height: 16px;
   }
@@ -419,12 +459,10 @@
     letter-spacing: 0.04em;
   }
 
-  /* The groups part by a little more than the keys do. */
+  /* The groups part by a little more than the buttons do. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar,
+  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key-lead,
   body.cookrew-mobile .cr-prompt .voice-bar:not(.keys-only) .voice-keys > :first-child {
-    margin-left: 6px;
-  }
-
-  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key-lead {
     margin-left: 6px;
   }
 }

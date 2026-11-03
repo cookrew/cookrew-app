@@ -519,6 +519,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
+      {/* The tools after the chips: one row on a phone, swiped sideways
+          (global-prompt.css · .cr-prompt-tools); in line on a wide screen. */}
+      <span className="cr-prompt-tools">
       <ExtrasToggle shown={extrasOn} speaking={spoken.on} onToggle={toggleExtras} />
       {browse.input}
       {(extrasOn || to) && (
@@ -564,6 +567,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           <CrIcon name="keyboard" />
         </button>
       )}
+      </span>
       <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>
         <CrIcon name="send" />
       </button>
