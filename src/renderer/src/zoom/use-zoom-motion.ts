@@ -1,17 +1,21 @@
 import { useCallback, useLayoutEffect, useRef } from 'react'
 import { agentClick, derive, itemClick, settle, type ZoomDir } from './zoom-path'
-import { layoutOf, paint, type FrameEls, type FrameModel, type ShelfOut } from './zoom-frame'
+import { layoutOf, paint, type FrameEls, type FrameModel } from './zoom-frame'
 import { zoomStore } from './zoom-store'
+import { shelfPage } from './zoom-layout'
 import { stageSelect } from '../stage/stage-select'
 import { createRestFlag } from './zoom-rest'
 
 /** The compositor-facing part of the navigator. React builds nodes; this owns the moving values. */
-/** The crew's scroll on a narrow screen, the thumbnails' and their shelf's: the view owns them (a drag, the wheel), the painter clamps them. */
+/** The crew's scroll on a narrow screen and the thumbnails', and the page of their shelf: the view owns them (a drag, the wheel, the shelf's chip), the painter clamps the scroll. */
 export interface ZoomPan {
   get: () => number
   shelf: () => number
-  setMax: (max: number, shelf: ShelfOut) => void
+  setMax: (max: number) => void
 }
+
+/** A shelf face's node stands at 12 + its place on the page, kept under the waiting dots (zoom.css · .zv-dot, 44). */
+const SHELF_RANKS = 31
 
 export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null, root: React.RefObject<HTMLDivElement>, pan?: ZoomPan) {
   const m = useRef({ model, collect, pan })
@@ -104,7 +108,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         lastSelection.current = null
       }
       const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0, shelf: m.current.pan?.shelf() ?? 0 })
-      m.current.pan?.setMax(out.panMax, out.shelf)
+      m.current.pan?.setMax(out.panMax)
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))
@@ -117,7 +121,12 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       // On the way into a full view: no hover mark rides a growing card or thumbnail.
       const going = (at.dir === 'agents' && at.v > 2.05 && at.v < 2.99) || (at.dir === 'items' && at.v > 0.02 && at.v < 0.99) ? 'full' : ''
       if (env.dataset.going !== going) env.dataset.going = going
-      // Per-agent stacking order is changed only when the focus changes.
+      // Per-agent stacking order is changed only when the focus changes. On
+      // the artifacts' shelf each face lies over the one before it, as the
+      // troop's do (zoom-layout.ts · shelfPage): by z-index, never by moving
+      // the nodes (a moved node drops the focus of the reply box it holds).
+      const onShelf = at.dir === 'items' ? Object.keys(shelfPage(layout.thumbs.shelf, m.current.pan?.shelf() ?? 0).x) : []
+      const shelfRank = new Map(onShelf.map((id, k) => [id, Math.min(k, SHELF_RANKS)] as const))
       for (const a of m.current.model.agents) {
         const el = els.agents.get(a.id)
         if (!el) continue
@@ -125,7 +134,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         const open = a.id === focus && at.v > 1.2 && (at.dir !== 'agents' || at.v < 2.1)
         const flag = open ? 'open' : ''
         if (el.node.dataset.card !== flag) el.node.dataset.card = flag
-        const level = a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10
+        const rank = shelfRank.get(a.id)
+        const level = rank !== undefined ? 10 + rank : a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10
         if (el.node.style.zIndex !== String(level + 2)) el.node.style.zIndex = String(level + 2)
         if (el.cardl.style.zIndex !== String(level)) el.cardl.style.zIndex = String(level)
       }

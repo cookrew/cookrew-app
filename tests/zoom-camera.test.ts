@@ -5,7 +5,7 @@
 // and scrolls; the open card fills the screen; neither goes past 1:1.
 import { describe, expect, it } from 'vitest'
 import { deskThumbs, layoutOf, phoneCamera, phoneThumbs, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
-import { deviceOf, fitScale, shelfRow, SHELF_FACE, SHELF_GAP } from '../src/renderer/src/zoom/zoom-layout'
+import { deviceOf, fitScale, shelfPage, shelfPer, SHELF_FACE, SHELF_MORE_GAP, SHELF_STEP } from '../src/renderer/src/zoom/zoom-layout'
 
 const crewOf = (n: number): FrameModel => ({
   agents: Array.from({ length: n }, (_, i) => ({ id: `a${i}`, name: `A${i}`, preset: 'Claude Code', orch: false, waiting: false })),
@@ -91,29 +91,68 @@ describe('the thumbnails on a phone', () => {
 
 })
 
-// THE SHELF IS ONE ROW (owner, 2026-11-02): over the artifacts the agents stand
-// in a single row that scrolls sideways; packed into 900px their names ran together.
+// THE SHELF IS THE AGENTS' GROUP (owner, 2026-11-03): over the artifacts the
+// agents stand as the troop does, each face over the one before it, a page at a
+// time behind a "+N" chip, as many a page as fit across the grid ("four is too few").
 describe('the shelf of agents over the thumbnails', () => {
   it('is one row in the crew’s order, those that carry something first', () => {
     const L = layoutOf(withItems(20, 4), false)
     // Four items carried by a0..a3: they lead, the sixteen others follow.
     expect(L.thumbs.shelf.order.slice(0, 4)).toEqual(['a0', 'a1', 'a2', 'a3'])
     expect(L.thumbs.shelf.order).toHaveLength(20)
-    expect(L.thumbs.shelf.looseFrom).toBe(4)
   })
 
-  it('gives every name its own width, so no two names touch, however long', () => {
-    const L = layoutOf(withItems(21, 4), false)
-    const width = (id: string): number => (Number(id.slice(1)) % 3 === 0 ? 150 : 30)
-    const row = shelfRow(L.thumbs.shelf, width)
-    const xs = L.thumbs.shelf.order.map((id) => row.x[id])
-    for (let i = 1; i < xs.length; i++) {
-      const [a, b] = [L.thumbs.shelf.order[i - 1], L.thumbs.shelf.order[i]]
-      const room = Math.max(SHELF_FACE, width(a)) / 2 + Math.max(SHELF_FACE, width(b)) / 2 + SHELF_GAP
-      expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(room - 1e-9)
-    }
-    // Centred on the grid's middle, its length the sum of its places.
-    expect(xs[0] - Math.max(SHELF_FACE, width(L.thumbs.shelf.order[0])) / 2).toBeCloseTo(-row.w / 2)
+  it('stacks the faces at the troop’s step, from the grid’s left edge', () => {
+    const L = layoutOf(withItems(20, 4), true)
+    const page = shelfPage(L.thumbs.shelf, 0)
+    const xs = L.thumbs.shelf.order.filter((id) => id in page.x).map((id) => page.x[id])
+    // Each face lies over the one before it and shows 16 of the troop's 28 px.
+    expect(SHELF_STEP / SHELF_FACE).toBeCloseTo(16 / 28, 1)
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBe(SHELF_STEP)
+    // The first face's edge is the first thumbnail's (two columns 200 apart, 168 wide).
+    expect(xs[0] - SHELF_FACE / 2).toBeCloseTo(-(200 + 168) / 2)
+  })
+
+  it('holds as many faces a page as fit across the grid, many more than four', () => {
+    const phone = layoutOf(withItems(25, 4), true).thumbs.shelf
+    const desk = layoutOf(withItems(25, 4), false).thumbs.shelf
+    expect(phone.per).toBe(17)
+    // A desk's grid is three columns wide: twenty-five fit on one page.
+    expect(desk.per).toBe(25)
+    // The page and its chip stay inside the grid.
+    const page = shelfPage(phone, 0)
+    expect(page.more).not.toBeNull()
+    expect(page.more!.x + SHELF_FACE / 2).toBeLessThanOrEqual((200 + 168) / 2)
+    expect(page.more!.x - Math.max(...Object.values(page.x))).toBe(SHELF_FACE + SHELF_MORE_GAP)
+  })
+
+  it('needs no chip when everyone fits, and gives every face a page when they do not', () => {
+    expect(shelfPer(3, 368)).toBe(3)
+    expect(shelfPage(layoutOf(withItems(3, 4), true).thumbs.shelf, 0).more).toBeNull()
+    expect(shelfPer(1000, 10)).toBe(1)
+  })
+
+  it('turns a page with "+N", says "–" on the last, and goes back to the first', () => {
+    const shelf = layoutOf(withItems(40, 4), true).thumbs.shelf
+    const first = shelfPage(shelf, 0)
+    expect(Object.keys(first.x)).toHaveLength(17)
+    expect(first.more).toMatchObject({ rest: 23, last: false })
+    const second = shelfPage(shelf, 1)
+    expect(Object.keys(second.x)).toEqual(shelf.order.slice(17, 34))
+    expect(second.more).toMatchObject({ rest: 6, last: false })
+    const last = shelfPage(shelf, 2)
+    expect(Object.keys(last.x)).toEqual(shelf.order.slice(34))
+    expect(last.more).toMatchObject({ rest: 0, last: true })
+    // The chip follows the page's last face, a short page's too.
+    expect(last.more!.x).toBe(shelf.left + 5 * SHELF_STEP + SHELF_FACE + SHELF_MORE_GAP)
+    expect(shelfPage(shelf, 3)).toEqual(first)
+  })
+
+  it('stands below the label’s band, where the names stood, clear of the first row of thumbnails', () => {
+    const T = layoutOf(withItems(20, 4), true).thumbs
+    expect(T.shelf.y).toBeGreaterThan(T.shelfY)
+    // The first row's thumbnails are 108 tall about y 0.
+    expect(T.shelf.y + SHELF_FACE / 2).toBeLessThan(-54 - 20)
   })
 
   it('never widens the view: the box is the grid’s, however many agents there are', () => {

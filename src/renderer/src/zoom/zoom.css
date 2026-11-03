@@ -1292,6 +1292,30 @@
   will-change: transform, opacity;
 }
 
+/* THE SHELF'S "+N" CHIP (owner, 2026-11-03: the agents over the artifacts in
+   the agents group's form): a face's size and ring after the page's last
+   face, as the troop's "+N" (pets.css · .cr-pet.more); it turns the page, and
+   says "–" on the last one. The painter places it and shows it. */
+.zv-shelf-more {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 50%;
+  background: var(--zv-paper);
+  box-shadow: 0 2px 6px var(--zv-shadow-sm);
+  color: var(--zv-ink-soft);
+  font: 700 10px/1 var(--font-mono);
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+
 /* ── hover: a seal ring, never a transform (the painter owns transforms) ── */
 @media (hover: hover) {
   .zv-av:hover {
@@ -1326,6 +1350,12 @@
 
   .zv-grp button:hover {
     color: var(--zv-ink);
+  }
+
+  .zv-shelf-more:hover {
+    box-shadow:
+      0 0 0 2px var(--zv-paper),
+      0 0 0 3.5px var(--zv-seal);
   }
 
   .zv-grp button.zv-seal:hover {
@@ -1791,8 +1821,8 @@
 /* ── a phone (2026-11-01 phone evals) ──
    The device's marks are drawn at 0.62 inside a device seen at ~0.6, so their
    labels are set large enough to read there, cut short before a neighbour's.
-   A name stays short enough not to run into the next one on the thumbnails'
-   shelf (zoom-layout.ts · phoneShelf).
+   A name stays short enough not to run into the next one in the crew
+   (scene-words.ts · --zv-nm-max).
    At the full view the way back out is a round button in the head's corner,
    not a pill over the agent's name. */
 @media (max-width: 759px) {

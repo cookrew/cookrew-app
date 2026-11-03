@@ -57,3 +57,14 @@ describe('the stylesheet agrees', () => {
     expect(body).toMatch(/flex-wrap: nowrap/)
   })
 })
+
+// A troop dragged off the panel floats as a column of its picked few; only the
+// attached strip pages by what its row holds (review, 2026-11-03).
+describe('only the attached strip pages by its row', () => {
+  const troop = readFileSync('src/renderer/src/pets/PetTroop.tsx', 'utf8')
+  const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
+  it('sizes the strip by stripFaces, the floating troop by its members', () => {
+    expect(troop).toContain('strip ? Math.max(members.length, stripFaces(side, window.innerWidth)) : members.length')
+    expect(pets).not.toContain('order.members.length')
+  })
+})
