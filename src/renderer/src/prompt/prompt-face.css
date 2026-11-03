@@ -394,9 +394,10 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
 .pf-who {
   position: absolute;
   z-index: 5;
-  /* Over the chip it opens from. */
+  /* Over the chip it opens from, and over the phone's tray while it shows
+     (global-prompt.css · THE TRAY FLOATS). */
   left: 0;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 8px + var(--cr-tray-lift, 0px));
   display: flex;
   flex-direction: column;
   width: 300px;
