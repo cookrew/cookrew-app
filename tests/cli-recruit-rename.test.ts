@@ -139,6 +139,33 @@ describe('cookrew recruit --prompt', () => {
     expect(recruits(store, home, me.id).map((n) => n.name)).toEqual(['Scout'])
   })
 
+  // 2026-11-03, six of six: "Prompt delivered" over an empty composer. With
+  // the card's view wired, the brief waits for the harness and "delivered"
+  // needs evidence; without it the card stays, the dispatch is closed and the
+  // command fails with the plain sentence.
+  it('says "Card created, brief NOT confirmed" and fails when the brief never shows up on the card', async () => {
+    const { store, deps, home } = setup()
+    const interrupt = vi.fn()
+    const witness = { readyForInput: () => true, turnRunning: () => false, turnCount: () => 0, screen: () => '' }
+    const watched = { ...deps, dispatch: { ...deps.dispatch!, get: () => ({ state: 'running' }), interrupt }, recruitWitness: witness, recruitTiming: { confirmMs: 0, retryMs: 1 } } as unknown as SocketServerDeps
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    await expect(cmdRecruit(request('recruit', ['Scout'], me.id, { prompt: 'look around' }), watched)).rejects.toThrow(
+      /Recruited "Scout"[\s\S]*Card created, brief NOT confirmed[\s\S]*no turn started[\s\S]*cookrew check "Scout"/
+    )
+    expect(interrupt).toHaveBeenCalledWith('d-1', expect.stringMatching(/not confirmed/))
+    expect(recruits(store, home, me.id).map((n) => n.name)).toEqual(['Scout'])
+  })
+
+  it('says which evidence confirmed the brief', async () => {
+    const { store, deps } = setup()
+    const sentence = 'look around the repo and list the open TODOs'
+    const witness = { readyForInput: () => true, turnRunning: () => false, turnCount: () => 0, screen: () => `❯ ${sentence}` }
+    const watched = { ...deps, dispatch: { ...deps.dispatch!, get: () => ({ state: 'running' }) }, recruitWitness: witness, recruitTiming: { retryMs: 1 } } as unknown as SocketServerDeps
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    const told = await cmdRecruit(request('recruit', ['Scout'], me.id, { prompt: sentence }), watched)
+    expect(told).toMatch(/Prompt delivered \(dispatch d-1, seen on its screen\)/)
+  })
+
   it('refuses a prompt for a bare shell, and an empty --prompt', async () => {
     const { store, deps } = setup()
     const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
