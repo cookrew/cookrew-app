@@ -190,6 +190,20 @@ async function upload(name: string, body: Blob): Promise<string> {
 }
 
 /**
+ * One recording from the phone's mic, for the Mac to hear (POST /api/listen,
+ * main/hear-file.ts). Raw bytes, like an attachment; the answer is the words.
+ */
+async function hearRecording(audio: Blob, signal?: AbortSignal): Promise<{ text: string; alternates: Record<string, string> }> {
+  const headers: Record<string, string> = { 'content-type': audio.type || 'audio/wav' }
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const heard = await parse<{ text?: string; alternates?: Record<string, string> }>(
+    await planeFetch(apiPath('/api/listen'), { method: 'POST', headers, body: audio, ...(signal ? { signal } : {}) })
+  )
+  return { text: heard.text ?? '', alternates: heard.alternates ?? {} }
+}
+
+/**
  * A prompt's picture, as raw bytes (mobile-api · /api/image). A picture that
  * is not there, or not the phone's to see, is a 404: nothing to draw.
  */
@@ -764,8 +778,13 @@ export function createRemoteApi(): CookrewApi {
     onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
     inboxAct: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/act`), 'POST', {}),
     inboxDismiss: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/dismiss`), 'POST', {}),
-    // The phone hears through its own browser (prompt/use-dictation.ts); the Mac's ear is
-    // the desktop's alone.
+    // The phone hears through its own browser, or records for the Mac to hear
+    // (prompt/use-dictation.ts); the Mac's live ear is the desktop's alone.
+    hearAvailable: () =>
+      req<{ available?: boolean }>(apiPath('/api/listen'))
+        .then((out) => out.available === true)
+        .catch(() => false),
+    hearRecording,
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
     listenStop: () => Promise.resolve(),

@@ -511,7 +511,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         <button
           type="button"
           className={`cr-btn sm voice-mic${dictation.listening ? ' listening' : ''}`}
-          title={dictation.listening ? 'Stop: the words go into the prompt' : 'Dictate into the prompt (or hold ⌘)'}
+          title={dictation.listening ? 'Stop: the words go into the prompt' : dictation.ear === 'mac' ? 'Dictate into the prompt (or hold ⌘)' : 'Dictate into the prompt'}
           aria-label={dictation.listening ? 'Stop dictating' : 'Dictate'}
           aria-pressed={dictation.listening}
           // Keep the caret where it was: the words land in the draft either way.
@@ -541,6 +541,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       {attach.attaching && (
         <span className="cr-prompt-note" role="status">
           attaching…
+        </span>
+      )}
+      {/* The phone's ear has no words until the Mac has heard them: say what it is doing. */}
+      {dictation.ear === 'phone' && dictation.phase !== 'idle' && (
+        <span className="cr-prompt-note cr-prompt-sous" role="status">
+          {dictation.phase === 'hearing' ? '● Recording: tap the mic to finish' : 'The Mac is listening…'}
         </span>
       )}
       {dictation.phase === 'closing' && dictation.heard.trim() && (

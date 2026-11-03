@@ -63,6 +63,7 @@ import type { SousDoor } from "./socket-server";
 import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
+import { HEAR_MAX_BYTES, type Heard } from "./hear-file";
 import type { EventEmitter } from "node:events";
 import type { SecretsStore } from "./secrets-store";
 import { isSecretName } from "../shared/secret-slot";
@@ -260,6 +261,11 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
+  /**
+   * The Mac's ear for a phone's recording (hear-file.ts): GET /api/listen says
+   * whether this Mac has one, POST /api/listen hears the raw audio body.
+   */
+  hear?: { available: () => boolean; recording: (bytes: Uint8Array) => Promise<Heard> };
   /** The HITL inbox (R3): a one-shot read, a hold while a stream is open, and the announcements. */
   inbox?: () => InboxRow[];
   inboxHold?: () => () => void;
@@ -1672,6 +1678,25 @@ export async function handleMobileApi(
     }
   }
 
+  // The phone's mic, heard by the Mac (hear-file.ts). The body is the raw
+  // recording; the answer is the words, never sent anywhere: the box lands them.
+  if (p === "/api/listen" && method === "GET") {
+    respondJson(response, 200, { available: deps.hear?.available() ?? false });
+    return true;
+  }
+  if (p === "/api/listen" && method === "POST") {
+    if (!deps.hear?.available()) {
+      respondJson(response, 503, { error: "This Mac has no ear to hear with" });
+      return true;
+    }
+    try {
+      const bytes = await readBytes(request, HEAR_MAX_BYTES);
+      respondJson(response, 200, await deps.hear.recording(bytes));
+    } catch (error) {
+      respondJson(response, 422, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
   // Sous, spoken to from a phone or a speaker. POST, so the read-only wall
   // token is refused exactly as for every other mutating route; the sentence
   // is the whole request, the controller's answer is the whole response —

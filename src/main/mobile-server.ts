@@ -252,6 +252,8 @@ export interface MobileServerDeps {
   build?: MobileApiDeps['build']
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
+  /** The Mac's ear for the phone's recordings — see MobileApiDeps; passed through as-is. */
+  hear?: MobileApiDeps['hear']
   uiBus?: MobileApiDeps['uiBus']
   /** The HITL inbox (R3) — see MobileApiDeps; passed through as-is. */
   inbox?: MobileApiDeps['inbox']

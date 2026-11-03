@@ -79,6 +79,7 @@ import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
 import { MacListener } from './listen'
+import { hearAvailable, hearRecording } from './hear-file'
 import { polishTranscript } from './sous-polish'
 import { readSousVoiceConfig } from './sous-voice-config'
 import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
@@ -6224,18 +6225,18 @@ app.whenReady().then(() => {
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".
-  const listener = new MacListener({
+  const earOptions = {
     binary: app.isPackaged
       ? path.join(process.resourcesPath, 'cr-listen')
       : path.join(dirname, '../../resources/cr-listen/cr-listen'),
     // Two ears: the owner's locale first (its partials are what the pill
     // shows), en-US alongside because that is the ear that spells the
     // roster's English names right. Same audio, one microphone.
-    locales: () => {
+    locales: (): string[] => {
       const primary = readSousVoiceConfig().locale
       return primary === 'en-US' ? [primary] : [primary, 'en-US']
     },
-    hints: () => {
+    hints: (): string[] => {
       const roster = sousRoster()
       return [
         'Sous',
@@ -6245,7 +6246,13 @@ app.whenReady().then(() => {
         ...roster.presets
       ]
     }
-  })
+  }
+  const listener = new MacListener(earOptions)
+  // The same ears for a recording the phone made (hear-file.ts, POST /api/listen).
+  const phoneEar = {
+    available: () => hearAvailable(earOptions),
+    recording: (bytes: Uint8Array) => hearRecording(earOptions, bytes)
+  }
   ipcMain.handle('listen:available', () => listener.available())
   ipcMain.handle('listen:start', () =>
     listener.start((event) => mainWindow?.webContents.send('listen:event', event))
@@ -6346,6 +6353,8 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous: sousDoor,
     uiBus,
+    // The phone's mic, heard by the Mac's ears.
+    hear: phoneEar,
     // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
     inbox: () => inbox.read(),
     inboxAct,
