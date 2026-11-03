@@ -39,4 +39,9 @@ describe('CHAT is a plain conversation', () => {
     // The webkit pseudo the trace surface hides is shown again for the chat (Safari reads only that).
     expect(rule(paper, '.lod-overlay .look-chat > .ctx-transcript::-webkit-scrollbar')).toContain('display: block;')
   })
+
+  it('shows no CHECKPOINT row and no LIVE button over the chat when the reader scrolls back', () => {
+    const overlay = src('TerminalOverlay.tsx')
+    expect(overlay).toMatch(/\{selectedIndex !== null && look !== 'chat' && \(\s*<div className="popout-ask"/)
+  })
 })
