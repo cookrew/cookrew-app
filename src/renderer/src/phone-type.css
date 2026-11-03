@@ -103,15 +103,12 @@
   :root:root .cr-prompt-harness,
   :root:root .cr-prompt-tune,
   :root:root .cr-prompt .cr-tune-menu-btn,
-  :root:root .cr-prompt-menu button,
-  :root:root .cr-prompt-menu-orch {
+  :root:root .cr-prompt-menu button {
     font-size: var(--ph-control);
   }
   :root:root .cr-prompt-menu-family,
   :root:root .cr-prompt-menu button small,
-  :root:root .cr-prompt-menu-orch small,
   :root:root .cr-prompt-suggest button small,
-  :root:root .cr-prompt-orch,
   :root:root .cr-prompt-note,
   :root:root .cr-prompt-error {
     font-size: var(--ph-caption);
