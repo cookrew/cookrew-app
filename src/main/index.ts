@@ -6389,6 +6389,8 @@ app.whenReady().then(() => {
     uiBus,
     // The phone's mic, heard by the Mac's ears.
     hear: phoneEar,
+    // The same Doubao voice for the phone's spoken replies.
+    speak: replyVoice,
     // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
     inbox: () => inbox.read(),
     inboxAct,
