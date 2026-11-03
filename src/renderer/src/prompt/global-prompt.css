@@ -599,12 +599,80 @@
   text-align: center;
 }
 
+/* ---- THE BOX FLOATS AT EVERY WIDTH (owner, 2026-11-03: "the desktop and wide
+   screens are not done yet") ----
+   What the phone got first (the phone's one-row block, below) holds on the
+   desktop and in a wide browser too: the dock is no band but a see-through
+   layer at the foot, the box a pill over the page, centred and no wider than
+   960px, and the stage runs to the window's bottom. What stood on the band
+   clears the pill through --cr-float-h: the full view's sheet
+   (zoom/full-views.css), the zoom's bar (zoom/zoom.css), the pets' bed
+   (pets/stage-floor.ts). The cookrew.dev embed keeps its own bar.
+
+   The pill's shape is :where()-scoped, so it ranks as the box's own rules do
+   and the phone's (body.cookrew-mobile …) still win at its width. */
+.cr-app:not(.cr-embed) {
+  /* The pill (48), its foot (12) and 8px of air above it. */
+  --cr-float-h: calc(68px + env(safe-area-inset-bottom, 0px));
+}
+
+.cr-app:not(.cr-embed) > .cr-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  padding: 0 16px max(12px, env(safe-area-inset-bottom, 0px));
+  background: transparent;
+  border-top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.cr-app:not(.cr-embed) > .cr-dock .dock-canvas {
+  justify-content: center;
+  pointer-events: none;
+}
+
+.cr-app:not(.cr-embed) > .cr-dock .dock-canvas > * {
+  pointer-events: auto;
+}
+
+/* A hint or a failed make: one line over the pill, never a box across the page. */
+.cr-app:not(.cr-embed) > .cr-dock .cr-dock-hint {
+  order: -1;
+  flex: 0 0 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: center;
+  text-shadow: 0 0 4px var(--sumi-paper, var(--cream)), 0 0 8px var(--sumi-paper, var(--cream));
+  pointer-events: none;
+}
+
+:where(.cr-app:not(.cr-embed) > .cr-dock) .cr-prompt {
+  flex: 0 1 960px;
+  min-height: 48px;
+  padding: 4px 6px 4px 8px;
+  border-radius: 24px;
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    0 8px 28px rgba(40, 30, 15, 0.18),
+    0 1px 3px rgba(40, 30, 15, 0.1);
+}
+
+:where(.cr-app:not(.cr-embed) > .cr-dock) .cr-prompt:focus-within {
+  box-shadow:
+    inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep)),
+    0 8px 28px rgba(40, 30, 15, 0.2),
+    0 1px 3px rgba(40, 30, 15, 0.1);
+}
+
 /* ---- THE BOX FLOATS, ONE ROW (owner, 2026-11-03: "can the bottom input box be
    a floating box that takes no bottom-bar space, one row") ----
    A phone's dock is no band any more: a fixed, see-through layer at the foot,
    the box a pill over the page, and the stage runs to the screen's bottom.
-   What stood on the band clears the pill through --cr-float-h, defined here
-   and only here: the full view's sheet (zoom/full-views.css), the zoom's bar
+   What stood on the band clears the pill through --cr-float-h (a phone's own
+   value here; every width's above, THE BOX FLOATS AT EVERY WIDTH): the full view's sheet (zoom/full-views.css), the zoom's bar
    (zoom/zoom.css), the pets' bed (pets/stage-floor.ts reads the pill's top).
 
    At rest the pill is ONE row: the left chip (@agent or ＋ harness), the
@@ -613,12 +681,12 @@
    listens or the extras are open — the pill grows upward, so the row typed in
    never moves. Sous's word and an error stand on top of it all. */
 @media (max-width: 700px) {
-  body.cookrew-mobile {
+  body.cookrew-mobile .cr-app:not(.cr-embed) {
     /* The pill (40 + 2 × 4), its foot, and 8px of air above it. */
     --cr-float-h: calc(56px + max(8px, env(safe-area-inset-bottom, 0px)));
   }
 
-  body.cookrew-mobile .cr-dock.cr-dock {
+  body.cookrew-mobile .cr-app:not(.cr-embed) > .cr-dock.cr-dock {
     position: fixed;
     left: 0;
     right: 0;
