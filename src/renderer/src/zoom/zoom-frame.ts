@@ -376,7 +376,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const grow = (f: number, s0: number, wd: number, ht: number, left: number): { dx: number; dy: number } => ({ dx: left * (wd / 2) * s0 * (f - 1), dy: (ht / 2) * s0 * (f - 1) })
     const U = UNDER_FACE
     const stTop = U.nameTop + U.toStatus * fN
-    const cntTop = stTop + U.toCounts * fS
+    // THE CREW SHOWS NO STATE WORD (owner, 2026-11-03: "the agents page needs no done / idle under
+    // them"): the face's ink says it. The word shows in the open card's head and the full view's;
+    // under a face, the counts take its line.
+    const cntTop = stTop
     const nA = { x: lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny) + (1 - nmIn) * -14, s: pop, o: nmIn * words }
     // The troop's faces carry no names: a face's title says who it is (ZoomParts · AgentNode).
     const nB = { x: -e.nmW / 2, y: 22, s: SHELF_NAME_S, o: 0 }
@@ -403,7 +406,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
       stP.y = lerp(stP.y, at.y - ((e.stH ?? 13) / 2) * (1 - k), into)
       stP.k = lerp(stP.k, k, into)
     }
-    put(e.st, `translate(${f1(stP.x)}px, ${f1(stP.y)}px)${stP.k === 1 ? '' : ` scale(${f4(stP.k)})`}`, stIn * gone * words)
+    put(e.st, `translate(${f1(stP.x)}px, ${f1(stP.y)}px)${stP.k === 1 ? '' : ` scale(${f4(stP.k)})`}`, stIn * gone * words * nx)
     const cntIn = ramp(z, 0.62, 0.95)
     // Where the crew has no room for the counts' line, they show in the open card's head only.
     const cntRoom = sw.counts ? 1 : nx
@@ -420,7 +423,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     // The typed words: centred by their own CSS (their width moves with every
     // key, the measured ones only with the model), on the counts' line when
     // there are none. The open card's reply box holds them, so they go there.
-    const dftTop = e.cntW > 0 && sw.counts ? cntTop + U.toDraft * fS : stTop + U.toCounts * fS
+    const dftTop = e.cntW > 0 && sw.counts ? cntTop + U.toDraft * fS : stTop
     put(e.dft, `translate(0px, ${f1(dftTop + (1 - cntIn) * -10)}px)${fS === 1 ? '' : ` scale(${f4(fS)})`}`, cntIn * gone * words * (1 - nx))
     const b = ramp(zi, 1.6, 1.97)
     // The last words go to the transcript's top, and hand over to it; the

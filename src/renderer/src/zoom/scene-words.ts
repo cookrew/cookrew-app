@@ -88,7 +88,8 @@ export function sceneWords(s: RestScales, narrow: boolean): SceneWords {
   const name = pinned(SCENE_TYPE.name, NAME.px, s.crew)
   const status = pinned(SCENE_TYPE.small, STATUS.px, s.crew)
   // The counts' line ends above the next row's face, a couple of px clear.
-  const countsBottom = UNDER_FACE.nameTop + UNDER_FACE.toStatus * name + UNDER_FACE.toCounts * status + COUNTS.line * status
+  // Under a face: the name, then the counts on the line a state word would take (the crew shows none).
+  const countsBottom = UNDER_FACE.nameTop + UNDER_FACE.toStatus * name + COUNTS.line * status
   // A name is cut short before its neighbour's, in its own px (it is drawn at body / 15 of them on screen).
   const pitch = COL * s.crew
   const nameMax = Math.max(40, Math.min(180, ((pitch - NAME_GAP) * NAME.px) / SCENE_TYPE.name))
