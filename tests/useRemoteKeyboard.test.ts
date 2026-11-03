@@ -97,3 +97,16 @@ describe('inputModeFor — the phone keyboard a page field asks for', () => {
     expect(inputModeFor(undefined)).toBe('text')
   })
 })
+
+describe('the phone listens to the NATIVE beforeinput', () => {
+  // React's onBeforeInput is built from the legacy `textInput` event and has no
+  // inputType: a phone's single letters and its Backspace never got through.
+  const read = (file: string): string =>
+    require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'renderer', 'src', file), 'utf8')
+  it('the hook attaches a real beforeinput listener', () => {
+    expect(read('useRemoteKeyboard.ts')).toContain("addEventListener('beforeinput'")
+  })
+  it('the frame does not route the key field through React’s onBeforeInput', () => {
+    expect(read('MobileBrowserFrame.tsx')).not.toContain('onBeforeInput=')
+  })
+})
