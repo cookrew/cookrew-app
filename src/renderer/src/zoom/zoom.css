@@ -1468,18 +1468,8 @@
   cursor: pointer;
 }
 
-/* The last stop is the switch (owner, 2026-11-01): agents | artifacts, one
-   outlined pair, so in the workspace the other side is one press away. */
-.zv-side {
-  display: flex;
-  flex: 2 1 0;
-  min-width: 0;
-  gap: 2px;
-  margin-left: 6px;
-  border-radius: 999px;
-  outline: 1px solid var(--zv-hair-2);
-  outline-offset: 1px;
-}
+/* The last stop is the switch (owner, 2026-11-01): the outlined pair is the
+   two groups of what needs you now (BarGroups.tsx, bar-groups.css). */
 
 .zv-stops button[aria-current] {
   background: var(--zv-ink);
@@ -1674,7 +1664,7 @@
   /* Each stop as wide as its word, the rest shared (a 360px Samsung, 2026-11-03: equal
      widths cut WORKSPACES and ARTIFACTS while DEVICES and AGENTS had room to spare). */
   .zv-stops button,
-  .zv-side {
+  .zv-groups {
     flex: 1 1 auto;
   }
 }

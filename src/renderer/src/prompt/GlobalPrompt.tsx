@@ -38,6 +38,7 @@ import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
 import { boxFold, facePlace, promptFold, usePromptOpen, usePromptWho, type FacePlace } from './prompt-fold'
 import { flyFace, popFace, type Box } from './face-flip'
+import { barCard, useBarAgent } from '../zoom/bar-pick'
 import { fliesBack, flyBack, snapshotBox, stageGhost, type FoldSnapshot } from './fold-flight'
 import { SentToast, pressKey, useSentToast } from './SentToast'
 import { useFaceSlot } from './face-slot'
@@ -198,7 +199,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   if (itemUser.current.key !== itemKey || (itemKey !== null && itemUser.current.id === null)) {
     itemUser.current = { key: itemKey, id: itemKey ? latestUser(itemOwners, crewRows) : null }
   }
-  const viewed = fullAgentId ?? cardAgent ?? itemUser.current.id
+  // An agent's card opened from the bar's group selects it (zoom/bar-pick.ts):
+  // the latest choice, so it stands before a card the zoom still holds.
+  const barAgent = useBarAgent()
+  const viewed = fullAgentId ?? barAgent ?? cardAgent ?? itemUser.current.id
   const stop = useWordsStop()
   // AN ITEM NOBODY HAS USED rides the words as a #ref chip (owner design,
   // 2026-11-04): the new agent is made with it. × leaves it out until the view moves.
@@ -226,6 +230,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     // opened again) the old pick does not come back.
     setStandIn((s) => pickAfterMove(s, moveKey))
   }, [moveKey])
+  // A bar group's agent card is a deliberate choice too: an older pick or let-go does not stand over it.
+  useEffect(() => {
+    if (barAgent === null) return
+    setReleased(null)
+    setStandIn(null)
+  }, [barAgent])
   const release = releaseAfter(released, viewed)
   useEffect(() => {
     if (release !== released) setReleased(release)
@@ -655,7 +665,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     }
     const el = chipFace.current
     if (!el) return
-    if (was.folded && lastFace.current) flyFace(el, lastFace.current, { box: formRef.current, rest: [chipName.current] })
+    // Opened from a bar group's face, it flies from that face; else from the folded one.
+    const from = barCard.takeFrom() ?? lastFace.current
+    if (was.folded && from) flyFace(el, from, { box: formRef.current, rest: [chipName.current] })
     else if (was.id !== id) popFace(el)
   }, [folded, to?.id, place, placed])
   /** The box can send: words, or a bare Enter where the agent's terminal is in sight (send-plan.ts). */

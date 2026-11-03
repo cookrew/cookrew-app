@@ -1,0 +1,293 @@
+/* ── THE BAR'S GROUPS (BarGroups.tsx; owner, 2026-11-04, cut e-groups) ──
+   The pair that ended the stops is two groups in the troop's own form
+   (pets.css · STACKED): stacked thumbnails, stacked faces, a "+N" coin, in
+   the outlined pair the switch was. A group is its stop: the press off its
+   faces goes there (the stop button's ::before covers the group), lit in ink
+   when current. `.zv-stops button` styles every button in the stops; the
+   faces and the coin set back what they are not. */
+
+.zv-groups {
+  display: flex;
+  flex: 2 1 auto;
+  min-width: 0;
+  gap: 2px;
+  margin-left: 6px;
+  border-radius: 999px;
+  outline: 1px solid var(--zv-hair-2);
+  outline-offset: 1px;
+}
+
+.zv-group {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  min-height: 28px;
+  border-radius: 999px;
+  transition: background-color 160ms ease;
+}
+
+.zv-group.lit {
+  background: var(--zv-ink);
+}
+
+/* The stop: the word, and the whole group under the faces. */
+.zv-stops .zv-group > .zv-group-stop {
+  position: static;
+  flex: 1 1 auto;
+  background: none;
+}
+
+.zv-group-stop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.zv-stops .zv-group.lit > .zv-group-stop {
+  color: var(--zv-paper);
+}
+
+@media (hover: hover) {
+  .zv-stops .zv-group > .zv-group-stop:not([aria-current]):hover {
+    background: none;
+  }
+  .zv-group:not(.lit):has(> .zv-group-stop:hover) {
+    background: var(--zv-wash);
+  }
+}
+
+/* With a stack, the word stands before it at its own width (the desktop). */
+.zv-stops .zv-group.full > .zv-group-stop {
+  flex: none;
+  padding: 0 6px 0 10px;
+}
+
+.zv-group-stack {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-right: 4px;
+  pointer-events: none;
+}
+
+/* One face of the stack: a paper coin with the agent's ink face. */
+.zv-stops .zv-group button.zv-gf {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  min-width: 0;
+  height: 24px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--zv-hair-2);
+  border-radius: 50%;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  overflow: visible;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.zv-stops .zv-group button.zv-gf + .zv-gf {
+  margin-left: -10px;
+}
+
+.zv-gf .vi-avatar,
+.zv-gf .vi-avatar svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Waiting on you: the face's red ring, and the dot the crew's waiting face wears. */
+.zv-gf-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--zv-wait);
+  box-shadow: 0 0 0 1.5px var(--zv-paper);
+  pointer-events: none;
+}
+
+/* An artifact's face: its page, as the troop's attached column draws it. */
+.zv-stops .zv-group button.zv-gf.item {
+  width: 36px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+}
+
+.zv-stops .zv-group button.zv-gf.item + .zv-gf.item {
+  margin-left: -24px;
+}
+
+.zv-gf.item > .zv-th {
+  position: absolute;
+  inset: 0;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+
+.zv-group.lit .zv-gf.item > .zv-th {
+  box-shadow: 0 0 0 1px var(--zv-paper), 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Hover and focus lift a face but keep the stack's order: raised, it would
+   cover the slice of the next one the pointer is moving to (focus stays on a
+   face after Esc closes its card). Only the open one rises. */
+.zv-stops .zv-group button.zv-gf:hover,
+.zv-stops .zv-group button.zv-gf:focus-visible {
+  transform: translateY(-2px);
+}
+
+.zv-stops .zv-group button.zv-gf.open {
+  z-index: 2;
+  transform: translateY(-2px);
+}
+
+.zv-stops .zv-group button.zv-gf.open {
+  box-shadow: 0 0 0 2px var(--zv-seal);
+}
+
+/* In and out (~220 ms): a handled one goes, the next slides in from the right. */
+.zv-gf.in {
+  animation: zv-gf-in 220ms ease-out both;
+}
+
+.zv-stops .zv-group button.zv-gf.out {
+  pointer-events: none;
+  animation: zv-gf-out 220ms ease-in both;
+}
+
+@keyframes zv-gf-in {
+  from {
+    opacity: 0;
+    translate: 12px 0;
+  }
+}
+
+@keyframes zv-gf-out {
+  to {
+    opacity: 0;
+    scale: 0.6;
+    translate: 0 6px;
+  }
+}
+
+/* "+N": the troop's coin; it turns the stack's page. */
+.zv-stops .zv-group > button.zv-group-more {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: auto;
+  min-width: 24px;
+  height: 24px;
+  min-height: 0;
+  margin: 0 3px 0 0;
+  padding: 0 5px;
+  border: 1.5px solid var(--zv-hair-2);
+  border-radius: 999px;
+  background: var(--zv-paper-2);
+  color: var(--zv-ink);
+  font: 600 10px/1 var(--zv-mono);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* The desktop: the word and its five beside it, so the bar grows past its 380. */
+@media (min-width: 701px) {
+  .zv-zoom-control:has(.zv-group.full) {
+    width: auto;
+    min-width: 380px;
+  }
+  /* Grown, each stop keeps its whole word (equal shares cut DEVICES and WORKSPACES). */
+  .zv-zoom-control:has(.zv-group.full) .zv-stops > button {
+    flex: 1 0 auto;
+  }
+}
+
+/* A phone: 3 and "+N", no word beside them (it stays in the DOM, and names the stop). */
+@media (max-width: 700px) {
+  .zv-stops .zv-group.full > .zv-group-stop {
+    width: 6px;
+    min-width: 6px;
+    padding: 0;
+  }
+
+  .zv-group.full > .zv-group-stop > .zv-group-word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .zv-stops .zv-group button.zv-gf {
+    width: 24px;
+    height: 24px;
+  }
+
+  .zv-stops .zv-group button.zv-gf + .zv-gf {
+    margin-left: -12px;
+  }
+
+  .zv-stops .zv-group button.zv-gf.item {
+    width: 36px;
+    height: 24px;
+  }
+
+  .zv-stops .zv-group button.zv-gf.item + .zv-gf.item {
+    margin-left: -26px;
+  }
+
+  .zv-stops .zv-group > button.zv-group-more {
+    min-width: 24px;
+    padding: 0 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zv-gf.in,
+  .zv-stops .zv-group button.zv-gf.out {
+    animation: none;
+  }
+}
+
+/* A group's card stands above the bar (BarCards.tsx), arriving from below. */
+.zv-bar-card {
+  transform-origin: bottom center;
+  animation: zv-bar-card-in 150ms ease-out both;
+}
+
+@keyframes zv-bar-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zv-bar-card {
+    animation: none;
+  }
+}
+
+.cr-pet-since {
+  color: var(--rose, var(--zv-wait));
+}

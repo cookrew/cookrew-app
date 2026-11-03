@@ -55,7 +55,7 @@ const stageBand = (): { top: number; bottom: number } => {
  * eaten before anything under it (a thumbnail, the background's step out)
  * sees it. Once, until the next press or a moment later.
  */
-function eatNextClick(): void {
+export function eatNextClick(): void {
   const done = (): void => {
     document.removeEventListener('click', eat, true)
     document.removeEventListener('pointerdown', next, true)
