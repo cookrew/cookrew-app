@@ -190,14 +190,14 @@ async function upload(name: string, body: Blob): Promise<string> {
 }
 
 /**
- * One chunk of a reply in the Mac's Doubao voice (POST /api/speak,
- * main/doubao-tts.ts): the text out, its mp3 back.
+ * One chunk of a reply in the Mac's local voice (POST /api/speak,
+ * main/local-voice.ts): the text out, its audio back.
  */
-async function speakAudio(text: string, signal?: AbortSignal): Promise<Blob> {
+async function speakAudio(text: string, signal?: AbortSignal, lang?: 'zh' | 'en'): Promise<Blob> {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
-  const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text }), ...(signal ? { signal } : {}) })
+  const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text, ...(lang ? { lang } : {}) }), ...(signal ? { signal } : {}) })
   if (!response.ok) await parse(response)
   return response.blob()
 }

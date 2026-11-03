@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { TerminalActivity } from '../../../shared/turn'
+import { cookrew } from '../api'
 import { isPrimed, isReading, onReading, primeVoice, readAloud, stopReading } from './reply-voice'
 
 /**
  * 🔊 SPOKEN REPLIES: while on, the box's agent's final reply is read aloud
  * when its turn completes, all of it as sentences (shared/speakable.ts), in
- * the Doubao voice where the Mac has one (prompt/reply-voice.ts). One switch
+ * the Mac's free local voice where it is installed (prompt/reply-voice.ts). One switch
  * for the box (it outlived VoiceBar.tsx, where it was the agent's alone): it
  * can be turned before a new agent exists, and the agent the box carries next
  * is the one heard.
@@ -62,6 +63,8 @@ export function useSpokenReplies(agentId: string | null, activity: TerminalActiv
   useEffect(() => {
     const now: Heard = { id: agentId, phase: activity?.phase }
     if (shouldSpeak(was.current, now, activity?.reply, on)) void readAloud(activity?.reply ?? '')
+    // The agent has started on a turn: wake the Mac's voice for its reply.
+    else if (on && now.phase === 'thinking' && was.current.phase !== 'thinking') void cookrew().speakAvailable?.().catch(() => false)
     was.current = now
   }, [agentId, activity?.phase, activity?.reply, on])
 

@@ -5,10 +5,10 @@ import { hasCjk, speakableText, speechChunks } from '../../../shared/speakable'
  * THE VOICE THAT READS A REPLY (prompt/use-spoken-replies.ts).
  *
  * A reply is first turned into sentences a person would say and packed into
- * chunks (shared/speakable.ts). Where the Mac has the Doubao voice set up
- * (main/doubao-tts.ts), each chunk comes back as mp3 and plays through ONE
- * audio element, the next chunk fetched while this one plays. Without it, or
- * when a chunk fails, the rest is read by the browser's own voice.
+ * chunks (shared/speakable.ts). Where the Mac has the free local voice
+ * installed (main/local-voice.ts), each chunk comes back as audio and plays
+ * through ONE audio element, the next chunk fetched while this one plays.
+ * Without it, or when a chunk fails, the rest is read by the browser's voice.
  *
  * One reading at a time: a new reply, or a stop, ends the one before it.
  */
@@ -111,7 +111,7 @@ export function stopReading(): void {
   setReading(false)
 }
 
-/** Plays one mp3 to its end. False when it cannot play (the browser refused, the audio was bad). */
+/** Plays one chunk's audio to its end. False when it cannot play (the browser refused, the audio was bad). */
 function playBlob(blob: Blob): Promise<boolean> {
   const audio = audioElement()
   if (!audio) return Promise.resolve(false)
@@ -136,13 +136,15 @@ function playBlob(blob: Blob): Promise<boolean> {
   })
 }
 
-/** The chunks in the Doubao voice. Answers the chunks it could not play, for the browser's voice. */
-async function playDoubao(chunks: readonly string[], gen: number): Promise<readonly string[]> {
+/** The chunks in the Mac's voice. Answers the chunks it could not play, for the browser's voice. */
+async function playLocal(chunks: readonly string[], gen: number): Promise<readonly string[]> {
   const fetchAudio = cookrew().speakAudio
   if (!fetchAudio) return chunks
   const controller = new AbortController()
   fetches = controller
-  const fetchChunk = (i: number): Promise<Blob> => fetchAudio(chunks[i], controller.signal)
+  // One voice for the whole reading: the English one only when none of it is Chinese.
+  const lang = chunks.some(hasCjk) ? 'zh' : 'en'
+  const fetchChunk = (i: number): Promise<Blob> => fetchAudio(chunks[i], controller.signal, lang)
   let next = fetchChunk(0)
   for (let i = 0; i < chunks.length; i += 1) {
     let blob: Blob
@@ -197,7 +199,7 @@ function playBrowser(chunks: readonly string[]): Promise<void> {
   })
 }
 
-async function doubaoAvailable(): Promise<boolean> {
+async function localVoiceAvailable(): Promise<boolean> {
   const api = cookrew()
   if (!api.speakAvailable || !api.speakAudio) return false
   return api.speakAvailable().catch(() => false)
@@ -215,7 +217,7 @@ export async function readAloud(text: string): Promise<void> {
   }
   setReading(true)
   try {
-    const rest = (await doubaoAvailable()) && gen === generation ? await playDoubao(chunks, gen) : chunks
+    const rest = (await localVoiceAvailable()) && gen === generation ? await playLocal(chunks, gen) : chunks
     if (gen === generation && rest.length > 0) await playBrowser(rest)
   } finally {
     if (gen === generation) {
