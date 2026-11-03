@@ -40,7 +40,9 @@ export interface BindableTerminal {
 export const paneCardFor = (terminal: BindableTerminal, workspace: string): PaneCardInfo => ({
   terminalId: terminal.id,
   title: terminal.name,
-  agent: terminal.role ?? terminal.preset,
+  // herdr's panel labels a row by display_agent first, so this is the name
+  // the owner reads there; the role and harness were the panel's whole label.
+  agent: terminal.name,
   workspace,
   cwd: terminal.cwd
 })

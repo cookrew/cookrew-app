@@ -2621,6 +2621,21 @@ function paneCard(t: BindableTerminal): PaneCardInfo {
 }
 
 /**
+ * herdr's agent names, kept (herdr-host-multiplexer.ts · reconcileAgentNames):
+ * a name drops whenever an agent restarts in its pane. One async listing per
+ * tick, single-flight inside the backend; the first tick also names the
+ * panes of workspaces not attached since boot.
+ */
+const AGENT_NAME_TICK_MS = 30_000
+function keepAgentNames(): void {
+  const tick = (): void => {
+    void multiplexer()?.reconcileAgentNames?.().catch(() => 0)
+  }
+  setTimeout(tick, 10_000).unref()
+  setInterval(tick, AGENT_NAME_TICK_MS).unref()
+}
+
+/**
  * Every pane wears its card again.
  *
  * ensureSession re-reports the binding for terminals it ATTACHES, which is the
@@ -4181,14 +4196,22 @@ function addNode(node: CanvasNode): CanvasNode {
   return added
 }
 
-function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
-  const existing = store.node(id)
+/**
+ * Every patch to a card. `by` names who renamed it when a rename came from
+ * somewhere other than the owner's own hands (`cookrew rename`, Sous): the
+ * rename is recorded either way (`<kind>.renamed`, old name in details).
+ */
+function updateNode(id: string, patch: Partial<CanvasNode>, by?: string): CanvasNode | undefined {
+  const existing = store.node(id) ?? store.nodeAcrossWorkspaces(id)?.node
   if (existing?.kind === 'note' && typeof (patch as { content?: string }).content === 'string') {
     const { content, ...rest } = patch as { content: string } & Partial<CanvasNode>
     const written = store.writeNote(id, content)
     return Object.keys(rest).length > 0 ? store.updateNode(id, rest) : written
   }
   const updated = store.updateNode(id, patch)
+  if (existing && updated && 'name' in patch && updated.name !== existing.name) {
+    recordRename(updated, existing.name, by)
+  }
   // A rename is metadata: syncing would START a cold card's browser just to
   // relabel it, and `cookrew rename` reaches every card of a workspace.
   if (updated?.kind === 'browser' && Object.keys(patch).some((key) => key !== 'name')) {
@@ -4206,12 +4229,23 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     const mux = multiplexer()
     mux?.reportPaneCard?.(sessionNameFor(id), card)
     if ('name' in patch) {
-      if (mux?.followRename) mux.followRename(sessionNameFor(id), updated.name)
+      if (mux?.followRename) mux.followRename(sessionNameFor(id), updated.name, id)
       else mux?.renameTab?.(sessionNameFor(id), updated.name)
       agents.rename(id, updated.name)
     }
   }
   return updated
+}
+
+/** The audit line of a rename: who, from what, to what (event log + SSE). */
+function recordRename(node: CanvasNode, was: string, by?: string): void {
+  const owner = store.ownerOf(node.id)
+  if (!owner) return
+  try {
+    store.recordEventIn(owner, `${node.kind}.renamed`, node.id, node.name, `was "${was}"${by ? ` · by ${by}` : ''}`)
+  } catch (error) {
+    console.error('Could not record a rename:', error)
+  }
 }
 
 function workspaceName(id: string): string {
@@ -4225,7 +4259,7 @@ function workspaceName(id: string): string {
  * pinned (customName), as the card menu's RENAME does, or its next edit
  * would name it from its content again. Shared by `cookrew rename`.
  */
-function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string): RenameOutcome {
   const hit = store.nodeAcrossWorkspaces(id)
   if (!hit) return { ok: false, error: 'That card is not on any canvas.' }
   const plan = planRename({
@@ -4236,15 +4270,15 @@ function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix'): R
     onClash
   })
   if (plan.ok && plan.changed) {
-    updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name })
+    updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name }, by)
   }
   return plan
 }
 
 /** renameCard for an agent only: `cookrew recruit`, Sous, and a name picked from a prompt. */
-function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string): RenameOutcome {
   if (store.nodeAcrossWorkspaces(id)?.node.kind !== 'terminal') return { ok: false, error: 'That agent is not on any canvas.' }
-  return renameCard(id, wanted, onClash)
+  return renameCard(id, wanted, onClash, by)
 }
 
 /**
@@ -4257,7 +4291,7 @@ async function autoNameTerminal(id: string, standIn: string, prompt: string): Pr
   const picked = await nameAgent(prompt)
   if (!picked) return null
   if (!stillStandIn(store.nodeAcrossWorkspaces(id)?.node.name, standIn)) return null
-  return renameTerminal(id, picked, 'suffix')
+  return renameTerminal(id, picked, 'suffix', 'Sous (named from the prompt)')
 }
 
 /**
@@ -6057,7 +6091,7 @@ app.whenReady().then(() => {
     },
     connect: (a, b) => store.connectAcross(a, b),
     rename: (id, name) => {
-      const renamed = renameTerminal(id, name, 'refuse')
+      const renamed = renameTerminal(id, name, 'refuse', 'Sous (voice)')
       if (!renamed.ok) throw new Error(renamed.error)
     },
     // Short by nature (one spoken sentence), so the owner-submit primitive is
@@ -6765,6 +6799,7 @@ app.whenReady().then(() => {
   // resident ones ensureSession will reattach. A herdr server replaced under
   // the fleet keeps the panes and forgets what they were called.
   reportPaneBindings()
+  keepAgentNames()
 
   // File this Mac's workspaces under the account, by NAME AND ID only (P1).
   // Best effort and never awaited: a registry that is down must not delay a

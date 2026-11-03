@@ -1196,7 +1196,10 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Allow-listed update — the only mutation surface exposed to IPC/mobile. */
   updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
-    const node = this.node(id)
+    // Any canvas, not only the one on screen: `cookrew rename` and Sous name
+    // cards of background workspaces, and a focused-only lookup answered
+    // "renamed" while nothing changed. updateNodeUnsafe falls through.
+    const node = this.node(id) ?? this.nodeAcrossWorkspaces(id)?.node
     if (!node) return undefined
     const allowed = WorkspaceStore.PATCHABLE[node.kind]
     const safe = Object.fromEntries(

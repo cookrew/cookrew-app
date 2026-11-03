@@ -108,7 +108,10 @@ export interface PaneCardInfo {
   terminalId: string
   /** Card title — the node's display name. */
   title: string
-  /** Role when the card has one, else the harness/preset (claude, shell…). */
+  /**
+   * The name herdr's agent panel shows (display_agent): the card's name, as
+   * it is — Chinese included (owner, 2026-11-03: the name, no role).
+   */
   agent: string
   /** Name of the Cookrew workspace the card lives in. */
   workspace: string
@@ -391,13 +394,19 @@ export interface Multiplexer {
 
   /**
    * The backend's own name for the session's agent follows the card's
-   * (herdr: `agent rename`, a slug unique among live agents; cleared when the
-   * card's name has no slug). Same display-only, best effort contract.
+   * (herdr: `agent rename`, a slug unique among live agents — pinyin for Chinese,
+   * `card-<id>` when nothing is readable; cleared only with neither). Same display-only, best effort contract.
    */
-  nameAgent?(name: string, cardName: string): void
+  nameAgent?(name: string, cardName: string, cardId?: string): void
 
   /** renameTab and nameAgent together, off one lookup of the session (herdr). */
-  followRename?(name: string, label: string): void
+  followRename?(name: string, label: string, cardId?: string): void
+
+  /**
+   * Put back the backend's agent names that dropped (an agent restarted in
+   * its pane), async and off the main thread; resolves how many it renamed.
+   */
+  reconcileAgentNames?(): Promise<number>
 
   /**
    * The workspace-level half of the binding: the backend's workspace wears

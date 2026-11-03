@@ -261,6 +261,18 @@ describe('cookrew rename', () => {
     expect(() => cmdRename(request('rename', ['Faraway', 'Mine'], caller.id), open.deps)).toThrow(/not you or a card in your workspace or wired to you/)
   })
 
+  it('only the Orch itself renames the Orch; and the renamer is named', () => {
+    const { store, deps } = setup()
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    const orch = store.addNode(terminal('t2', 'Conductor', true)) as TerminalNodeData
+    expect(() => cmdRename(request('rename', ['Conductor', 'Finch Jr'], me.id), deps)).toThrow(/is the Orch\. Only it/)
+    expect(store.node(orch.id)?.name).toBe('Conductor')
+    cmdRename(request('rename', ['Door'], orch.id), deps)
+    expect(store.node(orch.id)?.name).toBe('Door')
+    const renameCard = (deps as unknown as { renameCard: { mock: { calls: unknown[][] } } }).renameCard
+    expect(renameCard.mock.calls.at(-1)?.[3]).toBe('"Conductor" (orch, cookrew rename)')
+  })
+
   it('refuses a name another card wears, and an unchanged one is not an error', () => {
     const { store, deps } = setup()
     const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
@@ -268,6 +280,16 @@ describe('cookrew rename', () => {
     expect(() => cmdRename(request('rename', ['Conductor'], me.id), deps)).toThrow(/already a card/)
     expect(store.node(me.id)?.name).toBe('Finch')
     expect(cmdRename(request('rename', ['Finch'], me.id), deps)).toMatch(/already called that/)
+  })
+
+  it('renames the caller when its canvas is not the one on screen', () => {
+    const { store, deps, home } = setup()
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    const other = store.list().workspaces.find((w) => w.id !== home)!.id
+    store.switchWorkspace(other)
+    expect(store.focusedId).not.toBe(home)
+    expect(cmdRename(request('rename', ['Robin'], me.id), deps)).toBe('Renamed "Finch" → "Robin"')
+    expect(store.nodeAcrossWorkspaces(me.id)?.node.name).toBe('Robin')
   })
 
   it('says how to use it', () => {
