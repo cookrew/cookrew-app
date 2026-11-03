@@ -106,6 +106,35 @@
   animation: pf-pop 200ms ease-out;
 }
 
+/* It runs elsewhere (a served session): a small ↗ at the corner the other
+   marks leave free (the draft dot top-left, the ink's tick or z top-right,
+   the verb bottom-right). On the folded face and on the open box's chip. */
+.pf-remote {
+  position: absolute;
+  left: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--sumi-paper, var(--cream));
+  color: var(--sumi-ink, var(--ink));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    0 0 0 2px var(--sumi-card, var(--cream-hi));
+  font: 700 9px/1 var(--font-mono);
+  pointer-events: none;
+}
+
+.pf-chip-face .pf-remote {
+  left: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  font-size: 8px;
+}
+
 /* Nobody in the box: a dashed ring round the harness a new agent would run. */
 .pf-new .pf-disc {
   background: transparent;
