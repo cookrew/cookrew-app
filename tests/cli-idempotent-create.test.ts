@@ -96,7 +96,7 @@ describe('cookrew list — the cards you are not wired to are counted, and --can
     const out = cmdList(request('list', [], 'atlas'), deps)
     expect(out).not.toContain('UI · P1 Setup')
     expect(out).toMatch(/2 more cards on this canvas are not wired to you/)
-    expect(out).toContain('cookrew list --canvas')
+    expect(out).toContain('cookrew list --workspace')
   })
 
   it('--canvas lists every card with who it is wired to', () => {
