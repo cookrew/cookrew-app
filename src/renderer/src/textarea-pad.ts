@@ -123,11 +123,20 @@ export function muteXtermFieldSends(term: unknown): boolean {
 
 type Listener = (ev: Event) => void
 
-/** The slice of a DOM node the field needs; a test can fake it. */
+/**
+ * The slice of a DOM node the field needs; a test can fake it.
+ *
+ * Phase is passed as `{ capture }`, never a bare boolean: Node 22's EventTarget
+ * (the one CI's tests run on) does not remove a listener whose capture was
+ * given as `true`, so a detach there left every capture listener in place.
+ */
 export interface ListenTarget {
-  addEventListener(type: string, listener: Listener, capture?: boolean): void
-  removeEventListener(type: string, listener: Listener, capture?: boolean): void
+  addEventListener(type: string, listener: Listener, options?: { capture?: boolean }): void
+  removeEventListener(type: string, listener: Listener, options?: { capture?: boolean }): void
 }
+
+const CAPTURE = { capture: true } as const
+const BUBBLE = { capture: false } as const
 
 /** The slice of xterm's textarea the field needs. */
 export interface PadTarget extends ListenTarget {
@@ -236,10 +245,10 @@ export function attachPhoneField(
     ['compositionend', onCompositionEnd],
     ['keydown', onKeyDown]
   ]
-  for (const [type, fn] of onContainer) container.addEventListener(type, fn, true)
+  for (const [type, fn] of onContainer) container.addEventListener(type, fn, CAPTURE)
   // Bubble: after xterm's handlers, which write the field for these.
-  container.addEventListener('contextmenu', rebase, false)
-  container.addEventListener('paste', rebase, false)
+  container.addEventListener('contextmenu', rebase, BUBBLE)
+  container.addEventListener('paste', rebase, BUBBLE)
   textarea.addEventListener('blur', onBlur)
   textarea.addEventListener('focus', tidy)
   tidy()
@@ -257,9 +266,9 @@ export function attachPhoneField(
     detach() {
       for (const cancel of pending) cancel()
       pending.clear()
-      for (const [type, fn] of onContainer) container.removeEventListener(type, fn, true)
-      container.removeEventListener('contextmenu', rebase, false)
-      container.removeEventListener('paste', rebase, false)
+      for (const [type, fn] of onContainer) container.removeEventListener(type, fn, CAPTURE)
+      container.removeEventListener('contextmenu', rebase, BUBBLE)
+      container.removeEventListener('paste', rebase, BUBBLE)
       textarea.removeEventListener('blur', onBlur)
       textarea.removeEventListener('focus', tidy)
     }
