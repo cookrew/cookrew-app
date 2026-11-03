@@ -22,7 +22,7 @@ export function ExtrasToggle({ shown, speaking, onToggle }: { shown: boolean; sp
     <button
       type="button"
       className={`cr-btn sm cr-prompt-more${shown ? ' open' : ''}${heard ? ' speaking' : ''}`}
-      title={shown ? 'Hide attach and spoken replies' : heard ? 'Show attach and spoken replies (spoken replies are on)' : 'Show attach and spoken replies'}
+      title={shown ? 'Hide the tools' : heard ? 'Show the tools: attach, spoken replies (on), the agent\'s keys' : 'Show the tools: attach, spoken replies, the agent\'s keys'}
       aria-label="More tools"
       aria-expanded={shown}
       onMouseDown={keepFocus}

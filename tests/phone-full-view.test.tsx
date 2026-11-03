@@ -90,11 +90,12 @@ describe('the box on a phone', () => {
     expect(html).not.toContain('placeholder="Prompt Lark')
   }, 20_000)
 
-  it('folds the agent\'s keys behind ⌨ while the agent is not asking', async () => {
+  // 2026-11-03, later: the keys fold behind the ^ with attach and 🔊; ⌨ is gone.
+  it('folds the agent\'s keys with the other tools, behind the one ^', async () => {
     const html = await draw()
-    expect(html).toContain('aria-label="Agent keys"')
-    expect(html).toContain('aria-expanded="false"')
-    expect(html).toMatch(/class="cr-prompt to-agent[^"]* keys-folded/)
+    expect(html).not.toContain('aria-label="Agent keys"')
+    expect(html).toMatch(/aria-label="More tools"/)
+    expect(html.indexOf('cr-prompt-more')).toBeLessThan(html.indexOf('term-key'))
   })
 
   it('puts Send on the first row and caps the chips so the second never wraps', () => {
@@ -104,7 +105,7 @@ describe('the box on a phone', () => {
     expect(phone).toMatch(/\.cr-prompt-to\s*\{[^}]*max-width: 38%/)
     // The model takes what the name leaves, up to its own width: grown from 0, it never wraps the row.
     expect(phone).toMatch(/\.cr-tune-menu\s*\{[^}]*flex: 1 1 0;[^}]*max-width: max-content/)
-    // Folded, the keys go; the row goes too unless the ^ shows the extras on it.
-    expect(phone).toMatch(/\.cr-prompt\.keys-folded \.voice-keys,\s*body\.cookrew-mobile \.cr-prompt\.keys-folded \.voice-bar\.keys-only\s*\{\s*display: none;/)
+    // No ⌨ fold of its own any more: the ^ takes the keys away with the rest.
+    expect(phone).not.toContain('keys-folded')
   })
 })

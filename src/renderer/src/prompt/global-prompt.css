@@ -183,28 +183,37 @@
   border-top: 0;
 }
 
-/* THE EXTRAS (PromptExtras.tsx; owner, 2026-11-03): attach and 🔊 are drawn
-   flat, in the mic's shape beside them. The tray's 30 px squares are the
-   phone's keys row (styles.css), never this line's. */
+/* THE TOOLS (PromptExtras.tsx; owner, 2026-11-03): attach, 🔊 and the agent's
+   keys sit behind the one ^, at every width: the keys are drawn whenever the
+   tray is (styles.css hides .voice-keys on a wide screen elsewhere). A phone
+   lays them out flat in its tools row (below). */
+.cr-prompt .voice-keys {
+  display: flex;
+  align-items: center;
+}
+
+/* On a wide screen every tool is drawn flat, in the mic's shape beside them,
+   the keys too: their 30 px squares (styles.css) are the phone's. */
 @media (min-width: 701px) {
-  .cr-prompt .voice-bar .cr-btn:not(.term-key) {
+  .cr-prompt .voice-bar .cr-btn,
+  .cr-prompt .voice-bar .voice-keys .cr-btn.term-key {
     min-width: 0;
+    min-height: 0;
+    width: auto;
     height: auto;
     padding: 3px 8px;
     font-size: 8.5px;
   }
 
-  .cr-prompt .voice-bar .cr-btn:not(.term-key) .cr-icon {
+  .cr-prompt .voice-bar .cr-btn .cr-icon {
     width: 12px;
     height: 12px;
   }
-}
 
-/* Only the agent's keys in the tray, where the keys are not drawn (a wide
-   screen with a mouse): no tray, so no empty gap before the mic. */
-@media (min-width: 701px) and (not (pointer: coarse)) {
-  .cr-prompt .voice-bar.keys-only {
-    display: none;
+  /* ESC, the one word among the icons: a line as tall as an icon. */
+  .cr-prompt .voice-bar .voice-keys .cr-btn.term-key:not(.term-key-icon) {
+    font: 600 10px/12px var(--font-mono);
+    letter-spacing: 0.04em;
   }
 }
 
@@ -263,11 +272,6 @@
   cursor: progress;
 }
 
-/* The agent's keys behind one button: a phone's (below); a wider screen keeps them in line. */
-.cr-prompt-keys {
-  display: none;
-}
-
 .cr-prompt-error {
   flex: 0 1 auto;
   max-width: 34%;
@@ -304,7 +308,7 @@
     font-size: 16px;
   }
 
-  /* Row 2 never wraps: the chips shorten before the mic and ⌨ move. */
+  /* Row 2 never wraps: the chips shorten before the tools move. */
   body.cookrew-mobile .cr-prompt-to {
     flex: 0 1 auto;
     min-width: 0;
@@ -316,10 +320,9 @@
   }
 
   /* The thumb's buttons: a real tap size. Send ends the words' row; the mic
-     and ⌨ end the chips' row. */
+     ends the chips' row. */
   body.cookrew-mobile .cr-prompt .cr-prompt-more,
   body.cookrew-mobile .cr-prompt .voice-mic,
-  body.cookrew-mobile .cr-prompt .cr-prompt-keys,
   body.cookrew-mobile .cr-prompt > button[type='submit'] {
     flex: none;
     min-width: 44px;
@@ -333,8 +336,7 @@
     min-width: 36px;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-prompt-more ~ .voice-mic,
-  body.cookrew-mobile .cr-prompt .cr-prompt-more ~ .cr-prompt-keys {
+  body.cookrew-mobile .cr-prompt .cr-prompt-more ~ .voice-mic {
     margin-left: 0;
   }
 
@@ -343,30 +345,8 @@
     margin-left: 0;
   }
 
-  body.cookrew-mobile .cr-prompt .voice-mic + .cr-prompt-keys {
-    margin-left: 0;
-  }
-
-  body.cookrew-mobile .cr-prompt .cr-prompt-keys {
-    display: inline-flex;
-    align-items: center;
-  }
-
-  body.cookrew-mobile .cr-prompt .cr-prompt-keys.open {
-    box-shadow: inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep));
-    color: var(--sumi-seal, var(--amber-deep));
-  }
-
-  /* The agent's keys open by themselves while it waits on you (GlobalPrompt · keysFolded).
-     The extras the ^ shows keep the row; with none, the row goes too. */
-  body.cookrew-mobile .cr-prompt.keys-folded .voice-keys,
-  body.cookrew-mobile .cr-prompt.keys-folded .voice-bar.keys-only {
-    display: none;
-  }
-
   body.cookrew-mobile .cr-prompt .cr-prompt-more .cr-icon,
   body.cookrew-mobile .cr-prompt .voice-mic .cr-icon,
-  body.cookrew-mobile .cr-prompt .cr-prompt-keys .cr-icon,
   body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
     width: 16px;
     height: 16px;
@@ -388,9 +368,9 @@
     padding: 0 6px;
   }
 
-  /* ONE ROW UNDER THE WORDS (owner, 2026-11-03): the chips, then ⌄ 🎤 ⌨ and
-     the agent's keys, every button one size, side by side; what does not fit
-     is swiped to. ⌨ hides the terminal keys (keys-folded, above). */
+  /* ONE ROW UNDER THE WORDS (owner, 2026-11-03): the chips, then ^ and what
+     it shows (attach, 🔊, the agent's keys), every button one size, side by
+     side; what does not fit is swiped to. The ^ folds them all. */
   body.cookrew-mobile .cr-prompt .cr-prompt-tools {
     display: flex;
     flex: 1 1 0;
@@ -407,7 +387,7 @@
     display: none;
   }
 
-  /* ⌄ 🎤 ⌨ first, then what they open. The first one's auto margin keeps the
+  /* ^ first, then what it opens. Its auto margin keeps the
      row at the right while it fits, and gives way (to 0) when it overflows, so
      its start is never cut off where a swipe cannot reach. */
   body.cookrew-mobile .cr-prompt .cr-prompt-tools > .cr-prompt-more {
@@ -417,11 +397,6 @@
 
   body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-mic {
     order: 2;
-    margin-left: 0;
-  }
-
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .cr-prompt-keys {
-    order: 3;
     margin-left: 0;
   }
 
@@ -439,7 +414,7 @@
   }
 
   /* 34px, not 40: beside two chips a 412px phone leaves the row ~235px, and the
-     six keys (← ↓ ↑ → 📋 ESC) must fit in it at once when ⌨ opens. */
+     six keys (← ↓ ↑ → 📋 ESC) must fit in it at once when the ^ opens. */
   body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn {
     flex: none;
     min-width: 0;
@@ -464,7 +439,7 @@
   /* The groups part by a little more than the buttons do. */
   body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar,
   body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key-lead,
-  body.cookrew-mobile .cr-prompt .voice-bar:not(.keys-only) .voice-keys > :first-child {
+  body.cookrew-mobile .cr-prompt .voice-bar .voice-keys > :first-child {
     margin-left: 4px;
   }
 }
@@ -561,7 +536,7 @@
   /* A phone box's second row holds the left chip, this, the mic and Send:
      the chip shows the model only, and gives up room first. */
   /* Grown from 0, the model never wraps the row: it takes what the name
-     (capped at 38%) and the mic and ⌨ leave, up to its own width — the whole
+     (capped at 38%) and the tools leave, up to its own width — the whole
      "claude-opus-5-5" beside a short name, an ellipsis beside a long one. */
   .cr-prompt .cr-tune-menu {
     flex: 1 1 0;
@@ -676,7 +651,7 @@
    (zoom/zoom.css), the pets' bed (pets/stage-floor.ts reads the pill's top).
 
    At rest the pill is ONE row: the left chip (@agent or ＋ harness), the
-   words, 🎤, Send. The model chip and the tools (⌄ ⌨ and the keys) float as
+   words, 🎤, Send. The model chip and the tools (^ and what it shows) float as
    a row ABOVE it while the box has focus, the agent waits on you, the ear
    listens or the extras are open — the pill grows upward, so the row typed in
    never moves. Sous's word and an error stand on top of it all. */
@@ -811,16 +786,16 @@
   }
 
   /* The tray, while it is wanted. */
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open)) .cr-prompt-tools {
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-tools {
     display: flex;
   }
 
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open)) .cr-tune-menu,
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open)) .cr-prompt-new:has(> .cr-prompt-tune) {
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-tune-menu,
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-new:has(> .cr-prompt-tune) {
     display: inline-flex;
   }
 
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open))::before {
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open))::before {
     display: block;
   }
 }

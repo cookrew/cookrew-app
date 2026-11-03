@@ -12,8 +12,6 @@ export type CrIconName =
   | 'collapse'
   | 'close'
   | 'mic'
-  /** The agent's keys (arrows, paste, Esc), folded behind one button on a phone. */
-  | 'keyboard'
   | 'speaker'
   | 'send'
   | 'attach'
@@ -141,12 +139,6 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="6" y="1.9" width="4" height="7" rx="2" />
       <path d="M3.7 7.6 a4.3 4.3 0 0 0 8.6 0" />
       <path d="M8 11.9 V13.9" strokeLinecap="square" />
-    </g>
-  ),
-  keyboard: (
-    <g {...STROKE}>
-      <rect x="1.6" y="4" width="12.8" height="8.4" rx="1.2" />
-      <path d="M4 6.6 H4.6 M6.6 6.6 H7.2 M9 6.6 H9.6 M11.4 6.6 H12 M5 9.8 H11" strokeLinecap="square" />
     </g>
   ),
   speaker: (

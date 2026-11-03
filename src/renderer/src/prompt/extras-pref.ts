@@ -1,7 +1,7 @@
 /**
- * THE BOX'S EXTRA TOOLS, SHOWN OR FOLDED (owner, 2026-11-03): attach and the
- * spoken-replies toggle sit in the prompt box for an agent AND for a new one,
- * behind a ^ that shows or hides them. The pick sticks. Until one is made a
+ * THE BOX'S TOOLS, SHOWN OR FOLDED (owner, 2026-11-03): attach, the
+ * spoken-replies toggle and, with an agent in the box, its keys (arrows,
+ * paste, Esc) sit behind one ^ that shows or hides them all. The pick sticks. Until one is made a
  * desktop shows them (they were always there) and a phone folds them: there
  * they take a row of their own, and the phone's height is the scarce thing.
  */
@@ -44,4 +44,13 @@ export function rememberExtras(shown: boolean): void {
   } catch {
     // private mode: not remembered
   }
+}
+
+/**
+ * Whether the tools show: a tap on the ^ while the agent waits stands until
+ * the waiting ends (pick); else the saved pick, or the agent waiting on you,
+ * which opens them by itself (its keys are for answering it).
+ */
+export function toolsOpen(pick: boolean | null, saved: boolean, waitingOnYou: boolean): boolean {
+  return pick ?? (saved || waitingOnYou)
 }

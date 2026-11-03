@@ -179,10 +179,11 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
 }
 
 /**
- * The tray of the prompt box's tools (prompt/GlobalPrompt.tsx): the extras it
- * is handed (attach, spoken replies: prompt/PromptExtras.tsx) and, with an
- * agent in the box, the keys a touch keyboard lacks. A wide screen draws the
- * tray in line; a phone gives it a row of its own (global-prompt.css).
+ * The tray of the prompt box's tools (prompt/GlobalPrompt.tsx), drawn while
+ * its ^ shows them: the extras it is handed (attach, spoken replies:
+ * prompt/PromptExtras.tsx) and, with an agent in the box, its keys (arrows,
+ * paste, Esc). A wide screen draws the tray in line; a phone puts it on the
+ * tools row (global-prompt.css).
  */
 export function VoiceBar({
   terminalId,
@@ -193,7 +194,7 @@ export function VoiceBar({
   children?: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className={`voice-bar nodrag${children ? '' : ' keys-only'}`}>
+    <div className="voice-bar nodrag">
       {children}
       {terminalId && <TermKeys terminalId={terminalId} />}
     </div>

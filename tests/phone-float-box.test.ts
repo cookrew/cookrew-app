@@ -35,7 +35,8 @@ describe('one row at rest, the tray above it when needed', () => {
   })
 
   it('shows them above the words while focused, waited on, listening or with the extras open', () => {
-    for (const why of [':focus-within', '.listening', '.to-agent:not(.keys-folded)', ':has(.cr-prompt-more.open)']) expect(phone).toContain(why)
+    // Waited on: the ^ opens by itself then (extras-pref.ts · toolsOpen), so :has(.open) covers it.
+    for (const why of [':focus-within', '.listening', ':has(.cr-prompt-more.open)']) expect(phone).toContain(why)
   })
 
   it('keeps the words row last, so the row typed in never moves', () => {
