@@ -40,6 +40,7 @@ import { useRemoteKeyboard } from './useRemoteKeyboard'
 import { FramePainter } from './frame-painter'
 import { createInputPump } from './input-pump'
 import { RemoteKeyBar } from './RemoteKeyBar'
+import { LONG_PRESS_MS, stillHolding, type HoldStart } from './touch-select'
 import { readClipboardText, writeClipboardLater, writeClipboardText } from './clipboard'
 
 /** A touch that moved less than this (view px), and let go sooner than TAP_MS, is a tap. */
@@ -423,12 +424,14 @@ export function MobileBrowserFrame({
       tapStart.current = null
       return
     }
+    if (e.touches.length === 1) selectedThisTouch.current = false
     const touch = e.touches.length === 1 ? e.touches[0] : null
     tapStart.current = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null
   }
   const onTouchEnd = (e: React.TouchEvent): void => {
     const start = tapStart.current
     tapStart.current = null
+    if (selectedThisTouch.current) return // a selection, not a tap on a field
     if (!interactive || desktopInput || !start || e.touches.length > 0 || e.changedTouches.length !== 1) return
     const touch = e.changedTouches[0]
     if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > TAP_SLOP_PX || Date.now() - start.at > TAP_MS) return
@@ -456,11 +459,45 @@ export function MobileBrowserFrame({
   pump.retarget(sendFrameInput)
   useEffect(() => () => pump.cancel(), [pump])
 
+  // PRESS AND HOLD SELECTS (touch-select.ts): the held finger becomes a mouse
+  // that double-pressed, so the word is selected and a drag extends it.
+  const holdStart = useRef<HoldStart | null>(null)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const selecting = useRef<{ pointerId: number; last: { x: number; y: number } } | null>(null)
+  /** This touch became a selection: its lift is not a tap (no keyboard raised). */
+  const selectedThisTouch = useRef(false)
+  const stopHold = (): void => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    holdTimer.current = null
+    holdStart.current = null
+  }
+  useEffect(() => () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+  }, [])
+  const startSelecting = (): void => {
+    const start = holdStart.current
+    stopHold()
+    const gesture = touchGesture.current
+    const contact = gesture.contacts[0]
+    if (!start || gesture.contacts.length !== 1 || !contact || contact.pointerId !== start.pointerId) return
+    touchGesture.current = emptyTouchGesture()
+    sendFrameInput({ t: 'touchcancel' })
+    const point = { x: contact.x, y: contact.y }
+    selecting.current = { pointerId: start.pointerId, last: point }
+    selectedThisTouch.current = true
+    sendFrameInput(pointerMsg('down', point, 2))
+    if (typeof navigator.vibrate === 'function') navigator.vibrate(12)
+  }
+
   // If freshness disappears mid-gesture, release every remote contact before
   // input is disabled so Chromium is never left with a stuck mouse or touch.
   useEffect(() => {
     if (interactive) return
     pump.cancel()
+    stopHold()
+    const held = selecting.current
+    selecting.current = null
+    if (held) sendFrameInput(pointerMsg('up', held.last, 2))
     const touches = touchGesture.current
     const touchRelease = releaseTouchGesture(touches)
     touchGesture.current = emptyTouchGesture()
@@ -512,6 +549,13 @@ export function MobileBrowserFrame({
       touchGesture.current = update.state
       e.currentTarget.setPointerCapture(e.pointerId)
       sendFrameInput(update.message)
+      // One finger on a web page may become a selection; a second is a pinch.
+      // A device's screen (a use card) keeps its own touch.
+      if (update.state.contacts.length === 1 && stream.deviceStatus === null) {
+        stopHold()
+        holdStart.current = { pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY }
+        holdTimer.current = setTimeout(startSelecting, LONG_PRESS_MS)
+      } else stopHold()
       return
     }
 
@@ -534,6 +578,15 @@ export function MobileBrowserFrame({
   }
   const onPointerMove = (e: React.PointerEvent): void => {
     if (!interactive) return
+    const held = selecting.current
+    if (held && held.pointerId === e.pointerId) {
+      const point = framePoint(e)
+      if (!point) return
+      held.last = point
+      pump.move(moveMsg(point, 1))
+      return
+    }
+    if (holdStart.current && !stillHolding(holdStart.current, e.pointerId, e.clientX, e.clientY)) stopHold()
     if (touchGesture.current.contacts.some((contact) => contact.pointerId === e.pointerId)) {
       const point = touchPoint(e)
       if (!point) return
@@ -553,6 +606,15 @@ export function MobileBrowserFrame({
     pump.move(moveMsg(point, dragging ? e.buttons : 0, modsOf(e)))
   }
   const onPointerUp = (e: React.PointerEvent): void => {
+    if (holdStart.current?.pointerId === e.pointerId) stopHold()
+    const held = selecting.current
+    if (held && held.pointerId === e.pointerId) {
+      selecting.current = null
+      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+      pump.flush()
+      sendFrameInput(pointerMsg('up', framePoint(e) ?? held.last, 2))
+      return
+    }
     const contact = touchGesture.current.contacts.find((point) => point.pointerId === e.pointerId)
     if (contact) {
       const point = touchPoint(e) ?? contact

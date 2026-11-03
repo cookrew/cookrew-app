@@ -247,6 +247,32 @@ describe.skipIf(!enabled)('phone fields, paste and copy through the port viewer,
       send({ t: 'tap', x: 300, y: 400 })
       await waitFor(() => (lastOf('fields') as Fields | undefined)?.focus.editable === false)
 
+      // PRESS AND HOLD SELECTS, in phone mode: what the phone sends after
+      // LONG_PRESS_MS — the touch withdrawn, a double press, a drag, a release.
+      onMessage({ data: { t: 'viewport-claim', width: 390, height: 700, mobile: true } })
+      await waitFor(() => (lastOf('frame')?.meta as { mobile?: boolean } | undefined)?.mobile === true)
+      await settle(400)
+      await evaluate('getSelection().removeAllRanges()')
+      send({ t: 'touchstart', x: 30, y: 250 })
+      await settle(450)
+      send({ t: 'touchcancel' })
+      send({ t: 'down', x: 30, y: 250, count: 2 })
+      await settle()
+      const word = String(await evaluate('getSelection().toString()'))
+      // One move per frame, as the phone's input pump sends them.
+      // Across the words themselves (the paragraph ends near x 140; past it,
+      // over empty page, Chrome pins a word selection back to its anchor).
+      for (let x = 40; x <= 130; x += 15) {
+        send({ t: 'move', x, y: 250, buttons: 1 })
+        await settle(20)
+      }
+      send({ t: 'up', x: 130, y: 250, count: 2 })
+      await settle()
+      const dragged = String(await evaluate('getSelection().toString()'))
+      expect(word.trim().length).toBeGreaterThan(0)
+      expect(dragged.length).toBeGreaterThan(word.length)
+      expect(await evaluate('document.activeElement === document.body || document.activeElement === null')).toBe(true)
+
       // PASTE, PLAIN FIELD: the page leaves it alone, so it is typed in.
       send({ t: 'tap', x: 60, y: 35 })
       await settle()
