@@ -93,3 +93,20 @@ describe("the new agent's chip", () => {
     expect(html).toContain('cr-prompt-menu-family cr-model-section')
   })
 })
+
+describe('a tall list rising over the dock', () => {
+  it('stops under the top bar (QA 2026-11-04: the first row sat under it)', async () => {
+    const { riseOver, riseStyle } = await import('../src/renderer/src/prompt/rise-anchor')
+    const at = riseOver({ left: 10, top: 950 }, 1000, 0, 6, 49)
+    expect(at).toEqual({ left: 10, bottom: 56, top: 49 })
+    expect(riseStyle(at, 12).maxHeight).toBe('calc(100vh - 117px - var(--kb-inset, 0px))')
+    // no bar: as before
+    expect(riseOver({ left: 10, top: 950 }, 1000, 0)).toEqual({ left: 10, bottom: 56 })
+  })
+
+  it('marks the row it stands on, for the list to open there', () => {
+    const html = renderToStaticMarkup(<ModelList rows={modelRows(CHOICES)} current="group/smart" onPick={() => {}} />)
+    expect(html.match(/data-current="true"/g)).toHaveLength(1)
+    expect(html).toMatch(/data-current="true"[^>]*>group\/smart</)
+  })
+})
