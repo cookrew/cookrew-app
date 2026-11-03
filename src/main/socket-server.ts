@@ -19,6 +19,7 @@ import {
 } from '../shared/model'
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import { noteWriteReply, parseNoteWrite } from './note-write-guard'
 import { reachByName, type ReachKind } from './ask-reach'
 import { adoptedNoteAnswer, findClaimedNote } from './note-adopt'
 import type { PairingHandout } from '../shared/account-v2'
@@ -1224,12 +1225,17 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return [`[${lines.length} lines total]`, ...numbered].join('\n')
     }
     case 'write': {
-      const note = reachCard(request, deps, rest[0], 'note', 'note write') as NoteNodeData
+      // Refused before the card is reached: a write with no content (or a
+      // stray flag) must neither clobber the note nor lay a cable to it.
+      const write = parseNoteWrite(rest, request.flags)
+      const note = reachCard(request, deps, write.name, 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
-      deps.store.writeNote(note.id, rest[1] ?? '')
+      const written = deps.store.writeNote(note.id, write.content)
       // Writing puts words in: agent → note.
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
-      return 'OK'
+      // The name follows the first line, so a write can rename the note —
+      // the silent part of the old clobber. Say so.
+      return noteWriteReply(note.name, written?.name ?? note.name)
     }
     case 'edit': {
       const note = reachCard(request, deps, rest[0], 'note', 'note edit') as NoteNodeData
@@ -1859,7 +1865,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew note create ["content"] [--new]       Create a connected note on the canvas (a first line naming
                                                 a note already there wires you to it instead; --new forces a second)
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
-  cookrew note write "Name" "content"           Replace a note's content
+  cookrew note write "Name" "content"           Replace a note's content ("" clears it)
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a note wired to you (destructive)
   cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its environment
