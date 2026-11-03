@@ -1,5 +1,7 @@
 /* ---- THE FACE IS THE SEND KEY (prompt/PromptFace.tsx; owner, 2026-11-04) ----
-   Design: docs/avatar-send-design-2026-11-04.html. Every colour is a palette
+   Design: docs/avatar-send-design-2026-11-04.html. Since 2026-11-04 (later):
+   an agent in the box keeps it open, its face the chip at the left; Send is
+   the box's own button again, right of the mic. Every colour is a palette
    token (--sumi-*: ink, its night, root), so the three themes follow:
    the primary (--sumi-gold: amber in ink, reverse video in root) fills a face
    ready to send, and its ink turns to the colour drawn on it. */
@@ -241,17 +243,98 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
   pointer-events: none;
 }
 
-/* ── open: the face is the box's send key (the form's one submit) ── */
-.cr-prompt > button.pf-face.pf-face.pf-face[type='submit'] {
-  width: 38px;
-  min-width: 38px;
-  height: 38px;
-  margin: 0;
-  padding: 0;
-  border: 0;
+/* ── open: the face is the chip at the box's left (owner, 2026-11-04) ──
+   The agent's face and name (flown here from the bar's end, face-flip.ts), or a
+   new agent's dashed ring round its harness. A tap on the agent's chooses who. */
+.pf-chip-face {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
-  background: none;
+  background: var(--sumi-paper, var(--cream));
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  /* The fly's scale is measured from the corner (face-flip.ts · flipFrom). */
+  transform-origin: 0 0;
+  vertical-align: middle;
+}
+
+.pf-chip-face .ink-avatar {
+  width: 90%;
+  height: 90%;
+}
+
+.pf-chip-face.pf-new {
+  margin-right: 6px;
+  background: transparent;
   box-shadow: none;
+  border: 1.5px dashed var(--sumi-muted, var(--muted));
+}
+
+.pf-chip-face.pf-new .ink-own > g:not(.ink-glyph) {
+  display: none;
+}
+
+.pf-chip-face.pf-new .ink-avatar {
+  --zv-ink: var(--sumi-ink-soft, var(--muted));
+  width: 76%;
+  height: 76%;
+}
+
+.cr-prompt-to.pf-chip {
+  gap: 0;
+  padding: 2px 0 2px 2px;
+}
+
+.cr-prompt-to.pf-chip > button.pf-chip-who {
+  /* The name gives way (ends in …) so the × stays on the chip. */
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  padding: 0 2px 0 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--sumi-ink, var(--ink));
+  font: 600 13px/1.2 var(--sumi-serif, var(--font-serif));
+  letter-spacing: 0;
+}
+
+.cr-prompt-to.pf-chip > button.pf-chip-who b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+
+.cr-prompt-to.pf-chip > button.pf-chip-who:focus-visible {
+  outline: 2px solid var(--sumi-ink, var(--ink));
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+@media (max-width: 700px) {
+  body .cr-prompt-to.pf-chip {
+    padding-left: 2px;
+  }
+
+  body .pf-chip-face {
+    width: 28px;
+    height: 28px;
+  }
+
+  body .cr-prompt-new > .cr-prompt-harness .pf-chip-face.pf-new {
+    width: 22px;
+    height: 22px;
+    margin: -3px 6px 0 -6px;
+  }
 }
 
 /* ── alone in the corner: a browser's or a note's full view, whose bar is at the top ── */
@@ -281,7 +364,8 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
 .pf-who {
   position: absolute;
   z-index: 5;
-  right: 0;
+  /* Over the chip it opens from. */
+  left: 0;
   bottom: calc(100% + 8px);
   width: 300px;
   max-height: min(60vh, 440px);

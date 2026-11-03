@@ -5,7 +5,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { facePlace, promptFold } from '../src/renderer/src/prompt/prompt-fold'
+import { boxFold, facePlace, promptFold } from '../src/renderer/src/prompt/prompt-fold'
+import { clipFrom, flipFrom } from '../src/renderer/src/prompt/face-flip'
 import { enterOpensBox, keepsBoxOpen, pressOnCanvas } from '../src/renderer/src/prompt/enter-opens'
 import { latestUser, pickerRows } from '../src/renderer/src/prompt/item-user'
 import { boxTargetId } from '../src/renderer/src/prompt/prompt-target'
@@ -21,6 +22,35 @@ describe('where the folded face stands', () => {
     expect(facePlace(null)).toBe('bar')
     expect(facePlace('item')).toBe('corner')
     expect(facePlace('agent')).toBe('none')
+  })
+})
+
+describe('an agent selected opens the box (owner, 2026-11-04)', () => {
+  it('nobody in the box: it folds at the bar, open only when opened', () => {
+    expect(boxFold({ place: 'bar', slot: true, pinned: false, open: false })).toEqual({ canFold: true, folded: true, overBar: false })
+    expect(boxFold({ place: 'bar', slot: true, pinned: false, open: true })).toEqual({ canFold: true, folded: false, overBar: true })
+  })
+  it('an agent in the box: open at once, in the bar\'s place, and no fold', () => {
+    expect(boxFold({ place: 'bar', slot: true, pinned: true, open: false })).toEqual({ canFold: false, folded: false, overBar: true })
+    expect(boxFold({ place: 'corner', slot: false, pinned: true, open: false })).toEqual({ canFold: false, folded: false, overBar: false })
+  })
+  it('no bar mounted (the board) and an agent full view never fold', () => {
+    expect(boxFold({ place: 'bar', slot: false, pinned: false, open: false }).folded).toBe(false)
+    expect(boxFold({ place: 'none', slot: true, pinned: false, open: false }).folded).toBe(false)
+  })
+})
+
+describe('the face flies to the left', () => {
+  it('is drawn from the folded face: corner to corner, scaled by width', () => {
+    expect(flipFrom({ left: 310, top: 740, width: 34, height: 34 }, { left: 16, top: 744, width: 28, height: 28 })).toEqual({ dx: 294, dy: -4, s: 34 / 28 })
+  })
+  it('the box opens leftward from the folded face, never cutting it', () => {
+    expect(clipFrom({ left: 312, top: 0, width: 34, height: 34 }, { left: 8, top: 0, width: 344, height: 48 })).toBe(300)
+    expect(clipFrom({ left: 2000, top: 0, width: 34, height: 34 }, { left: 8, top: 0, width: 344, height: 48 })).toBe(344)
+    expect(clipFrom({ left: 0, top: 0, width: 34, height: 34 }, { left: 8, top: 0, width: 344, height: 48 })).toBe(0)
+  })
+  it('does nothing without a size to fly from or to', () => {
+    expect(flipFrom({ left: 0, top: 0, width: 0, height: 0 }, { left: 16, top: 744, width: 28, height: 28 })).toBeNull()
   })
 })
 
@@ -139,6 +169,12 @@ describe('the CSS contract', () => {
   })
   it("a phone's card drops its own reply box (the face is the one place to type)", () => {
     expect(face).toMatch(/body\.cookrew-mobile:is\(\.cr-prompt-folded, \.cr-prompt-open\) \.zv-reply:not\(\.cr-pet-card-ask\) \{[^}]*display: none !important/)
+  })
+  it('the chip is the face and Send is the box\'s own button again', () => {
+    const box = read('prompt', 'GlobalPrompt.tsx')
+    expect(box).toMatch(/className="cr-prompt-to pf-chip"/)
+    expect(box).toMatch(/<button type="submit" className="cr-btn sm primary"[^>]*aria-label="Send"/)
+    expect(face).toMatch(/\.pf-chip-face \{[^}]*transform-origin: 0 0/)
   })
   it('the zoom bar keeps the slot and asks the box before Esc steps out', () => {
     const zoom = read('zoom', 'ZoomView.tsx')

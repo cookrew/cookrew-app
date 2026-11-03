@@ -14,6 +14,25 @@ import { useSyncExternalStore } from 'react'
  * show as a dot on its face.
  */
 
+/**
+ * AN AGENT SELECTED OPENS THE BOX (owner, 2026-11-04: "in any view, an agent
+ * selected puts the prompt box on the bar at once"). With an agent in the box
+ * (a card open, its full view, a pick, an item's latest user) the box is open
+ * and takes the bar's place; folding is for nobody (a new agent's ＋ face).
+ */
+export function boxFold({ place, slot, pinned, open }: { place: FacePlace; slot: boolean; pinned: boolean; open: boolean }): {
+  /** The box may fold here and now. */
+  canFold: boolean
+  folded: boolean
+  /** The open box stands where the zoom's bar is: the bar steps aside. */
+  overBar: boolean
+} {
+  const placed = place === 'corner' || (place === 'bar' && slot)
+  const canFold = placed && !pinned
+  const folded = canFold && !open
+  return { canFold, folded, overBar: place === 'bar' && slot && !folded }
+}
+
 /** Where the folded face stands for a view; 'none' where the box never folds. */
 export type FacePlace = 'bar' | 'corner' | 'none'
 

@@ -35,6 +35,7 @@ export type FaceMode = 'folded' | 'empty' | 'ready'
 const HOLD_MS = 450
 
 export interface PromptFaceProps {
+  buttonRef?: React.Ref<HTMLButtonElement>
   agent: FaceAgent | null
   /** The harness a new agent runs: its mark, when nobody is in the box. */
   harness: string
@@ -70,6 +71,7 @@ const Arrow = (): React.JSX.Element => (
 )
 
 export function PromptFace({
+  buttonRef,
   agent,
   harness,
   mode,
@@ -116,6 +118,7 @@ export function PromptFace({
     .join(' ')
   return (
     <button
+      ref={buttonRef}
       type={type}
       className={classes}
       aria-label={label}
