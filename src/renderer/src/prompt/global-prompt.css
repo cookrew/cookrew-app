@@ -396,7 +396,7 @@
     flex: 1 1 0;
     flex-wrap: nowrap;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
     overflow-x: auto;
     overscroll-behavior-x: contain;
@@ -430,7 +430,7 @@
     flex: none;
     display: flex;
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 4px;
     overflow: visible;
   }
 
@@ -438,10 +438,12 @@
     display: contents;
   }
 
+  /* 34px, not 40: beside two chips a 412px phone leaves the row ~235px, and the
+     six keys (← ↓ ↑ → 📋 ESC) must fit in it at once when ⌨ opens. */
   body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn {
     flex: none;
     min-width: 0;
-    width: 40px;
+    width: 34px;
     height: 36px;
     padding: 0;
     justify-content: center;
@@ -463,7 +465,7 @@
   body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar,
   body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key-lead,
   body.cookrew-mobile .cr-prompt .voice-bar:not(.keys-only) .voice-keys > :first-child {
-    margin-left: 6px;
+    margin-left: 4px;
   }
 }
 

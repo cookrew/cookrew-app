@@ -17,7 +17,7 @@ const rule = (selector: string): string => {
 describe("the phone's tools: one row after the chips", () => {
   it('holds ⌄, the extras and keys, 🎤 and ⌨ in one wrapper that is invisible on a wide screen', () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
-    const at = box.indexOf('<span className="cr-prompt-tools">')
+    const at = box.indexOf('<span className="cr-prompt-tools"')
     expect(at).toBeGreaterThan(-1)
     const end = box.indexOf('</span>', box.indexOf('cr-prompt-keys', at))
     const inside = box.slice(at, end)
@@ -46,7 +46,7 @@ describe("the phone's tools: one row after the chips", () => {
   it('draws every button in it at one size', () => {
     const one = rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn')
     expect(one).toContain('flex: none;')
-    expect(one).toContain('width: 40px;')
+    expect(one).toContain('width: 34px;')
     expect(one).toContain('height: 36px;')
     expect(css).toMatch(/body\.cookrew-mobile \.cr-prompt \.voice-keys \{\s*display: contents;/)
   })
@@ -58,5 +58,19 @@ describe("the phone's tools: one row after the chips", () => {
   it('draws the four arrows as one icon turned four ways', () => {
     const bar = read('VoiceBar.tsx')
     for (const way of ['left', 'down', 'up', 'right']) expect(bar).toContain(`icon: 'arrow-${way}'`)
+  })
+
+  // Owner, 2026-11-03: "the arrows and ESC seem gone". Beside two chips the row
+  // showed ⌄ 🎤 ⌨ ← ↓ and the rest was past the edge, with nothing saying so.
+  it('swipes the row to the keys whenever they open', () => {
+    const box = read('prompt', 'GlobalPrompt.tsx')
+    expect(box).toContain('<span className="cr-prompt-tools" ref={toolsRef}>')
+    expect(box).toMatch(/if \(row && to && !keysFolded\) row\.scrollLeft = row\.scrollWidth\s*\}, \[keysFolded, to\?\.id\]\)/)
+  })
+
+  it('fits all six keys in the ~235px two chips leave on a 412px phone', () => {
+    const width = Number(rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn').match(/width: (\d+)px;/)?.[1])
+    const gap = Number(rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar').match(/gap: (\d+)px;/)?.[1] ?? 4)
+    expect(6 * width + 5 * gap + 2 * gap).toBeLessThanOrEqual(235)
   })
 })
