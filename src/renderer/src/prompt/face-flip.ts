@@ -20,10 +20,11 @@ export function flipFrom(from: Box, to: Box): { dx: number; dy: number; s: numbe
   return { dx: from.left - to.left, dy: from.top - to.top, s: from.width / to.width }
 }
 
-const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
+export const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
 export const FLY_MS = 360
 
-const still = (): boolean => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+/** The reader asked for less motion: opacity only, nothing scales or clips. */
+export const still = (): boolean => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /** How far in from the box's left its clip starts: at the folded face's left, so the face is never cut. */
 export function clipFrom(from: Box, box: Box): number {

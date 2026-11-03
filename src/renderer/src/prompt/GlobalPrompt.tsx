@@ -36,8 +36,10 @@ import { keyboardCoverNow, riseOver, type RiseAnchor, topBarBottom } from './ris
 import { useCrewContext } from '../stage/crew-rows'
 import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
-import { boxFold, facePlace, promptFold, usePromptOpen } from './prompt-fold'
+import { boxFold, facePlace, promptFold, usePromptOpen, type FacePlace } from './prompt-fold'
 import { flyFace, popFace, type Box } from './face-flip'
+import { fliesBack, flyBack, snapshotBox, stageGhost, type FoldSnapshot } from './fold-flight'
+import { SentToast, pressKey, useSentToast } from './SentToast'
 import { useFaceSlot } from './face-slot'
 import { enterOpensBox, keepsBoxOpen, pressOnCanvas } from './enter-opens'
 import { latestUser, pickerRows } from './item-user'
@@ -388,11 +390,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) wireRefs(made.id, refs)
+    toast.leave(`New ${harness} agent`, shownWords(raw))
     setText('')
   }
 
+  // SEND (SentToast.tsx): the key dips as the words go, and they leave as a toast over the box.
+  const sendRef = useRef<HTMLButtonElement>(null)
+  const toast = useSentToast()
   const submit = (): void => {
     setError(null)
+    pressKey(sendRef.current)
     // "@Other …" goes to Other, whoever the box is carrying.
     const mention = mentionTarget(text, agents)
     if (mention && mention.id !== to?.id) {
@@ -400,6 +407,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       const out = said(mention.text)
       sendToAgent(mention.id, out.words)
       wireRefs(mention.id, out.refs)
+      toast.leave(agents.find((a) => a.id === mention.id)?.name ?? '', shownWords(mention.text))
       // Enter took whatever sat in Other's line along with the words.
       endLine(mention.id)
       setText('')
@@ -412,6 +420,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       if (!out.words.trim() && to.id !== fullAgentId) return
       submitLine(to.id, out.words.trim() ? out.words : '')
       wireRefs(to.id, out.refs)
+      toast.leave(to.name, shownWords(mention ? mention.text : text))
       return
     }
     const prompt = text.trim()
@@ -571,19 +580,42 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const lastFace = useRef<Box | null>(null)
   const chipFace = useRef<HTMLSpanElement>(null)
   const chipName = useRef<HTMLElement>(null)
-  const seen = useRef<{ folded: boolean; id: string | null }>({ folded, id: to?.id ?? null })
+  // The face's place is there: the bar's slot mounted (the zoom mounts after the dock), or the corner.
+  const placed = place === 'corner' || (place === 'bar' && faceSlot !== null)
+  const seen = useRef<{ folded: boolean; id: string | null; place: FacePlace; placed: boolean }>({ folded, id: to?.id ?? null, place, placed })
   useLayoutEffect(() => {
     if (folded && faceRef.current) lastFace.current = faceRef.current.getBoundingClientRect()
   })
+  // Read in the render that changes the fold, while the page still shows the
+  // last one (its commit unmounts the face, or hides the box): the folded face
+  // where it is now, mid-flight or at rest, for the open; the open box and its
+  // chip's face for the fold's flight back (fold-flight.ts).
+  const foldFrom = useRef<FoldSnapshot | null>(null)
+  if (!folded && seen.current.folded && faceRef.current) lastFace.current = faceRef.current.getBoundingClientRect()
+  if (fliesBack(seen.current, { folded, place, placed })) foldFrom.current = snapshotBox(formRef.current, chipFace.current)
+  /** The fold's flight under way: stopped by a re-open, or the box going away. */
+  const landing = useRef<(() => void) | null>(null)
+  useEffect(() => () => landing.current?.(), [])
   useLayoutEffect(() => {
     const was = seen.current
     const id = to?.id ?? null
-    seen.current = { folded, id }
+    seen.current = { folded, id, place, placed }
+    const snap = foldFrom.current
+    foldFrom.current = null
+    landing.current?.()
+    landing.current = null
+    if (folded) {
+      const face = faceRef.current
+      if (!snap || !face || !fliesBack(was, { folded, place, placed })) return
+      if (formRef.current) stageGhost(snap, formRef.current)
+      landing.current = flyBack(face, snap, { dot: face.querySelector<HTMLElement>('.pf-dot'), bar: face.closest<HTMLElement>('.zv-controls'), page: document.body })
+      return
+    }
     const el = chipFace.current
-    if (folded || !el) return
+    if (!el) return
     if (was.folded && lastFace.current) flyFace(el, lastFace.current, { box: formRef.current, rest: [chipName.current] })
     else if (was.id !== id) popFace(el)
-  }, [folded, to?.id])
+  }, [folded, to?.id, place, placed])
   /** The box can send: words, or a bare Enter where the agent's terminal is in sight. */
   const canSend = text.trim() !== '' || (to !== null && to.id === fullAgentId)
   const hold = dictation.ear
@@ -603,7 +635,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       draft={text !== ''}
       listening={dictation.listening}
       label={to ? `Reply to ${to.name}` : `New ${harness} agent`}
-      title={to ? `Reply to ${to.name} · click, or press Enter` : `A new ${harness} agent · click, or press Enter`}
+      tip={
+        <>
+          {to ? 'Reply to' : 'New'} <b>{to ? to.name : harness}</b>
+          {to ? '' : ' agent'} · click, or press <kbd>⏎</kbd>
+        </>
+      }
       onTap={() => {
         if (dictation.listening) dictation.stop()
         openBox()
@@ -878,10 +915,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         </button>
       )}
       {/* Send, right of the mic (owner, 2026-11-04). */}
-      <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || !canSend}>
+      <button type="submit" className="cr-btn sm primary" ref={sendRef} title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || !canSend}>
         <CrIcon name="send" />
       </button>
       {picker}
+      <SentToast sent={toast.sent} />
       {attach.attaching && (
         <span className="cr-prompt-note" role="status">
           attaching…
