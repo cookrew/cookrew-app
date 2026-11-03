@@ -410,13 +410,6 @@
   color: var(--fv-ink);
 }
 .zv-fullview .lod-overlay .look-log .ctx-block.active { background: transparent; }
-.zv-fullview .lod-overlay .look-log .ctx-block-head {
-  opacity: 1;
-  font: 10px/1 var(--fv-mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--fv-muted);
-}
 .zv-fullview .lod-overlay .look-log .ctx-block-prompt {
   margin: 0;
   padding: 0;

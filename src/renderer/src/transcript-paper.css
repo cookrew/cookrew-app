@@ -225,8 +225,10 @@
 
 /* A PLAIN CONVERSATION (owner, 2026-11-01): the turn the reader is at wears
    no gold edge and no tint, and an exchange has no checkpoint heading over it
-   (its "T1 …" pill repeated the prompt word for word). The checkpoints stay
-   with LOG and LIVE, and their rail (TerminalOverlay · look !== 'chat'). */
+   (its "T1 …" pill repeated the prompt word for word). Of the checkpoint rail
+   only its tag stays, naming the turn in view while scrolling, with ROLE /
+   FORK / REWIND (CheckpointTimeline · tagOnly); LIVE keeps the whole rail.
+   LOG reads the same way (THE LOG LOOK, below). */
 .lod-overlay .look-chat .ctx-block.active {
   background: transparent;
   box-shadow: none;
@@ -738,8 +740,33 @@
   font: 13px/1.5 var(--font-mono);
 }
 
+/* Plain reading, as the chat (owner, 2026-11-03): no gold edge or tint on the
+   turn the reader is at, no "T1 …" heading over an exchange, and the record's
+   own thin scrollbar in place of the rail, which only LIVE keeps. */
+.lod-overlay .look-log .ctx-block.active {
+  background: transparent;
+  box-shadow: none;
+}
+
 .lod-overlay .look-log .ctx-block-head {
-  opacity: 0.7;
+  display: none;
+}
+
+.lod-overlay .look-log > .ctx-transcript {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-log > .ctx-transcript::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-log > .ctx-transcript::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
 }
 
 .lod-overlay .look-log .ctx-block-prompt {
