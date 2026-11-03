@@ -14,6 +14,8 @@ import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { setTheme, useTheme } from './color-scheme'
+import { canFullscreen, toggleFullscreen, useFullscreen } from './fullscreen'
+import { isRemoteMode } from './api'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -44,6 +46,9 @@ export function HeaderMore({
   const [open, setOpen] = useState(false)
   const sounds = useSoundsOn()
   const theme = useTheme()
+  const fullscreen = useFullscreen()
+  // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
+  const offerFullscreen = isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document)
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
@@ -154,6 +159,18 @@ export function HeaderMore({
             <CrIcon name="terminal" />
             <span className="cr-more-label">{theme === 'root' ? 'Theme: Root' : 'Theme: Ink'}</span>
           </button>
+          {offerFullscreen && (
+            <button
+              type="button"
+              className={`cr-more-item${fullscreen ? ' on' : ''}`}
+              aria-pressed={fullscreen}
+              title="Hide the browser's address bar and the phone's status and navigation bars"
+              onClick={() => void toggleFullscreen(document)}
+            >
+              <CrIcon name="fullscreen" />
+              <span className="cr-more-label">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
+            </button>
+          )}
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
             <span className="cr-more-label">Refresh</span>

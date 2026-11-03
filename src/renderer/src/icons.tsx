@@ -46,6 +46,8 @@ export type CrIconName =
   | 'more'
   /** The route's device step: this desktop. */
   | 'device'
+  /** The phone's Full screen row in ⋯: four corners of the screen. */
+  | 'fullscreen'
 
 const STROKE = {
   fill: 'none',
@@ -243,6 +245,14 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="6.8" y="6.9" width="2.4" height="2.4" />
       <rect x="11.4" y="6.9" width="2.4" height="2.4" />
     </g>
+  ),
+  fullscreen: (
+    <path
+      {...STROKE}
+      strokeWidth={1.8}
+      strokeLinecap="square"
+      d="M2.6 6 V2.6 H6 M10 2.6 H13.4 V6 M13.4 10 V13.4 H10 M6 13.4 H2.6 V10"
+    />
   ),
   device: (
     <g {...STROKE}>
