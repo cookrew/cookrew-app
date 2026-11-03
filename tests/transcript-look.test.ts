@@ -70,12 +70,13 @@ describe('transcript-paper.css', () => {
 })
 
 
-describe('the terminal keeps clear of the checkpoint rail', () => {
-  it('reserves the rail in every look, so looks and the rail never resize the pane', async () => {
+describe('the terminal takes the whole width', () => {
+  // The rail it kept clear of is gone from LIVE (owner, 2026-11-03), and in
+  // CHAT and LOG the rail is only a tag over a hidden terminal: the room is
+  // given back in every look, so the looks still never resize the pane.
+  it('reserves no rail column in any look', async () => {
     const { readFileSync } = await import('node:fs')
     const css = readFileSync(new URL('../src/renderer/src/transcript-paper.css', import.meta.url), 'utf8')
-    expect(css).toMatch(/\.lod-overlay \.popout-main\.look-records \.ctx-live,\s*\.lod-overlay \.popout-main\.look-live \.ctx-live \{\s*right: 30px;/)
-    const rail = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
-    expect(rail.slice(rail.indexOf('.cr-ckpt-rail {'), rail.indexOf('.cr-ckpt-rail {') + 160)).toContain('width: 30px')
+    expect(css).not.toMatch(/\.ctx-live \{\s*right: 30px;/)
   })
 })

@@ -206,8 +206,8 @@ describe('the bar offers the places, the card fills them', () => {
     expect(menu).toContain('closeZoomMenu()')
   })
 
-  it('shows the "YOU ❯" line no more; a picked checkpoint keeps its row, the way back to live', () => {
-    expect(overlay).toContain("{selectedIndex !== null && look === 'live' && (\n        <div className=\"popout-ask\"")
+  it('shows the "YOU ❯" line no more, nor a picked checkpoint’s row (owner 2026-11-03)', () => {
+    expect(overlay).not.toContain('className="popout-ask"')
     expect(overlay).not.toContain('(selectedIndex !== null || activity?.prompt) && (')
   })
 
