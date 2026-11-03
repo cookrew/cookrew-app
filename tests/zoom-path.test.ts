@@ -80,8 +80,9 @@ describe('clicks', () => {
     expect(agentClick('agents', 2, true)).toEqual({ kind: 'set', v: 3 })
     expect(agentClick('agents', 2, false)).toEqual({ kind: 'switch', v: 2 })
     expect(agentClick('agents', 3, false)).toEqual({ kind: 'refocus-full' })
-    expect(agentClick('items', 0, false)).toEqual({ kind: 'jump-full' })
-    expect(agentClick('items', 1, true)).toEqual({ kind: 'jump-full' })
+    // From the artifacts an agent opens its card first (owner, 2026-11-03).
+    expect(agentClick('items', 0, false)).toEqual({ kind: 'jump-card' })
+    expect(agentClick('items', 1, true)).toEqual({ kind: 'jump-card' })
   })
 
   it('a browser or note: the thumbs from the device, its full view deeper in, across from the agent side', () => {
