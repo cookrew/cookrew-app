@@ -4,6 +4,9 @@
 // side, the row swiped sideways for the rest, and ⌨ hiding the terminal keys.
 // 2026-11-04 (phone evals): the swiped row hid its last keys past the edge; it
 // wraps them now, every button 32px (tests/phone-prompt-fit.test.ts).
+// 2026-11-04, later (the cut "Tray tools"): every button is the tray's pill,
+// 28px drawn and 32px to the thumb (tests/tray-tools.test.tsx), the keys
+// Esc ← ↓ ↑ → paste after a hairline.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -44,19 +47,22 @@ describe("the phone's tools: one row after the chips", () => {
     expect(css).not.toMatch(/\.cr-prompt \.voice-bar \{[^}]*flex-basis: 100%/)
   })
 
-  it("puts the ^ first, then the extras and the keys, in the DOM's order", () => {
+  // 2026-11-04, later: the wide row puts the ^ after the keys (chip · model ·
+  // words · 📎 🔊 · keys · ^ · mic · Send), so the DOM does; the phone's row
+  // keeps it first by its order.
+  it('puts the ^ first in the phone\'s row, then the extras and the keys', () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
     const at = box.indexOf('<span className="cr-prompt-tools"')
-    expect(box.indexOf('<ExtrasToggle', at)).toBeLessThan(box.indexOf('<VoiceBar', at))
-    expect(css).not.toMatch(/\.cr-prompt-tools > [^{]*\{[^}]*order:/)
+    expect(box.indexOf('</VoiceBar>', at)).toBeLessThan(box.indexOf('<ExtrasToggle', at))
+    expect(rule('  body .cr-prompt .cr-prompt-tools > .cr-prompt-more')).toContain('order: -1;')
   })
 
-  it('draws every button in it at one size', () => {
-    const one = rule('  body .cr-prompt .cr-prompt-tools .cr-btn')
+  it('draws every button in it as one pill', () => {
+    const one = rule('.cr-app .cr-prompt .cr-btn.cr-tray')
     expect(one).toContain('flex: none;')
-    // Flat, as the desktop's (owner, 2026-11-03), and a thumb's size (2026-11-04).
-    expect(one).toContain('width: 32px;')
-    expect(one).toContain('height: 32px;')
+    expect(one).toContain('height: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    for (const cls of ['cr-prompt-more', 'voice-attach', 'voice-speak']) expect(read('prompt', 'PromptExtras.tsx')).toContain(`cr-btn sm cr-tray ${cls}`)
+    expect(read('VoiceBar.tsx')).toContain('cr-btn sm cr-tray term-key')
     expect(css).toMatch(/body \.cr-prompt \.voice-keys \{\s*display: flex;\s*flex: none;/)
   })
 
@@ -79,14 +85,16 @@ describe("the phone's tools: one row after the chips", () => {
     expect(box).not.toContain('scrollLeft')
   })
 
-  // A 412px phone: the dock's 8px sides and the pill's 4px leave 388px; the tune
-  // chip ("smart ▾", 61px measured by the phone evals) and its 4px gap, 323.
-  it('fits ^, 📎, 🔊 and the six keys on one line beside the tune chip at 412px', () => {
-    const width = Number(rule('  body .cr-prompt .cr-prompt-tools .cr-btn').match(/width: (\d+)px;/)?.[1])
-    const gap = Number(rule('  body .cr-prompt .cr-prompt-tools').match(/gap: \d+px (\d+)px;/)?.[1])
+  // A 360px phone: the dock's 8px sides and the pill's 4px leave 336px. The
+  // keys wrap as one group: a hairline, Esc (a word, ~42px) and five icons.
+  it('fits the keys on a line of their own at 360px', () => {
+    const phone = css.slice(css.indexOf("THE TRAY'S TOOLS, ONE FORM"))
+    const h = Number(phone.match(/--tray-h: 28px;/) ? 28 : NaN)
+    const reach = Number(phone.match(/--tray-reach: (\d+)px;/)?.[1])
+    const width = h + 2 * reach
     const keyGap = Number(rule('  body .cr-prompt .voice-keys').match(/gap: (\d+)px;/)?.[1])
-    const part = Number(css.match(/body \.cr-prompt \.voice-bar \.cr-btn\.term-key-lead \{\s*margin-left: (\d+)px;/)?.[1])
-    // ^ 📎 🔊 [keys]: three gaps; six keys: five; three groups part (📎, the keys, paste).
-    expect(9 * width + 3 * gap + 5 * keyGap + 3 * part).toBeLessThanOrEqual(388 - 61 - 4)
+    const part = Number(css.match(/body \.cr-prompt \.voice-bar \.voice-keys \{\s*margin-left: (\d+)px;/)?.[1])
+    // the hairline (1) and six keys: six gaps; the group parts from the rest.
+    expect(1 + 42 + 5 * width + 6 * keyGap + part).toBeLessThanOrEqual(336)
   })
 })

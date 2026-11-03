@@ -96,7 +96,8 @@ describe('the box on a phone', () => {
     const html = await draw()
     expect(html).not.toContain('aria-label="Agent keys"')
     expect(html).toMatch(/aria-label="More tools"/)
-    expect(html.indexOf('cr-prompt-more')).toBeLessThan(html.indexOf('term-key'))
+    // The ^ after the keys in the markup (the wide row's order); a phone draws it first (tray-tools.test.tsx).
+    expect(html.lastIndexOf('term-key')).toBeLessThan(html.indexOf('cr-prompt-more'))
   })
 
   it('puts Send on the first row and caps the chips so the second never wraps', () => {

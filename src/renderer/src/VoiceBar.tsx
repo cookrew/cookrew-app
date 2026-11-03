@@ -26,31 +26,25 @@ interface TermKey {
   /** Drawn instead of the label: paste has no glyph of its own, and a font
    *  draws ← → smaller than ↓ ↑ (owner's phone, 2026-11-03). */
   icon?: CrIconName
-  /** Opens a group of its own in the row (paste and Esc after the arrows). */
-  lead?: boolean
 }
 
 /**
  * Control keys the touch keyboard cannot send — plus PASTE, which is not a
  * key at all. The phone has no other door to the clipboard (iOS shows its
  * callout only on a long-pressed editable, and xterm's is hidden), and this
- * row is already where the thumb is. It sits between → and Escape by the
- * owner's placement.
+ * row is already where the thumb is.
+ *
+ * Esc ← ↓ ↑ → paste, in the design's one pill form (owner, 2026-11-04; the
+ * cut "Tray tools"): global-prompt.css · THE TRAY'S TOOLS, ONE FORM. No
+ * numbers: a waiting agent's menu is answered from the choice box.
  */
 const TERM_KEYS: TermKey[] = [
+  { label: 'Esc', title: 'Escape', repeat: false, action: { kind: 'seq', seq: '\x1b' } },
   { label: '←', title: 'Arrow left', repeat: true, action: { kind: 'seq', seq: '\x1b[D' }, icon: 'arrow-left' },
   { label: '↓', title: 'Arrow down', repeat: true, action: { kind: 'seq', seq: '\x1b[B' }, icon: 'arrow-down' },
   { label: '↑', title: 'Arrow up', repeat: true, action: { kind: 'seq', seq: '\x1b[A' }, icon: 'arrow-up' },
   { label: '→', title: 'Arrow right', repeat: true, action: { kind: 'seq', seq: '\x1b[C' }, icon: 'arrow-right' },
-  {
-    label: 'PASTE',
-    title: 'Paste from the clipboard',
-    repeat: false,
-    action: { kind: 'paste' },
-    icon: 'clipboard',
-    lead: true
-  },
-  { label: 'ESC', title: 'Escape', repeat: false, action: { kind: 'seq', seq: '\x1b' } }
+  { label: 'PASTE', title: 'Paste from the clipboard', repeat: false, action: { kind: 'paste' }, icon: 'clipboard' }
 ]
 
 /** Hold-to-repeat cadence: a pause before the first repeat, then ~14/s. */
@@ -146,7 +140,7 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
         <button
           key={key.title}
           type="button"
-          className={`cr-btn sm term-key${key.icon ? ' term-key-icon' : ''}${key.lead ? ' term-key-lead' : ''}`}
+          className={`cr-btn sm cr-tray term-key${key.icon ? ' term-key-icon' : ''}`}
           tabIndex={-1}
           title={key.title}
           aria-label={key.title}

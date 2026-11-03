@@ -953,9 +953,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       {/* The tools after the chips: a row above the words on a phone, the
           keys wrapping onto a line of their own when it is short (owner,
           2026-11-03: "the arrows and ESC seem gone" from a swiped row;
-          global-prompt.css · .cr-prompt-tools); in line on a wide screen. */}
+          global-prompt.css · .cr-prompt-tools); in line on a wide screen.
+          One pill each, the ^ after the keys (owner, 2026-11-04: chip · model
+          · words · 📎 🔊 · keys · ^ · mic · Send; a phone keeps the ^ first,
+          global-prompt.css · THE TRAY'S TOOLS, ONE FORM). */}
       <span className="cr-prompt-tools">
-      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       {browse.input}
       {toolsShown && (
         <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null}>
@@ -970,6 +972,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           />
         </VoiceBar>
       )}
+      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       </span>
       {/* Beside Send, out of the tools: on a phone the box's one row at rest is
           the chip, the words, 🎤 and Send (global-prompt.css · THE BOX FLOATS). */}

@@ -4,8 +4,9 @@ import { CrIcon } from '../icons'
 
 /**
  * THE BOX'S EXTRA TOOLS (owner, 2026-11-03): 📎 attach and 🔊 spoken replies,
- * for an agent and for a new one alike, drawn flat like the mic beside them,
- * and behind a ^ that shows or hides them (extras-pref.ts).
+ * for an agent and for a new one alike, behind a ^ that shows or hides them
+ * (extras-pref.ts). Every one of them, the ^ too, wears the tray's one pill
+ * (owner, 2026-11-04: global-prompt.css · THE TRAY'S TOOLS, ONE FORM).
  *
  * Attach puts the files' paths into the DRAFT, as a pasted or dropped
  * screenshot does (use-prompt-attach.ts): the draft is the agent's own line,
@@ -21,7 +22,7 @@ export function ExtrasToggle({ shown, speaking, onToggle }: { shown: boolean; sp
   return (
     <button
       type="button"
-      className={`cr-btn sm cr-prompt-more${shown ? ' open' : ''}${heard ? ' speaking' : ''}`}
+      className={`cr-btn sm cr-tray cr-prompt-more${shown ? ' open' : ''}${heard ? ' speaking' : ''}`}
       title={shown ? 'Hide the tools' : heard ? 'Show the tools: attach, spoken replies (on), the agent\'s keys' : 'Show the tools: attach, spoken replies, the agent\'s keys'}
       aria-label="More tools"
       aria-expanded={shown}
@@ -81,7 +82,7 @@ export function PromptExtras({ canAttach, attaching, onPick, onBrowse, speaking,
       {canAttach && (
         <button
           type="button"
-          className={`cr-btn sm voice-attach${attaching ? ' busy' : ''}`}
+          className={`cr-btn sm cr-tray voice-attach${attaching ? ' busy' : ''}`}
           title="Attach files: their paths go into the prompt"
           aria-label="Attach files"
           disabled={attaching}
@@ -93,7 +94,7 @@ export function PromptExtras({ canAttach, attaching, onPick, onBrowse, speaking,
       )}
       <button
         type="button"
-        className={`cr-btn sm voice-speak${speaking ? ' on' : ''}${speaking && reading ? ' reading' : ''}`}
+        className={`cr-btn sm cr-tray voice-speak${speaking ? ' on' : ''}${speaking && reading ? ' reading' : ''}`}
         title={speaking && reading ? 'Reading the reply: tap to stop reading' : speaking ? 'Spoken replies on: tap to turn off' : 'Speak replies aloud'}
         aria-label="Speak replies aloud"
         aria-pressed={speaking}
