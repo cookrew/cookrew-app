@@ -363,6 +363,7 @@ import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 import { createPromptImageReader, imageRefOf } from './prompt-image'
+import { adoptPictures } from './picture-adopt'
 import { servedSessionKey } from './storage-gc-served'
 import { sweepStorageInWorker } from './storage-gc-worker'
 
@@ -6524,6 +6525,7 @@ app.whenReady().then(() => {
     // prompt box's model-picked name goes through, herdr's chrome included.
     renameCard,
     autoNameTerminal,
+    adoptPictures: (text) => adoptPictures(text, defaultAttachmentsDir()),
     // The cable between the asking pane and the agent it asks lights twice.
     signal: (moment) => void cableSignals.emit(moment),
     forkTerminal,
