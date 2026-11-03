@@ -32,6 +32,7 @@ import { recordLineageIds } from './lineage-spill'
 import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
+import { multiInstanceDefault } from './launch-defaults'
 import type { RecoverableSnapshot } from './recoverable'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
@@ -98,7 +99,7 @@ interface HydratedSession {
   saveTimer: NodeJS.Timeout | null
 }
 
-const MULTI_INSTANCE_DEFAULT = process.env.COOKREW_MULTI_INSTANCE === '1'
+const MULTI_INSTANCE_DEFAULT = multiInstanceDefault()
 
 /** A node found by a cross-workspace lookup, with its owning workspace. */
 export interface WorkspaceNodeHit {

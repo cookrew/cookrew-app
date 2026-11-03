@@ -78,7 +78,7 @@ describe('pathsForFiles', () => {
   it('a file with no path of its own (a screenshot dragged from its thumbnail) is saved from its bytes', async () => {
     const api = {
       attachFiles: vi.fn(async () => ['/tmp/a.png', '']),
-      saveAttachmentBytes: vi.fn(async (name: string) => `/Users/me/.cookrew/attachments/${name}`)
+      saveAttachmentBytes: vi.fn(async (name: string, _bytes: Uint8Array) => `/Users/me/.cookrew/attachments/${name}`)
     }
     expect(await pathsForFiles([file('a.png'), file('Screenshot 1.png')], api)).toEqual([
       '/tmp/a.png',
@@ -104,7 +104,7 @@ describe('a screenshot dragged from its floating thumbnail', () => {
     const shot = file('Screenshot 2026-11-01 at 8.07.47 PM.png')
     const api = {
       attachFiles: vi.fn(async () => [TEMP]),
-      saveAttachmentBytes: vi.fn(async (name: string) => `/Users/me/.cookrew/attachments/${name}`)
+      saveAttachmentBytes: vi.fn(async (name: string, _bytes: Uint8Array) => `/Users/me/.cookrew/attachments/${name}`)
     }
     expect(await pathsForFiles([shot], api)).toEqual(['/Users/me/.cookrew/attachments/Screenshot 2026-11-01 at 8.07.47 PM.png'])
     expect(api.saveAttachmentBytes.mock.calls[0][1]).toEqual(new Uint8Array([9]))
@@ -121,7 +121,7 @@ describe('a screenshot dragged from its floating thumbnail', () => {
 describe('saveClipboardImages', () => {
   it('names each pasted image by its type and the moment, in order', async () => {
     const image = (type: string) => ({ type, arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2]).buffer) })
-    const saveAttachmentBytes = vi.fn(async (name: string) => `/a/${name}`)
+    const saveAttachmentBytes = vi.fn(async (name: string, _bytes: Uint8Array) => `/a/${name}`)
     expect(await saveClipboardImages([image('image/png')], { saveAttachmentBytes }, '7')).toEqual(['/a/pasted-image-7.png'])
     expect(await saveClipboardImages([image('image/png'), image('image/jpeg')], { saveAttachmentBytes }, '7')).toEqual([
       '/a/pasted-image-7-1.png',

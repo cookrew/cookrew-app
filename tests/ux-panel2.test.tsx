@@ -53,7 +53,9 @@ describe('a typed Setup line, watched', () => {
     const sub = { line: online.setup.addSubscriptionLine, lastLine: 'Finish signing in in your browser', oauth: true, url: 'https://claude.ai/oauth/authorize?x=1' }
     const menu = renderToStaticMarkup(<AddMenu setup={online.setup} onRun={() => {}} defaultOpen running={sub} />)
     expect(menu).toContain('sign in — open the page')
-    expect((menu.match(/disabled=""/g) ?? []).length).toBe(1)
+    // Auto group is disabled on its own account here (the fixture sends no auto-group script), so it is left out of the count.
+    const disabledItems = [...menu.matchAll(/<button[^>]*disabled=""[^>]*>/g)].filter((m) => !m[0].includes('data-item="auto-group"'))
+    expect(disabledItems).toHaveLength(1)
     const rows = renderToStaticMarkup(<Harnesses rows={routeFixture('offline').harnesses} onRun={() => {}} running={{ line: 'codex login', lastLine: 'Opening your browser…', oauth: true, url: 'https://auth.openai.com/oauth/authorize?x=1' }} />)
     expect(rows).toContain('sign in — open the page')
   })

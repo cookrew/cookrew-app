@@ -22,6 +22,7 @@
  *
  * Pure: zoom-frame.ts reads it, tests pin it.
  */
+import { stripFaces } from '../pets/pet-dock'
 
 export interface Spot {
   x: number
@@ -68,7 +69,8 @@ const PHONE = {
   line: { x: 60, y: -14 },
   transcript: { x: 15, y: 55 },
   cell: { left: 73, bottom: 55, pitch: 114, w: 104, h: 68 },
-  dock: { left: 43, y: 28, pitch: 16, size: 28, shown: 3, more: 66 }
+  /** The troop's strip (pets/pet-dock.ts · stripFaces): the first face's centre, the chip's after the last, 34 px on. */
+  dock: { left: 43, y: 28, pitch: 16, size: 28, more: 34 }
 } as const
 
 export function fullPoses(w: number, h: number, narrow: boolean): FullPoses {
@@ -88,10 +90,12 @@ export function fullPoses(w: number, h: number, narrow: boolean): FullPoses {
         const x = P.cell.left + P.cell.pitch * j
         return { x, y: h - P.cell.bottom, w: P.cell.w, h: P.cell.h, o: x + P.cell.w / 2 <= w ? 1 : 0 }
       },
-      dock: (k) =>
-        k < P.dock.shown
+      dock: (k, n) => {
+        const shown = Math.min(n, stripFaces('right', w))
+        return k < shown
           ? { x: P.dock.left + P.dock.pitch * k, y: P.dock.y, size: P.dock.size, o: 1 }
-          : { x: P.dock.left + P.dock.more, y: P.dock.y, size: P.dock.size, o: 0 }
+          : { x: P.dock.left + P.dock.pitch * (shown - 1) + P.dock.more, y: P.dock.y, size: P.dock.size, o: 0 }
+      }
     }
   }
   const D = DESK

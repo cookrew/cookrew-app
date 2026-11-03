@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
-import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripPage, type Box } from './pet-dock'
+import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripFaces, stripPage, type Box } from './pet-dock'
 import './pets.css'
 
 /**
@@ -179,7 +179,8 @@ export function PetTroop({
   const draft = useRef('')
 
   const strip = docked && window.innerWidth <= PHONE_PX
-  const paged = stripPage(members.length + more.length, members.length, page)
+  // The strip pages through everyone, as many a page as its row holds (stripFaces); floating, the troop keeps its few.
+  const paged = stripPage(members.length + more.length, strip ? Math.max(members.length, stripFaces(side, window.innerWidth)) : members.length, page)
   const shown = tucked ? members.slice(0, 1) : strip ? [...members, ...more].slice(paged.start, paged.end) : expanded ? [...members, ...more] : members
   const shownKey = shown.map((member) => member.id).join(' ')
   useEffect(() => {

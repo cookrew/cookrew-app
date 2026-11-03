@@ -8,8 +8,10 @@
  *   crew    — its agents in rows, the orchestrators on top (the app keeps no
  *             lead/member relation, so there is no tree to draw)
  *   thumbs  — its browsers and notes in a grid, the most shared first; the
- *             agents step up into a shelf above them, one row
+ *             agents step up into a shelf above them, one row in the
+ *             troop's form, a page at a time
  */
+import { stripPage } from '../pets/pet-dock'
 
 export interface Pos {
   x: number
@@ -208,10 +210,39 @@ export interface Thumbs {
   at: Record<string, Pos>
   /** The grid's row pitch in scene px: the view mounts only the rows on screen (ZoomView). */
   rowH: number
-  /** The shelf, one row: who stands on it in order, and where the ones that carry nothing start (shelfRow places them). */
-  shelf: { order: string[]; looseFrom: number }
+  /**
+   * The shelf, one row in the troop's form (shelfPage): who stands on it in
+   * order, its first face's x and its y, and how many faces a page holds.
+   */
+  shelf: { order: string[]; left: number; y: number; per: number }
+  /** Where the shelf's band is anchored: the workspace's label stands above it (zoom-frame.ts · paint). */
   shelfY: number
   box: Box
+}
+
+/** A thumbnail's width (zoom.css · .zv-ip > .zv-th, 168x108). */
+const THUMB_W = 168
+/** A face on the shelf, in scene px: zoom.css · .zv-av, 64px drawn at the shelf's 0.5. */
+export const SHELF_FACE = 32
+/**
+ * THE SHELF IS THE AGENTS' GROUP (owner, 2026-11-03: "the agents over the
+ * artifacts in the agents group's form"): each face lies over the one before
+ * it as the troop's do (pets.css · STACKED: 16 of a 28 px face seen), and the
+ * "+N" chip stands after the last, the troop's gap away.
+ */
+export const SHELF_STEP = Math.round((SHELF_FACE * 16) / 28)
+export const SHELF_MORE_GAP = 8
+/** The faces stand lower than the band's anchor, where their names stood: the label's counts above them stay clear. */
+const SHELF_DROP = 30
+
+/**
+ * How many faces a page of the shelf holds across `span` scene px: all of
+ * them when they fit, else as many as leave room for the "+N" chip (owner,
+ * 2026-11-03: "more agents a page, four is too few").
+ */
+export function shelfPer(count: number, span: number): number {
+  const fit = (room: number): number => Math.max(1, Math.floor((room - SHELF_FACE) / SHELF_STEP) + 1)
+  return count <= fit(span) ? Math.max(1, count) : fit(span - SHELF_MORE_GAP - SHELF_FACE)
 }
 
 export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[], narrow: boolean): Thumbs {
@@ -227,49 +258,43 @@ export function thumbsOf(items: readonly CrewItem[], agents: readonly CrewAgent[
     at[id] = { x: ((g % cols) - (inRow - 1) / 2) * dx, y: row * rowH }
   })
   const shelfY = -170
-  // The shelf: the agents that carry something, then a gap, then those that carry nothing.
+  // The shelf: the agents that carry something, then those that carry nothing,
+  // from the grid's left edge across its full width.
   const carrying = new Set(items.flatMap((i) => i.owners))
   const linked = agents.filter((a) => carrying.has(a.id))
   const loose = agents.filter((a) => !carrying.has(a.id))
+  const span = (cols - 1) * dx + THUMB_W
   const gridH = (rows - 1) * rowH
   return {
     order,
     at,
     rowH,
-    shelf: { order: [...linked, ...loose].map((a) => a.id), looseFrom: linked.length },
+    shelf: { order: [...linked, ...loose].map((a) => a.id), left: -span / 2 + SHELF_FACE / 2, y: shelfY + SHELF_DROP, per: shelfPer(agents.length, span) },
     shelfY,
-    // The box is the grid's: a long shelf scrolls sideways (zoom-frame.ts · shelfFrame), it never widens the view.
+    // The box is the grid's: a long shelf turns pages (shelfPage), it never widens the view.
     box: { w: narrow ? 400 : 820, h: gridH + 520, cy: (shelfY - 80 + gridH + 160) / 2 }
   }
 }
 
-/** A phone's name on the shelf is cut to fit this pitch (scene-words.ts · nameMax: zoom.css caps it at 112px, 87 at the shelf's 0.78). */
-export const SHELF_DX = 88
-/** A face's room on the shelf (zoom.css · .zv-av, 64px drawn at the shelf's 0.5, plus air), and the air between two names. */
-export const SHELF_FACE = 44
-export const SHELF_GAP = 20
-/** More air before the agents that carry nothing. */
-const SHELF_LOOSE_GAP = 36
+/** One page of the shelf: each shown face's x, and the "+N" chip (null when every face fits). */
+export interface ShelfPage {
+  x: Record<string, number>
+  more: { x: number; rest: number; last: boolean } | null
+}
 
 /**
- * THE SHELF IS ONE ROW (owner, 2026-11-02: the agents over the artifacts in a
- * single row that scrolls sideways; packed into 900px, 21 names ran into each
- * other). Each agent takes its own name's width as drawn on the shelf
- * (`width`, scene px), at least a face's, so no two names touch. The row is
- * centred on 0; `w` is its whole length.
+ * A PAGE OF THE SHELF, as the troop's strip turns one (pets/pet-dock.ts ·
+ * stripPage): the same row, the next `per` faces, the chip saying how many
+ * are still behind it, and "–" on the last page, back to the first. `page`
+ * counts taps on the chip and wraps.
  */
-export function shelfRow(shelf: Thumbs['shelf'], width: (id: string) => number): { x: Record<string, number>; slot: Record<string, number>; w: number } {
-  const slots = shelf.order.map((id, i) => ({
-    id,
-    w: Math.max(SHELF_FACE, width(id) || 0),
-    before: i === 0 ? 0 : SHELF_GAP + (i === shelf.looseFrom ? SHELF_LOOSE_GAP : 0)
-  }))
-  const total = slots.reduce((sum, k) => sum + k.before + k.w, 0)
-  const centres = slots.reduce<{ left: number; at: [string, number][] }>(
-    (acc, k) => ({ left: acc.left + k.before + k.w, at: [...acc.at, [k.id, acc.left + k.before + k.w / 2]] }),
-    { left: -total / 2, at: [] }
-  )
-  return { x: Object.fromEntries(centres.at), slot: Object.fromEntries(slots.map((k) => [k.id, k.w])), w: total }
+export function shelfPage(shelf: Thumbs['shelf'], page: number): ShelfPage {
+  const { start, end, rest, last } = stripPage(shelf.order.length, shelf.per, page)
+  const x: Record<string, number> = {}
+  shelf.order.slice(start, end).forEach((id, k) => (x[id] = shelf.left + k * SHELF_STEP))
+  if (shelf.order.length <= Math.max(1, shelf.per)) return { x, more: null }
+  const lastX = shelf.left + (end - start - 1) * SHELF_STEP
+  return { x, more: { x: lastX + SHELF_FACE + SHELF_MORE_GAP, rest, last } }
 }
 
 /** How far a mark's tile (its wash, zoom-frame.ts · SWS) reaches above its centre on the device. */

@@ -2,7 +2,7 @@
 // docs/brand-ink-2026-10-31/group-motion-pivot.html draws it.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { columnMiddle, dockedCount, dockedOrder, dockedSpot, LANE_WIDE, nearDock, PHONE_PX, sheetBox, sheetOf, SHEET_INSET, SNAP_PX, STRIP_PX } from '../src/renderer/src/pets/pet-dock'
+import { columnMiddle, dockedCount, dockedOrder, dockedSpot, LANE_WIDE, nearDock, PHONE_PX, sheetBox, sheetOf, SHEET_INSET, SNAP_PX, stripFaces, STRIP_PX } from '../src/renderer/src/pets/pet-dock'
 
 const full = { left: 0, top: 60, width: 1440, height: 780 }
 const lanes = { left: LANE_WIDE, right: LANE_WIDE }
@@ -110,11 +110,27 @@ describe('on a phone, a strip above the sheet', () => {
     expect(overlap({ ...right, ...row }, { ...left, ...row })).toBe(0)
   })
 
-  it('holds a few faces a side, the rest behind +N; beside a wide sheet, all of them', () => {
-    expect(dockedCount(8, 'right', 412)).toBe(4)
+  // Owner, 2026-11-03: "more agents a page, four is too few". The crew fills
+  // its row up to the tools (or the browsers' and notes' troop): 28 px faces,
+  // 16 px apart, with the grip and "+N" beside them.
+  it('fills the crew’s row and keeps a few browsers and notes, the rest behind +N; beside a wide sheet, all of them', () => {
+    expect(dockedCount(30, 'right', 412)).toBe(11)
+    expect(dockedCount(30, 'right', 375)).toBe(9)
+    expect(dockedCount(30, 'right', 360)).toBe(8)
+    expect(dockedCount(30, 'right', 320)).toBe(5)
     expect(dockedCount(8, 'left', 412)).toBe(3)
-    expect(dockedCount(8, 'right', 360)).toBe(3)
+    expect(dockedCount(8, 'left', 360)).toBe(2)
     expect(dockedCount(2, 'right', 412)).toBe(2)
-    expect(dockedCount(8, 'right', PHONE_PX + 1)).toBe(8)
+    expect(dockedCount(30, 'right', PHONE_PX + 1)).toBe(30)
+  })
+
+  it('stops the crew’s row before the tools in an agent’s full view (CHAT ✎+ ⊕+, 124 px)', () => {
+    for (const vw of [320, 360, 375, 412, 430]) {
+      const faces = stripFaces('right', vw)
+      // Head row: 8 px in from each side; the tools at its right end, ROW_GAP_PX before them.
+      const room = vw - 16 - 124 - 8
+      // A face's step of air is kept, for a wider label or a fallback font.
+      expect(14 + 6 + 28 + 16 * (faces - 1) + 6 + 28).toBeLessThanOrEqual(room - 16)
+    }
   })
 })

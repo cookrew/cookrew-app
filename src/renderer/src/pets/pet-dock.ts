@@ -37,12 +37,27 @@ export const SNAP_PX = 90
  * and one over its edge covered the transcript. At or below this width the
  * troops stand as rows in a strip between the head and the sheet, which steps
  * down by STRIP_PX (zoom/full-views.css · --fv-strip): the browsers and notes
- * from the left edge, the crew from the right, a few faces each, the rest
- * behind "+N" (stripFaces).
+ * from the left edge, a few, the crew from the right, as many as its row
+ * holds, the rest behind "+N" (stripFaces).
  */
 export const PHONE_PX = 700
 export const STRIP_PX = 44
-export const stripFaces = (side: Side, viewportWidth: number): number => (side === 'right' ? 4 : 3) - (viewportWidth < 380 ? 1 : 0)
+/**
+ * THE CREW FILLS ITS ROW (owner, 2026-11-03: "more agents a page, four is too
+ * few"). Its faces are stacked (pets.css · STACKED: 28 px, each 16 px past the
+ * one before), and the row keeps room for its grip, its "+N" chip and their
+ * gaps, and for what shares it: the tools in an agent's full view (rowSpot),
+ * the browsers' and notes' troop in an item's — about the same width.
+ */
+const STRIP_FACE = 28
+const STRIP_STEP = 16
+const STRIP_OWN = 14 + 6 + 6 + 28
+/** The tools (CHAT ✎+ ⊕+, 124 px), the row's insets and gap, and one face's step of slack for a wider label or font. */
+const STRIP_SHARED = 148 + STRIP_STEP
+export const stripFaces = (side: Side, viewportWidth: number): number =>
+  side === 'right'
+    ? Math.max(3, Math.floor((viewportWidth - STRIP_SHARED - STRIP_OWN - STRIP_FACE) / STRIP_STEP) + 1)
+    : 3 - (viewportWidth < 380 ? 1 : 0)
 /** How many faces an attached troop shows: all of them beside the sheet; on a phone, what its row in the strip holds. */
 export const dockedCount = (count: number, side: Side, viewportWidth: number): number =>
   viewportWidth <= PHONE_PX ? Math.min(count, stripFaces(side, viewportWidth)) : count

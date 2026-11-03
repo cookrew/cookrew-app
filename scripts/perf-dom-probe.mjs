@@ -111,15 +111,34 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
   // Chrome does not notice when this process dies — the vitest worker killed
   // on timeout never reaches kill(). The guard is a detached shell that does.
   const guard = guardChromeWithParent({ childPid: child.pid })
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
+  // A loaded CI runner (the whole suite in parallel) can take well past 15 s
+  // to bring DevTools up; returning a port nobody listens on only moved the
+  // failure to the caller's first fetch, as "fetch failed". Wait longer, stop
+  // at once if Chrome exits, and say which of the two happened.
+  const deadline = Date.now() + 60_000
+  let up = false
+  while (!up && Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`)
-      if (res.ok) break
+      up = (await fetch(`http://127.0.0.1:${port}/json/version`)).ok
     } catch {
       // not up yet
     }
-    await sleep(100)
+    if (!up) await sleep(100)
+  }
+  if (!up) {
+    const exited = child.exitCode !== null || child.signalCode !== null
+    child.kill('SIGKILL')
+    guard.stop()
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 3 })
+    } catch {
+      // best effort, as in kill(): a profile left in tmp is nothing
+    }
+    throw new Error(
+      exited
+        ? `Chrome exited (${child.exitCode ?? child.signalCode}) before DevTools came up on :${port}`
+        : `Chrome's DevTools did not come up on :${port} within 60 s`
+    )
   }
   return {
     port,
@@ -443,7 +462,7 @@ const BOARD_CLICK = (view) => `(() => {
 export async function waitForCanvas(page, timeoutMs = 150_000, settleMs = 2500) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node, .cr-stage-view').length").catch(() => 0)
+    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node, .cr-stage-view, .zv-root').length").catch(() => 0)
     if (cards > 0) {
       await sleep(settleMs) // thumbs, checkpoints and the first activity seed
       return cards

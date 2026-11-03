@@ -14,7 +14,8 @@
  *   the card    the same name, status and counts in the card's head at title
  *               (18) and caption; the card's own words through CSS custom
  *               properties (each stop's scale at rest, phone-type.css).
- *   the shelf   over the artifacts, the agents' names at caption.
+ *   the shelf   over the artifacts, the agents' names at caption as they
+ *               fade: the shelf is the troop's faces, no names.
  *   the label   the workspace's label at caption, at the crew, the card and the artifacts.
  *
  * The painter (zoom-frame.ts · paint) draws the words that move between
@@ -22,7 +23,7 @@
  * by the properties in `vars`. A desk keeps every factor at 1 and no
  * properties: its words are as zoom.css sets them.
  */
-import { COL, ROW, SHELF_DX } from './zoom-layout'
+import { COL, ROW } from './zoom-layout'
 
 /** The phone's type scale, on screen, in CSS px (phone-type.css mirrors it). */
 export const PHONE_TYPE = { caption: 11, control: 13, body: 16, title: 18, display: 22 } as const
@@ -77,11 +78,10 @@ export function sceneWords(s: RestScales, narrow: boolean): SceneWords {
   // The counts' line ends above the next row's face, a couple of px clear.
   const countsBottom = UNDER_FACE.nameTop + UNDER_FACE.toStatus * name + UNDER_FACE.toCounts * status + COUNTS.line * status
   const counts = countsBottom <= ROW - FACE_R - 2 / s.crew
-  // One width for a name wherever it stands: it must fit the crew's column and the shelf's.
+  // A name must fit the crew's column (the shelf shows faces only).
   const shelf = PHONE_TYPE.caption / (NAME.px * SHELF_NAME_S * s.thumbs)
   const crewMax = (pitch - NAME_GAP) / (s.crew * name)
-  const shelfMax = (SHELF_DX * s.thumbs - NAME_GAP) / (s.thumbs * SHELF_NAME_S * shelf)
-  const nameMax = Math.max(40, Math.min(180, crewMax, shelfMax))
+  const nameMax = Math.max(40, Math.min(180, crewMax))
   return {
     crew: { name, status, counts },
     card: { name: PHONE_TYPE.title / (NAME.px * s.card), status: PHONE_TYPE.caption / (STATUS.px * s.card) },
