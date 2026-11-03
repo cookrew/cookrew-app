@@ -50,6 +50,7 @@ import type { SousCommandInput, SousCommandResult } from './sous-control'
 import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
+import { staleBooleanFlagError } from './cli-flags'
 import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
@@ -305,6 +306,9 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
   // A lone - the client did not expand would reach the agent as its brief.
   const unread = stdinPlaceholderError(request)
   if (unread) throw new Error(unread)
+  // A valueless flag that arrives with a value swallowed one of the args.
+  const swallowed = staleBooleanFlagError(request)
+  if (swallowed) throw new Error(swallowed)
   switch (cmd) {
     case 'list':
       return cmdList(request, deps)
@@ -1914,6 +1918,7 @@ function cmdPreset(): string {
 export const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
 Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
+  (flags go anywhere; --new --no-wait --all --canvas --help --rotate --disabled never take a value)
   cookrew list                                  List connected agents, notes, and browsers
   cookrew list --workspace [<name>]             Every card in your workspace (or the one named)
   cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
@@ -1924,7 +1929,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
   cookrew ask "Agent" - <<'EOF'                 A lone - reads the brief from stdin, byte for byte: the shell
     brief with \`backticks\`, $(…), $VARS, !      runs nothing inside a QUOTED heredoc. Prefer it for any brief
-  EOF                                           with code in it (add --no-wait after the -)
+  EOF                                           with code in it (--no-wait may sit anywhere)
   cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
   cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
                                                 thinking | waiting (blocked on you) | replied
@@ -1977,6 +1982,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew team save ["Name"]                    (Orch) Snapshot the team (nodes, layout, turn histories)
   cookrew team fork [--name N] [--from "Team"]  (Orch) Fork the whole canvas (or a saved team) into a new workspace
   cookrew role save "Agent" "RoleName" --prompt "..."   Save an agent as a reusable role
+  cookrew role save "Agent" "RoleName" --prompt - <<'EOF'   The role text from stdin, like ask -
   cookrew role list                             List saved roles
   cookrew role delete "RoleName"                (Orch) Remove a saved role
   cookrew notify "message"                      (Orch) Desktop notification`
