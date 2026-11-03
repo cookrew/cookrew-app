@@ -1208,14 +1208,11 @@ describe('the card binding — Cookrew names in herdr chrome', () => {
     expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
   })
 
-  it('names herdr\'s agent after the card on every attach, after the agent is reported', () => {
+  it('attaching names no agent — no extra fork on the main thread; the reconcile does it', () => {
     const runner = fakeRunner({ ...LIVE_REPLIES, 'agent rename': '{"result":{}}' })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
       .ensureSession(SPEC_WITH_CARD)
-    const at = (pred: (c: Call) => boolean): number => runner.calls.findIndex(pred)
-    const rename = at((c) => c.args[0] === 'agent' && c.args[1] === 'rename')
-    expect(runner.calls[rename]?.args.slice(3)).toEqual(['reviewer'])
-    expect(rename).toBeGreaterThan(at((c) => c.args[1] === 'release-agent'))
+    expect(runner.calls.some((c) => c.args[0] === 'agent' && c.args[1] === 'rename')).toBe(false)
   })
 
   it('does NOT report when the spec carries no card — tmux/direct parity', () => {
@@ -1393,9 +1390,16 @@ describe('nameAgent — herdr\'s own agent name follows the card', () => {
     expect(renames(base)).toEqual([['w2:pA7', 'rename-anyone']])
   })
 
-  it('clears herdr\'s name when the card\'s has no slug, so it never keeps a stale one', () => {
+  it('names a Chinese card in pinyin, and a card with nothing readable by its id', () => {
     const runner = herdrWith([], [])
     named(runner, '顶栏模型切换')
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).nameAgent('cookrew_abc', '🦊', 'abc-123')
+    expect(renames(runner)).toEqual([['w2:pA7', 'dinglanmoxingqiehuan'], ['w2:pA7', 'card-abc123']])
+  })
+
+  it('clears herdr\'s name when there is no name and no id, so it never keeps a stale one', () => {
+    const runner = herdrWith([], [])
+    named(runner, '🦊')
     expect(renames(runner)).toEqual([['w2:pA7', '--clear']])
   })
 
@@ -1406,5 +1410,58 @@ describe('nameAgent — herdr\'s own agent name follows the card', () => {
 
     const broken = fakeRunner({ 'pane list': PANES, 'agent list': 'not json' })
     expect(() => named(broken, 'Reviewer')).not.toThrow()
+  })
+})
+
+describe('reconcileAgentNames — names that dropped are put back, off the main thread', () => {
+  const AGENT = (pane: string, title: string, name?: string): unknown => ({
+    pane_id: pane, title, ...(name ? { name } : {}), tokens: { cookrew_terminal: `t-${pane}` }
+  })
+  function backend(agents: unknown[], refuse: string[] = []) {
+    const sync = fakeRunner({})
+    const asyncCalls: string[][] = []
+    const asyncRunner: AsyncCliRunner = async (args) => {
+      asyncCalls.push(args)
+      if (args[0] === 'agent' && args[1] === 'list') return JSON.stringify({ result: { agents } })
+      if (args[0] === 'agent' && args[1] === 'rename' && refuse.includes(args[3])) throw new Error('in use')
+      return '{"result":{}}'
+    }
+    const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: sync, asyncRunner })
+    const renames = (): string[][] => asyncCalls.filter((a) => a[0] === 'agent' && a[1] === 'rename').map((a) => a.slice(2))
+    return { mux, sync, renames }
+  }
+
+  it('renames only the Cookrew panes whose name dropped, and nothing synchronously', async () => {
+    const { mux, sync, renames } = backend([
+      AGENT('w1:p1', 'Reviewer'),
+      AGENT('w1:p2', 'Finch', 'finch'),
+      AGENT('w1:p3', '顶栏模型切换'),
+      { pane_id: 'w1:p9', name: 'outsider' }
+    ])
+    expect(await mux.reconcileAgentNames()).toBe(2)
+    expect(renames()).toEqual([['w1:p1', 'reviewer'], ['w1:p3', 'dinglanmoxingqiehuan']])
+    expect(sync.calls.filter((c) => c.args[0] === 'agent')).toEqual([])
+  })
+
+  it('keeps a suffix a pane already won, and suffixes past names that stay', async () => {
+    const { mux, renames } = backend([
+      AGENT('w1:p1', 'Reviewer', 'reviewer-2'),
+      AGENT('w1:p2', 'Reviewer'),
+      { pane_id: 'w1:p9', name: 'reviewer' }
+    ])
+    await mux.reconcileAgentNames()
+    expect(renames()).toEqual([['w1:p2', 'reviewer-3']])
+  })
+
+  it('clears a name the card no longer reads as, and survives a broken listing', async () => {
+    const { mux, renames } = backend([AGENT('w1:p1', '🦊', 'old-name')])
+    await mux.reconcileAgentNames()
+    expect(renames()).toEqual([['w1:p1', 'card-tw1p1']])
+
+    const broken = new HerdrHostMultiplexer({
+      session: 'cookrewtest', configPath: '/c', runner: fakeRunner({}),
+      asyncRunner: async () => 'not json'
+    })
+    await expect(broken.reconcileAgentNames()).resolves.toBe(0)
   })
 })

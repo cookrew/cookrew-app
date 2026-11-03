@@ -90,7 +90,7 @@ export interface SocketServerDeps {
    * agent name (index.ts · renameCard). Absent in a test server that has
    * none: `cookrew rename` then says so.
    */
-  renameCard?: (id: string, wanted: string, onClash: 'refuse' | 'suffix') => RenameOutcome
+  renameCard?: (id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string) => RenameOutcome
   /**
    * Sous's name for a card recruited from a prompt, once it answers (null: it
    * had none, or the card was renamed meanwhile). index.ts · autoNameTerminal.
@@ -1514,7 +1514,15 @@ export function cmdRename(request: CliRequest, deps: SocketServerDeps): string {
   const [first, second] = request.args
   if (first === undefined || request.args.length > 2) throw new Error(usage)
   const target = second === undefined ? me : renameTarget(request, deps, me, first)
-  const done = deps.renameCard(target.id, second ?? first, 'refuse')
+  // The Orch is the workspace's door: its name is how the team and served
+  // callers reach it, so only it — or the owner, in the card menu — renames it.
+  if (target.kind === 'terminal' && (target as TerminalNodeData).orch && target.id !== me.id) {
+    throw new Error(`"${target.name}" is the Orch. Only it, or the owner from the card menu, can rename it.`)
+  }
+  const by = `"${me.name}" (${me.orch ? 'orch' : 'agent'}, cookrew rename)`
+  const done = deps.store.withOpContext({ actor: me.orch ? 'orch' : 'agent', via: 'rename' }, () =>
+    deps.renameCard!(target.id, second ?? first, 'refuse', by)
+  )
   if (!done.ok) throw new Error(done.error)
   if (!done.changed) return `"${done.name}" is already called that.`
   return `Renamed "${target.name}" → "${done.name}"`
