@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { writeFileSync } from 'node:fs'
@@ -142,6 +142,35 @@ describe('serving survives a restart — the persistence seam', () => {
     const s = wireServing(deps({ persist: servedTemplateFile(base), door: { orchOf: () => null } }))
     expect(s.served.list()).toHaveLength(0)
     expect(s.served.bySlug('research')).toBeNull()
+  })
+})
+
+describe('a returning caller after a restart never lands on last run\'s sandbox', () => {
+  // The session table is memory-only, so a restart forgets every ordinal it
+  // minted. The sandboxes do not vanish with it: retention keeps an ended one
+  // for its grace period. Minting ana-1 again would put the new crew's HOME on
+  // the old path, with the old .claude state and grant files still in it.
+  it('mints above every ordinal that still has a path, and leaves the old sandbox alone', async () => {
+    const persist = servedTemplateFile(base)
+    const before = wireServing(deps({ persist }))
+    await before.serve(CREW)
+    await before.resolveInboundCall('research', 'ana')
+    const [old] = before.instantiator.sessions()
+    expect(old.ordinal).toBe(1)
+    const oldDir = path.join(base, 'sessions', 'svc-research', 'ana-1')
+    writeFileSync(path.join(oldDir, 'grant.json'), '{"old":true}')
+
+    // The app restarts: a new wiring over the same base, nothing in memory.
+    const after = wireServing(deps({ persist }))
+    const call = await after.resolveInboundCall('research', 'ana')
+    if (call.kind !== 'served') throw new Error('expected served')
+    expect(call.created).toBe(true)
+    const [fresh] = after.instantiator.sessions()
+    expect(fresh.ordinal).toBe(2)
+    expect(existsSync(path.join(base, 'sessions', 'svc-research', 'ana-2'))).toBe(true)
+    expect(existsSync(path.join(base, 'sessions', 'svc-research', 'ana-2', 'grant.json'))).toBe(false)
+    // Never delete anything: the old sandbox is retention's to age out.
+    expect(readFileSync(path.join(oldDir, 'grant.json'), 'utf8')).toBe('{"old":true}')
   })
 })
 

@@ -27,8 +27,8 @@ export type DockTool =
  * (stage/AgentArtifacts.tsx), so it is wired to the agent that holds it.
  *
  * And so is TERMINAL (owner, 2026-11-01): the prompt box's ＋ menu
- * (prompt/HarnessMenu.tsx) carries all its row held — the harnesses, a bare
- * shell, the roles, the saved teams, the import and ORCH. Its row below only
+ * (prompt/HarnessMenu.tsx) carries the harnesses, a bare shell and the roles;
+ * the saved teams, the import and ORCH are retired from it (owner, 2026-11-03). Its row below only
  * opens on a canvas brought back, where TERMINAL arms a placement.
  */
 const TOOLS: readonly DockTool[] = [
@@ -159,11 +159,8 @@ export function Dock({
   const acts = {
     shell: harnesses.includes(SHELL_PRESET),
     roles: roles.map((r) => r.name),
-    teams: savedTeams,
     onPreset,
     onRole,
-    onImportServed,
-    onOrch,
     making
   }
   const tools = dockTools()

@@ -91,7 +91,7 @@ interface GlobalPromptProps {
   orch?: boolean
   /** The workspace's notes and browsers, for "#Name". */
   artifacts?: readonly PromptArtifact[]
-  /** What the ＋ menu opens at once: a shell, roles, saved teams, ORCH (HarnessMenu.tsx). */
+  /** What the ＋ menu opens at once: a shell, the saved roles (HarnessMenu.tsx). */
   acts?: NewMenuActs
 }
 
@@ -413,16 +413,15 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             className="cr-prompt-harness"
             aria-haspopup="menu"
             aria-expanded={picking !== null}
-            title={orch ? 'The harness the new agent runs · ORCH: it leads the crew' : 'The harness the new agent runs — or open a shell or a team'}
+            title="The harness the new agent runs — or open a shell"
             onClick={(e) => {
               const at = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow())
               setPicking((open) => (open ? null : at))
             }}
           >
-            ＋ {harness}
-            {orch && <small className="cr-prompt-orch">ORCH</small>} ▾
+            ＋ {harness} ▾
           </button>
-          {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} orch={orch} acts={acts} onDone={() => setPicking(null)} />}
+          {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} acts={acts} onDone={() => setPicking(null)} />}
         </span>
       )}
       {/* The chip and the voice bar are siblings in this form: one key each,

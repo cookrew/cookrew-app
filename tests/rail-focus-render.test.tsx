@@ -151,3 +151,28 @@ describe('the rail hands the focus to the policy, not to the scroll', () => {
     expect(rail).toContain("nextFocus(state, { kind: 'live', at: Date.now() })")
   })
 })
+
+// CHAT AND LOG KEEP ONLY THE TAG (owner, 2026-11-03): no line, no ticks, no CP
+// count and no live dot, and the native scrollbar is the way through; but the
+// tag that names the turn in view while scrolling stays, with ROLE, FORK and
+// ⟲ REWIND on it.
+describe('a tag-only rail, for CHAT and LOG', () => {
+  it('draws the focus tag and its actions, and no bar at all', async () => {
+    const markup = await shortCard({ activeIndex: 2, markerFrac: 0.5, tagOnly: true })
+    expect(markup).toContain('cr-ckpt-rail tag-only')
+    expect(markup).toContain('cr-ckpt-scrub-preview')
+    const tag = markup.slice(markup.indexOf('cr-ckpt-scrub-preview'))
+    for (const action of ['ROLE', 'FORK', '⟲ REWIND']) expect(tag).toContain(action)
+    for (const part of ['cr-ckpt-mini', 'cr-ckpt-line', 'cr-ckpt-count', 'cr-ckpt-livedot', 'cr-ckpt-here']) expect(markup).not.toContain(part)
+  })
+
+  it('draws nothing at the live tail', async () => {
+    const markup = await shortCard({ tagOnly: true })
+    expect(markup).not.toContain('cr-ckpt-scrub-preview')
+  })
+
+  it('lets the transcript under it take every press: only the tag’s rows are hit', () => {
+    const css = readFileSync(join(__dirname, '../src/renderer/src/agent-roster.css'), 'utf8')
+    expect(css).toMatch(/\.cr-ckpt-rail\.tag-only \{[^}]*pointer-events: none;/)
+  })
+})

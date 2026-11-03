@@ -95,8 +95,9 @@ export function sandboxRoot(base: string, serviceId: string, sessionId: string):
   const dir = path.join(serviceRoot(base, serviceId), sessionSegment(serviceId, sessionId))
   mkdirSync(dir, { recursive: true })
   // A mint is a write, and it must LOOK like one: `mkdir -p` on a directory
-  // that already exists (ordinals restart at 1 with the app, so a returning
-  // account lands on last run's path) touches nothing, and the storage sweep
+  // that already exists (the instantiator seeds ordinals from disk so this
+  // should not happen, but a path it could not see would be re-used) touches
+  // nothing, and the storage sweep
   // reads a sandbox's age from its newest write. Without this line a sweep in
   // flight could measure the old directory, miss the session the instantiator
   // has not registered yet, and remove a booting crew's HOME

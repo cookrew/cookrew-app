@@ -3,6 +3,7 @@ import {
   type ConductorRoute,
   type Ender,
   type Minter,
+  type OrdinalHistory,
   type TemplateSource
 } from './session-instantiator'
 import {
@@ -10,6 +11,7 @@ import {
   makeConductorRoute,
   makeEnder,
   makeMinter,
+  makeOrdinalHistory,
   makeTemplateSource,
   type CallCutter,
   type EntryTerminalLookup,
@@ -151,7 +153,13 @@ export function wireServing(deps: ServingDeps): Serving {
   const route: ConductorRoute = makeConductorRoute(deps.entry)
   const ender: Ender = makeEnder({ base: deps.base, cutter: deps.callsInFlight, remover: deps.remover })
 
-  const instantiator = new SessionInstantiator(instantiatorDeps({ templates, minter, route, ender }))
+  // The ordinal floor survives a restart by reading what is on disk, so a
+  // returning caller is never minted back onto last run's sandbox.
+  const history: OrdinalHistory = makeOrdinalHistory({ base: deps.base })
+
+  const instantiator = new SessionInstantiator(
+    instantiatorDeps({ templates, minter, route, ender, history })
+  )
 
   const resolveInboundCall = async (slug: string, accountId: string): Promise<InboundCall> => {
     const scope = resolveCallScope(slug, {
