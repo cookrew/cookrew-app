@@ -7,6 +7,72 @@ ipcRenderer.on('app:deep-link', (_e, link: unknown) => {
   else heldDeepLinks = [...heldDeepLinks, link]
 })
 
+/**
+ * A browser card's live view, straight from main (browser-cast-ipc.ts). Main
+ * answers an ask with one end of a MessageChannel, paired by nonce. The port
+ * stays HERE: the page gets post/close and its own callbacks, which is all a
+ * view needs and keeps the port itself out of the main world.
+ */
+interface BrowserStreamHandlers {
+  onOpen: () => void
+  onMessage: (message: unknown) => void
+  onClose: () => void
+}
+const browserStreamWaiters = new Map<string, (port: MessagePort) => void>()
+ipcRenderer.on('browser-stream:port', (event, info: { nonce?: unknown } | null) => {
+  const port = event.ports[0]
+  const nonce = typeof info?.nonce === 'string' ? info.nonce : ''
+  const waiter = browserStreamWaiters.get(nonce)
+  browserStreamWaiters.delete(nonce)
+  if (waiter && port) waiter(port)
+  else port?.close()
+})
+
+function openBrowserStream(
+  browserId: string,
+  handlers: BrowserStreamHandlers
+): { post: (message: unknown) => void; close: () => void } {
+  const nonce = crypto.randomUUID()
+  let port: MessagePort | null = null
+  let closed = false
+  const queued: unknown[] = []
+  const end = (): void => {
+    if (closed) return
+    closed = true
+    browserStreamWaiters.delete(nonce)
+    port?.close()
+    handlers.onClose()
+  }
+  browserStreamWaiters.set(nonce, (answer) => {
+    if (closed) return answer.close()
+    port = answer
+    answer.onmessage = (event: MessageEvent): void => {
+      const data = event.data as { t?: unknown } | null
+      // Main says goodbye before it closes its end (the card's instance was
+      // replaced or removed): the view redials, the same as a dropped socket.
+      if (data?.t === 'bye') return end()
+      handlers.onMessage(data)
+    }
+    answer.start()
+    for (const message of queued.splice(0)) answer.postMessage(message)
+    handlers.onOpen()
+  })
+  ipcRenderer.send('browser-stream:open', browserId, nonce)
+  return {
+    post: (message) => {
+      if (closed) return
+      if (port) port.postMessage(message)
+      else queued.push(message)
+    },
+    close: () => {
+      if (closed) return
+      closed = true
+      browserStreamWaiters.delete(nonce)
+      port?.close()
+    }
+  }
+}
+
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
   // The owner's grant surface. Main refuses any sender that is not the owner
@@ -526,6 +592,7 @@ const api = {
     ipcRenderer.send('browser:thumb', browserId, dataUrl),
   interactiveBrowserEnabled: () => ipcRenderer.invoke('browser:interactive-enabled'),
   browserStreamToken: () => ipcRenderer.invoke('browser:stream-token'),
+  openBrowserStream,
   onCmdW: (cb: () => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('app:cmd-w', listener)

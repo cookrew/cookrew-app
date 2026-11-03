@@ -245,6 +245,7 @@ export class BrowserViewportCoordinator {
   private sameEnough(a: ViewportMetrics, b: ViewportMetrics): boolean {
     return (
       a.mobile === b.mobile &&
+      (a.scale ?? 1) === (b.scale ?? 1) &&
       Math.abs(a.width - b.width) < VIEWPORT_HYSTERESIS_PX &&
       Math.abs(a.height - b.height) < VIEWPORT_HYSTERESIS_PX
     )

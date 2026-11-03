@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
@@ -238,6 +238,7 @@ import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
+import { createBrowserCastIpc } from './browser-cast-ipc'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
@@ -5581,7 +5582,20 @@ const browserManager = new HeadlessBrowserManager({
   },
   uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
   // Declared below; called only after boot, never during construction.
-  onInstanceGone: (browserId) => browserCast.drop(browserId)
+  onInstanceGone: (browserId) => {
+    browserCast.drop(browserId)
+    browserCastIpc.drop(browserId)
+  }
+})
+
+/**
+ * The desktop's own view of a card's Chrome: a MessagePort from main, raw
+ * JPEG bytes, no socket and no token (browser-cast-ipc.ts). The phone keeps
+ * the WebSocket below.
+ */
+const browserCastIpc = createBrowserCastIpc({
+  getInstance: (browserId) => browserManager.get(browserId),
+  enabled: interactiveBrowserEnabled
 })
 
 const browserCast = createBrowserCast({
@@ -6755,6 +6769,7 @@ app.on('before-quit', (event) => {
   // deliveries) and await the bounded TERM→KILL settlements (Sol r10).
   defaultProducerLease().retireAll()
   browserCast.shutdown()
+  browserCastIpc.shutdown()
   // The line goes down BEFORE the app does, so the registry stops handing the
   // owner's phone a name whose Mac is quitting — a downlink the process drops
   // silently is a relay that claims this desktop for as long as it takes the
@@ -7497,6 +7512,19 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:get', () => store.focusedState)
   ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
   ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
+  // A card's live view, straight from main: the owner window's top frame
+  // asks, main answers with one end of a fresh MessageChannel (the nonce
+  // pairs the answer with the ask). Anything else asking gets nothing — a
+  // browser card's page has no ipcRenderer, and a frame below the top is not
+  // the owner (owner-grant.ts · isOwnerSender).
+  ipcMain.on('browser-stream:open', (event, browserId: unknown, nonce: unknown) => {
+    if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) return
+    if (typeof browserId !== 'string' || browserId.length === 0 || browserId.length > 200) return
+    if (typeof nonce !== 'string' || nonce.length === 0 || nonce.length > 100) return
+    const { port1, port2 } = new MessageChannelMain()
+    browserCastIpc.open(browserId, port1)
+    event.sender.postMessage('browser-stream:port', { nonce }, [port2])
+  })
 
   ipcMain.handle('node:add', (_e, node: CanvasNode) => addNode(node))
   ipcMain.handle('node:update', (_e, id: string, patch: Partial<CanvasNode>) =>

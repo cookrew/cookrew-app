@@ -42,15 +42,26 @@ export interface ViewportSize {
 
 export interface ViewportPreference extends ViewportSize {
   mobile: boolean
+  /** Device pixels per CSS px (the desktop's display); absent or 1 on the phone. */
+  scale?: number
 }
 
 export type ViewportControlKind = 'offer' | 'claim' | 'release'
 
 /** Closed renderer→server viewport/controller vocabulary. */
 export type ViewportControlMsg =
-  | { t: 'viewport-offer'; width: number; height: number; mobile: boolean }
-  | { t: 'viewport-claim'; width: number; height: number; mobile: boolean }
+  | { t: 'viewport-offer'; width: number; height: number; mobile: boolean; scale?: number }
+  | { t: 'viewport-claim'; width: number; height: number; mobile: boolean; scale?: number }
   | { t: 'viewport-release' }
+
+/** The largest device scale a view asks for (cast-viewport.ts · VIEWPORT_SCALE_MAX). */
+export const VIEW_SCALE_MAX = 2
+
+/** A display's pixel ratio as a view's ask: half steps in [1, 2], so a Retina Mac draws the page 1:1. */
+export function viewScale(devicePixelRatio: number): number {
+  if (!Number.isFinite(devicePixelRatio) || devicePixelRatio <= 1) return 1
+  return Math.min(VIEW_SCALE_MAX, Math.round(devicePixelRatio * 2) / 2)
+}
 
 /** Exhaustive renderer ownership contract for one browser tab surface. */
 export type BrowserRenderMode =
@@ -123,14 +134,17 @@ export function normalizeRevision(value: number | null | undefined): number {
 export function viewportControlMsg(
   t: ViewportControlKind,
   viewport: ViewportSize,
-  mobile: boolean
+  mobile: boolean,
+  scale = 1
 ): ViewportControlMsg {
   if (t === 'release') return { t: 'viewport-release' }
+  const ask = viewScale(scale)
   return {
     t: t === 'claim' ? 'viewport-claim' : 'viewport-offer',
     width: clampViewport(viewport.width),
     height: clampViewport(viewport.height),
-    mobile
+    mobile,
+    ...(ask > 1 ? { scale: ask } : {})
   }
 }
 
@@ -225,7 +239,11 @@ interface StreamFrameMeta {
 export type StreamMessage =
   | ({ kind: 'ready'; w: number; h: number; revision?: number; mobile?: boolean })
   | ({ kind: 'control' } & StreamControlFields)
-  | ({ kind: 'frame'; seq: number; src: string } & StreamFrameMeta)
+  /**
+   * One JPEG: `src` (a data: URL) off a socket, where it rode as base64 text;
+   * `bytes` straight from main over the desktop's port (browser-cast-ipc.ts).
+   */
+  | ({ kind: 'frame'; seq: number; src?: string; bytes?: Uint8Array } & StreamFrameMeta)
   | { kind: 'error'; msg: string }
   | { kind: 'status'; status: UseStatus }
   /** The page copied this right after the viewer's own input: it goes on the viewer's clipboard. */
@@ -242,13 +260,25 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
   const trimmed = raw.trim()
   if (trimmed.length === 0) return null
   if (!trimmed.startsWith('{')) return { kind: 'frame', seq: 0, src: frameDataUrl(trimmed) }
-  let obj: Record<string, unknown>
+  let obj: unknown
   try {
     obj = JSON.parse(trimmed)
   } catch {
     return null
   }
-  if (obj.t === 'frame' && typeof obj.data === 'string') {
+  return parseStreamObject(obj)
+}
+
+/**
+ * The same messages, already structured: what the desktop's port delivers
+ * (a frame's JPEG as bytes in `jpeg`), and what a socket's JSON parses to
+ * (base64 in `data`). Pure — unit-tested.
+ */
+export function parseStreamObject(raw: unknown): StreamMessage | null {
+  const obj = asRecord(raw)
+  if (!obj) return null
+  const jpeg = obj.t === 'frame' && obj.jpeg instanceof Uint8Array && obj.jpeg.byteLength > 0 ? obj.jpeg : null
+  if (obj.t === 'frame' && (typeof obj.data === 'string' || jpeg)) {
     const meta = asRecord(obj.meta)
     const revision = finiteRevision(obj.revision ?? meta?.revision)
     const deviceWidth = positiveNumber(meta?.deviceWidth)
@@ -259,7 +289,7 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
     return {
       kind: 'frame',
       seq: typeof obj.seq === 'number' ? obj.seq : 0,
-      src: frameDataUrl(obj.data),
+      ...(jpeg ? { bytes: jpeg } : { src: frameDataUrl(obj.data as string) }),
       ...(revision !== null ? { revision } : {}),
       ...(deviceWidth !== null ? { deviceWidth } : {}),
       ...(deviceHeight !== null ? { deviceHeight } : {}),
@@ -404,14 +434,29 @@ export type TouchInputMsg =
   | { t: 'touchstart' | 'touchmove'; points: StreamTouchPoint[] }
   | { t: 'touchend' }
 
+export type MouseButtonName = 'left' | 'right' | 'middle'
+
+/** Held modifiers as CDP bits (cast-input.ts): Alt=1, Ctrl=2, Meta=4, Shift=8. */
+export interface PointerOptions {
+  button?: MouseButtonName
+  mods?: number
+}
+
 /** Client→server input messages — the closed vocabulary Forge whitelists. */
 export type CastInputMsg =
-  | { t: 'tap'; x: number; y: number; count?: number }
-  | { t: 'down'; x: number; y: number; count?: number }
-  | { t: 'up'; x: number; y: number; count?: number }
-  | { t: 'move'; x: number; y: number }
-  | { t: 'wheel'; x: number; y: number; dy: number }
-  | { t: 'key'; key: string; code?: string; text?: string }
+  | { t: 'tap'; x: number; y: number; count?: number; button?: MouseButtonName; mods?: number }
+  | { t: 'down'; x: number; y: number; count?: number; button?: MouseButtonName; mods?: number }
+  | { t: 'up'; x: number; y: number; count?: number; button?: MouseButtonName; mods?: number }
+  /** A hover, or a drag while `buttons` (the DOM bitmask) are held. */
+  | { t: 'move'; x: number; y: number; buttons?: number; mods?: number }
+  | { t: 'wheel'; x: number; y: number; dy: number; dx?: number; mods?: number }
+  /** A trackpad pinch step: zoom the page by `scale` around the point. */
+  | { t: 'pinch'; x: number; y: number; scale: number }
+  | { t: 'key'; key: string; code?: string; text?: string; mods?: number }
+  /** Committed text: an IME's result, a paste, an autocorrect. */
+  | { t: 'text'; text: string }
+  /** The IME's uncommitted text, shown in the page's field as it is composed. */
+  | { t: 'compose'; text: string }
   | TouchInputMsg
 
 export type RevisionedCastInputMsg = CastInputMsg & { revision: number }
@@ -467,11 +512,42 @@ export function streamInputAllowed(
 export function pointerMsg(
   t: 'tap' | 'down' | 'up' | 'move',
   p: { x: number; y: number },
-  count = 1
+  count = 1,
+  options: PointerOptions = {}
 ): CastInputMsg {
   // count carries the click multiplicity (2 = double-click, 3 = triple) so the
   // remote page can select a word / line; move never carries it.
-  return { t, x: p.x, y: p.y, ...(t !== 'move' && count > 1 ? { count } : {}) }
+  const button = options.button && options.button !== 'left' ? { button: options.button } : {}
+  const mods = options.mods ? { mods: options.mods } : {}
+  if (t === 'move') return { t, x: p.x, y: p.y, ...mods }
+  return { t, x: p.x, y: p.y, ...(count > 1 ? { count } : {}), ...button, ...mods }
+}
+
+/**
+ * A mouse move at a FRAME point. With no button held it is a hover (menus,
+ * tooltips, :hover); with `buttons` held it is a drag — Chromium extends a
+ * selection or moves a slider only when the move names the held button.
+ */
+export function moveMsg(p: { x: number; y: number }, buttons = 0, mods = 0): CastInputMsg {
+  // Left, right and middle only: back/forward buttons are not the page's.
+  const held = buttons & 7
+  return {
+    t: 'move',
+    x: p.x,
+    y: p.y,
+    ...(held > 0 ? { buttons: held } : {}),
+    ...(mods ? { mods } : {})
+  }
+}
+
+/** The DOM's button number (0 main, 1 middle, 2 secondary) as the wire's name. */
+export function buttonName(button: number): MouseButtonName {
+  return button === 2 ? 'right' : button === 1 ? 'middle' : 'left'
+}
+
+/** A DOM event's held modifiers as CDP bits. */
+export function modsOf(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number {
+  return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0)
 }
 
 /**
@@ -572,15 +648,64 @@ export function releaseTouchGesture(state: TouchGestureState): TouchGestureUpdat
   }
 }
 
-/** Build a wheel/scroll message at a FRAME point with a vertical delta. */
-export function wheelMsg(p: { x: number; y: number }, dy: number): CastInputMsg {
-  return { t: 'wheel', x: p.x, y: p.y, dy }
+/** Build a wheel/scroll message at a FRAME point; dx scrolls sideways (a trackpad's two-finger swipe). */
+export function wheelMsg(p: { x: number; y: number }, dy: number, dx = 0, mods = 0): CastInputMsg {
+  return { t: 'wheel', x: p.x, y: p.y, dy, ...(dx !== 0 ? { dx } : {}), ...(mods ? { mods } : {}) }
 }
 
-/** Build a key message; `text` only for printable single characters. */
-export function keyMsg(key: string, code: string): CastInputMsg {
-  return { t: 'key', key, code, ...(key.length === 1 ? { text: key } : {}) }
+const WHEEL_LINE_PX = 16
+
+/**
+ * A wheel event's delta in CSS px. A trackpad reports pixels; a notched mouse
+ * on some systems reports LINES (deltaMode 1) or PAGES (2), which forwarded
+ * raw scroll the page by 3 px a notch.
+ */
+export function wheelDeltaPx(
+  e: { deltaX: number; deltaY: number; deltaMode: number },
+  pageHeight: number
+): { dx: number; dy: number } {
+  const unit = e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? Math.max(1, pageHeight) : 1
+  return { dx: e.deltaX * unit, dy: e.deltaY * unit }
 }
+
+/**
+ * A trackpad pinch reaches a page as ctrl+wheel; Chromium's own convention for
+ * the zoom one such event means is exp(-deltaY / 100).
+ */
+export function pinchScaleFromWheel(deltaY: number): number {
+  return Math.exp(-deltaY / 100)
+}
+
+/** A pinch step at a FRAME point. */
+export function pinchMsg(p: { x: number; y: number }, scale: number): CastInputMsg {
+  return { t: 'pinch', x: p.x, y: p.y, scale }
+}
+
+/** Build a key message; `text` only for printable single characters, never under ⌘/Ctrl. */
+export function keyMsg(key: string, code: string, mods = 0): CastInputMsg {
+  const shortcut = (mods & (2 | 4)) !== 0
+  return {
+    t: 'key',
+    key,
+    code,
+    ...(key.length === 1 && !shortcut ? { text: key } : {}),
+    ...(mods ? { mods } : {})
+  }
+}
+
+/** Committed text as typing (an IME's result, a paste); null when there is nothing to send. */
+export function textMsg(text: string): CastInputMsg | null {
+  return text.length > 0 ? { t: 'text', text: text.slice(0, MAX_TEXT_MSG) } : null
+}
+
+/** The IME's in-progress text, shown live in the page's field. */
+export function composeMsg(text: string): CastInputMsg {
+  return { t: 'compose', text: text.slice(0, MAX_COMPOSE_MSG) }
+}
+
+/** The server's bounds (cast-input.ts): a paste longer than this is cut, not refused. */
+export const MAX_TEXT_MSG = 4096
+const MAX_COMPOSE_MSG = 256
 
 /** A frame is live only inside the freshness window; zero means no frame yet. */
 export function frameIsFresh(lastFrameAt: number, now: number, staleMs: number): boolean {
