@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { CrIcon } from '../icons'
 import type { InkStatus } from '../zoom/ink-status'
+import { FaceTip } from './FaceTip'
 import './prompt-face.css'
 
 /**
@@ -60,6 +61,8 @@ export interface PromptFaceProps {
   disabled?: boolean
   label: string
   title?: string
+  /** A desktop hover tip over the face (FaceTip.tsx), in place of the title. */
+  tip?: React.ReactNode
   className?: string
   onTap: (e: React.MouseEvent<HTMLButtonElement>) => void
   /** A hold began (the ear opens) and ended (it closes). Absent: no hold. */
@@ -101,12 +104,25 @@ export function PromptFace({
   disabled = false,
   label,
   title,
+  tip,
   className,
   onTap,
   onHold,
   onHoldEnd
 }: PromptFaceProps): React.JSX.Element {
   const timer = useRef<number | null>(null)
+  const tipId = useId()
+  // The tip listens on the face itself: the element, kept as state so it mounts with it.
+  const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null)
+  // Stable, so the ref the caller passed is called once per element, not once per render.
+  const setButton = useCallback(
+    (el: HTMLButtonElement | null): void => {
+      setAnchor(el)
+      if (typeof buttonRef === 'function') buttonRef(el)
+      else if (buttonRef) (buttonRef as React.MutableRefObject<HTMLButtonElement | null>).current = el
+    },
+    [buttonRef]
+  )
   const held = useRef(false)
   /** The click that follows a hold's release is the hold's, not a tap. */
   const swallow = useRef(false)
@@ -137,62 +153,71 @@ export function PromptFace({
     .filter(Boolean)
     .join(' ')
   return (
-    <button
-      ref={buttonRef}
-      type={type}
-      className={classes}
-      aria-label={label}
-      title={title ?? label}
-      disabled={disabled}
-      aria-haspopup={expanded === undefined ? undefined : 'listbox'}
-      aria-expanded={expanded}
-      onMouseDown={keepFocus ? (e) => e.preventDefault() : undefined}
-      onPointerDown={(e) => {
-        swallow.current = false
-        if (!onHold || e.button !== 0 || e.pointerType === 'mouse') return
-        held.current = false
-        // The release must come back here even if the finger slides off.
-        e.currentTarget.setPointerCapture?.(e.pointerId)
-        timer.current = window.setTimeout(() => {
-          timer.current = null
-          held.current = true
-          onHold()
-        }, HOLD_MS)
-      }}
-      onPointerUp={() => endHold(true)}
-      onPointerCancel={() => endHold(false)}
-      // A long press must not open the phone's context menu over the face.
-      onContextMenu={(e) => {
-        if (onHold) e.preventDefault()
-      }}
-      onClick={(e) => {
-        // A keyboard's click (Enter, Space) is never a hold's.
-        if (swallow.current && e.detail > 0) {
+    <>
+      <button
+        ref={setButton}
+        type={type}
+        className={classes}
+        aria-label={label}
+        // A tip of its own stands in for the title, whose native tip lands under the cursor.
+        title={tip ? undefined : (title ?? label)}
+        aria-describedby={tip ? tipId : undefined}
+        disabled={disabled}
+        aria-haspopup={expanded === undefined ? undefined : 'listbox'}
+        aria-expanded={expanded}
+        onMouseDown={keepFocus ? (e) => e.preventDefault() : undefined}
+        onPointerDown={(e) => {
           swallow.current = false
-          e.preventDefault()
-          return
-        }
-        onTap(e)
-      }}
-    >
-      <span className="pf-disc">
-        <InkAvatar
-          id={agent?.id ?? `new:${harness}`}
-          preset={agent?.preset ?? harness}
-          orch={agent?.orch ?? false}
-          status={agent?.status ?? 'idle'}
-          weight="regular"
-        />
-      </span>
-      {mode === 'folded' && <span className="pf-verb">{agent ? <Arrow /> : <Plus />}</span>}
-      {draft && mode !== 'ready' && <span className="pf-dot" aria-hidden="true" />}
-      {dropping && (
-        <span className="pf-drop-cue" aria-hidden="true">
-          <CrIcon name="attach" />
-          <span className="pf-drop-words">DROP TO ATTACH</span>
+          if (!onHold || e.button !== 0 || e.pointerType === 'mouse') return
+          held.current = false
+          // The release must come back here even if the finger slides off.
+          e.currentTarget.setPointerCapture?.(e.pointerId)
+          timer.current = window.setTimeout(() => {
+            timer.current = null
+            held.current = true
+            onHold()
+          }, HOLD_MS)
+        }}
+        onPointerUp={() => endHold(true)}
+        onPointerCancel={() => endHold(false)}
+        // A long press must not open the phone's context menu over the face.
+        onContextMenu={(e) => {
+          if (onHold) e.preventDefault()
+        }}
+        onClick={(e) => {
+          // A keyboard's click (Enter, Space) is never a hold's.
+          if (swallow.current && e.detail > 0) {
+            swallow.current = false
+            e.preventDefault()
+            return
+          }
+          onTap(e)
+        }}
+      >
+        <span className="pf-disc">
+          <InkAvatar
+            id={agent?.id ?? `new:${harness}`}
+            preset={agent?.preset ?? harness}
+            orch={agent?.orch ?? false}
+            status={agent?.status ?? 'idle'}
+            weight="regular"
+          />
         </span>
+        {mode === 'folded' && <span className="pf-verb">{agent ? <Arrow /> : <Plus />}</span>}
+        {draft && mode !== 'ready' && <span className="pf-dot" aria-hidden="true" />}
+        {dropping && (
+          <span className="pf-drop-cue" aria-hidden="true">
+            <CrIcon name="attach" />
+            <span className="pf-drop-words">DROP TO ATTACH</span>
+          </span>
+        )}
+        {agent && remote && <RemoteMark />}
+      </button>
+      {tip && (
+        <FaceTip anchor={anchor} id={tipId}>
+          {tip}
+        </FaceTip>
       )}
-      {agent && remote && <RemoteMark />}
-    </button>
+    </>
   )
 }
