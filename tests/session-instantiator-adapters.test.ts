@@ -11,7 +11,7 @@ import {
   type ForkEngine
 } from '../src/main/session-instantiator-adapters'
 import { sessionIdentity } from '../src/main/session-identity'
-import { sandboxRoot, serviceRoot } from '../src/main/session-sandbox'
+import { sandboxRoot, serviceRoot, sessionSegment } from '../src/main/session-sandbox'
 
 /**
  * THE ADAPTERS route the orchestrator to the real machinery. These prove the
@@ -323,6 +323,30 @@ describe('makeOrdinalHistory — what a previous run left under sessions/', () =
     leaveSandbox('Svc.Research', 'Ana@Example', 4)
     const history = makeOrdinalHistory({ base })
     expect(history.onDisk('Svc.Research', 'Ana@Example')).toEqual([4])
+  })
+
+  it('finds a long service + account pair’s sandboxes, one ordinal each', () => {
+    // 40 + 40 passes 64 together: the ids that used to lose their ordinal.
+    const service = 'svc-'.padEnd(40, 's')
+    const account = 'acct-'.padEnd(40, 'a')
+    leaveSandbox(service, account, 1)
+    leaveSandbox(service, account, 2)
+    const history = makeOrdinalHistory({ base })
+    expect([...history.onDisk(service, account)].sort((a, b) => a - b)).toEqual([1, 2])
+  })
+
+  it('finds a long account’s sandboxes and residue, never a neighbour sharing its prefix', () => {
+    const service = 'svc-'.padEnd(70, 's')
+    const account = 'acct-'.padEnd(70, 'a')
+    const neighbour = `${account}-other`
+    leaveSandbox(service, account, 1)
+    leaveSandbox(service, account, 3)
+    leaveSandbox(service, neighbour, 9)
+    const residue = sessionSegment(service, sessionIdentity(service, account, 6).sessionId)
+    mkdirSync(path.join(serviceRoot(base, service), `${residue}.bak-20261104-000000`))
+    const history = makeOrdinalHistory({ base })
+    expect([...history.onDisk(service, account)].sort((a, b) => a - b)).toEqual([1, 3, 6])
+    expect(history.onDisk(service, neighbour)).toEqual([9])
   })
 
   it('deletes and creates nothing — it only reads', () => {
