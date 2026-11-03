@@ -145,7 +145,52 @@ const execTail = cmd === 'secret' && args[0] === 'exec' ? tail : null
 if (execTail !== null && execTail.length === 0) {
   fail('usage: cookrew secret exec <name> -- <command…>', 1)
 }
-const request = { id: randomUUID(), terminalId, sessionId: ancestorSessionId(), cmd, args, flags }
+/**
+ * `cookrew ask "Agent" -` and `cookrew recruit --prompt -`: a lone dash reads
+ * the brief from stdin.
+ *
+ * WHY. A brief passed as an argument goes through the caller's shell, which
+ * runs backticks and $(...), expands $VAR and history-expands ! before this
+ * process ever sees the text. The brief still delivered, a word short, with no
+ * error — agents briefing each other hit it constantly. A quoted heredoc
+ * (<<'EOF') is the one shell form that passes text through untouched, and it
+ * arrives on stdin.
+ *
+ * Only the heredoc's own closing newline is dropped; every other byte is the
+ * brief. Empty stdin (or a terminal, which would block waiting for typing) is
+ * a usage error, and nothing is sent.
+ */
+const STDIN_USAGE = {
+  ask: `usage: cookrew ask "Agent" - <<'EOF'\n  your brief, any characters\nEOF\n(a lone - reads the brief from stdin, and stdin was empty)`,
+  recruit: `usage: cookrew recruit ["Name"] --prompt - <<'EOF'\n  its first prompt, any characters\nEOF\n(--prompt - reads the prompt from stdin, and stdin was empty)`
+}
+const stdinSlot =
+  cmd === 'ask' && args[1] === '-' && flags.raw === undefined
+    ? 'ask'
+    : cmd === 'recruit' && flags.prompt === '-'
+      ? 'recruit'
+      : null
+
+async function readStdin() {
+  if (process.stdin.isTTY) return ''
+  const chunks = []
+  for await (const chunk of process.stdin) chunks.push(chunk)
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+const brief = stdinSlot === null ? null : (await readStdin()).replace(/\r?\n$/, '')
+if (brief !== null && brief.trim() === '') fail(STDIN_USAGE[stdinSlot], 1)
+const requestArgs = stdinSlot === 'ask' ? [args[0], brief, ...args.slice(2)] : args
+const requestFlags = stdinSlot === 'recruit' ? { ...flags, prompt: brief } : flags
+
+const request = {
+  id: randomUUID(),
+  terminalId,
+  sessionId: ancestorSessionId(),
+  cmd,
+  args: requestArgs,
+  flags: requestFlags
+}
 
 // `cookrew mobile` also renders a QR code locally for the returned URL.
 const wantQr = cmd === 'mobile'
