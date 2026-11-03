@@ -62,7 +62,13 @@ describe('index.ts wiring — the recruit, the one injection path, and role boot
     expect(main).toContain("const boot = [role ? buildRoleBootMessage(role.name, role.rolePrompt) : '', first]")
     expect(main).toContain('injectWhenReady(session, boot)')
     // the respawn is a kill + spawnTracked, with no injection of its own
-    expect(main).toMatch(/respawn: async \(id\) => \{[^}]*spawnTracked\(node\)[^}]*\}/)
-    expect(main).not.toMatch(/respawn: async \(id\) => \{[^}]*inject[^}]*\}/)
+    // respawn delegates to respawnInPlace (tune-relaunch, 7a264264); the
+    // respawned pane is a plain spawnTracked(node), never an injection.
+    expect(main).toMatch(/respawn: async \(id\) => respawnInPlace\(id\)/)
+    const inPlace = main.slice(main.indexOf('async function respawnInPlace'))
+    // `main` has its whitespace collapsed: the body ends at its last `return true }`.
+    const body = inPlace.slice(0, inPlace.indexOf('return true }'))
+    expect(body).toMatch(/spawnTracked\(node\)/)
+    expect(body).not.toMatch(/inject/)
   })
 })
