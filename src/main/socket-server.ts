@@ -33,6 +33,7 @@ import type { RenameOutcome } from './agent-rename'
 import { deliverToRecruit, type RecruitDeliveryOptions, type RecruitEvidence, type RecruitWitness } from './recruit-delivery'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
+import { adoptRequestPictures } from './picture-adopt'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
 import {
@@ -54,6 +55,8 @@ import { staleBooleanFlagError } from './cli-flags'
 import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
+  /** A brief's pictures copied into the attach store, the brief naming the copies (picture-adopt.ts). */
+  adoptPictures?: (text: string) => Promise<string>
   store: WorkspaceStore
   ptys: PtyManager
   /** Spawn a terminal's PTY with turn tracking (same path as IPC creation). */
@@ -301,7 +304,9 @@ function respond(socket: net.Socket, response: CliResponse): void {
 
 // ---- command dispatch ----
 
-async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<string> {
+  // A brief's pictures outside the attach store go into it, so the phone can draw them (picture-adopt.ts).
+  const request = deps.adoptPictures ? await adoptRequestPictures(sent, deps.adoptPictures) : sent
   const { cmd, args } = request
   // A lone - the client did not expand would reach the agent as its brief.
   const unread = stdinPlaceholderError(request)
