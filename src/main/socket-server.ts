@@ -20,6 +20,7 @@ import {
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import { reachByName, type ReachKind } from './ask-reach'
+import { adoptedNoteAnswer, findClaimedNote } from './note-adopt'
 import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
@@ -1167,12 +1168,32 @@ function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
   })
 }
 
+/** Wire the caller to a note it tried to create again, and say whose it is. */
+function adoptNote(me: TerminalNodeData, note: NoteNodeData, deps: SocketServerDeps): string {
+  const alreadyWired = connectedOf(deps.store, me.id).some((hit) => hit.node.id === note.id)
+  if (!alreadyWired) deps.store.connectAcross(me.id, note.id)
+  const holders = connectedOf(deps.store, note.id)
+    .map((hit) => hit.node)
+    .filter((node) => node.kind === 'terminal' && node.id !== me.id)
+    .map((node) => node.name)
+  return adoptedNoteAnswer(note, holders, alreadyWired)
+}
+
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, ...rest] = request.args
   const me = self(request, deps)
   switch (sub) {
     case 'create': {
       const content = rest[0] ?? ''
+      // A NOTE WITH THE SAME NAME IS THE SAME NOTE (note-adopt.ts): a first
+      // line naming a note already on the caller's canvas wires the caller to
+      // it and leaves its content alone, unless the caller says --new.
+      if (!request.flags.new) {
+        const home = deps.store.ownerOf(me.id)
+        const canvas = home ? deps.store.workspaceState(home) : deps.store.focusedState
+        const existing = findClaimedNote(content, canvas.nodes)
+        if (existing) return adoptNote(me, existing, deps)
+      }
       // THE CALLER'S CANVAS, NEVER THE ONE ON SCREEN. A note is made beside
       // the terminal that asked for it, and that terminal belongs to exactly
       // one workspace; using the focused one put every agent's card on
@@ -1835,7 +1856,8 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
                                                 thinking | waiting (blocked on you) | replied
                                                 (turn ENDED, needs a fresh dispatch) | idle
-  cookrew note create ["content"]               Create a connected note on the canvas
+  cookrew note create ["content"] [--new]       Create a connected note on the canvas (a first line naming
+                                                a note already there wires you to it instead; --new forces a second)
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
   cookrew note write "Name" "content"           Replace a note's content
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
