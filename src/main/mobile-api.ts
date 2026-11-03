@@ -64,6 +64,7 @@ import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import { HEAR_MAX_BYTES, type Heard } from "./hear-file";
+import { SpeakError, type DoubaoVoice } from "./doubao-tts";
 import type { EventEmitter } from "node:events";
 import type { SecretsStore } from "./secrets-store";
 import { isSecretName } from "../shared/secret-slot";
@@ -266,6 +267,12 @@ export interface MobileApiDeps {
    * whether this Mac has one, POST /api/listen hears the raw audio body.
    */
   hear?: { available: () => boolean; recording: (bytes: Uint8Array) => Promise<Heard> };
+  /**
+   * The Mac's voice for the phone's spoken replies (doubao-tts.ts): GET
+   * /api/speak says whether the Doubao voice is set up, POST /api/speak
+   * answers one chunk of text as mp3.
+   */
+  speak?: DoubaoVoice;
   /** The HITL inbox (R3): a one-shot read, a hold while a stream is open, and the announcements. */
   inbox?: () => InboxRow[];
   inboxHold?: () => () => void;
@@ -1694,6 +1701,36 @@ export async function handleMobileApi(
       respondJson(response, 200, await deps.hear.recording(bytes));
     } catch (error) {
       respondJson(response, 422, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  }
+  // The phone's spoken replies in the Doubao voice (doubao-tts.ts). POST, so
+  // the read-only wall token is refused; the body is one chunk of text, the
+  // answer its mp3. The key never leaves the Mac.
+  if (p === "/api/speak" && method === "GET") {
+    respondJson(response, 200, { available: deps.speak?.available() ?? false });
+    return true;
+  }
+  if (p === "/api/speak" && method === "POST") {
+    if (!deps.speak) {
+      respondJson(response, 503, { error: "This Mac has no voice to speak with" });
+      return true;
+    }
+    // The phone stopped reading (or left): stop the upstream request with it.
+    const hangup = new AbortController();
+    response.on("close", () => {
+      if (!response.writableFinished) hangup.abort();
+    });
+    try {
+      const body = await readJson<{ text?: unknown }>(request);
+      const audio = await deps.speak.speak(body?.text as string, hangup.signal);
+      if (hangup.signal.aborted) return true;
+      response.writeHead(200, { "content-type": "audio/mpeg", "content-length": String(audio.byteLength), "cache-control": "no-store" });
+      response.end(Buffer.from(audio));
+    } catch (error) {
+      if (hangup.signal.aborted) return true;
+      const status = error instanceof SpeakError ? error.status : 400;
+      respondJson(response, status, { error: error instanceof Error ? error.message : String(error) });
     }
     return true;
   }

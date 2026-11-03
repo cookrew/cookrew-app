@@ -190,6 +190,19 @@ async function upload(name: string, body: Blob): Promise<string> {
 }
 
 /**
+ * One chunk of a reply in the Mac's Doubao voice (POST /api/speak,
+ * main/doubao-tts.ts): the text out, its mp3 back.
+ */
+async function speakAudio(text: string, signal?: AbortSignal): Promise<Blob> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text }), ...(signal ? { signal } : {}) })
+  if (!response.ok) await parse(response)
+  return response.blob()
+}
+
+/**
  * One recording from the phone's mic, for the Mac to hear (POST /api/listen,
  * main/hear-file.ts). Raw bytes, like an attachment; the answer is the words.
  */
@@ -785,6 +798,11 @@ export function createRemoteApi(): CookrewApi {
         .then((out) => out.available === true)
         .catch(() => false),
     hearRecording,
+    speakAvailable: () =>
+      req<{ available?: boolean }>(apiPath('/api/speak'))
+        .then((out) => out.available === true)
+        .catch(() => false),
+    speakAudio,
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
     listenStop: () => Promise.resolve(),

@@ -10,7 +10,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { gistOf, shouldSpeak } from '../src/renderer/src/prompt/use-spoken-replies'
+import { shouldSpeak } from '../src/renderer/src/prompt/use-spoken-replies'
+import { PromptExtras } from '../src/renderer/src/prompt/PromptExtras'
 import { shownWords, withAttached } from '../src/renderer/src/prompt/draft-pictures'
 
 type Store = Map<string, string>
@@ -183,9 +184,27 @@ describe('🔊 reads the box agent\'s reply once, as its turn lands', () => {
     expect(shouldSpeak({ id: 'b', phase: 'thinking' }, { id: 'a', phase: 'replied' }, 'done it', on)).toBe(false)
     expect(shouldSpeak({ id: null, phase: undefined }, { id: null, phase: 'replied' }, 'x', on)).toBe(false)
   })
-  it('the gist: whitespace folded, the first 300 characters', () => {
-    expect(gistOf('  a\n\n b  ')).toBe('a b')
-    expect(gistOf('x'.repeat(400))).toHaveLength(300)
-    expect(gistOf('')).toBe('done')
+})
+
+describe('the 🔊 button says what a tap will do', () => {
+  const button = (speaking: boolean, reading: boolean): string | undefined =>
+    tag(
+      renderToStaticMarkup(
+        createElement(PromptExtras, { canAttach: false, attaching: false, onPick: () => undefined, onBrowse: () => undefined, speaking, reading, onSpeak: () => undefined })
+      ),
+      'voice-speak'
+    )
+  it('off: speak replies aloud', () => {
+    expect(button(false, false)).toMatch(/title="Speak replies aloud"/)
+    expect(button(false, false)).not.toMatch(/\bon\b|\breading\b/)
+  })
+  it('on and quiet: a tap turns it off', () => {
+    expect(button(true, false)).toMatch(/class="[^"]*\bon\b/)
+    expect(button(true, false)).not.toMatch(/\breading\b/)
+    expect(button(true, false)).toMatch(/tap to turn off/)
+  })
+  it('reading: it breathes, and a tap stops the reading', () => {
+    expect(button(true, true)).toMatch(/class="[^"]*\breading\b/)
+    expect(button(true, true)).toMatch(/tap to stop reading/)
   })
 })

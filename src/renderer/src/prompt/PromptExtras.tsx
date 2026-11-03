@@ -65,10 +65,12 @@ interface PromptExtrasProps {
   /** The phone browser's picker (useFilePicker). */
   onBrowse: () => void
   speaking: boolean
+  /** A reply is being read now: a tap stops the reading, not spoken replies. */
+  reading?: boolean
   onSpeak: () => void
 }
 
-export function PromptExtras({ canAttach, attaching, onPick, onBrowse, speaking, onSpeak }: PromptExtrasProps): React.JSX.Element {
+export function PromptExtras({ canAttach, attaching, onPick, onBrowse, speaking, reading = false, onSpeak }: PromptExtrasProps): React.JSX.Element {
   const pick = (): void => {
     if (attaching) return
     if (hasNativeWebview()) onPick()
@@ -91,8 +93,8 @@ export function PromptExtras({ canAttach, attaching, onPick, onBrowse, speaking,
       )}
       <button
         type="button"
-        className={`cr-btn sm voice-speak${speaking ? ' on' : ''}`}
-        title={speaking ? 'Spoken replies on: tap to stop' : 'Speak replies aloud'}
+        className={`cr-btn sm voice-speak${speaking ? ' on' : ''}${speaking && reading ? ' reading' : ''}`}
+        title={speaking && reading ? 'Reading the reply: tap to stop reading' : speaking ? 'Spoken replies on: tap to turn off' : 'Speak replies aloud'}
         aria-label="Speak replies aloud"
         aria-pressed={speaking}
         onMouseDown={keepFocus}
