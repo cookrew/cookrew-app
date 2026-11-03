@@ -755,6 +755,13 @@ export interface CookrewApi {
   listenStop: () => Promise<void>;
   onListenEvent: (cb: (event: ListenEvent) => void) => () => void;
   /**
+   * The phone's mic, heard by the Mac (prompt/use-dictation.ts ear 'phone',
+   * main/hear-file.ts): whether this Mac can, and the words of one recording.
+   * Remote surfaces only — the desktop has the Mac's own ear above.
+   */
+  hearAvailable?: () => Promise<boolean>;
+  hearRecording?: (audio: Blob, signal?: AbortSignal) => Promise<{ text: string; alternates: Record<string, string> }>;
+  /**
    * A `cookrew://` link the OS handed to the app, already parsed by main —
    * one of three verbs, never a raw URL (shared/deep-link.ts).
    */

@@ -69,7 +69,9 @@ static const double SETTLE_SECONDS = 1.5;
 
 /// Ask once, block until answered. A CLI has no run loop of its own yet, so
 /// the callbacks are waited on with semaphores rather than dispatched.
-static void authorize(void) {
+/// `mic`: a recording read from a file needs speech recognition only, never
+/// the microphone (a mic dialog on the Mac's screen would block a phone's ear).
+static void authorize(BOOL mic) {
   dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, AUTHORIZE_TIMEOUT_SECONDS * NSEC_PER_SEC);
   dispatch_semaphore_t speech = dispatch_semaphore_create(0);
   __block SFSpeechRecognizerAuthorizationStatus speechStatus = SFSpeechRecognizerAuthorizationStatusNotDetermined;
@@ -82,14 +84,15 @@ static void authorize(void) {
     fail([NSString stringWithFormat:@"speech recognition not authorized (%ld)", (long)speechStatus]);
   }
 
-  dispatch_semaphore_t mic = dispatch_semaphore_create(0);
+  if (!mic) return;
+  dispatch_semaphore_t micAnswer = dispatch_semaphore_create(0);
   __block BOOL micGranted = NO;
   [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
                            completionHandler:^(BOOL granted) {
                              micGranted = granted;
-                             dispatch_semaphore_signal(mic);
+                             dispatch_semaphore_signal(micAnswer);
                            }];
-  if (dispatch_semaphore_wait(mic, deadline) != 0) fail(@"microphone permission was not answered");
+  if (dispatch_semaphore_wait(micAnswer, deadline) != 0) fail(@"microphone permission was not answered");
   if (!micGranted) fail(@"microphone not authorized");
 }
 
@@ -101,9 +104,37 @@ static void authorize(void) {
 @property(nonatomic, strong) SFSpeechRecognitionTask *task;
 @property(nonatomic, copy) NSString *lastText;
 @property(nonatomic, copy) NSString *finalText; // nil until the recognizer settled
+/// Utterances already ended. After a pause the recognizer starts its
+/// transcription over (measured 2026-11-03, macOS 26: each utterance ends with
+/// a result carrying speechRecognitionMetadata, and the final after trailing
+/// silence is EMPTY), so what was said before the pause lives only here.
+@property(nonatomic, strong) NSMutableArray<NSString *> *said;
 @end
 @implementation Ear
 @end
+
+/// Utterances joined as speech: a space between words, none between hanzi.
+static NSString *joinSaid(NSArray<NSString *> *parts) {
+  NSMutableString *out = [NSMutableString string];
+  for (NSString *part in parts) {
+    if (part.length == 0) continue;
+    if (out.length > 0) {
+      unichar left = [out characterAtIndex:out.length - 1];
+      unichar right = [part characterAtIndex:0];
+      if (left < 0x2E80 && right < 0x2E80) [out appendString:@" "];
+    }
+    [out appendString:part];
+  }
+  return out;
+}
+
+/// Everything heard so far: the ended utterances, then the current one.
+static NSString *heardSoFar(Ear *ear, NSString *current) {
+  NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithArray:ear.said ?: @[]];
+  // A final that repeats the utterance just ended is that utterance, not a new one.
+  if (current.length > 0 && ![current isEqualToString:parts.lastObject]) [parts addObject:current];
+  return joinSaid(parts);
+}
 
 @interface Listener : NSObject
 /// Words the recognizers should expect — agent, workspace and preset names.
@@ -113,6 +144,7 @@ static void authorize(void) {
 - (void)stop;
 - (void)recognizeFile:(NSString *)path;
 - (void)streamFile:(NSString *)path;
+- (void)finish;
 @end
 
 @implementation Listener {
@@ -229,6 +261,9 @@ static void authorize(void) {
   request.taskHint = SFSpeechRecognitionTaskHintDictation;
   if (self.hints.count > 0) request.contextualStrings = self.hints;
   _ears = @[ ear ];
+  // A recording has already ended: there is no key to come up, so the final
+  // is the last word and ends the process (the phone's ear waits on it).
+  _stopping = YES;
   __weak Listener *weakSelf = self;
   ear.task = [ear.recognizer recognitionTaskWithRequest:request
                                           resultHandler:^(SFSpeechRecognitionResult *result, NSError *error) {
@@ -265,11 +300,17 @@ static void authorize(void) {
   if (_finished) return;
   BOOL primary = ear == _ears.firstObject;
   if (result) {
-    NSString *text = result.bestTranscription.formattedString;
+    NSString *current = result.bestTranscription.formattedString;
+    NSString *text = heardSoFar(ear, current);
     if (result.isFinal) {
       ear.finalText = text;
       [self finishIfAllHeard];
       return;
+    }
+    // An utterance ended: keep it, the next one starts from nothing.
+    if (result.speechRecognitionMetadata != nil && current.length > 0 && ![current isEqualToString:ear.said.lastObject]) {
+      if (!ear.said) ear.said = [NSMutableArray array];
+      [ear.said addObject:current];
     }
     if (![text isEqualToString:ear.lastText]) {
       ear.lastText = text;
@@ -395,13 +436,14 @@ int main(int argc, const char *argv[]) {
     dispatch_source_set_event_handler(sigterm, onStop);
     dispatch_resume(sigterm);
 
-    authorize();
+    authorize(file == nil);
     listener = [[Listener alloc] initWithLocales:locales allowServer:allowServer];
     listener.hints = hints;
     if (file) {
       // Diagnostic / test mode: no microphone — the file ends itself.
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(maxSeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        fail(@"file recognition timed out");
+        // Out of time: what it heard so far is the final, not an error.
+        [listener finish];
       });
       if (streamFile) [listener streamFile:file];
       else {
