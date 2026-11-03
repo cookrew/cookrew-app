@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import type { CanvasNode } from '../../../shared/model'
 import { addressedToSous } from '../../../shared/sous-intent'
@@ -22,11 +22,11 @@ import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
-import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, releaseAfter, zoomMoveKey, type Release } from './prompt-target'
+import { boxPin, boxTargetId, heldAfter, mentionTarget, pickAfterMove, pickNow, promptTargetOf, releaseAfter, zoomMoveKey, type Pick, type Release } from './prompt-target'
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
-import { useDropZone } from './drop-zone'
+import { useDropOn, useDropZone } from './drop-zone'
 import { ExtrasToggle, PromptExtras, useFilePicker } from './PromptExtras'
 import { extrasShown, rememberExtras, toolsOpen } from './extras-pref'
 import { useSpokenReplies } from './use-spoken-replies'
@@ -36,10 +36,13 @@ import { keyboardCoverNow, riseOver, type RiseAnchor, topBarBottom } from './ris
 import { useCrewContext } from '../stage/crew-rows'
 import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
-import { boxFold, facePlace, promptFold, usePromptOpen } from './prompt-fold'
+import { boxFold, facePlace, promptFold, usePromptOpen, usePromptWho } from './prompt-fold'
 import { flyFace, popFace, type Box } from './face-flip'
 import { useFaceSlot } from './face-slot'
-import { enterOpensBox, keepsBoxOpen, pressOnCanvas } from './enter-opens'
+import { enterOpensBox, pasteOpensBox } from './enter-opens'
+import { listenFoldPress } from './fold-press'
+import { sendPlan } from './send-plan'
+import { pastedImages } from './prompt-attach'
 import { latestUser, usersInView } from './item-user'
 import { PromptFace, RemoteMark, type FaceAgent } from './PromptFace'
 import { promptPlaceholder, withItemRef, wordsStop, type WordsStop } from './prompt-words'
@@ -89,6 +92,13 @@ import './global-prompt.css'
  * elsewhere folds it, the words kept as its draft. Open, the face is the send
  * key, and with no words it chooses who (WhoPicker.tsx). In a browser's or a
  * note's full view the face is the item's latest user (item-user.ts).
+ * Folded, the ＋ face takes a dropped file and a pasted picture: the box opens
+ * with it attached. Back on the phone takes the Esc order (back-guard.ts).
+ *
+ * THE BOX FOLLOWS WHAT IT MADE (owner task, 2026-11-04): after a prompt makes
+ * an agent, the chip becomes the new agent's face and name (it pops in), so
+ * the next words are a follow-up, until the zoom's next deliberate move, as a
+ * pick (prompt-target.ts · pickNow).
  *
  * VOICE lands here too, and only here (use-dictation.ts): the mic, or ⌘
  * held, puts the words into the draft to be read and sent, for an agent or
@@ -153,9 +163,6 @@ function useWordsStop(): WordsStop {
   return useSyncExternalStore(zoomStore.subscribe, () => wordsStop(zoomStore.get()), () => 'crew')
 }
 
-/** How long a released press's click may take to arrive (a finger's tap is the slow one). */
-const CLICK_GRACE_MS = 350
-
 const NO_ROWS: readonly AgentRow[] = []
 const NO_IDS: readonly string[] = []
 
@@ -207,11 +214,15 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // Let go of @agent until the view moves: a deliberate move of the zoom, or
   // another agent on show (prompt-target.ts · releaseAfter).
   const [released, setReleased] = useState<Release | null>(null)
-  // The who-picker's pick stands in for the view's agent until the same move.
-  const [pickedAgent, setPickedAgent] = useState<string | null>(null)
+  // The who-picker's pick, or the agent a prompt just made, stands in for the
+  // view's agent until the same move (prompt-target.ts · pickNow).
+  const [standIn, setStandIn] = useState<Pick | null>(null)
+  const pickedAgent = pickNow(standIn, moveKey)
   useEffect(() => {
     setReleased(null)
-    setPickedAgent(null)
+    // A move ends it for good: back at the same place (a card closed and
+    // opened again) the old pick does not come back.
+    setStandIn((s) => pickAfterMove(s, moveKey))
   }, [moveKey])
   const release = releaseAfter(released, viewed)
   useEffect(() => {
@@ -411,35 +422,38 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch, prompt, autoName: true, tune }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
-    if (made.id) wireRefs(made.id, refs)
+    if (made.id) {
+      wireRefs(made.id, refs)
+      // The box follows it: the next words are a follow-up. Keyed to where the
+      // make left the zoom (its card), so its next deliberate move ends it.
+      setReleased(null)
+      setStandIn({ id: made.id, at: zoomMoveKey(zoomStore.get()) })
+    }
     setText('')
   }
 
+  // What Enter or Send does with the words (send-plan.ts): nothing in an empty box.
+  const plan = sendPlan({ text, to, fullAgentId, mention: mentionTarget(text, agents) })
   const submit = (): void => {
     setError(null)
-    // "@Other …" goes to Other, whoever the box is carrying.
-    const mention = mentionTarget(text, agents)
-    if (mention && mention.id !== to?.id) {
-      if (!mention.text) return
-      const out = said(withItemRef(mention.text, attachedItem, artifacts))
-      sendToAgent(mention.id, out.words)
-      wireRefs(mention.id, out.refs)
+    if (plan.kind === 'mention') {
+      // "@Other …" goes to Other, whoever the box is carrying.
+      const out = said(withItemRef(plan.words, attachedItem, artifacts))
+      sendToAgent(plan.id, out.words)
+      wireRefs(plan.id, out.refs)
       // Enter took whatever sat in Other's line along with the words.
-      endLine(mention.id)
+      endLine(plan.id)
       setText('')
       return
     }
-    if (to) {
-      const out = said(withItemRef(mention ? mention.text : text, attachedItem, artifacts))
-      // A bare Enter only where its terminal is in sight: from a card it
-      // could answer a permission prompt nobody is looking at.
-      if (!out.words.trim() && to.id !== fullAgentId) return
-      submitLine(to.id, out.words.trim() ? out.words : '')
-      wireRefs(to.id, out.refs)
+    if (plan.kind === 'agent') {
+      // A bare Enter only where its terminal is in sight (send-plan.ts).
+      const out = said(withItemRef(plan.words, attachedItem, artifacts))
+      submitLine(plan.id, out.words.trim() ? out.words : '')
+      wireRefs(plan.id, out.refs)
       return
     }
-    const prompt = text.trim()
-    if (prompt && !busy) void makeNew(prompt)
+    if (plan.kind === 'new' && !busy) void makeNew(plan.words)
   }
 
   // "@…" and "#…" offer the names they could become, while the box has focus.
@@ -485,18 +499,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const open = usePromptOpen()
   // An agent in the box holds it open, in place of the bar (prompt-fold.ts · boxFold).
   const { canFold: foldable, folded, overBar } = boxFold({ place, slot: faceSlot !== null, pinned: to !== null, open })
-  const [who, setWho] = useState(false)
-  useEffect(() => setWho(false), [to?.id, folded])
+  // The who-picker lives in the fold store: the zoom's Esc and the phone's
+  // back close it first (prompt-fold.ts · takeBack).
+  const who = usePromptWho()
+  const setWho = promptFold.setPicker
+  useEffect(() => setWho(false), [to?.id, folded, setWho])
   // The picker is for an empty box: words typed with it open close it, so a
   // pick never lands while words hold the box on someone else.
   useEffect(() => {
     if (text.trim() !== '') setWho(false)
-  }, [text])
-  // Where the box cannot fold (an agent's full view), it is not left open
-  // behind it: back at the stops it starts folded, the bar in view.
-  useEffect(() => {
-    if (!foldable) promptFold.fold()
-  }, [foldable])
+  }, [text, setWho])
   // The store outlives the box (the board's view unmounts it): leave it as
   // if no box were there, or the zoom's Esc would fold nothing.
   useEffect(
@@ -511,6 +523,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   useEffect(() => {
     if (folded) setHeld(null)
   }, [folded])
+  // Where the box cannot fold (an agent in it, its full view) it is not left
+  // open behind: back at the stops it starts folded (prompt-fold.ts · setFoldable).
   useEffect(() => promptFold.setFoldable(foldable), [foldable])
   // In the layout pass: the face's flight measures the open box, which these classes un-hide.
   useLayoutEffect(() => {
@@ -542,56 +556,57 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folded])
-  // A primary press anywhere else folds it. On the zoom's canvas it only
-  // folds, as a press outside a menu closes it (else it would also zoom out
-  // or open a card); anywhere else (the header, a page, a dialog) it goes on
-  // to do what it does.
+  // A primary press anywhere else folds it; on the canvas that is all it does
+  // (fold-press.ts).
   useEffect(() => {
     if (!foldable || folded) return
-    const onDown = (e: PointerEvent): void => {
-      if (e.button !== 0 || !e.isPrimary) return
-      const target = e.target instanceof Element ? e.target : null
-      if (keepsBoxOpen(target)) return
-      setPicking(null)
-      promptFold.fold()
-      if (!pressOnCanvas(target)) return
-      e.stopPropagation()
-      const swallow = (c: MouseEvent): void => {
-        c.stopPropagation()
-        c.preventDefault()
+    return listenFoldPress(window, {
+      onFold: () => {
+        setPicking(null)
+        promptFold.fold()
       }
-      // Armed for this press's own click only. A cancelled press (a pan) never
-      // clicks: it disarms at once. A lifted one gets a beat for its click,
-      // which a finger's tap can deliver well after the release.
-      const unarm = (): void => window.removeEventListener('click', swallow, true)
-      const lifted = (): void => {
-        stop()
-        window.setTimeout(unarm, CLICK_GRACE_MS)
-      }
-      const cancelled = (): void => {
-        stop()
-        unarm()
-      }
-      const stop = (): void => {
-        window.removeEventListener('pointerup', lifted, true)
-        window.removeEventListener('pointercancel', cancelled, true)
-      }
-      window.addEventListener('click', swallow, { capture: true, once: true })
-      window.addEventListener('pointerup', lifted, true)
-      window.addEventListener('pointercancel', cancelled, true)
-    }
-    window.addEventListener('pointerdown', onDown, true)
-    return () => window.removeEventListener('pointerdown', onDown, true)
+    })
   }, [foldable, folded])
   // A word from Sous or an error must be seen: they live in the box, so it opens.
   useEffect(() => {
     if ((error || sous) && foldable) promptFold.open()
   }, [error, sous, foldable])
 
+  // A PICTURE PASTED WITH THE BOX FOLDED (desktop ⌘V, no field taking it)
+  // opens the box with the picture attached (enter-opens.ts · pasteOpensBox).
+  const attachRef = useRef(attach)
+  attachRef.current = attach
+  useEffect(() => {
+    if (!folded) return
+    const onPaste = (e: ClipboardEvent): void => {
+      if (e.defaultPrevented || !pasteOpensBox(e.target instanceof Element ? e.target : null)) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      const images = pastedImages(e.clipboardData)
+      if (images.length === 0) return
+      e.preventDefault()
+      openBox()
+      attachRef.current.takeImages(images)
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folded])
+
   const face = to ? faceOf(to.id, to.name, crewRows, harness) : null
   // THE FACE FLIES LEFT (face-flip.ts): where the folded face last stood, and
   // the chip's face it becomes when the box opens; another agent pops in.
-  const faceRef = useRef<HTMLButtonElement>(null)
+  const faceRef = useRef<HTMLButtonElement | null>(null)
+  // A FILE DROPPED ON THE FOLDED FACE (desktop) opens the box with it
+  // attached; the drop cue shows over the face while the file hovers it.
+  const [faceEl, setFaceEl] = useState<HTMLButtonElement | null>(null)
+  const faceButton = useCallback((node: HTMLButtonElement | null) => {
+    faceRef.current = node
+    setFaceEl(node)
+  }, [])
+  const faceDrop = useDropOn(folded ? faceEl : null, (files) => {
+    openBox()
+    attachRef.current.dropFiles(files)
+  })
   const lastFace = useRef<Box | null>(null)
   const chipFace = useRef<HTMLSpanElement>(null)
   const chipName = useRef<HTMLElement>(null)
@@ -608,8 +623,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     if (was.folded && lastFace.current) flyFace(el, lastFace.current, { box: formRef.current, rest: [chipName.current] })
     else if (was.id !== id) popFace(el)
   }, [folded, to?.id])
-  /** The box can send: words, or a bare Enter where the agent's terminal is in sight. */
-  const canSend = text.trim() !== '' || (to !== null && to.id === fullAgentId)
+  /** The box can send: words, or a bare Enter where the agent's terminal is in sight (send-plan.ts). */
+  const canSend = plan.kind !== 'none'
   const hold = dictation.ear
     ? {
         onHold: () => {
@@ -620,11 +635,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     : {}
   const foldedFace = (
     <PromptFace
-      buttonRef={faceRef}
+      buttonRef={faceButton}
       agent={face}
       harness={harness}
       mode="folded"
       draft={text !== ''}
+      dropping={faceDrop}
       remote={to?.remote ?? false}
       listening={dictation.listening}
       label={to ? `Reply to ${to.name}${to.remote ? ' · runs elsewhere' : ''}` : `New ${harness} agent`}
@@ -667,14 +683,14 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             setReleased(null)
             // A hold on the box moves with the pick: the words go where it points.
             setHeld((h) => (h ? { id } : h))
-            setPickedAgent(id)
+            setStandIn({ id, at: moveKey })
             setWho(false)
           })
           focusBox()
         }}
         onNew={(name) => {
           flushSync(() => {
-            setPickedAgent(null)
+            setStandIn(null)
             if (viewed) letGo(viewed)
             setWho(false)
             takeHarness(name)
@@ -713,9 +729,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           e.stopPropagation()
           return closeWho()
         }
-        if (!foldable) return
-        e.stopPropagation()
-        promptFold.fold()
+        if (promptFold.backFirst()) e.stopPropagation()
       }}
       onSubmit={(e) => {
         e.preventDefault()

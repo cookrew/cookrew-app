@@ -46,13 +46,15 @@ interface FoldState {
   readonly open: boolean
   /** The box can fold here: its face has a place to stand. */
   readonly foldable: boolean
+  /** The who-picker is open over the box (WhoPicker.tsx). */
+  readonly picker: boolean
 }
 
-let state: FoldState = { open: false, foldable: false }
+let state: FoldState = { open: false, foldable: false, picker: false }
 const listeners = new Set<() => void>()
 
 function emit(next: FoldState): void {
-  if (next.open === state.open && next.foldable === state.foldable) return
+  if (next.open === state.open && next.foldable === state.foldable && next.picker === state.picker) return
   state = next
   for (const listener of listeners) listener()
 }
@@ -64,19 +66,49 @@ export const promptFold = {
     return () => listeners.delete(listener)
   },
   open: (): void => emit({ ...state, open: true }),
-  fold: (): void => emit({ ...state, open: false }),
-  setFoldable: (foldable: boolean): void => emit({ ...state, foldable }),
+  /** Folded, the picker goes with the box. */
+  fold: (): void => emit({ ...state, open: false, picker: false }),
+  /**
+   * Where the box cannot fold (an agent in it, an agent's full view) it is
+   * not left open behind: once it can fold again it starts folded, the bar
+   * in view (an agent deselected folds the box).
+   */
+  setFoldable: (foldable: boolean): void => emit({ ...state, foldable, open: foldable && state.open }),
+  setPicker: (picker: boolean): void => emit({ ...state, picker }),
   /**
    * The zoom's Esc asks here first: an open box that can
    * fold folds, and the view stays where it is.
    */
   foldFirst(): boolean {
     if (!state.open || !state.foldable) return false
-    emit({ ...state, open: false })
+    emit({ ...state, open: false, picker: false })
     return true
-  }
+  },
+  /** Esc and back ask here first (takeBack): the picker closes, else a box that can fold folds. */
+  backFirst(): boolean {
+    if (state.picker) {
+      emit({ ...state, picker: false })
+      return true
+    }
+    return promptFold.foldFirst()
+  },
+  /** The box would take the next Esc or back. */
+  wantsBack: (): boolean => state.picker || (state.open && state.foldable)
+}
+
+/**
+ * ONE ORDER FOR ESC AND BACK (design, "Esc · Android back"): the picker, then
+ * the box, then the zoom one stop out. True when a step was taken; false at
+ * the outermost stop with nothing open, where back leaves the page.
+ */
+export function takeBack(zoomOut: () => boolean): boolean {
+  return promptFold.backFirst() || zoomOut()
 }
 
 export function usePromptOpen(): boolean {
   return useSyncExternalStore(promptFold.subscribe, () => state.open, () => false)
+}
+
+export function usePromptWho(): boolean {
+  return useSyncExternalStore(promptFold.subscribe, () => state.picker, () => false)
 }

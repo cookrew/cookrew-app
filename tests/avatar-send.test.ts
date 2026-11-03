@@ -179,6 +179,6 @@ describe('the CSS contract', () => {
   it('the zoom bar keeps the slot and asks the box before Esc steps out', () => {
     const zoom = read('zoom', 'ZoomView.tsx')
     expect(zoom).toMatch(/ref=\{setFaceSlot\}/)
-    expect(zoom).toMatch(/promptFold\.foldFirst\(\)/)
+    expect(zoom).toMatch(/takeBack\(stepBack\)/)
   })
 })

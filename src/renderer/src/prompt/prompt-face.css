@@ -656,3 +656,68 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
     transition: none;
   }
 }
+
+/* ---- A FILE DRAGGED OVER THE FOLDED FACE (task "Face inputs", 2026-11-04) ----
+   The transcripts view's drop cue (styles.css · .attach-drop-hint), drawn
+   over the face: its dashed ring in the primary, a paperclip in place of the
+   face, and DROP TO ATTACH above it. Dropped, the box opens with the file. */
+.pf-face.pf-dropping .pf-disc {
+  transform: scale(1.12);
+}
+
+.pf-face.pf-dropping .pf-drop-cue {
+  position: absolute;
+  inset: -3px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px dashed var(--sumi-seal, var(--amber-deep));
+  background: color-mix(in srgb, var(--sumi-gold, var(--amber)) 88%, var(--sumi-card, var(--cream-hi)));
+  color: var(--sumi-on-gold, var(--ink));
+  pointer-events: none;
+  animation: pf-drop-in 160ms ease-out;
+}
+
+.pf-face.pf-dropping .pf-drop-cue > .cr-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.pf-face.pf-dropping .pf-verb,
+.pf-face.pf-dropping .pf-dot {
+  visibility: hidden;
+}
+
+/* Above the face, its right edge on the face's: the face stands at the bar's
+   right end (or in the corner), so the words grow leftward, never off-screen. */
+.pf-drop-words {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 8px);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--sumi-card, var(--cream-hi));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    var(--sumi-lift, 0 10px 28px rgba(40, 30, 15, 0.1));
+  color: var(--sumi-ink, var(--ink));
+  font: 11px/1.2 var(--font-pixel, ui-monospace, monospace);
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+@keyframes pf-drop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-face.pf-dropping .pf-drop-cue {
+    animation: none;
+  }
+  .pf-face.pf-dropping .pf-disc {
+    transform: none;
+  }
+}
