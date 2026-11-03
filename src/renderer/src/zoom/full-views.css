@@ -532,6 +532,8 @@
 /* A phone is one column: the head wraps, the tabs shrink. */
 @media (max-width: 700px) {
   .zv-fullview { padding: 8px 8px 6px; }
+  /* The phone's box floats over the stage's foot (global-prompt.css · THE BOX FLOATS): the sheet ends above it. */
+  .zv-fullview { padding-bottom: var(--cr-float-h, 6px); }
   .zv-fullview::after { inset: 66px 8px 8px; }
   .zv-fv-head { gap: 9px; padding: 2px 4px 8px; }
   .zv-fv-ink { width: 34px; height: 34px; }

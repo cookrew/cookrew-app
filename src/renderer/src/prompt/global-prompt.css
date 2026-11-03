@@ -598,3 +598,161 @@
   padding: 6px 12px;
   text-align: center;
 }
+
+/* ---- THE BOX FLOATS, ONE ROW (owner, 2026-11-03: "can the bottom input box be
+   a floating box that takes no bottom-bar space, one row") ----
+   A phone's dock is no band any more: a fixed, see-through layer at the foot,
+   the box a pill over the page, and the stage runs to the screen's bottom.
+   What stood on the band clears the pill through --cr-float-h, defined here
+   and only here: the full view's sheet (zoom/full-views.css), the zoom's bar
+   (zoom/zoom.css), the pets' bed (pets/stage-floor.ts reads the pill's top).
+
+   At rest the pill is ONE row: the left chip (@agent or ＋ harness), the
+   words, 🎤, Send. The model chip and the tools (⌄ ⌨ and the keys) float as
+   a row ABOVE it while the box has focus, the agent waits on you, the ear
+   listens or the extras are open — the pill grows upward, so the row typed in
+   never moves. Sous's word and an error stand on top of it all. */
+@media (max-width: 700px) {
+  body.cookrew-mobile {
+    /* The pill (40 + 2 × 4), its foot, and 8px of air above it. */
+    --cr-float-h: calc(56px + max(8px, env(safe-area-inset-bottom, 0px)));
+  }
+
+  body.cookrew-mobile .cr-dock.cr-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: var(--kb-inset, 0px);
+    padding: 0 8px max(8px, env(safe-area-inset-bottom, 0px));
+    background: transparent;
+    border-top: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  body.cookrew-mobile .cr-dock .dock-canvas {
+    pointer-events: none;
+  }
+
+  body.cookrew-mobile .cr-dock .dock-canvas > * {
+    pointer-events: auto;
+  }
+
+  body.cookrew-mobile .cr-prompt {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-height: 0;
+    padding: 4px;
+    border-radius: 24px;
+    box-shadow:
+      inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+      0 8px 28px rgba(40, 30, 15, 0.18),
+      0 1px 3px rgba(40, 30, 15, 0.1);
+  }
+
+  body.cookrew-mobile .cr-prompt:focus-within {
+    box-shadow:
+      inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep)),
+      0 8px 28px rgba(40, 30, 15, 0.2),
+      0 1px 3px rgba(40, 30, 15, 0.1);
+  }
+
+  /* Top to bottom: what was said, the tray, a break, then the one row. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-note,
+  body.cookrew-mobile .cr-prompt .cr-prompt-sous,
+  body.cookrew-mobile .cr-prompt .cr-prompt-error {
+    order: -5;
+    padding: 2px 10px 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-tune-menu,
+  body.cookrew-mobile .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune) {
+    order: -4;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools {
+    order: -4;
+    flex: 1 1 0;
+  }
+
+  body.cookrew-mobile .cr-prompt::before {
+    content: '';
+    order: -3;
+    flex: 0 0 100%;
+    height: 0;
+    margin-bottom: -4px;
+  }
+
+  body.cookrew-mobile .cr-prompt-to,
+  body.cookrew-mobile .cr-prompt .cr-prompt-new:has(> .cr-prompt-harness) {
+    order: -2;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 34%;
+  }
+
+  /* A block, so a long harness ends in "…" (a flex button's text cannot). */
+  body.cookrew-mobile .cr-prompt-new > .cr-prompt-harness {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  body.cookrew-mobile .cr-prompt input {
+    order: -1;
+    flex: 1 1 0;
+    min-width: 60px;
+    height: 40px;
+    padding: 0 4px 0 6px;
+  }
+
+  body.cookrew-mobile .cr-prompt > .voice-mic {
+    order: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+    order: 1;
+  }
+
+  body.cookrew-mobile .cr-prompt > .voice-mic,
+  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+    flex: none;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    margin: 0;
+    padding: 0;
+    border-radius: 50%;
+    justify-content: center;
+  }
+
+  body.cookrew-mobile .cr-prompt > .voice-mic .cr-icon,
+  body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* At rest: one row. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-tools,
+  body.cookrew-mobile .cr-prompt .cr-tune-menu,
+  body.cookrew-mobile .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune),
+  body.cookrew-mobile .cr-prompt::before {
+    display: none;
+  }
+
+  /* The tray, while it is wanted. */
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open)) .cr-prompt-tools {
+    display: flex;
+  }
+
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open)) .cr-tune-menu,
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open)) .cr-prompt-new:has(> .cr-prompt-tune) {
+    display: inline-flex;
+  }
+
+  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, .to-agent:not(.keys-folded), :has(.cr-prompt-more.open))::before {
+    display: block;
+  }
+}
