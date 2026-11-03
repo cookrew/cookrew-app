@@ -193,13 +193,26 @@ async function upload(name: string, body: Blob): Promise<string> {
  * One chunk of a reply in the Mac's local voice (POST /api/speak,
  * main/local-voice.ts): the text out, its audio back.
  */
-async function speakAudio(text: string, signal?: AbortSignal, lang?: 'zh' | 'en'): Promise<Blob> {
+const speaking = new Map<string, AbortController>()
+
+async function speakAudio(text: string, lang?: 'zh' | 'en', requestId?: string): Promise<Blob> {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
-  const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text, ...(lang ? { lang } : {}) }), ...(signal ? { signal } : {}) })
-  if (!response.ok) await parse(response)
-  return response.blob()
+  const controller = new AbortController()
+  if (requestId) speaking.set(requestId, controller)
+  try {
+    const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text, ...(lang ? { lang } : {}) }), signal: controller.signal })
+    if (!response.ok) await parse(response)
+    return await response.blob()
+  } finally {
+    if (requestId) speaking.delete(requestId)
+  }
+}
+
+/** A chunk the phone no longer wants: hanging up stops the Mac making it (mobile-api). */
+function speakCancel(requestId: string): void {
+  speaking.get(requestId)?.abort()
 }
 
 /**
@@ -803,6 +816,7 @@ export function createRemoteApi(): CookrewApi {
         .then((out) => out.available === true)
         .catch(() => false),
     speakAudio,
+    speakCancel,
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
     listenStop: () => Promise.resolve(),
