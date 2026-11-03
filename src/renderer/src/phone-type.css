@@ -118,6 +118,12 @@
     font-size: var(--ph-caption);
   }
 
+  /* ── a sheet's title (Account, a team's fork, a lock card) ── */
+  :root:root body.cr-ink :is(.tf-title, .cr-acct-lockcard h2),
+  :root:root body.cr-ink .cr-sheet .gs-sheet-head h2 {
+    font-size: var(--ph-title);
+  }
+
   /* ── a sheet's own words under its title (the account sheet on a phone) ── */
   :root:root .gs-sheet .gs-sub {
     font-size: var(--ph-control);
