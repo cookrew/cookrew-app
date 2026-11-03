@@ -265,6 +265,8 @@ export interface HoldReveal {
  * touch equivalent of the desktop row-hover) to reveal its SAVE ROLE / FORK
  * actions; a release before `ms` is a plain tap and reveals nothing. Uses the
  * global timer (fake-timer testable). Pure control-flow — unit-tested.
+ *
+ * @deprecated the actions it revealed were retired from the checkpoint rail by the owner on 2026-11-03; nothing calls it now.
  */
 export function createHoldReveal(onReveal: (index: number) => void, ms: number): HoldReveal {
   let timer: ReturnType<typeof setTimeout> | null = null

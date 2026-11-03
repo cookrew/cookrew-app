@@ -1,12 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { cookrew } from './api'
-import { CrIcon } from './icons'
+import { useEffect, useRef, useState } from 'react'
 import { type TitleMode } from './checkpoint-sync'
-import { hasRoleFromCheckpoint } from './role-checkpoint'
 import { LineagePanel } from './LineagePanel'
 import { CheckpointRowView } from './CheckpointRowView'
-import { SaveRoleInline } from './SaveRoleInline'
-import { createHoldReveal, hasLineageSegmentsApi, railAnchorTop, railPointerFraction } from './transcript'
+import { hasLineageSegmentsApi, railAnchorTop, railPointerFraction } from './transcript'
 import {
   checkpointRowTitle,
   scrollFocusState,
@@ -32,15 +28,6 @@ import {
 
 /** Px of pointer travel before a press on the rail becomes a scrub, not a tap. */
 const SCRUB_THRESHOLD = 4
-/** Press-and-hold a tab/row this long (~2s) to reveal its SAVE ROLE / FORK
- *  actions. Same gesture for mouse and touch — desktop == mobile. */
-const HOLD_REVEAL_MS = 1500
-
-/** M4: a two-tap REWIND arm expires after this long (walk-away safety — the
- *  chip reverts to REWIND instead of staying one tap from a rewind). */
-const REWIND_ARM_MS = 8000
-/** M3: an inline rewind refusal lingers this long, then dismisses itself. */
-const REWIND_ERROR_MS = 6000
 /** F1: movement stops for this long and the tag fades out. */
 const IDLE_AFTER_MS = 1700
 
@@ -61,14 +48,14 @@ const IDLE_AFTER_MS = 1700
  *    under it and PINS that focus for a dwell (stream/focus-policy.ts), so the
  *    list is still there when the finger comes back to press something — and a
  *    live agent's own output cannot scroll it away in the meantime.
- *  - In the list: tap/click a row → jump; press-and-HOLD a row/tab (~2s) → its
- *    SAVE ROLE / FORK actions. On the PINNED focus row those actions are
- *    already showing: the hold is a shortcut, not the only door (D2, canvas QA
- *    2026-09-07 — with one pointer, holding the fan open and pressing a row are
- *    the same finger).
+ *  - In the list: tap/click a row → jump. Rows carry NO actions: SAVE ROLE,
+ *    FORK and ⟲ REWIND were retired from the rail by the owner on 2026-11-03
+ *    (the features are @deprecated where they live — role-checkpoint.ts and
+ *    the fork / rewind calls in api.ts), and the press-and-hold that
+ *    revealed them went with them.
  *
  * Rows span the WHOLE trace (unified-scroll item 3): identities below the record
- * cap render trace-only (fork works, role-save needs the record). Fresco owns the
+ * cap render trace-only. Fresco owns the
  * `.cr-ckpt-*` visuals and makes them IDENTICAL for both interaction modes.
  */
 export function CheckpointTimeline({
@@ -115,11 +102,13 @@ export function CheckpointTimeline({
   markerFrac?: number
   /**
    * CHAT and LOG (owner, 2026-11-03): only the tag that names the turn in view
-   * while scrolling, with its ROLE / FORK / REWIND. No bar, ticks, count or
-   * live dot, and no full list; the transcript's own scrollbar moves it.
+   * while scrolling. No bar, ticks, count or live dot, and no full list; the
+   * transcript's own scrollbar moves it.
    */
   tagOnly?: boolean
-  /** Guards the mutating rail actions (rewind); read-only embedders opt out. */
+  /** Guards the earlier-sessions panel's mutating action (its deprecated
+   *  rewind); read-only embedders opt out. The rail rows themselves no longer
+   *  carry any action to guard. */
   allowActions?: boolean
   /**
    * May a segment boundary open the earlier-sessions panel? False for a card
@@ -186,17 +175,6 @@ export function CheckpointTimeline({
   const focused = focusState.focus
   /** Bumped when a dwell expires, so the fan re-evaluates without a scroll. */
   const [dwellTick, setDwellTick] = useState(0)
-  /** The row whose SAVE ROLE / FORK actions are revealed (held ~2s). */
-  const [acting, setActing] = useState<number | null>(null)
-  const [savingIndex, setSavingIndex] = useState<number | null>(null)
-  const [forkingIndex, setForkingIndex] = useState<number | null>(null)
-  /** REWIND two-tap arm: first tap arms "SURE?" (in-place rewind is the one
-   * destructive-ish rail action), second tap executes. */
-  const [rewindArmed, setRewindArmed] = useState<number | null>(null)
-  const [rewindingIndex, setRewindingIndex] = useState<number | null>(null)
-  /** M3: a refused rewind, surfaced INLINE on the row (never window.alert — a
-   * native modal freezes the whole Electron UI). Scoped by row index. */
-  const [rewindError, setRewindError] = useState<{ index: number; reason: string } | null>(null)
   /** Earlier-sessions panel (lineage reach) — opened from the segment-boundary tick. */
   const [lineageOpen, setLineageOpen] = useState(false)
   /** F1: true once movement has stopped for IDLE_AFTER_MS. The tag stays
@@ -216,17 +194,6 @@ export function CheckpointTimeline({
   // Rail scrub gesture: a press that travels past SCRUB_THRESHOLD becomes a
   // scrollbar drag; a press that stays put is a tap that opens the fan.
   const scrub = useRef<{ startY: number; moved: boolean }>({ startY: 0, moved: false })
-  // Set when a HOLD fires (reveals actions) so the following click is swallowed.
-  const held = useRef(false)
-  const hold = useMemo(
-    () =>
-      createHoldReveal((index) => {
-        setActing(index)
-        held.current = true
-      }, HOLD_REVEAL_MS),
-    []
-  )
-  useEffect(() => () => hold.cancel(), [hold])
 
   // SCROLL → FOCUS: track the focused checkpoint (+ its PRECISE identity fraction
   // in markerFrac) from the identity in view — not while scrubbing (the scrub
@@ -298,116 +265,7 @@ export function CheckpointTimeline({
     setTitleShift(overflow > 0 ? overflow : 0)
   }, [focused?.index, titleMode, rows])
 
-  // Dismiss a row's revealed actions on a pointerdown OUTSIDE the rail (the tab
-  // is scroll-driven, not click-opened, so it needs no dismissal itself).
-  useEffect(() => {
-    if (acting === null) return
-    const onDown = (e: PointerEvent): void => {
-      if (railRef.current && !railRef.current.contains(e.target as Node)) {
-        setActing(null)
-        setSavingIndex(null)
-      }
-    }
-    document.addEventListener('pointerdown', onDown)
-    return () => document.removeEventListener('pointerdown', onDown)
-  }, [acting])
-
-  // M4: rewindArmed is a checkpoint ORDINAL — when the rows shift (new
-  // checkpoints arrive), the same ordinal now names a DIFFERENT checkpoint,
-  // so the two-tap "SURE?" would fire on a row the user never armed. Disarm
-  // (and drop any surfaced refusal) on any rows-identity change.
-  const rowsSignature = rows.map((r) => `${r.index}:${r.id}`).join('|')
-  useEffect(() => {
-    setRewindArmed(null)
-    setRewindError(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowsSignature])
-
-  // M4: an arm also expires — walk away mid-confirmation and the chip reverts
-  // to REWIND rather than staying one tap from a destructive action.
-  useEffect(() => {
-    if (rewindArmed === null) return
-    const timeout = setTimeout(() => setRewindArmed(null), REWIND_ARM_MS)
-    return () => clearTimeout(timeout)
-  }, [rewindArmed])
-
-  // M3: a surfaced refusal auto-dismisses (closing the row's action strip).
-  useEffect(() => {
-    if (rewindError === null) return
-    const timeout = setTimeout(() => {
-      setRewindError(null)
-      setActing(null)
-    }, REWIND_ERROR_MS)
-    return () => clearTimeout(timeout)
-  }, [rewindError])
-
   if (rows.length === 0) return null
-
-  const closeActions = (): void => {
-    setActing(null)
-    setSavingIndex(null)
-    setRewindArmed(null) // M4: never keep an arm across dismissed actions
-  }
-  // HOLD to reveal actions — same gesture for mouse and touch. A short release is
-  // a plain tap; `held` swallows the click that fires after a completed hold.
-  const startHold = (index: number): void => {
-    if (!allowActions) return
-    held.current = false
-    hold.start(index)
-  }
-  const endHold = (): void => hold.cancel()
-  const onTap = (tap: () => void): void => {
-    if (held.current) {
-      held.current = false
-      return
-    }
-    tap()
-  }
-
-  const fork = (index: number): void => {
-    if (forkingIndex !== null) return
-    setForkingIndex(index)
-    void cookrew()
-      .forkTerminal(terminalId, index)
-      .catch((error) => console.error('Fork failed:', error))
-      .finally(() => {
-        setForkingIndex(null)
-        closeActions()
-      })
-  }
-
-  // In-place rewind: the executor kills, rebinds to a truncated copy, and
-  // respawns the SAME node (undo lives server-side on the node's restoreStack).
-  const rewind = (index: number): void => {
-    if (rewindingIndex !== null) return
-    if (rewindArmed !== index) {
-      setRewindError(null)
-      setRewindArmed(index)
-      return
-    }
-    const restore = cookrew().restoreCheckpoint
-    if (typeof restore !== 'function') return
-    setRewindingIndex(index)
-    void restore(terminalId, index)
-      .then((result) => {
-        if (result.ok) {
-          closeActions()
-        } else {
-          // M3: no window.alert — the refusal rides the row's action strip
-          // inline (actions stay open) and auto-dismisses.
-          setRewindError({ index, reason: result.reason ?? 'Rewind refused.' })
-        }
-      })
-      .catch((error: unknown) => {
-        setRewindError({ index, reason: error instanceof Error ? error.message : String(error) })
-      })
-      .finally(() => {
-        setRewindArmed(null)
-        setRewindingIndex(null)
-      })
-  }
-
-  const stop = (e: React.MouseEvent): void => e.stopPropagation()
 
   /** F1: pointer activity restarts the idle timer, at most ~4×/second. */
   const wake = (): void => {
@@ -536,49 +394,6 @@ export function CheckpointTimeline({
 
   const rowLabel = (row: CheckpointRow): string => checkpointRowTitle(row, titleMode)
 
-  const rowActions = (row: CheckpointRow, index: number): React.JSX.Element | null =>
-    allowActions ? (
-      <span className="cr-ckpt-row-actions" onMouseDown={stop} onClick={stop}>
-        {rewindError?.index === index && (
-          <span className="cr-ckpt-rewind-error" role="alert">
-            {rewindError.reason}
-          </span>
-        )}
-        {savingIndex === index ? (
-          <SaveRoleInline
-            terminalId={terminalId}
-            checkpoint={row.index}
-            expectedUuid={row.id}
-            onDone={closeActions}
-          />
-        ) : (
-          <>
-            {hasRoleFromCheckpoint() && (
-              <button className="cr-ckpt-action" onClick={() => setSavingIndex(index)}>
-                <CrIcon name="agent" /> ROLE
-              </button>
-            )}
-            <button
-              className="cr-ckpt-action"
-              disabled={forkingIndex !== null}
-              onClick={() => fork(index)}
-            >
-              <CrIcon name="fork" /> {forkingIndex === index ? '…' : 'FORK'}
-            </button>
-            {typeof cookrew().restoreCheckpoint === 'function' && (
-              <button
-                className={`cr-ckpt-action rewind${rewindArmed === index ? ' armed' : ''}`}
-                disabled={rewindingIndex !== null}
-                onClick={() => rewind(index)}
-              >
-                {rewindingIndex === index ? '…' : rewindArmed === index ? 'SURE?' : '⟲ REWIND'}
-              </button>
-            )}
-          </>
-        )}
-      </span>
-    ) : null
-
   // Boundary dividers (◆ compact / ⇥ clear) sit BETWEEN checkpoint rows, keyed
   // to the row they follow — a compact reads as "context was squeezed here",
   // a clear as "the session restarted here (earlier endpoints still reachable
@@ -633,22 +448,14 @@ export function CheckpointTimeline({
         row={row}
         label={rowLabel(row)}
         active={isActive}
-        // THE THIRD DOOR (D2c): a PINNED focus row shows its actions with no
-        // 1500ms hold at all. The hold is a shortcut now, not the only way in.
-        acting={acting === row.index || (isActive && pinned)}
         loading={loadingIndex === row.index}
         titleShift={titleShift}
         {...(isActive ? { titleRef } : {})}
-        actions={rowActions(row, row.index)}
         {...(style !== undefined ? { style } : {})}
-        onPressStart={() => startHold(row.index)}
-        onPressEnd={endHold}
-        onSelect={() =>
-          onTap(() => {
-            selectRow(row)
-            onGoto(row.index)
-          })
-        }
+        onSelect={() => {
+          selectRow(row)
+          onGoto(row.index)
+        }}
       />
     )
   }
@@ -659,8 +466,8 @@ export function CheckpointTimeline({
   //
   // `pinned` is why the fan survives the lift (D2). It used to be `scrubbing`
   // alone, so the fan existed only while a pointer was held down on the rail —
-  // and the finger holding it open was the finger that would have pressed ROLE,
-  // FORK or ⟲ REWIND. The dwell keeps it mounted regardless of live output.
+  // and the finger holding it open was the finger that would have pressed a
+  // row. The dwell keeps it mounted regardless of live output.
   const fanned = focused !== null && focusedRow !== null && (scrubbing || pinned)
   /**
    * F3 — the reveal is the FULL range, laid along the bar: T1 at the top, the
@@ -698,17 +505,10 @@ export function CheckpointTimeline({
   /**
    * Fade only when the rail is genuinely unattended.
    *
-   * The bare `idle` flag broke touch outright. HOLD_REVEAL_MS is 1500 and the
-   * idle timer is 1700, so a long-press revealed a row's ROLE / FORK / REWIND
-   * actions and 200ms later the whole tag went to opacity 0 AND
-   * pointer-events: none — and on touch nothing wakes it, because there is no
-   * post-lift pointermove. The actions were visible for a fifth of a second and
-   * then inert: revealed, unreadable, untappable.
-   *
-   * A paused scrub had the same problem — hold the thumb still mid-drag and the
-   * thing being dragged fades out from under the finger.
-   *
-   * So: never while a row's actions are open, never mid-scrub.
+   * The bare `idle` flag broke touch outright: a paused scrub — the thumb held
+   * still mid-drag — faded the thing being dragged out from under the finger
+   * (opacity 0 AND pointer-events: none, and on touch nothing wakes it, because
+   * there is no post-lift pointermove). So: never mid-scrub.
    */
   // …and never while the earlier-sessions panel is open: it is a modal-ish
   // reading surface, and fading it mid-read is the touch bug all over again.
@@ -718,7 +518,7 @@ export function CheckpointTimeline({
   // fade to opacity 0 AND pointer-events: none a second and a half later —
   // revealed, unreadable, untappable, which is the exact touch bug above with a
   // different trigger.
-  const showIdle = idle && acting === null && !scrubbing && !lineageOpen && !pinned
+  const showIdle = idle && !scrubbing && !lineageOpen && !pinned
 
   return (
     <div
@@ -790,8 +590,6 @@ export function CheckpointTimeline({
                     onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
                     onClick: (e: React.MouseEvent) => {
                       e.stopPropagation()
-                      setActing(null)
-                      setSavingIndex(null)
                       setLineageOpen(true)
                     }
                   }
@@ -842,14 +640,12 @@ export function CheckpointTimeline({
                 aria-label={ended ? 'Ended' : 'Live'}
                 style={{ top: railAnchorTop(entry.fraction) }}
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  onTap(() => {
-                    // The way OUT of a pinned focus, and always obeyed — on a
-                    // short card nothing else would ever clear it (D2).
-                    setFocusState((state) => nextFocus(state, { kind: 'live', at: Date.now() }))
-                    onLive()
-                  })
-                }
+                onClick={() => {
+                  // The way OUT of a pinned focus, and always obeyed — on a
+                  // short card nothing else would ever clear it (D2).
+                  setFocusState((state) => nextFocus(state, { kind: 'live', at: Date.now() }))
+                  onLive()
+                }}
               >
                 <span className="cr-ckpt-row-label">
                   <span className="cr-ckpt-row-idx">{ended ? 'ENDED' : 'LIVE'}</span>

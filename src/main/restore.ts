@@ -57,6 +57,10 @@ export interface RestoreExecutorDeps {
   projectsDir?: string
 }
 
+/**
+ * @deprecated the in-place rewind behind ⟲ REWIND was retired from the checkpoint rail by the owner on 2026-11-03. Still wired
+ * for the earlier-sessions panel and the phone route; do not grow it.
+ */
 export function createRestoreHandlers(deps: RestoreExecutorDeps): {
   restoreCheckpoint: (
     id: string,
