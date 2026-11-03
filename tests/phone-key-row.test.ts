@@ -15,13 +15,16 @@ const rule = (selector: string): string => {
 }
 
 describe("the phone's tools: one row after the chips", () => {
-  it('holds ⌄, the extras and keys, 🎤 and ⌨ in one wrapper that is invisible on a wide screen', () => {
+  // 2026-11-03, later: the box floats as one row and 🎤 stands beside Send
+  // (tests/phone-float-box.test.ts); the tools row keeps ⌄, the keys and ⌨.
+  it('holds ⌄, the extras and keys, and ⌨ in one wrapper that is invisible on a wide screen', () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
     const at = box.indexOf('<span className="cr-prompt-tools"')
     expect(at).toBeGreaterThan(-1)
     const end = box.indexOf('</span>', box.indexOf('cr-prompt-keys', at))
     const inside = box.slice(at, end)
-    for (const part of ['<ExtrasToggle', '<VoiceBar', 'voice-mic', 'cr-prompt-keys']) expect(inside).toContain(part)
+    for (const part of ['<ExtrasToggle', '<VoiceBar', 'cr-prompt-keys']) expect(inside).toContain(part)
+    expect(inside).not.toContain('voice-mic')
     expect(inside).not.toContain('type="submit"')
     expect(rule('.cr-prompt-tools')).toContain('display: contents;')
   })
@@ -36,10 +39,9 @@ describe("the phone's tools: one row after the chips", () => {
     expect(css).not.toMatch(/\.cr-prompt \.voice-bar \{[^}]*flex-basis: 100%/)
   })
 
-  it('puts ⌄ 🎤 ⌨ first, then the extras and the keys', () => {
+  it('puts ⌄ ⌨ first, then the extras and the keys', () => {
     const order = (sel: string): number => Number(rule(`  body.cookrew-mobile .cr-prompt .cr-prompt-tools > ${sel}`).match(/order: (\d+);/)?.[1])
-    expect(order('.cr-prompt-more')).toBeLessThan(order('.voice-mic'))
-    expect(order('.voice-mic')).toBeLessThan(order('.cr-prompt-keys'))
+    expect(order('.cr-prompt-more')).toBeLessThan(order('.cr-prompt-keys'))
     expect(order('.cr-prompt-keys')).toBeLessThan(order('.voice-bar'))
   })
 

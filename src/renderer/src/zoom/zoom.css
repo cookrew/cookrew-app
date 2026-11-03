@@ -2021,3 +2021,11 @@
     display: none;
   }
 }
+
+/* THE PHONE'S BOX FLOATS over the stage's foot (prompt/global-prompt.css): the
+   zoom's bar stands just above it. The full view's bar is at the top already. */
+@media (max-width: 700px) {
+  .zv-root:not([data-full='true']) .zv-controls {
+    bottom: var(--cr-float-h, calc(14px + env(safe-area-inset-bottom, 0px)));
+  }
+}

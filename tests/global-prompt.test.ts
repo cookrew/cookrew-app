@@ -214,7 +214,7 @@ describe('the box, drawn', () => {
     expect(full.match(/aria-label="Send"/g)?.length).toBe(1)
     const none = renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: null, agents, harnesses: ['Claude Code', 'Codex'], nodes: [] }))
     expect(none).toContain('＋ Claude Code ▾')
-    expect(none).toContain('Describe a task for a new agent')
+    expect(none).toContain('placeholder="Describe a task…"')
     // The extras stay for a new agent (owner, 2026-11-03); the agent's keys do not.
     expect(none).toContain('voice-attach')
     expect(none).toContain('voice-speak')

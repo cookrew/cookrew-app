@@ -475,7 +475,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={hearing ? 'Listening…' : to ? 'Reply… · # a note or browser' : 'Describe a task for a new agent…'}
+        placeholder={hearing ? 'Listening…' : to ? 'Reply… · # a note or browser' : 'Describe a task…'}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"
@@ -548,20 +548,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           )}
         </VoiceBar>
       )}
-      {dictation.ear && (
-        <button
-          type="button"
-          className={`cr-btn sm voice-mic${dictation.listening ? ' listening' : ''}`}
-          title={dictation.listening ? 'Stop: the words go into the prompt' : dictation.ear === 'mac' ? 'Dictate into the prompt (or hold ⌘)' : 'Dictate into the prompt'}
-          aria-label={dictation.listening ? 'Stop dictating' : 'Dictate'}
-          aria-pressed={dictation.listening}
-          // Keep the caret where it was: the words land in the draft either way.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={dictation.toggle}
-        >
-          <CrIcon name="mic" />
-        </button>
-      )}
       {/* Phone only (global-prompt.css): the agent's keys, folded or open. */}
       {to && (
         <button
@@ -577,6 +563,22 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         </button>
       )}
       </span>
+      {/* Beside Send, out of the tools: on a phone the box's one row at rest is
+          the chip, the words, 🎤 and Send (global-prompt.css · THE BOX FLOATS). */}
+      {dictation.ear && (
+        <button
+          type="button"
+          className={`cr-btn sm voice-mic${dictation.listening ? ' listening' : ''}`}
+          title={dictation.listening ? 'Stop: the words go into the prompt' : dictation.ear === 'mac' ? 'Dictate into the prompt (or hold ⌘)' : 'Dictate into the prompt'}
+          aria-label={dictation.listening ? 'Stop dictating' : 'Dictate'}
+          aria-pressed={dictation.listening}
+          // Keep the caret where it was: the words land in the draft either way.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={dictation.toggle}
+        >
+          <CrIcon name="mic" />
+        </button>
+      )}
       <button type="submit" className="cr-btn sm primary" title={to ? 'Send (Enter)' : 'Make the agent (Enter)'} aria-label="Send" disabled={busy || dictation.listening || (!text.trim() && to?.id !== fullAgentId) || (!to && !text.trim())}>
         <CrIcon name="send" />
       </button>
