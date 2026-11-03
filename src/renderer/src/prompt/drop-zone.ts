@@ -72,9 +72,11 @@ export function listenDropZone(target: EventTarget, { onOver, onFiles }: DropZon
     ['drop', drop, false],
     ['dragend', done, false]
   ]
-  for (const [type, fn, capture] of listeners) target.addEventListener(type, fn, capture)
+  // `{ capture }`, not a bare boolean: Node 22's EventTarget does not remove a
+  // listener whose capture was given as `true` (see textarea-pad.ts ListenTarget).
+  for (const [type, fn, capture] of listeners) target.addEventListener(type, fn, { capture })
   return () => {
-    for (const [type, fn, capture] of listeners) target.removeEventListener(type, fn, capture)
+    for (const [type, fn, capture] of listeners) target.removeEventListener(type, fn, { capture })
   }
 }
 
