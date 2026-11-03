@@ -126,6 +126,13 @@
   :root:root :is(.cr-routing-seg, .cr-routing-seg .k3, .cr-routing-source, .cr-routing-quota .l, .cr-routing-win, .cr-routing-acct-f, .cr-routing-menu .c, .cr-routing-lrow .alt, .cr-routing-pick, .cr-routing-hint, .cr-routing-bad) {
     font-size: var(--ph-caption);
   }
+  /* A subscription's account row: its name at control, its windows, balance and tokens left at caption. */
+  :root:root .cr-routing-acct {
+    font-size: var(--ph-control);
+  }
+  :root:root :is(.cr-routing-acct-f, .cr-routing-win, .cr-routing-win .t) {
+    font-size: var(--ph-caption);
+  }
   :root:root .cr-routing-seg :is(.cr-routing-btn, .cr-routing-tick) {
     font-size: var(--ph-control);
   }
