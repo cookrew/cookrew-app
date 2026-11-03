@@ -40,7 +40,7 @@ import { boxFold, facePlace, promptFold, usePromptOpen } from './prompt-fold'
 import { flyFace, popFace, type Box } from './face-flip'
 import { useFaceSlot } from './face-slot'
 import { enterOpensBox, keepsBoxOpen, pressOnCanvas } from './enter-opens'
-import { latestUser, pickerRows } from './item-user'
+import { latestUser, usersInView } from './item-user'
 import { PromptFace, type FaceAgent } from './PromptFace'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { WhoPicker } from './WhoPicker'
@@ -137,6 +137,13 @@ function useZoomFull(): 'agent' | 'item' | null {
 function useZoomItem(): string | null {
   return useSyncExternalStore(zoomStore.subscribe, () => zoomStore.get().item, () => null)
 }
+/** The zoom's side and where on it: at the artifacts, their users lead the picker (item-user.ts · usersInView). */
+function useZoomDir(): 'agents' | 'items' {
+  return useSyncExternalStore(zoomStore.subscribe, () => zoomStore.get().dir, () => 'agents' as const)
+}
+function useZoomV(): number {
+  return useSyncExternalStore(zoomStore.subscribe, () => zoomStore.get().v, () => -1)
+}
 
 /** How long a released press's click may take to arrive (a finger's tap is the slow one). */
 const CLICK_GRACE_MS = 350
@@ -164,6 +171,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const zoomItem = useZoomItem()
   // A browser's or a note's full view talks to its latest user (item-user.ts).
   const itemOwners = zoomFull === 'item' && zoomItem ? (artifacts.find((a) => a.id === zoomItem)?.owners ?? NO_IDS) : NO_IDS
+  const zoomDir = useZoomDir()
+  const zoomV = useZoomV()
   const moveKey = useZoomMoveKey()
   // Read once per entry into the item's view (and again while nobody is known
   // yet): its users' activity must not move the face under the eye.
@@ -618,41 +627,58 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       }
     />
   )
+  /** Closed, the box takes the focus back (the list had it: its 'Send to…' field). */
+  const closeWho = (): void => {
+    setWho(false)
+    focusBox()
+  }
   const picker = (() => {
     if (!who) return null
     const pickable = crewRows.map((r) => ({ ...faceOf(r.id, r.name, crewRows, harness), lastActivityAt: r.lastActivityAt }))
-    const lists = pickerRows(pickable, { current: to?.id ?? null, first: itemOwners })
+    // At the artifacts stop and in a browser's or a note's full view, their users lead.
+    const first = usersInView({ dir: zoomDir, v: zoomV, full: zoomFull, item: zoomItem, artifacts })
     return (
       <WhoPicker
-        waiting={lists.waiting}
-        recent={lists.recent}
+        rows={pickable}
+        first={first}
         recentTitle={zoomFull === 'item' ? 'used it' : 'recent'}
         harnesses={harnesses}
         current={{ id: to?.id ?? null, harness }}
         onAgent={(id) => {
           if (!known(id)) return
-          setReleased(null)
-          // A hold on the box moves with the pick: the words go where it points.
-          setHeld((h) => (h ? { id } : h))
-          setPickedAgent(id)
-          setWho(false)
+          // Committed before the focus comes back, so the box's focus holds the picked agent.
+          flushSync(() => {
+            setReleased(null)
+            // A hold on the box moves with the pick: the words go where it points.
+            setHeld((h) => (h ? { id } : h))
+            setPickedAgent(id)
+            setWho(false)
+          })
           focusBox()
         }}
         onNew={(name) => {
-          setPickedAgent(null)
-          if (viewed) letGo(viewed)
-          setWho(false)
-          pick(name)
+          flushSync(() => {
+            setPickedAgent(null)
+            if (viewed) letGo(viewed)
+            setWho(false)
+            takeHarness(name)
+          })
+          focusBox()
         }}
+        onClose={closeWho}
       />
     )
   })()
 
-  const pick = (name: string): void => {
+  /** A harness taken for the new agent; its menu closes. */
+  const takeHarness = (name: string): void => {
     picked.current = name
     setHarness(name)
     rememberHarness(name)
     setPicking(null)
+  }
+  const pick = (name: string): void => {
+    takeHarness(name)
     focusBox()
   }
 
@@ -669,7 +695,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         if (e.key !== 'Escape') return
         if (who) {
           e.stopPropagation()
-          return setWho(false)
+          return closeWho()
         }
         if (!foldable) return
         e.stopPropagation()
@@ -692,7 +718,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             aria-expanded={who}
             aria-label={`${to.name} · choose who the words go to`}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setWho((w) => !w)}
+            onClick={() => (who ? closeWho() : setWho(true))}
           >
             <span className="pf-chip-face" ref={chipFace}>
               <InkAvatar id={to.id} preset={face?.preset ?? harness} orch={face?.orch ?? false} status={face?.status ?? 'idle'} weight="regular" />
