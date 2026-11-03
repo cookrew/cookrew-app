@@ -41,7 +41,8 @@ export interface BrowserInstance {
   unregisterViewportViewer(id: string): void
   onViewportState(listener: (state: BrowserViewportState) => void): () => void
   beginAgentViewportActivity(): Promise<() => void>
-  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): void
+  /** May resolve when the device took it (a Chrome does); a pinch step paces on that. */
+  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): Promise<void> | void
 
   readonly viewport: { width: number; height: number }
   readonly viewportState: BrowserViewportState

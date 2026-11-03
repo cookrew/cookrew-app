@@ -2299,7 +2299,9 @@ a.card-close {
 /* Interactive stream: the view takes touch/keys (Fresco styles the affordances +
    the live indicator; this is structural). */
 .browser-frame.streaming {
-  cursor: pointer;
+  /* The page's own pointer, not a hand: a hover is forwarded, so the remote
+     page shows its links and fields itself. */
+  cursor: default;
   touch-action: none; /* we forward touch/drag as input, not native scroll */
 }
 

@@ -1,0 +1,154 @@
+import http from 'node:http'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createBrowserCastIpc, type CastPort } from '../src/main/browser-cast-ipc'
+import { findChrome, HeadlessInstance } from '../src/main/headless-chrome'
+import { jpegSize } from '../src/main/jpeg-size'
+
+/**
+ * THE DESKTOP'S HANDS, AGAINST A REAL CHROME.
+ *
+ * Opt-in (COOKREW_REAL_CHROME_TEST=1): a real headless Chrome, driven the way
+ * the desktop drives it — through the port viewer (browser-cast-ipc.ts), the
+ * shared viewer core and the closed vocabulary (cast-input.ts). Each line here
+ * was a thing the old wire could not do: drag-select, ⌘A, a CJK word, an IME
+ * composition, sideways scroll, a trackpad pinch, a crisp 2x frame.
+ */
+
+const chrome = findChrome()
+const enabled = process.env.COOKREW_REAL_CHROME_TEST === '1' && chrome !== null
+
+const PAGE = `<!doctype html><meta name="viewport" content="width=device-width">
+<body style="margin:0;width:3000px;height:4000px;font:20px sans-serif">
+<input id="i" style="position:fixed;top:10px;left:10px;width:300px;font:16px sans-serif" value="hello world">
+<p id="p" style="position:absolute;top:200px;left:10px;margin:0">Select this paragraph text by dragging across it</p>
+</body>`
+
+describe.skipIf(!enabled)('desktop input through the port viewer, real Chromium', () => {
+  const profileDir = mkdtempSync(path.join(tmpdir(), 'cookrew-input-integration-'))
+  let server: http.Server
+  let origin = ''
+
+  beforeAll(async () => {
+    server = http.createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end(PAGE)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('test server has no TCP address')
+    origin = `http://127.0.0.1:${address.port}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
+
+  it('drags, selects, types CJK, composes, scrolls sideways and pinches — at 2x', async () => {
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir,
+      width: 800,
+      height: 600,
+      tabs: [{ id: 'tab', url: `${origin}/`, title: '' }],
+      activeTabId: 'tab'
+    })
+    const posted: Array<Record<string, unknown>> = []
+    let onMessage: (event: { data: unknown }) => void = () => undefined
+    // A renderer that paints at once: every frame gets its receipt.
+    const port: CastPort = {
+      postMessage: (message) => {
+        const record = message as Record<string, unknown>
+        posted.push(record)
+        if (record.t === 'frame') setTimeout(() => onMessage({ data: { t: 'painted', seq: record.seq } }), 0)
+      },
+      on: ((event: string, listener: (event: { data: unknown }) => void) => {
+        if (event === 'message') onMessage = listener
+      }) as CastPort['on'],
+      start: () => undefined,
+      close: () => undefined
+    }
+    const ipc = createBrowserCastIpc({ enabled: () => true, getInstance: () => Promise.resolve(instance) })
+    const lastFrame = (): Record<string, unknown> | undefined => posted.filter((m) => m.t === 'frame').at(-1)
+    const meta = (): { revision: number; displayScale: number } =>
+      lastFrame()?.meta as { revision: number; displayScale: number }
+    /** One input message, bound to the newest delivered frame and revision; CSS px in, frame px out. */
+    const send = (message: Record<string, unknown>): void => {
+      const frame = lastFrame()
+      if (!frame) throw new Error('no frame yet')
+      const { revision, displayScale } = meta()
+      const scaled = { ...message }
+      for (const axis of ['x', 'y'] as const) {
+        if (typeof scaled[axis] === 'number') scaled[axis] = (scaled[axis] as number) * displayScale
+      }
+      onMessage({ data: { ...scaled, revision, frameSeq: frame.seq } })
+    }
+    const evaluate = (expression: string): Promise<unknown> => instance.evaluate(expression)
+    const settle = (ms = 150): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+    try {
+      await instance.start()
+      ipc.open('card', port)
+      await waitFor(() => lastFrame() !== undefined)
+
+      // CRISP: the desktop owner asks for 2x, and the frames are 2x.
+      onMessage({ data: { t: 'viewport-claim', width: 800, height: 600, mobile: false, scale: 2 } })
+      await waitFor(() => instance.viewportState.revision >= 2 && meta()?.revision === instance.viewportState.revision)
+      await waitFor(() => (jpegSize(Buffer.from(lastFrame()?.jpeg as Uint8Array))?.width ?? 0) >= 1600)
+      expect(meta().displayScale).toBeCloseTo(2)
+      expect(await evaluate('devicePixelRatio')).toBe(2)
+
+      // DRAG-SELECT: the moves name the held button.
+      send({ t: 'down', x: 15, y: 211 })
+      for (let x = 20; x <= 300; x += 20) send({ t: 'move', x, y: 211, buttons: 1 })
+      send({ t: 'up', x: 300, y: 211 })
+      await settle()
+      expect(String(await evaluate('getSelection().toString()'))).toMatch(/^Select this paragraph/)
+
+      // ⌘A in a field selects its text; then a CJK word goes in WHOLE.
+      send({ t: 'tap', x: 100, y: 20 })
+      await settle()
+      send({ t: 'key', key: 'a', code: 'KeyA', mods: 4 })
+      await settle()
+      expect(await evaluate('[i.selectionStart, i.selectionEnd]')).toEqual([0, 11])
+      send({ t: 'text', text: '你好' })
+      await settle()
+      expect(await evaluate('i.value')).toBe('你好')
+
+      // AN IME: the composition shows in the field, the result replaces it.
+      send({ t: 'compose', text: 'shi' })
+      await settle()
+      expect(await evaluate('i.value')).toBe('你好shi')
+      send({ t: 'text', text: '世' })
+      await settle()
+      expect(await evaluate('i.value')).toBe('你好世')
+
+      // ⌘Z undoes in the field.
+      send({ t: 'key', key: 'z', code: 'KeyZ', mods: 4 })
+      await settle()
+      expect(String(await evaluate('i.value')).length).toBeLessThan(3)
+
+      // SIDEWAYS: a two-finger swipe's dx scrolls the page left-right.
+      send({ t: 'wheel', x: 400, y: 400, dy: 0, dx: 240 })
+      await waitFor(async () => Number(await evaluate('scrollX')) >= 240)
+
+      // A TRACKPAD PINCH zooms the visual viewport.
+      send({ t: 'pinch', x: 400, y: 300, scale: 1.5 })
+      await waitFor(async () => Number(await evaluate('visualViewport.scale')) > 1.4)
+    } finally {
+      ipc.shutdown()
+      await instance.stop()
+    }
+  }, 60_000)
+})
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!(await predicate())) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for condition')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}

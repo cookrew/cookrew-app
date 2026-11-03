@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { hasNativeWebview, isRemoteMode } from './api'
+import { cookrew, hasNativeWebview, isRemoteMode } from './api'
 import { apiPath } from './api-base'
 import { tokenParam } from './auth-gate'
 import { useDataPlaneRoute } from './use-data-plane'
@@ -12,7 +12,6 @@ import {
   frameIsFresh,
   inputWithRevision,
   nextStreamStatus,
-  parseStreamMessage,
   reconnectDelayMs,
   streamCanDrive,
   streamInputAllowed,
@@ -23,14 +22,17 @@ import {
   type CastInputMsg,
   type StreamClient,
   type StreamEvent,
+  type StreamMessage,
   type StreamStatus,
   type ViewportControlKind,
   type ViewportOwner,
   type ViewportPreference,
   type ViewportSize
 } from './browser-stream'
+import { portLine, socketLine, type StreamLine, type StreamLineHandlers } from './stream-line'
+import type { PaintableFrame } from './frame-painter'
 
-/** No first frame within this long after the socket opens -> use the renderer fallback. */
+/** No first frame within this long after the line opens -> use the renderer fallback. */
 const FIRST_FRAME_TIMEOUT_MS = 4000
 /**
  * The phone's, longer: its socket may be bridged through the relay
@@ -43,13 +45,21 @@ const VIEWPORT_REPORT_DEBOUNCE_MS = 200
 /** No frame for this long -> treat the view as NOT live (frozen), input OFF. */
 export const FRAME_STALE_MS = 1200
 
-/** The current renderable frame, viewport ownership, and input sender. */
+/** One received frame, ready to paint (frame-painter.ts). */
+export interface StreamFrame extends PaintableFrame {
+  receivedAt: number
+}
+
+/**
+ * The live view's state, without the frames. A frame is never React state: it
+ * goes to subscribers (the canvas painter) and only the rare changes — first
+ * frame, revision, liveness — re-render the view.
+ */
 export interface BrowserStream {
   status: StreamStatus
-  frameUrl: string | null
-  frameSeq: number | null
+  /** A frame of the current viewport revision has arrived. */
+  hasFrame: boolean
   frameRevision: number | null
-  lastFrameAt: number | null
   live: boolean
   effectiveViewport: ViewportSize | null
   effectiveMobile: boolean | null
@@ -62,13 +72,21 @@ export interface BrowserStream {
   controlAvailable: boolean
   /** A use card's device: live, or offline and why (pixel-instance.ts). Null on a web card. */
   deviceStatus: UseStatus | null
-  /** The socket dropped and a new one is being dialled; the last frame stays on screen. */
+  /** The line dropped and a new one is being dialled; the last picture stays on screen. */
   reconnecting: boolean
+  /** The desktop's direct port to main, not a socket (browser-cast-ipc.ts). */
+  direct: boolean
   /** Stable current frame permits input; decode/freshness is view-owned. */
   canDrive: boolean
   send: (msg: CastInputMsg) => void
   claim: () => void
   release: () => void
+  /** Every frame of the current revision, as it arrives. */
+  subscribeFrames: (listener: (frame: StreamFrame) => void) => () => void
+  /** The newest frame not yet superseded, for a painter that subscribes late. */
+  latestFrame: () => StreamFrame | null
+  /** A frame was painted or skipped: over the port, that is what lets main send the next. */
+  receipt: (seq: number) => void
 }
 
 function currentClient(): StreamClient {
@@ -81,10 +99,14 @@ function measuredViewport(viewport: ViewportPreference): boolean {
   return viewport.width > 0 && viewport.height > 0
 }
 
+function sameSize(a: ViewportSize | null, width: number, height: number): boolean {
+  return a !== null && a.width === width && a.height === height
+}
+
 /**
- * One WebSocket viewer for the node-owned browser. The measured browser-frame
- * box is reported separately from the stream image so the server can keep one
- * sticky viewport owner while every observer receives the same frame.
+ * One viewer for the node-owned browser. The measured browser-frame box is
+ * reported separately from the stream image so the server can keep one sticky
+ * viewport owner while every observer receives the same frame.
  */
 export function useBrowserStream(
   browserId: string,
@@ -94,13 +116,12 @@ export function useBrowserStream(
   viewport: ViewportPreference
 ): BrowserStream {
   const client = currentClient()
+  const direct = client === 'desktop' && typeof cookrew().openBrowserStream === 'function'
   const planeRoute = useDataPlaneRoute()
   const viewportReady = measuredViewport(viewport)
   const [status, setStatus] = useState<StreamStatus>('idle')
-  const [frameUrl, setFrameUrl] = useState<string | null>(null)
-  const [frameSeq, setFrameSeq] = useState<number | null>(null)
+  const [hasFrame, setHasFrame] = useState(false)
   const [frameRevision, setFrameRevision] = useState<number | null>(null)
-  const [lastFrameAt, setLastFrameAt] = useState<number | null>(null)
   const [live, setLive] = useState(false)
   const [effectiveViewport, setEffectiveViewport] = useState<ViewportSize | null>(null)
   const [effectiveMobile, setEffectiveMobile] = useState<boolean | null>(null)
@@ -115,18 +136,21 @@ export function useBrowserStream(
   const [reconnectNonce, setReconnectNonce] = useState(0)
   const [reconnecting, setReconnecting] = useState(false)
   const attemptRef = useRef(0)
-  /** Set while a reconnect run is being prepared: it keeps the last frame instead of blanking the card. */
+  /** Set while a reconnect run is being prepared: it keeps the last picture instead of blanking the card. */
   const keepFrameRef = useRef(false)
 
-  const wsRef = useRef<WebSocket | null>(null)
+  const lineRef = useRef<StreamLine | null>(null)
   const gotFrameRef = useRef(false)
   const warnedRef = useRef(false)
   const liveRef = useRef(false)
+  const hasFrameRef = useRef(false)
   const lastFrameAtRef = useRef(0)
   const frameRevisionRef = useRef<number | null>(null)
   const viewportRevisionRef = useRef<number | null>(null)
   const agentHeldRef = useRef(false)
   const transitioningRef = useRef(false)
+  const latestFrameRef = useRef<StreamFrame | null>(null)
+  const frameListenersRef = useRef(new Set<(frame: StreamFrame) => void>())
   const viewportRef = useRef(viewport)
   viewportRef.current = viewport
 
@@ -152,32 +176,43 @@ export function useBrowserStream(
     [browserId]
   )
 
-  const sendViewportControl = useCallback(
-    (kind: ViewportControlKind): void => {
-      const ws = wsRef.current
-      const size = viewportRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN) return
-      if (kind !== 'release' && !measuredViewport(size)) return
-      ws.send(JSON.stringify(viewportControlMsg(kind, size, size.mobile)))
-    },
-    []
-  )
+  const sendViewportControl = useCallback((kind: ViewportControlKind): void => {
+    const line = lineRef.current
+    const size = viewportRef.current
+    if (!line?.isOpen()) return
+    if (kind !== 'release' && !measuredViewport(size)) return
+    line.send(viewportControlMsg(kind, size, size.mobile, size.scale))
+  }, [])
 
-  const claim = useCallback((): void => {
-    sendViewportControl('claim')
-  }, [sendViewportControl])
+  const claim = useCallback((): void => sendViewportControl('claim'), [sendViewportControl])
+  const release = useCallback((): void => sendViewportControl('release'), [sendViewportControl])
 
-  const release = useCallback((): void => {
-    sendViewportControl('release')
-  }, [sendViewportControl])
+  const receipt = useCallback((seq: number): void => {
+    const line = lineRef.current
+    if (line?.direct && line.isOpen()) line.send({ t: 'painted', seq })
+  }, [])
+
+  const subscribeFrames = useCallback((listener: (frame: StreamFrame) => void): (() => void) => {
+    const listeners = frameListenersRef.current
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }, [])
+
+  const latestFrame = useCallback((): StreamFrame | null => latestFrameRef.current, [])
 
   useEffect(() => {
+    const forgetFrame = (): void => {
+      latestFrameRef.current = null
+      hasFrameRef.current = false
+      frameRevisionRef.current = null
+      setHasFrame(false)
+      setFrameRevision(null)
+    }
     if (!open) {
       setStatus('idle')
-      setFrameUrl(null)
-      setFrameSeq(null)
-      setFrameRevision(null)
-      setLastFrameAt(null)
+      forgetFrame()
       setLive(false)
       setEffectiveViewport(null)
       setEffectiveMobile(null)
@@ -192,7 +227,6 @@ export function useBrowserStream(
       setReconnecting(false)
       attemptRef.current = 0
       keepFrameRef.current = false
-      frameRevisionRef.current = null
       viewportRevisionRef.current = null
       liveRef.current = false
       agentHeldRef.current = false
@@ -205,20 +239,20 @@ export function useBrowserStream(
     warnedRef.current = false
     gotFrameRef.current = false
     lastFrameAtRef.current = 0
-    frameRevisionRef.current = null
     viewportRevisionRef.current = null
     liveRef.current = false
     agentHeldRef.current = false
     transitioningRef.current = false
     setStatus('idle')
     if (!keepFrame) {
-      setFrameUrl(null)
-      setFrameSeq(null)
-      setFrameRevision(null)
-      setLastFrameAt(null)
+      forgetFrame()
       setEffectiveViewport(null)
       setEffectiveMobile(null)
       setDeviceStatus(null)
+    } else {
+      // The painted picture stays on the canvas; the frame data is the old line's.
+      latestFrameRef.current = null
+      frameRevisionRef.current = null
     }
     setLive(false)
     setViewportRevision(null)
@@ -234,27 +268,27 @@ export function useBrowserStream(
       return
     }
     if (!viewportReady) return
-    if (!streamSupported(typeof WebSocket !== 'undefined', client)) {
+    if (!streamSupported(typeof WebSocket !== 'undefined' || direct, client)) {
       advance('unsupported')
       return
     }
-    if (client === 'desktop' && !desktopToken) {
+    if (client === 'desktop' && !direct && !desktopToken) {
       advance('error')
       return
     }
 
     let disposed = false
     let failed = false
-    let ws: WebSocket | null = null
+    let line: StreamLine | null = null
     let deadline: ReturnType<typeof setTimeout> | null = null
     let staleTimer: ReturnType<typeof setInterval> | null = null
     let redial: ReturnType<typeof setTimeout> | null = null
 
     const sendControl = (kind: ViewportControlKind): void => {
       const size = viewportRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      if (!line?.isOpen()) return
       if (kind !== 'release' && !measuredViewport(size)) return
-      ws.send(JSON.stringify(viewportControlMsg(kind, size, size.mobile)))
+      line.send(viewportControlMsg(kind, size, size.mobile, size.scale))
     }
 
     const fail = (event: 'error' | 'close'): void => {
@@ -271,11 +305,7 @@ export function useBrowserStream(
       liveRef.current = false
       setLive(false)
       advance(event)
-      try {
-        ws?.close()
-      } catch {
-        // already closing
-      }
+      line?.close()
       // Dial again, by itself. The effect re-runs on the nonce; this run's
       // cleanup clears the timer if the card closes first.
       const attempt = attemptRef.current
@@ -296,11 +326,125 @@ export function useBrowserStream(
       frameRevisionRef.current = null
       lastFrameAtRef.current = 0
       liveRef.current = false
-      setFrameUrl(null)
-      setFrameSeq(null)
+      latestFrameRef.current = null
+      hasFrameRef.current = false
+      setHasFrame(false)
       setFrameRevision(null)
-      setLastFrameAt(null)
       setLive(false)
+    }
+
+    const onFrame = (msg: Extract<StreamMessage, { kind: 'frame' }>): void => {
+      const revision = msg.revision ?? viewportRevisionRef.current ?? 0
+      if (viewportRevisionRef.current === null) adoptViewportRevision(revision)
+      if (revision !== viewportRevisionRef.current) {
+        // Not for this viewport: done with, so the port may send the next.
+        if (line?.direct) line.send({ t: 'painted', seq: msg.seq })
+        return
+      }
+      const width = msg.deviceWidth
+      const height = msg.deviceHeight
+      if (width && height) {
+        setEffectiveViewport((prev) => (sameSize(prev, width, height) ? prev : { width, height }))
+      }
+      if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
+      const receivedAt = Date.now()
+      lastFrameAtRef.current = receivedAt
+      if (frameRevisionRef.current !== revision) {
+        frameRevisionRef.current = revision
+        setFrameRevision(revision)
+      }
+      if (!liveRef.current) {
+        liveRef.current = true
+        setLive(true)
+      }
+      if (!hasFrameRef.current) {
+        hasFrameRef.current = true
+        setHasFrame(true)
+      }
+      const frame: StreamFrame = {
+        seq: msg.seq,
+        revision,
+        receivedAt,
+        ...(msg.bytes ? { bytes: msg.bytes } : {}),
+        ...(msg.src ? { src: msg.src } : {})
+      }
+      latestFrameRef.current = frame
+      const listeners = frameListenersRef.current
+      if (listeners.size === 0) {
+        if (line?.direct) line.send({ t: 'painted', seq: frame.seq })
+      } else {
+        for (const listener of listeners) listener(frame)
+      }
+      if (!gotFrameRef.current) {
+        gotFrameRef.current = true
+        attemptRef.current = 0
+        setReconnecting(false)
+        if (deadline) {
+          clearTimeout(deadline)
+          deadline = null
+        }
+        advance('firstFrame')
+      }
+    }
+
+    const onMessage = (msg: StreamMessage): void => {
+      if (disposed || failed) return
+      if (msg.kind === 'error') {
+        console.error(`[browser-stream] server error for ${browserId}: ${msg.msg}`)
+        fail('error')
+        return
+      }
+
+      if (msg.kind === 'copy') {
+        // The page's copy happened inside the card's own Chrome: put it on
+        // this machine's clipboard, where the owner will paste it (page-copy.ts).
+        void writeClipboardText(msg.text).then((ok) => {
+          if (!ok) console.error(`[browser-stream] the page's copy could not reach the clipboard for ${browserId}`)
+        })
+        return
+      }
+
+      if (msg.kind === 'status') {
+        // The server is answering for a device; an offline one sends no
+        // frames on purpose, so the first-frame deadline does not apply.
+        if (deadline) {
+          clearTimeout(deadline)
+          deadline = null
+        }
+        attemptRef.current = 0
+        setReconnecting(false)
+        setDeviceStatus(msg.status)
+        return
+      }
+
+      if (msg.kind === 'ready') {
+        if (msg.w > 0 && msg.h > 0) setEffectiveViewport({ width: msg.w, height: msg.h })
+        if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
+        if (typeof msg.revision === 'number') adoptViewportRevision(msg.revision)
+        // A revision+mobile ready identifies the arbitration-aware server;
+        // wait for its immediately-following viewport-state before driving.
+        if (typeof msg.revision === 'number' && typeof msg.mobile === 'boolean') {
+          setControlAvailable(true)
+        }
+        return
+      }
+
+      if (msg.kind === 'control') {
+        setEffectiveViewport((prev) => (sameSize(prev, msg.width, msg.height) ? prev : { width: msg.width, height: msg.height }))
+        setEffectiveMobile(msg.mobile)
+        adoptViewportRevision(msg.revision)
+        agentHeldRef.current = msg.agentHeld
+        transitioningRef.current = msg.transitioning
+        setControlAvailable(true)
+        setIsOwner(msg.isOwner)
+        setOwner(msg.owner)
+        setViewerCount(msg.viewerCount)
+        setAgentHeld(msg.agentHeld)
+        setTransitioning(msg.transitioning)
+        return
+      }
+
+      onFrame(msg)
     }
 
     const connect = (): void => {
@@ -308,132 +452,57 @@ export function useBrowserStream(
       const size = viewportRef.current
       const w = clampViewport(size.width)
       const h = clampViewport(size.height)
+      const handlers: StreamLineHandlers = {
+        onOpen: () => {
+          if (disposed || failed) return
+          advance('open')
+          sendControl(document.hidden ? 'release' : 'offer')
+        },
+        onMessage,
+        onClose: () => fail('close')
+      }
+      const openPort = direct ? cookrew().openBrowserStream : undefined
       try {
-        // THE SOCKET FOLLOWS THE DATA PLANE, like every fetch does.
-        //
-        // The desktop keeps its own route: it is loaded from file:// or Vite,
-        // so it has no page origin to speak of and reaches the companion
-        // server on its stable loopback address. A phone composes through
-        // apiPath, which answers the relay prefix or the Mac's own trusted
-        // origin depending on where the plane is pointing right now.
-        ws =
-          client === 'desktop'
-            ? new WebSocket(streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken))
-            : // THE TOKEN RIDES THE URL, because `new WebSocket(...)` cannot
-              // set a header — the same constraint EventSource has, answered
-              // the same way. Without it the socket is an unauthenticated
-              // stream, and the desktop now refuses those (browser-cast.ts).
-              // On the direct link it rides a data channel (rtc-plane.ts).
-              openWebSocket(tokenParam(apiPath(streamPath(browserId, w, h, null))))
+        if (openPort) {
+          // THE DESKTOP DRAWS ITS OWN CHROME DIRECTLY: a port from main, JPEG
+          // bytes, no socket and no token (browser-cast-ipc.ts).
+          line = portLine(openPort, browserId, handlers)
+        } else {
+          // THE SOCKET FOLLOWS THE DATA PLANE, like every fetch does.
+          //
+          // A desktop without the port (an older preload) keeps its own route:
+          // it is loaded from file:// or Vite, so it has no page origin to
+          // speak of and reaches the companion server on its stable loopback
+          // address. A phone composes through apiPath, which answers the relay
+          // prefix or the Mac's own trusted origin depending on where the plane
+          // is pointing right now.
+          const socket =
+            client === 'desktop'
+              ? new WebSocket(streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken))
+              : // THE TOKEN RIDES THE URL, because `new WebSocket(...)` cannot
+                // set a header — the same constraint EventSource has, answered
+                // the same way. Without it the socket is an unauthenticated
+                // stream, and the desktop now refuses those (browser-cast.ts).
+                // On the direct link it rides a data channel (rtc-plane.ts).
+                openWebSocket(tokenParam(apiPath(streamPath(browserId, w, h, null))))
+          line = socketLine(socket, handlers)
+        }
       } catch {
         fail('error')
         return
       }
-      wsRef.current = ws
+      lineRef.current = line
 
       deadline = setTimeout(() => {
         if (!gotFrameRef.current) fail('error')
       }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
-        if (!disposed && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {
+        if (!disposed && liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {
           liveRef.current = false
           setLive(false)
         }
       }, 400)
-
-      ws.onopen = (): void => {
-        advance('open')
-        sendControl(document.hidden ? 'release' : 'offer')
-      }
-      ws.onerror = (): void => fail('error')
-      ws.onclose = (): void => fail('close')
-      ws.onmessage = (ev: MessageEvent): void => {
-        if (disposed || failed) return
-        const msg = parseStreamMessage(ev.data)
-        if (!msg) return
-        if (msg.kind === 'error') {
-          console.error(`[browser-stream] server error for ${browserId}: ${msg.msg}`)
-          fail('error')
-          return
-        }
-
-        if (msg.kind === 'copy') {
-          // The page's copy happened inside the card's own Chrome: put it on
-          // this machine's clipboard, where the owner will paste it (page-copy.ts).
-          void writeClipboardText(msg.text).then((ok) => {
-            if (!ok) console.error(`[browser-stream] the page's copy could not reach the clipboard for ${browserId}`)
-          })
-          return
-        }
-
-        if (msg.kind === 'status') {
-          // The server is answering for a device; an offline one sends no
-          // frames on purpose, so the first-frame deadline does not apply.
-          if (deadline) {
-            clearTimeout(deadline)
-            deadline = null
-          }
-          attemptRef.current = 0
-          setReconnecting(false)
-          setDeviceStatus(msg.status)
-          return
-        }
-
-        if (msg.kind === 'ready') {
-          if (msg.w > 0 && msg.h > 0) setEffectiveViewport({ width: msg.w, height: msg.h })
-          if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
-          if (typeof msg.revision === 'number') adoptViewportRevision(msg.revision)
-          // A revision+mobile ready identifies the arbitration-aware server;
-          // wait for its immediately-following viewport-state before driving.
-          if (typeof msg.revision === 'number' && typeof msg.mobile === 'boolean') {
-            setControlAvailable(true)
-          }
-          return
-        }
-
-        if (msg.kind === 'control') {
-          setEffectiveViewport({ width: msg.width, height: msg.height })
-          setEffectiveMobile(msg.mobile)
-          adoptViewportRevision(msg.revision)
-          agentHeldRef.current = msg.agentHeld
-          transitioningRef.current = msg.transitioning
-          setControlAvailable(true)
-          setIsOwner(msg.isOwner)
-          setOwner(msg.owner)
-          setViewerCount(msg.viewerCount)
-          setAgentHeld(msg.agentHeld)
-          setTransitioning(msg.transitioning)
-          return
-        }
-
-        const revision = msg.revision ?? viewportRevisionRef.current ?? 0
-        if (viewportRevisionRef.current === null) adoptViewportRevision(revision)
-        if (revision !== viewportRevisionRef.current) return
-        if (msg.deviceWidth && msg.deviceHeight) {
-          setEffectiveViewport({ width: msg.deviceWidth, height: msg.deviceHeight })
-        }
-        if (typeof msg.mobile === 'boolean') setEffectiveMobile(msg.mobile)
-        const receivedAt = Date.now()
-        frameRevisionRef.current = revision
-        setFrameUrl(msg.src)
-        setFrameSeq(msg.seq)
-        setFrameRevision(revision)
-        setLastFrameAt(receivedAt)
-        lastFrameAtRef.current = receivedAt
-        liveRef.current = true
-        setLive(true)
-        if (!gotFrameRef.current) {
-          gotFrameRef.current = true
-          attemptRef.current = 0
-          setReconnecting(false)
-          if (deadline) {
-            clearTimeout(deadline)
-            deadline = null
-          }
-          advance('firstFrame')
-        }
-      }
     }
     connect()
 
@@ -443,28 +512,23 @@ export function useBrowserStream(
       if (redial) clearTimeout(redial)
       if (deadline) clearTimeout(deadline)
       if (staleTimer) clearInterval(staleTimer)
-      if (ws?.readyState === WebSocket.OPEN) sendControl('release')
-      if (ws) ws.onopen = ws.onerror = ws.onclose = ws.onmessage = null
-      try {
-        ws?.close()
-      } catch {
-        // already closing
-      }
-      if (wsRef.current === ws) wsRef.current = null
+      if (line?.isOpen()) sendControl('release')
+      line?.close()
+      if (lineRef.current === line) lineRef.current = null
     }
     // planeRoute is a dependency and not an unused read: a switch onto the
     // LAN has to drop this socket and open the new one, and a socket is the
     // one connection that cannot re-read its own URL (plane-streams.ts).
-  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute, reconnectNonce])
+  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute, reconnectNonce, direct])
 
-  // Report the actual browser-frame content box without reconnecting the socket.
+  // Report the actual browser-frame content box without reconnecting the line.
   useEffect(() => {
     if (!open || !enabled || !viewportReady) return
     const timer = setTimeout(() => {
       if (!document.hidden) sendViewportControl('offer')
     }, VIEWPORT_REPORT_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [viewport.width, viewport.height, viewport.mobile, open, enabled, viewportReady, sendViewportControl])
+  }, [viewport.width, viewport.height, viewport.mobile, viewport.scale, open, enabled, viewportReady, sendViewportControl])
 
   useEffect(() => {
     if (!open || !enabled) return
@@ -475,11 +539,10 @@ export function useBrowserStream(
   }, [open, enabled, sendViewportControl])
 
   const send = useCallback((msg: CastInputMsg): void => {
-    const ws = wsRef.current
+    const line = lineRef.current
     const revision = frameRevisionRef.current
     if (
-      ws &&
-      ws.readyState === WebSocket.OPEN &&
+      line?.isOpen() &&
       revision !== null &&
       streamInputAllowed(msg, {
         live: liveRef.current,
@@ -489,7 +552,7 @@ export function useBrowserStream(
         viewportRevision: viewportRevisionRef.current
       })
     ) {
-      ws.send(JSON.stringify(inputWithRevision(msg, revision)))
+      line.send(inputWithRevision(msg, revision))
     }
   }, [])
 
@@ -501,13 +564,13 @@ export function useBrowserStream(
     viewportRevision
   })
 
+  const shared = { direct, send, claim, release, subscribeFrames, latestFrame, receipt }
   return open
     ? {
+        ...shared,
         status,
-        frameUrl,
-        frameSeq,
+        hasFrame,
         frameRevision,
-        lastFrameAt,
         live,
         effectiveViewport,
         effectiveMobile,
@@ -520,17 +583,13 @@ export function useBrowserStream(
         controlAvailable,
         deviceStatus,
         reconnecting,
-        canDrive,
-        send,
-        claim,
-        release
+        canDrive
       }
     : {
+        ...shared,
         status: 'idle',
-        frameUrl: null,
-        frameSeq: null,
+        hasFrame: false,
         frameRevision: null,
-        lastFrameAt: null,
         live: false,
         effectiveViewport: null,
         effectiveMobile: null,
@@ -543,9 +602,6 @@ export function useBrowserStream(
         controlAvailable: false,
         deviceStatus: null,
         reconnecting: false,
-        canDrive: false,
-        send,
-        claim,
-        release
+        canDrive: false
       }
 }

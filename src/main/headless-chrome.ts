@@ -191,6 +191,8 @@ export class HeadlessInstance {
   private width: number
   private height: number
   private mobile = false
+  /** Device pixels per CSS px the viewport owner asked for (cast-viewport.ts · viewportScale). */
+  private scale = 1
   private activeTabId: string
   private stopPromise: Promise<HeadlessStopResult> | null = null
   private readonly viewportCoordinator: BrowserViewportCoordinator
@@ -529,8 +531,8 @@ export class HeadlessInstance {
       await next.cdp.send('Page.startScreencast', {
         format: 'jpeg',
         quality: this.opts.quality ?? 60,
-        maxWidth: this.width,
-        maxHeight: this.height,
+        maxWidth: Math.round(this.width * this.scale),
+        maxHeight: Math.round(this.height * this.scale),
         everyNthFrame: 1
       })
       next.screencasting = true
@@ -741,6 +743,7 @@ export class HeadlessInstance {
     this.width = metrics.width
     this.height = metrics.height
     this.mobile = metrics.mobile
+    this.scale = metrics.scale ?? 1
     this.lastHash = ''
     for (const page of this.pages.values()) await this.resizePage(page, metrics)
     if (active) await this.activatePage(active.tabId)
@@ -748,12 +751,12 @@ export class HeadlessInstance {
 
   private async resizePage(
     page: PageBinding,
-    metrics: ViewportMetrics = { width: this.width, height: this.height, mobile: this.mobile }
+    metrics: ViewportMetrics = { width: this.width, height: this.height, mobile: this.mobile, scale: this.scale }
   ): Promise<void> {
     await page.cdp.send('Emulation.setDeviceMetricsOverride', {
       width: metrics.width,
       height: metrics.height,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: metrics.scale ?? 1,
       mobile: metrics.mobile,
       screenWidth: metrics.width,
       screenHeight: metrics.height
@@ -792,9 +795,11 @@ export class HeadlessInstance {
     return this.viewportCoordinator.beginAgentActivity()
   }
 
-  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): void {
+  /** Resolves once Chrome has taken the command; a pinch step is animated, so its caller paces on this. */
+  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): Promise<void> {
     const page = this.pages.get(this.activeTabId)
-    void page?.cdp.send(method, params).catch(() => undefined)
+    if (!page) return Promise.resolve()
+    return page.cdp.send(method, params).then(() => undefined, () => undefined)
   }
 
   get viewport(): { width: number; height: number } {
