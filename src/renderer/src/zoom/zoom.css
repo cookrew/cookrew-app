@@ -1866,12 +1866,12 @@
     font-size: 32px;
     letter-spacing: 0.04em;
   }
-  /* The seal's number as large as the name beside it: both read at caption (zoom-frame.ts · deviceWords). */
+  /* The seal as the open workspace's own (13 on a 24 box, on screen): the label is drawn at 11 / 32. */
   .zv-mark .zv-mark-label .zv-seal {
-    width: 52px;
-    height: 52px;
-    font-size: 32px;
-    line-height: 52px;
+    width: calc(24px * 32 / 11);
+    height: calc(24px * 32 / 11);
+    font-size: calc(13px * 32 / 11);
+    line-height: calc(24px * 32 / 11);
   }
 }
 

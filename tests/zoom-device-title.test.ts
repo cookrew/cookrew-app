@@ -30,7 +30,8 @@ describe("the device's title", () => {
 
   it('is anchored by its bottom, growing up from there', async () => {
     const { readFileSync } = await import('node:fs')
-    const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-    expect(view).toContain('${device.titleBottom}px) scale(${words.titleK.toFixed(4)}) translateY(-100%)')
+    // The painter places it (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms.
+    const frame = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
+    expect(frame).toContain('${f1(L.device.titleBottom)}px) scale(${f4(d.dw.titleK * back)}) translateY(-100%)')
   })
 })

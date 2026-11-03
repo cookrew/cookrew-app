@@ -140,8 +140,9 @@
   }
 
   /* ── the full view: its head, its look switch, its strip of browsers and notes ── */
+  /* An agent's name is 16 wherever it stands: under its face, on its card, here (zoom/scene-words.ts). */
   :root:root .zv-fv-who b {
-    font-size: var(--ph-title);
+    font-size: var(--ph-body);
   }
   :root:root .zv-fv-who small,
   :root:root .zv-fv-used,
@@ -165,7 +166,7 @@
   /* ── the cards floating over the full view (a docked face: AgentCard; a docked item: item-card) ── */
   :root:root .ag-plate .cr-pet-card-name,
   :root:root .item-card .cr-pet-card-name {
-    font-size: var(--ph-title);
+    font-size: var(--ph-body);
   }
   :root:root .ag-plate .ag-meta,
   :root:root .ag-plate .ag-meta :is(.zv-st, .zv-cnt),
@@ -264,6 +265,31 @@
   :root:root .zv-mark-none {
     font-size: calc(var(--ph-caption) / var(--zv-k-marks, 1));
     line-height: 1.15;
+  }
+
+  /* ONE SIZE WHEREVER THE CAMERA IS (owner, 2026-11-03). The painter draws the moving words at
+     their size on screen on every frame (zoom-frame.ts); these are what it scales about. */
+  :root:root .zv-machine-label {
+    transform-origin: 0 0;
+  }
+  :root:root .zv-machinecard-label {
+    transform-origin: 0 100%;
+  }
+  :root:root .zv-newcap {
+    transform-origin: 0 0;
+  }
+  /* A workspace's seal (its agents' count) at control, on its mark as on the open one. */
+  :root:root .zv-scene .zv-grp .zv-seal {
+    font-size: var(--ph-control);
+  }
+  /* The machine's name over its marks as under its screen: title. */
+  :root:root .zv-device-label b {
+    font-size: var(--ph-title);
+  }
+  /* A picture's words (a thumbnail's title, line, host, count) show only where the camera
+     draws them at their size: --zv-wo, from the painter (zoom-frame.ts · wordsSeen). */
+  :root:root .zv-scene .zv-th :is(.zv-bar, .zv-nt b, .zv-nt span, em) {
+    opacity: var(--zv-wo, 1);
   }
 
   /* A name under a face is cut short before its neighbour's (scene-words.ts · nameMax). */
