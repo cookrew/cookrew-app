@@ -15,6 +15,9 @@ import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
 import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { setFaceSlot } from '../prompt/face-slot'
+import { CrIcon } from '../icons'
+import { promptFold } from '../prompt/prompt-fold'
 import { useZoomFleetView } from './use-zoom-fleet'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
@@ -358,7 +361,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if (e.key !== 'Escape') return
       // The board's box and its panel own their Esc (BoardSearch.tsx).
       if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm, .cr-board-search, .cr-board-pop')) return
+      // The box's own buttons and picker keep their Esc while the box can fold
+      // or its picker is open; in an agent's full view it steps out as before.
+      if ((e.target as Element | null)?.closest?.('.cr-prompt') && (promptFold.get().foldable || document.querySelector('.pf-who'))) return
       e.preventDefault()
+      // An open prompt box folds first; the view stays (prompt/prompt-fold.ts).
+      if (promptFold.foldFirst()) return
       stepBack()
     }
     // Capture, so a card that stops Escape on its way up does not keep us zoomed.
@@ -595,13 +603,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">
           <div className="zv-stops">
-            {stops.map((v, i) => <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} onClick={() => motion.go(v)}>{names[i]}</button>)}
+            {/* Narrow, the stops you are not on wear the header's own marks and give the face its room (zoom.css). */}
+            {stops.map((v, i) => (
+              <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} aria-label={names[i]} onClick={() => motion.go(v)}>
+                <CrIcon name={v === BAR_STOPS[zoom.dir][0] ? 'device' : 'canvas'} className="zv-stop-ic" />
+                <span className="zv-stop-word">{names[i]}</span>
+              </button>
+            ))}
             <div className="zv-side" role="group" aria-label="Agents or artifacts">
               {BAR_SIDES.map((s) => <button key={s.dir} type="button" aria-current={side === s.dir ? 'step' : undefined} onClick={() => motion.go(s.v, s.dir)}>{s.name}</button>)}
             </div>
           </div>
         </div>
         <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
+        {/* The prompt's face, folded: the send key at the bar's end (prompt/face-slot.ts). */}
+        <span className="zv-face-slot" ref={setFaceSlot} />
       </nav>
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>

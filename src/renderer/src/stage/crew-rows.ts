@@ -85,6 +85,11 @@ export function CrewProvider({ workspace, workspaceId, children }: { workspace: 
   return createElement(CrewContext.Provider, { value: crew }, children)
 }
 
+/** The provider's crew, or null outside one (a test, the embed): its readers draw without it. */
+export function useCrewContext(): Crew | null {
+  return useContext(CrewContext)
+}
+
 /** Renders `children(crew)` with the provider's crew; re-renders with it. */
 export function WithCrew({ children }: { children: (crew: Crew) => ReactNode }): React.JSX.Element {
   const crew = useContext(CrewContext)
