@@ -109,3 +109,30 @@ describe('keys', () => {
     expect(vphoneKeyName('Meta')).toBeNull()
   })
 })
+
+describe('committed text and the other buttons (the desktop’s and the phone keyboard’s new words)', () => {
+  it('Input.insertText types ASCII and pastes the rest — a phone keyboard’s word, an IME result, a paste', () => {
+    const m = new VphoneGestureMapper(() => 0)
+    expect(m.map({ method: 'Input.insertText', params: { text: 'hello world' } })).toEqual([
+      { method: 'input.type', params: { text: 'hello world' } }
+    ])
+    expect(m.map({ method: 'Input.insertText', params: { text: '你好' } })).toEqual([
+      { method: 'input.paste', params: { text: '你好' } }
+    ])
+    expect(m.map({ method: 'Input.insertText', params: { text: '' } })).toEqual([])
+  })
+  it('an uncommitted IME composition and a pinch have no screen gesture: nothing is sent', () => {
+    const m = new VphoneGestureMapper(() => 0)
+    expect(m.map({ method: 'Input.imeSetComposition', params: { text: 'ni', selectionStart: 2, selectionEnd: 2 } })).toEqual([])
+    expect(m.map({ method: 'Input.synthesizePinchGesture', params: { x: 1, y: 1, scaleFactor: 2 } })).toEqual([])
+  })
+  it('a right or middle click is never a tap on the device', () => {
+    const m = new VphoneGestureMapper(() => 0)
+    expect(m.map(mouse('mousePressed', 10, 10, { button: 'right' }))).toEqual([])
+    expect(m.map(mouse('mouseReleased', 10, 10, { button: 'right' }))).toEqual([])
+    expect(m.map(mouse('mousePressed', 10, 10, { button: 'middle' }))).toEqual([])
+    expect(m.map(mouse('mouseReleased', 10, 10, { button: 'middle' }))).toEqual([])
+    expect(m.map(mouse('mousePressed', 10, 10, { button: 'left' }))).toEqual([])
+    expect(m.map(mouse('mouseReleased', 10, 10, { button: 'left' }))).toEqual([{ method: 'input.tap', params: { x: 10, y: 10 } }])
+  })
+})

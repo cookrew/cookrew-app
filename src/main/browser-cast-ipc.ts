@@ -80,7 +80,8 @@ export function createBrowserCastIpc(deps: BrowserCastIpcDeps): BrowserCastIpc {
 
 class PortViewer {
   private readonly viewer: CastViewer
-  private inFlight = 0
+  /** The frames on the wire, by seq: a receipt counts only for one of these (a late or stray one is nothing). */
+  private readonly inFlight = new Set<number>()
   private readyCallbacks: Array<() => void> = []
   private receiptTimer: ReturnType<typeof setTimeout> | null = null
   private portClosed = false
@@ -92,7 +93,7 @@ class PortViewer {
   ) {
     const sink: ViewerSink = {
       sendControl: (message) => this.post(message),
-      frameReady: () => this.inFlight < IPC_FRAMES_IN_FLIGHT,
+      frameReady: () => this.inFlight.size < IPC_FRAMES_IN_FLIGHT,
       sendFrame: (frame) => this.sendFrame(frame),
       onceReady: (callback) => {
         this.readyCallbacks.push(callback)
@@ -120,20 +121,20 @@ class PortViewer {
   private onMessage(data: unknown): void {
     if (typeof data !== 'object' || data === null) return
     const message = data as Record<string, unknown>
-    if (message.t === 'painted') return this.receipt()
+    if (message.t === 'painted') return this.receipt(message.seq)
     this.viewer.handleMessage(message)
   }
 
   private sendFrame(frame: OutboundFrame): void {
-    this.inFlight += 1
+    this.inFlight.add(frame.seq)
     this.armReceiptTimeout()
     this.post({ t: 'frame', seq: frame.seq, jpeg: ownBytes(frame.bytes), meta: frame.meta })
   }
 
   /** The renderer painted (or skipped) a frame: one more may go. */
-  private receipt(): void {
-    this.inFlight = Math.max(0, this.inFlight - 1)
-    if (this.inFlight === 0 && this.receiptTimer) {
+  private receipt(seq: unknown): void {
+    if (typeof seq !== 'number' || !this.inFlight.delete(seq)) return
+    if (this.inFlight.size === 0 && this.receiptTimer) {
       clearTimeout(this.receiptTimer)
       this.receiptTimer = null
     }
@@ -144,13 +145,14 @@ class PortViewer {
     if (this.receiptTimer) clearTimeout(this.receiptTimer)
     this.receiptTimer = setTimeout(() => {
       this.receiptTimer = null
-      this.inFlight = 0
+      // Whatever is still out is written off: its receipt, if it ever comes, counts for nothing.
+      this.inFlight.clear()
       this.flushReady()
     }, IPC_RECEIPT_TIMEOUT_MS)
   }
 
   private flushReady(): void {
-    if (this.inFlight >= IPC_FRAMES_IN_FLIGHT) return
+    if (this.inFlight.size >= IPC_FRAMES_IN_FLIGHT) return
     const callbacks = this.readyCallbacks
     this.readyCallbacks = []
     for (const callback of callbacks) callback()
@@ -171,6 +173,7 @@ class PortViewer {
     if (this.receiptTimer) clearTimeout(this.receiptTimer)
     this.receiptTimer = null
     this.readyCallbacks = []
+    this.inFlight.clear()
     try {
       // The renderer's port gets no close event of its own: say it, so the
       // view redials (a replaced instance) instead of waiting on a dead line.

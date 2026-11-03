@@ -101,6 +101,10 @@ describe.skipIf(!enabled)('desktop input through the port viewer, real Chromium'
       expect(meta().displayScale).toBeCloseTo(2)
       expect(await evaluate('devicePixelRatio')).toBe(2)
 
+      // The card's picture stays 1x: it goes to the phone over the relay too.
+      const still = await instance.snapshot()
+      expect(jpegSize(Buffer.from(still as string, 'base64'))?.width).toBe(800)
+
       // DRAG-SELECT: the moves name the held button.
       send({ t: 'down', x: 15, y: 211 })
       for (let x = 20; x <= 300; x += 20) send({ t: 'move', x, y: 211, buttons: 1 })
@@ -130,6 +134,14 @@ describe.skipIf(!enabled)('desktop input through the port viewer, real Chromium'
       send({ t: 'key', key: 'z', code: 'KeyZ', mods: 4 })
       await settle()
       expect(String(await evaluate('i.value')).length).toBeLessThan(3)
+
+      // Browser shortcuts are not the page's to lose: ⌘W, ⌘Q and Ctrl+W close nothing.
+      for (const [key, mods] of [['w', 4], ['q', 4], ['w', 2]] as const) {
+        send({ t: 'key', key, code: `Key${key.toUpperCase()}`, mods })
+      }
+      await settle(300)
+      expect(await evaluate('1 + 1')).toBe(2)
+      expect((await instance.pageInfo()).url).toBe(`${origin}/`)
 
       // SIDEWAYS: a two-finger swipe's dx scrolls the page left-right.
       send({ t: 'wheel', x: 400, y: 400, dy: 0, dx: 240 })

@@ -5,7 +5,7 @@ import {
   IPC_RECEIPT_TIMEOUT_MS,
   type CastPort
 } from '../src/main/browser-cast-ipc'
-import { foldPinch } from '../src/main/cast-viewer'
+import { foldPinch, PINCH_STEP_TIMEOUT_MS } from '../src/main/cast-viewer'
 import type { BrowserInstance } from '../src/main/browser-instance'
 import type { FrameMeta } from '../src/main/headless-chrome'
 
@@ -164,6 +164,52 @@ describe('the desktop’s port to a card’s Chrome', () => {
     expect(frames(port)).toHaveLength(2)
     vi.advanceTimersByTime(IPC_RECEIPT_TIMEOUT_MS + 1)
     expect(frames(port)).toHaveLength(3)
+  })
+
+  it('a late or stray receipt never loosens the cap (only a seq on the wire counts)', async () => {
+    const { instance, port } = await opened()
+    const meta = { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 }
+    instance.emit(jpegFrame(400, 300), meta)
+    instance.emit(jpegFrame(401, 300), meta)
+    // The renderer stalls past the timeout: 1 and 2 are written off, 3 and 4 go.
+    instance.emit(jpegFrame(402, 300), meta)
+    vi.advanceTimersByTime(IPC_RECEIPT_TIMEOUT_MS + 1)
+    instance.emit(jpegFrame(403, 300), meta)
+    expect(frames(port).map((frame) => frame.seq)).toEqual([1, 2, 3, 4])
+    // The old receipts arrive late, plus junk: none of them frees a slot.
+    port.deliver({ t: 'painted', seq: 1 })
+    port.deliver({ t: 'painted', seq: 2 })
+    port.deliver({ t: 'painted', seq: 99 })
+    port.deliver({ t: 'painted' })
+    instance.emit(jpegFrame(404, 300), meta)
+    expect(frames(port).map((frame) => frame.seq)).toEqual([1, 2, 3, 4])
+    port.deliver({ t: 'painted', seq: 3 })
+    expect(frames(port).map((frame) => frame.seq)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('a pinch step that never answers does not wedge the next ones', async () => {
+    const { instance, port } = await opened()
+    vi.mocked(instance.dispatchInput).mockImplementation(() => new Promise<void>(() => undefined))
+    instance.emit(jpegFrame(400, 300), { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 })
+    port.deliver({ t: 'pinch', x: 10, y: 10, scale: 1.2, revision: 1, frameSeq: 1 })
+    port.deliver({ t: 'pinch', x: 10, y: 10, scale: 1.2, revision: 1, frameSeq: 1 })
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(PINCH_STEP_TIMEOUT_MS + 1)
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('a folded pinch step is dropped if the viewport started changing meanwhile', async () => {
+    const { instance, port } = await opened()
+    let finish: () => void = () => undefined
+    vi.mocked(instance.dispatchInput).mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)))
+    instance.emit(jpegFrame(400, 300), { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 })
+    port.deliver({ t: 'pinch', x: 10, y: 10, scale: 1.2, revision: 1, frameSeq: 1 })
+    port.deliver({ t: 'pinch', x: 10, y: 10, scale: 1.2, revision: 1, frameSeq: 1 })
+    ;(instance.viewportState as { transitioning: boolean }).transitioning = true
+    finish()
+    await settle()
+    await settle()
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(1)
   })
 
   it('input over the port goes through the same closed vocabulary, mapped against the painted frame', async () => {

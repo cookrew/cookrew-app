@@ -102,6 +102,8 @@ export interface RemoteKeyboard {
   close: () => void
   /** Desktop: take the keys, with the IME's window near (x, y) in the frame's box. */
   focusAt: (x: number, y: number) => void
+  /** Finish a composition in progress (the field commits it on blur), before input moves elsewhere. */
+  endComposition: () => void
   inputRef: React.RefObject<HTMLTextAreaElement>
   onBeforeInput: (e: React.FormEvent<HTMLTextAreaElement>) => void
   onInput: (e: React.FormEvent<HTMLTextAreaElement>) => void
@@ -168,6 +170,14 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
     el.style.left = `${Math.max(0, Math.round(x))}px`
     el.style.top = `${Math.max(0, Math.round(y))}px`
     if (document.activeElement !== el) el.focus({ preventScroll: true })
+  }, [])
+
+  const endComposition = useCallback((): void => {
+    const el = inputRef.current
+    if (!composingRef.current || !el) return
+    // Blur ends the IME: compositionend commits (onCompositionEnd sends it), or
+    // onBlur clears a composition that was dropped instead.
+    el.blur()
   }, [])
 
   const onBeforeInput = useCallback(
@@ -263,6 +273,7 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
     toggle,
     close,
     focusAt,
+    endComposition,
     inputRef,
     onBeforeInput,
     onInput,

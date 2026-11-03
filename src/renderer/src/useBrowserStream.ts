@@ -310,7 +310,9 @@ export function useBrowserStream(
       liveRef.current = false
       setLive(false)
       advance(event)
-      if (line?.direct && !line.isOpen() && !gotFrameRef.current && desktopToken) portUnansweredRef.current = true
+      // Only a port that was never answered: one main said goodbye on (a
+      // replaced instance) is answered, and the next dial is a port again.
+      if (line?.direct && !line.answered() && desktopToken) portUnansweredRef.current = true
       line?.close()
       // Dial again, by itself. The effect re-runs on the nonce; this run's
       // cleanup clears the timer if the card closes first.

@@ -67,6 +67,8 @@ function frameBytes(base64: string): Buffer {
 const PINCH = 'Input.synthesizePinchGesture'
 const MAX_PINCH_STEP = 4
 const MIN_PINCH_STEP = 0.25
+/** A step takes ~70 ms; one that never answers (a tab switched mid-gesture) must not wedge every later pinch. */
+export const PINCH_STEP_TIMEOUT_MS = 500
 
 export class CastViewer {
   readonly id = randomUUID()
@@ -273,14 +275,22 @@ export class CastViewer {
       return
     }
     this.pinchBusy = true
-    void Promise.resolve(instance.dispatchInput(command.method, command.params))
-      .catch(() => undefined)
-      .then(() => {
-        this.pinchBusy = false
-        const next = this.pinchPending
-        this.pinchPending = null
-        if (next && !this.closed && this.instance === instance) this.dispatch(instance, next)
-      })
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const step = Promise.resolve(instance.dispatchInput(command.method, command.params)).catch(() => undefined)
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, PINCH_STEP_TIMEOUT_MS)
+    })
+    void Promise.race([step, deadline]).then(() => {
+      if (timer) clearTimeout(timer)
+      this.pinchBusy = false
+      const next = this.pinchPending
+      this.pinchPending = null
+      if (!next || this.closed || this.instance !== instance) return
+      // The folded step was accepted against an older state: the same gate again before it goes.
+      const viewport = instance.viewportState
+      if (viewport.transitioning || viewport.agentHeld || viewport.revision !== this.deliveredRevision) return
+      this.dispatch(instance, next)
+    })
   }
 
   private pushViewportState(state: BrowserViewportState): void {

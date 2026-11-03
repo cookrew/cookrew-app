@@ -23,6 +23,7 @@ describe('the port line (the desktop’s)', () => {
     const { line, posted, port, events } = harness()
     expect(line.direct).toBe(true)
     expect(line.isOpen()).toBe(false)
+    expect(line.answered()).toBe(false)
     line.send({ t: 'viewport-offer' })
     expect(posted).toEqual([])
     port().onOpen()
@@ -47,6 +48,8 @@ describe('the port line (the desktop’s)', () => {
     first.port().onClose()
     expect(first.events.closed).toBe(1)
     expect(first.line.isOpen()).toBe(false)
+    // Answered, then said goodbye: still answered — the next dial is a port again.
+    expect(first.line.answered()).toBe(true)
 
     const second = harness()
     second.port().onOpen()

@@ -28,6 +28,8 @@ export interface StreamLine {
   /** Frames come as bytes over the desktop's port; receipts pace them. */
   readonly direct: boolean
   isOpen: () => boolean
+  /** The other end ever answered (a port arrived, a socket opened), whatever happened since. */
+  answered: () => boolean
   send: (message: object) => void
   close: () => void
 }
@@ -69,6 +71,7 @@ export function portLine(open: OpenBrowserStream, browserId: string, handlers: S
   return {
     direct: true,
     isOpen: () => opened && !closed,
+    answered: () => opened,
     send: (message) => {
       if (opened && !closed) port.post(message)
     },
@@ -82,12 +85,14 @@ export function portLine(open: OpenBrowserStream, browserId: string, handlers: S
 
 export function socketLine(socket: WebSocket, handlers: StreamLineHandlers): StreamLine {
   let closed = false
+  let opened = false
   const drop = (): void => {
     if (closed) return
     closed = true
     handlers.onClose()
   }
   socket.onopen = (): void => {
+    opened = true
     if (!closed) handlers.onOpen()
   }
   socket.onerror = drop
@@ -100,6 +105,7 @@ export function socketLine(socket: WebSocket, handlers: StreamLineHandlers): Str
   return {
     direct: false,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
+    answered: () => opened,
     send: (message) => {
       if (!closed && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
     },

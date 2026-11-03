@@ -1,4 +1,5 @@
 import { UseOverlay } from './use/UseOverlay'
+import { hasNativeWebview } from './api'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import {
@@ -77,7 +78,7 @@ export function MobileBrowserFrame({
   )
   /** The canvas holds a picture from this open (it survives a reconnect). */
   const [hasPicture, setHasPicture] = useState(false)
-  const [scale, setScale] = useState(() => viewScale(window.devicePixelRatio))
+  const [pixelRatio, setPixelRatio] = useState(() => window.devicePixelRatio)
   const boxRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const paintedFrameSeq = useRef<number | null>(null)
@@ -94,14 +95,16 @@ export function MobileBrowserFrame({
   const lastPaintedRef = useRef<Blob | null>(null)
   const wasOpenRef = useRef(open)
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
-  // A fine pointer is a desktop: its keys come from the keyboard it has, and
-  // its frames are drawn at its display's pixel ratio (crisp on a Retina Mac).
+  // A fine pointer has a keyboard: its keys come as keys, not a soft keyboard's input.
   const desktopInput = !coarsePointer
+  // Only the app itself asks for its display's pixel ratio (crisp on a Retina
+  // Mac, at no network cost): a laptop on the relay would pull 4x the bytes.
+  const scale = hasNativeWebview() && desktopInput ? viewScale(pixelRatio) : 1
   const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken, {
     width: view.w,
     height: view.h,
     mobile: mobilePreference,
-    ...(desktopInput && scale > 1 ? { scale } : {})
+    ...(scale > 1 ? { scale } : {})
   })
   const streaming = frameSource(stream.status) === 'stream'
 
@@ -188,14 +191,15 @@ export function MobileBrowserFrame({
     }
   }, [open, browserId, subscribeFrames, latestFrame, receipt])
 
-  // A display change (the window moved to another screen) re-asks for that one's pixel ratio.
+  // A display change (the window moved to another screen, a zoom) re-asks for
+  // that one's pixel ratio; the query is re-armed on every ratio it reports.
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
-    const query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
-    const update = (): void => setScale(viewScale(window.devicePixelRatio))
+    const query = window.matchMedia(`(resolution: ${pixelRatio}dppx)`)
+    const update = (): void => setPixelRatio(window.devicePixelRatio)
     query.addEventListener('change', update)
     return () => query.removeEventListener('change', update)
-  }, [scale])
+  }, [pixelRatio])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -382,6 +386,9 @@ export function MobileBrowserFrame({
     const point = framePoint(e)
     if (!point) return
     e.preventDefault()
+    // A click mid-composition commits it where it was being typed, first —
+    // never into the field the click is about to focus.
+    kbd.endComposition()
     takeKeys(e)
     mousePointerId.current = e.pointerId
     mouseLastPoint.current = point

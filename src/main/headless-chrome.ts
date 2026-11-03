@@ -589,10 +589,31 @@ export class HeadlessInstance {
     if (this.closed || this.viewportCoordinator.state.transitioning) return null
     const page = this.pages.get(this.activeTabId)
     if (!page) return null
+    const clip = this.scale > 1 ? await this.oneXClip(page) : null
     const shot = (await page.cdp
-      .send('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
+      .send('Page.captureScreenshot', { format: 'jpeg', quality: 55, ...(clip ? { clip } : {}) })
       .catch(() => null)) as { data?: string } | null
     return typeof shot?.data === 'string' && shot.data.length > 0 ? shot.data : null
+  }
+
+  /**
+   * The visible page at 1x. The card's picture goes to the phone too, over the
+   * relay, and a 2x desktop owner (cast-viewport.ts · scale) must not make it
+   * four times the bytes. Null — a plain capture — when the page will not say
+   * where its viewport is.
+   */
+  private async oneXClip(
+    page: PageBinding
+  ): Promise<{ x: number; y: number; width: number; height: number; scale: number } | null> {
+    const metrics = (await page.cdp.send('Page.getLayoutMetrics').catch(() => null)) as {
+      cssVisualViewport?: { pageX?: unknown; pageY?: unknown; clientWidth?: unknown; clientHeight?: unknown }
+    } | null
+    const viewport = metrics?.cssVisualViewport
+    const values = [viewport?.pageX, viewport?.pageY, viewport?.clientWidth, viewport?.clientHeight]
+    if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return null
+    const [x, y, width, height] = values as number[]
+    if (width <= 0 || height <= 0) return null
+    return { x, y, width, height, scale: 1 / this.scale }
   }
 
   private async pollTick(): Promise<void> {

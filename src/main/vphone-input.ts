@@ -87,6 +87,10 @@ export class VphoneGestureMapper {
         return this.touch(command.params)
       case 'Input.dispatchKeyEvent':
         return this.key(command.params)
+      case 'Input.insertText':
+        // Committed text — a paste, a phone keyboard's word, an IME's result.
+        // An uncommitted composition (imeSetComposition) has no screen to show on.
+        return this.text(command.params)
       default:
         return []
     }
@@ -95,6 +99,10 @@ export class VphoneGestureMapper {
   private mouse(params: Record<string, unknown>): VphoneCall[] {
     const x = num(params.x)
     const y = num(params.y)
+    // A screen has one kind of touch: a right or middle click is not a tap.
+    if ((params.type === 'mousePressed' || params.type === 'mouseReleased') && params.button !== undefined && params.button !== 'left') {
+      return []
+    }
     switch (params.type) {
       case 'mousePressed':
         if (x === null || y === null) return []
@@ -169,6 +177,14 @@ export class VphoneGestureMapper {
     const elapsed = (this.now() - press.at) / 1000
     const seconds = Math.min(SWIPE_MAX_SECONDS, Math.max(SWIPE_MIN_SECONDS, Math.round(elapsed * 100) / 100))
     return [swipe(press.x, press.y, x, y, seconds)]
+  }
+
+  private text(params: Record<string, unknown>): VphoneCall[] {
+    const text = typeof params.text === 'string' ? params.text : ''
+    if (text.length === 0) return []
+    return isAsciiPrintable(text)
+      ? [{ method: 'input.type', params: { text } }]
+      : [{ method: 'input.paste', params: { text } }]
   }
 
   private key(params: Record<string, unknown>): VphoneCall[] {
