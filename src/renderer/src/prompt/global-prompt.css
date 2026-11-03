@@ -287,11 +287,12 @@
    chips sit under them on the left, the mic and Send on the right, within
    the thumb's reach. Squeezed into one row the words had 108 px, the tune
    chip read "de" and Send fell to a row of its own. The agent's keys (arrows,
-   paste, Esc) keep a row of their own below. The width gates it, not the
-   class alone: the companion carries cookrew-mobile in a desktop browser too,
-   where the box belongs on the buttons' row. */
+   paste, Esc) keep a row of their own below. The width alone gates it
+   (2026-11-04): the companion's class in a wide desktop browser draws the
+   wide box, and a page without it at 412px (a narrow window, the phone
+   evals' fixture) drew the wide box's one row there, Send past the edge. */
 @media (max-width: 700px) {
-  body.cookrew-mobile .cr-prompt {
+  body .cr-prompt {
     order: -1;
     flex-basis: 100%;
     flex-wrap: wrap;
@@ -300,7 +301,7 @@
   }
 
   /* Row 1: the words, and Send at their end (owner, 2026-11-02). */
-  body.cookrew-mobile .cr-prompt input {
+  body .cr-prompt input {
     order: -2;
     flex: 1 1 calc(100% - 56px);
     height: 36px;
@@ -309,59 +310,59 @@
   }
 
   /* Row 2 never wraps: the chips shorten before the tools move. */
-  body.cookrew-mobile .cr-prompt-to {
+  body .cr-prompt-to {
     flex: 0 1 auto;
     min-width: 0;
     max-width: 38%;
   }
 
-  body.cookrew-mobile .cr-prompt-new {
+  body .cr-prompt-new {
     max-width: 45%;
   }
 
   /* The thumb's buttons, flat as the desktop's (owner, 2026-11-03: "flat icons, the same as the desktop"). Send ends the
      words' row; the mic ends the chips' row. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-more,
-  body.cookrew-mobile .cr-prompt .voice-mic,
-  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+  body .cr-prompt .cr-prompt-more,
+  body .cr-prompt .voice-mic,
+  body .cr-prompt > button[type='submit'] {
     flex: none;
     min-width: 36px;
-    height: 28px;
+    height: 32px;
     margin-left: auto;
     justify-content: center;
   }
 
   /* The ^ leads the right-hand group; what follows it sits beside it. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-more {
+  body .cr-prompt .cr-prompt-more {
     min-width: 36px;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-prompt-more ~ .voice-mic {
+  body .cr-prompt .cr-prompt-more ~ .voice-mic {
     margin-left: 0;
   }
 
-  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+  body .cr-prompt > button[type='submit'] {
     order: -1;
     margin-left: 0;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-prompt-more .cr-icon,
-  body.cookrew-mobile .cr-prompt .voice-mic .cr-icon,
-  body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
+  body .cr-prompt .cr-prompt-more .cr-icon,
+  body .cr-prompt .voice-mic .cr-icon,
+  body .cr-prompt > button[type='submit'] .cr-icon {
     width: 16px;
     height: 16px;
   }
 
   /* With an agent in the box, the tools step aside on a phone, as the old
      composer did: the box and the agent's keys are what the thumb needs. */
-  body.cookrew-mobile .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
+  body .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
     display: none;
   }
 
   /* Sous's reply, a note and an error get a line of their own under the box. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-note,
-  body.cookrew-mobile .cr-prompt .cr-prompt-sous,
-  body.cookrew-mobile .cr-prompt .cr-prompt-error {
+  body .cr-prompt .cr-prompt-note,
+  body .cr-prompt .cr-prompt-sous,
+  body .cr-prompt .cr-prompt-error {
     order: 4;
     flex-basis: 100%;
     max-width: 100%;
@@ -370,77 +371,63 @@
 
   /* ONE ROW UNDER THE WORDS (owner, 2026-11-03): the chips, then ^ and what
      it shows (attach, 🔊, the agent's keys), every button one size, side by
-     side; what does not fit is swiped to. The ^ folds them all. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools {
+     side, at the row's right. The ^ folds them all. What does not fit WRAPS
+     (2026-11-04): a swiped row hid its last keys past the edge, and at 32px
+     a button the tune chip, ^ 📎 🔊 and six keys need ~385px. The keys go
+     as one group, onto a line of their own under the rest. */
+  body .cr-prompt .cr-prompt-tools {
     display: flex;
     flex: 1 1 0;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: center;
-    gap: 4px;
+    gap: 4px 3px;
     min-width: 0;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools::-webkit-scrollbar {
-    display: none;
-  }
-
-  /* ^ first, then what it opens. Its auto margin keeps the
-     row at the right while it fits, and gives way (to 0) when it overflows, so
-     its start is never cut off where a swipe cannot reach. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .cr-prompt-more {
-    order: 1;
-    margin-left: auto;
-  }
-
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-mic {
-    order: 2;
-    margin-left: 0;
-  }
-
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar {
-    order: 4;
-    flex: none;
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 4px;
-    overflow: visible;
-  }
-
-  body.cookrew-mobile .cr-prompt .voice-keys {
+  /* ^ first (the DOM's order), then what it opens: the tray's own buttons, so
+     each sits in the tools row. */
+  body .cr-prompt .cr-prompt-tools > .voice-bar {
     display: contents;
   }
 
-  /* 34px, not 40: beside two chips a 412px phone leaves the row ~235px, and the
-     six keys (← ↓ ↑ → 📋 ESC) must fit in it at once when the ^ opens. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn {
+  /* The agent's keys, the one group that wraps whole. */
+  body .cr-prompt .voice-keys {
+    display: flex;
+    flex: none;
+    flex-wrap: nowrap;
+    gap: 3px;
+  }
+
+  /* A thumb's size, 32px (2026-11-04), flat as the desktop's: ^, 📎, 🔊 and
+     the keys (← ↓ ↑ → 📋 ESC) fit one line beside the tune chip at 412px,
+     and the keys take their own at 375px. */
+  body .cr-prompt .cr-prompt-tools .cr-btn {
     flex: none;
     min-width: 0;
-    width: 30px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     justify-content: center;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn .cr-icon {
+  body .cr-prompt .cr-prompt-tools .cr-btn .cr-icon {
     width: 16px;
     height: 16px;
   }
 
   /* The arrows and paste are icons (VoiceBar.tsx); ESC is the one word. */
-  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key {
-    min-height: 28px;
+  body .cr-prompt .voice-bar .cr-btn.term-key {
+    min-height: 32px;
     font-size: var(--ph-control, 11px);
     letter-spacing: 0.04em;
   }
 
   /* The groups part by a little more than the buttons do. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar,
-  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key-lead,
-  body.cookrew-mobile .cr-prompt .voice-bar .voice-keys > :first-child {
-    margin-left: 4px;
+  body .cr-prompt .voice-bar > :first-child,
+  body .cr-prompt .voice-bar .voice-keys,
+  body .cr-prompt .voice-bar .cr-btn.term-key-lead {
+    margin-left: 3px;
   }
 }
 
@@ -548,6 +535,12 @@
     overflow: hidden;
   }
 
+  /* A thumb's size (2026-11-04): as tall as the tools beside it. */
+  .cr-prompt-tune,
+  .cr-prompt .cr-tune-menu-btn {
+    min-height: 32px;
+  }
+
   .cr-prompt .cr-tune-menu-effort {
     display: none;
   }
@@ -585,7 +578,7 @@
    (pets/stage-floor.ts). The cookrew.dev embed keeps its own bar.
 
    The pill's shape is :where()-scoped, so it ranks as the box's own rules do
-   and the phone's (body.cookrew-mobile …) still win at its width. */
+   and the phone's (body …) still win at its width. */
 .cr-app:not(.cr-embed) {
   /* The pill (48), its foot (12) and 8px of air above it. */
   --cr-float-h: calc(68px + env(safe-area-inset-bottom, 0px));
@@ -656,12 +649,12 @@
    listens or the extras are open — the pill grows upward, so the row typed in
    never moves. Sous's word and an error stand on top of it all. */
 @media (max-width: 700px) {
-  body.cookrew-mobile .cr-app:not(.cr-embed) {
+  body .cr-app:not(.cr-embed) {
     /* The pill (40 + 2 × 4), its foot, and 8px of air above it. */
     --cr-float-h: calc(56px + max(8px, env(safe-area-inset-bottom, 0px)));
   }
 
-  body.cookrew-mobile .cr-app:not(.cr-embed) > .cr-dock.cr-dock {
+  body .cr-app:not(.cr-embed) > .cr-dock.cr-dock {
     position: fixed;
     left: 0;
     right: 0;
@@ -673,15 +666,15 @@
     pointer-events: none;
   }
 
-  body.cookrew-mobile .cr-dock .dock-canvas {
+  body .cr-dock .dock-canvas {
     pointer-events: none;
   }
 
-  body.cookrew-mobile .cr-dock .dock-canvas > * {
+  body .cr-dock .dock-canvas > * {
     pointer-events: auto;
   }
 
-  body.cookrew-mobile .cr-prompt {
+  body .cr-prompt {
     flex-wrap: wrap;
     align-items: center;
     gap: 4px;
@@ -694,7 +687,7 @@
       0 1px 3px rgba(40, 30, 15, 0.1);
   }
 
-  body.cookrew-mobile .cr-prompt:focus-within {
+  body .cr-prompt:focus-within {
     box-shadow:
       inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep)),
       0 8px 28px rgba(40, 30, 15, 0.2),
@@ -702,24 +695,24 @@
   }
 
   /* Top to bottom: what was said, the tray, a break, then the one row. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-note,
-  body.cookrew-mobile .cr-prompt .cr-prompt-sous,
-  body.cookrew-mobile .cr-prompt .cr-prompt-error {
+  body .cr-prompt .cr-prompt-note,
+  body .cr-prompt .cr-prompt-sous,
+  body .cr-prompt .cr-prompt-error {
     order: -5;
     padding: 2px 10px 0;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-tune-menu,
-  body.cookrew-mobile .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune) {
+  body .cr-prompt .cr-tune-menu,
+  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune) {
     order: -4;
   }
 
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools {
+  body .cr-prompt .cr-prompt-tools {
     order: -4;
     flex: 1 1 0;
   }
 
-  body.cookrew-mobile .cr-prompt::before {
+  body .cr-prompt::before {
     content: '';
     order: -3;
     flex: 0 0 100%;
@@ -727,76 +720,98 @@
     margin-bottom: -4px;
   }
 
-  body.cookrew-mobile .cr-prompt-to,
-  body.cookrew-mobile .cr-prompt .cr-prompt-new:has(> .cr-prompt-harness) {
+  body .cr-prompt-to,
+  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-harness) {
     order: -2;
     flex: 0 1 auto;
     min-width: 0;
     max-width: 34%;
   }
 
-  /* A block, so a long harness ends in "…" (a flex button's text cannot). */
-  body.cookrew-mobile .cr-prompt-new > .cr-prompt-harness {
+  /* A block, so a long harness ends in "…" (a flex button's text cannot);
+     32px tall, its words centred by the line. */
+  body .cr-prompt-new > .cr-prompt-harness {
     display: block;
+    height: 32px;
+    padding: 0 10px;
+    line-height: 32px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
 
-  body.cookrew-mobile .cr-prompt input {
+  /* @agent: the chip as tall as the row, and its × a thumb's square at its
+     end (2026-11-04: it was 12px wide). */
+  body .cr-prompt-to {
+    min-height: 32px;
+    padding: 0 0 0 10px;
+    gap: 0;
+  }
+
+  body .cr-prompt-to button {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+  }
+
+  body .cr-prompt input {
     order: -1;
     flex: 1 1 0;
     min-width: 60px;
-    height: 30px;
+    height: 32px;
     padding: 0 4px 0 6px;
   }
 
-  body.cookrew-mobile .cr-prompt > .voice-mic {
+  body .cr-prompt > .voice-mic {
     order: 0;
   }
 
-  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+  body .cr-prompt > button[type='submit'] {
     order: 1;
   }
 
-  body.cookrew-mobile .cr-prompt > .voice-mic,
-  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+  body .cr-prompt > .voice-mic,
+  body .cr-prompt > button[type='submit'] {
     flex: none;
     /* Flat, as the desktop's (owner, 2026-11-03: "flat icons, the same as the desktop"). */
     width: 36px;
     min-width: 36px;
-    height: 28px;
+    height: 32px;
     margin: 0;
     padding: 0;
     border-radius: 8px;
     justify-content: center;
   }
 
-  body.cookrew-mobile .cr-prompt > .voice-mic .cr-icon,
-  body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
+  body .cr-prompt > .voice-mic .cr-icon,
+  body .cr-prompt > button[type='submit'] .cr-icon {
     width: 16px;
     height: 16px;
   }
 
   /* At rest: one row. */
-  body.cookrew-mobile .cr-prompt .cr-prompt-tools,
-  body.cookrew-mobile .cr-prompt .cr-tune-menu,
-  body.cookrew-mobile .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune),
-  body.cookrew-mobile .cr-prompt::before {
+  body .cr-prompt .cr-prompt-tools,
+  body .cr-prompt .cr-tune-menu,
+  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-tune),
+  body .cr-prompt::before {
     display: none;
   }
 
   /* The tray, while it is wanted. */
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-tools {
+  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-tools {
     display: flex;
   }
 
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-tune-menu,
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-new:has(> .cr-prompt-tune) {
+  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-tune-menu,
+  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open)) .cr-prompt-new:has(> .cr-prompt-tune) {
     display: inline-flex;
   }
 
-  body.cookrew-mobile .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open))::before {
+  body .cr-prompt:is(:focus-within, .listening, :has(.cr-prompt-more.open))::before {
     display: block;
   }
 }

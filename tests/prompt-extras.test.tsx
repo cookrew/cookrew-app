@@ -35,7 +35,7 @@ const stubWindow = (store: Store, phone = false): void => {
     cookrew: {}
   }
   ;(globalThis as unknown as { localStorage: unknown }).localStorage = storage
-  // The companion's body class: the phone default needs it AND the width.
+  // The companion's body class, as on the phone (the default fold reads the width alone).
   const g = globalThis as unknown as { document?: unknown }
   if (phone) g.document = { body: { classList: { contains: (c: string) => c === 'cookrew-mobile' } } }
   else delete g.document
@@ -143,15 +143,19 @@ describe('the ^ folded still says 🔊 is on', () => {
     expect(tag(await render({ fullAgentId: null, store: store('1') }), 'cr-prompt-more')).not.toMatch(/\bspeaking\b/)
   })
 
-  it('a narrow desktop window is no phone: the extras show', async () => {
+  // 2026-11-04 (phone evals): a narrow window draws the phone's box (global-prompt.css
+  // · the width alone gates it), so it folds as the phone does: shown, its tray stood
+  // over the zoom bar's stops at 412px.
+  it('a narrow window folds them as a phone does; a wide one, the companion too, shows them', async () => {
     vi.resetModules()
     stubWindow(new Map(), false)
-    ;(globalThis as unknown as { window: Record<string, unknown> }).window.matchMedia = () => ({ matches: true })
+    const win = (globalThis as unknown as { window: Record<string, unknown> }).window
+    win.matchMedia = () => ({ matches: true })
     const { extrasShown } = await import('../src/renderer/src/prompt/extras-pref')
-    expect(extrasShown()).toBe(true)
-    // The companion's boot flag counts before its body class is set.
-    ;(globalThis as unknown as { window: Record<string, unknown> }).window.COOKREW_MOBILE = 1
     expect(extrasShown()).toBe(false)
+    win.matchMedia = () => ({ matches: false })
+    win.COOKREW_MOBILE = 1
+    expect(extrasShown()).toBe(true)
   })
 })
 

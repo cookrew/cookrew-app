@@ -20,7 +20,7 @@ describe('the dock floats at every width', () => {
 
   it('defines the clearance for every width, and the phone its own on the same element', () => {
     expect(wide).toMatch(/\.cr-app:not\(\.cr-embed\) \{[^}]*--cr-float-h:/)
-    expect(box).toMatch(/body\.cookrew-mobile \.cr-app:not\(\.cr-embed\) \{[^}]*--cr-float-h:/)
+    expect(box).toMatch(/body \.cr-app:not\(\.cr-embed\) \{[^}]*--cr-float-h:/)
   })
 
   it('draws the box as a pill no wider than 960px, centred', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasNode } from '../../../shared/model'
 import { addressedToSous } from '../../../shared/sous-intent'
 import { cookrew, isRemoteMode } from '../api'
@@ -291,15 +291,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setExtrasOn(next)
     rememberExtras(next)
   }
-  // The keys come last on the phone's one row (global-prompt.css), past what
-  // the chips leave in view: when they open, by the ^ or because the agent
-  // waits on you, the row is swiped to them (owner, 2026-11-03: "the arrows
-  // and ESC seem gone"). A wide screen's tools have no box, so nothing scrolls.
-  const toolsRef = useRef<HTMLSpanElement>(null)
-  useLayoutEffect(() => {
-    const row = toolsRef.current
-    if (row && to && toolsShown) row.scrollLeft = row.scrollWidth
-  }, [toolsShown, to?.id])
   useEffect(() => {
     const waiting = phase === 'waiting'
     const id = to?.id ?? null
@@ -546,9 +537,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
-      {/* The tools after the chips: one row on a phone, swiped sideways
-          (global-prompt.css · .cr-prompt-tools); in line on a wide screen. */}
-      <span className="cr-prompt-tools" ref={toolsRef}>
+      {/* The tools after the chips: a row above the words on a phone, the
+          keys wrapping onto a line of their own when it is short (owner,
+          2026-11-03: "the arrows and ESC seem gone" from a swiped row;
+          global-prompt.css · .cr-prompt-tools); in line on a wide screen. */}
+      <span className="cr-prompt-tools">
       <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       {browse.input}
       {toolsShown && (

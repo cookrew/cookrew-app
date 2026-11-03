@@ -2,6 +2,8 @@
 // row was spread across the box in three groups; then the owner asked for the
 // chips, ⌄ 🎤 ⌨ and all the keys on ONE row, every button one size, side by
 // side, the row swiped sideways for the rest, and ⌨ hiding the terminal keys.
+// 2026-11-04 (phone evals): the swiped row hid its last keys past the edge; it
+// wraps them now, every button 32px (tests/phone-prompt-fit.test.ts).
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -31,28 +33,31 @@ describe("the phone's tools: one row after the chips", () => {
     expect(rule('.cr-prompt-tools')).toContain('display: contents;')
   })
 
-  it('on a phone is one row that never wraps and swipes sideways', () => {
-    const row = rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools')
+  it('on a phone is a row at the right that wraps what does not fit, never swiped past the edge', () => {
+    const row = rule('  body .cr-prompt .cr-prompt-tools')
     expect(row).toContain('display: flex;')
-    expect(row).toContain('flex-wrap: nowrap;')
-    expect(row).toContain('overflow-x: auto;')
+    expect(row).toContain('flex-wrap: wrap;')
+    expect(row).toContain('justify-content: flex-end;')
+    expect(row).not.toContain('overflow-x')
     expect(row).toContain('min-width: 0;')
     // The key tray is not a row of its own any more.
     expect(css).not.toMatch(/\.cr-prompt \.voice-bar \{[^}]*flex-basis: 100%/)
   })
 
-  it('puts the ^ first, then the extras and the keys', () => {
-    const order = (sel: string): number => Number(rule(`  body.cookrew-mobile .cr-prompt .cr-prompt-tools > ${sel}`).match(/order: (\d+);/)?.[1])
-    expect(order('.cr-prompt-more')).toBeLessThan(order('.voice-bar'))
+  it("puts the ^ first, then the extras and the keys, in the DOM's order", () => {
+    const box = read('prompt', 'GlobalPrompt.tsx')
+    const at = box.indexOf('<span className="cr-prompt-tools"')
+    expect(box.indexOf('<ExtrasToggle', at)).toBeLessThan(box.indexOf('<VoiceBar', at))
+    expect(css).not.toMatch(/\.cr-prompt-tools > [^{]*\{[^}]*order:/)
   })
 
   it('draws every button in it at one size', () => {
-    const one = rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn')
+    const one = rule('  body .cr-prompt .cr-prompt-tools .cr-btn')
     expect(one).toContain('flex: none;')
-    // Flat, as the desktop's (owner, 2026-11-03).
-    expect(one).toContain('width: 30px;')
-    expect(one).toContain('height: 28px;')
-    expect(css).toMatch(/body\.cookrew-mobile \.cr-prompt \.voice-keys \{\s*display: contents;/)
+    // Flat, as the desktop's (owner, 2026-11-03), and a thumb's size (2026-11-04).
+    expect(one).toContain('width: 32px;')
+    expect(one).toContain('height: 32px;')
+    expect(css).toMatch(/body \.cr-prompt \.voice-keys \{\s*display: flex;\s*flex: none;/)
   })
 
   it('lets the ^ hide the terminal keys with the rest: no tray while it is folded', () => {
@@ -67,15 +72,21 @@ describe("the phone's tools: one row after the chips", () => {
 
   // Owner, 2026-11-03: "the arrows and ESC seem gone". Beside two chips the row
   // showed ⌄ 🎤 ⌨ ← ↓ and the rest was past the edge, with nothing saying so.
-  it('swipes the row to the keys whenever they open', () => {
+  // It was swiped to them; now nothing is past the edge to swipe to.
+  it('never swipes: the keys wrap into view instead', () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
-    expect(box).toContain('<span className="cr-prompt-tools" ref={toolsRef}>')
-    expect(box).toMatch(/if \(row && to && toolsShown\) row\.scrollLeft = row\.scrollWidth\s*\}, \[toolsShown, to\?\.id\]\)/)
+    expect(box).toContain('<span className="cr-prompt-tools">')
+    expect(box).not.toContain('scrollLeft')
   })
 
-  it('fits all six keys in the ~235px two chips leave on a 412px phone', () => {
-    const width = Number(rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn').match(/width: (\d+)px;/)?.[1])
-    const gap = Number(rule('  body.cookrew-mobile .cr-prompt .cr-prompt-tools > .voice-bar').match(/gap: (\d+)px;/)?.[1] ?? 4)
-    expect(6 * width + 5 * gap + 2 * gap).toBeLessThanOrEqual(235)
+  // A 412px phone: the dock's 8px sides and the pill's 4px leave 388px; the tune
+  // chip ("smart ▾", 61px measured by the phone evals) and its 4px gap, 323.
+  it('fits ^, 📎, 🔊 and the six keys on one line beside the tune chip at 412px', () => {
+    const width = Number(rule('  body .cr-prompt .cr-prompt-tools .cr-btn').match(/width: (\d+)px;/)?.[1])
+    const gap = Number(rule('  body .cr-prompt .cr-prompt-tools').match(/gap: \d+px (\d+)px;/)?.[1])
+    const keyGap = Number(rule('  body .cr-prompt .voice-keys').match(/gap: (\d+)px;/)?.[1])
+    const part = Number(css.match(/body \.cr-prompt \.voice-bar \.cr-btn\.term-key-lead \{\s*margin-left: (\d+)px;/)?.[1])
+    // ^ 📎 🔊 [keys]: three gaps; six keys: five; three groups part (📎, the keys, paste).
+    expect(9 * width + 3 * gap + 5 * keyGap + 3 * part).toBeLessThanOrEqual(388 - 61 - 4)
   })
 })
