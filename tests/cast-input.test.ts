@@ -190,9 +190,141 @@ describe('sanitizeInput — key vocab', () => {
       params: { windowsVirtualKeyCode: 37 }
     })
   })
-  it('a printable key gets no virtual key code (it inserts via text)', () => {
-    expect(sanitizeInput({ t: 'key', key: 'a', code: 'KeyA', text: 'a' }, ctx)?.[0].params).not.toHaveProperty(
+  it('a letter or digit carries its virtual key code (pages and games read keyCode) and still inserts via text', () => {
+    expect(sanitizeInput({ t: 'key', key: 'a', code: 'KeyA', text: 'a' }, ctx)?.[0].params).toMatchObject({
+      text: 'a',
+      windowsVirtualKeyCode: 65
+    })
+    expect(sanitizeInput({ t: 'key', key: '7', code: 'Digit7', text: '7' }, ctx)?.[0].params).toMatchObject({
+      windowsVirtualKeyCode: 55
+    })
+    // A key with no code (the phone bridge) gets none: nothing to derive it from.
+    expect(sanitizeInput({ t: 'key', key: 'a', text: 'a' }, ctx)?.[0].params).not.toHaveProperty(
       'windowsVirtualKeyCode'
     )
+  })
+})
+
+/**
+ * THE DESKTOP'S HANDS. Hover, drag, the other buttons, modifiers, sideways
+ * scroll, a trackpad pinch, IME text and the editing shortcuts a headless
+ * Chrome does not bind by itself — each verified against a real headless
+ * Chrome before it was allowed onto the wire (headless-chrome.integration).
+ */
+describe('sanitizeInput — desktop pointer: hover, drag, buttons, modifiers', () => {
+  it('a bare move is a hover: mouseMoved with no button', () => {
+    expect(sanitizeInput({ t: 'move', x: 20, y: 40 }, ctx)).toEqual([
+      { method: 'Input.dispatchMouseEvent', params: { type: 'mouseMoved', x: 10, y: 20 } }
+    ])
+  })
+  it('a move with buttons held is a drag: it names the button, or Chromium selects nothing', () => {
+    expect(sanitizeInput({ t: 'move', x: 20, y: 40, buttons: 1 }, ctx)?.[0].params).toEqual({
+      type: 'mouseMoved', x: 10, y: 20, button: 'left', buttons: 1
+    })
+    expect(sanitizeInput({ t: 'move', x: 20, y: 40, buttons: 2 }, ctx)?.[0].params).toMatchObject({ button: 'right', buttons: 2 })
+    expect(sanitizeInput({ t: 'move', x: 20, y: 40, buttons: 4 }, ctx)?.[0].params).toMatchObject({ button: 'middle', buttons: 4 })
+  })
+  it('a hostile buttons mask is ignored, never forwarded', () => {
+    for (const buttons of [8, -1, 1.5, 'all', 255]) {
+      expect(sanitizeInput({ t: 'move', x: 20, y: 40, buttons }, ctx)?.[0].params).not.toHaveProperty('buttons')
+    }
+  })
+  it('right and middle clicks keep their button; anything else is the left one', () => {
+    expect(sanitizeInput({ t: 'down', x: 2, y: 4, button: 'right' }, ctx)?.[0].params).toMatchObject({ button: 'right' })
+    expect(sanitizeInput({ t: 'up', x: 2, y: 4, button: 'middle' }, ctx)?.[0].params).toMatchObject({ button: 'middle' })
+    expect(sanitizeInput({ t: 'tap', x: 2, y: 4, button: 'back' }, ctx)?.[0].params).toMatchObject({ button: 'left' })
+  })
+  it('held modifiers ride on clicks and wheels (⇧-click extends, ⌘-click opens)', () => {
+    expect(sanitizeInput({ t: 'down', x: 2, y: 4, mods: 8 }, ctx)?.[0].params).toMatchObject({ modifiers: 8 })
+    expect(sanitizeInput({ t: 'wheel', x: 2, y: 4, dy: 3, mods: 8 }, ctx)?.[0].params).toMatchObject({ modifiers: 8 })
+  })
+  it('a modifier mask outside the four bits is dropped, not forwarded', () => {
+    for (const mods of [16, -1, 2.5, '4']) {
+      expect(sanitizeInput({ t: 'down', x: 2, y: 4, mods }, ctx)?.[0].params).not.toHaveProperty('modifiers')
+    }
+  })
+  it('the wheel carries a sideways delta, clamped like the vertical one', () => {
+    expect(sanitizeInput({ t: 'wheel', x: 2, y: 4, dy: 10, dx: -30 }, ctx)?.[0].params).toMatchObject({ deltaX: -30, deltaY: 10 })
+    expect(sanitizeInput({ t: 'wheel', x: 2, y: 4, dy: 0, dx: 1e9 }, ctx)?.[0].params).toMatchObject({ deltaX: 10_000 })
+    expect(sanitizeInput({ t: 'wheel', x: 2, y: 4, dy: 0, dx: 'NaN' }, ctx)).toBeNull()
+  })
+})
+
+describe('sanitizeInput — a trackpad pinch', () => {
+  it('becomes a mouse-sourced pinch gesture at the page point (the page sees ctrl+wheel, the viewport zooms)', () => {
+    expect(sanitizeInput({ t: 'pinch', x: 200, y: 400, scale: 1.2 }, ctx)).toEqual([{
+      method: 'Input.synthesizePinchGesture',
+      params: { x: 100, y: 200, scaleFactor: 1.2, relativeSpeed: 20_000, gestureSourceType: 'mouse' }
+    }])
+  })
+  it('clamps a step to [0.25, 4] and refuses a non-positive one', () => {
+    expect(sanitizeInput({ t: 'pinch', x: 2, y: 4, scale: 1000 }, ctx)?.[0].params).toMatchObject({ scaleFactor: 4 })
+    expect(sanitizeInput({ t: 'pinch', x: 2, y: 4, scale: 0.0001 }, ctx)?.[0].params).toMatchObject({ scaleFactor: 0.25 })
+    expect(sanitizeInput({ t: 'pinch', x: 2, y: 4, scale: 0 }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'pinch', x: 2, y: 4, scale: -2 }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'pinch', x: 2, y: 4 }, ctx)).toBeNull()
+  })
+})
+
+describe('sanitizeInput — keys with modifiers: the editing commands', () => {
+  const keyDown = (raw: Record<string, unknown>) => sanitizeInput({ t: 'key', ...raw }, ctx)?.[0].params
+  it('⌘A selects all, ⌘C copies, ⌘X cuts, ⌘Z undoes, ⇧⌘Z redoes', () => {
+    expect(keyDown({ key: 'a', code: 'KeyA', mods: 4 })).toMatchObject({ commands: ['selectAll'], modifiers: 4 })
+    expect(keyDown({ key: 'c', code: 'KeyC', mods: 4 })).toMatchObject({ commands: ['copy'] })
+    expect(keyDown({ key: 'x', code: 'KeyX', mods: 4 })).toMatchObject({ commands: ['cut'] })
+    expect(keyDown({ key: 'z', code: 'KeyZ', mods: 4 })).toMatchObject({ commands: ['undo'] })
+    expect(keyDown({ key: 'z', code: 'KeyZ', mods: 12 })).toMatchObject({ commands: ['redo'] })
+  })
+  it('Ctrl does the same for a phone’s hardware keyboard', () => {
+    expect(keyDown({ key: 'a', code: 'KeyA', mods: 2 })).toMatchObject({ commands: ['selectAll'] })
+    expect(keyDown({ key: 'y', code: 'KeyY', mods: 2 })).toMatchObject({ commands: ['redo'] })
+  })
+  it('line, word and document moves, with and without ⇧', () => {
+    expect(keyDown({ key: 'ArrowLeft', code: 'ArrowLeft', mods: 4 })).toMatchObject({ commands: ['moveToBeginningOfLine'] })
+    expect(keyDown({ key: 'ArrowRight', code: 'ArrowRight', mods: 12 })).toMatchObject({
+      commands: ['moveToEndOfLineAndModifySelection']
+    })
+    expect(keyDown({ key: 'ArrowLeft', code: 'ArrowLeft', mods: 1 })).toMatchObject({ commands: ['moveWordLeft'] })
+    expect(keyDown({ key: 'Backspace', code: 'Backspace', mods: 1 })).toMatchObject({ commands: ['deleteWordBackward'] })
+    expect(keyDown({ key: 'Backspace', code: 'Backspace', mods: 4 })).toMatchObject({ commands: ['deleteToBeginningOfLine'] })
+  })
+  it('a plain key or ⇧ alone carries no command (Chromium binds those itself)', () => {
+    expect(keyDown({ key: 'a', code: 'KeyA', text: 'a' })).not.toHaveProperty('commands')
+    expect(keyDown({ key: 'ArrowLeft', code: 'ArrowLeft', mods: 8 })).not.toHaveProperty('commands')
+  })
+  it('the keyUp never carries the command (it would run twice)', () => {
+    expect(sanitizeInput({ t: 'key', key: 'a', code: 'KeyA', mods: 4 }, ctx)?.[1].params).not.toHaveProperty('commands')
+  })
+  it('a shortcut types nothing: ⌘A with text "a" sends no text', () => {
+    expect(keyDown({ key: 'a', code: 'KeyA', text: 'a', mods: 4 })).not.toHaveProperty('text')
+    expect(keyDown({ key: 'a', code: 'KeyA', text: 'a', mods: 8 })).toMatchObject({ text: 'a' })
+  })
+  it('the wire can never name a command itself', () => {
+    expect(keyDown({ key: 'q', code: 'KeyQ', mods: 4, commands: ['paste'] })).not.toHaveProperty('commands')
+  })
+  it('an absurd key or code name is refused', () => {
+    expect(sanitizeInput({ t: 'key', key: 'x'.repeat(40) }, ctx)).toBeNull()
+    expect(keyDown({ key: 'a', code: 'K'.repeat(40) })).not.toHaveProperty('code')
+  })
+})
+
+describe('sanitizeInput — committed text and IME composition', () => {
+  it('text goes in whole with Input.insertText (a CJK word is never split into keys)', () => {
+    expect(sanitizeInput({ t: 'text', text: '你好世界' }, ctx)).toEqual([
+      { method: 'Input.insertText', params: { text: '你好世界' } }
+    ])
+  })
+  it('text is typing-sized: empty, non-string or over 4096 is refused', () => {
+    expect(sanitizeInput({ t: 'text', text: '' }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'text', text: 7 }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'text', text: 'x'.repeat(4097) }, ctx)).toBeNull()
+    expect(sanitizeInput({ t: 'text', text: 'x'.repeat(4096) }, ctx)).not.toBeNull()
+  })
+  it('a composition shows in the page with the caret at its end; an empty one clears it', () => {
+    expect(sanitizeInput({ t: 'compose', text: 'ni' }, ctx)).toEqual([
+      { method: 'Input.imeSetComposition', params: { text: 'ni', selectionStart: 2, selectionEnd: 2 } }
+    ])
+    expect(sanitizeInput({ t: 'compose', text: '' }, ctx)?.[0].params).toEqual({ text: '', selectionStart: 0, selectionEnd: 0 })
+    expect(sanitizeInput({ t: 'compose', text: 'x'.repeat(257) }, ctx)).toBeNull()
   })
 })

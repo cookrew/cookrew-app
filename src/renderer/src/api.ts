@@ -1,3 +1,4 @@
+import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
@@ -699,6 +700,12 @@ export interface CookrewApi {
   interactiveBrowserEnabled: () => Promise<boolean>;
   /** Desktop-only token authorizing its cross-origin localhost WS connection. */
   browserStreamToken: () => Promise<string | null>;
+  /**
+   * The desktop's own line to a browser card's Chrome: a MessagePort from
+   * main (browser-cast-ipc.ts). Absent on the phone and the demo, and on a
+   * preload older than the port — the view then dials the socket.
+   */
+  openBrowserStream?: OpenBrowserStream;
   onBrowserOpenTab: (
     cb: (req: { webContentsId: number; url: string }) => void,
   ) => () => void;

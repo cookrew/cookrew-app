@@ -191,6 +191,8 @@ export class HeadlessInstance {
   private width: number
   private height: number
   private mobile = false
+  /** Device pixels per CSS px the viewport owner asked for (cast-viewport.ts · viewportScale). */
+  private scale = 1
   private activeTabId: string
   private stopPromise: Promise<HeadlessStopResult> | null = null
   private readonly viewportCoordinator: BrowserViewportCoordinator
@@ -529,8 +531,8 @@ export class HeadlessInstance {
       await next.cdp.send('Page.startScreencast', {
         format: 'jpeg',
         quality: this.opts.quality ?? 60,
-        maxWidth: this.width,
-        maxHeight: this.height,
+        maxWidth: Math.round(this.width * this.scale),
+        maxHeight: Math.round(this.height * this.scale),
         everyNthFrame: 1
       })
       next.screencasting = true
@@ -587,10 +589,31 @@ export class HeadlessInstance {
     if (this.closed || this.viewportCoordinator.state.transitioning) return null
     const page = this.pages.get(this.activeTabId)
     if (!page) return null
+    const clip = this.scale > 1 ? await this.oneXClip(page) : null
     const shot = (await page.cdp
-      .send('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
+      .send('Page.captureScreenshot', { format: 'jpeg', quality: 55, ...(clip ? { clip } : {}) })
       .catch(() => null)) as { data?: string } | null
     return typeof shot?.data === 'string' && shot.data.length > 0 ? shot.data : null
+  }
+
+  /**
+   * The visible page at 1x. The card's picture goes to the phone too, over the
+   * relay, and a 2x desktop owner (cast-viewport.ts · scale) must not make it
+   * four times the bytes. Null — a plain capture — when the page will not say
+   * where its viewport is.
+   */
+  private async oneXClip(
+    page: PageBinding
+  ): Promise<{ x: number; y: number; width: number; height: number; scale: number } | null> {
+    const metrics = (await page.cdp.send('Page.getLayoutMetrics').catch(() => null)) as {
+      cssVisualViewport?: { pageX?: unknown; pageY?: unknown; clientWidth?: unknown; clientHeight?: unknown }
+    } | null
+    const viewport = metrics?.cssVisualViewport
+    const values = [viewport?.pageX, viewport?.pageY, viewport?.clientWidth, viewport?.clientHeight]
+    if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return null
+    const [x, y, width, height] = values as number[]
+    if (width <= 0 || height <= 0) return null
+    return { x, y, width, height, scale: 1 / this.scale }
   }
 
   private async pollTick(): Promise<void> {
@@ -741,6 +764,7 @@ export class HeadlessInstance {
     this.width = metrics.width
     this.height = metrics.height
     this.mobile = metrics.mobile
+    this.scale = metrics.scale ?? 1
     this.lastHash = ''
     for (const page of this.pages.values()) await this.resizePage(page, metrics)
     if (active) await this.activatePage(active.tabId)
@@ -748,12 +772,12 @@ export class HeadlessInstance {
 
   private async resizePage(
     page: PageBinding,
-    metrics: ViewportMetrics = { width: this.width, height: this.height, mobile: this.mobile }
+    metrics: ViewportMetrics = { width: this.width, height: this.height, mobile: this.mobile, scale: this.scale }
   ): Promise<void> {
     await page.cdp.send('Emulation.setDeviceMetricsOverride', {
       width: metrics.width,
       height: metrics.height,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: metrics.scale ?? 1,
       mobile: metrics.mobile,
       screenWidth: metrics.width,
       screenHeight: metrics.height
@@ -792,9 +816,11 @@ export class HeadlessInstance {
     return this.viewportCoordinator.beginAgentActivity()
   }
 
-  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): void {
+  /** Resolves once Chrome has taken the command; a pinch step is animated, so its caller paces on this. */
+  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): Promise<void> {
     const page = this.pages.get(this.activeTabId)
-    void page?.cdp.send(method, params).catch(() => undefined)
+    if (!page) return Promise.resolve()
+    return page.cdp.send(method, params).then(() => undefined, () => undefined)
   }
 
   get viewport(): { width: number; height: number } {

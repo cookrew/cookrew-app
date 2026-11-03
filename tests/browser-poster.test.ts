@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { handOffFrame, posterSource, shouldHandOff } from '../src/renderer/src/browser-poster'
+import { handOffBlob, shouldHandOff } from '../src/renderer/src/browser-poster'
 import { KeyedStore } from '../src/renderer/src/keyed-store'
 
 /**
@@ -31,29 +31,6 @@ import { KeyedStore } from '../src/renderer/src/keyed-store'
  *   the browser keeps decoded bytes rather than base64 strings in JS memory
  *   (the phone's ceiling). One decode at the edge, the previous blob revoked.
  */
-
-describe('which picture the zoomed surface shows', () => {
-  it('the live frame while streaming', () => {
-    expect(posterSource({ streaming: true, frameUrl: 'data:image/jpeg;base64,AAAA', poster: 'blob:x' })).toBe(
-      'data:image/jpeg;base64,AAAA'
-    )
-  })
-
-  it('the stored picture as a poster while the stream has nothing to show', () => {
-    expect(posterSource({ streaming: false, frameUrl: null, poster: 'blob:x' })).toBe('blob:x')
-    // A stale frame left in state from a previous session of the socket is
-    // not the stream's to show once it is no longer streaming.
-    expect(posterSource({ streaming: false, frameUrl: 'data:image/jpeg;base64,OLD', poster: 'blob:x' })).toBe('blob:x')
-  })
-
-  it('nothing at all when there is neither — the status chip says why', () => {
-    expect(posterSource({ streaming: false, frameUrl: null, poster: undefined })).toBeNull()
-  })
-
-  it('never a poster INSTEAD of a live frame that is there', () => {
-    expect(posterSource({ streaming: true, frameUrl: null, poster: 'blob:x' })).toBeNull()
-  })
-})
 
 describe('when the hand-off happens', () => {
   it('on the zoom-out edge, when a frame was painted', () => {
@@ -85,37 +62,36 @@ describe('handing a live frame to the card', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it('decodes the data URL once into a blob of its own type, and the card sees the blob', () => {
+  it('names the painted blob once, and the card sees it', () => {
     const store = new KeyedStore<string>()
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64')
-    handOffFrame(store, 'b1', `data:image/jpeg;base64,${jpeg}`)
+    const blob = new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xe0])], { type: 'image/jpeg' })
+    handOffBlob(store, 'b1', blob)
     expect(store.get('b1')).toBe('blob:test/1')
-    expect(created).toHaveLength(1)
-    expect(created[0].type).toBe('image/jpeg')
-    expect(created[0].size).toBe(4)
+    expect(created).toEqual([blob])
   })
 
   it('revokes the blob it replaces, and only a blob', () => {
     const store = new KeyedStore<string>()
+    const blob = new Blob([new Uint8Array([1])], { type: 'image/jpeg' })
     store.set('b1', 'blob:old')
-    handOffFrame(store, 'b1', 'data:image/jpeg;base64,AAAA')
+    handOffBlob(store, 'b1', blob)
     expect(revoked).toEqual(['blob:old'])
     store.set('b2', 'data:image/png;base64,BBBB')
-    handOffFrame(store, 'b2', 'data:image/jpeg;base64,AAAA')
+    handOffBlob(store, 'b2', blob)
     expect(revoked).toEqual(['blob:old'])
   })
 
-  it('stores a frame that is already a URL as it is', () => {
-    const store = new KeyedStore<string>()
-    handOffFrame(store, 'b1', 'blob:already')
-    expect(store.get('b1')).toBe('blob:already')
-    expect(created).toHaveLength(0)
-  })
-
-  it('leaves the store alone when the frame cannot be decoded', () => {
+  it('leaves the store alone when the blob cannot become a URL', () => {
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: () => {
+        throw new Error('no')
+      },
+      revokeObjectURL: (url: string) => void revoked.push(url)
+    })
     const store = new KeyedStore<string>()
     store.set('b1', 'blob:keep')
-    handOffFrame(store, 'b1', 'data:image/jpeg;base64,%%%not-base64%%%')
+    handOffBlob(store, 'b1', new Blob([new Uint8Array([1])]))
     expect(store.get('b1')).toBe('blob:keep')
     expect(revoked).toEqual([])
   })
@@ -136,15 +112,16 @@ const strip = (file: string): string =>
 describe('the zoomed frame', () => {
   const frame = strip('MobileBrowserFrame.tsx')
 
-  it('reads the card’s stored picture and shows it as the poster', () => {
+  it('reads the card’s stored picture and shows it as the poster while nothing is live', () => {
     expect(frame).toContain('const poster = useThumb(browserId)')
-    expect(frame).toContain('posterSource({ streaming, frameUrl: stream.frameUrl, poster })')
+    expect(frame).toContain(': (poster ?? null)')
   })
 
   it('remembers the last painted live frame, and hands it off on the edge and at unmount', () => {
-    expect(frame).toContain('lastPaintedRef.current = src')
+    // The live view is a canvas now (frame-painter.ts): what it remembers is the painted JPEG.
+    expect(frame).toContain('lastPaintedRef.current = frame.blob')
     expect(frame).toContain('shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null })')
-    expect(frame).toContain('handOffFrame(thumbStore, browserId, lastPaintedRef.current)')
+    expect(frame).toContain('handOffBlob(thumbStore, browserId, lastPaintedRef.current)')
   })
 
   it('does not cover a poster with the loading glyph — the status chip says the state', () => {

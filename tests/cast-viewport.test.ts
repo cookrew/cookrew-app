@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeViewportMessage, VIEWPORT_MAX, VIEWPORT_MIN } from '../src/shared/cast-viewport'
+import { sanitizeViewportMessage, viewportScale, VIEWPORT_MAX, VIEWPORT_MIN } from '../src/shared/cast-viewport'
 
 describe('sanitizeViewportMessage (unauth LAN security boundary)', () => {
   it('accepts only the closed offer/claim/release vocabulary', () => {
@@ -52,5 +52,26 @@ describe('sanitizeViewportMessage (unauth LAN security boundary)', () => {
         params: { width: 1, height: 1, mobile: true }
       })
     ).toBeNull()
+  })
+})
+
+describe('a viewer’s device scale (crisp on a Retina desktop, bounded for everyone)', () => {
+  it('passes a 2x ask through, and leaves a 1x ask (the phone’s) out of the metrics', () => {
+    expect(sanitizeViewportMessage({ t: 'viewport-offer', width: 800, height: 600, mobile: false, scale: 2 })).toEqual({
+      type: 'offer',
+      metrics: { width: 800, height: 600, mobile: false, scale: 2 }
+    })
+    expect(sanitizeViewportMessage({ t: 'viewport-offer', width: 800, height: 600, mobile: false, scale: 1 })).toEqual({
+      type: 'offer',
+      metrics: { width: 800, height: 600, mobile: false }
+    })
+  })
+  it('clamps to [1, 2] in half steps; junk is 1', () => {
+    expect(viewportScale(3)).toBe(2)
+    expect(viewportScale(1.3)).toBe(1.5)
+    expect(viewportScale(0.5)).toBe(1)
+    expect(viewportScale('2')).toBe(1)
+    expect(viewportScale(Number.NaN)).toBe(1)
+    expect(viewportScale(undefined)).toBe(1)
   })
 })

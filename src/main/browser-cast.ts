@@ -1,4 +1,6 @@
-// WebSocket viewer/input transport for node-owned headless browsers.
+// WebSocket viewer/input transport for node-owned headless browsers — the
+// phone's. The desktop draws the same instance over its own MessagePort
+// (browser-cast-ipc.ts); both are a CastViewer (cast-viewer.ts).
 //
 // Browser lifecycle belongs to HeadlessBrowserManager. This module only
 // attaches viewers to an existing node instance, fans out JPEG frames with
@@ -7,16 +9,9 @@
 
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { randomUUID } from 'node:crypto'
-import { sanitizeInput, type MapContext } from '../shared/cast-input'
-import { sanitizeViewportMessage } from '../shared/cast-viewport'
-import type { UseStatus } from '../shared/use-signal'
-import { jpegSize } from './jpeg-size'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
-import { copyArmed } from './page-copy'
-import type { BrowserViewportState } from './browser-viewport'
-import type { FrameMeta } from './headless-chrome'
 import type { BrowserInstance } from './browser-instance'
+import { CastViewer, type OutboundFrame, type ViewerSink } from './cast-viewer'
 import {
   acceptKey,
   decodeFrame,
@@ -181,178 +176,39 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
   }
 }
 
+/**
+ * One WebSocket viewer: a CastViewer whose sink is this socket. Frames are
+ * JSON text with the JPEG in base64 (the relay and the phone's data channel
+ * carry text); pacing is the socket's own drain.
+ */
 class ClientConn {
-  private readonly id = randomUUID()
   private inbound: Buffer = Buffer.alloc(0)
-  private seq = 0
-  private closed = false
-  private latest: string | null = null
-  private latestSeq: number | null = null
-  private latestRevision: number | null = null
-  private latestContext: MapContext | null = null
-  private deliveredRevision: number | null = null
-  private drainArmed = false
-  private instance: BrowserInstance | null = null
-  private unsubscribeViewport: (() => void) | null = null
-  private ctx: MapContext = { displayScale: 1, viewportWidth: 800, viewportHeight: 600 }
-  private readonly frameContexts = new Map<number, { ctx: MapContext; revision: number }>()
-  private observedPageScaleFactor = 1
-  private hasObservedPageScaleFactor = false
-  private readonly frameListener = (data: string, meta: FrameMeta): void =>
-    this.pushFrame(data, meta)
-  private readonly viewportListener = (state: BrowserViewportState): void =>
-    this.pushViewportState(state)
-  /** A use's device state: a viewer shows "offline — <why>" over the last frame instead of a frozen screen. */
-  private readonly statusListener = (status: UseStatus): void =>
-    this.wsSend(JSON.stringify({ t: 'status', ...status }))
-  /** When this viewer's own input last reached the page: a copy right after it is theirs (page-copy.ts). */
-  private lastInputAt: number | null = null
-  /**
-   * The page copied: this viewer's clipboard gets it only if this viewer just
-   * acted on the page. A page copying on its own, or after another viewer's
-   * click, writes nobody's clipboard here.
-   */
-  private readonly copyListener = (text: string): void => {
-    if (copyArmed(this.lastInputAt, Date.now())) this.wsSend(JSON.stringify({ t: 'copy', text }))
-  }
+  private readonly viewer: CastViewer
 
   constructor(
     private readonly socket: Duplex,
-    private readonly onClosed: () => void,
+    onClosed: () => void,
     readonly browserId: string
   ) {
+    const sink: ViewerSink = {
+      sendControl: (message) => this.wsSend(JSON.stringify(message)),
+      frameReady: () => this.socket.writableLength <= DEFAULT_DRAIN_THRESHOLD,
+      sendFrame: (frame) => this.wsSend(frameText(frame)),
+      onceReady: (callback) => void this.socket.once('drain', callback),
+      close: () => this.socket.destroy()
+    }
+    this.viewer = new CastViewer(sink, onClosed, browserId)
     socket.on('data', this.onData)
     socket.on('close', this.close)
     socket.on('error', this.close)
   }
 
   attach(instance: BrowserInstance): void {
-    if (this.closed) return
-    this.instance = instance
-    instance.registerViewportViewer(this.id)
-    this.unsubscribeViewport = instance.onViewportState(this.viewportListener)
-    const viewport = instance.viewportState
-    this.ctx = {
-      displayScale: 1,
-      viewportWidth: viewport.width,
-      viewportHeight: viewport.height
-    }
-    instance.frameListeners.add(this.frameListener)
-    instance.statusListeners?.add(this.statusListener)
-    instance.copyListeners?.add(this.copyListener)
-    this.wsSend(JSON.stringify({
-      t: 'ready',
-      w: viewport.width,
-      h: viewport.height,
-      mobile: viewport.mobile,
-      revision: viewport.revision
-    }))
-    this.pushViewportState(viewport)
-    if (instance.status) this.statusListener(instance.status)
+    this.viewer.attach(instance)
   }
 
   fail(message: string): void {
-    if (this.closed) return
-    this.wsSend(JSON.stringify({ t: 'error', msg: message }))
-    this.close()
-  }
-
-  private pushFrame(base64: string, meta: FrameMeta): void {
-    if (this.closed) return
-    const viewport = this.instance?.viewportState
-    const size = jpegSize(Buffer.from(base64, 'base64'))
-    const deviceWidth = meta.deviceWidth ?? viewport?.width
-    const deviceHeight = meta.deviceHeight ?? viewport?.height
-    if (
-      typeof meta.pageScaleFactor === 'number' &&
-      Number.isFinite(meta.pageScaleFactor) &&
-      meta.pageScaleFactor > 0
-    ) {
-      this.observedPageScaleFactor = meta.pageScaleFactor
-      this.hasObservedPageScaleFactor = true
-    } else if (this.hasObservedPageScaleFactor) {
-      // Never pair a new frame with a scale inherited from an older frame.
-      return
-    }
-    let frameContext = this.ctx
-    if (deviceWidth && deviceHeight && size && deviceWidth > 0) {
-      frameContext = {
-        // Frame pixels cover the visual viewport. At pinch zoom, Chromium's
-        // deviceWidth remains fixed while each page CSS px occupies
-        // pageScaleFactor frame pixels.
-        displayScale: (size.width / deviceWidth) * this.observedPageScaleFactor,
-        viewportWidth: deviceWidth / this.observedPageScaleFactor,
-        viewportHeight: deviceHeight / this.observedPageScaleFactor
-      }
-    }
-    const revision = meta.revision ?? viewport?.revision ?? 1
-    const seq = (this.seq += 1)
-    const msg = JSON.stringify({
-      t: 'frame',
-      seq,
-      data: base64,
-      meta: {
-        deviceWidth,
-        deviceHeight,
-        displayScale: frameContext.displayScale,
-        pageScaleFactor: this.observedPageScaleFactor,
-        mobile: meta.mobile ?? viewport?.mobile ?? false,
-        revision
-      }
-    })
-    if (this.socket.writableLength <= DEFAULT_DRAIN_THRESHOLD) {
-      this.latest = null
-      this.latestSeq = null
-      this.latestRevision = null
-      this.latestContext = null
-      this.wsSend(msg)
-      if (!this.closed) {
-        this.ctx = frameContext
-        this.deliveredRevision = revision
-        this.rememberFrameContext(seq, revision, frameContext)
-      }
-    } else {
-      this.latest = msg
-      this.latestSeq = seq
-      this.latestRevision = revision
-      this.latestContext = frameContext
-      this.armDrain()
-    }
-  }
-
-  private armDrain(): void {
-    if (this.drainArmed) return
-    this.drainArmed = true
-    this.socket.once('drain', () => {
-      this.drainArmed = false
-      const pending = this.latest
-      const seq = this.latestSeq
-      const revision = this.latestRevision
-      const context = this.latestContext
-      this.latest = null
-      this.latestSeq = null
-      this.latestRevision = null
-      this.latestContext = null
-      if (pending && !this.closed) {
-        this.wsSend(pending)
-        if (!this.closed) {
-          if (context) this.ctx = context
-          this.deliveredRevision = revision
-          if (seq !== null && revision !== null && context) {
-            this.rememberFrameContext(seq, revision, context)
-          }
-        }
-      }
-    })
-  }
-
-  private rememberFrameContext(seq: number, revision: number, ctx: MapContext): void {
-    this.frameContexts.set(seq, { ctx, revision })
-    while (this.frameContexts.size > 32) {
-      const oldest = this.frameContexts.keys().next().value
-      if (typeof oldest !== 'number') break
-      this.frameContexts.delete(oldest)
-    }
+    this.viewer.fail(message)
   }
 
   private onData = (chunk: Buffer): void => {
@@ -379,41 +235,11 @@ class ClientConn {
     } catch {
       return
     }
-    const instance = this.instance
-    if (!instance) return
-    const viewportMessage = sanitizeViewportMessage(raw)
-    if (viewportMessage) {
-      if (viewportMessage.type === 'offer') instance.offerViewport(this.id, viewportMessage.metrics)
-      else if (viewportMessage.type === 'claim') instance.claimViewport(this.id, viewportMessage.metrics)
-      else instance.releaseViewport(this.id)
-      this.pushViewportState(instance.viewportState)
-      return
-    }
-    if (typeof raw !== 'object' || raw === null) return
-    const input = raw as Record<string, unknown>
-    const revision = input.revision
-    const frameSeq = input.frameSeq
-    const needsFrameContext = input.t !== 'key' && input.t !== 'touchend'
-    const frameContext = Number.isInteger(frameSeq)
-      ? this.frameContexts.get(frameSeq as number)
-      : undefined
-    const releasesActivePointer = input.t === 'up' || input.t === 'touchend'
-    const viewport = instance.viewportState
-    if (
-      ((viewport.transitioning || viewport.agentHeld) && !releasesActivePointer) ||
-      !Number.isInteger(revision) ||
-      revision !== viewport.revision ||
-      revision !== this.deliveredRevision ||
-      (needsFrameContext && (!frameContext || frameContext.revision !== revision))
-    ) return
-    const commands = sanitizeInput(raw, frameContext?.ctx ?? this.ctx)
-    if (!commands) return
-    for (const command of commands) instance.dispatchInput(command.method, command.params)
-    this.lastInputAt = Date.now()
+    this.viewer.handleMessage(raw)
   }
 
   private wsSend(message: string): void {
-    if (this.closed) return
+    if (this.viewer?.isClosed) return
     try {
       this.socket.write(encodeTextFrame(message))
     } catch {
@@ -421,41 +247,12 @@ class ClientConn {
     }
   }
 
-  private pushViewportState(state: BrowserViewportState): void {
-    this.wsSend(JSON.stringify({
-      t: 'viewport-state',
-      width: state.width,
-      height: state.height,
-      mobile: state.mobile,
-      revision: state.revision,
-      owner: state.ownerId === this.id ? 'self' : state.ownerId ? 'other' : 'none',
-      viewerCount: state.viewerCount,
-      agentHeld: state.agentHeld,
-      transitioning: state.transitioning
-    }))
-  }
-
   close = (): void => {
-    if (this.closed) return
-    this.closed = true
-    this.latest = null
-    this.latestSeq = null
-    this.latestRevision = null
-    this.latestContext = null
-    this.deliveredRevision = null
-    this.frameContexts.clear()
-    this.instance?.frameListeners.delete(this.frameListener)
-    this.instance?.statusListeners?.delete(this.statusListener)
-    this.instance?.copyListeners?.delete(this.copyListener)
-    this.unsubscribeViewport?.()
-    this.unsubscribeViewport = null
-    this.instance?.unregisterViewportViewer(this.id)
-    this.instance = null
-    try {
-      this.socket.destroy()
-    } catch {
-      // Socket already closed.
-    }
-    this.onClosed()
+    this.viewer.close()
   }
+}
+
+/** The phone's frame: the JPEG as base64 inside the same JSON the client has always parsed. */
+function frameText(frame: OutboundFrame): string {
+  return JSON.stringify({ t: 'frame', seq: frame.seq, data: frame.base64, meta: frame.meta })
 }
