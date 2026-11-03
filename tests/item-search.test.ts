@@ -82,3 +82,38 @@ describe('why a row is in the results', () => {
     expect(`${s?.pre}${s?.hit}${s?.post}`).toContain('figma.com/file/zoom-pivot')
   })
 })
+
+// THE OWNER'S RULE (2026-11-03): a browser card is found by the card's name,
+// a site's name or a site's address, and one card can hold several sites, so
+// every tab counts, and the words of one search may land on different tabs.
+describe('a browser card holding several sites', () => {
+  const card = browser('b9', 'Launch research', [
+    { url: 'https://www.xiaohongshu.com/explore/123', title: '小红书 - 你的生活指南' },
+    { url: 'https://github.com/cookrew/app/issues/42', title: 'Board search · Issue #42' },
+    { url: 'http://localhost:5173/zoom?seed=crew', title: '' },
+  ], 1)
+  const found = (q: string): boolean => searchItems(itemCorpus([card]), q).some((h) => h.node.id === 'b9')
+
+  it("is found by the card's own name", () => {
+    expect(found('launch')).toBe(true)
+    expect(found('launch research')).toBe(true)
+  })
+
+  it("is found by any site's name, the showing tab or not", () => {
+    expect(found('小红书')).toBe(true)
+    expect(found('xiaohongshu')).toBe(true)
+    expect(found('github')).toBe(true)
+  })
+
+  it("is found by any site's address, a tab never loaded included", () => {
+    expect(found('cookrew/app/issues')).toBe(true)
+    expect(found('localhost:5173')).toBe(true)
+    expect(found('seed=crew')).toBe(true)
+  })
+
+  it('takes the words of one search from the name and different sites', () => {
+    expect(found('launch 小红书 localhost')).toBe(true)
+    expect(found('github xiaohongshu')).toBe(true)
+    expect(found('github figma')).toBe(false)
+  })
+})
