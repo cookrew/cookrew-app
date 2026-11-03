@@ -731,7 +731,6 @@ export function MobileBrowserFrame({
         autoCapitalize="off"
         autoCorrect="off"
         spellCheck={false}
-        onBeforeInput={kbd.onBeforeInput}
         onInput={kbd.onInput}
         onKeyDown={kbd.onKeyDown}
         onCompositionStart={kbd.onCompositionStart}

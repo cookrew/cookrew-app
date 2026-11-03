@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { composeMsg, keyMsg, modsOf, pasteMsg, textMsg, type CastInputMsg, type FieldMode } from './browser-stream'
 
 /**
@@ -135,7 +135,6 @@ export interface RemoteKeyboard {
   /** Finish a composition in progress (the field commits it on blur), before input moves elsewhere. */
   endComposition: () => void
   inputRef: React.RefObject<HTMLTextAreaElement>
-  onBeforeInput: (e: React.FormEvent<HTMLTextAreaElement>) => void
   onInput: (e: React.FormEvent<HTMLTextAreaElement>) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
   onCompositionStart: () => void
@@ -229,15 +228,20 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
     el.blur()
   }, [])
 
-  const onBeforeInput = useCallback(
-    (e: React.FormEvent<HTMLTextAreaElement>): void => {
-      if (mode !== 'touch') return
-      const ie = e.nativeEvent as InputEvent
+  // NATIVE beforeinput, not React's onBeforeInput: React synthesizes that one
+  // from the old `textInput` event, which has no inputType — so a phone's
+  // single letters and its Backspace (deleteContentBackward) never arrived.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el || mode !== 'touch') return
+    const onBeforeInput = (event: Event): void => {
+      const ie = event as InputEvent
       if (ie.isComposing || composingRef.current) return
       for (const msg of keyMsgsForInput(ie.inputType, ie.data)) send(msg)
-    },
-    [send, mode]
-  )
+    }
+    el.addEventListener('beforeinput', onBeforeInput)
+    return () => el.removeEventListener('beforeinput', onBeforeInput)
+  }, [send, mode])
 
   // Re-seed after every edit so the buffer never depletes or grows — but never
   // mid-composition, which would cancel what the IME is building.
@@ -347,7 +351,6 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
     focusAt,
     endComposition,
     inputRef,
-    onBeforeInput,
     onInput,
     onKeyDown,
     onCompositionStart,
