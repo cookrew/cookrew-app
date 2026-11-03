@@ -8,7 +8,8 @@
 // may go.
 
 import { randomUUID } from 'node:crypto'
-import { sanitizeInput, type CdpInputCommand, type MapContext } from '../shared/cast-input'
+import { sanitizeInput, sanitizePaste, type CdpInputCommand, type MapContext } from '../shared/cast-input'
+import { fieldsInFrame, type FieldReport } from './page-fields'
 import { sanitizeViewportMessage } from '../shared/cast-viewport'
 import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
@@ -69,6 +70,10 @@ const MAX_PINCH_STEP = 4
 const MIN_PINCH_STEP = 0.25
 /** A step takes ~70 ms; one that never answers (a tab switched mid-gesture) must not wedge every later pinch. */
 export const PINCH_STEP_TIMEOUT_MS = 500
+/** A paste whose page never answers lets the input behind it go after this long. */
+export const PASTE_TIMEOUT_MS = 1000
+/** Input held behind a paste: a burst of typing, never a backlog. */
+const MAX_HELD_INPUT = 256
 
 export class CastViewer {
   readonly id = randomUUID()
@@ -87,6 +92,19 @@ export class CastViewer {
   /** A pinch step is animated in Chrome (~70 ms): one at a time, the rest folded into the next. */
   private pinchBusy = false
   private pinchPending: CdpInputCommand | null = null
+  /** Watching the page's text fields (page-fields.ts) — a phone asks, to raise its keyboard on a tap. */
+  private unwatchFields: (() => void) | null = null
+  /**
+   * While a paste is on its way (a page paste event, then maybe typed text),
+   * the input after it waits: a key typed right after ⌘V must land after
+   * the pasted text, not before it.
+   */
+  private held: CdpInputCommand[] | null = null
+  private readonly fieldsListener = (report: FieldReport): void => {
+    if (this.deliveredRevision === null) return
+    const inFrame = fieldsInFrame(report, this.ctx.displayScale)
+    this.sink.sendControl({ t: 'fields', revision: this.deliveredRevision, ...inFrame })
+  }
   private readonly frameListener = (data: string, meta: FrameMeta): void => this.pushFrame(data, meta)
   private readonly viewportListener = (state: BrowserViewportState): void => this.pushViewportState(state)
   /** A use's device state: a viewer shows "offline — <why>" over the last frame instead of a frozen screen. */
@@ -244,6 +262,15 @@ export class CastViewer {
     }
     if (typeof raw !== 'object' || raw === null) return
     const input = raw as Record<string, unknown>
+    if (input.t === 'watch-fields') {
+      if (!this.unwatchFields && instance.watchFields) this.unwatchFields = instance.watchFields(this.fieldsListener)
+      return
+    }
+    if (input.t === 'unwatch-fields') {
+      this.unwatchFields?.()
+      this.unwatchFields = null
+      return
+    }
     const revision = input.revision
     const frameSeq = input.frameSeq
     const needsFrameContext = !POINTLESS.has(input.t as string)
@@ -259,13 +286,47 @@ export class CastViewer {
       revision !== this.deliveredRevision ||
       (needsFrameContext && (!frameContext || frameContext.revision !== revision))
     ) return
+    const pasted = sanitizePaste(raw)
+    if (pasted !== null) {
+      this.paste(instance, pasted)
+      this.lastInputAt = Date.now()
+      return
+    }
     const commands = sanitizeInput(raw, frameContext?.ctx ?? this.ctx)
     if (!commands) return
     for (const command of commands) this.dispatch(instance, command)
     this.lastInputAt = Date.now()
   }
 
+  private paste(instance: BrowserInstance, text: string): void {
+    if (!instance.paste) {
+      this.dispatch(instance, { method: 'Input.insertText', params: { text } })
+      return
+    }
+    if (this.held) {
+      // A paste behind a paste: it waits its turn like any other input.
+      this.held.push({ method: 'Input.insertText', params: { text } })
+      return
+    }
+    this.held = []
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, PASTE_TIMEOUT_MS)
+    })
+    void Promise.race([instance.paste(text).catch(() => undefined), deadline]).then(() => {
+      if (timer) clearTimeout(timer)
+      const waiting = this.held ?? []
+      this.held = null
+      if (this.closed || this.instance !== instance) return
+      for (const command of waiting) this.dispatch(instance, command)
+    })
+  }
+
   private dispatch(instance: BrowserInstance, command: CdpInputCommand): void {
+    if (this.held) {
+      if (this.held.length < MAX_HELD_INPUT) this.held.push(command)
+      return
+    }
     if (command.method !== PINCH) {
       void instance.dispatchInput(command.method, command.params)
       return
@@ -314,6 +375,9 @@ export class CastViewer {
     this.latestContext = null
     this.deliveredRevision = null
     this.pinchPending = null
+    this.held = null
+    this.unwatchFields?.()
+    this.unwatchFields = null
     this.frameContexts.clear()
     this.instance?.frameListeners.delete(this.frameListener)
     this.instance?.statusListeners?.delete(this.statusListener)
@@ -332,7 +396,7 @@ export class CastViewer {
 }
 
 /** Input with no point on the page: it needs no painted frame to map against. */
-const POINTLESS = new Set(['key', 'touchend', 'text', 'compose'])
+const POINTLESS = new Set(['key', 'touchend', 'text', 'compose', 'paste'])
 
 /** Two pinch steps as one: scales multiply, the newest anchor wins. */
 export function foldPinch(pending: CdpInputCommand | null, next: CdpInputCommand): CdpInputCommand {

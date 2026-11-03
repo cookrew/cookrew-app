@@ -5,7 +5,8 @@ import {
   IPC_RECEIPT_TIMEOUT_MS,
   type CastPort
 } from '../src/main/browser-cast-ipc'
-import { foldPinch, PINCH_STEP_TIMEOUT_MS } from '../src/main/cast-viewer'
+import { foldPinch, PASTE_TIMEOUT_MS, PINCH_STEP_TIMEOUT_MS } from '../src/main/cast-viewer'
+import type { FieldReport } from '../src/main/page-fields'
 import type { BrowserInstance } from '../src/main/browser-instance'
 import type { FrameMeta } from '../src/main/headless-chrome'
 
@@ -245,6 +246,67 @@ describe('the desktop’s port to a card’s Chrome', () => {
     const folded = vi.mocked(instance.dispatchInput).mock.calls[1] as unknown as [string, { scaleFactor: number }]
     expect(folded[0]).toBe('Input.synthesizePinchGesture')
     expect(folded[1].scaleFactor).toBeCloseTo(1.21)
+  })
+
+  it('a viewer that asks gets the page’s fields in FRAME px of the delivered revision, and stops on close', async () => {
+    const { instance, port, ipc } = await opened()
+    let report: (r: FieldReport) => void = () => undefined
+    const unwatch = vi.fn()
+    Object.assign(instance, {
+      watchFields: vi.fn((listener: (r: FieldReport) => void) => {
+        report = listener
+        return unwatch
+      })
+    })
+    instance.emit(jpegFrame(800, 600), { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 })
+    port.deliver({ t: 'watch-fields' })
+    port.deliver({ t: 'watch-fields' })
+    expect(instance.watchFields).toHaveBeenCalledTimes(1)
+    report({ focus: { editable: true, rect: [10, 20, 100, 30], mode: 'email' }, fields: [{ rect: [10, 20, 100, 30], mode: 'email' }] })
+    expect(port.posted.at(-1)).toEqual({
+      t: 'fields',
+      revision: 1,
+      focus: { editable: true, rect: [20, 40, 200, 60], mode: 'email' },
+      fields: [{ rect: [20, 40, 200, 60], mode: 'email' }]
+    })
+    ipc.drop('card-1')
+    expect(unwatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('a paste goes to the page’s own paste, and the keys typed after it wait until it is in', async () => {
+    const { instance, port } = await opened()
+    let pasted: () => void = () => undefined
+    const paste = vi.fn(() => new Promise<void>((resolve) => (pasted = resolve)))
+    Object.assign(instance, { paste })
+    instance.emit(jpegFrame(400, 300), { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 })
+    port.deliver({ t: 'paste', text: 'hello', revision: 1 })
+    port.deliver({ t: 'key', key: '!', code: 'Digit1', text: '!', revision: 1 })
+    expect(paste).toHaveBeenCalledWith('hello')
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+    pasted()
+    await settle()
+    await settle()
+    expect(instance.dispatchInput).toHaveBeenCalledWith('Input.dispatchKeyEvent', expect.objectContaining({ type: 'keyDown', key: '!' }))
+  })
+
+  it('a page that never answers a paste holds the keys behind it no longer than the timeout', async () => {
+    const { instance, port } = await opened()
+    Object.assign(instance, { paste: vi.fn(() => new Promise<void>(() => undefined)) })
+    instance.emit(jpegFrame(400, 300), { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 })
+    port.deliver({ t: 'paste', text: 'x', revision: 1 })
+    port.deliver({ t: 'key', key: 'a', code: 'KeyA', text: 'a', revision: 1 })
+    expect(instance.dispatchInput).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(PASTE_TIMEOUT_MS + 1)
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('a card without a page paste (a phone screen) gets the text typed in', async () => {
+    const { instance, port } = await opened()
+    instance.emit(jpegFrame(400, 300), { deviceWidth: 400, deviceHeight: 300, pageScaleFactor: 1, revision: 1 })
+    port.deliver({ t: 'paste', text: 'from the Mac', revision: 1 })
+    expect(instance.dispatchInput).toHaveBeenCalledWith('Input.insertText', { text: 'from the Mac' })
+    port.deliver({ t: 'paste', text: 'x'.repeat(5000), revision: 1 })
+    expect(instance.dispatchInput).toHaveBeenCalledTimes(1)
   })
 
   it('a dropped card says goodbye before closing, so the view redials onto the new instance', async () => {

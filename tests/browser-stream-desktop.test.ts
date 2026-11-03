@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   buttonName,
   composeMsg,
+  fieldAt,
   keyMsg,
+  pasteMsg,
   modsOf,
   moveMsg,
   parseStreamObject,
@@ -114,5 +116,42 @@ describe('the desktop’s keys and text', () => {
   })
   it('a composition is sent as it stands', () => {
     expect(composeMsg('ni')).toEqual({ t: 'compose', text: 'ni' })
+  })
+})
+
+describe('the page’s text fields on the phone', () => {
+  it('parses a fields report and drops what is malformed', () => {
+    expect(
+      parseStreamObject({
+        t: 'fields',
+        revision: 3,
+        focus: { editable: true, rect: [1, 2, 3, 4], mode: 'email' },
+        fields: [{ rect: [1, 2, 3, 4], mode: 'email' }, { rect: [1, 2], mode: 'text' }, { rect: [0, 0, 5, 5], mode: 'bogus' }]
+      })
+    ).toEqual({
+      kind: 'fields',
+      revision: 3,
+      focus: { editable: true, rect: [1, 2, 3, 4], mode: 'email' },
+      fields: [
+        { rect: [1, 2, 3, 4], mode: 'email' },
+        { rect: [0, 0, 5, 5], mode: 'text' }
+      ]
+    })
+    expect(parseStreamObject({ t: 'fields', fields: [] })).toBeNull()
+  })
+  it('a tap on a field (with a finger’s slack) finds it; a tap beside it does not', () => {
+    const fields = {
+      focus: { editable: false, rect: null, mode: 'text' as const },
+      fields: [{ rect: [100, 100, 200, 40] as [number, number, number, number], mode: 'search' as const }]
+    }
+    expect(fieldAt(fields, { x: 150, y: 120 })?.mode).toBe('search')
+    expect(fieldAt(fields, { x: 97, y: 96 })?.mode).toBe('search')
+    expect(fieldAt(fields, { x: 150, y: 200 })).toBeNull()
+    expect(fieldAt(null, { x: 150, y: 120 })).toBeNull()
+  })
+  it('a paste is its own message, cut at the server’s bound', () => {
+    expect(pasteMsg('hi')).toEqual({ t: 'paste', text: 'hi' })
+    expect(pasteMsg('')).toBeNull()
+    expect((pasteMsg('x'.repeat(MAX_TEXT_MSG + 1)) as { text: string }).text).toHaveLength(MAX_TEXT_MSG)
   })
 })

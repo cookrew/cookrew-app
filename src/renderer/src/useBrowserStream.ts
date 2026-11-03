@@ -22,6 +22,7 @@ import {
   type CastInputMsg,
   type StreamClient,
   type StreamEvent,
+  type StreamFields,
   type StreamMessage,
   type StreamStatus,
   type ViewportControlKind,
@@ -87,6 +88,28 @@ export interface BrowserStream {
   latestFrame: () => StreamFrame | null
   /** A frame was painted or skipped: over the port, that is what lets main send the next. */
   receipt: (seq: number) => void
+  /** Where the page's text fields are (only while watched), and every new report. */
+  latestFields: () => StreamFieldsAt | null
+  subscribeFields: (listener: (fields: StreamFieldsAt) => void) => () => void
+  /**
+   * The next copy the page makes, for up to `ms`; null when none comes. While
+   * one is awaited the copy is the caller's to place (an iPhone needs it
+   * written inside the tap that asked — clipboard.ts · writeClipboardLater).
+   */
+  expectCopy: (ms: number) => Promise<string | null>
+  /** A page copy this device could not write by itself (no gesture): offered for a tap. */
+  copyOffer: string | null
+  clearCopyOffer: () => void
+}
+
+/** A field report and the viewport revision its FRAME px belong to. */
+export interface StreamFieldsAt extends StreamFields {
+  revision: number
+}
+
+export interface BrowserStreamOptions {
+  /** A touch viewer: ask the page where its text fields are (page-fields.ts). */
+  watchFields?: boolean
 }
 
 function currentClient(): StreamClient {
@@ -113,7 +136,8 @@ export function useBrowserStream(
   open: boolean,
   enabled: boolean,
   desktopToken: string | null,
-  viewport: ViewportPreference
+  viewport: ViewportPreference,
+  options: BrowserStreamOptions = {}
 ): BrowserStream {
   const client = currentClient()
   const direct = client === 'desktop' && typeof cookrew().openBrowserStream === 'function'
@@ -158,6 +182,12 @@ export function useBrowserStream(
   const frameListenersRef = useRef(new Set<(frame: StreamFrame) => void>())
   const viewportRef = useRef(viewport)
   viewportRef.current = viewport
+  const watchFieldsRef = useRef(options.watchFields === true)
+  watchFieldsRef.current = options.watchFields === true
+  const latestFieldsRef = useRef<StreamFieldsAt | null>(null)
+  const fieldListenersRef = useRef(new Set<(fields: StreamFieldsAt) => void>())
+  const copyWaitersRef = useRef(new Set<(text: string | null) => void>())
+  const [copyOffer, setCopyOffer] = useState<string | null>(null)
 
   const advance = useCallback(
     (event: StreamEvent): void => {
@@ -206,6 +236,30 @@ export function useBrowserStream(
   }, [])
 
   const latestFrame = useCallback((): StreamFrame | null => latestFrameRef.current, [])
+
+  const latestFields = useCallback((): StreamFieldsAt | null => latestFieldsRef.current, [])
+  const subscribeFields = useCallback((listener: (fields: StreamFieldsAt) => void): (() => void) => {
+    const listeners = fieldListenersRef.current
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }, [])
+  const expectCopy = useCallback(
+    (ms: number): Promise<string | null> =>
+      new Promise((resolve) => {
+        const waiters = copyWaitersRef.current
+        const done = (text: string | null): void => {
+          clearTimeout(timer)
+          waiters.delete(done)
+          resolve(text)
+        }
+        const timer = setTimeout(() => done(null), ms)
+        waiters.add(done)
+      }),
+    []
+  )
+  const clearCopyOffer = useCallback((): void => setCopyOffer(null), [])
 
   useEffect(() => {
     const forgetFrame = (): void => {
@@ -282,6 +336,7 @@ export function useBrowserStream(
       return
     }
 
+    latestFieldsRef.current = null
     let disposed = false
     let failed = false
     let line: StreamLine | null = null
@@ -406,9 +461,25 @@ export function useBrowserStream(
       if (msg.kind === 'copy') {
         // The page's copy happened inside the card's own Chrome: put it on
         // this machine's clipboard, where the owner will paste it (page-copy.ts).
+        const waiters = [...copyWaitersRef.current]
+        if (waiters.length > 0) {
+          // Asked for by a Copy tap, which places it itself.
+          for (const waiter of waiters) waiter(msg.text)
+          return
+        }
         void writeClipboardText(msg.text).then((ok) => {
-          if (!ok) console.error(`[browser-stream] the page's copy could not reach the clipboard for ${browserId}`)
+          if (ok) return
+          // No gesture to write it with (an iPhone): offer it for a tap instead.
+          if (client === 'remote') setCopyOffer(msg.text)
+          else console.error(`[browser-stream] the page's copy could not reach the clipboard for ${browserId}`)
         })
+        return
+      }
+
+      if (msg.kind === 'fields') {
+        const fields: StreamFieldsAt = { revision: msg.revision, focus: msg.focus, fields: msg.fields }
+        latestFieldsRef.current = fields
+        for (const listener of fieldListenersRef.current) listener(fields)
         return
       }
 
@@ -465,6 +536,7 @@ export function useBrowserStream(
           if (disposed || failed) return
           advance('open')
           sendControl(document.hidden ? 'release' : 'offer')
+          if (watchFieldsRef.current) line?.send({ t: 'watch-fields' })
         },
         onMessage,
         onClose: () => fail('close')
@@ -529,6 +601,14 @@ export function useBrowserStream(
     // one connection that cannot re-read its own URL (plane-streams.ts).
   }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute, reconnectNonce, direct])
 
+  // A viewer that starts or stops wanting the page's fields says so on the open line.
+  useEffect(() => {
+    const line = lineRef.current
+    if (!open || !line?.isOpen()) return
+    line.send({ t: options.watchFields === true ? 'watch-fields' : 'unwatch-fields' })
+    if (options.watchFields !== true) latestFieldsRef.current = null
+  }, [open, options.watchFields])
+
   // Report the actual browser-frame content box without reconnecting the line.
   useEffect(() => {
     if (!open || !enabled || !viewportReady) return
@@ -572,7 +652,20 @@ export function useBrowserStream(
     viewportRevision
   })
 
-  const shared = { direct: direct && !portUnansweredRef.current, send, claim, release, subscribeFrames, latestFrame, receipt }
+  const shared = {
+    direct: direct && !portUnansweredRef.current,
+    send,
+    claim,
+    release,
+    subscribeFrames,
+    latestFrame,
+    receipt,
+    latestFields,
+    subscribeFields,
+    expectCopy,
+    copyOffer,
+    clearCopyOffer
+  }
   return open
     ? {
         ...shared,

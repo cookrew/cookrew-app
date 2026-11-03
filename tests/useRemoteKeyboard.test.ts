@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { desktopKeyAction, keyMsgsForInput, type DesktopKeyEvent } from '../src/renderer/src/useRemoteKeyboard'
+import { desktopKeyAction, inputModeFor, keyMsgsForInput, type DesktopKeyEvent } from '../src/renderer/src/useRemoteKeyboard'
 
 // The mobile keyboard bridge forwards typing to the remote field via the SAME
 // whitelisted key vocabulary as hardware keys (keyMsg → Input.dispatchKeyEvent).
@@ -11,7 +11,11 @@ describe('keyMsgsForInput — mobile beforeinput → whitelisted key vocab', () 
   it('a suggestion, an autocorrect or an emoji goes in whole as text, never split into keys', () => {
     expect(keyMsgsForInput('insertText', 'hello')).toEqual([{ t: 'text', text: 'hello' }])
     expect(keyMsgsForInput('insertText', '😀')).toEqual([{ t: 'text', text: '😀' }])
-    expect(keyMsgsForInput('insertFromPaste', '你好世界')).toEqual([{ t: 'text', text: '你好世界' }])
+    expect(keyMsgsForInput('insertReplacementText', 'their')).toEqual([{ t: 'text', text: 'their' }])
+  })
+  it('a paste from the soft keyboard goes as a paste: the page gets its paste event', () => {
+    expect(keyMsgsForInput('insertFromPaste', '你好世界')).toEqual([{ t: 'paste', text: '你好世界' }])
+    expect(keyMsgsForInput('insertFromPaste', '')).toEqual([])
   })
   it('composition is NOT forwarded from beforeinput — each update sent per character typed garbage (n, ni, then the word)', () => {
     expect(keyMsgsForInput('insertCompositionText', '你好')).toEqual([])
@@ -78,5 +82,18 @@ describe('desktopKeyAction — a desktop keydown in the hidden field', () => {
     expect(desktopKeyAction(key({ key: 'Escape', code: 'Escape', keyCode: 27 })).kind).toBe('bubble')
     expect(desktopKeyAction(key({ key: 'Shift', code: 'ShiftLeft', keyCode: 16, shiftKey: true })).kind).toBe('ignore')
     expect(desktopKeyAction(key({ key: 'Meta', code: 'MetaLeft', keyCode: 91, metaKey: true })).kind).toBe('ignore')
+  })
+})
+
+describe('inputModeFor — the phone keyboard a page field asks for', () => {
+  it('a number field gets the number pad, an email field the email keyboard', () => {
+    expect(inputModeFor('decimal')).toBe('decimal')
+    expect(inputModeFor('email')).toBe('email')
+    expect(inputModeFor('search')).toBe('search')
+  })
+  it('text, a password, or nothing at all is the plain keyboard', () => {
+    expect(inputModeFor('text')).toBe('text')
+    expect(inputModeFor('password')).toBe('text')
+    expect(inputModeFor(undefined)).toBe('text')
   })
 })
