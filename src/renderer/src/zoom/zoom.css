@@ -1316,6 +1316,26 @@
   will-change: transform, opacity;
 }
 
+/* An agent's card over the artifacts (ShelfCard.tsx): the troop's card,
+   arriving from the face it opened under. */
+.zv-shelf-card {
+  transform-origin: top center;
+  animation: zv-shelf-card-in 150ms ease-out both;
+}
+
+@keyframes zv-shelf-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zv-shelf-card {
+    animation: none;
+  }
+}
+
 /* ── hover: a seal ring, never a transform (the painter owns transforms) ── */
 @media (hover: hover) {
   .zv-av:hover {
