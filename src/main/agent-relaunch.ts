@@ -9,10 +9,12 @@
 //
 // The rules, in order:
 //   gone          no such card: nothing is saved.
-//   busy          mid-turn, or waiting on a question the owner has not
-//                 answered: a restart would cut the reply or drop the
-//                 question, so nothing is saved either — the pick is made
-//                 again once it replies (the rail is locked meanwhile).
+//   busy          mid-turn, waiting on a question the owner has not
+//                 answered, or a prompt still on its way in (a dispatch open,
+//                 the submission window held, undelivered text in the box): a
+//                 restart would cut the reply, drop the question or lose the
+//                 prompt, so nothing is saved either — the pick is made again
+//                 once it replies (the rail is locked meanwhile).
 //   asleep        no process: the command is saved and the agent wakes on it.
 //   unrestorable  the session could not be resumed exactly: the command is
 //                 saved for the next start, but nothing is killed, because a
@@ -27,6 +29,12 @@ export type RelaunchVerdict = 'restarted' | 'asleep' | 'busy' | 'unrestorable' |
 export interface RelaunchDeps {
   node: (id: string) => TerminalNodeData | null
   phaseOf: (id: string) => TurnPhase | undefined
+  /**
+   * A prompt is on its way in: the turn tracker cannot see it yet (a turn
+   * starts once the agent takes the prompt), and a restart now loses it and
+   * strands its dispatch's slot (QA 2026-11-03).
+   */
+  delivering: (id: string) => boolean
   /** Save the launch command on the card (the next spawn of it boots this). */
   setCommand: (id: string, command: string) => void
   /** A process, or a pane the multiplexer still holds, is running for the card. */
@@ -45,7 +53,7 @@ function settled(phase: TurnPhase | undefined): boolean {
 export function relaunchInPlace(deps: RelaunchDeps, id: string, command: string): RelaunchVerdict {
   const node = deps.node(id)
   if (node === null) return 'gone'
-  if (!settled(deps.phaseOf(id))) return 'busy'
+  if (!settled(deps.phaseOf(id)) || deps.delivering(id)) return 'busy'
   deps.setCommand(id, command)
   if (!deps.live(id)) return 'asleep'
   if (!deps.restorable({ ...node, command })) return 'unrestorable'

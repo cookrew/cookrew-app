@@ -115,7 +115,7 @@ describe('turning a claude dial restarts it on the flag, and types nothing', () 
 })
 
 describe('when main may restart an agent in place', () => {
-  function relaunchDeps(over: { phase?: TurnPhase; live?: boolean; restorable?: boolean; gone?: boolean } = {}): {
+  function relaunchDeps(over: { phase?: TurnPhase; live?: boolean; restorable?: boolean; gone?: boolean; delivering?: boolean } = {}): {
     deps: RelaunchDeps
     saved: string[]
     respawned: string[]
@@ -128,6 +128,7 @@ describe('when main may restart an agent in place', () => {
       deps: {
         node: () => (over.gone ? null : node()),
         phaseOf: () => over.phase,
+        delivering: () => over.delivering ?? false,
         setCommand: (_id, command) => saved.push(command),
         live: () => over.live ?? true,
         restorable: () => over.restorable ?? true,
@@ -152,6 +153,18 @@ describe('when main may restart an agent in place', () => {
       expect(d.saved).toEqual([])
       expect(d.respawned).toEqual([])
     }
+  })
+
+  // QA 2026-11-03: a pick fired three seconds after `cookrew ask` restarted
+  // the pane while the prompt was still being typed in. The turn tracker
+  // still said `replied` (a turn starts only once the agent takes the prompt),
+  // so the prompt was lost and its dispatch kept the agent's slot: every later
+  // ask answered busy.
+  it('touches nothing while a prompt is being delivered, though no turn has started yet', () => {
+    const d = relaunchDeps({ phase: 'replied', delivering: true })
+    expect(relaunchInPlace(d.deps, 'term-1', 'claude --model opus')).toBe('busy')
+    expect(d.saved).toEqual([])
+    expect(d.respawned).toEqual([])
   })
 
   it('saves but does not restart an agent with no process: it wakes on the new command', () => {
