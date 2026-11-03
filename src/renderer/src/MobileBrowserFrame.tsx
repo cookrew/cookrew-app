@@ -1,5 +1,4 @@
 import { UseOverlay } from './use/UseOverlay'
-import { hasNativeWebview } from './api'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import {
@@ -26,7 +25,6 @@ import {
   releaseTouchGesture,
   streamSurfaceState,
   updateTouchGesture,
-  viewScale,
   viewToFramePoint,
   wheelDeltaPx,
   wheelMsg,
@@ -95,10 +93,16 @@ export function MobileBrowserFrame({
   )
   /** The canvas holds a picture from this open (it survives a reconnect). */
   const [hasPicture, setHasPicture] = useState(false)
-  const [pixelRatio, setPixelRatio] = useState(() => window.devicePixelRatio)
   const boxRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const paintedFrameSeq = useRef<number | null>(null)
+  /**
+   * The painted frame's own pixel size, set in the same breath as its seq:
+   * input is mapped against exactly the frame the server will map it back
+   * with (its context is per seq), never against a size React has not caught
+   * up with yet.
+   */
+  const paintedSize = useRef({ w: 0, h: 0 })
   /**
    * THE CARD'S OWN PICTURE, read here for two reasons and fetched for neither.
    * It is the POSTER under the status chip while the stream has no decoded
@@ -114,9 +118,12 @@ export function MobileBrowserFrame({
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
   // A fine pointer has a keyboard: its keys come as keys, not a soft keyboard's input.
   const desktopInput = !coarsePointer
-  // Only the app itself asks for its display's pixel ratio (crisp on a Retina
-  // Mac, at no network cost): a laptop on the relay would pull 4x the bytes.
-  const scale = hasNativeWebview() && desktopInput ? viewScale(pixelRatio) : 1
+  // NO 2x ASK (2026-11-03, measured): headless Chrome's screencast ignores
+  // deviceScaleFactor and keeps streaming 1x frames while the still-frame
+  // fallback (captureScreenshot) honours it, so a 2x ask made frames
+  // alternate 1x/2x and input mapped against the wrong size. The server
+  // still accepts a scale (cast-viewport.ts) for when a source honours it.
+  const scale = 1
   const stream = useBrowserStream(
     browserId,
     open,
@@ -175,6 +182,7 @@ export function MobileBrowserFrame({
     wasOpenRef.current = open
     lastPaintedRef.current = null
     paintedFrameSeq.current = null
+    paintedSize.current = { w: 0, h: 0 }
     setStreamFrameLoaded(false)
     setHasPicture(false)
     if (!open) {
@@ -209,6 +217,7 @@ export function MobileBrowserFrame({
       onPainted: (frame) => {
         receipt(frame.seq)
         paintedFrameSeq.current = frame.seq
+        paintedSize.current = { w: frame.width, h: frame.height }
         lastPaintedRef.current = frame.blob
         const box = boxRef.current
         if (box) {
@@ -233,15 +242,6 @@ export function MobileBrowserFrame({
     }
   }, [open, browserId, subscribeFrames, latestFrame, receipt])
 
-  // A display change (the window moved to another screen, a zoom) re-asks for
-  // that one's pixel ratio; the query is re-armed on every ratio it reports.
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
-    const query = window.matchMedia(`(resolution: ${pixelRatio}dppx)`)
-    const update = (): void => setPixelRatio(window.devicePixelRatio)
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [pixelRatio])
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -485,7 +485,8 @@ export function MobileBrowserFrame({
     const box = boxRef.current
     if (!box || natural.w <= 0) return null
     const r = box.getBoundingClientRect()
-    return viewToFramePoint(clientX - r.left, clientY - r.top, fit, natural.w, natural.h)
+    const size = streaming && paintedSize.current.w > 0 ? paintedSize.current : natural
+    return viewToFramePoint(clientX - r.left, clientY - r.top, fit, size.w, size.h)
   }
   const framePoint = (e: React.PointerEvent): { x: number; y: number } | null => framePointAt(e.clientX, e.clientY)
   const touchPoint = (e: React.PointerEvent): StreamTouchPointer | null => {
