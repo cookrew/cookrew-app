@@ -48,6 +48,7 @@ import type { SousCommandInput, SousCommandResult } from './sous-control'
 import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
+import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
   store: WorkspaceStore
@@ -264,6 +265,9 @@ function respond(socket: net.Socket, response: CliResponse): void {
 
 async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const { cmd, args } = request
+  // A lone - the client did not expand would reach the agent as its brief.
+  const unread = stdinPlaceholderError(request)
+  if (unread) throw new Error(unread)
   switch (cmd) {
     case 'list':
       return cmdList(request, deps)
@@ -921,7 +925,7 @@ function cmdListAll(deps: SocketServerDeps): string {
 
 async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
-  if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
+  if (!name) throw new Error(`Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" - <<'EOF' (brief on stdin) | cookrew ask "Agent" --raw "bytes"`)
   const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
   let session = deps.ptys.get(target.id)
   let cold = false
@@ -1254,7 +1258,7 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
 }
 
 const RECRUIT_USAGE =
-  'Usage: cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]\n' +
+  'Usage: cookrew recruit ["Name"] [--prompt "task" | --prompt - <<\'EOF\'] [--preset P] [--role R] [--dir PATH]\n' +
   '  With --prompt and no name, the agent is named from its prompt (Sous), the way /rename titles a chat.'
 
 /**
@@ -1820,7 +1824,7 @@ function cmdPreset(): string {
   ].join('\n')
 }
 
-const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
+export const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
 Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew list                                  List connected agents, notes, and browsers
@@ -1831,6 +1835,9 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew ask "Agent" --raw "bytes"             Send raw input (\\n or \\r Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
+  cookrew ask "Agent" - <<'EOF'                 A lone - reads the brief from stdin, byte for byte: the shell
+    brief with \`backticks\`, $(…), $VARS, !      runs nothing inside a QUOTED heredoc. Prefer it for any brief
+  EOF                                           with code in it (add --no-wait after the -)
   cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
   cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
                                                 thinking | waiting (blocked on you) | replied
@@ -1860,7 +1867,8 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]
                                                 Spawn a teammate wired to you, in your workspace (any agent);
                                                 --prompt is its first prompt, and with no name it is named
-                                                from the prompt (Sous). --dir elsewhere is Orch only
+                                                from the prompt (Sous). --dir elsewhere is Orch only;
+                                                --prompt - <<'EOF' reads the prompt from stdin, like ask -
   cookrew rename ["Card"] "New name"            Rename yourself, or any agent, note or browser of your
                                                 workspace (--kind agent|note|browser when two share a name);
                                                 for an agent herdr's pane title, tab and agent name follow
