@@ -19,7 +19,9 @@ import {
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import { claimSocket, type SocketClaim } from './socket-claim'
+import { noteWriteReply, parseNoteWrite } from './note-write-guard'
 import { reachByName, type ReachKind } from './ask-reach'
+import { adoptedNoteAnswer, findClaimedNote } from './note-adopt'
 import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
@@ -48,6 +50,7 @@ import type { SousCommandInput, SousCommandResult } from './sous-control'
 import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
+import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
   store: WorkspaceStore
@@ -290,6 +293,9 @@ function respond(socket: net.Socket, response: CliResponse): void {
 
 async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const { cmd, args } = request
+  // A lone - the client did not expand would reach the agent as its brief.
+  const unread = stdinPlaceholderError(request)
+  if (unread) throw new Error(unread)
   switch (cmd) {
     case 'list':
       return cmdList(request, deps)
@@ -947,7 +953,7 @@ function cmdListAll(deps: SocketServerDeps): string {
 
 async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
-  if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
+  if (!name) throw new Error(`Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" - <<'EOF' (brief on stdin) | cookrew ask "Agent" --raw "bytes"`)
   const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
   let session = deps.ptys.get(target.id)
   let cold = false
@@ -1193,12 +1199,32 @@ function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
   })
 }
 
+/** Wire the caller to a note it tried to create again, and say whose it is. */
+function adoptNote(me: TerminalNodeData, note: NoteNodeData, deps: SocketServerDeps): string {
+  const alreadyWired = connectedOf(deps.store, me.id).some((hit) => hit.node.id === note.id)
+  if (!alreadyWired) deps.store.connectAcross(me.id, note.id)
+  const holders = connectedOf(deps.store, note.id)
+    .map((hit) => hit.node)
+    .filter((node) => node.kind === 'terminal' && node.id !== me.id)
+    .map((node) => node.name)
+  return adoptedNoteAnswer(note, holders, alreadyWired)
+}
+
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, ...rest] = request.args
   const me = self(request, deps)
   switch (sub) {
     case 'create': {
       const content = rest[0] ?? ''
+      // A NOTE WITH THE SAME NAME IS THE SAME NOTE (note-adopt.ts): a first
+      // line naming a note already on the caller's canvas wires the caller to
+      // it and leaves its content alone, unless the caller says --new.
+      if (!request.flags.new) {
+        const home = deps.store.ownerOf(me.id)
+        const canvas = home ? deps.store.workspaceState(home) : deps.store.focusedState
+        const existing = findClaimedNote(content, canvas.nodes)
+        if (existing) return adoptNote(me, existing, deps)
+      }
       // THE CALLER'S CANVAS, NEVER THE ONE ON SCREEN. A note is made beside
       // the terminal that asked for it, and that terminal belongs to exactly
       // one workspace; using the focused one put every agent's card on
@@ -1229,12 +1255,17 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return [`[${lines.length} lines total]`, ...numbered].join('\n')
     }
     case 'write': {
-      const note = reachCard(request, deps, rest[0], 'note', 'note write') as NoteNodeData
+      // Refused before the card is reached: a write with no content (or a
+      // stray flag) must neither clobber the note nor lay a cable to it.
+      const write = parseNoteWrite(rest, request.flags)
+      const note = reachCard(request, deps, write.name, 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
-      deps.store.writeNote(note.id, rest[1] ?? '')
+      const written = deps.store.writeNote(note.id, write.content)
       // Writing puts words in: agent → note.
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
-      return 'OK'
+      // The name follows the first line, so a write can rename the note —
+      // the silent part of the old clobber. Say so.
+      return noteWriteReply(note.name, written?.name ?? note.name)
     }
     case 'edit': {
       const note = reachCard(request, deps, rest[0], 'note', 'note edit') as NoteNodeData
@@ -1280,7 +1311,7 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
 }
 
 const RECRUIT_USAGE =
-  'Usage: cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]\n' +
+  'Usage: cookrew recruit ["Name"] [--prompt "task" | --prompt - <<\'EOF\'] [--preset P] [--role R] [--dir PATH]\n' +
   '  With --prompt and no name, the agent is named from its prompt (Sous), the way /rename titles a chat.'
 
 /**
@@ -1846,7 +1877,7 @@ function cmdPreset(): string {
   ].join('\n')
 }
 
-const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
+export const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
 Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew list                                  List connected agents, notes, and browsers
@@ -1857,13 +1888,17 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew ask "Agent" --raw "bytes"             Send raw input (\\n or \\r Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
+  cookrew ask "Agent" - <<'EOF'                 A lone - reads the brief from stdin, byte for byte: the shell
+    brief with \`backticks\`, $(…), $VARS, !      runs nothing inside a QUOTED heredoc. Prefer it for any brief
+  EOF                                           with code in it (add --no-wait after the -)
   cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
   cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
                                                 thinking | waiting (blocked on you) | replied
                                                 (turn ENDED, needs a fresh dispatch) | idle
-  cookrew note create ["content"]               Create a connected note on the canvas
+  cookrew note create ["content"] [--new]       Create a connected note on the canvas (a first line naming
+                                                a note already there wires you to it instead; --new forces a second)
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
-  cookrew note write "Name" "content"           Replace a note's content
+  cookrew note write "Name" "content"           Replace a note's content ("" clears it)
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a note wired to you (destructive)
   cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its environment
@@ -1886,7 +1921,8 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]
                                                 Spawn a teammate wired to you, in your workspace (any agent);
                                                 --prompt is its first prompt, and with no name it is named
-                                                from the prompt (Sous). --dir elsewhere is Orch only
+                                                from the prompt (Sous). --dir elsewhere is Orch only;
+                                                --prompt - <<'EOF' reads the prompt from stdin, like ask -
   cookrew rename ["Card"] "New name"            Rename yourself, or any agent, note or browser of your
                                                 workspace (--kind agent|note|browser when two share a name);
                                                 for an agent herdr's pane title, tab and agent name follow
