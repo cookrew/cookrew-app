@@ -475,7 +475,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={hearing ? 'Listening…' : to ? 'Reply… · # a note or browser' : 'Describe a task…'}
+        placeholder={earSays(dictation) ?? (to ? 'Reply… · # a note or browser' : 'Describe a task…')}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"
@@ -587,12 +587,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           attaching…
         </span>
       )}
-      {/* The phone's ear has no words until the Mac has heard them: say what it is doing. */}
-      {dictation.ear === 'phone' && dictation.phase !== 'idle' && (
-        <span className="cr-prompt-note cr-prompt-sous" role="status">
-          {dictation.phase === 'hearing' ? '● Recording: tap the mic to finish' : 'The Mac is listening…'}
-        </span>
-      )}
       {dictation.phase === 'closing' && dictation.heard.trim() && (
         <span className="cr-prompt-note cr-prompt-sous" role="status" title={dictation.heard}>
           … {dictation.heard}
@@ -622,4 +616,16 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       )}
     </form>
   )
+}
+
+/**
+ * What the box's own placeholder says while an ear is open. The phone's ear
+ * has no words until the Mac has heard them, so it says what it is doing —
+ * IN the box: a note of its own took a row on a phone and moved every
+ * button under the owner's thumb (owner, 2026-11-03).
+ */
+function earSays(dictation: { ear: string | null; phase: 'idle' | 'hearing' | 'closing' }): string | null {
+  if (dictation.phase === 'idle') return null
+  if (dictation.ear === 'phone') return dictation.phase === 'hearing' ? '● Recording… tap the mic to finish' : 'The Mac is listening…'
+  return dictation.phase === 'hearing' ? 'Listening…' : null
 }
