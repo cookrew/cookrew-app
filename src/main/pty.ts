@@ -14,7 +14,9 @@ import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TM
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
 import { DirectMultiplexer } from './direct-multiplexer'
-import { selectMultiplexers } from './multiplexer-select'
+import { planHost } from './host-claim'
+import { confirmHerdrClaim, herdrSessionDir, processClaimDeps, releaseHerdrClaim, type ClaimDeps, type ClaimVerdict } from './herdr-session-claim'
+import { reapOrphansOn } from './orphan-reap'
 import { harnessFor } from './harness'
 import { confinedSpawn } from './session-sandbox'
 import { defaultProducerLease } from './producer-lease'
@@ -226,23 +228,8 @@ export function sessionNameFor(terminalId: string): string {
   return tmuxSessionNameFor(terminalId)
 }
 
-/** Our tmux session naming, so the reaper never touches foreign sessions. */
-const COOKREW_SESSION_RE = /^cookrew_[A-Za-z0-9]+$/
-
-/**
- * tmux session names that belong to NO terminal node — leaked agents from a
- * crash or (until now) a workspace delete that never killed its terminals.
- * Pure: only sessions matching our naming AND not owned by a live node are
- * returned, so a foreign tmux session on the same server is never reaped.
- */
-export function orphanSessionNames(
-  tmuxNames: string[],
-  ownedTerminalIds: Iterable<string>
-): string[] {
-  const owned = new Set<string>()
-  for (const id of ownedTerminalIds) owned.add(sessionNameFor(id))
-  return tmuxNames.filter((name) => COOKREW_SESSION_RE.test(name) && !owned.has(name))
-}
+/** Session names that belong to no terminal node — see orphan-reap.ts. */
+export { orphanSessionNames } from './orphan-reap'
 
 /**
  * Poll until a tmux session is gone; THROW when it survives the deadline
@@ -268,10 +255,6 @@ function killTmuxSessionByName(name: string): void {
   activeMux?.killSession(name)
 }
 
-/** Live cookrew tmux session names, or [] when no server / tmux is absent. */
-function listTmuxSessionNames(): string[] {
-  return activeMux?.listSessions() ?? []
-}
 
 /** One physical mirror row, as the wheel-jump planner needs it. */
 export interface BufferRow {
@@ -1286,8 +1269,25 @@ export function multiplexerOrder(
   return chosen.length > 0 ? [...chosen, ...candidates.filter((m) => m.id !== preference)] : candidates
 }
 
+export interface PtyManagerOptions {
+  /**
+   * This instance's identity for the herdr owner claim: its userData path,
+   * the same key the single-instance lock uses.
+   */
+  instance?: string
+}
+
 export class PtyManager {
   private sessions = new Map<string, PtySession>()
+  /**
+   * Set when another live Cookrew owns the herdr session: the line to log
+   * before exiting. While set, this instance hosts on the inert direct
+   * backend and has not run a single session command.
+   */
+  readonly hostRefusal: string | null
+  private readonly claimDir: string | null
+  private readonly claimDeps: ClaimDeps
+  private hostClaim: ClaimVerdict | null
 
   /**
    * Which workspace holds each live PTY (multi-instance step 2). ONE map, one
@@ -1309,7 +1309,7 @@ export class PtyManager {
    */
   onBackendDeath: ((why: string) => void) | null = null
 
-  constructor() {
+  constructor(options: PtyManagerOptions = {}) {
     // Wire the durable input-provenance WAL into the process-wide producer
     // lease (Sol r10 P0-1). Done HERE — the PTY plane's boot, before any
     // session exists or any terminal id is queried — so every write path's
@@ -1338,9 +1338,25 @@ export class PtyManager {
       new TmuxMultiplexer({ configFile: this.tmuxConf }),
       new DirectMultiplexer()
     ])
-    const roles = selectMultiplexers({ candidates })
+    // The owner claim is settled BEFORE any session command: a second
+    // Cookrew that finds a live owner refuses here (host-claim.ts) and the
+    // herdr branch below never runs for it.
+    this.claimDir = herdrSessionDir(HERDR_SESSION, process.env)
+    this.claimDeps = processClaimDeps(options.instance ?? `${homedir()}#${process.pid}`)
+    const plan = planHost({
+      candidates,
+      inert: new DirectMultiplexer(),
+      claimDir: this.claimDir,
+      deps: this.claimDeps
+    })
+    this.hostRefusal = plan.refusal
+    this.hostClaim = plan.claim
+    if (plan.claim?.kind === 'unknown') {
+      console.error(`herdr owner claim could not be taken (${plan.claim.reason}) — the boot reap will close nothing`)
+    }
+    const roles = plan.roles
     setMultiplexer(roles.host)
-    setBackends(candidates)
+    setBackends(plan.backends)
     // A dead herdr server means every agent is dead until it returns; the
     // supervisor turns that from "until the next app launch" into ~15s.
     if (roles.host instanceof HerdrHostMultiplexer) {
@@ -1601,14 +1617,41 @@ export class PtyManager {
   }
 
   /**
-   * Startup reaper: kill every cookrew tmux session not owned by a terminal
-   * node (past workspace-delete leaks, crash-stranded agents). Returns the
-   * reaped names. Foreign tmux sessions are never touched (naming guard).
+   * Startup reaper: close cookrew sessions owned by no terminal node (past
+   * workspace-delete leaks, crash-stranded agents). Returns the reaped names.
+   * Guarded (orphan-reap.ts): only the herdr session's claimed owner reaps,
+   * only with a store that owns at least one live pane, and never more than
+   * a handful per boot. Foreign sessions are never touched (naming guard).
    */
   reapOrphanSessions(ownedTerminalIds: Iterable<string>): string[] {
-    const orphans = orphanSessionNames(listTmuxSessionNames(), ownedTerminalIds)
-    for (const name of orphans) killTmuxSessionByName(name)
-    return orphans
+    if (!activeMux) return []
+    return reapOrphansOn(activeMux, ownedTerminalIds, { claimHeld: this.holdsHostClaim() })
+  }
+
+  /**
+   * Re-take the herdr owner claim once the single-instance lock is held. A
+   * live owner with our own userData is then a predecessor on its way out
+   * (the restart race), so it is replaced; a foreign one never is.
+   */
+  confirmHostClaim(): void {
+    if (!(activeMux instanceof HerdrHostMultiplexer) || !this.claimDir) return
+    if (this.hostClaim?.kind === 'owned') return
+    this.hostClaim = confirmHerdrClaim(this.claimDir, this.claimDeps)
+    if (this.hostClaim.kind !== 'owned') {
+      const why =
+        this.hostClaim.kind === 'unknown' ? this.hostClaim.reason : `held by pid ${this.hostClaim.owner.pid}`
+      console.error(`herdr owner claim not confirmed (${why}) — the boot reap will close nothing`)
+    }
+  }
+
+  /**
+   * May this instance close sessions it believes are leaks? Under herdr only
+   * with the owner claim in hand; tmux and direct keep their old behaviour
+   * (the planner's familiar-store and cap guards still apply).
+   */
+  private holdsHostClaim(): boolean {
+    if (!(activeMux instanceof HerdrHostMultiplexer)) return true
+    return this.hostClaim?.kind === 'owned'
   }
 
   /** App quit: detach everything so sessions survive for the next launch. */
@@ -1620,5 +1663,10 @@ export class PtyManager {
     for (const session of this.sessions.values()) session.dispose()
     this.sessions.clear()
     for (const id of this.ownership.all()) this.ownership.release(id)
+    // The panes outlive us; the claim does not. Only removed while ours.
+    if (this.hostClaim?.kind === 'owned' && this.claimDir) {
+      releaseHerdrClaim(this.claimDir, this.claimDeps)
+      this.hostClaim = null
+    }
   }
 }
