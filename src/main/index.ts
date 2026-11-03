@@ -10,7 +10,7 @@ import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
-import { deliverToRecruit } from './recruit-delivery'
+import { deliverToRecruit, type RecruitWitness } from './recruit-delivery'
 import { nameAgent } from './agent-namer'
 import { planRename, stillStandIn, type RenameOutcome } from './agent-rename'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
@@ -143,7 +143,7 @@ import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
-import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
@@ -3723,6 +3723,28 @@ const dispatchService = new DispatchService({
   }
 })
 
+/**
+ * The conductor's view of a card a recruit just made (recruit-delivery.ts):
+ * the brief waits for the harness's own input prompt — the readiness a forked
+ * agent waits for — and is called delivered only on a turn that started or
+ * the text on the card's screen. Every read is the PTY mirror or the tracker,
+ * never a backend fork: these are polled while the CLI waits.
+ */
+const recruitWitness: RecruitWitness = {
+  readyForInput: (id) => {
+    const session = ptys.get(id)
+    if (!session) return false
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    return harnessReadyForInput(session, node?.kind === 'terminal' ? node.command : session.command)
+  },
+  turnRunning: (id) => {
+    const phase = turns.phaseOf(id)
+    return phase === 'thinking' || phase === 'waiting'
+  },
+  turnCount: (id) => (turns.isTracked(id) ? turns.history(id).length : null),
+  screen: (id) => ptys.get(id)?.viewportText() ?? null
+}
+
 // Backend death reaches the dispatch plane the moment the supervisor sees it:
 // every open record the dead server hosted is stamped interrupted (billed as
 // infrastructure, never as the agent failing), not left to the sweep.
@@ -6100,7 +6122,7 @@ app.whenReady().then(() => {
       // engine (retrying the boot-time 503s of a card made a moment ago),
       // delivered by herdr once the harness is at its prompt, on the ledger.
       deliver: async (input) => {
-        const { dispatchId } = await deliverToRecruit(dispatchService, input)
+        const { dispatchId } = await deliverToRecruit(dispatchService, input, { witness: recruitWitness })
         // The ledger learns how the delivery ended once the engine settles it.
         if (input.token) {
           const token = input.token
@@ -6262,7 +6284,11 @@ app.whenReady().then(() => {
     })
     if (!verdict.ok) return { ok: false, error: verdict.error }
     try {
-      const { dispatchId } = await deliverToRecruit(dispatchService, { nodeId: verdict.nodeId, sentence: verdict.text, originId: null })
+      const { dispatchId } = await deliverToRecruit(
+        dispatchService,
+        { nodeId: verdict.nodeId, sentence: verdict.text, originId: null },
+        { witness: recruitWitness }
+      )
       sousLedger.write({ token, dispatchId, outcome: 'delivered', dismissed: false })
       void dispatchService.settled(dispatchId).then(() => {
         const record = dispatchService.get(dispatchId)
@@ -6362,6 +6388,9 @@ app.whenReady().then(() => {
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
     dispatch: dispatchService,
+    // `cookrew recruit --prompt`: the brief waits for the harness and needs
+    // evidence it landed before the command says "delivered".
+    recruitWitness,
     // `cookrew rename` and `cookrew recruit --prompt`: the same rename the
     // prompt box's model-picked name goes through, herdr's chrome included.
     renameCard,

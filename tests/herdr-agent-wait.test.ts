@@ -322,3 +322,15 @@ describe.skipIf(process.platform === 'win32')('runCli — abort escalates SIGTER
     expect(existsSync(marker)).toBe(false)
   }, 15_000)
 })
+
+// A recruit brief is a long, multi-line text (2026-11-03): it must reach herdr
+// as ONE argv element — blank lines, quotes and all — and be submitted once.
+describe('submitArgs — a multi-line ~3 KB brief rides whole', () => {
+  it('keeps blank lines, quotes and length in a single element', () => {
+    const brief = ['Own the "login" bug.', '', "Don't touch fixtures.", '', ...Array.from({ length: 60 }, (_, i) => `  ${i}. case '${i}' with "quotes" and \`ticks\``)].join('\n')
+    expect(brief.length).toBeGreaterThan(2500)
+    const args = submitArgs('w1:p3', brief)
+    expect(args).toEqual(['agent', 'prompt', 'w1:p3', brief])
+    expect(args.filter((a) => a === brief)).toHaveLength(1)
+  })
+})

@@ -30,7 +30,7 @@ import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { cleanAgentName, nameFromPrompt } from '../shared/agent-name'
 import type { RenameOutcome } from './agent-rename'
-import { deliverToRecruit } from './recruit-delivery'
+import { deliverToRecruit, type RecruitDeliveryOptions, type RecruitEvidence, type RecruitWitness } from './recruit-delivery'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
@@ -66,6 +66,15 @@ export interface SocketServerDeps {
    * silently falling back to a blocking ask the caller did not ask for.
    */
   dispatch?: DispatchService
+  /**
+   * The conductor's view of a card `cookrew recruit --prompt` just made
+   * (recruit-delivery.ts): the brief waits for the harness's input prompt and
+   * is called delivered only on evidence. Absent, the engine's record alone
+   * decides, as in a test server with no panes.
+   */
+  recruitWitness?: RecruitWitness
+  /** Test seam for the recruit brief's windows; production uses the defaults. */
+  recruitTiming?: Pick<RecruitDeliveryOptions, 'admissionMs' | 'readyMs' | 'confirmMs' | 'retryMs'>
   /**
    * Light the cable between the asking pane and the agent it asks
    * (cable-signal.ts): once when the prompt is submitted, once when the reply
@@ -1400,8 +1409,12 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
       ? deps.autoNameTerminal(added.id, added.name, prompt).catch(() => null)
       : Promise.resolve(null),
     prompt && deps.dispatch
-      ? deliverToRecruit(deps.dispatch, { nodeId: added.id, sentence: prompt, originId: me.id }).then(
-          ({ dispatchId }) => ({ ok: true as const, dispatchId }),
+      ? deliverToRecruit(
+          deps.dispatch,
+          { nodeId: added.id, sentence: prompt, originId: me.id },
+          { ...deps.recruitTiming, ...(deps.recruitWitness ? { witness: deps.recruitWitness } : {}) }
+        ).then(
+          ({ dispatchId, evidence }) => ({ ok: true as const, dispatchId, evidence }),
           (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) })
         )
       : Promise.resolve(null)
@@ -1420,14 +1433,27 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
       `⚠ "${name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )
   }
-  if (delivered?.ok) lines.push(`Prompt delivered (dispatch ${delivered.dispatchId}). Follow it: cookrew status "${name}"`)
+  if (delivered?.ok) {
+    lines.push(`Prompt delivered (dispatch ${delivered.dispatchId}${EVIDENCE_WORDS[delivered.evidence ?? 'record']}). Follow it: cookrew status "${name}"`)
+  }
   if (delivered && !delivered.ok) {
     // The card exists either way; say so, and fail, so a script does not
-    // carry on as if the work had started.
-    lines.push(`⚠ The prompt did not reach "${name}": ${delivered.error}. Send it again: cookrew ask "${name}" "…"`)
+    // carry on as if the work had started. An unconfirmed brief may still be
+    // in the box, so the remedy is to look before sending a second copy.
+    lines.push(
+      `⚠ Card created, brief NOT confirmed: ${delivered.error}. Until it is, the prompt did not reach "${name}" — ` +
+        `look first (cookrew check "${name}"), then send it again: cookrew ask "${name}" "…"`
+    )
     throw new Error(lines.join('\n'))
   }
   return lines.join('\n')
+}
+
+/** How `cookrew recruit` names the evidence a brief landed on. */
+const EVIDENCE_WORDS: Record<RecruitEvidence | 'record', string> = {
+  turn: ', its turn started',
+  composer: ', seen on its screen',
+  record: ''
 }
 
 const RENAME_KINDS: Record<string, ReachKind> = { agent: 'terminal', terminal: 'terminal', note: 'note', browser: 'browser' }

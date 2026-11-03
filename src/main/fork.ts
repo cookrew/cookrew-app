@@ -54,6 +54,22 @@ export function claudeComposerDrawn(screen: string): boolean {
   if (lines.some((line) => /\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle/i.test(line))) return true
   return lines.some((line) => /^\s*[─━]{10,}\s*$/.test(line)) && lines.some((line) => /^\s*(?:│\s*)?[❯>]\s?/.test(line))
 }
+
+/**
+ * HAS THE AGENT TUI BOOTED FAR ENOUGH TO TAKE TYPED INPUT? Output seen, then
+ * BOOT_QUIET_MS of quiet, and for Claude its composer drawn. The one
+ * readiness predicate for a fresh pane: the fork preamble below and the
+ * recruit brief (recruit-delivery.ts) both wait on it. `command` defaults to
+ * the session's own; a caller holding the card can pass the card's.
+ */
+export function harnessReadyForInput(
+  session: Pick<PtySession, 'idleFor' | 'viewportText'> & { command?: string },
+  command: string = session.command ?? ''
+): boolean {
+  const idle = session.idleFor()
+  if (!Number.isFinite(idle) || idle < BOOT_QUIET_MS) return false
+  return !isClaudeCommand(command) || claudeComposerDrawn(session.viewportText())
+}
 /**
  * Create the fork node (placed beside its source, wired to it with an edge)
  * and kick off context injection. Returns as soon as the card exists — the
@@ -194,12 +210,9 @@ export function forkContextReady(nodeId: string): Promise<void> {
  */
 export async function injectWhenReady(session: PtySession, preamble: string): Promise<void> {
   const startedAt = Date.now()
-  const claude = isClaudeCommand(session.command ?? '')
   await new Promise<void>((resolve) => {
     const timer = setInterval(() => {
-      const idle = session.idleFor()
-      const booted = Number.isFinite(idle) && idle >= BOOT_QUIET_MS && (!claude || claudeComposerDrawn(session.viewportText()))
-      if (booted || Date.now() - startedAt >= BOOT_TIMEOUT_MS) {
+      if (harnessReadyForInput(session) || Date.now() - startedAt >= BOOT_TIMEOUT_MS) {
         clearInterval(timer)
         resolve()
       }
