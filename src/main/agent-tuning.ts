@@ -392,7 +392,17 @@ export interface TuneDeps {
    * Where the card's turns go, for a model pick (claude-model-route.ts): a
    * routed card's model is its route. Absent: direct, no catalog.
    */
-  routeFor?: (node: TerminalNodeData) => { routed: boolean; catalog: readonly string[] }
+  routeFor?: (node: TerminalNodeData) => {
+    routed: boolean
+    catalog: readonly string[]
+    /** A gateway model's effort levels (its catalog row). */
+    levelsOf?: (id: string) => readonly string[]
+  }
+  /**
+   * The effort levels this card's model takes (owner 2026-11-04): the
+   * gateway's catalog row for a routed card. Absent or null: claude's own.
+   */
+  effortChoices?: (terminalId: string) => readonly string[] | null
 }
 
 export type TuneResult = { ok: true; ask: TuneAsk } | { ok: false; reason: string }
@@ -416,6 +426,8 @@ export function tuningStateOf(deps: TuneDeps, terminalId: string): AgentTuningSt
   // The RTE dial reads from CardRouteState, never from the session file; it
   // is listed here only so the rail knows the card has one and what it offers.
   const typed = [...knobs]
+  const effortChoices = knobs.includes('effort') ? (deps.effortChoices?.(terminalId) ?? null) : null
+  if (effortChoices && effortChoices.length > 0) choices.effort = effortChoices
   const routeChoices = deps.routeChoices?.(terminalId) ?? null
   if (routeChoices) {
     knobs.push('route')
@@ -459,15 +471,18 @@ export function applyTuning(
   // Against the HARNESS's values when it names them, not the shared defaults.
   // For pi this is the difference between setting a model and opening a picker
   // that swallows the pane's input.
-  const offered =
-    harness.tuning.values?.(knob, readTuning(subjectOf(node), deps.watch ?? {})) ?? null
-  const allowed = offered === null ? tuneValueOk(knob, value) : offered.includes(value)
-  if (!allowed) return { ok: false, reason: `not a ${knob} this agent offers` }
   // A command the flag cannot ride (launch-tune.launchOffer) would restart on
   // nothing new: its line is typed instead, as before.
-  if (harness.tuning.relaunch && deps.relaunch && launchOffer(node.command) !== null) {
-    return relaunchTuning(deps, node, knob, value)
-  }
+  const relaunching = harness.tuning.relaunch === true && deps.relaunch !== undefined && launchOffer(node.command) !== null
+  const offered =
+    knob === 'effort' && relaunching
+      ? (deps.effortChoices?.(terminalId) ?? null)
+      : (harness.tuning.values?.(knob, readTuning(subjectOf(node), deps.watch ?? {})) ?? null)
+  // A relaunched model pick is one of the one list's rows (model-pick.ts):
+  // launchPick checks it against the gateway's catalog, which this check cannot.
+  const allowed = relaunching && knob === 'model' ? true : offered === null || offered.length === 0 ? tuneValueOk(knob, value) : offered.includes(value) && tuneValueOk(knob, value)
+  if (!allowed) return { ok: false, reason: `not a ${knob} this agent offers` }
+  if (relaunching) return relaunchTuning(deps, node, knob, value)
   const line = harness.tuning.line(knob, value)
   if (line === null) return { ok: false, reason: `this agent has no ${knob} dial` }
 
@@ -500,7 +515,9 @@ const RELAUNCH_REFUSAL: Partial<Record<RelaunchVerdict, string>> = {
 function relaunchTuning(deps: TuneDeps, node: TerminalNodeData, knob: TuneKnob, value: string): TuneResult {
   // The route knob never comes here (applyTuning refuses it before), so the knob is a launch flag.
   const where = deps.routeFor?.(node) ?? { routed: false, catalog: [] }
-  const plan = launchPick({ command: node.command, knob: knob as 'model' | 'effort', value, ...where })
+  // What it runs at now, carried onto a new model (owner 2026-11-04: keep it).
+  const effort = knob === 'model' ? ((deps.cache ?? new TuningCache()).of(subjectOf(node), deps.watch ?? {})?.effort ?? null) : null
+  const plan = launchPick({ command: node.command, knob: knob as 'model' | 'effort', value, effort, ...where })
   if ('error' in plan) return { ok: false, reason: plan.error }
   const verdict = deps.relaunch?.(node.id, plan) ?? 'gone'
   const refusal = RELAUNCH_REFUSAL[verdict]

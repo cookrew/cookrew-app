@@ -1963,6 +1963,24 @@
 .cr-tune-turn { color: var(--phos); opacity: 0.85 }
 .cr-tune-row.group { color: var(--phos-glow) }
 
+/* THE ONE MODEL LIST (ModelDial.tsx): section headings between the rows, a
+   wrapper that leaves the rows in the list's own flow, and room for ids. */
+.cr-model-row-wrap { display: contents }
+.cr-tune-section {
+  display: block;
+  padding: 6px 6px 2px;
+  color: var(--phos);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  opacity: 0.55;
+}
+.cr-tune-list.models {
+  width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .cr-tune-chip.refused .cr-tune-flag {
   color: var(--amber-deep);
 }

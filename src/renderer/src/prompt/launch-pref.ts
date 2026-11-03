@@ -1,4 +1,5 @@
 import { LAUNCH_KNOBS, cleanLaunchTune, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
+import { DIRECT, effortLevelsFor, keptEffort, parseModelPick } from '../../../shared/model-pick'
 
 /**
  * THE MODEL AND EFFORT A NEW AGENT STARTS ON (owner, 2026-11-01): the prompt
@@ -61,4 +62,18 @@ export function withLaunchKnob(tune: LaunchTune, knob: LaunchKnob, value: string
  */
 export function offeredPart(tune: LaunchTune, offer: LaunchOffer | null): LaunchTune {
   return cleanLaunchTune(offer, tune)
+}
+
+/**
+ * THE ONE LIST'S PICK for a new claude agent (owner 2026-11-04): a gateway id
+ * or `direct:<alias>` (shared/model-pick.ts) is kept while the gateway lists
+ * it, with an effort its model takes; anything else is narrowed as before
+ * (offeredPart). Main turns the pick into a route and flags.
+ */
+export function offeredPick(tune: LaunchTune, offer: LaunchOffer | null, gateway: { ids: readonly string[]; models: readonly { id: string; levels: readonly string[] }[] } | null): LaunchTune {
+  const pick = tune.model !== undefined ? parseModelPick(tune.model) : null
+  if (offer?.harness !== 'claude' || gateway === null || pick === null || pick.route === undefined) return offeredPart(tune, offer)
+  if (pick.route !== DIRECT && !gateway.ids.includes(pick.route)) return offeredPart({ ...(tune.effort ? { effort: tune.effort } : {}) }, offer)
+  const effort = keptEffort(tune.effort, effortLevelsFor(tune.model, gateway.models))
+  return { model: tune.model as string, ...(effort !== null ? { effort } : {}) }
 }

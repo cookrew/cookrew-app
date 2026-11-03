@@ -11,8 +11,10 @@ import type { LaunchKnob } from '../../../shared/launch-tune'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from '../../../shared/agent-name'
 import { lastHarness, rememberHarness } from './harness-pref'
-import { lastLaunchTune, offeredPart, rememberLaunchTune, withLaunchKnob } from './launch-pref'
-import { NewAgentTune } from './NewAgentTune'
+import { lastLaunchTune, offeredPick, rememberLaunchTune, withLaunchKnob } from './launch-pref'
+import { NewAgentTune, type NewAgentGateway } from './NewAgentTune'
+import { useRouteState } from '../routing/use-route-state'
+import { routeChoices } from '../../../shared/route-view'
 import { usePresetOffers } from './use-preset-commands'
 import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
@@ -189,11 +191,21 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const offer = usePresetOffers().get(harness) ?? null
   const [launchTune, setLaunchTune] = useState(() => lastLaunchTune(harness))
   useEffect(() => setLaunchTune(lastLaunchTune(harness)), [harness])
+  // An updater: a model pick may drop the effort in the same click (NewAgentTune.pickModel).
   const pickLaunch = (knob: LaunchKnob, value: string | null): void => {
-    const next = withLaunchKnob(launchTune, knob, value)
-    setLaunchTune(next)
-    rememberLaunchTune(harness, next)
+    setLaunchTune((prev) => {
+      const next = withLaunchKnob(prev, knob, value)
+      rememberLaunchTune(harness, next)
+      return next
+    })
   }
+  // THE ONE MODEL LIST (owner 2026-11-04): with the gateway online, a new
+  // claude agent picks a route or a direct alias from the live dial's rows.
+  const route = useRouteState().state
+  const gateway: NewAgentGateway | null =
+    route?.status === 'online' && route.models.length > 0
+      ? { ids: routeChoices(route.models), models: route.models, defaultModel: route.defaultModel }
+      : null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const activity = useLiveLine(to?.id ?? null)
@@ -320,7 +332,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setBusy(true)
     setError(null)
     const { words: prompt, refs } = said(raw)
-    const tune = offeredPart(launchTune, offer)
+    const tune = offeredPick(launchTune, offer, gateway)
     const made = await makeAgent(cookrew(), { name: nameFromPrompt(prompt), preset: harness, orch, prompt, autoName: true, tune }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
@@ -446,7 +458,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         offer && (
           <NewAgentTune
             offer={offer}
-            tune={offeredPart(launchTune, offer)}
+            tune={offeredPick(launchTune, offer, gateway)}
+            gateway={gateway}
             onPick={(knob, value) => {
               pickLaunch(knob, value)
               focusBox()

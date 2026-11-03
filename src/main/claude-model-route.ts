@@ -21,7 +21,9 @@
 // Effort is a flag either way: `--effort` holds on a routed card as well.
 // Pure: the catalog and the settings arrive as values.
 
-import { launchCommand, withoutRoutedPick, type LaunchKnob } from '../shared/launch-tune'
+import { EFFORT_LEVELS, isEffortLevel } from '../shared/agent-tuning'
+import { launchCommand, withoutRoutedPick, type LaunchKnob, type LaunchOffer } from '../shared/launch-tune'
+import { DIRECT, keptEffort, parseModelPick } from '../shared/model-pick'
 
 /** What a pick changes on the card. */
 export interface LaunchPatch {
@@ -83,6 +85,16 @@ export function withGatewayModel(command: string, catalog: readonly string[]): s
   return id === null ? command : command.replace(MODEL_FLAG, `$1$2${id}`)
 }
 
+const EFFORT_FLAG = /\s--effort(?:=|\s+)(\S+)/
+
+/** The line with its effort carried onto a model that takes it, or dropped for one that does not. */
+function withKeptEffort(command: string, effort: string | null | undefined, levels: readonly string[]): string {
+  const own = EFFORT_FLAG.exec(command)?.[1]
+  if (own !== undefined) return levels.includes(own) ? command : command.replace(EFFORT_FLAG, '')
+  const kept = keptEffort(effort, levels)
+  return kept === null ? command : launchCommand(command, { effort: kept })
+}
+
 /** The card after a model or effort pick, for where its turns go. */
 export function launchPick(input: {
   command: string
@@ -91,10 +103,54 @@ export function launchPick(input: {
   /** The card's turns go through a route (RouteService.routeOf ≠ direct, gateway online). */
   routed: boolean
   catalog: readonly string[]
+  /** A gateway model's effort levels (its catalog row); absent or empty: claude's own. */
+  levelsOf?: (id: string) => readonly string[]
+  /** The effort the card runs at now (its reading), carried onto a new model (owner 2026-11-04: keep it). */
+  effort?: string | null
 }): LaunchPlan {
   const { command, knob, value } = input
-  if (knob === 'effort' || !input.routed) return { command: launchCommand(command, { [knob]: value }) }
-  const route = gatewayModelFor(value, input.catalog)
-  if (route === null) return { error: `the gateway lists no ${value} model to route to` }
-  return { command: withoutRoutedPick(command, 'claude'), route }
+  const levels = (id: string | null): readonly string[] => {
+    const own = id ? (input.levelsOf?.(id) ?? []).filter(isEffortLevel) : []
+    return own.length > 0 ? own : EFFORT_LEVELS
+  }
+  if (knob === 'effort') return { command: launchCommand(command, { effort: value }) }
+  const pick = parseModelPick(value)
+  if (pick === null) return { error: `not a model this agent offers: ${value}` }
+  // The one list's rows (model-pick.ts): a gateway id, or direct with an alias.
+  if (pick.route === DIRECT) {
+    return { command: withKeptEffort(launchCommand(withoutRoutedPick(command, 'claude'), { model: pick.alias }), input.effort, levels(null)), route: DIRECT }
+  }
+  if (pick.route !== undefined) {
+    if (!input.catalog.includes(pick.route)) return { error: `not in the gateway's catalog: ${pick.route}` }
+    return { command: withKeptEffort(withoutRoutedPick(command, 'claude'), input.effort, levels(pick.route)), route: pick.route }
+  }
+  // A bare alias (an older caller): where the card's turns already go.
+  if (!input.routed) return { command: withKeptEffort(launchCommand(command, { model: pick.alias }), input.effort, levels(null)) }
+  const route = gatewayModelFor(pick.alias, input.catalog)
+  if (route === null) return { error: `the gateway lists no ${pick.alias} model to route to` }
+  return { command: withKeptEffort(withoutRoutedPick(command, 'claude'), input.effort, levels(route)), route }
+}
+
+/**
+ * A new claude agent's launch, from the prompt box's pick: a gateway id is
+ * its route, `direct:<alias>` its flag and a direct route; the effort rides
+ * as a flag. Anything else is the launch line as before (launchCommand).
+ */
+export function newAgentPlan(input: {
+  command: string
+  tune: unknown
+  offer: LaunchOffer | null
+  catalog: readonly string[]
+  levelsOf?: (id: string) => readonly string[]
+}): LaunchPatch {
+  const raw = typeof input.tune === 'object' && input.tune !== null ? (input.tune as Record<string, unknown>) : {}
+  const pick = typeof raw.model === 'string' ? parseModelPick(raw.model) : null
+  const effort = typeof raw.effort === 'string' ? raw.effort : undefined
+  if (pick?.route === DIRECT) return { command: launchCommand(input.command, { model: pick.alias, effort }, input.offer), route: DIRECT }
+  if (pick?.route !== undefined && input.catalog.includes(pick.route)) {
+    const own = (input.levelsOf?.(pick.route) ?? []).filter(isEffortLevel)
+    const allowed = own.length > 0 ? own : EFFORT_LEVELS
+    return { command: launchCommand(input.command, effort && allowed.includes(effort as never) ? { effort } : {}, input.offer), route: pick.route }
+  }
+  return { command: launchCommand(input.command, input.tune, input.offer) }
 }

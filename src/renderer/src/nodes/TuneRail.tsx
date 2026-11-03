@@ -20,6 +20,7 @@ import {
 } from '../../../shared/agent-tuning'
 import type { CardRouteState } from '../../../shared/route'
 import { routeDialLines, shortRoute } from '../../../shared/route-view'
+import { ModelDial, type ModelDialProps } from './ModelDial'
 
 /**
  * R2 · THE THIRD DIAL. Model and effort come from the harness's own record;
@@ -49,6 +50,12 @@ export interface TuneRailProps {
   onMouseDown?: (e: React.MouseEvent) => void
   route?: RouteDialProps | null
   /**
+   * THE ONE MODEL LIST (owner 2026-11-04): a routed claude card's model is its
+   * route, so one MDL dial (ModelDial.tsx) stands for both the model dial and
+   * the route dial, which are then not drawn.
+   */
+  model?: ModelDialProps | null
+  /**
    * Only these typed knobs (default: every one the view has). The top bar asks
    * for one switch — `['model']`, or `[]` with the route dial — rather than
    * the whole rail (zoom-bar.ts).
@@ -68,18 +75,22 @@ export function TuneRail({
   error,
   onMouseDown,
   route,
+  model = null,
   knobs,
   bar = false,
   menu = false
 }: TuneRailProps): React.JSX.Element {
   const locked = view.locked
-  const shown = view.dials.filter((dial) => dial.knob !== 'route' && (knobs === undefined || knobs.includes(dial.knob)))
+  const shown = view.dials.filter(
+    (dial) => dial.knob !== 'route' && !(model !== null && dial.knob === 'model') && (knobs === undefined || knobs.includes(dial.knob))
+  )
   const label = bar ? (route ? 'Route' : 'Model') : route ? 'Model, effort and route' : 'Model and effort'
   return (
     <div className={`cr-tune-rail${bar ? ' bar' : ''}${menu ? ' menu' : ''}`} role="group" aria-label={label}>
       {/* The generic dials are the TYPED knobs. The route knob main lists in
           `knobs` is drawn by RouteDial below from CardRouteState — never as a
           generic dial, which would read the session file for a route. */}
+      {model !== null && <ModelDial model={model} locked={locked} caveat={view.caveat} onMouseDown={onMouseDown} />}
       {shown.map((dial) => (
         <Dial
           key={dial.knob}
@@ -92,7 +103,7 @@ export function TuneRail({
           onMouseDown={onMouseDown}
         />
       ))}
-      {route && <RouteDial route={route} locked={locked} onMouseDown={onMouseDown} />}
+      {route && model === null && <RouteDial route={route} locked={locked} onMouseDown={onMouseDown} />}
       {/* The reason sits UNDER the dials whether or not there are any: a
           harness without dials has only this line, and it is the whole point
           of drawing a rail for it. */}
