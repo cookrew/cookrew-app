@@ -109,6 +109,15 @@ describe('a phone draws every word at one size, wherever the camera is', () => {
     }
   })
 
+  it('the crew shows no state word under a face: only the open card does (owner, 2026-11-03)', () => {
+    for (const [w, h] of PHONES) {
+      expect(frameAt(modelOf(13), w, h, 1).map((x) => x.what)).not.toContain('state')
+      expect(frameAt(modelOf(13), w, h, 2).filter((x) => x.what === 'state')).toHaveLength(1)
+    }
+    const desk = frameAt(modelOf(13), 1440, 820, 1, false)
+    expect(desk.map((x) => x.what)).not.toContain('state')
+  })
+
   it('the words that do not fit at their size, toward the devices, fade instead of shrinking', () => {
     const at = frameAt(modelOf(13), 412, 753, -2)
     expect(at.map((x) => x.what)).not.toContain('mark')
@@ -133,7 +142,7 @@ describe("the crew's layout on a phone", () => {
       const name = pinned(SCENE_TYPE.name, 15, s.crew)
       const status = pinned(SCENE_TYPE.small, 11, s.crew)
       expect(max * name * s.crew).toBeLessThanOrEqual(COL * s.crew - 7)
-      const bottom = UNDER_FACE.nameTop + UNDER_FACE.toStatus * name + UNDER_FACE.toCounts * status + 11 * status
+      const bottom = UNDER_FACE.nameTop + UNDER_FACE.toStatus * name + 11 * status
       if (words.counts) expect(bottom).toBeLessThanOrEqual(ROW - 32)
     })
   })

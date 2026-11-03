@@ -99,11 +99,12 @@ describe('the painter', () => {
   const y = (t: string): number => parseFloat(t.split(',')[1])
 
   it('puts the words where the counts would be, under an agent that carries nothing', () => {
-    expect(y(paintCrew(0, 1).dft.style.transform)).toBe(80)
+    // The crew shows no state word (owner, 2026-11-03): the counts' line is the state's old one, 18 higher.
+    expect(y(paintCrew(0, 1).dft.style.transform)).toBe(62)
   })
 
   it('puts them under the counts when there are counts', () => {
-    expect(y(paintCrew(30, 1).dft.style.transform)).toBe(96)
+    expect(y(paintCrew(30, 1).dft.style.transform)).toBe(78)
   })
 
   it('shows them on the crew and not on the open card, whose reply box holds the draft', () => {
