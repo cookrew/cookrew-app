@@ -1,15 +1,17 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   makeConductorRoute,
   makeEnder,
   makeMinter,
+  makeOrdinalHistory,
   makeTemplateSource,
   type ForkEngine
 } from '../src/main/session-instantiator-adapters'
 import { sessionIdentity } from '../src/main/session-identity'
+import { sandboxRoot, serviceRoot } from '../src/main/session-sandbox'
 
 /**
  * THE ADAPTERS route the orchestrator to the real machinery. These prove the
@@ -269,5 +271,77 @@ describe('makeEnder — cut by workspace, remove the right sandbox', () => {
     // A remove that had to mkdir the path first would be the sandboxRoot bug;
     // the pure builder must not touch disk.
     expect(existsSync(dir)).toBe(false)
+  })
+})
+
+describe('makeOrdinalHistory — what a previous run left under sessions/', () => {
+  // A sandbox exactly where the minter would have put it: the path is built
+  // from sessionIdentity by the same rule, never spelled by hand.
+  const leaveSandbox = (serviceId: string, accountId: string, ordinal: number): string =>
+    sandboxRoot(base, serviceId, sessionIdentity(serviceId, accountId, ordinal).sessionId)
+  const tree = (): string[] =>
+    (readdirSync(path.join(base, 'sessions'), { recursive: true }) as string[]).sort()
+
+  it('answers nothing, and creates nothing, when the service was never served', () => {
+    const history = makeOrdinalHistory({ base })
+    expect(history.onDisk('svc', 'ana')).toEqual([])
+    expect(existsSync(path.join(base, 'sessions'))).toBe(false)
+  })
+
+  it('finds every sandbox the account had, including ended ones the sweep has not aged out', () => {
+    leaveSandbox('svc', 'ana', 1)
+    leaveSandbox('svc', 'ana', 3)
+    leaveSandbox('svc', 'ana', 12)
+    const history = makeOrdinalHistory({ base })
+    expect([...history.onDisk('svc', 'ana')].sort((a, b) => a - b)).toEqual([1, 3, 12])
+  })
+
+  it('counts backup residue of a sandbox (<session>.bak-*) as an ordinal that had a path', () => {
+    const dir = leaveSandbox('svc', 'ana', 2)
+    const root = serviceRoot(base, 'svc')
+    mkdirSync(path.join(root, `${path.basename(dir)}.bak-20260807-011637`))
+    mkdirSync(path.join(root, 'ana-7.bak-20260901-000000'))
+    writeFileSync(path.join(root, 'ana-9.bak-1.tgz'), 'x')
+    const history = makeOrdinalHistory({ base })
+    expect([...history.onDisk('svc', 'ana')].sort((a, b) => a - b)).toEqual([2, 7, 9])
+  })
+
+  it("never reads another account's or another service's sandboxes as this one's", () => {
+    leaveSandbox('svc', 'ana', 1)
+    leaveSandbox('svc', 'bob', 9)
+    leaveSandbox('svc', 'ana-1', 5) // dir ana-1-5: a different account, not ana's ordinal
+    leaveSandbox('other', 'ana', 40)
+    mkdirSync(path.join(serviceRoot(base, 'svc'), 'ana-x'))
+    mkdirSync(path.join(serviceRoot(base, 'svc'), 'anabel-6'))
+    const history = makeOrdinalHistory({ base })
+    expect(history.onDisk('svc', 'ana')).toEqual([1])
+    expect(history.onDisk('svc', 'ana-1')).toEqual([5])
+    expect(history.onDisk('other', 'ana')).toEqual([40])
+  })
+
+  it('segments raw ids exactly as sessionIdentity does (case, punctuation)', () => {
+    leaveSandbox('Svc.Research', 'Ana@Example', 4)
+    const history = makeOrdinalHistory({ base })
+    expect(history.onDisk('Svc.Research', 'Ana@Example')).toEqual([4])
+  })
+
+  it('deletes and creates nothing — it only reads', () => {
+    leaveSandbox('svc', 'ana', 1)
+    mkdirSync(path.join(serviceRoot(base, 'svc'), 'ana-1.bak-x'))
+    writeFileSync(path.join(leaveSandbox('svc', 'ana', 2), 'grant.json'), '{}')
+    const before = tree()
+    makeOrdinalHistory({ base }).onDisk('svc', 'ana')
+    expect(tree()).toEqual(before)
+  })
+
+  it('throws on a service dir it cannot read, rather than answering "nothing here"', () => {
+    leaveSandbox('svc', 'ana', 1)
+    const root = serviceRoot(base, 'svc')
+    chmodSync(root, 0o000)
+    try {
+      expect(() => makeOrdinalHistory({ base }).onDisk('svc', 'ana')).toThrow()
+    } finally {
+      chmodSync(root, 0o755)
+    }
   })
 })
