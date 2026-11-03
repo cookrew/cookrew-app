@@ -8,6 +8,7 @@ import { BAR_NAMES, BAR_STOPS, barStop, type ZoomDir } from '../zoom/zoom-path'
  *
  *   an agent             Reply to <name>…
  *   an agent asleep      <name> is asleep · wakes on send
+ *   an agent asking      Answer <name>…   (a free question: no menu to tap, WaitChoices.tsx)
  *   devices, workspaces  New agent in <workspace>…   (the new agent lands in the active one)
  *   the crew             Describe a task for a new agent…
  *   the artifacts        New agent… · # adds a note or browser
@@ -30,7 +31,8 @@ export function promptPlaceholder({
   agent,
   stop,
   workspace,
-  item
+  item,
+  asks = false
 }: {
   agent: { readonly name: string; readonly status: string } | null
   stop: WordsStop
@@ -38,8 +40,11 @@ export function promptPlaceholder({
   workspace: string | null
   /** The item attached to the words (an item's full view nobody has used). */
   item: { readonly name: string } | null
+  /** The agent waits on a question with no menu to tap: the words are its answer. */
+  asks?: boolean
 }): string {
-  if (agent) return agent.status === 'offline' ? `${agent.name} is asleep · wakes on send` : `Reply to ${agent.name}…`
+  if (agent?.status === 'offline') return `${agent.name} is asleep · wakes on send`
+  if (agent) return asks ? `Answer ${agent.name}…` : `Reply to ${agent.name}…`
   if (stop === 'item' && item) return `New agent with #${item.name}…`
   if ((stop === 'devices' || stop === 'workspaces') && workspace?.trim()) return `New agent in ${workspace.trim()}…`
   if (stop === 'artifacts') return 'New agent… · # adds a note or browser'

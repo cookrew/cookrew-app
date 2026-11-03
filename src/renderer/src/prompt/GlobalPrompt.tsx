@@ -52,6 +52,9 @@ import { promptPlaceholder, withItemRef, wordsStop, type WordsStop } from './pro
 import { ItemRefChip } from './ItemRefChip'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { WhoPicker } from './WhoPicker'
+import { WaitChoices } from './WaitChoices'
+import { useWaitAnswer } from './wait-answer'
+import { promptBox } from './box-focus'
 import './global-prompt.css'
 
 /**
@@ -512,6 +515,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const anchor = suggesting ? inputRef.current?.getBoundingClientRect() : undefined
   /** A chip's pick is made: the prompt is what comes next. */
   const focusBox = (): void => inputRef.current?.focus()
+  // THE WAIT CHOICE BOX (WaitChoices.tsx): the menu the agent waits on, over
+  // the box; its Esc row (and a bar card's) hands over to typing here.
+  const wait = useWaitAnswer(to?.id ?? null, focusBox)
+  useEffect(() => promptBox.register(() => inputRef.current?.focus()), [])
 
   // THE FOLD (prompt-fold.ts): the face stands on the zoom's bar at its stops,
   // alone in a corner over a browser or a note; an agent's full view keeps the
@@ -789,6 +796,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         submit()
       }}
     >
+      {/* Before the box in the focus order; a bar group's card for the same agent carries the rows instead. */}
+      {to && face && !folded && barAgent !== to.id && <WaitChoices face={{ id: to.id, name: to.name, preset: face.preset, orch: face.orch }} wait={wait} />}
       {/* THE CHIP IS THE FACE (owner, 2026-11-04): the agent's own face and name,
           flown here from the bar's end (face-flip.ts); a tap chooses who. */}
       {to ? (
@@ -864,7 +873,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem })}
+        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu })}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"
@@ -907,6 +916,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               setDismissedAt(text)
               return
             }
+          }
+          // An empty box answers the menu the agent waits on: a row's key, or Esc (WaitChoices.tsx).
+          // Never a shifted letter (words start with one) nor an IME's keystroke (229).
+          if (!who && shown === '' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && wait.key(e.key)) {
+            e.preventDefault()
+            return
           }
           // Enter with nothing to send is nothing: the face is the form's submit,
           // and its empty tap is the who-picker's, not the keyboard's.
