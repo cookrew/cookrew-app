@@ -394,8 +394,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       if (e.key !== 'Escape') return
       // An agent's card over the artifacts closes first, from its reply box too;
       // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
-      // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card.
-      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input')) {
+      // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card;
+      // the who-picker's field (WhoPicker.tsx) closes the picker first.
+      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
         e.preventDefault()
         closeShelfCard()
         return
