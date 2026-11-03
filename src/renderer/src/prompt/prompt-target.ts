@@ -47,15 +47,22 @@ export function boxTargetId({
   viewed,
   pin,
   released,
-  known
+  known,
+  picked = null
 }: {
   viewed: string | null
   pin: { id: string | null } | null
   /** The release, if any (releaseAfter says how long it lasts). */
   released: Release | null
   known: (id: string) => boolean
+  /**
+   * An agent picked on the face's who-picker (owner, 2026-11-04): it stands
+   * in for the view's until the zoom's next deliberate move (zoomMoveKey).
+   */
+  picked?: string | null
 }): string | null {
-  const id = pin && (pin.id === null || known(pin.id)) ? pin.id : viewed
+  const shown = picked !== null && known(picked) ? picked : viewed
+  const id = pin && (pin.id === null || known(pin.id)) ? pin.id : shown
   return id !== null && id === released?.id ? null : id
 }
 

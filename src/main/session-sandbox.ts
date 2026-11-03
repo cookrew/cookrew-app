@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, realpathSync, utimesSync } from 'node:fs'
 import path from 'node:path'
 import { gatewayDenyClauses } from './route/sandbox-deny'
@@ -60,8 +61,45 @@ export function serviceRoot(base: string, serviceId: string): string {
  * differ only in case must not silently share a sandbox.
  */
 export function safeSegment(raw: string): string {
-  const cleaned = raw.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '')
-  return cleaned.length > 0 ? cleaned.slice(0, 64) : 'unnamed'
+  return fitSegment(cleanSegment(raw))
+}
+
+/** The longest segment emitted; a longer id is SHORTENED to it, never cut. */
+const SEGMENT_MAX = 64
+/** Hex digits of the full id's hash that a shortened segment carries. */
+const SEGMENT_HASH_CHARS = 12
+/** A trailing `-<digits>` (an ordinal) a shortened segment keeps verbatim. */
+const ORDINAL_TAIL = /-\d{1,20}$/
+
+/** Lowercase, fold everything outside [a-z0-9_-] to '-', trim the dashes. */
+function cleanSegment(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/**
+ * Bound a CLEANED segment to SEGMENT_MAX without losing what tells ids apart.
+ *
+ * Up to the limit a segment is returned exactly as it is — the paths every
+ * existing sandbox already lives at. Past it, the old rule simply cut at 64,
+ * and a long service id plus a long account id lost the ordinal at the end:
+ * every session of that pair shared ONE sandbox, and a new session inherited
+ * the last one's harness state. So a long segment becomes
+ * `<readable head>-<hash of the whole cleaned id>[-<ordinal>]`, exactly
+ * SEGMENT_MAX long. The ordinal stays LAST and verbatim, so distinct ordinals
+ * always give distinct names and the reseed scan
+ * (session-instantiator-adapters.ts makeOrdinalHistory) still reads it after
+ * the final '-'. The hash is over the cleaned form, so long ids collapse case
+ * exactly as short ones do. The output never contains a dot (the residue
+ * naming relies on that) and is a fixed point: shortening it again changes
+ * nothing.
+ */
+function fitSegment(cleaned: string): string {
+  if (cleaned.length === 0) return 'unnamed'
+  if (cleaned.length <= SEGMENT_MAX) return cleaned
+  const tail = ORDINAL_TAIL.exec(cleaned)?.[0] ?? ''
+  const hash = createHash('sha256').update(cleaned).digest('hex').slice(0, SEGMENT_HASH_CHARS)
+  const head = cleaned.slice(0, SEGMENT_MAX - SEGMENT_HASH_CHARS - 1 - tail.length)
+  return `${head}-${hash}${tail}`
 }
 
 /**
@@ -80,8 +118,11 @@ export function safeSegment(raw: string): string {
  */
 export function sessionSegment(serviceId: string, sessionId: string): string {
   const service = safeSegment(serviceId)
-  const session = safeSegment(sessionId)
-  return session.startsWith(`${service}-`) ? session.slice(service.length + 1) : session
+  // Strip the service prefix BEFORE bounding the length: bounding the whole
+  // id first is what spent the budget on the prefix and pushed the ordinal
+  // off the end. Identical to the old order for every id within the limit.
+  const session = cleanSegment(sessionId)
+  return fitSegment(session.startsWith(`${service}-`) ? session.slice(service.length + 1) : session)
 }
 
 /**
