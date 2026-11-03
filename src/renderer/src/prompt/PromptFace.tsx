@@ -42,6 +42,8 @@ export interface PromptFaceProps {
   mode: FaceMode
   /** Words wait in this face's draft. */
   draft?: boolean
+  /** The agent runs elsewhere (a served session): a small ↗ says so. */
+  remote?: boolean
   /** It opens the who-picker when tapped empty: whether that picker is open. */
   expanded?: boolean
   /** Keep the caret where it is when pressed (the box's own send key). */
@@ -70,12 +72,20 @@ const Arrow = (): React.JSX.Element => (
   </svg>
 )
 
+/** A remote agent's mark: it runs elsewhere (owner design, 2026-11-04). */
+export const RemoteMark = (): React.JSX.Element => (
+  <span className="pf-remote" aria-hidden="true">
+    ↗
+  </span>
+)
+
 export function PromptFace({
   buttonRef,
   agent,
   harness,
   mode,
   draft = false,
+  remote = false,
   expanded,
   keepFocus = false,
   listening = false,
@@ -112,6 +122,7 @@ export function PromptFace({
     `pf-${mode}`,
     draft && mode !== 'ready' ? 'pf-has-draft' : '',
     listening ? 'pf-listening' : '',
+    agent && remote ? 'pf-is-remote' : '',
     className ?? ''
   ]
     .filter(Boolean)
@@ -166,6 +177,7 @@ export function PromptFace({
       </span>
       {mode === 'folded' && <span className="pf-verb">{agent ? <Arrow /> : <Plus />}</span>}
       {draft && mode !== 'ready' && <span className="pf-dot" aria-hidden="true" />}
+      {agent && remote && <RemoteMark />}
     </button>
   )
 }

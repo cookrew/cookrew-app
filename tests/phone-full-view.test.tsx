@@ -84,9 +84,10 @@ describe('the box on a phone', () => {
     return renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: 'l', agents, harnesses: ['Claude Code'], nodes: [], ...over }))
   }
 
-  it('says no name in the placeholder: the chip and the bar already do', async () => {
+  // 2026-11-04 (prompt words): the placeholder says who the words go to.
+  it('says who the words go to in the placeholder', async () => {
     const html = await draw()
-    expect(html).toContain('placeholder="Reply… · # a note or browser"')
+    expect(html).toContain('placeholder="Reply to Lark…"')
     expect(html).not.toContain('placeholder="Prompt Lark')
   }, 20_000)
 
