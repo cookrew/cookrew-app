@@ -16,7 +16,8 @@
 //   parent hands them. Two near-identical JSX blocks is how that drifts.
 //
 // PRESENTATION ONLY. Every decision — which row is active, what the label
-// says, whether the actions are revealed — is the parent's, passed in.
+// says — is the parent's, passed in. A row carries no actions: SAVE ROLE /
+// FORK / ⟲ REWIND were retired from the rail on 2026-11-03.
 
 import type { CheckpointRow } from './stream/stream-rows'
 
@@ -24,48 +25,35 @@ export function CheckpointRowView({
   row,
   label,
   active,
-  acting,
   loading,
   titleShift,
   titleRef,
-  actions,
   style,
-  onPressStart,
-  onPressEnd,
   onSelect
 }: {
   row: CheckpointRow
   /** The row's text under the active title mode — the parent owns the rule. */
   label: string
   active: boolean
-  acting: boolean
   loading: boolean
   /** Measured overflow of the focused title, in px (F5b marquee). */
   titleShift: number
   titleRef?: React.Ref<HTMLSpanElement>
-  /** The revealed SAVE ROLE / FORK / REWIND strip, or null. */
-  actions: React.JSX.Element | null
   style?: React.CSSProperties
-  onPressStart: () => void
-  onPressEnd: () => void
   onSelect: () => void
 }): React.JSX.Element {
   return (
     <div
       role="listitem"
-      className={`cr-ckpt-row${active ? ' active' : ''}${acting ? ' acting' : ''}${
-        loading ? ' loading' : ''
-      }${row.rolledBack ? ' rolled-back' : ''}`}
+      className={`cr-ckpt-row${active ? ' active' : ''}${loading ? ' loading' : ''}${
+        row.rolledBack ? ' rolled-back' : ''
+      }`}
       style={style}
       aria-label={
         row.rolledBack ? `Checkpoint ${row.index}, rolled back` : `Checkpoint ${row.index}`
       }
       aria-busy={loading || undefined}
       onMouseDown={(e) => e.preventDefault()}
-      onPointerDown={onPressStart}
-      onPointerUp={onPressEnd}
-      onPointerLeave={onPressEnd}
-      onPointerCancel={onPressEnd}
       onClick={onSelect}
     >
       {/* A COMPACTION IS A PROPERTY OF THE ROW AFTER IT, and it draws as one:
@@ -78,7 +66,6 @@ export function CheckpointRowView({
           compacted
         </span>
       )}
-      {actions}
       <span className="cr-ckpt-row-label">
         <span className="cr-ckpt-row-idx">T{row.index}</span>
         {/* A ROLLED-BACK CHECKPOINT IS DIMMED, NOT GONE. The rewind note is

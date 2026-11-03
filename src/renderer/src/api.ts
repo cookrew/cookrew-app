@@ -523,13 +523,20 @@ export interface CookrewApi {
    * ENDPOINT RESTORE: rewind this agent in place to one of its checkpoints.
    * `targetSessionId` names an EARLIER lineage segment when the index is
    * counted in one (each segment numbers its own T1..Tn); absent = current.
+   *
+   * @deprecated ⟲ REWIND was retired from the checkpoint rail by the owner on 2026-11-03; the earlier-sessions panel
+   * (LineagePanel) is the last caller. Do not add new ones.
    */
   restoreCheckpoint?: (
     id: string,
     checkpointIndex: number,
     targetSessionId?: string
   ) => Promise<RestoreResult>;
-  /** Undo the last endpoint restore (rebind to the pre-restore session). */
+  /**
+   * Undo the last endpoint restore (rebind to the pre-restore session).
+   *
+   * @deprecated goes with restoreCheckpoint — rewind was retired from the checkpoint rail by the owner on 2026-11-03.
+   */
   undoRestore?: (id: string) => Promise<RestoreResult>;
   /**
    * ONE STREAM (design: docs/site/one-stream-2026-09-07.html, T3). The rail,
@@ -654,7 +661,13 @@ export interface CookrewApi {
   watchLatest?: (terminalId: string) => Promise<void>;
   unwatchLatest?: (terminalId: string) => Promise<void>;
   onLatestChanged?: (cb: (terminalId: string) => void) => () => void;
-  /** Fork a NEW agent card from a past turn; omit turnIndex for the latest. */
+  /**
+   * Fork a NEW agent card from a past turn; omit turnIndex for the latest.
+   *
+   * @deprecated FORK was retired from the checkpoint rail by the owner on 2026-11-03; the card menu and the canvas turn pager are
+   * the last UI callers. The CLI `cookrew fork` runs main-side and is not
+   * affected.
+   */
   forkTerminal: (sourceId: string, turnIndex?: number) => Promise<CanvasNode>;
   /** Fork a team into a NEW workspace per the spec (switches to it). */
   teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;

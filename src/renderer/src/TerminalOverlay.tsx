@@ -1491,7 +1491,7 @@ function TerminalOverlay({
         </div>
         {/* CHAT and LOG are plain reading with their own scrollbar (transcript-paper.css,
             owner 2026-11-01 and 11-03): of the rail they keep only the tag that names
-            the turn in view while scrolling, with ROLE / FORK / REWIND. LIVE has none:
+            the turn in view while scrolling (no row actions since 2026-11-03). LIVE has none:
             the terminal's own scrollbar moves through the pane's history. */}
         {isRecordLook(look) && (
         <CheckpointTimeline

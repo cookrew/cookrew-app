@@ -29,7 +29,12 @@ export interface SaveRoleFromCheckpointInput {
   rolePrompt?: string
 }
 
-/** True when this mode can persist roles (desktop IPC / mobile HTTP). */
+/**
+ * True when this mode can persist roles (desktop IPC / mobile HTTP).
+ *
+ * @deprecated SAVE ROLE from a checkpoint was retired from the checkpoint rail by the owner on 2026-11-03; the card menu is the
+ * last caller.
+ */
 export function hasRoleFromCheckpoint(): boolean {
   return typeof cookrew().saveRole === 'function'
 }
@@ -38,6 +43,9 @@ export function hasRoleFromCheckpoint(): boolean {
  * Persist a role carrying its checkpoint provenance: the session prompt-entry
  * uuid binds the role to the exact exchange (survives index shifts), and the
  * prompt text keeps it human-readable in the roles list.
+ *
+ * @deprecated SAVE ROLE from a checkpoint was retired from the checkpoint rail by the owner on 2026-11-03; the card menu is the
+ * last caller.
  */
 export async function saveRoleFromCheckpoint(
   input: SaveRoleFromCheckpointInput
