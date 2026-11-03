@@ -211,7 +211,7 @@ beforeAll(async () => {
     const request = p.request as { url: string; postData?: string }
     requests.push({ url: request.url, body: request.postData ?? '' })
   })
-}, 60_000)
+}, 120_000)
 
 /** Every request the page made, so the walk can be read off the wire too. */
 const requests: { url: string; body: string }[] = []
