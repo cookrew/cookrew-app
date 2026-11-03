@@ -1,26 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TerminalActivity } from '../../shared/turn'
+import { useCallback, useEffect, useRef } from 'react'
 import { cookrew } from './api'
-import { AttachButton } from './AttachButton'
 import { CrIcon, type CrIconName } from './icons'
 import { requestTerminalPaste } from './terminal-paste-bus'
 import { keyGesture, type KeyGestureState } from './touch-key-gesture'
 
 /**
- * The agent's tools inside the global prompt box (prompt/GlobalPrompt.tsx),
- * desktop AND phone: attach, a 🔊 toggle that reads the agent's reply aloud
- * when its turn completes, and the keys a touch keyboard lacks. Dictation is
- * not here: the box has the one mic (prompt/use-dictation.ts).
+ * The tools tray inside the global prompt box (prompt/GlobalPrompt.tsx),
+ * desktop AND phone: the box's extras (attach, spoken replies) and the keys a
+ * touch keyboard lacks. Dictation is not here: the box has the one mic
+ * (prompt/use-dictation.ts); the 🔊 switch is prompt/use-spoken-replies.ts.
  */
-
-function speak(text: string): void {
-  const gist = (text || 'done').replace(/\s+/g, ' ').trim().slice(0, 300)
-  const utterance = new SpeechSynthesisUtterance(gist)
-  speechSynthesis.cancel()
-  speechSynthesis.speak(utterance)
-}
-
-const SPEAK_PREF_KEY = 'cookrew-speak-replies'
 
 /**
  * What a tap on one of these does: send a PTY sequence, or ask the zoomed
@@ -185,55 +174,24 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
   )
 }
 
+/**
+ * The tray of the prompt box's tools (prompt/GlobalPrompt.tsx): the extras it
+ * is handed (attach, spoken replies: prompt/PromptExtras.tsx) and, with an
+ * agent in the box, the keys a touch keyboard lacks. A wide screen draws the
+ * tray in line; a phone gives it a row of its own (global-prompt.css).
+ */
 export function VoiceBar({
   terminalId,
-  activity,
-  remote = false
+  children
 }: {
-  terminalId: string
-  activity: TerminalActivity | undefined
-  /** The terminal is a line into a session elsewhere: nothing here attaches. */
-  remote?: boolean
+  /** The agent the keys drive; none for a new agent, and then no keys. */
+  terminalId: string | null
+  children?: React.ReactNode
 }): React.JSX.Element {
-  const [speakReplies, setSpeakReplies] = useState(
-    () => localStorage.getItem(SPEAK_PREF_KEY) === '1'
-  )
-
-  // Read the reply aloud when the turn lands on 'replied' while toggled on.
-  const prevPhase = useRef(activity?.phase)
-  useEffect(() => {
-    const phase = activity?.phase
-    if (speakReplies && phase === 'replied' && prevPhase.current !== 'replied' && activity?.reply) {
-      speak(activity.reply)
-    }
-    prevPhase.current = phase
-  }, [activity?.phase, activity?.reply, speakReplies])
-
-  const toggleSpeak = (): void => {
-    const next = !speakReplies
-    setSpeakReplies(next)
-    localStorage.setItem(SPEAK_PREF_KEY, next ? '1' : '0')
-    if (next) speak('Spoken replies on')
-    else speechSynthesis.cancel()
-  }
-
-  // mousedown-preventDefault keeps focus in the zoomed xterm — clicking a
-  // dock button must not stop the user's typing mid-prompt.
-  const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
-
   return (
-    <div className="voice-bar nodrag">
-      {!remote && <AttachButton terminalId={terminalId} />}
-      <button
-        type="button"
-        className={`cr-btn sm voice-speak${speakReplies ? ' on' : ''}`}
-        title="Speak replies aloud"
-        onMouseDown={keepFocus}
-        onClick={toggleSpeak}
-      >
-        <CrIcon name="speaker" />
-      </button>
-      <TermKeys terminalId={terminalId} />
+    <div className={`voice-bar nodrag${children ? '' : ' keys-only'}`}>
+      {children}
+      {terminalId && <TermKeys terminalId={terminalId} />}
     </div>
   )
 }

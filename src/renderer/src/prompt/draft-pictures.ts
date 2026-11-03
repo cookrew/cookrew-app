@@ -1,5 +1,5 @@
 import { shellQuotePath } from '../../../shared/attach'
-import { imagePathTokens } from '../../../shared/prompt-images'
+import { imageMimeOf, imagePathTokens } from '../../../shared/prompt-images'
 
 /**
  * THE BOX SHOWS THE PICTURE, NOT ITS PATH (owner, 2026-11-02). A screenshot
@@ -53,6 +53,23 @@ export function withPictures(text: string, paths: readonly string[]): string {
   if (saved.length === 0) return text
   const tokens = pictureTokens(text)
   return draftOf(shownWords(text), [...tokens, ...saved.filter((t) => !tokens.includes(t))])
+}
+
+/**
+ * The draft with these attached paths (the paperclip, a drop): pictures are
+ * drawn (withPictures); any other file goes in as words at the end of the
+ * box's words, each once, a space after it so the next word stands apart.
+ */
+export function withAttached(text: string, paths: readonly string[]): string {
+  const saved = paths.filter((p) => p !== '')
+  const files = saved.filter((p) => imageMimeOf(p) === null).map(shellQuotePath)
+  const worded = files.reduce((draft, token) => {
+    const words = shownWords(draft)
+    if (words.split(/(?<!\\)\s+/u).includes(token)) return draft
+    const gap = words === '' || /\s$/u.test(words) ? '' : ' '
+    return withShownWords(draft, `${words}${gap}${token} `)
+  }, text)
+  return withPictures(worded, saved.filter((p) => imageMimeOf(p) !== null))
 }
 
 /** The draft without the picture at `path`. */
