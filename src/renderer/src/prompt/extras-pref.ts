@@ -2,8 +2,8 @@
  * THE BOX'S TOOLS, SHOWN OR FOLDED (owner, 2026-11-03): attach, the
  * spoken-replies toggle and, with an agent in the box, its keys (arrows,
  * paste, Esc) sit behind one ^ that shows or hides them all. The pick sticks. Until one is made a
- * desktop shows them (they were always there) and a phone folds them: there
- * they take a row of their own, and the phone's height is the scarce thing.
+ * desktop shows them (they were always there) and a phone's width folds them:
+ * there they take a row of their own, and the phone's height is the scarce thing.
  */
 
 const KEY = 'cookrew.prompt-extras'
@@ -12,15 +12,13 @@ const KEY = 'cookrew.prompt-extras'
 const PHONE_WIDTH = '(max-width: 700px)'
 
 /**
- * The phone's layout: its width AND the companion (a narrow desktop window is
- * no phone). The companion's boot script sets COOKREW_MOBILE at once; its body
- * class waits for DOMContentLoaded, which the first render may beat.
+ * The phone's layout: its width alone (2026-11-04). A narrow window draws the
+ * phone's box too (global-prompt.css), where shown tools stand as a tray over
+ * the zoom bar's stops; the companion in a wide browser draws the wide box.
  */
 function phoneLayout(): boolean {
   try {
-    const flagged = typeof window !== 'undefined' && Boolean((window as { COOKREW_MOBILE?: unknown }).COOKREW_MOBILE)
-    const mobile = flagged || (globalThis.document?.body?.classList?.contains('cookrew-mobile') ?? false)
-    return mobile && typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(PHONE_WIDTH).matches
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(PHONE_WIDTH).matches
   } catch {
     return false
   }

@@ -18,12 +18,12 @@ const phone = box.slice(box.indexOf('THE BOX FLOATS, ONE ROW'))
 
 describe('the dock floats on a phone', () => {
   it('is a fixed, see-through layer that lets taps through around the pill', () => {
-    expect(phone).toMatch(/body\.cookrew-mobile \.cr-app:not\(\.cr-embed\) > \.cr-dock\.cr-dock \{[^}]*position: fixed;[^}]*background: transparent;[^}]*pointer-events: none;/)
+    expect(phone).toMatch(/body \.cr-app:not\(\.cr-embed\) > \.cr-dock\.cr-dock \{[^}]*position: fixed;[^}]*background: transparent;[^}]*pointer-events: none;/)
     expect(phone).toMatch(/\.dock-canvas > \* \{\s*pointer-events: auto;/)
   })
 
   it('defines the clearance only on a phone, and the full view and the zoom bar read it', () => {
-    expect(phone).toMatch(/body\.cookrew-mobile \.cr-app:not\(\.cr-embed\) \{[^}]*--cr-float-h:/)
+    expect(phone).toMatch(/body \.cr-app:not\(\.cr-embed\) \{[^}]*--cr-float-h:/)
     expect(read('zoom', 'full-views.css')).toMatch(/padding-bottom: var\(--cr-float-h/)
     expect(read('zoom', 'zoom.css')).toMatch(/bottom: var\(--cr-float-h/)
   })
@@ -41,9 +41,9 @@ describe('one row at rest, the tray above it when needed', () => {
 
   it('keeps the words row last, so the row typed in never moves', () => {
     const order = (sel: string): number => Number(phone.slice(phone.indexOf(sel)).match(/order: (-?\d+);/)?.[1])
-    expect(order('body.cookrew-mobile .cr-prompt-to')).toBeGreaterThan(order('body.cookrew-mobile .cr-prompt::before'))
-    expect(order('body.cookrew-mobile .cr-prompt input')).toBeGreaterThan(order('body.cookrew-mobile .cr-prompt-to'))
-    expect(order("body.cookrew-mobile .cr-prompt > button[type='submit']")).toBeGreaterThan(order('body.cookrew-mobile .cr-prompt > .voice-mic'))
+    expect(order('body .cr-prompt-to')).toBeGreaterThan(order('body .cr-prompt::before'))
+    expect(order('body .cr-prompt input')).toBeGreaterThan(order('body .cr-prompt-to'))
+    expect(order("body .cr-prompt > button[type='submit']")).toBeGreaterThan(order('body .cr-prompt > .voice-mic'))
   })
 
   it('stands the mic beside Send, out of the tools', () => {
