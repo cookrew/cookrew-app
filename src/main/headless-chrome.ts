@@ -21,7 +21,8 @@ import {
 } from './browser-viewport'
 import { CdpClient } from './cdp-client'
 import { applySignInCompatibility, presentableUserAgent } from './browser-signin'
-import { COPY_BINDING, PAGE_COPY_SCRIPT, copyText } from './page-copy'
+import { COPY_BINDING, PAGE_COPY_SCRIPT, PASTE_FUNCTION, copyText } from './page-copy'
+import { FIELDS_BINDING, FIELDS_WATCH, PAGE_FIELDS_SCRIPT, sanitizeFieldReport, type FieldReport } from './page-fields'
 
 function httpJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -206,6 +207,9 @@ export class HeadlessInstance {
   readonly frameListeners = new Set<(jpegBase64: string, meta: FrameMeta) => void>()
   /** Text the active page copied (page-copy.ts); the cast decides which viewer gets it. */
   readonly copyListeners = new Set<(text: string) => void>()
+  /** Viewers watching where the page's text fields are (page-fields.ts); the page reports only while this is non-empty. */
+  private readonly fieldListeners = new Set<(report: FieldReport) => void>()
+  private lastFields: FieldReport | null = null
   onExit: () => void = () => undefined
   onPageState: (tabId: string, state: HeadlessPageState) => void = () => undefined
   onTabOpened: (tab: BrowserTab) => void = () => undefined
@@ -524,8 +528,11 @@ export class HeadlessInstance {
       await previous.cdp.send('Page.stopScreencast').catch(() => undefined)
       previous.screencasting = false
     }
+    if (previous && previous !== next && this.fieldListeners.size > 0) this.setFieldWatch(previous, false)
     this.activeTabId = tabId
     this.lastHash = ''
+    this.lastFields = null
+    if (this.fieldListeners.size > 0) this.setFieldWatch(next, true)
     await this.browserCdp?.send('Target.activateTarget', { targetId: next.targetId })
     if (!next.screencasting) {
       await next.cdp.send('Page.startScreencast', {
@@ -554,14 +561,74 @@ export class HeadlessInstance {
     } catch (error) {
       console.error('Watching a browser card page for copies failed:', error)
     }
+    try {
+      await cdp.send('Runtime.addBinding', { name: FIELDS_BINDING })
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PAGE_FIELDS_SCRIPT })
+      await cdp.send('Runtime.evaluate', { expression: PAGE_FIELDS_SCRIPT })
+    } catch (error) {
+      console.error('Watching a browser card page for its text fields failed:', error)
+    }
+  }
+
+  /** Switch the page's field reports on or off (page-fields.ts); best effort. */
+  private setFieldWatch(page: PageBinding, on: boolean): void {
+    void page.cdp
+      .send('Runtime.evaluate', { expression: `window.${FIELDS_WATCH} && window.${FIELDS_WATCH}(${on ? 'true' : 'false'})` })
+      .catch(() => undefined)
+  }
+
+  /** Watch where the active page's text fields are; the listener hears the last report at once. */
+  watchFields(listener: (report: FieldReport) => void): () => void {
+    const first = this.fieldListeners.size === 0
+    this.fieldListeners.add(listener)
+    const page = this.pages.get(this.activeTabId)
+    if (first && page) this.setFieldWatch(page, true)
+    else if (this.lastFields) listener(this.lastFields)
+    return () => {
+      if (!this.fieldListeners.delete(listener) || this.fieldListeners.size > 0) return
+      const active = this.pages.get(this.activeTabId)
+      if (active && !this.closed) this.setFieldWatch(active, false)
+    }
+  }
+
+  /**
+   * The viewer's paste. A real paste event first (an editor may format or
+   * take it); typed in with Input.insertText when the page leaves it alone.
+   * The text goes into a fixed call as a JSON literal — never as code.
+   */
+  async paste(text: string): Promise<void> {
+    const page = this.pages.get(this.activeTabId)
+    if (!page) return
+    const answer = (await page.cdp
+      .send('Runtime.evaluate', {
+        expression: `typeof window.${PASTE_FUNCTION} === 'function' && window.${PASTE_FUNCTION}(${JSON.stringify(text)})`,
+        returnByValue: true
+      })
+      .catch(() => null)) as RuntimeEvaluateResult | null
+    if (answer?.result?.value === true) return
+    await page.cdp.send('Input.insertText', { text }).catch(() => undefined)
   }
 
   /** A copy on the page the viewers are looking at; a background tab's is nobody's. */
   private onBindingCalled(page: PageBinding, params: Record<string, unknown>): void {
+    if (params.name === FIELDS_BINDING) return this.onFieldsCalled(page, params.payload)
     if (params.name !== COPY_BINDING || page.tabId !== this.activeTabId) return
     const text = copyText(params.payload)
     if (text === null) return
     for (const listener of this.copyListeners) listener(text)
+  }
+
+  /** A page said hello (switch it on if someone watches) or reported its fields. */
+  private onFieldsCalled(page: PageBinding, payload: unknown): void {
+    if (page.tabId !== this.activeTabId) return
+    if (payload === 'hello') {
+      if (this.fieldListeners.size > 0) this.setFieldWatch(page, true)
+      return
+    }
+    const report = sanitizeFieldReport(payload)
+    if (!report) return
+    this.lastFields = report
+    for (const listener of this.fieldListeners) listener(report)
   }
 
   private onScreencastFrame(page: PageBinding, params: Record<string, unknown>): void {
@@ -847,6 +914,7 @@ export class HeadlessInstance {
     this.pollTimer = null
     this.frameListeners.clear()
     this.copyListeners.clear()
+    this.fieldListeners.clear()
     this.viewportCoordinator.dispose()
     for (const page of this.pages.values()) {
       page.closing = true

@@ -243,6 +243,18 @@ function touch(type: string, points: TouchPoint[]): CdpInputCommand {
 }
 
 /**
+ * A paste from the viewer's clipboard: `{t:'paste', text}`. Not a CDP command
+ * — the cast hands it to the instance's typed paste (a page paste event, then
+ * Input.insertText), so it is validated here with the rest of the wire.
+ */
+export function sanitizePaste(raw: unknown): string | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const msg = raw as Record<string, unknown>
+  if (msg.t !== 'paste' || typeof msg.text !== 'string') return null
+  return msg.text.length > 0 && msg.text.length <= MAX_INSERT_TEXT ? msg.text : null
+}
+
+/**
  * Translate one wire message into whitelisted CDP Input.* commands, or null to
  * reject. A tap/key expands to a press+release pair.
  */

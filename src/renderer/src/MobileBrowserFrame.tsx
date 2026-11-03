@@ -12,6 +12,9 @@ import {
 import {
   buttonName,
   emptyTouchGesture,
+  fieldAt,
+  keyMsg,
+  pasteMsg,
   frameSource,
   inputWithFrameSeq,
   mobileViewportPreference,
@@ -28,6 +31,7 @@ import {
   wheelDeltaPx,
   wheelMsg,
   type CastInputMsg,
+  type FieldMode,
   type StreamSurfaceState,
   type StreamTouchPointer
 } from './browser-stream'
@@ -37,6 +41,19 @@ import { handOffBlob, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
 import { FramePainter } from './frame-painter'
 import { createInputPump } from './input-pump'
+import { RemoteKeyBar } from './RemoteKeyBar'
+import { readClipboardText, writeClipboardLater, writeClipboardText } from './clipboard'
+
+/** A touch that moved less than this (view px), and let go sooner than TAP_MS, is a tap. */
+const TAP_SLOP_PX = 12
+const TAP_MS = 650
+/** The page's own focus may raise the keyboard this long after a tap (Android allows it; iOS ignores it). */
+const FOCUS_RAISE_WINDOW_MS = 2500
+/** Right after a raise, a stale "nothing focused" report must not close it again. */
+const RAISE_GRACE_MS = 700
+/** How long a Copy waits for the page to say what it copied. */
+const COPY_WAIT_MS = 1500
+const CTRL = 2
 
 /**
  * Shared LIVE browser viewport for phone and desktop. In headless mode, both
@@ -100,12 +117,21 @@ export function MobileBrowserFrame({
   // Only the app itself asks for its display's pixel ratio (crisp on a Retina
   // Mac, at no network cost): a laptop on the relay would pull 4x the bytes.
   const scale = hasNativeWebview() && desktopInput ? viewScale(pixelRatio) : 1
-  const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken, {
-    width: view.w,
-    height: view.h,
-    mobile: mobilePreference,
-    ...(scale > 1 ? { scale } : {})
-  })
+  const stream = useBrowserStream(
+    browserId,
+    open,
+    streamEnabled,
+    desktopStreamToken,
+    {
+      width: view.w,
+      height: view.h,
+      mobile: mobilePreference,
+      ...(scale > 1 ? { scale } : {})
+    },
+    // A touch viewer asks where the page's text fields are, so a tap on one
+    // raises the keyboard (page-fields.ts).
+    { watchFields: !desktopInput }
+  )
   const streaming = frameSource(stream.status) === 'stream'
 
   // Observers still see and drive the shared frame. The viewport owner controls
@@ -122,6 +148,22 @@ export function MobileBrowserFrame({
   // Desktop: focused by the first click into the page. Phone: the ⌨ button
   // focuses it within the tap gesture (the only way iOS shows the keyboard).
   const kbd = useRemoteKeyboard(stream.send, desktopInput ? 'desktop' : 'touch')
+  const kbdRef = useRef(kbd)
+  kbdRef.current = kbd
+  const tapStart = useRef<{ x: number; y: number; at: number } | null>(null)
+  const lastTapAt = useRef(0)
+  const raisedAt = useRef(0)
+  const [fieldMode, setFieldMode] = useState<FieldMode>('text')
+  /** A short word on the frame: "Copied", "Nothing selected". */
+  const [note, setNote] = useState<string | null>(null)
+  /** A copy this phone could not write without a tap (iOS), offered as one. */
+  const [localOffer, setLocalOffer] = useState<string | null>(null)
+  const copyOffer = localOffer ?? stream.copyOffer
+  useEffect(() => {
+    if (note === null) return
+    const timer = setTimeout(() => setNote(null), 1800)
+    return () => clearTimeout(timer)
+  }, [note])
 
   useEffect(() => {
     // The zoom-out EDGE: the last painted live frame becomes the card's
@@ -309,6 +351,99 @@ export function MobileBrowserFrame({
         ? 'Release viewport fit'
         : 'Fit browser to this view'
 
+  // THE PAGE'S FOCUS, on a phone: a field that loses focus closes the keyboard
+  // a tap on it raised; a field the page focuses itself, right after a tap,
+  // raises it (Android lets a focus that close to a gesture show the keyboard).
+  const { subscribeFields } = stream
+  useEffect(() => {
+    if (desktopInput) return
+    let closing: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = subscribeFields((fields) => {
+      const keys = kbdRef.current
+      if (fields.focus.editable) {
+        if (closing) clearTimeout(closing)
+        closing = null
+        setFieldMode(fields.focus.mode)
+        if (!keys.open && Date.now() - lastTapAt.current < FOCUS_RAISE_WINDOW_MS) {
+          keys.raise({ mode: fields.focus.mode, auto: true })
+          raisedAt.current = Date.now()
+        }
+        return
+      }
+      if (!keys.open || !keys.auto || Date.now() - raisedAt.current < RAISE_GRACE_MS) return
+      if (closing) clearTimeout(closing)
+      closing = setTimeout(() => {
+        closing = null
+        if (kbdRef.current.auto) kbdRef.current.close()
+      }, 250)
+    })
+    return () => {
+      unsubscribe()
+      if (closing) clearTimeout(closing)
+    }
+  }, [desktopInput, subscribeFields])
+
+  // ---- clipboard, both ways ----
+  /** Copy what is selected on the page onto THIS device, written inside the tap (clipboard.ts). */
+  const copyFromPage = (): void => {
+    const copied = stream.expectCopy(COPY_WAIT_MS)
+    stream.send(keyMsg('c', 'KeyC', CTRL))
+    void writeClipboardLater(copied).then(({ text, ok }) => {
+      if (ok) setNote('Copied')
+      else if (text) setLocalOffer(text)
+      else setNote('Nothing selected')
+    })
+  }
+  /** This device's clipboard into the page's field, as a paste the page sees. */
+  const pasteIntoPage = (): void => {
+    void readClipboardText().then((text) => {
+      const msg = text ? pasteMsg(text) : null
+      if (msg) stream.send(msg)
+      else setNote(text === null ? 'This phone will not share its clipboard here' : 'The clipboard is empty')
+    })
+  }
+  const takeCopyOffer = (): void => {
+    const text = copyOffer
+    if (text === null) return
+    void writeClipboardText(text).then((ok) => setNote(ok ? 'Copied' : 'Could not copy'))
+    setLocalOffer(null)
+    stream.clearCopyOffer()
+  }
+
+  /**
+   * A TAP ON A TEXT FIELD RAISES THE KEYBOARD. Decided here, synchronously, in
+   * the touch's own handler — the only place iOS will show a keyboard for a
+   * focus — against where the page last said its fields are.
+   */
+  /** A touch on the frame's own controls (or the bar, portaled but still a React child) is not a tap on the page. */
+  const onControl = (e: React.TouchEvent): boolean =>
+    e.target instanceof Element && e.target.closest('button, textarea, .remote-keybar') !== null
+  const onTouchStart = (e: React.TouchEvent): void => {
+    if (onControl(e)) {
+      tapStart.current = null
+      return
+    }
+    const touch = e.touches.length === 1 ? e.touches[0] : null
+    tapStart.current = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null
+  }
+  const onTouchEnd = (e: React.TouchEvent): void => {
+    const start = tapStart.current
+    tapStart.current = null
+    if (!interactive || desktopInput || !start || e.touches.length > 0 || e.changedTouches.length !== 1) return
+    const touch = e.changedTouches[0]
+    if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > TAP_SLOP_PX || Date.now() - start.at > TAP_MS) return
+    lastTapAt.current = Date.now()
+    const point = framePointAt(touch.clientX, touch.clientY)
+    const fields = stream.latestFields()
+    if (!point || !fields || fields.revision !== stream.frameRevision) return
+    const field = fieldAt(fields, point)
+    if (!field) return
+    const r = boxRef.current?.getBoundingClientRect()
+    setFieldMode(field.mode)
+    kbd.raise({ mode: field.mode, auto: true, at: r ? { x: touch.clientX - r.left, y: touch.clientY - r.top } : undefined })
+    raisedAt.current = Date.now()
+  }
+
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
   const touchGesture = useRef(emptyTouchGesture())
@@ -359,10 +494,7 @@ export function MobileBrowserFrame({
   }
   /** Desktop: the keys follow the click, with the IME's window where the click was. */
   const takeKeys = (e: React.PointerEvent): void => {
-    if (!desktopInput) {
-      boxRef.current?.focus()
-      return
-    }
+    if (!desktopInput) return
     const r = boxRef.current?.getBoundingClientRect()
     kbd.focusAt(r ? e.clientX - r.left : 0, r ? e.clientY - r.top : 0)
   }
@@ -375,7 +507,7 @@ export function MobileBrowserFrame({
       const update = updateTouchGesture(touchGesture.current, 'start', point)
       if (!update) return // At most two active touch pointers.
       e.preventDefault()
-      boxRef.current?.focus()
+      // No focus move: the key field keeps the keyboard up while the page is tapped.
       touchGesture.current = update.state
       e.currentTarget.setPointerCapture(e.pointerId)
       sendFrameInput(update.message)
@@ -511,11 +643,13 @@ export function MobileBrowserFrame({
       data-offer-mobile={mobilePreference ? 'true' : 'false'}
       // Interactive drive ONLY while frames are actively flowing (not merely WS
       // open); the tabIndex lets it take keys.
-      tabIndex={interactive ? 0 : undefined}
+      tabIndex={interactive && desktopInput ? 0 : undefined}
       onPointerDown={interactive ? onPointerDown : undefined}
       onPointerMove={interactive ? onPointerMove : undefined}
       onPointerUp={interactive ? onPointerUp : undefined}
       onPointerCancel={interactive ? onPointerUp : undefined}
+      onTouchStart={interactive && !desktopInput ? onTouchStart : undefined}
+      onTouchEnd={interactive && !desktopInput ? onTouchEnd : undefined}
       // The page's own context menu, not the app's: a right click is the page's.
       onContextMenu={interactive ? (event) => event.preventDefault() : undefined}
     >
@@ -556,6 +690,19 @@ export function MobileBrowserFrame({
           {interactive && !desktopInput && (
             <button
               type="button"
+              className="browser-frame-btn"
+              title="Copy what is selected on the page"
+              aria-label="Copy what is selected on the page"
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={copyFromPage}
+            >
+              <span aria-hidden="true">⧉</span>
+            </button>
+          )}
+          {interactive && !desktopInput && (
+            <button
+              type="button"
               className={`browser-frame-btn${kbd.open ? ' on' : ''}`}
               title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
               aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
@@ -590,9 +737,33 @@ export function MobileBrowserFrame({
         onCompositionUpdate={kbd.onCompositionUpdate}
         onCompositionEnd={kbd.onCompositionEnd}
         onPaste={kbd.onPaste}
+        onCopy={kbd.onCopy}
+        onCut={kbd.onCut}
         onBlur={kbd.onBlur}
         style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, border: 0, padding: 0, pointerEvents: 'none' }}
       />
+      {!desktopInput && kbd.open && interactive && (
+        <RemoteKeyBar
+          composition={kbd.composition}
+          mode={fieldMode}
+          note={note}
+          onPaste={pasteIntoPage}
+          onCopy={copyFromPage}
+          onSelectAll={() => stream.send(keyMsg('a', 'KeyA', CTRL))}
+          onHide={kbd.close}
+        />
+      )}
+      {copyOffer !== null && (
+        <button
+          type="button"
+          className="browser-frame-copychip"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={takeCopyOffer}
+        >
+          Copied on the page · tap to copy here
+        </button>
+      )}
+      {note !== null && !kbd.open && <span className="browser-frame-note" role="status">{note}</span>}
       {/* The live dot keeps the corner to itself now that the controls sit in
           the dock — nothing left up here to make room for. */}
       {frameReady && <span className="browser-frame-live" aria-hidden="true" />}

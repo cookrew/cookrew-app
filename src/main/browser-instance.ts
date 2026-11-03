@@ -1,3 +1,4 @@
+import type { FieldReport } from './page-fields'
 import type { CdpInputCommand } from '../shared/cast-input'
 import type { UseStatus } from '../shared/use-signal'
 import type { Gesture } from './vphone-input'
@@ -54,6 +55,14 @@ export interface BrowserInstance {
    */
   readonly status?: UseStatus
   readonly statusListeners?: Set<(status: UseStatus) => void>
+  /**
+   * Where the page's text fields are and whether one has focus (page-fields.ts),
+   * while someone watches. The listener gets the last report at once. Absent
+   * on a use card: a device screen has no DOM to ask.
+   */
+  watchFields?(listener: (report: FieldReport) => void): () => void
+  /** The viewer's paste: a page paste event, typed in if the page leaves it. Absent → Input.insertText. */
+  paste?(text: string): Promise<void>
   /** The agent's hand on a screen: gestures in viewport points, resolved once the device took them. */
   act?(gestures: readonly Gesture[]): Promise<void>
 }

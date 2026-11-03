@@ -214,6 +214,64 @@ export function frameDataUrl(base64: string): string {
   return base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`
 }
 
+/** The soft keyboard a remote field wants. */
+export type FieldMode = 'text' | 'numeric' | 'decimal' | 'tel' | 'email' | 'url' | 'search' | 'password'
+const FIELD_MODES: readonly FieldMode[] = ['text', 'numeric', 'decimal', 'tel', 'email', 'url', 'search', 'password']
+
+/** [x, y, width, height] in FRAME px. */
+export type FrameRect = [number, number, number, number]
+
+export interface StreamFields {
+  focus: { editable: boolean; rect: FrameRect | null; mode: FieldMode }
+  fields: Array<{ rect: FrameRect; mode: FieldMode }>
+}
+
+function frameRect(raw: unknown): FrameRect | null {
+  if (!Array.isArray(raw) || raw.length !== 4) return null
+  if (!raw.every((n) => typeof n === 'number' && Number.isFinite(n))) return null
+  const [x, y, w, h] = raw as number[]
+  return w > 0 && h > 0 ? [x, y, w, h] : null
+}
+
+function fieldMode(raw: unknown): FieldMode {
+  return FIELD_MODES.includes(raw as FieldMode) ? (raw as FieldMode) : 'text'
+}
+
+function parseFields(obj: Record<string, unknown>): StreamFields {
+  const focus = asRecord(obj.focus) ?? {}
+  const editable = focus.editable === true
+  const fields: StreamFields['fields'] = []
+  if (Array.isArray(obj.fields)) {
+    for (const entry of obj.fields.slice(0, 64)) {
+      const field = asRecord(entry)
+      const rect = field ? frameRect(field.rect) : null
+      if (field && rect) fields.push({ rect, mode: fieldMode(field.mode) })
+    }
+  }
+  return {
+    focus: { editable, rect: editable ? frameRect(focus.rect) : null, mode: editable ? fieldMode(focus.mode) : 'text' },
+    fields
+  }
+}
+
+/**
+ * The text field under a FRAME point, if any — decided on the phone, inside
+ * the tap, because iOS raises its keyboard only for a focus made there. A few
+ * px of slack: a finger is not a mouse. Pure — unit-tested.
+ */
+export function fieldAt(
+  fields: StreamFields | null,
+  point: { x: number; y: number },
+  slack = 6
+): { rect: FrameRect; mode: FieldMode } | null {
+  if (!fields) return null
+  for (const field of fields.fields) {
+    const [x, y, w, h] = field.rect
+    if (point.x >= x - slack && point.x <= x + w + slack && point.y >= y - slack && point.y <= y + h + slack) return field
+  }
+  return null
+}
+
 interface StreamControlFields {
   isOwner: boolean
   owner: ViewportOwner
@@ -248,6 +306,8 @@ export type StreamMessage =
   | { kind: 'status'; status: UseStatus }
   /** The page copied this right after the viewer's own input: it goes on the viewer's clipboard. */
   | { kind: 'copy'; text: string }
+  /** Where the page's text fields are, in FRAME px of `revision` (page-fields.ts). */
+  | ({ kind: 'fields'; revision: number } & StreamFields)
 
 /**
  * Parse a server→client WS payload into a typed message, or null to ignore.
@@ -317,6 +377,10 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
   }
   if (obj.t === 'error') {
     return { kind: 'error', msg: typeof obj.msg === 'string' ? obj.msg : 'stream error' }
+  }
+  if (obj.t === 'fields') {
+    const revision = finiteRevision(obj.revision)
+    return revision === null ? null : { kind: 'fields', revision, ...parseFields(obj) }
   }
   if (obj.t === 'copy') {
     return typeof obj.text === 'string' && obj.text.length > 0 ? { kind: 'copy', text: obj.text } : null
@@ -457,6 +521,8 @@ export type CastInputMsg =
   | { t: 'text'; text: string }
   /** The IME's uncommitted text, shown in the page's field as it is composed. */
   | { t: 'compose'; text: string }
+  /** The viewer's clipboard: a paste event in the page, typed in if the page leaves it. */
+  | { t: 'paste'; text: string }
   | TouchInputMsg
 
 export type RevisionedCastInputMsg = CastInputMsg & { revision: number }
@@ -696,6 +762,11 @@ export function keyMsg(key: string, code: string, mods = 0): CastInputMsg {
 /** Committed text as typing (an IME's result, a paste); null when there is nothing to send. */
 export function textMsg(text: string): CastInputMsg | null {
   return text.length > 0 ? { t: 'text', text: text.slice(0, MAX_TEXT_MSG) } : null
+}
+
+/** A paste from this device's clipboard; null when there is nothing to paste. */
+export function pasteMsg(text: string): CastInputMsg | null {
+  return text.length > 0 ? { t: 'paste', text: text.slice(0, MAX_TEXT_MSG) } : null
 }
 
 /** The IME's in-progress text, shown live in the page's field. */

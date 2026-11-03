@@ -15,6 +15,10 @@
 // page's own call still runs; a rejection from the headless clipboard is
 // swallowed, because the copy DID happen, just elsewhere.
 //
+// AND THE OTHER WAY: the viewer's own clipboard reaches the page as a paste
+// (PASTE_FUNCTION, called by HeadlessInstance.paste) — a paste event first,
+// typed text if the page leaves it alone.
+//
 // WHO MAY WRITE THE OWNER'S CLIPBOARD: a page calls the binding whenever it
 // likes, so the binding alone would let any site write the owner's clipboard
 // at will. A real browser only lets a page write after a user gesture; the
@@ -23,6 +27,8 @@
 // Chrome.
 
 export const COPY_BINDING = '__cookrewCopy'
+/** The page-side half of a paste: a real `paste` event carrying the viewer's text. */
+export const PASTE_FUNCTION = '__cookrewPaste'
 
 /** How long after the viewer's last input a copy still counts as theirs. */
 export const COPY_WINDOW_MS = 5_000
@@ -79,6 +85,26 @@ export const PAGE_COPY_SCRIPT = `(() => {
       } catch (_) {}
     }
     send(text)
+  })
+  // THE VIEWER'S PASTE, as the page would have seen it: a paste event on the
+  // focused element with the text in clipboardData, so an editor that
+  // formats or intercepts pastes gets to. True when the page took it over
+  // (preventDefault); otherwise main types the text in itself.
+  Object.defineProperty(window, '${PASTE_FUNCTION}', {
+    value: (text) => {
+      let target = document.activeElement || document.body
+      while (target && target.shadowRoot && target.shadowRoot.activeElement) target = target.shadowRoot.activeElement
+      if (!target) return false
+      try {
+        const data = new DataTransfer()
+        data.setData('text/plain', String(text))
+        const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true, composed: true })
+        target.dispatchEvent(event)
+        return event.defaultPrevented
+      } catch (_) {
+        return false
+      }
+    }
   })
 })()`
 

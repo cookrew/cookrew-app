@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { readClipboardText, writeClipboardText } from '../src/renderer/src/clipboard'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readClipboardText, writeClipboardLater, writeClipboardText } from '../src/renderer/src/clipboard'
 import type { ClipboardEnv } from '../src/renderer/src/clipboard'
 
 function env(overrides: Partial<ClipboardEnv>): ClipboardEnv {
@@ -60,5 +60,59 @@ describe('readClipboardText', () => {
       }
     }
     expect(await readClipboardText(env({ clipboard }))).toBe(null)
+  })
+})
+
+describe('writeClipboardLater — a copy that comes back after the tap', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  class FakeItem {
+    constructor(readonly items: Record<string, Promise<Blob>>) {}
+  }
+
+  it('starts the write IN the tap with a promised item, and finishes when the text comes', async () => {
+    const written: FakeItem[] = []
+    let started = false
+    vi.stubGlobal('ClipboardItem', FakeItem)
+    vi.stubGlobal('navigator', {
+      clipboard: {
+        write: vi.fn(async (items: FakeItem[]) => {
+          started = true
+          written.push(...items)
+          await items[0].items['text/plain']
+        }),
+        writeText: vi.fn()
+      }
+    })
+    let arrive: (text: string | null) => void = () => undefined
+    const pending = writeClipboardLater(new Promise((resolve) => (arrive = resolve)))
+    // Synchronously, before any text: the write has already begun.
+    expect(started).toBe(true)
+    arrive('copied words')
+    expect(await pending).toEqual({ text: 'copied words', ok: true })
+    expect(await (await written[0].items['text/plain']).text()).toBe('copied words')
+  })
+
+  it('nothing copied: no write, not ok', async () => {
+    vi.stubGlobal('ClipboardItem', FakeItem)
+    const writeText = vi.fn()
+    vi.stubGlobal('navigator', {
+      clipboard: {
+        write: vi.fn(async (items: FakeItem[]) => {
+          await items[0].items['text/plain']
+        }),
+        writeText
+      }
+    })
+    expect(await writeClipboardLater(Promise.resolve(null))).toEqual({ text: null, ok: false })
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('without promised items it writes the plain way once the text is in', async () => {
+    const writeText = vi.fn(async () => undefined)
+    vi.stubGlobal('ClipboardItem', undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    expect(await writeClipboardLater(Promise.resolve('plain'))).toEqual({ text: 'plain', ok: true })
+    expect(writeText).toHaveBeenCalledWith('plain')
   })
 })
