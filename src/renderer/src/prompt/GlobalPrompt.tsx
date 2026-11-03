@@ -43,8 +43,10 @@ import { enterOpensBox, pasteOpensBox } from './enter-opens'
 import { listenFoldPress } from './fold-press'
 import { sendPlan } from './send-plan'
 import { pastedImages } from './prompt-attach'
-import { latestUser, pickerRows } from './item-user'
-import { PromptFace, type FaceAgent } from './PromptFace'
+import { latestUser, usersInView } from './item-user'
+import { PromptFace, RemoteMark, type FaceAgent } from './PromptFace'
+import { promptPlaceholder, withItemRef, wordsStop, type WordsStop } from './prompt-words'
+import { ItemRefChip } from './ItemRefChip'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { WhoPicker } from './WhoPicker'
 import './global-prompt.css'
@@ -125,6 +127,8 @@ interface GlobalPromptProps {
   artifacts?: readonly PromptArtifact[]
   /** What the ＋ menu opens at once: a shell, the saved roles (HarnessMenu.tsx). */
   acts?: NewMenuActs
+  /** The active workspace's name: the placeholder names it at the outer stops. */
+  workspaceName?: string | null
 }
 
 type Suggestion = { name: string; kind: 'agent' | 'note' | 'browser' }
@@ -147,6 +151,17 @@ function useZoomFull(): 'agent' | 'item' | null {
 function useZoomItem(): string | null {
   return useSyncExternalStore(zoomStore.subscribe, () => zoomStore.get().item, () => null)
 }
+/** The zoom's side and where on it: at the artifacts, their users lead the picker (item-user.ts · usersInView). */
+function useZoomDir(): 'agents' | 'items' {
+  return useSyncExternalStore(zoomStore.subscribe, () => zoomStore.get().dir, () => 'agents' as const)
+}
+function useZoomV(): number {
+  return useSyncExternalStore(zoomStore.subscribe, () => zoomStore.get().v, () => -1)
+}
+/** The stop the box's words are read at (prompt-words.ts): what its placeholder says. */
+function useWordsStop(): WordsStop {
+  return useSyncExternalStore(zoomStore.subscribe, () => wordsStop(zoomStore.get()), () => 'crew')
+}
 
 const NO_ROWS: readonly AgentRow[] = []
 const NO_IDS: readonly string[] = []
@@ -164,13 +179,15 @@ function useZoomMoveKey(): string {
   return useSyncExternalStore(zoomStore.subscribe, () => zoomMoveKey(zoomStore.get()), () => '')
 }
 
-export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts }: GlobalPromptProps): React.JSX.Element {
+export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts, workspaceName = null }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
   const crewRows = useCrewContext()?.crew ?? NO_ROWS
   const zoomFull = useZoomFull()
   const zoomItem = useZoomItem()
   // A browser's or a note's full view talks to its latest user (item-user.ts).
   const itemOwners = zoomFull === 'item' && zoomItem ? (artifacts.find((a) => a.id === zoomItem)?.owners ?? NO_IDS) : NO_IDS
+  const zoomDir = useZoomDir()
+  const zoomV = useZoomV()
   const moveKey = useZoomMoveKey()
   // Read once per entry into the item's view (and again while nobody is known
   // yet): its users' activity must not move the face under the eye.
@@ -180,6 +197,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     itemUser.current = { key: itemKey, id: itemKey ? latestUser(itemOwners, crewRows) : null }
   }
   const viewed = fullAgentId ?? cardAgent ?? itemUser.current.id
+  const stop = useWordsStop()
+  // AN ITEM NOBODY HAS USED rides the words as a #ref chip (owner design,
+  // 2026-11-04): the new agent is made with it. × leaves it out until the view moves.
+  const [itemLeftOut, setItemLeftOut] = useState<string | null>(null)
+  const viewedItem = itemKey && itemUser.current.id === null ? (artifacts.find((a) => a.id === zoomItem) ?? null) : null
+  const attachedItem = viewedItem && itemLeftOut !== itemKey ? viewedItem : null
   const known = (id: string): boolean => agents.some((a) => a.id === id)
   // While the box has focus, words showing in it hold its agent still: the
   // view may move on (a newly waiting agent takes the stage), the words being
@@ -393,9 +416,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const makeNew = async (raw: string): Promise<void> => {
     setBusy(true)
     setError(null)
-    const { words: prompt, refs } = said(raw)
+    const { words: prompt, refs } = said(withItemRef(raw, attachedItem, artifacts))
     const tune = offeredPick(launchTune, offer, gateway)
-    const made = await makeAgent(cookrew(), { name: nameFromPrompt(prompt), preset: harness, orch, prompt, autoName: true, tune }, nodes)
+    // Named from the words typed, not from the item riding ahead of them.
+    const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch, prompt, autoName: true, tune }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) {
@@ -414,7 +438,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setError(null)
     if (plan.kind === 'mention') {
       // "@Other …" goes to Other, whoever the box is carrying.
-      const out = said(plan.words)
+      const out = said(withItemRef(plan.words, attachedItem, artifacts))
       sendToAgent(plan.id, out.words)
       wireRefs(plan.id, out.refs)
       // Enter took whatever sat in Other's line along with the words.
@@ -424,7 +448,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     }
     if (plan.kind === 'agent') {
       // A bare Enter only where its terminal is in sight (send-plan.ts).
-      const out = said(plan.words)
+      const out = said(withItemRef(plan.words, attachedItem, artifacts))
       submitLine(plan.id, out.words.trim() ? out.words : '')
       wireRefs(plan.id, out.refs)
       return
@@ -617,8 +641,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       mode="folded"
       draft={text !== ''}
       dropping={faceDrop}
+      remote={to?.remote ?? false}
       listening={dictation.listening}
-      label={to ? `Reply to ${to.name}` : `New ${harness} agent`}
+      label={to ? `Reply to ${to.name}${to.remote ? ' · runs elsewhere' : ''}` : `New ${harness} agent`}
       title={to ? `Reply to ${to.name} · click, or press Enter` : `A new ${harness} agent · click, or press Enter`}
       onTap={() => {
         if (dictation.listening) dictation.stop()
@@ -634,41 +659,58 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       }
     />
   )
+  /** Closed, the box takes the focus back (the list had it: its 'Send to…' field). */
+  const closeWho = (): void => {
+    setWho(false)
+    focusBox()
+  }
   const picker = (() => {
     if (!who) return null
     const pickable = crewRows.map((r) => ({ ...faceOf(r.id, r.name, crewRows, harness), lastActivityAt: r.lastActivityAt }))
-    const lists = pickerRows(pickable, { current: to?.id ?? null, first: itemOwners })
+    // At the artifacts stop and in a browser's or a note's full view, their users lead.
+    const first = usersInView({ dir: zoomDir, v: zoomV, full: zoomFull, item: zoomItem, artifacts })
     return (
       <WhoPicker
-        waiting={lists.waiting}
-        recent={lists.recent}
+        rows={pickable}
+        first={first}
         recentTitle={zoomFull === 'item' ? 'used it' : 'recent'}
         harnesses={harnesses}
         current={{ id: to?.id ?? null, harness }}
         onAgent={(id) => {
           if (!known(id)) return
-          setReleased(null)
-          // A hold on the box moves with the pick: the words go where it points.
-          setHeld((h) => (h ? { id } : h))
-          setStandIn({ id, at: moveKey })
-          setWho(false)
+          // Committed before the focus comes back, so the box's focus holds the picked agent.
+          flushSync(() => {
+            setReleased(null)
+            // A hold on the box moves with the pick: the words go where it points.
+            setHeld((h) => (h ? { id } : h))
+            setStandIn({ id, at: moveKey })
+            setWho(false)
+          })
           focusBox()
         }}
         onNew={(name) => {
-          setStandIn(null)
-          if (viewed) letGo(viewed)
-          setWho(false)
-          pick(name)
+          flushSync(() => {
+            setStandIn(null)
+            if (viewed) letGo(viewed)
+            setWho(false)
+            takeHarness(name)
+          })
+          focusBox()
         }}
+        onClose={closeWho}
       />
     )
   })()
 
-  const pick = (name: string): void => {
+  /** A harness taken for the new agent; its menu closes. */
+  const takeHarness = (name: string): void => {
     picked.current = name
     setHarness(name)
     rememberHarness(name)
     setPicking(null)
+  }
+  const pick = (name: string): void => {
+    takeHarness(name)
     focusBox()
   }
 
@@ -683,6 +725,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       // the picker closes first, then the box folds; the zoom never sees it.
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
+        if (who) {
+          e.stopPropagation()
+          return closeWho()
+        }
         if (promptFold.backFirst()) e.stopPropagation()
       }}
       onSubmit={(e) => {
@@ -694,18 +740,19 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       {/* THE CHIP IS THE FACE (owner, 2026-11-04): the agent's own face and name,
           flown here from the bar's end (face-flip.ts); a tap chooses who. */}
       {to ? (
-        <span className="cr-prompt-to pf-chip" title={`Prompts go to ${to.name}`}>
+        <span className="cr-prompt-to pf-chip" title={`Prompts go to ${to.name}${to.remote ? ' · it runs elsewhere' : ''}`}>
           <button
             type="button"
             className="pf-chip-who"
             aria-haspopup="listbox"
             aria-expanded={who}
-            aria-label={`${to.name} · choose who the words go to`}
+            aria-label={`${to.name}${to.remote ? ' (runs elsewhere)' : ''} · choose who the words go to`}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setWho(!who)}
+            onClick={() => (who ? closeWho() : setWho(true))}
           >
             <span className="pf-chip-face" ref={chipFace}>
               <InkAvatar id={to.id} preset={face?.preset ?? harness} orch={face?.orch ?? false} status={face?.status ?? 'idle'} weight="regular" />
+              {to.remote && <RemoteMark />}
             </span>
             <b ref={chipName}>{to.name}</b>
           </button>
@@ -756,6 +803,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           />
         )
       )}
+      {attachedItem && itemKey && <ItemRefChip item={attachedItem} onRemove={() => setItemLeftOut(itemKey)} />}
       {suggesting && anchor && pending && (
         <span className="cr-prompt-menu cr-prompt-suggest" role="listbox" aria-label={pending.sigil === '@' ? 'Agents' : 'Notes and browsers'} style={{ left: anchor.left, bottom: window.innerHeight - anchor.top + 6 }}>
           {options.map((option, i) => (
@@ -782,7 +830,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={earSays(dictation) ?? (to ? 'Reply… · # a note or browser' : 'Describe a task…')}
+        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem })}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"

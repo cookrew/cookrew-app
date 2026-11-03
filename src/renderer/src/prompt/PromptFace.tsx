@@ -49,6 +49,8 @@ export interface PromptFaceProps {
   draft?: boolean
   /** A file is dragged over it: the drop cue shows. */
   dropping?: boolean
+  /** The agent runs elsewhere (a served session): a small ↗ says so. */
+  remote?: boolean
   /** It opens the who-picker when tapped empty: whether that picker is open. */
   expanded?: boolean
   /** Keep the caret where it is when pressed (the box's own send key). */
@@ -77,6 +79,13 @@ const Arrow = (): React.JSX.Element => (
   </svg>
 )
 
+/** A remote agent's mark: it runs elsewhere (owner design, 2026-11-04). */
+export const RemoteMark = (): React.JSX.Element => (
+  <span className="pf-remote" aria-hidden="true">
+    ↗
+  </span>
+)
+
 export function PromptFace({
   buttonRef,
   agent,
@@ -84,6 +93,7 @@ export function PromptFace({
   mode,
   draft = false,
   dropping = false,
+  remote = false,
   expanded,
   keepFocus = false,
   listening = false,
@@ -121,6 +131,7 @@ export function PromptFace({
     draft && mode !== 'ready' ? 'pf-has-draft' : '',
     listening ? 'pf-listening' : '',
     dropping ? 'pf-dropping' : '',
+    agent && remote ? 'pf-is-remote' : '',
     className ?? ''
   ]
     .filter(Boolean)
@@ -181,6 +192,7 @@ export function PromptFace({
           <span className="pf-drop-words">DROP TO ATTACH</span>
         </span>
       )}
+      {agent && remote && <RemoteMark />}
     </button>
   )
 }

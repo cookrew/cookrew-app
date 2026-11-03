@@ -99,6 +99,56 @@
   color: var(--sumi-seal, var(--amber-deep));
 }
 
+/* The item riding the words (ItemRefChip.tsx): #Name and its ×. */
+.cr-prompt-ref {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 0 8px;
+  border-radius: 999px;
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+  font: 600 11.5px/1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.cr-prompt-ref > .cr-icon,
+.cr-prompt-ref > svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.cr-prompt-ref > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-prompt-ref > button {
+  flex: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: 14px/1 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-ref > button:hover {
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
 /* Fixed, over the dock: the dock clips anything that hangs out of it. */
 .cr-prompt-menu {
   position: fixed;
@@ -720,12 +770,27 @@
     margin-bottom: -4px;
   }
 
+  /* The chip's name has room at 360 px (2026-11-04: it read "Con…"): a 6-8
+     letter name shows whole, the words keep their 60px. */
   body .cr-prompt-to,
   body .cr-prompt .cr-prompt-new:has(> .cr-prompt-harness) {
     order: -2;
     flex: 0 1 auto;
     min-width: 0;
-    max-width: 34%;
+    max-width: 46%;
+  }
+
+  /* The item riding the words sits with the tools, above them: the words'
+     row has no room for a third chip at 360 px. Its × a thumb's square. */
+  body .cr-prompt .cr-prompt-ref {
+    order: -4;
+    max-width: 60%;
+    min-height: 32px;
+  }
+
+  body .cr-prompt .cr-prompt-ref > button {
+    width: 32px;
+    height: 32px;
   }
 
   /* A block, so a long harness ends in "…" (a flex button's text cannot);
