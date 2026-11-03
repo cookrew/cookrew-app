@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { TerminalActivity } from '../../../shared/turn'
 import { cookrew } from '../api'
-import { isPrimed, isReading, onReading, primeVoice, readAloud, stopReading } from './reply-voice'
+import { announce, isPrimed, isReading, onReading, primeVoice, readAloud, stopReading } from './reply-voice'
+import { installAnnouncer } from './announce'
 
 /**
  * 🔊 SPOKEN REPLIES: while on, the box's agent's final reply is read aloud
@@ -10,6 +11,9 @@ import { isPrimed, isReading, onReading, primeVoice, readAloud, stopReading } fr
  * for the box (it outlived VoiceBar.tsx, where it was the agent's alone): it
  * can be turned before a new agent exists, and the agent the box carries next
  * is the one heard.
+ *
+ * Every OTHER agent is announced by name when it finishes or needs you,
+ * never read (prompt/announce.ts): what the box is on is what is heard.
  *
  * A tap while a reply is being read stops that reading and leaves spoken
  * replies on; a tap while quiet turns them off.
@@ -45,8 +49,25 @@ export interface SpokenReplies {
   readonly toggle: () => void
 }
 
-export function useSpokenReplies(agentId: string | null, activity: TerminalActivity | undefined): SpokenReplies {
+export function useSpokenReplies(
+  agentId: string | null,
+  activity: TerminalActivity | undefined,
+  agents: ReadonlyArray<{ readonly id: string; readonly name: string }> = []
+): SpokenReplies {
   const [on, setOn] = useState(savedOn)
+  // The announcer lives as long as the box; it reads the latest of these.
+  const live = useRef({ on, agentId, agents })
+  live.current = { on, agentId, agents }
+  useEffect(
+    () =>
+      installAnnouncer({
+        isOn: () => live.current.on,
+        boxAgentId: () => live.current.agentId,
+        nameOf: (id) => live.current.agents.find((a) => a.id === id)?.name,
+        say: announce
+      }),
+    []
+  )
   const reading = useSyncExternalStore(onReading, isReading, () => false)
   const was = useRef<Heard>({ id: agentId, phase: activity?.phase })
   // Spoken replies restored on after a reload were never primed by a tap:

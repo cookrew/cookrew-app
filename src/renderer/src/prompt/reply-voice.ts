@@ -106,8 +106,27 @@ function stopPlayback(): void {
   if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel()
 }
 
-/** Stop reading now. Spoken replies stay on; the next reply is read. */
+/** Announcements waiting for the reading in front of them to end. */
+let queued: readonly string[] = []
+const QUEUE_MAX = 6
+
+/**
+ * Say a short line (an agent finished, an agent needs you) without cutting
+ * into what is being read: it waits its turn. The same line twice in the
+ * queue is said once.
+ */
+export function announce(line: string): void {
+  if (!reading) {
+    void readAloud(line)
+    return
+  }
+  if (queued.includes(line) || queued.length >= QUEUE_MAX) return
+  queued = [...queued, line]
+}
+
+/** Stop reading now, and drop the announcements waiting. Spoken replies stay on; the next reply is read. */
 export function stopReading(): void {
+  queued = []
   generation += 1
   stopPlayback()
   setReading(false)
@@ -233,6 +252,10 @@ export async function readAloud(text: string): Promise<void> {
     if (gen === generation) {
       stopCurrent = null
       setReading(false)
+      // Ended on its own: the next announcement waiting is said.
+      const [next, ...rest] = queued
+      queued = rest
+      if (next !== undefined) void readAloud(next)
     }
   }
 }

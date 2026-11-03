@@ -368,7 +368,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // The whole box takes a dropped screenshot, with the transcripts view's cue over it.
   const formRef = useRef<HTMLFormElement>(null)
   const dropOver = useDropZone(formRef, attach.dropFiles)
-  const spoken = useSpokenReplies(to?.id ?? null, activity)
+  const spoken = useSpokenReplies(to?.id ?? null, activity, agents)
   const browse = useFilePicker(attach.dropFiles)
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [sel, setSel] = useState(0)

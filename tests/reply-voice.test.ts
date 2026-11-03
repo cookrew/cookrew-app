@@ -249,6 +249,32 @@ describe('reading a reply', () => {
     expect(played).toEqual([{ kind: 'browser', text: 'Done. All good.' }])
   })
 
+  it('an announcement waits for the reading in front of it, said once, then in order', async () => {
+    stub(mac())
+    const voice = await load()
+    const reading = voice.readAloud('The reply in front.')
+    voice.announce('Forge 完成了')
+    voice.announce('Forge 完成了')
+    voice.announce('Gauge 需要你')
+    await reading
+    await vi.waitFor(() => expect(played.map((p) => p.text)).toEqual(['The reply in front.', 'Forge 完成了', 'Gauge 需要你']))
+    await vi.waitFor(() => expect(voice.isReading()).toBe(false))
+  })
+
+  it('quiet, an announcement is said at once; a stop drops the ones waiting', async () => {
+    stub(mac())
+    const voice = await load()
+    voice.announce('Forge 完成了')
+    await vi.waitFor(() => expect(played.map((p) => p.text)).toEqual(['Forge 完成了']))
+    played.length = 0
+    const reading = voice.readAloud('Another reply here.')
+    voice.announce('Gauge 需要你')
+    voice.stopReading()
+    await reading
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(played.map((p) => p.text)).not.toContain('Gauge 需要你')
+  })
+
   it('only code: nothing is read', async () => {
     stub(mac())
     const voice = await load()
