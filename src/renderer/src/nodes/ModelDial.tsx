@@ -6,7 +6,21 @@
 // draw it: the live agent's MDL dial below, and the new agent's menu
 // (prompt/NewAgentTune.tsx), each with its own row look.
 
+import { useLayoutEffect, useRef } from 'react'
 import { MODEL_SECTION_LABEL, modelChipText, type ModelRow } from '../../../shared/model-pick'
+
+/**
+ * Open a long list on the row it stands on (QA 2026-11-04: 84 rows, the
+ * current one out of sight). Only the list scrolls: scrollIntoView would
+ * also move whatever holds it, and here that is the zoom's scene.
+ */
+export function centerCurrent(container: HTMLElement | null): void {
+  const row = container?.querySelector<HTMLElement>('[data-current="true"]')
+  if (!container || !row) return
+  const box = container.getBoundingClientRect()
+  const at = row.getBoundingClientRect()
+  container.scrollTop += at.top - box.top - (box.height - at.height) / 2
+}
 
 export interface ModelListProps {
   rows: readonly ModelRow[]
@@ -41,6 +55,7 @@ export function ModelList({ rows, current, asked = null, disabled = false, onPic
               aria-checked={look === 'menu' ? row.value === current : undefined}
               className={look === 'rail' ? `cr-tune-row ${state}${row.section === 'group' ? ' group' : ''}` : undefined}
               title={row.value}
+              data-current={row.value === current ? 'true' : undefined}
               disabled={disabled}
               onMouseDown={onMouseDown}
               onClick={() => onPick(row.value)}
@@ -82,6 +97,10 @@ export function ModelDial({
   onMouseDown?: (e: React.MouseEvent) => void
 }): React.JSX.Element {
   const shown = model.current !== null ? modelChipText(model.current) : model.reading
+  const list = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (model.open) centerCurrent(list.current)
+  }, [model.open])
   const reading = shown ?? 'not recorded yet'
   return (
     <div className={`cr-tune-dial${model.open ? ' open' : ''}`} data-knob="model">
@@ -103,7 +122,7 @@ export function ModelDial({
         {model.note !== null && <span className="cr-tune-flag">{model.note}</span>}
       </button>
       {model.open && (
-        <div className="cr-tune-list models" role="listbox" aria-label="Model">
+        <div className="cr-tune-list models" role="listbox" aria-label="Model" ref={list}>
           <ModelList rows={model.rows} current={model.current} asked={model.ask?.asked ?? null} disabled={locked !== null} onPick={model.onPick} onMouseDown={onMouseDown} />
           {caveat !== null && <div className="cr-tune-caveat">{caveat}</div>}
         </div>

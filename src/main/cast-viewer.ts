@@ -277,7 +277,7 @@ export class CastViewer {
     const frameContext = Number.isInteger(frameSeq)
       ? this.frameContexts.get(frameSeq as number)
       : undefined
-    const releasesActivePointer = input.t === 'up' || input.t === 'touchend'
+    const releasesActivePointer = input.t === 'up' || input.t === 'touchend' || input.t === 'touchcancel'
     const viewport = instance.viewportState
     if (
       ((viewport.transitioning || viewport.agentHeld) && !releasesActivePointer) ||
@@ -396,7 +396,7 @@ export class CastViewer {
 }
 
 /** Input with no point on the page: it needs no painted frame to map against. */
-const POINTLESS = new Set(['key', 'touchend', 'text', 'compose', 'paste'])
+const POINTLESS = new Set(['key', 'touchend', 'touchcancel', 'text', 'compose', 'paste'])
 
 /** Two pinch steps as one: scales multiply, the newest anchor wins. */
 export function foldPinch(pending: CdpInputCommand | null, next: CdpInputCommand): CdpInputCommand {

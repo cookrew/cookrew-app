@@ -356,6 +356,11 @@ export function sanitizeInput(raw: unknown, ctx: MapContext): CdpInputCommand[] 
       if (msg.points !== undefined && (!Array.isArray(msg.points) || msg.points.length !== 0)) return null
       return [touch('touchEnd', [])]
     }
+    case 'touchcancel': {
+      // The touch is withdrawn, not lifted: no tap, no click, no link opened.
+      // A phone's press-and-hold becomes a text selection this way.
+      return [touch('touchCancel', [])]
+    }
     default:
       return null // whitelist: unknown types (evaluate, navigate, …) are dropped
   }

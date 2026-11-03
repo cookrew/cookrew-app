@@ -3617,6 +3617,7 @@ body.cookrew-mobile .react-flow__pane {
 
 body.cookrew-mobile .cr-header {
   padding-left: max(14px, env(safe-area-inset-left));
+  padding-right: max(10px, env(safe-area-inset-right));
   padding-top: max(10px, env(safe-area-inset-top));
   -webkit-app-region: no-drag;
   flex-wrap: nowrap;

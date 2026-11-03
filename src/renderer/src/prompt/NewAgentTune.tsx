@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
-import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor } from './rise-anchor'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { keyboardCoverNow, riseOver, riseStyle, typesIntoBox, type RiseAnchor, topBarBottom } from './rise-anchor'
 import { LAUNCH_KNOBS, effortOffer, launchTuneLabel, type LaunchKnob, type LaunchOffer, type LaunchTune } from '../../../shared/launch-tune'
 import { effortLevelsFor, modelChipText, modelRows } from '../../../shared/model-pick'
 import { shortRoute } from '../../../shared/route-view'
-import { ModelList } from '../nodes/ModelDial'
+import { ModelList, centerCurrent } from '../nodes/ModelDial'
 
 /**
  * The gateway, for THE ONE MODEL LIST (owner 2026-11-04): a new claude agent
@@ -77,6 +77,10 @@ export function NewAgentTune({
     }
   }, [at])
 
+  const menu = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    if (at) centerCurrent(menu.current)
+  }, [at !== null])
   const merged = offer.harness === 'claude' && gateway !== null && gateway.ids.length > 0
   const label = merged ? newAgentLabel(tune, gateway) : (launchTuneLabel(tune) ?? 'default')
   const levels = (model: string | null | undefined): readonly string[] =>
@@ -97,7 +101,7 @@ export function NewAgentTune({
         title={merged ? 'The model and effort the new agent starts on — default is the default route' : 'The model and effort the new agent starts on — default leaves them to the harness'}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
-          const next = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow())
+          const next = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow(), 6, topBarBottom())
           setAt((open) => (open ? null : next))
         }}
       >
@@ -106,6 +110,7 @@ export function NewAgentTune({
       {at && (
         <span
           className="cr-prompt-menu cr-prompt-tune-menu"
+          ref={menu}
           role="menu"
           style={riseStyle(at, GAP)}
         >

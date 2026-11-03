@@ -497,6 +497,8 @@ export type TouchInputMsg =
   | { t: TouchInputKind; x: number; y: number }
   | { t: 'touchstart' | 'touchmove'; points: StreamTouchPoint[] }
   | { t: 'touchend' }
+  /** The touch withdrawn (no tap): a press-and-hold turning into a selection. */
+  | { t: 'touchcancel' }
 
 export type MouseButtonName = 'left' | 'right' | 'middle'
 
@@ -570,7 +572,7 @@ export function streamInputAllowed(
   opts: Parameters<typeof streamCanDrive>[0]
 ): boolean {
   if (!frameMatchesViewport(opts.frameRevision, opts.viewportRevision)) return false
-  if (msg.t === 'up' || msg.t === 'touchend') return true
+  if (msg.t === 'up' || msg.t === 'touchend' || msg.t === 'touchcancel') return true
   return streamCanDrive(opts)
 }
 
