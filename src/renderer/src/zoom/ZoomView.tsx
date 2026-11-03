@@ -167,7 +167,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore') }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values()], get('devices')!) }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
   // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
@@ -387,9 +387,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       const el = registry.current.get(`mark:${m.id}`)
       const at = device.at[m.id]
       if (el && at) el.style.transform = `translate(${at.x}px, ${at.y}px) scale(${SWS})`
-      const label = el?.querySelector<HTMLElement>('.zv-mark-label')
+      const label = el?.querySelector<HTMLElement & { _t?: string; _o?: number }>('.zv-mark-label')
       if (label) {
-        label.style.transform = `translateX(-50%) scale(${words.markK.toFixed(4)})`
+        // A phone's painter draws it at one size on every frame (zoom-frame.ts · paintDeviceWords); a desk's is set once here.
+        if (!narrow) {
+          label.style.transform = `translateX(-50%) scale(${words.markK.toFixed(4)})`
+          label.style.opacity = ''
+          label.style.visibility = ''
+          label._t = undefined
+          label._o = undefined
+        }
         label.style.maxWidth = `${Math.round(words.markMax)}px`
       }
     }
@@ -415,7 +422,18 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       const at = places.at[i]
       if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
     })
-  }, [device, words, model.marks, model.machines])
+    // Back on a desk, the words a phone's painter held at one size go back to their sheet.
+    if (!narrow) {
+      for (const el of root.current?.querySelectorAll<HTMLElement & { _t?: string; _o?: number }>('.zv-machine-label, .zv-machinecard-label, .zv-mark-none') ?? []) {
+        el.style.transform = ''
+        el.style.opacity = ''
+        el.style.visibility = ''
+        el._t = undefined
+        el._o = undefined
+      }
+    }
+    motion.wake()
+  }, [device, words, model.marks, model.machines, narrow, motion.wake])
   const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents') => {
     setError(null)
     try {
@@ -513,7 +531,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </button>
         </div>
         <div className="zv-device" ref={bind('device')}>
-          <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.titleBottom}px) scale(${words.titleK.toFixed(4)}) translateY(-100%)`, maxWidth: Math.round(words.titleMax) }}>
+          {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
+          <div className="zv-device-label" ref={bind('deviceLabel')} style={{ maxWidth: Math.round(words.titleMax) }}>
             <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span><small>agents open the crew · browsers open thumbnails</small>
           </div>
           {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} onOpenItems={stable(`mark-items:${m.id}`, () => void switchWorkspace(m.id, 'items'))} />)}
@@ -587,4 +606,15 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>
   )
+}
+
+/** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */
+function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'markNones' | 'machineWords'> {
+  const each = (sel: string): HTMLElement[] => marks.map((m) => m.querySelector<HTMLElement>(sel)).filter((e): e is HTMLElement => !!e)
+  return {
+    deviceLabel: title,
+    markLabels: each('.zv-mark-label'),
+    markNones: each('.zv-mark-none'),
+    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')]
+  }
 }
