@@ -273,6 +273,15 @@ export class RouteService extends EventEmitter {
   }
 
   /**
+   * A respawn of this card loses nothing: its session resumes exactly, or it
+   * has nothing to lose. The dials ask the same before a relaunch
+   * (agent-relaunch.ts), so the two restarts can never disagree.
+   */
+  restorable(node: TerminalNodeData): boolean {
+    return this.deps.canRestoreExact(node) || this.fresh(node) || (this.deps.sessionOnDisk?.(node) ?? false)
+  }
+
+  /**
    * Nothing to restore is also nothing to lose: a card with no session id of
    * any harness and no recorded turn can be respawned at once, where the
    * exact-context gate would refuse for want of anything to restore.
@@ -328,9 +337,7 @@ export class RouteService extends EventEmitter {
     const phase = this.deps.phaseOf(terminalId)
     const idle = phase === undefined || phase === 'idle' || phase === 'replied'
     const after = this.deps.node(terminalId)
-    const restorable = (node: TerminalNodeData): boolean =>
-      this.deps.canRestoreExact(node) || this.fresh(node) || (this.deps.sessionOnDisk?.(node) ?? false)
-    if (idle && after && (after.routeEffective ?? null) !== route && restorable(after)) {
+    if (idle && after && (after.routeEffective ?? null) !== route && this.restorable(after)) {
       await this.deps.respawn(terminalId)
     }
     this.emitCard(terminalId)

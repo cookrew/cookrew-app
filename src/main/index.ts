@@ -221,6 +221,7 @@ import {
   type TuneDeps
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
+import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -740,15 +741,7 @@ const routeService = new RouteService({
   harnessOf: (command) => harnessFor(command)?.id ?? null,
   phaseOf: (id) => turns.phaseOf(id),
   canRestoreExact: (node) => canRestoreExact(node),
-  // In place, with exact context: the kill drops the PTY, the spawn resumes
-  // the same session under the new env (the recover path's own guarantee).
-  respawn: async (id) => {
-    const node = store.nodeAcrossWorkspaces(id)?.node
-    if (!node || node.kind !== 'terminal') return false
-    if (ptys.get(id)) ptys.kill(id)
-    spawnTracked(node)
-    return true
-  },
+  respawn: async (id) => respawnInPlace(id),
   dockCommands: () => PRESETS.map((p) => p.command),
   hasTurns: (id) => turns.history(id).length > 0,
   // The session file the node names, on disk: the harness resumes it itself,
@@ -3310,15 +3303,18 @@ function putAgentToSleep(id: string, quietMs: number): void {
  * slept, its pane was closed, herdr restarted. A cold agent resumes its own
  * session; a pane herdr still holds is only re-attached.
  */
+/** Does the multiplexer still hold this terminal's pane (whether or not a mirror is attached)? */
+function paneAlive(id: string): boolean {
+  const mux = multiplexer()
+  const name = sessionNameFor(id)
+  if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
+  return mux?.sessionExists(name) === true
+}
+
 const waker = new AgentWaker<PtySession>({
   session: (id) => ptys.get(id),
   isTerminal: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'terminal',
-  paneAlive: (id) => {
-    const mux = multiplexer()
-    const name = sessionNameFor(id)
-    if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
-    return mux?.sessionExists(name) === true
-  },
+  paneAlive,
   boot: (id) => ensureTerminalMirror(id),
   // A respawned TUI paints its resumed transcript and swallows the CRs sent
   // meanwhile (ask-cold-start); Claude can also sit silent before drawing
@@ -4392,6 +4388,45 @@ function retireTerminal(id: string, why: string): void {
  * mobile call site is how the two surfaces would come to disagree about which
  * cache they read and whose asks they remember.
  */
+/**
+ * In place, with exact context: the kill ends the pane, the spawn resumes the
+ * same session under the card's current command and env (the recover path's
+ * own guarantee). The route dial and the model/effort dials both restart here.
+ *
+ * killAndWait, not kill: kill returns before the pane is torn down, and a
+ * spawn that lands first re-attaches to the dying pane, ignoring the new
+ * command; and kill does nothing for a pane running with no mirror attached.
+ * The node is read AFTER the wait, so the spawn takes the command as saved.
+ */
+async function respawnInPlace(id: string): Promise<boolean> {
+  if (store.nodeAcrossWorkspaces(id)?.node.kind !== 'terminal') return false
+  try {
+    await ptys.killAndWait(id)
+  } catch (error) {
+    console.error(`respawn ${id}: the old pane would not end, so nothing was started`, error)
+    return false
+  }
+  const node = store.nodeAcrossWorkspaces(id)?.node
+  if (!node || node.kind !== 'terminal') return false
+  spawnTracked(node)
+  return true
+}
+
+/** A model or effort pick, as a launch flag: saved on the card, then a restart in place (agent-relaunch.ts). */
+function relaunchDeps(): RelaunchDeps {
+  return {
+    node: (id) => {
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      return node?.kind === 'terminal' ? node : null
+    },
+    phaseOf: (id) => turns.phaseOf(id),
+    setCommand: (id, command) => void store.updateNodeUnsafe(id, { command }),
+    live: (id) => ptys.get(id) !== undefined || paneAlive(id),
+    restorable: (node) => routeService.restorable(node),
+    respawn: (id) => void respawnInPlace(id)
+  }
+}
+
 function tuneDeps(): TuneDeps {
   return {
     // ACROSS WORKSPACES, not just the focused one. store.node() searches only
@@ -4405,6 +4440,7 @@ function tuneDeps(): TuneDeps {
       return node?.kind === 'terminal' ? node : null
     },
     write: (id, data) => ptys.get(id)?.write(data),
+    relaunch: (id, command) => relaunchInPlace(relaunchDeps(), id, command),
     asks: tuneAsks,
     cache: tuningCache,
     // The RTE dial: offered only when the gateway is online and the card's

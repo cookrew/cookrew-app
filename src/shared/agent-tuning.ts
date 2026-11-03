@@ -220,6 +220,15 @@ export interface HarnessTuning {
    * a deliberately typed slash command into one click.
    */
   caveat?: string
+  /**
+   * The dials are LAUNCH FLAGS, not typed lines (owner 2026-11-01). A pick
+   * rewrites the card's launch command (shared/launch-tune.launchCommand) and
+   * the agent restarts in place on the same session (main/agent-relaunch), as
+   * a route change does. Claude declares it: its slash commands raced the
+   * prompt box for the input line and saved every pick as the machine's
+   * default; its `--model` / `--effort` flags hold for that session only.
+   */
+  relaunch?: boolean
 }
 
 export const TUNE_COPY = {
