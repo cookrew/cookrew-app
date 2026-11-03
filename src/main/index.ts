@@ -4442,6 +4442,9 @@ function relaunchDeps(): RelaunchDeps {
       return node?.kind === 'terminal' ? node : null
     },
     phaseOf: (id) => turns.phaseOf(id),
+    // An open dispatch, a held submission window, or undelivered text in the box.
+    delivering: (id) =>
+      dispatchService.hasOpenDispatch(id) || defaultProducerLease().holderOf(id) !== null || defaultProducerLease().isContaminated(id),
     setCommand: (id, command) => void store.updateNodeUnsafe(id, { command }),
     live: (id) => ptys.get(id) !== undefined || paneAlive(id),
     restorable: (node) => routeService.restorable(node),

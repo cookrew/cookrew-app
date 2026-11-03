@@ -470,7 +470,7 @@ export function applyTuning(
 
 /** Why a relaunch did not take the pick now, in the rail's words. */
 const RELAUNCH_REFUSAL: Partial<Record<RelaunchVerdict, string>> = {
-  busy: 'mid-turn or waiting for an answer — pick again once it replies',
+  busy: 'mid-turn, waiting for an answer, or taking a prompt — pick again once it replies',
   unrestorable: 'saved for its next start — a restart now would lose its conversation',
   gone: 'no such terminal'
 }
