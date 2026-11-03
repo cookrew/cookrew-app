@@ -19,20 +19,28 @@ import {
 } from '../shared/model'
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import { reachByName, type ReachKind } from './ask-reach'
 import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
 import { readProxyConfig, tailnetProxyGaps } from './proxy-bypass'
 import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
+import { cleanAgentName, nameFromPrompt } from '../shared/agent-name'
+import type { RenameOutcome } from './agent-rename'
+import { deliverToRecruit } from './recruit-delivery'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
-import { askRaw, askTerminal, decodeRawEscapes } from './ask'
+import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
+import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
+import { servedUseRefusal } from './use-commands'
 import {
   DeliveryError,
   deliverAndConfirm,
   replyText,
   terminalDeliveryDeps
 } from './ask-delivery'
+import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
 import type { VoiceEngine } from './voice'
@@ -61,14 +69,48 @@ export interface SocketServerDeps {
    * is back. The caller pane is the sender, which is why this lives here and
    * not in the ask itself — the ask does not know who is asking.
    */
-  signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' }) => void
+  signal?: (moment: { from: string; to: string; kind: 'ask' | 'answer' | 'write' | 'read' }) => void
   /** Durable global agent directory (~/.cookrew/agents.json). */
   agents: AgentRegistry
+  /**
+   * Rename a card — agent, note or browser: checked against its workspace's
+   * other cards, then the store, and for an agent herdr's pane title, tab and
+   * agent name (index.ts · renameCard). Absent in a test server that has
+   * none: `cookrew rename` then says so.
+   */
+  renameCard?: (id: string, wanted: string, onClash: 'refuse' | 'suffix') => RenameOutcome
+  /**
+   * Sous's name for a card recruited from a prompt, once it answers (null: it
+   * had none, or the card was renamed meanwhile). index.ts · autoNameTerminal.
+   */
+  autoNameTerminal?: (id: string, standIn: string, prompt: string) => Promise<RenameOutcome | null>
+  /**
+   * The sealed slots (secrets-store.ts) and their audit line. Absent in a
+   * test server that has none: `cookrew secret` then says so and exits 3.
+   */
+  secrets?: SecretsStore
+  audit?: (event: SecretAudit) => void
+  /**
+   * Was this terminal spawned for a served session? Read for the secret verbs
+   * only, and REQUIRED: an optional predicate fails open when nobody wires it.
+   */
+  isServed: (terminalId: string) => boolean
   /** Fork an agent from one of its turns (same path as IPC forking). */
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData
   routines: RoutineScheduler
   /** Ask the renderer to run a browser command; resolves with its output. */
   browserCommand: (args: string[], terminalId: string) => Promise<string>
+  /**
+   * Make a browser card in a workspace that is NOT on screen (an agent's own,
+   * while the owner looks at another). No engine is booted for it: the page
+   * runs when that workspace is shown. Absent in a test server that has none.
+   */
+  createBrowserInWorkspace?: (card: {
+    url: string
+    name: string
+    terminalId: string
+    workspaceId: string
+  }) => { name: string; adopted: boolean }
   notify: (message: string) => void
   /** Debug helper: capture the app window to a PNG, returns the file path. */
   captureWindow: () => Promise<string>
@@ -167,7 +209,9 @@ async function handleLine(
       // Per-outcome exit code (delivery contract): a shell caller's next
       // action differs per outcome, so collapsing every failure to 1 would
       // rebuild the ambiguity one layer down.
-      ...(error instanceof DeliveryError ? { exitCode: error.exitCode } : {})
+      // Any error that names its exit code — an ask delivery, a refused
+      // secret — hands it to the shell; the rest leave with 1.
+      ...(hasExitCode(error) ? { exitCode: error.exitCode } : {})
     })
   }
 }
@@ -178,6 +222,9 @@ async function handleLine(
  * rebuild). Retried once; a persistent condition (wrong workspace, not the
  * orch, unknown command) is a plain Error and never retried.
  */
+const hasExitCode = (error: unknown): error is { exitCode: number } =>
+  error instanceof Error && typeof (error as { exitCode?: unknown }).exitCode === 'number'
+
 export class RetryableDispatchError extends Error {}
 
 /** How long to wait before the single retry across a workspace switch. */
@@ -230,10 +277,14 @@ async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<st
       return cmdDispatch(request, deps)
     case 'note':
       return cmdNote(request, deps)
+    case 'secret':
+      return cmdSecretVerb(request, deps)
     case 'connect':
       return cmdConnect(request, deps)
     case 'recruit':
       return cmdRecruit(request, deps)
+    case 'rename':
+      return cmdRename(request, deps)
     case 'dismiss':
       return cmdDismiss(request, deps)
     case 'orch':
@@ -470,7 +521,66 @@ function findConnected(
       .find((e) => e.active && e.name.toLowerCase() === name.toLowerCase())
     if (entry) return terminalFromRegistry(entry)
   }
-  throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' not found among your connections. Run 'cookrew list'.`)
+  throw new Error(`${kind === 'terminal' ? 'Agent' : kind} '${name}' is not wired to you. Run 'cookrew list'.`)
+}
+
+/**
+ * The card a teammate names: from its wires, else from its own canvas
+ * (ask-reach.ts). Reaching an unwired card lays the cable, its event labelled
+ * with the verb that asked — the inquiry IS the relation (owner, 2026-10-31).
+ * A served caller is held to its wires.
+ */
+export function reachCard(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  name: string | undefined,
+  kind: ReachKind,
+  via: string
+): CanvasNode {
+  const label = kind === 'terminal' ? 'Agent' : kind === 'note' ? 'Note' : 'Browser'
+  if (!name) throw new Error(`Missing ${label.toLowerCase()} name. Run 'cookrew list'.`)
+  const me = self(request, deps)
+  if (kind === 'terminal' && name.toLowerCase() === me.name.toLowerCase()) {
+    throw new Error(`That is you ('${me.name}') — ask a teammate. Run 'cookrew list'.`)
+  }
+  const hit = reachByName({
+    selfId: me.id,
+    name,
+    kind,
+    wired: connectedOf(deps.store, me.id),
+    canvas: ownCanvas(deps, me.id)
+  })
+  if (hit) {
+    if (hit.wire) wire(deps, me, hit.node.id, via)
+    return hit.node
+  }
+  // Reboot fallback: a teammate the workspace files lost but the durable
+  // registry still tracks as active (agent-registry-spawn-broadca).
+  if (kind === 'terminal') {
+    const entry = deps.agents
+      .list()
+      .find((e) => e.active && e.name.toLowerCase() === name.toLowerCase())
+    if (entry) return terminalFromRegistry(entry)
+  }
+  throw new Error(
+    `${label} '${name}' not found in your workspace or among your connections. Run 'cookrew list --workspace'.`
+  )
+}
+
+/** The caller's own canvas, or null when it may only reach what it is wired to. */
+function ownCanvas(
+  deps: SocketServerDeps,
+  selfId: string
+): { workspaceId: string; nodes: readonly CanvasNode[] } | null {
+  if (deps.isServed(selfId)) return null
+  const workspaceId = deps.store.ownerOf(selfId)
+  if (workspaceId === undefined) return null
+  return { workspaceId, nodes: deps.store.workspaceState(workspaceId).nodes }
+}
+
+/** Lay the cable an inquiry made, attributed to the asker and the verb. */
+function wire(deps: SocketServerDeps, me: TerminalNodeData, otherId: string, via: string): void {
+  deps.store.withOpContext({ actor: me.orch ? 'orch' : 'agent', via }, () => deps.store.connectAcross(me.id, otherId))
 }
 
 /**
@@ -510,6 +620,43 @@ export function browserWorkspaceError(scope: {
   return null
 }
 
+/**
+ * WHICH WORKSPACE A CLI CALL MAY TOUCH (owner, 2026-11-01).
+ *
+ * An agent may make cards in ITS OWN workspace and nowhere else: `--workspace`
+ * is how it says which one it means, and naming another is refused rather than
+ * quietly done. A caller with no home workspace (a plain shell after a reboot)
+ * may name any. Pure, so the wording is pinned by tests.
+ */
+export function cliWorkspaceScope(input: {
+  wanted: string | null
+  /** Every workspace, for resolving a name or an id. */
+  all: readonly { id: string; name: string }[]
+  /** Where the calling terminal lives; null for a caller no workspace holds. */
+  caller: { id: string; name: string } | null
+  focused: string
+}): { id: string; name: string } {
+  const { wanted, all, caller, focused } = input
+  const byName = (value: string): { id: string; name: string } | undefined =>
+    all.find((w) => w.id === value) ?? all.find((w) => w.name.toLowerCase() === value.toLowerCase())
+  if (wanted !== null && wanted !== '') {
+    const found = byName(wanted)
+    if (!found) throw new Error(`No workspace called '${wanted}'. You have: ${all.map((w) => w.name).join(', ')}.`)
+    if (caller !== null && found.id !== caller.id) {
+      throw new Error(
+        `You can only make cards in your own workspace ("${caller.name}"), not "${found.name}". ` +
+          `Nothing was created. Ask the owner to switch, or keep the card in "${caller.name}".`
+      )
+    }
+    return found
+  }
+  // No flag: the caller's own workspace, never the one the owner happens to be looking at.
+  if (caller !== null) return caller
+  const current = all.find((w) => w.id === focused)
+  if (!current) throw new Error('No workspace is open.')
+  return current
+}
+
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
   // DELIBERATELY focus, not the caller's workspace. Everything below resolves
@@ -523,18 +670,44 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   const active = { id: activeId, name: workspaceName(deps, activeId) }
   const [sub, name] = request.args
 
+  // A served caller never reaches the owner's screens, cameras or phones
+  // (use-commands.ts · servedUseRefusal) — checked before anything resolves.
+  if (deps.isServed(me.id)) {
+    const refusal = servedUseRefusal(request.args, (cardName) => {
+      const card = deps.store.nodeByName(cardName, 'browser') as BrowserNodeData | undefined
+      return card ? (card.tabs ?? []).map((tab) => tab.url).concat(card.url) : []
+    })
+    if (refusal) throw new Error(refusal)
+  }
+
   // Only `create` cares where the CALLER lives: it anchors the new node to the
   // caller's position and connects the two, which is impossible across a
   // workspace boundary. Every other subcommand just needs the BROWSER to be
   // here, so a caller parked elsewhere must keep working (it did before).
   if (sub === 'create') {
-    if (!deps.store.node(me.id)) {
-      const home = deps.store.workspaceOfNode(me.id)
-      const error = browserWorkspaceError({
-        active,
-        caller: home ? { id: home.id, name: home.name } : undefined
-      })
-      if (error) throw new Error(error)
+    const home = deps.store.workspaceOfNode(me.id)
+    const wanted = typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null
+    // WHERE the card goes: the caller's own workspace unless it says otherwise,
+    // and never a workspace that is not its own (cliWorkspaceScope).
+    const scope = cliWorkspaceScope({
+      wanted,
+      all: deps.listWorkspaces().workspaces,
+      caller: home ? { id: home.id, name: home.name } : null,
+      focused: activeId
+    })
+    // A card made where nobody is looking is stored, not driven: the page runs
+    // when that workspace is shown. Same name-adoption rule as on screen.
+    if (scope.id !== activeId) {
+      const [, url, requestedName] = request.args
+      if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>] [--new]')
+      if (!deps.createBrowserInWorkspace) {
+        throw new Error(`This build cannot make a card in "${scope.name}" while "${active.name}" is on screen.`)
+      }
+      const made = deps.createBrowserInWorkspace({ url, name: requestedName || 'Browser', terminalId: me.id, workspaceId: scope.id })
+      return (
+        `Created browser "${made.name}" in workspace "${scope.name}"` +
+        (made.adopted ? ' (it was already there — wired to you and navigated)' : ' — it opens when that workspace is shown')
+      )
     }
     // me.id, NOT request.terminalId. The raw id is the env the caller's process
     // INHERITED — for an agent the harness spawned in the background that is
@@ -543,6 +716,33 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
     // the raw id onward meant create()'s `store.node(terminalId)` missed, so the
     // card was anchored nowhere, owned no edge, and announced itself as "not
     // connected" — the caller's own browser, disowned by its caller.
+    // A DELIVERABLE WITH THE SAME NAME IS THE SAME DELIVERABLE. Two agents
+    // opened one page twice: the second could not see the first's card
+    // (`cookrew list` is what is wired to YOU) and the store minted "(2)".
+    // A name that already exists on this canvas is adopted — the caller is
+    // wired to it, and it is navigated when the URL differs — unless the
+    // caller says --new. The engine is never asked to create a second.
+    const [, url, requestedName] = request.args
+    if (requestedName && !request.flags.new) {
+      const existing = deps.store.nodeByName(requestedName, 'browser') as BrowserNodeData | undefined
+      if (existing) {
+        const wired = deps.store.connectedTo(me.id).some((n) => n.id === existing.id)
+        if (!wired) deps.store.connect(me.id, existing.id)
+        const navigated = url !== undefined && url !== existing.url
+        if (navigated) await deps.browserCommand(['navigate', existing.name, url], me.id)
+        const holders = deps.store
+          .connectedTo(existing.id)
+          .filter((n) => n.kind === 'terminal' && n.id !== me.id)
+          .map((n) => n.name)
+        return (
+          `Browser "${existing.name}" already exists on this canvas` +
+          (holders.length > 0 ? ` (wired to ${holders.join(', ')})` : '') +
+          ` — ${wired ? 'already wired to you' : 'now wired to you too'}` +
+          (navigated ? `, navigated to ${url}` : '') +
+          '. Pass --new to create a second one.'
+        )
+      }
+    }
     return deps.browserCommand(request.args, me.id)
   }
 
@@ -569,15 +769,36 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   }
   // Same repair for every other subcommand. These do not anchor a node, but the
   // id still names who is driving, and one identity per command beats two.
-  return deps.browserCommand(request.args, me.id)
+  const result = await deps.browserCommand(request.args, me.id)
+  // The cable lights once the verb has run: driving the page is agent →
+  // browser, reading it is browser → agent (shared/cable-signal browserVerbKind).
+  // Resolved by name on the active canvas — the same browser the engine drove.
+  const kind = browserVerbKind(sub ?? '')
+  const browser = name ? deps.store.nodeByName(name, 'browser') : undefined
+  if (kind && browser) {
+    // Driving or reading a page of your own canvas wires you to it. Checked
+    // in memory first: this runs on every click of a browser session.
+    const ownCanvasIsActive = deps.store.ownerOf(me.id) === deps.store.focusedId
+    if (ownCanvasIsActive && !deps.isServed(me.id) && !deps.store.isConnected(me.id, browser.id)) {
+      wire(deps, me, browser.id, `browser ${sub}`)
+    }
+    deps.signal?.(kind === 'write' ? { from: me.id, to: browser.id, kind } : { from: browser.id, to: me.id, kind })
+  }
+  return result
 }
 
 function workspaceName(deps: SocketServerDeps, id: string): string {
   return deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
 }
 
-function cmdList(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.all) return cmdListAll(deps)
+  // `list --workspace [name]` is the one spelling now (owner, 2026-11-01):
+  // the workspace's every card, not just the ones wired to you. `--canvas`
+  // still works so an agent's old habit is not a broken command, and says
+  // nothing: a deprecation notice in the output of a tool call is noise.
+  if (request.flags.workspace !== undefined) return cmdListCanvas(request, deps)
+  if (request.flags.canvas) return cmdListCanvas(request, deps)
   const me = self(request, deps)
   // Relative to where the CALLER lives. An agent in workspace B asking what it
   // is connected to must be told "[workspace: X]" against B — its own canvas —
@@ -620,8 +841,62 @@ function cmdList(request: CliRequest, deps: SocketServerDeps): string {
   if (agents.length + notes.length + browsers.length === 0) {
     lines.push('', 'No connected agents, notes, or browsers. Connect nodes on the canvas or use `cookrew note create`.')
   }
+  // WHAT YOU ARE NOT WIRED TO still exists. An orchestrator checking whether
+  // a teammate's card is there read this list, saw nothing, and made the card
+  // again. The count names the gap; --canvas lists every card and its wiring.
+  const canvas = deps.store.workspaceState(activeId).nodes
+  const wiredIds = new Set(connected.map((h) => h.node.id))
+  const unwired = canvas.filter((n) => n.id !== me.id && !wiredIds.has(n.id))
+  if (unwired.length > 0) {
+    const count = `${unwired.length} more card${unwired.length === 1 ? '' : 's'} on this canvas ${unwired.length === 1 ? 'is' : 'are'} not wired to you`
+    // Askable by name unless the caller is served (ask-reach.ts).
+    const reach = deps.isServed(me.id)
+      ? ''
+      : ' yet; you can ask, read or drive any of them by name, and that wires you to it'
+    lines.push('', `${count}${reach} — \`cookrew list --workspace\` lists every card and who it is wired to.`)
+  }
   return lines.join('\n')
 }
+
+/**
+ * Every card on the caller's canvas, whoever it is wired to. The answer to
+ * "does a card called X already exist?", which the wired-only listing above
+ * cannot give — and the reason a page was once opened twice.
+ */
+function cmdListCanvas(request: CliRequest, deps: SocketServerDeps): string {
+  const me = self(request, deps)
+  const home = deps.store.workspaceOfNode(me.id)
+  // `list --workspace` alone means "mine"; with a value it names one.
+  const named = typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null
+  const wanted = request.flags.workspace === true ? null : named
+  // Reading follows the same rule as writing: your own workspace, or one you
+  // name when you have none. Naming another agent's is refused.
+  const scope = cliWorkspaceScope({
+    wanted,
+    all: deps.listWorkspaces().workspaces,
+    caller: home ? { id: home.id, name: home.name } : null,
+    focused: deps.store.focusedId
+  })
+  const activeId = scope.id
+  const nodes = deps.store.workspaceState(activeId).nodes
+  const wsName = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)?.name ?? activeId
+  const terminalNames = (id: string): string[] =>
+    deps.store.connectedTo(id).filter((n) => n.kind === 'terminal').map((n) => n.name)
+  const lines: string[] = [`Everything on "${wsName}" (${nodes.length} card${nodes.length === 1 ? '' : 's'}):`]
+  for (const kind of ['terminal', 'note', 'browser'] as const) {
+    const group = nodes.filter((n) => n.kind === kind)
+    if (group.length === 0) continue
+    lines.push('', `${kind === 'terminal' ? 'Agents' : kind === 'note' ? 'Notes' : 'Browsers'}:`)
+    for (const n of group) {
+      const wiredTo = terminalNames(n.id).filter((name) => name !== n.name)
+      const you = n.id === me.id ? ' (you)' : ''
+      const url = n.kind === 'browser' ? ` - url: ${(n as BrowserNodeData).url}` : ''
+      lines.push(`  - "${n.name}"${you}${url}${wiredTo.length > 0 ? ` — wired to: ${wiredTo.join(', ')}` : ' — wired to nobody'}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 
 /** Global roster from the durable agent registry, grouped by workspace. */
 function cmdListAll(deps: SocketServerDeps): string {
@@ -647,8 +922,9 @@ function cmdListAll(deps: SocketServerDeps): string {
 async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
   if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
-  const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
+  const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
   let session = deps.ptys.get(target.id)
+  let cold = false
   if (!session) {
     // Cross-workspace / after reboot: the tmux session may be alive with its
     // PTY detached (workspace switch drops clients). Reattach through the
@@ -659,15 +935,25 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
       console.error('Reattach failed:', error)
     }
     session = deps.ptys.get(target.id)
+    cold = true
   }
   // Still transient during a workspace switch (PTYs rebuilding) — retried once.
   if (!session) throw new RetryableDispatchError(`Agent '${target.name}' has no running terminal`)
+  // A pane we just spawned is still painting its resumed transcript, and a
+  // carriage return sent into that window is swallowed while the brief stays
+  // in the box (measured live 2026-10-31: the whole ask came back
+  // `unsubmitted`, and the same CR worked once the pane went quiet). Wait for
+  // quiet before the first byte goes in. A warm agent pays nothing.
+  if (cold) {
+    const ready = await waitForReady(session)
+    if (!ready) console.warn(`Agent '${target.name}' was still booting when the ask was delivered`)
+  }
   if (request.flags.raw) {
     return askRaw(session, decodeRawEscapes(String(request.flags.raw)))
   }
   if (!prompt) throw new Error('Missing prompt')
   // The asking pane, for the cable between the two. Already resolved once by
-  // findConnected; resolving is cheap and the id is what the canvas needs.
+  // reachCard; resolving is cheap and the id is what the canvas needs.
   const me = self(request, deps)
   // No armed-dispatch check here, on purpose (Sol r5 P0-1): a route-level
   // refusal would only be a fast path with a check-to-submit race behind it.
@@ -821,7 +1107,7 @@ function cmdDispatch(request: CliRequest, deps: SocketServerDeps): string {
 function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   const [name] = request.args
   if (!name) throw new Error('Usage: cookrew check "Agent Name"')
-  const target = findConnected(request, deps, name, 'terminal') as TerminalNodeData
+  const target = reachCard(request, deps, name, 'terminal', 'check') as TerminalNodeData
   let session = deps.ptys.get(target.id)
   if (!session) {
     // Cross-workspace / after reboot: the tmux session may be alive with its
@@ -837,6 +1123,48 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
   // Still transient during a workspace switch (PTYs rebuilding) — retried once.
   if (!session) throw new RetryableDispatchError(`Agent '${target.name}' has no running terminal`)
   return session.viewportText()
+}
+
+/**
+ * THE CALLER OF A SECRET VERB — an owner pane of this app, and nothing else.
+ *
+ * Every other verb resolves its caller generously: `--as <name>` lets a
+ * plain shell speak as an agent, and a terminal the store has forgotten is
+ * still answered from the agent registry. A secret read must not be that
+ * generous. It needs a real COOKREW_TERMINAL_ID (repaired against the
+ * session bindings, as every verb's is) that resolves to a LIVE pane of
+ * this app, and that pane must not have been spawned for a served session —
+ * the fact the pty layer and the served spawn contexts hold, never the
+ * node's `servedSession`, which marks the owner's receipt of a session
+ * served somewhere else.
+ */
+export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  const refuse = (why: string): SecretCliError =>
+    new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused)
+  if (typeof request.flags.as === 'string') throw refuse('--as names another pane')
+  if (!request.terminalId) throw refuse('this shell is not a Cookrew terminal')
+  const identity = resolveCallerTerminalId({
+    envTerminalId: request.terminalId,
+    sessionId: request.sessionId ?? null,
+    terminals: deps.store.terminalsAcross?.() ?? []
+  })
+  const id = identity.terminalId
+  const node = deps.store.node(id) ?? deps.store.nodeAcrossWorkspaces?.(id)?.node
+  if (!node || node.kind !== 'terminal') throw refuse('no live pane of this app answers to this terminal')
+  if (deps.isServed(id)) throw refuse('never readable from a served session')
+  return node
+}
+
+/** `cookrew secret …` (secret-cli.ts), with the caller held to ownerPaneOf. */
+function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
+  if (!deps.secrets) {
+    throw new SecretCliError("refused: secrets are the owner's — this app holds none", SECRET_EXIT.refused)
+  }
+  return cmdSecret(request, {
+    secrets: deps.secrets,
+    self: (r) => ownerPaneOf(r, deps),
+    audit: (event) => deps.audit?.(event)
+  })
 }
 
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
@@ -864,7 +1192,9 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return `Created note "${note.name}"`
     }
     case 'read': {
-      const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      const note = reachCard(request, deps, rest[0], 'note', 'note read') as NoteNodeData
+      // Reading takes the note's words out: the pulse runs note → agent.
+      deps.signal?.({ from: note.id, to: me.id, kind: noteVerbKind('read') ?? 'read' })
       const lines = note.content.split('\n')
       const offset = rest[1] ? Math.max(1, parseInt(rest[1], 10)) : 1
       const limit = rest[2] ? parseInt(rest[2], 10) : lines.length
@@ -873,13 +1203,15 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return [`[${lines.length} lines total]`, ...numbered].join('\n')
     }
     case 'write': {
-      const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      const note = reachCard(request, deps, rest[0], 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
       deps.store.writeNote(note.id, rest[1] ?? '')
+      // Writing puts words in: agent → note.
+      deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
       return 'OK'
     }
     case 'edit': {
-      const note = findConnected(request, deps, rest[0], 'note') as NoteNodeData
+      const note = reachCard(request, deps, rest[0], 'note', 'note edit') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
       const [, oldText, newText] = rest
       if (oldText === undefined || newText === undefined) {
@@ -889,6 +1221,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
         throw new Error(`Text not found in note '${note.name}'`)
       }
       deps.store.writeNote(note.id, note.content.replace(oldText, newText))
+      deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('edit') ?? 'write' })
       return 'OK'
     }
     case 'delete': {
@@ -920,15 +1253,37 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   return `Connected "${a.name}" and "${b.name}"`
 }
 
-function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
-  const me = requireOrch(request, deps)
-  const [name] = request.args
+const RECRUIT_USAGE =
+  'Usage: cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]\n' +
+  '  With --prompt and no name, the agent is named from its prompt (Sous), the way /rename titles a chat.'
+
+/**
+ * `cookrew recruit` (owner, 2026-11-01): ANY agent may make a teammate in its
+ * own workspace, wired to it — the Orch alone may also place one in another
+ * workspace, or grow its workspace by a directory. `--prompt` is the new
+ * agent's first prompt: it goes in through the dispatch engine (the verified
+ * path Sous's recruit uses, recruit-delivery.ts) and, with no name given,
+ * names the card — Sous's pick, else a stand-in read off the words. The answer
+ * comes back once both have settled, so the name it prints is the one to ask.
+ */
+export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  if (request.flags.help) return RECRUIT_USAGE
+  const me = self(request, deps)
+  const [nameArg] = request.args
+  const chosen = nameArg === undefined ? '' : cleanAgentName(nameArg)
+  if (nameArg !== undefined && chosen === '') throw new Error(`That is not a name. ${RECRUIT_USAGE}`)
+  const promptFlag = request.flags.prompt
+  const prompt = typeof promptFlag === 'string' ? promptFlag.trim() : ''
+  if (promptFlag !== undefined && prompt === '') throw new Error(`--prompt needs the task in quotes. ${RECRUIT_USAGE}`)
+  if (prompt && !deps.dispatch) throw new Error('This build cannot hand a recruit its prompt (no dispatch engine).')
   const presetName = String(request.flags.preset ?? 'Claude Code')
   const preset = PRESETS.find((p) => p.name.toLowerCase() === presetName.toLowerCase())
   if (!preset) {
     throw new Error(`Unknown preset '${presetName}'. Run 'cookrew preset list'.`)
   }
   const command = request.flags.command ? String(request.flags.command) : preset.command
+  // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
+  if (prompt && !command.trim()) throw new Error(`The ${preset.name} preset is a bare shell; it takes no --prompt.`)
   const dirFlag = request.flags.dir ? String(request.flags.dir) : null
   const cwd = dirFlag ?? me.cwd
   // Layer 2 (cross-workspace-orch-fix-dec): --dir routes to the workspace
@@ -940,24 +1295,39 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
     home.id,
     dirFlag
   )
+  if (!me.orch && (plan.workspaceId !== home.id || plan.autoAddDir)) {
+    throw new Error(
+      `${dirFlag} is not a directory of your workspace ("${home.name}"). Only the Orch recruits elsewhere or adds a directory; ` +
+        'leave out --dir to recruit beside you. Nothing was created.'
+    )
+  }
+  // A name the caller chose is the address it will ask by: refused when taken,
+  // never quietly suffixed into one it does not know (agent-rename.ts).
+  if (chosen && deps.store.workspaceState(plan.workspaceId).nodes.some((n) => n.name.trim().toLowerCase() === chosen.toLowerCase())) {
+    throw new Error(`"${chosen}" is already a card in this workspace. Pick another name, or leave it out and give --prompt. Nothing was created.`)
+  }
   if (plan.autoAddDir) deps.addWorkspaceDir(home.id, plan.autoAddDir)
   const siblings = connectedOf(deps.store, me.id).filter((h) => h.node.kind === 'terminal').length
+  const standIn = chosen || (prompt ? nameFromPrompt(prompt) : preset.name)
   const terminal: TerminalNodeData = {
     kind: 'terminal',
     id: randomUUID(),
-    name: name || preset.name,
+    name: standIn,
     preset: preset.name,
     command,
     cwd,
     orch: false,
     role: request.flags.role ? String(request.flags.role) : null,
+    // The prompt is the card's BRIEF (display only, never typed on a respawn;
+    // recruit-node.ts) — it goes in once, through the dispatch below.
+    ...(prompt ? { brief: prompt } : {}),
     position: {
       x: me.position.x + (siblings + 1) * (DEFAULT_TERMINAL_SIZE.width + 60),
       y: me.position.y + 120
     },
     size: DEFAULT_TERMINAL_SIZE
   }
-  const added = deps.store.withOpContext({ actor: 'orch', via: 'recruit' }, () => {
+  const added = deps.store.withOpContext({ actor: me.orch ? 'orch' : 'agent', via: 'recruit' }, () => {
     const node = deps.store.addNodeToWorkspace(plan.workspaceId, terminal) as TerminalNodeData
     deps.store.connectAcross(me.id, node.id)
     return node
@@ -965,7 +1335,24 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   deps.spawnTerminal(added)
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
-  const lines = [`Recruited "${added.name}" (${preset.name}) into workspace "${wsName(plan.workspaceId)}"`]
+
+  // Named and briefed side by side: the name needs no running agent, and the
+  // brief waits for the harness's prompt anyway.
+  const [named, delivered] = await Promise.all([
+    prompt && !chosen && deps.autoNameTerminal
+      ? deps.autoNameTerminal(added.id, added.name, prompt).catch(() => null)
+      : Promise.resolve(null),
+    prompt && deps.dispatch
+      ? deliverToRecruit(deps.dispatch, { nodeId: added.id, sentence: prompt, originId: me.id }).then(
+          ({ dispatchId }) => ({ ok: true as const, dispatchId }),
+          (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) })
+        )
+      : Promise.resolve(null)
+  ])
+  const name = named?.ok ? named.name : added.name
+
+  const lines = [`Recruited "${name}" (${preset.name}) into workspace "${wsName(plan.workspaceId)}", wired to you`]
+  if (named?.ok && named.changed) lines.push(`Named from its prompt by Sous (stand-in was "${added.name}")`)
   if (plan.autoAddDir) {
     lines.push(`Added ${plan.autoAddDir} to workspace "${home.name}" (no workspace owned it)`)
   }
@@ -973,10 +1360,81 @@ function cmdRecruit(request: CliRequest, deps: SocketServerDeps): string {
   // against the ORCH's own workspace — it is the one being surprised.
   if (plan.workspaceId !== (deps.store.ownerOf(me.id) ?? deps.store.focusedId)) {
     lines.push(
-      `⚠ "${added.name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
+      `⚠ "${name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )
   }
+  if (delivered?.ok) lines.push(`Prompt delivered (dispatch ${delivered.dispatchId}). Follow it: cookrew status "${name}"`)
+  if (delivered && !delivered.ok) {
+    // The card exists either way; say so, and fail, so a script does not
+    // carry on as if the work had started.
+    lines.push(`⚠ The prompt did not reach "${name}": ${delivered.error}. Send it again: cookrew ask "${name}" "…"`)
+    throw new Error(lines.join('\n'))
+  }
   return lines.join('\n')
+}
+
+const RENAME_KINDS: Record<string, ReachKind> = { agent: 'terminal', terminal: 'terminal', note: 'note', browser: 'browser' }
+const KIND_WORD: Record<ReachKind, string> = { terminal: 'agent', note: 'note', browser: 'browser' }
+
+/**
+ * The card `cookrew rename "Card" "New"` may rename (owner, 2026-11-02): you,
+ * or any agent, note or browser the ask-anyone rule reaches (ask-reach.ts) —
+ * what you are wired to, wherever it lives, then every card on your own
+ * canvas. A served caller is held to its wires. Unlike an inquiry a rename
+ * lays no cable: it is an edit, not a conversation. Cards of different kinds
+ * wearing the name are refused; --kind picks one.
+ */
+function renameTarget(request: CliRequest, deps: SocketServerDeps, me: TerminalNodeData, name: string): CanvasNode {
+  const flag = request.flags.kind
+  const only = typeof flag === 'string' ? RENAME_KINDS[flag.trim().toLowerCase()] : undefined
+  if (flag !== undefined && only === undefined) throw new Error('--kind is one of: agent, note, browser')
+  const wanted = name.trim().toLowerCase()
+  if ((only === undefined || only === 'terminal') && me.name.trim().toLowerCase() === wanted) return me
+  const named = (node: CanvasNode): boolean =>
+    node.id !== me.id &&
+    (node.kind === 'terminal' || node.kind === 'note' || node.kind === 'browser') &&
+    (only === undefined || node.kind === only) &&
+    node.name.trim().toLowerCase() === wanted
+  const canvas = ownCanvas(deps, me.id)
+  const sources = [connectedOf(deps.store, me.id).map((hit) => hit.node), canvas?.nodes ?? []]
+  for (const nodes of sources) {
+    const hits = nodes.filter(named)
+    const kinds = [...new Set(hits.map((h) => KIND_WORD[h.kind as ReachKind]))]
+    // Two of one kind (wired agents in two workspaces) resolve as ask does:
+    // the first wins. Only kinds --kind can tell apart are refused.
+    if (kinds.length === 1) return hits[0]
+    if (kinds.length > 1) {
+      throw new Error(
+        `${hits.length} cards are called '${name}' (${kinds.join(', ')}). ` +
+          `Pick one with --kind ${kinds.join('|')}.`
+      )
+    }
+  }
+  throw new Error(
+    `'${name}' is not you or a card ${canvas ? 'in your workspace or ' : ''}wired to you. ` +
+      `Rename yourself with: cookrew rename "New name". Run 'cookrew list --workspace'.`
+  )
+}
+
+/**
+ * `cookrew rename ["Card"] "New name"` (owner, 2026-11-01; any card of the
+ * workspace 2026-11-02): one argument renames the caller, the way /rename
+ * names the chat it is typed in. For an agent herdr's pane title, tab and
+ * agent name follow. A name another card of the workspace wears is refused,
+ * not suffixed: a name is the address `cookrew ask` resolves.
+ */
+export function cmdRename(request: CliRequest, deps: SocketServerDeps): string {
+  const usage = 'Usage: cookrew rename "New name"  |  cookrew rename "Card" "New name" [--kind agent|note|browser]'
+  if (request.flags.help) return usage
+  if (!deps.renameCard) throw new Error('This build cannot rename a card.')
+  const me = self(request, deps)
+  const [first, second] = request.args
+  if (first === undefined || request.args.length > 2) throw new Error(usage)
+  const target = second === undefined ? me : renameTarget(request, deps, me, first)
+  const done = deps.renameCard(target.id, second ?? first, 'refuse')
+  if (!done.ok) throw new Error(done.error)
+  if (!done.changed) return `"${done.name}" is already called that.`
+  return `Renamed "${target.name}" → "${done.name}"`
 }
 
 function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
@@ -1093,6 +1551,10 @@ const SOUS_SURFACES: ReadonlySet<string> = new Set(['canvas', 'zoom', 'phone', '
 /** The one method of the controller a door needs; tests fake it in one line. */
 export interface SousDoor {
   handle: (input: SousCommandInput) => Promise<SousCommandResult>
+  /** The box's commit of a shown decision (R3); optional for a door with no decide step. */
+  commit?: (token: string, choice?: { target?: string }, caller?: { surface: SousSurface; callerId?: string }) => Promise<SousCommandResult>
+  /** The box closed with the decision uncommitted: drop the token. */
+  cancel?: (token: string, caller?: { surface: SousSurface; callerId?: string }) => boolean
 }
 
 async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
@@ -1360,10 +1822,13 @@ function cmdPreset(): string {
 
 const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
-Usage:
+Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew list                                  List connected agents, notes, and browsers
-  cookrew ask "Agent" "prompt"                  Send a prompt to a connected agent, wait for the reply
-  cookrew ask "Agent" --raw "bytes"             Send raw input (\\n Enter, \\t Tab, \\e ESC, \\xNN byte)
+  cookrew list --workspace [<name>]             Every card in your workspace (or the one named)
+  cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
+                                                (asking, checking, reading a note or driving a browser by name
+                                                wires you to it if you were not already)
+  cookrew ask "Agent" --raw "bytes"             Send raw input (\\n or \\r Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
   cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
@@ -1374,14 +1839,31 @@ Usage:
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
   cookrew note write "Name" "content"           Replace a note's content
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
-  cookrew note delete "Name"                    Remove a connected note (destructive)
-  cookrew browser create URL ["Name"]            Create a connected browser browser
+  cookrew note delete "Name"                    Remove a note wired to you (destructive)
+  cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its environment
+                                                (its children inherit it; nothing is printed — the better of the two paths)
+  cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
+  cookrew secret list                           Sealed secret names, never values
+                                                (owner panes only; every read is logged)
+  cookrew browser create URL ["Name"] [--workspace <name>] [--new]
+                                                Create a browser card in YOUR workspace
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...
+  cookrew browser create screen://main|window://App[/Title]|adb://SERIAL|vphone://VM|cam://0 ["Name"]
+                                                A USE card: a Mac display or window (?roi=x,y,w,h), a phone, a camera
+  cookrew browser screenshot "Card" [file.jpg]   Save what the card shows; prints its point size
+  cookrew browser tap "Card" X Y | swipe "Card" X1 Y1 X2 Y2 [ms]   Point at a screen (any card)
+  cookrew browser type|key|scroll|status "Card" ...   Drive a screen card; status says live or why offline
   cookrew browser tabs "Browser"                  List the browser's tabs (pages opened by the site land here)
   cookrew browser tab-new "Browser" URL           Open a new tab in the browser
   cookrew browser tab-select|tab-close "Browser" N   Switch to / close tab N
   cookrew connect "From" "To"                   (Orch) Wire two nodes together
-  cookrew recruit "Name" [--preset P] [--role R] [--dir PATH]   (Orch) Spawn a teammate
+  cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]
+                                                Spawn a teammate wired to you, in your workspace (any agent);
+                                                --prompt is its first prompt, and with no name it is named
+                                                from the prompt (Sous). --dir elsewhere is Orch only
+  cookrew rename ["Card"] "New name"            Rename yourself, or any agent, note or browser of your
+                                                workspace (--kind agent|note|browser when two share a name);
+                                                for an agent herdr's pane title, tab and agent name follow
   cookrew dismiss "Name"                        (Orch) Remove a teammate
   cookrew orch "Name"                           Make this agent the workspace's orch (the door)
   cookrew fork "Agent" [--turn N]               (Orch) Fork a NEW agent from a past turn (original untouched)

@@ -1,0 +1,266 @@
+:root {
+  --paper: #f2efe7;
+  --ink: #231e16;
+  --muted: #857d6e;
+  --rule: #ddd6c8;
+  --card: #fbf8f0;
+  --ok: #2f8a4c;
+  --bad: #c43a2f;
+  --silhouette: #231e16;
+  color-scheme: light;
+}
+/* dark tokens as the shell paints its stage: paper 23 20 15 */
+:root[data-theme='dark'] {
+  --paper: #17140f;
+  --ink: #e9e2cf;
+  --muted: #9a917f;
+  --rule: #3a352d;
+  --card: #24211d;
+  --ok: #6fd08b;
+  --bad: #ff7a6b;
+  --silhouette: #e9e2cf;
+  --cf-shadow: #0b0d1c;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #17140f;
+    --ink: #e9e2cf;
+    --muted: #9a917f;
+    --rule: #3a352d;
+    --card: #24211d;
+    --ok: #6fd08b;
+    --bad: #ff7a6b;
+    --silhouette: #e9e2cf;
+    --cf-shadow: #0b0d1c;
+    color-scheme: dark;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* the figure kit's theme hook: outer silhouettes follow the page */
+.cf {
+  color: var(--silhouette);
+  display: block;
+}
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+h1 {
+  font-size: 14px;
+  margin: 0;
+}
+h1 span,
+.muted {
+  color: var(--muted);
+  font-weight: 400;
+}
+.controls {
+  display: flex;
+  gap: 14px;
+}
+select,
+input {
+  font: inherit;
+  color: inherit;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+.toc {
+  display: flex;
+  gap: 14px;
+  padding: 8px 20px;
+}
+.toc a {
+  color: var(--muted);
+}
+main {
+  padding: 0 20px 40px;
+}
+section {
+  margin: 28px 0;
+}
+h2 {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 4px;
+}
+h3 {
+  font-size: 12px;
+  margin: 18px 0 6px;
+}
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+}
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cell small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+table {
+  border-collapse: collapse;
+  min-width: 520px;
+}
+th,
+td {
+  text-align: left;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ok {
+  color: var(--ok);
+}
+.bad {
+  color: var(--bad);
+  font-weight: 700;
+}
+.machine {
+  position: relative;
+}
+.portal {
+  position: absolute;
+  overflow: hidden;
+  transform-origin: 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px;
+}
+.portal .ws {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+}
+.portal .ws svg {
+  width: 9px;
+  height: 9px;
+}
+.stale {
+  opacity: 0.55;
+}
+.box {
+  position: relative;
+}
+.av {
+  position: absolute;
+  cursor: pointer;
+}
+.av > svg {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+}
+.av .card {
+  position: absolute;
+  z-index: 1;
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+  transform: translate(calc(var(--i) * 2px), calc(var(--i) * -1px)) rotate(calc(var(--i) * -4deg));
+  pointer-events: none;
+}
+.av:hover {
+  z-index: 4;
+}
+.av:hover .card {
+  transform: translate(calc(var(--i) * -26px - 10px), calc(var(--i) * -9px - 14px)) rotate(calc(-14deg + var(--i) * 7deg));
+}
+.av .tip {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  z-index: 6;
+  width: 240px;
+  padding: 6px 8px;
+  background: var(--card);
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: 2px 2px 0 var(--ink);
+  font-size: 11px;
+}
+.av:hover .tip {
+  display: block;
+}
+.fleetrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: flex-end;
+  margin-bottom: 18px;
+}
+.timing {
+  font-size: 13px;
+}
+.timing b {
+  font-size: 18px;
+}
+@media (max-width: 560px) {
+  main,
+  .top,
+  .toc {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  table {
+    min-width: 0;
+  }
+}
+
+/* a row on the shell's dark paper, whatever the page theme */
+.on-dark {
+  --cf-shadow: #0b0d1c;
+  background: #17140f;
+  color: #e9e2cf;
+  border-radius: 10px;
+  padding: 10px;
+  margin-top: 8px;
+}
+.on-dark .cf {
+  color: #e9e2cf;
+}
+.on-dark small {
+  color: #9a917f;
+}
+.phone {
+  width: 390px;
+  height: 844px;
+  overflow-y: auto;
+  border: 2px solid var(--ink);
+  border-radius: 34px;
+  padding: 40px 16px;
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}

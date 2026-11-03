@@ -86,8 +86,8 @@ export function recordThumbSuccess(backoffs: ThumbBackoffs, id: string): ThumbBa
 // The batch poll (perf lane L7): what to ask for, and what an answer means.
 // ---------------------------------------------------------------------------
 
-import { THUMB_BATCH_MAX } from '../../shared/thumb-batch'
-export { THUMB_BATCH_MAX }
+import { THUMB_BATCH_MAX, THUMB_BATCH_TIMEOUT_MS } from '../../shared/thumb-batch'
+export { THUMB_BATCH_MAX, THUMB_BATCH_TIMEOUT_MS }
 
 export interface ThumbCandidate {
   readonly id: string

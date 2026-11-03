@@ -2,6 +2,8 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+// @ts-expect-error -- a plain .mjs build helper, tested on its own
+import { keepRecentChunks } from './scripts/keep-recent-chunks.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 
@@ -26,6 +28,9 @@ export default defineConfig({
     }
   },
   renderer: {
-    plugins: [react()]
+    // Earlier builds' chunks stay for a while (scripts/keep-recent-chunks.mjs):
+    // a phone that loaded the page before a rebuild must still find them.
+    build: { emptyOutDir: false },
+    plugins: [react(), keepRecentChunks()]
   }
 })

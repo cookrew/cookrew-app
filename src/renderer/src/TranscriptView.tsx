@@ -716,6 +716,7 @@ export const TranscriptView = forwardRef<
             placeholderHeight={block ? undefined : estHeight}
             titleMode={titleMode}
             translated={translated}
+            terminalId={terminalId}
             ref={rowRef(id)}
           />
         )

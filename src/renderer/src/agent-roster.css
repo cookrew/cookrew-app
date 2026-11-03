@@ -1216,8 +1216,12 @@
 
 .cr-ckpt-list .cr-ckpt-row {
   position: absolute;
-  left: 0;
+  /* A tag at the bar, as wide as its words — not a bar across the lane. With
+     left:0 every laid row was a 336px slab over the transcript (phone report
+     2026-11-01: five black bars hiding the message text). The row is a flex
+     box anchored right, so it shrinks to its content and grows leftward. */
   right: 0;
+  max-width: 100%;
   transform: translateY(-50%); /* same anchoring maths as the here-marker */
   pointer-events: auto; /* HIGH-2 opt-in — see the register above */
 }
@@ -1236,11 +1240,15 @@
 }
 
 .cr-ckpt-title-text {
-  display: inline-block;
+  /* INLINE at rest: the clip's ellipsis applies only to inline content, and an
+     inline-block mover is one atomic box the clip cuts mid-letter ("Update
+     commen"). It becomes a box only while it marquees, which needs transform. */
+  display: inline;
   white-space: nowrap;
 }
 
 .cr-ckpt-title-text.marquee {
+  display: inline-block;
   animation: cr-ckpt-title-marquee 6s linear infinite alternate;
 }
 
@@ -1943,6 +1951,11 @@
   border-color: var(--amber-deep);
 }
 
+/* R2 · the route dial's two small lines: this turn's model · tokens · cost,
+   and "applies on restart" / "gateway offline". Same strip, same type. */
+.cr-tune-turn { color: var(--phos); opacity: 0.85 }
+.cr-tune-row.group { color: var(--phos-glow) }
+
 .cr-tune-chip.refused .cr-tune-flag {
   color: var(--amber-deep);
 }
@@ -2051,4 +2064,350 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ==== a zoomed terminal's own browsers and notes (AttachPanel) ====
+   Left column = the dials (MDL / EFF / RTE), then the side tabs under them.
+   Middle = transcripts, and — when an item is open — the item in the lower
+   half. The checkpoint rail stays on the right at full height. */
+.popout-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.popout-main > .ctx-transcript {
+  flex: 1 1 0;
+}
+.popout-main.split > .ctx-transcript,
+.popout-main.split > .attach-panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.popout-side {
+  flex: 0 0 auto;
+  width: 46px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Over the transcript, so the tune lists and the widened tabs cover it. */
+  z-index: 5;
+  background: var(--phos-bg);
+  border-right: 1px solid rgba(233, 185, 73, 0.12);
+}
+.popout-side > .cr-tune-rail {
+  border-right: 0;
+}
+/* Holds the column's width; the tab bar inside widens over the transcript. */
+.attach-tabs-slot {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  border-top: 1px solid rgba(233, 185, 73, 0.12);
+}
+.attach-tabs {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 46px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 3px;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--phos-bg);
+  transition: width 120ms ease;
+}
+.attach-tabs::-webkit-scrollbar {
+  display: none;
+}
+.attach-tabs:hover,
+.attach-tabs:focus-within,
+.attach-tabs.pinned {
+  width: 232px;
+  box-shadow: 6px 0 14px rgba(0, 0, 0, 0.35);
+  /* A pass of the pointer to the transcript does not fling it open. */
+  transition-delay: 150ms;
+}
+.attach-tabs.pinned {
+  transition-delay: 0s;
+}
+.attach-tab {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 2px;
+  border: 1px solid rgba(233, 185, 73, 0.18);
+  border-radius: 4px;
+  background: rgba(233, 185, 73, 0.04);
+  color: var(--phos);
+  cursor: pointer;
+  text-align: left;
+}
+.attach-tab:hover {
+  background: rgba(233, 185, 73, 0.12);
+  border-color: rgba(233, 185, 73, 0.45);
+}
+.attach-tab.on {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--ink);
+}
+.attach-tab-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: 600 12px/1 var(--font-mono);
+}
+.attach-tab-icon .cr-icon {
+  width: 13px;
+  height: 13px;
+}
+/* Collapsed: the first letters under the icon. Open: the whole name beside it. */
+.attach-tab-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  font: 9px/1.1 var(--font-mono);
+}
+.attach-tab.attach-pin {
+  min-height: 22px;
+  border-style: dashed;
+  color: var(--phos-dim);
+}
+.attach-tab.attach-pin .attach-tab-name {
+  display: none;
+}
+.attach-tabs:hover .attach-tab,
+.attach-tabs:focus-within .attach-tab,
+.attach-tabs.pinned .attach-tab {
+  flex-direction: row;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 8px;
+}
+.attach-tabs:hover .attach-tab-name,
+.attach-tabs:focus-within .attach-tab-name,
+.attach-tabs.pinned .attach-tab-name {
+  display: block;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+.attach-tabs-find {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 8px 0 12px;
+  border-radius: 4px;
+  color: var(--phos-dim);
+  overflow: hidden;
+}
+.attach-tabs-find .cr-icon {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+}
+.attach-tabs-find input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid rgba(233, 185, 73, 0.3);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--phos);
+  font: 11.5px/1 var(--font-mono);
+}
+.attach-panel {
+  display: flex;
+  flex-direction: column;
+  border-top: 2px solid var(--line);
+  background: var(--cream-hi);
+  min-height: 0;
+}
+/* The browser layer draws the page over this box; it only holds the space.
+   The theme's ground, never a fixed cream: --paper was never defined, so the
+   fallback cream showed as white corners round the page on a dark theme. */
+.attach-slot {
+  flex: 1;
+  min-height: 0;
+  background: var(--cream);
+}
+.attach-note-head {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font: 600 12px/1.2 var(--font-mono);
+}
+.attach-note-head .attach-hint {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--muted);
+}
+.attach-note-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 14px;
+}
+.attach-note-editor {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  resize: none;
+}
+/* The embedded browser stacks over its terminal card (later in the DOM at the
+   same z); full window goes over everything the stage has. */
+.browser-lod.browser-full {
+  inset: 0;
+  z-index: 200;
+}
+
+/* ---- the phone: the dials as one row over the transcript ----
+   A 46px column of three chips on a 412px phone left the transcript about
+   220px, some 22 characters a line, and the column ran empty under the chips
+   for the rest of the screen (2026-10-30). On a phone the dials are a row
+   under the ask instead: the height of one chip for the column's whole width.
+   Only when the column holds the dials alone; a terminal's side tabs keep
+   their column. */
+@media (max-width: 700px) {
+  .popout-terminal-wrap:has(> .popout-side > .cr-tune-rail:only-child) {
+    flex-direction: column;
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) {
+    width: auto;
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) > .cr-tune-rail {
+    width: auto;
+    min-width: 0;
+    flex-direction: row;
+    padding: 4px 6px;
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) .cr-tune-dial {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .popout-side:has(> .cr-tune-rail:only-child) .cr-tune-chip {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 5px;
+    max-width: 150px;
+    padding: 3px 7px;
+  }
+  /* The checkpoint rail starts under the row, so its count is not behind it. */
+  .popout-terminal-wrap:has(> .popout-side > .cr-tune-rail:only-child) > .cr-ckpt-rail {
+    top: 30px;
+  }
+  /* The list opens under its chip, not beside it. */
+  .popout-side:has(> .cr-tune-rail:only-child) .cr-tune-list {
+    top: calc(100% + 4px);
+    left: 0;
+  }
+}
+
+/* ---- search by kind (board-sections.ts): agents, browsers, notes ----
+   A strip of kinds while a search is up, a head over each kind's section,
+   and an "all N" row under a section ALL cut short. */
+.roster-kinds {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.roster-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1.5px solid var(--line-soft);
+  background: var(--cream-hi);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.roster-kind:hover {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.roster-kind.on {
+  border-color: var(--line);
+  background: var(--amber-soft);
+  color: var(--ink);
+}
+
+.roster-kind-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.roster-kind-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 4px;
+  background: var(--cream-lo);
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.roster-kind-more {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+  color: var(--amber-deep);
+  cursor: pointer;
+}
+
+.roster-kind-more:hover {
+  background: var(--cream-lo);
+}
+
+.ags-item-hit-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-mark {
+  padding: 0 1px;
+  background: var(--amber);
+  color: var(--ink);
 }

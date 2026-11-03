@@ -77,6 +77,11 @@ export interface EventMeta {
   verb: string
   /** Singular noun for coalesced counts ("terminal" → "3 terminals recruited"). */
   noun: string
+  /**
+   * The verb for a coalesced count when `verb` names its own object for one
+   * agent ("Kite had a dispatch interrupted" → "2 dispatches interrupted").
+   */
+  many?: string
   icon: EventIconName
   hatch: boolean
   /** Metric bucket this type rolls into, or null to exclude from counts. */
@@ -120,10 +125,10 @@ const META: Record<string, EventMeta> = {
   'team.moved': { label: 'Team move', verb: 'moved into', noun: 'team', icon: 'fork', hatch: false, metric: 'forks' },
   // The dispatch plane's product surface: accepted/settled announcements
   // (details carry the agent's name and, on failure, the honest error).
-  'dispatch.accepted': { label: 'Dispatch', verb: 'took a dispatch', noun: 'dispatch', icon: 'agent', hatch: false, metric: null },
-  'dispatch.done': { label: 'Dispatch', verb: 'finished a dispatch', noun: 'dispatch', icon: 'agent', hatch: false, metric: null },
-  'dispatch.failed': { label: 'Dispatch', verb: 'failed a dispatch', noun: 'dispatch', icon: 'close', hatch: false, metric: null },
-  'dispatch.interrupted': { label: 'Dispatch', verb: 'had a dispatch interrupted', noun: 'dispatch', icon: 'close', hatch: false, metric: null },
+  'dispatch.accepted': { label: 'Dispatch', verb: 'took a dispatch', noun: 'dispatch', many: 'accepted', icon: 'agent', hatch: false, metric: null },
+  'dispatch.done': { label: 'Dispatch', verb: 'finished a dispatch', noun: 'dispatch', many: 'finished', icon: 'agent', hatch: false, metric: null },
+  'dispatch.failed': { label: 'Dispatch', verb: 'failed a dispatch', noun: 'dispatch', many: 'failed', icon: 'close', hatch: false, metric: null },
+  'dispatch.interrupted': { label: 'Dispatch', verb: 'had a dispatch interrupted', noun: 'dispatch', many: 'interrupted', icon: 'close', hatch: false, metric: null },
   'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null }
 }
 
@@ -138,6 +143,14 @@ const FALLBACK_META: EventMeta = {
 
 export function eventMeta(type: string): EventMeta {
   return META[type] ?? FALLBACK_META
+}
+
+const plural = (noun: string): string => (/(s|x|z|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`)
+
+/** A coalesced toast's line: "2 dispatches interrupted", "3 agents killed". */
+export function groupedLine(type: string, count: number): string {
+  const meta = eventMeta(type)
+  return `${count} ${plural(meta.noun)} ${meta.many ?? meta.verb}`
 }
 
 /** Semantic category for Fresco's tint hooks: create/remove/fork/switch. */

@@ -1,0 +1,2023 @@
+/* ---- THE ZOOM NAVIGATOR (ZoomView.tsx, ZoomParts.tsx) ----
+   Drawn in the ink palette (ink-theme.css, `--sumi-*`), whether or not the
+   rest of the app wears the theme. The painter (zoom-frame.ts) writes only
+   transform, opacity and pointer-events, inline; this sheet gives every part
+   its box, its origin and its look, and never animates a property the painter
+   owns.
+
+   Geometry is in scene units around a part's anchor point, as zoom-frame.ts
+   reads it: an agent's avatar is 64 px about its anchor, its card 260 × 244
+   from (−34, −34), a link's thumbnail 70 × 46 over a 22 px coin, an item's
+   own thumbnail 168 × 108. Parts the painter moves are zero-size boxes at
+   (0, 0), so their default transform origin IS the anchor.
+
+   Stacking inside the root: the real full view (.zv-full, its stage at 40)
+   under the overview (41), the jump's ghost (42), the controls (44) and the
+   error (45); all under the header and dock (50) and the pets (55). The root
+   makes no stacking context, so sheets opened from the stage keep theirs. */
+
+/* The ink tokens: the zoom's, and the agent card's where it floats (AgentCard.tsx). */
+.zv-root,
+.ag-ink {
+  --zv-paper: var(--sumi-paper, #f4efe4);
+  --zv-paper-2: var(--sumi-paper-2, #ebe3d3);
+  --zv-card: var(--sumi-card, #fbf8f1);
+  --zv-ink: var(--sumi-ink, #1d1a16);
+  --zv-ink-soft: var(--sumi-ink-soft, #5d554a);
+  --zv-muted: var(--sumi-muted, #6f675b);
+  --zv-dim: var(--sumi-dim, #8c8374);
+  --zv-hair: var(--sumi-hair, rgba(29, 26, 22, 0.1));
+  --zv-hair-2: var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
+  --zv-rule: var(--sumi-rule, rgba(29, 26, 22, 0.42));
+  --zv-seal: var(--sumi-seal, #a8692b);
+  --zv-seal-fill: var(--sumi-seal-fill, #96592a);
+  --zv-seal-text: var(--sumi-seal-text, #8f5520);
+  --zv-on-seal: var(--sumi-on-seal, #fbf8f1);
+  --zv-wait: var(--sumi-wait, #c0392b);
+  --zv-wash: var(--sumi-wash, rgba(168, 140, 98, 0.16));
+  --zv-grain: var(--sumi-grain, rgba(120, 100, 70, 0.06));
+  --zv-shadow: var(--sumi-shadow, rgba(40, 30, 15, 0.1));
+  --zv-shadow-sm: var(--sumi-shadow-sm, rgba(40, 30, 15, 0.08));
+  --zv-serif: var(--font-serif, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif);
+  --zv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+  /* Text on a browser's tint (the coin's initial, the favicon). */
+  --zv-on-tint: #fbf8f1;
+}
+
+.zv-root {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* Clipped, never a scroll box: see .zv-overview. */
+  overflow: clip;
+  background: var(--zv-paper);
+}
+
+/* Type is set on the zoom's own parts, never on the root: the real full view
+   inside it inherits from the app, as it did before it moved in here. */
+.zv-overview,
+.zv-controls,
+.zv-error {
+  color: var(--zv-ink);
+  font: 15px/1.5 var(--zv-serif);
+}
+
+/* ── the real full view, underneath ── */
+.zv-full {
+  position: absolute;
+  inset: 0;
+  opacity: var(--zv-full-opacity, 1);
+}
+
+.zv-full[aria-hidden='true'] {
+  pointer-events: none;
+}
+
+/* ── the overview: the paper the zoom is drawn on ── */
+.zv-overview {
+  position: absolute;
+  inset: 0;
+  z-index: 41;
+  /* CLIPPED, NEVER SCROLLED (Gauge, 2026-11-01, shots/r4/phone-2-card.png: the
+     open card's left third and the label cut off at the left edge). The
+     painter places every part from (0, 0) of this box (zoom-frame.ts), but
+     `hidden` still makes a scroll box: a scroll into view (a test driver's tap,
+     a Tab focus, a phone keyboard over the reply box) scrolled it by the parts
+     drawn past the edge, and the whole scene slid off its camera. `clip` cannot
+     be scrolled; `hidden` stays for an engine without it (ZoomView resets it). */
+  overflow: hidden;
+  overflow: clip;
+  opacity: var(--zv-cover, 1);
+  background-color: var(--zv-paper);
+  background-image: radial-gradient(var(--zv-grain) 1px, transparent 1px);
+  background-size: 3px 3px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* At the full view the overview is gone: nothing to paint, nothing to press. */
+.zv-root[data-full='true'] .zv-overview {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* The three layers ride one camera. Hidden until the painter's first frame,
+   which writes their opacity inline, so a mount never flashes every part
+   stacked at the origin. */
+.zv-devices,
+.zv-device,
+.zv-scene {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  opacity: 0;
+}
+
+.zv-devices,
+.zv-device {
+  will-change: transform, opacity;
+}
+
+.zv-scene {
+  will-change: transform;
+}
+
+/* A jump across paths: a snapshot of the old scene fading over the new. */
+.zv-ghost {
+  z-index: 42;
+  pointer-events: none;
+}
+
+/* ── the ink strokes (InkAvatar.tsx) ── */
+:is(.ink-avatar, .ink-ring, .ink-tie) {
+  overflow: visible;
+}
+
+:is(.ink-avatar, .ink-ring, .ink-tie) .ink-body {
+  fill: var(--zv-ink, var(--sumi-ink, #1d1a16));
+}
+
+:is(.ink-avatar, .ink-ring, .ink-tie) .ink-bleed {
+  fill: var(--zv-ink, var(--sumi-ink, #1d1a16));
+  opacity: 0.16;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(1.025);
+}
+
+:is(.ink-avatar, .ink-ring, .ink-tie) .ink-bristle {
+  fill: none;
+  stroke: var(--zv-ink, var(--sumi-ink, #1d1a16));
+  stroke-width: 0.42;
+  stroke-linecap: round;
+  opacity: 0.82;
+}
+
+/* ── an agent's status in ink (InkAvatar status, ink-status.ts) ──
+   Red rides the ensō: working laps a third of a turn, waiting closes the ring
+   and blinks it with the harness mark (red too), done ticks the shoulder in
+   red, offline fades the ink under an ink z. Motion is a rotation and an
+   opacity only; idle, done and offline stand still. */
+.ink-avatar :is(.ink-zhu, .ink-glyph) {
+  --zv-ink-status: var(--sumi-wait, #c0392b);
+}
+
+.ink-avatar .ink-zhu,
+.ink-avatar.waiting .ink-glyph {
+  --zv-ink: var(--zv-ink-status);
+}
+
+.ink-avatar .ink-lap {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ink-lap 1.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+  animation: ink-blink 1.2s ease-in-out infinite;
+}
+
+.ink-avatar .ink-corner {
+  animation: ink-in 0.4s ease-out both;
+}
+
+.ink-avatar.offline .ink-own {
+  opacity: 0.34;
+}
+
+.ink-avatar.offline .ink-corner {
+  opacity: 0.8;
+}
+
+@keyframes ink-lap {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ink-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes ink-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ink-avatar :is(.ink-lap, .ink-zhu, .ink-glyph, .ink-corner),
+  .ink-avatar.waiting :is(.ink-zhu, .ink-glyph) {
+    animation: none;
+  }
+}
+
+.ink-tie .ink-bristle {
+  stroke-width: 0.3;
+}
+
+/* ── all the devices: this machine's frame; its screen IS the device view ── */
+.zv-machine {
+  appearance: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 0;
+  padding: 0;
+  border: 2px solid var(--zv-ink);
+  border-radius: 14px;
+  background: var(--zv-paper-2);
+  box-shadow: 0 10px 30px var(--zv-shadow);
+  color: var(--zv-ink);
+  font: inherit;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+/* The screen inside the bezel. */
+.zv-machine::before {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  border-radius: 6px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1px var(--zv-hair);
+  pointer-events: none;
+}
+
+.zv-machine-deck {
+  position: absolute;
+  left: -9%;
+  right: -9%;
+  bottom: -26px;
+  height: 16px;
+  border: 2px solid var(--zv-ink);
+  border-radius: 3px 3px 12px 12px;
+  background: var(--zv-paper);
+  pointer-events: none;
+}
+
+/* The lip a lid lifts by. */
+.zv-machine-deck::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: 16%;
+  height: 5px;
+  transform: translateX(-50%);
+  border: 2px solid var(--zv-ink);
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  background: var(--zv-paper-2);
+}
+
+.zv-machine-label {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 46px);
+  display: grid;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.zv-machine-label b {
+  font: 600 18px/1.1 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-machine-label small {
+  font: 11px/1.2 var(--zv-mono);
+  letter-spacing: 0.04em;
+  color: var(--zv-ink-soft);
+}
+
+.zv-machine:focus-visible {
+  outline: 3px solid var(--zv-seal);
+  outline-offset: 6px;
+}
+
+/* ── the device: its workspaces, a mark each ──
+   The machine's name and hint grow (scale, from their top-left corner) to be
+   read where the device is seen small, and wrap inside the device's width
+   (ZoomView · deviceWords sets both inline): the hint takes a line of its own
+   rather than running off a phone's edge (Gauge, 2026-11-01). */
+.zv-device-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  /* In a zero-width layer a wrapping box would shrink to its widest word: it takes its full line, up to the max-width. */
+  width: max-content;
+  white-space: nowrap;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.zv-device-label b {
+  font: 600 22px/1.1 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-device-label span {
+  font: 11px/1 var(--zv-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
+}
+
+.zv-device-label small {
+  padding-left: 12px;
+  border-left: 1px solid var(--zv-hair-2);
+  font: italic 11px/1.3 var(--zv-mono);
+  color: var(--zv-muted);
+  white-space: normal;
+}
+
+/* Another workspace: drawn once, placed once (translate + scale inline). The
+   whole mark answers a click through one round hit area; its parts only show. */
+.zv-mark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  cursor: pointer;
+}
+
+.zv-mark::before {
+  content: '';
+  position: absolute;
+  left: -130px;
+  top: -150px;
+  width: 260px;
+  height: 300px;
+  border-radius: 50%;
+}
+
+.zv-mark > * {
+  pointer-events: none;
+}
+
+.zv-mark .zv-wash,
+.zv-mark .zv-ring,
+.zv-mark .zv-av,
+.zv-mark .zv-dot,
+.zv-mark .zv-grp {
+  will-change: auto;
+}
+
+.zv-mark-none {
+  position: absolute;
+  left: -60px;
+  top: -20px;
+  width: 120px;
+  text-align: center;
+  font: italic 13px/1 var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+.zv-mark .zv-mark-dot {
+  transform: translate(38px, -52px);
+}
+
+.zv-mark .zv-mark-label {
+  top: 108px;
+  transform: translateX(-50%);
+  /* It grows from under the ring (ZoomView · deviceWords, inline), cut short before a neighbour's. */
+  transform-origin: 50% 0;
+}
+
+.zv-mark .zv-mark-label > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The open workspace's place on the device: a round, invisible button over
+   its mark (the mark itself is the scene's group). */
+.zv-workspace-hit {
+  appearance: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 180px;
+  height: 180px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.zv-workspace-hit:focus-visible {
+  outline: 3px solid var(--zv-seal);
+  outline-offset: 4px;
+}
+
+/* ── the workspace's own ground: its wash and its ring ──
+   The wash's soft edge is two gradient fades multiplied (a mask), not a
+   blurred shadow. At the crew stop the wash is magnified several times in a
+   layer of its own, and a GPU blurs a magnified shadow tile by tile: each
+   tile's approximation differed, and the edge came out as flat light and dark
+   rectangles across the background (owner's screenshot, 2026-11-01). A
+   gradient is the same exact value per pixel in every tile. The box is the
+   old one plus its shadow (1200x540, spread 28, blur 48): 76px each side,
+   the fade centred where the shadow's was. */
+.zv-wash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1352px;
+  height: 692px;
+  margin: -346px 0 0 -676px;
+  background: var(--zv-wash);
+  -webkit-mask-image: var(--zv-wash-fade-x), var(--zv-wash-fade-y);
+  mask-image: var(--zv-wash-fade-x), var(--zv-wash-fade-y);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  pointer-events: none;
+  will-change: transform, opacity;
+  --zv-wash-fade-x: linear-gradient(
+    to right,
+    transparent 0,
+    rgba(0, 0, 0, 0.16) 24px,
+    rgba(0, 0, 0, 0.5) 48px,
+    rgba(0, 0, 0, 0.84) 72px,
+    #000 96px,
+    #000 calc(100% - 96px),
+    rgba(0, 0, 0, 0.84) calc(100% - 72px),
+    rgba(0, 0, 0, 0.5) calc(100% - 48px),
+    rgba(0, 0, 0, 0.16) calc(100% - 24px),
+    transparent 100%
+  );
+  --zv-wash-fade-y: linear-gradient(
+    to bottom,
+    transparent 0,
+    rgba(0, 0, 0, 0.16) 24px,
+    rgba(0, 0, 0, 0.5) 48px,
+    rgba(0, 0, 0, 0.84) 72px,
+    #000 96px,
+    #000 calc(100% - 96px),
+    rgba(0, 0, 0, 0.84) calc(100% - 72px),
+    rgba(0, 0, 0, 0.5) calc(100% - 48px),
+    rgba(0, 0, 0, 0.16) calc(100% - 24px),
+    transparent 100%
+  );
+}
+
+.zv-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 220px;
+  height: 220px;
+  margin: -110px 0 0 -110px;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.zv-ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* A cable between two terminals: 400 long at scale 1, stretched from its left end. */
+.zv-tie {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 400px;
+  height: 24px;
+  margin-top: -12px;
+  transform-origin: 0 50%;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.zv-tie svg {
+  display: block;
+  width: 400px;
+  height: 24px;
+}
+
+/* ── the group's label: seal, name, totals ── */
+.zv-grp {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font: 11px/1 var(--zv-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
+  will-change: transform, opacity;
+}
+
+.zv-grp button {
+  appearance: none;
+  margin: 0;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.zv-grp button:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
+.zv-grp .zv-workspace-name,
+.zv-mark-label > span:last-child {
+  color: var(--zv-ink);
+}
+
+.zv-seal {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  background: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+  font: 600 14px/24px var(--zv-serif);
+  letter-spacing: 0;
+  text-align: center;
+  transform: rotate(-6deg);
+}
+
+.zv-grp button.zv-seal {
+  padding: 0;
+  border-radius: 3px;
+  background: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+  font: 600 14px/24px var(--zv-serif);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.zv-grp .zv-tot {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  padding: 4px 2px 4px 10px;
+  border-left: 1px solid var(--zv-hair-2);
+  border-radius: 0 4px 4px 0;
+  letter-spacing: 0.06em;
+  cursor: zoom-in;
+}
+
+.zv-tot > span,
+.zv-cnt > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.zv-glyph {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.zv-none {
+  font-style: italic;
+}
+
+.zv-newcap {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 9.5px/1.2 var(--zv-mono);
+  color: var(--zv-ink-soft);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* No agents: said inside the ring, where the stack would be. */
+.zv-empty {
+  position: absolute;
+  left: -100px;
+  top: -10px;
+  width: 200px;
+  transform: translateY(-50%);
+  text-align: center;
+  font: italic 12px/1.45 var(--zv-mono);
+  color: var(--zv-muted);
+  pointer-events: none;
+}
+
+/* ── an agent's card: drawn under its words, scaled out from the avatar ── */
+.zv-cardl {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 10;
+  will-change: transform, opacity;
+}
+
+.zv-card {
+  position: absolute;
+  left: -34px;
+  top: -34px;
+  width: 260px;
+  height: 244px;
+  border-radius: 14px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 8px 22px var(--zv-shadow);
+  transform-origin: 34px 34px;
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+
+/* ── an agent: face, name, state, counts, last words, quick reply ── */
+.zv-m {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 12;
+  will-change: transform, opacity;
+}
+
+.zv-av {
+  position: absolute;
+  left: -32px;
+  top: -32px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--zv-paper);
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+
+.zv-av .ink-avatar {
+  display: block;
+  width: 64px;
+  height: 64px;
+}
+
+
+.zv-nm,
+.zv-st,
+.zv-body {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform, opacity;
+}
+
+/* Scaled about its own centre, under the avatar at crew zoom. */
+.zv-nm {
+  max-width: 188px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 15px/1.2 var(--zv-serif);
+  color: var(--zv-ink);
+  cursor: pointer;
+}
+
+.zv-st {
+  white-space: nowrap;
+  font: 500 10px/1.2 var(--zv-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
+  pointer-events: none;
+}
+
+.zv-st.working {
+  color: var(--zv-ink);
+}
+
+.zv-st.done {
+  color: var(--zv-seal-text);
+}
+
+.zv-st.waiting {
+  color: var(--zv-wait);
+  font-weight: 600;
+}
+
+/* THE WORDS OVER THE CABLES (owner, 2026-11-01, Samsung Browser: the ties ran
+   through Forge, Velvet, Setup, Harden and Conductor, names and status words
+   alike). The ties already lie under the agents (no z-index, under .zv-m's
+   12), but a word had no paper of its own, so a stroke showed between its
+   letters. Each one now wears a patch of the page, as the face does (.zv-av):
+   a background and a spread shadow, never a padding, so the widths the
+   painter measures (zoom-frame.ts · nmW, stW, cntW) stay the text's. The open
+   card is its own paper and keeps its words bare. */
+.zv-m:not([data-card='open']) :is(.zv-nm, .zv-st, .zv-cnt) {
+  border-radius: 3px;
+  background: var(--zv-paper);
+  box-shadow: 0 0 0 3px var(--zv-paper);
+}
+
+/* No browser or note: the line says nothing, and a patch of paper with no
+   words on it would be a smudge over the ties. */
+.zv-cnt:empty {
+  display: none;
+}
+
+/* WHAT IS TYPED, UNSENT (owner, 2026-11-01): under the face, on the counts'
+   line or the one below it (zoom-frame.ts). The painter puts the box at the
+   face's centre line; the words centre themselves on it, as their width moves
+   with every key. One line, cut at an ellipsis, a column's width at most. */
+.zv-dft {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.zv-dft > span {
+  display: block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: var(--zv-paper);
+  box-shadow: 0 0 0 3px var(--zv-paper);
+  font: italic 10.5px/1.2 var(--zv-mono);
+  color: var(--zv-ink);
+}
+
+.zv-dft > span::after {
+  content: '\258d';
+  margin-left: 1px;
+  font-style: normal;
+  color: var(--zv-ink-soft);
+}
+
+.zv-cnt {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font: 10.5px/1 var(--zv-mono);
+  color: var(--zv-ink-soft);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* The latest block (AgentLatest.tsx, agent-card.css): four lines at most, one
+   each, so the strip of thumbnails starts at 113. */
+.zv-body {
+  width: 228px;
+  max-height: 64px;
+  overflow: hidden;
+  font: 11.5px/16px var(--zv-mono);
+  color: var(--zv-ink-soft);
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.zv-body b {
+  font-weight: 600;
+  color: var(--zv-ink);
+}
+
+
+.zv-reply {
+  position: absolute;
+  left: -18px;
+  top: 170px;
+  width: 228px;
+  height: 30px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 3px 0 10px;
+  border-radius: 8px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
+  will-change: opacity;
+}
+
+.zv-reply:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--zv-seal);
+}
+
+.zv-reply input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font: 11px/1 var(--zv-mono);
+  color: var(--zv-ink);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.zv-reply input::placeholder {
+  color: var(--zv-muted);
+  opacity: 1;
+}
+
+.zv-reply button {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+  font: 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-reply button:disabled {
+  background: var(--zv-paper-2);
+  color: var(--zv-dim);
+  cursor: default;
+}
+
+.zv-reply button:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
+/* Inside the field, beside the send button: above it would sit on the
+   strip's third thumbnail. The field is empty again once a reply is sent. */
+.zv-sent {
+  position: absolute;
+  right: 32px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding-left: 6px;
+  background: var(--zv-paper);
+  font: 9.5px/1 var(--zv-mono);
+  color: var(--zv-seal-text);
+  pointer-events: none;
+  animation: zv-sent 4s ease forwards;
+}
+
+@keyframes zv-sent {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Waiting on you: the one red thing, with a slow halo. */
+.zv-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 44;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--zv-wait);
+  box-shadow: 0 0 0 3px var(--zv-paper);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.zv-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--zv-wait);
+  animation: zv-halo 2.4s ease-out infinite;
+}
+
+@keyframes zv-halo {
+  0% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  70%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* ── a link: a small thumbnail on the card over a two-faced coin ── */
+.zv-lk {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 8;
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+
+.zv-th {
+  position: absolute;
+  overflow: hidden;
+  background: var(--zv-paper);
+}
+
+/* The hairline over the picture, so a live thumbnail keeps its edge. */
+.zv-th::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  pointer-events: none;
+}
+
+.zv-lk > .zv-th {
+  left: -35px;
+  top: -23px;
+  width: 70px;
+  height: 46px;
+  border-radius: 5px;
+  box-shadow: 0 2px 6px var(--zv-shadow-sm);
+  will-change: transform, opacity;
+}
+
+.zv-th .zv-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 11px;
+  padding-left: 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--zv-hair);
+  background: var(--zv-paper-2);
+  font: 6.5px/1 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.zv-th .zv-shot {
+  display: block;
+  width: 100%;
+  height: calc(100% - 11px);
+  object-fit: cover;
+  object-position: top center;
+}
+
+.zv-th .zv-pg {
+  display: grid;
+  gap: 3px;
+  padding: 4px 5px;
+}
+
+.zv-th .zv-pg b {
+  display: block;
+  height: 9px;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+.zv-th .zv-pg i {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--zv-hair-2);
+}
+
+.zv-th .zv-pg i + i {
+  width: 70%;
+}
+
+/* A note: card paper with a turned corner. */
+.zv-th.note {
+  background: var(--zv-card);
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.zv-th.note::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 10px;
+  height: 10px;
+  background: linear-gradient(225deg, transparent 50%, var(--zv-hair-2) 50%);
+}
+
+.zv-th .zv-nt {
+  display: grid;
+  gap: 3px;
+  padding: 13px 6px 0;
+}
+
+.zv-th .zv-nt b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 7.5px/1.1 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-th .zv-nt span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 6.5px/1.2 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.zv-th .zv-nt i {
+  display: block;
+  height: 1px;
+  margin-top: 2px;
+  background: var(--zv-hair-2);
+}
+
+.zv-th em {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  font: 600 6.5px/1 var(--zv-mono);
+  font-style: normal;
+  color: var(--zv-seal-text);
+}
+
+.zv-coin {
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.zv-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background: var(--zv-seal-fill);
+  box-shadow: 0 0 0 2px var(--zv-paper);
+  font: 600 10px/1 var(--zv-mono);
+  color: var(--zv-on-tint);
+}
+
+.zv-lk.note .zv-face-item {
+  background: var(--zv-card);
+  box-shadow:
+    0 0 0 2px var(--zv-paper),
+    inset 0 0 0 1px var(--zv-hair-2);
+  color: var(--zv-ink);
+}
+
+.zv-face-agent {
+  transform: rotateY(180deg);
+  background: var(--zv-paper);
+  box-shadow:
+    0 0 0 2px var(--zv-paper),
+    inset 0 0 0 1px var(--zv-hair-2);
+}
+
+.zv-face-agent .ink-avatar {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.zv-badge {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  min-width: 15px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+  font: 600 8px/12px var(--zv-mono);
+  text-align: center;
+  pointer-events: none;
+  will-change: opacity;
+}
+
+/* ── an item's own thumbnail, in the thumbs grid ── */
+.zv-ip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 7;
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+
+.zv-ip > .zv-th {
+  left: -84px;
+  top: -54px;
+  width: 168px;
+  height: 108px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px var(--zv-shadow);
+}
+
+.zv-big .zv-bar {
+  gap: 6px;
+  height: 20px;
+  padding-left: 8px;
+  font-size: 9.5px;
+}
+
+.zv-big .zv-fav {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  font: 600 7px/1 var(--zv-mono);
+  font-style: normal;
+  color: var(--zv-on-tint);
+}
+
+.zv-big .zv-shot {
+  height: calc(100% - 20px);
+}
+
+.zv-big .zv-pg {
+  gap: 7px;
+  padding: 9px 10px;
+}
+
+.zv-big .zv-pg b {
+  height: 24px;
+}
+
+.zv-big .zv-pg i {
+  height: 5px;
+}
+
+.zv-th.zv-big.note {
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+
+.zv-th.zv-big.note::after {
+  width: 18px;
+  height: 18px;
+}
+
+.zv-big .zv-nt {
+  gap: 6px;
+  padding: 14px 12px 0;
+}
+
+.zv-big .zv-nt b {
+  font-size: 13px;
+}
+
+.zv-big .zv-nt span {
+  font-size: 10px;
+}
+
+.zv-big .zv-nt .zv-glyph {
+  width: 13px;
+  height: 13px;
+  color: var(--zv-ink-soft);
+}
+
+.zv-ip .zv-ttl {
+  position: absolute;
+  left: -84px;
+  top: 60px;
+  width: 168px;
+  display: grid;
+  gap: 2px;
+  pointer-events: none;
+  will-change: opacity;
+}
+
+.zv-ttl b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 13px/1.25 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-ttl span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10px/1.3 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.zv-ttl .zv-who {
+  color: var(--zv-ink);
+}
+
+/* ── the full-view shell: from the card (or thumbnail) to the whole view ──
+   Its own size is the view inset by 12; the painter scales it from there. */
+.zv-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Under the scene (it comes first): the parts going to the full view ride over it. */
+  z-index: 0;
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  border-radius: 16px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 14px 40px var(--zv-shadow);
+  transform-origin: 0 0;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* THE SHELF'S "+N" CHIP (owner, 2026-11-03: the agents over the artifacts in
+   the agents group's form): a face's size and ring after the page's last
+   face, as the troop's "+N" (pets.css · .cr-pet.more); it turns the page, and
+   says "–" on the last one. The painter places it and shows it. */
+.zv-shelf-more {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 50%;
+  background: var(--zv-paper);
+  box-shadow: 0 2px 6px var(--zv-shadow-sm);
+  color: var(--zv-ink-soft);
+  font: 700 10px/1 var(--font-mono);
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+
+/* ── hover: a seal ring, never a transform (the painter owns transforms) ── */
+@media (hover: hover) {
+  .zv-av:hover {
+    box-shadow:
+      0 0 0 2px var(--zv-paper),
+      0 0 0 3.5px var(--zv-seal);
+  }
+
+  .zv-nm:hover {
+    text-decoration: underline;
+    text-decoration-color: var(--zv-seal);
+    text-underline-offset: 3px;
+  }
+
+  .zv-card:hover {
+    box-shadow:
+      inset 0 0 0 1px var(--zv-rule),
+      0 10px 26px var(--zv-shadow);
+  }
+
+  .zv-lk:hover .zv-face {
+    box-shadow:
+      0 0 0 2px var(--zv-paper),
+      0 0 0 3.5px var(--zv-seal);
+  }
+
+  .zv-ip:hover > .zv-th {
+    box-shadow:
+      0 0 0 2px var(--zv-seal),
+      0 8px 22px var(--zv-shadow);
+  }
+
+  .zv-grp button:hover {
+    color: var(--zv-ink);
+  }
+
+  .zv-shelf-more:hover {
+    box-shadow:
+      0 0 0 2px var(--zv-paper),
+      0 0 0 3.5px var(--zv-seal);
+  }
+
+  .zv-grp button.zv-seal:hover {
+    color: var(--zv-on-seal);
+    background: var(--zv-seal);
+  }
+
+  .zv-mark:hover .zv-mark-label {
+    color: var(--zv-ink);
+  }
+
+  .zv-workspace-hit:hover {
+    box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
+  }
+
+  .zv-machine:hover {
+    box-shadow: 0 14px 38px var(--zv-shadow);
+  }
+}
+
+/* ── the controls: a pill at the bottom; at the full view, a small one on top ── */
+.zv-controls {
+  position: absolute;
+  z-index: 44;
+  left: 50%;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 6px 14px 6px 6px;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 8px 24px var(--zv-shadow);
+  color: var(--zv-ink);
+  font: 11px/1 var(--zv-mono);
+  user-select: none;
+  -webkit-user-select: none;
+  animation: zv-controls-in 180ms ease-out;
+}
+
+.zv-back {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  padding: 0 0 3px;
+  border: 1.5px solid var(--zv-rule);
+  border-radius: 50%;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 20px/1 var(--zv-serif);
+  cursor: pointer;
+}
+
+.zv-zoom-control {
+  width: 380px;
+  min-width: 0;
+}
+
+.zv-stops {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.zv-stops button {
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10px/1 var(--zv-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  min-height: 28px;
+  color: var(--zv-ink-soft);
+  cursor: pointer;
+}
+
+/* The last stop is the switch (owner, 2026-11-01): agents | artifacts, one
+   outlined pair, so in the workspace the other side is one press away. */
+.zv-side {
+  display: flex;
+  flex: 2 1 0;
+  min-width: 0;
+  gap: 2px;
+  margin-left: 6px;
+  border-radius: 999px;
+  outline: 1px solid var(--zv-hair-2);
+  outline-offset: 1px;
+}
+
+.zv-stops button[aria-current] {
+  background: var(--zv-ink);
+  color: var(--zv-paper);
+}
+
+.zv-location {
+  flex: none;
+  /* As wide as "artifacts", so the switch does not slide under the pointer when it flips. */
+  min-width: 4.4em;
+  padding-left: 10px;
+  border-left: 1px solid var(--zv-hair-2);
+  white-space: nowrap;
+  font: italic 13px/1 var(--zv-serif);
+  color: var(--zv-ink-soft);
+}
+
+.zv-back:focus-visible,
+.zv-stops button:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .zv-back:hover {
+    border-color: var(--zv-ink);
+    background: var(--zv-ink);
+    color: var(--zv-paper);
+  }
+
+  .zv-stops button:not([aria-current]):hover {
+    background: var(--zv-wash);
+    color: var(--zv-ink);
+  }
+}
+
+/* At the full view the real page has the room: only the way back out stays,
+   small, at the top. */
+.zv-root[data-full='true'] .zv-controls {
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  bottom: auto;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  opacity: 0.9;
+  animation-name: zv-controls-in-top;
+}
+
+.zv-root[data-full='true'] .zv-zoom-control {
+  display: none;
+}
+
+.zv-root[data-full='true'] .zv-back {
+  width: 28px;
+  height: 28px;
+  font-size: 17px;
+}
+
+.zv-root[data-full='true'] .zv-location {
+  padding-left: 0;
+  border-left: 0;
+  font-size: 12px;
+}
+
+@media (hover: hover) {
+  .zv-root[data-full='true'] .zv-controls:hover {
+    opacity: 1;
+  }
+}
+
+/* Two names, so returning from the full view replays the entrance. */
+@keyframes zv-controls-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+
+@keyframes zv-controls-in-top {
+  from {
+    opacity: 0;
+    translate: 0 -6px;
+  }
+}
+
+/* ── an error: said in ink with the seal's edge (red is kept for waiting) ── */
+.zv-error {
+  position: absolute;
+  z-index: 45;
+  left: 50%;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: min(560px, calc(100% - 24px));
+  padding: 8px 6px 8px 14px;
+  border-radius: 10px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 3px 0 0 var(--zv-seal),
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 8px 24px var(--zv-shadow);
+  overflow-wrap: anywhere;
+  font: 12px/1.45 var(--zv-mono);
+  color: var(--zv-ink);
+}
+
+.zv-error button {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  font: 18px/1 var(--zv-mono);
+  color: var(--zv-ink-soft);
+  cursor: pointer;
+}
+
+.zv-error button:hover {
+  background: var(--zv-wash);
+  color: var(--zv-ink);
+}
+
+.zv-error button:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 1px;
+}
+
+.zv-root[data-full='true'] .zv-error {
+  top: calc(56px + env(safe-area-inset-top, 0px));
+}
+
+/* ── narrow: the pill takes the width; the stops become the thumb's targets ── */
+@media (max-width: 700px) {
+  .zv-controls {
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    transform: none;
+    max-width: none;
+    gap: 6px;
+    padding: 5px;
+    border-radius: 22px;
+  }
+
+  .zv-zoom-control {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .zv-stops button {
+    min-height: 32px;
+    padding: 0 2px;
+    letter-spacing: 0.04em;
+  }
+
+  .zv-location {
+    padding-right: 6px;
+  }
+}
+
+/* A phone: the side's name gives its room to the stops. */
+@media (max-width: 520px) {
+  .zv-location {
+    display: none;
+  }
+
+  .zv-root[data-full='true'] .zv-location {
+    display: inline;
+  }
+
+  .zv-back {
+    width: 38px;
+    height: 38px;
+  }
+
+  .zv-stops button {
+    min-height: 38px;
+    font-size: 10.5px;
+  }
+}
+
+/* A finger needs room; a phone must not zoom the page to type a reply (iOS
+   zooms into a field under 16 px). */
+@media (pointer: coarse) {
+  .zv-stops button {
+    min-height: 40px;
+  }
+
+  .zv-reply input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zv-dot::after {
+    animation: none;
+    opacity: 0;
+  }
+
+  .zv-sent {
+    animation: none;
+  }
+
+  .zv-controls,
+  .zv-root[data-full='true'] .zv-controls {
+    animation: none;
+  }
+}
+
+/* ── the account's other machines (MachineNode): a small frame under this one ──
+   Each is only what the fleet could read: a ring and a name per workspace, the
+   machine's own line. A listed-only desktop says so instead of showing zeros. */
+.zv-machinecard {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 380px;
+  height: 220px;
+  padding: 22px 20px 64px;
+  border: 2px solid var(--zv-ink);
+  border-radius: 12px;
+  background: var(--zv-paper-2);
+  box-shadow: 0 8px 24px var(--zv-shadow);
+  cursor: pointer;
+}
+
+.zv-machinecard.off {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.zv-machinecard-screen {
+  height: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 12px 18px;
+}
+
+.zv-mws {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: 64px;
+  font: 9px/1.1 var(--zv-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
+  text-align: center;
+}
+
+.zv-mws-ring {
+  width: 40px;
+  height: 40px;
+}
+
+.zv-mws-ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.zv-mws-dot {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--zv-wait);
+  box-shadow: 0 0 0 2px var(--zv-paper-2);
+}
+
+.zv-machinecard-label {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.zv-machinecard-label b {
+  font: 600 17px/1.1 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.zv-machinecard-label small {
+  font: 10.5px/1.3 var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+.zv-machinecard:focus-visible {
+  outline: 3px solid var(--zv-seal);
+  outline-offset: 4px;
+}
+
+/* ── removal: one small mark, only where the card is open ──────────────────
+   A card's × is the way out of the workspace; the app's confirm dialog does
+   the asking, so nothing is removed by a stray click. */
+.zv-del {
+  position: absolute;
+  left: 222px;
+  top: -46px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 50%;
+  background: var(--zv-card);
+  color: var(--zv-muted);
+  font: 13px/1 var(--zv-mono);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.zv-m[data-card='open'] .zv-del,
+.zv-ip:hover .zv-del,
+.zv-ip:focus-within .zv-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.zv-del:hover { border-color: var(--zv-wait); color: var(--zv-wait); }
+
+/* An item tile's origin is its thumbnail's centre (.zv-ip > .zv-th, 168x108),
+   not a card's face: the card's offset put the × some 140px right of the
+   picture (owner, 2026-11-01). It sits inside the thumbnail's top right
+   corner, as on the agent's sheet (full-views.css · .zv-fv-art-del). */
+.zv-ip > .zv-del {
+  left: 56px;
+  top: -48px;
+  z-index: 1;
+}
+
+/* AT REST, NO PART KEEPS A LAYER (zoom-rest.ts). Every hint above is for the
+   motion: held at rest, a layer keeps the sharpest raster a dive made of it,
+   and the tiles of a magnified wash and crew ran Chromium out of tile memory —
+   it then leaves parts undrawn. Without `data-moving` the overview is painted
+   flat, each part at the scale it is shown. */
+.zv-root:not([data-moving]) .zv-overview * {
+  will-change: auto;
+}
+
+/* ── a phone (2026-11-01 phone evals) ──
+   The device's marks are drawn at 0.62 inside a device seen at ~0.6, so their
+   labels are set large enough to read there, cut short before a neighbour's.
+   A name stays short enough not to run into the next one in the crew
+   (scene-words.ts · --zv-nm-max).
+   At the full view the way back out is a round button in the head's corner,
+   not a pill over the agent's name. */
+@media (max-width: 759px) {
+  .zv-nm {
+    max-width: 112px;
+  }
+  /* The crew's small words: a phone's crew is drawn at ~0.95 (0.86 on a 375px
+     phone), so 10px read at ~6-9px; at 11px they read at 9.4px or more
+     (Gauge, 2026-11-01; tests/zoom-phone-crew-words.test.ts). */
+  .zv-scene .zv-st,
+  .zv-scene .zv-cnt {
+    font-size: 11px;
+  }
+  /* The typed words under a face, as large as its other words. */
+  .zv-scene .zv-dft > span {
+    font-size: 11px;
+  }
+  /* The open workspace's label in the marks' form: seal and name in 130px
+     (380 when it grows by 2.9 on the device stop, as wide as theirs), its
+     totals on a line below. */
+  .zv-grp:not(.zv-mark-label) {
+    flex-wrap: wrap;
+    /* In a zero-width scene a wrapping box would shrink to its widest part. */
+    width: max-content;
+    max-width: 130px;
+    row-gap: 2px;
+  }
+  .zv-grp .zv-workspace-name {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .zv-grp:not(.zv-mark-label) .zv-tot {
+    margin-left: 28px;
+    padding-left: 2px;
+    border-left: 0;
+  }
+  .zv-mark .zv-mark-label {
+    gap: 12px;
+    max-width: 380px;
+    font-size: 32px;
+    letter-spacing: 0.04em;
+  }
+  /* The seal's number as large as the name beside it: both read at caption (zoom-frame.ts · deviceWords). */
+  .zv-mark .zv-mark-label .zv-seal {
+    width: 52px;
+    height: 52px;
+    font-size: 32px;
+    line-height: 52px;
+  }
+}
+
+@media (max-width: 700px) {
+  .zv-root[data-full='true'] .zv-controls {
+    left: auto;
+    right: 8px;
+    transform: none;
+    padding: 3px;
+  }
+  .zv-root[data-full='true'] .zv-location {
+    display: none;
+  }
+  .zv-root[data-full='true'] .zv-back {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* ── agents per row (ZoomView · crew-cols.ts): a small pill at the crew's top right ── */
+.zv-cols {
+  position: absolute;
+  z-index: 44;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px 4px 10px;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 6px 18px var(--zv-shadow);
+  color: var(--zv-ink-soft);
+  font: 10px/1 var(--zv-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  animation: zv-controls-in 180ms ease-out;
+}
+
+.zv-cols > span {
+  margin-right: 4px;
+}
+
+.zv-cols button {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--zv-ink-soft);
+  font: 600 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-cols button[aria-pressed='true'] {
+  background: var(--zv-ink);
+  color: var(--zv-paper);
+}
+
+.zv-cols button:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .zv-cols button {
+    width: 32px;
+    height: 32px;
+  }
+}
+
+/* A screenshot on its way into the reply (prompt/prompt-attach.ts), or why
+   it did not go: in the same place as "sent ✓", held while it saves. */
+.zv-attach-note {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: none;
+}
+
+.zv-attach-note.failed {
+  color: var(--sumi-wait, var(--danger, #c0392b));
+  animation: zv-sent 5s ease forwards;
+}
+
+/* ── the way into a full view (full-poses.ts) ── */
+/* The item's crisp head: the full view's own head, laid over the same box, with no paper of its own. */
+.zv-fv-ghost {
+  z-index: 13;
+  background: none !important;
+  opacity: 0;
+  pointer-events: none;
+}
+.zv-fv-ghost::after {
+  display: none;
+}
+.zv-fv-ghost.laned {
+  --fv-lane-left: 56px;
+  --fv-lane-right: 56px;
+}
+/* Only the zoom's own marks, only while moving: the full view's own × stay (its artifacts'). */
+[data-going='full'] .zv-scene .zv-del {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* The live browser of an item's full view (BrowserLayer.tsx, outside the zoom's
+   root): it fades with the real full view, by the value the zoom sets on the
+   body; with no zoom mounted the value is absent and it shows as it always did. */
+.browser-lod.browser-embedded {
+  opacity: var(--zv-full-opacity, 1);
+  pointer-events: var(--zv-full-pe, auto);
+}
+/* On the way into a full view the stop bar steps away: the full view has none,
+   and on a phone it lay over the row the thumbnails were flying to. */
+.zv-controls {
+  transition: opacity 160ms ease;
+}
+[data-going='full'] .zv-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+/* A workspace's newest browser beside its stack (ZoomParts · NewestThumb): a
+   thumbnail like a coin's, pressable. On a phone the marks are too small for
+   it (the open workspace's shows from the group out, never as specks). */
+.zv-wsnew {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.zv-wsnew > .zv-th {
+  transform: none;
+}
+.zv-wsnew-cap {
+  opacity: 1;
+}
+@media (max-width: 759px) {
+  .zv-mark .zv-wsnew,
+  .zv-mark .zv-wsnew-cap {
+    display: none;
+  }
+}

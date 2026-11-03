@@ -1,0 +1,6 @@
+  think  group/think
+  routing   order
+  stays     turn
+  models    1 ollama/qwen2.5:1.5b  Ollama · qwen2.5:1.5b
+            2 ollama/qwen3:1.7b  Ollama · qwen3:1.7b
+  rules     1 reasoning → ollama/qwen3:1.7b

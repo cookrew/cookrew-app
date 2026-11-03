@@ -1,9 +1,14 @@
+import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
+import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
+import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
+import type { InboxRow } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { ListenEvent } from '../../main/listen'
 import type { UiCommandEvent } from '../../shared/sous-ui'
 import type {
@@ -23,12 +28,15 @@ import type {
   RecoverResult,
   RestoreResult,
 } from "../../shared/model";
+import type { SecretListing } from "../../shared/secret-slot";
 import type { TerminalActivity, TurnRecord } from "../../shared/turn";
 import type { TurnMatch } from "../../shared/turn-search";
 import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
+import type { LevelsEvent } from "../../shared/strata";
+import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
 import type {
@@ -296,7 +304,11 @@ export interface CookrewApi {
   snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
   /** Every workspace's picture, as data URLs, read on demand. */
   workspaceShots: () => Promise<Record<string, { src: string; at: number }>>;
+  /** Whether the terminals' herdr server predates this macOS login (main/terminal-session.ts). */
+  terminalSession?: () => Promise<{ stale: boolean; serverPid: number | null; serverStartedAt: number | null; loginAt: number | null }>;
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
+  /** The owner's one-line brief (shared/workspace-brief.ts); '' clears it. Rejects an invalid one. */
+  setWorkspaceBrief: (id: string, brief: string) => Promise<WorkspaceList>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
   removeWorkspace: (id: string) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
@@ -327,7 +339,8 @@ export interface CookrewApi {
   removeNode: (id: string) => Promise<void>;
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;
-  listPresets: () => Promise<{ name: string; command: string }[]>;
+  /** `launch`: what a new agent of the preset can start on (main/launch-offers.ts); absent from an older main. */
+  listPresets: () => Promise<{ name: string; command: string; launch?: LaunchOffer | null }[]>;
   /**
    * Version pins for a terminal (§10) — the rail's third marker class. Asked
    * per terminal because a pin belongs to a transcript, not to a workspace.
@@ -340,6 +353,12 @@ export interface CookrewApi {
     orch: boolean;
     /** Boot from a saved role (rolePrompt injected once the TUI is quiet). */
     roleName?: string;
+    /** Its first prompt, submitted once the TUI is quiet. */
+    prompt?: string;
+    /** `name` is a stand-in read off `prompt`: Sous names the card once it answers. */
+    autoName?: boolean;
+    /** The model and effort it starts on, as launch flags (shared/launch-tune). */
+    tune?: LaunchTune;
   }) => Promise<CanvasNode>;
   /**
    * Resolve dropped/picked File objects to absolute paths on the machine
@@ -348,6 +367,8 @@ export interface CookrewApi {
    */
   attachFiles: (files: File[]) => Promise<string[]>;
   saveAttachmentBytes: (name: string, bytes: Uint8Array) => Promise<string>;
+  /** A prompt's picture (shared/prompt-images.ts), or null when there is none to show. */
+  readImage: (ref: ImageRef) => Promise<ImageBytes | null>;
   /** Native multi-file picker (desktop only; returns [] elsewhere). */
   pickFiles: () => Promise<string[]>;
   ptyInput: (terminalId: string, data: string) => void;
@@ -402,6 +423,13 @@ export interface CookrewApi {
     onData: (data: string) => void,
     onHello?: (geometry: { cols: number; rows: number }) => void
   ) => () => void;
+  /**
+   * Ask for this viewer's live terminal to be re-sent WITH the pane's history
+   * (PtySession.seedFrame), so it scrolls locally. Arrives on the attach's own
+   * data stream, ending in the seed marker for `nonce`. False: no history
+   * here (the backend cannot read it, or the stream is not attached).
+   */
+  ptySeed?: (terminalId: string, nonce: string, lines: number) => Promise<boolean>;
   listActivity: () => Promise<TerminalActivity[]>;
   onTerminalActivity: (cb: (activity: TerminalActivity) => void) => () => void;
   /**
@@ -411,14 +439,50 @@ export interface CookrewApi {
    */
   onEvent?: (cb: (event: unknown) => void) => () => void;
   /**
+   * The route program (shared/route.ts): is the Magpie gateway here, what it
+   * serves, where each turn went; and one card's route. Optional and
+   * feature-detected like the dials: a bridge without it draws no panel.
+   */
+  routeState?: () => Promise<RouteState>;
+  routeSetDefault?: (model: string | null) => Promise<RouteState>;
+  routeSetSharedMcp?: (on: boolean) => Promise<RouteState>;
+  terminalRoute?: (terminalId: string) => Promise<CardRouteState>;
+  terminalRouteSet?: (terminalId: string, route: CardRoute) => Promise<CardRouteState | { error: string }>;
+  onRoute?: (cb: (state: RouteState) => void) => () => void;
+  onCardRoute?: (cb: (row: { terminalId: string } & CardRouteState) => void) => () => void;
+  /**
    * Signals on the cables: one agent asked another, or answered — one frame
    * per moment (shared/cable-signal.ts). Optional and feature-detected: the
    * harness lights nothing on a bridge without it.
    */
   onCableSignal?: (cb: (signal: unknown) => void) => () => void;
+  /**
+   * An agent acted on a card — the cursor over its screen (shared/use-signal.ts).
+   * Optional and feature-detected, like the cable signals.
+   */
+  onUseSignal?: (cb: (signal: unknown) => void) => () => void;
+  /**
+   * The Mac's addresses moved and the registry has taken the new card. The
+   * companion's plane switcher races the Mac's names at once on it
+   * (path/companion.ts). Optional: the demo has no Mac to move.
+   */
+  onReachChanged?: (cb: () => void) => () => void;
+  /** The build the Mac serves (main/build-id.ts); the companion reloads when it changes. */
+  onBuild?: (cb: (id: string) => void) => () => void;
+  /**
+   * The sealed slots (R4, shared/secret-slot.ts): a note line `🔒 <name>` is
+   * a slot; SEAL puts the value in ~/.cookrew/secrets/ and nothing in the
+   * note. The listing carries names and dates, never values. Optional: an
+   * older bridge draws the slot with no store behind it.
+   */
+  secretPut?: (name: string, value: string, served: boolean) => Promise<SecretListing>;
+  secretList?: () => Promise<SecretListing[]>;
+  secretRemove?: (name: string) => Promise<boolean>;
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
+  /** One changed registry entry (spawn, respawn, exit) as it happens. Optional, feature-detected. */
+  onAgentChanged?: (cb: (entry: unknown) => void) => () => void;
   /**
    * Activity Board snapshot (cross-workspace task view). Optional and
    * feature-detected like listAgents — an older bridge shows the roster
@@ -431,6 +495,24 @@ export interface CookrewApi {
    * feature-detect, and fall back to listBoard.
    */
   subscribeBoard?: (cb: (board: BoardSnapshotLike) => void) => () => void;
+  /** This desktop's name for the header's device step; null when it has none. Optional — the phone names its desktop from the path. */
+  machineName?: () => Promise<string | null>;
+  /**
+   * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
+   * levels feed — every workspace with its agents and their wired notes and
+   * browsers (shared/strata.ts LevelsEvent): a snapshot first, then deltas.
+   * `refused` says the desktop would not open it (its levels service is not
+   * up yet, or this client may not read it); the caller asks again. Returns
+   * the release. Optional — feature-detect; without it the navigator names
+   * this desktop's workspaces from listWorkspaces.
+   */
+  subscribeZoomFleet?: (cb: (event: LevelsEvent) => void, refused?: () => void) => () => void;
+  /**
+   * The signed-in account's desktops as the registry lists them: names,
+   * presence, kind, workspace names — never addresses (shared/zoom-fleet.ts).
+   * Optional — feature-detect.
+   */
+  zoomFleetMachines?: () => Promise<AccountMachines>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
@@ -635,13 +717,31 @@ export interface CookrewApi {
    */
   sousCommand: (
     text: string,
-    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }
+    ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }
   ) => Promise<SousCommandResult>;
   onUiCommand: (cb: (event: UiCommandEvent) => void) => () => void;
   /**
-   * Hold ⌘ to talk (desktop only — the phone dictates through the Web Speech
-   * API in VoiceBar). Main spawns the on-device recognizer on start, SIGINTs
-   * it on stop, and streams ready / partial / final / error here.
+   * R3 · the decide step. `sousCommand` may answer `intent: 'decide'` with a
+   * decision the box shows for `holdMs`; this commits it under its token —
+   * once. Optional: an older bridge never decides, and the box then shows
+   * what Sous said and nothing else.
+   */
+  sousCommit?: (token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: SousSurface) => Promise<SousCommandResult>;
+  /** HP · a late revision of a minted decision: main may only APPEND alternates. Optional on an older bridge. */
+  onSousDecisionUpdated?: (cb: (update: { token: string; alternates: Alternate[] }) => void) => () => void;
+  /** The box closed with a decision still held: main drops the token. */
+  sousCancel?: (token: string, surface?: SousSurface) => Promise<boolean>;
+  /** R3 · the HITL inbox: a one-shot read, and the subscription that holds the list open in main. */
+  inbox?: () => Promise<InboxRow[]>;
+  onInbox?: (cb: (rows: InboxRow[]) => void) => () => void;
+  /** HP · a `sous` row's RETRY/OPEN, and any dismissable row's DISMISS (owner token only). */
+  inboxAct?: (id: string) => Promise<{ ok: boolean; error?: string; dispatchId?: string }>;
+  inboxDismiss?: (id: string) => Promise<{ ok: boolean }>;
+  /**
+   * The Mac's ear for the prompt box (prompt/use-dictation.ts: its mic, or ⌘
+   * held) — desktop only; the phone dictates through the Web Speech API. Main
+   * spawns the on-device recognizer on start, SIGINTs it on stop, and streams
+   * ready / partial / final / error here.
    */
   listenAvailable: () => Promise<boolean>;
   listenStart: () => Promise<boolean>;

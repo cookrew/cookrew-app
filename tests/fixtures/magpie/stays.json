@@ -1,0 +1,14 @@
+{
+  "note": "one bearer (magpie-cookrew), group/think = [ollama/qwen2.5:1.5b, ollama/qwen3:1.7b], routing=order, one rule: effort=on -> qwen3:1.7b",
+  "session": {
+    "hp-x (reasoning)": "ollama/qwen3:1.7b",
+    "hp-y (plain, NEW session)": "ollama/qwen3:1.7b",
+    "hp-z (plain, NEW session)": "ollama/qwen3:1.7b"
+  },
+  "turn": {
+    "hp-x2 (reasoning)": "ollama/qwen3:1.7b",
+    "hp-y2 (plain, NEW session)": "ollama/qwen2.5:1.5b"
+  },
+  "finding": "stays=session is scoped to the BEARER, not to X-Magpie-Session: a pin made by one session is inherited by every other session on the same key. stays=turn re-decides per turn and does not leak.",
+  "control": "qwen3 was the loaded model throughout, and stays=turn still returned qwen2.5 for a plain turn at the same moment - so the leak is the pin, not Ollama readiness."
+}

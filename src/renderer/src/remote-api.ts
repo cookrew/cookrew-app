@@ -1,3 +1,5 @@
+import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
+import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
@@ -8,13 +10,20 @@ import type { BoardSnapshotLike, CookrewApi } from './api'
 import type {
   LaneInfo,
   LandResult, CanvasNode, GitInfo, WorkspaceList, WorkspaceState } from '../../shared/model'
+import type { SecretListing } from '../../shared/secret-slot'
 import type { UiCommandEvent } from '../../shared/sous-ui'
+import type { InboxRow } from '../../shared/inbox-rank'
+import type { Alternate } from '../../shared/sous-decide'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
-import { apiPath } from './api-base'
+import type { LevelsEvent } from '../../shared/strata'
+import { apiPath, clientBase } from './api-base'
 import { planeFetch } from './plane-fetch'
+import { planeHealth } from './plane-health'
 import { registerPlaneStream } from './plane-streams'
+import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
+import { relayAccountMachines } from './relay-machines'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -41,9 +50,22 @@ import { createRawInputQueue } from './raw-input-queue'
  */
 interface ParseOptions {
   passive?: boolean
+  /** Abort the request (raw-input-queue.ts gives up on a hung keystroke). */
+  signal?: AbortSignal
 }
 
 /** Turn a server answer into a value, or into the right kind of failure. */
+/** The Mac ANSWERED, with a status that is not a success: not a transport failure. */
+export class HttpStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message)
+    this.name = 'HttpStatusError'
+  }
+}
+
 async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
@@ -56,7 +78,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
       if (!(options.passive && failure.scope === 'read-only')) authStore().report(failure)
       throw failure
     }
-    throw new Error(message)
+    throw new HttpStatusError(message, response.status)
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -80,6 +102,29 @@ const inFlightGets = new Map<string, Promise<unknown>>()
  */
 const SHARE_GET_MS = 10_000
 
+/** Each attached terminal's stream name, from its hello (ptySeed). */
+const seedStreamIds = new Map<string, string>()
+/** Seeds asked for before the stream's hello named it: answered when it does. */
+const seedStreamWaiters = new Map<string, Array<(id: string | null) => void>>()
+
+/** The stream's name, waiting a little for a hello still on its way (a card opened straight into LIVE asks first). */
+function seedStreamId(terminalId: string, waitMs = 5000): Promise<string | null> {
+  const known = seedStreamIds.get(terminalId)
+  if (known) return Promise.resolve(known)
+  return new Promise((resolve) => {
+    const list = seedStreamWaiters.get(terminalId) ?? []
+    const timer = setTimeout(() => done(null), waitMs)
+    const done = (id: string | null): void => {
+      clearTimeout(timer)
+      const rest = (seedStreamWaiters.get(terminalId) ?? []).filter((one) => one !== done)
+      if (rest.length > 0) seedStreamWaiters.set(terminalId, rest)
+      else seedStreamWaiters.delete(terminalId)
+      resolve(id)
+    }
+    seedStreamWaiters.set(terminalId, [...list, done])
+  })
+}
+
 async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
   if (method !== 'GET' || body !== undefined) {
     // A write may change what any GET in flight would answer; nobody asking
@@ -99,7 +144,7 @@ async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions
 }
 
 async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
-  const options: RequestInit = { method }
+  const options: RequestInit = { method, ...(parseOptions.signal ? { signal: parseOptions.signal } : {}) }
   const headers: Record<string, string> = {}
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
@@ -142,6 +187,24 @@ async function upload(name: string, body: Blob): Promise<string> {
     })
   )
   return result.path
+}
+
+/**
+ * A prompt's picture, as raw bytes (mobile-api · /api/image). A picture that
+ * is not there, or not the phone's to see, is a 404: nothing to draw.
+ */
+async function readImage(ref: ImageRef): Promise<ImageBytes | null> {
+  const query =
+    'path' in ref
+      ? `path=${encodeURIComponent(ref.path)}`
+      : `file=${encodeURIComponent(ref.file)}&uuid=${encodeURIComponent(ref.uuid)}&i=${ref.i}`
+  const url = 'path' in ref ? apiPath(`/api/image?${query}`) : apiPath(`/api/terminal/${encodeURIComponent(ref.terminalId)}/image?${query}`)
+  const headers: Record<string, string> = {}
+  const token = authStore().token()
+  if (token) headers.authorization = `Bearer ${token}`
+  const response = await planeFetch(url, { headers })
+  if (!response.ok) return null
+  return { mime: response.headers.get('content-type') ?? 'image/png', bytes: new Uint8Array(await response.arrayBuffer()) }
 }
 
 /**
@@ -191,10 +254,21 @@ function passivePost(path: string, body: unknown): void {
 /**
  * Keystrokes for the terminal, ordered and coalesced (raw-input-queue.ts).
  * req() has already reported any auth failure to the store by the time the
- * queue swallows the rejection — same contract as post() above.
+ * queue swallows the rejection — same contract as post() above. A batch that
+ * got no answer at all is sent again with its id; one the Mac answered,
+ * whatever it said, is not.
  */
-const rawInput = createRawInputQueue((terminalId, data) =>
-  req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data })
+const rawInput = createRawInputQueue(
+  (terminalId, data, signal, id) => req(apiPath(`/api/terminal/${terminalId}/raw`), 'POST', { data, id }, { signal }),
+  // An answer from the Mac (any status, or a body that was not JSON) is not
+  // sent again: only a batch that got no answer at all may not have been
+  // typed. A 502-504 is the relay saying it could not reach the Mac.
+  {
+    retryable: (error) =>
+      error instanceof HttpStatusError
+        ? error.status >= 502 && error.status <= 504
+        : !(error instanceof AuthError) && !(error instanceof SyntaxError)
+  }
 )
 
 /**
@@ -253,18 +327,23 @@ function sharedEvents(): ReconnectingStream {
         // gets the snapshot, which is how a dropped stream heals (L7).
         const first = !streamOpenedOnce
         streamOpenedOnce = true
-        return new EventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
+        return openEventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
       },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.
-      onState: setPathLink
+      onState: setPathLink,
+      // A direct plane that cannot deliver this stream within SWITCH_PROVE_MS
+      // carries nothing a session needs (live-stream.ts): the link is asked
+      // whether it is there, and the plane given up when it is not, while
+      // the old stream keeps the session. A no-op on the relay.
+      onSwitchFailed: () => planeHealth().suspect('a new stream delivered nothing')
     })
     events = stream
     // A live stream does not re-read its own URL, so a plane switch has to
     // push it. It is never torn down, so the unsubscribe is deliberately
     // dropped rather than stored.
-    registerPlaneStream({ restart: () => stream.restart() })
+    registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
   }
   return events
 }
@@ -351,6 +430,7 @@ export function createRemoteApi(): CookrewApi {
       req(apiPath('/api/templates/import'), 'POST', { team, position }),
     switchWorkspace: (id) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
     renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
+    setWorkspaceBrief: (id, brief) => req<WorkspaceList>(apiPath('/api/workspaces/brief'), 'POST', { id, brief }),
     removeWorkspace: (id) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}`), 'DELETE'),
     addWorkspaceDir: (id, dir) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'POST', { path: dir }),
     removeWorkspaceDir: (id, dir) =>
@@ -393,6 +473,7 @@ export function createRemoteApi(): CookrewApi {
     saveAttachmentBytes: (name, bytes) =>
       upload(name, new Blob([new Uint8Array(bytes).slice().buffer])),
     pickFiles: () => Promise.resolve([]),
+    readImage,
 
     // Ordered and coalesced — see raw-input-queue.ts: one request in flight
     // per terminal, later bytes ride the next request as a single batch.
@@ -408,6 +489,15 @@ export function createRemoteApi(): CookrewApi {
     turnSeen: (terminalId) => passivePost(apiPath(`/api/terminal/${terminalId}/seen`), {}),
     ptyResize: (terminalId, cols, rows) =>
       passivePost(apiPath(`/api/terminal/${terminalId}/resize`), { cols, rows }),
+    ptySeed: async (terminalId, nonce, lines) => {
+      const stream = await seedStreamId(terminalId)
+      if (!stream) return false
+      try {
+        return (await req<{ ok?: boolean }>(apiPath(`/api/terminal/${terminalId}/seed`), 'POST', { nonce, lines, stream })).ok === true
+      } catch {
+        return false
+      }
+    },
     ptyAttach: (terminalId, onData, onHello) => {
       // Healing, not hoping — see attachTerminalStream for why a bare
       // EventSource left the live pane black on the first open of an idle
@@ -416,15 +506,23 @@ export function createRemoteApi(): CookrewApi {
       // so a foreground return revives the link the way the canvas stream's
       // resync does.
       const stream = attachTerminalStream(
-        { open: () => new EventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
+        { open: () => openEventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
         onData,
-        onHello
+        (hello) => {
+          // The stream's name rides its hello: a seed is sent down it alone.
+          const id = (hello as { stream?: unknown }).stream
+          if (typeof id === 'string') {
+            seedStreamIds.set(terminalId, id)
+            for (const waiter of seedStreamWaiters.get(terminalId) ?? []) waiter(id)
+          }
+          onHello?.(hello)
+        }
       )
       const onVisible = (): void => {
         if (document.visibilityState === 'visible') stream.revive()
       }
       document.addEventListener('visibilitychange', onVisible)
-      const unregister = registerPlaneStream({ restart: () => stream.restart() })
+      const unregister = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
       return () => {
         document.removeEventListener('visibilitychange', onVisible)
         unregister()
@@ -445,6 +543,14 @@ export function createRemoteApi(): CookrewApi {
     // One fleet-wide GET for every card's tag, then the same change-gated push
     // the desktop renderer gets — so nothing here polls.
     listTuning: () => req<Record<string, AgentTuning>>(apiPath('/api/tuning')),
+    // Magpie routing over the companion's API (LEDGER endpoints).
+    routeState: () => req<RouteState>(apiPath('/api/route')),
+    routeSetDefault: (model) => req<RouteState>(apiPath('/api/route/default'), 'PUT', { model }),
+    routeSetSharedMcp: (on) => req<RouteState>(apiPath('/api/route/shared-mcp'), 'PUT', { on }),
+    terminalRoute: (terminalId) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`)),
+    terminalRouteSet: (terminalId, route) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`), 'PUT', { route }),
+    onRoute: (cb) => subscribe<RouteState>('route', cb),
+    onCardRoute: (cb) => subscribe<{ terminalId: string } & CardRouteState>('card-route', cb),
     onTerminalTuning: (cb) =>
       subscribe<{ terminalId: string; tuning: AgentTuning }>('tuning', cb),
     terminalTuning: (terminalId) =>
@@ -459,6 +565,17 @@ export function createRemoteApi(): CookrewApi {
     // stream carries 'event'; queries/roster are plain GETs.
     onEvent: (cb) => subscribe('event', cb),
     onCableSignal: (cb) => subscribe('signal', cb),
+    onUseSignal: (cb) => subscribe('use', cb),
+    onReachChanged: (cb) => subscribe('reach', () => cb()),
+    onBuild: (cb) => subscribe<{ id?: unknown }>('build', (data) => {
+      if (typeof data.id === 'string') cb(data.id)
+    }),
+    // The sealed slots: owner-token routes; the read-only wall token gets 401.
+    secretPut: (name, value, served) =>
+      req<SecretListing>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'PUT', { value, served }),
+    secretList: () => req<SecretListing[]>(apiPath('/api/secrets')),
+    secretRemove: (name) =>
+      req<{ removed: boolean }>(apiPath(`/api/secrets/${encodeURIComponent(name)}`), 'DELETE').then((r) => r.removed),
     queryEvents: async (query) => {
       const params = new URLSearchParams()
       const q = (query ?? {}) as Record<string, unknown>
@@ -481,10 +598,46 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>(apiPath('/api/agents'))
       return result.agents
     },
+    onAgentChanged: (cb) => subscribe('agent', cb),
     listBoard: (window?: string) =>
       req<BoardSnapshotLike>(
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
       ),
+    // THE ZOOM NAVIGATOR'S DEVICES: the companion's levels stream (unnamed
+    // data frames, a snapshot first; EventSource reconnects onto a fresh
+    // snapshot by itself, so only a stream it gave up on — a 401 — is a
+    // refusal), and the account's desktops from cookrew.dev itself.
+    subscribeZoomFleet: (cb, refused) => {
+      // AHEALING stream, like the canvas's and the terminal's: a levels feed
+      // that dies without a reset (iOS reaping it, the Mac restarting) is
+      // otherwise never reopened, and the fleet's workspace list freezes for
+      // the life of the page.
+      const stream = new ReconnectingStream({
+        open: () => openEventSource(tokenParam(apiPath('/api/levels/stream'))),
+        onState: (state) => {
+          if (state === 'failed') refused?.()
+        },
+        backoffMs: [1000, 2000, 4000, 8000]
+      })
+      stream.on('message', (message) => {
+        try {
+          cb(JSON.parse(message.data) as LevelsEvent)
+        } catch (error) {
+          console.error('Levels stream sent a frame that is not JSON:', error)
+        }
+      })
+      const onVisible = (): void => {
+        if (document.visibilityState === 'visible') stream.revive()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      const unregister = registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
+      return () => {
+        document.removeEventListener('visibilitychange', onVisible)
+        unregister()
+        stream.close()
+      }
+    },
+    zoomFleetMachines: () => relayAccountMachines(clientBase()),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
       req(apiPath(`/api/agents/${id}/restore`), 'POST', {
@@ -601,9 +754,17 @@ export function createRemoteApi(): CookrewApi {
     // focusedAgentId is deliberately not sent — a network door names agents
     // by name only (see SousCommandInput).
     sousCommand: (text, ctx) =>
-      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId() }),
+      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId(), ...(ctx.box ? { box: true } : {}) }),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
-    // The phone hears through its own browser (VoiceBar); the Mac's ear is
+    sousCommit: (token, choice, surface) =>
+      req(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}), ...(choice?.ack ? { ack: choice.ack } : {}) }),
+    onSousDecisionUpdated: (cb) => subscribe<{ token: string; alternates: Alternate[] }>('sous', cb),
+    sousCancel: (token, surface) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId() }).then((out) => out.cancelled),
+    inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),
+    onInbox: (cb) => subscribe<{ rows: InboxRow[] }>('inbox', (frame) => cb(frame.rows)),
+    inboxAct: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/act`), 'POST', {}),
+    inboxDismiss: (id) => req<{ ok: boolean }>(apiPath(`/api/inbox/${encodeURIComponent(id)}/dismiss`), 'POST', {}),
+    // The phone hears through its own browser (prompt/use-dictation.ts); the Mac's ear is
     // the desktop's alone.
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
@@ -664,6 +825,10 @@ export function createRemoteApi(): CookrewApi {
     workspaceShots: () =>
       req<Record<string, { src: string; at: number }>>(apiPath('/api/workspaces/shots')).catch(
         () => ({})
+      ),
+    terminalSession: () =>
+      req<{ stale: boolean; serverPid: number | null; serverStartedAt: number | null; loginAt: number | null }>(apiPath('/api/terminal-session')).catch(
+        () => ({ stale: false, serverPid: null, serverStartedAt: null, loginAt: null })
       ),
     quitApp: () => undefined
   }

@@ -6,7 +6,7 @@ import { diffOutput } from './ask'
 // normalization decides both "did the prompt land?" and "is this turn the
 // dispatched one?" — two rules would let a prompt land under one and never
 // complete under the other.
-import { promptAnswersDispatch, type FinalTurnAnswer } from './dispatch'
+import { contextExhausted, promptAnswersDispatch, type FinalTurnAnswer } from './dispatch'
 // The delta seam's wire type is the parser lane's (shared/session-turns) —
 // one definition, or the emitter and this applier drift apart.
 import type { HistoryDelta } from '../shared/session-turns'
@@ -37,8 +37,11 @@ import {
   dedupePhantomEchoes,
   detectAgentActivity,
   isCommandPrompt,
+  isUiCommand,
   detectAttention,
   detectLiveWork,
+  detectTurnEnded,
+  lastStatusLine,
   extractPromptEcho,
   feedPromptBuffer,
   type PromptFeed,
@@ -52,6 +55,12 @@ import {
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
 /**
+ * The silence that is enough when herdr has ALREADY watched the turn end
+ * ('done') and the screen's last status line is a finished one: two witnesses
+ * that agree, so only a repaint's worth of settle is left to wait out.
+ */
+const DONE_SETTLE_MS = 600
+/**
  * How long a herdr 'working' report holds a turn open with NO output at all.
  * Long enough for slow silent tool calls, short enough that a detector stuck
  * at 'working' cannot pin a turn open for the rest of the run.
@@ -64,6 +73,22 @@ const WORKING_TRUST_MS = 60_000
 const RESUME_WINDOW_MS = 30_000
 /** Min gap between rendered-screen scans in the self-heal path. */
 const HEAL_SCAN_MS = 1000
+/**
+ * A held lone ESC may be the first half of a split Shift+Enter (ESC CR) or a
+ * paste marker, and those halves arrive back to back. Held longer than this
+ * over an EMPTY box, it was an Esc keypress of its own (closing a picker): the
+ * next chunk is fed without it, so a later Enter submits instead of reading as
+ * Shift+Enter. Over typed text it keeps pairing — the TUI may still read the
+ * two bytes together, and a missed newline there would clear the mark beside
+ * live owner text.
+ */
+const LONE_ESC_PAIR_MS = 100
+/**
+ * After a menu answer, herdr's "blocked" lags the menu closing by a few
+ * hundred ms, and the answer's spinner is not up yet: inside this window
+ * blocked is believed only while the screen still shows a question.
+ */
+const ANSWER_GRACE_MS = 1500
 /**
  * Paced Sous title-backfill: one record per tick so a burst never trips the
  * summarizer's breaker (which would null out a whole sequential pass).
@@ -413,6 +438,10 @@ interface TrackedTerminal {
   inPaste: boolean
   /** Partial paste marker withheld between input chunks (feedPromptBuffer). */
   heldInput: string
+  /** Epoch ms heldInput was last set; ages out a lone ESC (LONE_ESC_PAIR_MS). */
+  heldAt: number
+  /** Epoch ms of the last menu answer (ANSWER_GRACE_MS); 0 when none. */
+  answeredAt: number
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /**
@@ -423,6 +452,11 @@ interface TrackedTerminal {
    * boot phantom is never mistaken for input-less boot noise at finalize.
    */
   sawInputThisTurn: boolean
+  /**
+   * The screen's last status line when this turn opened (lastStatusLine): the
+   * PREVIOUS turn's finished line, which must not end this one.
+   */
+  startStatus: string | null
   /** Epoch ms of the last self-heal viewport scan (throttle). */
   lastHealScanAt: number
   /**
@@ -1449,6 +1483,21 @@ export class TurnTracker extends EventEmitter {
    * has nobody to witness its turn, and accepting work for it would pin a
    * watch on nothing.
    */
+  /**
+   * Is this card's context full, read off the PTY MIRROR's visible screen —
+   * the same text the tracker already watches — never a pane capture. For a
+   * card the tracker does not hold, false: "cannot see" is not "full".
+   */
+  contextFullCached(terminalId: string): boolean {
+    const t = this.tracked.get(terminalId)
+    if (!t) return false
+    try {
+      return contextExhausted(t.session.viewportText())
+    } catch {
+      return false
+    }
+  }
+
   isTracked(terminalId: string): boolean {
     return this.tracked.has(terminalId)
   }
@@ -1965,8 +2014,11 @@ export class TurnTracker extends EventEmitter {
       promptBuffer: '',
       inPaste: false,
       heldInput: '',
+      heldAt: 0,
+      answeredAt: 0,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
+      startStatus: null,
       lastHealScanAt: 0,
       // A mark that predates this attachment (set, then the view detached
       // and re-tracked) means the REAL box holds owner bytes this fresh
@@ -2024,6 +2076,8 @@ export class TurnTracker extends EventEmitter {
     session.on('replay', t.onReplay)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
+    // herdr may have reported the question before this mirror existed.
+    if (this.backendPhase.get(session.terminalId)?.phase === 'waiting') this.healBlocked(t)
   }
 
   /**
@@ -2119,10 +2173,33 @@ export class TurnTracker extends EventEmitter {
     if (current?.phase === phase && current.agent === agent) return
     this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now() })
     // A tracked terminal reports its own truth; announcing this one would
-    // race the real screen for the same card.
-    if (!this.tracked.has(terminalId)) {
+    // race the real screen for the same card. The one thing its screen cannot
+    // report is a question that was already up when it attached.
+    const t = this.tracked.get(terminalId)
+    if (!t) {
       this.announce(this.backendActivity(terminalId, phase, agent))
+    } else if (phase === 'waiting') {
+      this.healBlocked(t)
     }
+  }
+
+  /**
+   * A tracked agent at rest whose multiplexer says it is blocked on the human.
+   *
+   * The screen alone never finds this: "waiting" is decided by poll(), which
+   * only runs inside a turn the tracker saw open, and a question that was
+   * already up when the mirror attached (a card opened on it, a restart, a
+   * workspace switch) prints nothing until someone answers. herdr's blocked
+   * rules read the approval or question box itself, so a POSITIVE blocked is
+   * trusted here the way poll() trusts it: open the missed turn (self-heal,
+   * as a live spinner would) and hold it waiting. Output resumes 'thinking'
+   * through handleData, and quiescence ends it as ever.
+   */
+  private healBlocked(t: TrackedTerminal): void {
+    if (!t.agent || (t.phase !== 'idle' && t.phase !== 'replied')) return
+    this.resumeThinking(t)
+    t.phase = 'waiting'
+    this.push(t)
   }
 
   /**
@@ -2236,11 +2313,12 @@ export class TurnTracker extends EventEmitter {
     // provably empty box), and every refusal names that requirement.
     const prevBuffer = t.promptBuffer
     const prevInPaste = t.inPaste
-    const prevHeld = t.heldInput
-    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
+    const prevHeld = this.liveHeld(t)
+    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, prevHeld)
     t.promptBuffer = fed.buffer
     t.inPaste = fed.inPaste
     t.heldInput = fed.held
+    t.heldAt = Date.now()
     // THE EDITING RESERVATION (Sol r8 P0-1, proof-gated per r9 P0-2),
     // maintained from the same buffer feed that renders 'typing:' on cards —
     // and synchronously with the write that delivered the bytes
@@ -2285,6 +2363,7 @@ export class TurnTracker extends EventEmitter {
       // submitted text is the real first prompt, so fall through to startTurn.
       t.phase = 'thinking'
       t.lastSubmitAt = 0
+      t.answeredAt = Date.now()
       this.push(t)
       return
     }
@@ -2307,12 +2386,53 @@ export class TurnTracker extends EventEmitter {
         this.schedulePush(terminalId)
         return
       }
+      // A picker or a quit is not an exchange: no turn, no working face —
+      // and no submit stamp either, or the picker's own drawing (and the
+      // transcript repaint when it closes, "⏺ …" / "✻ Churned for 7s") reads
+      // as agent output answering a submit and self-heals a turn anyway.
+      if (isUiCommand(prompt)) {
+        t.lastSubmitAt = 0
+        this.schedulePush(terminalId)
+        return
+      }
       this.startTurn(t, prompt)
       return
     }
     // No submit: the input box content changed (typing, paste) — surface it
     // as pendingInput on the next throttled push.
     this.schedulePush(terminalId)
+  }
+
+  /**
+   * Is herdr's "blocked" still the screen's truth? Not once the answer's
+   * spinner runs, and not just after a menu answer unless a question is
+   * still drawn (the answer landed on "Type something", or a second question).
+   */
+  private blockedOnScreen(t: TrackedTerminal): boolean {
+    const screen = t.session.viewportText()
+    if (detectLiveWork(screen)) return false
+    if (Date.now() - t.answeredAt >= ANSWER_GRACE_MS) return true
+    return detectAttention(cleanTurnLines(screen))
+  }
+
+  /** Can the held carry age out? Only a lone ESC over an empty box, no paste open. */
+  private agingEsc(t: TrackedTerminal): boolean {
+    return t.heldInput === '\x1b' && t.promptBuffer === '' && !t.inPaste
+  }
+
+  /** The held carry still pending, minus a lone ESC that aged into a keypress. */
+  private liveHeld(t: TrackedTerminal): string {
+    if (!this.agingEsc(t)) return t.heldInput
+    return Date.now() - t.heldAt > LONE_ESC_PAIR_MS ? '' : t.heldInput
+  }
+
+  /**
+   * Every reading of the next chunk the guard must honour. The guard runs
+   * before the write and handleInput after it, so a lone ESC can age out in
+   * between: the guard takes both readings and the stricter verdict.
+   */
+  private heldReadings(t: TrackedTerminal): string[] {
+    return this.agingEsc(t) ? [t.heldInput, ''] : [t.heldInput]
   }
 
   /**
@@ -2361,16 +2481,24 @@ export class TurnTracker extends EventEmitter {
     fed: PromptFeed,
     prev: { buffer: string; inPaste: boolean; held: string }
   ): void {
-    const holdsBytes = fed.buffer.length > 0 || fed.inPaste || fed.held.length > 0
+    // A lone held ESC is a keypress (closing a picker, interrupting), not box
+    // content: it marks nothing, same as dirtiesInputBox. If the next chunk
+    // completes a paste marker, that chunk opens the paste and marks.
+    const heldMarker = fed.held.length > 0 && fed.held !== '\x1b'
+    const holdsBytes = fed.buffer.length > 0 || fed.inPaste || heldMarker
     // Destructive edits: Ctrl-U/Ctrl-C and backspace. On a fully watched
     // single line their effect is exact; over anything opaque their
     // per-harness semantics (kill ONE line, interrupt-vs-clear, whether a
     // backspace crosses a soft newline) are not modelled.
     const destructive =
       data.includes('\x15') || data.includes('\x03') || data.includes('\x7f') || data.includes('\b')
-    const chunkOpaque = /\x1b[\r\n]/.test(data) || data.includes('\x1b[200~')
+    // A lone held ESC is not opaque by itself; what it pairs with is, so the
+    // chunk checks read it together with the held carry.
+    const seen = prev.held + data
+    const chunkOpaque = /\x1b[\r\n]/.test(seen) || seen.includes('\x1b[200~')
+    const prevHeldMarker = prev.held.length > 0 && prev.held !== '\x1b'
     const prevOpaque =
-      t.unprovenBox || prev.buffer.includes('\n') || prev.inPaste || prev.held.length > 0
+      t.unprovenBox || prev.buffer.includes('\n') || prev.inPaste || prevHeldMarker
     // The divergence record first, from the PRE-feed state: a destructive op
     // over a box the model cannot fully vouch for leaves model and box
     // disagreeing from here on, whatever the rest of this chunk did. Ctrl-C
@@ -2394,7 +2522,7 @@ export class TurnTracker extends EventEmitter {
       (prev.held + data).includes('\x1b[200~') ||
       (prev.held + data).includes('\x1b[201~') ||
       fed.inPaste ||
-      fed.held.length > 0
+      heldMarker
     if (pasteObserved) t.unprovenBox = true
     if (holdsBytes) this.lease.markOwnerEditing(terminalId)
     const menuAnswer =
@@ -2432,10 +2560,12 @@ export class TurnTracker extends EventEmitter {
     prev: { buffer: string; inPaste: boolean; held: string }
   ): boolean {
     if (t.unprovenBox) return false
-    if (prev.inPaste || prev.held.length > 0 || prev.buffer.includes('\n')) return false
-    if (data.includes('\x03')) return false
-    if (/\x1b[\r\n]/.test(data)) return false
-    if (data.includes('\x1b[200~') || data.includes('\x1b[201~')) return false
+    const prevHeldMarker = prev.held.length > 0 && prev.held !== '\x1b'
+    if (prev.inPaste || prevHeldMarker || prev.buffer.includes('\n')) return false
+    const seen = prev.held + data
+    if (seen.includes('\x03')) return false
+    if (/\x1b[\r\n]/.test(seen)) return false
+    if (seen.includes('\x1b[200~') || seen.includes('\x1b[201~')) return false
     return true
   }
 
@@ -2471,23 +2601,22 @@ export class TurnTracker extends EventEmitter {
   guardOwnerInput(terminalId: string, data: string): OwnerInputVerdict {
     if (this.lease.holderOf(terminalId) !== null) return 'refused'
     const t = this.tracked.get(terminalId)
+    const feeds = t
+      ? this.heldReadings(t).map((held) => feedPromptBuffer(t.promptBuffer, data, t.inPaste, held))
+      : [feedPromptBuffer('', data)]
     if (this.lease.isContaminated(terminalId)) {
-      const fed = t
-        ? feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
-        : feedPromptBuffer('', data)
       // ANY submit — an empty menu Enter included — sends whatever the box
       // holds, and the box holds a cancelled producer's text.
-      return fed.submitted.length > 0 ? 'refused' : 'allow'
+      return feeds.some((fed) => fed.submitted.length > 0) ? 'refused' : 'allow'
     }
     if (!t || !t.agent) return 'allow'
     if (!this.pendingDispatch.has(terminalId)) return 'allow'
-    const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, t.heldInput)
-    if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
+    if (t.phase === 'waiting' && t.prompt !== null && feeds.some((fed) => fed.submitted.length > 0)) {
       // A menu answer while a dispatch is armed feeds the CURRENT turn and
       // produces no competing exchange — allowed, as ever.
       return 'allow'
     }
-    const submits = fed.submitted.some((s) => s.length > 0)
+    const submits = feeds.some((fed) => fed.submitted.some((s) => s.length > 0))
     if (!submits) return 'allow'
     return this.preemptOnOwnerSubmit(terminalId, undefined)
   }
@@ -2602,6 +2731,7 @@ export class TurnTracker extends EventEmitter {
     // Monotonic tmux anchor when available; the screen-derived count is the
     // non-tmux fallback only (under tmux it saturates at pane rows).
     t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
+    t.startStatus = lastStatusLine(t.session.viewportText())?.text ?? null
     t.phase = 'thinking'
     t.lastSubmitAt = 0
     t.sawInputThisTurn = true
@@ -2704,7 +2834,11 @@ export class TurnTracker extends EventEmitter {
     // one place the derived-activity cache has to be invalidated from.
     t.outputRev += 1
     if (t.phase === 'waiting') {
-      t.phase = 'thinking'
+      // A question box repaints as it is navigated: while herdr still reads it
+      // as blocked and no spinner runs, that is the same question.
+      if (agentStatus(t.session.sessionName) !== 'blocked' || detectLiveWork(data) || detectLiveWork(t.session.viewportText())) {
+        t.phase = 'thinking'
+      }
     } else if (
       t.agent &&
       (t.phase === 'replied' || t.phase === 'idle') &&
@@ -2737,7 +2871,12 @@ export class TurnTracker extends EventEmitter {
   }
 
   private hasPendingInput(t: TrackedTerminal): boolean {
-    if (t.promptBuffer.trim().length > 0) return true
+    const buffered = t.promptBuffer.trim()
+    // A slash command still in the box (typed, or pasted ahead of its Enter)
+    // makes the agent draw its command menu and repaint, which can re-emit
+    // old "⏺ …" lines; no model turn answers it until the Enter, and a UI
+    // command never opens one at all.
+    if (buffered.length > 0) return !isUiCommand(buffered) && !/^\/\S*$/.test(buffered)
     return t.lastSubmitAt !== 0 && Date.now() - t.lastSubmitAt < RESUME_WINDOW_MS
   }
 
@@ -2752,6 +2891,7 @@ export class TurnTracker extends EventEmitter {
       t.snapshot = t.session.fullText()
     t.outputRev += 1
       t.turnStartLine = t.session.scrollAnchor?.() ?? scrollLineOf(t.snapshot)
+      t.startStatus = lastStatusLine(t.session.viewportText())?.text ?? null
       t.turnStartedAt = Date.now()
       // Prompt-of-record, strongest first: a confirmed native delivery's
       // EXACT text (noteDispatchDelivered — the screen may show a collapsed
@@ -2783,6 +2923,20 @@ export class TurnTracker extends EventEmitter {
     this.push(t)
   }
 
+  /**
+   * A discarded turn leaves the terminal where it rested before it: the last
+   * real exchange, unread or seen. Never 'replied' over nothing — the card
+   * reads 'replied' as an unread reply and ticks it done.
+   */
+  private rest(t: TrackedTerminal): void {
+    const last = this.liveHistory(t.session.terminalId).at(-1)
+    t.prompt = last?.prompt ?? null
+    t.reply = last?.reply ?? null
+    t.title = last?.title ?? null
+    t.phase = last && last.seenAt === undefined ? 'replied' : 'idle'
+    this.push(t)
+  }
+
   private poll(t: TrackedTerminal): void {
     if (t.phase !== 'thinking') return
     const elapsed = Date.now() - t.turnStartedAt
@@ -2806,11 +2960,30 @@ export class TurnTracker extends EventEmitter {
     // corroboration (output quiet AND no live spinner) that was always
     // required before herdr existed. Cheap to check, immune to a stuck feed.
     const reported = agentStatus(t.session.sessionName)
+    // Blocked is read off the approval or question box itself, so it needs no
+    // quiet to be believed: waiting at once — unless a spinner is live, which
+    // is the answer already running while herdr's blocked goes stale.
+    if (reported === 'blocked' && this.blockedOnScreen(t)) {
+      t.phase = 'waiting'
+      this.push(t)
+      return
+    }
     // Hold while herdr says working — this survives long silent tool calls,
     // which is the feed's real value — but not FOREVER: a detector stuck at
     // 'working' would otherwise pin the turn open for the rest of the run.
     if (reported === 'working' && t.session.idleFor() < WORKING_TRUST_MS) return
-    if (t.session.idleFor() < QUIESCENCE_MS) return
+    // A NEW finished status line ("✻ Baked for 16s") as the screen's last one
+    // is the turn's own end: a short settle is enough. New = not the line that
+    // was last when this turn opened — that one is the previous turn's, still
+    // on screen while a new prompt waits for its first spinner. herdr only
+    // vetoes here ('working' held above, 'blocked' taken above); its 'done'
+    // and 'idle' arrive interchangeably at a turn's end (measured).
+    const idle = t.session.idleFor()
+    if (idle < DONE_SETTLE_MS) return
+    if (idle < QUIESCENCE_MS) {
+      const last = lastStatusLine(t.session.viewportText())
+      if (!last?.finished || last.text === t.startStatus) return
+    }
 
     const delta = diffOutput(t.snapshot, t.session.fullText())
     // Agents pause well past quiescence mid-turn (long tool calls, slow
@@ -2855,7 +3028,7 @@ export class TurnTracker extends EventEmitter {
     // otherwise finalize looking input-less and be discarded (the Codex
     // first-ask drop). sawInputThisTurn survives the resume.
     if (t.prompt === null && !t.sawInputThisTurn) {
-      this.push(t)
+      this.rest(t)
       return
     }
     // A typed slash command (/rewind, /clear …) is a UI action, not an
@@ -2863,7 +3036,10 @@ export class TurnTracker extends EventEmitter {
     // message, so a scrape checkpoint here would break the 1:1 with the
     // session list. Discard it; a real '/…' prompt is re-added on reconcile.
     if (t.prompt !== null && isCommandPrompt(t.prompt)) {
-      this.push(t)
+      // A command that ran a model turn (a skill) printed a finished-turn
+      // line: its reply is real and unread. Anything else rests.
+      if (detectTurnEnded(delta)) this.push(t)
+      else this.rest(t)
       return
     }
     // A real exchange just ended: announce how long it took (latency spec

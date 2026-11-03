@@ -1,0 +1,49 @@
+{
+  "accepted": [
+    "use",
+    "pause",
+    "tokens",
+    "images",
+    "effort",
+    "agents",
+    "intent",
+    "compact",
+    "time",
+    "days",
+    "folders",
+    "classifier",
+    "at"
+  ],
+  "refused": {
+    "header=X-Magpie-Session": "unknown",
+    "ua=codex": "unknown",
+    "asked=codex/gpt-5.5": "unknown"
+  },
+  "rendered": [
+    "agent codex → ollama/qwen3:1.7b",
+    "reasoning → ollama/qwen3:1.7b",
+    "agent claude|codex → ollama/qwen3:1.7b",
+    "tokens ≥ 200000 → ollama/qwen3:1.7b",
+    "images → ollama/qwen3:1.7b"
+  ],
+  "oneBearerProof": {
+    "bearer": "magpie-cookrew",
+    "plain": {
+      "rule": {
+        "n": 0
+      },
+      "model": "ollama/qwen2.5:1.5b"
+    },
+    "reasoning": {
+      "rule": {
+        "n": 1,
+        "use": "ollama/qwen3:1.7b",
+        "when": [
+          "reasoning"
+        ],
+        "effort": "high"
+      },
+      "model": "ollama/qwen3:1.7b"
+    }
+  }
+}

@@ -1,0 +1,116 @@
+/* The agents' cursors and the device line over a card's frame (UseOverlay.tsx). */
+.use-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.use-cursors {
+  position: absolute;
+}
+
+.use-cursor {
+  position: absolute;
+  width: 0;
+  height: 0;
+  transition: left 420ms cubic-bezier(0.2, 0.8, 0.2, 1), top 420ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 600ms ease;
+  --use-ink: hsl(var(--use-hue) 70% 52%);
+}
+
+.use-cursor.returning {
+  opacity: 0;
+  transition: left 700ms ease-in, top 700ms ease-in, opacity 700ms ease-in;
+}
+
+.use-arrow {
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35));
+}
+
+.use-arrow path {
+  fill: var(--use-ink);
+  stroke: #fff;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
+.use-badge {
+  position: absolute;
+  left: 13px;
+  top: 15px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--use-ink);
+  color: #fff;
+  font: 600 10px/18px system-ui, sans-serif;
+  text-align: center;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+
+.use-verb {
+  position: absolute;
+  left: 34px;
+  top: 16px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--use-ink);
+  color: #fff;
+  font: 500 10px/16px system-ui, sans-serif;
+  white-space: nowrap;
+  animation: use-verb-fade 2200ms ease forwards;
+}
+
+.use-ripple {
+  position: absolute;
+  left: -14px;
+  top: -14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--use-ink);
+  animation: use-ripple 650ms ease-out forwards;
+}
+
+@keyframes use-ripple {
+  from { transform: scale(0.3); opacity: 0.9; }
+  to { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes use-verb-fade {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.use-device {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 4px 10px;
+  border-radius: 10px;
+  font: 500 11px/1.35 system-ui, sans-serif;
+  text-align: center;
+  background: rgb(20 20 24 / 0.72);
+  color: #f4f4f5;
+  backdrop-filter: blur(6px);
+}
+
+.use-device-warn {
+  background: rgb(120 53 15 / 0.86);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .use-cursor,
+  .use-cursor.returning {
+    transition: opacity 200ms ease;
+  }
+  .use-ripple {
+    animation: none;
+    display: none;
+  }
+}

@@ -89,3 +89,20 @@
     width: auto;
   }
 }
+
+/* Terminals from an earlier login (TerminalSessionNotice): the same card, a
+   little wider for its longer sentence, under a moved door's if both stand. */
+.door-moved.old-login {
+  z-index: 118;
+}
+.door-moved.old-login .door-moved-card {
+  width: 340px;
+}
+.door-moved:not(.old-login) ~ .door-moved.old-login {
+  top: 190px;
+}
+@media (max-width: 700px) {
+  .door-moved.old-login .door-moved-card {
+    width: auto;
+  }
+}

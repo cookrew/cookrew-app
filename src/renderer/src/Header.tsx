@@ -1,19 +1,26 @@
+import { useState } from 'react'
 import { isDemoMode, isRemoteMode } from './api'
-import { CrHandMark, CrLogoMark } from './CrLogoMark'
-import { CompanionAvatar, PathBadge } from './PathBadge'
-import { CrIcon } from './icons'
-import { StatusCoin } from './nodes/AgentAvatar'
-import { WorkspaceSwitcher } from './WorkspaceSwitcher'
+import { HeaderMore } from './HeaderMore'
+import { setZoomBarSlot } from './zoom-bar'
+import { HeaderRoute } from './HeaderRoute'
+import { LocalNetworkRow } from './LocalNetworkRow'
+import { CompanionAvatar, PathSheet, usePathBadge } from './PathBadge'
+import type { RouteStatus } from '../../shared/route'
+import './header.css'
 
-/** The two things the stage can be showing. */
-export type MainView = 'canvas' | 'agents'
+/**
+ * What the window shows: the STAGE (stage/StageView.tsx) — canvas and board
+ * merged into one (2026-10-30). The levels view is deleted (2026-10-31), and
+ * the board is no longer a view: it is the search box on this bar
+ * (BoardSearch.tsx, owner 2026-11-01).
+ */
+export type MainView = 'stage'
 
 interface HeaderProps {
   workspaceName: string
   dir: string
   terminalCount: number
   busyCount: number
-  attentionCount: number
   /** Which view the stage is showing — drives the pressed state of the switch. */
   view: MainView
   onViewChange: (view: MainView) => void
@@ -22,8 +29,18 @@ interface HeaderProps {
    * and removing workspaces, and the activity history, all live behind it.
    */
   onWall: () => void
-  /** Re-pull the canvas and re-establish the push channel (the brand mark). */
+  /**
+   * Opens the Routing panel (routing/RoutingPanel.tsx) — Magpie's models,
+   * accounts and live routes inside Cookrew. Null status = not read yet.
+   */
+  onRouting?: () => void
+  routeStatus?: RouteStatus | null
+  /** Re-pull the canvas and re-establish the push channel. */
   onResync: () => void
+  /** The agent whose terminal the canvas has zoomed into (or the stage shows): the route's last step. */
+  zoomedAgent?: string | null
+  /** The stage's agent's workspace, which need not be the canvas's. */
+  stageWorkspace?: string | null
   /**
    * The account avatar (identity v2, D1), or null where there is no account
    * surface — the phone companion and the demo tab feature-detect to nothing.
@@ -31,132 +48,94 @@ interface HeaderProps {
    * identity state lives in src/renderer/src/account.
    */
   avatar?: React.ReactNode
+  /** The board's search box (BoardSearch.tsx), left of ⋯. Passed in, like the avatar. */
+  search?: React.ReactNode
 }
 
 /**
- * The brand mark doubles as REFRESH. A phone whose link to the desktop went
- * quiet has no way to say so — the canvas simply stops changing, or comes back
- * from a reload empty — and reaching a browser's reload from a home-screen web
- * app is awkward. The mark is the one control always on screen, so tapping it
- * asks for everything again. Styled inline rather than through the stylesheet:
- * it must look EXACTLY like the plain mark it replaces, with no button chrome.
- */
-const RESYNC_BUTTON: React.CSSProperties = {
-  background: 'none',
-  border: 'none',
-  padding: 0,
-  margin: 0,
-  font: 'inherit',
-  color: 'inherit',
-  lineHeight: 0,
-  cursor: 'pointer'
-}
-
-/**
- * Cookrew-style top bar, one line.
+ * THE ONE BAR. Two halves:
  *
- * The row is ordered by how often it is used, not by what exists: brand, the
- * CANVAS ⇄ AGENTS switch, live status, then the workspace. The inline tool
- * group that used to sit before the workspace (activity + fork) is gone:
- * saving/duplicating the team lives on the dock — you save the canvas FROM
- * the canvas — and activity is an action on the screen wall, since history
- * is a property of the workspace, not a top-level destination.
+ *   left  — the ROUTE (HeaderRoute.tsx): device / workspace / agent, each
+ *           step a way out to its level.
+ *   right — the FUNCTION BAR: the board's search box (BoardSearch.tsx),
+ *           the More menu (HeaderMore.tsx) and the avatar.
  *
- * ATTENTION LIVES ON THE SWITCH. It used to be a second coin plus "N NEED YOU"
- * in the status block — a passive label next to the button you would then have
- * to find. As a badge on AGENTS it says the same thing in less room and is
- * itself the way to go and look.
+ * It replaces a bar that put everything on one line in the order it was
+ * added — mark, path badge, avatar, switch, status, routing lamp, workspace
+ * chip. Whatever is neither a way to move nor a button to press now lives
+ * behind ⋯, and each row there opens the sheet its chip used to. A zoomed
+ * terminal has NO head of its own any more (owner 2026-10-31): its model
+ * switch and CHAT/LIVE sit here left of ⋯, the rest of its head inside ⋯.
+ *
+ * Attention lives on the stage's faces (the rose ones) and as a count on the
+ * board's box while it is closed. The account's
+ * waiting devices ride the avatar, which is why the avatar stays on the bar.
  */
 export function Header({
   workspaceName,
   dir,
   terminalCount,
   busyCount,
-  attentionCount,
   view,
   onViewChange,
   onWall,
+  onRouting,
+  routeStatus,
   onResync,
-  avatar
+  zoomedAgent = null,
+  stageWorkspace = null,
+  avatar,
+  search
 }: HeaderProps): React.JSX.Element {
+  const remote = isRemoteMode()
+  const path = usePathBadge()
+  const [pathOpen, setPathOpen] = useState(false)
+
   return (
     <header className="cr-header">
-      <div className="cr-header-brand">
-        {/* ON THE PHONE THE C HAND BRANDS THE BAR AND THE BADGE DOES THE WORK. The
-            lockup is too wide for one line in portrait, so the hand stands alone
-            as the mark; in landscape (700 px up) styles.css swaps in the still
-            lockup. The path badge beside it is the always-visible "this
-            is how I am asking, and it still works" and tapping it refreshes;
-            the marks are marks, not controls. */}
-        {isRemoteMode() ? (
-          <>
-            <CrHandMark />
-            <CrLogoMark />
-            <PathBadge onRefresh={onResync} />
-          </>
-        ) : (
-          <button
-            type="button"
-            style={RESYNC_BUTTON}
-            title="Refresh — pull the canvas from the desktop again"
-            aria-label="Refresh the canvas"
-            onClick={onResync}
-          >
-            <CrLogoMark />
-          </button>
-        )}
-        {/* THE WORDMARK IS INSIDE THE MARK NOW, on every surface: the still lockup on the
-            desktop and in landscape on the phone, the hand alone in portrait. No text twin. */}
-        {/* IDENTITY LIVES IN THE BRAND GROUP (D1), right after the wordmark and
-            at the mark's own 24 px, so the group stays one line. */}
+      <HeaderRoute
+        view={view}
+        workspaceName={workspaceName}
+        dir={dir}
+        path={path}
+        zoomedAgent={zoomedAgent}
+        stageWorkspace={stageWorkspace}
+        onViewChange={onViewChange}
+      />
+      <div className="cr-fn" role="toolbar" aria-label="Functions">
+        {/* The zoomed terminal's place left of ⋯ (zoom-bar.ts): empty, and so
+            invisible, since its model switch went to the prompt box and
+            CHAT/LIVE to the transcript (2026-11-01); its presence tells the
+            card that a One Bar is here. */}
+        <span className="cr-zoom-slot" ref={setZoomBarSlot} />
+        {/* The board, as a search box: right where a search is looked for. */}
+        {search}
+        <HeaderMore
+          busyCount={busyCount}
+          terminalCount={terminalCount}
+          connection={remote ? path : null}
+          onConnection={() => {
+            // Both, in this order: the refresh is what the badge's tap did and
+            // the reader expects it at once; the sheet explains what they just
+            // refreshed.
+            onResync()
+            setPathOpen(true)
+          }}
+          onRouting={onRouting}
+          routeStatus={routeStatus ?? null}
+          onWall={onWall}
+          onResync={onResync}
+          demo={isDemoMode()}
+        />
         {avatar}
-        {isDemoMode() && (
-          <span className="cr-chip violet icon" title="Demo data">
-            <CrIcon name="demo" />
-          </span>
-        )}
-        {/* The violet handset's slot becomes the avatar (M3). It was only ever
-            a mode marker with no action; the badge beside it now says the mode
-            more usefully, and the account is worth the pixels. */}
-        {isRemoteMode() && <CompanionAvatar />}
+        {remote && <CompanionAvatar />}
       </div>
-
-      <div className="cr-viewseg" role="group" aria-label="View">
-        <button
-          type="button"
-          aria-pressed={view === 'canvas'}
-          title="The canvas"
-          onClick={() => onViewChange('canvas')}
-        >
-          <CrIcon name="canvas" />
-          <span className="cr-viewseg-label">Canvas</span>
-        </button>
-        <button
-          type="button"
-          className={attentionCount > 0 ? 'attention' : undefined}
-          aria-pressed={view === 'agents'}
-          title={
-            attentionCount > 0
-              ? `The board — ${attentionCount} need you`
-              : 'The board (agents + elements, every workspace)'
-          }
-          onClick={() => onViewChange('agents')}
-        >
-          <CrIcon name="agent" />
-          <span className="cr-viewseg-label">Board</span>
-          {attentionCount > 0 && <span className="cr-viewseg-badge">{attentionCount}</span>}
-        </button>
-      </div>
-
-      <div className="cr-header-status">
-        <StatusCoin phase={busyCount > 0 ? 'thinking' : 'idle'} />
-        <span className="cr-kicker">
-          {busyCount}/{terminalCount}
-          <span className="cr-kicker-word"> WORKING</span>
-        </span>
-      </div>
-
-      <WorkspaceSwitcher fallbackName={workspaceName} fallbackDir={dir} onWall={onWall} />
+      {/* UNDER the bar, not inside the menu: the local-network ask has to be
+          visible without a tap, because a permission nobody knows to look for
+          is a permission nobody grants. It renders nothing in three of the
+          four states, so on most phones the bar is exactly as it is. */}
+      {remote && <LocalNetworkRow />}
+      {pathOpen && <PathSheet view={path} onClose={() => setPathOpen(false)} />}
     </header>
   )
 }

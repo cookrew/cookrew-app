@@ -1,0 +1,284 @@
+// THE PETS (renderer pets/): the agents, and the browsers and notes, as small
+// round faces over every page, with the canvas and the stage's side columns
+// retired (2026-10-30). Which ride along, in what order, and where a troop and
+// a card may sit are pure rules, pinned here; the wiring by its source.
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+import type { AgentRow } from '../src/renderer/src/agent-rows'
+import {
+  PET_DONE_FRESH_MS,
+  PET_MAX,
+  PET_MAX_PHONE,
+  PET_MIN,
+  cardPlacement,
+  clampSpot,
+  moodOf,
+  petHome,
+  petClick,
+  petMax,
+  pickItems,
+  pickPets,
+  nameTagSpot,
+  readSpot
+} from '../src/renderer/src/pets/pet-pick'
+import { THUMB_WANTS_MAX, thumbWants } from '../src/renderer/src/pets/thumb-wants'
+
+const NOW = 10_000_000
+const row = (id: string, phase: AgentRow['phase'], ago: number, over: Partial<AgentRow> = {}): AgentRow => ({
+  id,
+  name: id,
+  preset: 'claude',
+  role: null,
+  orch: false,
+  active: true,
+  workspaceId: 'ws',
+  workspaceName: 'WS',
+  cwd: '/',
+  spawnedAt: 0,
+  phase,
+  turn: null,
+  turnCount: 1,
+  lastActivityAt: NOW - ago,
+  ...over
+})
+const ids = (pets: readonly { row: AgentRow }[]): string[] => pets.map((pet) => pet.row.id)
+
+describe('who rides along', () => {
+  it('whoever needs you first, then whoever is working, then what finished lately', () => {
+    const troop = pickPets(
+      [row('done', 'done', 60_000), row('work', 'working', 5_000), row('need', 'waiting', 90_000), row('need2', 'waiting', 1_000)],
+      { now: NOW }
+    )
+    expect(ids(troop.pets)).toEqual(['need2', 'need', 'work', 'done'])
+    expect(troop.pets.map((pet) => pet.mood)).toEqual(['needs', 'needs', 'working', 'done'])
+  })
+
+  // The owner, 2026-11-01: the working agents kept trading places as each one
+  // acted. They stand by name, and stay put however often they act.
+  it('stands the working agents by name, and keeps them there whoever acted last', () => {
+    const crew = [row('t3', 'working', 1_000, { name: 'Velvet' }), row('t1', 'working', 50_000, { name: 'Forge' }), row('t2', 'working', 9_000, { name: 'agent 10' }), row('t4', 'working', 7_000, { name: 'agent 2' })]
+    const first = pickPets(crew, { now: NOW }).pets.map((pet) => pet.row.name)
+    expect(first).toEqual(['agent 2', 'agent 10', 'Forge', 'Velvet'])
+    const later = crew.map((r) => ({ ...r, lastActivityAt: NOW - Math.floor(Math.random() * 60_000) }))
+    expect(pickPets(later, { now: NOW }).pets.map((pet) => pet.row.name)).toEqual(first)
+  })
+
+  it('the browsers and notes wear no pill either, as the agents do', () => {
+    const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
+    expect(css).toMatch(/\.cr-pets\.right,\s*\.cr-pets\.left \{[^}]*background: none;/)
+  })
+
+  it("a browser in a slot wears the demo's page: rounded 10px, one hairline, no ink edge", () => {
+    const css = readFileSync('src/renderer/src/zoom/full-views.css', 'utf8')
+    expect(css).toMatch(/\.browser-lod\.browser-embedded:not\(\.browser-full\) \.popout \{\s*border: 0;\s*border-radius: 10px;/)
+  })
+
+  it('a finished turn stops being news after a while', () => {
+    expect(moodOf(row('a', 'done', PET_DONE_FRESH_MS - 1), NOW)).toBe('done')
+    expect(moodOf(row('a', 'done', PET_DONE_FRESH_MS + 1), NOW)).toBeNull()
+    expect(moodOf(row('a', 'waiting', 1, { active: false }), NOW)).toBeNull()
+  })
+
+  it('puts the rest behind the +N coin, in the same order', () => {
+    const rows = Array.from({ length: PET_MAX + 3 }, (_, n) => row(`w${n}`, 'working', n * 1000))
+    const troop = pickPets(rows, { now: NOW })
+    expect(troop.pets).toHaveLength(PET_MAX)
+    expect(ids(troop.more)).toEqual([`w${PET_MAX}`, `w${PET_MAX + 1}`, `w${PET_MAX + 2}`])
+  })
+
+  it('never leaves a quiet workspace without a troop: the latest sit in, asleep', () => {
+    const troop = pickPets([row('old', 'done', 3 * 3600_000), row('older', 'quiet', 9 * 3600_000), row('oldest', 'offline', 99 * 3600_000), row('x', 'quiet', 999 * 3600_000)], { now: NOW })
+    expect(ids(troop.pets)).toEqual(['old', 'older', 'oldest'])
+    expect(troop.pets.every((pet) => pet.mood === 'asleep')).toBe(true)
+    expect(troop.pets).toHaveLength(PET_MIN)
+    expect(ids(troop.more)).toEqual(['x'])
+  })
+
+  // THE CREW (owner, 2026-11-01): the group and the crew view disagreed on how
+  // many agents there were. The group drops nobody now: an inactive agent rides
+  // asleep, as the crew view draws it offline.
+  it('keeps every agent of the crew, so its count is the crew view\'s', () => {
+    const crew = [row('a', 'working', 1), row('b', 'offline', 9, { active: false }), row('c', 'quiet', 99), row('d', 'done', 3 * 3600_000)]
+    const troop = pickPets(crew, { now: NOW, max: 2 })
+    expect(troop.pets.length + troop.more.length).toBe(crew.length)
+    expect([...troop.pets, ...troop.more].find((pet) => pet.row.id === 'b')?.mood).toBe('asleep')
+  })
+
+  it('no agents, no troop', () => {
+    expect(pickPets([], { now: NOW }).pets).toEqual([])
+  })
+})
+
+describe('which browsers and notes ride along', () => {
+  const items = [
+    { id: 'n-new', kind: 'note' as const },
+    { id: 'b-mine', kind: 'browser' as const },
+    { id: 'b-busy', kind: 'browser' as const },
+    { id: 'n-old', kind: 'note' as const }
+  ]
+  const owners = new Map([
+    ['b-mine', ['agent-on-stage']],
+    ['b-busy', ['agent-busy']]
+  ])
+
+  it("the agent on stage's first, then the busy agents', then the newest", () => {
+    const picked = pickItems(items, { owners, focus: ['agent-on-stage', 'agent-busy'], max: 3 })
+    expect(picked.shown.map((item) => item.id)).toEqual(['b-mine', 'b-busy', 'n-new'])
+    expect(picked.more.map((item) => item.id)).toEqual(['n-old'])
+  })
+
+  it('with nobody in focus, simply the newest', () => {
+    expect(pickItems(items, { owners, focus: [] }).shown.map((item) => item.id)).toEqual(['n-new', 'b-mine', 'b-busy', 'n-old'])
+  })
+
+  it('a phone shows fewer of each: its columns are shorter', () => {
+    expect(petMax(412)).toBe(PET_MAX_PHONE)
+    expect(petMax(1440)).toBe(PET_MAX)
+  })
+
+  it('asks for pictures of the faces it shows, never of a whole expanded troop', () => {
+    thumbWants.set(Array.from({ length: 40 }, (_, n) => `b${n}`))
+    expect(thumbWants.ids()).toHaveLength(THUMB_WANTS_MAX)
+    thumbWants.set([])
+  })
+})
+
+describe('where a troop sits', () => {
+  it('is kept on screen however far it is dragged', () => {
+    const troop = { width: 300, height: 50 }
+    const view = { width: 1000, height: 800 }
+    expect(clampSpot({ x: -50, bottom: 9999 }, troop, view)).toEqual({ x: 4, bottom: 746 })
+    expect(clampSpot({ x: 900, bottom: -3 }, troop, view)).toEqual({ x: 696, bottom: 4 })
+  })
+
+  it('remembers a spot it was dragged to, and nothing that is not one', () => {
+    expect(readSpot(null)).toBeNull()
+    expect(readSpot('{"right":30,"bottom":40}')).toBeNull()
+    expect(readSpot('not json')).toBeNull()
+    expect(readSpot('{"x":30,"bottom":40}')).toEqual({ x: 30, bottom: 40 })
+  })
+
+  it('stands in its gutter, on the dock, wherever the stage ends', () => {
+    expect(petHome(56, 1440)).toEqual({ x: 4, bottom: 64 })
+    expect(petHome(0, 412)).toEqual({ x: 2, bottom: 8 })
+  })
+
+  it('stands in columns down the sides, over a stage that keeps its full width (the owner, 2026-10-31)', () => {
+    const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
+    const stage = readFileSync('src/renderer/src/stage/stage.css', 'utf8')
+    expect(css).toMatch(/\.cr-pets \{[^}]*flex-direction: column;/)
+    expect(css).toMatch(/\.cr-pets\.right,\s*\.cr-pets\.left \{[^}]*background: none;[^}]*box-shadow: none;[^}]*pointer-events: none;/)
+    expect(css).toMatch(/\.cr-pets\.right > \*,\s*\.cr-pets\.left > \* \{\s*pointer-events: auto;/)
+    expect(stage).toMatch(/\.cr-stage-view\.bedded \{\s*padding: 0;/)
+  })
+
+  it('the transcript is a chat: your prompt on the right, the agent beside its face on the left', () => {
+    const row = readFileSync('src/renderer/src/TranscriptRow.tsx', 'utf8')
+    const paper = readFileSync('src/renderer/src/transcript-paper.css', 'utf8')
+    expect(row).toContain('<div className="ctx-chat-agent">')
+    expect(row).toContain('<div className="ctx-chat-bubble">')
+    expect(paper).toMatch(/\.lod-overlay \.look-chat \.ctx-block-prompt \{\s*align-self: flex-end;/)
+    expect(readFileSync('src/renderer/src/TerminalOverlay.tsx', 'utf8')).toContain('<TranscriptFaceContext.Provider value={chatFace}>')
+  })
+})
+
+describe("where a pet's card opens", () => {
+  const view = { width: 1000, height: 800 }
+  const card = { width: 340, height: 200 }
+
+  it('beside the face, toward the middle: left of the agents, right of the browsers and notes', () => {
+    expect(cardPlacement({ left: 950, top: 400, width: 38, height: 38 }, card, view, 'right')).toEqual({ left: 600, top: 319 })
+    expect(cardPlacement({ left: 10, top: 400, width: 38, height: 38 }, card, view, 'left')).toEqual({ left: 58, top: 319 })
+  })
+
+  it('level with the face where it fits, never off the screen', () => {
+    expect(cardPlacement({ left: 950, top: 760, width: 38, height: 38 }, card, view, 'right').top).toBe(592)
+    expect(cardPlacement({ left: 950, top: 0, width: 38, height: 38 }, card, view, 'right').top).toBe(8)
+    // A narrow phone: the card takes what room there is.
+    expect(cardPlacement({ left: 370, top: 300, width: 34, height: 34 }, card, { width: 412, height: 915 }, 'right').left).toBe(20)
+  })
+})
+
+// THE OWNER'S SKETCH (2026-10-31): hover names it, a click opens its card
+// (the synopsis and a prompt box), a second click opens it in full.
+describe('three steps to an agent', () => {
+  it('the first click opens its card; the second, with its card open, opens it in full', () => {
+    expect(petClick(null, 'a')).toBe('card')
+    expect(petClick('a', 'a')).toBe('full')
+    // Another face's card open: this one's card, not a jump into it.
+    expect(petClick('b', 'a')).toBe('card')
+  })
+
+  it('pins the name tag to the screen beside the face, toward the middle, so a scrolling troop never clips it', () => {
+    const face = { left: 1380, top: 300, width: 38, height: 38 }
+    expect(nameTagSpot(face, 'right', 1440)).toEqual({ top: 298, height: 42, right: 41 })
+    expect(nameTagSpot({ ...face, left: 20 }, 'left', 1440)).toEqual({ top: 298, height: 42, left: 39 })
+  })
+
+  it('hover names the face and opens nothing; no timer opens a card', () => {
+    const troop = readFileSync('src/renderer/src/pets/PetTroop.tsx', 'utf8')
+    expect(troop).toContain('nameFace(member.id, event.currentTarget)')
+    expect(troop).toContain('<span className="cr-pet-name" aria-hidden="true" style={hoverId === member.id && tagSpot ? { position: \'fixed\', ...tagSpot } : undefined}>')
+    expect(troop).not.toMatch(/ENTER_MS|LEAVE_MS|setTimeout\(\(\) => setOpenId/)
+    expect(troop).toContain("if (petClick(openId, id) === 'full')")
+  })
+})
+
+describe('the wiring', () => {
+  const agents = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
+  const items = readFileSync('src/renderer/src/pets/ItemPets.tsx', 'utf8')
+  const troop = readFileSync('src/renderer/src/pets/PetTroop.tsx', 'utf8')
+  const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+  const css = readFileSync('src/renderer/src/pets/pets.css', 'utf8')
+
+  it('both troops ride over every page: mounted in App, portalled to the body, under the scrims', () => {
+    expect(app).toMatch(/<AgentPets\s+crew=\{crew\}\s+attachIndex=\{attachIndex\}\s+onOpen=\{zoomToNode\}/)
+    // In a full view both attach to its panel (pet-dock.ts).
+    expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}")
+    expect(app).toContain("dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}")
+    expect(app).toContain('<ItemPets')
+    expect(troop).toContain('document.body')
+    expect(css).toMatch(/\.cr-pets \{[^}]*z-index: 55;/)
+  })
+
+  it("the card's reply box (one copy, quick-reply.tsx) writes the agent's own line, then Enter", () => {
+    const parts = readFileSync('src/renderer/src/zoom/quick-reply.tsx', 'utf8')
+    expect(parts).toMatch(/typeLine\(agentId, text\)/)
+    expect(parts).toMatch(/submitLine\(agentId, text\)/)
+    const line = readFileSync('src/renderer/src/prompt/live-line.ts', 'utf8')
+    expect(line).toMatch(/typeLine\(agentId, text, true\)\s+cookrew\(\)\.ptyInput\(agentId, '\\r'\)/)
+  })
+
+  it('reads no tail and no board of its own: the pets only pick faces, the card is the view\'s', () => {
+    expect(agents).not.toContain('useStreamTails')
+    expect(agents).not.toContain('useCrewRows')
+  })
+
+  it("a browser's face is its page's picture, and the producers are fed from the faces", () => {
+    expect(items).toContain('<img className="cr-pet-thumb" src={thumb}')
+    expect(items).toContain("thumbWants.claim('troop'")
+    expect(app.match(/thumbWants\.ids\(\)/g)).toHaveLength(2)
+  })
+})
+
+describe('the canvas and the side columns are retired', () => {
+  const app = readFileSync('src/renderer/src/App.tsx', 'utf8')
+  const stage = readFileSync('src/renderer/src/stage/StageView.tsx', 'utf8')
+  const header = readFileSync('src/renderer/src/Header.tsx', 'utf8')
+
+  it('the canvas is not rendered, nor its overlay layer: it costs no CPU or GPU', () => {
+    expect(app).not.toMatch(/<ReactFlow[\s>]/)
+    expect(app).not.toMatch(/<LodOverlays[\s>]/)
+    // The board drops under the bar (BoardSearch.tsx): the stage is the one view.
+    expect(header).toContain("export type MainView = 'stage'\n")
+  })
+
+  it('every card opens on the stage, wherever it was asked for from', () => {
+    expect(app).toMatch(/const zoomToNode = useCallback\([\s\S]{0,1200}stageSelect\.set\([\s\S]{0,200}if \(viewRef\.current !== 'stage'\) setView\('stage'\)/)
+  })
+
+  it('the stage is one card wide, with a bed for the pets', () => {
+    expect(stage).not.toMatch(/AgentColumn|ItemColumn/)
+    expect(stage).toContain('cr-stage-view bedded')
+  })
+})

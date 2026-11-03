@@ -1,18 +1,22 @@
 {
   "name": "cookrew",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Cookrew — an open-source spatial canvas for AI agents. Terminals, notes, browsers and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
   "main": "out/main/index.js",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "cookrew": "./cli/cookrew.mjs"
+    "cookrew": "./cli/cookrew.mjs",
+    "crew": "./cli/cookrew.mjs"
   },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "registry:assets": "node scripts/registry-assets.mjs",
-    "registry:build": "node scripts/registry-assets.mjs && esbuild --bundle registry/src/main.ts --format=esm --platform=node --minify-whitespace --minify-syntax --define:__SITE_REF__=\\\"$(git rev-parse HEAD)\\\" --outfile=/tmp/registry.mjs",
+    "deeplink:doctor": "node scripts/dev-deeplink-doctor.mjs",
+    "registry:build": "node scripts/registry-assets.mjs && esbuild --bundle registry/src/main.ts --format=esm --platform=node --minify --define:__SITE_REF__=\\\"$(git rev-parse HEAD)\\\" --outfile=/tmp/registry.mjs",
+    "strata:preview": "node scripts/strata-preview.mjs",
+    "strata:build": "node scripts/strata-build.mjs",
     "start": "electron-vite preview",
     "postinstall": "electron-rebuild -f -w node-pty; node scripts/ensure-node-pty.mjs; node scripts/build-cr-listen.mjs",
     "test": "vitest run",
@@ -37,7 +41,8 @@
     "marked": "^15.0.0",
     "node-pty": "^1.0.0",
     "qrcode-terminal": "^0.12.0",
-    "viem": "^2.55.19"
+    "viem": "^2.55.19",
+    "werift": "^0.25.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",

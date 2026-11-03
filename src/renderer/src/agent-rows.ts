@@ -7,6 +7,7 @@ import {
 import type { ActivityClock } from './activity-clock'
 import type { AgentRegistryEntry } from './agent-registry'
 import type { TerminalActivity } from '../../shared/turn'
+import type { CanvasNode, TerminalNodeData } from '../../shared/model'
 
 /**
  * Rows for the agents sidebar: the durable roster (who exists, everywhere)
@@ -32,9 +33,13 @@ export interface AgentRow {
   cwd: string
   spawnedAt: number
   phase: AgentPhase
+  /** A finished turn whose reply nobody has looked at yet (the tracker's `replied`, cleared on view). */
+  unread?: boolean
   /** Bound from the SAME selector the canvas card uses. */
   turn: TurnViewModel | null
   turnCount: number
+  /** THE BRIEF the card was recruited for (TerminalNodeData.brief) — display only; null or absent when none or unknown here. */
+  brief?: string | null
   /**
    * THE sort key, descending. Start time while a turn is in flight, last
    * output once it is done — never a value that moves on its own, or the list
@@ -72,6 +77,8 @@ export interface AgentRowsInput {
    * turn's own timestamps, which is correct but coarser.
    */
   changedAt?: ActivityClock
+  /** terminalId → brief, read off the loaded workspace's nodes (the registry carries none). */
+  briefs?: Record<string, string>
 }
 
 export interface AgentRows {
@@ -159,6 +166,7 @@ function rowOf(
   activity: TerminalActivity | undefined,
   checkpoint: LatestCheckpoint | null | undefined,
   changedAt: number | undefined,
+  brief: string | null,
 ): AgentRow {
   // The live tracker wins the moment it has anything; the checkpoint is the
   // fallback, through the same view model the card binds (T1).
@@ -175,10 +183,54 @@ function rowOf(
     cwd: entry.cwd,
     spawnedAt: entry.spawnedAt,
     phase: phaseOf(activity, entry.active, turn),
+    unread: activity?.phase === 'replied',
     turn,
     turnCount: activity?.turnCount ?? 0,
+    brief,
     lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
+}
+
+/**
+ * THE ROW AN UNCHANGED AGENT ALREADY HAS. Every activity push rebuilt a row
+ * for every agent in every workspace (about 370 on the owner's Mac), each
+ * deriving its turn view again, though a push changes one or two agents
+ * (profiled while zooming: buildAgentRows 557 ms in 13 s). The activity store
+ * replaces an agent's object only when it changes, and the roster's entries
+ * hold still between registry pushes, so the same inputs by identity give
+ * back the same row object, which also lets memoised views skip it.
+ */
+interface RowInputs {
+  entry: AgentRegistryEntry
+  activity: TerminalActivity | undefined
+  checkpoint: LatestCheckpoint | null | undefined
+  changedAt: number | undefined
+  brief: string | null
+  row: AgentRow
+}
+const lastRows = new Map<string, RowInputs>()
+
+function rowFor(
+  entry: AgentRegistryEntry,
+  activity: TerminalActivity | undefined,
+  checkpoint: LatestCheckpoint | null | undefined,
+  changedAt: number | undefined,
+  brief: string | null,
+): AgentRow {
+  const last = lastRows.get(entry.id)
+  if (
+    last &&
+    last.entry === entry &&
+    last.activity === activity &&
+    last.checkpoint === checkpoint &&
+    last.changedAt === changedAt &&
+    last.brief === brief
+  ) {
+    return last.row
+  }
+  const row = rowOf(entry, activity, checkpoint, changedAt, brief)
+  lastRows.set(entry.id, { entry, activity, checkpoint, changedAt, brief, row })
+  return row
 }
 
 /** Facets over the WHOLE roster, in first-seen order. */
@@ -205,14 +257,20 @@ export function buildAgentRows(input: AgentRowsInput): AgentRows {
     floatWaiting = false,
     workspaceId = null,
     changedAt = {},
+    briefs = {},
   } = input
   const workspaces = facetsOf(roster)
 
   const rows = roster
     .filter((entry) => workspaceId === null || entry.workspaceId === workspaceId)
     .map((entry) =>
-      rowOf(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id]),
+      rowFor(entry, activities[entry.id], checkpoints[entry.id], changedAt[entry.id], briefs[entry.id] ?? null),
     )
+  // Agents that left the roster take their rows with them.
+  if (lastRows.size > roster.length * 2 + 64) {
+    const present = new Set(roster.map((entry) => entry.id))
+    for (const id of lastRows.keys()) if (!present.has(id)) lastRows.delete(id)
+  }
 
   // A row is quiet when there is nothing to say about it — no turn tracked
   // and no checkpoint on file. Everything else earns a place on the timeline,
@@ -229,4 +287,49 @@ export function buildAgentRows(input: AgentRowsInput): AgentRows {
     )
 
   return { live, quiet, workspaces }
+}
+
+/** A terminal card the roster has no row for yet: a quiet row, so it is still counted and drawn. */
+export function quietRowOf(t: TerminalNodeData, workspace: { readonly id: string; readonly name: string }): AgentRow {
+  return {
+    id: t.id,
+    name: t.name,
+    preset: t.preset,
+    role: t.role ?? null,
+    orch: t.orch === true,
+    active: true,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    cwd: t.cwd,
+    spawnedAt: 0,
+    phase: 'quiet',
+    turn: null,
+    turnCount: 0,
+    brief: t.brief ?? null,
+    lastActivityAt: 0
+  }
+}
+
+/**
+ * THE CREW OF THE OPEN WORKSPACE, ONE LIST FOR EVERY VIEW OF IT (owner,
+ * 2026-11-01: the agent group and the crew view disagreed on who was in it,
+ * how many, and in what state). One row per terminal card, in card order:
+ * its roster row when there is one (phase, turn, unread, as useCrewRows reads
+ * them, with the last checkpoint behind them), a quiet row when there is not.
+ * The card's own name, harness and lead flag win, as the crew view draws them.
+ * The zoom view (zoom-model.ts), the stage and the agent group read this.
+ */
+export function crewOf(
+  nodes: readonly CanvasNode[],
+  rows: readonly AgentRow[],
+  workspace: { readonly id: string; readonly name: string }
+): AgentRow[] {
+  const rowOf = new Map(rows.map((r) => [r.id, r]))
+  const out: AgentRow[] = []
+  for (const n of nodes) {
+    if (n.kind !== 'terminal') continue
+    const row = rowOf.get(n.id)
+    out.push(row ? { ...row, name: n.name, preset: n.preset, orch: n.orch === true, brief: row.brief ?? n.brief ?? null } : quietRowOf(n, workspace))
+  }
+  return out
 }

@@ -1,5 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { AttachPanel, AttachTabs } from './AttachPanel'
+import { attachView, useAttachView } from './attach-view'
+import { NO_ATTACHMENTS, SideTabsContext, TerminalAttachmentsContext } from './terminal-attachments'
+import { HeadToolsContext } from './head-tools'
+import './transcript-paper.css'
 import { Terminal } from '@xterm/xterm'
+import { createPortal } from 'react-dom'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import type { IClipboardProvider } from '@xterm/addon-clipboard'
 import { readClipboardText, writeClipboardText } from './clipboard'
@@ -26,25 +32,27 @@ import { terminalKeyIntent } from './terminal-key-intent'
 import { pasteFromClipboard } from './terminal-clipboard'
 import { registerTerminalPaste } from './terminal-paste-bus'
 import { attachImeBridge } from './ime-input-bridge'
+import { attachPhoneField, muteXtermFieldSends } from './textarea-pad'
+import { phoneGlyphs } from './phone-glyphs'
 import { CrIcon } from './icons'
 import { TranslateButton } from './TranslateButton'
 import { languageByCode } from '../../shared/translate'
 import { useCheckpointTranslation } from './use-checkpoint-translation'
-import { StatusCoin } from './nodes/AgentAvatar'
-import { TuneRail } from './nodes/TuneRail'
-import { useAgentTuning } from './nodes/use-agent-tuning'
-
-const PHOSPHOR_THEME = {
-  background: '#14110A',
-  foreground: '#E9B949',
-  cursor: '#FFD77A',
-  cursorAccent: '#14110A',
-  selectionBackground: '#5C4A1F',
-  black: '#14110A',
-  brightBlack: '#8A6D1C',
-  white: '#FFD77A',
-  brightWhite: '#FFFEF5'
-}
+import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
+import { TranscriptFaceContext } from './transcript-face'
+import { LOOK_LABEL, LOOK_TITLE, TranscriptLookContext, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
+import { shouldAttachTerminal } from './terminal-view-mode'
+import { installLocalScroll, type LocalScroll } from './live-scroll'
+import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
+import { installLiveSheet, type LiveSheet } from './live-sheet'
+import { closeZoomMenu, useZoomSlots } from './zoom-bar'
+import { CardTune } from './nodes/CardTune'
+import { isNight, themeNow, useNight, useTheme } from './color-scheme'
+import { PAPER_THEME, terminalTheme } from './terminal-theme'
+import { paperCursor } from './paper-cursor'
+import { createSizeOwner, openedAt, SETTLE_CHECK_MS, tookOthers, type PaneSize } from './pane-size'
+import { lastUserInputAt } from './user-input'
+import { createTurnRedraw } from './turn-redraw'
 
 /**
  * Full views for terminal cards under semantic zoom: whenever a terminal
@@ -64,6 +72,11 @@ function languageName(code: string | null): string {
  * this layer only has work to do when the arbitration result changes — which
  * useLodLayout guarantees by handing back the same `lod` object until it does.
  */
+/** The mount kick waits until the terminal's box has been still this long. */
+const MOUNT_KICK_SETTLE_MS = 400
+/** ...but only while opening: a box change later is a resize, refitted as usual. */
+const MOUNT_SETTLE_WINDOW_MS = 3000
+
 export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
   terminals,
   lod,
@@ -88,16 +101,22 @@ export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
       {terminals
         .filter((t) => activeIds.has(t.id) && rects[t.id])
         .map((t) => (
-          <TerminalOverlayFor key={t.id} node={t} rect={rects[t.id]} />
+          <TerminalOverlayFor
+            key={t.id}
+            node={t}
+            rect={rects[t.id]}
+            // Nothing primary (a browser won): the first terminal holds the bar.
+            primary={primaryTerminal !== null ? t.id === primaryTerminal : t === terminals.find((x) => activeIds.has(x.id) && rects[x.id])}
+          />
         ))}
     </>
   )
 })
 
 /** The overlay with ITS card's activity — a per-id subscription, not App's map. */
-function TerminalOverlayFor({ node, rect }: { node: TerminalNodeData; rect: ScreenRect }): React.JSX.Element {
+function TerminalOverlayFor({ node, rect, primary }: { node: TerminalNodeData; rect: ScreenRect; primary: boolean }): React.JSX.Element {
   const activity = useActivity(node.id)
-  return <TerminalOverlay node={node} activity={activity} rect={rect} />
+  return <TerminalOverlay node={node} activity={activity} rect={rect} primary={primary} />
 }
 
 function clip(text: string, max: number): string {
@@ -135,14 +154,36 @@ const PHASE_CHIP: Record<TurnPhase, { label: string; cls: string }> = {
 function TerminalOverlay({
   node,
   activity,
-  rect
+  rect,
+  primary = true
 }: {
   node: TerminalNodeData
   activity: TerminalActivity | undefined
   rect: ScreenRect
+  /**
+   * The zoomed-in one (most covered) when several are mounted: only it puts
+   * its switch on the bar and its rows in ⋯, or two cards would share one bar.
+   */
+  primary?: boolean
 }): React.JSX.Element {
   const { zoomBack, requestClose } = useCanvasUi()
   const phase = activity?.phase ?? 'idle'
+  // This terminal's own browsers and notes (canvas wiring), and the one open
+  // in the lower half, if any.
+  const attachments = useContext(TerminalAttachmentsContext).get(node.id) ?? NO_ATTACHMENTS
+  const sideTabs = useContext(SideTabsContext)
+  const headTools = useContext(HeadToolsContext)
+  const openView = useAttachView()
+  const openItem =
+    openView !== null && openView.terminalId === node.id
+      ? (attachments.find((a) => a.node.id === openView.itemId) ?? null)
+      : null
+  // Unwired or deleted while open: nothing left to show.
+  useEffect(() => {
+    if (openView !== null && openView.terminalId === node.id && openItem === null) attachView.close(node.id)
+  }, [openView, openItem, node.id])
+  // Leaving the card closes what it had open; the browser goes back to its own card.
+  useEffect(() => () => attachView.close(node.id), [node.id])
   const [tailReady, setTailReady] = useState(false)
   const metadataReady = tailReady
   /**
@@ -163,6 +204,11 @@ function TerminalOverlay({
    */
   const activityRef = useRef(activity)
   activityRef.current = activity
+  // A widen mid-turn is redrawn when the turn ends (turn-redraw.ts); the
+  // terminal effect below fills in the kick and the ownership test.
+  const turnRedraw = useRef(createTurnRedraw())
+  const kickRef = useRef<(() => void) | null>(null)
+  const ownsRef = useRef<() => boolean>(() => false)
   // Drag-in attachments: dragenter/leave bubble from every child of the
   // overlay, so a plain boolean would flicker — count enters vs leaves.
   const [dropReady, setDropReady] = useState(false)
@@ -356,17 +402,80 @@ function TerminalOverlay({
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
-  // The LEFT rail: the agent's model and effort, read off its own record and
-  // turned by one typed line. Mirror of the checkpoint rail on the right.
-  const tuning = useAgentTuning({ terminalId: node.id, phase, remote })
-
-  // Owner ruling 2026-08-30: the zoomed view is PTY-DIRECT for every card.
+  // The agent's face on its side of the chat (transcript-face.ts): one
+  // element, so the memoised rows are not re-rendered by a new one each frame.
+  const chatFace = useMemo(() => <AgentAvatar id={node.id} orch={node.orch === true} status="idle" preset={node.preset} />, [node.id, node.orch, node.preset])
+  // Chat or the raw terminal (transcript-look.ts): one class on the box.
+  const [look, setLook] = useTranscriptLook()
+  // Read by the terminal's mount-once setup: is the live view on screen?
+  const lookRef = useRef(look)
+  lookRef.current = look
+  /** The live terminal's local scroll (live-scroll.ts), once the terminal is up. */
+  const localScrollRef = useRef<LocalScroll | null>(null)
+  /** The phone's native-scroll history surface (live-sheet.ts), once the terminal is up. */
+  const liveSheetRef = useRef<LiveSheet | null>(null)
+  const mainRef = useRef<HTMLDivElement>(null)
+  /** Where the chat was read when the terminal took the box: null = at the newest. */
+  const chatScroll = useRef<number | null>(null)
+  const switchLook = (next: TranscriptLook): void => {
+    const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
+    if (next === 'live' && isRecordLook(look) && box) {
+      chatScroll.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24 ? null : box.scrollTop
+    }
+    setLook(next)
+  }
+  // A card with no conversation (a plain shell, an agent before its first
+  // prompt) would be an empty chat: after a moment it says so and offers the
+  // terminal. The moment keeps it from flashing while the stream loads.
+  const [noConversation, setNoConversation] = useState(false)
   useEffect(() => {
+    if (stream.total > 0) {
+      setNoConversation(false)
+      return
+    }
+    const timer = setTimeout(() => setNoConversation(true), 1200)
+    return () => clearTimeout(timer)
+  }, [stream.total, node.id])
+  useLayoutEffect(() => {
+    const box = mainRef.current?.querySelector<HTMLElement>('.ctx-transcript') ?? null
+    if (!box) return
+    if (look === 'live') {
+      // The terminal is the whole card now: keys go to it, and its history
+      // is fetched so the first scroll is local (live-scroll.ts).
+      termRef.current?.focus()
+      localScrollRef.current?.onLive()
+      liveSheetRef.current?.sync()
+      return
+    }
+    liveSheetRef.current?.sync()
+    box.scrollTop = chatScroll.current ?? box.scrollHeight
+  }, [look])
+  // The model · effort · route button left for the prompt box (CardTune.tsx,
+  // owner 2026-11-01); only the embed, which has no box, still draws it here.
+  const zoomSlots = useZoomSlots()
+
+  // The phone flipped between light and dark while this was open.
+  const night = useNight()
+  const theme = useTheme()
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = terminalTheme(theme, night)
+  }, [theme, night])
+
+  // Owner ruling 2026-08-30: LIVE is PTY-DIRECT. CHAT and LOG are record
+  // views: mounting xterm there kept a herdr mirror (and its agent process)
+  // alive even when nobody was looking at the terminal. Record views must
+  // remain mirrorless so idle sleep can end the TUI process.
+  useEffect(() => {
+    if (!shouldAttachTerminal(look)) {
+      termRef.current = null
+      return
+    }
     const container = containerRef.current
     if (!container) return
 
     const term = new Terminal({
-      theme: PHOSPHOR_THEME,
+      theme: terminalTheme(themeNow(), isNight()),
+      minimumContrastRatio: 4.5,
       fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
       fontSize: 13,
       cursorBlink: true,
@@ -526,16 +635,68 @@ function TerminalOverlay({
       // retry that measured the same size must not re-send it (Pilot's
       // phone-crash hunt, 2026-08-27 — the mount burst was 4–13 identical
       // resizes, each reflowing the desktop viewer too).
-      let lastSent: { cols: number; rows: number } | null = null
+      /**
+       * The pane's size as this viewer last knew it — what it sent, or what the
+       * pane reported. A resize to the size the pane already has is not free:
+       * herdr answers EVERY resize with a full replay (`\e[2J\e[3J…`), which
+       * repaints every viewer and wipes the history the live view scrolls
+       * (live-scroll.ts). Measured on the phone page, 2026-10-31: the refit
+       * observer re-sent the size the mount kick had just set, once per open.
+       */
+      let paneSize: { cols: number; rows: number } | null = null
+      /** The last size this viewer asked for as its own (a repaint kick's cols-1 step is not one). */
+      let mySize: PaneSize | null = null
+      const sendSize = (cols: number, rows: number, kick = false): void => {
+        paneSize = { cols, rows }
+        if (!kick) mySize = { cols, rows }
+        cookrew().ptyResize(node.id, cols, rows)
+      }
+      /**
+       * WHO OWNS THE PANE'S SIZE: the viewer someone used last. Window focus
+       * is no test — the desktop window keeps it while the owner reads on the
+       * phone, and two "focused" viewers would resize the shared pane back and
+       * forth, each resize a full replay and a Claude Code reprint. So a viewer
+       * takes the size back only within this long of a touch, click or key in
+       * it, and a touch or click claims it at once.
+       */
+      // The rule is pane-size.ts: the viewer used last owns the size, the
+      // others adopt it and stay quiet until their own next use.
+      const owner = createSizeOwner(openedAt(Date.now(), lastUserInputAt()))
+      const owns = (): boolean => owner.owns(Date.now(), document.visibilityState === 'visible')
+      const claimSize = (): void => {
+        owner.use(Date.now())
+        if (disposed || container.offsetWidth <= 40) return
+        try {
+          fit.fit()
+          if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
+        } catch {
+          // container may be mid-teardown
+        }
+      }
+      const onUse = (): void => claimSize()
+      container.addEventListener('pointerdown', onUse, true)
+      container.addEventListener('touchstart', onUse, { capture: true, passive: true })
+      // Dragging the window's edge, or turning the phone, is using it too; the
+      // refit observer then sends the new size.
+      const onWindowResize = (): void => {
+        if (document.visibilityState === 'visible') owner.use(Date.now())
+      }
+      window.addEventListener('resize', onWindowResize)
+      cleanups.push(() => {
+        container.removeEventListener('pointerdown', onUse, true)
+        container.removeEventListener('touchstart', onUse, true)
+        window.removeEventListener('resize', onWindowResize)
+      })
       const fitUntilStable = (attempt = 0): void => {
-        if (disposed) return
+        // A viewer nobody opened keeps the pane's size: the hello sets its grid.
+        if (disposed || !owns()) return
         try {
           if (container.offsetWidth > 40) {
             fit.fit()
-            if (lastSent?.cols !== term.cols || lastSent?.rows !== term.rows) {
-              lastSent = { cols: term.cols, rows: term.rows }
-              cookrew().ptyResize(node.id, term.cols, term.rows)
-            }
+            // Against the pane's size, not what this viewer last sent: a
+            // hello may have moved the pane since, and a grid refitted without
+            // telling the pane is the wrong width for every frame after.
+            if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
           }
         } catch {
           // ignore; retried below
@@ -562,27 +723,45 @@ function TerminalOverlay({
       // focused one and the pane's size is not its own — re-assert its fitted
       // size. Idle viewers adopt and stay quiet, so two viewers cannot fight.
       let reassertTimer: ReturnType<typeof setTimeout> | null = null
-      // THE MURDER WEAPON (black box, 2026-08-27): both kills ended at the
-      // redraw's final chunk — Claude Code's composer line, whose U+23F5 ⏵
-      // is an EMOJI-PRESENTATION candidate on Apple platforms. iOS 26.6's
-      // text engine dies resolving that fallback inside xterm's DOM-renderer
-      // grid. VS15 (U+FE0E, zero width) pins every media-control symbol to
-      // TEXT presentation — same glyph, same cell width, no emoji path.
+      // Claude Code's media-control symbols as a phone can draw them: the iOS
+      // crash guard, ⏺ → ●, and the footer's ⏵⏵ that were tofu (phone-glyphs.ts).
       // Remote only: desktop WebKit shapes these fine.
-      const detoxify = (raw: string): string =>
-        isRemoteMode() ? raw.replace(/[\u23E9-\u23FA]/g, (m) => `${m}\uFE0E`) : raw
-      /** SIGWINCH: make the TUI repaint its real screen at this size. */
+      const detoxify = (raw: string): string => (isRemoteMode() ? phoneGlyphs(raw) : raw)
+      /**
+       * SIGWINCH: make the TUI repaint its real screen at this size. One
+       * column narrower, then back: Claude Code redraws everything only when
+       * the terminal gets NARROWER, and a render it makes at the dip that
+       * lands late only leaves a margin. Never wider first: a late render at
+       * a wider size spills every padded row onto a row of its own (owner,
+       * 2026-10-31: a blank row under every line, the input box jumping;
+       * main/pty.ts · PtySession.resize).
+       *
+       * Back to the size the pane had BEFORE the kick, read then: by the
+       * settle this viewer has adopted the dip from main's hello, and
+       * settling on term.cols would keep it. A kick while one is in flight
+       * (the mount's and a turn's end can meet) goes back to the same size:
+       * read afresh it would be the dip, and the pane lost a column a kick.
+       */
+      /** How long the kick's dip holds: long enough for Claude Code to redraw at it (main/pty.ts DIP_MS). */
+      const KICK_DIP_MS = 400
       let settleTimer: ReturnType<typeof setTimeout> | null = null
       let lastKickAt = 0
+      /** The size an in-flight kick goes back to. */
+      let kickBack: PaneSize | null = null
       const repaintKick = (): void => {
-        if (disposed || term.cols < 21) return
+        const at = kickBack ?? paneSize ?? { cols: term.cols, rows: term.rows }
+        if (disposed || at.cols < 21) return
         lastKickAt = Date.now()
-        cookrew().ptyResize(node.id, term.cols - 1, term.rows)
+        kickBack = at
+        sendSize(at.cols - 1, at.rows, true)
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(() => {
-          if (!disposed) cookrew().ptyResize(node.id, term.cols, term.rows)
-        }, 60)
+          kickBack = null
+          if (!disposed) sendSize(at.cols, at.rows)
+        }, KICK_DIP_MS)
       }
+      kickRef.current = repaintKick
+      ownsRef.current = owns
       /**
        * A RE-hello is a reconnect, and a reconnect may have found a mirror
        * that was rebuilt while the link was down — whose replay frame is an
@@ -598,25 +777,94 @@ function TerminalOverlay({
         if (settleTimer) clearTimeout(settleTimer)
         if (rekickTimer) clearTimeout(rekickTimer)
       })
+      // The live view scrolls its own copy of the pane's history (live-scroll.ts).
+      const api = cookrew()
+      const localScroll = installLocalScroll(term, {
+        seed: (nonce, lines) => api.ptySeed?.(node.id, nonce, lines) ?? Promise.resolve(false),
+        live: () => lookRef.current === 'live',
+        lines: isRemoteMode() ? 400 : 1000,
+        refreshMs: isRemoteMode() ? 8000 : 3000,
+        history: () => activityRef.current?.scrollBase ?? null
+      })
+      localScrollRef.current = localScroll
+      // Full repaints (a replay, the history seed) land under a copy of the
+      // painted rows, so the reader never sees one half-parsed (live-curtain.ts).
+      const curtain = createCurtain(
+        domCurtainDeps(
+          () => term.element?.querySelector('.xterm-screen') ?? null,
+          () => term.options.theme?.background ?? PAPER_THEME.background
+        )
+      )
+      cleanups.push(() => curtain.dispose())
+      // ON A PHONE the history scrolls as a native page over the terminal, the
+      // way the chat does, instead of a row at a time (live-sheet.ts).
+      if (isRemoteMode()) {
+        const liveSheet = installLiveSheet(term, container, {
+          live: () => lookRef.current === 'live',
+          wantHistory: () => localScroll.onLive()
+        })
+        // A seed replaces the history; this handler runs before live-scroll's
+        // and passes the sequence on (false).
+        const seedSeen = term.parser.registerOscHandler(777, (data) => {
+          if (data.startsWith('cookrew-seed;')) liveSheet.invalidate()
+          return false
+        })
+        liveSheetRef.current = liveSheet
+        cleanups.push(() => {
+          seedSeen.dispose()
+          liveSheet.dispose()
+          if (liveSheetRef.current === liveSheet) liveSheetRef.current = null
+        })
+      }
+      cleanups.push(() => {
+        localScroll.dispose()
+        if (localScrollRef.current === localScroll) localScrollRef.current = null
+      })
       const detach = cookrew().ptyAttach(
         node.id,
-        (chunk) => term.write(detoxify(chunk)),
-        ({ cols, rows }) => {
+        (raw) => {
+          // On paper, Claude Code's white cursor cell is drawn as an ink block (paper-cursor.ts).
+          const chunk = isNight() ? raw : paperCursor(raw)
+          if (localScroll.admit(chunk)) curtain.write(detoxify(chunk), (c, done) => term.write(c, done))
+        },
+        (hello) => {
+          const { cols, rows } = hello
           if (disposed || cols <= 0 || rows <= 0) return
+          // A widen is judged HERE, on the size the pane reports (every resize is
+          // echoed, to the viewer that asked too), never on what a viewer asks:
+          // an ask recorded first would hide its own widen from the echo. A
+          // kick's dip and its way back are no widen (turn-redraw.ts · DIP_MEMORY_MS).
+          if ((hello as { resized?: boolean }).resized) turnRedraw.current.sized(cols, activityRef.current?.phase ?? 'idle', Date.now())
+          else turnRedraw.current.note(cols, Date.now())
+          paneSize = { cols, rows }
           term.resize(cols, rows)
-          if (helloSeen && Date.now() - lastKickAt > 2000) {
+          // The pane changed size (every viewer is told, the one that asked
+          // too): adopt it, so herdr's repaints land on the right cells. If it
+          // settles on a size this viewer did not ask for, somebody else is
+          // using the pane — give the size up, and take it back only on this
+          // viewer's own next touch, click or key. Never on a timer: two
+          // viewers that each took it back were the bounce.
+          if ((hello as { resized?: boolean }).resized) {
+            if (reassertTimer) clearTimeout(reassertTimer)
+            reassertTimer = setTimeout(() => {
+              if (paneSize && tookOthers(paneSize, mySize)) owner.yieldTo()
+            }, SETTLE_CHECK_MS)
+            return
+          }
+          if (helloSeen && owns() && Date.now() - lastKickAt > 2000) {
             if (rekickTimer) clearTimeout(rekickTimer)
             rekickTimer = setTimeout(repaintKick, 120)
           }
           helloSeen = true
-          if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+          // A reconnect: the viewer in use puts its own size back; the rest adopt.
+          if (!owns()) return
           if (reassertTimer) clearTimeout(reassertTimer)
           reassertTimer = setTimeout(() => {
             if (disposed) return
             try {
               fit.fit()
               if (term.cols !== cols || term.rows !== rows) {
-                cookrew().ptyResize(node.id, term.cols, term.rows)
+                sendSize(term.cols, term.rows)
               }
             } catch {
               // container may be mid-teardown
@@ -624,9 +872,26 @@ function TerminalOverlay({
           }, 400)
         }
       )
+      // Asked only now: the attach is listening, so the seed cannot arrive unheard.
+      if (lookRef.current === 'live') localScroll.onLive()
       cleanups.push(() => {
         if (reassertTimer) clearTimeout(reassertTimer)
       })
+      // Typing here is using this viewer: the first key after a pause takes
+      // the pane's size back (claimSize), the rest only keep it.
+      const typed = (input: string): void => {
+        if (!owns()) claimSize()
+        else owner.use(Date.now())
+        cookrew().ptyInput(node.id, input)
+      }
+      // On a phone the keyboard's field is the truth (textarea-pad.ts): xterm
+      // sends its keys, the field sends its edits, so a composition update
+      // replaces the word instead of appending it. Should xterm's internals not
+      // be the shape the mute expects, the field stays xterm's and the bridge's.
+      const phoneField =
+        isRemoteMode() && term.textarea && muteXtermFieldSends(term)
+          ? attachPhoneField(term.textarea, container, { send: typed })
+          : null
       // Counts every emit so the IME bridge can tell whether xterm already
       // claimed an input event — see ime-input-bridge.ts for why iOS needs one.
       // Count AND a short log of what was sent: the bridge needs the text to
@@ -634,18 +899,23 @@ function TerminalOverlay({
       // deciding about (a count cannot see that — see withoutWhatXtermJustSent).
       let xtermDataCount = 0
       let xtermRecent: { at: number; text: string }[] = []
-      const inputSub = term.onData((input) => {
+      const inputSub = term.onData((data) => {
         xtermDataCount += 1
-        xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: input }]
-        cookrew().ptyInput(node.id, input)
+        phoneField?.xtermSent(data)
+        xtermRecent = [...xtermRecent.slice(-15), { at: Date.now(), text: data }]
+        typed(data)
       })
-      cleanups.push(
-        attachImeBridge(
-          container,
-          () => ({ count: xtermDataCount, log: xtermRecent }),
-          (text) => cookrew().ptyInput(node.id, text)
+      if (phoneField) {
+        cleanups.push(() => phoneField.detach())
+      } else {
+        cleanups.push(
+          attachImeBridge(
+            container,
+            () => ({ count: xtermDataCount, log: xtermRecent }),
+            (text) => cookrew().ptyInput(node.id, text)
+          )
         )
-      )
+      }
       // Focus pops the software keyboard AND (with a small-font textarea)
       // iOS's page auto-zoom — on a phone that fired the zoom/resize loop the
       // moment the overlay opened. Desktop keeps instant focus; the phone
@@ -662,8 +932,26 @@ function TerminalOverlay({
       // internal screen state — incremental redraws (ink/Claude Code) then
       // land on a wrong baseline and scatter. A double resize (SIGWINCH)
       // forces the app to repaint its real screen at the overlay size.
-      const kickTimer = setTimeout(repaintKick, 200)
-      cleanups.push(() => clearTimeout(kickTimer))
+      // Only the viewer in use: a kick is a resize of the SHARED pane.
+      //
+      // ONCE, when the box has settled: a full view lays itself out over its
+      // first moments (the head, the dock, the side groups), and a kick at a
+      // fixed 200 ms overlapped those refits — four resizes of the shared
+      // pane on one open, each a full repaint and a redraw by the agent
+      // (traced 2026-11-01). Every box change in the first moments moves it.
+      const mountedAt = Date.now()
+      let kickTimer: ReturnType<typeof setTimeout> | null = null
+      const scheduleMountKick = (): void => {
+        if (kickTimer) clearTimeout(kickTimer)
+        kickTimer = setTimeout(() => {
+          kickTimer = null
+          if (owns()) repaintKick()
+        }, MOUNT_KICK_SETTLE_MS)
+      }
+      scheduleMountKick()
+      cleanups.push(() => {
+        if (kickTimer) clearTimeout(kickTimer)
+      })
 
       // Touch scrolling: tmux runs with `mouse on`, so xterm sits in
       // mouse-tracking mode and its built-in touch scrolling is disabled
@@ -686,10 +974,32 @@ function TerminalOverlay({
       const trackingEl = (): Element | null =>
         container.querySelector('.xterm.enable-mouse-events')
 
+      /**
+       * THE ROWS FOLLOW THE FINGER (owner, 2026-10-31: "swiping live is not as
+       * smooth as chat"). A swipe moves the scrollback a whole row at a time;
+       * between two steps the screen is shifted by the pixels left over, so it
+       * moves with the finger and the next step lands where the shift had
+       * brought it. Only while the live view scrolls its OWN history — a wheel
+       * that goes to the pane cannot be followed. The row height is the one
+       * live-scroll.ts divides by, or the two disagree and a row is skipped.
+       */
+      const screenEl = (): HTMLElement | null => term.element?.querySelector<HTMLElement>('.xterm-screen') ?? null
+      const rowHeight = (): number => {
+        const h = screenEl()?.getBoundingClientRect().height ?? 0
+        return h > 0 ? Math.max(8, h / Math.max(1, term.rows)) : Math.max(12, container.clientHeight / Math.max(term.rows, 1))
+      }
+      const localHistory = (): boolean =>
+        lookRef.current === 'live' && term.buffer.active.type === 'normal' && term.buffer.active.baseY > 0
+      const shiftRows = (px: number, settle = false): void => {
+        const el = screenEl()
+        if (!el) return
+        el.style.transition = settle ? 'transform 140ms ease-out' : 'none'
+        el.style.transform = px === 0 ? '' : `translateY(${px}px)`
+      }
       const emitScroll = (px: number): void => {
         const target = trackingEl()
         if (!target || !lastTouch) return
-        const rowPx = Math.max(12, container.clientHeight / Math.max(term.rows, 1))
+        const rowPx = rowHeight()
         carry += px
         while (Math.abs(carry) >= rowPx) {
           const sign = carry > 0 ? 1 : -1
@@ -705,6 +1015,12 @@ function TerminalOverlay({
           )
           carry -= sign * rowPx
         }
+        const buf = term.buffer.active
+        shiftRows(
+          localHistory()
+            ? subRowShift({ carry, rowPx, atTop: buf.viewportY <= 0, atBottom: buf.viewportY >= buf.baseY })
+            : 0
+        )
       }
 
       const stopGlide = (): void => {
@@ -712,9 +1028,20 @@ function TerminalOverlay({
         glideRaf = 0
       }
 
+      /** A touch on the phone's history surface scrolls natively; the bridge must not touch it. */
+      const onSheet = (e: TouchEvent): boolean => (e.target as Element | null)?.closest?.('.cr-live-sheet.on') != null
       const onTouchStart = (e: TouchEvent): void => {
+        if (onSheet(e)) {
+          touchY = null
+          return
+        }
         stopGlide()
-        carry = 0
+        // A finger landing mid-fling keeps the rows where they are: the shift
+        // and its remainder carry on under the new drag instead of snapping.
+        if (!localHistory()) {
+          carry = 0
+          shiftRows(0)
+        }
         if (e.touches.length === 1) {
           touchY = e.touches[0].clientY
           history = [{ t: performance.now(), y: touchY }]
@@ -723,6 +1050,7 @@ function TerminalOverlay({
         }
       }
       const onTouchMove = (e: TouchEvent): void => {
+        if (onSheet(e)) return
         if (touchY === null || e.touches.length !== 1 || !trackingEl()) return
         const touch = e.touches[0]
         lastTouch = { x: touch.clientX, y: touch.clientY }
@@ -739,13 +1067,18 @@ function TerminalOverlay({
       const onTouchEnd = (): void => {
         const wasTracking = touchY !== null
         touchY = null
-        if (!wasTracking || history.length < 2) return
+        if (!wasTracking) return
+        const settle = (): void => {
+          carry = 0
+          shiftRows(0, true)
+        }
+        if (history.length < 2) return settle()
         const newest = history[history.length - 1]
         const oldest = history[0]
         const span = newest.t - oldest.t
-        if (span <= 0) return
+        if (span <= 0) return settle()
         const velocity = (oldest.y - newest.y) / span
-        if (Math.abs(velocity) < 0.25) return
+        if (Math.abs(velocity) < 0.25) return settle()
         glideV = Math.max(-3, Math.min(3, velocity))
         let lastFrame = performance.now()
         const frame = (now: number): void => {
@@ -754,12 +1087,15 @@ function TerminalOverlay({
           emitScroll(glideV * dt)
           glideV *= Math.pow(0.92, dt / 16.7)
           glideRaf = Math.abs(glideV) > 0.04 ? requestAnimationFrame(frame) : 0
+          if (glideRaf === 0) settle()
         }
         glideRaf = requestAnimationFrame(frame)
       }
       const onTouchCancel = (): void => {
         touchY = null
         history = []
+        carry = 0
+        shiftRows(0, true)
       }
       container.addEventListener('touchstart', onTouchStart, { passive: true })
       container.addEventListener('touchmove', onTouchMove, { passive: false })
@@ -778,11 +1114,17 @@ function TerminalOverlay({
       // hammering the TUI with SIGWINCH every frame.
       let refitTimer: ReturnType<typeof setTimeout> | null = null
       const observer = new ResizeObserver(() => {
+        // Still opening: the mount kick waits for the box to settle.
+        if (kickTimer !== null && Date.now() - mountedAt < MOUNT_SETTLE_WINDOW_MS) scheduleMountKick()
         if (refitTimer) clearTimeout(refitTimer)
         refitTimer = setTimeout(() => {
+          // A viewer not in use keeps the adopted size: refitting it would
+          // draw the pane at the wrong width here, and sending it would take
+          // the pane from the viewer someone is using (pane-size.ts).
+          if (!owns()) return
           try {
             fit.fit()
-            cookrew().ptyResize(node.id, term.cols, term.rows)
+            if (paneSize?.cols !== term.cols || paneSize?.rows !== term.rows) sendSize(term.cols, term.rows)
           } catch {
             // container may be mid-teardown
           }
@@ -803,7 +1145,7 @@ function TerminalOverlay({
       // dispose in reverse: detach stream/observers before killing the term
       for (const cleanup of cleanups.reverse()) cleanup()
     }
-  }, [node.id])
+  }, [look, node.id])
 
   // Live-tail-only clip (unified-scroll item 1): when the turn is at rest, keep
   // only Forge's tail boundary in the live layer; the trace owns older
@@ -819,6 +1161,12 @@ function TerminalOverlay({
   useEffect(() => {
     if (phase === 'replied') cookrew().turnSeen(node.id)
   }, [phase, node.id])
+
+  // The turn came to rest after a widen it was too busy to redraw for: the
+  // viewer that owns the size nudges it once (repaintKick).
+  useEffect(() => {
+    if (turnRedraw.current.settled(phase) && ownsRef.current()) kickRef.current?.()
+  }, [phase])
 
   const hasFiles = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files')
@@ -836,6 +1184,53 @@ function TerminalOverlay({
       console.error('Attachment drop failed:', error)
     )
   }
+
+  const pickTranslation = (code: string): void => {
+    /**
+     * NO SELECTION MEANS THE NEWEST, not nothing.
+     *
+     * This used to be disabled whenever selectedIndex was null, which
+     * on a phone is how every card opens — you tap in, you are live,
+     * and the button is dead. The reason it was dead lived in a
+     * `title` tooltip, and touch devices do not show tooltips, so it
+     * was an inert control with an invisible explanation. Live is not
+     * "no checkpoint": it is the latest one, which is exactly the
+     * body someone opening a card wants read back to them.
+     */
+    const target = selectedIndex ?? rows[rows.length - 1]?.index ?? null
+    if (target === null) {
+      translation.note('This card has no checkpoint to translate yet.')
+      return
+    }
+    // The text comes from the view that already rendered it. A
+    // checkpoint scrolled far out of the loaded window has been
+    // evicted, and saying so beats a button that looks broken.
+    const body = transcriptRef.current?.blockText(target) ?? null
+    if (body === null) {
+      translation.note(
+        `Checkpoint T${target} is not loaded yet — scroll to it and try again.`
+      )
+      return
+    }
+    translation.translate(target, body, code)
+  }
+
+  // ONE toggle for the transcript: it says what is showing, a tap flips it.
+  // In a full view it stands in the head's tools, over the sheet's top-right
+  // corner beside NOTE+ and BROWSER+ (head-tools.ts, owner 2026-11-01);
+  // elsewhere in the transcript's own top-right corner. Never on the top bar.
+  const lookToggle = (
+    <button
+      type="button"
+      className={`cr-look-toggle cr-look-corner look-${look}`}
+      aria-label={`Showing ${look} — switch to ${nextLook(look)}`}
+      title={LOOK_TITLE[look]}
+      onMouseDown={keepFocus}
+      onClick={() => switchLook(nextLook(look))}
+    >
+      {LOOK_LABEL[look]}
+    </button>
+  )
 
   return (
     <div
@@ -859,96 +1254,107 @@ function TerminalOverlay({
       }}
       onDrop={onDrop}
     >
-      <div className="popout-header">
-        {/* One coin only: it carries both identity (brand mark) and status.
-            Header line mirrors the full card: coin · name · [STATUS]. */}
-        <StatusCoin phase={phase} preset={node.preset} title={`${node.name} · ${node.preset}`} />
-        <span className="popout-name" title={`${node.name} · ${node.preset}`}>
-          {node.name}
-        </span>
-        {node.orch && <span className="cr-chip amber">ORCH</span>}
-        <span className={`cr-chip${PHASE_CHIP[phase].cls}`}>{PHASE_CHIP[phase].label}</span>
-        {/* No model/effort chip up here: the zoomed card already says both on its tune rail
-            (MDL / EFF), and the same two words twice on one screen read as two facts. */}
-        <div className="popout-actions">
-          <TranslateButton
-            active={translation.showing !== null}
-            working={translation.working}
-            language={translation.language}
-            onMouseDown={keepFocus}
-            onClear={translation.clear}
-            onPick={(code) => {
-              /**
-               * NO SELECTION MEANS THE NEWEST, not nothing.
-               *
-               * This used to be disabled whenever selectedIndex was null, which
-               * on a phone is how every card opens — you tap in, you are live,
-               * and the button is dead. The reason it was dead lived in a
-               * `title` tooltip, and touch devices do not show tooltips, so it
-               * was an inert control with an invisible explanation. Live is not
-               * "no checkpoint": it is the latest one, which is exactly the
-               * body someone opening a card wants read back to them.
-               */
-              const target = selectedIndex ?? rows[rows.length - 1]?.index ?? null
-              if (target === null) {
-                translation.note('This card has no checkpoint to translate yet.')
-                return
-              }
-              // The text comes from the view that already rendered it. A
-              // checkpoint scrolled far out of the loaded window has been
-              // evicted, and saying so beats a button that looks broken.
-              const body = transcriptRef.current?.blockText(target) ?? null
-              if (body === null) {
-                translation.note(
-                  `Checkpoint T${target} is not loaded yet — scroll to it and try again.`
-                )
-                return
-              }
-              translation.translate(target, body, code)
-            }}
-          />
-          <button
-            className="cr-btn sm icon"
-            aria-label={
-              titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'
-            }
-            title={
-              titleMode === 'conclusion'
-                ? 'Checkpoint titles: conclusions — click for precise prompts'
-                : 'Checkpoint titles: precise prompts — click for conclusions'
-            }
-            onMouseDown={keepFocus}
-            onClick={toggleTitleMode}
-          >
-            <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
-          </button>
-          {/* The "fork from a past checkpoint" button is deprecated — fork is now
-              available per-checkpoint in the timeline (State A hold + State B
-              rows), so the standalone header button is redundant. */}
-          <button
-            className="cr-btn sm icon popout-close"
-            title="Back to canvas (Esc)"
-            aria-label="Back to canvas"
-            onClick={zoomBack}
-          >
-            <CrIcon name="collapse" />
-          </button>
-          <button
-            className="cr-btn sm icon popout-kill"
-            title="Close card & kill session (⌘W)"
-            aria-label="Close card & kill session"
-            onClick={() => requestClose(node.id)}
-          >
-            <CrIcon name="close" />
-          </button>
+      {/* NO HEAD (owner 2026-10-31). Translate, titles, back and close sit
+          inside ⋯ on the top bar; the model switch sits in the prompt box and
+          CHAT/LIVE in the transcript's corner (owner 2026-11-01). The bar names
+          the agent already, so the name and the phase chip that were here said
+          it a second time. zoom-bar.ts has the why of the portals. A surface
+          with no One Bar (the cookrew.dev embed) has no prompt box either, so
+          it keeps one slim row with the model switch. */}
+      {primary && zoomSlots.bar === null && (
+        <div className="popout-header slim">
+          <CardTune terminalId={node.id} phase={phase} remote={remote} onMouseDown={keepFocus} />
+          <div className="popout-actions">
+            <TranslateButton
+              active={translation.showing !== null}
+              working={translation.working}
+              language={translation.language}
+              onMouseDown={keepFocus}
+              onClear={translation.clear}
+              onPick={pickTranslation}
+            />
+            <button className="cr-btn sm icon" aria-label={titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'} onMouseDown={keepFocus} onClick={toggleTitleMode}>
+              <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
+            </button>
+            <button className="cr-btn sm icon popout-close" title="Back (Esc)" aria-label="Back" onClick={zoomBack}>
+              <CrIcon name="collapse" />
+            </button>
+            <button className="cr-btn sm icon popout-kill" title="Close card & kill session (⌘W)" aria-label="Close card & kill session" onClick={() => requestClose(node.id)}>
+              <CrIcon name="close" />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
+      {primary && zoomSlots.menu !== null &&
+        createPortal(
+          <>
+            <div className="cr-more-group" role="presentation">
+              {node.name}
+            </div>
+            {/* Translate keeps ⋯ open: its language list opens from this row. */}
+            <div className="cr-more-row cr-zoom-translate" role="presentation">
+              <TranslateButton
+                active={translation.showing !== null}
+                working={translation.working}
+                language={translation.language}
+                onMouseDown={keepFocus}
+                onClear={() => {
+                  translation.clear()
+                  closeZoomMenu()
+                }}
+                onPick={pickTranslation}
+              />
+              <span className="cr-more-label">Translate</span>
+            </div>
+            <button
+              type="button"
+              className="cr-more-item"
+              onMouseDown={keepFocus}
+              onClick={() => {
+                toggleTitleMode()
+                closeZoomMenu()
+              }}
+            >
+              <CrIcon name={titleMode === 'conclusion' ? 'summary' : 'terminal'} />
+              <span className="cr-more-label">
+                {titleMode === 'conclusion' ? 'Titles: conclusions' : 'Titles: precise prompts'}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="cr-more-item"
+              onClick={() => {
+                closeZoomMenu()
+                zoomBack()
+              }}
+            >
+              <CrIcon name="collapse" />
+              <span className="cr-more-label">Back</span>
+              <kbd>Esc</kbd>
+            </button>
+            <button
+              type="button"
+              className="cr-more-item danger"
+              onClick={() => {
+                closeZoomMenu()
+                requestClose(node.id)
+              }}
+            >
+              <CrIcon name="close" />
+              <span className="cr-more-label">Close card &amp; kill session</span>
+              <kbd>⌘W</kbd>
+            </button>
+          </>,
+          zoomSlots.menu
+        )}
       {clipNote !== null && (
         <div className="popout-clip-note" role="status">
           {clipNote}
         </div>
       )}
-      {(selectedIndex !== null || activity?.prompt) && (
+      {/* Only while a checkpoint is picked: then it says which one and is the way
+          back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31). */}
+      {selectedIndex !== null && (
         <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {/* Identity, not array position: T-number matches transcript + rail. */}
@@ -1052,16 +1458,16 @@ function TerminalOverlay({
         </div>
       )}
       <div className="popout-terminal-wrap">
-        {tuning.view !== null && (
-          <TuneRail
-            view={tuning.view}
-            open={tuning.open}
-            onOpen={tuning.setOpen}
-            onTurn={tuning.turn}
-            error={tuning.error}
-            onMouseDown={keepFocus}
-          />
+        {/* The left column: this terminal's browsers and notes as side tabs. The
+            dials moved to the prompt box (one model switch; CardTune.tsx). */}
+        {sideTabs && attachments.length > 0 && (
+          <div className="popout-side">
+            <AttachTabs terminalId={node.id} items={attachments} openId={openItem?.node.id ?? null} />
+          </div>
         )}
+        <div ref={mainRef} className={`popout-main look-${look}${isRecordLook(look) ? ' look-records' : ''}${openItem !== null ? ' split' : ''}`}>
+        <TranscriptFaceContext.Provider value={chatFace}>
+        <TranscriptLookContext.Provider value={look}>
         <TranscriptView
           ref={transcriptRef}
           terminalId={node.id}
@@ -1095,6 +1501,31 @@ function TerminalOverlay({
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
+        </TranscriptLookContext.Provider>
+        </TranscriptFaceContext.Provider>
+        {isRecordLook(look) && noConversation && phase !== 'thinking' && (
+          <div className="chat-empty">
+            <span>No conversation yet.</span>
+            <button type="button" className="cr-btn sm" onClick={() => switchLook('live')}>
+              Open terminal
+            </button>
+          </div>
+        )}
+        {isRecordLook(look) && (phase === 'thinking' || phase === 'waiting') && (
+          <ChatStatus
+            phase={phase}
+            name={node.name}
+            status={activity?.glance?.status ?? null}
+            tool={activity?.glance?.tools.at(-1) ?? null}
+            onTerminal={() => switchLook('live')}
+          />
+        )}
+        {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
+        {primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
+        </div>
+        {/* CHAT is a plain conversation with its own scrollbar (transcript-paper.css,
+            owner 2026-11-01); LOG and LIVE keep the checkpoint rail. */}
+        {look !== 'chat' && (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -1114,6 +1545,7 @@ function TerminalOverlay({
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
           onReach={stream.reach}
         />
+        )}
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
@@ -1126,3 +1558,38 @@ function TerminalOverlay({
     </div>
   )
 }
+
+/**
+ * WHAT THE AGENT IS DOING RIGHT NOW, under the chat (transcript-look.ts).
+ * The chat shows finished exchanges; the turn in flight is this line — its
+ * status verb and newest tool call, read off the terminal by the tracker.
+ * An agent waiting on you is usually waiting on its terminal (a permission,
+ * a choice), so that one comes with the way there.
+ */
+function ChatStatus({
+  phase,
+  name,
+  status,
+  tool,
+  onTerminal
+}: {
+  phase: 'thinking' | 'waiting'
+  name: string
+  status: string | null
+  tool: string | null
+  onTerminal: () => void
+}): React.JSX.Element {
+  return (
+    <div className={`chat-status ${phase}`} role="status">
+      <span className="chat-status-dot" aria-hidden="true" />
+      <span className="chat-status-text">{phase === 'waiting' ? `${name} needs you` : (status ?? `${name} is working…`)}</span>
+      {tool && <span className="chat-status-tool">{tool}</span>}
+      {phase === 'waiting' && (
+        <button type="button" className="cr-btn sm" onClick={onTerminal}>
+          Open terminal
+        </button>
+      )}
+    </div>
+  )
+}
+

@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import { routeCables, type CableLink, type CableRect } from '../src/renderer/src/cable-route'
-import { harnessView } from '../src/renderer/src/cable-view'
+import { TABS_PER_CARD, harnessView, tabLayout, tabPairKey, type ViewTab } from '../src/renderer/src/cable-view'
 import {
   MAX_IN_FLIGHT,
+  PULSE_FADE_MS,
+  PULSE_MIN_MS,
+  PULSE_SCREEN_PX,
+  PULSE_SPEED_PX_S,
   SIGNAL_TTL_MS,
   admit,
+  pathLength,
+  pulseDuration,
+  pulseKeyframes,
   createSignalFeed,
   expire,
   linkBetween,
@@ -17,7 +24,7 @@ import {
   type LiveSignal
 } from '../src/renderer/src/cable-signal'
 import { CableSignalBus } from '../src/main/cable-signal'
-import { isCableSignal, type CableSignal } from '../src/shared/cable-signal'
+import { browserVerbKind, isCableSignal, noteVerbKind, type CableSignal } from '../src/shared/cable-signal'
 
 /**
  * SIGNALS ON THE CABLES, AS ARITHMETIC.
@@ -324,5 +331,125 @@ describe('the feed', () => {
     feed.reset()
     expect(feed.snapshot()).toEqual([])
     expect(c.pending()).toBe(0)
+  })
+})
+
+describe('round two: four kinds, and the direction is the pair', () => {
+  it('admits a write and a read as signals', () => {
+    expect(isCableSignal(sig('orch', 'spec', 'write'))).toBe(true)
+    expect(isCableSignal(sig('spec', 'orch', 'read'))).toBe(true)
+    expect(isCableSignal({ ...sig('a', 'b'), kind: 'drive' })).toBe(false)
+  })
+
+  it('maps every note verb: write and edit go in, read comes out, create and delete light nothing', () => {
+    expect(noteVerbKind('write')).toBe('write')
+    expect(noteVerbKind('edit')).toBe('write')
+    expect(noteVerbKind('read')).toBe('read')
+    expect(noteVerbKind('create')).toBeNull()
+    expect(noteVerbKind('delete')).toBeNull()
+  })
+
+  it('maps every browser verb: driving the page goes in, taking its words or picture comes out', () => {
+    for (const v of ['navigate', 'click', 'fill', 'type', 'key', 'scroll', 'evaluate']) expect(browserVerbKind(v), v).toBe('write')
+    for (const v of ['text', 'html', 'snapshot', 'info']) expect(browserVerbKind(v), v).toBe('read')
+    expect(browserVerbKind('create')).toBeNull()
+    expect(browserVerbKind('tab-new')).toBeNull()
+  })
+
+  it('keeps a glance shorter than a question', () => {
+    expect(SIGNAL_TTL_MS.write).toBeLessThan(SIGNAL_TTL_MS.ask)
+    expect(SIGNAL_TTL_MS.read).toBeLessThan(SIGNAL_TTL_MS.ask)
+  })
+})
+
+describe('round two: the pulse is a screen-sized thing at one speed', () => {
+  const short = [{ x: 0, y: 0 }, { x: 300, y: 0 }]
+  const long = [{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 4000, y: 4000 }]
+
+  it('measures the polyline', () => {
+    expect(pathLength(short)).toBe(300)
+    expect(pathLength(long)).toBe(8000)
+    expect(pathLength([])).toBe(0)
+  })
+
+  it('takes longer on a long cable than a short one, at the same zoom', () => {
+    expect(pulseDuration(long, 1, 'ask')).toBeGreaterThan(pulseDuration(short, 1, 'ask'))
+  })
+
+  it('is a speed in SCREEN pixels: the same cable is quicker zoomed out', () => {
+    const near = pulseDuration(long, 1, 'ask')
+    const far = pulseDuration(long, 0.1, 'ask')
+    expect(far).toBeLessThan(near)
+    // 8000 flow px at zoom 0.1 is 800 screen px: 800 / 600 px/s.
+    expect(far).toBe(Math.round((800 / PULSE_SPEED_PX_S) * 1000))
+  })
+
+  it('is never shorter than a glance nor longer than the lit trunks', () => {
+    expect(pulseDuration([{ x: 0, y: 0 }, { x: 10, y: 0 }], 1, 'ask')).toBe(PULSE_MIN_MS)
+    expect(pulseDuration(long, 4, 'ask')).toBe(SIGNAL_TTL_MS.ask - PULSE_FADE_MS)
+    expect(pulseDuration(long, 4, 'write')).toBe(SIGNAL_TTL_MS.write - PULSE_FADE_MS)
+  })
+
+  it('has a diameter on screen that does not depend on the zoom', () => {
+    // CableHarness divides by the zoom; the constant is the whole contract.
+    expect(PULSE_SCREEN_PX).toBeGreaterThanOrEqual(10)
+  })
+
+  it('places the keyframes by distance, so the dot moves at one speed round every corner', () => {
+    const frames = pulseKeyframes(long, 2000)
+    expect(frames[0]).toMatchObject({ transform: 'translate(0px, 0px)', offset: 0, opacity: 0 })
+    expect(frames[frames.length - 1]).toMatchObject({ transform: 'translate(4000px, 4000px)', offset: 1, opacity: 0 })
+    const corner = frames.find((f) => f.transform === 'translate(4000px, 0px)')!
+    expect(corner.offset).toBe(0.5) // half the length, half the time
+    for (let i = 1; i < frames.length; i += 1) expect(frames[i].offset).toBeGreaterThan(frames[i - 1].offset)
+  })
+
+  it('is lit for the trip and fades at the end, inside the trip', () => {
+    const frames = pulseKeyframes(long, 2000)
+    const lit = frames.filter((f) => f.opacity === 1)
+    expect(lit.length).toBeGreaterThanOrEqual(2)
+    expect(lit[0].offset).toBeLessThanOrEqual(0.08)
+    expect(lit[lit.length - 1].offset).toBeGreaterThanOrEqual(1 - PULSE_FADE_MS / 2000 - 0.01)
+  })
+
+  it('does not divide by zero on a path with no length', () => {
+    expect(() => pulseKeyframes([{ x: 1, y: 1 }], 500)).not.toThrow()
+    expect(pulseKeyframes([], 500)).toEqual([])
+  })
+})
+
+describe('round two: the lamp on a hub', () => {
+  const hub = card('hub', 0, 0)
+  const partners = Array.from({ length: 10 }, (_, i) => card(`p${i}`, 3000, i * 500))
+  const rects = new Map([hub, ...partners].map((r) => [r.id, r]))
+  const names = new Map(partners.map((p) => [p.id, p.id.toUpperCase()]))
+  const order = new Map([hub, ...partners].map((r, i) => [r.id, i]))
+  const tabs: ViewTab[] = partners.map((p) => ({ card: 'hub', partner: p.id, hot: false }))
+
+  it('folds an old partner behind +N when nothing is lit', () => {
+    const laid = tabLayout(tabs, rects, names, order, new Set())
+    expect(laid.filter((t) => !t.more)).toHaveLength(TABS_PER_CARD - 1)
+    expect(laid.some((t) => t.partner === 'p0')).toBe(false) // the oldest is hidden
+    expect(laid.find((t) => t.more)?.lit).toBe(false)
+  })
+
+  it('promotes the lit partner out of the fold for the signal’s lifetime', () => {
+    const lit = new Set([tabPairKey('hub', 'p0')])
+    const laid = tabLayout(tabs, rects, names, order, new Set(), TABS_PER_CARD, lit)
+    const shown = laid.filter((t) => !t.more)
+    expect(shown[0].partner).toBe('p0')
+    expect(shown[0].lit).toBe(true)
+    expect(shown).toHaveLength(TABS_PER_CARD - 1)
+    expect(laid.find((t) => t.more)?.lit).toBe(false)
+  })
+
+  it('lights the fold itself only when more partners are lit than fit', () => {
+    const lit = new Set(Array.from({ length: 8 }, (_, i) => tabPairKey('hub', `p${i}`)))
+    const laid = tabLayout(tabs, rects, names, order, new Set(), TABS_PER_CARD, lit)
+    expect(laid.find((t) => t.more)?.lit).toBe(true)
+  })
+
+  it('reads the pair the way the tab names it', () => {
+    expect(tabPairKey('a', 'b')).not.toBe(tabPairKey('b', 'a'))
   })
 })

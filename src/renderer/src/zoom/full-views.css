@@ -1,0 +1,706 @@
+/* ---- THE FULL VIEWS, ON THE PANEL (StageView.tsx, zoom/full-views.css) ----
+   The navigator's last stop is not a page of plain cream with a browser's
+   chrome on it: it is the same panel the demo drew
+   (docs/brand-ink-2026-10-31/group-motion-pivot.html) — a sheet of paper with
+   the agent's head on it (its ensō, its name in serif, its state and what it
+   carries), the transcript on the paper, the browsers and notes as tabs down
+   the right, and the prompt box at the foot. The browser's and the note's own
+   full view wear the same sheet, with who uses it.
+
+   Everything here is scoped to .zv-fullview, so nothing outside the navigator
+   moves. The tokens are the ink theme's (zoom/ink-theme.css); the fallbacks are
+   the demo's own paper. */
+
+.zv-fullview {
+  --fv-paper: var(--sumi-paper, #f4efe4);
+  --fv-card: var(--sumi-card, #fbf8f1);
+  --fv-ink: var(--sumi-ink, #1d1a16);
+  --fv-soft: var(--sumi-ink-soft, #5d554a);
+  --fv-muted: var(--sumi-muted, #6f675b);
+  --fv-hair: var(--sumi-hair, rgba(29, 26, 22, 0.1));
+  --fv-hair-2: var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
+  --fv-seal: var(--sumi-seal, #a8692b);
+  --fv-wait: var(--sumi-wait, #c0392b);
+  --fv-serif: var(--sumi-serif, 'Iowan Old Style', Palatino, Georgia, serif);
+  --fv-mono: var(--font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+
+  /* The lanes an attached side group takes beside the sheet (pets/pet-dock.ts). */
+  --fv-lane-left: 0px;
+  --fv-lane-right: 0px;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px calc(14px + var(--fv-lane-right)) 10px calc(14px + var(--fv-lane-left));
+  background-color: var(--fv-paper);
+  background-image: radial-gradient(var(--sumi-grain, rgba(120, 100, 70, 0.06)) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+/* The sheet: the panel the transcript and the page sit on. */
+.zv-fullview::after {
+  content: '';
+  position: absolute;
+  inset: 78px calc(14px + var(--fv-lane-right)) 12px calc(14px + var(--fv-lane-left));
+  z-index: 0;
+  border-radius: 16px;
+  background: var(--fv-card);
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2), 0 14px 40px rgba(40, 30, 15, 0.12);
+  pointer-events: none;
+}
+
+/* ---- the head ---- */
+/* Never shrinks (2026-11-03): a long artifacts column squeezed it 60 -> 54 px,
+   so the sheet jumped whenever the column was hidden or the agent changed. */
+.zv-fv-head {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 4px 10px 10px;
+  color: var(--fv-ink);
+}
+.zv-fv-ink { display: block; width: 46px; height: 46px; flex: none; }
+.zv-fv-ink svg { display: block; width: 100%; height: 100%; }
+.zv-fv-face {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--fv-card);
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2);
+  font: 600 16px/1 var(--fv-mono);
+  color: var(--fv-ink);
+}
+.zv-fv-face.browser { color: #fbf8f1; background: var(--fv-seal); box-shadow: none; }
+.zv-fv-who { display: grid; gap: 3px; min-width: 0; }
+.zv-fv-who b { font: 600 21px/1.15 var(--fv-serif); letter-spacing: 0.01em; }
+.zv-fv-who small { display: flex; flex-wrap: wrap; gap: 10px; font: 10.5px/1.2 var(--fv-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fv-muted); }
+.zv-fv-state { color: var(--fv-soft); }
+.zv-fv-state.waiting { color: var(--fv-wait); }
+.zv-fv-used { margin-left: auto; display: flex; align-items: center; gap: 10px; font: 11px/1 var(--fv-mono); color: var(--fv-muted); }
+.zv-fv-used em { font-style: normal; letter-spacing: 0.12em; text-transform: uppercase; }
+.zv-fv-used i { display: flex; align-items: center; gap: 5px; font-style: normal; color: var(--fv-ink); }
+.zv-fv-used .vi-avatar, .zv-fv-used .vi-avatar svg { width: 20px; height: 20px; }
+
+/* The real pane sits on the sheet, inside its edge. */
+.zv-fullview.agent .cr-stage-term,
+.zv-fullview.item .stg-item-pane {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 6px 2px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* ---- the agent's browsers and notes, on its sheet (stage/AgentArtifacts.tsx) ----
+   The design's column (owner, 2026-11-01): right of the transcript, inside the
+   paper, under a mono label; each one the navigator's big thumbnail, ×N when
+   it is shared. The two small buttons by the label make a note or a browser
+   for this agent — the dock no longer does. */
+/* Here the body IS the sheet: the ::after's fixed 78px top sat 9px below
+   wherever the head really ended, and the transcript's top showed above it. */
+.zv-fullview.agent::after {
+  content: none;
+}
+.zv-fullview.agent .zv-fv-body {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  margin-bottom: 2px;
+  padding-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--fv-hair-2);
+  border-radius: 16px;
+  background: var(--fv-card);
+  box-shadow: 0 14px 40px rgba(40, 30, 15, 0.12);
+}
+.zv-fullview.agent .zv-fv-body > .cr-stage-term {
+  min-width: 0;
+}
+.zv-fv-arts {
+  flex: 0 0 196px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 18px 16px 12px 6px;
+}
+.zv-fv-arts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10px/1 var(--fv-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fv-soft);
+  white-space: nowrap;
+}
+.zv-fv-arts-make {
+  display: inline-flex;
+  gap: 4px;
+}
+/* The head is the switch (owner, 2026-11-03): "artifacts", its count, and a
+   caret that points down while the thumbnails show and right while hidden. */
+.zv-fv-arts-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 3px 6px 3px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.zv-fv-arts-toggle:hover {
+  color: var(--fv-ink);
+}
+.zv-fv-arts-toggle:focus-visible {
+  outline: 2px solid var(--fv-seal);
+  outline-offset: 2px;
+}
+.zv-fv-arts-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 0.15s ease;
+}
+.zv-fv-arts.hidden .zv-fv-arts-caret {
+  transform: rotate(-90deg);
+}
+.zv-fv-arts-n {
+  color: var(--fv-ink);
+}
+/* Hidden: the column gives the transcript its width back and keeps only its head. */
+.zv-fv-arts.hidden {
+  flex: none;
+  padding-right: 10px;
+}
+/* None, and the make buttons in the column (no head slot): only the buttons. */
+.zv-fv-arts.empty {
+  flex: none;
+}
+
+/* ---- the head's tools, over the sheet's top-right corner (owner, 2026-11-01) ----
+   CHAT/LOG/LIVE, then NOTE+ and BROWSER+ (head-tools.ts): one row at the head's
+   foot, its right edge on the sheet's (the head's 10px padding given back),
+   6px above the sheet. */
+.zv-fv-tools {
+  margin-left: auto;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: -10px;
+  margin-bottom: -4px;
+}
+.zv-fv-tools > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.zv-fv-tools > span:empty {
+  display: none;
+}
+.zv-fv-tools .zv-fv-arts-make {
+  gap: 6px;
+}
+.zv-fv-tools .cr-look-toggle.cr-look-corner {
+  position: static;
+  height: 28px;
+}
+.zv-fv-tools .zv-fv-arts-btn {
+  width: 30px;
+  height: 28px;
+}
+.zv-fv-arts-btn {
+  appearance: none;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2);
+  color: var(--fv-ink);
+  cursor: pointer;
+}
+.zv-fv-arts-btn .cr-icon {
+  width: 13px;
+  height: 13px;
+}
+.zv-fv-arts-btn b {
+  position: absolute;
+  right: 2px;
+  top: 1px;
+  font: 700 9px/1 var(--fv-mono);
+  color: var(--fv-seal);
+}
+.zv-fv-arts-btn:hover:not(:disabled) {
+  background: var(--sumi-gold-soft, #f3e4c2);
+}
+.zv-fv-arts-btn:disabled {
+  opacity: 0.45;
+  cursor: progress;
+}
+.zv-fv-arts-btn:focus-visible,
+.zv-fv-art:focus-visible {
+  outline: 2px solid var(--fv-seal);
+  outline-offset: 2px;
+}
+.zv-fv-arts-error {
+  margin: 0;
+  font: 11px/1.3 var(--fv-mono);
+  color: var(--fv-wait);
+}
+.zv-fv-arts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  /* Room for the thumbnails' shadow inside the scroll box. */
+  padding: 2px 8px 12px 2px;
+  scrollbar-width: thin;
+}
+.zv-fv-art {
+  appearance: none;
+  flex: none;
+  display: block;
+  width: 168px;
+  height: 108px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  transition: transform 120ms ease-out;
+}
+.zv-fv-art:hover {
+  transform: translateY(-1px);
+}
+.zv-fv-art > .zv-th {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px var(--zv-shadow);
+  text-align: left;
+}
+/* The open one: the seal along its edge (the hairline layer, which a note's
+   turned corner does not clip away). */
+.zv-fv-art.on > .zv-th::before {
+  box-shadow: inset 0 0 0 2px var(--fv-seal);
+}
+.zv-fv-art > .zv-th em {
+  right: 7px;
+  bottom: 6px;
+  font-size: 10px;
+}
+/* Its ×, as the agent's (zoom.css · .zv-del): inside the thumbnail's top
+   right corner, since the list scrolls and would clip a mark above its edge;
+   shown on hover or focus, always where there is no hover (a phone). */
+.zv-fv-art-cell {
+  position: relative;
+  flex: none;
+  /* Hug the thumbnail: stretched to the column, the corner was the column's. */
+  align-self: flex-start;
+}
+.zv-fv-art-cell > .zv-fv-art-del {
+  left: auto;
+  right: 6px;
+  top: 6px;
+  z-index: 1;
+  border-color: var(--fv-hair-2);
+  background: var(--fv-card);
+}
+.zv-fv-art-cell:hover > .zv-fv-art-del,
+.zv-fv-art-cell:focus-within > .zv-fv-art-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+.zv-fv-art-cell > .zv-fv-art-del:hover {
+  border-color: var(--fv-wait);
+  color: var(--fv-wait);
+}
+@media (hover: none) {
+  .zv-fv-art-cell > .zv-fv-art-del {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* ---- the transcript, set as the demo sets it ---- */
+.zv-fullview .lod-overlay {
+  background: transparent;
+}
+.zv-fullview .popout-header.slim {
+  min-height: 34px;
+  padding: 2px 6px 6px;
+  background: transparent;
+  border: 0;
+}
+/* A prompt is the owner's line: the seal, then the words. Prose is serif;
+   tool calls stay mono, because that is what they are. */
+.zv-fullview .ctx-block-prompt,
+.zv-fullview .phos-line.you {
+  font-family: var(--fv-serif);
+  font-size: 14.5px;
+  color: var(--fv-ink);
+}
+.zv-fullview .ctx-block-prompt::before,
+.zv-fullview .look-chat .ctx-block-prompt::before {
+  color: var(--fv-seal);
+}
+.zv-fullview .ctx-block-reply,
+.zv-fullview .ctx-block-reply p,
+.zv-fullview .look-chat .ctx-chat-bubble {
+  font-family: var(--fv-serif);
+}
+.zv-fullview .ctx-block-reply code,
+.zv-fullview .ctx-block-reply pre,
+.zv-fullview .ctx-block-tool {
+  font-family: var(--fv-mono);
+}
+/* The paper's own margins: a reading column, not a wall of text. */
+.zv-fullview .ctx-transcript { padding-left: 30px; padding-right: 30px; }
+
+/* CHAT TAKES THE SHEET'S WIDTH (owner, 2026-11-01): the bubbles reach out to
+   both sides of the paper instead of standing in an 860px column, so a wide
+   screen shows more of the conversation. */
+.zv-fullview .popout-main.look-chat > .ctx-transcript { padding-left: 16px; padding-right: 16px; }
+.zv-fullview .lod-overlay .look-chat .ctx-block,
+.zv-fullview .lod-overlay .popout-main.look-chat .chat-status { max-width: none; }
+
+/* LOG, SET AS THE DEMO SETS ITS TRANSCRIPT (owner, 2026-11-01;
+   group-motion-pivot.html · .tx): no boxes and no terminal glyph soup — your
+   line opens with YOU in the seal's mono, the agent's words are serif prose,
+   and its tool calls are one quiet mono line each, their results kept short
+   under them. A reading column on the left of the paper, as the demo has it. */
+.zv-fullview .lod-overlay .look-log .ctx-block {
+  display: grid;
+  gap: 10px;
+  max-width: 820px;
+  padding: 12px 0 14px;
+  border-top: 0;
+  font: 13.5px/1.45 var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block.active { background: transparent; }
+.zv-fullview .lod-overlay .look-log .ctx-block-head {
+  opacity: 1;
+  font: 10px/1 var(--fv-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fv-muted);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-prompt {
+  margin: 0;
+  padding: 0;
+  background: none;
+  font: 13.5px/1.45 var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-prompt::before {
+  content: 'You';
+  margin-right: 10px;
+  font: 600 11.5px/1 var(--fv-mono);
+  letter-spacing: 0.04em;
+  color: var(--fv-seal);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-tool {
+  margin: 0;
+  font: 11.5px/1.4 var(--fv-mono);
+  color: var(--fv-soft);
+}
+.zv-fullview .lod-overlay .look-log .ctx-tool-call::before {
+  color: var(--fv-soft);
+}
+.zv-fullview .lod-overlay .look-log .ctx-tool-result {
+  font: 11px/1.4 var(--fv-mono);
+  color: var(--fv-muted);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-reply {
+  margin: 0;
+  font: 13.5px/1.45 var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .lod-overlay .look-log .ctx-block-reply::before { content: none; }
+.zv-fullview .lod-overlay .look-log .ctx-block-reply * { font-family: var(--fv-serif); }
+.zv-fullview .lod-overlay .look-log .ctx-block-reply code,
+.zv-fullview .lod-overlay .look-log .ctx-block-reply pre,
+.zv-fullview .lod-overlay .look-log .ctx-block-reply pre * { font-family: var(--fv-mono); font-size: 12px; }
+
+/* ---- the tabs: the demo's thumbnails, down the right ---- */
+.zv-fullview .popout-side {
+  background: transparent;
+  border-left: 0;
+  padding-right: 2px;
+}
+.zv-fullview .attach-tabs {
+  gap: 8px;
+  background: transparent;
+  border: 0;
+}
+.zv-fullview .attach-tab {
+  border-radius: 8px;
+  background: var(--fv-card);
+  box-shadow: inset 0 0 0 1px var(--fv-hair), 0 2px 6px rgba(40, 30, 15, 0.06);
+  font-family: var(--fv-mono);
+  color: var(--fv-soft);
+}
+.zv-fullview .attach-tab.on {
+  box-shadow: inset 0 0 0 1.5px var(--fv-seal);
+  color: var(--fv-ink);
+}
+.zv-fullview .attach-tabs-slot .attach-tab-name { font-size: 11px; }
+
+/* The browser or note itself, on the sheet. */
+.zv-fullview .attach-panel {
+  background: transparent;
+  border: 0;
+}
+.zv-fullview .attach-note-head {
+  font-family: var(--fv-serif);
+  color: var(--fv-ink);
+}
+.zv-fullview .note-editor,
+.zv-fullview .note-body,
+.zv-fullview .attach-note-body {
+  font-family: var(--fv-serif);
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--fv-ink);
+}
+
+/* The dials and the status line keep their place, in the panel's colours. */
+.zv-fullview .chat-status { font-family: var(--fv-mono); color: var(--fv-muted); }
+.zv-fullview .chat-status.waiting .chat-status-dot { background: var(--fv-wait); }
+.zv-fullview .chat-empty { font-family: var(--fv-serif); color: var(--fv-muted); }
+
+/* THE BROWSER, ON THE PAPER (owner, 2026-11-01). A browser drawn in a slot —
+   its own full view, or under an agent's transcript — kept the canvas card's
+   square frame and its 2px ink edge, unlike the note and the agent beside it.
+   It wears the demo's page now (group-motion-pivot.html · .ipage): rounded
+   10px, one hairline, a soft shadow, and its address bar on the second paper
+   over a hairline. BrowserLayer draws it outside .zv-fullview, so the ink
+   tokens are read directly. Full window (browser-full) stays edge to edge. */
+.browser-lod.browser-embedded:not(.browser-full) .popout {
+  border: 0;
+  border-radius: 10px;
+  background: var(--sumi-paper, #f4efe4);
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16)),
+    0 6px 20px rgba(40, 30, 15, 0.08);
+}
+.browser-lod.browser-embedded:not(.browser-full) .popout-header {
+  background: var(--sumi-paper-2, #ebe3d3);
+  border-bottom: 1px solid var(--sumi-hair, rgba(29, 26, 22, 0.1));
+}
+.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
+  color: var(--sumi-ink, #1d1a16);
+}
+.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn:hover {
+  background: var(--sumi-paper, #f4efe4);
+}
+.browser-lod.browser-embedded:not(.browser-full) .browser-address,
+.browser-lod.browser-embedded:not(.browser-full) .browser-idplate {
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* A phone is one column: the head wraps, the tabs shrink. */
+@media (max-width: 700px) {
+  .zv-fullview { padding: 8px 8px 6px; }
+  .zv-fullview::after { inset: 66px 8px 8px; }
+  .zv-fv-head { gap: 9px; padding: 2px 4px 8px; }
+  .zv-fv-ink { width: 34px; height: 34px; }
+  .zv-fv-who b { font-size: 17px; }
+  .zv-fv-who small { gap: 7px; font-size: 9.5px; }
+  .zv-fv-used { width: 100%; margin-left: 0; }
+  .zv-fullview .ctx-transcript { padding-left: 12px; padding-right: 12px; }
+  .zv-fullview .popout-main.look-chat > .ctx-transcript { padding-left: 8px; padding-right: 8px; }
+  .zv-fullview .lod-overlay .look-log .ctx-block { font-size: 16px; }
+  .zv-fullview .lod-overlay .look-log .ctx-block-prompt,
+  .zv-fullview .lod-overlay .look-log .ctx-block-reply { font-size: 16px; }
+  .zv-fullview .lod-overlay .look-log .ctx-block-tool { font-size: 14px; }
+  /* The agent's browsers and notes: a row under the transcript, as the demo's phone draws them. */
+  .zv-fullview.agent .zv-fv-body { flex-direction: column; }
+  .zv-fullview.agent .zv-fv-body > .cr-stage-term { flex: 1 1 auto; }
+  .zv-fv-arts { flex: none; gap: 8px; padding: 8px 10px 4px; }
+  .zv-fv-arts-list { flex-direction: row; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 8px; }
+  .zv-fv-art { width: 104px; height: 68px; }
+  .zv-fv-art > .zv-th em { font-size: 9px; }
+  .zv-fv-arts-btn { width: 32px; height: 30px; }
+  .zv-fv-tools .zv-fv-arts-btn { width: 32px; height: 30px; }
+  .zv-fv-tools .cr-look-toggle.cr-look-corner { height: 30px; }
+}
+
+/* ---- the side groups, attached (pets/PetTroop.tsx, pets/pet-dock.ts) ----
+   As group-motion-pivot.html draws the full view: the panel in the middle,
+   the crew a column of faces beside it on the right, the browsers and notes
+   one on the left. On a wide screen the sheet steps in by a lane for each
+   attached group; below 900px there is no width to spare, and the columns
+   stand over the sheet's edges instead (pet-dock.ts · NARROW_PX). */
+body.cr-docked-left .zv-fullview {
+  --fv-lane-left: 56px;
+}
+body.cr-docked-right .zv-fullview {
+  --fv-lane-right: 56px;
+}
+@media (max-width: 899px) {
+  body.cr-docked-left .zv-fullview,
+  body.cr-docked-right .zv-fullview {
+    --fv-lane-left: 0px;
+    --fv-lane-right: 0px;
+  }
+}
+
+/* A phone (pet-dock.ts · PHONE_PX): the attached groups are rows in a strip
+   between the head and the sheet, and the sheet steps down by it; the head is
+   one line, clear of the way back out (zoom.css), its words cut short. */
+@media (max-width: 700px) {
+  body.cr-docked-left .zv-fullview,
+  body.cr-docked-right .zv-fullview {
+    --fv-strip: 44px;
+  }
+  .zv-fullview::after {
+    top: calc(66px + var(--fv-strip, 0px));
+  }
+  .zv-fv-head {
+    flex-wrap: nowrap;
+    margin-bottom: var(--fv-strip, 0px);
+    padding-right: 52px;
+  }
+  .zv-fv-who {
+    flex: 1 1 auto;
+  }
+  .zv-fv-who b {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .zv-fv-who small {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .zv-fv-used {
+    flex: none;
+    width: auto;
+    margin-left: auto;
+  }
+  .zv-fv-used em {
+    display: none;
+  }
+  /* The head's right 52px is the round way back's: the tools stop short of it. */
+  .zv-fv-tools {
+    flex: none;
+    margin-right: 0;
+  }
+}
+
+/* AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02, the Samsung screenshot:
+   the bar, the head and the troop's strip were three rows saying who it is).
+   Row 1 is the bar (header.css · route-slot.ts): it names the agent and holds
+   the way back, so the head's own face and name step aside, and the round ‹
+   with them. Row 2 is the head: CHAT ✎+ ⊕+ at its right, the troops in the
+   same row (pet-dock.ts · rowSpot), no strip of their own. A browser's or a
+   note's full view keeps its head, its strip and its round ‹. */
+@media (max-width: 700px) {
+  body.cr-full-agent .zv-root[data-full='true'] .zv-controls {
+    display: none;
+  }
+  .zv-fullview.agent .zv-fv-ink,
+  .zv-fullview.agent .zv-fv-who {
+    display: none;
+  }
+  body.cr-docked-left .zv-fullview.agent,
+  body.cr-docked-right .zv-fullview.agent {
+    --fv-strip: 0px;
+  }
+  .zv-fullview.agent .zv-fv-head {
+    min-height: 40px;
+    margin-bottom: 0;
+    padding: 5px 0;
+  }
+  .zv-fullview.agent .zv-fv-tools {
+    align-self: center;
+    margin: 0 0 0 auto;
+  }
+}
+
+/* CLEAR OF THE WAY BACK OUT (UI/UX QA 2026-11-01: a long title ran under the
+   centred "‹ browsers & notes" pill, zoom.css · data-full). Above a phone the
+   pill stands at the middle of the top, over the head: each side of the head
+   keeps to its own half, less the pill's half (--fv-back-clear), less the
+   28px the middle moves when only one side group is attached, and cuts its
+   words short. The title also gives up the face and the gap before it (68px).
+   A phone has its own: the way back is a round button in the corner. */
+@media (min-width: 701px) {
+  .zv-fullview {
+    --fv-back-clear: 96px;
+  }
+  .zv-fv-who {
+    max-width: calc(50% - 68px - 28px - var(--fv-back-clear));
+  }
+  .zv-fv-who b,
+  .zv-fv-who small {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .zv-fv-who small {
+    flex-wrap: nowrap;
+  }
+  /* An item's line is one run of text (kind · address): a block, so it can end in an ellipsis. */
+  .zv-fullview.item .zv-fv-who small {
+    display: block;
+  }
+  .zv-fv-used {
+    max-width: calc(50% - 28px - var(--fv-back-clear));
+    overflow: hidden;
+    white-space: nowrap;
+  }
+}
+
+/* Checkpoint tags on paper: the cream skin is in styles.css (on-cream); here
+   only their edge, so an opaque tag reads as a tag over the transcript. The
+   row carries the surface, so the focused tag's wrapper adds no square one. */
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row {
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2), 0 2px 8px rgba(40, 30, 15, 0.1);
+}
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row.active::after {
+  border-radius: 0 6px 6px 0;
+}
+.zv-fullview .cr-ckpt-fan-focus {
+  background: transparent;
+}

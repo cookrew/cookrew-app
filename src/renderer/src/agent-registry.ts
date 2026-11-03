@@ -34,6 +34,7 @@ export interface AgentRegistryEntry {
 
 interface RegistryBridge {
   listAgents?: () => Promise<AgentRegistryEntry[]>
+  onAgentChanged?: (cb: (entry: AgentRegistryEntry) => void) => () => void
   onAgentSpawn?: (cb: (entry: AgentRegistryEntry) => void) => () => void
   onAgentRegistry?: (cb: (list: AgentRegistryEntry[]) => void) => () => void
 }
@@ -91,6 +92,11 @@ export function onAgentRegistry(cb: (list: AgentRegistryEntry[]) => void): () =>
   return () => window.removeEventListener(MOCK_SPAWN_EVENT, listener)
 }
 
+/** The roster with one announced entry merged in: replaced in place, or appended. */
+export function mergeEntry(list: readonly AgentRegistryEntry[], entry: AgentRegistryEntry): AgentRegistryEntry[] {
+  return list.some((e) => e.id === entry.id) ? list.map((e) => (e.id === entry.id ? entry : e)) : [...list, entry]
+}
+
 /** Live roster hook: initial fetch + subscription, newest spawn first. */
 export function useRoster(): AgentRegistryEntry[] {
   const [roster, setRoster] = useState<AgentRegistryEntry[]>([])
@@ -100,9 +106,12 @@ export function useRoster(): AgentRegistryEntry[] {
       if (alive) setRoster(list)
     })
     const off = onAgentRegistry((list) => setRoster(list))
+    // Each change as it happens (spawn, exit): merged into what was fetched.
+    const offChanged = bridge().onAgentChanged?.((entry) => setRoster((list) => mergeEntry(list, entry))) ?? (() => undefined)
     return () => {
       alive = false
       off()
+      offChanged()
     }
   }, [])
   return roster

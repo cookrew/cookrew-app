@@ -55,6 +55,8 @@ export type PlaneOutcome =
   | 'refused'
   /** The browser would prompt, and nobody is looking. Nothing was tried. */
   | 'unasked'
+  /** A path proved to be this Mac and was slower than the plane in use (plane-quality.ts). */
+  | 'slower'
   | 'switched'
 
 /** LAN beats tailnet beats relay, as everywhere else. */
@@ -149,6 +151,12 @@ export interface PlaneSwitchDeps {
    * Absent, the clock's verdict stands as it always did.
    */
   readonly named?: (origin: string) => Promise<'live' | 'dead' | 'unknown'>
+  /**
+   * IS THE WINNER BETTER THAN WHAT THE PHONE HAS? Asked after a win and
+   * before adopting (path/plane-quality.ts). Absent, a win is adopted, as
+   * it always was.
+   */
+  readonly worthIt?: (origin: string, kind: 'lan' | 'tailnet') => Promise<boolean>
 }
 
 /**
@@ -213,12 +221,17 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
     // tailnet address that answers in 3 ms can never take a session off a LAN
     // address that answers in 400. The rank encodes cost, not speed.
     let attempts: readonly PlaneAttempt[] = []
+    let slower = false
     for (const kind of ['lan', 'tailnet'] as const) {
       const tier = candidates.filter((candidate) => candidate.kind === kind)
       if (tier.length === 0) continue
       const result = await raceTier(tier, kind, card.deviceId, deps)
       attempts = [...attempts, ...result.attempts]
       if (!result.won) continue
+      if (deps.worthIt && !(await deps.worthIt(result.won, kind).catch(() => false))) {
+        slower = true
+        continue
+      }
       // THE PLANE KEEPS TALKING THE WAY THE HELLO GOT THROUGH. Chrome 152
       // behind a system proxy refuses the annotated request in 32 ms and
       // delivers the same one without it (2026-09-08), so a plane adopted after
@@ -233,7 +246,7 @@ export const switchPlaneIfBetter = async (deps: PlaneSwitchDeps): Promise<PlaneO
       return 'switched'
     }
     await report(deps, attempts)
-    return 'unreachable'
+    return slower ? 'slower' : 'unreachable'
   } finally {
     deps.probing?.(false)
   }

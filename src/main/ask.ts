@@ -801,6 +801,49 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
+/**
+ * WAIT FOR A PANE THAT IS STILL BOOTING.
+ *
+ * A respawned agent prints its whole resumed transcript before it accepts
+ * input: measured 2026-10-31, every carriage return sent during that window
+ * was swallowed while the brief sat in the box. So the ask path, when IT
+ * spawned the terminal, waits for the pane to stop painting first.
+ *
+ * Quiet is judged on the pane's own text, not on a detector: the text is what
+ * the caller reads, and it is the only signal that needs no backend. Returns
+ * false at the deadline — a caller must never fail an ask because a slow boot
+ * outlasted our patience; the delivery is attempted anyway.
+ *
+ * `drawn`, when given, must also hold: a pane can be quiet BEFORE its TUI has
+ * drawn anything (`clear; exec claude`, node silent for seconds — fork.ts ·
+ * claudeComposerDrawn), and keys typed then are lost with the mode switch.
+ */
+export async function waitForReady(
+  session: Pick<PtySession, 'fullText'>,
+  options: { minMs?: number; quietMs?: number; pollMs?: number; timeoutMs?: number; drawn?: () => boolean } = {}
+): Promise<boolean> {
+  const minMs = options.minMs ?? 800
+  const quietMs = options.quietMs ?? 1200
+  const pollMs = options.pollMs ?? 200
+  const timeoutMs = options.timeoutMs ?? 60_000
+  const started = Date.now()
+  let last = session.fullText()
+  let quietSince = started
+  while (Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+    const now = session.fullText()
+    if (now !== last) {
+      last = now
+      quietSince = Date.now()
+      continue
+    }
+    const quietFor = Date.now() - quietSince
+    const awakeFor = Date.now() - started
+    if (quietFor >= quietMs && awakeFor >= minMs && (options.drawn?.() ?? true)) return true
+  }
+  return false
+}
+
 /** Send raw bytes (with escapes already decoded) and return the viewport. */
 export async function askRaw(
   session: PtySession,
@@ -843,13 +886,17 @@ export function diffOutput(before: string, after: string): string {
   return afterLines.slice(common).join('\n').replace(/^\n+/, '')
 }
 
-/** Decode CLI escapes: \n \t \e \\ and \xNN byte sequences. */
+/** Decode CLI escapes: \n \r \t \e \\ and \xNN byte sequences. */
 export function decodeRawEscapes(input: string): string {
   return input
     .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex: string) =>
       String.fromCharCode(parseInt(hex, 16))
     )
     .replace(/\\n/g, '\r')
+    // `\r` is what the CLI's own unsubmitted remedy tells a caller to send
+    // ("send a carriage return"). Without it the caller typed the two
+    // characters \ and r into the box — observed live 2026-10-31.
+    .replace(/\\r/g, '\r')
     .replace(/\\t/g, '\t')
     .replace(/\\e/g, String.fromCharCode(27))
     .replace(/\\\\/g, '\\')

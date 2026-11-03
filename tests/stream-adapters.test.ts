@@ -453,10 +453,10 @@ describe('the differences the adapters do NOT hide', () => {
     const streamed = (await fixture('stream', '/turns')) as TurnRecord[]
     const stored = (await fixture('old', '/turns')) as TurnRecord[]
     expect(stored[0].reply).toBe('part two')
-    expect(streamed[0].reply).toBe('part one\npart two')
+    expect(streamed[0].reply).toBe('part one\n\npart two')
     // And the drawer already agreed with the stream, on both sides.
     expect(((await fixture('old', '/trace')) as { blocks: { reply: string }[] }).blocks[0].reply).toBe(
-      'part one\npart two'
+      'part one\n\npart two'
     )
   })
 

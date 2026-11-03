@@ -50,8 +50,10 @@
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { commandWithArgs, routeExports } from './tmux-multiplexer'
 import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
+import { herdrAgentName, uniqueHerdrAgentName } from './herdr-agent-name'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -90,12 +92,16 @@ export interface HerdrPane {
   label?: string | null
   /** The workspace this pane lives in — herdr always answers it. */
   workspace_id?: string | null
+  /** The tab this pane sits in; a pane alone in its tab names it (renameTab). */
+  tab_id?: string | null
   /** herdr's own view of which agent runs here — set by report-agent. */
   agent?: string | null
   /** herdr's current lifecycle state for this pane, when it has one. */
   agent_status?: string | null
   terminal_id?: string | null
   cwd?: string | null
+  /** A herdr client (the owner's own herdr, Alma) has this pane in front. */
+  focused?: boolean
   revision?: number
   scroll?: {
     offset_from_bottom?: number
@@ -198,6 +204,9 @@ export function toScrollState(pane: HerdrPane | null): ScrollState {
   }
 }
 
+/** Discard the terminal's pending input; a no-op without a tty or without perl. */
+const FLUSH_TYPEAHEAD = `perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null`
+
 /**
  * The boot script's contents.
  *
@@ -210,9 +219,16 @@ export function toScrollState(pane: HerdrPane | null): ScrollState {
  * The `exec` is load-bearing: it replaces the pane's shell with the agent, so
  * the pane pid IS the agent pid — which is how codex rollouts are bound by
  * lsof. The single quotes are the same containment tmux's boot script uses.
+ *
+ * The typeahead flush is the backstop for bootIntoPane's retypes (2026-11-01:
+ * an agent's first message was its own boot line, twice). A shell slow in its
+ * rc init holds every typed line in the terminal; it runs the first, which
+ * execs this script, and whatever is still queued would be the agent's first
+ * input. Dropping it here, before the exec, means no boot line ever reaches an
+ * agent, whatever the shell took.
  */
 export function bootCommand(spec: AttachSpec): string {
-  const inner = spec.command && spec.command.trim().length > 0 ? spec.command : `${spec.shell} -l`
+  const inner = commandWithArgs(spec)
   return [
     `export TERM_PROGRAM=Cookrew`,
     `export COOKREW_TERMINAL_ID='${spec.terminalId}'`,
@@ -221,11 +237,13 @@ export function bootCommand(spec: AttachSpec): string {
     // is read by the pane's POSIX shell, so backslashes would be escapes.
     `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
+    ...routeExports(spec),
+    FLUSH_TYPEAHEAD,
     `exec ${inner}`
   ].join('; ')
 }
 
-/** Env every Cookrew pane needs, as herdr `--env KEY=VALUE` arguments. */
+/** Env every Cookrew pane needs, as herdr `--env KEY=VALUE` arguments — the route's too. */
 export function envArgs(spec: AttachSpec): string[] {
   return [
     ['TERM_PROGRAM', 'Cookrew'],
@@ -234,7 +252,8 @@ export function envArgs(spec: AttachSpec): string[] {
     // path.posix for the same reason the tmux boot script uses it: this is a
     // value the pane's POSIX shell will see, not a host filesystem path.
     ['COOKREW_CLI', path.posix.join(spec.cliDir, 'cookrew')],
-    ['PATH', spec.path]
+    ['PATH', spec.path],
+    ...Object.entries(spec.env ?? {})
   ].flatMap(([key, value]) => ['--env', `${key}=${value}`])
 }
 
@@ -967,6 +986,14 @@ export class HerdrHostMultiplexer implements Multiplexer {
       .filter((label): label is string => typeof label === 'string' && label.length > 0)
   }
 
+  /** Sessions whose pane a herdr client has focused — someone is at it. */
+  focusedSessions(): string[] {
+    return this.panes()
+      .filter((pane) => pane.focused === true)
+      .map((pane) => pane.label)
+      .filter((label): label is string => typeof label === 'string' && label.length > 0)
+  }
+
   killSession(name: string): void {
     const pane = this.paneFor(name)
     if (!pane) return
@@ -1044,7 +1071,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // re-reports for the same reason: herdr persists pane LAYOUT, not the
       // metadata a source reported.
       this.reportAgent(existing, spec)
-      if (spec.card) this.reportPaneCardTo(existing, spec.card)
+      if (spec.card) {
+        this.reportPaneCardTo(existing, spec.card)
+        this.nameAgentOn(existing.pane_id, spec.card.title)
+      }
       return
     }
 
@@ -1082,7 +1112,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
 
     // The card binding lands once the pane is labelled and booted: herdr's
     // chrome then shows Cookrew's card name and role instead of a raw shell.
-    if (spec.card) this.reportPaneCardTo(namedPane, spec.card)
+    if (spec.card) {
+      this.reportPaneCardTo(namedPane, spec.card)
+      this.nameAgentOn(namedPane.pane_id, spec.card.title)
+    }
   }
 
   /**
@@ -1107,6 +1140,108 @@ export class HerdrHostMultiplexer implements Multiplexer {
       '--token', `cookrew_workspace=${card.workspace}`,
       '--token', `cookrew_cwd=${card.cwd}`
     ])
+  }
+
+  /**
+   * The pane's TAB wears the card's name too, when the pane has it to itself.
+   *
+   * The pane title follows a rename (reportPaneCard), but a tab is labelled
+   * once, when it is made — Alma's service gives every Cookrew pane its own
+   * tab named after the card's title at that moment — and kept that label
+   * through every rename after (measured: a card renamed from a Chinese
+   * prompt still sat in a tab labelled "Finch"). A tab holding several panes is
+   * shared, and names none of them. Display-only, best effort.
+   */
+  renameTab(name: string, label: string): void {
+    this.renameTabOf(this.paneFor(name), label)
+  }
+
+  /**
+   * A rename's whole herdr half — the tab and herdr's agent name — off ONE
+   * pane listing: every herdr call is a synchronous fork on the main thread.
+   */
+  followRename(name: string, label: string): void {
+    const pane = this.paneFor(name)
+    if (!pane) return
+    this.renameTabOf(pane, label)
+    this.nameAgentOn(pane.pane_id, label)
+  }
+
+  private renameTabOf(pane: HerdrPane | null, label: string): void {
+    const tabId = pane?.tab_id
+    if (!tabId || label.length === 0) return
+    try {
+      const tab = parseEnvelope(this.herdr(['tab', 'get', tabId]))?.tab as
+        | { pane_count?: number; label?: string }
+        | undefined
+      if (tab?.pane_count !== 1 || tab.label === label) return
+      this.quiet(['tab', 'rename', tabId, label])
+    } catch {
+      // Best effort by contract — the label is chrome, never control flow.
+    }
+  }
+
+  /**
+   * herdr's own name for the agent follows the card's (herdr-agent-name.ts):
+   * `herdr agent get|prompt|wait <name>` then reach the card by the name it
+   * wears. A card name herdr cannot hold clears herdr's, so it never keeps a
+   * name the card gave up. Display-only, best effort, like the pane title.
+   */
+  nameAgent(name: string, cardName: string): void {
+    const pane = this.paneFor(name)
+    if (pane) this.nameAgentOn(pane.pane_id, cardName)
+  }
+
+  /** The name each pane's agent was last given, by the card name it came from. */
+  private readonly agentNames = new Map<string, { card: string; name: string }>()
+
+  /**
+   * One fork in the usual case. herdr refuses a name another live agent
+   * wears, and only then are the live names read for a free suffix. The name
+   * a pane was given last is tried first, so a card that lost a clash once
+   * keeps its suffix on every later attach instead of losing it again.
+   */
+  private nameAgentOn(paneId: string, cardName: string): void {
+    const base = herdrAgentName(cardName)
+    if (base === null) {
+      this.agentNames.delete(paneId)
+      this.quiet(['agent', 'rename', paneId, '--clear'])
+      return
+    }
+    const last = this.agentNames.get(paneId)
+    const first = last?.card === cardName ? last.name : base
+    if (this.tryAgentName(paneId, first)) {
+      this.agentNames.set(paneId, { card: cardName, name: first })
+      return
+    }
+    try {
+      const agents = (parseEnvelope(this.herdr(['agent', 'list']))?.agents ?? []) as {
+        pane_id?: string
+        name?: string | null
+      }[]
+      const taken = new Set(
+        agents.filter((a) => a.pane_id !== paneId && typeof a.name === 'string').map((a) => a.name as string)
+      )
+      const free = uniqueHerdrAgentName(base, taken)
+      if (free !== first && this.tryAgentName(paneId, free)) {
+        this.agentNames.set(paneId, { card: cardName, name: free })
+        return
+      }
+    } catch {
+      // Fall through: the name could not be given.
+    }
+    // Whatever refused it, the pane must not keep a name the card gave up.
+    this.agentNames.delete(paneId)
+    this.quiet(['agent', 'rename', paneId, '--clear'])
+  }
+
+  private tryAgentName(paneId: string, name: string): boolean {
+    try {
+      this.herdr(['agent', 'rename', paneId, name])
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -1409,6 +1544,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // So: retype ONLY while the ROOT process is still a bare shell (positive
     // evidence the boot has not begun), a full beat apart, with ctrl+u making
     // each attempt self-cleaning.
+    //
+    // A bare root is ALSO what a shell still in its rc init looks like (11-01:
+    // an oh-my-zsh compinit held a fresh pane for 10-30 s). Its keys were not
+    // dropped, they are queued, and the terminal echoes them — so a boot line
+    // still standing last on the screen is waiting its turn, and is not retyped.
     const deadline = Date.now() + this.settleMs * 6
     const waitABeat = this.pollBackoff()
     type()
@@ -1417,11 +1557,34 @@ export class HerdrHostMultiplexer implements Multiplexer {
       const seen = this.paneRuns(paneId, expected, spec.sessionName)
       if (seen === 'agent') return
       if (seen === 'shell' && Date.now() - lastTypedAt >= this.settleMs) {
-        type()
+        if (!this.bootLineWaiting(paneId, spec.sessionName)) type()
         lastTypedAt = Date.now()
       }
       if (Date.now() >= deadline) return
       waitABeat()
+    }
+  }
+
+  /**
+   * Is this session's boot line the last thing the pane shows? Then the shell
+   * has not read it yet: the terminal echoed it and nothing came after. A
+   * prompt drawn under it means the shell is past its rc and the line is gone
+   * (run, or flushed with the rest of the typeahead), and so does a dead
+   * agent's line on a restored husk. Unknown counts as no, which retypes
+   * exactly as before: the boot script's typeahead flush keeps a stacked line
+   * out of the agent either way.
+   */
+  private bootLineWaiting(paneId: string, sessionName: string): boolean {
+    try {
+      const screen = this.herdr(['pane', 'read', paneId, '--source', 'recent-unwrapped'])
+      const last = screen
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .pop()
+      return last?.includes(`boot-${sessionName}.sh`) ?? false
+    } catch {
+      return false
     }
   }
 
@@ -1611,6 +1774,25 @@ export class HerdrHostMultiplexer implements Multiplexer {
     try {
       return await this.runAsync(
         ['pane', 'read', pane.pane_id, '--source', 'recent-unwrapped'],
+        5000
+      )
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The pane's recent history in colour, wrapped at its width (`recent`, not
+   * `recent-unwrapped`: a viewer lays it out row for row). Measured on a
+   * busy agent: 1000 lines are ~82 KB and ~0.5 s through the CLI — which is
+   * why viewers fetch it ahead of a scroll, never during one.
+   */
+  async historyAnsiAsync(name: string, lines: number): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.runAsync(
+        ['pane', 'read', pane.pane_id, '--source', 'recent', '--ansi', '--lines', String(Math.max(1, Math.floor(lines)))],
         5000
       )
     } catch {

@@ -154,3 +154,32 @@ describe('the CLI ask lights the cable from the caller pane', () => {
     expect(cmdAsk).toContain('{ text: prompt, origin: me.id }')
   })
 })
+
+describe('round two: notes and browsers light the cable by direction', () => {
+  const source = readFileSync(path.join(__dirname, '..', 'src', 'main', 'socket-server.ts'), 'utf8')
+  const fn = (name: string): string => source.slice(source.indexOf(`function ${name}(`), source.indexOf('\n}\n', source.indexOf(`function ${name}(`)))
+  const cmdNote = fn('cmdNote')
+  const cmdBrowser = fn('cmdBrowser')
+
+  it('a note read runs note → agent; a write or edit runs agent → note; create and delete light nothing', () => {
+    expect(cmdNote).toContain("deps.signal?.({ from: note.id, to: me.id, kind: noteVerbKind('read') ?? 'read' })")
+    expect(cmdNote).toContain("deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })")
+    expect(cmdNote).toContain("deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('edit') ?? 'write' })")
+    const createCase = cmdNote.slice(cmdNote.indexOf("case 'create'"), cmdNote.indexOf("case 'read'"))
+    const deleteCase = cmdNote.slice(cmdNote.indexOf("case 'delete'"))
+    expect(createCase).not.toContain('deps.signal')
+    expect(deleteCase).not.toContain('deps.signal')
+  })
+
+  it('a note signal fires only after the write landed, not before a locked note refuses', () => {
+    const writeCase = cmdNote.slice(cmdNote.indexOf("case 'write'"), cmdNote.indexOf("case 'edit'"))
+    expect(writeCase.indexOf('deps.store.writeNote')).toBeLessThan(writeCase.indexOf('deps.signal'))
+    expect(writeCase.indexOf('is locked')).toBeLessThan(writeCase.indexOf('deps.signal'))
+  })
+
+  it('a browser verb lights after it ran, by browserVerbKind, resolved to the browser the engine drove', () => {
+    expect(cmdBrowser.indexOf('await deps.browserCommand(request.args, me.id)')).toBeLessThan(cmdBrowser.indexOf('browserVerbKind('))
+    expect(cmdBrowser).toContain("deps.store.nodeByName(name, 'browser')")
+    expect(cmdBrowser).toContain("kind === 'write' ? { from: me.id, to: browser.id, kind } : { from: browser.id, to: me.id, kind }")
+  })
+})

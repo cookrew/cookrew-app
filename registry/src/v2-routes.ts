@@ -24,6 +24,7 @@ import {
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach } from './v2-reach'
+import { fleetRow } from './v2-fleet'
 import { verifyHelloClaim } from './hello-verify'
 import { callerAddress } from './v2-limiter'
 import { passwordGate } from './v2-hash-gate'
@@ -646,7 +647,19 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // ONLY THIS ACCOUNT'S. Any device of it may read them — that is the whole
     // point of the picker — but the answer is built from the signed-in
     // account and never from anything the caller named.
-    v2Json(response, 200, account.desktops.map((desktop) => desktopBody(desktop, hasNames(ctx)(desktop.deviceId))))
+    // STRATA: each row is also a FleetMachine (src/shared/strata.ts) — online
+    // from the relay, the base the shell reaches it under, and its profile.
+    // Additive: every member a client read before is still there.
+    const presence = ctx.presence?.(account.username) ?? new Map()
+    const now = Date.now()
+    v2Json(
+      response,
+      200,
+      account.desktops.map((desktop) => ({
+        ...desktopBody(desktop, hasNames(ctx)(desktop.deviceId)),
+        ...fleetRow(account.username, desktop, presence.get(desktop.deviceId), now)
+      }))
+    )
     return
   }
   // REACH v2.1 — the Mac's own certificate. Before /open, because both are
@@ -691,6 +704,8 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     const out = v2.accounts.putDesktop(account.username, deviceId, {
       name: body.value.name,
       workspaces: body.value.workspaces,
+      profile: body.value.profile,
+      appVersion: body.value.appVersion,
       ...(body.value.doors === undefined ? {} : { doors: body.value.doors }),
       ...(reach === undefined ? {} : { reach })
     })

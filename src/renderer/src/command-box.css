@@ -1,0 +1,154 @@
+/* THE ONE BOX (route program R3): the command line to Sous and the HITL inbox,
+   one surface. Desktop: ⌘K floats it above the dock. Phone: it is the bottom bar. */
+.cmd {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  width: min(760px, 92vw);
+  z-index: 58;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+.cmd-rows {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.cmd-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto 14px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft, rgba(0, 0, 0, 0.12));
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cmd-row:last-child { border-bottom: 0; }
+.cmd-row:hover, .cmd-row:focus-visible { background: var(--amber-soft, #fff3b0); outline: none; }
+.cmd-row .k { font-size: 14px; text-align: center; }
+.cmd-row .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-row .who b { font-weight: 700; margin-right: 6px; }
+.cmd-row .who span { color: var(--muted, #6b665c); }
+.cmd-row .wait { color: var(--muted, #6b665c); white-space: nowrap; }
+.cmd-row .blocks { font-size: 11px; white-space: nowrap; color: var(--ink); border: 1.5px solid var(--ink); padding: 1px 6px; }
+.cmd-row .blocks:empty { display: none; border: 0; }
+.cmd-row .go { color: var(--muted, #6b665c); }
+.cmd-row.served .who b::after { content: ' · seat'; color: var(--violet, #9b8acb); font-weight: 400; }
+.cmd-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.cmd-field .key {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border: 1.5px solid var(--ink);
+  color: var(--ink);
+}
+.cmd-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.cmd-field input::placeholder { color: var(--muted, #6b665c); }
+.cmd-field .busy { flex: none; color: var(--muted, #6b665c); }
+.cmd-echo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 7px 12px;
+  border: 2px solid var(--ink);
+  background: var(--amber, #ffd600);
+  color: #2d2a20;
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.cmd-echo.said { background: var(--paper); color: var(--ink); }
+.cmd-echo.refused { background: var(--paper); color: var(--danger, #c0392b); }
+.cmd-echo .line { flex: 1; min-width: 0; }
+.cmd-echo .hold { font-size: 11px; white-space: nowrap; color: inherit; opacity: 0.8; }
+.cmd-echo button {
+  border: 1.5px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.cmd-alts { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+.cmd-alts button { font-size: 12px; }
+
+/* The phone (a keyboard's ⌘K; the dock's SOUS button is gone, 2026-11-01): the box is a
+   sheet along the bottom, above the safe area, lifted by the keyboard the
+   way the dock is; the rows fold to three; its own ✕ closes it. Parked there
+   permanently it covered the dock's tool and preset rows (IMG_3770). */
+.cmd.phone {
+  left: 0;
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  transform: none;
+  width: auto;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--cream, #faf8f4);
+  border-top: 2px solid var(--ink);
+  z-index: 70;
+}
+.cmd.phone .cmd-rows, .cmd.phone .cmd-field, .cmd.phone .cmd-echo { box-shadow: none; }
+.cmd.phone .cmd-row { grid-template-columns: 18px minmax(0, 1fr) auto 14px; }
+.cmd.phone .cmd-row .blocks { display: none; }
+.cmd.phone .cmd-field .key { display: none; }
+.cmd.phone .cmd-field input { font-size: 16px; }
+.cmd.phone .cmd-close { flex: none; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); font: inherit; font-size: 13px; padding: 2px 8px; cursor: pointer; }
+
+/* HP: how the decision is held, and the distinct act for an exposed one. */
+.cmd-echo .mode { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 1px 6px; border: 1.5px solid currentColor; white-space: nowrap; }
+.cmd-echo[data-mode="paused"] { background: var(--cream, #faf8f4); color: var(--ink); }
+.cmd-echo[data-mode="question"], .cmd-echo[data-mode="answer"] { background: var(--paper); color: var(--ink); }
+.cmd-boundary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 2px solid #b7791f;
+  background: #fff3b0;
+  color: #5b4300;
+}
+.cmd-boundary .line { flex: 1; min-width: 0; }
+.cmd-boundary .send-anyway { border: 2px solid #b7791f; background: var(--amber, #ffd600); color: #2d2a20; font-weight: 700; letter-spacing: 0.06em; }
+.cmd-boundary .send-anyway:focus-visible { outline: 3px solid var(--ink); outline-offset: 1px; }
+.cmd-draft { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted, #6b665c); white-space: nowrap; }
+.cmd-draft button { border: 1.5px solid currentColor; background: transparent; color: inherit; font: inherit; font-size: 11px; padding: 1px 6px; cursor: pointer; }
+/* A sous row: the proposal on one line, and its act and DISMISS as buttons of their own. */
+.cmd-row[data-kind="sous"] { grid-template-columns: 18px minmax(0, 1fr) auto auto auto; cursor: default; }
+.cmd-row[data-kind="sous"] .who span { font-style: italic; }
+.cmd-row .act, .cmd-row .dismiss { border: 1.5px solid var(--ink); background: transparent; color: var(--ink); font: inherit; font-size: 11px; letter-spacing: 0.06em; padding: 2px 8px; cursor: pointer; }
+.cmd-row .act:hover, .cmd-row .dismiss:hover { background: var(--amber-soft, #fff3b0); }
+.cmd-row .dismiss { color: var(--muted, #6b665c); border-color: var(--muted, #6b665c); }

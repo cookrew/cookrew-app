@@ -1,0 +1,1099 @@
+/* ---- THE ONE BAR (Header.tsx) ----
+   The route on the left (HeaderRoute.tsx), the function bar on the right:
+   the view switch, ⋯ (HeaderMore.tsx) and the avatar. The bar's own box — height, line, layer, drag region — is the
+   .cr-header rule in styles.css; this file is what sits on it. */
+
+.cr-header {
+  gap: 12px;
+}
+
+/* ---- the route: device / workspace / agent ---- */
+
+.cr-route {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.cr-route-step {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* The device gives first, then the workspace; the agent is what you came for. */
+.cr-route-device {
+  flex-shrink: 3;
+}
+
+.cr-route-workspace {
+  flex-shrink: 2;
+}
+
+.cr-route-sep {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  color: var(--muted);
+}
+
+.cr-route-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1.5px solid transparent;
+  border-radius: 3px;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cr-route-btn:hover {
+  background: var(--amber-soft);
+  border-color: var(--line);
+}
+
+/* The step whose level is on screen. A tap on it is still a way out: on the
+   workspace choice the device step goes to all the devices. */
+.cr-route-btn[aria-current='page'] {
+  background: var(--cream-md);
+  border-color: var(--line);
+}
+
+.cr-route-btn .cr-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.cr-route-label {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-route-emoji {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* The phone's path, as the dot of the badge it was (PathBadge.tsx). */
+.cr-route-path {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* The open agent: where you are, so a name and not a button. Drag stays off
+   it, or its full-name tooltip never shows on the desktop. */
+.cr-route-here {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 3ch;
+  padding: 3px 6px;
+  border: 1.5px solid var(--line);
+  border-radius: 3px;
+  background: var(--cream-md);
+  -webkit-app-region: no-drag;
+}
+
+.cr-route-here .cr-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+/* ---- the function bar ---- */
+
+.cr-fn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The ⋯ button wears the switch's frame, so the bar reads as one row of
+   controls rather than a switch with strays beside it. */
+.cr-more {
+  position: relative;
+  display: flex;
+}
+
+.cr-more-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cr-more-btn:hover,
+.cr-more-btn.on {
+  background: var(--amber-soft);
+}
+
+.cr-more-btn .cr-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.cr-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 250px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+}
+
+.cr-more-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.cr-more-item,
+.cr-more-row .cr-routing-entry {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/* The chip hid its word on a phone (routing-panel.css); in a menu row the word is the row. */
+.cr-more-row .cr-routing-entry span.word {
+  display: inline;
+}
+
+.cr-more-item:hover,
+.cr-more-row .cr-routing-entry:hover {
+  background: var(--amber-soft);
+}
+
+.cr-more-item .cr-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.cr-more-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cr-more-item kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.cr-more-item.danger:hover {
+  background: var(--rose);
+  color: var(--cream-hi);
+}
+
+/* The views group: the stage, then the three it replaced. */
+.cr-more-group {
+  margin-top: 4px;
+  padding: 8px 8px 3px;
+  border-top: 1.5px solid var(--line);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cr-more-item.on {
+  background: var(--amber);
+}
+
+.cr-more-item.deprecated .cr-more-label {
+  color: var(--muted);
+}
+
+.cr-more-tag {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid var(--line-soft, var(--line));
+  font-size: 7.5px;
+  color: var(--muted);
+}
+
+/* Away on a deprecated view: the way back to the stage, on the bar. */
+.cr-fn-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px 0 6px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber);
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cr-fn-stage .cr-icon {
+  width: 11px;
+  height: 11px;
+}
+
+/* The path badge inside its row: the same dot and word, without the button frame. */
+.cr-more-item .cr-path {
+  height: 20px;
+  padding: 0 6px;
+  box-shadow: none;
+  cursor: inherit;
+}
+
+/* ---- narrow: icons before words ----
+   The route keeps its icons and gives its words in order of how little they
+   carry — the device's name first (the dot and the icon say which desktop),
+   then the workspace's name down to a few letters (its icon says which); the
+   agent's name keeps the most. The function bar gives nothing: every item
+   on it moves or acts. */
+@media (max-width: 700px) {
+  .cr-header {
+    gap: 8px;
+  }
+
+  .cr-route-device .cr-route-label {
+    display: none;
+  }
+
+  .cr-fn {
+    gap: 6px;
+  }
+
+  /* THE DIAL GIVES BEFORE THE NAMES (owner, 2026-11-01, Samsung Browser: with
+     the zoomed agent's model dial and LIVE on the bar, the route read "C." /
+     "L..", and the device's dot, icon and the workspace's icon stood on each
+     other). The function bar never shrank, so every pixel it took came out
+     of the names. Now the route has a floor it does not go under — room for
+     the device's icon and a few letters of each name, never more than the
+     bar leaves the function bar's fixed parts (LIVE, the board's magnifier,
+     ⋯, the avatar: ~166, the dial's 28 floor and the gaps) — and grows past it into whatever
+     is free; the function bar takes the rest, and in it only the zoom slot
+     gives, so the dial's model name is what ellipsizes. With nothing
+     zoomed the function bar is small and the route has the row. The
+     device, its label already gone, keeps its icons whole. */
+  .cr-route {
+    flex: 1 0 min(200px, calc(100vw - 232px));
+  }
+
+  .cr-route-device {
+    flex-shrink: 0;
+  }
+
+  .cr-fn {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .cr-fn > :not(.cr-zoom-slot) {
+    flex-shrink: 0;
+  }
+
+  .cr-zoom-slot {
+    flex: 0 1 auto;
+  }
+
+  .cr-tune-menu-btn {
+    min-width: 28px;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 480px) {
+  .cr-route-btn {
+    padding: 3px 4px;
+    gap: 4px;
+  }
+
+  .cr-route-sep {
+    padding: 0 2px;
+  }
+
+  /* The names take the room the bar leaves them (owner, 2026-11-02: at the phone's
+     16px the workspace read "Cookr…" with half the bar free): the route's steps
+     shrink in their order (the workspace twice as fast as the agent), each down to a few letters. */
+  .cr-route-workspace .cr-route-label {
+    max-width: none;
+    min-width: 2.5em;
+  }
+
+  .cr-route-agent .cr-route-label {
+    max-width: none;
+    min-width: 3em;
+  }
+
+  .cr-route-here {
+    padding: 3px 4px;
+    gap: 4px;
+  }
+
+  .cr-viewseg button {
+    padding: 5px 7px;
+  }
+}
+
+/* THE ZOOMED TERMINAL ON THE BAR (zoom-bar.ts). Its head is gone: one model
+   switch and CHAT/LIVE sit here left of ⋯, the rest of its head inside ⋯.
+   The slot is empty — and takes no room — with nothing zoomed. */
+.cr-zoom-slot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cr-zoom-slot:empty,
+.cr-more-zoom:empty {
+  display: none;
+}
+
+.cr-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The tune rail as ONE chip of the bar's own make: the bar's line, the bar's
+   cream, its list dropping DOWN from the chip instead of out to the right. */
+.cr-tune-rail.bar {
+  width: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  min-width: 0;
+}
+
+.cr-tune-rail.bar .cr-tune-chip {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  height: 28px;
+  max-width: 200px;
+  padding: 0 8px;
+  align-items: center;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+}
+
+.cr-tune-rail.bar .cr-tune-chip:hover,
+.cr-tune-rail.bar .cr-tune-dial.open .cr-tune-chip {
+  background: var(--amber-soft);
+}
+
+.cr-tune-rail.bar .cr-tune-k {
+  color: var(--ink-dim, var(--ink));
+  opacity: 0.6;
+}
+
+.cr-tune-rail.bar .cr-tune-v {
+  font-size: 11px;
+  min-width: 0;
+}
+
+/* The turn line and notes stay in the chip's title on the bar; a 28px chip
+   with three lines in it is a rail again. */
+.cr-tune-rail.bar .cr-tune-flag {
+  display: none;
+}
+
+.cr-tune-rail.bar .cr-tune-list {
+  top: calc(100% + 6px);
+  left: auto;
+  right: 0;
+  width: 220px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  z-index: 60;
+}
+
+/* "mid-turn — the dials wait for the reply" is a fact about PICKING: the list's
+   rows say it (disabled) when the chip is opened. Hung open under a bar chip it
+   sat over the transcript for the whole turn. An error still shows: it is an
+   alert, and it goes away. */
+.cr-tune-rail.bar .cr-tune-locked {
+  display: none;
+}
+
+/* Opened while locked: the sentence sits above the (disabled) rows, so a tap
+   that does nothing says why. */
+.cr-tune-rail.bar:has(.cr-tune-dial.open) .cr-tune-locked {
+  display: block;
+  width: 220px;
+}
+
+.cr-tune-rail.bar:has(.cr-tune-locked):has(.cr-tune-dial.open) .cr-tune-list {
+  top: calc(100% + 52px);
+}
+
+.cr-tune-rail.bar .cr-tune-locked,
+.cr-tune-rail.bar .cr-tune-error {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  max-width: 260px;
+  padding: 4px 8px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  font-size: 11px;
+  z-index: 60;
+}
+
+.cr-zoom-bar .cr-tune-rail.bar {
+  position: relative;
+}
+
+/* ⋯'s rows for the zoomed card: the translate row is the button plus its label. */
+.cr-zoom-translate {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 2px 8px 2px 2px;
+  font-family: var(--font-pixel);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cr-more-zoom {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.cr-more-zoom > .cr-more-group:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+/* The translate row's button is the row's icon, not a framed button. */
+.cr-zoom-translate .cr-btn.icon {
+  width: 22px;
+  height: 22px;
+  border: none;
+  box-shadow: none;
+  background: none;
+}
+
+/* The embed (no One Bar) keeps one slim row for the same controls. */
+.popout-header.slim {
+  justify-content: flex-end;
+  padding: 4px 8px;
+}
+
+@media (max-width: 480px) {
+  /* A phone bar holds the route, the switch, CHAT/LIVE, ⋯ and the avatar: the
+     chip shows the value only, and the agent's name gives up a little room. */
+  .cr-tune-rail.bar .cr-tune-k {
+    display: none;
+  }
+
+  .cr-tune-rail.bar .cr-tune-chip {
+    max-width: 76px;
+    padding: 0 5px;
+  }
+
+  .cr-tune-rail.bar .cr-tune-v {
+    font-size: 10px;
+  }
+
+  .cr-zoom-bar {
+    gap: 4px;
+  }
+
+  .cr-zoom-bar .cr-viewseg button {
+    padding: 5px 5px;
+    letter-spacing: 0.04em;
+  }
+}
+
+/* THE ONE TUNE BUTTON (TuneMenu.tsx): model · effort on the bar, the whole
+   rail — MDL, EFF, RTE — in the panel it drops. */
+.cr-tune-menu {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.cr-tune-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  max-width: 220px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.cr-tune-menu-btn:hover,
+.cr-tune-menu.open .cr-tune-menu-btn {
+  background: var(--amber-soft);
+}
+
+.cr-tune-menu-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-tune-menu-effort {
+  flex: 0 0 auto;
+  opacity: 0.65;
+}
+
+.cr-tune-menu-caret {
+  flex: 0 0 auto;
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.cr-tune-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 260px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  z-index: 60;
+  border: 2px solid var(--line);
+  box-shadow: 3px 3px 0 var(--line);
+  background: var(--phos-bg);
+}
+
+/* The rail as rows: label and value on one line, each list opening in place. */
+.cr-tune-rail.menu {
+  width: 100%;
+  border: none;
+  padding: 6px;
+  gap: 6px;
+}
+
+.cr-tune-rail.menu .cr-tune-chip {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+}
+
+.cr-tune-rail.menu .cr-tune-k {
+  flex: 0 0 30px;
+}
+
+.cr-tune-rail.menu .cr-tune-v {
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+
+.cr-tune-rail.menu .cr-tune-list {
+  position: static;
+  width: auto;
+  margin-top: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  box-shadow: none;
+}
+
+/* ONE toggle for the transcript: it reads what is showing; a tap flips it. */
+.cr-look-toggle {
+  flex: 0 0 auto;
+  height: 28px;
+  min-width: 52px;
+  padding: 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber, #f2c200);
+  color: var(--ink-on-amber, #1b1712);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.cr-look-toggle.look-log {
+  background: var(--ink);
+  color: var(--cream-hi);
+}
+
+.cr-look-toggle.look-live {
+  background: var(--cream-hi);
+  color: var(--ink);
+}
+
+/* In the transcript's own top-right corner (owner, 2026-11-01), level with the
+   full view's "browsers & notes" head (zoom/full-views.css · .zv-fv-arts-head:
+   18px down, 24px tall), in that head's make: mono, hairline, quiet. */
+.lod-overlay .popout-main {
+  position: relative;
+}
+
+.cr-look-toggle.cr-look-corner {
+  position: absolute;
+  top: 18px;
+  /* Clear of the checkpoint rail's line, which runs down the box's right edge. */
+  right: 24px;
+  z-index: 6;
+  height: 24px;
+  min-width: 48px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  background: var(--sumi-card, var(--cream-hi));
+  color: var(--sumi-ink, var(--ink));
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+}
+
+.cr-look-toggle.cr-look-corner:hover {
+  background: var(--sumi-gold-soft, var(--amber-soft));
+}
+
+.cr-look-toggle.cr-look-corner.look-log {
+  background: var(--sumi-ink, var(--ink));
+  color: var(--sumi-card, var(--cream-hi));
+}
+
+.cr-look-toggle.cr-look-corner.look-live {
+  box-shadow: inset 0 0 0 1px var(--sumi-seal, var(--amber-deep));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-look-toggle.cr-look-corner:focus-visible {
+  outline: 2px solid var(--sumi-seal, var(--amber-deep));
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .cr-tune-menu-btn {
+    max-width: 112px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  /* The effort is the dial's second word: in a dial cut to a few letters it
+     left the model none (2026-11-01). It is still in the panel the dial opens. */
+  .cr-tune-menu-effort {
+    display: none;
+  }
+
+  .cr-look-toggle {
+    min-width: 44px;
+    padding: 0 6px;
+  }
+
+  .cr-tune-menu-panel {
+    position: fixed;
+    top: 56px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+}
+
+/* ---- THE BOARD, AS A SEARCH BOX (BoardSearch.tsx, owner 2026-11-01) ----
+   Left of ⋯, in ⋯'s frame and height, so the function bar reads as one row.
+   It widens while open; the board itself hangs under the bar's right edge,
+   portalled to <body> above the pets (55) and under the sheets (60+). */
+.cr-board-search {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cr-board-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 210px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--cream-hi);
+  color: var(--muted);
+  cursor: text;
+  -webkit-app-region: no-drag;
+  transition: width 160ms ease;
+}
+
+.cr-board-search.open .cr-board-box {
+  width: 320px;
+  background: var(--cream);
+  color: var(--ink);
+}
+
+.cr-board-box > .cr-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.cr-board-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.cr-board-input::placeholder {
+  color: var(--dim);
+}
+
+/* The box draws its own ×: the engine's cancel glyph would be a second one. */
+.cr-board-input::-webkit-search-cancel-button,
+.cr-board-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.cr-board-kbd {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--muted);
+}
+
+.cr-board-badge {
+  flex: 0 0 auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--rose);
+  color: var(--cream-hi);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cr-board-clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.cr-board-clear:hover {
+  background: var(--cream-lo);
+  color: var(--ink);
+}
+
+.cr-board-clear .cr-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.cr-board-pop {
+  position: fixed;
+  right: 12px;
+  z-index: 58;
+  width: min(560px, calc(100vw - 24px));
+  display: flex;
+  animation: cr-board-drop 140ms ease-out;
+}
+
+@keyframes cr-board-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cr-board-box {
+    transition: none;
+  }
+
+  .cr-board-pop {
+    animation: none;
+  }
+}
+
+.cr-board-loading {
+  width: 100%;
+  padding: 14px;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The roster's panel, hanging: as wide as the drop, as tall as the window
+   leaves above the dock. Its own field is the box on the bar. */
+.roster-pop {
+  display: flex;
+  width: 100%;
+}
+
+.roster-panel.popover {
+  width: 100%;
+  max-height: min(72vh, 720px);
+  padding: 10px 12px 12px;
+}
+
+.roster-panel.popover .roster-list {
+  min-height: 0;
+}
+
+/* A desktop narrow enough to crowd the route: the box keeps ⋯'s footprint
+   plus a few letters, and still opens wide. */
+@media (max-width: 900px) {
+  .cr-board-box {
+    width: 150px;
+  }
+
+  .cr-board-kbd {
+    display: none;
+  }
+}
+
+/* PHONE: a magnifier the size of ⋯. Open, the box lies across the whole bar,
+   over the route, and the board drops edge to edge under it. */
+@media (max-width: 700px) {
+  .cr-board-box {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    position: relative;
+  }
+
+  .cr-board-box > .cr-icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .cr-board-search:not(.open) .cr-board-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .cr-board-search:not(.open) .cr-board-badge {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    min-width: 14px;
+    height: 14px;
+    font-size: 9px;
+  }
+
+  .cr-board-search.open .cr-board-box {
+    position: absolute;
+    z-index: 2;
+    left: 8px;
+    right: 8px;
+    top: 50%;
+    width: auto;
+    height: 32px;
+    padding: 0 6px 0 10px;
+    gap: 8px;
+    justify-content: flex-start;
+    transform: translateY(-50%);
+  }
+
+  /* 16px: iOS zooms the page into any field set smaller. */
+  .cr-board-input {
+    font-size: 16px;
+  }
+
+  .cr-board-pop {
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+
+  .roster-panel.popover {
+    max-height: calc(100dvh - 140px - var(--kb-inset, 0px));
+  }
+}
+
+/* ---- AN AGENT'S FULL VIEW ON A PHONE (owner, 2026-11-02) ----
+   The bar is "‹ face name · state": the device and workspace steps fold into
+   ‹ (the round ‹'s own step out), and the full view draws who it is into the
+   slot (route-slot.ts) — so its head below keeps only its tools. Above a
+   phone the route is the route, and these two stay hidden. */
+.cr-route-back,
+.cr-route-full {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .cr-route.has-full .cr-route-device,
+  .cr-route.has-full .cr-route-workspace {
+    display: none;
+  }
+
+  /* The agent's own step stays until the full view has drawn into the slot. */
+  .cr-route.has-full:has(.cr-route-full:not(:empty)) .cr-route-agent,
+  .cr-route.has-full .cr-route-agent .cr-route-sep {
+    display: none;
+  }
+
+  .cr-route.has-full .cr-route-back {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin: 0 4px 0 0;
+    padding: 0 0 3px;
+    border: 1.5px solid var(--sumi-hair-2, var(--line));
+    border-radius: 50%;
+    background: var(--sumi-card, var(--cream-hi));
+    color: var(--sumi-ink, var(--ink));
+    font: 600 20px/1 var(--sumi-serif, Georgia, serif);
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+
+  .cr-route.has-full .cr-route-full:not(:empty) {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .cr-route-face {
+    flex: none;
+    display: block;
+    width: 30px;
+    height: 30px;
+  }
+
+  .cr-route-face svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .cr-route-who {
+    min-width: 0;
+    display: grid;
+    gap: 0;
+  }
+
+  .cr-route-who b {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: var(--sumi-serif, 'Iowan Old Style', Palatino, Georgia, serif);
+    font-weight: 600;
+    line-height: 1.05;
+    color: var(--sumi-ink, var(--ink));
+  }
+
+  .cr-route-who small {
+    display: flex;
+    gap: 8px;
+    overflow: hidden;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    line-height: 1.1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sumi-muted, var(--muted));
+  }
+
+  .cr-route-who .waiting {
+    color: var(--sumi-wait, var(--danger, #c0392b));
+  }
+}

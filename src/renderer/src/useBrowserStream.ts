@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasNativeWebview, isRemoteMode } from './api'
 import { apiPath } from './api-base'
 import { tokenParam } from './auth-gate'
-import { useDataPlaneOrigin } from './use-data-plane'
+import { useDataPlaneRoute } from './use-data-plane'
+import { openWebSocket } from './rtc-plane'
+import type { UseStatus } from '../../shared/use-signal'
+import { writeClipboardText } from './clipboard'
 import {
   DESKTOP_STREAM_ORIGIN,
   clampViewport,
@@ -10,9 +13,9 @@ import {
   inputWithRevision,
   nextStreamStatus,
   parseStreamMessage,
+  reconnectDelayMs,
   streamCanDrive,
   streamInputAllowed,
-  socketUrl,
   streamPath,
   streamSupported,
   streamUrl,
@@ -29,6 +32,12 @@ import {
 
 /** No first frame within this long after the socket opens -> use the renderer fallback. */
 const FIRST_FRAME_TIMEOUT_MS = 4000
+/**
+ * The phone's, longer: its socket may be bridged through the relay
+ * (rtc-plane.ts · openWebSocket), where the first frame is a whole JPEG over
+ * the slowest path the companion has.
+ */
+const REMOTE_FIRST_FRAME_TIMEOUT_MS = 10_000
 const VIEWPORT_REPORT_DEBOUNCE_MS = 200
 
 /** No frame for this long -> treat the view as NOT live (frozen), input OFF. */
@@ -51,6 +60,10 @@ export interface BrowserStream {
   agentHeld: boolean
   transitioning: boolean
   controlAvailable: boolean
+  /** A use card's device: live, or offline and why (pixel-instance.ts). Null on a web card. */
+  deviceStatus: UseStatus | null
+  /** The socket dropped and a new one is being dialled; the last frame stays on screen. */
+  reconnecting: boolean
   /** Stable current frame permits input; decode/freshness is view-owned. */
   canDrive: boolean
   send: (msg: CastInputMsg) => void
@@ -81,7 +94,7 @@ export function useBrowserStream(
   viewport: ViewportPreference
 ): BrowserStream {
   const client = currentClient()
-  const planeOrigin = useDataPlaneOrigin()
+  const planeRoute = useDataPlaneRoute()
   const viewportReady = measuredViewport(viewport)
   const [status, setStatus] = useState<StreamStatus>('idle')
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
@@ -98,6 +111,12 @@ export function useBrowserStream(
   const [agentHeld, setAgentHeld] = useState(false)
   const [transitioning, setTransitioning] = useState(false)
   const [controlAvailable, setControlAvailable] = useState(false)
+  const [deviceStatus, setDeviceStatus] = useState<UseStatus | null>(null)
+  const [reconnectNonce, setReconnectNonce] = useState(0)
+  const [reconnecting, setReconnecting] = useState(false)
+  const attemptRef = useRef(0)
+  /** Set while a reconnect run is being prepared: it keeps the last frame instead of blanking the card. */
+  const keepFrameRef = useRef(false)
 
   const wsRef = useRef<WebSocket | null>(null)
   const gotFrameRef = useRef(false)
@@ -169,6 +188,10 @@ export function useBrowserStream(
       setAgentHeld(false)
       setTransitioning(false)
       setControlAvailable(false)
+      setDeviceStatus(null)
+      setReconnecting(false)
+      attemptRef.current = 0
+      keepFrameRef.current = false
       frameRevisionRef.current = null
       viewportRevisionRef.current = null
       liveRef.current = false
@@ -176,6 +199,8 @@ export function useBrowserStream(
       transitioningRef.current = false
       return
     }
+    const keepFrame = keepFrameRef.current
+    keepFrameRef.current = false
 
     warnedRef.current = false
     gotFrameRef.current = false
@@ -186,13 +211,16 @@ export function useBrowserStream(
     agentHeldRef.current = false
     transitioningRef.current = false
     setStatus('idle')
-    setFrameUrl(null)
-    setFrameSeq(null)
-    setFrameRevision(null)
-    setLastFrameAt(null)
+    if (!keepFrame) {
+      setFrameUrl(null)
+      setFrameSeq(null)
+      setFrameRevision(null)
+      setLastFrameAt(null)
+      setEffectiveViewport(null)
+      setEffectiveMobile(null)
+      setDeviceStatus(null)
+    }
     setLive(false)
-    setEffectiveViewport(null)
-    setEffectiveMobile(null)
     setViewportRevision(null)
     setIsOwner(null)
     setOwner(null)
@@ -220,6 +248,7 @@ export function useBrowserStream(
     let ws: WebSocket | null = null
     let deadline: ReturnType<typeof setTimeout> | null = null
     let staleTimer: ReturnType<typeof setInterval> | null = null
+    let redial: ReturnType<typeof setTimeout> | null = null
 
     const sendControl = (kind: ViewportControlKind): void => {
       const size = viewportRef.current
@@ -247,6 +276,16 @@ export function useBrowserStream(
       } catch {
         // already closing
       }
+      // Dial again, by itself. The effect re-runs on the nonce; this run's
+      // cleanup clears the timer if the card closes first.
+      const attempt = attemptRef.current
+      attemptRef.current = attempt + 1
+      setReconnecting(true)
+      redial = setTimeout(() => {
+        if (disposed) return
+        keepFrameRef.current = true
+        setReconnectNonce((n) => n + 1)
+      }, reconnectDelayMs(attempt))
     }
 
     const adoptViewportRevision = (revision: number): void => {
@@ -277,15 +316,15 @@ export function useBrowserStream(
         // server on its stable loopback address. A phone composes through
         // apiPath, which answers the relay prefix or the Mac's own trusted
         // origin depending on where the plane is pointing right now.
-        ws = new WebSocket(
+        ws =
           client === 'desktop'
-            ? streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken)
+            ? new WebSocket(streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken))
             : // THE TOKEN RIDES THE URL, because `new WebSocket(...)` cannot
               // set a header — the same constraint EventSource has, answered
               // the same way. Without it the socket is an unauthenticated
               // stream, and the desktop now refuses those (browser-cast.ts).
-              socketUrl(window.location.origin, tokenParam(apiPath(streamPath(browserId, w, h, null))))
-        )
+              // On the direct link it rides a data channel (rtc-plane.ts).
+              openWebSocket(tokenParam(apiPath(streamPath(browserId, w, h, null))))
       } catch {
         fail('error')
         return
@@ -294,7 +333,7 @@ export function useBrowserStream(
 
       deadline = setTimeout(() => {
         if (!gotFrameRef.current) fail('error')
-      }, FIRST_FRAME_TIMEOUT_MS)
+      }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
         if (!disposed && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {
@@ -316,6 +355,28 @@ export function useBrowserStream(
         if (msg.kind === 'error') {
           console.error(`[browser-stream] server error for ${browserId}: ${msg.msg}`)
           fail('error')
+          return
+        }
+
+        if (msg.kind === 'copy') {
+          // The page's copy happened inside the card's own Chrome: put it on
+          // this machine's clipboard, where the owner will paste it (page-copy.ts).
+          void writeClipboardText(msg.text).then((ok) => {
+            if (!ok) console.error(`[browser-stream] the page's copy could not reach the clipboard for ${browserId}`)
+          })
+          return
+        }
+
+        if (msg.kind === 'status') {
+          // The server is answering for a device; an offline one sends no
+          // frames on purpose, so the first-frame deadline does not apply.
+          if (deadline) {
+            clearTimeout(deadline)
+            deadline = null
+          }
+          attemptRef.current = 0
+          setReconnecting(false)
+          setDeviceStatus(msg.status)
           return
         }
 
@@ -364,6 +425,8 @@ export function useBrowserStream(
         setLive(true)
         if (!gotFrameRef.current) {
           gotFrameRef.current = true
+          attemptRef.current = 0
+          setReconnecting(false)
           if (deadline) {
             clearTimeout(deadline)
             deadline = null
@@ -377,6 +440,7 @@ export function useBrowserStream(
     return () => {
       disposed = true
       liveRef.current = false
+      if (redial) clearTimeout(redial)
       if (deadline) clearTimeout(deadline)
       if (staleTimer) clearInterval(staleTimer)
       if (ws?.readyState === WebSocket.OPEN) sendControl('release')
@@ -388,10 +452,10 @@ export function useBrowserStream(
       }
       if (wsRef.current === ws) wsRef.current = null
     }
-    // planeOrigin is a dependency and not an unused read: a switch onto the
+    // planeRoute is a dependency and not an unused read: a switch onto the
     // LAN has to drop this socket and open the new one, and a socket is the
     // one connection that cannot re-read its own URL (plane-streams.ts).
-  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeOrigin])
+  }, [browserId, open, enabled, desktopToken, advance, viewportReady, client, planeRoute, reconnectNonce])
 
   // Report the actual browser-frame content box without reconnecting the socket.
   useEffect(() => {
@@ -454,6 +518,8 @@ export function useBrowserStream(
         agentHeld,
         transitioning,
         controlAvailable,
+        deviceStatus,
+        reconnecting,
         canDrive,
         send,
         claim,
@@ -475,6 +541,8 @@ export function useBrowserStream(
         agentHeld: false,
         transitioning: false,
         controlAvailable: false,
+        deviceStatus: null,
+        reconnecting: false,
         canDrive: false,
         send,
         claim,

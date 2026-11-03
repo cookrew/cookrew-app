@@ -80,6 +80,21 @@ export interface PathReportAttempt {
   readonly hint?: 'local' | 'none'
 }
 
+/**
+ * ONE WAY OF REACHING THE MAC THAT IS NOT A FETCH — tried only on a browser
+ * whose fetches to the LAN never arrive (iOS, 2026-10-11: the Mac saw no
+ * packet from a 2.5 s probe). A socket, an image or an opaque request may be
+ * carried where a fetch is not; each is reported as what it did.
+ */
+export interface PathReportProbe {
+  readonly kind: 'socket' | 'image' | 'opaque' | 'rtc'
+  readonly name: string
+  readonly outcome: string
+  readonly ms: number | null
+}
+
+export const PATH_REPORT_MAX_PROBES = 6
+
 export interface PathReport {
   readonly at: number
   readonly plane: 'LAN' | 'TAILNET' | 'RELAY'
@@ -88,6 +103,9 @@ export interface PathReport {
   /** `Chrome 142`, `Safari 17`, `other`. */
   readonly browser: string
   readonly attempts: readonly PathReportAttempt[]
+  readonly probes?: readonly PathReportProbe[]
+  /** 'standalone' from a Home Screen web app, 'browser' from a tab (path/page-context.ts). */
+  readonly context?: 'standalone' | 'browser'
 }
 
 /** A report as the Mac keeps it: what arrived, plus who it arrived from and when. */

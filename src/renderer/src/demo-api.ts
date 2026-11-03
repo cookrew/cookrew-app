@@ -1,3 +1,5 @@
+import type { CardRouteState, RouteState } from '../../shared/route'
+import { cardRouteFixture, routeFixture } from '../../shared/route-fixture'
 import type {
   CanvasNode,
   Connection,
@@ -6,6 +8,9 @@ import type {
   WorkspaceState
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
+import { rankInbox } from '../../shared/inbox-rank'
+import { checkBrief } from '../../shared/workspace-brief'
+import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
 
 /**
@@ -94,6 +99,8 @@ const DEMO_RESPONSES: Record<string, string> = {
 /** Connections minted so far — the tie-breaker that keeps demo ids unique within a millisecond. */
 let demoConnections = 0
 
+const demoSecrets = new Map<string, { name: string; served: boolean; updatedAt: number }>()
+
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
   const metas: WorkspaceMeta[] = [
@@ -112,6 +119,48 @@ export function createDemoApi(): CookrewApi {
   const wsListeners = new Set<(l: WorkspaceList) => void>()
   const ptyListeners = new Map<string, (data: string) => void>()
   const lineBuffers = new Map<string, string>()
+  // Magpie routing with no gateway behind it: the online fixture, switchable
+  // from a fixture page through `window.__routeStatus('absent'|'offline'|'online')`
+  // so the Routing panel's states can be photographed.
+  let route: RouteState = routeFixture('online')
+  const routeListeners = new Set<(state: RouteState) => void>()
+  const sousUpdateListeners = new Set<(update: { token: string; alternates: Alternate[] }) => void>()
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as { __sousRevise?: (token: string, alternates: Alternate[]) => void }).__sousRevise = (token, alternates) => {
+      for (const listener of sousUpdateListeners) listener({ token, alternates })
+    }
+  }
+  const cardRoutes = new Map<string, CardRouteState>()
+  const cardRouteListeners = new Set<(row: { terminalId: string } & CardRouteState) => void>()
+  const routeChanged = (): void => {
+    for (const listener of routeListeners) listener(route)
+  }
+  // A read that answers late, with the state as it was when asked — the
+  // companion's GET through a slow link, for the fixture's race test.
+  let routeReadLagMs = 0
+  if (typeof window !== 'undefined') {
+    const hooks = window as unknown as { __routeStatus?: (status: RouteState['status']) => void; __routePush?: () => void; __routeReadLag?: (ms: number) => void; __routeAuto?: (on: boolean) => void }
+    hooks.__routeStatus = (status) => {
+      route = routeFixture(status)
+      routeChanged()
+    }
+    // The same state, pushed again — what main does after any probe.
+    hooks.__routePush = () => routeChanged()
+    hooks.__routeReadLag = (ms) => {
+      routeReadLagMs = ms
+    }
+    // The local tier offered (the script's printed command on the setup lines, group/auto in the catalog) or not.
+    hooks.__routeAuto = (on) => {
+      route = on
+        ? {
+            ...route,
+            models: route.models.some((m) => m.id === 'group/auto') ? route.models : [{ id: 'group/auto', displayName: 'auto', ownedBy: 'magpie', group: true, reasoning: false, levels: [], contextWindow: null }, ...route.models],
+            setup: { ...route.setup, addAutoGroupLine: 'magpie group add auto models=ollama/qwen3:32b,ollama/qwen2.5:1.5b routing=smart stays=turn' }
+          }
+        : { ...route, models: route.models.filter((m) => m.id !== 'group/auto'), setup: { ...route.setup, addAutoGroupLine: null } }
+      routeChanged()
+    }
+  }
   // Signals on the cables, with no main behind them: a fixture page (the
   // harness preview, QA) puts one on a cable through `window.__cableSignal`.
   const signalListeners = new Set<(signal: unknown) => void>()
@@ -186,6 +235,16 @@ export function createDemoApi(): CookrewApi {
       }
       return Promise.resolve({ workspaces: metas, activeId })
     },
+    setWorkspaceBrief: (id, brief) => {
+      const checked = checkBrief(brief)
+      if (!checked.ok) return Promise.reject(new Error(checked.reason))
+      const at = metas.findIndex((m) => m.id === id)
+      if (at < 0) return Promise.reject(new Error(`Workspace '${id}' not found`))
+      const { brief: _previous, ...rest } = metas[at]
+      metas[at] = checked.brief ? { ...rest, brief: checked.brief } : rest
+      wsBroadcast()
+      return Promise.resolve({ workspaces: metas, activeId })
+    },
     // Workspace v2 stubs: the demo has one in-memory dir, no git, no picker.
     removeWorkspace: () => Promise.resolve({ workspaces: metas, activeId }),
     addWorkspaceDir: () => Promise.resolve({ workspaces: metas, activeId }),
@@ -200,6 +259,15 @@ export function createDemoApi(): CookrewApi {
     laneOpen: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
     laneLand: () => Promise.resolve({ ok: false as const, reason: 'not-a-lane' as const, detail: 'not in the demo' }),
     laneClose: () => Promise.reject(new Error('Lanes need a git repo — not in the demo')),
+    // The sealed slots, in memory: the harness view draws the block with a
+    // store that forgets on reload and never had a file.
+    secretPut: (name, _value, served) => {
+      const row = { name, served, updatedAt: Date.now() }
+      demoSecrets.set(name, row)
+      return Promise.resolve(row)
+    },
+    secretList: () => Promise.resolve([...demoSecrets.values()]),
+    secretRemove: (name) => Promise.resolve(demoSecrets.delete(name)),
     laneAuto: (nodeId) => Promise.resolve(state.nodes.find((n) => n.id === nodeId) as CanvasNode),
     onWorkspaceList: (cb) => {
       wsListeners.add(cb)
@@ -284,6 +352,7 @@ export function createDemoApi(): CookrewApi {
     // No filesystem in the demo tab — attachments are a no-op.
     attachFiles: () => Promise.resolve([]),
     saveAttachmentBytes: () => Promise.resolve(''),
+    readImage: () => Promise.resolve(null),
     pickFiles: () => Promise.resolve([]),
 
     ptyInput: (terminalId, data) => {
@@ -327,6 +396,43 @@ export function createDemoApi(): CookrewApi {
 
     listActivity: () => Promise.resolve([]),
     onTerminalActivity: () => () => undefined,
+    routeState: () => {
+      const asked = route
+      return routeReadLagMs > 0 ? new Promise((resolve) => setTimeout(() => resolve(asked), routeReadLagMs)) : Promise.resolve(asked)
+    },
+    routeSetDefault: (model) => {
+      route = { ...route, defaultModel: model }
+      routeChanged()
+      return Promise.resolve(route)
+    },
+    routeSetSharedMcp: (on) => {
+      route = { ...route, sharedMcp: on }
+      routeChanged()
+      return Promise.resolve(route)
+    },
+    terminalRoute: (terminalId) =>
+      Promise.resolve(
+        cardRoutes.get(terminalId) ??
+          cardRouteFixture(route.status === 'online' ? {} : { route: 'direct', effective: null, live: null, turn: null, offline: route.status === 'offline' })
+      ),
+    terminalRouteSet: (terminalId, next) => {
+      const row = cardRouteFixture({ route: next, effective: next === 'direct' ? null : next, appliesOn: 'restart', live: null, turn: null, offline: false })
+      cardRoutes.set(terminalId, row)
+      for (const listener of cardRouteListeners) listener({ terminalId, ...row })
+      return Promise.resolve(row)
+    },
+    onRoute: (cb) => {
+      routeListeners.add(cb)
+      return () => {
+        routeListeners.delete(cb)
+      }
+    },
+    onCardRoute: (cb) => {
+      cardRouteListeners.add(cb)
+      return () => {
+        cardRouteListeners.delete(cb)
+      }
+    },
     onCableSignal: (cb) => {
       signalListeners.add(cb)
       return () => {
@@ -374,9 +480,88 @@ export function createDemoApi(): CookrewApi {
     onBrowserOpenTab: () => () => undefined,
     onBrowserPhoneViewing: () => () => undefined,
     onCmdW: () => () => undefined,
-    // No Sous in the demo: nothing to drive, so every sentence is `none`.
-    sousCommand: () => Promise.resolve({ intent: 'none' as const, spoken: '' }),
+    // Sous in the demo DECIDES but never drives: a sentence comes back as the
+    // decision the box would show (so the harness view renders the echo),
+    // and a commit answers as if the brief went out. Nothing is created.
+    sousCommand: (text) => {
+      const sentence = text.trim()
+      if (sentence === '' || /\?|？$/.test(sentence)) {
+        return Promise.resolve({ intent: 'none' as const, spoken: '' })
+      }
+      const recruit = /\b(every|all|refactor|audit|prune)\b|全部|所有|重构/i.test(sentence)
+      const decision = recruit
+        ? {
+            kind: 'recruit' as const,
+            harness: 'Codex' as const,
+            name: sentence.split(/\s+/).slice(0, 3).join(' '),
+            beside: { id: 'demo-conductor', name: 'Conductor' },
+            alternates: [
+              { kind: 'recruit' as const, id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code' as const, reasons: ['Claude Code instead'] },
+              { kind: 'ask' as const, id: 'demo-bench-0', name: 'Bench 0', reasons: ['idle', 'same repo', 'no word matched · 2h'] }
+            ],
+            reasons: ['no idle card fits the brief', 'repo-wide → Codex', 'beside Conductor, wired to it'],
+            direct: true,
+            cwd: 'repo' as const,
+            token: 'demo-decision',
+            holdMs: 2500,
+            sentence,
+            mode: 'paused' as const,
+            exposure: 2 as const,
+            exposureWhy: 'touches every file in the repo',
+            boundaries: 'push only after the check passes',
+            domain: 'repo' as const,
+            route: { route: 'group/smart', effective: null }
+          }
+        : {
+            kind: 'ask' as const,
+            target: { id: 'demo-conductor', name: 'Conductor' },
+            alternates: [
+              { kind: 'ask' as const, id: 'demo-bench-0', name: 'Bench 0', reasons: ['idle', 'same repo', 'last touched the bench'] },
+              { kind: 'recruit' as const, id: 'harness:Claude Code', name: 'Claude Code', harness: 'Claude Code' as const, reasons: ['a brief with no shape → Claude Code'] }
+            ],
+            reasons: ['idle', 'same repo', 'last touched README · 2h'],
+            recruit: { harness: 'Claude Code' as const, name: sentence.split(/\s+/).slice(0, 3).join(' '), beside: { id: 'demo-conductor', name: 'Conductor' }, direct: true },
+            token: 'demo-decision',
+            holdMs: 2500,
+            sentence,
+            mode: 'ticking' as const,
+            exposure: 1 as const,
+            exposureWhy: null,
+            boundaries: null,
+            domain: 'repo' as const,
+            route: { route: 'group/smart', effective: 'deepseek/deepseek-v4' }
+          }
+      const spoken = decision.kind === 'ask' ? `→ Conductor (${decision.reasons.join(' · ')})` : `+ Codex card · ${decision.name} (${decision.reasons.join(' · ')})`
+      return Promise.resolve({ intent: 'decide' as const, spoken, decision })
+    },
+    sousCommit: (_token, choice) =>
+      Promise.resolve({ intent: 'ask' as const, spoken: `Sent to ${choice?.target === 'demo-bench-0' ? 'Bench 0' : 'Conductor'}`, agentId: choice?.target ?? 'demo-conductor' }),
+    sousCancel: () => Promise.resolve(true),
+    // HP: a fixture page pushes a late revision through `window.__sousRevise(token, alternates)`.
+    onSousDecisionUpdated: (cb) => {
+      sousUpdateListeners.add(cb)
+      return () => {
+        sousUpdateListeners.delete(cb)
+      }
+    },
+    inboxAct: () => Promise.resolve({ ok: true }),
+    inboxDismiss: () => Promise.resolve({ ok: true }),
     onUiCommand: () => () => undefined,
+    // The inbox the harness view renders: one of each signal, on the demo's own cards.
+    inbox: () =>
+      Promise.resolve(
+        rankInbox(
+          [
+            { kind: 'waiting', nodeId: 'demo-conductor', nodeName: 'Conductor', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'asks you — "replace the Chinese headings too?"', since: Date.now() - 4 * 60_000, served: false, blockedDownstream: 2 },
+            { kind: 'secret', nodeId: 'demo-note', nodeName: 'Bench 0', nodeKind: 'note', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'needs STRIPE_SECRET_KEY — seal it', since: Date.now() - 60_000, served: false, blockedDownstream: 1, slot: 'STRIPE_SECRET_KEY', noteId: 'demo-note' },
+            { kind: 'dispatch', nodeId: 'demo-bench-1', nodeName: 'Bench 1', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'delivery failed — owner is composing', since: Date.now() - 12 * 60_000, served: false, blockedDownstream: 0 },
+            { kind: 'sous', id: 'sous-1', nodeId: 'demo-bench-2', nodeName: 'Bench 2', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'the brief never reached the card', since: Date.now() - 3 * 60_000, served: false, blockedDownstream: 0, action: 'retry', dismissable: true, text: 'Audit every README for stale install lines' },
+            { kind: 'sous', id: 'sous-2', nodeId: 'demo-conductor', nodeName: 'Sous', nodeKind: 'terminal', workspaceId: 'demo', workspaceName: 'Cookrew Demo', reason: 'an answer', since: Date.now() - 60_000, served: false, blockedDownstream: 0, action: null, dismissable: true, text: 'Three cards are idle in this repo; Forge last touched README.' }
+          ],
+          Date.now()
+        )
+      ),
+    onInbox: () => () => undefined,
     listenAvailable: () => Promise.resolve(false),
     listenStart: () => Promise.resolve(false),
     listenStop: () => Promise.resolve(),

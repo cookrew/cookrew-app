@@ -12,6 +12,7 @@ import {
   type HelloResult
 } from './hello-result'
 import type { HelloReply } from './switch'
+import { trustedNetwork } from '../../../shared/trusted-origin'
 
 /**
  * THE ONE PROBE THE COMPANION MAKES DIRECTLY AT A MAC.
@@ -31,6 +32,53 @@ import type { HelloReply } from './switch'
  * black hole while the working path sits idle.
  */
 export const HELLO_TIMEOUT_MS = 800
+
+/**
+ * How long a trusted NAME has to answer — the same question, after a lookup.
+ *
+ * A name is on the same Wi-Fi too, but before its first packet can leave the
+ * phone's resolver walks cookrew.dev, then the d.cookrew.dev servers, then the
+ * record, cold, across whatever distance separates the phone's ISP from the
+ * registry. Measured from the owner's LAN on 2026-10-11: 564 ms for one cold
+ * chain through a Chinese public resolver — and the phone's own reports said
+ * "timeout, 800–804 ms" for every candidate, once a minute, LAN and tailnet
+ * alike, with the Mac three metres away. The address was right, the zone
+ * answered, the Mac listened; the clock ran out during the lookup, and the
+ * sheet blamed the network.
+ *
+ * Twice a cold lookup, plus the handshake and the hello. The race runs beside
+ * the plane in use, so this patience delays only the verdict "no".
+ */
+export const NAME_HELLO_TIMEOUT_MS = 2500
+
+/**
+ * A TAILNET NAME GETS LONGER STILL: the path behind it is not the Wi-Fi.
+ *
+ * Away from home Tailscale often runs through one of its relay servers, and
+ * the owner's phone on 2026-10-18 answered its tailnet name in 1281 and
+ * 1975 ms on the tries that made it — every other try died at exactly
+ * 2500. The Mac was there; the deadline was the LAN's. The race runs beside
+ * the plane in use, so this patience delays only the verdict "no".
+ */
+export const TAILNET_HELLO_TIMEOUT_MS = 6000
+
+/** Is this host an IP literal (v4, or a bracketed v6) rather than a name? */
+const isIpLiteral = (host: string): boolean => {
+  const bare = host.replace(/^\[/, '').replace(/]$/, '')
+  return bare.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(bare)
+}
+
+/** The deadline a candidate gets when the caller sets none: by what it is. */
+export const helloDeadlineMs = (url: string): number => {
+  let host: string
+  try {
+    host = new URL(url).hostname
+  } catch {
+    return HELLO_TIMEOUT_MS
+  }
+  if (host === 'localhost' || isIpLiteral(host)) return HELLO_TIMEOUT_MS
+  return trustedNetwork(url) === 'tailnet' ? TAILNET_HELLO_TIMEOUT_MS : NAME_HELLO_TIMEOUT_MS
+}
 
 export interface AskHelloOptions {
   readonly timeoutMs?: number
@@ -89,7 +137,7 @@ const oneHello = async (
   const timer = setTimeout(() => {
     timedOut = true
     abort.abort()
-  }, options.timeoutMs ?? HELLO_TIMEOUT_MS)
+  }, options.timeoutMs ?? helloDeadlineMs(url))
   const asked =
     options.origin === undefined ? '' : `&origin=${encodeURIComponent(options.origin)}`
   try {

@@ -37,7 +37,7 @@ function setup(): { store: WorkspaceStore; deps: SocketServerDeps; home: string;
   const home = store.focusedId
   store.renameWorkspace(home, 'Cookrew Dev')
   const other = store.createWorkspace('Playground', '/tmp').id
-  const deps = { store, listWorkspaces: () => store.list() } as unknown as SocketServerDeps
+  const deps = { store, listWorkspaces: () => store.list(), isServed: () => false } as unknown as SocketServerDeps
   return { store, deps, home, other }
 }
 

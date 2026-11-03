@@ -40,9 +40,29 @@ export interface ThumbCacheDeps {
   now?: () => number
   /** A frame younger than this is served as-is. Default 3s. */
   freshMs?: number
+  /** How long an asker waits for a capture before going on with what is held. */
+  waitMs?: number
+  /** A capture still running after this is let go, so the next ask takes a new one. */
+  giveUpMs?: number
 }
 
 const DEFAULT_FRESH_MS = 3000
+/**
+ * A CAPTURE THAT NEVER ENDS (2026-11-01). One headless page whose screenshot
+ * never settled held every /api/browser/thumbs batch that named it open
+ * forever: the batch awaits the heartbeat of each id. On the companion's six
+ * HTTP/1.1 connections, two such batches beside four streams left no room,
+ * and the keystrokes typed in LIVE waited behind them. An asker now waits a
+ * moment and is answered with the frame held (or none); the capture runs on.
+ */
+const DEFAULT_WAIT_MS = 1500
+const DEFAULT_GIVE_UP_MS = 20_000
+
+const settleAfter = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
 
 export class BrowserThumbCache {
   private readonly frames = new Map<string, ThumbFrame>()
@@ -50,10 +70,14 @@ export class BrowserThumbCache {
   private readonly pending = new Map<string, Promise<void>>()
   private readonly now: () => number
   private readonly freshMs: number
+  private readonly waitMs: number
+  private readonly giveUpMs: number
 
   constructor(private readonly deps: ThumbCacheDeps) {
     this.now = deps.now ?? Date.now
     this.freshMs = deps.freshMs ?? DEFAULT_FRESH_MS
+    this.waitMs = deps.waitMs ?? DEFAULT_WAIT_MS
+    this.giveUpMs = deps.giveUpMs ?? DEFAULT_GIVE_UP_MS
   }
 
   /** Store a frame pushed as a `data:image/...;base64,...` URL. */
@@ -96,6 +120,9 @@ export class BrowserThumbCache {
    * cached one has aged out. A failed or impossible capture LEAVES the last
    * frame in place: a card that briefly cannot be photographed should keep
    * showing the page it was on, not fall back to the empty placeholder.
+   *
+   * Resolves once the capture lands or after `waitMs`, whichever is first:
+   * never later, whatever the page does.
    */
   async refresh(browserId: string): Promise<void> {
     const capture = this.deps.capture
@@ -103,18 +130,25 @@ export class BrowserThumbCache {
     const existing = this.frames.get(browserId)
     if (existing && this.now() - existing.capturedAt < this.freshMs) return
     const inFlight = this.pending.get(browserId)
-    if (inFlight) return inFlight
-    const run = capture(browserId)
-      .then((base64) => {
-        if (base64) this.put(browserId, base64, 'image/jpeg')
+    if (inFlight) return Promise.race([inFlight, settleAfter(this.waitMs)])
+    let live = true
+    const run = Promise.race([
+      capture(browserId).then((base64) => {
+        // A capture let go of does not overwrite a newer one's frame.
+        if (base64 && live) this.put(browserId, base64, 'image/jpeg')
+      }),
+      settleAfter(this.giveUpMs).then(() => {
+        if (live) console.error(`browser thumbnail capture gave up after ${this.giveUpMs} ms (${browserId})`)
       })
+    ])
       .catch((error: unknown) => {
         console.error(`browser thumbnail capture failed (${browserId}):`, error)
       })
       .finally(() => {
-        this.pending.delete(browserId)
+        live = false
+        if (this.pending.get(browserId) === run) this.pending.delete(browserId)
       })
     this.pending.set(browserId, run)
-    return run
+    return Promise.race([run, settleAfter(this.waitMs)])
   }
 }

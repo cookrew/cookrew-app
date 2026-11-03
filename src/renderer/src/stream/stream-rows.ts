@@ -17,6 +17,7 @@
 // regressed before. Renaming the coordinate the anchor math reads would be
 // exactly the kind of change that breaks it quietly.
 
+import { isHarnessNotice, noticeLine } from '../../../shared/harness-notice'
 import type { RollbackNote, StreamCheckpoint } from './stream-types'
 import type { TitleMode } from '../checkpoint-sync'
 
@@ -116,8 +117,11 @@ export function traceRowLabel(index: number, traceTitle: string): string {
  * reads as its ordinal.
  */
 export function checkpointRowTitle(row: CheckpointRow, mode: TitleMode): string {
-  if (mode === 'precise') return traceRowLabel(row.index, row.promptHead)
-  return traceRowLabel(row.index, row.title ?? row.promptHead)
+  // The head of a harness notice is its opening tag: say what it is instead.
+  // The stored head is left as it is — the replay verdict compares it.
+  const head = isHarnessNotice(row.promptHead) ? noticeLine(row.promptHead) : row.promptHead
+  if (mode === 'precise') return traceRowLabel(row.index, head)
+  return traceRowLabel(row.index, row.title ?? head)
 }
 
 /**

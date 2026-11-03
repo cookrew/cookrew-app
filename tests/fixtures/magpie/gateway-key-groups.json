@@ -1,0 +1,17 @@
+{
+  "question": "does `magpie gateway-key models <id> …` accept a GROUP id? (scripts/magpie-sous-key.sh)",
+  "cli": "magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]",
+  "accepted": {
+    "group/think (a group that exists)": "hp-facts probe: only group/think",
+    "group/jevs group/auto (Tinker's exact arguments; NEITHER group exists here)": "hp-facts probe: only group/jevs, group/auto",
+    "ollama/qwen2.5:1.5b (control)": "hp-facts probe: only ollama/qwen2.5:1.5b"
+  },
+  "validated": false,
+  "enforced": true,
+  "enforcement": {
+    "models=group/think, POST /v1/chat/completions model=group/think": 200,
+    "models=group/think, POST /v1/chat/completions model=ollama/qwen2.5:1.5b": 403
+  },
+  "finding": "A group id is accepted and ENFORCED, but it is NOT validated: a group that does not exist is stored verbatim. Scoping to a group scopes the ENTRY, not the members - the key could reach ollama/qwen3:1.7b through group/think while being refused that same model named directly.",
+  "key": "named 'hp-facts probe', minted and REMOVED in this lane; no credential recorded anywhere"
+}

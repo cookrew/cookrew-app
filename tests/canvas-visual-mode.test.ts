@@ -61,11 +61,10 @@ describe('canvas visual modes', () => {
     expect(visibleCanvasEdges(edges, 'harness')).toBe(visibleCanvasEdges(edges, 'no-cables'))
   })
 
-  it('replaces the lock slot with the visual control and mounts the harness under it', () => {
-    expect(appSource).toContain('<Controls position="bottom-right" showInteractive={false}>')
-    expect(appSource).toContain('className={`canvas-visual-toggle mode-${canvasVisualMode}`}')
-    expect(appSource).toContain('nodes={renderedNodes}')
-    expect(appSource).toContain('edges={renderedEdges}')
-    expect(appSource).toContain("canvasVisualMode === 'harness' && <CableHarness")
+  // The canvas is retired (2026-10-30) and not rendered: its controls and
+  // the harness under them went with it.
+  it('mounts no canvas controls any more', () => {
+    expect(appSource).not.toContain('<Controls position="bottom-right" showInteractive={false}>')
+    expect(appSource).not.toContain("canvasVisualMode === 'harness' && <CableHarness")
   })
 })

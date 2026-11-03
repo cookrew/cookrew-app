@@ -39,6 +39,7 @@
  * log. It is never printed.
  */
 import { spawn } from 'node:child_process'
+import { guardChromeWithParent, reapOrphans } from './chrome-reaper.mjs'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { createServer } from 'node:net'
@@ -83,6 +84,10 @@ function freePort() {
 
 export async function launchChrome({ width, height, chrome = findChrome() }) {
   if (!chrome) throw new Error('no Chrome binary found (set COOKREW_CHROME)')
+  // Anything left by an earlier run whose worker was killed on timeout dies
+  // first (chrome-reaper.mjs); a live Chrome's parent is alive, so it never
+  // matches. Ten of these had piled up by 2026-10-31, ~3.6 GB.
+  reapOrphans('cookrew-dom-probe-')
   const port = await freePort()
   const profile = mkdtempSync(path.join(tmpdir(), 'cookrew-dom-probe-'))
   const child = spawn(
@@ -103,15 +108,37 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
     ],
     { stdio: 'ignore' }
   )
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
+  // Chrome does not notice when this process dies — the vitest worker killed
+  // on timeout never reaches kill(). The guard is a detached shell that does.
+  const guard = guardChromeWithParent({ childPid: child.pid })
+  // A loaded CI runner (the whole suite in parallel) can take well past 15 s
+  // to bring DevTools up; returning a port nobody listens on only moved the
+  // failure to the caller's first fetch, as "fetch failed". Wait longer, stop
+  // at once if Chrome exits, and say which of the two happened.
+  const deadline = Date.now() + 60_000
+  let up = false
+  while (!up && Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`)
-      if (res.ok) break
+      up = (await fetch(`http://127.0.0.1:${port}/json/version`)).ok
     } catch {
       // not up yet
     }
-    await sleep(100)
+    if (!up) await sleep(100)
+  }
+  if (!up) {
+    const exited = child.exitCode !== null || child.signalCode !== null
+    child.kill('SIGKILL')
+    guard.stop()
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 3 })
+    } catch {
+      // best effort, as in kill(): a profile left in tmp is nothing
+    }
+    throw new Error(
+      exited
+        ? `Chrome exited (${child.exitCode ?? child.signalCode}) before DevTools came up on :${port}`
+        : `Chrome's DevTools did not come up on :${port} within 60 s`
+    )
   }
   return {
     port,
@@ -124,6 +151,7 @@ export async function launchChrome({ width, height, chrome = findChrome() }) {
       })
       child.kill('SIGKILL')
       await exited
+      guard.stop()
       // Best effort: the profile is a temp dir and Chrome may still be
       // writing it when the kill lands (ENOTEMPTY on the macOS CI runner).
       // A profile left in tmp is nothing; a teardown that throws fails the
@@ -418,7 +446,7 @@ async function idle(page, ms) {
 
 /** The header's view switch: the segment button whose label says the view. */
 const BOARD_CLICK = (view) => `(() => {
-  const label = ${JSON.stringify(view === 'agents' ? 'Board' : 'Canvas')}
+  const label = ${JSON.stringify(view === 'agents' ? 'Board' : 'Stage')}
   const button = [...document.querySelectorAll('.cr-viewseg button')].find(
     (b) => (b.querySelector('.cr-viewseg-label')?.textContent || '').trim() === label
   )
@@ -427,17 +455,21 @@ const BOARD_CLICK = (view) => `(() => {
   return true
 })()`
 
+/**
+ * The app is up: a canvas card, or — with the canvas retired (2026-10-30) and
+ * not rendered — the stage. Named for what it waited on first.
+ */
 export async function waitForCanvas(page, timeoutMs = 150_000, settleMs = 2500) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node').length").catch(() => 0)
+    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node, .cr-stage-view, .zv-root').length").catch(() => 0)
     if (cards > 0) {
       await sleep(settleMs) // thumbs, checkpoints and the first activity seed
       return cards
     }
     await sleep(250)
   }
-  throw new Error('the canvas never showed a card')
+  throw new Error('the app never showed a card or the stage')
 }
 
 // ---------------------------------------------------------------------------
@@ -608,7 +640,7 @@ export async function measureCompanion(
     if (opened) {
       await sleep(2000)
       result.board = { open: { dom: await page.evaluate(CENSUS), layers: await layers(), metrics: await metrics(page) } }
-      await page.evaluate(BOARD_CLICK('canvas'))
+      await page.evaluate(BOARD_CLICK('stage'))
       await sleep(1500)
       await page.send('HeapProfiler.collectGarbage').catch(() => undefined)
       await sleep(500)

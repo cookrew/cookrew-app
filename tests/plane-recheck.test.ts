@@ -8,7 +8,7 @@ import {
   type PlaneRecheckDeps,
   type RecheckOutcome
 } from '../src/renderer/src/path/plane-recheck'
-import { createPlaneHealth } from '../src/renderer/src/plane-health'
+import { createPlaneHealth, HOLD_AFTER_FALLBACK_MS } from '../src/renderer/src/plane-health'
 import type { DataPlane } from '../src/renderer/src/data-plane'
 import type { HelloReply, HelloResult } from '../src/renderer/src/path/switch'
 
@@ -195,7 +195,7 @@ describe('the fallback a condemnation causes', () => {
     // And the switcher is held off, so the same name cannot be re-adopted on
     // the next tick — which is what made the badge flap before the hold.
     expect(health.held()).toBe(true)
-    clock += 59_000
+    clock += HOLD_AFTER_FALLBACK_MS - 1_000
     expect(health.held()).toBe(true)
     clock += 2_000
     expect(health.held()).toBe(false)

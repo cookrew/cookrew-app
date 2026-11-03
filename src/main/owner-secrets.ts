@@ -115,9 +115,13 @@ export const DEFAULT_APP_DIR = 'cookrew'
 export function ownerSecretPaths(
   base: string,
   home: string = homedir(),
-  appDir: string = DEFAULT_APP_DIR
+  appDir: string = DEFAULT_APP_DIR,
+  env: NodeJS.ProcessEnv = process.env
 ): readonly string[] {
   const at = (...parts: string[]): string => path.join(home, ...parts)
+  // Magpie's config dir follows XDG when the owner set it; the default lives
+  // under ~/.config. Both are denied when both could exist.
+  const xdg = typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.length > 0 ? env.XDG_CONFIG_HOME : null
   return [
     // The owner's browsing identity: Default/Cookies for every card they ever
     // logged into. `file-read*` is allowed across the disk, so without these a
@@ -126,6 +130,8 @@ export function ownerSecretPaths(
     // …and the app's OWN origin state, entry by entry (the default session
     // writes it beside the settings, so the tree cannot be taken).
     ...defaultSessionStatePaths(home, appDir),
+    // The Sous ledger: every sentence the owner said to the crew, scrubbed but theirs (sous-ledger.ts).
+    at(appDir === DEFAULT_APP_DIR ? '.cookrew' : appDir, 'sous-decisions.jsonl'),
     // The one the ruling names by hand.
     at('.claude', '.credentials.json'),
     at('.claude.json'),
@@ -147,6 +153,26 @@ export function ownerSecretPaths(
     path.join(base, 'stripe.env'),
     // Public data, but still owner payment configuration. The fixture binds it
     // to the same served-sandbox deny as the write-only Stripe source.
-    path.join(base, 'payment.json')
+    path.join(base, 'payment.json'),
+    // THE SEALED SLOTS (R4, secrets-store.ts): one 0600 file per name. The
+    // served CLI refuses every read; the sandbox must refuse the files too,
+    // or the refusal is theatre. And the root pairing token, which opens the
+    // owner's companion to whoever holds it.
+    path.join(base, 'secrets'),
+    path.join(base, 'pairing-token'),
+    // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
+    // plugin-providers.json, logins.json, plugin auth — is every upstream key
+    // the owner holds; the Sous ledger and its Magpie facts; the owner's
+    // route choices; and the scoped gateway key Sous speaks with.
+    at('.config', 'magpie'),
+    ...(xdg ? [path.join(xdg, 'magpie')] : []),
+    path.join(base, 'sous-decisions.jsonl'),
+    path.join(base, 'sous-magpie.json'),
+    path.join(base, 'route.json'),
+    path.join(base, 'sous-gateway.key'),
+    // The per-harness gateway key names (route program, E2E round).
+    path.join(base, 'route-keys.json'),
+    // The plugin file Magpie writes for this app carries `route.key`.
+    path.join(base, 'magpie.json')
   ]
 }

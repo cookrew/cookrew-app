@@ -1,4 +1,5 @@
 import { Marked, type Tokens } from 'marked'
+import { secretSlotOf } from '../../shared/secret-slot'
 
 /**
  * Note bodies render markdown — and ONLY markdown.
@@ -62,7 +63,43 @@ export function safeUrl(href: string): string | null {
   return SAFE_SCHEMES.has(scheme[1].toLowerCase()) ? trimmed : null
 }
 
+/**
+ * A SEALED SLOT ON THE CARD FACE IS A CHIP, NEVER A FIELD. The line `🔒 <name>`
+ * (shared/secret-slot.ts) names a secret that lives in ~/.cookrew/secrets/;
+ * the body carries the name and nothing else, so the face draws the name and
+ * nothing else. The password field exists in the zoom editor only
+ * (nodes/SecretSlot.tsx), and the markdown must not grow one.
+ */
+interface SecretSlotToken {
+  type: 'secretSlot'
+  raw: string
+  name: string
+}
+
+const SECRET_SLOT_LINE = /^🔒 [a-z0-9][a-z0-9-]{0,63}[ \t]*(?:\n|$)/
+
+const secretSlotExtension = {
+  name: 'secretSlot',
+  level: 'block' as const,
+  start: (src: string): number | undefined => {
+    const at = src.indexOf('🔒 ')
+    return at === -1 ? undefined : at
+  },
+  tokenizer(src: string): SecretSlotToken | undefined {
+    const match = SECRET_SLOT_LINE.exec(src)
+    if (!match) return undefined
+    const name = secretSlotOf(match[0].replace(/\n$/, ''))
+    if (name === null) return undefined
+    return { type: 'secretSlot', raw: match[0], name }
+  },
+  renderer(token: unknown): string {
+    const name = escapeHtml((token as SecretSlotToken).name)
+    return `<p class="cr-secret-chip-line"><span class="cr-secret-chip" data-secret-chip="${name}">🔒 ${name}</span></p>\n`
+  }
+}
+
 const noteMarked = new Marked({
+  extensions: [secretSlotExtension],
   renderer: {
     /** Covers BOTH block and inline HTML tokens — the whole pass-through. */
     html(token: Tokens.HTML | Tokens.Tag): string {

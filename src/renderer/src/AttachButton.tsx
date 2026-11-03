@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import { buildAttachmentPaste } from '../../shared/attach'
 import { cookrew, hasNativeWebview } from './api'
-import { imageAttachmentName } from './clipboard-image'
+import { saveClipboardImages } from './clipboard-image'
+import { pathsForFiles } from './dropped-files'
 import { CrIcon } from './icons'
 
 /**
@@ -11,8 +12,8 @@ import { CrIcon } from './icons'
  */
 export async function attachFilesToTerminal(terminalId: string, files: File[]): Promise<void> {
   if (files.length === 0) return
-  const paths = await cookrew().attachFiles(files)
-  pastePaths(terminalId, paths)
+  // A screenshot dragged from its thumbnail is saved, not pasted as a path that is about to vanish.
+  pastePaths(terminalId, (await pathsForFiles(files, cookrew())).filter((p) => p !== ''))
 }
 
 function pastePaths(terminalId: string, paths: string[]): void {
@@ -30,14 +31,7 @@ export async function pasteClipboardImages(
   terminalId: string,
   images: Array<{ type: string; arrayBuffer: () => Promise<ArrayBuffer> }>
 ): Promise<void> {
-  const stamp = String(Date.now())
-  const paths: string[] = []
-  for (const [i, image] of images.entries()) {
-    const bytes = new Uint8Array(await image.arrayBuffer())
-    const name = imageAttachmentName(image.type, images.length > 1 ? `${stamp}-${i + 1}` : stamp)
-    paths.push(await cookrew().saveAttachmentBytes(name, bytes))
-  }
-  pastePaths(terminalId, paths)
+  pastePaths(terminalId, await saveClipboardImages(images, cookrew()))
 }
 
 /**
@@ -78,6 +72,7 @@ export function AttachButton({ terminalId }: { terminalId: string }): React.JSX.
   return (
     <>
       <button
+        type="button"
         className={`cr-btn sm voice-attach${busy ? ' busy' : ''}`}
         title="Attach files (paste their paths into the terminal)"
         onClick={pick}

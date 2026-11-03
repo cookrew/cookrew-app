@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { attachmentIndex, sameAttachmentIndex, TerminalAttachmentsContext, type AttachmentIndex } from './terminal-attachments'
 import { requestJoin } from './account/open-request'
 import {
   Background,
@@ -25,15 +26,21 @@ import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../sha
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
 import { useWorkspaceWall } from './WorkspaceWallHost'
+import { RoutingPanel, shouldAutoOpen } from './routing/RoutingPanel'
+import { useRouteState } from './routing/use-route-state'
+import { useSetupTerminal } from './routing/use-setup-terminal'
+import { newestError } from './routing/newest-error'
 import { BrowserNode } from './nodes/BrowserNode'
 import { CableEdge } from './CableEdge'
 import { Header, type MainView } from './Header'
+import { BoardSearch } from './BoardSearch'
 import { Dock } from './Dock'
 import { tuningStore } from './tuning-store'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
 import { LodOverlays } from './LodOverlays'
 import { browserInFullView } from './dock-target'
-import { useInteractiveBrowserCapability } from './BrowserLayer'
+import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
+import type { LodLayout } from './zoom-lod'
 import {
   recordThumbFailure,
   recordThumbSuccess,
@@ -43,6 +50,7 @@ import {
   shouldSnapshotLocally,
   thumbPollList,
   THUMB_BATCH_MAX,
+  THUMB_BATCH_TIMEOUT_MS,
   applyThumbBatch,
   knownVersions,
   viewportBrowserIds,
@@ -87,9 +95,10 @@ import { snapCardChanges, MOUSE_SNAP_PX, TOUCH_SNAP_PX, SnapGuide } from './card
 import { SnapGuides } from './SnapGuides'
 import { EventToastLayer } from './EventToast'
 import { DoorMovedNotice } from './DoorMovedNotice'
+import { TerminalSessionNotice } from './TerminalSessionNotice'
 // Opened by a tap, never at boot: each panel is its own chunk (perf lane L7).
-const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default: m.MetricsPanel })))
+const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default: m.StageView })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
 import { useAccountSurface } from './account/AccountSurface'
@@ -99,9 +108,7 @@ import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { CrIcon } from './icons'
-import { SousPill } from './SousPill'
-import { speakSous } from './sous-speak'
-import { usePushToTalk } from './use-push-to-talk'
+import { CommandBox } from './CommandBox'
 import {
   canvasVisualModeOf,
   nextCanvasVisualMode,
@@ -110,6 +117,18 @@ import {
   type CanvasVisualMode
 } from './canvas-visual-mode'
 import { CableHarness } from './CableHarness'
+import { ownersOf, stageSelect, useStageSelection } from './stage/stage-select'
+import { AgentPets } from './pets/AgentPets'
+import { CrewProvider, WithCrew } from './stage/crew-rows'
+import { ItemPets } from './pets/ItemPets'
+import { thumbWants } from './pets/thumb-wants'
+import { ZoomView } from './zoom/ZoomView'
+import { useZoomFull } from './zoom/zoom-store'
+import { zoomStore } from './zoom/zoom-store'
+import { importTeam, makeAgent, makeItem, type Made } from './zoom/make-card'
+import { attachView } from './attach-view'
+import { installStatusChime } from './chime-sound'
+import type { StageShowing } from './stage/StageView'
 
 /** How often a headless browser card refreshes its still. Matches the legacy
  *  webview capture cadence — the same picture, from the page that now owns it. */
@@ -123,12 +142,26 @@ const VISUAL_MODE_LABEL: Record<CanvasVisualMode, string> = {
   agents: 'Agents only'
 }
 
-const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent'> = {
+const VISUAL_MODE_ICON: Record<CanvasVisualMode, 'canvas' | 'connect' | 'agent' | 'expand'> = {
   all: 'canvas',
   harness: 'connect',
   'no-cables': 'connect',
   agents: 'agent'
 }
+
+/**
+ * The view a window opens on: the stage, always (2026-10-30). Canvas and
+ * board are merged into it, and the board came back as the header's search
+ * box (BoardSearch.tsx, 2026-11-01). The levels view is deleted (2026-10-31).
+ */
+const MAIN_VIEW_KEY = 'cookrew-main-view'
+
+function storedMainView(): MainView {
+  return 'stage'
+}
+
+/** The browser host's layout with the canvas retired: no card is zoomed, so no rects. */
+const NO_CANVAS_LOD: LodLayout = { activeIds: new Set(), rects: {}, primaryId: null }
 
 function storedCanvasVisualMode(): CanvasVisualMode {
   try {
@@ -174,6 +207,9 @@ function Canvas(): React.JSX.Element {
   const interactiveCapability = useInteractiveBrowserCapability()
   const interactiveBrowser = interactiveCapability?.enabled ?? null
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const zoomFull = useZoomFull()
+  /** The stage's pick: in a browser's or note's full view, which one it is (the side groups attach around it). */
+  const stagePick = useStageSelection()
   const [nodes, setNodes] = useState<Node[]>([])
   const [canvasVisualMode, setCanvasVisualMode] = useState<CanvasVisualMode>(storedCanvasVisualMode)
   const [tool, setTool] = useState<ToolId>('move')
@@ -230,11 +266,19 @@ function Canvas(): React.JSX.Element {
    * owns live webviews and terminal panes that must never remount, and swapping
    * it out of the tree would also drop the viewport transform.
    */
-  const [view, setView] = useState<MainView>('canvas')
+  const [view, setView] = useState<MainView>(storedMainView)
+  useEffect(() => {
+    if (view !== 'stage') return
+    try {
+      window.localStorage.setItem(MAIN_VIEW_KEY, view)
+    } catch {
+      // Storage blocked: the next window opens on the stage, the default.
+    }
+  }, [view])
+  /** The agent on the stage: the dock's composer and the route follow it. */
+  const [stageShowing, setStageShowing] = useState<StageShowing | null>(null)
   /** Activity metrics / history panel (opened from the workspace popout). */
   const [metricsOpen, setMetricsOpen] = useState(false)
-  /** Board selection mode — the dock's slid-in clipboard button drives it. */
-  const [boardSelecting, setBoardSelecting] = useState(false)
   /**
    * Node awaiting a close confirmation. Every ✕ routes here instead of calling
    * removeNode, so there is one dialog and no close button can skip it.
@@ -276,6 +320,22 @@ function Canvas(): React.JSX.Element {
    * snapshot of its canvas, and you pick the picture — and it is where a
    * workspace is made, given directories or removed, too. */
   const wall = useWorkspaceWall({ stageRef, workspace, onActivity: () => setMetricsOpen(true) })
+  // R1 · the Routing panel: the gateway's state (pushed), the Setup card its
+  // buttons type into, and one self-opening on first boot while nothing is
+  // installed. Everything else about it is a menu entry in the header.
+  const routeState = useRouteState()
+  const setupTerminal = useSetupTerminal(workspace)
+  const [routingOpen, setRoutingOpen] = useState(false)
+  useEffect(() => {
+    if (routeState.state && shouldAutoOpen(routeState.state.status, window.localStorage)) setRoutingOpen(true)
+  }, [routeState.state])
+  // The panel opening is the owner looking: ask main once, so a renderer that
+  // fell behind the gateway shows the default the owner actually has.
+  const rereadRoute = routeState.reread
+  useEffect(() => {
+    if (routingOpen) rereadRoute()
+  }, [routingOpen, rereadRoute])
+  const cardNames = useMemo(() => new Map((workspace?.nodes ?? []).map((n) => [n.id, n.name])), [workspace?.nodes])
   /**
    * A workspace switch replaces every node while the viewport still frames the
    * OUTGOING canvas — so the incoming workspace opens somewhere off in empty
@@ -301,7 +361,6 @@ function Canvas(): React.JSX.Element {
   const jumpRef = useRef<JumpController<Node> | null>(null)
   const knownWsIdRef = useRef<string | null>(null)
   const reactFlow = useReactFlow()
-  const { screenToFlowPosition } = reactFlow
   const browsersRef = useRef<BrowserNodeData[]>([])
   const draggingRef = useRef(false)
   /** Viewport before the last zoomToNode, so ⤢ CANVAS can return to it. */
@@ -524,6 +583,9 @@ function Canvas(): React.JSX.Element {
     }
   }, [])
 
+  // A chime when an agent finishes or needs you (status-chime.ts decides when).
+  useEffect(() => installStatusChime(), [])
+
   // WHAT EACH AGENT IS RUNNING ON (tuning-store). One snapshot for the whole
   // fleet, then a push per card when — and only when — its dials change. The
   // phone runs this same effect over its own transport (/api/tuning + the
@@ -653,11 +715,6 @@ function Canvas(): React.JSX.Element {
   useEffect(() => {
     if (!clipping) setHoverId(null)
   }, [clipping])
-  // Leaving the board view stands its selection mode down.
-  useEffect(() => {
-    if (view !== 'agents') setBoardSelecting(false)
-  }, [view])
-
   /** Mirrors for the ⌘A handler (stable subscription, fresh reads). */
   const viewRef = useRef<MainView>(view)
   viewRef.current = view
@@ -730,37 +787,39 @@ function Canvas(): React.JSX.Element {
     }
   }, [])
 
-  // ⌘A while clipping picks the whole canvas — the whole-team case the old
-  // dock buttons owned. Never while typing (any input/textarea/xterm owns
-  // its own ⌘A), never under the agents view or a zoomed card.
+  // ⌘K is the one box (CommandBox): the command line to Sous and the inbox.
+  // Toggles anywhere but inside a terminal, where ⌘K is the terminal's.
+  // Same guard as ⌘A: never while typing somewhere else. Focus goes back to
+  // where it was when the box closes.
+  const [commandOpen, setCommandOpen] = useState(false)
+  const commandReturnFocus = useRef<HTMLElement | null>(null)
+  const closeCommand = useCallback(() => {
+    setCommandOpen(false)
+    const back = commandReturnFocus.current
+    commandReturnFocus.current = null
+    if (back && back.isConnected) back.focus()
+  }, [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'a') return
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'k') return
       const target = e.target as HTMLElement | null
+      if (target?.closest('.cmd')) {
+        e.preventDefault()
+        closeCommand()
+        return
+      }
       if (target?.closest('input, textarea, [contenteditable="true"], .xterm')) return
-      if (viewRef.current !== 'canvas' || !clippingRef.current) return
-      if (zoomedNodeIdRef.current) return
       e.preventDefault()
-      const state = workspaceRef.current
-      if (!state) return
-      // Working agents are uncopyable, so ⌘A leaves them out — a pick-all
-      // that traps the selection behind a busy agent isn't "all".
-      const working = activityStore.getSnapshot()
-      setPicked(
-        new Set(
-          state.nodes
-            .filter((n) => n.kind !== 'terminal' || working[n.id]?.phase !== 'thinking')
-            .map((n) => n.id)
-        )
-      )
+      setCommandOpen((v) => {
+        if (!v) commandReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        return !v
+      })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [closeCommand])
 
-  // Semantic zoom: clicking a card animates the viewport until the card
-  // fills the stage; crossing the coverage threshold swaps its thumbnail
-  // for the full renderer (see zoom-lod.ts).
+  // Open a card: on the stage, wherever it was asked for from.
   const zoomToNode = useCallback(
     (
       id: string,
@@ -772,62 +831,22 @@ function Canvas(): React.JSX.Element {
        */
       freshCanvas = false
     ) => {
-      // WHERE ARE WE GOING — resolved FIRST, because a zoom that cannot land
-      // must change nothing at all (not the return point, not the deliberate
-      // flag, not the zoomed id).
-      //
-      // A just-created node may not be in the React Flow store yet (its
-      // workspace broadcast is still in flight), so callers that know the
-      // node's rect pass it; everything else resolves the card's own bounds
-      // out of the store.
-      //
-      // ALWAYS fitBounds, NEVER fitView({nodes}) — D1, canvas QA 2026-09-07.
-      // fitView does not move the viewport itself: it queues the fit behind
-      // `nodesInitialized`, which `onlyRenderVisibleElements` holds false
-      // forever on a zoomed-in canvas because off-screen cards are never
-      // measured. The queued fit is dropped, its promise never settles (so no
-      // arrival, so no full view), and a stale one can later land on the card
-      // tapped before this one. fitBounds calls panZoom directly. See
-      // nodes/zoom-target.ts for the whole trace.
-      const bounds = rect ?? nodeZoomBounds(reactFlow.getInternalNode(id))
-      if (bounds === null) {
-        // Never silently do nothing — that WAS the defect.
-        reportMissingZoomTarget(id)
-        return
-      }
-      // Where Back goes, and the three reasons it may go nowhere — all of
-      // them in nodes/zoom-target.ts, where they can be read one at a time.
-      // Leaving the return point empty falls Back to the overview instead.
-      if (
-        savesReturnViewport({
-          saved: prevViewportRef.current,
-          overlayOpen: zoomedTerminalIdRef.current !== null,
-          freshCanvas
-        })
-      ) {
-        prevViewportRef.current = reactFlow.getViewport()
-      }
-      // A deliberate tap: from here the LOD may open the card's full view (see
-      // deliberateOpenRef). The overview does not set this, so it never opens
-      // one passively on the phone.
-      deliberateOpenRef.current = true
-      zoomedNodeIdRef.current = id
-      // CARD_FIT_PADDING is 0 on purpose — the grid has no gutter, so any
-      // padding here frames the neighbouring card too.
-      const options = { duration: CARD_ZOOM_MS, padding: CARD_FIT_PADDING }
-      // The animation reports its own completion, and that is a better "the
-      // viewport has stopped" signal than the SETTLE_MS debounce the LOD would
-      // otherwise wait out — the debounce exists for wheel-zoom, which has no
-      // end event to offer. Taking it here is what stops a tapped card sitting
-      // as a thumbnail for an extra beat after it has visibly arrived.
-      setArrivedId(null)
-      void reactFlow.fitBounds(bounds, options).then(() => {
-        // Guard against a stale arrival: tapping a second card mid-animation
-        // must not hand the full view back to the first one.
-        if (zoomedNodeIdRef.current === id) setArrivedId(id)
-      })
+      // A card asked for from anywhere (the pets, the command box, a toast,
+      // the board) takes the stage's middle: a browser or note as itself,
+      // anything else as the agent. One from another workspace says so on the
+      // stage (StageTerminal) until that workspace is switched to. The canvas
+      // is retired (2026-10-30) and is not rendered, so there is nowhere else.
+      const asked = workspaceRef.current?.nodes.find((n) => n.id === id)
+      const item = asked?.kind === 'browser' || asked?.kind === 'note'
+      stageSelect.set(item ? { kind: 'item', id } : { kind: 'agent', id })
+      zoomStore.jumpTo(item ? 'item' : 'agent', id)
+      if (viewRef.current !== 'stage') setView('stage')
+      // The canvas's own arguments (a just-created card's rect, a board row
+      // landing on a canvas that just arrived) have nothing left to frame.
+      void rect
+      void freshCanvas
     },
-    [reactFlow]
+    []
   )
 
   const zoomBack = useCallback(() => {
@@ -919,37 +938,10 @@ function Canvas(): React.JSX.Element {
     [zoomToNode, zoomBack]
   )
 
-  // Hold ⌘ to talk. On the canvas the sentence is a command; over a zoomed
-  // terminal it is dictation for that agent (shared/sous-intent decides, from
-  // the surface). What comes back is said aloud and shown for a beat.
-  const [sousReply, setSousReply] = useState<{ text: string; refused: boolean } | null>(null)
-  useEffect(() => {
-    if (!sousReply) return
-    const timer = window.setTimeout(() => setSousReply(null), 3500)
-    return () => window.clearTimeout(timer)
-  }, [sousReply])
-  const ptt = usePushToTalk({
-    enabled: true,
-    onFinal: (text, alternates) => {
-      if (!text.trim()) return
-      const zoomed = zoomedTerminalIdRef.current
-      const ctx = zoomed
-        ? { surface: 'zoom' as const, focusedAgentId: zoomed, alternates }
-        : { surface: 'canvas' as const, alternates }
-      void cookrew()
-        .sousCommand(text, ctx)
-        .then((result) => {
-          if (!result.spoken) return
-          // What landed, next to what was said about it — the cleaned-up
-          // sentence is the thing the owner wants to check.
-          const shown = result.text ? `${result.spoken} · ${result.text}` : result.spoken
-          setSousReply({ text: shown, refused: result.intent === 'refused' })
-          speakSous(result.spoken)
-        })
-    },
-    onError: (message) => setSousReply({ text: message, refused: true })
-  })
-
+  /** The dock is making a card (zoom/make-card.ts), and why the last one failed. */
+  const [making, setMaking] = useState(false)
+  const [makeError, setMakeError] = useState<string | null>(null)
+  const makingRef = useRef(false)
   /**
    * Dock tool selection. There is no MOVE button — the resting hand is what
    * every tool falls back to: re-clicking the active tool stands it down,
@@ -959,6 +951,24 @@ function Canvas(): React.JSX.Element {
   const selectTool = useCallback((next: ToolId) => {
     setTool((prev) => (prev === next ? 'move' : next))
     setClipping(false)
+    setMakeError(null)
+  }, [])
+  /**
+   * The dock MAKES, it no longer places (the canvas is retired): a chip or
+   * NOTE / BROWSER makes its card at once in the active workspace, through
+   * the crew seat's own path (zoom/make-card.ts). One at a time, so a double
+   * press makes one card.
+   */
+  const make = useCallback(async (run: () => Promise<Made>) => {
+    if (makingRef.current) return
+    makingRef.current = true
+    setMaking(true)
+    setMakeError(null)
+    const made = await run()
+    makingRef.current = false
+    setMaking(false)
+    if (made.ok) setTool('move')
+    else setMakeError(made.error)
   }, [])
   /** The clipboard toggle: arming it stands any placement tool down. */
   const toggleClipping = useCallback(() => {
@@ -1030,10 +1040,12 @@ function Canvas(): React.JSX.Element {
     if (!snapshot) return
     let disposed = false
     const tick = async (): Promise<void> => {
+      // The browsers whose faces the item pets show (pets/thumb-wants.ts):
+      // with the canvas retired there is no viewport to ask.
       const ids = snapshotPlan({
-        zoom: cardZoomMode(reactFlow.getZoom()),
+        zoom: 'card',
         hidden: document.hidden,
-        visible: visibleBrowserIds(),
+        visible: thumbWants.ids(),
         zoomedId: zoomedNodeIdRef.current,
         max: THUMB_BATCH_MAX
       })
@@ -1106,13 +1118,14 @@ function Canvas(): React.JSX.Element {
   const thumbVersionsRef = useRef<Readonly<Record<string, number>>>({})
   useEffect(() => {
     if (!shouldPollThumbs({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
+    // ONE BATCH AT A TIME, AND NEVER FOR LONG (2026-11-01): a batch the Mac
+    // did not answer (one page's screenshot hung) used to be joined by
+    // another every 5 s, until they held every free HTTP/1.1 connection and
+    // the keystrokes typed in LIVE queued behind them.
+    let inFlight: AbortController | null = null
     const tick = (): void => {
-      // Zoomed OUT, no browser card decodes its thumb (BrowserNode mini path),
-      // so fetching + blob-decoding all of them is pure memory churn — and on a
-      // phone at fit-to-view (all cards mini) that churn is what tips iOS Safari
-      // into a WebContent OOM. Skip the whole poll at mini; it resumes when a
-      // card is zoomed in enough to actually show a picture.
-      if (document.hidden || cardZoomMode(reactFlow.getZoom()) === 'mini') return
+      // A page nobody is looking at needs no pictures.
+      if (document.hidden || inFlight) return
       // ONLY WHAT THE SCREEN SHOWS, IN ONE EXCHANGE, ONLY WHEN CHANGED. The
       // poll used to walk every browser card on the canvas eight at a time,
       // one request each with ?v= so nothing could ever be cached — through
@@ -1121,7 +1134,9 @@ function Canvas(): React.JSX.Element {
       // the viewport, one GET /api/browser/thumbs, and the version of each
       // frame already held rides along so an unchanged one answers with a
       // number and no bytes.
-      const visible = visibleBrowserIds()
+      // Only what the item pets show (pets/thumb-wants.ts): the canvas and
+      // its viewport are retired.
+      const visible = [...thumbWants.ids()]
       // Per-id failure backoff — the desktop's capture-storm lesson, applied to
       // the polling side. After an app restart NO engine is booted, so 40+
       // cards have no frame at once; re-asking them all every 5s was a
@@ -1140,7 +1155,10 @@ function Canvas(): React.JSX.Element {
       // A HEADER, not ?token=. This is an ordinary fetch and can set one, so
       // the token stays out of the URL — see tokenParam, which exists only
       // for the two EventSources that genuinely cannot.
-      void planeFetch(apiPath(`/api/browser/thumbs?${params.toString()}`), { headers: authHeaders() })
+      const batch = new AbortController()
+      inFlight = batch
+      const giveUp = setTimeout(() => batch.abort(), THUMB_BATCH_TIMEOUT_MS)
+      void planeFetch(apiPath(`/api/browser/thumbs?${params.toString()}`), { headers: authHeaders(), signal: batch.signal })
         .then((r) => (r.ok ? (r.json() as Promise<{ frames: ThumbBatchFrame[] }>) : null))
         .then((body) => {
           if (!body) {
@@ -1167,10 +1185,17 @@ function Canvas(): React.JSX.Element {
           }
         })
         .catch(failAll)
+        .finally(() => {
+          clearTimeout(giveUp)
+          if (inFlight === batch) inFlight = null
+        })
     }
     tick()
     const timer = setInterval(tick, 5000)
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      inFlight?.abort()
+    }
   }, [interactiveBrowser, reactFlow, visibleBrowserIds])
 
   // ESC dismisses the top overlay: modal panels (team fork / roster / metrics /
@@ -1293,76 +1318,6 @@ function Canvas(): React.JSX.Element {
     [tool, connectFrom]
   )
 
-  const onPaneClick = useCallback(
-    async (event: React.MouseEvent) => {
-      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
-      if (tool === 'terminal') {
-        // A SAVED TEMPLATE placed as a preset IMPORTS a session: a new
-        // workspace forked from the template — team, worktree, workdir —
-        // switched to. Not a terminal on this canvas, so it returns before
-        // createTerminal. The click that "placed" it is the confirm.
-        if (!role && templates.includes(preset)) {
-          try {
-            await cookrew().templateImport(preset, position)
-          } catch (error) {
-            console.error('Importing template failed:', error)
-          } finally {
-            setTool('move')
-          }
-          return
-        }
-        // window.prompt is unsupported in Electron — creation uses the
-        // preset (or saved-role) chips in the dock; a role boots its preset
-        // with the role prompt injected once the TUI is quiet (roleName path).
-        const selectedRole = role ? roles.find((r) => r.name === role) : undefined
-        const created = await cookrew().createTerminal(
-          selectedRole
-            ? { name: selectedRole.name, preset: selectedRole.preset, roleName: selectedRole.name, position, orch }
-            : { name: preset, preset, position, orch }
-        )
-        setTool('move')
-        // A new code agent zooms straight into its live terminal so the
-        // first prompt can be typed immediately; plain shells stay as
-        // overview cards.
-        if (created.kind === 'terminal' && created.preset !== 'Shell') {
-          zoomToNode(created.id, { ...created.position, ...created.size })
-        }
-      } else if (tool === 'note') {
-        const note: CanvasNode = {
-          kind: 'note',
-          id: crypto.randomUUID(),
-          name: 'untitled',
-          customName: null,
-          content: '',
-          locked: false,
-          position,
-          size: { width: 280, height: 220 }
-        }
-        await cookrew().addNode(note)
-        setTool('move')
-      } else if (tool === 'browser') {
-        const browser: CanvasNode = {
-          kind: 'browser',
-          id: crypto.randomUUID(),
-          name: 'Browser',
-          url: 'https://example.com',
-          position,
-          size: { width: 720, height: 560 }
-        }
-        await cookrew().addNode(browser)
-        setTool('move')
-      } else {
-        // A pane click while clipping clears the pick — the canvas-wide
-        // "click again to cancel". Arming no tool just stands connect down.
-        if (clipping) setPicked((prev) => (prev.size === 0 ? prev : new Set()))
-        setConnectFrom(null)
-      }
-    },
-    // templates is CONSULTED above; leaving it out freezes the closure and a
-    // template placement falls through to plain terminal creation.
-    [tool, preset, role, roles, orch, clipping, templates, screenToFlowPosition, zoomToNode]
-  )
-
   // STABLE, on purpose. React Flow hands these three straight to every
   // NodeWrapper as props, and NodeWrapper is memo'd on them: an inline arrow
   // here is a new identity per Canvas render, which re-rendered EVERY mounted
@@ -1405,6 +1360,30 @@ function Canvas(): React.JSX.Element {
   // props (so they re-rendered) even during pan/zoom and activity, when the
   // nodes themselves are unchanged. These now change only on a real workspace
   // push.
+  // Each terminal's wired browsers and notes, for its zoomed card. Kept the
+  // same object while nothing a card shows changes (sameAttachmentIndex):
+  // the workspace object itself changes on every tick and drag.
+  // THE CREW, READ ONCE (stage/crew-rows.ts · CrewProvider): the zoom view,
+  // the stage and the agent group all draw this one list, so they agree on
+  // who is in it, how many, and in what state. In context, not here: a crew
+  // change re-renders those three, not the whole app.
+  const attachIndexRef = useRef<AttachmentIndex>(new Map())
+  const attachIndex = useMemo(() => {
+    const next = attachmentIndex(workspace?.nodes ?? [], workspace?.connections ?? [])
+    if (!sameAttachmentIndex(attachIndexRef.current, next)) attachIndexRef.current = next
+    return attachIndexRef.current
+  }, [workspace?.nodes, workspace?.connections])
+  // What a full view shows, for the side groups that attach to it: never the
+  // card on the panel; around a browser or note, the agents wired to it first.
+  const fullItemId = zoomFull === 'item' && stagePick.kind === 'item' ? stagePick.id : null
+  const fullAgentId = zoomFull === 'agent' ? (stageShowing?.terminalId ?? null) : null
+  const fullDock = useMemo(
+    () => ({
+      agents: { exclude: fullAgentId, first: fullItemId ? (ownersOf(attachIndex).get(fullItemId) ?? []) : [] },
+      items: { exclude: fullItemId }
+    }),
+    [fullAgentId, fullItemId, attachIndex]
+  )
   const terminals = useMemo(
     () => (workspace?.nodes.filter((n) => n.kind === 'terminal') ?? []) as TerminalNodeData[],
     [workspace?.nodes]
@@ -1413,6 +1392,18 @@ function Canvas(): React.JSX.Element {
     () => (workspace?.nodes.filter((n) => n.kind === 'browser') ?? []) as BrowserNodeData[],
     [workspace?.nodes]
   )
+  /** The global prompt's agents: its @names, and who it can talk to. */
+  const promptAgents = useMemo(
+    () => terminals.map((t) => ({ id: t.id, name: t.name, remote: t.servedSession != null })),
+    [terminals]
+  )
+  /** The prompt's "#Name": every note and browser of the workspace, and who holds it. */
+  const promptArtifacts = useMemo(() => {
+    const owners = ownersOf(attachIndex)
+    return (workspace?.nodes ?? []).flatMap((n) =>
+      n.kind === 'note' || n.kind === 'browser' ? [{ id: n.id, name: n.name, kind: n.kind, owners: owners.get(n.id) ?? [] }] : []
+    )
+  }, [workspace?.nodes, attachIndex])
   // The snapshot poll reads this instead of `browsers`, so it subscribes once
   // rather than tearing down its interval on every workspace push.
   browsersRef.current = browsers
@@ -1463,163 +1454,51 @@ function Canvas(): React.JSX.Element {
 
   return (
     <CanvasUiContext.Provider value={ui}>
+      <CrewProvider workspace={workspace} workspaceId={activeWsId}>
       <div className={`cr cr-app tool-${tool}${clipping ? ' clipping' : ''}`}>
         <Header
           workspaceName={workspace?.name ?? 'Cookrew'}
           dir={workspace?.dir ?? ''}
           terminalCount={terminals.length}
           busyCount={busyCount}
-          attentionCount={attentionCount}
           view={view}
           onViewChange={setView}
           onWall={wall.open}
+          onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}
+          routeStatus={routeState.state?.status ?? null}
           onResync={resync}
+          zoomedAgent={view === 'stage' ? (stageShowing?.zoomed ? stageShowing.name : null) : (terminals.find((t) => t.id === zoomedTerminalId)?.name ?? null)}
+          stageWorkspace={view === 'stage' ? (stageShowing?.workspaceName ?? null) : null}
           avatar={account.avatar}
+          search={<BoardSearch workspace={workspace} activeWorkspaceId={activeWsId} attentionCount={attentionCount} />}
         />
         <div className="cr-stage" ref={stageRef}>
-          <ReactFlow
-            nodes={renderedNodes}
-            edges={renderedEdges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            onNodesChange={onNodesChange}
-            onNodeDragStart={onNodeDragStart}
-            onNodeDragStop={onNodeDragStop}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            onNodeContextMenu={onNodeContextMenu}
-            onNodeMouseEnter={onNodeMouseEnter}
-            onNodeMouseLeave={onNodeMouseLeave}
-            /* Cards stay draggable while clipping — the clipboard is a
-               toggle over the resting hand, not a separate one: the header
-               drags, the body click picks (click again cancels). */
-            onNodesDelete={onNodesDelete}
-            onEdgesDelete={onEdgesDelete}
-            onConnect={onConnect}
-            minZoom={0.1}
-            maxZoom={8}
-            onlyRenderVisibleElements
-            /* Backspace/Delete used to remove a selected card outright — and
-               disconnect its cables on the way, since ReactFlow deletes the
-               attached edges too. That is the accident the close confirmation
-               exists to prevent, and it fired from a key that sits next to the
-               ones you type with. ⌘W is the keyboard way to close now, and it
-               asks like every ✕ does. */
-            deleteKeyCode={null}
-            proOptions={{ hideAttribution: true }}
-            fitView
-          >
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="#D9D3C5" />
-            <SnapGuides guides={guides} />
-            {/* The tidied cables. ReactFlow holds no edges in this mode (see
-                visibleCanvasEdges); this layer routes the full set around the
-                cards and draws shared runs once. It reads `nodes` and `edges`,
-                which a pan never changes — so a pan never renders it. */}
-            {canvasVisualMode === 'harness' && <CableHarness nodes={nodes} edges={edges} />}
-            <MiniMap
-              pannable
-              zoomable
-              className="cookrew-minimap"
-              nodeColor={minimapNodeColor}
-              nodeStrokeColor={minimapNodeStrokeColor}
-              nodeClassName={minimapNodeClassName}
-            />
-            <Controls position="bottom-right" showInteractive={false}>
-              <ControlButton
-                className={`canvas-visual-toggle mode-${canvasVisualMode}`}
-                data-mode={canvasVisualMode}
-                aria-label={`Canvas view: ${VISUAL_MODE_LABEL[canvasVisualMode]}`}
-                title={`Canvas view: ${VISUAL_MODE_LABEL[canvasVisualMode]}. Next: ${VISUAL_MODE_LABEL[nextCanvasVisualMode(canvasVisualMode)]}`}
-                onClick={cycleCanvasVisualMode}
-              >
-                <span className="canvas-visual-glyph">
-                  <CrIcon name={VISUAL_MODE_ICON[canvasVisualMode]} />
-                </span>
-              </ControlButton>
-            </Controls>
-            {/* Cross-workspace paste preview: dashed ghosts at the exact
-                spots the staged elements would land (moves keep their
-                position, copies nudge +32). Flow coordinates via the
-                viewport portal, so they pan/zoom with the canvas. */}
-            {clipping &&
-              clipInfo !== null &&
-              activeWsId !== null &&
-              clipInfo.fromWorkspaceId !== activeWsId && (
-                <ViewportPortal>
-                  {clipInfo.items.map((item) => {
-                    const nudge = item.moves ? 0 : 32
-                    return (
-                      <div
-                        key={item.id}
-                        className="cr-paste-ghost"
-                        style={{
-                          transform: `translate(${item.position.x + nudge}px, ${item.position.y + nudge}px)`,
-                          width: item.size.width,
-                          height: item.size.height
-                        }}
-                      >
-                        <span className="cr-paste-ghost-name">{item.name}</span>
-                      </div>
-                    )
-                  })}
-                </ViewportPortal>
-              )}
-          </ReactFlow>
-          {/* Inside the stage on purpose: it covers exactly the canvas and
-              leaves the header — which owns the way back — reachable above it.
-              The canvas keeps running underneath rather than unmounting. */}
+          {/* THE CANVAS IS RETIRED (owner, 2026-10-30): it is not rendered, so
+              it costs no CPU or GPU. Every card opens on the stage below, and
+              the agents and the browsers and notes ride over every page as
+              pets (pets/). */}
           {/* RETIRED (owner ruling 2026-08-26): the WHO CAN CALL entry opened
               a parallel admin panel onto a dead end ("no agents are
               exportable"). Sharing now happens once, where saving happens —
               the save sheet's share section — and who-is-on lives on the
               served team itself. */}
-          {view === 'agents' && (
+          {view === 'stage' && (
             <Suspense fallback={null}>
-            <RosterPanel
-              workspace={workspace}
-              activeWorkspaceId={activeWsId}
-              picked={picked}
-              onTogglePick={togglePick}
-              editing={boardSelecting}
-              onEditingChange={setBoardSelecting}
-              onClipStaged={() => {
-                // Land where the clipboard lives: the canvas with the
-                // clipboard armed, tray showing what the board just staged.
-                setView('canvas')
-                setClipping(true)
-                setTool('move')
-              }}
-              variant="view"
-              onClose={() => setView('canvas')}
-            />
+              <TerminalAttachmentsContext.Provider value={attachIndex}>
+                <WithCrew>
+                  {(crew) => (
+                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose}>
+                      {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
+                    </ZoomView>
+                  )}
+                </WithCrew>
+              </TerminalAttachmentsContext.Provider>
             </Suspense>
           )}
-          {/* The clipboard's action bar: copy / cut / save / paste on the
-              picked cards (cables included). Present the whole time the
-              toggle is on — PASTE must be reachable before anything is
-              picked. Hidden when a card zooms to full view. */}
-          {workspace && clipping && view === 'canvas' && overlayPrimaryId === null && (
-            <SelectionBar
-              workspace={workspace}
-              picked={picked}
-              onClipChange={setClipInfo}
-              onPasted={() => setClipping(false)}
-            />
-          )}
-          {/* Right-click / long-press card edit menu: rename, save/fork by
-              checkpoint, workdir. Rendered at viewport coordinates inside
-              the stage; CardMenu dismisses itself outside / on Escape. */}
-          {cardMenu &&
-          workspace &&
-          view === 'canvas' &&
-          workspace.nodes.some((n) => n.id === cardMenu.nodeId) ? (
-            <CardMenu
-              anchor={cardMenu}
-              workspace={workspace}
-              onClose={() => setCardMenu(null)}
-            />
-          ) : null}
         </div>
+        {/* The dock always holds its strip: it is where an agent is added, and
+            a dock that comes and goes resizes the stage under the zoom. Only
+            its composer waits for an agent to be in the middle (voiceFor). */}
         <Dock
           tool={tool}
           onSelect={selectTool}
@@ -1631,17 +1510,38 @@ function Canvas(): React.JSX.Element {
           onPreset={(name) => {
             setPreset(name)
             setRole(null)
+            // A saved team opens a session of its own; a harness joins this crew.
+            void make(() =>
+              templates.includes(name)
+                ? importTeam(cookrew(), name)
+                : makeAgent(cookrew(), { name, preset: name, orch }, workspace?.nodes ?? [])
+            )
           }}
           roles={roles}
           role={role}
           onRole={(name) => {
             setRole(name)
+            const chosen = roles.find((r) => r.name === name)
+            if (!chosen) return
+            void make(() =>
+              makeAgent(cookrew(), { name: chosen.name, preset: chosen.preset, roleName: chosen.name, orch }, workspace?.nodes ?? [])
+            )
           }}
+          onMake={(kind) => void make(() => makeItem(cookrew(), kind, workspace?.nodes ?? []))}
+          making={making}
+          makeError={makeError}
           onImportServed={() => setImportServedOpen(true)}
           orch={orch}
           onOrch={setOrch}
+          agents={promptAgents}
+          artifacts={promptArtifacts}
+          nodes={workspace?.nodes ?? NO_NODES}
           voiceFor={
-            zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
+            view === 'stage'
+              ? stageShowing?.terminalId != null
+                ? { id: stageShowing.terminalId, remote: terminals.find((t) => t.id === stageShowing.terminalId)?.servedSession != null }
+                : null
+              : zoomedTerminalId && terminals.some((t) => t.id === zoomedTerminalId)
               ? {
                   id: zoomedTerminalId,
                   // An imported card runs at someone else's app: the dock's
@@ -1651,14 +1551,8 @@ function Canvas(): React.JSX.Element {
               : null
           }
           browserFor={browserInFullView(overlayPrimaryId, browsers)}
-          /* Board view: the canvas tools glide out and the board's
-             clipboard selection toggle glides in — the SAME dock, the same
-             motion as zooming a terminal. */
-          boardFor={
-            view === 'agents'
-              ? { editing: boardSelecting, onToggle: () => setBoardSelecting((v) => !v) }
-              : null
-          }
+          /* The board is the header's search box now; its dock toggle is unused. */
+          boardFor={null}
           connectHint={
             tool === 'connect'
               ? connectFrom
@@ -1666,19 +1560,6 @@ function Canvas(): React.JSX.Element {
                 : 'CLICK THE FIRST NODE TO CONNECT'
               : null
           }
-        />
-        <LodOverlays
-          terminals={terminals}
-          browsers={browsers}
-          deliberateOpen={deliberateOpenRef}
-          focused={zoomedNodeIdRef}
-          arrivedId={arrivedId}
-          onArrivalConsumed={clearArrived}
-          onPrimaryChange={setOverlayPrimaryId}
-          onPrimaryTerminalChange={setZoomedTerminalId}
-          onThumb={onThumb}
-          isPhoneViewing={isPhoneViewing}
-          interactiveCapability={interactiveCapability}
         />
         {metricsOpen && (
           <Suspense fallback={null}>
@@ -1728,18 +1609,96 @@ function Canvas(): React.JSX.Element {
         {/* The screen wall covers the stage it hands back to, so it is mounted
             after the canvas and measures that stage rather than guessing. */}
         {wall.element}
+        <RoutingPanel
+          open={routingOpen}
+          onClose={() => setRoutingOpen(false)}
+          state={routeState.state}
+          available={routeState.available}
+          onRun={(line, options) => void setupTerminal.run(line, options)}
+          setupTerminalId={setupTerminal.terminalId}
+          focusTick={setupTerminal.focusTick}
+          running={setupTerminal.running}
+          onSetDefault={routeState.setDefault}
+          onSetSharedMcp={routeState.setSharedMcp}
+          error={newestError(routeState.error, setupTerminal.error)}
+          onAddToDock={(harness) => {
+            // "In the dock" as Cookrew can make it true today: the harness
+            // becomes the dock's active preset, its chip lit in the row.
+            setPreset(harness.name)
+            setRole(null)
+            setRoutingOpen(false)
+          }}
+          names={cardNames}
+          onZoom={(terminalId) => {
+            setRoutingOpen(false)
+            zoomToNode(terminalId)
+          }}
+        />
         <EventToastLayer />
+        {/* THE BROWSER HOST: every browser page lives in BrowserLayer and is
+            drawn at the slot a stage pane or a terminal's lower half measures
+            (attach-view.ts). It rode inside the canvas's LodOverlays, and
+            retiring the canvas took it along — every browser slot stayed
+            empty (owner, 2026-10-31). No canvas, so no card rects. */}
+        <BrowserLayer
+          browsers={browsers}
+          lod={NO_CANVAS_LOD}
+          onThumb={onThumb}
+          isPhoneViewing={isPhoneViewing}
+          interactiveCapability={interactiveCapability}
+        />
+        {/* The crew, and the browsers and notes, as pets over every page: hover
+            for a card, click to open it (pets/). On the stage they ride at the
+            full view only — the navigator draws the crew everywhere else. */}
+        {(zoomFull !== null || view !== 'stage') && (
+          <WithCrew>
+            {(crew) => (
+              <AgentPets
+                crew={crew}
+                attachIndex={attachIndex}
+                onOpen={zoomToNode}
+                onDelete={requestClose}
+                // In a full view both groups attach to its panel (pets/pet-dock.ts),
+                // as group-motion-pivot.html draws them.
+                dock={view === 'stage' && zoomFull !== null ? fullDock.agents : null}
+              />
+            )}
+          </WithCrew>
+        )}
+        {/* Not beside an agent's full view: its browsers and notes attach to
+            its own sheet there (stage/AgentArtifacts.tsx · owner, 2026-11-01). */}
+        {(zoomFull === 'item' || view !== 'stage') && <ItemPets
+          workspace={workspace}
+          attachIndex={attachIndex}
+          dock={view === 'stage' && zoomFull !== null ? fullDock.items : null}
+          onStage={view === 'stage' ? (stageShowing?.terminalId ?? null) : null}
+          onOpen={(id, owners) => {
+            // The agent on stage's own browser or note opens under its
+            // transcript, as its side tab did; anything else takes the middle.
+            const onStage = view === 'stage' ? (stageShowing?.terminalId ?? null) : null
+            const kind = workspace?.nodes.find((n) => n.id === id)?.kind
+            if (onStage && owners.includes(onStage) && (kind === 'browser' || kind === 'note')) attachView.toggle(onStage, id, kind)
+            else zoomToNode(id)
+          }}
+        />}
         {/* D14 · a door this Mac was serving moved to another of the account's. */}
         <DoorMovedNotice />
-        <SousPill listening={ptt.listening} partial={ptt.partial} reply={sousReply} />
+        {/* Terminals from an earlier macOS login cannot resolve names or open apps. */}
+        <TerminalSessionNotice />
+        {/* R3 · the one box: ⌘K on the desktop, the bottom bar on the phone. */}
+        <CommandBox open={commandOpen} onClose={closeCommand} phone={isRemoteMode()} />
         {/* Identity: the sheets and the lock. Mounted here, after everything
             else, so the lock screen is drawn over the canvas it covers. */}
         {account.overlays}
         <ReauthOverlay />
       </div>
+      </CrewProvider>
     </CanvasUiContext.Provider>
   )
 }
+
+/** One empty list, so a missing workspace does not hand the dock a new array every render. */
+const NO_NODES: readonly CanvasNode[] = []
 
 export default function App(): React.JSX.Element {
   return (

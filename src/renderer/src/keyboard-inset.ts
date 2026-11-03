@@ -14,9 +14,11 @@ export function keyboardInset(innerHeight: number, viewportHeight: number, offse
 
 /**
  * Track the keyboard inset via window.visualViewport and publish it as the
- * `--kb-inset` CSS variable (belt-and-suspenders to Forge's viewport-meta half),
- * so the dock/composer — and the mobile checkpoint sheet — ride above the
- * keyboard. No visualViewport (desktop / older engines) → NO-OP: the inset stays
+ * `--kb-inset` CSS variable, so the dock/composer — and the mobile checkpoint
+ * sheet — ride above the keyboard. This is the ONLY way the layout meets the
+ * keyboard: the viewport meta asks for `resizes-visual`, because resizing the
+ * layout refits the zoomed terminal and resizes the pane it shares with the
+ * desktop (tests/keyboard-viewport.test.ts). No visualViewport (desktop / older engines) → NO-OP: the inset stays
  * 0 and the variable is never set.
  */
 export function useKeyboardInset(): number {

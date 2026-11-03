@@ -87,7 +87,7 @@ export interface PathReporterDeps {
  * observed again.
  */
 const signatureOf = (report: PathReport): string =>
-  JSON.stringify([report.plane, report.permission, report.browser, report.attempts])
+  JSON.stringify([report.plane, report.permission, report.browser, report.attempts, report.probes ?? []])
 
 /**
  * A reporter with its three guards, as a value.
@@ -107,7 +107,8 @@ export const createPathReporter = (
   return async (report: PathReport): Promise<boolean> => {
     // FIRST, AND WITHOUT TOUCHING ANYTHING. A report with no rows describes no
     // race, and its only observable effect was to suppress the report that did.
-    if (report.attempts.length === 0) return false
+    // A WebRTC row alone (a link knocked open or one that ended) is a fact.
+    if (report.attempts.length === 0 && (report.probes?.length ?? 0) === 0) return false
     if (inFlight) return false
     const at = now()
     if (lastAt !== null && at - lastAt < gap) return false

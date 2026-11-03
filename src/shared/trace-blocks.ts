@@ -14,6 +14,7 @@ import {
   type StreamingTurnParser
 } from './session-turns'
 import type { TurnRecord } from './turn'
+import type { TraceImage } from './prompt-images'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
 export interface TraceToolCall {
@@ -22,6 +23,19 @@ export interface TraceToolCall {
   args: string
   /** Result snippet (head-capped); '' when no output was captured. */
   result: string
+  /**
+   * Where in the block's `reply` the call was made (its length then): the chat
+   * folds what came before the last step and shows the answer after it.
+   * Absent where the reply is only the last message (codex): every call precedes it.
+   */
+  at?: number
+}
+
+/** One thinking block the agent wrote (head-capped), where in `reply` it fell, and after how many of the block's tool calls. */
+export interface TraceThought {
+  at: number
+  calls: number
+  text: string
 }
 
 export interface TraceBlock {
@@ -34,10 +48,18 @@ export interface TraceBlock {
   index: number
   /** Exact prompt text, newlines included. */
   prompt: string
+  /**
+   * The pictures Claude Code pasted into the prompt itself ("[Image #N]"):
+   * where their bytes sit in the session file, never the bytes. Absent when
+   * it carried none (and for codex and pi, which record no such thing).
+   */
+  images?: TraceImage[]
   /** Joined assistant text for the block. */
   reply: string
   /** Tool invocations in TUI order, with matched results. */
   activity: TraceToolCall[]
+  /** The agent's thinking, in order; absent when it wrote none (codex keeps its reasoning encrypted). */
+  thoughts?: TraceThought[]
   startedAt: number
   endedAt: number
   /**
@@ -65,9 +87,19 @@ export interface TraceBlock {
 const ACTIVITY_ARG_CHARS = 80
 /** Head of a tool result snippet. */
 const ACTIVITY_RESULT_CHARS = 160
+/** Head of a thinking block: the chat shows it folded, as a glimpse of the reasoning. */
+const THOUGHT_CHARS = 600
 
 const head = (text: string, max: number): string =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text
+
+/**
+ * The reply's length once a message's texts so far are joined on: messages
+ * part with a blank line, a message's own texts with a newline (as the
+ * parsers join them), so a step taken mid-message falls after its words.
+ */
+export const replyAt = (reply: string, pending: readonly string[]): number =>
+  pending.length === 0 ? reply.length : (reply.length > 0 ? reply.length + 2 : 0) + pending.join('\n').length
 
 function timeMs(value: unknown, fallback: number): number {
   const parsed = typeof value === 'string' ? Date.parse(value) : NaN
@@ -91,6 +123,8 @@ interface ClaudeEntry {
   type?: string
   subtype?: string
   isMeta?: boolean
+  /** The N of each "[Image #N]" Claude Code numbered, in the order of the record's image blocks. */
+  imagePasteIds?: unknown
   uuid?: string
   parentUuid?: string
   timestamp?: string
@@ -101,6 +135,7 @@ interface ClaudeEntry {
 interface ClaudeContentBlock {
   type?: string
   text?: string
+  thinking?: string
   name?: string
   id?: string
   input?: unknown
@@ -138,6 +173,20 @@ function claudeResultText(content: unknown): string {
     return head(texts.join('\n'), ACTIVITY_RESULT_CHARS)
   }
   return ''
+}
+
+/** The image blocks of a prompt record, as where they are: never their bytes. */
+function claudeImagesOf(entry: ClaudeEntry): TraceImage[] {
+  const content = entry.message?.content
+  if (typeof entry.uuid !== 'string' || !Array.isArray(content)) return []
+  const ids = Array.isArray(entry.imagePasteIds) ? entry.imagePasteIds : []
+  const images: TraceImage[] = []
+  for (const [i, raw] of (content as ClaudeContentBlock[]).entries()) {
+    if (raw?.type !== 'image') continue
+    const n = ids[images.length]
+    images.push({ uuid: entry.uuid, i, ...(typeof n === 'number' ? { n } : {}) })
+  }
+  return images
 }
 
 /**
@@ -239,11 +288,14 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
           })
         }
         if (step !== null) {
+          const images = claudeImagesOf(entry)
           if (step.sibling && current !== null) {
             // Same submission — collapse: adopt the continuation identity/prompt,
             // keep the accumulated reply/activity (siblings precede any reply).
             current.id = checkpointIdentity(step.id)
             current.prompt = step.id.prompt
+            // Claude writes the words and their pasted images as one more record of the same submission.
+            if (images.length > 0) current.images = [...(current.images ?? []), ...images]
             continue
           }
           const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
@@ -251,6 +303,7 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             id: checkpointIdentity(step.id),
             index: step.id.index,
             prompt: step.id.prompt,
+            ...(images.length > 0 ? { images } : {}),
             reply: '',
             activity: [],
             startedAt,
@@ -274,9 +327,12 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
         }
         if (entry.type !== 'assistant' || !Array.isArray(content)) continue
         const texts: string[] = []
+        const block = current
         for (const raw of content as ClaudeContentBlock[]) {
           if (raw.type === 'text' && typeof raw.text === 'string' && raw.text.trim().length > 0) {
             texts.push(raw.text)
+          } else if (raw.type === 'thinking' && typeof raw.thinking === 'string' && raw.thinking.trim().length > 0) {
+            block.thoughts = [...(block.thoughts ?? []), { at: replyAt(block.reply, texts), calls: block.activity.length, text: head(raw.thinking.trim(), THOUGHT_CHARS) }]
           } else if (
             raw.type === 'tool_use' &&
             typeof raw.name === 'string' &&
@@ -287,14 +343,17 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             const call: TraceToolCall = {
               tool: raw.name.trim(),
               args: claudeToolArgs(raw.input),
-              result: ''
+              result: '',
+              at: replyAt(block.reply, texts)
             }
-            current.activity.push(call)
+            block.activity.push(call)
             if (typeof raw.id === 'string') pendingCalls.set(raw.id, call)
           }
         }
+        // Each message the agent sends is its own paragraph: a single newline
+        // is a soft break in Markdown, and the chat read three messages as one.
         if (texts.length > 0) {
-          current.reply = current.reply.length > 0 ? `${current.reply}\n${texts.join('\n')}` : texts.join('\n')
+          current.reply = current.reply.length > 0 ? `${current.reply}\n\n${texts.join('\n')}` : texts.join('\n')
         }
         current.endedAt = timeMs(entry.timestamp, current.endedAt)
       }
@@ -672,7 +731,8 @@ function createPiBlockBuilder(): PiBlockBuilder {
           const call: TraceToolCall = {
             tool: block.name.trim(),
             args: claudeToolArgs(block.arguments),
-            result: ''
+            result: '',
+            at: replyAt(current.reply, texts)
           }
           current.activity.push(call)
           if (typeof block.id === 'string') pending.set(block.id, call)
@@ -680,7 +740,7 @@ function createPiBlockBuilder(): PiBlockBuilder {
       }
       if (texts.length > 0) {
         const text = texts.join('\n')
-        current.reply = current.reply ? `${current.reply}\n${text}` : text
+        current.reply = current.reply ? `${current.reply}\n\n${text}` : text
       }
       // FINALITY tracks the LATEST assistant message's stopReason, exactly
       // like Claude's stop_reason rule (verified on real session files):

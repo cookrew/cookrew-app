@@ -94,6 +94,15 @@ describe('buildAgentRows — phase', () => {
   it('reports an inactive agent as offline whatever its last activity said', () => {
     expect(phaseOf({ phase: 'thinking' }, { active: false })).toBe('offline')
   })
+  it('marks a reply nobody has looked at yet as unread, and only that', () => {
+    const unreadOf = (a: Partial<TerminalActivity>): boolean | undefined => {
+      const out = buildAgentRows({ roster: [entry()], activities: { t1: activity(a) }, now: NOW })
+      return [...out.live, ...out.quiet][0].unread
+    }
+    expect(unreadOf({ phase: 'replied' })).toBe(true)
+    expect(unreadOf({ phase: 'idle', reply: 'all tests pass' })).toBe(false)
+    expect(unreadOf({ phase: 'thinking' })).toBe(false)
+  })
 })
 
 describe('buildAgentRows — the turn the row shows', () => {
@@ -474,5 +483,31 @@ describe('buildAgentRows — the checkpoint count must stay the checkpoint count
     })
     const byId = new Map([...out.live, ...out.quiet].map((r) => [r.id, r.turnCount]))
     expect([byId.get('a'), byId.get('b'), byId.get('c')]).toEqual([1, 2, 3])
+  })
+})
+
+describe('an unchanged agent keeps its row (perf: every push rebuilt ~370 rows)', () => {
+  it('gives back the same row object while its inputs are the same, and a new one when its activity changes', () => {
+    const a = entry({ id: 'keep-a', name: 'A' })
+    const b = entry({ id: 'keep-b', name: 'B' })
+    const actA = activity({ terminalId: 'keep-a', prompt: 'hi', reply: 'yo' })
+    const actB1 = activity({ terminalId: 'keep-b', prompt: 'one', reply: null, phase: 'thinking' })
+    const first = buildAgentRows({ roster: [a, b], activities: { 'keep-a': actA, 'keep-b': actB1 }, now: 1 })
+    const actB2 = activity({ terminalId: 'keep-b', prompt: 'one', reply: 'done', phase: 'replied' })
+    const second = buildAgentRows({ roster: [a, b], activities: { 'keep-a': actA, 'keep-b': actB2 }, now: 2 })
+    const rowA = (rows: typeof first) => [...rows.live, ...rows.quiet].find((r) => r.id === 'keep-a')
+    const rowB = (rows: typeof first) => [...rows.live, ...rows.quiet].find((r) => r.id === 'keep-b')
+    expect(rowA(second)).toBe(rowA(first))
+    expect(rowB(second)).not.toBe(rowB(first))
+    expect(rowB(second)?.phase).toBe('done')
+  })
+
+  it('a changed roster entry (renamed) is a new row', () => {
+    const before = entry({ id: 'keep-c', name: 'Old' })
+    const act = activity({ terminalId: 'keep-c', prompt: 'p', reply: 'r' })
+    const first = buildAgentRows({ roster: [before], activities: { 'keep-c': act }, now: 1 })
+    const second = buildAgentRows({ roster: [{ ...before, name: 'New' }], activities: { 'keep-c': act }, now: 1 })
+    expect(second.live[0]).not.toBe(first.live[0])
+    expect(second.live[0].name).toBe('New')
   })
 })

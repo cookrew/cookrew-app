@@ -86,6 +86,15 @@ export interface AttachSpec {
    * (tmux, direct) ignore it entirely.
    */
   card?: PaneCardInfo
+  /**
+   * The card's ROUTE (route program): env the harness reads to reach the
+   * Magpie gateway, and args appended to its command line. Both are set by
+   * pty.ts from the route service at spawn, never for a served pane, and
+   * each backend carries them the way it carries COOKREW_*: the boot script
+   * (tmux, herdr), `--env` (herdr split) or the spawn options (direct).
+   */
+  env?: Record<string, string>
+  args?: string[]
 }
 
 /**
@@ -201,6 +210,11 @@ export interface Multiplexer {
   sessionExists(name: string): boolean
   /** Session names this backend owns — never foreign ones. */
   listSessions(): string[]
+  /**
+   * Sessions a client of the backend itself has in front of a person (herdr's
+   * focused pane). Optional: absent = the backend cannot say.
+   */
+  focusedSessions?(): string[]
   killSession(name: string): void
 
   /**
@@ -257,6 +271,12 @@ export interface Multiplexer {
    * degrade to that rather than assume depth they did not get.
    */
   captureDeep?(name: string, lines: number): string | null
+  /**
+   * The pane's recent history WITH its colours, wrapped at the pane width —
+   * what a viewer needs to scroll locally (PtySession.seedFrame). Optional and
+   * async: only a backend with an off-thread runner answers; null = no view.
+   */
+  historyAnsiAsync?(name: string, lines: number): Promise<string | null>
   scrollState(name: string): ScrollState
   /**
    * Bounded-STALE scroll state for the hot activity path, served without a
@@ -360,6 +380,24 @@ export interface Multiplexer {
    * nowhere to show it (tmux, direct) do not implement it.
    */
   reportPaneCard?(name: string, card: PaneCardInfo): void
+
+  /**
+   * The session's tab wears its card's name after a rename, when the session
+   * has the tab to itself (herdr; a tab is labelled once at creation and
+   * otherwise keeps a name the card no longer has). Same display-only, best
+   * effort contract as reportPaneCard.
+   */
+  renameTab?(name: string, label: string): void
+
+  /**
+   * The backend's own name for the session's agent follows the card's
+   * (herdr: `agent rename`, a slug unique among live agents; cleared when the
+   * card's name has no slug). Same display-only, best effort contract.
+   */
+  nameAgent?(name: string, cardName: string): void
+
+  /** renameTab and nameAgent together, off one lookup of the session (herdr). */
+  followRename?(name: string, label: string): void
 
   /**
    * The workspace-level half of the binding: the backend's workspace wears

@@ -1,11 +1,25 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron'
 import path from 'node:path'
+import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
-import { PtyManager, multiplexer, sessionNameFor } from './pty'
+import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
+import { buildInbox, type InboxNode } from './inbox'
+import { cachedDispatchReader, wireInbox } from './inbox-wiring'
+import { createWindowHold } from './inbox-window-hold'
+import { deliverToRecruit } from './recruit-delivery'
+import { nameAgent } from './agent-namer'
+import { planRename, stillStandIn, type RenameOutcome } from './agent-rename'
+import { recruitPatch, spawnInjectionFor } from './recruit-node'
+import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
+import { SousLedger } from './sous-ledger'
+import { createJevDecider, jevEnabled, JEV_DEADLINE_MS } from './sous-jev'
+import { createSousBreaker } from './sous-breaker'
+import { retryVerdict } from './sous-retry'
+import { buildCandidates } from './decide-candidates'
 import type { PtySession } from './pty'
 import type { PaneCardInfo } from './multiplexer'
 import { paneCardFor, reportAllPaneBindings, type BindableTerminal } from './pane-bindings'
@@ -19,6 +33,7 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
+import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
   DispatchService,
@@ -27,6 +42,7 @@ import {
   compactDispatchRegistry,
   defaultDispatchRegistry,
   readDispatchRecords,
+  contextExhausted,
   readDispatchTombstones,
   turnDetails
 } from './dispatch'
@@ -36,7 +52,7 @@ import { DEEP_LINK_SCHEME, createDeepLinkQueue, deepLinkInArgv, parseDeepLink } 
 import { DEEP_LINK_CHANNEL } from '../shared/deep-link'
 import { createRegistryTokenVerifier, registryKeyOverHttp } from './registry-token'
 import { faceWords, harnessesOf } from './served-face'
-import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit } from './ask'
+import { askTerminal, beginShutdown, cancelAllAsks, ownerSubmit, pasteAndSubmit, waitForReady } from './ask'
 import { CableSignalBus } from './cable-signal'
 import { defaultProducerLease } from './producer-lease'
 import {
@@ -48,6 +64,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
+import { registerZoomFleetIpc } from './zoom-fleet'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
@@ -57,7 +74,7 @@ import { sousBreakerState, sousReadiness, summarizeTurn } from './sous'
 import { translateBody } from './sous-translate'
 import { remoteSousHost } from './sous-remote-config'
 import { TRANSLATE_MAX_CHARS } from '../shared/translate'
-import { startSocketServer } from './socket-server'
+import { startSocketServer, type SousDoor } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
@@ -70,6 +87,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
+  localLevelsService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -78,9 +96,24 @@ import {
   activeCertFingerprint,
   trustedOrigins,
   allowedCompanionOrigins,
-  companionTokenAccepted
+  companionTokenAccepted,
+  refreshMobileCert,
+  advertisedHostsNow
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
+import { createSecretsStore } from './secrets-store'
+import { createRtcHost } from './rtc-peer'
+import { createSocketBridge } from './socket-bridge'
+import { BUILD_CHECK_MS, readBuildId } from './build-id'
+import { secretAuditDetails, type SecretAudit } from './secret-cli'
+import { ensureSecretSlotNote } from './secret-note'
+import { createScrubber } from './scrub'
+import { sousGatewayKey } from './sous-config'
+import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
+import { VphoneInstance } from './vphone-instance'
+import { createSocketGuest, vphoneSocketPath } from './vphone-socket'
+import { createUseInstances } from './use-instances'
+import { UseSignalBus } from './use-signal-bus'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
 import {
@@ -103,7 +136,12 @@ import {
   WorkspaceMeta
 } from '../shared/model'
 import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
-import { forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
+import { launchCommand, withoutRoutedPick } from '../shared/launch-tune'
+import { launchOfferFor, withLaunchOffers } from './launch-offers'
+import { GatewayMonitor } from './route/gateway'
+import { RouteService } from './route/service'
+import { magpieInstalled } from './route/discovery'
+import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
@@ -119,11 +157,13 @@ import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
+import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import { localDeviceName } from './device-name'
+import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
 import { Requests, answeredStoreIn } from './requests'
 import {
@@ -161,6 +201,7 @@ import { isChromiumErrorPage } from '../shared/browser-navigation'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
+  realCwd,
   resolveClaudeSessionId,
   resumeRoleSession,
   roleSessionDir,
@@ -199,9 +240,15 @@ import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
+import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
+import { reapOrphanChrome } from './orphan-chrome'
+import { staleAgentIds } from './agent-reconcile'
+import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
+import { AgentWaker } from './agent-wake'
+import { gatherSleepEvidence, paneHolder, quietSince, readProcTable } from './agent-sleep-evidence'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -235,6 +282,7 @@ import { doorMovedSentence } from '../shared/door-ownership'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
+import { prepareChoresDir } from './claude-trust'
 import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
@@ -309,6 +357,7 @@ import { buildRoleBootMessage } from '../shared/fork'
 import { pageTurns } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
+import { createPromptImageReader, imageRefOf } from './prompt-image'
 import { servedSessionKey } from './storage-gc-served'
 import { sweepStorageInWorker } from './storage-gc-worker'
 
@@ -468,6 +517,26 @@ const tuningAnnounced = new Map<string, string>()
 /** The same change-gated announcement the renderer gets, for phone streams. */
 const tuningBus = new EventEmitter()
 /**
+ * 'changed' when the registry has taken a reach card that differs from the
+ * last one it took: this Mac's addresses moved and the zone answers the new
+ * names. Phone streams relay it as `reach` (mobile-api) and the renderer gets
+ * `reach:changed`; both mean "race the Mac's names now, not in a minute".
+ */
+const reachBus = new EventEmitter()
+/**
+ * THE BUILD THIS MAC SERVES (build-id.ts). Read now and every minute; a
+ * change goes to every phone stream, whose page reloads itself when the
+ * owner next switches away from it or back (renderer/build-watch.ts).
+ */
+const buildBus = new EventEmitter()
+let buildId = readBuildId(app.getAppPath(), app.getVersion())
+setInterval(() => {
+  const next = readBuildId(app.getAppPath(), app.getVersion())
+  if (next === buildId) return
+  buildId = next
+  buildBus.emit('build', next)
+}, BUILD_CHECK_MS).unref()
+/**
  * Signals on the cables: "A asked B" and "B answered A", one frame each, to
  * the desktop renderer over IPC and to every phone stream over SSE
  * (mobile-api). Minted by the CLI ask and by the dispatch engine; the owner's
@@ -515,6 +584,92 @@ const ownerGrant = new OwnerGrant({
 })
 const callConversations = new CallConversationStore()
 /**
+ * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file per name. The
+ * value goes in from the note slot (IPC `secret:put`, or the phone's owner-
+ * token PUT) and comes out through `cookrew secret read` in an owner pane,
+ * and through nothing else — not an event, not workspace state, not a log.
+ */
+const secrets = createSecretsStore()
+/**
+ * THE DIRECT LINK BY WEBRTC (rtc-peer.ts): a phone on the relay offers, this
+ * Mac answers on exactly the addresses it publishes — the LAN first, then
+ * the tailnet — and the link needs no name and no certificate authority.
+ */
+const rtcHost = createRtcHost({
+  hosts: () => {
+    const endpoints = mobileEndpointList()
+    const v4 = (kind: string): string[] =>
+      endpoints.filter((e) => e.kind === kind && /^\d{1,3}(\.\d{1,3}){3}$/.test(e.host)).map((e) => e.host)
+    return [...new Set([...v4('lan'), ...v4('tailscale')])]
+  },
+  deviceId: () => accounts.account()?.deviceId ?? null,
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
+/**
+ * THE SCRUB (scrub.ts): every string that leaves main for a pane, a phone,
+ * a wall or a ledger. The sealed values are read per call from the store,
+ * the tokens from where they live; nothing is cached across calls.
+ */
+const scrub = createScrubber({
+  secrets: () =>
+    secrets
+      .list()
+      .map((row) => secrets.read(row.name)?.value)
+      .filter((value): value is string => typeof value === 'string'),
+  // The pairing token, the gateway's bearer, and the scoped key Sous will
+  // speak with (sous-config.ts) — read when the table is rebuilt.
+  tokens: () => [activePairingTokenValue(), routeService.gatewayKey(), sousGatewayKey()],
+  env: process.env,
+  // A seal or a removal drops the table at once; otherwise it lives 2 s.
+  onChange: (listener) => void secrets.onChange(listener)
+})
+/** The audit line every read and every missing read leaves: name only. */
+const auditSecret = (event: SecretAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  // A name nobody sealed gets a slot to land on (secret-note.ts) BEFORE the
+  // row is written, so the row can name the note. Best effort: a canvas that
+  // refuses the note still gets its audit line.
+  if (event.type === 'secret.requested') {
+    try {
+      ensureSecretSlotNote(
+        {
+          nodesOf: (id) => store.workspaceState(id).nodes,
+          createNote: (partial, id) => store.createNote(partial, id),
+          writeNote: (id, content) => store.writeNote(id, content),
+          connect: (from, to) => void store.connectAcross(from, to)
+        },
+        {
+          workspaceId,
+          asker: hit?.node.kind === 'terminal' ? (hit.node as TerminalNodeData) : null,
+          name: event.name
+        }
+      )
+    } catch (error) {
+      console.error(`[secrets] could not make a slot for ${event.name}:`, error)
+    }
+  }
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'agent',
+    timestamp: Date.now(),
+    // `<name>` or `<name> note:<id>` when a note on that canvas has the slot —
+    // scrubbed like every string that leaves main, for everyone, not only
+    // the wall (which still gets no details at all).
+    details: scrub(
+      secretAuditDetails(
+        event.name,
+        store.workspaceState(workspaceId).nodes.flatMap((node) => (node.kind === 'note' ? [node] : []))
+      )
+    )
+  })
+}
+/**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
  *
  * An unauthenticated call resolves a NAME before any credential is examined —
@@ -558,6 +713,64 @@ const servedSpawnContexts = new Map<
  * counts sessions rather than dollars.
  */
 const grants = serviceGrants(sessionsBase)
+// THE ROUTE (route program, 2026-10-11): is the Magpie gateway here, what it
+// serves, where each card's turns go. One service; the panel, the rail, the
+// phone and every spawn read it. Its emitter fans out to the renderer and
+// the phone stream (routeBus) exactly like the dials' tuningBus.
+const routeBus = new EventEmitter()
+const routeService = new RouteService({
+  // PATH, ~/.local/bin (the installer's symlink, off a GUI app's PATH) and the app bundle.
+  monitor: new GatewayMonitor({ hasBinary: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync) }),
+  fetch: (input, init) => fetch(input, init),
+  home: homedir(),
+  pathEnv: process.env.PATH,
+  pluginDir: app.isPackaged ? path.join(process.resourcesPath, 'magpie') : path.join(app.getAppPath(), 'resources', 'magpie'),
+  node: (id) => {
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    return node?.kind === 'terminal' ? node : null
+  },
+  updateNode: (id, patch) => void store.updateNodeUnsafe(id, patch),
+  isServed: (id) => {
+    const owner = store.ownerOf(id)
+    return owner !== undefined && servedSpawnContexts.has(owner)
+  },
+  harnessOf: (command) => harnessFor(command)?.id ?? null,
+  phaseOf: (id) => turns.phaseOf(id),
+  canRestoreExact: (node) => canRestoreExact(node),
+  // In place, with exact context: the kill drops the PTY, the spawn resumes
+  // the same session under the new env (the recover path's own guarantee).
+  respawn: async (id) => {
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    if (!node || node.kind !== 'terminal') return false
+    if (ptys.get(id)) ptys.kill(id)
+    spawnTracked(node)
+    return true
+  },
+  dockCommands: () => PRESETS.map((p) => p.command),
+  hasTurns: (id) => turns.history(id).length > 0,
+  // The session file the node names, on disk: the harness resumes it itself,
+  // whatever the lazy tracker has verified so far (claude and codex; the
+  // other two keep the gate's answer).
+  sessionOnDisk: (node) => {
+    const harness = harnessFor(node.command)?.id
+    if (harness === 'claude') return Boolean(node.claudeSessionId) && existsSync(claudeSessionFile(node.cwd, node.claudeSessionId as string))
+    if (harness === 'codex') return typeof node.codexSessionRef === 'string' && existsSync(node.codexSessionRef)
+    return false
+  },
+  terminalsAcross: () => store.terminalsAcross()
+})
+// The roster a page holds learns each change as it happens (agent-registry onChange).
+agents.onChange((entry) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('agents:changed', entry)
+})
+routeService.on('route', (state) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('route', state)
+  routeBus.emit('route', state)
+})
+routeService.on('card-route', (row) => {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('card-route', row)
+  routeBus.emit('card-route', row)
+})
 const grantPreflight = servedGrantPreflight({
   grants,
   orch: {
@@ -657,15 +870,12 @@ const servedCallers = new ServedCallers()
  * guessing from the shape of the URL.
  */
 /**
- * THE RELAY, and why it is opt-in rather than the default it will become.
- *
- * Turning this on hands a team's door to a machine we operate, and until
- * cookrew.dev is actually standing there that would be a promise the product
- * cannot keep. Configured → the card offers a cookrew.dev name; not configured
- * → everything below behaves exactly as it did, which is what keeps every
- * existing test about reach meaningful rather than merely still-passing.
+ * THE RELAY. Opt-in until cookrew.dev was standing there to keep the promise;
+ * the default since 0.4.0 (launch-defaults.ts). `COOKREW_REGISTRY=` (empty)
+ * still turns it off, and then everything below behaves as it did before —
+ * which is what keeps every existing test about reach meaningful.
  */
-const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
+const RELAY_ORIGIN = relayOrigin()
 /** COOKREW_HANDLE as the environment set it — a development override now. */
 const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
 
@@ -681,6 +891,8 @@ const accounts = new Accounts({
   // host, and a name already on the account gets a counter — decided here,
   // never at the registry, which files what it is sent.
   deviceName: localDeviceName(),
+  // STRATA: the record also says what kind of machine this is (machine-profile.ts).
+  machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -1931,6 +2143,12 @@ turns.onMark = (terminalId, patch) => {
   if (!result.ok) console.error(`mark write for ${terminalId}: ${result.error ?? 'failed'}`)
 }
 
+/** A prompt's pictures, for the prompt box and the CHAT/LOG views (prompt-image.ts). */
+const promptImages = createPromptImageReader({
+  chainFiles: async (terminalId) => (await streamService.chain(terminalId)).files.map((f) => f.file),
+  attachmentsDir: defaultAttachmentsDir()
+})
+
 /** What the desktop's stream door reads through — the SAME service the HTTP
  *  routes use, and the same door/scrape provider the old routes use. */
 const streamIpcDeps: StreamIpcDeps = {
@@ -2151,11 +2369,28 @@ const lazyTerminals = new LazyTerminalAttachments({
 const backendPhaseOf = (status: HerdrStatus): TurnPhase | null =>
   status === 'working' ? 'thinking' : status === 'blocked' ? 'waiting' : null
 
+// herdr's word reaches the tracker through the pane: a slash command's own
+// UI (the /model picker) is not a turn, whatever herdr's screen guess says.
+const herdrPhases = createBackendPhaseGate({
+  read: async (terminalId) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(terminalId)
+    if (mux instanceof HerdrHostMultiplexer) return mux.captureAsync(name)
+    return mux?.capture(name) ?? null
+  },
+  current: (terminalId) => {
+    const status = agentStatus(sessionNameFor(terminalId))
+    return status ? backendPhaseOf(status) : null
+  },
+  apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent)
+})
+
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
   const terminalId = terminalIdForSessionName(sessionName)
   if (!terminalId) return
+  idleSleep.touch(terminalId, Date.now())
   lazyTerminals.observeStatus(terminalId, status)
-  turns.observeBackendPhase(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
+  herdrPhases.observe(terminalId, backendPhaseOf(status), isAgentTerminal(terminalId))
   // herdr's push IS the board's phase for this pane: fold it in at once.
   void boardProbe.invalidate(terminalId)
 })
@@ -2183,7 +2418,7 @@ function syncBackendPhases(): void {
   for (const terminal of store.terminalsAcross()) {
     const status = agentStatus(sessionNameFor(terminal.id))
     if (status) lazyTerminals.observeStatus(terminal.id, status)
-    turns.observeBackendPhase(
+    herdrPhases.observe(
       terminal.id,
       status ? backendPhaseOf(status) : null,
       terminal.command.trim().length > 0
@@ -2248,6 +2483,14 @@ function focusMainWindow(): void {
  * development the running Electron binary has to be told which script it
  * launches with, or the OS would open a bare Electron shell on the link
  * (the form Electron's own docs prescribe).
+ *
+ * ON macOS THAT FORM IS NOT ENOUGH. The OS binds a scheme to a bundle id and
+ * ignores the arguments, and every project's node_modules Electron.app shares
+ * the id com.github.Electron — so the link can open another project's copy,
+ * bare, with the Electron welcome page (seen 2026-10-04). The claim is still
+ * made, because it is right whenever this repository's copy is the only one
+ * registered; scripts/dev-deeplink-doctor.mjs lists the others and unregisters
+ * them. A packaged build has its own id and none of this applies.
  */
 function registerDeepLinkScheme(): void {
   const claimed = app.isPackaged
@@ -2645,13 +2888,38 @@ function spawnTracked(t: {
         grantedKeys: grants.envKeysFor(servedCtx.serviceId),
         // The canvas control plane is the owner's alone: pty.ts withholds the
         // env keys that name this socket, and the profile denies the connect.
-        controlSocketPath: ptys.socketPath
+        controlSocketPath: ptys.socketPath,
+        // The owner's gateway is denied to a seat outright (sandbox-deny.ts).
+        gatewayPorts: routeService.gatewayPorts()
       })
     : undefined
+  // The card's route, as env and args the harness is spawned with. Decided
+  // here, at the spawn, so what the process got is what the node records as
+  // `routeEffective`; a served session gets none (the service refuses it).
+  const route = cardNode?.kind === 'terminal' ? routeService.envFor(cardNode) : null
+  // Magpie's one MCP hub, handed to every agent so the fleet shares one copy
+  // of each MCP server (route/shared-mcp.ts). Appended AFTER the route's args:
+  // claude's --mcp-config is variadic and must be last on the line.
+  const mcpArgs = cardNode?.kind === 'terminal' && !served ? routeService.sharedMcpFor(cardNode) : []
+  const spawnRoute = route && !served ? { env: route.env, args: [...route.args, ...mcpArgs] } : null
+  // A routed card runs the route's model: a launch pick's model gives way to it.
+  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : effective
+  const fresh = !ptys.get(t.id)
   const session = ptys.spawn(
-    { terminalId: t.id, command: effective, cwd: t.cwd, card, served },
+    {
+      terminalId: t.id,
+      command: launched,
+      cwd: t.cwd,
+      card,
+      served,
+      ...(spawnRoute ? { route: spawnRoute } : {})
+    },
     owner
   )
+  // The route is RECORDED only when a process was created: a tmux reattach
+  // rode a surviving session and ignored the boot command, so what this
+  // spawn computed never reached it; the card then reads "applies on restart".
+  if (route && !served && fresh && !session.reattached) routeService.recordEffective(t.id, route)
   // One producer per conversation: every owner keystroke consults the
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
   // preempted durably or the write is refused (Sol r4 P0-1).
@@ -2875,6 +3143,207 @@ function dampedSpawnSession(
  * tiny reads per sweep, and a card whose process has moved house is rebound
  * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
  */
+/**
+ * THE REGISTRY OUTLIVES NOTHING IT DESCRIBES (agent-reconcile.ts).
+ *
+ * `active` flips only on an explicit dismiss/kill/exit event, so a pane lost
+ * without one — a herdr restart, a dead login session, a crash — leaves a
+ * card claiming to be a resting agent with a prompt box. Measured 2026-10-31:
+ * Beacon had eight such entries, the oldest sixteen weeks old.
+ *
+ * One multiplexer listing per sweep (a synchronous herdr child), and NOTHING
+ * is marked when the multiplexer cannot be seen: blindness is not absence.
+ */
+function reconcileAgentLiveness(): void {
+  try {
+    const mux = multiplexer()
+    if (!mux?.available()) return
+    const sessions = new Set(mux.listSessions())
+    const entries = agents.list()
+    const live = new Set(
+      entries
+        .filter((e) => ptys.get(e.id) !== undefined || sessions.has(sessionNameFor(e.id)))
+        .map((e) => e.id)
+    )
+    const exempt = new Set(entries.filter((e) => servedSpawnContexts.has(e.workspaceId)).map((e) => e.id))
+    const stale = staleAgentIds({ entries, observable: true, live, exempt })
+    for (const id of stale) agents.deactivate(id)
+    if (stale.length > 0) {
+      console.error(`Reconciled ${stale.length} stale agent entr${stale.length === 1 ? 'y' : 'ies'}`)
+    }
+  } catch (error) {
+    console.error('Agent liveness reconcile failed:', error)
+  }
+}
+const livenessSweep = setInterval(reconcileAgentLiveness, 5 * 60_000)
+livenessSweep.unref()
+setTimeout(reconcileAgentLiveness, 30_000).unref()
+
+/**
+ * IDLE SLEEP (agent-sleep.ts). Owner, 2026-10-31: keep the TUI, stop paying
+ * for it while nobody uses it. A Claude agent with no turn, no viewer, no
+ * input and no draft in its box for COOKREW_IDLE_SLEEP_MS (default an hour,
+ * 0 = off) is NOMINATED; it sleeps only when Claude's own record agrees
+ * (agent-sleep-evidence.ts — 2026-11-01, mid-turn agents were being ended).
+ * Its conversation stays on disk and the next ask, dispatch, quick reply,
+ * phone message or LIVE resumes it.
+ *
+ * Claude only, on purpose: its wake is proven (Harden, twice, 2026-10-31) and
+ * resumes the exact session. Codex's wake depends on the herdr session being
+ * able to start codex at all — until it can, a sleeping Codex card would be a
+ * card nobody can wake.
+ */
+const IDLE_SLEEP_MS = idleSleepMsFrom(process.env.COOKREW_IDLE_SLEEP_MS)
+const idleSleep = new IdleSleep(IDLE_SLEEP_MS)
+
+/** Anything that means a person or a turn is using this agent right now. */
+function agentBusy(id: string): boolean {
+  return (
+    lazyTerminals.viewerCount(id) > 0 ||
+    turns.inTurn(id) ||
+    turns.ownerComposing(id) ||
+    agentStatus(sessionNameFor(id)) === 'working'
+  )
+}
+
+/** One multiplexer listing per sweep — the same price as the liveness sweep. */
+function sleepSweep(): void {
+  if (IDLE_SLEEP_MS <= 0) return
+  try {
+    const mux = multiplexer()
+    if (!mux?.available()) return
+    const sessions = new Set(mux.listSessions())
+    // A pane focused in herdr itself (the owner's own client, Alma on the
+    // phone) has a person at it that Cookrew's viewer count cannot see.
+    const focused = new Set(mux.focusedSessions?.() ?? [])
+    const running = store.terminalsAcross().filter((n) => sessions.has(sessionNameFor(n.id)))
+    const due = idleSleep.due(
+      running.map((n) => ({
+        id: n.id,
+        resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
+        served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
+        busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
+      })),
+      Date.now()
+    )
+    if (due.length > 0) void confirmSleep(due)
+  } catch (error) {
+    console.error('Idle sleep sweep failed:', error)
+  }
+}
+
+/** Cold pane-pid lookups are synchronous herdr calls: at most this many per pass. */
+const SLEEP_COLD_LOOKUPS = 2
+let confirmingSleep = false
+
+/**
+ * The clock nominated these; the agent's own process decides. Claude must say
+ * idle, nothing it started may still be running, and its newest sign of life
+ * (status change, transcript or subagent write, a loop's next wakeup) must be
+ * a whole window old. Otherwise the window restarts from that sign of life.
+ */
+async function confirmSleep(due: readonly string[]): Promise<void> {
+  if (confirmingSleep) return
+  confirmingSleep = true
+  try {
+    const procs = await readProcTable()
+    let coldLookups = 0
+    for (const id of due) {
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      if (!node || node.kind !== 'terminal' || !node.claudeSessionId) continue
+      // Left nominated: the next sweep warms it, a minute later.
+      if (!panePids.isWarm(id) && coldLookups++ >= SLEEP_COLD_LOOKUPS) continue
+      const holders = liveSessionHolders()
+      const now = Date.now()
+      const evidence = await gatherSleepEvidence({
+        holder: paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd),
+        holders,
+        procs,
+        transcript: claudeSessionFile(node.cwd, node.claudeSessionId),
+        now
+      })
+      const quiet = quietSince(evidence, now)
+      if (now - quiet.at < IDLE_SLEEP_MS) {
+        idleSleep.restart(id, quiet.at)
+        continue
+      }
+      putAgentToSleep(id, now - quiet.at)
+    }
+  } catch (error) {
+    console.error('Idle sleep confirm failed:', error)
+  } finally {
+    confirmingSleep = false
+  }
+}
+const sleepSweepTimer = setInterval(sleepSweep, 60_000)
+sleepSweepTimer.unref()
+
+/**
+ * End an idle agent's process and nothing else: the node, its wires, its
+ * session id and its turn history all stay, so the wake is a plain resume.
+ * Asked once more at the moment of the act — a turn can start inside the
+ * sweep's minute.
+ */
+function putAgentToSleep(id: string, quietMs: number): void {
+  const node = store.nodeAcrossWorkspaces(id)?.node
+  if (!node || node.kind !== 'terminal' || agentBusy(id)) return
+  lazyTerminals.forget(id)
+  herdrPhases.observe(id, null, true)
+  sessionSync.unwatch(id)
+  turns.untrack(id)
+  if (ptys.get(id)) ptys.kill(id)
+  else ptys.killDetached(id)
+  agents.deactivate(id)
+  idleSleep.markAsleep(id)
+  const minutes = Math.round(quietMs / 60_000)
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEvent('terminal.asleep', id, node.name, `idle ${minutes} min; wakes on the next ask, reply or LIVE`)
+  )
+}
+
+/**
+ * Wakes an agent that has no running mirror (agent-wake.ts): one the idle
+ * sweep slept, and any other card shown offline — the app restarted since it
+ * slept, its pane was closed, herdr restarted. A cold agent resumes its own
+ * session; a pane herdr still holds is only re-attached.
+ */
+const waker = new AgentWaker<PtySession>({
+  session: (id) => ptys.get(id),
+  isTerminal: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'terminal',
+  paneAlive: (id) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(id)
+    if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
+    return mux?.sessionExists(name) === true
+  },
+  boot: (id) => ensureTerminalMirror(id),
+  // A respawned TUI paints its resumed transcript and swallows the CRs sent
+  // meanwhile (ask-cold-start); Claude can also sit silent before drawing
+  // anything, so a Claude session waits for its input box as well.
+  ready: (session) =>
+    waitForReady(session, {
+      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined
+    }),
+  sleep: { take: (id) => idleSleep.takeAsleep(id), mark: (id) => idleSleep.markAsleep(id) },
+  // Never a silent drop (Sol r8): the words went nowhere, so say so.
+  lost: (id, chunks) => {
+    if (chunks.length === 0) return
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    store.withOpContext({ actor: 'agent' }, () =>
+      store.recordEvent('terminal.input-refused', id, node?.name ?? id, 'it is offline and would not start — the prompt was not delivered')
+    )
+  },
+  warn: (message) => console.warn(message)
+})
+
+/**
+ * Bring back an agent that is not running, resolving with its session once it
+ * takes input. Undefined when the id is no terminal card or it would not start.
+ */
+function wakeAgent(id: string): Promise<PtySession | undefined> {
+  return waker.wake(id)
+}
+
 const oracleSweep = setInterval(() => {
   // A cold pane-pid lookup is a synchronous herdr child process, so at most
   // ONE per tick: a fleet that all boots at once warms up over a few sweeps
@@ -3218,6 +3687,7 @@ const dispatchService = new DispatchService({
   // The input box belongs to a composing owner: admission refuses and both
   // delivery legs stand down rather than pasting under their typing.
   ownerComposing: (agentId) => turns.ownerComposing(agentId),
+  wake: async (agentId) => (await wakeAgent(agentId)) !== undefined,
   // Observer probation: a native-file acceptance must see its watch actually
   // reconcile; a path that never materializes interrupts at 60s, not 10min.
   observerLive: (agentId) => sessionSync.isVerified(agentId),
@@ -3578,10 +4048,12 @@ function adoptLiveNode(added: CanvasNode): void {
  * a failed spawn keeps the preamble for the next boot.
  */
 function deliverPendingInject(t: TerminalNodeData): void {
-  if (!t.pendingInject) return
+  // The one text a (re)spawn may type — a staged copy preamble; never the
+  // card's brief or role (recruit-node.ts).
+  const inject = spawnInjectionFor(t)
+  if (inject === null) return
   const session = ptys.get(t.id)
   if (!session) return
-  const inject = t.pendingInject
   store.updateNodeUnsafe(t.id, { pendingInject: null })
   injectWhenReady(session, inject).catch((error) => {
     console.error('Deferred copy context injection failed:', error)
@@ -3696,20 +4168,75 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     return Object.keys(rest).length > 0 ? store.updateNode(id, rest) : written
   }
   const updated = store.updateNode(id, patch)
-  if (updated?.kind === 'browser') {
+  // A rename is metadata: syncing would START a cold card's browser just to
+  // relabel it, and `cookrew rename` reaches every card of a workspace.
+  if (updated?.kind === 'browser' && Object.keys(patch).some((key) => key !== 'name')) {
     void browserManager.syncNode(updated).catch(() => undefined)
   }
   // A renamed/re-roled terminal re-binds its pane chrome (herdr only — the
-  // method is absent elsewhere). The name the pane wears comes from the
+  // method is absent elsewhere): the pane title, and on a rename its tab and
+  // its entry in the agent directory. The name the pane wears comes from the
   // store, so this runs AFTER the patch lands.
+  // The live session keeps the new card too, or an in-place reattach (a
+  // dropped herdr client) would put the old name back on the pane.
   if (updated?.kind === 'terminal' && ('name' in patch || 'role' in patch)) {
-    multiplexer()?.reportPaneCard?.(sessionNameFor(id), paneCard(updated))
+    const card = paneCard(updated)
+    ptys.get(id)?.rebindCard(card)
+    const mux = multiplexer()
+    mux?.reportPaneCard?.(sessionNameFor(id), card)
+    if ('name' in patch) {
+      if (mux?.followRename) mux.followRename(sessionNameFor(id), updated.name)
+      else mux?.renameTab?.(sessionNameFor(id), updated.name)
+      agents.rename(id, updated.name)
+    }
   }
   return updated
 }
 
 function workspaceName(id: string): string {
   return store.list().workspaces.find((w) => w.id === id)?.name ?? id
+}
+
+/**
+ * Rename a card (agent-rename.ts): checked against its workspace's other
+ * cards, then through updateNode, so an agent's herdr pane title, tab and
+ * agent name follow and a browser's page re-syncs. A note's new name is
+ * pinned (customName), as the card menu's RENAME does, or its next edit
+ * would name it from its content again. Shared by `cookrew rename`.
+ */
+function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+  const hit = store.nodeAcrossWorkspaces(id)
+  if (!hit) return { ok: false, error: 'That card is not on any canvas.' }
+  const plan = planRename({
+    id,
+    current: hit.node.name,
+    wanted,
+    siblings: store.workspaceState(hit.workspaceId).nodes,
+    onClash
+  })
+  if (plan.ok && plan.changed) {
+    updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name })
+  }
+  return plan
+}
+
+/** renameCard for an agent only: `cookrew recruit`, Sous, and a name picked from a prompt. */
+function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+  if (store.nodeAcrossWorkspaces(id)?.node.kind !== 'terminal') return { ok: false, error: 'That agent is not on any canvas.' }
+  return renameCard(id, wanted, onClash)
+}
+
+/**
+ * The name Sous picks for a card made from a prompt (agent-namer.ts), once it
+ * answers. Null when it has nothing better, or when the card was renamed
+ * while it thought: the card then wears a choice, and a guess never
+ * overwrites one.
+ */
+async function autoNameTerminal(id: string, standIn: string, prompt: string): Promise<RenameOutcome | null> {
+  const picked = await nameAgent(prompt)
+  if (!picked) return null
+  if (!stillStandIn(store.nodeAcrossWorkspaces(id)?.node.name, standIn)) return null
+  return renameTerminal(id, picked, 'suffix')
 }
 
 /**
@@ -3844,7 +4371,7 @@ function retireTerminal(id: string, why: string): void {
   lazyTerminals.forget(id)
   // A retired terminal has no phase; leaving one behind is a board row and a
   // drain reference that outlive the card.
-  turns.observeBackendPhase(id, null)
+  herdrPhases.observe(id, null, true)
   sessionSync.unwatch(id)
   turns.untrack(id)
   // Unsettled dial turns belong to the pane that was asked; a reborn id
@@ -3876,7 +4403,17 @@ function tuneDeps(): TuneDeps {
     },
     write: (id, data) => ptys.get(id)?.write(data),
     asks: tuneAsks,
-    cache: tuningCache
+    cache: tuningCache,
+    // The RTE dial: offered only when the gateway is online and the card's
+    // harness can be routed; 'direct' first, then the catalog, groups first.
+    routeChoices: (id) => {
+      const state = routeService.state()
+      if (state.status !== 'online') return null
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      const harness = node?.kind === 'terminal' ? harnessFor(node.command)?.id : null
+      if (!harness || harness === 'pi') return null
+      return ['direct', ...state.models.map((m) => m.id)]
+    }
   }
 }
 
@@ -3936,6 +4473,7 @@ async function removeNode(id: string): Promise<void> {
   if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
   retireTerminal(id, 'terminal removed')
   defaultProducerLease().forgetTerminal(id)
+  routeService.forget(id)
   // A permanently removed uuid never returns: its input-provenance fact
   // protects nothing and would otherwise sit in the WAL forever.
   defaultProducerLease().clearProvenanceOnDeath(id)
@@ -3963,8 +4501,27 @@ interface CreateTerminalOpts {
   preset: string
   position?: { x: number; y: number }
   orch?: boolean
+  /** Work here instead of the focused canvas's directory (a chore card in ~/.cookrew/chores). */
+  cwd?: string
   /** Boot a fresh agent from a saved role instead of a bare preset. */
   roleName?: string
+  /**
+   * Its first prompt, submitted once the agent's TUI is quiet (the global
+   * prompt box makes an agent from a prompt; owner, 2026-11-01).
+   */
+  prompt?: string
+  /**
+   * `name` is a stand-in read off `prompt` (the global prompt box): Sous names
+   * the card properly once it answers, unless it was renamed meanwhile.
+   */
+  autoName?: boolean
+  /**
+   * The model and effort a new agent starts on (the prompt box's tune chip,
+   * owner 2026-11-01): launch flags, checked against the harness's offer
+   * (shared/launch-tune). A role or a `command` keeps its own line. Unknown:
+   * it arrives over IPC and HTTP, and launchCommand keeps only what it offers.
+   */
+  tune?: unknown
   /**
    * Run THIS instead of the preset's command. Used by a placed remote-orch
    * card, whose command is a line to someone else's orch, not a local harness.
@@ -3994,8 +4551,11 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     id: randomUUID(),
     name: opts.name || role?.name || preset.name,
     preset: role ? role.preset : preset.name,
-    command: opts.command ?? (role ? role.command : preset.command),
-    cwd: store.focusedState.dir,
+    // The catalogs are read only when a pick came with the ask: most terminals bring none.
+    command:
+      opts.command ??
+      (role ? role.command : opts.tune === undefined ? preset.command : launchCommand(preset.command, opts.tune, launchOfferFor(preset.command))),
+    cwd: opts.cwd ?? store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
     ...(restoredSessionId ? { claudeSessionId: restoredSessionId } : {}),
@@ -4004,13 +4564,17 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   }
   const added = store.addNode(terminal)
   spawnTracked(added as TerminalNodeData)
-  if (role) {
+  // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
+  const first = typeof opts.prompt === 'string' && terminal.command.trim() ? opts.prompt.trim() : ''
+  const boot = [role ? buildRoleBootMessage(role.name, role.rolePrompt) : '', first].filter(Boolean).join('\n\n')
+  if (boot) {
     const session = ptys.get(added.id)
     if (session) {
-      injectWhenReady(session, buildRoleBootMessage(role.name, role.rolePrompt)).catch((error) =>
-        console.error('Role boot injection failed:', error)
-      )
+      injectWhenReady(session, boot).catch((error) => console.error('Boot prompt injection failed:', error))
     }
+  }
+  if (opts.autoName && first) {
+    void autoNameTerminal(added.id, added.name, first).catch((error) => console.error('Naming the new agent failed:', error))
   }
   return added
 }
@@ -4887,8 +5451,12 @@ async function noteBrowserViewed(browserId: string): Promise<void> {
   }
 }
 
-const interactiveBrowserEnabled = (): boolean =>
-  process.env.COOKREW_INTERACTIVE_BROWSER === '1'
+/** Decided once per launch: on by default where a Chrome is installed (launch-defaults.ts). */
+let interactiveBrowserDecision: boolean | null = null
+const interactiveBrowserEnabled = (): boolean => {
+  interactiveBrowserDecision ??= interactiveBrowserDefault(process.env, () => findChrome() !== null)
+  return interactiveBrowserDecision
+}
 const desktopBrowserStreamToken = randomUUID()
 
 function activeBrowserNode(browserId: string): BrowserNodeData | null {
@@ -4976,6 +5544,16 @@ const browserCacheRoot = (): string =>
 
 // C-2 ownership: one headless process/profile per active browser node. Cast
 // viewers and trusted agent commands both resolve through this manager.
+// THE USES (use-instances.ts): a Mac display or window, an adb phone, a
+// camera — each a browser card the cast streams and the agent drives.
+// Driving THIS Mac from a viewer or an agent is a decision, never a default.
+const useInstances = createUseInstances({
+  captureDir: path.join(app.getPath('userData'), 'use-capture'),
+  computerInput: () => process.env.COOKREW_COMPUTER_INPUT === '1'
+})
+const useSignals = new UseSignalBus()
+useSignals.on((signal) => mainWindow?.webContents.send('use:signal', signal))
+
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
   chromePath: findChrome,
@@ -4993,7 +5571,17 @@ const browserManager = new HeadlessBrowserManager({
   resolveNode: activeBrowserNode,
   onPageState: recordHeadlessPageState,
   onTabOpened: recordHeadlessTabOpened,
-  onTabClosed: recordHeadlessTabClosed
+  onTabClosed: recordHeadlessTabClosed,
+  // A `vphone://<machine>` card is a vphone-cli guest on this Mac, reached
+  // through the machine's own socket under ~/.vphone/machines (or
+  // VPHONE_LIBRARY). The VM is the user's: never launched or stopped here.
+  vphone: {
+    makeInstance: (machine) =>
+      new VphoneInstance({ machine, guest: createSocketGuest(vphoneSocketPath(machine), { machine }) })
+  },
+  uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
+  // Declared below; called only after boot, never during construction.
+  onInstanceGone: (browserId) => browserCast.drop(browserId)
 })
 
 const browserCast = createBrowserCast({
@@ -5019,7 +5607,9 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   manager: browserManager,
   addNode,
   updateNode,
-  connectNodes: (aId, bId) => void store.connectAcross(aId, bId)
+  connectNodes: (aId, bId) => void store.connectAcross(aId, bId),
+  onUse: (signal) => void useSignals.emit(signal),
+  shotsDir: path.join(app.getPath('userData'), 'use-shots')
 })
 
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
@@ -5036,6 +5626,41 @@ function rendererBrowserCommand(args: string[], terminalId: string): Promise<str
   })
   mainWindow.webContents.send('browser:command', { id, args, terminalId })
   return promise
+}
+
+/**
+ * A browser card made in a workspace that is not on screen (an agent's own,
+ * while the owner looks elsewhere). No engine is booted — the page runs when
+ * that workspace is shown — and the card is wired to its caller the same way
+ * the on-screen path wires it, so `cookrew list --workspace` sees it there.
+ */
+function createBrowserInWorkspace(card: { url: string; name: string; terminalId: string; workspaceId: string }): {
+  name: string
+  adopted: boolean
+} {
+  const state = store.workspaceState(card.workspaceId)
+  const existing = state.nodes.find(
+    (n): n is BrowserNodeData => n.kind === 'browser' && n.name.toLowerCase() === card.name.toLowerCase()
+  )
+  if (existing) {
+    if (!store.connectedTo(card.terminalId).some((n) => n.id === existing.id)) store.connect(card.terminalId, existing.id)
+    return { name: existing.name, adopted: true }
+  }
+  const anchor = store.node(card.terminalId)
+  const tab: BrowserTab = { id: randomUUID(), url: card.url, title: '' }
+  const node: BrowserNodeData = {
+    kind: 'browser',
+    id: randomUUID(),
+    name: card.name,
+    url: card.url,
+    tabs: [tab],
+    activeTabId: tab.id,
+    position: { x: (anchor?.position.x ?? 0) + (anchor?.size.width ?? 640) + 80, y: anchor?.position.y ?? 0 },
+    size: { width: 720, height: 560 }
+  }
+  const added = store.addNodeToWorkspace(card.workspaceId, node) as BrowserNodeData
+  if (anchor) store.connect(card.terminalId, added.id)
+  return { name: added.name, adopted: false }
 }
 
 function browserCommand(args: string[], terminalId: string): Promise<string> {
@@ -5095,9 +5720,15 @@ function createWindow(): void {
   // A deep link waits for the renderer, not for the window: the subscriber
   // lives in App.tsx, which does not exist until the page has loaded.
   mainWindow.webContents.on('did-finish-load', () => deepLinks.ready())
+  // The gateway's clock runs while the window lives: a card spawned after a
+  // restart routes when the gateway is online and a default is set.
+  const releaseRouteHold = routeService.hold()
   mainWindow.on('closed', () => {
     mainWindow = null
+    // The capture host is a hidden window: left open, it would keep the app from quitting.
+    useInstances.dispose()
     deepLinks.gone()
+    releaseRouteHold()
   })
   // Browser webviews: window.open / target=_blank must become a tab in the
   // same browser, never a detached native window. The renderer maps the
@@ -5176,6 +5807,10 @@ app.whenReady().then(() => {
       console.error('Dock icon failed to load:', error)
     }
   }
+  // The cards routed before this restart are still routed (their node data
+  // says so); seed them, then one probe before the first card spawns.
+  routeService.seedRouted()
+  void routeService.refresh()
   // Ship the CLI next to the socket so PTYs get it on PATH.
   const cliSource = app.isPackaged
     ? path.join(process.resourcesPath, 'cli', 'cookrew.mjs')
@@ -5319,6 +5954,9 @@ app.whenReady().then(() => {
       presets: PRESETS.map((p) => p.name)
     }
   }
+  // THE SOUS LEDGER (HP): every decision, the owner's answer, the delivery's end — 0600, scrubbed, 30 d.
+  const sousLedger = new SousLedger(undefined, undefined, scrub)
+  const sousBus = new EventEmitter()
   const sous = new SousController({
     roster: sousRoster,
     activeWorkspaceId: () => store.focusedId,
@@ -5336,7 +5974,8 @@ app.whenReady().then(() => {
     },
     connect: (a, b) => store.connectAcross(a, b),
     rename: (id, name) => {
-      updateNode(id, { name })
+      const renamed = renameTerminal(id, name, 'refuse')
+      if (!renamed.ok) throw new Error(renamed.error)
     },
     // Short by nature (one spoken sentence), so the owner-submit primitive is
     // the right sink: it holds the producer lease and answers at submission,
@@ -5363,19 +6002,225 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send('ui:command', event)
       uiBus.emit('command', event)
     },
-    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice')
+    note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice'),
+    // THE DECIDE STEP (R3): who takes a brief the intent core did not match.
+    // Candidates are the cards as the Board sees them; a context-full card is
+    // read off its pane the way the pre-dispatch probe reads it, for the idle
+    // same-repo cards only (one capture each, never the whole fleet).
+    decide: {
+      workdir: () => store.focusedState.dir,
+      candidates: async () => {
+        // NO PANE CAPTURES HERE (HP budget): context-full is read off the
+        // tracker's mirror; the capture is wired so the builder's test can
+        // prove it is never called (decide-candidates.ts).
+        const rows = new Map(buildBoard(boardSources()).rows.map((r) => [r.terminalId, r]))
+        return buildCandidates({
+          terminals: () => store.terminalsAcross(),
+          rowOf: (id) => rows.get(id),
+          ownerOf: (id) => store.ownerOf(id),
+          contextFull: (id) => turns.contextFullCached(id),
+          capture: (id) => multiplexer()?.capture(sessionNameFor(id)) ?? null
+        })
+      },
+      status: () => ({ openDispatches: dispatchService.openDispatchIds().length }),
+      recruit: ({ preset, name, brief, besideId, cwd }) => {
+        const nodes = store.focusedState.nodes
+        const anchor = besideId ? (nodes.find((n) => n.id === besideId) ?? null) : null
+        const position = placeBeside(anchor, nodes, DEFAULT_TERMINAL_SIZE)
+        // A chore works outside the repo: ~/.cookrew/chores, 0700, never the tree.
+        const choresDir = path.join(app.getPath('home'), '.cookrew', 'chores')
+        // Created 0700 and pre-trusted in ~/.claude.json: a fresh chore card must not stop at Claude's trust dialog.
+        if (cwd === 'chores') prepareChoresDir(choresDir, path.join(app.getPath('home'), '.claude.json'))
+        const node = createTerminal({ name, preset, position, ...(cwd === 'chores' ? { cwd: choresDir } : {}) })
+        // The sentence is the card's BRIEF, not its role: a role is a saved
+        // role's name, worn by the pane chrome and typed by role boot; a brief
+        // is display only and nothing types it on a respawn (recruit-node.ts).
+        updateNode(node.id, recruitPatch(scrub(brief)))
+        return { id: node.id, name: node.name }
+      },
+      // The same door `cookrew ask --no-wait` uses: admitted by the dispatch
+      // engine (retrying the boot-time 503s of a card made a moment ago),
+      // delivered by herdr once the harness is at its prompt, on the ledger.
+      deliver: async (input) => {
+        const { dispatchId } = await deliverToRecruit(dispatchService, input)
+        // The ledger learns how the delivery ended once the engine settles it.
+        if (input.token) {
+          const token = input.token
+          void dispatchService.settled(dispatchId).then(() => {
+            const record = dispatchService.get(dispatchId)
+            if (record?.state === 'failed' || record?.state === 'interrupted') sousLedger.write({ token, dispatchId, outcome: record.state })
+          })
+        }
+        return { dispatchId }
+      },
+      ledger: sousLedger,
+      // THE FIVE-QUESTION JEV (E2E lane jev), only when COOKREW_SOUS_JEV=1:
+      // one budgeted POST to the gateway's /v1/systemone through its own
+      // breaker; with the flag off this dep is absent and nothing changes.
+      ...(jevEnabled()
+        ? {
+            jev: createJevDecider({
+              gateway: () => {
+                const g = routeService.state().gateway
+                return g ? { v1: g.v1 } : null
+              },
+              key: () => sousGatewayKey(),
+              breaker: createSousBreaker({ probeTimeoutMs: JEV_DEADLINE_MS }),
+              recent: () => sousLedger.rows().slice(-3).map((r) => `${r.ownerResponse ?? 'pending'}: ${r.sentence.slice(0, 60)} → ${r.target?.name ?? '—'}`)
+            })
+          }
+        : {}),
+      decisionUpdated: (update) => {
+        mainWindow?.webContents.send('sous:decision-updated', update)
+        sousBus.emit('sous', { kind: 'decision-updated', ...update })
+      },
+      // The target's route, when Forge's routeOfCard exists on this build; a
+      // card whose new route applies on restart will respawn to take the brief.
+      routeOf: ({ cardId }) => {
+        // A recruit has no card yet: its intended route is the fleet default
+        // (pinned at start), or direct when none is set.
+        if (!cardId) return { route: routeService.defaultModel() ?? 'direct', effective: null, respawn: false }
+        const svc = routeService as unknown as { routeOfCard?: (id: string) => { route: string; effective: string | null; appliesOn?: string } | null }
+        if (typeof svc.routeOfCard !== 'function') return null
+        const r = svc.routeOfCard(cardId)
+        return r ? { route: r.route, effective: r.effective, respawn: r.appliesOn === 'restart' } : null
+      },
+      // Routability, read from the route service: a default route set means
+      // a recruit should land on a harness the gateway can carry. `routable`
+      // comes from HarnessRow when the service reports it (round 2 contract);
+      // until then the one harness route-env refuses is pi.
+      routing: () => {
+        const state = routeService.state()
+        const names: Record<string, Harness> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', pi: 'Pi' }
+        const routable: Partial<Record<Harness, boolean>> = { Pi: false }
+        for (const row of state.harnesses) {
+          const flag = (row as { routable?: boolean }).routable
+          if (flag !== undefined) routable[names[row.id]] = flag
+        }
+        return { defaultSet: state.defaultModel !== null, routable }
+      }
+    }
   })
+  // The desktop's box: one caller, on the surface it says. A token minted on
+  // the canvas is the canvas box's to commit or cancel, and nobody else's.
+  const desktopCaller = (surface: unknown): { surface: SousSurface; callerId: string } => ({ surface: surface === 'phone' ? 'phone' : 'canvas', callerId: 'desktop' })
+  // THE DOOR EVERY SURFACE GETS — the desktop box, the phone, the CLI: the
+  // same controller, its spoken sentence and its choices scrubbed on the way
+  // out (scrub-surfaces.ts). Commit and cancel pass through untouched.
+  const sousDoor: SousDoor = {
+    handle: async (input) => scrubSousResult(await sous.handle(input), scrub),
+    // A commit answers a result too — the same scrub; cancel answers a boolean.
+    commit: async (token, choice, caller) => scrubSousResult(await sous.commit(token, choice ?? {}, caller), scrub),
+    cancel: (token, caller) => sous.cancel(token, caller)
+  }
+  ipcMain.handle('sous:commit', (_e, token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: unknown) => sous.commit(String(token), choice ?? {}, desktopCaller(surface)))
   ipcMain.handle(
     'sous:command',
-    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[] }) =>
-      sous.handle({
+    (_e, text: string, ctx: { surface: SousSurface; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
+      sousDoor.handle({
         text,
         alternates: ctx.alternates,
         surface: ctx.surface,
+        // Only the box decides; push-to-talk sends no flag and keeps the regex core.
+        box: ctx.box === true,
         callerId: 'desktop',
         focusedAgentId: ctx.focusedAgentId ?? null
       })
   )
+
+  // THE INBOX (R3): one ranked list of what only a person can move. Built
+  // only while a client holds it, on a trailing debounce over the store, the
+  // event log and the probe — never on Sous's own lines (inbox-wiring.ts).
+  // The rows come from the probe's CURRENT phases, not from a touch that
+  // would announce back into this very builder.
+  const readDispatches = cachedDispatchReader(defaultDispatchRegistry())
+  const inbox = wireInbox({
+    build: () => {
+      const workspaces = store.list().workspaces
+      const nameOf = (id: string): string => workspaces.find((w) => w.id === id)?.name ?? id
+      const nodes: InboxNode[] = []
+      const connections: { a: string; b: string }[] = []
+      for (const meta of workspaces) {
+        const state = store.workspaceState(meta.id)
+        for (const n of state.nodes) {
+          nodes.push({
+            id: n.id,
+            name: n.name,
+            kind: n.kind,
+            workspaceId: meta.id,
+            workspaceName: nameOf(meta.id),
+            served: n.kind === 'terminal' && n.servedSession != null
+          })
+        }
+        for (const c of state.connections) connections.push({ a: c.a, b: c.b })
+      }
+      const sources = { ...boardSources(), probe: () => boardProbe.phases() }
+      return buildInbox({
+        rows: () => buildBoard(sources).rows,
+        nodes: () => nodes,
+        connections: () => connections,
+        dispatches: readDispatches,
+        events: (type, since) => events.query({ type, since }),
+        // Sous's own stuck deliveries, from the ledger (already scrubbed on write; scrubbed again on the way out).
+        sous: () => sousLedger.stuck().map((r) => ({ token: r.token, deliveredTo: r.deliveredTo as string, proposalText: r.proposalText as string, outcome: r.outcome, updatedAt: r.updatedAt }))
+      }).map((row) => scrubInboxRow(row, scrub))
+    },
+    // The op itself rides along: Sous's notes are store ops too.
+    onStoreOp: (cb) => {
+      const listener = (op: { type: string }): void => cb(op)
+      store.on('op', listener)
+      return () => void store.off('op', listener)
+    },
+    onEvent: (cb) => {
+      events.on('event', cb)
+      return () => void events.off('event', cb)
+    },
+    onProbeChange: (cb) => boardProbe.onChange(cb),
+    onLedgerChange: (cb) => {
+      sousLedger.on('change', cb)
+      return () => void sousLedger.off('change', cb)
+    },
+    announce: (rows) => mainWindow?.webContents.send('inbox:changed', rows)
+  })
+  // The window holds the list while its box is subscribed; a one-shot read
+  // builds on demand. The hold goes with the page that took it: a reload or a
+  // closed window never sends the unsubscribe (inbox-window-hold.ts).
+  const windowHold = createWindowHold(() => inbox.hold())
+  ipcMain.handle('inbox:subscribe', (event) => {
+    windowHold.subscribe(event.sender)
+    return inbox.read()
+  })
+  ipcMain.handle('inbox:unsubscribe', () => windowHold.release())
+  ipcMain.handle('inbox:list', () => inbox.read())
+  // RETRY re-sends the proposal the owner saw, from the ledger, through the
+  // engine, to the same card; DISMISS hides the row and the ledger remembers.
+  const inboxAct = async (token: string): Promise<{ ok: boolean; error?: string; dispatchId?: string }> => {
+    // Only a brief that never landed, and only into a card that can take it
+    // right now (sous-retry.ts) — never a second copy of a delivered one.
+    const verdict = retryVerdict(sousLedger.get(token), (nodeId) => {
+      const hit = store.nodeAcrossWorkspaces(nodeId)
+      if (!hit || hit.node.kind !== 'terminal') return null
+      return { served: hit.node.servedSession != null, phase: turns.phaseOf(nodeId), ownerComposing: turns.ownerComposing(nodeId) }
+    })
+    if (!verdict.ok) return { ok: false, error: verdict.error }
+    try {
+      const { dispatchId } = await deliverToRecruit(dispatchService, { nodeId: verdict.nodeId, sentence: verdict.text, originId: null })
+      sousLedger.write({ token, dispatchId, outcome: 'delivered', dismissed: false })
+      void dispatchService.settled(dispatchId).then(() => {
+        const record = dispatchService.get(dispatchId)
+        if (record?.state === 'failed' || record?.state === 'interrupted') sousLedger.write({ token, dispatchId, outcome: record.state })
+      })
+      return { ok: true, dispatchId }
+    } catch (error) {
+      const what = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: what }
+    }
+  }
+  const inboxDismiss = (token: string): boolean => sousLedger.dismiss(token)
+  ipcMain.handle('inbox:act', (_e, token: unknown) => inboxAct(String(token)))
+  ipcMain.handle('inbox:dismiss', (_e, token: unknown) => ({ ok: inboxDismiss(String(token)) }))
+  ipcMain.handle('sous:revise', (_e, token: unknown, alternates: unknown) => sous.revise(String(token), Array.isArray(alternates) ? (alternates as Alternate[]) : []))
+  ipcMain.handle('sous:cancel', (_e, token: string, surface?: unknown) => sous.cancel(String(token), desktopCaller(surface)))
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".
@@ -5413,16 +6258,32 @@ app.whenReady().then(() => {
     spawnTerminal: spawnTracked,
     agents,
     turns,
-    sous,
+    sous: sousDoor,
+    // `cookrew secret read/list` (secret-cli.ts): the store, and the line
+    // each read leaves in the event log.
+    secrets,
+    audit: auditSecret,
+    // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
+    // seat (pty.ts), or any pane on a workspace this app serves out
+    // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
+    // the owner's receipt of a session served elsewhere — and must not be
+    // read for this.
+    isServed: (terminalId) =>
+      ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''),
     // `ask --no-wait` and `cookrew dispatch <id>`: the SAME engine the HTTP
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
     dispatch: dispatchService,
+    // `cookrew rename` and `cookrew recruit --prompt`: the same rename the
+    // prompt box's model-picked name goes through, herdr's chrome included.
+    renameCard,
+    autoNameTerminal,
     // The cable between the asking pane and the agent it asks lights twice.
     signal: (moment) => void cableSignals.emit(moment),
     forkTerminal,
     routines,
     browserCommand,
+    createBrowserInWorkspace,
     notify: showNotification,
     captureWindow,
     injectInput,
@@ -5467,6 +6328,7 @@ app.whenReady().then(() => {
   setTimeout(publishDoorClaims, 5_000).unref?.()
 
   startMobileServer({
+    appVersion: () => app.getVersion(),
     /**
      * v3 (V3-21 · H2): an OVERRIDE for QA, never the switch.
      *
@@ -5482,8 +6344,15 @@ app.whenReady().then(() => {
     servedSlug: handleServedSlug,
     store,
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
-    sous,
+    sous: sousDoor,
     uiBus,
+    // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
+    inbox: () => inbox.read(),
+    inboxAct,
+    inboxDismiss,
+    sousBus,
+    inboxHold: () => inbox.hold(),
+    inboxBus: inbox,
     // THE DIALS on the phone — the same reads and the same write the desktop
     // does, through the same deps, so the two surfaces cannot drift.
     tuning: {
@@ -5495,6 +6364,8 @@ app.whenReady().then(() => {
     tuningBus,
     // The same cable signals the desktop gets, filtered to the stream's canvas.
     signalBus: cableSignals,
+    useBus: useSignals,
+    reachBus,
     // Serves the CA-issued chain by SNI for this Mac's names, keeps the
     // self-signed one as the default, and spells the printed URLs.
     nameCert: nameCertificate,
@@ -5504,6 +6375,13 @@ app.whenReady().then(() => {
     // §10: the same pin store the desktop rail reads — the phone's rail must
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
+    // The sealed slots, for the phone's note editor: names out, values in.
+    secrets,
+    // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
+    rtc: rtcHost,
+    // The browser card's socket over plain HTTP, for a phone on the relay.
+    socketBridge: createSocketBridge(),
+    build: { id: () => buildId, bus: buildBus },
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,
     // THE INTERNET GATE (§9 · ④), mounted per workspace session. Reachable only
@@ -5581,10 +6459,26 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // STRATA: the levels detail reuses a cached git answer, never causes one.
+    gitPeek: (dir) => gitCache.peek(dir),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
+    // The route program's four endpoints, the stream's two frames, and the
+    // `route` field on /api/health (mobile-api.ts).
+    route: {
+      state: () => routeService.state(),
+      setDefault: (model) => routeService.setDefault(model),
+      setSharedMcp: (on) => routeService.setSharedMcp(on),
+      cardState: (id) => routeService.cardState(id),
+      setCardRoute: (id, route) => routeService.setCardRoute(id, route),
+      health: () => routeService.health(),
+      hold: () => routeService.hold()
+    },
+    routeBus,
     // The screen wall's pictures, for the phone (GET /api/workspaces/shots).
     workspaceShots: currentWorkspaceShots,
+    // Terminals from an earlier login, for the phone (GET /api/terminal-session).
+    terminalSession: () => readTerminalSession(),
     // Attach-free dispatch (v4 §3): the two /api routes answer 503 without it.
     dispatch: dispatchService,
     // While a dispatch is armed, the HTTP input/ask producers refuse 409 —
@@ -5620,9 +6514,12 @@ app.whenReady().then(() => {
     restoreCheckpoint,
     undoRestore,
     ptys,
+    wakeAgent,
+    holdInput: (terminalId: string, data: string) => waker.hold(terminalId, data),
     voice,
     turns,
-    presets: PRESETS,
+    // Each preset's `launch` offer is read per request (launch-offers.ts).
+    presets: withLaunchOffers(PRESETS),
     ops: {
       addNode,
       updateNode,
@@ -5635,6 +6532,10 @@ app.whenReady().then(() => {
       switchWorkspace,
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
+        return store.list()
+      },
+      setWorkspaceBrief: (id, brief) => {
+        store.setWorkspaceBrief(id, brief)
         return store.list()
       },
       removeWorkspace,
@@ -5659,6 +6560,7 @@ app.whenReady().then(() => {
       roleDelete: (name: string) => roles.delete(name)
     },
     saveAttachment: (name, data) => saveAttachment(defaultAttachmentsDir(), name, data),
+    promptImage: promptImages,
     browserThumb: (id) => browserThumbs.frame(id),
     interactiveBrowserEnabled,
     browserThumbRequested: noteBrowserViewed,
@@ -5675,6 +6577,11 @@ app.whenReady().then(() => {
   // Profiles outlive crashes, but not their browser nodes. Enumerate every
   // workspace strictly so corrupt parked state makes this fail closed.
   try {
+    // Processes BEFORE directories: a Chromium from an instance that died
+    // hard holds its profile open, so deleting the directory under it frees
+    // nothing. Orphaned by definition (ppid 1), so no live card is touched.
+    const stray = reapOrphanChrome(browserProfileRoot())
+    if (stray.length > 0) console.error(`Killed ${stray.length} orphaned browser process(es)`)
     const owned = store.allBrowserIdsStrict()
     const reaped = reapOrphanBrowserProfiles(browserProfileRoot(), owned)
     if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned browser profile(s)`)
@@ -5761,6 +6668,15 @@ app.whenReady().then(() => {
     trusted: () => trustedOrigins(),
     register: (workspaces, reach, trusted) =>
       accounts.registerDesktop(workspaces, reach, trusted),
+    // ONLY ONCE THE ZONE ANSWERS. A phone told before the registry took the
+    // card would resolve the new name to NXDOMAIN and cache that answer for
+    // minutes (path/name-oracle.ts, 2026-10-04); told after, it finds a Mac.
+    onChanged: () => {
+      reachBus.emit('changed')
+      if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('reach:changed')
+      }
+    },
     log: (message) => console.error(`[cookrew] ${message}`)
   })
   // The line's state IS half the card, so a line that comes up or goes down
@@ -5772,6 +6688,29 @@ app.whenReady().then(() => {
   // The addresses move without anyone asking: a laptop lid, a new Wi-Fi, a
   // Tailscale that finally came up. Polling is the only honest way to notice.
   reachPublisher.watch()
+  // AND NOTICE IN SECONDS, NOT A MINUTE. The publisher's clock is the floor;
+  // this diff of the interfaces is one syscall and forks nothing (it reads
+  // the tailnet from the cache the minute clocks fill), so it runs every few
+  // seconds, and the two moments macOS can name — waking and unlocking — are
+  // checked at once. On a change the self-signed certificate is re-issued
+  // for the new bare address FIRST, then the card goes to the registry, and
+  // the registry's acceptance (onChanged above) is what tells the phone.
+  const networkWatch = createNetworkWatch({
+    read: advertisedHostsNow,
+    onChange: ({ reason, added, removed }) => {
+      console.error(
+        `[cookrew] addresses changed (${reason}): +[${added.join(' ')}] -[${removed.join(' ')}]`
+      )
+      void refreshMobileCert()
+        .catch((error) => console.error('Mobile cert refresh after a network change failed:', error))
+        .then(() => reachPublisher?.republish('addresses changed'))
+        .catch(() => undefined)
+    }
+  })
+  networkWatch.check('boot')
+  networkWatch.start()
+  powerMonitor.on('resume', () => void networkWatch.check('wake'))
+  powerMonitor.on('unlock-screen', () => void networkWatch.check('unlock'))
 
   // The certificate, once the account and the addresses are known. Best
   // effort and never awaited: an order is seconds of polling at the registry
@@ -5792,6 +6731,8 @@ let appShutdownStarted = false
 let appShutdownComplete = false
 
 app.on('before-quit', (event) => {
+  // The sizes panes last had, so their mirrors start at them next launch (pane-sizes.ts).
+  paneSizes().flush()
   if (appShutdownComplete) return
   event.preventDefault()
   if (appShutdownStarted) return
@@ -5803,6 +6744,7 @@ app.on('before-quit', (event) => {
   clearInterval(dispatchSweep)
   clearInterval(sessionDrain)
   loopHealth.stop()
+  routeService.dispose()
   // Latch FIRST: no new ask may register after the drain snapshot begins
   // (Sol r11) — then interrupt commissioned work and retire the lease
   // generations, firing the abort seam into everything still in flight.
@@ -5840,6 +6782,7 @@ app.on('before-quit', (event) => {
     })
     .catch(() => undefined)
     .then(() => browserManager.shutdown())
+    .then(() => useInstances.dispose())
     .catch((error) => console.error('Headless browser shutdown failed:', error))
     .finally(() => {
       appShutdownComplete = true
@@ -6296,6 +7239,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     return workspaceShots.capture(id, rect)
   })
   ipcMain.handle('workspace:shots', () => currentWorkspaceShots())
+  /** Whether the terminals' herdr server predates this macOS login (terminal-session.ts). */
+  ipcMain.handle('terminals:session', () => readTerminalSession())
 
   ipcMain.handle('workspace:switch', (_e, id: string) => {
     switchWorkspace(id)
@@ -6305,6 +7250,10 @@ function registerIpc(handlers: RestoreHandlers): void {
     store.renameWorkspace(id, name)
     // The active workspace's new name is what the herdr workspace wears.
     if (id === store.focusedId) reportWorkspaceBinding()
+    return store.list()
+  })
+  ipcMain.handle('workspace:brief', (_e, id: string, brief: unknown) => {
+    store.setWorkspaceBrief(id, brief)
     return store.list()
   })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
@@ -6333,8 +7282,23 @@ function registerIpc(handlers: RestoreHandlers): void {
   // durable registry holds exactly what a readout needs (command, cwd, session
   // ref), so nothing has to be resident to be readable.
   ipcMain.handle('tuning:list', () => tuningFleet())
+  // The route (route program): read on demand, pushed on change (routeService).
+  ipcMain.handle('route:state', () => routeService.refresh())
+  ipcMain.handle('route:set-default', (_e, model: string | null) => routeService.setDefault(model))
+  ipcMain.handle('route:set-shared-mcp', (_e, on: boolean) => routeService.setSharedMcp(on === true))
+  ipcMain.handle('terminal:route', (_e, terminalId: string) => routeService.cardState(terminalId))
+  ipcMain.handle('terminal:route-set', (_e, terminalId: string, route: string) =>
+    routeService.setCardRoute(terminalId, route)
+  )
   ipcMain.handle('git:info', (_e, dir: string) => gitCache.info(dir))
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
+  // The sealed slots (R4): the zoom editor's SEAL button and its listing.
+  // The value crosses IPC once, into the store, and is never sent back.
+  ipcMain.handle('secret:put', (_e, name: string, value: string, served?: boolean) =>
+    secrets.put(name, value, { served: served === true })
+  )
+  ipcMain.handle('secret:list', () => secrets.list())
+  ipcMain.handle('secret:remove', (_e, name: string) => secrets.remove(name))
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
   ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
   ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
@@ -6365,6 +7329,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Turn/summary activity for the canvas cards.
   turns.on('activity', (activity) => {
     lazyTerminals.reconsider(activity.terminalId)
+    // A routed card in flight is followed at the gateway; at rest, it is not.
+    routeService.onActivity(activity.terminalId, activity.phase)
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('terminal:activity', activity)
       announceTuning(activity.terminalId)
@@ -6510,6 +7476,17 @@ function registerIpc(handlers: RestoreHandlers): void {
   const boardHolds = createBoardHolds({ sources: boardSources, turns, store })
   ipcMain.handle('board:subscribe', (event) => boardHolds.subscribe(event.sender))
   ipcMain.handle('board:unsubscribe', (event) => boardHolds.unsubscribe(event.sender))
+  // The header's device step: this desktop by the name its account record
+  // gives it (the name /me and the phone show), else the renderer's fallback.
+  ipcMain.handle('machine:name', () => accounts.account()?.name ?? null)
+  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
+  // pushed per window like the board, and the account's desktops from the
+  // registry, cut to directory facts before they reach the renderer.
+  registerZoomFleetIpc(ipcMain.handle.bind(ipcMain), {
+    service: localLevelsService,
+    authed: (pathname) => accounts.authed<unknown>(pathname),
+    deviceId: () => accounts.account()?.deviceId ?? null
+  })
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)
@@ -6537,8 +7514,10 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Harness presets PLUS saved templates: a template is a terminal preset, so
   // placing it imports the crew as one orch terminal. Templates last, so a
   // built-in always wins a name clash (and createTerminal checks them last too).
+  // Each harness preset carries what a new agent of it can start on (the
+  // prompt box's tune chip, read off the harness's own catalog).
   ipcMain.handle('preset:list', () => [
-    ...PRESETS,
+    ...PRESETS.map((p) => ({ ...p, launch: launchOfferFor(p.command) })),
     ...teams.list().map((t) => ({ name: t.name, command: `cookrew call · ${t.name}` }))
   ])
 
@@ -6578,10 +7557,18 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('attach:save', (_e, name: string, bytes: Uint8Array) =>
     saveAttachment(defaultAttachmentsDir(), name, Buffer.from(bytes))
   )
+  // A prompt's picture, as a view scrolls to it: the owner's own renderer reads any picture a prompt names.
+  ipcMain.handle('image:read', async (_e, raw: unknown) => {
+    const ref = imageRefOf(raw)
+    return ref ? promptImages.read(ref, { trusted: true }) : null
+  })
 
   // Terminal stream bridging renderer xterm <-> PTY
   const inputRefusalAnnounced = new Map<string, number>()
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    idleSleep.touch(terminalId, Date.now())
+    // Keys for an offline agent wake it; they wait for it, then go in in order.
+    if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
     // A refused byte must be VISIBLE (Sol r8): silently vanishing keystrokes
     // during a delivery window or a contaminated box read as a broken app.
@@ -6680,6 +7667,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         dropForwarder(terminalId, binding)
         return
       }
+      // The NEW size first, as an attach sends it: a viewer that kept its old
+      // grid applied herdr's deltas for another size to it — the phone's
+      // garbled screen and doubled lines when the desktop resized the pane.
+      event.sender.send(`pty:hello:${terminalId}`, { ...session.geometry(), resized: true })
       event.sender.send(`pty:data:${terminalId}`, frame)
     }
     const onDestroyed = (): void => dropForwarder(terminalId, binding)
@@ -6705,6 +7696,17 @@ function registerIpc(handlers: RestoreHandlers): void {
   })
   // The popout detaches on close; without this the forwarder would keep
   // serializing every output chunk to a channel nobody listens on.
+  // History for this window's live terminal (PtySession.seedFrame): sent down
+  // ITS OWN data channel, so it lands in order with the deltas around it and
+  // goes to no other viewer.
+  ipcMain.handle('pty:seed', async (event, terminalId: string, nonce: string, lines: number) => {
+    const session = ptys.get(terminalId)
+    if (!session || typeof nonce !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(nonce)) return false
+    const frame = await session.seedFrame(Number(lines) || 0, nonce)
+    if (frame === null || event.sender.isDestroyed()) return false
+    event.sender.send(`pty:data:${terminalId}`, frame)
+    return true
+  })
   ipcMain.on('pty:detach', (event, terminalId: string) => {
     const binding = forwarders.get(terminalId)
     // A stale/destroyed renderer must not release a replacement window's view.

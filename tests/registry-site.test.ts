@@ -116,8 +116,6 @@ describe('what a team’s page says', () => {
     expect(page.body).toContain('3 agents')
     expect(page.body).toContain('2.50 USD')
     expect(page.body).toContain('https://cookrew.dev/drej/cookrew-alpha')
-    expect(page.body).toContain('USDC')
-    expect(page.body).toContain('card')
   })
 
   it('carries what the line needs, and nothing that is not the owner’s to give', () => {
@@ -394,10 +392,11 @@ describe('the market', () => {
     expect(page.body).toContain('<form')
     expect(page.headers['content-security-policy']).toContain("form-action 'self'")
     expect(titles(page.body)).toEqual(['Growth Desk', 'COOKREW Alpha', 'Ledger Close'])
-    expect(page.body).toContain('data-star="drej/cookrew-alpha"')
-    expect(page.body).toContain('cookrew://import/@drej/cookrew-alpha')
     expect(page.body).toContain('The crew that builds Cookrew.')
-    expect(page.body).toContain('3 teams')
+    // one button per card, and nothing else to press on it
+    expect(page.body.match(/<article class="team"/g)).toHaveLength(3)
+    expect(page.body).not.toContain('data-star=')
+    expect(page.body).not.toContain('In Cookrew')
   })
 
   it('searches the face: title, owner, door, summary, tags, harnesses', () => {
@@ -424,8 +423,7 @@ describe('the market', () => {
     expect(market(doors, 'tab=starred').body).toContain('Sign in to see what you starred')
     const mine = market(doors, 'tab=starred', { account: 'mira', starredTeams: ['lin/ledger'] })
     expect(titles(mine.body)).toEqual(['Ledger Close'])
-    expect(mine.body).toContain('class="star on"')
-    expect(mine.body).toContain('signed in as @mira')
+    expect(mine.body).toContain('1 starred by @mira')
   })
 
   it('presets are a second tab, reviewed in the app, never installed by a link', () => {
@@ -497,14 +495,13 @@ describe('the rent strip and the one buy control', () => {
     const stranger = market(doors).body
     expect(stranger).not.toContain('?buy=1')
     expect(stranger).toContain('Sign in to buy · $2.50')
-    expect(stranger).toContain('<details><summary>How listings, seats, stars and opening work')
   })
 
-  it('a team page has exactly one buy control, in the seat bar, and the gate card has no button', () => {
+  it('a team page has exactly one buy control, in the gate card, and the line’s own entry stays hidden', () => {
     const unseated = team(door(), { account: 'mira' }).body
     expect(unseated.match(/Buy a seat/g)).toHaveLength(1)
     expect(unseated).toContain('id="seat-buy"')
-    expect(unseated).toContain('A seat first — buy one above, or ask @drej.')
+    expect(unseated).toContain('no seat here yet')
     expect(unseated).toMatch(/<button class="btn primary" id="btn-open" hidden>/)
     for (const body of [
       team(door(), { account: 'mira', seat: { id: 's1', team: '@drej/cookrew-alpha', account: 'mira', source: 'granted', by: 'drej', createdAt: 1 } }).body,
@@ -522,10 +519,10 @@ describe('the rent strip and the one buy control', () => {
 
   it('keeps every element line.js and site.js read', () => {
     const body = team(door(), { account: 'mira' }).body
-    for (const id of ['team', 'phase', 'state', 'strip-opened', 'gate', 'gate-h', 'gate-p', 'gate-actions', 'btn-open', 'btn-new', 'btn-end', 'bar-led', 'prompt', 'send', 'term', 'rail', 'rail-n', 'rail-tail', 'block', 'seatbar', 'seat-head', 'seat-ask-note', 'seat-buy', 'star', 'addr', 'led', 'livetxt', 'overlay', 'open']) {
+    for (const id of ['team', 'phase', 'state', 'strip-opened', 'gate', 'gate-h', 'gate-p', 'gate-actions', 'btn-open', 'btn-new', 'btn-end', 'bar-led', 'prompt', 'send', 'term', 'rail', 'rail-n', 'rail-tail', 'block', 'seatbar', 'seat-head', 'seat-ask-note', 'seat-buy', 'star', 'led', 'livetxt', 'overlay']) {
       expect(body, id).toContain(`id="${id}"`)
     }
-    for (const hook of ['data-seat-buy', 'data-seat-ask', 'data-open=', 'data-copy=', 'data-star=', 'data-door=', 'data-seal-key=', 'data-relayed=', 'data-price=', 'data-orch=', 'data-live=', 'data-access=']) {
+    for (const hook of ['data-seat-buy', 'data-seat-ask', 'data-open=', 'data-star=', 'data-door=', 'data-seal-key=', 'data-relayed=', 'data-price=', 'data-orch=', 'data-live=', 'data-access=']) {
       expect(body, hook).toContain(hook)
     }
     // the owner's bar is the line and a count — seats are managed in the app (owner, 2026-10-04)
@@ -559,15 +556,14 @@ describe('the market is a shop with one name on the door', () => {
 
   it('puts what the reader holds on a shelf, and prices the rest by their standing', () => {
     const page = market(doors, '', { account: 'mira', seats: [seat] }).body
-    const shelf = page.slice(page.indexOf('id="yours"'), page.indexOf('id="count"'))
+    const shelf = page.slice(page.indexOf('id="yours"'), page.indexOf('class="finder"'))
     expect(titles(shelf)).toEqual(['Growth Desk', 'COOKREW Alpha'])
     expect(shelf).toContain('Yours · you serve it')
     expect(shelf).toContain('Seated · bought')
-    expect(shelf.match(/>Open the line</g)).toHaveLength(2)
+    expect(shelf.match(/>Open</g)).toHaveLength(2)
     expect(shelf.match(/\?open=1"/g)).toHaveLength(2)
-    const rest = page.slice(page.indexOf('id="count"'))
+    const rest = page.slice(page.indexOf('class="finder"'))
     expect(titles(rest)).toEqual(['Ledger Close'])
-    expect(rest).toContain('1 more team')
     expect(rest).toContain('Free · yours to open')
     expect(page).toContain('@mira · 1 seat · 1 team served · 0 starred')
     expect(page).not.toContain('data-signin>')

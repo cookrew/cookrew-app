@@ -156,7 +156,9 @@ describe('the streams are covered too', () => {
     // mis-scoped EventSource connects happily and feeds the wrong canvas's
     // state forever.
     const source = readFileSync(path.join(RENDERER, 'remote-api.ts'), 'utf8')
-    const streams = source.match(/new EventSource\([^)]*\)/g) ?? []
+    // openEventSource (rtc-plane.ts) is how a stream is opened now: the same
+    // EventSource, or the same stream over the direct link.
+    const streams = source.match(/(?:new EventSource|openEventSource)\([^)]*\)/g) ?? []
     expect(streams.length).toBeGreaterThan(0)
     for (const stream of streams) expect(stream).toContain('apiPath(')
   })
@@ -173,14 +175,31 @@ describe('the streams are covered too', () => {
     // reopening the read gate.
     const violations: string[] = []
     for (const file of sourceFiles(RENDERER)) {
+      // The one opener: it is handed a URL its callers built, token and all.
+      if (path.relative(RENDERER, file) === 'rtc-plane.ts') continue
       const code = stripComments(readFileSync(file, 'utf8'))
       code.split('\n').forEach((line, index) => {
-        if (!/new EventSource\(/.test(line)) return
+        if (!/(?:new EventSource|openEventSource)\(/.test(line)) return
         if (/tokenParam\(/.test(line)) return
         violations.push(`${path.relative(RENDERER, file)}:${index + 1}: ${line.trim()}`)
       })
     }
     expect(violations).toEqual([])
+  })
+
+  it('every stream opens through openEventSource, so it follows the direct link', () => {
+    // A stream built with `new EventSource` directly would keep riding the
+    // relay after the plane moved onto the WebRTC link (rtc-plane.ts) — the
+    // badge would say LAN while the busiest connection never left cookrew.dev.
+    const direct: string[] = []
+    for (const file of sourceFiles(RENDERER)) {
+      if (path.relative(RENDERER, file) === 'rtc-plane.ts') continue
+      const code = stripComments(readFileSync(file, 'utf8'))
+      code.split('\n').forEach((line, index) => {
+        if (/new EventSource\(/.test(line)) direct.push(`${path.relative(RENDERER, file)}:${index + 1}`)
+      })
+    }
+    expect(direct).toEqual([])
   })
 
   it('the browser socket is scoped and follows the data plane', () => {

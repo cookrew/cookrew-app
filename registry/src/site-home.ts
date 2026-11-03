@@ -17,6 +17,8 @@ import {
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
+import type { SampleArt } from './site-art-manifest'
+import { MOTION, PROMO, type Motion } from './site-motion'
 
 /**
  * THE FRONT PAGE — one page, top to bottom (owner ruling, 2026-09-06).
@@ -60,6 +62,12 @@ export interface HomeInput {
    * cannot learn this any other way — it runs no script, by design.
    */
   account?: string | null
+  /**
+   * The sample fleet's pictures, from the strata shell's bundle. With them the
+   * first screen is the sample at three levels and the promo moves down to
+   * the features; without (no shell deployed) the page is as it was.
+   */
+  art?: SampleArt | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */
@@ -233,18 +241,28 @@ function dock(input: HomeInput): string {
 }
 
 /**
- * THE PROMO — ten seconds, muted, looping, in the hero where the still frame was.
- *
- * It is the product, not a render: the shipped App on a geometry dump of the Cookrew Dev board,
- * driven with real input in a headless Chrome (docs/shoot-fixture, the shoot script in the job
- * dir) — the board zooms to the crew, a card is dragged and the harness re-routes, a card opens.
- * The file lives with the frames on GitHub; the registry bundle has no room for a megabyte. No
- * script: <video autoplay muted loop playsinline> needs none, and a reader whose browser refuses
- * autoplay sees the poster, which is the still frame this replaced.
+ * THE PROMO — the hero's video: the running app, recorded in its ink theme
+ * (2026-10-31), walking the semantic zoom by click from the machines down to
+ * one agent's full transcript and back out. Real agents in the owner's own
+ * workspace, real cables, real replies; nothing staged, nothing written for
+ * the shot. The file lives with the frames on GitHub; the bundle has no room
+ * for it. No script: <video autoplay muted loop playsinline> needs none, and
+ * a reader whose browser refuses autoplay sees the poster.
  */
 function promo(): string {
   const poster = `${SITE_FRAMES}promo-poster.jpg`
-  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="Ten seconds of Cookrew: agent cards on the canvas, one opened on its transcript and checkpoint rail, a note card, a browser card"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>Ten seconds of the real app on the Cookrew Dev board: agent cards with their last turn, wired to notes and browsers; Velvet opens on its transcript and 138 checkpoints, the rail fans out; a spec note opens; a research page opens in a browser card. Every record is the agents' own. <a href="/features/ai-agents-on-one-canvas">The canvas, frame by frame →</a></figcaption></figure>`
+  return `<figure class="shot promo"><video autoplay muted loop playsinline preload="metadata" poster="${esc(poster)}" width="1400" height="874" aria-label="${esc(PROMO.label)}"><source src="${SITE_FRAMES}promo.mp4" type="video/mp4"></video><figcaption><span class="rec">● REC</span>${esc(PROMO.caption)}</figcaption></figure>`
+}
+
+/**
+ * THE ZOOM, RECORDED — one short clip per step of the navigator, each the
+ * real app answering one click. They loop muted and carry a poster, so a
+ * reader whose browser refuses autoplay still sees the step.
+ */
+function motionStrip(): string {
+  const clip = (m: Motion): string =>
+    `<figure class="shot"><video autoplay muted loop playsinline preload="none" poster="${SITE_FRAMES}${m.file}.jpg" width="${m.w}" height="${m.h}" aria-label="${esc(m.title)}"><source src="${SITE_FRAMES}${m.file}.mp4" type="video/mp4"></video><figcaption><span class="rec">${esc(m.step)}</span><span><b class="serif">${esc(m.title)}</b> — ${esc(m.caption)}</span></figcaption></figure>`
+  return `<div class="motion" id="zoom">${MOTION.map(clip).join('')}</div>`
 }
 
 /** GET STARTED: the two steps, the crew builder, and the two questions people ask first. */
@@ -273,6 +291,8 @@ function featuresSection(commits: readonly Commit[] | null): string {
 <p class="kicker"><span class="no">FEATURES</span>recorded, not described</p>
 <h2>What Cookrew does</h2>
 <p class="lede">${esc(DEFINITION)}</p>
+<h3 class="mkt-h" style="margin-top:6px">The zoom, recorded<span class="chip">one click each · the running app</span></h3>
+${motionStrip()}
 ${featuresGrid()}
 <h3 id="compare" style="margin-top:32px">A chat tab, one CLI agent, or a team</h3>${compareTable()}
 <h3 id="faq" style="margin-top:32px">Questions and answers</h3><div class="faq">${FAQ.map((f) => `<details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}</div>
@@ -294,6 +314,7 @@ function catalog(release: Release | null): string {
     ['#serve', 'Save and serve a team', true],
     ['#build', 'What your orch runs', true],
     ['#features', 'Features', false],
+    ['#zoom', 'The zoom, recorded', true],
     ['#compare', 'Chat tab, one agent, or a team', true],
     ['#faq', 'Questions', true],
     ['#built', 'What landed on dev', true]

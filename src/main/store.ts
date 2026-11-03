@@ -26,11 +26,13 @@ import {
   uniqueName
 } from '../shared/model'
 import { addDir, removeDir, setPrimary } from '../shared/workspace-dirs'
+import { checkBrief } from '../shared/workspace-brief'
 import { slugFor } from '../shared/workspace-slug'
 import { recordLineageIds } from './lineage-spill'
 import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
+import { multiInstanceDefault } from './launch-defaults'
 import type { RecoverableSnapshot } from './recoverable'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
@@ -97,7 +99,7 @@ interface HydratedSession {
   saveTimer: NodeJS.Timeout | null
 }
 
-const MULTI_INSTANCE_DEFAULT = process.env.COOKREW_MULTI_INSTANCE === '1'
+const MULTI_INSTANCE_DEFAULT = multiInstanceDefault()
 
 /** A node found by a cross-workspace lookup, with its owning workspace. */
 export interface WorkspaceNodeHit {
@@ -395,6 +397,25 @@ export class WorkspaceStore extends EventEmitter {
     this.emit('workspaces', this.list())
     if (id === this.focused) this.emit('change', this.focusedState)
     this.emitOp('workspace.renamed', id, name, id)
+  }
+
+  /**
+   * The owner's one-line brief (shared/workspace-brief.ts); a blank one
+   * clears it. Throws on an unknown workspace or a brief that fails the check,
+   * changing nothing. An unchanged brief is no event.
+   */
+  setWorkspaceBrief(id: string, raw: unknown): void {
+    const target = this.registry.workspaces.find((w) => w.id === id)
+    if (!target) throw new Error(`Workspace '${id}' not found`)
+    const checked = checkBrief(raw)
+    if (!checked.ok) throw new Error(checked.reason)
+    if ((target.brief ?? '') === checked.brief) return
+    this.registry = {
+      ...this.registry,
+      workspaces: this.registry.workspaces.map((w) => (w.id === id ? withBrief(w, checked.brief) : w))
+    }
+    saveRegistry(this.baseDir, this.registry)
+    this.emit('workspaces', this.list())
   }
 
   /**
@@ -1168,7 +1189,7 @@ export class WorkspaceStore extends EventEmitter {
    * plantable from there; internal main-process code uses updateNodeUnsafe).
    */
   private static readonly PATCHABLE: Record<CanvasNode['kind'], ReadonlySet<string>> = {
-    terminal: new Set(['name', 'position', 'size', 'role']),
+    terminal: new Set(['name', 'position', 'size', 'role', 'brief']),
     note: new Set(['name', 'customName', 'content', 'locked', 'position', 'size']),
     browser: new Set(['name', 'url', 'tabs', 'activeTabId', 'position', 'size'])
   }
@@ -1355,6 +1376,12 @@ function withSlugs(registry: Registry): Registry {
   return { ...registry, workspaces }
 }
 
+/** The meta with this brief, or without one when it is blank. */
+function withBrief(meta: WorkspaceMeta, brief: string): WorkspaceMeta {
+  const { brief: _previous, ...rest } = meta
+  return brief ? { ...rest, brief } : rest
+}
+
 function loadRegistry(base: string): Registry {
   try {
     if (existsSync(registryFile(base))) {
@@ -1364,7 +1391,9 @@ function loadRegistry(base: string): Registry {
         const workspaces = raw.workspaces.map((w) => {
           const dirs = normalizeDirs({ dir: w.dir, dirs: w.dirs })
           const finalDirs = dirs.length > 0 ? dirs : [homedir()]
-          return { ...w, dir: finalDirs[0], dirs: finalDirs }
+          // A hand-edited brief that fails the check is dropped, not trusted.
+          const brief = checkBrief(w.brief)
+          return withBrief({ ...w, dir: finalDirs[0], dirs: finalDirs }, brief.ok ? brief.brief : '')
         })
         return { ...raw, workspaces }
       }

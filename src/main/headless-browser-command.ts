@@ -8,8 +8,11 @@ import { randomUUID } from 'node:crypto'
 import type { BrowserNodeData, BrowserTab, CanvasNode } from '../shared/model'
 import { activeBrowserTab, browserTabs } from '../shared/model'
 import type { WorkspaceStore } from './store'
-import type { HeadlessBrowserManager } from './headless-browser-manager'
-import type { HeadlessInstance } from './headless-chrome'
+import { backingOf, type HeadlessBrowserManager } from './headless-browser-manager'
+import type { BrowserInstance } from './browser-instance'
+import { parseUseUrl } from '../shared/use-url'
+import type { UseSignal } from '../shared/use-signal'
+import { handlesUseCommand, runUseCommand } from './use-commands'
 
 export interface HeadlessBrowserCommandDeps {
   store: WorkspaceStore
@@ -17,7 +20,20 @@ export interface HeadlessBrowserCommandDeps {
   addNode: (node: CanvasNode) => CanvasNode
   updateNode: (id: string, patch: Partial<CanvasNode>) => CanvasNode | undefined
   connectNodes: (aId: string, bId: string) => void
+  /** Every acting command, as the cursor the owner watches (shared/use-signal.ts). */
+  onUse?: (signal: UseSignal) => void
+  /** Where `screenshot` without a file name saves. */
+  shotsDir?: string
+  now?: () => number
 }
+
+/** The centre of the element a selector names, in viewport points — where the cursor goes for a DOM action. */
+const CENTER_OF = (selector: string): string => `(() => {
+  const el = ${selectorFor(selector)}
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), w: innerWidth, h: innerHeight }
+})()`
 
 const SNAPSHOT_SCRIPT = `(() => {
   const SALIENT = 'a,button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[onclick],h1,h2,h3,label,summary'
@@ -55,7 +71,7 @@ function selectorFor(selector: string): string {
 }
 
 async function withElement(
-  instance: HeadlessInstance,
+  instance: BrowserInstance,
   selector: string,
   action: string
 ): Promise<string> {
@@ -87,12 +103,41 @@ export class HeadlessBrowserCommandEngine {
     try {
       if (TAB_COMMANDS.has(sub)) return this.runTabCommand(sub, node, rest.slice(1))
       const params = rest.slice(1)
+      const target = parseUseUrl(activeBrowserTab(node).url)
+      if (handlesUseCommand(sub, instance)) {
+        return await runUseCommand(sub, params, instance, {
+          agent: terminalId,
+          card: node.id,
+          cardName: node.name,
+          target,
+          shotsDir: this.deps.shotsDir ?? '/tmp/cookrew-shots',
+          now: this.deps.now ?? Date.now,
+          emit: (signal) => this.deps.onUse?.(signal)
+        })
+      }
+      if (sub === 'click' || sub === 'fill' || (sub === 'type' && params.length > 1)) {
+        await this.signalAt(instance, node.id, terminalId, sub, params[0])
+      } else if (sub === 'navigate') {
+        this.deps.onUse?.({ agent: terminalId, card: node.id, use: 'browser', verb: 'navigate', point: null, viewport: null, at: (this.deps.now ?? Date.now)() })
+      }
       switch (sub) {
         case 'snapshot':
           return String(await instance.evaluate(SNAPSHOT_SCRIPT))
         case 'navigate': {
           const url = params[0]
           if (!url) throw new Error(`Usage: cookrew browser navigate "${browserName}" URL`)
+          // ANOTHER DEVICE IS A NEW ADDRESS FOR THE CARD, not a page for the
+          // old device to open: the card's tab is re-addressed and the
+          // manager swaps the instance (its viewers redial onto the new one).
+          // A web address on a phone still opens in the phone's browser.
+          const readdressed = withActiveUrl(node, url)
+          if (target !== null || parseUseUrl(url) !== null) {
+            if (parseUseUrl(url) !== null && backingOf(readdressed) !== backingOf(node)) {
+              const updated = this.patch(node.id, { url, tabs: readdressed.tabs })
+              await this.deps.manager.syncNode(updated)
+              return `Re-addressed to ${url}`
+            }
+          }
           await instance.navigate(url)
           return `Navigated to ${url}`
         }
@@ -163,7 +208,7 @@ export class HeadlessBrowserCommandEngine {
 
   private async create(params: string[], terminalId: string): Promise<string> {
     const [url, requestedName] = params
-    if (!url) throw new Error('Usage: cookrew browser create URL ["Name"]')
+    if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>] [--new]')
     // A caller parked in ANOTHER workspace is refused before it gets here
     // (cmdBrowser). What remains is a caller no workspace file holds at all —
     // a terminal resolved from the durable registry after a reboot. It has no
@@ -193,6 +238,25 @@ export class HeadlessBrowserCommandEngine {
       : `Created browser "${added.name}" (not connected: your terminal is not a node in this workspace)`
   }
 
+  /** The cursor for a DOM action: the element's centre. Best effort — a miss never blocks the action. */
+  private async signalAt(instance: BrowserInstance, card: string, agent: string, verb: string, selector: string | undefined): Promise<void> {
+    if (!this.deps.onUse || !selector) return
+    type Center = { x: number; y: number; w: number; h: number }
+    const at = await instance.evaluate(CENTER_OF(selector)).then(
+      (value) => (value ?? null) as Center | null,
+      () => null
+    )
+    this.deps.onUse({
+      agent,
+      card,
+      use: 'browser',
+      verb,
+      point: at ? { x: at.x, y: at.y } : null,
+      viewport: at ? { width: at.w, height: at.h } : null,
+      at: (this.deps.now ?? Date.now)()
+    })
+  }
+
   private findBrowser(name: string): BrowserNodeData {
     const node = this.deps.store.nodeByName(name, 'browser')
     if (!node || node.kind !== 'browser') {
@@ -201,7 +265,7 @@ export class HeadlessBrowserCommandEngine {
     return node
   }
 
-  private async requireInstance(node: BrowserNodeData): Promise<HeadlessInstance> {
+  private async requireInstance(node: BrowserNodeData): Promise<BrowserInstance> {
     const instance = await this.deps.manager.syncNode(node)
     if (!instance) throw new Error(`Headless browser '${node.name}' is unavailable`)
     return instance
@@ -277,3 +341,9 @@ export class HeadlessBrowserCommandEngine {
 }
 
 const TAB_COMMANDS = new Set(['tabs', 'tab-new', 'tab-select', 'tab-close'])
+
+/** The card with its active tab pointed at `url` — what it would be, re-addressed. */
+function withActiveUrl(node: BrowserNodeData, url: string): BrowserNodeData {
+  const active = activeBrowserTab(node)
+  return { ...node, url, tabs: browserTabs(node).map((tab) => (tab.id === active.id ? { ...tab, url, title: '' } : tab)) }
+}

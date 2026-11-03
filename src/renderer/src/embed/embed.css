@@ -1,0 +1,151 @@
+/* Strata embed mode: the attachments rail around the companion's full view.
+   Nothing here touches .lod-overlay or .cr-dock — the terminal and its Dock
+   render exactly as the full view renders them. */
+
+.cr-embed .cr-stage {
+  background: var(--cream);
+}
+
+.cr-embed-rail,
+.cr-embed-drawer,
+.cr-embed-sheet {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--cream-hi);
+  border: 2px solid var(--line);
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+
+.cr-embed-drawer {
+  top: 56px;
+  bottom: 96px;
+  width: min(360px, 42vw);
+  box-shadow: 6px 6px 0 var(--amber-deep);
+}
+.cr-embed-drawer.left {
+  left: 30px;
+}
+.cr-embed-drawer.right {
+  right: 30px;
+}
+
+.cr-embed-pill {
+  position: fixed;
+  z-index: 61;
+  top: 50%;
+  padding: 10px 4px;
+  border: 2px solid var(--line);
+  background: var(--cream-hi);
+  font: 600 11px/1 var(--font-body);
+  letter-spacing: 0.08em;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+}
+.cr-embed-pill.left {
+  left: 0;
+  transform: translateY(-50%) rotate(180deg);
+}
+.cr-embed-pill.right {
+  right: 0;
+  transform: translateY(-50%);
+}
+.cr-embed-pill.sheet {
+  top: auto;
+  left: 50%;
+  bottom: calc(84px + var(--kb-inset, 0px));
+  transform: translateX(-50%);
+  writing-mode: horizontal-tb;
+  padding: 8px 12px;
+}
+.cr-embed-pill[aria-expanded='true'] {
+  background: var(--amber, #e9b949);
+}
+
+.cr-embed-sheet {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 62vh;
+  border-width: 2px 0 0;
+}
+.cr-embed-sheet-head {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 2px solid var(--line);
+}
+.cr-embed-close {
+  margin-left: auto;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  font-size: 18px;
+}
+
+.cr-embed-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.cr-embed-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  overflow-x: auto;
+  border-bottom: 2px solid var(--line);
+  flex: 0 0 auto;
+}
+.cr-embed-tab {
+  flex: 0 0 auto;
+  max-width: 180px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 2px solid var(--line);
+  background: var(--cream);
+  font: 600 12px/1.2 var(--font-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.cr-embed-tab.on {
+  background: var(--amber, #e9b949);
+}
+.cr-embed-tabpanel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.cr-embed-note {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.5 var(--font-mono, ui-monospace, monospace);
+}
+.cr-embed-browser {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.cr-embed-url {
+  overflow-wrap: anywhere;
+}
+.cr-embed-muted {
+  margin: 0;
+  opacity: 0.7;
+}
+.cr-embed-status {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 600 13px/1.4 var(--font-body);
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}

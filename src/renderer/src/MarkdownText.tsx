@@ -1,11 +1,11 @@
-import { Fragment, memo } from 'react'
-import { parseMarkdown, type BlockNode, type InlineNode } from './markdown'
+import { Fragment, memo, useLayoutEffect, useRef, useState } from 'react'
+import { parseMarkdown, type BlockNode, type InlineNode, type TableAlign } from './markdown'
 
 /**
  * Render a markdown reply body (unified-scroll addendum) as REACT ELEMENTS ONLY
  * — no dangerouslySetInnerHTML, no raw HTML pass-through. The pure parser
  * (markdown.ts) yields a safe AST; this walks it to STANDARD tags (strong / em /
- * code / pre / ul / ol / h1-6 / p), which Fresco styles by tag under
+ * code / pre / ul / ol / h1-6 / p / table), which Fresco styles by tag under
  * `.ctx-block-reply.md` to keep the phosphor terminal aesthetic. Anything the
  * parser didn't recognize already arrived as plain text, so it renders verbatim.
  */
@@ -26,7 +26,24 @@ export const MarkdownText = memo(function MarkdownText({
   )
 })
 
-function Inlines({ nodes }: { nodes: InlineNode[] }): React.JSX.Element {
+/**
+ * A code span in a table cell may break only after its own punctuation — a
+ * `/`, `.` or `_` between word characters (`src/` `main/` `index.` `ts`) —
+ * never inside a word: the cell wraps only between words (UI/UX QA r4).
+ */
+export const CODE_BREAK_RE = /(?<=\w[/._])(?=\w)/
+
+function cellCode(value: string): React.ReactNode {
+  const parts = value.split(CODE_BREAK_RE)
+  return parts.map((part, k) => (
+    <Fragment key={k}>
+      {k > 0 && <wbr />}
+      {part}
+    </Fragment>
+  ))
+}
+
+function Inlines({ nodes, cell = false }: { nodes: InlineNode[]; cell?: boolean }): React.JSX.Element {
   return (
     <>
       {nodes.map((node, i) => {
@@ -34,17 +51,17 @@ function Inlines({ nodes }: { nodes: InlineNode[] }): React.JSX.Element {
           case 'strong':
             return (
               <strong key={i}>
-                <Inlines nodes={node.children} />
+                <Inlines nodes={node.children} cell={cell} />
               </strong>
             )
           case 'em':
             return (
               <em key={i}>
-                <Inlines nodes={node.children} />
+                <Inlines nodes={node.children} cell={cell} />
               </em>
             )
           case 'code':
-            return <code key={i}>{node.value}</code>
+            return <code key={i}>{cell ? cellCode(node.value) : node.value}</code>
           default:
             return <Fragment key={i}>{node.value}</Fragment>
         }
@@ -69,6 +86,34 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
           <code>{node.value}</code>
         </pre>
       )
+    case 'table':
+      // Its own box scrolls sideways: a wide table never widens the chat (a phone is 412px).
+      return (
+        <TableBox>
+          <table>
+            <thead>
+              <tr>
+                {node.head.map((cell, k) => (
+                  <th key={k} style={alignOf(node.align[k])}>
+                    <Inlines nodes={cell} cell />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {node.rows.map((row, r) => (
+                <tr key={r}>
+                  {row.map((cell, k) => (
+                    <td key={k} style={alignOf(node.align[k])}>
+                      <Inlines nodes={cell} cell />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableBox>
+      )
     case 'list': {
       const Tag = node.ordered ? 'ol' : 'ul'
       return (
@@ -88,4 +133,49 @@ function Block({ node }: { node: BlockNode }): React.JSX.Element {
         </p>
       )
   }
+}
+
+/** A column's alignment from the separator row's colons; none leaves the stylesheet's. */
+const alignOf = (align: TableAlign | undefined): React.CSSProperties | undefined => (align ? { textAlign: align } : undefined)
+
+/** Which side of a table's box has more of it off screen: null when it all fits. */
+export function tableEdge(box: { readonly scrollLeft: number; readonly clientWidth: number; readonly scrollWidth: number }): 'left' | 'right' | 'both' | null {
+  const left = box.scrollLeft > 1
+  const right = box.scrollLeft + box.clientWidth < box.scrollWidth - 1
+  return left && right ? 'both' : left ? 'left' : right ? 'right' : null
+}
+
+/**
+ * A table's box: it scrolls sideways only when the columns cannot wrap to fit
+ * (transcript-paper.css), and then says so — the outer box fades the cut edge
+ * while there is more off that side (UI/UX QA 2026-11-01: on a phone the
+ * columns just stopped). Read on scroll and on resize, never per frame.
+ */
+function TableBox({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  const [edge, setEdge] = useState<ReturnType<typeof tableEdge>>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const read = (): void => {
+      const next = tableEdge(el)
+      setEdge((at) => (at === next ? at : next))
+    }
+    read()
+    el.addEventListener('scroll', read, { passive: true })
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(read) : null
+    ro?.observe(el)
+    if (el.firstElementChild) ro?.observe(el.firstElementChild)
+    return () => {
+      el.removeEventListener('scroll', read)
+      ro?.disconnect()
+    }
+  }, [])
+  return (
+    <div className="md-table-box" data-more={edge ?? undefined}>
+      <div ref={ref} className="md-table" role="region" aria-label="Table" tabIndex={0}>
+        {children}
+      </div>
+    </div>
+  )
 }

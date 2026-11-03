@@ -51,6 +51,12 @@ export interface DataPlane {
    * the fallback existed, so nothing that leaves it unset changes behaviour.
    */
   readonly hint?: AddressSpaceHint
+  /**
+   * THE DIRECT LINK BY WEBRTC (path/rtc-link.ts): the plane is LAN or TAILNET
+   * by the Mac's own word, the origin stays '' and the relay's URLs are kept,
+   * and requests and streams ride a data channel (rtc-plane.ts).
+   */
+  readonly transport?: 'rtc'
 }
 
 /**
@@ -71,9 +77,10 @@ export const dataPlane = (): DataPlane => plane
  */
 export const setDataPlane = (next: DataPlane): void => {
   const normalized: DataPlane = {
-    origin: next.kind === 'relay' ? '' : next.origin.replace(/\/+$/, ''),
+    origin: next.kind === 'relay' || next.transport === 'rtc' ? '' : next.origin.replace(/\/+$/, ''),
     kind: next.kind,
-    ...(next.hint ? { hint: next.hint } : {})
+    ...(next.hint ? { hint: next.hint } : {}),
+    ...(next.transport === 'rtc' && next.kind !== 'relay' ? { transport: 'rtc' as const } : {})
   }
   // The variant is part of the identity: the same origin reached with and
   // without the annotation is two different transports, and a stream that did
@@ -81,7 +88,8 @@ export const setDataPlane = (next: DataPlane): void => {
   if (
     normalized.origin === plane.origin &&
     normalized.kind === plane.kind &&
-    normalized.hint === plane.hint
+    normalized.hint === plane.hint &&
+    normalized.transport === plane.transport
   ) {
     return
   }

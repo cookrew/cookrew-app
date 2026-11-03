@@ -612,3 +612,55 @@ describe('originAllowed (CSWSH / DNS-rebinding guard)', () => {
     expect(originAllowed({ headers: { origin: 'not a url', host: '192.168.2.13:8643' } })).toBe(false)
   })
 })
+
+describe('a page’s copy reaches the viewer who just acted (page-copy.ts)', () => {
+  const copyInstance = (): HeadlessInstance & { copyListeners: Set<(text: string) => void> } =>
+    Object.assign(fakeInstance(), { copyListeners: new Set<(text: string) => void>() }) as HeadlessInstance & {
+      copyListeners: Set<(text: string) => void>
+    }
+  const open = async (instance: HeadlessInstance): Promise<TestSocket> => {
+    const socket = socketStub()
+    createBrowserCast({ ...okDeps(), getInstance: vi.fn(() => Promise.resolve(instance)) }).upgrade(req('/api/browser/copy/stream'), socket)
+    await Promise.resolve()
+    await Promise.resolve()
+    for (const listener of instance.frameListeners) listener('current-frame', { revision: 1 })
+    return socket
+  }
+  const copies = (socket: TestSocket): string[] => socket.writes.filter((w) => w.includes('"t":"copy"')).map((w) => w.slice(w.indexOf('{')))
+  const copy = (instance: { copyListeners: Set<(text: string) => void> }, text: string): void => {
+    for (const listener of instance.copyListeners) listener(text)
+  }
+
+  it('forwards a copy that follows the viewer’s own input', async () => {
+    const instance = copyInstance()
+    const socket = await open(instance)
+    socket.emitEvent('data', maskedTextFrame(JSON.stringify({ t: 'key', key: 'c', code: 'KeyC', revision: 1 })))
+    copy(instance, 'the copied words')
+    expect(copies(socket)).toEqual([JSON.stringify({ t: 'copy', text: 'the copied words' })])
+  })
+
+  it('forwards nothing a page copies on its own', async () => {
+    const instance = copyInstance()
+    const socket = await open(instance)
+    copy(instance, 'unasked')
+    expect(copies(socket)).toEqual([])
+  })
+
+  it('gives the copy to the viewer who clicked, not to another one watching', async () => {
+    const instance = copyInstance()
+    const actor = await open(instance)
+    const watcher = await open(instance)
+    actor.emitEvent('data', maskedTextFrame(JSON.stringify({ t: 'key', key: 'c', code: 'KeyC', revision: 1 })))
+    copy(instance, 'mine')
+    expect(copies(actor)).toHaveLength(1)
+    expect(copies(watcher)).toEqual([])
+  })
+
+  it('stops listening when the viewer leaves', async () => {
+    const instance = copyInstance()
+    const socket = await open(instance)
+    expect(instance.copyListeners.size).toBe(1)
+    socket.emitEvent('close')
+    expect(instance.copyListeners.size).toBe(0)
+  })
+})

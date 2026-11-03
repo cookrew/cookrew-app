@@ -5,6 +5,8 @@ import { homedir, tmpdir } from 'node:os'
 import pty, { IPty } from 'node-pty'
 import xtermHeadless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { createPaneSizes } from './pane-sizes'
+import { clipToCells, cutAtScreen, dropReprintedMessages, dropReprints } from './seed-history'
 import { sanitizeAgentEnv } from './multiplexer'
 import { paneEnv } from './pane-env'
 import type { AttachSpec, Multiplexer, PaneCardInfo } from './multiplexer'
@@ -18,6 +20,7 @@ import { confinedSpawn } from './session-sandbox'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
+import { multiplexerPreference } from './launch-defaults'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 import {
   decideReattach,
@@ -43,6 +46,9 @@ export const TMUX_LABEL = TMUX_LABEL_CONST
 
 /** Stable per-user dir; the socket pointer lives here for the PATH-installed CLI. */
 const COOKREW_HOME = path.join(homedir(), '.cookrew')
+let sharedPaneSizes: ReturnType<typeof createPaneSizes> | null = null
+/** The sizes panes last had, kept in ~/.cookrew (pane-sizes.ts). */
+export const paneSizes = (): ReturnType<typeof createPaneSizes> => (sharedPaneSizes ??= createPaneSizes(path.join(COOKREW_HOME, 'pane-sizes.json')))
 
 /**
  * Erase screen + scrollback + home the cursor. Every replay starts here so a
@@ -93,6 +99,82 @@ export function modeReplay(modes: HeadlessTerminalType['modes']): string {
   // that missed the init would send CSI arrows and the agent would see junk.
   if (modes.applicationCursorKeysMode) out += '\x1b[?1h'
   return out
+}
+
+/** The marker a seeded frame ends with, so the viewer knows its history has landed (OSC, ignored by any terminal that does not ask). */
+export const SEED_OSC = 777
+/** Ends a seeded frame: the nonce it answers and the width it was built at, so a viewer at another width can refuse it (live-scroll.ts). */
+export const seedMarker = (nonce: string, cols?: number): string =>
+  `\x1b]${SEED_OSC};cookrew-seed;${nonce}${cols === undefined ? '' : `;${cols}`}\x07`
+/** The most history one seed may carry. */
+export const SEED_MAX_LINES = 2000
+
+/**
+ * A replay frame with the pane's history ABOVE the screen, in the viewer's
+ * scrollback — so the viewer scrolls it locally, at once, instead of asking
+ * the pane to scroll and waiting ~60–230 ms for the repaint per wheel tick
+ * (measured 2026-10-31; the owner: "live is not as smooth as chat").
+ *
+ * herdr repaints its screen in place, so nothing a viewer is sent ever
+ * scrolls into its own scrollback; the history has to be fetched from the
+ * pane (`historyAnsiAsync`) and laid in: the lines above the screen, pushed
+ * up by one screen of newlines, then the screen cleared (ED 2 does not touch
+ * scrollback) and painted exactly as replayFrame paints it, modes and all.
+ * The last screenful of the history IS the screen, so it is dropped rather
+ * than shown twice. Ends with the seed marker.
+ *
+ * herdr's client draws on the ALTERNATE screen, which keeps no scrollback;
+ * a seed that switched the viewer there would bury its own history (measured
+ * live: the history landed, the viewer sat on the alternate screen, and the
+ * wheel had nothing to scroll). So the screen is painted on the NORMAL
+ * screen, under the history, and the viewer stays there; herdr's later
+ * deltas are absolute addresses and draw the same cells on either screen.
+ */
+export function buildSeededFrame(
+  screen: Pick<HeadlessTerminalType, 'rows' | 'cols' | 'modes'>,
+  serializer: Pick<SerializeAddon, 'serialize'>,
+  history: string,
+  nonce: string,
+  /** The screen's rows as text: where it begins in the history (seed-history.ts · cutAtScreen). */
+  screenText: readonly string[] = []
+): string {
+  const lines = history.replace(/(\r?\n)+$/, '').split(/\r?\n/)
+  // What the screen already shows is cut off by its own words, and a run
+  // that a resize reprinted is kept once — the later copy (seed-history.ts).
+  // A copy a redraw left garbled is caught by its messages' heads (dropReprintedMessages).
+  const above = dropReprintedMessages(dropReprints(cutAtScreen(lines, screenText, screen.rows), screenText), screenText).map((line) =>
+    clipToCells(line, screen.cols)
+  )
+  // A row printed before a resize can be wider than the screen: a border or
+  // padding past the edge is cut (clipToCells); real text wraps, whole.
+  const body =
+    above.length === 0
+      ? CLEAR_SCREEN + serializer.serialize({ scrollback: screen.rows })
+      : LEAVE_ALTERNATE + CLEAR_SCREEN + WRAP + above.join('\x1b[0m\r\n') + '\x1b[0m' + '\r\n'.repeat(screen.rows) + '\x1b[H\x1b[2J' + screenOnNormal(serializer)
+  return body + modeReplay(screen.modes) + seedMarker(nonce, screen.cols)
+}
+
+/**
+ * The viewer is usually ON the alternate screen already — every plain replay
+ * and herdr's own start put it there — and nothing else in a seed would take
+ * it off: the history would be written into a screen that cannot keep it.
+ */
+/** After a widen: how long the pane holds its new width before the dip, so the agent sees it first (resize). */
+export const WIDEN_SETTLE_MS = 250
+/** How long a dip one column narrower holds: long enough for the agent to redraw at it. */
+export const DIP_MS = 400
+
+const LEAVE_ALTERNATE = '\x1b[?1049l'
+const WRAP = '\x1b[?7h'
+
+/** What serialize() puts after the switch when the alternate screen is active. */
+const TO_ALTERNATE = '\x1b[?1049h\x1b[H'
+
+/** The screen as the viewer should see it, drawn on the normal screen: the alternate screen's content when that is the one showing. */
+function screenOnNormal(serializer: Pick<SerializeAddon, 'serialize'>): string {
+  const frame = serializer.serialize({ scrollback: 0 })
+  const at = frame.indexOf(TO_ALTERNATE)
+  return at < 0 ? frame : frame.slice(at + TO_ALTERNATE.length)
 }
 
 /**
@@ -339,7 +421,17 @@ export interface PtySessionOptions {
    * the one remaining integration.
    */
   served?: { env: Record<string, string>; profilePath: string }
+  /**
+   * The card's route (route program): what the harness is handed to reach
+   * the Magpie gateway. Ignored outright for a served session — a stranger's
+   * seat never runs on the owner's gateway (design D3) — so an option set by
+   * mistake cannot leak it.
+   */
+  route?: { env: Record<string, string>; args: string[] }
 }
+
+/** The CLI's names on a pane's PATH: the full one and its short alias. */
+const CLI_NAMES = ['cookrew', 'crew'] as const
 
 /**
  * One PTY per terminal node. A headless xterm mirrors the screen so the
@@ -362,12 +454,27 @@ export class PtySession extends EventEmitter {
   private serializer: SerializeAddon
   private lastOutputAt = 0
   private disposed = false
+  /** A widen's dip (resize): one column narrower, then back. */
+  private widenTimer: ReturnType<typeof setTimeout> | null = null
   /** Backend/spec are retained so a dropped herdr client can reattach in place. */
   private readonly mux: Multiplexer
-  private readonly attachSpec: AttachSpec
+  private attachSpec: AttachSpec
   private readonly paneEnvironment: Record<string, string>
   private readonly served: boolean
   private readonly servedProfilePath: string | null
+  /**
+   * The card this session's pane wears, after a rename or a new role. An
+   * in-place reattach replays the spec, so it must carry the card's CURRENT
+   * name, not the one it was spawned with.
+   */
+  rebindCard(card: PaneCardInfo): void {
+    this.attachSpec = { ...this.attachSpec, card }
+  }
+
+  /** The served fact, as the socket server's secret verbs read it. */
+  get isServed(): boolean {
+    return this.served
+  }
   private readonly cwd: string
   /** Raw child output is synchronous; xterm's parsed mirror drains later. */
   private attachOutputTail = ''
@@ -457,7 +564,8 @@ export class PtySession extends EventEmitter {
       cliDir: options.cliDir,
       path: `${options.cliDir}:${process.env.PATH ?? ''}`,
       cwd: options.cwd,
-      card: options.card
+      card: options.card,
+      ...(options.route && !options.served ? { env: options.route.env, args: options.route.args } : {})
     }
     // One live process per terminal across ALL backends: a copy of this
     // agent alive under a non-host multiplexer is killed there first and
@@ -467,8 +575,18 @@ export class PtySession extends EventEmitter {
     this.startAttach(false)
   }
 
+  /**
+   * True when the backend already held this session and the attach rode it:
+   * the boot command (and so the route env) was ignored and no process was
+   * created. Read by the spawner to record only what a real create set.
+   */
+  reattached = false
+
   /** Spawn one attach client and bind it to this stable session object. */
   private startAttach(recovering: boolean): void {
+    // Asked BEFORE the attach: `new-session -A` creates or reattaches in one
+    // step and never says which, so the question is put to the backend first.
+    this.reattached = this.mux.sessionExists(this.sessionName)
     // Idempotent, and a no-op for tmux (whose `new-session -A` does it inside
     // the attach). On recovery herdr also verifies the server and refreshes
     // runtime-only agent registration before resolving a new attach argv.
@@ -693,7 +811,45 @@ export class PtySession extends EventEmitter {
     this.emit('input', data)
   }
 
+  /**
+   * A WIDEN IS FOLLOWED BY A DIP (owner's desktop after the phone,
+   * 2026-10-31: the live view showed phone-width rows three and four abreast).
+   *
+   * Claude Code redraws its whole conversation when the terminal gets
+   * NARROWER, and only when idle; on a widen it redraws nothing, and what is
+   * left on screen is herdr's reflow, which joins rows to the row after them.
+   * So after a widen settles (WIDEN_SETTLE_MS) the pane dips one column
+   * narrower for DIP_MS and comes back: the dip makes Claude Code redraw, one
+   * column short of the width, which only leaves a margin.
+   *
+   * Never PAST the width asked for (it went one column past until
+   * 2026-10-31): a render Claude Code makes at the wider size can land after
+   * the pane is back, and then every padded row spills onto a row of its own
+   * — a blank row under every line, and the input box jumping. A late render
+   * at the dip's narrower size spills nothing.
+   *
+   * A one-column widen is the end of a dip (here, or a viewer's repaint kick)
+   * and is not dipped again.
+   */
   resize(cols: number, rows: number): void {
+    if (this.widenTimer !== null) {
+      clearTimeout(this.widenTimer)
+      this.widenTimer = null
+    }
+    const widened = cols > this.screen.cols + 1
+    this.applySize(cols, rows)
+    if (!widened || cols < 21) return
+    this.widenTimer = setTimeout(() => {
+      if (this.disposed) return
+      this.applySize(cols - 1, rows)
+      this.widenTimer = setTimeout(() => {
+        this.widenTimer = null
+        if (!this.disposed) this.applySize(cols, rows)
+      }, DIP_MS)
+    }, WIDEN_SETTLE_MS)
+  }
+
+  private applySize(cols: number, rows: number): void {
     const changed = cols !== this.screen.cols || rows !== this.screen.rows
     try {
       this.proc.resize(cols, rows)
@@ -712,7 +868,10 @@ export class PtySession extends EventEmitter {
     // decide whether the agent is producing output, and a synthetic
     // full-screen repaint there reads as agent activity — it would reset
     // quiescence and mint phantom checkpoints. Only viewers subscribe here.
-    if (changed && !this.disposed) this.emit('replay', this.replayFrame())
+    if (changed && !this.disposed) {
+      this.emit('resized', { cols, rows })
+      this.emit('replay', this.replayFrame())
+    }
   }
 
   /**
@@ -736,6 +895,38 @@ export class PtySession extends EventEmitter {
    * The leading clear resets both screen and scrollback: a reattach must not
    * append this frame under whatever the viewer was showing before.
    */
+  /**
+   * A replay frame carrying the pane's history (buildSeededFrame), for ONE
+   * viewer that asked — never broadcast: a desktop scrolling must not push
+   * kilobytes of history to a phone watching the same card. The history is
+   * read off-thread; the screen is serialized the moment it lands, so the
+   * frame is the mirror's state at the instant it is sent and the deltas
+   * after it apply cleanly. Null when the backend cannot read history.
+   */
+  async seedFrame(lines: number, nonce: string): Promise<string | null> {
+    return this.seedFrameAt(lines, nonce)
+  }
+
+  /** The screen the viewer sees, as text rows (the alternate screen when herdr is on it). */
+  private screenText(): string[] {
+    const buffer = this.screen.buffer.active
+    const rows: string[] = []
+    for (let y = buffer.baseY; y < buffer.baseY + this.screen.rows; y++) rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
+    return rows
+  }
+
+  private async seedFrameAt(lines: number, nonce: string): Promise<string | null> {
+    if (this.disposed || !this.mux.historyAnsiAsync) return null
+    const history = await this.mux.historyAnsiAsync(this.sessionName, Math.min(SEED_MAX_LINES, Math.max(1, lines)) + this.screen.rows)
+    if (this.disposed || history === null) return null
+    try {
+      return buildSeededFrame(this.screen, this.serializer, history, nonce, this.screenText())
+    } catch (error) {
+      console.error('PTY seed serialize failed:', error)
+      return null
+    }
+  }
+
   replayFrame(): string {
     if (this.disposed) return ''
     try {
@@ -809,6 +1000,10 @@ export class PtySession extends EventEmitter {
     if (this.reattachTimer !== null) {
       clearTimeout(this.reattachTimer)
       this.reattachTimer = null
+    }
+    if (this.widenTimer !== null) {
+      clearTimeout(this.widenTimer)
+      this.widenTimer = null
     }
     try {
       this.proc.kill()
@@ -1138,7 +1333,7 @@ export class PtyManager {
     // Selection, not assumption: tmux when it is there, the direct backend
     // otherwise. On Windows tmux does not exist and herdr cannot host a
     // terminal, so `direct` is what the release actually runs on.
-    const candidates = multiplexerOrder(process.env.COOKREW_MULTIPLEXER, [
+    const candidates = multiplexerOrder(multiplexerPreference(), [
       new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf }),
       new TmuxMultiplexer({ configFile: this.tmuxConf }),
       new DirectMultiplexer()
@@ -1190,9 +1385,13 @@ export class PtyManager {
     }
     const script = path.join(this.runtimeDir, 'cookrew.mjs')
     copyFileSync(cliSource, script)
-    const wrapper = path.join(this.runtimeDir, 'cookrew')
-    writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
-    chmodSync(wrapper, 0o755)
+    // `crew` is the short name (owner, 2026-11-01): the same CLI, fewer keys.
+    // Briefs and docs keep spelling `cookrew`, so one grep still finds them.
+    for (const name of CLI_NAMES) {
+      const wrapper = path.join(this.runtimeDir, name)
+      writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
+      chmodSync(wrapper, 0o755)
+    }
   }
 
   /**
@@ -1212,8 +1411,12 @@ export class PtyManager {
     if (workspaceId) this.ownership.claim(options.terminalId, workspaceId)
     const existing = this.sessions.get(options.terminalId)
     if (existing) return existing
+    // Started at the size the pane last had (pane-sizes.ts): the mirror's
+    // attach sizes the shared pane, and the default would shrink it.
+    const known = options.cols === undefined && options.rows === undefined ? paneSizes().get(options.terminalId) : null
     const session = new PtySession({
       ...options,
+      ...(known ? { cols: known.cols, rows: known.rows } : {}),
       socketPath: this.socketPath,
       cliDir: this.runtimeDir,
       tmuxConf: this.tmuxConf
@@ -1229,6 +1432,7 @@ export class PtyManager {
       this.ownership.release(options.terminalId)
     })
     this.sessions.set(options.terminalId, session)
+    session.on('resized', (size: { cols: number; rows: number }) => paneSizes().remember(options.terminalId, size))
     // A pane created after the subscription was made is not covered by it.
     // A workspace switch spawns every terminal synchronously, so collapse that
     // burst to one subscription rebuild after the last pane exists.
@@ -1238,6 +1442,11 @@ export class PtyManager {
 
   get(terminalId: string): PtySession | undefined {
     return this.sessions.get(terminalId)
+  }
+
+  /** Was this terminal spawned for a served session — someone else's seat? */
+  isServed(terminalId: string): boolean {
+    return this.sessions.get(terminalId)?.isServed ?? false
   }
 
   /**

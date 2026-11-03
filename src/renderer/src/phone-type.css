@@ -1,0 +1,276 @@
+/* ==== THE PHONE'S TYPE (owner, 2026-11-02: "the phone's font sizes are all over the place; fix them to what a phone app requires") ====
+
+   A census of every word on every phone surface (scratchpad/phone-type)
+   measured 22 different CSS sizes, 9.4 to 13px for the controls alone, 3px
+   words at the overview stops and a 22px reply box on the open card. A phone
+   app reads at a few sizes, each for one role, and never under 11 (iOS HIG
+   caption 2, Material label small); a text field is 16 so iOS never zooms
+   into it. This sheet is the phone's ONE place for type sizes:
+
+     caption   11   counts, states, badges, kickers, section heads
+     control   13   buttons, chips, tabs, stops, menu rows, crumbs' kin
+     body      16   reading text, transcripts, every text field
+     title     18   the open agent's name, the card's head
+     display   22   a stop's own heading
+
+   Chrome is unscaled: its words take the role's size here. The zoom's scene
+   is drawn at each stop's camera scale: its words are pinned on SCREEN, the
+   moving ones by the painter (zoom/scene-words.ts), the ones seen at one stop
+   only below, by that stop's scale at rest (--zv-k-*, set by ZoomView).
+   A phone's per-file blocks set no font size of their own.
+
+   Every selector starts with :root:root so it outranks the theme's
+   `body.cr-ink …` rules and the lazy chunks' sheets that load after this one,
+   whatever their order. Glyph-only buttons (‹ × ⋯ ➜ ← ↓ ↑) are icons, sized as
+   icons, and are not listed. */
+
+:root {
+  --ph-caption: 11px;
+  --ph-control: 13px;
+  --ph-body: 16px;
+  --ph-title: 18px;
+  --ph-display: 22px;
+}
+
+@media (max-width: 700px) {
+  /* ── the header ── */
+  :root:root .cr-route,
+  :root:root body.cr-ink .cr-route {
+    font-size: var(--ph-body);
+  }
+  :root:root .cr-route-emoji {
+    font-size: var(--ph-control);
+  }
+  /* An agent's full view: its name and state on the bar (header.css · route-slot.ts). */
+  :root:root .cr-route-who b {
+    font-size: var(--ph-title);
+  }
+  :root:root .cr-route-who small {
+    font-size: var(--ph-caption);
+  }
+  :root:root .cr-acct-avatar {
+    font-size: var(--ph-caption);
+    letter-spacing: 0;
+  }
+
+  /* ── the ⋯ menu ── */
+  :root:root .cr-more-item,
+  :root:root .cr-more-row .cr-routing-entry {
+    font-size: var(--ph-control);
+    letter-spacing: 0.04em;
+  }
+  :root:root .cr-more-status .cr-kicker,
+  :root:root .cr-more-group,
+  :root:root .cr-more-tag,
+  :root:root .cr-path,
+  :root:root .cr-path-latency,
+  :root:root .cr-path-switch {
+    font-size: var(--ph-caption);
+  }
+
+  /* ── the board's search ── */
+  :root:root .cr-board-badge,
+  :root:root .cr-board-search:not(.open) .cr-board-badge,
+  :root:root .cr-board-kbd {
+    font-size: var(--ph-caption);
+  }
+  :root:root .cr-board-input,
+  :root:root body.cr-ink .cr-board-input {
+    font-size: var(--ph-body);
+  }
+  :root:root .cr-board-loading {
+    font-size: var(--ph-control);
+  }
+
+  /* ── the zoom's bar and its per-row pill ── */
+  :root:root .zv-stops button {
+    font-size: var(--ph-control);
+    letter-spacing: 0.02em;
+  }
+  :root:root .zv-cols {
+    font-size: var(--ph-caption);
+  }
+  :root:root .zv-cols button {
+    font-size: var(--ph-control);
+  }
+
+  /* ── the dock's prompt box and its menus ── */
+  :root:root .cr-prompt input,
+  :root:root body.cookrew-mobile .cr-prompt input {
+    font-size: var(--ph-body);
+  }
+  :root:root .cr-prompt-to,
+  :root:root .cr-prompt-harness,
+  :root:root .cr-prompt-tune,
+  :root:root .cr-prompt .cr-tune-menu-btn,
+  :root:root .cr-prompt-menu button,
+  :root:root .cr-prompt-menu-orch {
+    font-size: var(--ph-control);
+  }
+  :root:root .cr-prompt-menu-family,
+  :root:root .cr-prompt-menu button small,
+  :root:root .cr-prompt-menu-orch small,
+  :root:root .cr-prompt-suggest button small,
+  :root:root .cr-prompt-orch,
+  :root:root .cr-prompt-note,
+  :root:root .cr-prompt-error {
+    font-size: var(--ph-caption);
+  }
+
+  /* ── a sheet's own words under its title (the account sheet on a phone) ── */
+  :root:root .gs-sheet .gs-sub {
+    font-size: var(--ph-control);
+  }
+
+  /* ── the routing panel (⋯ → Routing): rows and their buttons at control, their notes at caption ── */
+  :root:root :is(.cr-routing-status, .cr-routing-empty, .cr-routing-hrow, .cr-routing-arow, .cr-routing-menu, .cr-routing-model, .cr-routing-lrow, .cr-routing-default, .cr-routing-signin, .cr-routing-tick, .cr-routing-btn) {
+    font-size: var(--ph-control);
+  }
+  :root:root :is(.cr-routing-seg, .cr-routing-seg .k3, .cr-routing-source, .cr-routing-quota .l, .cr-routing-menu .c, .cr-routing-lrow .alt, .cr-routing-pick, .cr-routing-hint, .cr-routing-bad) {
+    font-size: var(--ph-caption);
+  }
+  :root:root .cr-routing-seg :is(.cr-routing-btn, .cr-routing-tick) {
+    font-size: var(--ph-control);
+  }
+
+  /* ── the workspaces' wall (⋯ → Workspaces…) ── */
+  :root:root .cr-wsw-label b,
+  :root:root .cr-wsw-touch .cr-wsw-actions button {
+    font-size: var(--ph-control);
+  }
+  :root:root :is(.cr-wsw-label span, .cr-wsw-stamp, .cr-wsw-blank, .cr-wsw-hud, .cr-wsw-touch .cr-wsw-hud, .cr-wsw-hud kbd) {
+    font-size: var(--ph-caption);
+  }
+
+  /* ── the full view: its head, its look switch, its strip of browsers and notes ── */
+  :root:root .zv-fv-who b {
+    font-size: var(--ph-title);
+  }
+  :root:root .zv-fv-who small,
+  :root:root .zv-fv-used,
+  :root:root .zv-fv-arts-head,
+  :root:root .zv-fv-arts-btn b,
+  :root:root .zv-fv-arts-error,
+  :root:root .zv-fv-art .zv-nt span,
+  :root:root .zv-fv-art .zv-bar,
+  :root:root .zv-fv-art > .zv-th em {
+    font-size: var(--ph-caption);
+  }
+  :root:root .zv-fv-art .zv-nt b,
+  :root:root .cr-look-toggle,
+  :root:root .cr-look-toggle.cr-look-corner {
+    font-size: var(--ph-control);
+  }
+  :root:root .cr-look-toggle.cr-look-corner {
+    letter-spacing: 0.06em;
+  }
+
+  /* ── the cards floating over the full view (a docked face: AgentCard; a docked item: item-card) ── */
+  :root:root .ag-plate .cr-pet-card-name,
+  :root:root .item-card .cr-pet-card-name {
+    font-size: var(--ph-title);
+  }
+  :root:root .ag-plate .ag-meta,
+  :root:root .ag-plate .ag-meta :is(.zv-st, .zv-cnt),
+  :root:root .item-card :is(.cr-pet-card-meta, .cr-pet-mood, .item-line, .item-users) {
+    font-size: var(--ph-caption);
+  }
+  :root:root .item-card :is(.cr-pet-card-open, .item-user) {
+    font-size: var(--ph-control);
+  }
+  :root:root .item-card .item-note {
+    font-size: var(--ph-body);
+  }
+
+  /* ── the transcript: what was said at body, what was done at control, its marks at caption ── */
+  :root:root .zv-fullview .lod-overlay :is(.ctx-block-reply, .ctx-block-prompt, .ctx-block-said, .phos-line.you),
+  :root:root .zv-fullview .lod-overlay .look-log .ctx-block {
+    font-size: var(--ph-body);
+  }
+  :root:root .zv-fullview .lod-overlay :is(.ctx-block-tool, .ctx-block-thought, .ctx-block-notice),
+  :root:root .zv-fullview .lod-overlay .look-chat .ctx-chat-bubble .ctx-block-tool {
+    font-size: var(--ph-control);
+  }
+  :root:root .zv-fullview .lod-overlay :is(.ctx-block-head, .ctx-block-idx, .ctx-block-title) {
+    font-size: var(--ph-caption);
+  }
+  /* Code in running text: a step down, as type does everywhere, never its own fixed size. */
+  :root:root .zv-fullview .lod-overlay .ctx-block-reply code,
+  :root:root .zv-fullview .lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply code {
+    font-size: 0.875em;
+  }
+  :root:root .zv-fullview .lod-overlay .ctx-block-reply pre code {
+    font-size: var(--ph-control);
+  }
+
+  /* ── the checkpoint rail's count: the number reads, the 5.5px "CP" under it did not ── */
+  :root:root .cr-ckpt-count .n {
+    font-size: var(--ph-caption);
+  }
+  :root:root .cr-ckpt-count .l {
+    display: none;
+  }
+
+  /* ── the docked faces over the full view ── */
+  :root:root .cr-pet.named .cr-pet-name,
+  :root:root body.cr-ink .cr-pet-name {
+    font-size: var(--ph-control);
+  }
+  :root:root .cr-pet.more,
+  :root:root .cr-pet-count {
+    font-size: var(--ph-caption);
+  }
+}
+
+/* ── the zoom's scene, where a phone's camera draws it (ZoomView · narrow = under 760) ──
+   On screen a word is its CSS size times the stop's scale: a word seen at one
+   stop only is set at its role over that scale (--zv-k-*: scene-words.ts). */
+@media (max-width: 759px) {
+  /* The open card: its latest at body, its reply box at body (iOS keeps the
+     page's scale: index.html · maximum-scale=1), its thumbnails' words at control and caption. */
+  :root:root .zv-body {
+    max-height: min(80px, calc(88px / var(--zv-k-card, 1)));
+    font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
+    line-height: calc(22px / var(--zv-k-card, 1));
+  }
+  :root:root .zv-body .ag-latest {
+    font-size: inherit;
+    line-height: inherit;
+  }
+  :root:root .zv-reply input {
+    font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
+  }
+  :root:root .zv-lk .zv-th .zv-nt b {
+    font-size: calc(var(--ph-control) / var(--zv-k-card, 1));
+  }
+  :root:root .zv-lk .zv-th :is(.zv-nt span, .zv-bar, em) {
+    font-size: calc(var(--ph-caption) / var(--zv-k-card, 1));
+  }
+
+  /* The artifacts' grid: a title at control, its line, its host and its count at caption. */
+  :root:root .zv-scene .zv-ip :is(.zv-ttl b, .zv-nt b) {
+    font-size: calc(var(--ph-control) / var(--zv-k-thumbs, 1));
+  }
+  :root:root .zv-scene .zv-ip :is(.zv-ttl span, .zv-nt span, .zv-bar, .zv-th em) {
+    font-size: calc(var(--ph-caption) / var(--zv-k-thumbs, 1));
+  }
+
+  /* The devices stop: the machine's name at title under its screen, its counts at caption. */
+  :root:root :is(.zv-machine-label, .zv-machinecard-label) b {
+    font-size: calc(var(--ph-title) / var(--zv-k-devices, 1));
+  }
+  :root:root :is(.zv-machine-label, .zv-machinecard-label) small {
+    font-size: calc(var(--ph-caption) / var(--zv-k-devices, 1));
+  }
+
+  /* The workspaces stop: an empty workspace's "no agents", inside its ring. */
+  :root:root .zv-mark-none {
+    font-size: calc(var(--ph-caption) / var(--zv-k-marks, 1));
+    line-height: 1.15;
+  }
+
+  /* A name under a face is cut short before its neighbour's (scene-words.ts · nameMax). */
+  :root:root .zv-scene .zv-nm {
+    max-width: var(--zv-nm-max, 112px);
+  }
+}

@@ -65,7 +65,8 @@ describe('the decision behind the row', () => {
     expect(view.kind).toBe('ask')
     expect(view.sentence).toContain(LOCAL_NETWORK_COPY.ask)
     expect(view.sentence).toContain('A system proxy may be hiding the address')
-    expect(view.sentence).toContain('Wi-Fi address directly')
+    // No instruction after it: the button it once pointed at is gone.
+    expect(view.sentence).not.toContain('Wi-Fi address')
   })
 
   it('does not name a proxy when only one of several was refused both ways', () => {
@@ -129,5 +130,15 @@ describe('the row as it renders', () => {
     const markup = await render('denied', [attempt({ hint: 'none' })])
     expect(markup).toContain('site settings')
     expect(markup).not.toContain('</button>')
+  })
+
+  it('hides the ask once the reader pressed it and the browser still says prompt', () => {
+    const view = askRow({ permission: 'prompt', offered: true, asked: true, attempts: [attempt()] })
+    expect(view.kind).toBe('hidden')
+  })
+
+  it('keeps the refusal sentence after a press', () => {
+    const view = askRow({ permission: 'denied', offered: true, asked: true, attempts: [attempt()] })
+    expect(view.kind).toBe('denied')
   })
 })

@@ -18,6 +18,24 @@ export function pickBinDir(candidates, isWritable) {
 }
 
 /**
+ * The interpreter to bake, as a path that survives a node upgrade.
+ *
+ * `process.execPath` under Homebrew is the VERSIONED keg
+ * (/opt/homebrew/Cellar/node/25.9.0_1/bin/node). An upgrade can leave that keg
+ * on disk while moving the libraries it links against: on 2026-10-30 llhttp
+ * went 9.3 -> 9.4, the old node still passed `-x`, and every `cookrew` call
+ * died in dyld ("Library not loaded: libllhttp.9.3.dylib"). Homebrew's
+ * `opt/<formula>` link follows upgrades, so that is what is baked when it
+ * exists; any other install is baked as it is.
+ */
+export function stableNodePath(execPath, exists) {
+  const keg = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/.exec(execPath)
+  if (!keg) return execPath
+  const linked = `${keg[1]}/opt/${keg[2]}/bin/node`
+  return exists(linked) ? linked : execPath
+}
+
+/**
  * The launcher. POSIX sh so it does not depend on the user's shell.
  *
  * The node interpreter is BAKED IN as an absolute path, not left as `node`.

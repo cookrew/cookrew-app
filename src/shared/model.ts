@@ -68,7 +68,14 @@ export interface TerminalNodeData {
   command: string
   cwd: string
   orch: boolean
+  /** A SAVED role's name (roles.ts), never free text — the pane chrome and team fork read it as one. */
   role: string | null
+  /**
+   * THE BRIEF THIS CARD WAS RECRUITED FOR (Sous, route program R3): the
+   * sentence that was delivered to it once, kept as what the card is about.
+   * Display only — nothing types it on a spawn or respawn (recruit-node.ts).
+   */
+  brief?: string | null
   /**
    * WHAT THIS CARD WAS ADMITTED WITH — a placed orch card only.
    *
@@ -142,6 +149,13 @@ export interface TerminalNodeData {
    * injects it once the terminal is live, then clears it. Absent otherwise.
    */
   pendingInject?: string | null
+  /**
+   * The card's model route (route program, shared/route.ts): 'direct', or a
+   * Magpie model/group id. Absent = the fleet default at spawn time.
+   */
+  route?: string
+  /** What the running process was actually handed at its last spawn; null before one. */
+  routeEffective?: string | null
   position: CanvasPosition
   size: CanvasSize
 }
@@ -222,6 +236,13 @@ export interface WorkspaceMeta {
   dirs: string[]
   /** One emoji shown in the switcher. */
   icon: string
+  /**
+   * One line the owner writes about the project (workspace-brief.ts: at most
+   * BRIEF_MAX characters, trimmed, newlines collapsed). It picks the
+   * workspace's traits on cookrew.dev and never reaches cookrew.dev itself;
+   * only the desktop and its paired devices see it. Absent = unset.
+   */
+  brief?: string
 }
 
 /** Git state of a workspace directory (main/git.ts). */

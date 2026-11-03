@@ -40,7 +40,7 @@
 //                            renewal comes out of the same allowance.
 // Absent flags mean nothing listens and nothing changes.
 //
-// Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
+// Flags: --port --data --seed --origin --chain --terms-ttl --shell-assets <file> --strata-me. The origin defaults to the port that is
 // bound; pass it only to serve a ceremony on a host other than localhost, and a
 // value that contradicts --port refuses at boot.
 import { generateKeyPairSync } from 'node:crypto'
@@ -48,6 +48,7 @@ import path from 'node:path'
 import { RegistryStore } from './store'
 import { TransparencyLog } from './log'
 import { createRegistry } from './server'
+import { loadShellBundle } from './strata-shell'
 import { IdentityService, identityConfigFor } from './identity'
 import { makeAuthorize } from './authorize'
 import { PayoutStore } from './payouts'
@@ -325,6 +326,14 @@ createRegistry({
   v2,
   note: (message) => console.error(message),
   ...(names === undefined ? {} : { names }),
+  // STRATA: a desktop's last-seen time survives a restart (v2-line-seen.ts).
+  lineSeenFile: path.join(DATA, 'canvas-line-seen.json'),
+  // STRATA: the shell's files, from the second ConfigMap (strata-shell.ts).
+  // No flag and no env → no shell: the front page keeps its promo.
+  shell: loadShellBundle(flag('shell-assets', process.env.STRATA_SHELL_ASSETS ?? ''), (message) => console.error(message)),
+  // With a shell, /me becomes it only under --strata-me; without the flag the
+  // shell only draws the front page's sample fleet and /me stays the account page.
+  strataMe: args.includes('--strata-me') || process.env.STRATA_ME === '1',
   authorize: makeAuthorize(store, identity, pricing)
 }).listen(PORT, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner

@@ -19,7 +19,7 @@
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
-import { launcherScript, pickBinDir } from './install-cli-lib.mjs'
+import { launcherScript, pickBinDir, stableNodePath } from './install-cli-lib.mjs'
 import process from 'node:process'
 
 const REPO_CLI = path.resolve(import.meta.dirname, '..', 'cli', 'cookrew.mjs')
@@ -52,13 +52,14 @@ function main() {
   }
 
   const target = path.join(dir, 'cookrew')
-  writeFileSync(target, launcherScript(RUNTIME_CLI, REPO_CLI, process.execPath))
+  const node = stableNodePath(process.execPath, existsSync)
+  writeFileSync(target, launcherScript(RUNTIME_CLI, REPO_CLI, node))
   chmodSync(target, 0o755)
 
   console.log(`installed: ${target}`)
   console.log(`  runtime CLI: ${RUNTIME_CLI}${existsSync(RUNTIME_CLI) ? '' : '  (appears after the app launches)'}`)
   console.log(`  fallback   : ${REPO_CLI}`)
-  console.log(`  node       : ${process.execPath}`)
+  console.log(`  node       : ${node}`)
 
   const onPath = (process.env.PATH ?? '').split(path.delimiter).includes(dir)
   if (!onPath) {

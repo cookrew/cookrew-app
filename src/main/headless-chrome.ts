@@ -21,6 +21,7 @@ import {
 } from './browser-viewport'
 import { CdpClient } from './cdp-client'
 import { applySignInCompatibility, presentableUserAgent } from './browser-signin'
+import { COPY_BINDING, PAGE_COPY_SCRIPT, copyText } from './page-copy'
 
 function httpJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -201,6 +202,8 @@ export class HeadlessInstance {
   private syncTail: Promise<void> = Promise.resolve()
 
   readonly frameListeners = new Set<(jpegBase64: string, meta: FrameMeta) => void>()
+  /** Text the active page copied (page-copy.ts); the cast decides which viewer gets it. */
+  readonly copyListeners = new Set<(text: string) => void>()
   onExit: () => void = () => undefined
   onPageState: (tabId: string, state: HeadlessPageState) => void = () => undefined
   onTabOpened: (tab: BrowserTab) => void = () => undefined
@@ -380,9 +383,11 @@ export class HeadlessInstance {
     })
     cdp.on('Page.navigatedWithinDocument', () => void this.refreshPageState(page))
     cdp.on('Page.loadEventFired', () => void this.refreshPageState(page))
+    cdp.on('Runtime.bindingCalled', (params) => this.onBindingCalled(page, params))
 
     await cdp.send('Page.enable')
     await cdp.send('Runtime.enable')
+    await this.watchCopies(cdp)
     // Before anything navigates: tell a sign-in page the truth about this
     // browser. It advertised HeadlessChrome and claimed a platform
     // authenticator it does not have, which left Google waiting forever on a
@@ -531,6 +536,30 @@ export class HeadlessInstance {
       next.screencasting = true
     }
     await this.refreshPageState(next)
+  }
+
+  /**
+   * The page's copies, caught where they happen (page-copy.ts): a binding the
+   * page calls, and the script that calls it in every document — the one
+   * already loaded too. Best effort: a page that refuses it still works, it
+   * only copies onto this Chrome's clipboard as before.
+   */
+  private async watchCopies(cdp: CdpClient): Promise<void> {
+    try {
+      await cdp.send('Runtime.addBinding', { name: COPY_BINDING })
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PAGE_COPY_SCRIPT })
+      await cdp.send('Runtime.evaluate', { expression: PAGE_COPY_SCRIPT })
+    } catch (error) {
+      console.error('Watching a browser card page for copies failed:', error)
+    }
+  }
+
+  /** A copy on the page the viewers are looking at; a background tab's is nobody's. */
+  private onBindingCalled(page: PageBinding, params: Record<string, unknown>): void {
+    if (params.name !== COPY_BINDING || page.tabId !== this.activeTabId) return
+    const text = copyText(params.payload)
+    if (text === null) return
+    for (const listener of this.copyListeners) listener(text)
   }
 
   private onScreencastFrame(page: PageBinding, params: Record<string, unknown>): void {
@@ -791,6 +820,7 @@ export class HeadlessInstance {
     if (this.pollTimer) clearInterval(this.pollTimer)
     this.pollTimer = null
     this.frameListeners.clear()
+    this.copyListeners.clear()
     this.viewportCoordinator.dispose()
     for (const page of this.pages.values()) {
       page.closing = true

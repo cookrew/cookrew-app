@@ -213,17 +213,11 @@ describe('the canvas does not call the queued fitView any more', () => {
     expect(app).not.toContain('reactFlow.fitView(')
   })
 
-  it('flies to a card with fitBounds, from resolved bounds', () => {
-    expect(app).toContain('rect ?? nodeZoomBounds(reactFlow.getInternalNode(id))')
-    expect(app).toContain('reactFlow.fitBounds(bounds, options)')
-  })
-
-  it('says so out loud when a tap has nowhere to land', () => {
-    expect(app).toContain('reportMissingZoomTarget(id)')
-  })
-
-  it('asks this module whether the zoom has a viewport to come back to', () => {
-    expect(app).toContain('savesReturnViewport(')
+  // The canvas is retired (2026-10-30): a card opens on the stage, not by a
+  // flight across a viewport (tests/agent-pets.test.ts pins where it goes).
+  it('flies nowhere: opening a card is the stage, with no canvas to frame', () => {
+    expect(app).not.toContain('reactFlow.fitBounds(bounds, options)')
+    expect(app).toContain("if (viewRef.current !== 'stage') setView('stage')")
   })
 })
 

@@ -177,6 +177,11 @@ const api = {
     ipcRenderer.on('account:changed', listener)
     return () => ipcRenderer.removeListener('account:changed', listener)
   },
+  onReachChanged: (cb: () => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('reach:changed', listener)
+    return () => ipcRenderer.removeListener('reach:changed', listener)
+  },
   onAccountLocked: (cb: (locked: boolean) => void) => {
     const listener = (_e: unknown, locked: boolean): void => cb(locked)
     ipcRenderer.on('account:locked', listener)
@@ -264,8 +269,11 @@ const api = {
   snapWorkspace: (rect: { x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke('workspace:snap', rect),
   workspaceShots: () => ipcRenderer.invoke('workspace:shots'),
+  /** Whether the terminals' herdr server predates this macOS login (main/terminal-session.ts). */
+  terminalSession: () => ipcRenderer.invoke('terminals:session'),
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
+  setWorkspaceBrief: (id: string, brief: string) => ipcRenderer.invoke('workspace:brief', id, brief),
   removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
   addWorkspaceDir: (id: string, dir: string) => ipcRenderer.invoke('workspace:dir:add', id, dir),
   removeWorkspaceDir: (id: string, dir: string) =>
@@ -282,6 +290,11 @@ const api = {
   laneLand: (nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
     ipcRenderer.invoke('lane:land', nodeId, opts),
   laneClose: (nodeId: string, force?: boolean) => ipcRenderer.invoke('lane:close', nodeId, force),
+  // The sealed slots (R4): names and dates come back; the value only ever goes in.
+  secretPut: (name: string, value: string, served: boolean) =>
+    ipcRenderer.invoke('secret:put', name, value, served),
+  secretList: () => ipcRenderer.invoke('secret:list'),
+  secretRemove: (name: string) => ipcRenderer.invoke('secret:remove', name),
   laneAuto: (nodeId: string, on: boolean) => ipcRenderer.invoke('lane:auto', nodeId, on),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   browserSnapshot: (browserId: string) => ipcRenderer.invoke('browser:snapshot', browserId),
@@ -306,6 +319,8 @@ const api = {
   ptyJump: (terminalId: string, text: string | null) =>
     ipcRenderer.send('pty:jump', terminalId, text),
   turnSeen: (terminalId: string) => ipcRenderer.send('turn:seen', terminalId),
+  ptySeed: (terminalId: string, nonce: string, lines: number): Promise<boolean> =>
+    ipcRenderer.invoke('pty:seed', terminalId, nonce, lines),
   ptyAttach: (
     terminalId: string,
     onData: (data: string) => void,
@@ -353,6 +368,8 @@ const api = {
   // returns the absolute path to paste into the terminal.
   saveAttachmentBytes: (name: string, bytes: Uint8Array) =>
     ipcRenderer.invoke('attach:save', name, bytes),
+  // A prompt's picture (main/prompt-image.ts), asked for once a view scrolls to it.
+  readImage: (ref: unknown) => ipcRenderer.invoke('image:read', ref),
 
   listActivity: () => ipcRenderer.invoke('activity:list'),
   listTurns: (terminalId: string) => ipcRenderer.invoke('turn:history', terminalId),
@@ -417,6 +434,29 @@ const api = {
     return () => ipcRenderer.removeListener('event:new', listener)
   },
   // A cable lit: one agent asked another, or answered (cable-signal.ts).
+  // The route program (shared/route.ts): the gateway state, the owner's one
+  // default, and each card's route. Pushed, never polled, like the dials.
+  routeState: () => ipcRenderer.invoke('route:state'),
+  routeSetDefault: (model: string | null) => ipcRenderer.invoke('route:set-default', model),
+  routeSetSharedMcp: (on: boolean) => ipcRenderer.invoke('route:set-shared-mcp', on),
+  terminalRoute: (terminalId: string) => ipcRenderer.invoke('terminal:route', terminalId),
+  terminalRouteSet: (terminalId: string, route: string) => ipcRenderer.invoke('terminal:route-set', terminalId, route),
+  onRoute: (cb: (state: unknown) => void) => {
+    const listener = (_e: unknown, state: unknown): void => cb(state)
+    ipcRenderer.on('route', listener)
+    return () => ipcRenderer.removeListener('route', listener)
+  },
+  onCardRoute: (cb: (row: unknown) => void) => {
+    const listener = (_e: unknown, row: unknown): void => cb(row)
+    ipcRenderer.on('card-route', listener)
+    return () => ipcRenderer.removeListener('card-route', listener)
+  },
+  // An agent acted on a card: the cursor over its screen (use-signal-bus.ts).
+  onUseSignal: (cb: (signal: unknown) => void) => {
+    const listener = (_e: unknown, signal: unknown): void => cb(signal)
+    ipcRenderer.on('use:signal', listener)
+    return () => ipcRenderer.removeListener('use:signal', listener)
+  },
   onCableSignal: (cb: (signal: unknown) => void) => {
     const listener = (_e: unknown, signal: unknown): void => cb(signal)
     ipcRenderer.on('cable:signal', listener)
@@ -425,6 +465,11 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  onAgentChanged: (cb: (entry: unknown) => void) => {
+    const listener = (_e: unknown, entry: unknown): void => cb(entry)
+    ipcRenderer.on('agents:changed', listener)
+    return () => ipcRenderer.removeListener('agents:changed', listener)
+  },
   listBoard: (window?: string) => ipcRenderer.invoke('board:list', window),
   // A board panel that stays open: the probe runs while at least one of
   // these holds, and every change arrives pushed instead of polled.
@@ -437,6 +482,27 @@ const api = {
       void ipcRenderer.invoke('board:unsubscribe')
     }
   },
+  /** This desktop's name for the header's device step (its account record); null when it has none. */
+  machineName: () => ipcRenderer.invoke('machine:name'),
+  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's levels feed, a snapshot
+  // first, then every delta, pushed; the release closes this window's stream
+  // when its last reader goes. A refused hold (the companion is not up yet)
+  // is said, so the reader can ask again.
+  subscribeZoomFleet: (cb: (event: unknown) => void, refused?: () => void) => {
+    const listener = (_e: unknown, event: unknown): void => cb(event)
+    ipcRenderer.on('zoom-fleet:event', listener)
+    const held = ipcRenderer.invoke('zoom-fleet:subscribe').then(
+      (ok: unknown) => ok === true,
+      () => false
+    )
+    void held.then((ok) => (ok ? undefined : refused?.()))
+    return () => {
+      ipcRenderer.removeListener('zoom-fleet:event', listener)
+      // Only a hold that was taken is given back: a refused one must not release another reader's.
+      void held.then((ok) => (ok ? ipcRenderer.invoke('zoom-fleet:unsubscribe') : undefined)).catch(() => undefined)
+    }
+  },
+  zoomFleetMachines: () => ipcRenderer.invoke('zoom-fleet:machines'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),
@@ -466,12 +532,35 @@ const api = {
     return () => ipcRenderer.removeListener('app:cmd-w', listener)
   },
   // Sous driving the canvas: a sentence up, zoom / zoom-back down.
-  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[] }) =>
+  sousCommand: (text: string, ctx: { surface: string; focusedAgentId?: string | null; alternates?: string[]; box?: boolean }) =>
     ipcRenderer.invoke('sous:command', text, ctx),
   onUiCommand: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)
     ipcRenderer.on('ui:command', listener)
     return () => ipcRenderer.removeListener('ui:command', listener)
+  },
+  // R3: the decide step's commit, and the HITL inbox.
+  sousCommit: (token: string, choice?: { target?: string; ack?: 'send-anyway' }, surface?: string) => ipcRenderer.invoke('sous:commit', token, choice ?? {}, surface ?? 'canvas'),
+  sousCancel: (token: string, surface?: string) => ipcRenderer.invoke('sous:cancel', token, surface ?? 'canvas'),
+  // HP: a late revision may only append alternates; the box merges them.
+  onSousDecisionUpdated: (cb: (update: unknown) => void) => {
+    const listener = (_e: unknown, update: unknown): void => cb(update)
+    ipcRenderer.on('sous:decision-updated', listener)
+    return () => ipcRenderer.removeListener('sous:decision-updated', listener)
+  },
+  inbox: () => ipcRenderer.invoke('inbox:list'),
+  inboxAct: (id: string) => ipcRenderer.invoke('inbox:act', id),
+  inboxDismiss: (id: string) => ipcRenderer.invoke('inbox:dismiss', id),
+  // Subscribing HOLDS the list open in main (it is built only while someone
+  // looks); the opening rows arrive through the callback too.
+  onInbox: (cb: (rows: unknown) => void) => {
+    const listener = (_e: unknown, rows: unknown): void => cb(rows)
+    ipcRenderer.on('inbox:changed', listener)
+    void ipcRenderer.invoke('inbox:subscribe').then((rows: unknown) => cb(rows))
+    return () => {
+      ipcRenderer.removeListener('inbox:changed', listener)
+      void ipcRenderer.invoke('inbox:unsubscribe')
+    }
   },
   // Hold ⌘ to talk: main runs the on-device recognizer and streams what it hears.
   listenAvailable: () => ipcRenderer.invoke('listen:available'),

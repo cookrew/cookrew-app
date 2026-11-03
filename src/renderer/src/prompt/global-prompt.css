@@ -1,0 +1,502 @@
+/* ---- THE GLOBAL PROMPT (prompt/GlobalPrompt.tsx; owner, 2026-11-01) ----
+   One box at the foot of the app, right after the dock's buttons, taking the
+   rest of the row. In ink: the card's paper, one hairline, @agent in the seal. */
+
+.cr-prompt {
+  position: relative;
+  flex: 1 1 360px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 3px 4px 3px 6px;
+  border-radius: 12px;
+  background: var(--sumi-card, var(--cream-hi));
+  box-shadow: inset 0 0 0 1.5px var(--sumi-hair-2, var(--line));
+}
+
+.cr-prompt:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt input {
+  /* From zero, not the input's own 20 characters: on a phone that width alone
+     pushed the send button to a row of its own. */
+  flex: 1 1 0;
+  min-width: 80px;
+  height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: 13px/1 var(--font-mono);
+  color: var(--sumi-ink, var(--ink));
+}
+
+.cr-prompt input::placeholder {
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-to,
+.cr-prompt-harness {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 40%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sumi-paper-2, var(--cream-md));
+  white-space: nowrap;
+  font: 600 11.5px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.cr-prompt-to b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt-to button {
+  appearance: none;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: 14px/1 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-new {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  display: inline-flex;
+}
+
+/* The cap is the wrapper's (above): a percentage on the button itself was
+   read against that shrink-to-fit wrapper, i.e. against the chip's own text,
+   and drew a 51 px pill under "＋ Claude Code ▾" and "de" for "default ▾". */
+.cr-prompt-new > .cr-prompt-harness,
+.cr-prompt-new > .cr-prompt-tune {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.cr-prompt-harness {
+  cursor: pointer;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt-harness:hover,
+.cr-prompt-to button:hover {
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* Fixed, over the dock: the dock clips anything that hangs out of it. */
+.cr-prompt-menu {
+  position: fixed;
+  z-index: 200;
+  display: grid;
+  min-width: 170px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--sumi-card, var(--cream-hi));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    0 10px 30px rgba(40, 30, 15, 0.16);
+}
+
+.cr-prompt-menu button {
+  appearance: none;
+  margin: 0;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: 12px/1.2 var(--font-mono);
+  color: var(--sumi-ink, var(--ink));
+}
+
+.cr-prompt-menu button[aria-checked='true'] {
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt-menu button:hover {
+  background: var(--sumi-paper-2, var(--cream-md));
+}
+
+/* "@…" and "#…": the names they could become, in the harness menu's paper. */
+.cr-prompt-suggest {
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 24px));
+}
+
+.cr-prompt-suggest button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cr-prompt-suggest button .cr-icon {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt-suggest button span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-prompt-suggest button small {
+  flex: none;
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt-suggest button[aria-selected='true'] {
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt .voice-bar {
+  flex: none;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border-top: 0;
+}
+
+/* Dictating (use-dictation.ts): the words so far stand in the box, not yet
+   the draft, until the ear closes. */
+.cr-prompt.listening input {
+  color: var(--sumi-muted, var(--muted));
+  font-style: italic;
+}
+
+/* A screenshot on its way into the prompt (prompt-attach.ts). */
+.cr-prompt-note {
+  flex: none;
+  font: 11px/1.2 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+/* What Sous said back to a spoken command: a beat, never wider than the box. */
+.cr-prompt-sous {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-prompt.attaching input {
+  cursor: progress;
+}
+
+/* The agent's keys behind one button: a phone's (below); a wider screen keeps them in line. */
+.cr-prompt-keys {
+  display: none;
+}
+
+.cr-prompt-error {
+  flex: 0 1 auto;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.2 var(--font-mono);
+  color: var(--sumi-wait, var(--danger, #c0392b));
+}
+
+/* A phone (owner, 2026-11-01, a Samsung screenshot): the box takes its own
+   row of the dock, and inside it the words take the whole first row; the
+   chips sit under them on the left, the mic and Send on the right, within
+   the thumb's reach. Squeezed into one row the words had 108 px, the tune
+   chip read "de" and Send fell to a row of its own. The agent's keys (arrows,
+   paste, Esc) keep a row of their own below. The width gates it, not the
+   class alone: the companion carries cookrew-mobile in a desktop browser too,
+   where the box belongs on the buttons' row. */
+@media (max-width: 700px) {
+  body.cookrew-mobile .cr-prompt {
+    order: -1;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px;
+  }
+
+  /* Row 1: the words, and Send at their end (owner, 2026-11-02). */
+  body.cookrew-mobile .cr-prompt input {
+    order: -2;
+    flex: 1 1 calc(100% - 56px);
+    height: 36px;
+    padding: 0 6px;
+    font-size: 16px;
+  }
+
+  /* Row 2 never wraps: the chips shorten before the mic and ⌨ move. */
+  body.cookrew-mobile .cr-prompt-to {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 38%;
+  }
+
+  body.cookrew-mobile .cr-prompt-new {
+    max-width: 45%;
+  }
+
+  /* The thumb's buttons: a real tap size. Send ends the words' row; the mic
+     and ⌨ end the chips' row. */
+  body.cookrew-mobile .cr-prompt .voice-mic,
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys,
+  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+    flex: none;
+    min-width: 44px;
+    height: 36px;
+    margin-left: auto;
+    justify-content: center;
+  }
+
+  body.cookrew-mobile .cr-prompt > button[type='submit'] {
+    order: -1;
+    margin-left: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-mic + .cr-prompt-keys {
+    margin-left: 0;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys.open {
+    box-shadow: inset 0 0 0 1.5px var(--sumi-seal, var(--amber-deep));
+    color: var(--sumi-seal, var(--amber-deep));
+  }
+
+  /* The agent's keys open by themselves while it waits on you (GlobalPrompt · keysFolded). */
+  body.cookrew-mobile .cr-prompt.keys-folded .voice-bar {
+    display: none;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-mic .cr-icon,
+  body.cookrew-mobile .cr-prompt .cr-prompt-keys .cr-icon,
+  body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* With an agent in the box, the tools step aside on a phone, as the old
+     composer did: the box and the agent's keys are what the thumb needs. */
+  body.cookrew-mobile .cr-dock:has(.cr-prompt.to-agent) .cr-dock-tools {
+    display: none;
+  }
+
+  /* Sous's reply, a note and an error get a line of their own under the box. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-note,
+  body.cookrew-mobile .cr-prompt .cr-prompt-sous,
+  body.cookrew-mobile .cr-prompt .cr-prompt-error {
+    order: 4;
+    flex-basis: 100%;
+    max-width: 100%;
+    padding: 0 6px;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-bar {
+    order: 3;
+    flex-basis: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+}
+
+/* The ＋ menu (HarnessMenu.tsx): the harnesses, then what opens at once. The
+   new agent's tune menu scrolls too: it stays open after a pick, and the
+   keyboard that pick brings up on a phone takes its room (rise-anchor.ts). */
+.cr-prompt-new-menu,
+.cr-prompt-tune-menu {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cr-prompt-menu-family {
+  margin: 6px 0 2px;
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--sumi-hair-2, var(--line));
+  font: 600 9.5px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+  opacity: 0.8;
+}
+
+.cr-prompt-menu-teams {
+  display: grid;
+  max-height: 168px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cr-prompt-menu button small,
+.cr-prompt-menu-orch small {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt-menu button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.cr-prompt-menu-orch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px 5px;
+  border-top: 1px solid var(--sumi-hair-2, var(--line));
+  cursor: pointer;
+  font: 600 11px/1 var(--font-mono);
+  color: var(--sumi-ink, var(--ink));
+}
+
+/* The menu sits inside the prompt's form: undo the text box's own sizing. */
+.cr-prompt .cr-prompt-menu-orch input {
+  flex: none;
+  width: 13px;
+  min-width: 0;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--sumi-seal, var(--amber-deep));
+  cursor: pointer;
+}
+
+.cr-prompt-orch {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--sumi-seal, var(--amber-deep));
+  color: var(--sumi-card, var(--cream-hi));
+  font: 700 9px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+/* ---- THE TUNE CHIP (owner, 2026-11-01): beside the left chip, in its pill ----
+   Aimed at an agent it is that agent's own model · effort · route button
+   (nodes/CardTune.tsx → TuneMenu, rising); with nobody targeted, the new
+   agent's pick (NewAgentTune.tsx). Both read as the harness chip does. */
+.cr-prompt-tune,
+.cr-prompt .cr-tune-menu-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: auto;
+  max-width: 34%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: none;
+  background: var(--sumi-paper-2, var(--cream-md));
+  white-space: nowrap;
+  cursor: pointer;
+  font: 600 11.5px/1 var(--font-mono);
+  letter-spacing: 0.02em;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt .cr-tune-menu {
+  flex: none;
+  max-width: 34%;
+}
+
+.cr-prompt .cr-tune-menu-btn {
+  max-width: 100%;
+}
+
+.cr-prompt-tune:hover,
+.cr-prompt .cr-tune-menu-btn:hover,
+.cr-prompt .cr-tune-menu.open .cr-tune-menu-btn {
+  background: var(--sumi-paper-2, var(--cream-md));
+  color: var(--sumi-seal, var(--amber-deep));
+}
+
+/* The live agent's menu rises over the dock, fixed: the dock clips it otherwise. */
+.cr-tune-menu-panel.rise {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 200;
+}
+
+/* The new agent's two lists, one under the other; the first needs no rule above it. */
+.cr-prompt-tune-knob {
+  display: grid;
+}
+
+.cr-prompt-tune-knob:first-child .cr-prompt-menu-family {
+  margin-top: 0;
+  border-top: 0;
+}
+
+@media (max-width: 700px) {
+  /* A phone box's second row holds the left chip, this, the mic and Send:
+     the chip shows the model only, and gives up room first. */
+  /* Grown from 0, the model never wraps the row: it takes what the name
+     (capped at 38%) and the mic and ⌨ leave, up to its own width — the whole
+     "claude-opus-5-5" beside a short name, an ellipsis beside a long one. */
+  .cr-prompt .cr-tune-menu {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: max-content;
+  }
+
+  .cr-prompt .cr-tune-menu-btn {
+    overflow: hidden;
+  }
+
+  .cr-prompt .cr-tune-menu-effort {
+    display: none;
+  }
+
+  .cr-prompt-tune {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cr-tune-menu-panel.rise {
+    right: 8px;
+    width: auto;
+  }
+}
+
+/* The box as a drop zone (drop-zone.ts): the transcripts view's cue, over the box alone. */
+.attach-drop-hint.cr-prompt-drop {
+  border-radius: inherit;
+  z-index: 20;
+}
+
+.cr-prompt-drop span {
+  padding: 6px 12px;
+  text-align: center;
+}

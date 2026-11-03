@@ -190,12 +190,6 @@ body,
   -webkit-app-region: no-drag;
 }
 
-.cr-header-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .cr-logo-mark {
   height: 28px;
   flex: 0 0 auto;
@@ -245,13 +239,6 @@ body.cookrew-mobile .cr-logo-mark {
   font-size: 17px;
   letter-spacing: 0.08em;
   text-shadow: 2px 2px 0 var(--amber);
-}
-
-.cr-header-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
 }
 
 /* ---- CANVAS ⇄ AGENTS switch ----
@@ -321,13 +308,6 @@ body.cookrew-mobile .cr-logo-mark {
 
 .cr-viewseg button.attention:not([aria-pressed='true']) {
   animation: cr-blink 1.6s steps(2) infinite;
-}
-
-.cr-header-status {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Shared on-state for toggle buttons (the roster's SELECT among them, which
@@ -413,8 +393,7 @@ body.cookrew-mobile .cr-header {
     display: none;
   }
 
-  .cr-viewseg-label,
-  .cr-header-status .cr-kicker-word {
+  .cr-viewseg-label {
     display: none;
   }
 
@@ -644,12 +623,6 @@ a.cr-btn {
   height: 9px;
   vertical-align: -1.5px;
 }
-.cr-ws-icon .cr-icon {
-  width: 12px;
-  height: 12px;
-  vertical-align: -2px;
-}
-
 .vi-pager-btn .cr-icon {
   width: calc(10px * var(--z, 1));
   height: calc(10px * var(--z, 1));
@@ -775,6 +748,12 @@ a.cr-btn {
   border: 1.5px dashed var(--line);
   padding: 4px 10px;
   animation: cr-fadein 160ms ease-out;
+}
+
+/* A card the dock could not make says why, where the hint stands. */
+.cr-dock-hint.error {
+  color: var(--danger, #c0392b);
+  border-color: currentColor;
 }
 
 /* ---- selection bar (Figma model: selected elements grow actions) ---- */
@@ -1555,6 +1534,7 @@ a.cr-btn {
 .ctx-transcript,
 .ctx-block,
 .ctx-block-prompt,
+.ctx-block-notice,
 .ctx-block-tool,
 .ctx-tool-call,
 .ctx-tool-name,
@@ -1569,6 +1549,20 @@ a.cr-btn {
 .ctx-block-prompt::before {
   content: '❯ ';
   color: var(--amber);
+}
+
+/* A turn the harness started (harness-notice.ts): not the owner's prompt, so
+   no ❯ and no bubble — one quiet line saying what woke the agent. Words, not
+   a symbol glyph: a phone font may not have one. */
+.ctx-block-notice {
+  color: var(--phos-dim);
+  font: 11.5px/1.45 var(--font-mono);
+  word-break: break-word;
+}
+
+.ctx-block-notice::before {
+  content: 'TASK · ';
+  letter-spacing: 0.08em;
 }
 
 /* tool_call lines between prompt and reply — rendered like the real TUI
@@ -1610,8 +1604,11 @@ a.cr-btn {
 }
 
 .ctx-tool-name {
+  flex: none;
   color: var(--phos);
   font-weight: 600;
+  /* A long description wraps; the tool's name never breaks ("Ba / sh" on a phone). */
+  white-space: nowrap;
 }
 
 /* the short descriptor after the name (Forge's args, head-capped 80). Parens
@@ -2119,6 +2116,66 @@ a.card-close {
   opacity: 0.6;
 }
 
+/* The sealed slot (R4): the card face shows a chip; the zoom editor shows
+   the block with the only password field in Cookrew (nodes/SecretSlot.tsx). */
+.cr-secret-chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border: 1.5px solid var(--note-text);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--note-text) 8%, transparent);
+  color: var(--note-text);
+}
+.cr-secret-slots {
+  flex: 0 0 auto;
+  border-top: 1.5px dashed var(--note-text);
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--note-text);
+}
+.cr-secret-slot {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.cr-secret-slot-name {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.cr-secret-slot-state {
+  grid-column: 1 / -1;
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  opacity: 0.7;
+}
+.cr-secret-slot input[type='password'] {
+  font: 12px var(--font-mono);
+  padding: 3px 6px;
+  border: 1.5px solid var(--note-text);
+  background: var(--cream-hi, #fffef5);
+  color: var(--ink, #2d2a20);
+  min-width: 0;
+}
+.cr-secret-slot-how {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+.cr-secret-slot-served {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
 .note-body,
 .note-editor {
   flex: 1;
@@ -2203,6 +2260,9 @@ a.card-close {
   position: absolute;
   /* Velvet sets width/height/left/top from fitContain (letterbox, centered). */
   image-rendering: auto;
+  /* The page as a rounded sheet in its letterbox (owner 2026-11-03: rounded
+     corners are better than the square white block). */
+  border-radius: 10px;
   opacity: 0;
   transition: opacity 140ms ease;
 }
@@ -2734,17 +2794,6 @@ a.card-close {
   border-top: none;
 }
 
-/* Live dictation transcript — read-only caption, not an input box. */
-.voice-ghost {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--muted);
-  max-width: 240px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* Frameless mode marker in the header (mobile companion). */
 .cr-mode-icon {
   display: inline-flex;
@@ -2905,6 +2954,26 @@ a.card-close {
   justify-content: center;
   gap: 12px;
   color: var(--ink);
+}
+
+.crash-panel pre {
+  max-width: min(90vw, 720px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: center;
+}
+
+.crash-note {
+  margin: 0;
+  color: var(--ink-soft, var(--ink));
+  opacity: 0.75;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.crash-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .react-flow__resize-control.handle {
@@ -3154,11 +3223,8 @@ a.card-close {
   text-overflow: ellipsis;
 }
 
-/* Status avatar (AgentAvatar.tsx), Suite B minimal coin: the agent's brand
-   coin IS the avatar. Only the coin carries status — green rest, orange
-   spin while thinking, red rock+blink when waiting, unread dot on replied.
-   Idle/replied stay static (perf rule). */
-
+/* Status avatar (AgentAvatar.tsx): the agent's ink face carries its status
+   (InkAvatar status, styled in zoom/zoom.css). Only the box lives here. */
 .vi-avatar {
   position: relative;
   width: calc(24px * var(--z, 1));
@@ -3166,133 +3232,29 @@ a.card-close {
   flex: 0 0 auto;
   display: block;
 }
-
 .vi-avatar > svg {
   width: 100%;
   height: 100%;
   display: block;
   overflow: visible;
 }
-
-.vi-avatar.idle .ava-coin-tint,
-.vi-avatar.replied .ava-coin-tint {
-  color: var(--vi-done);
-}
-
-.vi-avatar.thinking .ava-coin-tint {
-  color: var(--vi-working);
-}
-
-.vi-avatar.waiting .ava-coin-tint {
-  color: var(--vi-wait);
-}
-
-.vi-avatar.thinking .ava-spin {
-  animation: ava-spin 0.9s linear infinite;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.vi-avatar.waiting > svg {
-  animation:
-    ava-rock 0.8s ease-in-out infinite,
-    ava-blink 0.8s steps(2) infinite;
-}
-
-/* Unread badge on TURN COMPLETE — cleared by acknowledge-on-view. */
-.vi-unread {
-  position: absolute;
-  top: calc(-2px * var(--z, 1));
-  right: calc(-2px * var(--z, 1));
-  width: calc(8px * var(--z, 1));
-  height: calc(8px * var(--z, 1));
-  border-radius: 50%;
-  background: var(--vi-wait);
-  border: 1.5px solid var(--ink);
-}
-
-@keyframes ava-spin {
-  0% {
-    transform: rotate(0) scaleX(1);
-  }
-  25% {
-    transform: rotate(90deg) scaleX(0.15);
-  }
-  50% {
-    transform: rotate(180deg) scaleX(1);
-  }
-  75% {
-    transform: rotate(270deg) scaleX(0.15);
-  }
-  100% {
-    transform: rotate(360deg) scaleX(1);
-  }
-}
-
-@keyframes ava-rock {
-  0%,
-  100% {
-    transform: rotate(-11deg);
-  }
-  50% {
-    transform: rotate(11deg);
-  }
-}
-
-@keyframes ava-blink {
-  50% {
-    opacity: 0.3;
-  }
-}
-
-/* Mini status coin (StatusCoin): replaces the old LED dots. The coin's ink
-   rim gives it contrast on cream, so only the tint changes per context. */
+/* Mini status face (StatusCoin): the ensō and its status, no harness mark. */
 .vi-coin-led {
   width: calc(13px * var(--z, 1));
   height: calc(13px * var(--z, 1));
   flex: 0 0 auto;
+  display: inline-block;
 }
-
-.vi-coin-led.idle,
-.vi-coin-led.replied {
-  color: var(--vi-done);
+.vi-coin-led > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
 }
-
-.vi-coin-led.thinking {
-  color: var(--vi-working);
-  animation: ava-blink 1s steps(2) infinite;
-}
-
-.vi-coin-led.waiting {
-  color: var(--vi-wait);
-  animation: ava-blink 0.55s steps(2) infinite;
-}
-
-.vi-coin-led.off {
-  color: #5a5a5f;
-}
-
 .cr-header .vi-coin-led,
 .popout-header .vi-coin-led {
   width: 14px;
   height: 14px;
-}
-
-.cr-header .vi-coin-led.idle,
-.cr-header .vi-coin-led.replied,
-.popout-header .vi-coin-led.idle,
-.popout-header .vi-coin-led.replied {
-  color: var(--hp);
-}
-
-.cr-header .vi-coin-led.thinking,
-.popout-header .vi-coin-led.thinking {
-  color: var(--amber);
-}
-
-.cr-header .vi-coin-led.waiting,
-.popout-header .vi-coin-led.waiting {
-  color: var(--rose);
 }
 
 /* ---- saved-role avatars (RoleAvatar.tsx) + role chips ---- */
@@ -3540,41 +3502,6 @@ a.card-close {
   max-height: 100%;
 }
 
-/* ---- workspace chip (header) ----
- * ONE CHIP, ONE DOOR. The name opens the screen wall, and the wall is the
- * whole workspace surface — switching, making, directories, removing, the
- * history. The caret and its dropdown are gone, so the chip is one button
- * wearing its own border again. */
-.cr-ws {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-}
-.cr-ws-current {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  background: var(--cream-md);
-  border: 1.5px solid var(--line);
-  border-radius: 3px;
-  padding: 3px 8px;
-  cursor: pointer;
-  min-width: 0;
-}
-.cr-ws-current:hover {
-  background: var(--amber-soft);
-}
-.cr-ws-icon {
-  font-size: 12px;
-  line-height: 1;
-}
-.cr-ws-name {
-  max-width: 200px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 /* The new-workspace form — the create sheet on the screen wall
    (WorkspaceCreateSheet.tsx). */
 .cr-ws-new {
@@ -3677,32 +3604,11 @@ body.cookrew-mobile .cr-header {
   gap: 10px;
 }
 
-/* One-line header on phones: everything shrinks except the LEDs; the
-   workspace name ellipsizes and the wordmark yields on tiny screens. */
+/* One-line header on phones: the route's names ellipsize (header.css). */
 body.cookrew-mobile .cr-header .cr-kicker {
   white-space: nowrap;
 }
 
-/* THE WORKSPACE CHIP IS A STUB ON THE PHONE. The bar has one line and the
-   name was walking off its right edge; the icon says which workspace, the
-   name keeps a few letters — a few more than before, since the caret's
-   sliver is gone. The wall has the full names. */
-body.cookrew-mobile .cr-ws-current {
-  padding: 3px 6px;
-  gap: 5px;
-  min-width: 0;
-}
-
-body.cookrew-mobile .cr-ws-name {
-  max-width: 72px;
-  font-size: 9px;
-}
-
-@media (max-width: 480px) {
-  body.cookrew-mobile .cr-logo {
-    display: none;
-  }
-}
 
 body.cookrew-mobile .cr-dock {
   padding-bottom: max(10px, env(safe-area-inset-bottom));
@@ -4160,6 +4066,18 @@ body.cookrew-mobile .cookrew-minimap {
 
 .cr-ckpt-row.live .cr-ckpt-row-actions {
   display: none;
+}
+
+/* Unrevealed, the strip takes no room. At opacity 0 alone it still held ~200px
+   of every row, so each title was squeezed into what was left and cut short.
+   Out of flow, not display:none: its buttons stay focusable, and a focused one
+   reveals the strip (focus-within) back in place. */
+.cr-ckpt-row:not(:hover):not(:focus-within):not(.acting) .cr-ckpt-row-actions {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 /* Inline "save as role" input, shown in place of the row actions. */
@@ -4628,13 +4546,26 @@ body.cookrew-mobile .cookrew-minimap {
 /* F5 made rows OPAQUE, which means they now carry a surface colour — and a
    dark one on a cream rail is a black slab. The dark defaults get cream
    counterparts here so the opacity fix does not become a theming bug the first
-   time .on-cream is used. */
-.cr-ckpt-rail.on-cream .cr-ckpt-row {
+   time .on-cream is used.
+
+   The paper full view (.zv-fullview) IS that context, and nothing set
+   .on-cream there: its CHAT view drew the fan as black slabs over a cream
+   transcript (phone report 2026-11-01). It takes the same skin by selector;
+   the tokens are the night scheme's too, so it follows the scheme. */
+.cr-ckpt-rail.on-cream .cr-ckpt-row,
+.cr-ckpt-rail.on-cream .cr-ckpt-fan-focus,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row {
   background: var(--cream-hi);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-row.active {
+.cr-ckpt-rail.on-cream .cr-ckpt-row.active,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row.active {
   background: var(--amber-soft);
+}
+
+.cr-ckpt-rail.on-cream .cr-ckpt-row:not(.active):not(.live) .cr-ckpt-dot i,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row:not(.active):not(.live) .cr-ckpt-dot i {
+  background: var(--cream-hi);
 }
 
 .cr-ckpt-rail.on-cream .cr-ckpt-line {
@@ -4650,21 +4581,25 @@ body.cookrew-mobile .cookrew-minimap {
   border-color: var(--cream-hi);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-row-title {
+.cr-ckpt-rail.on-cream .cr-ckpt-row-title,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row-title {
   color: var(--ink);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-row:hover {
+.cr-ckpt-rail.on-cream .cr-ckpt-row:hover,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-row:hover {
   background: var(--amber-soft);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-action {
+.cr-ckpt-rail.on-cream .cr-ckpt-action,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-action {
   color: var(--ink);
   background: var(--cream-hi);
   border: 1.5px solid var(--line);
 }
 
-.cr-ckpt-rail.on-cream .cr-ckpt-action:hover {
+.cr-ckpt-rail.on-cream .cr-ckpt-action:hover,
+.zv-fullview .cr-ckpt-rail .cr-ckpt-action:hover {
   background: var(--amber-soft);
   border-color: var(--line);
   color: var(--ink);
@@ -5001,13 +4936,6 @@ body.cookrew-mobile .cr-dock .voice-bar::-webkit-scrollbar {
   display: none;
 }
 
-
-/* The dictation caption is the only elastic item in a nowrap row — it
-   ellipsises so the buttons never get pushed into the scroll region. */
-body.cookrew-mobile .cr-dock .voice-ghost {
-  flex: 0 1 auto;
-  min-width: 0;
-}
 
 /* ---- phone companion (narrow viewports) ----
    The remote (mobile-server) UI shares this stylesheet; below ~700px the
@@ -5850,160 +5778,12 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   color: var(--muted);
 }
 
-/* The refusal line: the ask's slot, with the sentence on one row and its two
-   buttons free to drop to the next on a narrow phone. Amber like the sheet's
-   row, because it is a suggestion rather than a fact. */
-.cr-path-direct-line {
-  flex-wrap: wrap;
-  background: var(--amber-soft, var(--cream-hi));
-}
-
-.cr-path-direct-line .cr-path-ask-text {
-  flex: 1 1 180px;
-}
-
-.cr-path-direct-hide {
-  color: var(--muted);
-}
-
-/* The note on the page the OPEN ON WI-FI button landed on. Same hanging line
-   as the ask — it is the same slot under the same badge — and it is the only
-   one of the two that ever appears on a directly-served companion. */
-.cr-path-landed-ok {
-  flex: 0 0 auto;
-}
-
-/* ---- open on Wi-Fi ----
-   INSIDE the sheet, not hanging off the bar: it is the conclusion drawn from
-   the rows underneath it, so it is stacked, in flow, and full width. Amber
-   because it is the one thing in this sheet that is a suggestion rather than a
-   fact, and the button sits on its own line so a long sentence never squeezes
-   it to two characters on a narrow phone. */
-
-.cr-path-direct {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 12px;
-  padding: 9px 10px;
-  background: var(--amber-soft, var(--cream-hi));
-  border: 2px solid var(--line);
-  box-shadow: 2px 2px 0 var(--line);
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--ink);
-}
-
-.cr-path-direct-why {
-  display: block;
-}
-
-.cr-path-direct-go {
-  flex: 0 0 auto;
-}
-
-/* TRY AGAIN and OPEN ON WI-FI, in the order the sentence names them. They
-   wrap rather than shrink: on a narrow phone two full-width taps beat two
-   half-width ones. */
-.cr-path-direct-acts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.cr-path-direct-retry[disabled] {
-  opacity: 0.6;
-}
-
 .cr-path-latency {
   margin: 0 0 12px;
   font-family: var(--font-pixel);
   font-size: 9.5px;
   letter-spacing: 0.06em;
   color: var(--muted);
-}
-
-/* ---- why this path ----
-   Reference material inside the badge sheet: closed by default, monospaced
-   addresses so two of them line up, and one row per candidate. The winning
-   row is the only one with any weight, because the panel's whole job is to
-   answer "why THIS one". */
-
-.cr-path-why {
-  margin: 0 0 12px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.cr-path-why-head {
-  font-family: var(--font-pixel);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink);
-  cursor: pointer;
-}
-
-/* The condition every row below ran under: which browser, and what it says
-   about the local network. Four rows reading "refused before connecting" mean
-   one thing under a denied Chrome permission and something else under a Safari
-   that has no such permission at all. */
-.cr-path-why-env {
-  margin: 6px 0 0;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.cr-path-why-list {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-}
-
-.cr-path-why-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
-  border-top: 1px solid var(--line);
-  /* The browser's own words go on their own line under the sentence, rather
-     than squeezing the address and the plane out of a phone-width row. */
-  flex-wrap: wrap;
-}
-
-.cr-path-why-detail {
-  flex: 1 0 100%;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 10px;
-  opacity: 0.75;
-}
-
-.cr-path-why-name {
-  flex: 0 0 auto;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  color: var(--ink);
-}
-
-.cr-path-why-what {
-  flex: 1 1 auto;
-}
-
-.cr-path-why-plane {
-  flex: 0 0 auto;
-  font-family: var(--font-pixel);
-  font-size: 8.5px;
-  letter-spacing: 0.08em;
-}
-
-.cr-path-why-chosen {
-  color: var(--ink);
-}
-
-.cr-path-why-chosen .cr-path-why-plane {
-  color: var(--green, #3f8f4f);
 }
 
 .cr-path-switch {
@@ -6391,55 +6171,6 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   margin-top: 10px;
 }
 
-/* Sous, heard and answering — one pill at the top of the stage (SousPill).
-   Above every layer including a zoomed terminal, because the words are what
-   the owner is looking for while they hold the key. */
-.sous-pill {
-  position: fixed;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 60;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: min(70vw, 720px);
-  padding: 8px 14px;
-  border: 2px solid var(--ink);
-  border-radius: 999px;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  box-shadow: 4px 4px 0 var(--ink);
-  pointer-events: none;
-}
-.sous-pill .cr-icon {
-  width: 16px;
-  height: 16px;
-  flex: none;
-}
-.sous-pill.listening .cr-icon {
-  color: var(--danger, #c0392b);
-  animation: sous-pulse 1.1s ease-in-out infinite;
-}
-.sous-pill.refused {
-  border-style: dashed;
-}
-.sous-pill-text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-@keyframes sous-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
 
 /* The harness's tabs: a card's far partners, named on the border they face.
    Real elements rather than SVG, so the fold has a true click target — see
@@ -6483,15 +6214,19 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 /* ---- signals on the cables (cable-signal.ts, CableHarness.tsx) ----
-   One agent asked another, or answered: the trunks that carry the cable
-   take the signal's colour, and a pulse travels sender → receiver. The
-   pulse is an HTML element on an `offset-path` in flow coordinates, moved
-   by ONE keyframe on `offset-distance`, which Chromium runs on the
-   compositor — nothing here is per-frame work for React or the main thread.
-   Nothing is in the tree when nothing is in flight. */
+   One agent asked another, answered, wrote a note or drove a browser: the
+   trunks that carry the cable take the signal's colour with a faint glow
+   under them, and a pulse travels sender → receiver. The pulse is an HTML
+   element in flow coordinates sized in SCREEN pixels (CableHarness scales it
+   by 1/zoom), moved by a Web Animations `transform` animation — the
+   compositor's property; `offset-distance` was not, and cost the main thread
+   a style recalc, a PrePaint and a commit every frame. Nothing is in the
+   tree when nothing is in flight. */
 :root {
   --sig-ask: #d97706;
   --sig-answer: #1d4ed8;
+  --sig-write: #15803d;
+  --sig-read: #7c3aed;
 }
 .cr-harness .cr-harness-trunk.sig,
 .cr-harness .cr-harness-stub.sig {
@@ -6500,45 +6235,49 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 .cr-harness .sig-ask { stroke: var(--sig-ask) }
 .cr-harness .sig-answer { stroke: var(--sig-answer) }
+.cr-harness .sig-write { stroke: var(--sig-write) }
+.cr-harness .sig-read { stroke: var(--sig-read) }
+/* The glow is a second, wide, faint stroke under the lit trunk — painted
+   with it, never per frame. */
+.cr-harness .cr-harness-glow { stroke-opacity: 0.22; stroke-linecap: round }
 
 .cr-sig-dot {
   position: absolute;
   top: 0;
   left: 0;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
   border-radius: 50%;
   pointer-events: none;
-  offset-rotate: 0deg;
-  animation: cr-sig-travel var(--cr-sig-ms, 2400ms) linear forwards;
+  will-change: transform, opacity;
 }
 .cr-sig-dot.ask {
   background: var(--sig-ask);
-  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.22), 0 0 14px 4px rgba(217, 119, 6, 0.55);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(217, 119, 6, 0.22), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(217, 119, 6, 0.55);
 }
 .cr-sig-dot.answer {
   background: var(--sig-answer);
-  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.2), 0 0 14px 4px rgba(29, 78, 216, 0.5);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(29, 78, 216, 0.2), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(29, 78, 216, 0.5);
 }
-@keyframes cr-sig-travel {
-  0% { offset-distance: 0%; opacity: 0 }
-  6% { opacity: 1 }
-  82% { offset-distance: 100%; opacity: 1 }
-  100% { offset-distance: 100%; opacity: 0 }
+.cr-sig-dot.write {
+  background: var(--sig-write);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(21, 128, 61, 0.2), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(21, 128, 61, 0.5);
+}
+.cr-sig-dot.read {
+  background: var(--sig-read);
+  box-shadow: 0 0 0 calc(3px * var(--cr-sig-s, 1)) rgba(124, 58, 237, 0.2), 0 0 calc(14px * var(--cr-sig-s, 1)) calc(4px * var(--cr-sig-s, 1)) rgba(124, 58, 237, 0.5);
 }
 
 /* The tab as the lamp: the cable it names is off the stage, so the traffic
-   on it shows here. A composited opacity pulse, nothing else moves. */
+   on it shows here. A composited opacity pulse, nothing else moves. The fold
+   lights the same way when a lit partner is still behind it. */
 .cr-harness-tab.sig {
   border-color: var(--sig-ask);
   border-width: 2.5px;
   background: var(--amber-soft);
   animation: cr-sig-lamp 700ms ease-in-out infinite alternate;
 }
-.cr-harness-tab.sig-answer {
-  border-color: var(--sig-answer);
-}
+.cr-harness-tab.sig-answer { border-color: var(--sig-answer) }
+.cr-harness-tab.sig-write { border-color: var(--sig-write) }
+.cr-harness-tab.sig-read { border-color: var(--sig-read) }
 @keyframes cr-sig-lamp {
   from { opacity: 1 }
   to { opacity: 0.45 }
@@ -6546,7 +6285,7 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 
 @media (prefers-reduced-motion: reduce) {
   /* The fact stays on screen for the signal's lifetime; nothing travels. */
-  .cr-sig-dot { animation: none; display: none }
+  .cr-sig-dot { display: none }
   .cr-harness-tab.sig { animation: none }
 }
 
@@ -6589,3 +6328,24 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 .cr-lane-answer.ok { border-color: #6bbe58 }
 .cr-lane-answer.bad { border-color: #b04a36 }
+
+/* THE BRIEF — what a recruited card is about (TerminalNodeData.brief), one
+   line under the name on the card, in the zoomed header and on the Board row.
+   Display only; nothing edits it here. */
+.cr-brief {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.vi-brief { font-size: calc(10.5px * var(--z, 1)) }
+.vi-mini-brief { font-size: 9px }
+.popout-brief { max-width: 260px; flex: 0 1 auto }
+.ags-brief { font-size: 11px; margin-top: 1px }

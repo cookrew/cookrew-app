@@ -1,0 +1,797 @@
+/* ---- THE ZOOMED TERMINAL ON PAPER (2026-10-30) ----
+   The transcript, the live pane, the dials and the checkpoint rail were drawn
+   on a phosphor CRT: amber on near-black, with scanlines. The owner ruled one
+   colour for the whole app, so inside the zoomed terminal the phosphor tokens
+   mean the paper's own: cream ground, ink text, muted for the quiet lines, a
+   deep amber for emphasis. The rules that use the tokens are untouched; this
+   only says what the tokens are here, and drops the CRT effects. */
+.lod-overlay {
+  --phos-bg: var(--cream-hi);
+  --phos: var(--ink);
+  --phos-dim: var(--muted);
+  --phos-glow: #8a4b00;
+  background: var(--cream-hi);
+}
+
+.lod-overlay .ctx-transcript {
+  background-image: none;
+}
+
+.lod-overlay .cr-crt::before {
+  display: none;
+}
+
+.lod-overlay .phos-line.thinking,
+.lod-overlay .ctx-block-prompt {
+  text-shadow: none;
+}
+
+.lod-overlay .ctx-block {
+  border-top-color: var(--line-soft);
+}
+
+.lod-overlay .ctx-block.active {
+  background: rgba(255, 214, 0, 0.14);
+}
+
+.lod-overlay .ctx-block-reply code {
+  background: var(--cream-md);
+}
+
+.lod-overlay .ctx-block-reply pre {
+  background: var(--cream-md);
+  border-left-color: var(--line-soft);
+}
+
+.lod-overlay .ctx-block-reply hr {
+  border-top-color: var(--line-soft);
+}
+
+/* A GitHub table in a reply (MarkdownText · md-table; UI/UX QA 2026-11-01:
+   CHAT showed them as a paragraph of pipes). Paper like the rest of the chat:
+   hairline rules, the header on the darker cream, cells top-aligned so a long
+   one does not float its neighbours. The table is laid out to its box and its
+   columns wrap to fit; only when they cannot (a word or a code span wider
+   than its share) does the box scroll sideways on its own, so a wide table
+   never widens the bubble or the page — and then the cut edge fades while
+   there is more off that side (MarkdownText · TableBox, data-more). */
+.lod-overlay .ctx-block-reply .md-table-box {
+  position: relative;
+  max-width: 100%;
+  margin: 6px 0;
+}
+
+.lod-overlay .ctx-block-reply .md-table-box::before,
+.lod-overlay .ctx-block-reply .md-table-box::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  z-index: 1;
+  width: 28px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.lod-overlay .ctx-block-reply .md-table-box::before {
+  left: 1px;
+  border-radius: 8px 0 0 8px;
+  background:
+    linear-gradient(to right, rgba(40, 30, 15, 0.12), transparent 5px),
+    linear-gradient(to right, var(--cream-hi), transparent);
+}
+
+.lod-overlay .ctx-block-reply .md-table-box::after {
+  right: 1px;
+  border-radius: 0 8px 8px 0;
+  background:
+    linear-gradient(to left, rgba(40, 30, 15, 0.12), transparent 5px),
+    linear-gradient(to left, var(--cream-hi), transparent);
+}
+
+.lod-overlay .ctx-block-reply .md-table-box[data-more='right']::after,
+.lod-overlay .ctx-block-reply .md-table-box[data-more='both']::after {
+  opacity: 1;
+}
+
+.lod-overlay .ctx-block-reply .md-table-box[data-more='left']::before,
+.lod-overlay .ctx-block-reply .md-table-box[data-more='both']::before {
+  opacity: 1;
+}
+
+.lod-overlay .ctx-block-reply .md-table {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--cream-hi);
+}
+
+.lod-overlay .ctx-block-reply .md-table:focus-visible {
+  outline: 2px solid var(--amber-deep);
+  outline-offset: 2px;
+}
+
+.lod-overlay .ctx-block-reply .md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.93em;
+  line-height: 1.4;
+}
+
+.lod-overlay .ctx-block-reply .md-table th,
+.lod-overlay .ctx-block-reply .md-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  /* Only between words: the reply's word-break: break-word (styles.css) would
+     let a narrow screen squeeze a table by splitting them ("alread y"). Past
+     that the box scrolls, with the edge cue. */
+  word-break: normal;
+  overflow-wrap: normal;
+  hyphens: manual;
+}
+
+.lod-overlay .ctx-block-reply .md-table th + th,
+.lod-overlay .ctx-block-reply .md-table td + td {
+  border-left: 1px solid var(--line-soft);
+}
+
+.lod-overlay .ctx-block-reply .md-table th {
+  background: var(--cream-md);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.lod-overlay .ctx-block-reply .md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.lod-overlay .ctx-block-reply .md-table code {
+  /* Breaks at its spaces, and after its own / . _ (MarkdownText · cellCode). */
+  white-space: normal;
+  word-break: normal;
+}
+
+.lod-overlay .ctx-live {
+  border-top-color: rgba(21, 128, 61, 0.45);
+}
+
+.lod-overlay .ctx-live::before {
+  color: #15803d;
+}
+
+/* The dials and the side tabs: the same paper, a hairline for the column. */
+.lod-overlay .popout-side,
+.lod-overlay .cr-tune-rail,
+.lod-overlay .attach-tabs {
+  border-color: var(--line-soft);
+}
+
+.lod-overlay .cr-tune-chip,
+.lod-overlay .attach-tab {
+  border-color: var(--line-soft);
+  background: var(--cream);
+}
+
+.lod-overlay .cr-tune-chip:hover,
+.lod-overlay .attach-tab:hover {
+  background: var(--amber-soft);
+  border-color: var(--line);
+}
+
+.lod-overlay .attach-tab.on {
+  background: var(--amber);
+  border-color: var(--line);
+}
+
+.lod-overlay .xterm .xterm-viewport {
+  background-color: var(--cream-hi) !important;
+}
+
+/* The phone: the transcript's text keeps clear of the checkpoint rail (30px
+   down the right edge), or its count sits on the words (2026-10-30). */
+@media (max-width: 700px) {
+  .lod-overlay .popout-main > .ctx-transcript {
+    padding-right: 26px;
+  }
+}
+
+/* ---- THE TRANSCRIPT AS A CHAT WITH THE AGENT (owner, 2026-10-31) ----
+   Each checkpoint is one exchange: its heading a small centred label, your
+   prompt a bubble on the right, and the agent's side a bubble on the left with
+   its face (TranscriptRow.tsx): the tools it ran as chips, then its reply. The
+   column is centred and kept to a reading width, so on a wide screen the pets
+   down the sides float over the margin, never over the words. The live
+   terminal under the LIVE seam stays a terminal.
+   Scoped to .look-chat: the card's header switches between this and the
+   live look below (transcript-look.ts). */
+.lod-overlay .look-chat .ctx-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 14px 4px 10px;
+  border-top: 0;
+  border-radius: 14px;
+}
+
+/* A PLAIN CONVERSATION (owner, 2026-11-01): the turn the reader is at wears
+   no gold edge and no tint, and an exchange has no checkpoint heading over it
+   (its "T1 …" pill repeated the prompt word for word). The checkpoints stay
+   with LOG and LIVE, and their rail (TerminalOverlay · look !== 'chat'). */
+.lod-overlay .look-chat .ctx-block.active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.lod-overlay .look-chat .ctx-block-head {
+  display: none;
+}
+
+/* With no rail, the chat's own scrollbar is the way through it: dragging it
+   moves the conversation itself. The trace surface hides the native bar
+   (styles.css · ONE scrollbar total); the chat shows it again, thin and
+   quiet. The standard properties win in Chromium; Safari reads the pseudo. */
+.lod-overlay .look-chat > .ctx-transcript {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-chat > .ctx-transcript::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-chat > .ctx-transcript::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
+}
+
+/* Yours: on the right. */
+.lod-overlay .look-chat .ctx-block-prompt {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--amber-soft);
+  color: var(--ink);
+  text-shadow: none;
+  font: 13.5px/1.45 var(--font-body);
+}
+
+.lod-overlay .look-chat .ctx-block-prompt::before {
+  content: none;
+}
+
+/* Nobody's: a harness notice sits between the two sides, small and quiet. */
+.lod-overlay .look-chat .ctx-block-notice {
+  align-self: center;
+  max-width: 92%;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* The agent's: on the left, beside its face. */
+.lod-overlay .look-chat .ctx-chat-agent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 92%;
+}
+
+.lod-overlay .look-chat .ctx-chat-face {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 50%;
+  background: var(--cream);
+}
+
+.lod-overlay .look-chat .ctx-chat-face .vi-avatar,
+.lod-overlay .look-chat .ctx-chat-face .vi-avatar svg {
+  width: 22px;
+  height: 22px;
+}
+
+.lod-overlay .look-chat .ctx-chat-bubble {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px 16px 16px 16px;
+  background: var(--cream);
+}
+
+.lod-overlay .look-chat .ctx-chat-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-tool {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--cream-md);
+  font-size: 11px;
+}
+
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply {
+  margin: 0;
+  font: 13.5px/1.5 var(--font-body);
+}
+
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply code,
+.lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* THE AGENT'S STEPS, FOLDED (chat-fold.ts; owner, 2026-11-01): one quiet line
+   over the answer says what it did; tapped, its thinking, its words between
+   steps and its tool calls read in order, under a hairline. */
+.lod-overlay .look-chat .ctx-chat-process + .ctx-block-reply {
+  margin-top: 6px;
+}
+
+.lod-overlay .look-chat .ctx-process-toggle {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0;
+  padding: 2px 8px 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 11px/1.4 var(--font-mono);
+  letter-spacing: 0.02em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lod-overlay .look-chat .ctx-process-toggle:hover {
+  background: var(--cream-md);
+  color: var(--ink);
+}
+
+.lod-overlay .look-chat .ctx-process-label {
+  flex: none;
+}
+
+.lod-overlay .look-chat .ctx-process-label::before {
+  content: '▸';
+  display: inline-block;
+  width: 1.2em;
+  transition: transform 120ms ease;
+}
+
+.lod-overlay .look-chat .ctx-chat-process.open .ctx-process-label::before {
+  transform: rotate(90deg);
+}
+
+/* While the turn has no answer yet: what it is doing now, on the same line. */
+.lod-overlay .look-chat .ctx-process-now {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+.lod-overlay .look-chat .ctx-chat-process .ctx-chat-tools {
+  margin: 4px 0 0 9px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line-soft);
+}
+
+.lod-overlay .look-chat .ctx-block-thought {
+  color: var(--muted);
+  font: italic 12px/1.5 var(--font-body);
+  white-space: pre-wrap;
+}
+
+.lod-overlay .look-chat .ctx-block-said {
+  color: var(--muted);
+  font: 12.5px/1.5 var(--font-body);
+}
+
+.lod-overlay .look-chat .ctx-block-said > :first-child {
+  margin-top: 0;
+}
+
+.lod-overlay .look-chat .ctx-block-said > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 700px) {
+  .lod-overlay .look-chat .ctx-block-prompt {
+    max-width: 88%;
+  }
+  .lod-overlay .look-chat .ctx-chat-agent {
+    max-width: 100%;
+  }
+}
+
+/* ---- CHAT OR THE RAW TERMINAL (transcript-look.ts) ----
+   The herdr terminal sits in the SAME box in both views — the whole
+   transcript area, laid over it — so switching never resizes the agent's
+   pane. In chat it is there unseen and untouchable (visibility: hidden also
+   keeps its keyboard out of reach); in live it is all there is. */
+.lod-overlay .look-records .ctx-transcript,
+.lod-overlay .look-live .ctx-transcript {
+  position: relative;
+}
+
+.lod-overlay .look-records .ctx-live,
+.lod-overlay .look-live .ctx-live {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* THE TERMINAL KEEPS CLEAR OF THE CHECKPOINT RAIL (owner's recording,
+   2026-11-01): the rail is 30px laid over the right edge, and the terminal
+   under it was fitted to the whole width, so its last columns ran under the
+   rail. The room is kept in every look, so the terminal is the same size in
+   chat, log and live, and the rail arriving after its checkpoints load does
+   not resize the shared pane. */
+.lod-overlay .popout-main.look-records .ctx-live,
+.lod-overlay .popout-main.look-live .ctx-live {
+  right: 30px;
+}
+
+.lod-overlay .look-records .ctx-live::before,
+.lod-overlay .look-live .ctx-live::before {
+  content: none;
+}
+
+.lod-overlay .look-records .ctx-live {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.lod-overlay .look-live .ctx-transcript {
+  overflow: hidden;
+}
+
+.lod-overlay .look-live .ctx-transcript > :not(.ctx-live) {
+  display: none;
+}
+
+/* What the agent is doing right now, under the chat (TerminalOverlay).
+   It FLOATS over the bottom of the card and takes no room: in the flow it
+   shortened the transcript box by its own height, and the terminal laid in
+   that box — the agent's SHARED pane — was resized every time the strip came
+   or went: on CHAT → LIVE, and whenever the agent started or stopped work in
+   chat. herdr answers each resize with a full replay for every viewer and
+   wipes the live view's history (measured 2026-10-31: 756 px tall in chat,
+   787 in live). The chat leaves room for it at its end instead. */
+.lod-overlay .popout-main.look-records > .ctx-transcript {
+  padding-bottom: 40px;
+}
+
+.lod-overlay .chat-status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  background: var(--cream-hi);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 7px 12px;
+  color: var(--muted);
+  font: 12.5px/1.4 var(--font-body);
+}
+
+.lod-overlay .chat-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber-deep);
+  animation: chat-status-pulse 1.4s ease-in-out infinite;
+}
+
+.lod-overlay .chat-status.waiting .chat-status-dot {
+  background: var(--rose);
+}
+
+.lod-overlay .chat-status-text {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.lod-overlay .chat-status-tool {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.4 var(--font-mono);
+}
+
+.lod-overlay .chat-status button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+@keyframes chat-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lod-overlay .chat-status-dot {
+    animation: none;
+  }
+}
+
+/* The chat/live switch in the card header: as tall as the buttons beside it. */
+.lod-overlay .popout-look {
+  box-shadow: none;
+  border-width: 1.5px;
+}
+
+.lod-overlay .popout-look button {
+  padding: 3px 7px;
+  font-size: 8.5px;
+}
+
+/* A chat with nothing in it yet (TerminalOverlay · noConversation). */
+.lod-overlay .popout-main.look-records {
+  position: relative;
+}
+
+.lod-overlay .chat-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font: 13px/1.4 var(--font-body);
+  pointer-events: none;
+}
+
+.lod-overlay .chat-empty button {
+  pointer-events: auto;
+}
+
+/* The copy of the painted rows held over a full repaint (live-curtain.ts). */
+.xterm .xterm-screen > .cr-live-curtain {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The swipe shifts the screen by less than a row (TerminalOverlay); the
+   terminal's own box clips it, so it never slides over the bar or the dock. */
+.lod-overlay .look-live .popout-terminal {
+  overflow: hidden;
+}
+
+/* A FINGER NEVER LANDS ON A ROW (owner, 2026-10-31: "dragging live is still
+   stuck"). Touch events stay bound to the element the finger first landed on.
+   The DOM renderer rebuilds the rows' contents on every scroll, so after the
+   first row step that element was gone from the page, and the rest of the
+   swipe went to a detached node: one touchmove, no touchend, one row per
+   swipe (measured on the phone page; the chat got 27 moves for the same
+   swipe). The rows take no pointer, so the finger lands on .xterm-screen,
+   which stays. Selection, links and clicks are worked out by xterm from
+   coordinates on the screen, not from the row under the pointer. */
+.lod-overlay .xterm-rows {
+  pointer-events: none;
+}
+
+/* THE PHONE'S HISTORY SURFACE (live-sheet.ts): a native scroll page over the
+   live terminal. See-through at the bottom, so the live terminal shows and a
+   tap reaches it; opaque from the moment a finger lands, with a copy of the
+   screen in the spacer, so the browser scrolls a plain page like the chat. */
+.lod-overlay .popout-terminal {
+  position: relative;
+}
+
+.cr-live-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  display: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+}
+
+.cr-live-sheet::-webkit-scrollbar {
+  display: none;
+}
+
+.lod-overlay .look-live .cr-live-sheet.on {
+  display: block;
+}
+
+.cr-live-sheet-hist {
+  white-space: pre;
+  overflow: hidden;
+}
+
+.cr-live-sheet-hist > div,
+.cr-live-sheet-snap > div {
+  height: var(--row);
+  overflow: hidden;
+  white-space: pre;
+}
+
+.cr-live-sheet-screen {
+  position: relative;
+}
+
+.cr-live-sheet-snap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  white-space: pre;
+}
+
+/* Bottom CENTRE: on the phone stage the agent rail overhangs the right edge. */
+.cr-live-sheet-down {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  z-index: 12;
+  display: none;
+  padding: 6px 10px;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  background: var(--amber, #f2c200);
+  color: var(--ink-on-amber, #1b1712);
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.lod-overlay .look-live .cr-live-sheet-down.on {
+  display: block;
+}
+
+/* ---- THE LOG LOOK (transcript-look.ts): the record, drawn as the terminal ----
+   The same rows as the chat. The chat's wrappers dissolve, the face goes, and
+   the rows read as Claude Code prints them: ❯ your prompt, ⏺ each tool call
+   with ⎿ its result kept to a few lines, ⏺ the reply. Every line comes from
+   the conversation record, never from the screen. */
+.lod-overlay .look-log .ctx-chat-agent,
+.lod-overlay .look-log .ctx-chat-bubble,
+.lod-overlay .look-log .ctx-chat-process,
+.lod-overlay .look-log .ctx-chat-tools {
+  display: contents;
+}
+
+/* The log prints every step, as the terminal does: no fold line, and no
+   thinking (the terminal keeps that folded too). The words between steps
+   read as replies. */
+.lod-overlay .look-log .ctx-process-toggle,
+.lod-overlay .look-log .ctx-block-thought {
+  display: none;
+}
+
+.lod-overlay .look-log .ctx-block-said {
+  margin-top: 8px;
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-said::before {
+  content: '● ';
+  font-family: var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-said.md > p:first-child {
+  display: inline;
+}
+
+.lod-overlay .look-log .ctx-block-said * {
+  font-family: var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-chat-face {
+  display: none;
+}
+
+.lod-overlay .look-log .ctx-block {
+  padding: 8px 14px 10px;
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-head {
+  opacity: 0.7;
+}
+
+.lod-overlay .look-log .ctx-block-prompt {
+  margin: 4px 0 6px;
+  padding: 3px 8px;
+  background: var(--cream-md);
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-tool {
+  margin-top: 6px;
+  font: 12.5px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-tool-call::before,
+.lod-overlay .look-log .ctx-block-reply::before {
+  /* ● not ⏺: a phone browser may draw ⏺ as a coloured emoji button. */
+  content: '● ';
+  font-family: var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-tool-call::before {
+  color: #15803d;
+}
+
+/* The call flows as one line of text that wraps, as the terminal prints it;
+   the chat's flex row let long args squeeze the name into "Ba / sh". */
+.lod-overlay .look-log .ctx-tool-call {
+  display: block;
+}
+
+.lod-overlay .look-log .ctx-tool-name {
+  white-space: nowrap;
+}
+
+.lod-overlay .look-log .ctx-tool-result {
+  margin-left: 2ch;
+  max-height: 7.5em;
+  overflow: hidden;
+  font: 12px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-reply {
+  margin-top: 8px;
+  font: 13px/1.5 var(--font-mono);
+}
+
+.lod-overlay .look-log .ctx-block-reply.md > p:first-child {
+  display: inline;
+}
+
+.lod-overlay .look-log .ctx-block-reply * {
+  font-family: var(--font-mono);
+}
+

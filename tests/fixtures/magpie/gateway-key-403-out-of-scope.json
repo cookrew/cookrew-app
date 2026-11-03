@@ -1,0 +1,1 @@
+{"error":{"code":null,"message":"The gateway key \"hp-facts probe\" may not use ollama/qwen2.5:1.5b; it may use group/think. Change the key's models in magpie's Gateway page, or use a model it has.","param":null,"type":"permission_error"}}

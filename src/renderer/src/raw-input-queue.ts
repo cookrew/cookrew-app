@@ -21,11 +21,53 @@
  * exactly the shape it had before batching existed, which also preserves
  * the one-request paste+Enter delivery the paste-swallow guard relies on.
  *
- * A failed request drops only its own bytes (same contract as the
- * fire-and-forget POST it replaces); the bytes behind it still go.
+ * A request the Mac answered with a refusal drops only its own bytes (same
+ * contract as the fire-and-forget POST it replaces); the bytes behind it
+ * still go.
+ *
+ * AND A HUNG ONE IS A FAILED ONE. One request in flight means one request
+ * that never answers stops the terminal: on 2026-10-18 the phone's Tailscale
+ * dropped mid-request, the plane fell back to the relay, and the typing that
+ * followed queued behind a fetch the OS would not give up on for minutes. A
+ * request gets RAW_INPUT_DEADLINE_MS; past it it is aborted (a 'TimeoutError',
+ * which plane-fetch.ts counts against the plane).
+ *
+ * AND NO ANSWER IS SENT AGAIN, NOT DROPPED. A batch that got no answer — the
+ * deadline passed, the plane it went on was left (plane-fetch.ts aborts it),
+ * the WebRTC link closed under it — used to lose its bytes: the letters typed
+ * just as the phone moved between LAN and the relay never arrived. Now each
+ * batch carries an id and is sent again, on whatever plane is current, until
+ * it is answered or RAW_INPUT_GIVE_UP_MS has passed; the Mac types an id once
+ * however often it arrives (main/once-by-key.ts), so a batch that did land
+ * and lost only its answer is not typed twice. An ANSWER — any status at all
+ * — is final: those bytes are never sent again.
  */
 
-type SendRaw = (terminalId: string, data: string) => Promise<unknown>
+/** Long enough for a relayed round trip, short enough that typing never looks dead. */
+export const RAW_INPUT_DEADLINE_MS = 6_000
+/** Waits before each repeat of a batch that got no answer; the last one repeats. */
+export const RAW_INPUT_RETRY_MS = [0, 250, 500, 1_000, 2_000] as const
+/** Past this since its first try, a batch is given up on. */
+export const RAW_INPUT_GIVE_UP_MS = 30_000
+
+type SendRaw = (terminalId: string, data: string, signal: AbortSignal, id: string) => Promise<unknown>
+
+export interface RawInputQueueOptions {
+  readonly deadlineMs?: number
+  readonly giveUpMs?: number
+  /** Did this failure come WITHOUT an answer? Only those are sent again. */
+  readonly retryable?: (error: unknown) => boolean
+  /** Names this page's batches; the Mac keys its memory of them by it. */
+  readonly nonce?: string
+  readonly now?: () => number
+}
+
+interface Batch {
+  readonly data: string
+  readonly id: string
+  readonly firstAt: number
+  tries: number
+}
 
 interface Lane {
   chunks: string[]
@@ -35,10 +77,56 @@ interface Lane {
 /** Submit-capable per ownerSubmit's own classifier boundary. */
 const carriesEnter = (chunk: string): boolean => chunk.includes('\r') || chunk.includes('\n')
 
+const pageNonce = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID().slice(0, 13)
+    : Math.random().toString(36).slice(2, 15)
+
 export function createRawInputQueue(
-  send: SendRaw
+  send: SendRaw,
+  options: RawInputQueueOptions = {}
 ): (terminalId: string, data: string) => void {
+  const deadlineMs = options.deadlineMs ?? RAW_INPUT_DEADLINE_MS
+  const giveUpMs = options.giveUpMs ?? RAW_INPUT_GIVE_UP_MS
+  const retryable = options.retryable ?? ((): boolean => false)
+  const now = options.now ?? ((): number => Date.now())
+  const nonce = options.nonce ?? pageNonce()
   const lanes = new Map<string, Lane>()
+  let serial = 0
+
+  const attempt = (terminalId: string, lane: Lane, batch: Batch): void => {
+    batch.tries += 1
+    const abort = new AbortController()
+    let settled = false
+    const finish = (again: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      if (again && now() - batch.firstAt < giveUpMs) {
+        const wait = RAW_INPUT_RETRY_MS[Math.min(batch.tries - 1, RAW_INPUT_RETRY_MS.length - 1)]
+        setTimeout(() => attempt(terminalId, lane, batch), wait)
+        return
+      }
+      lane.inFlight = false
+      pump(terminalId, lane)
+    }
+    // The lane moves on at the deadline even if the abort is not honoured
+    // (a body still arriving): nothing behind it waits on it again.
+    const deadline = setTimeout(() => {
+      abort.abort(new DOMException('no answer in time', 'TimeoutError'))
+      finish(true)
+    }, deadlineMs)
+    let sent: Promise<unknown>
+    try {
+      sent = send(terminalId, batch.data, abort.signal, batch.id)
+    } catch (error) {
+      sent = Promise.reject(error)
+    }
+    sent.then(
+      () => finish(false),
+      (error: unknown) => finish(retryable(error))
+    )
+  }
 
   const pump = (terminalId: string, lane: Lane): void => {
     if (lane.inFlight || lane.chunks.length === 0) return
@@ -52,12 +140,7 @@ export function createRawInputQueue(
       }
     }
     lane.inFlight = true
-    void send(terminalId, data)
-      .catch(() => undefined)
-      .finally(() => {
-        lane.inFlight = false
-        pump(terminalId, lane)
-      })
+    attempt(terminalId, lane, { data, id: `${nonce}.${(serial += 1).toString(36)}`, firstAt: now(), tries: 0 })
   }
 
   return (terminalId, data) => {

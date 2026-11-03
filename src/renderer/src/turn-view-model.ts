@@ -1,3 +1,4 @@
+import { isHarnessNotice, noticeLine } from '../../shared/harness-notice'
 import type { TerminalActivity } from '../../shared/turn'
 
 /**
@@ -61,11 +62,15 @@ export interface LatestCheckpoint {
  */
 export function checkpointViewModel(cp: LatestCheckpoint | null): TurnViewModel | null {
   if (!cp) return null
-  const ask = cp.prompt.trim() ? firstLine(cp.prompt) : null
+  // A turn the harness started is nobody's ask (harness-notice.ts): no "You:"
+  // line, and what it says stands in for a title until Sous has one.
+  const notice = isHarnessNotice(cp.prompt)
+  const ask = !notice && cp.prompt.trim() ? firstLine(cp.prompt) : null
   const reply = cp.reply.trim() ? firstLine(cp.reply) : null
-  if (!ask && !reply && !cp.title) return null
+  const title = cp.title ? firstLine(cp.title) : notice ? noticeLine(cp.prompt) : null
+  if (!ask && !reply && !title) return null
   return {
-    title: cp.title ? firstLine(cp.title) : null,
+    title,
     ask,
     tools: [],
     latest: reply ? { text: reply, tone: 'done' } : null,
@@ -145,9 +150,15 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
           ? { text: firstLine(activity.reply), tone: 'done' }
           : null
 
+  // A turn the harness started is nobody's ask (harness-notice.ts).
+  const notice = isHarnessNotice(activity.prompt)
   return {
-    title: activity.title ? firstLine(activity.title) : null,
-    ask: activity.prompt === null ? null : firstLine(activity.prompt),
+    title: activity.title
+      ? firstLine(activity.title)
+      : notice && activity.prompt !== null
+        ? noticeLine(activity.prompt)
+        : null,
+    ask: activity.prompt === null || notice ? null : firstLine(activity.prompt),
     tools: inTurn ? (activity.glance?.tools ?? []) : [],
     latest,
     pendingInput,

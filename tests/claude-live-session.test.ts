@@ -57,6 +57,15 @@ describe.skipIf(process.platform === 'win32')('liveSessionHolders', () => {
     expect(holders.find((h) => h.sessionId === FORGE)?.kind).toBe('bg')
   })
 
+  it('carries claude\'s own turn status and when it last changed', () => {
+    // The idle-sleep evidence (2026-11-01): a mid-turn agent retrying through
+    // a 502 spell writes nothing for minutes, but its record says busy.
+    const holders = liveSessionHolders('/sessions', stubFs([1774], {
+      '1774.json': JSON.stringify({ pid: 1774, sessionId: TINKER, cwd: '/w', kind: 'interactive', status: 'busy', statusUpdatedAt: 1793535599233 })
+    }))
+    expect(holders).toEqual([{ pid: 1774, sessionId: TINKER, kind: 'interactive', cwd: '/w', status: 'busy', statusSince: 1793535599233 }])
+  })
+
   it('ignores a file whose process has exited', () => {
     // These accumulate — 133 files, 8 live, on the machine this was found on.
     const holders = liveSessionHolders('/sessions', stubFs([92878]))

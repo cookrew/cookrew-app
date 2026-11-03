@@ -32,7 +32,8 @@ interface StreamBridge {
   streamIndex?: StreamTransport['index']
   streamBlocks?: StreamTransport['blocks']
   streamMark?: (terminalId: string, patch: unknown) => Promise<{ ok: boolean; error?: string }>
-  streamTail?: (terminalId: string) => Promise<StreamTail>
+  /** Null when the terminal has no stream source at all — main answers that, so the type says it. */
+  streamTail?: (terminalId: string) => Promise<StreamTail | null>
   streamMarks?: (terminalId: string) => Promise<Record<string, StreamMarks>>
   watchLatest?: (terminalId: string) => Promise<void> | void
   unwatchLatest?: (terminalId: string) => Promise<void> | void
@@ -77,7 +78,16 @@ export function createBridgeStreamTransport(): StreamTransport {
       let seeded = false
       const readTail = async (): Promise<void> => {
         const tail = await bridge.streamTail?.(terminalId)
-        if (!closed && tail !== undefined) handlers.onTail(tail)
+        /**
+         * NULL IS NOT A TAIL. Main answers null for a terminal with no stream
+         * source at all (stream-ipc.ts: `sourceOf` is null for a plain Shell
+         * card, and for an agent whose session file does not exist yet) — and
+         * `onTail` is typed non-null, so the reducer dereferences `tail.block`
+         * and the whole canvas came down with "Cannot read properties of null".
+         * Opening a Shell card was enough to do it. No session is not an
+         * update: there is nothing to fold in, so nothing is emitted.
+         */
+        if (!closed && tail !== undefined && tail !== null) handlers.onTail(tail)
       }
       const readMarks = async (): Promise<void> => {
         const next = await bridge.streamMarks?.(terminalId)

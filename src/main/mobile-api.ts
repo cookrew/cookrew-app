@@ -1,4 +1,6 @@
 import type http from "node:http";
+import type { TerminalSession } from "./terminal-session";
+import { randomUUID } from "node:crypto";
 import { appendFile } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +10,8 @@ import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { CableSignalBus } from "./cable-signal";
 import type { CableSignal } from "../shared/cable-signal";
+import type { UseSignalBus } from "./use-signal-bus";
+import type { UseSignal } from "../shared/use-signal";
 import type { EventLog, CookrewEvent, EventQuery } from "./event-log";
 import { pageTurns, type TurnRecord } from "../shared/turn";
 import type { VersionPinRecord } from "../shared/version-pin";
@@ -43,19 +47,77 @@ import type {
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
+import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
+import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
+import { BATCH_ID, createOnceByKey } from "./once-by-key";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
+import type { PromptImageReader } from "./prompt-image";
+import type { ImageRef } from "../shared/prompt-images";
 import type { SousDoor } from "./socket-server";
+import { wallProjection, type InboxRow } from "../shared/inbox-rank";
 import type { Surface as SousSurface } from "../shared/sous-intent";
 import type { UiCommandEvent } from "../shared/sous-ui";
 import type { EventEmitter } from "node:events";
+import type { SecretsStore } from "./secrets-store";
+import { isSecretName } from "../shared/secret-slot";
+import { RELAY_MARKER, isLoopbackPeer } from "./relay-base";
+
+/**
+ * THE TRANSPORTS A SECRET VALUE MAY RIDE, each named for why:
+ *
+ *   TLS       the phone on the LAN or the tailnet, under a trusted name.
+ *   relay     a request the canvas bridge carried in (RELAY_MARKER, which
+ *             only the bridge on loopback may set — host-gate.ts). It is
+ *             accepted BECAUSE the relay leg is TLS hop by hop — phone to
+ *             cookrew.dev, cookrew.dev to this Mac's uplink — and not
+ *             because it happens to arrive from 127.0.0.1.
+ *   loopback  this Mac's own renderer and CLI.
+ *
+ * A plain-HTTP request from the LAN is none of these and is refused.
+ */
+
+/** Open terminal streams by the id their hello announced (POST …/seed). */
+const seedStreams = new Map<string, { terminalId: string; send: (event: string, data: unknown) => void }>();
+
+export const sealedTransport = (request: {
+  socket: { encrypted?: boolean; remoteAddress?: string };
+  headers?: Record<string, string | string[] | undefined>;
+}): boolean => {
+  if (request.socket.encrypted === true) return true;
+  const loopback = isLoopbackPeer(request.socket.remoteAddress);
+  if (request.headers?.[RELAY_MARKER] === "1") return loopback;
+  return loopback;
+};
+
+/** A `secret.*` event with its details — the name — withheld. */
+export const redactSecretDetails = <T extends { type: string; details?: string }>(event: T): T => {
+  if (!event.type.startsWith("secret.")) return event;
+  const { details: _details, ...rest } = event;
+  return rest as T;
+};
 
 const SOUS_SURFACES: ReadonlySet<string> = new Set(["canvas", "zoom", "phone", "home", "cli"]);
+
+/**
+ * WHO is on the other end of a decision: the caller's own id when it sends
+ * one (the phone's install), and no one when it does not. A caller-less
+ * request is NOT bound to its socket address — a dual-stack phone roams
+ * between v4 and v6 and between Wi-Fi and the tailnet mid-hold, and the
+ * token it minted on one address must still commit from the next. Never the
+ * token. The surface defaults to the phone's, the only network surface with a
+ * box.
+ */
+function sousCaller(body: { surface?: string; callerId?: string }): { surface: SousSurface; callerId: string } | undefined {
+  if (typeof body.callerId !== "string" || body.callerId.trim() === "") return undefined;
+  const surface = SOUS_SURFACES.has(body.surface ?? "") ? (body.surface as SousSurface) : "phone";
+  return { surface, callerId: body.callerId.trim().slice(0, 64) };
+}
 /** A spoken sentence; anything longer is a document and has other routes. */
 const SOUS_MAX_TEXT = 2000;
 
@@ -77,6 +139,10 @@ export interface MobileOps {
     position?: { x: number; y: number };
     orch?: boolean;
     roleName?: string;
+    prompt?: string;
+    autoName?: boolean;
+    /** A new agent's model and effort (shared/launch-tune); main checks it. */
+    tune?: unknown;
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
   listWorkspaces: () => WorkspaceList;
@@ -87,6 +153,8 @@ export interface MobileOps {
   ) => WorkspaceMeta | Promise<WorkspaceMeta>;
   switchWorkspace: (id: string) => WorkspaceMeta;
   renameWorkspace: (id: string, name: string) => WorkspaceList;
+  /** Throws on an unknown workspace or a brief that fails shared/workspace-brief.ts. */
+  setWorkspaceBrief: (id: string, brief: unknown) => WorkspaceList;
   /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
   removeWorkspace: (id: string) => WorkspaceList;
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
@@ -161,6 +229,22 @@ export interface MobileApiDeps {
    */
   listPins?: (terminalId: string) => readonly VersionPinRecord[];
   /**
+   * The sealed slots (secrets-store.ts). Names and dates travel; values
+   * travel in exactly one direction — INTO the store, on an owner-token PUT
+   * from the note slot. Nothing on this API ever answers a value.
+   */
+  secrets?: SecretsStore;
+  /**
+   * The Mac's WebRTC end (rtc-peer.ts): answers a phone's offer with
+   * candidates on this Mac's published addresses. Owner token only — the
+   * write gate above refuses a POST without pairing.
+   */
+  rtc?: { answer: (offerSdp: string) => Promise<string | null> };
+  /** The browser card's socket over plain HTTP, for the relay (socket-bridge.ts). */
+  socketBridge?: SocketBridge;
+  /** The build this Mac serves (build-id.ts): sent on every stream, and again when it changes. */
+  build?: { id: () => string; bus: EventEmitter };
+  /**
    * Cold-boot wait window for a stream open (acquireViewWhenReady). Omitted in
    * production (defaults ~2s in 50ms steps); tests shrink it for determinism.
    */
@@ -176,6 +260,15 @@ export interface MobileApiDeps {
    */
   sous?: SousDoor;
   uiBus?: EventEmitter;
+  /** The HITL inbox (R3): a one-shot read, a hold while a stream is open, and the announcements. */
+  inbox?: () => InboxRow[];
+  inboxHold?: () => () => void;
+  inboxBus?: { on: (event: "inbox", cb: (rows: InboxRow[]) => void) => void; removeListener: (event: "inbox", cb: (rows: InboxRow[]) => void) => void };
+  /** HP: RETRY a Sous proposal from the ledger; DISMISS a row. Owner (pairing) scope only. */
+  inboxAct?: (id: string) => Promise<{ ok: boolean; error?: string; dispatchId?: string }>;
+  inboxDismiss?: (id: string) => boolean;
+  /** Late decision revisions (`sous:decision-updated`) for the phone's box, as SSE `sous` frames. */
+  sousBus?: EventEmitter;
   /**
    * THE DIALS (shared/agent-tuning) — model and effort, read and turned.
    *
@@ -202,6 +295,31 @@ export interface MobileApiDeps {
    * desktop's does. Optional: a test server without agents has none.
    */
   signalBus?: CableSignalBus;
+  /** An agent acting on a card (use-signal-bus.ts): the cursor a phone viewer of that card draws. */
+  useBus?: UseSignalBus;
+  /**
+   * The route program (shared/route.ts): the gateway state, the owner's one
+   * default, each card's route. `routeBus` carries 'route' (the whole state,
+   * at most once a second) and 'card-route' (one card) for the stream.
+   */
+  route?: {
+    state: () => RouteState;
+    setDefault: (model: string | null) => RouteState;
+    setSharedMcp: (on: boolean) => RouteState;
+    cardState: (terminalId: string) => CardRouteState;
+    setCardRoute: (terminalId: string, route: string) => Promise<CardRouteState | { error: string }>;
+    health: () => { status: string; source: string | null; providers: number; live: number };
+    /** Held while a stream is open, so the gateway's clock runs only while someone looks. */
+    hold: () => () => void;
+  };
+  routeBus?: EventEmitter;
+  /**
+   * 'changed' once the registry has taken a reach card that differs from the
+   * last one it took (reach.ts · onChanged). The stream relays it as `reach`
+   * so a phone on the relay plane races the Mac's new names at once instead
+   * of on its own minute clock.
+   */
+  reachBus?: EventEmitter;
   /** Recover an inactive teammate as it was (agent-recover feature). */
   recoverAgent: (id: string) => RecoverResult;
   /** Endpoint restore: rewind an agent to a checkpoint (+ undo). The optional
@@ -245,6 +363,8 @@ export interface MobileApiDeps {
    * says NO SNAPSHOT YET for everything.
    */
   workspaceShots?: () => Record<string, { src: string; at: number }>;
+  /** Whether the terminals' herdr server predates this macOS login (terminal-session.ts). */
+  terminalSession?: () => Promise<TerminalSession>;
   /**
    * Importing a served team FROM THE PHONE — the desktop's own operations,
    * reached over this API. Absent = the six /api/serve routes answer 503
@@ -263,6 +383,8 @@ export interface MobileApiDeps {
   presets: readonly { name: string; command: string }[];
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string;
+  /** A prompt's pictures (prompt-image.ts), read for a view once they come into view. */
+  promptImage?: PromptImageReader;
   /**
    * Pairing token required on every MUTATING route (C1) as
    * `Authorization: Bearer <token>` (or `?token=`). Undefined =
@@ -293,6 +415,12 @@ export interface MobileApiDeps {
    * both. Absent = no serialization (embedders/tests without a tracker).
    */
   hasArmedDispatch?: (terminalId: string) => boolean;
+  /**
+   * Keys for an agent that is offline or still waking: true when they were
+   * taken (its wake started, they are typed once it is up), false when the
+   * running session takes them as usual (agent-wake.ts · hold).
+   */
+  holdInput?: (terminalId: string, data: string) => boolean;
   /** Acquire/release the local PTY mirror for a zoomed phone transcript. */
   acquireTerminalView?: (terminalId: string) => boolean;
   releaseTerminalView?: (terminalId: string) => void;
@@ -388,6 +516,11 @@ async function probeWarmed(board: BoardSources): Promise<void> {
     if (timer) clearTimeout(timer);
   }
 }
+
+/** A /raw batch's outcome; null = no running terminal, and nothing to wake. */
+type RawVerdict = Awaited<ReturnType<typeof ownerSubmit>> | null;
+/** Keystroke batches already typed, by terminal and the phone's batch id. */
+const rawInputOnce = createOnceByKey<RawVerdict>();
 
 /**
  * Boot nonces already honoured, so a stream that reconnects on its own with
@@ -541,7 +674,52 @@ export async function handleMobileApi(
     }
     // The compressor's own ledger rides along: how often a poll was answered
     // from the cache or with a 304 is the number behind the API tails.
-    respondJson(response, 200, { ...deps.health(), compression: dynamicCompressionStats() });
+    respondJson(response, 200, {
+      ...deps.health(),
+      compression: dynamicCompressionStats(),
+      ...(deps.route ? { route: deps.route.health() } : {})
+    });
+    return true;
+  }
+  // THE ROUTE. One fleet-wide read for the panel, one write for the owner's
+  // default, one read and one write per card. The blanket gates above cover
+  // them: GETs need `canRead`, the PUTs need pairing.
+  if (p === "/api/route" && method === "GET" && deps.route) {
+    respondJson(response, 200, deps.route.state());
+    return true;
+  }
+  if (p === "/api/route/default" && method === "PUT" && deps.route) {
+    const body = await readJson<{ model?: unknown }>(request);
+    if (body.model !== null && typeof body.model !== "string") {
+      respondJson(response, 400, { ok: false, reason: "model must be a string or null" });
+      return true;
+    }
+    respondJson(response, 200, deps.route.setDefault(body.model === "" ? null : body.model));
+    return true;
+  }
+  if (p === "/api/route/shared-mcp" && method === "PUT" && deps.route) {
+    const body = await readJson<{ on?: unknown }>(request);
+    if (typeof body.on !== "boolean") {
+      respondJson(response, 400, { ok: false, reason: "on must be a boolean" });
+      return true;
+    }
+    respondJson(response, 200, deps.route.setSharedMcp(body.on));
+    return true;
+  }
+  const routeMatch = p.match(/^\/api\/terminal\/([^/]+)\/route$/);
+  if (routeMatch && deps.route && (method === "GET" || method === "PUT")) {
+    const terminalId = decodeURIComponent(routeMatch[1]);
+    if (method === "GET") {
+      respondJson(response, 200, deps.route.cardState(terminalId));
+      return true;
+    }
+    const body = await readJson<{ route?: unknown }>(request);
+    if (typeof body.route !== "string" || !ROUTE_ID_RE.test(body.route)) {
+      respondJson(response, 400, { ok: false, reason: "route must be 'direct' or a model id" });
+      return true;
+    }
+    const result = await deps.route.setCardRoute(terminalId, body.route);
+    respondJson(response, "error" in result ? 404 : 200, result);
     return true;
   }
   if (method === "GET" && p === "/api/presets") {
@@ -563,6 +741,100 @@ export async function handleMobileApi(
   if (tuningMatch && method === "GET" && deps.tuning) {
     respondJson(response, 200, deps.tuning.state(tuningMatch[1]));
     return true;
+  }
+  // THE SEALED SLOTS — owner token only, GET included: the read-only wall
+  // token must not even learn the names. The write gate above already
+  // refused a read-only PUT/DELETE; this refuses its GET too.
+  // A WEBRTC OFFER, over whatever plane the phone is already on (the relay,
+  // at home): the answer carries this Mac's LAN and tailnet candidates and
+  // the DTLS fingerprint the direct link is checked against (rtc-peer.ts).
+  if (method === "POST" && p === "/api/rtc/offer" && deps.rtc) {
+    const body = await readJson<{ sdp?: unknown }>(request);
+    if (typeof body.sdp !== "string" || body.sdp.length === 0 || body.sdp.length > 64_000) {
+      respondJson(response, 400, { error: "sdp is required" });
+      return true;
+    }
+    try {
+      const sdp = await deps.rtc.answer(body.sdp);
+      respondJson(response, sdp === null ? 503 : 200, sdp === null ? { error: "no direct link offered" } : { sdp });
+    } catch {
+      respondJson(response, 400, { error: "offer not accepted" });
+    }
+    return true;
+  }
+  // THE BROWSER CARD'S SOCKET OVER PLAIN HTTP (socket-bridge.ts): down as an
+  // event stream, up as POSTs — the two things the relay carries.
+  if (deps.socketBridge && p === SOCKET_BRIDGE_PATH && method === "GET") {
+    const target = url.searchParams.get("path") ?? "";
+    if (!deps.socketBridge.open(target, response))
+      respondJson(response, bridgeablePath(target) ? 503 : 400, { error: "that socket cannot be bridged now" });
+    return true;
+  }
+  const bridgePost = p.match(/^\/api\/socket-bridge\/([0-9a-f-]{36})$/);
+  if (deps.socketBridge && bridgePost && method === "POST") {
+    const body = await readJson<{ m?: unknown }>(request);
+    const messages = Array.isArray(body.m) ? body.m : [];
+    if (
+      messages.length === 0 ||
+      messages.length > SOCKET_BRIDGE_POST_MESSAGES ||
+      !messages.every((m): m is string => typeof m === "string" && m.length <= SOCKET_BRIDGE_MESSAGE_MAX)
+    ) {
+      respondJson(response, 400, { error: "m must be a short list of strings" });
+      return true;
+    }
+    if (!deps.socketBridge.post(bridgePost[1], messages)) {
+      respondJson(response, 404, { error: "no such bridged socket" });
+      return true;
+    }
+    response.writeHead(204).end();
+    return true;
+  }
+  const secretMatch = p.match(/^\/api\/secrets(?:\/([^/]+))?$/);
+  if (secretMatch && deps.secrets) {
+    // No pairing token configured means no owner to answer to: refused, not open.
+    if (!deps.pairingToken) {
+      respondJson(response, 403, { error: "secrets need a paired companion" });
+      return true;
+    }
+    if (!hasPairing) {
+      respondJson(response, 401, { error: "Unauthorized — secrets are the owner's." });
+      return true;
+    }
+    let name: string | null;
+    try {
+      name = secretMatch[1] === undefined ? null : decodeURIComponent(secretMatch[1]);
+    } catch {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "GET" && name === null) {
+      respondJson(response, 200, deps.secrets.list());
+      return true;
+    }
+    if (name !== null && !isSecretName(name)) {
+      respondJson(response, 400, { error: "not a secret name" });
+      return true;
+    }
+    if (method === "PUT" && name !== null) {
+      // THE VALUE CROSSES THE NETWORK HERE, once: over TLS, through the relay
+      // (TLS hop by hop), or from this Mac itself — see sealedTransport. A
+      // cleartext LAN PUT would hand the value to the Wi-Fi.
+      if (!sealedTransport(request)) {
+        respondJson(response, 403, { error: "seal from the desktop or over TLS" });
+        return true;
+      }
+      const body = await readJson<{ value?: unknown; served?: unknown }>(request);
+      if (typeof body.value !== "string" || body.value.length === 0) {
+        respondJson(response, 400, { error: "value is required" });
+        return true;
+      }
+      respondJson(response, 200, deps.secrets.put(name, body.value, { served: body.served === true }));
+      return true;
+    }
+    if (method === "DELETE" && name !== null) {
+      respondJson(response, 200, { removed: deps.secrets.remove(name) });
+      return true;
+    }
   }
   const tuneMatch = p.match(/^\/api\/terminal\/([^/]+)\/tune$/);
   if (tuneMatch && method === "POST" && deps.tuning) {
@@ -587,6 +859,13 @@ export async function handleMobileApi(
       .then((body) => {
         const line = `${new Date().toISOString()} ${JSON.stringify(body)}\n`;
         appendFile(join(tmpdir(), "cookrew-phone-beacon.log"), line, () => undefined);
+        // A render crash on a phone (crash-report.ts): said in the dev log
+        // too, where the desktop's own crashes already land.
+        const report = body as { crash?: unknown; message?: unknown; component?: unknown };
+        if (report && report.crash === true && typeof report.message === "string") {
+          const where = typeof report.component === "string" ? report.component.split("\n").slice(0, 4).join(" ") : "";
+          console.error(`[companion] render crash: ${report.message.slice(0, 300)} — ${where.slice(0, 400)}`);
+        }
       })
       .catch(() => undefined);
     respondJson(response, 204, {});
@@ -636,6 +915,15 @@ export async function handleMobileApi(
     respondJson(response, 200, deps.workspaceShots());
     return true;
   }
+  // Terminals from an earlier macOS login: the phone says so too (TerminalSessionNotice).
+  if (method === "GET" && p === "/api/terminal-session") {
+    if (!deps.terminalSession) {
+      respondJson(response, 503, { error: "terminal session not wired" });
+      return true;
+    }
+    respondJson(response, 200, await deps.terminalSession());
+    return true;
+  }
   if (method === "POST" && p === "/api/workspaces") {
     const body = await readJson<{ name?: string; dir?: string; team?: string }>(
       request,
@@ -664,6 +952,21 @@ export async function handleMobileApi(
       200,
       ops.renameWorkspace(body.id ?? "", body.name ?? ""),
     );
+    return true;
+  }
+  if (method === "POST" && p === "/api/workspaces/brief") {
+    const body = await readJson<{ id?: string; brief?: unknown }>(request);
+    try {
+      respondJson(
+        response,
+        200,
+        ops.setWorkspaceBrief(body.id ?? "", body.brief),
+      );
+    } catch (error) {
+      respondJson(response, 400, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   }
   // Workspace v2: remove + directory management + git (mobile = text input).
@@ -807,6 +1110,9 @@ export async function handleMobileApi(
       position?: { x: number; y: number };
       orch?: boolean;
       roleName?: string;
+      prompt?: string;
+      autoName?: boolean;
+      tune?: unknown;
     }>(request);
     try {
       respondJson(response, 200, ops.createTerminal(opts));
@@ -965,6 +1271,37 @@ export async function handleMobileApi(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    return true;
+  }
+
+  // A PROMPT'S PICTURES (prompt-image.ts), one at a time, as a view scrolls
+  // to them. Below the GET gate like every read; the reader itself keeps a
+  // path inside the attach store and an image block inside the card's own
+  // session files.
+  const imageMatch = p.match(/^\/api\/terminal\/([^/]+)\/image$/);
+  if (method === "GET" && (p === "/api/image" || imageMatch)) {
+    const q = url.searchParams;
+    const ref: ImageRef | null = imageMatch
+      ? /^[A-Za-z0-9-]{1,64}$/.test(q.get("uuid") ?? "") && /^\d{1,4}$/.test(q.get("i") ?? "") && q.get("file")
+        ? { terminalId: decodeURIComponent(imageMatch[1]), file: q.get("file") as string, uuid: q.get("uuid") as string, i: Number(q.get("i")) }
+        : null
+      : q.get("path")?.startsWith("/")
+        ? { path: q.get("path") as string }
+        : null;
+    const image = ref && deps.promptImage ? await deps.promptImage.read(ref, { trusted: false }) : null;
+    if (!image) {
+      respondJson(response, 404, { error: "No such picture" });
+      return true;
+    }
+    response.writeHead(200, {
+      "content-type": image.mime,
+      "content-length": String(image.bytes.length),
+      // A picture at an address never changes: a pasted image is part of an
+      // append-only record, an attachment is never overwritten (attachments.ts).
+      "cache-control": "private, max-age=86400",
+      "x-content-type-options": "nosniff",
+    });
+    response.end(Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.length));
     return true;
   }
 
@@ -1191,7 +1528,7 @@ export async function handleMobileApi(
   }
 
   const ptyMatch = p.match(
-    /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump)$/,
+    /^\/api\/terminal\/([^/]+)\/(raw|resize|stream|jump|seed)$/,
   );
   if (ptyMatch) {
     const terminalId = ptyMatch[1];
@@ -1211,31 +1548,75 @@ export async function handleMobileApi(
       return true;
     }
     const session = ptys.get(terminalId);
-    if (!session) {
-      if (openingStream) deps.releaseTerminalView?.(terminalId);
-      respondJson(response, 404, { error: "Terminal not running" });
-      return true;
-    }
     if (method === "POST" && ptyMatch[2] === "raw") {
-      const body = await readJson<{ data?: string }>(request);
+      const body = await readJson<{ data?: string; id?: string }>(request);
       if (typeof body.data === "string") {
+        const data = body.data;
         // /raw is a producer (Sol r7 P0-2): its bytes can be a prompt plus
         // Enter, so they go through THE submit primitive — classified,
         // leased across paste+CR when submit-capable, ordinarily guarded
         // when not. A refusal is a 409 the caller can act on, never a
         // silently dropped write followed by an ok:true.
-        const verdict = await ownerSubmit(session, body.data);
+        //
+        // An agent that is offline (or still waking) takes the keys too:
+        // the first wakes it, and they are typed once it is up. Answered at
+        // once, so the phone's deadline never runs out on a boot.
+        //
+        // A batch the phone sent again after getting no answer carries the
+        // same id, and is typed once (once-by-key.ts).
+        const submit = async (): Promise<RawVerdict> =>
+          deps.holdInput?.(terminalId, data) === true
+            ? { ok: true, submitted: false }
+            : session
+              ? ownerSubmit(session, data)
+              : null;
+        const verdict =
+          typeof body.id === "string" && BATCH_ID.test(body.id)
+            ? await rawInputOnce(`${terminalId}:${body.id}`, submit)
+            : await submit();
+        if (verdict === null) {
+          respondJson(response, 404, { error: "Terminal not running" });
+          return true;
+        }
         if (!verdict.ok) {
           respondJson(response, 409, { error: verdict.reason });
           return true;
         }
+      } else if (!session) {
+        respondJson(response, 404, { error: "Terminal not running" });
+        return true;
       }
       respondJson(response, 200, { ok: true });
+      return true;
+    }
+    if (!session) {
+      if (openingStream) deps.releaseTerminalView?.(terminalId);
+      respondJson(response, 404, { error: "Terminal not running" });
       return true;
     }
     if (method === "POST" && ptyMatch[2] === "resize") {
       const body = await readJson<{ cols?: number; rows?: number }>(request);
       if (body.cols && body.rows) session.resize(body.cols, body.rows);
+      respondJson(response, 200, { ok: true });
+      return true;
+    }
+    // History for ONE viewer's live terminal (PtySession.seedFrame): sent down
+    // that viewer's own stream, named by the id its hello carried, so it lands
+    // in order with the deltas and costs no other viewer a byte.
+    if (method === "POST" && ptyMatch[2] === "seed") {
+      const body = await readJson<{ nonce?: unknown; lines?: unknown; stream?: unknown }>(request, 4096);
+      const nonce = typeof body.nonce === "string" && /^[A-Za-z0-9-]{1,64}$/.test(body.nonce) ? body.nonce : null;
+      const target = typeof body.stream === "string" ? seedStreams.get(body.stream) : undefined;
+      if (!nonce || !target || target.terminalId !== terminalId) {
+        respondJson(response, 200, { ok: false });
+        return true;
+      }
+      const frame = await session.seedFrame(Number(body.lines) || 0, nonce);
+      if (frame === null) {
+        respondJson(response, 200, { ok: false });
+        return true;
+      }
+      target.send("data", frame);
       respondJson(response, 200, { ok: true });
       return true;
     }
@@ -1257,13 +1638,21 @@ export async function handleMobileApi(
       // the client knows the mirror's size gets re-wrapped, and herdr's
       // absolute-addressed deltas then land in the wrong cells. Announcing the
       // size first lets the client size its grid BEFORE any byte arrives.
-      send("hello", session.geometry());
+      // The stream's own name, for a seed meant for this viewer alone.
+      const streamId = randomUUID();
+      seedStreams.set(streamId, { terminalId, send });
+      send("hello", { ...session.geometry(), stream: streamId });
       // A faithful ANSI frame, not plain text — see PtySession.replayFrame.
       send("data", session.replayFrame());
       const onData = (data: string): void => send("data", data);
       // Geometry changed: the server re-serialized at the new size. Applying
       // it verbatim is what keeps this viewer's addressing valid.
-      const onReplay = (frame: string): void => send("data", frame);
+      // The NEW size before the new frame, as on attach: another viewer resized
+      // the shared pane, and this one must not keep painting at the old size.
+      const onReplay = (frame: string): void => {
+        send("hello", { ...session.geometry(), stream: streamId, resized: true });
+        send("data", frame);
+      };
       const onExit = (): void => send("exit", {});
       session.on("data", onData);
       session.on("replay", onReplay);
@@ -1271,6 +1660,7 @@ export async function handleMobileApi(
       // Keepalive is startSse's job — see mobile-http.ts. Writing to the
       // response here would land plaintext inside the gzip stream.
       request.on("close", () => {
+        seedStreams.delete(streamId);
         session.removeListener("data", onData);
         session.removeListener("replay", onReplay);
         session.removeListener("exit", onExit);
@@ -1292,7 +1682,7 @@ export async function handleMobileApi(
       respondJson(response, 503, { error: "Sous is not listening on this desktop" });
       return true;
     }
-    const body = await readJson<{ text?: string; surface?: string; callerId?: string }>(request);
+    const body = await readJson<{ text?: string; surface?: string; callerId?: string; box?: boolean }>(request);
     const text = (body.text ?? "").trim();
     if (!text) {
       respondJson(response, 400, { error: "Missing text" });
@@ -1317,13 +1707,93 @@ export async function handleMobileApi(
       typeof body.callerId === "string" && body.callerId.trim() !== ""
         ? body.callerId.trim().slice(0, 64)
         : (request.socket.remoteAddress ?? "unknown");
-    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId });
+    // `box: true` is the phone's bar; voice-gateway and anything else keep the regex core.
+    const result = await deps.sous.handle({ text, surface: body.surface as SousSurface, callerId, box: body.box === true });
     respondJson(response, 200, result);
+    return true;
+  }
+
+  if (method === "GET" && p === "/api/inbox") {
+    // Task text for every workspace, like the board: gated the same way.
+    if (deps.pairingToken && !canRead) {
+      respondJson(response, 401, { error: "Unauthorized — the inbox requires a pairing or read-only token." });
+      return true;
+    }
+    // The WALL reads only kind, card and waited-for: no reasons, no question
+    // text, no brief, no proposal (HP contract).
+    const rows = deps.inbox?.() ?? [];
+    respondJson(response, 200, { rows: hasPairing || !deps.pairingToken ? rows : wallProjection(rows) });
+    return true;
+  }
+
+  if (method === "POST" && /^\/api\/inbox\/[^/]+\/(?:act|dismiss)$/.test(p)) {
+    const [, , , id, verb] = p.split("/");
+    if (verb === "act") {
+      if (!deps.inboxAct) {
+        respondJson(response, 503, { error: "this desktop cannot retry from the inbox" });
+        return true;
+      }
+      const out = await deps.inboxAct(decodeURIComponent(id));
+      respondJson(response, out.ok ? 200 : 409, out);
+      return true;
+    }
+    if (!deps.inboxDismiss) {
+      respondJson(response, 503, { error: "this desktop cannot dismiss inbox rows" });
+      return true;
+    }
+    const dismissed = deps.inboxDismiss(decodeURIComponent(id));
+    respondJson(response, dismissed ? 200 : 404, { ok: dismissed, dismissed });
+    return true;
+  }
+
+  if (method === "POST" && p === "/api/sous/commit") {
+    if (!deps.sous?.commit) {
+      respondJson(response, 503, { error: "Sous does not decide on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ token?: string; target?: string; surface?: string; callerId?: string; ack?: string }>(request);
+    if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
+      respondJson(response, 400, { error: "Missing token" });
+      return true;
+    }
+    const choice = {
+      ...(typeof body.target === "string" && body.target.length <= 128 ? { target: body.target } : {}),
+      ...(body.ack === "send-anyway" ? { ack: "send-anyway" as const } : {}),
+    };
+    const result = await deps.sous.commit(body.token, choice, sousCaller(body));
+    // A choice that was never shown is a bad request; another caller's token
+    // is not theirs; a commit already landing is a conflict; a spent or stale
+    // token is gone.
+    const status =
+      result.error === "bad-target" ? 400 : result.error === "not-yours" ? 403 : result.error === "in-flight" ? 409 : result.error === "expired" ? 410 : result.error === "needs-ack" ? 428 : 200;
+    respondJson(response, status, result);
+    return true;
+  }
+
+  if (method === "POST" && p === "/api/sous/cancel") {
+    if (!deps.sous?.cancel) {
+      respondJson(response, 503, { error: "Sous does not decide on this desktop" });
+      return true;
+    }
+    const body = await readJson<{ token?: string; surface?: string; callerId?: string }>(request);
+    if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 64) {
+      respondJson(response, 400, { error: "Missing token" });
+      return true;
+    }
+    respondJson(response, 200, { cancelled: deps.sous.cancel(body.token, sousCaller(body)) });
     return true;
   }
 
   if (method === "GET" && p === "/api/events") {
     const send = startSse(response);
+    // ONE close listener for the whole stream. Every source below hands its
+    // teardown here; eleven `request.on("close")` calls on one request were
+    // what Node kept reporting as a MaxListeners leak.
+    const teardown: Array<() => void> = [];
+    const onClose = (off: () => void): void => void teardown.push(off);
+    request.on("close", () => {
+      for (const off of teardown) off();
+    });
     // The opening workspace snapshot is skipped ONCE per boot: the client
     // says `?boot=<nonce>` (remote-api sharedEvents) because it is fetching
     // /api/workspace at this very moment, and the same document twice is the
@@ -1334,13 +1804,20 @@ export async function handleMobileApi(
     // kilobyte, and the switcher's source of truth (perf lane L7).
     if (!spendBootNonce(url.searchParams.get("boot"))) send("workspace", scopedState());
     send("workspaces", ops.listWorkspaces());
+    // WHICH BUILD THIS IS: the page reloads itself when it changes (build-watch.ts).
+    if (deps.build) {
+      send("build", { id: deps.build.id() });
+      const onBuild = (id: string): void => send("build", { id });
+      deps.build.bus.on("build", onBuild);
+      onClose(() => deps.build?.bus.removeListener("build", onBuild));
+    }
     // Sous's zoom / zoom-back, so the phone and the TV follow the owner's
     // voice. A scoped stream only hears about its own canvas.
     const onUi = (event: UiCommandEvent): void => {
       if (scope === null || event.workspaceId === scope) send("ui", event);
     };
     deps.uiBus?.on("command", onUi);
-    request.on("close", () => deps.uiBus?.removeListener("command", onUi));
+    onClose(() => deps.uiBus?.removeListener("command", onUi));
     // Activities are keyed by terminal id across every workspace, so a scoped
     // stream filters them or it leaks other canvases' agents into this one.
     const inScopedCanvas = (terminalId: string): boolean =>
@@ -1351,14 +1828,63 @@ export async function handleMobileApi(
       if (inScopedCanvas(row.terminalId)) send("tuning", row);
     };
     deps.tuningBus?.on("tuning", onTuning);
-    request.on("close", () => deps.tuningBus?.removeListener("tuning", onTuning));
+    onClose(() => deps.tuningBus?.removeListener("tuning", onTuning));
+    // The inbox rides the same stream, under the board's read gate; the
+    // opening frame is the list as it stands, so a phone never polls for it.
+    // The roster rides it too, one changed entry per frame, as /api/agents
+    // serves it (agent-registry onChange): a page never refetches the list.
+    // Optional-called: a server embedding a bare roster (tests, older hosts) just has no frames.
+    const offAgent = deps.agents?.onChange?.((entry) => send("agent", entry));
+    if (offAgent) onClose(offAgent);
+    if (deps.inbox && (!deps.pairingToken || canRead)) {
+      // A read-only (wall) token sees the projection only (HP contract).
+      const project = (rows: InboxRow[]): unknown => (hasPairing || !deps.pairingToken ? rows : wallProjection(rows));
+      const onInbox = (rows: InboxRow[]): void => send("inbox", { rows: project(rows) });
+      // The stream HOLDS the list open; the opening frame is built on demand.
+      const release = deps.inboxHold?.() ?? null;
+      send("inbox", { rows: project(deps.inbox()) });
+      deps.inboxBus?.on("inbox", onInbox);
+      onClose(() => {
+        deps.inboxBus?.removeListener("inbox", onInbox);
+        release?.();
+      });
+    }
     // A cable lit on this canvas. Either end on it is enough: the other end
     // may be a tab naming an agent elsewhere, and the tab is the lamp.
+    if (hasPairing || !deps.pairingToken) {
+      const onSous = (frame: unknown): void => send("sous", frame);
+      deps.sousBus?.on("sous", onSous);
+      onClose(() => deps.sousBus?.removeListener("sous", onSous));
+    }
     const onSignal = (signal: CableSignal): void => {
       if (inScopedCanvas(signal.from) || inScopedCanvas(signal.to)) send("signal", signal);
     };
     const offSignal = deps.signalBus?.on(onSignal) ?? null;
-    request.on("close", () => offSignal?.());
+    onClose(() => offSignal?.());
+    const onUse = (signal: UseSignal): void => {
+      if (inScopedCanvas(signal.agent) || inScopedCanvas(signal.card)) send("use", signal);
+    };
+    const offUse = deps.useBus?.on(onUse) ?? null;
+    onClose(() => offUse?.());
+    // The route: the whole state on change (debounced by the service), one
+    // card's state when its decision or turn facts land. The stream holds the
+    // gateway's clock open while it is, so a phone watching sees a probe.
+    const onRoute = (state: RouteState): void => send("route", state);
+    const onCardRoute = (row: { terminalId: string }): void => {
+      if (inScopedCanvas(row.terminalId)) send("card-route", row);
+    };
+    deps.routeBus?.on("route", onRoute);
+    deps.routeBus?.on("card-route", onCardRoute);
+    const releaseRoute = deps.route?.hold() ?? null;
+    onClose(() => {
+      deps.routeBus?.removeListener("route", onRoute);
+      deps.routeBus?.removeListener("card-route", onCardRoute);
+      releaseRoute?.();
+    });
+    // The Mac's addresses moved and the zone knows the new names: look now.
+    const onReach = (): void => send("reach", { at: Date.now() });
+    deps.reachBus?.on("changed", onReach);
+    onClose(() => deps.reachBus?.removeListener("changed", onReach));
     for (const activity of turns.list()) {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);
@@ -1457,7 +1983,7 @@ export async function handleMobileApi(
       store.on("change", onBoardSignal);
       store.on("workspaces", onBoardSignal);
     }
-    request.on("close", () => {
+    onClose(() => {
       // Symmetric with the attach above — an unremoved scoped listener is a
       // leak per disconnected phone, and phones disconnect constantly.
       if (scope === null) {
@@ -1482,8 +2008,11 @@ export async function handleMobileApi(
   // Observability queries (metrics/history panel) + global agent roster.
   if (method === "GET" && p === "/api/events/query") {
     const q = parseEventQuery(url.searchParams);
+    // The wall (read-only token) sees that a secret was read, never which:
+    // the names are the owner's.
+    const events = deps.events.query(q);
     respondJson(response, 200, {
-      events: deps.events.query(q),
+      events: hasPairing ? events : events.map(redactSecretDetails),
       counts: deps.events.count(q),
     });
     return true;

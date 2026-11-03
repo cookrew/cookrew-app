@@ -13,6 +13,16 @@ import { buildAgentRows, checkpointWanted, type AgentRow as Row } from './agent-
 import { useStreamTails } from './stream/use-stream-tails'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
+import { itemCorpus, searchItems, type BoardItem, type ItemHit } from './item-search'
+import {
+  KIND_ORDER,
+  KIND_WORDS,
+  foundWords,
+  kindCounts,
+  searchEntries,
+  type BoardKind,
+  type SearchEntry,
+} from './board-sections'
 import type { TurnMatch } from '../../shared/turn-search'
 import {
   EMPTY_FILTER,
@@ -63,6 +73,8 @@ export function RosterPanel({
   onEditingChange,
   onClose,
   onOpenGrants,
+  query: queryProp,
+  onQueryChange,
   variant = 'modal',
 }: {
   /** Opens WHO CAN CALL — the next step after an agent becomes exportable. */
@@ -93,8 +105,13 @@ export function RosterPanel({
    * `view` fills the stage as one of the two main views, where the header's
    * switch is what leaves it — so there is no scrim to dismiss and no ✕, which
    * would otherwise be a second, differently-shaped way out of the same place.
+   * `popover` drops under the header's search box (BoardSearch.tsx), which owns
+   * the query, Esc and the outside click, so the panel draws no field of its own.
    */
-  variant?: 'modal' | 'view'
+  variant?: 'modal' | 'view' | 'popover'
+  /** The search, CONTROLLED by the header's box in the popover. Absent → local. */
+  query?: string
+  onQueryChange?: (query: string) => void
 }): React.JSX.Element {
   const roster = useRoster()
   const { zoomToNode, jumpToNode } = useCanvasUi()
@@ -111,7 +128,10 @@ export function RosterPanel({
   const [phoneRowLimit, setPhoneRowLimit] = useState(PHONE_BOARD_PAGE_SIZE)
   const eventLimit = boardEventLimit(phoneWindowed)
   const [selected, setSelected] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
+  const [localQuery, setLocalQuery] = useState('')
+  const query = queryProp ?? localQuery
+  const setQuery = onQueryChange ?? setLocalQuery
+  const popover = variant === 'popover'
   /** Edit mode: rows become checkboxes and the footer becomes team actions. */
   const [localEditing, setLocalEditing] = useState(false)
   const editing = editingProp ?? localEditing
@@ -166,9 +186,15 @@ export function RosterPanel({
   // a crew the canvas shows mid-sentence.
   const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
   const checkpoints = useStreamTails(idle)
+  // The brief lives on the card (TerminalNodeData.brief), not in the registry.
+  const briefs = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const n of workspace?.nodes ?? []) if (n.kind === 'terminal' && n.brief) out[n.id] = n.brief
+    return out
+  }, [workspace])
   const all = useMemo(
-    () => buildAgentRows({ roster, activities, checkpoints, now, changedAt }),
-    [roster, activities, checkpoints, now, changedAt],
+    () => buildAgentRows({ roster, activities, checkpoints, now, changedAt, briefs }),
+    [roster, activities, checkpoints, now, changedAt, briefs],
   )
   // Facet TAGS speak for the CURRENT workspace only — a wall of every
   // workspace's presets/roles was noise; the list itself stays global.
@@ -204,20 +230,30 @@ export function RosterPanel({
   // source its canvas card uses: a note's content from the workspace state
   // (what NoteNode renders), a browser's snapshot from the shared `thumbs`
   // record (what BrowserNode shows). Three kinds — never one mechanical
-  // template. Search narrows by name, url, or note content.
-  const elements = useMemo(() => {
-    if (!workspace) return []
-    const q = query.trim().toLowerCase()
-    return workspace.nodes
-      .filter((n) => n.kind !== 'terminal')
-      .filter(
-        (n) =>
-          q.length === 0 ||
-          n.name.toLowerCase().includes(q) ||
-          (n.kind === 'browser' && (n as BrowserNodeData).url.toLowerCase().includes(q)) ||
-          (n.kind === 'note' && (n as NoteNodeData).content.toLowerCase().includes(q)),
-      )
-  }, [workspace, query])
+  // template.
+  const elements = useMemo(
+    () => (workspace ? (workspace.nodes.filter((n) => n.kind !== 'terminal') as BoardItem[]) : []),
+    [workspace],
+  )
+  // Search ranks them by name, page title, site, any tab's address or a
+  // note's body (item-search.ts). The corpus is lowercased once per workspace
+  // state, and only while a search is up — never per keystroke, never at rest.
+  const corpus = useMemo(() => (searching && workspace ? itemCorpus(workspace.nodes) : null), [searching, workspace])
+  const itemHits = useMemo(() => (corpus ? searchItems(corpus, query) : []), [corpus, query])
+  /** Which kind the results show: ALL is a few of each, a kind is all of it. */
+  const [pickedKind, setKind] = useState<BoardKind>('all')
+  useEffect(() => {
+    if (!searching) setKind('all')
+  }, [searching])
+  const counts = useMemo(() => kindCounts(results, itemHits), [results, itemHits])
+  // A picked kind holds while the query is refined, until it finds none of
+  // that kind: then the results show ALL rather than an empty list.
+  const kind: BoardKind = pickedKind !== 'all' && counts[pickedKind] === 0 ? 'all' : pickedKind
+  const searchList = useRef<HTMLDivElement>(null)
+  const pickKind = (next: BoardKind): void => {
+    setKind(next)
+    searchList.current?.scrollTo({ top: 0 })
+  }
   /**
    * The grant roster — ONE read for the whole list, shared by every row, so
    * "who can call this" stays legible at rest without forty IPC round trips.
@@ -288,6 +324,8 @@ export function RosterPanel({
   }
 
   useEffect(() => {
+    // The popover's Esc belongs to its search box, which clears before it closes.
+    if (popover) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.stopPropagation()
@@ -296,7 +334,7 @@ export function RosterPanel({
     }
     window.addEventListener('keydown', onKey, { capture: true })
     return () => window.removeEventListener('keydown', onKey, { capture: true })
-  }, [onClose])
+  }, [onClose, popover])
 
   // Auto-dismiss the recover toast.
   useEffect(() => {
@@ -438,7 +476,7 @@ export function RosterPanel({
     onClose()
   }
 
-  const renderElement = (node: (typeof elements)[number]): React.JSX.Element =>
+  const renderElement = ({ node, snippet }: ItemHit): React.JSX.Element =>
     node.kind === 'note' ? (
       <NoteRow
         key={node.id}
@@ -446,6 +484,7 @@ export function RosterPanel({
         workspaceName={workspace?.name ?? ''}
         selected={editing ? picked.has(node.id) : selected === node.id}
         selectable={editing}
+        match={snippet}
         onOpen={openElement}
       />
     ) : (
@@ -456,6 +495,7 @@ export function RosterPanel({
         workspaceName={workspace?.name ?? ''}
         selected={editing ? picked.has(node.id) : selected === node.id}
         selectable={editing}
+        match={snippet}
         onOpen={openElement}
       />
     )
@@ -482,23 +522,42 @@ export function RosterPanel({
     />
   )
 
-  type BoardEntry =
-    | { kind: 'agent'; row: Row }
-    | { kind: 'element'; node: NoteNodeData | BrowserNodeData }
-  const boardEntries: BoardEntry[] = [
-    ...(searching ? results : live).map((row): BoardEntry => ({ kind: 'agent', row })),
-    ...elements.map((node): BoardEntry => ({ kind: 'element', node })),
-    ...(!searching && showQuiet
-      ? quiet.map((row): BoardEntry => ({ kind: 'agent', row }))
-      : []),
-  ]
+  type BoardEntry = SearchEntry<Row>
+  // Searching: sections by kind (board-sections.ts). At rest: the live crew,
+  // then the workspace's browsers and notes, then the quiet behind a row.
+  const boardEntries: BoardEntry[] = searching
+    ? searchEntries(results, itemHits, kind)
+    : [
+        ...live.map((row): BoardEntry => ({ kind: 'agent', row })),
+        ...elements.map((node): BoardEntry => ({ kind: 'element', hit: { node, score: 0, snippet: null } })),
+        ...(showQuiet ? quiet.map((row): BoardEntry => ({ kind: 'agent', row })) : []),
+      ]
   const boardWindow = phoneBoardWindow(boardEntries, phoneRowLimit, phoneWindowed)
-  const renderEntry = (entry: BoardEntry): React.JSX.Element =>
-    entry.kind === 'agent' ? renderRow(entry.row) : renderElement(entry.node)
+  const renderEntry = (entry: BoardEntry): React.JSX.Element => {
+    switch (entry.kind) {
+      case 'agent':
+        return renderRow(entry.row)
+      case 'element':
+        return renderElement(entry.hit)
+      case 'head':
+        return (
+          <div key={`head:${entry.of}`} className="roster-kind-head" role="presentation">
+            <span>{KIND_WORDS[entry.of].many}</span>
+            <span className="roster-kind-count">{entry.count}</span>
+          </div>
+        )
+      case 'more':
+        return (
+          <button key={`more:${entry.of}`} type="button" className="roster-kind-more" onClick={() => pickKind(entry.of)}>
+            All {entry.count} {KIND_WORDS[entry.of].many} →
+          </button>
+        )
+    }
+  }
 
-  // A new query/facet starts at the top of its own result set. Board remounts
-  // reset naturally because this state belongs to the Board surface.
-  useEffect(() => setPhoneRowLimit(PHONE_BOARD_PAGE_SIZE), [query, filter])
+  // A new query/facet/kind starts at the top of its own result set. Board
+  // remounts reset naturally because this state belongs to the Board surface.
+  useEffect(() => setPhoneRowLimit(PHONE_BOARD_PAGE_SIZE), [query, filter, kind])
 
   const showMore = (): void => {
     setPhoneRowLimit((current) => nextPhoneBoardLimit(boardEntries.length, current))
@@ -515,11 +574,11 @@ export function RosterPanel({
 
   return (
     <div
-      className={variant === 'view' ? 'roster-view' : 'tf-scrim'}
-      onClick={variant === 'view' ? undefined : onClose}
+      className={variant === 'view' ? 'roster-view' : popover ? 'roster-pop' : 'tf-scrim'}
+      onClick={variant === 'modal' ? onClose : undefined}
     >
       <div
-        className="tf-panel roster-panel"
+        className={`tf-panel roster-panel${popover ? ' popover' : ''}`}
         onClick={(e) => e.stopPropagation()}
         onFocusCapture={(e) => {
           if ((e.target as Element).closest?.('.roster-search, .roster-facets')) setSearchHot(true)
@@ -534,13 +593,24 @@ export function RosterPanel({
           <span className="tf-title">BOARD</span>
           <span className="roster-count">
             {searching
-              ? `${results.length} of ${roster.length}`
+              ? foundWords(counts)
               : `${activeCount} active · ${roster.length} total`}
           </span>
           {/* Search ranks the crew by anything you remember — who they are, or
               what was said. It lives in the header's top-right and never grabs
               focus on its own: opening BOARD lands on the roster. Conversation
               text covers the LOADED workspace only. */}
+          {popover ? (
+            <button
+              type="button"
+              className={`cr-btn sm${editing ? ' primary' : ''}`}
+              aria-pressed={editing}
+              title={editing ? 'Done selecting' : 'Select agents to fork into a team'}
+              onClick={() => setEditing(!editing)}
+            >
+              {editing ? 'DONE' : 'SELECT'}
+            </button>
+          ) : (
           <div className="roster-search">
             <CrIcon name="search" />
             <input
@@ -562,6 +632,7 @@ export function RosterPanel({
               </button>
             )}
           </div>
+          )}
           {variant === 'modal' && (
             <button className="cr-btn sm icon tf-close" title="Close" onClick={onClose}>
               <CrIcon name="close" />
@@ -582,18 +653,42 @@ export function RosterPanel({
             while the search field is hot; at rest, only the chips that are
             ON — a list narrowed by something you cannot see is a list that
             looks short for no reason. */}
-        {(searchHot || filterActive(filter)) && (
+        {/* The popover IS the hot search: its box is focused to open it. */}
+        {(searchHot || popover || filterActive(filter)) && (
           <FacetBar facets={facets} filter={filter} atRest={!searchHot} onChange={setFilter} />
+        )}
+
+        {/* What the search found, by kind: ALL is a few of each, a chip is all of one. */}
+        {searching && results.length + itemHits.length > 0 && (
+          <div className="roster-kinds" role="tablist" aria-label="Show">
+            {(['all', ...KIND_ORDER] as const)
+              .filter((k) => k === 'all' || counts[k] > 0)
+              .map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  role="tab"
+                  aria-selected={kind === k}
+                  className={`roster-kind${kind === k ? ' on' : ''}`}
+                  onClick={() => pickKind(k)}
+                >
+                  {k === 'all' ? 'All' : KIND_WORDS[k].many}
+                  <span className="roster-kind-count">
+                    {k === 'all' ? results.length + itemHits.length : counts[k]}
+                  </span>
+                </button>
+              ))}
+          </div>
         )}
 
         {roster.length === 0 && elements.length === 0 ? (
           <div className="tf-role-note">No agents yet.</div>
         ) : searching ? (
-          <div className="roster-list">
-            {results.length === 0 && elements.length === 0 ? (
+          <div className="roster-list" ref={searchList}>
+            {results.length === 0 && itemHits.length === 0 ? (
               <div className="tf-role-note">
-                Nothing matches “{query.trim()}” — in any agent's name, current task, or checkpoint
-                history.
+                Nothing matches “{query.trim()}” — in any agent's name, current task or checkpoint
+                history, or in this workspace's browsers and notes.
               </div>
             ) : (
               boardWindow.visible.map(renderEntry)
@@ -632,7 +727,9 @@ export function RosterPanel({
           <div className="roster-edit-bar">
             <span className="roster-edit-count">{picked.size} SELECTED</span>
             <span className="roster-edit-spacer" />
-            {typeof cookrew().teamClipSet === 'function' && (
+            {/* COPY/CUT stage for the canvas's paste, and the canvas is
+                retired: the popover offers only what still lands somewhere. */}
+            {!popover && typeof cookrew().teamClipSet === 'function' && (
               <>
                 <button
                   className="cr-btn sm"

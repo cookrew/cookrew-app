@@ -23,10 +23,10 @@ import { loadOrCreatePairingToken, rotatePairingToken } from './pairing-token'
 import type { VersionPinRecord } from '../shared/version-pin'
 import { readTailnetAsync, type CertHosts, type TailnetIdentity } from './tailscale'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { powerSaveBlocker } from 'electron'
+import { powerSaveBlocker, screen } from 'electron'
 import type { WorkspaceStore } from './store'
-import type { RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
-import type { PtyManager } from './pty'
+import type { GitInfo, RecoverResult, RestoreResult, WorkspaceState } from '../shared/model'
+import type { PtyManager, PtySession } from './pty'
 import type { VoiceEngine } from './voice'
 import type { TurnTracker } from './turn-tracker'
 import type { TurnRecord } from '../shared/turn'
@@ -74,6 +74,29 @@ import { companionHostsOf, LOOPBACK_HOSTS } from './companion-hosts'
 import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
 import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
+import { handleLevelsRoutes } from './levels/routes'
+import { levelsServiceFor, prewarmLevels, type LevelsMountOptions } from './levels/mount'
+import { readMachineDisplay } from './machine-display'
+import type { LevelsService } from './levels/service'
+
+/** What the levels need from this server: its app version, and the token to scrub by value. */
+const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
+  appVersion: () => deps.appVersion?.() ?? null,
+  tokens: () => [activePairingToken ?? deps.pairingToken],
+  display: () => readMachineDisplay(() => screen)
+})
+
+/** The deps the companion server was started with: the window's zoom fleet feed shares its levels service. */
+let levelsDeps: MobileServerDeps | null = null
+
+/**
+ * This desktop's levels service — the one the companion's /api/levels routes
+ * serve — for the window's zoom navigator (zoom-fleet.ts). Null before the
+ * server starts, or when the board is not wired.
+ */
+export function localLevelsService(): LevelsService | null {
+  return levelsDeps ? levelsServiceFor(levelsDeps, levelsOptions(levelsDeps)) : null
+}
 
 // Re-exported so existing importers keep their import path; the constants
 // themselves live in an Electron-free module so pure code can use them.
@@ -149,7 +172,18 @@ const powerBlockerId: { current: number | null } = { current: null }
 
 export interface MobileServerDeps {
   store: WorkspaceStore
+  /** The app's version for the levels snapshot; injected so this listener never imports electron's app. */
+  appVersion?: () => string
   ptys: PtyManager
+  /**
+   * Bring back an agent that is not running — slept by the idle sweep or
+   * offline for any other reason (agent-wake.ts) — resolving with its session
+   * once it is ready for input; undefined when it is no terminal card or would
+   * not start. Absent (tests, embedders): a missing PTY stays a 404.
+   */
+  wakeAgent?: (terminalId: string) => Promise<PtySession | undefined>
+  /** Keys for an offline or waking agent, held until it is up (agent-wake.ts · hold). */
+  holdInput?: (terminalId: string, data: string) => boolean
   voice: VoiceEngine
   turns: TurnTracker
   /** Observability event log + agent roster (mobile query endpoints). */
@@ -164,12 +198,21 @@ export interface MobileServerDeps {
   tuningBus?: MobileApiDeps['tuningBus']
   /** Signals on the cables (cable-signal.ts) — passed straight through to the /api/events stream. */
   signalBus?: MobileApiDeps['signalBus']
+  /** Agents acting on cards (use-signal-bus.ts) — passed straight through to /api/events. */
+  useBus?: MobileApiDeps['useBus']
+  /** The route program's endpoints and stream frames — see MobileApiDeps; passed through as-is. */
+  route?: MobileApiDeps['route']
+  routeBus?: MobileApiDeps['routeBus']
+  /** 'changed' when the registry took a different reach card — the phone re-races on it. */
+  reachBus?: MobileApiDeps['reachBus']
   /** The one stream (T2) — passed straight through to handleMobileApi, which
    *  serves /stream* from it and, behind COOKREW_STREAM_ADAPTERS, the five
    *  old routes as well. Absent = the new routes 503, the old ones unchanged. */
   stream?: MobileApiDeps['stream']
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
+  /** STRATA: a cwd's git answer if already cached, never a query (levels detail's node.git). */
+  gitPeek?: (dir: string) => GitInfo | undefined
   /** Event-loop health (loop-health.ts); absent = /api/health answers 503. */
   health?: () => LoopHealthSnapshot
   /** Importing a served team from the phone (mobile-api ServeOps). */
@@ -199,11 +242,28 @@ export interface MobileServerDeps {
   ) => Promise<boolean>
   /** Version pins (§10) for the rail's third marker class; absent = []. */
   listPins?: (terminalId: string) => readonly VersionPinRecord[]
+  /** The sealed slots — passed straight through; names only ever leave. */
+  secrets?: MobileApiDeps['secrets']
+  /** The Mac's WebRTC end (rtc-peer.ts) — passed straight through. */
+  rtc?: MobileApiDeps['rtc']
+  /** The browser card's socket over plain HTTP (socket-bridge.ts) — passed straight through. */
+  socketBridge?: MobileApiDeps['socketBridge']
+  /** The build this Mac serves — passed straight through. */
+  build?: MobileApiDeps['build']
   /** Sous's door and its `ui` bus — see MobileApiDeps; passed through as-is. */
   sous?: MobileApiDeps['sous']
   uiBus?: MobileApiDeps['uiBus']
+  /** The HITL inbox (R3) — see MobileApiDeps; passed through as-is. */
+  inbox?: MobileApiDeps['inbox']
+  inboxHold?: MobileApiDeps['inboxHold']
+  inboxBus?: MobileApiDeps['inboxBus']
+  inboxAct?: MobileApiDeps['inboxAct']
+  inboxDismiss?: MobileApiDeps['inboxDismiss']
+  sousBus?: MobileApiDeps['sousBus']
   /** The screen wall's pictures for the phone — see MobileApiDeps; passed through as-is. */
   workspaceShots?: MobileApiDeps['workspaceShots']
+  /** Whether the terminals' herdr server predates this macOS login — see MobileApiDeps; passed through as-is. */
+  terminalSession?: MobileApiDeps['terminalSession']
   /**
    * Where the reach publisher stands with the registry (reach.ts · state).
    * Absent reads as "never accepted", which withholds the trusted names —
@@ -217,6 +277,8 @@ export interface MobileServerDeps {
   presets: readonly { name: string; command: string }[]
   /** Persist a phone-uploaded attachment; returns its absolute path. */
   saveAttachment: (name: string, data: Buffer) => string
+  /** A prompt's pictures, read as a view scrolls to them — see MobileApiDeps; passed through as-is. */
+  promptImage?: MobileApiDeps['promptImage']
   /** Latest card frame for a browser, whichever owner produced it. */
   browserThumb: (browserId: string) => ThumbFrame | undefined
   /** Whether browser nodes are backed by the node-owned headless runtime. */
@@ -311,6 +373,9 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (!powerBlockerId.current) {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
+  // STRATA: the first levels build at idle, not on the first shell's request.
+  levelsDeps = deps
+  prewarmLevels(deps, levelsOptions(deps))
 
   // C1: resolve the pairing token BEFORE any route can run — every mutating
   // route on this server requires it (see handleMobileApi's gate). The
@@ -481,25 +546,41 @@ const TAILNET_WATCH_MS = 60_000
  * already connected is not knocked off to fix one that is not yet.
  */
 function watchTailnetCert(secure: https.Server): void {
+  secureServer = secure
   const refresh = (): void => {
-    void refreshTailnetNow(true)
-      .then((tailnet) => {
-        const hosts = advertisedCertHosts(tailnet)
-        const missing = missingHosts(certSans, hosts)
-        if (missing.length === 0) return
-        const reissued = ensureCert(hosts)
-        if (!reissued) return
-        certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
-        activeCertFp = certFingerprint(reissued.cert)
-        secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
-        console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
-      })
-      .catch((error) => console.error('Tailscale certificate refresh failed:', error))
+    void refreshMobileCert().catch((error) =>
+      console.error('Tailscale certificate refresh failed:', error)
+    )
   }
   // Fill the cold cache immediately, but outside the startup call stack.
   refresh()
   const timer = setInterval(refresh, TAILNET_WATCH_MS)
   timer.unref()
+}
+
+/** The running TLS listener, once there is one; the cert is swapped on it. */
+let secureServer: https.Server | null = null
+
+/**
+ * Re-read the tailnet and the interfaces NOW and re-issue the self-signed
+ * certificate if an advertised host is missing from it. The clock above calls
+ * this every minute; a network change (index.ts · network watch) calls it the
+ * moment it is noticed, so a phone that probes the new bare address seconds
+ * later meets a certificate that names it. No-op before the listener is up.
+ */
+export async function refreshMobileCert(): Promise<void> {
+  const secure = secureServer
+  if (!secure) return
+  const tailnet = await refreshTailnetNow(true)
+  const hosts = advertisedCertHosts(tailnet)
+  const missing = missingHosts(certSans, hosts)
+  if (missing.length === 0) return
+  const reissued = ensureCert(hosts)
+  if (!reissued) return
+  certSans = sansOf(new X509Certificate(reissued.cert).subjectAltName)
+  activeCertFp = certFingerprint(reissued.cert)
+  secure.setSecureContext({ key: reissued.key, cert: reissued.cert })
+  console.error(`Mobile cert reissued for ${missing.join(', ')} — no restart needed`)
 }
 
 /**
@@ -585,6 +666,18 @@ function refreshTailnetNow(force = false): Promise<TailnetIdentity | null> {
     })
   tailnetCache.refreshing = pending
   return pending
+}
+
+/**
+ * THE ADDRESSES AS THEY ARE, WITHOUT ASKING TAILSCALE. The network watch
+ * (index.ts) reads this every few seconds; going through `cachedTailnet()`
+ * there would fork `tailscale status` every fifteen seconds for the life of
+ * the app. The interfaces are one syscall; the tailnet is whatever the
+ * minute clocks (watchTailnetCert, the reach publisher) last read, which is
+ * exactly as fresh as the card they publish.
+ */
+export function advertisedHostsNow(): string[] {
+  return [...localAddresses(), ...(tailnetCache.value?.ips ?? [])]
 }
 
 /**
@@ -874,7 +967,7 @@ window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
   const viewport = document.querySelector('meta[name="viewport"]')
-  if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content')
+  if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-visual')
 })
 </script>`
 
@@ -904,6 +997,7 @@ const STATIC_MIME: Record<string, string> = {
   '.css': 'text/css',
   '.map': 'application/json',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
@@ -1349,6 +1443,16 @@ export async function handle(
   recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
+  // STRATA: the levels (src/main/levels). Below the /api GET gate, and asking
+  // for the PAIRING scope on top of it: the wall token reads no note bodies.
+  if (
+    handleLevelsRoutes(request, response, url, {
+      service: () => levelsServiceFor(deps, levelsOptions(deps)),
+      paired: (req, u) => !authed.pairingToken || authed.companionGate(presentedToken(req, u))
+    })
+  )
+    return
+
   // MOVED BELOW THE DELEGATION, and that is the whole change to it.
   //
   // It used to answer ABOVE handleMobileApi, which meant it was the one /api
@@ -1572,7 +1676,9 @@ export async function handle(
 
   const inputMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/)
   if (request.method === 'POST' && inputMatch) {
-    const session = deps.ptys.get(inputMatch[1])
+    // An offline agent is woken (resumed on its session) rather than refused;
+    // one still waking is waited for, so the words never beat its boot.
+    const session = deps.wakeAgent ? await deps.wakeAgent(inputMatch[1]) : deps.ptys.get(inputMatch[1])
     if (!session) {
       respondJson(response, 404, { error: 'Terminal not running' })
       return

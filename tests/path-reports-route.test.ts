@@ -296,3 +296,51 @@ describe('the gate these two routes sit behind', () => {
     })
   })
 })
+
+describe('the probes a phone reports beside its attempts', () => {
+  it('are read, bounded, and spelled on the line', async () => {
+    const { readPathReport, pathReportLine } = await import('../src/main/path-reports')
+    const report = readPathReport(
+      {
+        plane: 'RELAY',
+        permission: 'unsupported',
+        browser: 'Safari 26',
+        attempts: [{ name: '192.168.2.40:8643', outcome: 'timeout', ms: 2501 }],
+        probes: [
+          { kind: 'socket', name: '192-168-2-40.x.d.cookrew.dev:8643', outcome: 'answered', ms: 41 },
+          { kind: 'image', name: '192-168-2-40.x.d.cookrew.dev:8643', outcome: 'timeout', ms: 2500 },
+          { kind: 'bogus', name: 'n', outcome: 'answered', ms: 1 },
+          { kind: 'opaque', name: '', outcome: 'answered', ms: 1 }
+        ]
+      },
+      1_000
+    )
+    expect(report?.probes).toEqual([
+      { kind: 'socket', name: '192-168-2-40.x.d.cookrew.dev:8643', outcome: 'answered', ms: 41 },
+      { kind: 'image', name: '192-168-2-40.x.d.cookrew.dev:8643', outcome: 'timeout', ms: 2500 }
+    ])
+    expect(pathReportLine({ ...report!, receivedAt: 1_000, device: 'iPhone' })).toContain(
+      'probes socket answered 41ms, image timeout 2500ms'
+    )
+  })
+
+  it('are absent, not empty, when the phone sent none', async () => {
+    const { readPathReport } = await import('../src/main/path-reports')
+    const report = readPathReport(
+      { plane: 'RELAY', permission: 'unsupported', browser: 'Safari 26', attempts: [] },
+      1_000
+    )
+    expect(report && 'probes' in report).toBe(false)
+  })
+})
+
+describe('who ran the page', () => {
+  it('is kept as one of two words and spelled on the line; anything else is dropped', async () => {
+    const { readPathReport, pathReportLine } = await import('../src/main/path-reports')
+    const base = { plane: 'RELAY', permission: 'unsupported', browser: 'Safari 26', attempts: [] }
+    const standalone = readPathReport({ ...base, context: 'standalone' }, 1_000)
+    expect(standalone?.context).toBe('standalone')
+    expect(pathReportLine({ ...standalone!, receivedAt: 1_000, device: 'iPhone' })).toContain('· standalone')
+    expect(readPathReport({ ...base, context: 'kiosk' }, 1_000)?.context).toBeUndefined()
+  })
+})

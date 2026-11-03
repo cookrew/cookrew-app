@@ -1,11 +1,11 @@
 import { AgentAvatar } from './nodes/AgentAvatar'
+import { inkStatusOfRow } from './zoom/ink-status'
 import { DialTag } from './nodes/DialTag'
 import type { AgentExportState } from './grant-state'
 import { TurnView } from './nodes/TurnView'
 import { RoleAvatar } from './nodes/RoleAvatar'
 import type { AgentPhase, AgentRow as Row } from './agent-rows'
 import type { TurnMatch } from '../../shared/turn-search'
-import type { TurnPhase } from '../../shared/turn'
 
 /**
  * One agent in the sidebar. The SAME field set the canvas card shows
@@ -23,15 +23,6 @@ const PHASE_LABEL: Record<AgentPhase, string> = {
   done: 'DONE',
   offline: 'OFFLINE',
   quiet: 'QUIET',
-}
-
-/** The avatar speaks TurnPhase; the row speaks AgentPhase. */
-const AVATAR_PHASE: Record<AgentPhase, TurnPhase> = {
-  working: 'thinking',
-  waiting: 'waiting',
-  done: 'replied',
-  offline: 'idle',
-  quiet: 'idle',
 }
 
 function agoLabel(since: number, now: number): string {
@@ -120,7 +111,7 @@ export function AgentRow({
         {row.role ? (
           <RoleAvatar name={row.role} className="ags-role-avatar" />
         ) : (
-          <AgentAvatar phase={AVATAR_PHASE[row.phase]} preset={row.preset} />
+          <AgentAvatar id={row.id} orch={row.orch} status={inkStatusOfRow(row.phase, row.unread)} preset={row.preset} />
         )}
       </span>
 
@@ -136,6 +127,11 @@ export function AgentRow({
           </span>
           {!row.active && <span className="cr-chip">INACTIVE</span>}
         </span>
+        {row.brief && (
+          <span className="cr-brief ags-brief" title={row.brief}>
+            {row.brief}
+          </span>
+        )}
 
         {/* Revealed by width, never by a mode switch (see agent-sidebar.css).
             The turn block is the SAME component the canvas card renders. */}

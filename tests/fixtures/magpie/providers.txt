@@ -1,0 +1,5 @@
+  Ollama       ollama  localhost:11434    ● no key needed                           4 of 4 models · fetched 2m ago     
+  Claude Code  claude  api.anthropic.com  ● signed in as [redacted]  17 of 17 models · fetched 16m ago  
+  Codex        codex   chatgpt.com        ● signed in as [redacted] · Team     7 of 7 models · fetched 16m ago    
+
+  WorkBuddy AI is signed in but not offered: You removed it from magpie. · magpie provider add workbuddy-ai brings it back

@@ -1,0 +1,65 @@
+/* ---- THE STAGE (StageView.tsx) ----
+   One card, the whole width, on the paper. The side columns are retired:
+   the agents and the browsers and notes ride over every page as pets
+   (pets/), and the stage keeps a bed along its bottom for them. */
+.cr-stage-view {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  background: var(--cream);
+  overflow: hidden;
+}
+
+.cr-stage-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--cream-hi);
+}
+
+/* A containing block: the overlay's fixed position counts from here. */
+.cr-stage-term {
+  position: absolute;
+  inset: 0;
+  contain: layout paint;
+}
+
+/* The stage's terminal is the page, not a card on it: no frame (owner,
+   2026-10-31). The canvas keeps its card's frame. */
+.cr-stage-term .lod-overlay {
+  border: 0;
+}
+
+.cr-stage-wait {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* A browser or note picked on the left, full size in the middle. */
+.stg-item-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stg-item-pane .attach-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 0;
+}
+
+/* The pets stand down the sides OVER the stage, which keeps its full width
+   (the owner, 2026-10-31: no narrowing). The transcript is a chat in a
+   centred reading column, so on a wide screen they float over its margin. */
+.cr-stage-view.bedded {
+  padding: 0;
+}

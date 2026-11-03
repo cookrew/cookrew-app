@@ -6,7 +6,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import process from 'node:process'
 
@@ -43,7 +43,11 @@ const socketPath =
   readSocketPointer() ??
   path.join(tmpdir(), 'cookrew-runtime', 'cookrew.sock')
 
-const { cmd, args, flags } = parseArgv(process.argv.slice(2))
+// Everything after `--` is the exec command and never a flag or an arg.
+const argvAll = process.argv.slice(2)
+const dashDash = argvAll.indexOf('--')
+const tail = dashDash === -1 ? [] : argvAll.slice(dashDash + 1)
+const { cmd, args, flags } = parseArgv(dashDash === -1 ? argvAll : argvAll.slice(0, dashDash))
 if (!cmd) fail("No command given. Run 'cookrew help'.")
 
 /**
@@ -133,6 +137,14 @@ function parseArgv(argv) {
 // sessionId is a CLAIM the app verifies against its own bindings, not a
 // replacement for terminalId: when the two disagree the binding wins, and when
 // the session is unknown the env value stands.
+// `cookrew secret exec <name> -- <command…>`: everything after `--` is the
+// command, run HERE with the value in its env as COOKREW_SECRET_<NAME>. The
+// app answers the value once over the socket; it is never written to this
+// pane, so it never reaches the scrollback, the transcript or the wall.
+const execTail = cmd === 'secret' && args[0] === 'exec' ? tail : null
+if (execTail !== null && execTail.length === 0) {
+  fail('usage: cookrew secret exec <name> -- <command…>', 1)
+}
 const request = { id: randomUUID(), terminalId, sessionId: ancestorSessionId(), cmd, args, flags }
 
 // `cookrew mobile` also renders a QR code locally for the returned URL.
@@ -158,6 +170,17 @@ socket.on('data', (chunk) => {
     return
   }
   if (response.ok) {
+    if (execTail !== null) {
+      socket.end()
+      const envName = `COOKREW_SECRET_${String(args[1] ?? '').toUpperCase().replace(/-/g, '_')}`
+      const child = spawn(execTail[0], execTail.slice(1), {
+        stdio: 'inherit',
+        env: { ...process.env, [envName]: response.output ?? '' }
+      })
+      child.on('error', (error) => fail(`${execTail[0]}: ${error.message}`, 127))
+      child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)))
+      return
+    }
     if (response.output) process.stdout.write(response.output + '\n')
     socket.end()
     if (wantQr && response.output) {

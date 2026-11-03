@@ -11,7 +11,6 @@
 // unannotated, one for a refusal that happened both ways.
 
 import { describe, expect, it } from 'vitest'
-import { attemptSentence } from '../src/renderer/src/path-copy'
 import { reportedAttempts } from '../src/renderer/src/path/report'
 import { readPathReport } from '../src/main/path-reports'
 import {
@@ -28,39 +27,6 @@ const DEVICE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
 const CGNAT = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
 const RELAY: DataPlane = { origin: '', kind: 'relay' }
-
-describe('the sentence a row says', () => {
-  it('is unchanged when nothing about the hint is news', () => {
-    expect(attemptSentence({ outcome: 'answered', ms: 6 })).toBe('answered in 6 ms')
-    expect(attemptSentence({ outcome: 'answered', ms: 6, hint: 'local' })).toBe('answered in 6 ms')
-    expect(attemptSentence({ outcome: 'blocked', ms: 32 })).toBe(
-      'refused by the browser before connecting — 32 ms'
-    )
-  })
-
-  it('names the proxy when the answer only arrived without the annotation', () => {
-    expect(attemptSentence({ outcome: 'answered', ms: 41, hint: 'none' })).toBe(
-      'answered (without the local-network hint — a proxy hides the address) in 41 ms'
-    )
-  })
-
-  it('says BOTH ways when the browser refused it with and without', () => {
-    // The difference between "go and allow this in your site settings" and
-    // "there is nothing to allow; the proxy is the reason".
-    expect(attemptSentence({ outcome: 'blocked', ms: 32, hint: 'none' })).toBe(
-      'refused by the browser before connecting (with and without the hint) — 32 ms'
-    )
-  })
-
-  it('invents no words for the outcomes the hint cannot explain', () => {
-    expect(attemptSentence({ outcome: 'timeout', ms: 800, hint: 'none' })).toBe(
-      'timed out (800 ms)'
-    )
-    expect(attemptSentence({ outcome: 'network', ms: 240, hint: 'none' })).toBe(
-      'could not connect (DNS, certificate or network) — 240 ms'
-    )
-  })
-})
 
 describe('the row a race writes', () => {
   const rowsFor = async (
@@ -101,7 +67,6 @@ describe('the row a race writes', () => {
   it('says nothing about a LAN answer that came back the ordinary way', async () => {
     const [row] = await rowsFor(LAN, answered('local'))
     expect(row.hint).toBe('local')
-    expect(attemptSentence(row)).not.toContain('proxy')
   })
 
   it('says nothing at all about an address no browser ever annotates', async () => {
@@ -110,7 +75,6 @@ describe('the row a race writes', () => {
     // proxy would invent a fact.
     const [row] = await rowsFor(CGNAT, answered('none'))
     expect(row.hint).toBeUndefined()
-    expect(attemptSentence(row)).toBe(attemptSentence({ outcome: 'answered', ms: row.ms }))
   })
 
   it('marks a refusal that happened with AND without the annotation', async () => {

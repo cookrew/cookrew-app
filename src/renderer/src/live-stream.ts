@@ -43,9 +43,26 @@ export interface ReconnectingStreamDeps {
   cancel?: (handle: unknown) => void
   /** Delay before each successive retry; the last value repeats. */
   backoffMs?: readonly number[]
+  /**
+   * A restart onto a new plane could not open its stream there, while the
+   * old one is still carrying the session. Evidence about the NEW plane
+   * (plane-health.ts counts it), never a reason to show the link as down.
+   */
+  onSwitchFailed?: () => void
 }
 
-const DEFAULT_BACKOFF = [1000, 2000, 5000, 10_000, 15_000] as const
+// Capped at 8 s: a phone that changed networks pays at most that before its
+// stream is back, and a successful request revives a waiting stream at once
+// (plane-streams.ts · reviveStreams).
+const DEFAULT_BACKOFF = [1000, 2000, 4000, 8000, 8000] as const
+
+/**
+ * A switch completes when the new stream DELIVERS, not when it connects. On a
+ * tailnet through a slow Tailscale relay the headers came back and the data
+ * never did — a black terminal under a TAILNET badge (2026-10-18). A new
+ * stream that has said nothing within this long is a failed switch.
+ */
+export const SWITCH_PROVE_MS = 8_000
 
 type Listener = (event: MessageEvent) => void
 
@@ -56,6 +73,12 @@ type Listener = (event: MessageEvent) => void
  */
 export class ReconnectingStream {
   private source: EventStreamLike | null = null
+  /** The stream opening on a new plane while the old one still carries the session. */
+  private pending: EventStreamLike | null = null
+  private pendingRetry = 0
+  private pendingTimer: unknown = null
+  /** The listeners watching the pending stream for its first event, by type. */
+  private pendingProbes: [string, (event: MessageEvent) => void][] = []
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly onError: Listener
   private readonly onOpen: Listener
@@ -129,13 +152,98 @@ export class ReconnectingStream {
   restart(): void {
     if (this.closed) return
     this.retry = 0
-    this.connect()
+    // MAKE BEFORE BREAK. A live stream keeps carrying the session until the
+    // new one has opened; tearing it down first left a phone switching onto
+    // a slow tailnet with no stream at all for as long as the handshake took
+    // — and with none at all when the new path did not open.
+    if (!this.alive || this.listeners.size === 0) return this.connect()
+    this.openPending()
+  }
+
+  private unwatchPending(pending: EventStreamLike): void {
+    pending.removeEventListener('error', this.onPendingError)
+    for (const [type, probe] of this.pendingProbes) pending.removeEventListener(type, probe)
+    this.pendingProbes = []
+    if (this.pendingTimer !== null) this.cancel(this.pendingTimer)
+    this.pendingTimer = null
+  }
+
+  private dropPending(): void {
+    const pending = this.pending
+    if (!pending) return
+    this.pending = null
+    this.unwatchPending(pending)
+    pending.close()
+  }
+
+  private openPending(): void {
+    this.dropPending()
+    if (this.timer !== null) {
+      this.cancel(this.timer)
+      this.timer = null
+    }
+    const pending = this.deps.open()
+    this.pending = pending
+    pending.addEventListener('error', this.onPendingError)
+    // The first event of any kind this stream carries — or the Mac's beat —
+    // proves the path delivers. It is handed on, so nothing is lost.
+    for (const type of new Set([...this.listeners.keys(), 'hb'])) {
+      const probe = (event: MessageEvent): void => this.takeOver(event, type)
+      this.pendingProbes.push([type, probe])
+      pending.addEventListener(type, probe)
+    }
+    this.pendingTimer = this.schedule(() => {
+      this.pendingTimer = null
+      if (this.pending !== pending) return
+      this.dropPending()
+      this.switchFailed()
+    }, SWITCH_PROVE_MS)
+  }
+
+  /** The new stream delivered: it takes over, and the old one is closed. */
+  private takeOver(first: MessageEvent, type: string): void {
+    const next = this.pending
+    if (!next) return
+    this.pending = null
+    this.unwatchPending(next)
+    this.detach()
+    this.source?.close()
+    this.source = next
+    next.addEventListener('error', this.onError)
+    next.addEventListener('open', this.onOpen)
+    for (const [type, set] of this.listeners) {
+      for (const listener of set) next.addEventListener(type, listener)
+    }
+    this.retry = 0
+    this.pendingRetry = 0
+    this.deps.onState?.('live')
+    for (const listener of this.listeners.get(type) ?? []) listener(first)
+  }
+
+  /** The new plane would not open: keep the old stream, say so, try again. */
+  private readonly onPendingError = (): void => {
+    const pending = this.pending
+    if (!pending || pending.readyState !== STREAM_CLOSED) return
+    this.dropPending()
+    this.switchFailed()
+  }
+
+  private switchFailed(): void {
+    this.deps.onSwitchFailed?.()
+    if (!this.alive) return this.connect()
+    const wait = this.backoff[Math.min(this.pendingRetry, this.backoff.length - 1)]
+    this.pendingRetry += 1
+    this.timer = this.schedule(() => {
+      this.timer = null
+      if (!this.closed) this.restart()
+    }, wait)
   }
 
   close(): void {
     this.closed = true
     if (this.timer !== null) this.cancel(this.timer)
     this.timer = null
+    this.dropPending()
     this.detach()
     this.source?.close()
     this.source = null
@@ -150,6 +258,7 @@ export class ReconnectingStream {
       this.cancel(this.timer)
       this.timer = null
     }
+    this.dropPending()
     this.detach()
     this.source?.close()
     const source = this.deps.open()

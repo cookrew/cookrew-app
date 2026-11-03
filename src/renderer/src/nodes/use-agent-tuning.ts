@@ -38,6 +38,8 @@ export interface TuningControls {
   turn: (knob: TuneKnob, value: string) => void
   /** Why the last turn was refused; cleared by the next attempt. */
   error: string | null
+  /** Main's choices for the route knob (direct, groups, models), or null when it listed none. */
+  routeChoices: readonly string[] | null
 }
 
 export function useAgentTuning(input: {
@@ -114,5 +116,5 @@ export function useAgentTuning(input: {
     [terminalId, read, stopChase]
   )
 
-  return { view: tuneRailView({ state, phase, remote }), open, setOpen, turn, error }
+  return { view: tuneRailView({ state, phase, remote }), open, setOpen, turn, error, routeChoices: state?.choices?.route ?? null }
 }

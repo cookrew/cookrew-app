@@ -322,3 +322,18 @@ describe('the HTTP oracle reads the same zone', () => {
     expect(lookupName(respond, `192-168-1-24.${MAC}.${ZONE}`)).toEqual({ live: false })
   })
 })
+
+describe('how long a resolver may keep an address', () => {
+  it('long: a name ENCODES its address, so a cached answer can never point at the wrong machine', () => {
+    // The old 60 s was written as if the record could go stale ("a Mac
+    // changing Wi-Fi must not be wrong for longer"). It cannot: a Mac that
+    // changes Wi-Fi gets a NEW name, and 192-168-2-40.<id> answers
+    // 192.168.2.40 or nothing, forever. What a short TTL actually did was
+    // make every probe a cold lookup — the phone races once a minute, the
+    // record expired in between, and a cold chain from the phone's ISP to
+    // this zone cost more than the probe's deadline (2026-10-11).
+    expect(ADDRESS_TTL).toBeGreaterThanOrEqual(3600)
+    // "No" stays short: a name that does not exist yet is about to.
+    expect(NEGATIVE_TTL).toBeLessThanOrEqual(60)
+  })
+})

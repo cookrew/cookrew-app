@@ -93,11 +93,17 @@ export interface CanvasBridge {
 }
 
 export interface CanvasBridgeDeps {
-  /** Frames going up. canvas-link's `send`. */
-  readonly send: (line: string) => void
+  /** Frames going up. canvas-link's `send`; the frame itself, for a sender that sorts them. */
+  readonly send: (line: string, frame: RelayFrame) => void
   readonly dial?: BridgeDialer
   readonly maxOpen?: number
   readonly log?: (message: string) => void
+  /**
+   * Raw bytes per `chunk` frame. The relay's line takes 384 KB; a WebRTC data
+   * channel to Safari does not take a message that large, so the direct link
+   * (rtc-peer.ts) asks for less.
+   */
+  readonly chunk?: number
 }
 
 /**
@@ -116,6 +122,16 @@ export const flattenHeaders = (headers: http.IncomingHttpHeaders): Record<string
 }
 
 /** The default: the companion's own plaintext listener, on loopback. */
+/**
+ * A path as the log may show it: never the query. Event streams carry the
+ * pairing token as `?token=` (EventSource cannot set a header), and a log line
+ * is a file anyone with the disk can read.
+ */
+export const loggedPath = (path: string): string => {
+  const cut = path.indexOf('?')
+  return cut === -1 ? path : `${path.slice(0, cut)}?…`
+}
+
 export const loopbackDialer =
   (port: number, host: string = BRIDGE_HOST): BridgeDialer =>
   (input, onResponse, onError) => {
@@ -167,6 +183,7 @@ interface Exchange {
 export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   const dial = deps.dial ?? loopbackDialer(8639)
   const maxOpen = deps.maxOpen ?? BRIDGE_MAX_OPEN
+  const chunkBytes = deps.chunk ?? BRIDGE_CHUNK
   const log = deps.log ?? ((): void => undefined)
 
   /** Requests whose body is still arriving. */
@@ -174,7 +191,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   /** Local calls in flight, so the caller hanging up stops the desktop working. */
   const calls = new Map<string, BridgeCall>()
 
-  const send = (frame: RelayFrame): void => deps.send(encodeFrame(frame))
+  const send = (frame: RelayFrame): void => deps.send(encodeFrame(frame), frame)
 
   const abort = (id: string, reason: string): void => {
     arriving.delete(id)
@@ -191,13 +208,16 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
   const answer = (id: string, exchange: Exchange): void => {
     const seal = exchange.sealed === undefined ? {} : { sealed: exchange.sealed }
     let ended = false
+    /** Set when the answer is over on its head and its local call must be let go. */
+    let discard = false
+    let call: BridgeCall | null = null
     const end = (): void => {
       if (ended) return
       ended = true
       calls.delete(id)
       send({ t: 'end', id })
     }
-    const call = dial(
+    const dialed = dial(
       { method: exchange.method, path: exchange.path, headers: exchange.headers },
       (response) => {
         send({ t: 'head', id, status: response.status, headers: response.headers, ...seal })
@@ -208,17 +228,28 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
         // for 120 s until sixteen of them shut the door (`too_many_exchanges`).
         if (bodiless(response.status)) {
           end()
+          // And the LOCAL call is over too. A response nobody reads never
+          // emits `end`, so the http client never hands its socket back and
+          // the server never arms its keep-alive clock: measured 2026-11-01 as
+          // 124 loopback sockets on each side, one pair per relayed beacon,
+          // for the life of the app. Destroyed rather than drained: draining
+          // waits on an `end` the 09-08 204 never sent. The cost is a body
+          // still unsent when the head lands, which no route has today (a
+          // beacon is one small write). A dialer that answered synchronously
+          // has no call yet; it is let go below, once its body is written.
+          discard = true
+          call?.destroy()
           return
         }
         response.onData((chunk) => {
           // ≤ 384 KB of RAW bytes per frame: a single read off a fast local
           // socket can be larger, and one oversized frame is refused by the
           // decoder at the other end rather than truncated.
-          for (let at = 0; at < chunk.byteLength; at += BRIDGE_CHUNK) {
+          for (let at = 0; at < chunk.byteLength; at += chunkBytes) {
             send({
               t: 'chunk',
               id,
-              data: chunk.subarray(at, at + BRIDGE_CHUNK).toString('base64'),
+              data: chunk.subarray(at, at + chunkBytes).toString('base64'),
               ...seal
             })
           }
@@ -231,15 +262,17 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
         if (ended) return
         // The companion failing is OURS, and it must not take the line with
         // it: one bad request would otherwise drop every other exchange.
-        log(`canvas bridge: ${exchange.method} ${exchange.path} failed: ${error.message}`)
+        log(`canvas bridge: ${exchange.method} ${loggedPath(exchange.path)} failed: ${error.message}`)
         abort(id, 'companion-failed')
       }
     )
     // A dialer that answers synchronously has ended before the call is on the
     // books; a call that is over is not in flight.
-    if (!ended) calls.set(id, call)
-    if (exchange.bytes > 0) call.write(Buffer.concat(exchange.body as Buffer[]))
-    call.end()
+    call = dialed
+    if (!ended) calls.set(id, dialed)
+    if (exchange.bytes > 0) dialed.write(Buffer.concat(exchange.body as Buffer[]))
+    dialed.end()
+    if (discard) dialed.destroy()
   }
 
   return {
@@ -259,7 +292,7 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
       switch (frame.t) {
         case 'open': {
           if (arriving.size + calls.size >= maxOpen) {
-            log(`canvas bridge: refused ${frame.path}, ${maxOpen} exchanges already open`)
+            log(`canvas bridge: refused ${loggedPath(frame.path)}, ${maxOpen} exchanges already open`)
             send({ t: 'abort', id: frame.id, reason: 'busy' })
             return
           }

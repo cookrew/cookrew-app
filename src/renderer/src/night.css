@@ -1,0 +1,180 @@
+/* ---- NIGHT (color-scheme.ts) ----
+   The companion follows the phone's dark mode; the desktop app stays paper
+   (`data-scheme="light"`, never matched here). The same paper, at night: the
+   tokens every rule already draws with get their dark values, so a card, a
+   column and the transcript change together rather than one rule at a time.
+
+   What a token flip cannot get right is written out below, and only that:
+   text on a BRIGHT accent (amber, green) keeps dark ink, because `--ink` is
+   the light colour now; and the few literal colours picked for paper. */
+
+:root[data-scheme='light'] {
+  color-scheme: light;
+}
+
+/* Says the page has a dark scheme, so a browser's forced darkening (Samsung
+   Internet, Chrome's auto dark) leaves it alone. */
+:root[data-scheme='auto'] {
+  color-scheme: light dark;
+  /* Text on a bright accent, whichever scheme. */
+  --on-accent: #2d2a20;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-scheme='auto'] {
+    --cream: #16140f;
+    --cream-hi: #1d1a14;
+    --cream-md: #25221b;
+    --cream-lo: #2d2921;
+    --ink: #ece5d3;
+    --ink-soft: #d8c695;
+    --muted: #a19887;
+    --dim: #6f6859;
+    --line: #6f6857;
+    --line-soft: #37322a;
+    --amber-soft: #3b3212;
+    --amber-deep: #f0a32a;
+    --rose: #f26d6d;
+    --violet-hi: #4a3f6e;
+    --note-bg: #3b3313;
+    --note-text: #efe5c2;
+  }
+
+  /* Dark ink on every bright accent fill (night-scheme.test.ts keeps this
+     list in step with the sheets: a new amber or green fill must be added). */
+  :root[data-scheme='auto'] :is(
+    .ags-mark,
+    .ags-recover-coin,
+    .ags-tick.on,
+    .attach-tab.on,
+    .browser-tabs-pill.on,
+    .canvas-visual-toggle.mode-agents,
+    .card-pick.on,
+    .cr-acct-avatar,
+    .cr-btn.icon.on,
+    .cr-btn.on,
+    .cr-btn.primary,
+    .cr-chip-live,
+    .cr-chip.amber,
+    .cr-chip.cr-serving-badge,
+    .cr-chip.done,
+    .cr-chip.role.amber,
+    .cr-chip.sel,
+    .cr-ckpt-action.rewind.armed,
+    .cr-ckpt-here,
+    .cr-ckpt-row.active .cr-ckpt-dot i,
+    .cr-ckpt-tick,
+    .cr-ckpt-tick.rewind,
+    .cr-fn-stage,
+    .cr-git-dirty,
+    .cr-led,
+    .cr-led.busy,
+    .cr-more-item.on,
+    .cr-path-relay .cr-path-dot,
+    .cr-routing-btn.primary,
+    .cr-routing-entry.online .cr-routing-lamp,
+    .cr-routing-pick.on,
+    .cr-routing-status.online .cr-routing-lamp,
+    .cr-routing-tick.btn,
+    .cr-sheet .gs-primary,
+    .cr-viewseg button[aria-pressed='true'],
+    .cr-ws-create,
+    .cr-pet-card-send,
+    .cr-wsw-actions button.primary,
+    .door-moved-b.primary,
+    .event-toast-count,
+    .gk-tick.done,
+    .gk-tick.now,
+    .lod-overlay .attach-tab.on,
+    .note-header,
+    .popout-ask-live,
+    .roster-recover-coin,
+    .sos-held-b.sel,
+    .sos-opt.sel .sos-dot,
+    .stg-dot.connecting,
+    .stg-dot.live,
+    .stg-thumb-col.agents i.replied,
+    .stg-thumb-col.agents i.thinking,
+    .tf-include.on,
+    .tf-include.on:hover,
+    .voice-speak.on
+  ),
+  :root[data-scheme='auto'] :is(
+    .ags-mark,
+    .ags-recover-coin,
+    .ags-tick.on,
+    .attach-tab.on,
+    .browser-tabs-pill.on,
+    .canvas-visual-toggle.mode-agents,
+    .card-pick.on,
+    .cr-acct-avatar,
+    .cr-btn.icon.on,
+    .cr-btn.on,
+    .cr-btn.primary,
+    .cr-chip-live,
+    .cr-chip.amber,
+    .cr-chip.cr-serving-badge,
+    .cr-chip.done,
+    .cr-chip.role.amber,
+    .cr-chip.sel,
+    .cr-ckpt-action.rewind.armed,
+    .cr-ckpt-here,
+    .cr-ckpt-row.active .cr-ckpt-dot i,
+    .cr-ckpt-tick,
+    .cr-ckpt-tick.rewind,
+    .cr-fn-stage,
+    .cr-git-dirty,
+    .cr-led,
+    .cr-led.busy,
+    .cr-more-item.on,
+    .cr-path-relay .cr-path-dot,
+    .cr-routing-btn.primary,
+    .cr-routing-entry.online .cr-routing-lamp,
+    .cr-routing-pick.on,
+    .cr-routing-status.online .cr-routing-lamp,
+    .cr-routing-tick.btn,
+    .cr-sheet .gs-primary,
+    .cr-viewseg button[aria-pressed='true'],
+    .cr-ws-create,
+    .cr-pet-card-send,
+    .cr-wsw-actions button.primary,
+    .door-moved-b.primary,
+    .event-toast-count,
+    .gk-tick.done,
+    .gk-tick.now,
+    .lod-overlay .attach-tab.on,
+    .note-header,
+    .popout-ask-live,
+    .roster-recover-coin,
+    .sos-held-b.sel,
+    .sos-opt.sel .sos-dot,
+    .stg-dot.connecting,
+    .stg-dot.live,
+    .stg-thumb-col.agents i.replied,
+    .stg-thumb-col.agents i.thinking,
+    .tf-include.on,
+    .tf-include.on:hover,
+    .voice-speak.on
+  ) * {
+    color: var(--on-accent);
+  }
+
+  /* The zoomed terminal on paper (transcript-paper.css): its emphasis and
+     the LIVE seam were picked for cream. */
+  :root[data-scheme='auto'] .lod-overlay {
+    --phos-glow: #f2b544;
+  }
+
+  :root[data-scheme='auto'] .lod-overlay .ctx-live {
+    border-top-color: rgba(74, 222, 128, 0.35);
+  }
+
+  :root[data-scheme='auto'] .lod-overlay .ctx-live::before,
+  :root[data-scheme='auto'] .stg-thumb-mid.replied span {
+    color: #4ade80;
+  }
+
+  :root[data-scheme='auto'] .cr-wsw-actions button.danger {
+    color: var(--ink);
+  }
+}

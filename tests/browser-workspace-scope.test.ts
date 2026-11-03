@@ -52,7 +52,8 @@ function setup(): {
   const deps = {
     store,
     browserCommand,
-    listWorkspaces: () => store.list()
+    listWorkspaces: () => store.list(),
+    isServed: () => false
   } as unknown as SocketServerDeps
   return { store, deps, browserCommand, home, other }
 }
