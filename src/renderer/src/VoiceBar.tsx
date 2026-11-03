@@ -23,8 +23,11 @@ interface TermKey {
   /** Hold-to-repeat. Never for Escape, never for paste. */
   repeat: boolean
   action: TermKeyAction
-  /** Drawn instead of the label — the paste key has no glyph of its own. */
+  /** Drawn instead of the label: paste has no glyph of its own, and a font
+   *  draws ← → smaller than ↓ ↑ (owner's phone, 2026-11-03). */
   icon?: CrIconName
+  /** Opens a group of its own in the row (paste and Esc after the arrows). */
+  lead?: boolean
 }
 
 /**
@@ -35,16 +38,17 @@ interface TermKey {
  * owner's placement.
  */
 const TERM_KEYS: TermKey[] = [
-  { label: '←', title: 'Arrow left', repeat: true, action: { kind: 'seq', seq: '\x1b[D' } },
-  { label: '↓', title: 'Arrow down', repeat: true, action: { kind: 'seq', seq: '\x1b[B' } },
-  { label: '↑', title: 'Arrow up', repeat: true, action: { kind: 'seq', seq: '\x1b[A' } },
-  { label: '→', title: 'Arrow right', repeat: true, action: { kind: 'seq', seq: '\x1b[C' } },
+  { label: '←', title: 'Arrow left', repeat: true, action: { kind: 'seq', seq: '\x1b[D' }, icon: 'arrow-left' },
+  { label: '↓', title: 'Arrow down', repeat: true, action: { kind: 'seq', seq: '\x1b[B' }, icon: 'arrow-down' },
+  { label: '↑', title: 'Arrow up', repeat: true, action: { kind: 'seq', seq: '\x1b[A' }, icon: 'arrow-up' },
+  { label: '→', title: 'Arrow right', repeat: true, action: { kind: 'seq', seq: '\x1b[C' }, icon: 'arrow-right' },
   {
     label: 'PASTE',
     title: 'Paste from the clipboard',
     repeat: false,
     action: { kind: 'paste' },
-    icon: 'clipboard'
+    icon: 'clipboard',
+    lead: true
   },
   { label: 'ESC', title: 'Escape', repeat: false, action: { kind: 'seq', seq: '\x1b' } }
 ]
@@ -142,7 +146,7 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
         <button
           key={key.title}
           type="button"
-          className={`cr-btn sm term-key${key.icon ? ' term-key-icon' : ''}`}
+          className={`cr-btn sm term-key${key.icon ? ' term-key-icon' : ''}${key.lead ? ' term-key-lead' : ''}`}
           tabIndex={-1}
           title={key.title}
           aria-label={key.title}

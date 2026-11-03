@@ -387,6 +387,46 @@
     overflow-x: auto;
     scrollbar-width: none;
   }
+
+  /* THE KEY ROW, LAID OUT (owner, 2026-11-03). It sat right-aligned with an
+     empty left third, its keys 30px squares under the 36px mic and ⌨. Now the
+     keys share the box's width evenly in three groups, [attach speak]
+     [← ↓ ↑ →] [paste ESC], each as tall as the buttons above; capped, so the
+     two extras alone (keys folded) stay buttons at the right, not halves. */
+  body.cookrew-mobile .cr-prompt .voice-keys {
+    display: contents;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 64px;
+    width: auto;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn .cr-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* The arrows and paste are icons (VoiceBar.tsx); ESC is the one word. */
+  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key {
+    min-height: 36px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+  }
+
+  /* The groups part by a little more than the keys do. */
+  body.cookrew-mobile .cr-prompt .voice-bar:not(.keys-only) .voice-keys > :first-child {
+    margin-left: 6px;
+  }
+
+  body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key-lead {
+    margin-left: 6px;
+  }
 }
 
 /* The ＋ menu (HarnessMenu.tsx): the harnesses, then what opens at once. The
