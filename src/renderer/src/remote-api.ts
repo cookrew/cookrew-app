@@ -16,6 +16,7 @@ import type { InboxRow } from '../../shared/inbox-rank'
 import type { Alternate } from '../../shared/sous-decide'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
+import type { RenameOutcome } from '../../shared/rename-plan'
 import type { LevelsEvent } from '../../shared/strata'
 import { apiPath, clientBase } from './api-base'
 import { planeFetch } from './plane-fetch'
@@ -491,6 +492,11 @@ export function createRemoteApi(): CookrewApi {
 
     addNode: (node) => req(apiPath('/api/nodes'), 'POST', node),
     updateNode: (id, patch) => req(apiPath(`/api/nodes/${id}`), 'POST', patch),
+    // A refusal is a 400 carrying the outcome's words: answered as an outcome, as the IPC does.
+    renameNode: (id, name) =>
+      req<RenameOutcome>(apiPath(`/api/nodes/${encodeURIComponent(id)}/rename`), 'POST', { name }).catch(
+        (error: unknown): RenameOutcome => ({ ok: false, error: error instanceof Error ? error.message : String(error) })
+      ),
     removeNode: (id) => req(apiPath(`/api/nodes/${id}`), 'DELETE'),
     connectNodes: (a, b) => req(apiPath('/api/connections'), 'POST', { a, b }),
     disconnect: (connId) => req(apiPath(`/api/connections/${connId}`), 'DELETE'),

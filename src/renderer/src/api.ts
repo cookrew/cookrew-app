@@ -6,6 +6,7 @@ import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
+import type { RenameOutcome } from '../../shared/rename-plan'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { InboxRow } from '../../shared/inbox-rank'
@@ -337,6 +338,12 @@ export interface CookrewApi {
     id: string,
     patch: Partial<CanvasNode>,
   ) => Promise<CanvasNode | undefined>;
+  /**
+   * The owner's rename by hand (main/agent-rename.ts · renameByHand): the
+   * same path as `cookrew rename`. Answers a refusal (a clash, an empty
+   * name) as an outcome, never a throw; the name it pins is never Sous's.
+   */
+  renameNode: (id: string, name: string) => Promise<RenameOutcome>;
   removeNode: (id: string) => Promise<void>;
   connectNodes: (a: string, b: string) => Promise<Connection>;
   disconnect: (connId: string) => Promise<void>;

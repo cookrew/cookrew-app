@@ -77,6 +77,12 @@ export interface TerminalNodeData {
    */
   brief?: string | null
   /**
+   * Its name was chosen, not guessed (main/agent-rename.ts): set by a rename
+   * by hand, `cookrew rename` or the voice, by main alone (not patchable from
+   * a renderer or the phone). Sous never names over it.
+   */
+  nameByHand?: boolean
+  /**
    * WHAT THIS CARD WAS ADMITTED WITH — a placed orch card only.
    *
    * A caller pays once, at admission, for a session; after that the product

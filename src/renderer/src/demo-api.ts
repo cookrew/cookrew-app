@@ -10,6 +10,7 @@ import type {
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { rankInbox } from '../../shared/inbox-rank'
 import { checkBrief } from '../../shared/workspace-brief'
+import { planRename } from '../../shared/rename-plan'
 import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
 
@@ -300,6 +301,17 @@ export function createDemoApi(): CookrewApi {
       })
       if (updated) broadcast({ ...state, nodes })
       return Promise.resolve(updated)
+    },
+    // Planned as the main process plans it (shared/rename-plan.ts): a clash refused, a note's name pinned.
+    renameNode: (id, name) => {
+      const node = state.nodes.find((n) => n.id === id)
+      if (!node) return Promise.resolve({ ok: false as const, error: 'That card is not on any canvas.' })
+      const plan = planRename({ id, current: node.name, wanted: name, siblings: state.nodes, onClash: 'refuse' })
+      if (plan.ok) {
+        const pin: Partial<CanvasNode> = node.kind === 'note' ? { customName: plan.name } : node.kind === 'terminal' ? { nameByHand: true } : {}
+        broadcast({ ...state, nodes: state.nodes.map((n) => (n.id === id ? ({ ...n, name: plan.name, ...pin } as CanvasNode) : n)) })
+      }
+      return Promise.resolve(plan)
     },
     removeNode: (id) => {
       broadcast({

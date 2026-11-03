@@ -260,6 +260,7 @@ const api = {
   },
   addNode: (node: unknown) => ipcRenderer.invoke('node:add', node),
   updateNode: (id: string, patch: unknown) => ipcRenderer.invoke('node:update', id, patch),
+  renameNode: (id: string, name: string) => ipcRenderer.invoke('node:rename', id, name),
   removeNode: (id: string) => ipcRenderer.invoke('node:remove', id),
   connectNodes: (a: string, b: string) => ipcRenderer.invoke('node:connect', a, b),
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),

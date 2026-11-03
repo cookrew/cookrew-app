@@ -45,6 +45,7 @@ import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
 import { closeZoomMenu, useZoomSlots } from './zoom-bar'
+import { requestRename } from './zoom/rename-request'
 import { CardTune } from './nodes/CardTune'
 import { isNight, themeNow, useNight, useTheme } from './color-scheme'
 import { PAPER_THEME, terminalTheme } from './terminal-theme'
@@ -1277,6 +1278,18 @@ function TerminalOverlay({
             <div className="cr-more-group" role="presentation">
               {node.name}
             </div>
+            {/* Opens the name's own field in the full view's head (the phone's bar): zoom/NameEdit.tsx. */}
+            <button
+              type="button"
+              className="cr-more-item"
+              onClick={() => {
+                closeZoomMenu()
+                requestRename(node.id)
+              }}
+            >
+              <CrIcon name="note" />
+              <span className="cr-more-label">Rename</span>
+            </button>
             {/* Translate keeps ⋯ open: its language list opens from this row. */}
             <div className="cr-more-row cr-zoom-translate" role="presentation">
               <TranslateButton

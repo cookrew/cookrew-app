@@ -55,8 +55,8 @@ describe('what keeps the card open (review, 2026-11-04)', () => {
     expect(view).toContain('getDraft(draftKey(shelfCard.id)).trim()')
     expect(view).not.toContain('cardDraft')
   })
-  it('only a plain press is a tap outside; an IME or an overlay keeps its Escape', () => {
+  it('only a plain press is a tap outside; an IME, an overlay or a name being renamed keeps its Escape', () => {
     expect(card).toContain('if (e.button !== 0) return')
-    expect(view).toMatch(/shelfCardOpen\.current && !e\.isComposing && !\(e\.target as Element \| null\)\?\.closest\?\.\('\.cmd, \.cr-board-search, \.cr-board-pop'\)/)
+    expect(view).toMatch(/shelfCardOpen\.current && !e\.isComposing && !\(e\.target as Element \| null\)\?\.closest\?\.\('\.cmd, \.cr-board-search, \.cr-board-pop, \.cr-name-input'\)/)
   })
 })
