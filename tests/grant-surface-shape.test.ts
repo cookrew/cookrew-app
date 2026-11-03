@@ -72,9 +72,11 @@ const GRANT_MODULES = [path.join(MAIN, 'owner-grant.ts'), path.join(MAIN, 'agent
  * What a listener-reachable module may import from electron.
  *
  * Closed, and vouched for one at a time. `powerSaveBlocker` keeps the machine
- * awake while a call is in flight and decides nothing.
+ * awake while a call is in flight and decides nothing. `screen` is read for
+ * the primary display's size so the phone draws the machine's screen at its
+ * real proportions (readMachineDisplay) — geometry only, it decides nothing.
  */
-const ELECTRON_ALLOWED = ['powerSaveBlocker']
+const ELECTRON_ALLOWED = ['powerSaveBlocker', 'screen']
 
 function sweepTree(): Violation[] {
   return sweepGrantReach(

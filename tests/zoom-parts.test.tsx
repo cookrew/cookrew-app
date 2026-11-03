@@ -90,7 +90,8 @@ describe('an agent’s card', () => {
     expect(card).toContain('body: { x: -18, y: 32 }')
     expect(card).toContain('thumb: (k: number) => ({ x: 17 + 79 * k, y: 136 })')
     expect(card).toContain('coin: { x: -27, y: -18, s: 0.45 }')
-    for (const cls of ['zv-av', 'zv-nm', 'zv-body', 'zv-lk', 'zv-th', 'zv-coin', 'zv-reply', 'zv-del', 'zv-emp']) expect(card).toContain(cls)
+    for (const cls of ['zv-av', 'zv-nm', 'zv-body', 'zv-lk', 'zv-th', 'zv-coin', 'zv-reply', 'zv-del']) expect(card).toContain(cls)
+    expect(card).not.toContain('zv-emp')
     expect(card).not.toMatch(/className="cr-pet-card-open|className="cr-pet-card-x|\n\s*OPEN\n/)
     // The zoom card grew by the two lines it now says (zoom-frame.ts · the strip and the card).
     const frame = readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')
@@ -108,9 +109,11 @@ describe('an agent’s card', () => {
     expect(view).toContain('card={cardIds.has(a.id)}')
   })
 
-  it('says so when an agent carries nothing, and keeps the same card shape', () => {
+  // Owner, 2026-11-03: "no browser or note" is not shown.
+  it('says nothing when an agent carries nothing', () => {
     const html = renderToStaticMarkup(<AgentNode agent={agent({ browsers: 0, notes: 0 })} bind={bind} onOpen={() => undefined} />)
-    expect(html).toContain('no browser or note')
+    expect(html).not.toContain('no browser or note')
+    expect(html).not.toContain('zv-emp')
   })
 })
 

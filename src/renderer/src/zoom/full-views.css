@@ -50,9 +50,12 @@
 }
 
 /* ---- the head ---- */
+/* Never shrinks (2026-11-03): a long artifacts column squeezed it 60 -> 54 px,
+   so the sheet jumped whenever the column was hidden or the agent changed. */
 .zv-fv-head {
   position: relative;
   z-index: 2;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -146,6 +149,54 @@
 .zv-fv-arts-make {
   display: inline-flex;
   gap: 4px;
+}
+/* The head is the switch (owner, 2026-11-03): "artifacts", its count, and a
+   caret that points down while the thumbnails show and right while hidden. */
+.zv-fv-arts-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 3px 6px 3px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.zv-fv-arts-toggle:hover {
+  color: var(--fv-ink);
+}
+.zv-fv-arts-toggle:focus-visible {
+  outline: 2px solid var(--fv-seal);
+  outline-offset: 2px;
+}
+.zv-fv-arts-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 0.15s ease;
+}
+.zv-fv-arts.hidden .zv-fv-arts-caret {
+  transform: rotate(-90deg);
+}
+.zv-fv-arts-n {
+  color: var(--fv-ink);
+}
+/* Hidden: the column gives the transcript its width back and keeps only its head. */
+.zv-fv-arts.hidden {
+  flex: none;
+  padding-right: 10px;
+}
+/* None, and the make buttons in the column (no head slot): only the buttons. */
+.zv-fv-arts.empty {
+  flex: none;
 }
 
 /* ---- the head's tools, over the sheet's top-right corner (owner, 2026-11-01) ----

@@ -822,22 +822,6 @@
   color: var(--zv-ink);
 }
 
-/* The card's strip, empty: same shape as one with thumbnails. */
-.zv-emp {
-  position: absolute;
-  left: -18px;
-  top: 113px;
-  width: 228px;
-  height: 46px;
-  display: grid;
-  place-items: center;
-  border: 1.5px dashed var(--zv-hair-2);
-  border-radius: 8px;
-  font: italic 10.5px/1 var(--zv-mono);
-  color: var(--zv-muted);
-  pointer-events: none;
-  will-change: opacity;
-}
 
 .zv-reply {
   position: absolute;

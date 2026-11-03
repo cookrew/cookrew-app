@@ -240,6 +240,7 @@ import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
+import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
@@ -869,15 +870,12 @@ const servedCallers = new ServedCallers()
  * guessing from the shape of the URL.
  */
 /**
- * THE RELAY, and why it is opt-in rather than the default it will become.
- *
- * Turning this on hands a team's door to a machine we operate, and until
- * cookrew.dev is actually standing there that would be a promise the product
- * cannot keep. Configured → the card offers a cookrew.dev name; not configured
- * → everything below behaves exactly as it did, which is what keeps every
- * existing test about reach meaningful rather than merely still-passing.
+ * THE RELAY. Opt-in until cookrew.dev was standing there to keep the promise;
+ * the default since 0.4.0 (launch-defaults.ts). `COOKREW_REGISTRY=` (empty)
+ * still turns it off, and then everything below behaves as it did before —
+ * which is what keeps every existing test about reach meaningful.
  */
-const RELAY_ORIGIN = process.env.COOKREW_REGISTRY ?? ''
+const RELAY_ORIGIN = relayOrigin()
 /** COOKREW_HANDLE as the environment set it — a development override now. */
 const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
 
@@ -5453,8 +5451,12 @@ async function noteBrowserViewed(browserId: string): Promise<void> {
   }
 }
 
-const interactiveBrowserEnabled = (): boolean =>
-  process.env.COOKREW_INTERACTIVE_BROWSER === '1'
+/** Decided once per launch: on by default where a Chrome is installed (launch-defaults.ts). */
+let interactiveBrowserDecision: boolean | null = null
+const interactiveBrowserEnabled = (): boolean => {
+  interactiveBrowserDecision ??= interactiveBrowserDefault(process.env, () => findChrome() !== null)
+  return interactiveBrowserDecision
+}
 const desktopBrowserStreamToken = randomUUID()
 
 function activeBrowserNode(browserId: string): BrowserNodeData | null {

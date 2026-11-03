@@ -435,24 +435,17 @@ describe('/me as level 0', () => {
     }
   })
 
-  it('sends a signed-in reader from the front page to their fleet; a signed-out one gets the sample', async () => {
+  it('sends a signed-in reader from the front page to their fleet; a signed-out one gets the front page', async () => {
     const mine = await fetch(`${shellSite.origin}/`, { headers: { authorization: `Bearer ${token}` }, redirect: 'manual' })
     expect(mine.status).toBe(302)
     expect(mine.headers.get('location')).toBe('/me')
     expect(mine.headers.get('cache-control')).toBe('private, no-store')
     const anyone = await fetch(`${shellSite.origin}/`, { redirect: 'manual' })
     expect(anyone.status).toBe(200)
-    const sample = await anyone.text()
-    expect(sample).toContain('class="strata"')
-    // Every picture the stage shows is one the shell's bundle serves.
-    const shown = [...sample.matchAll(/<img src="(\/strata\/assets\/art\/[^"]+)"/g)].map((m) => m[1])
-    expect(shown).toHaveLength(6)
-    for (const at of shown) {
-      const res = await fetch(`${shellSite.origin}${at}`)
-      expect(res.status, at).toBe(200)
-      expect(res.headers.get('content-type'), at).toBe('image/svg+xml')
-      expect(res.headers.get('cache-control'), at).toContain('immutable')
-    }
+    // The Strata sample stage no longer leads the page (aba26768: that desktop UI was deleted) — the promo does.
+    const front = await anyone.text()
+    expect(front).not.toContain('class="strata"')
+    expect(front).toContain('promo-poster')
     // No shell deployed: /me is the account page, so the front page stays the front page, with its promo.
     const mac = await claim(site.origin, 'yarrow')
     const noShell = await fetch(`${site.origin}/`, { headers: { authorization: `Bearer ${mac.token}` }, redirect: 'manual' })
@@ -462,15 +455,12 @@ describe('/me as level 0', () => {
     expect(promo).toContain('promo-poster')
   })
 
-  it('with a shell but without --strata-me, draws only the front page’s sample: /me and a signed-in / stay as they were', async () => {
+  it('with a shell but without --strata-me, /me and a signed-in / stay as they were', async () => {
     const mac = await claim(artSite.origin, 'rue')
     const front = await fetch(`${artSite.origin}/`, { headers: { authorization: `Bearer ${mac.token}` }, redirect: 'manual' })
     expect(front.status).toBe(200)
     const anyone = await (await fetch(`${artSite.origin}/`)).text()
-    expect(anyone).toContain('class="strata"')
-    const shown = [...anyone.matchAll(/<img src="(\/strata\/assets\/art\/[^"]+)"/g)].map((m) => m[1])
-    expect(shown).toHaveLength(6)
-    for (const at of shown) expect((await fetch(`${artSite.origin}${at}`)).status, at).toBe(200)
+    expect(anyone).not.toContain('class="strata"')
     for (const at of ['/me', '/me/m1/w1']) {
       const res = await fetch(`${artSite.origin}${at}`, { headers: { authorization: `Bearer ${mac.token}` } })
       const body = await res.text()
