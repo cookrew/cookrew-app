@@ -3,6 +3,7 @@
 // a phone the hint "agents open the crew · browsers open thumbnails" ran off
 // the right edge (shots/phone-0-device.png). Names 10px or more on a desktop;
 // the hint wraps inside the screen.
+import { PHONE_TYPE } from '../src/renderer/src/zoom/scene-words'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { deviceWords, DEVICE_TEXT_PX, SWS } from '../src/renderer/src/zoom/zoom-frame'
@@ -50,11 +51,15 @@ describe('the device stop on a desktop', () => {
 describe('the device stop on a phone', () => {
   // The phone's type scale (phone-type.css, owner 2026-11-02): the 32px labels are pinned at
   // caption on screen, a little under 1:1 here, as wide as before; the open one as large as theirs.
-  it("pins the marks' labels at caption on screen (32px, 380 wide) and the open one as large", () => {
-    const words = deviceWords(deviceOf(ids(7), true), PHONE.w, PHONE.h, true)
-    expect(32 * words.markK * SWS * words.cam).toBeCloseTo(DEVICE_TEXT_PX, 3)
-    expect(words.markMax * words.markK).toBeCloseTo(380, -1)
-    expect(11 * words.openK * SWS * words.cam).toBeCloseTo(DEVICE_TEXT_PX, 3)
+  // The phone's own type (phone-type.css, 2026-11-03): its labels are drawn 1:1 on screen at the
+  // workspaces stop, cut before a neighbour's; the open one (11px type) at caption, as large.
+  it("draws the marks' labels 1:1 on screen, cut before a neighbour's, and the open one as large", () => {
+    const device = deviceOf(ids(7), true)
+    const words = deviceWords(device, PHONE.w, PHONE.h, true)
+    expect(words.markK * SWS * words.cam).toBeCloseTo(1, 6)
+    expect(words.markMax).toBeLessThan(device.dx * words.cam)
+    expect(11 * words.openK * SWS * words.cam).toBeCloseTo(PHONE_TYPE.caption, 3)
+    expect(words.titleK * words.cam).toBeCloseTo(1, 6)
   })
 
   it('ends the title and its hint inside the screen: they wrap within the device', () => {

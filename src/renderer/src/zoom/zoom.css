@@ -1621,7 +1621,7 @@
   }
 
   .zv-stops button {
-    min-height: 32px;
+    min-height: 28px;
     padding: 0 2px;
     letter-spacing: 0.04em;
   }
@@ -1641,14 +1641,14 @@
     display: inline;
   }
 
+  /* The desktop's sizes (owner, 2026-11-03: "flat icons, the same as the desktop"). */
   .zv-back {
-    width: 38px;
-    height: 38px;
+    width: 34px;
+    height: 34px;
   }
 
   .zv-stops button {
-    min-height: 38px;
-    font-size: 10.5px;
+    min-height: 28px;
   }
 
   /* Each stop as wide as its word, the rest shared (a 360px Samsung, 2026-11-03: equal
@@ -1662,10 +1662,6 @@
 /* A finger needs room; a phone must not zoom the page to type a reply (iOS
    zooms into a field under 16 px). */
 @media (pointer: coarse) {
-  .zv-stops button {
-    min-height: 40px;
-  }
-
   .zv-reply input {
     font-size: 16px;
   }
@@ -1867,18 +1863,19 @@
     padding-left: 2px;
     border-left: 0;
   }
+  /* Drawn 1:1 on screen (zoom-frame.ts · deviceWords): its type is the phone's caption. */
   .zv-mark .zv-mark-label {
-    gap: 12px;
-    max-width: 380px;
-    font-size: 32px;
+    gap: 4px;
+    max-width: 130px;
+    font-size: var(--ph-caption, 10px);
     letter-spacing: 0.04em;
   }
-  /* The seal as the open workspace's own (control on a 24 box, on screen): the label is drawn at 11 / 32. */
+  /* The seal as the open workspace's own: control on a 24 box. */
   .zv-mark .zv-mark-label .zv-seal {
-    width: calc(24px * 32 / 11);
-    height: calc(24px * 32 / 11);
-    font-size: calc(var(--ph-control, 12px) * 32 / 11);
-    line-height: calc(24px * 32 / 11);
+    width: 24px;
+    height: 24px;
+    font-size: var(--ph-control, 11px);
+    line-height: 24px;
   }
 }
 
@@ -1893,8 +1890,8 @@
     display: none;
   }
   .zv-root[data-full='true'] .zv-back {
-    width: 36px;
-    height: 36px;
+    width: 34px;
+    height: 34px;
   }
 }
 
@@ -1948,12 +1945,6 @@
   outline-offset: 2px;
 }
 
-@media (max-width: 700px) {
-  .zv-cols button {
-    width: 32px;
-    height: 32px;
-  }
-}
 
 /* A screenshot on its way into the reply (prompt/prompt-attach.ts), or why
    it did not go: in the same place as "sent ✓", held while it saves. */

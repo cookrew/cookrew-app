@@ -398,7 +398,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const stP = { x: lerp(-e.stW / 2, 30, nx) + sg.dx, y: lerp(stTop, -2, ny) + (1 - stIn) * -18 + sg.dy, k: fS }
     if (focused && into > 0) {
       const at = local(FV.line.x, FV.line.y, x, y)
-      const k = 1 / S
+      const k = live ? fS : 1 / S
       stP.x = lerp(stP.x, at.x - (e.stW / 2) * (1 - k), into)
       stP.y = lerp(stP.y, at.y - ((e.stH ?? 13) / 2) * (1 - k), into)
       stP.k = lerp(stP.k, k, into)
@@ -411,7 +411,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const cP = { x: lerp(-e.cntW / 2, 30 + (e.stW + 10) * fS, nx) + cg.dx, y: lerp(cntTop, -1, ny) + (1 - cntIn) * -10 + cg.dy, k: fS }
     if (focused && into > 0) {
       const at = local(FV.line.x + e.stW + 10, FV.line.y, x, y)
-      const k = 1 / S
+      const k = live ? fS : 1 / S
       cP.x = lerp(cP.x, at.x - (e.cntW / 2) * (1 - k), into)
       cP.y = lerp(cP.y, at.y - (11 / 2) * (1 - k), into)
       cP.k = lerp(cP.k, k, into)

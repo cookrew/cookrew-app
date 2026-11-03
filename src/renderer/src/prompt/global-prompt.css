@@ -319,14 +319,14 @@
     max-width: 45%;
   }
 
-  /* The thumb's buttons: a real tap size. Send ends the words' row; the mic
-     ends the chips' row. */
+  /* The thumb's buttons, flat as the desktop's (owner, 2026-11-03: "flat icons, the same as the desktop"). Send ends the
+     words' row; the mic ends the chips' row. */
   body.cookrew-mobile .cr-prompt .cr-prompt-more,
   body.cookrew-mobile .cr-prompt .voice-mic,
   body.cookrew-mobile .cr-prompt > button[type='submit'] {
     flex: none;
-    min-width: 44px;
-    height: 36px;
+    min-width: 36px;
+    height: 28px;
     margin-left: auto;
     justify-content: center;
   }
@@ -418,8 +418,8 @@
   body.cookrew-mobile .cr-prompt .cr-prompt-tools .cr-btn {
     flex: none;
     min-width: 0;
-    width: 34px;
-    height: 36px;
+    width: 30px;
+    height: 28px;
     padding: 0;
     justify-content: center;
   }
@@ -431,8 +431,8 @@
 
   /* The arrows and paste are icons (VoiceBar.tsx); ESC is the one word. */
   body.cookrew-mobile .cr-prompt .voice-bar .cr-btn.term-key {
-    min-height: 36px;
-    font-size: 12px;
+    min-height: 28px;
+    font-size: var(--ph-control, 11px);
     letter-spacing: 0.04em;
   }
 
@@ -747,7 +747,7 @@
     order: -1;
     flex: 1 1 0;
     min-width: 60px;
-    height: 40px;
+    height: 30px;
     padding: 0 4px 0 6px;
   }
 
@@ -762,12 +762,13 @@
   body.cookrew-mobile .cr-prompt > .voice-mic,
   body.cookrew-mobile .cr-prompt > button[type='submit'] {
     flex: none;
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
+    /* Flat, as the desktop's (owner, 2026-11-03: "flat icons, the same as the desktop"). */
+    width: 36px;
+    min-width: 36px;
+    height: 28px;
     margin: 0;
     padding: 0;
-    border-radius: 50%;
+    border-radius: 8px;
     justify-content: center;
   }
 

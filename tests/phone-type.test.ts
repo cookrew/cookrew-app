@@ -52,7 +52,8 @@ function frameAt(model: FrameModel, w: number, h: number, sv: number, narrow = t
   }
   if (seen(els.label as Part)) words.push({ what: 'label', px: 11 * scaleOf(els.label.style.transform) * S })
   const mark = markLabels[0]
-  if (seen(mark) && dS > 0) words.push({ what: 'mark', px: 32 * scaleOf(mark.style.transform) * SWS * dS })
+  // A mark's label is set in the phone's caption (zoom.css), drawn 1:1 at the workspaces stop.
+  if (seen(mark) && dS > 0) words.push({ what: 'mark', px: PHONE_TYPE.caption * scaleOf(mark.style.transform) * SWS * dS })
   return words
 }
 
@@ -79,7 +80,7 @@ describe('a phone draws every word at one size, wherever the camera is', () => {
   // The whole path, in steps finer than a frame of any zoom: devices, workspaces, the group, the crew, the card, the full view.
   const PATH = Array.from({ length: 81 }, (_, i) => -2 + i * 0.05)
 
-  it('a name is 16 and a state, a label and a mark 11 on every frame, at every pick, on three phones', () => {
+  it('a name is body and a state, a label and a mark caption on every frame, at every pick, on three phones', () => {
     const want: Record<string, number> = { name: SCENE_TYPE.name, state: SCENE_TYPE.small, label: SCENE_TYPE.small, mark: SCENE_TYPE.small }
     for (const [w, h] of PHONES) {
       for (const n of CREWS) {
