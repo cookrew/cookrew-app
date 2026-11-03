@@ -151,6 +151,8 @@ export function ownerSecretPaths(
     path.join(base, 'sous.json'),
     path.join(base, 'qwen.env'),
     path.join(base, 'stripe.env'),
+    // The Doubao voice's key (doubao-tts.ts): spoken replies, the owner's bill.
+    path.join(base, 'doubao.env'),
     // Public data, but still owner payment configuration. The fixture binds it
     // to the same served-sandbox deny as the write-only Stripe source.
     path.join(base, 'payment.json'),

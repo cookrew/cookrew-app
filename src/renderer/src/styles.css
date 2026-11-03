@@ -2818,6 +2818,23 @@ a.card-close {
   background: var(--amber);
 }
 
+/* Reading a reply aloud: the lit speaker breathes until the reading ends. */
+.voice-speak.reading {
+  animation: cr-voice-reading 1.4s ease-in-out infinite;
+}
+
+@keyframes cr-voice-reading {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-speak.reading {
+    animation: none;
+  }
+}
+
 .voice-attach.busy {
   animation: cr-blink 1s steps(2) infinite;
 }

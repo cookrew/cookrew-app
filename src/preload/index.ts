@@ -633,6 +633,17 @@ const api = {
   listenAvailable: () => ipcRenderer.invoke('listen:available'),
   listenStart: () => ipcRenderer.invoke('listen:start'),
   listenStop: () => ipcRenderer.invoke('listen:stop'),
+  // Spoken replies in the Doubao voice: main holds the key, the box gets mp3.
+  speakAvailable: () => ipcRenderer.invoke('speak:available'),
+  speakAudio: (text: string, signal?: AbortSignal) => {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    const cancel = (): void => ipcRenderer.send('speak:cancel', id)
+    signal?.addEventListener('abort', cancel, { once: true })
+    return ipcRenderer
+      .invoke('speak:audio', id, text)
+      .then((bytes: Uint8Array) => new Blob([new Uint8Array(bytes)], { type: 'audio/mpeg' }))
+      .finally(() => signal?.removeEventListener('abort', cancel))
+  },
   onListenEvent: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)
     ipcRenderer.on('listen:event', listener)

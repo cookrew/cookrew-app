@@ -80,6 +80,7 @@ import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
 import { MacListener } from './listen'
 import { hearAvailable, hearRecording } from './hear-file'
+import { createDoubaoVoice } from './doubao-tts'
 import { polishTranscript } from './sous-polish'
 import { readSousVoiceConfig } from './sous-voice-config'
 import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
@@ -6268,6 +6269,25 @@ app.whenReady().then(() => {
     recording: (bytes: Uint8Array) => hearRecording(earOptions, bytes)
   }
   ipcMain.handle('listen:available', () => listener.available())
+  // Spoken replies in the Doubao voice (doubao-tts.ts): the box asks per
+  // chunk; the key stays in main. No key, and the box uses the browser's voice.
+  const replyVoice = createDoubaoVoice()
+  ipcMain.handle('speak:available', () => replyVoice.available())
+  // Each chunk carries an id so a stopped reading can cancel it upstream.
+  const speaking = new Map<string, AbortController>()
+  ipcMain.handle('speak:audio', async (_e, id: unknown, text: unknown) => {
+    const key = typeof id === 'string' && id.length <= 64 ? id : null
+    const controller = new AbortController()
+    if (key) speaking.set(key, controller)
+    try {
+      return await replyVoice.speak(text as string, controller.signal)
+    } finally {
+      if (key) speaking.delete(key)
+    }
+  })
+  ipcMain.on('speak:cancel', (_e, id: unknown) => {
+    if (typeof id === 'string') speaking.get(id)?.abort()
+  })
   ipcMain.handle('listen:start', () =>
     listener.start((event) => mainWindow?.webContents.send('listen:event', event))
   )

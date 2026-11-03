@@ -531,6 +531,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
               onPick={attach.pickFiles}
               onBrowse={browse.open}
               speaking={spoken.on}
+              reading={spoken.reading}
               onSpeak={spoken.toggle}
             />
           )}

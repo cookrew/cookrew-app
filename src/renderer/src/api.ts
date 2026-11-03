@@ -762,6 +762,14 @@ export interface CookrewApi {
   hearAvailable?: () => Promise<boolean>;
   hearRecording?: (audio: Blob, signal?: AbortSignal) => Promise<{ text: string; alternates: Record<string, string> }>;
   /**
+   * Spoken replies in the Doubao voice (prompt/reply-voice.ts,
+   * main/doubao-tts.ts): whether this Mac has the voice set up, and one chunk
+   * of text as mp3. Absent, or not set up, and the box reads with the
+   * browser's own voice.
+   */
+  speakAvailable?: () => Promise<boolean>;
+  speakAudio?: (text: string, signal?: AbortSignal) => Promise<Blob>;
+  /**
    * A `cookrew://` link the OS handed to the app, already parsed by main —
    * one of three verbs, never a raw URL (shared/deep-link.ts).
    */
