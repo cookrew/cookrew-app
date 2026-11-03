@@ -40,6 +40,8 @@ export interface TuningControls {
   error: string | null
   /** Main's choices for the route knob (direct, groups, models), or null when it listed none. */
   routeChoices: readonly string[] | null
+  /** Main's whole answer (the reading and the asks), for the one model list (model-pick.ts). */
+  state: AgentTuningState | null
 }
 
 export function useAgentTuning(input: {
@@ -116,5 +118,5 @@ export function useAgentTuning(input: {
     [terminalId, read, stopChase]
   )
 
-  return { view: tuneRailView({ state, phase, remote }), open, setOpen, turn, error, routeChoices: state?.choices?.route ?? null }
+  return { view: tuneRailView({ state, phase, remote }), open, setOpen, turn, error, routeChoices: state?.choices?.route ?? null, state }
 }

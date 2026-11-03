@@ -6,7 +6,8 @@
 // moves its route; a direct card's alias is sent as the gateway's id.
 
 import { describe, expect, it } from 'vitest'
-import { claudeSettingsGateway, gatewayModelFor, launchPick, withGatewayModel } from '../src/main/claude-model-route'
+import { claudeSettingsGateway, gatewayModelFor, launchPick, newAgentPlan, withGatewayModel } from '../src/main/claude-model-route'
+import { launchOffer } from '../src/shared/launch-tune'
 
 // The live gateway's claude rows, in its own order.
 const CATALOG = [
@@ -84,5 +85,50 @@ describe('a pick, for where the turns go', () => {
     expect(launchPick({ command: base, knob: 'model', value: 'haiku', routed: false, catalog: CATALOG })).toEqual({
       command: `${base} --model haiku`
     })
+  })
+})
+
+describe('the one list, in main (owner 2026-11-04)', () => {
+  const base = 'claude --permission-mode bypassPermissions'
+  const levelsOf = (id: string) => (id === 'group/smart' ? ['low', 'medium', 'high'] : [])
+
+  it('routes to a gateway id and keeps the effort it runs at', () => {
+    expect(launchPick({ command: `${base} --model opus`, knob: 'model', value: 'claude/claude-sonnet-5-5', routed: false, catalog: CATALOG, effort: 'high' })).toEqual({
+      command: `${base} --effort high`,
+      route: 'claude/claude-sonnet-5-5'
+    })
+  })
+
+  it('goes direct with an alias, from a routed card', () => {
+    expect(launchPick({ command: `${base} --effort low`, knob: 'model', value: 'direct:haiku', routed: true, catalog: CATALOG })).toEqual({
+      command: `${base} --effort low --model haiku`,
+      route: 'direct'
+    })
+  })
+
+  it("lets an effort go when the new model does not take it, and refuses an id outside the catalog", () => {
+    expect(launchPick({ command: `${base} --effort max`, knob: 'model', value: 'group/smart', routed: true, catalog: CATALOG, levelsOf })).toEqual({
+      command: base,
+      route: 'group/smart'
+    })
+    expect(launchPick({ command: base, knob: 'model', value: 'nope/model-x', routed: true, catalog: CATALOG })).toEqual({ error: "not in the gateway's catalog: nope/model-x" })
+    expect(launchPick({ command: base, knob: 'model', value: 'direct:gpt', routed: true, catalog: CATALOG })).toMatchObject({ error: expect.stringMatching(/not a model/) })
+  })
+
+  it("keeps a bare alias's effort too (an older caller)", () => {
+    expect(launchPick({ command: base, knob: 'model', value: 'sonnet', routed: true, catalog: CATALOG, effort: 'xhigh' })).toEqual({
+      command: `${base} --effort xhigh`,
+      route: 'claude/claude-sonnet-5-5'
+    })
+  })
+})
+
+describe("a new agent's pick from the one list", () => {
+  const offer = launchOffer('claude')
+  it('is a route, a direct alias, or the launch line as before', () => {
+    expect(newAgentPlan({ command: 'claude', tune: { model: 'group/smart', effort: 'low' }, offer, catalog: CATALOG })).toEqual({ command: 'claude --effort low', route: 'group/smart' })
+    expect(newAgentPlan({ command: 'claude', tune: { model: 'direct:sonnet', effort: 'max' }, offer, catalog: CATALOG })).toEqual({ command: 'claude --model sonnet --effort max', route: 'direct' })
+    expect(newAgentPlan({ command: 'claude', tune: { model: 'opus' }, offer, catalog: CATALOG })).toEqual({ command: 'claude --model opus' })
+    expect(newAgentPlan({ command: 'claude', tune: { model: 'nope/x', effort: 'low' }, offer, catalog: CATALOG })).toEqual({ command: 'claude --effort low' })
   })
 })

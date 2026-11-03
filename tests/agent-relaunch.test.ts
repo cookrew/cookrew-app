@@ -277,3 +277,41 @@ describe('asks the rail should not be holding', () => {
     expect(asks.of('term-1')).toEqual([])
   })
 })
+
+describe('main takes the one list (owner 2026-11-04)', () => {
+  const CATALOG = ['group/smart', 'claude/claude-sonnet-5-5']
+  function deps(over: { effortChoices?: readonly string[] } = {}): { deps: TuneDeps; patches: unknown[] } {
+    const patches: unknown[] = []
+    return {
+      patches,
+      deps: {
+        node: () => node({ command: 'claude --effort high' }),
+        write: () => 'allow',
+        relaunch: (_id, patch) => (patches.push(patch), 'restarted'),
+        routeFor: () => ({ routed: true, catalog: CATALOG }),
+        effortChoices: () => over.effortChoices ?? null,
+        asks: new TuneAsks()
+      }
+    }
+  }
+
+  it('accepts a gateway id or a direct alias as a model pick', () => {
+    const d = deps()
+    expect(applyTuning(d.deps, 'term-1', 'model', 'group/smart').ok).toBe(true)
+    expect(applyTuning(d.deps, 'term-1', 'model', 'direct:sonnet').ok).toBe(true)
+    expect(d.patches).toEqual([
+      { command: 'claude --effort high', route: 'group/smart' },
+      { command: 'claude --effort high --model sonnet', route: 'direct' }
+    ])
+  })
+
+  it("refuses an effort the card's model does not take", () => {
+    const d = deps({ effortChoices: ['low', 'medium', 'high'] })
+    expect(applyTuning(d.deps, 'term-1', 'effort', 'max').ok).toBe(false)
+    expect(applyTuning(d.deps, 'term-1', 'effort', 'medium').ok).toBe(true)
+  })
+
+  it('lists those levels on the rail', () => {
+    expect(tuningStateOf(deps({ effortChoices: ['low', 'high'] }).deps, 'term-1').choices?.effort).toEqual(['low', 'high'])
+  })
+})

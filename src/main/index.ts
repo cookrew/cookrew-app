@@ -222,7 +222,7 @@ import {
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
-import { claudeSettingsGateway, launchPick, withGatewayModel } from './claude-model-route'
+import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -4485,11 +4485,22 @@ function turnUnseen(id: string): boolean {
   return status === 'working' || status === 'blocked'
 }
 
-/** Where a card's turns go, for a model pick: routed through the gateway (its catalog), or direct. */
-function cardRouteFor(node: TerminalNodeData): { routed: boolean; catalog: readonly string[] } {
+/** Where a card's turns go, for a model pick: routed through the gateway (its catalog and levels), or direct. */
+function cardRouteFor(node: TerminalNodeData): { routed: boolean; catalog: readonly string[]; levelsOf: (id: string) => readonly string[] } {
   const state = routeService.state()
-  if (state.status !== 'online') return { routed: false, catalog: [] }
-  return { routed: routeService.routeOf(node) !== 'direct', catalog: state.models.map((m) => m.id) }
+  const levelsOf = (id: string): readonly string[] => state.models.find((m) => m.id === id)?.levels ?? []
+  if (state.status !== 'online') return { routed: false, catalog: [], levelsOf }
+  return { routed: routeService.routeOf(node) !== 'direct', catalog: state.models.map((m) => m.id), levelsOf }
+}
+
+/** The effort levels a claude card's model takes: its route's catalog row, else null (claude's own). */
+function cardEffortChoices(id: string): readonly string[] | null {
+  const node = store.nodeAcrossWorkspaces(id)?.node
+  if (node?.kind !== 'terminal' || !isClaudeCommand(node.command)) return null
+  const where = cardRouteFor(node)
+  if (!where.routed) return null
+  const levels = where.levelsOf(routeService.routeOf(node))
+  return levels.length > 0 ? levels : null
 }
 
 /** A direct claude line, with an alias `--model` sent as the gateway's id when claude's settings route claude there. */
@@ -4518,6 +4529,21 @@ function routedNewAgent(node: TerminalNodeData): TerminalNodeData {
   if (!where.routed) return node
   const plan = launchPick({ command: node.command, knob: 'model', value: model, ...where })
   return 'route' in plan && plan.route !== undefined ? { ...node, command: plan.command, route: plan.route } : node
+}
+
+/** A new agent's launch from the prompt box's pick: claude reads the one list (claude-model-route.newAgentPlan). */
+function newAgentLaunch(command: string, tune: unknown): { command: string; route?: string } {
+  const offer = launchOfferFor(command)
+  if (!isClaudeCommand(command)) return { command: launchCommand(command, tune, offer) }
+  const state = routeService.state()
+  const online = state.status === 'online'
+  return newAgentPlan({
+    command,
+    tune,
+    offer,
+    catalog: online ? state.models.map((m) => m.id) : [],
+    levelsOf: (id) => state.models.find((m) => m.id === id)?.levels ?? []
+  })
 }
 
 /** A model or effort pick, as a launch flag: saved on the card, then a restart in place (agent-relaunch.ts). */
@@ -4554,6 +4580,7 @@ function tuneDeps(): TuneDeps {
     write: (id, data) => ptys.get(id)?.write(data),
     relaunch: (id, patch) => relaunchInPlace(relaunchDeps(), id, patch),
     routeFor: (node) => cardRouteFor(node),
+    effortChoices: (id) => cardEffortChoices(id),
     asks: tuneAsks,
     cache: tuningCache,
     // The RTE dial: offered only when the gateway is online and the card's
@@ -4706,7 +4733,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     // The catalogs are read only when a pick came with the ask: most terminals bring none.
     command:
       opts.command ??
-      (role ? role.command : opts.tune === undefined ? preset.command : launchCommand(preset.command, opts.tune, launchOfferFor(preset.command))),
+      (role ? role.command : opts.tune === undefined ? preset.command : newAgentLaunch(preset.command, opts.tune).command),
     cwd: opts.cwd ?? store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
@@ -4714,7 +4741,10 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
   }
-  const added = store.addNode(opts.tune === undefined ? terminal : routedNewAgent(terminal))
+  // A pick from the one list carries its route (model-pick.ts); an older bare alias is routed as before.
+  const pickedRoute = !role && opts.command === undefined && opts.tune !== undefined ? newAgentLaunch(preset.command, opts.tune).route : undefined
+  const placed = pickedRoute !== undefined ? { ...terminal, route: pickedRoute } : opts.tune === undefined ? terminal : routedNewAgent(terminal)
+  const added = store.addNode(placed)
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
   const first = typeof opts.prompt === 'string' && terminal.command.trim() ? opts.prompt.trim() : ''
