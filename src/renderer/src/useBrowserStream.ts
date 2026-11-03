@@ -136,6 +136,11 @@ export function useBrowserStream(
   const [reconnectNonce, setReconnectNonce] = useState(0)
   const [reconnecting, setReconnecting] = useState(false)
   const attemptRef = useRef(0)
+  /**
+   * Main never answered the port (a preload newer than the main process that
+   * serves it, until the app restarts): the next dial takes the socket.
+   */
+  const portUnansweredRef = useRef(false)
   /** Set while a reconnect run is being prepared: it keeps the last picture instead of blanking the card. */
   const keepFrameRef = useRef(false)
 
@@ -272,7 +277,7 @@ export function useBrowserStream(
       advance('unsupported')
       return
     }
-    if (client === 'desktop' && !direct && !desktopToken) {
+    if (client === 'desktop' && (!direct || portUnansweredRef.current) && !desktopToken) {
       advance('error')
       return
     }
@@ -305,6 +310,7 @@ export function useBrowserStream(
       liveRef.current = false
       setLive(false)
       advance(event)
+      if (line?.direct && !line.isOpen() && !gotFrameRef.current && desktopToken) portUnansweredRef.current = true
       line?.close()
       // Dial again, by itself. The effect re-runs on the nonce; this run's
       // cleanup clears the timer if the card closes first.
@@ -461,7 +467,7 @@ export function useBrowserStream(
         onMessage,
         onClose: () => fail('close')
       }
-      const openPort = direct ? cookrew().openBrowserStream : undefined
+      const openPort = direct && !portUnansweredRef.current ? cookrew().openBrowserStream : undefined
       try {
         if (openPort) {
           // THE DESKTOP DRAWS ITS OWN CHROME DIRECTLY: a port from main, JPEG
@@ -564,7 +570,7 @@ export function useBrowserStream(
     viewportRevision
   })
 
-  const shared = { direct, send, claim, release, subscribeFrames, latestFrame, receipt }
+  const shared = { direct: direct && !portUnansweredRef.current, send, claim, release, subscribeFrames, latestFrame, receipt }
   return open
     ? {
         ...shared,
