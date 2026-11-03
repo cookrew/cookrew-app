@@ -204,7 +204,7 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
     const entry = agentById.get(id)
     if (workspaceId && entry?.why === 'reply') barSeen.mark(workspaceId, id, entry.sig)
   }
-  const tapItem = (id: string, el: HTMLElement): void => {
+  const tapItem = (id: string): void => {
     const open = barCard.get()
     if (open?.kind === 'item' && open.id === id) {
       barCard.close()
@@ -212,7 +212,8 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
     }
     const entry = itemById.get(id)
     since.current = entry?.at ?? null
-    barCard.open({ kind: 'item', id }, boxOf(el.getBoundingClientRect()))
+    // No flight from a thumbnail: only an agent's card puts a face in the box.
+    barCard.open({ kind: 'item', id })
     if (workspaceId && entry) barSeen.mark(workspaceId, id, entry.sig)
   }
 
@@ -244,7 +245,7 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
     return [
       <button key={id} ref={faceRef(`item:${id}`)} type="button" tabIndex={out ? -1 : undefined} aria-hidden={out || undefined}
         className={`zv-gf item ${view.kind}${motionOf(itemStack, id)}${card?.kind === 'item' && card.id === id ? ' open' : ''}`}
-        aria-label={label} title={label} onClick={(e) => tapItem(id, e.currentTarget)}>
+        aria-label={label} title={label} onClick={() => tapItem(id)}>
         <span className={`zv-th ${view.kind}`} aria-hidden="true">
           <Page item={view} words={false} />
         </span>

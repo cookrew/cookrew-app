@@ -74,6 +74,20 @@ describe('the seen book (since you last looked)', () => {
     book = observe(book, ws, [{ id: 'a', sig: 'x3' }], 300)
     expect(isUnseen(pageOf(book, ws), 'a', 'x3')).toBe(true)
   })
+  it('an item deleted before it was seen leaves the noticed list', () => {
+    let book = observe({}, ws, [{ id: 'a', sig: 'x' }], 100)
+    book = observe(book, ws, [{ id: 'a', sig: 'x' }, { id: 'tmp', sig: 't' }], 200)
+    expect(pageOf(book, ws).noticed.tmp).toEqual(['t', 200])
+    book = observe(book, ws, [{ id: 'a', sig: 'x' }], 300)
+    expect(pageOf(book, ws).noticed.tmp).toBeUndefined()
+  })
+  it("pruning a big page keeps the agents' read replies", () => {
+    const many = Array.from({ length: 4001 }, (_, k) => ({ id: `i${k}`, sig: 'b1' }))
+    let book = observe({}, ws, many, 1)
+    book = markSeen(book, ws, 'agent1', 'r55')
+    book = observe(book, ws, [{ id: 'i0', sig: 'b1' }], 2)
+    expect(pageOf(book, ws).seen).toEqual({ i0: 'b1', agent1: 'r55' })
+  })
   it('never mutates the book it was given', () => {
     const book = Object.freeze(observe({}, ws, [{ id: 'a', sig: 'x' }], 100))
     expect(() => markSeen(book, ws, 'a', 'y')).not.toThrow()
@@ -200,7 +214,7 @@ describe('the source contract', () => {
     expect(zoom).toMatch(/<BarGroups[\s\S]{0,800}motion\.go/)
   })
   it('an agent from a group is the agent the box carries, its face flying from the group', () => {
-    expect(prompt).toMatch(/fullAgentId \?\? cardAgent \?\? barAgent \?\?/)
+    expect(prompt).toMatch(/fullAgentId \?\? barAgent \?\? cardAgent \?\?/)
     expect(prompt).toContain('barCard.takeFrom()')
   })
   it("Esc closes the bar's card first, before the box or the view", () => {

@@ -65,13 +65,17 @@ export function observe(book: SeenBook, workspace: string, items: readonly { rea
     return { ...book, [workspace]: { based: true, seen: Object.fromEntries(items.map((i) => [i.id, i.sig])), noticed: {} } }
   }
   const fresh = items.filter((i) => page.seen[i.id] !== i.sig && page.noticed[i.id]?.[0] !== i.sig)
-  const big = Object.keys(page.seen).length > PRUNE_AT
-  if (fresh.length === 0 && !big) return book
-  const noticed = { ...page.noticed, ...Object.fromEntries(fresh.map((i) => [i.id, [i.sig, now] as const])) }
-  if (!big) return { ...book, [workspace]: { ...page, noticed } }
   const here = new Set(items.map((i) => i.id))
-  const keep = <T>(rec: Readonly<Record<string, T>>): Record<string, T> => Object.fromEntries(Object.entries(rec).filter(([id]) => here.has(id)))
-  return { ...book, [workspace]: { based: true, seen: keep(page.seen), noticed: keep(noticed) } }
+  const gone = Object.keys(page.noticed).some((id) => !here.has(id))
+  const big = Object.keys(page.seen).length > PRUNE_AT
+  if (fresh.length === 0 && !gone && !big) return book
+  // What is noticed is only ever an item on the board: one deleted unseen goes with it.
+  const noticed = Object.fromEntries(
+    [...Object.entries(page.noticed), ...fresh.map((i) => [i.id, [i.sig, now] as const] as const)].filter(([id]) => here.has(id))
+  )
+  // An agent's reply (replySig, "r…") is not an item: pruning keeps it, or a read reply would come back.
+  const seen = big ? Object.fromEntries(Object.entries(page.seen).filter(([id, sig]) => here.has(id) || sig.startsWith('r'))) : page.seen
+  return { ...book, [workspace]: { based: true, seen, noticed } }
 }
 
 /** Looked at (its card or full view opened): it is what it is now, and no longer news. */
