@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
-import { stageFloorNow } from './stage-floor'
+import { FLOOR_PARTS, stageFloorNow } from './stage-floor'
 import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripFaces, stripPage, type Box } from './pet-dock'
 import './pets.css'
 
@@ -203,11 +203,12 @@ export function PetTroop({
     keep()
     window.addEventListener('resize', keep)
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(keep) : null
-    const stage = document.querySelector('.cr-stage')
-    if (ro && stage) ro.observe(stage)
-    // The phone's box floats over the stage's foot: its height moves the bed too.
-    const dock = document.querySelector('.cr-dock')
-    if (ro && dock) ro.observe(dock)
+    // The phone's box floats over the stage's foot: its height moves the bed
+    // too, and so does its tray, which floats over it and shows and hides.
+    for (const sel of FLOOR_PARTS) {
+      const part = document.querySelector(sel)
+      if (ro && part) ro.observe(part)
+    }
     return () => {
       window.removeEventListener('resize', keep)
       ro?.disconnect()
