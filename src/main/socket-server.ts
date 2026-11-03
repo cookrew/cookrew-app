@@ -1,5 +1,4 @@
 import net from 'node:net'
-import { existsSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
@@ -19,6 +18,7 @@ import {
 } from '../shared/model'
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import { claimSocket, type SocketClaim } from './socket-claim'
 import { reachByName, type ReachKind } from './ask-reach'
 import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
@@ -159,13 +159,25 @@ export interface SocketServerDeps {
   roleDelete: (name: string) => boolean
 }
 
+export interface SocketServerHandle {
+  server: net.Server
+  /**
+   * Settles (never rejects) once the path is probed: owned, or left to the
+   * Cookrew already answering on it (socket-claim.ts). Release it on quit.
+   */
+  claim: Promise<SocketClaim>
+}
+
 /**
  * Newline-delimited JSON server on a Unix socket. This is the `cookrew` CLI's
  * backend over the local bridge socket.
+ *
+ * The path is shared by every Cookrew under this TMPDIR, so it is never
+ * taken from a live owner: a second instance runs without a CLI socket
+ * instead of cutting the whole fleet off theirs.
  */
-export function startSocketServer(deps: SocketServerDeps): net.Server {
+export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
   const { ptys } = deps
-  if (existsSync(ptys.socketPath)) unlinkSync(ptys.socketPath)
 
   const server = net.createServer((socket) => {
     let buffer = ''
@@ -182,8 +194,22 @@ export function startSocketServer(deps: SocketServerDeps): net.Server {
     socket.on('error', () => socket.destroy())
   })
 
-  server.listen(ptys.socketPath)
-  return server
+  const claim = claimSocket(server, ptys.socketPath).then(
+    (outcome) => {
+      if (!outcome.owned) {
+        console.warn(
+          `Cookrew CLI socket left alone at ${outcome.path}: ${outcome.reason}. ` +
+            'This instance runs without one.'
+        )
+      }
+      return outcome
+    },
+    (error: unknown): SocketClaim => {
+      console.error(`Starting the CLI socket at ${ptys.socketPath} failed:`, error)
+      return { owned: false, path: ptys.socketPath, reason: 'binding failed', release: () => undefined }
+    }
+  )
+  return { server, claim }
 }
 
 async function handleLine(

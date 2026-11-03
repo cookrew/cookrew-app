@@ -74,7 +74,7 @@ import { sousBreakerState, sousReadiness, summarizeTurn } from './sous'
 import { translateBody } from './sous-translate'
 import { remoteSousHost } from './sous-remote-config'
 import { TRANSLATE_MAX_CHARS } from '../shared/translate'
-import { startSocketServer, type SousDoor } from './socket-server'
+import { startSocketServer, type SocketServerHandle, type SousDoor } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
@@ -5810,6 +5810,12 @@ if (selfHosted) {
   app.exit(1)
 }
 
+/**
+ * The CLI socket this process serves, if it owns the shared path at all
+ * (socket-claim.ts). Released on quit, and only while the path is still ours.
+ */
+let cliSocket: SocketServerHandle | null = null
+
 app.whenReady().then(() => {
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
@@ -6293,7 +6299,7 @@ app.whenReady().then(() => {
   )
   ipcMain.handle('listen:stop', () => listener.stop())
 
-  startSocketServer({
+  cliSocket = startSocketServer({
     store,
     ptys,
     spawnTerminal: spawnTracked,
@@ -6813,6 +6819,9 @@ app.on('before-quit', (event) => {
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
+  // The shared CLI path goes only if it still holds the socket we bound: a
+  // live app's socket is never ours to remove (2026-09-18).
+  void cliSocket?.claim.then((claim) => claim.release()).catch(() => undefined)
   // The bounded drain: asks, then every tracked herdr child. The fold drain
   // that used to close this list went with the fold (T4) — nothing writes the
   // turn ledger any more, so there is no unproven rename left to outlive us.
