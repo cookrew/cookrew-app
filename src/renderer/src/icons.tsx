@@ -37,6 +37,11 @@ export type CrIconName =
   | 'translate'
   | 'external'
   | 'clipboard'
+  /** The agent's arrow keys (VoiceBar.tsx): one shape, four ways, so all four read alike. */
+  | 'arrow-left'
+  | 'arrow-down'
+  | 'arrow-up'
+  | 'arrow-right'
   /** Gated marketplace preset: the chip's lock badge (§8). */
   | 'lock'
   /** The header's More menu. */
@@ -168,6 +173,31 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
   'caret-right': <path {...FILLED} d="M5.4 3.4 V12.6 L11.4 8 Z" />,
   'chevron-up': <path {...STROKE} strokeWidth={2} strokeLinecap="square" d="M3.4 10.4 L8 5.8 L12.6 10.4" />,
   check: <path {...STROKE} strokeWidth={2.1} strokeLinecap="square" d="M2.8 8.6 L6.4 12 L13.2 4.2" />,
+  // The send arrow's shape, turned four ways.
+  'arrow-right': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M2.4 8 H12.2" />
+      <path d="M8.6 3.6 L13 8 L8.6 12.4" />
+    </g>
+  ),
+  'arrow-left': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M13.6 8 H3.8" />
+      <path d="M7.4 3.6 L3 8 L7.4 12.4" />
+    </g>
+  ),
+  'arrow-up': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M8 13.6 V3.8" />
+      <path d="M3.6 7.4 L8 3 L12.4 7.4" />
+    </g>
+  ),
+  'arrow-down': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M8 2.4 V12.2" />
+      <path d="M3.6 8.6 L8 13 L12.4 8.6" />
+    </g>
+  ),
   prev: <path {...FILLED} d="M10.8 2.8 L5 8 L10.8 13.2 Z" />,
   next: <path {...FILLED} d="M5.2 2.8 L11 8 L5.2 13.2 Z" />,
   canvas: (
