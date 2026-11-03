@@ -129,11 +129,11 @@ describe('the chip reads the pick', () => {
 // Review 2026-11-02: a routed card's route args come after the command, and
 // codex's -m outranks the route's -c model=.
 describe('a routed card gives the pick way to its route', () => {
-  it("drops codex's and opencode's model, pi's model and thinking, and keeps claude's", () => {
+  it("drops codex's, opencode's and claude's model, pi's model and thinking, and keeps claude's effort", () => {
     expect(withoutRoutedPick('codex -m gpt-6-luna -c model_reasoning_effort=high resume abc', 'codex')).toBe('codex -c model_reasoning_effort=high resume abc')
     expect(withoutRoutedPick('opencode --model gemini/gemini-2.5-pro --session ses_1', 'opencode')).toBe('opencode --session ses_1')
     expect(withoutRoutedPick('pi --model ifunk/k3 --thinking high', 'pi')).toBe('pi')
-    expect(withoutRoutedPick('claude --model opus --effort high', 'claude')).toBe('claude --model opus --effort high')
+    expect(withoutRoutedPick('claude --model opus --effort high', 'claude')).toBe('claude --effort high')
     expect(withoutRoutedPick('zsh', null)).toBe('zsh')
   })
 })

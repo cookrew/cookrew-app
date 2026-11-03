@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
-import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -222,6 +222,7 @@ import {
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
+import { claudeSettingsGateway, launchPick, withGatewayModel } from './claude-model-route'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -740,6 +741,7 @@ const routeService = new RouteService({
   },
   harnessOf: (command) => harnessFor(command)?.id ?? null,
   phaseOf: (id) => turns.phaseOf(id),
+  delivering: (id) => turnUnseen(id),
   canRestoreExact: (node) => canRestoreExact(node),
   respawn: async (id) => respawnInPlace(id),
   dockCommands: () => PRESETS.map((p) => p.command),
@@ -2914,7 +2916,8 @@ function spawnTracked(t: {
   const mcpArgs = cardNode?.kind === 'terminal' && !served ? routeService.sharedMcpFor(cardNode) : []
   const spawnRoute = route && !served ? { env: route.env, args: [...route.args, ...mcpArgs] } : null
   // A routed card runs the route's model: a launch pick's model gives way to it.
-  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : effective
+  // A direct claude card's alias is spelled for the gateway its own settings name (claude-model-route.ts).
+  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
   const fresh = !ptys.get(t.id)
   const session = ptys.spawn(
     {
@@ -4468,6 +4471,54 @@ async function respawnInPlace(id: string): Promise<boolean> {
   return true
 }
 
+/**
+ * Work a restart would cut that the turn phase cannot show (QA 2026-11-03): an
+ * open dispatch, a held submission window, undelivered text in the box — and,
+ * for a card the tracker does not follow (no mirror), herdr saying it works or
+ * asks. herdr errs towards idle, so it only ever adds a refusal.
+ */
+function turnUnseen(id: string): boolean {
+  if (dispatchService.hasOpenDispatch(id) || defaultProducerLease().holderOf(id) !== null || defaultProducerLease().isContaminated(id)) return true
+  if (turns.phaseOf(id) !== undefined) return false
+  const status = agentStatus(sessionNameFor(id))
+  return status === 'working' || status === 'blocked'
+}
+
+/** Where a card's turns go, for a model pick: routed through the gateway (its catalog), or direct. */
+function cardRouteFor(node: TerminalNodeData): { routed: boolean; catalog: readonly string[] } {
+  const state = routeService.state()
+  if (state.status !== 'online') return { routed: false, catalog: [] }
+  return { routed: routeService.routeOf(node) !== 'direct', catalog: state.models.map((m) => m.id) }
+}
+
+/** A direct claude line, with an alias `--model` sent as the gateway's id when claude's settings route claude there. */
+function directClaudeLine(command: string): string {
+  if (!isClaudeCommand(command) || !/\s--model[=\s]/.test(command)) return command
+  let settings: unknown = null
+  try {
+    settings = JSON.parse(readFileSync(path.join(homedir(), '.claude', 'settings.json'), 'utf8'))
+  } catch {
+    return command
+  }
+  if (!claudeSettingsGateway(settings)) return command
+  const state = routeService.state()
+  return state.status === 'online' ? withGatewayModel(command, state.models.map((m) => m.id)) : command
+}
+
+/**
+ * A new claude agent's model pick on a card the default route will take: the
+ * pick becomes its route, as a live pick on a routed card does, so the route
+ * cannot outrank it (claude-model-route.ts).
+ */
+function routedNewAgent(node: TerminalNodeData): TerminalNodeData {
+  const model = /\s--model(?:=|\s+)(\S+)/.exec(node.command)?.[1]
+  if (model === undefined || !isClaudeCommand(node.command)) return node
+  const where = cardRouteFor(node)
+  if (!where.routed) return node
+  const plan = launchPick({ command: node.command, knob: 'model', value: model, ...where })
+  return 'route' in plan && plan.route !== undefined ? { ...node, command: plan.command, route: plan.route } : node
+}
+
 /** A model or effort pick, as a launch flag: saved on the card, then a restart in place (agent-relaunch.ts). */
 function relaunchDeps(): RelaunchDeps {
   return {
@@ -4476,10 +4527,11 @@ function relaunchDeps(): RelaunchDeps {
       return node?.kind === 'terminal' ? node : null
     },
     phaseOf: (id) => turns.phaseOf(id),
-    // An open dispatch, a held submission window, or undelivered text in the box.
-    delivering: (id) =>
-      dispatchService.hasOpenDispatch(id) || defaultProducerLease().holderOf(id) !== null || defaultProducerLease().isContaminated(id),
-    setCommand: (id, command) => void store.updateNodeUnsafe(id, { command }),
+    delivering: (id) => turnUnseen(id),
+    save: (id, patch) => {
+      store.updateNodeUnsafe(id, patch)
+      if (patch.route !== undefined) routeService.cardChanged(id)
+    },
     live: (id) => ptys.get(id) !== undefined || paneAlive(id),
     restorable: (node) => routeService.restorable(node),
     respawn: (id) => void respawnInPlace(id)
@@ -4499,7 +4551,8 @@ function tuneDeps(): TuneDeps {
       return node?.kind === 'terminal' ? node : null
     },
     write: (id, data) => ptys.get(id)?.write(data),
-    relaunch: (id, command) => relaunchInPlace(relaunchDeps(), id, command),
+    relaunch: (id, patch) => relaunchInPlace(relaunchDeps(), id, patch),
+    routeFor: (node) => cardRouteFor(node),
     asks: tuneAsks,
     cache: tuningCache,
     // The RTE dial: offered only when the gateway is online and the card's
@@ -4660,7 +4713,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
   }
-  const added = store.addNode(terminal)
+  const added = store.addNode(opts.tune === undefined ? terminal : routedNewAgent(terminal))
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
   const first = typeof opts.prompt === 'string' && terminal.command.trim() ? opts.prompt.trim() : ''
