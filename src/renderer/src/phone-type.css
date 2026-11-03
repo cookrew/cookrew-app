@@ -119,6 +119,14 @@
     font-size: var(--ph-control);
   }
 
+  /* ── the toast when an agent opens a card (a browser, a note, an agent): its name at control, the rest at caption ── */
+  :root:root .spawn-toast-name {
+    font-size: var(--ph-control);
+  }
+  :root:root :is(.spawn-toast-hatchword, .spawn-toast-meta, .spawn-toast-cwd) {
+    font-size: var(--ph-caption);
+  }
+
   /* ── the routing panel (⋯ → Routing): rows and their buttons at control, their notes at caption ── */
   :root:root :is(.cr-routing-status, .cr-routing-empty, .cr-routing-hrow, .cr-routing-arow, .cr-routing-acct, .cr-routing-menu, .cr-routing-model, .cr-routing-lrow, .cr-routing-default, .cr-routing-signin, .cr-routing-tick, .cr-routing-btn) {
     font-size: var(--ph-control);
