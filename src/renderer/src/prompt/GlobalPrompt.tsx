@@ -847,24 +847,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           {picking && <HarnessMenu at={picking} harnesses={harnesses} harness={harness} onPick={pick} acts={acts} onDone={() => setPicking(null)} />}
         </span>
       )}
-      {/* The chip and the voice bar are siblings in this form: one key each,
-          never the bare agent id twice, or a retarget leaves the old chip behind. */}
-      {to ? (
-        <CardTune key={`tune:${to.id}`} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise onTurned={focusBox} />
-      ) : (
-        offer && (
-          <NewAgentTune
-            offer={offer}
-            tune={offeredPick(launchTune, offer, gateway)}
-            gateway={gateway}
-            onPick={(knob, value) => {
-              pickLaunch(knob, value)
-              focusBox()
-            }}
-          />
-        )
-      )}
-      {attachedItem && itemKey && <ItemRefChip item={attachedItem} onRemove={() => setItemLeftOut(itemKey)} />}
       {suggesting && anchor && pending && (
         <span className="cr-prompt-menu cr-prompt-suggest" role="listbox" aria-label={pending.sigil === '@' ? 'Agents' : 'Notes and browsers'} style={{ left: anchor.left, bottom: window.innerHeight - anchor.top + 6 }}>
           {options.map((option, i) => (
@@ -965,12 +947,34 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           }
         }}
       />
-      {/* The tools after the chips: a row above the words on a phone, the
-          keys wrapping onto a line of their own when it is short (owner,
-          2026-11-03: "the arrows and ESC seem gone" from a swiped row;
-          global-prompt.css · .cr-prompt-tools); in line on a wide screen. */}
+      {/* THE TRAY (task "Phone tray chips float", 2026-11-04): model · effort,
+          the item riding the words and the tools (^, 📎, 🔊, the agent's keys).
+          On a phone a see-through row of chips of its own, floating 8px over
+          the pill and swiped sideways (global-prompt.css · .cr-prompt-tray);
+          on a wide screen no box at all, its chips in the box's one line.
+          One pill each, the ^ after the keys (owner, 2026-11-04: chip · model
+          · words · 📎 🔊 · keys · ^ · mic · Send; a phone draws it after model
+          · effort, global-prompt.css · THE TRAY'S TOOLS, ONE FORM). */}
+      <div className="cr-prompt-tray">
+        {/* The chip and the voice bar are siblings in this form: one key each,
+            never the bare agent id twice, or a retarget leaves the old chip behind. */}
+        {to ? (
+          <CardTune key={`tune:${to.id}`} terminalId={to.id} phase={activity?.phase ?? 'idle'} remote={to.remote} onMouseDown={(e) => e.preventDefault()} rise onTurned={focusBox} />
+        ) : (
+          offer && (
+            <NewAgentTune
+              offer={offer}
+              tune={offeredPick(launchTune, offer, gateway)}
+              gateway={gateway}
+              onPick={(knob, value) => {
+                pickLaunch(knob, value)
+                focusBox()
+              }}
+            />
+          )
+        )}
+        {attachedItem && itemKey && <ItemRefChip item={attachedItem} onRemove={() => setItemLeftOut(itemKey)} />}
       <span className="cr-prompt-tools">
-      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       {browse.input}
       {toolsShown && (
         <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null}>
@@ -985,7 +989,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           />
         </VoiceBar>
       )}
+      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       </span>
+      </div>
       {/* Beside Send, out of the tools: on a phone the box's one row at rest is
           the chip, the words, 🎤 and Send (global-prompt.css · THE BOX FLOATS). */}
       {dictation.ear && (
