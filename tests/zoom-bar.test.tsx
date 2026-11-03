@@ -207,7 +207,7 @@ describe('the bar offers the places, the card fills them', () => {
   })
 
   it('shows the "YOU ❯" line no more; a picked checkpoint keeps its row, the way back to live', () => {
-    expect(overlay).toContain('{selectedIndex !== null && (\n        <div className="popout-ask"')
+    expect(overlay).toContain("{selectedIndex !== null && look !== 'chat' && (\n        <div className=\"popout-ask\"")
     expect(overlay).not.toContain('(selectedIndex !== null || activity?.prompt) && (')
   })
 

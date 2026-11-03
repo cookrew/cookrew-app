@@ -1353,8 +1353,10 @@ function TerminalOverlay({
         </div>
       )}
       {/* Only while a checkpoint is picked: then it says which one and is the way
-          back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31). */}
-      {selectedIndex !== null && (
+          back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31).
+          Never in CHAT: a plain conversation has no checkpoints to name, and
+          scrolling back is just reading (owner 2026-11-03). */}
+      {selectedIndex !== null && look !== 'chat' && (
         <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
           <span className="popout-ask-label">
             {/* Identity, not array position: T-number matches transcript + rail. */}
