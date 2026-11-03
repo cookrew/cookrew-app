@@ -20,6 +20,7 @@ import { confinedSpawn } from './session-sandbox'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
+import { multiplexerPreference } from './launch-defaults'
 import type { Terminal as HeadlessTerminalType } from '@xterm/headless'
 import {
   decideReattach,
@@ -1332,7 +1333,7 @@ export class PtyManager {
     // Selection, not assumption: tmux when it is there, the direct backend
     // otherwise. On Windows tmux does not exist and herdr cannot host a
     // terminal, so `direct` is what the release actually runs on.
-    const candidates = multiplexerOrder(process.env.COOKREW_MULTIPLEXER, [
+    const candidates = multiplexerOrder(multiplexerPreference(), [
       new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf }),
       new TmuxMultiplexer({ configFile: this.tmuxConf }),
       new DirectMultiplexer()

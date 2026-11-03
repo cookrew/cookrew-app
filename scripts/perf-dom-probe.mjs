@@ -443,7 +443,7 @@ const BOARD_CLICK = (view) => `(() => {
 export async function waitForCanvas(page, timeoutMs = 150_000, settleMs = 2500) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node, .cr-stage-view').length").catch(() => 0)
+    const cards = await page.evaluate("document.querySelectorAll('.react-flow__node, .cr-stage-view, .zv-root').length").catch(() => 0)
     if (cards > 0) {
       await sleep(settleMs) // thumbs, checkpoints and the first activity seed
       return cards
