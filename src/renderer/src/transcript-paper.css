@@ -455,16 +455,12 @@
   border: 0;
 }
 
-/* THE TERMINAL KEEPS CLEAR OF THE CHECKPOINT RAIL (owner's recording,
-   2026-11-01): the rail is 30px laid over the right edge, and the terminal
-   under it was fitted to the whole width, so its last columns ran under the
-   rail. The room is kept in every look, so the terminal is the same size in
-   chat, log and live, and the rail arriving after its checkpoints load does
-   not resize the shared pane. */
-.lod-overlay .popout-main.look-records .ctx-live,
-.lod-overlay .popout-main.look-live .ctx-live {
-  right: 30px;
-}
+/* THE TERMINAL TAKES THE WHOLE WIDTH (owner, 2026-11-03). It kept 30px clear
+   for the checkpoint rail (2026-11-01: its last columns ran under the rail).
+   LIVE has no rail now, and in CHAT and LOG the rail is only a tag over a
+   hidden terminal, so no look reserves the column: the terminal is the same
+   size in every look and switching never resizes the shared pane. */
+
 
 .lod-overlay .look-records .ctx-live::before,
 .lod-overlay .look-live .ctx-live::before {
@@ -646,6 +642,46 @@
 
 .lod-overlay .look-live .cr-live-sheet.on {
   display: block;
+}
+
+/* LIVE SCROLLS BY ITS OWN BAR (owner, 2026-11-03): the history the terminal
+   holds is the herdr pane's own (live-scroll.ts seeds it), and its scrollbar
+   comes back, thin and quiet, where the rail was. The trace surface's rule
+   hides it everywhere else (styles.css · ONE scrollbar total). The phone
+   scrolls the sheet over the terminal (above): it too. */
+
+.lod-overlay .look-live .popout-terminal .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-live .popout-terminal .xterm-viewport::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-live .popout-terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
+}
+
+.lod-overlay .look-live .cr-live-sheet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-live .cr-live-sheet::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-live .cr-live-sheet::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
 }
 
 .cr-live-sheet-hist {

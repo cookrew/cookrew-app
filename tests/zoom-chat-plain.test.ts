@@ -40,16 +40,32 @@ for (const look of ['chat', 'log'] as const) {
   })
 }
 
-describe('only LIVE keeps the checkpoints', () => {
+// LIVE IS THE TERMINAL'S OWN (owner, 2026-11-03): no checkpoint rail at all,
+// not even the tag; the terminal's own scrollbar moves through the herdr pane's
+// history it holds (desktop: the xterm viewport; phone: the live sheet).
+describe('LIVE scrolls by its own bar, CHAT and LOG keep only the tag', () => {
   const overlay = src('TerminalOverlay.tsx')
+  const paper = src('transcript-paper.css')
 
-  it('draws the whole rail in LIVE only; CHAT and LOG keep just its tag while scrolling', () => {
-    expect(overlay).not.toMatch(/\{look === 'live' && \(\s*<CheckpointTimeline/)
-    const rail = overlay.slice(overlay.indexOf('<CheckpointTimeline'), overlay.indexOf('/>', overlay.indexOf('<CheckpointTimeline')))
-    expect(rail).toContain("tagOnly={look !== 'live'}")
+  it('mounts the rail in CHAT and LOG only, and there as its tag', () => {
+    const at = overlay.indexOf('<CheckpointTimeline')
+    expect(overlay.slice(at - 60, at)).toMatch(/\{isRecordLook\(look\) && \(\s*$/)
+    expect(overlay.slice(at, overlay.indexOf('/>', at))).toMatch(/\btagOnly\b(?!=)/)
   })
 
-  it('shows the CHECKPOINT row and its LIVE button in LIVE only', () => {
-    expect(overlay).toMatch(/\{selectedIndex !== null && look === 'live' && \(\s*<div className="popout-ask"/)
+  it('shows no CHECKPOINT row or its LIVE button in any look', () => {
+    expect(overlay).not.toContain('className="popout-ask"')
+  })
+
+  it('gives the live terminal its own scrollbar back, on the desktop and the phone', () => {
+    const view = rule(paper, '.lod-overlay .look-live .popout-terminal .xterm-viewport')
+    expect(view).toContain('scrollbar-width: thin;')
+    expect(rule(paper, '.lod-overlay .look-live .popout-terminal .xterm-viewport::-webkit-scrollbar')).toContain('display: block;')
+    expect(rule(paper, '.lod-overlay .look-live .cr-live-sheet')).toContain('scrollbar-width: thin;')
+    expect(rule(paper, '.lod-overlay .look-live .cr-live-sheet::-webkit-scrollbar')).toContain('display: block;')
+  })
+
+  it('keeps no room for a rail beside the terminal any more', () => {
+    expect(paper).not.toMatch(/\.ctx-live,?[^{]*\{\s*right: 30px;/)
   })
 })

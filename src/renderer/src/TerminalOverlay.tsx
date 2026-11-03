@@ -22,7 +22,6 @@ import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-t
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import { tailClipRows } from './transcript'
-import { checkpointRowTitle } from './stream/stream-rows'
 import { streamPagerOf } from './stream/stream-pager'
 import { useStream } from './stream/use-stream'
 import { useTitleMode } from './checkpoint-sync'
@@ -117,11 +116,6 @@ export const TerminalOverlayLayer = memo(function TerminalOverlayLayer({
 function TerminalOverlayFor({ node, rect, primary }: { node: TerminalNodeData; rect: ScreenRect; primary: boolean }): React.JSX.Element {
   const activity = useActivity(node.id)
   return <TerminalOverlay node={node} activity={activity} rect={rect} primary={primary} />
-}
-
-function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
 /** The header line carries the agent's live status, not its name. */
@@ -391,14 +385,6 @@ function TerminalOverlay({
     if (active.index === selectedIndex) return
     setSelectedIndex(active.index)
   }
-  const selectedRow =
-    selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
-  // ONE TITLE RULE, from the mark. checkpointRowTitle is the same function the
-  // rail's rows use, so the ask line and the rail can no longer disagree about
-  // what a checkpoint is called — they did, whenever the ledger held a title
-  // the trace listing did not.
-  const selectedTitle =
-    selectedRow === null ? '' : checkpointRowTitle(selectedRow, titleMode)
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -1352,31 +1338,9 @@ function TerminalOverlay({
           {clipNote}
         </div>
       )}
-      {/* Only while a checkpoint is picked: then it says which one and is the way
-          back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31).
-          LIVE only: CHAT and LOG are plain reading with no checkpoints to name,
-          and scrolling back is just reading (owner 2026-11-03). */}
-      {selectedIndex !== null && look === 'live' && (
-        <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
-          <span className="popout-ask-label">
-            {/* Identity, not array position: T-number matches transcript + rail. */}
-            {selectedIndex === null ? 'YOU ❯' : `CHECKPOINT T${selectedIndex} ❯`}
-          </span>
-          <span className="popout-ask-text">
-            {selectedIndex !== null ? clip(selectedTitle, 300) : clip(activity?.prompt ?? '', 300)}
-          </span>
-          {selectedIndex !== null && (
-            <button
-              className="cr-btn sm popout-ask-live"
-              title="Back to live"
-              onMouseDown={keepFocus}
-              onClick={goLive}
-            >
-              LIVE
-            </button>
-          )}
-        </div>
-      )}
+      {/* No checkpoint row in any look (owner, 2026-11-03): CHAT and LOG are plain
+          reading, and LIVE has no rail to pick a checkpoint from; the bottom of the
+          transcript is the live end. */}
       {/* SAY WHICH WORDS THESE ARE.
           A translated body is still prose in a card that usually holds the
           agent's own words, and the difference is invisible once you are
@@ -1527,7 +1491,9 @@ function TerminalOverlay({
         </div>
         {/* CHAT and LOG are plain reading with their own scrollbar (transcript-paper.css,
             owner 2026-11-01 and 11-03): of the rail they keep only the tag that names
-            the turn in view while scrolling, with ROLE / FORK / REWIND. LIVE keeps it all. */}
+            the turn in view while scrolling, with ROLE / FORK / REWIND. LIVE has none:
+            the terminal's own scrollbar moves through the pane's history. */}
+        {isRecordLook(look) && (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -1542,12 +1508,13 @@ function TerminalOverlay({
           lineageReach={!remote}
           ended={doorState?.kind === 'ended'}
           anomalyNote={stream.anomalyNote}
-          tagOnly={look !== 'live'}
+          tagOnly
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}
           onReach={stream.reach}
         />
+        )}
       </div>
       {dropReady && (
         <div className="attach-drop-hint">
