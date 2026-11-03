@@ -502,7 +502,9 @@
    It wears the demo's page now (group-motion-pivot.html · .ipage): rounded
    10px, one hairline, a soft shadow, and its address bar on the second paper
    over a hairline. BrowserLayer draws it outside .zv-fullview, so the ink
-   tokens are read directly. Full window (browser-full) stays edge to edge. */
+   tokens are read directly. Full window (browser-full) wears the same address
+   bar but no frame at all: edge to edge, no edge, no corner, no shadow
+   (owner, 2026-11-04). */
 .browser-lod.browser-embedded:not(.browser-full) .popout {
   border: 0;
   border-radius: 10px;
@@ -511,22 +513,28 @@
     inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16)),
     0 6px 20px rgba(40, 30, 15, 0.08);
 }
-.browser-lod.browser-embedded:not(.browser-full) .popout-header {
+.browser-lod.browser-full .popout {
+  border: 0;
+  border-radius: 0;
+  background: var(--sumi-paper, #f4efe4);
+  box-shadow: none;
+}
+.browser-lod.browser-embedded .popout-header {
   background: var(--sumi-paper-2, #ebe3d3);
   border-bottom: 1px solid var(--sumi-hair, rgba(29, 26, 22, 0.1));
 }
-.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn {
+.browser-lod.browser-embedded .popout-header .cr-btn {
   border: 0;
   border-radius: 6px;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
   color: var(--sumi-ink, #1d1a16);
 }
-.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn:hover {
+.browser-lod.browser-embedded .popout-header .cr-btn:hover {
   background: var(--sumi-paper, #f4efe4);
 }
-.browser-lod.browser-embedded:not(.browser-full) .browser-address,
-.browser-lod.browser-embedded:not(.browser-full) .browser-idplate {
+.browser-lod.browser-embedded .browser-address,
+.browser-lod.browser-embedded .browser-idplate {
   border-radius: 6px;
   font-family: var(--font-mono, ui-monospace, monospace);
 }

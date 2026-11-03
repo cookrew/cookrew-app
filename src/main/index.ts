@@ -407,7 +407,18 @@ function recordPins(nodes: readonly CanvasNode[], pin: VersionPinRecord): void {
     }
   }
 }
-const ptys = new PtyManager()
+const ptys = new PtyManager({ instance: app.getPath('userData') })
+// Another live Cookrew owns the herdr session (a QA run with its own userData
+// slips past the single-instance lock below). This one has not run a single
+// session command and must not: on 2026-09-18 such an instance closed all 56
+// panes of the fleet. See host-claim.ts.
+if (ptys.hostRefusal) {
+  console.error(ptys.hostRefusal)
+  // A Dock launch has no console: without the box the app just never appears.
+  // showErrorBox is allowed before 'ready' and blocks until dismissed.
+  dialog.showErrorBox('Cookrew is already running', ptys.hostRefusal)
+  app.exit(1)
+}
 // Liveness covers EXISTENCE, not attachment: every terminal node — including
 // inactive-workspace agents this process never spawns an attach for — pins
 // its lease generation against tombstone eviction, and any write-ahead
@@ -6866,6 +6877,9 @@ app.whenReady().then(() => {
   // Fail SAFE: if any workspace's terminals can't be enumerated (corrupt
   // workspace.json), reap NOTHING rather than mistake owned sessions for
   // orphans.
+  // The single-instance lock is held by now, so a live claim under our own
+  // userData can only be a predecessor still exiting: take it over.
+  ptys.confirmHostClaim()
   try {
     const reaped = ptys.reapOrphanSessions(store.allTerminalIdsStrict())
     if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned agent session(s)`)

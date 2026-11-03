@@ -6,8 +6,21 @@
 // draw it: the live agent's MDL dial below, and the new agent's menu
 // (prompt/NewAgentTune.tsx), each with its own row look.
 
-import { useLayoutEffect, useRef } from 'react'
-import { MODEL_SECTION_LABEL, modelChipText, type ModelRow } from '../../../shared/model-pick'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { MODEL_SECTION_LABEL, modelChipText, visibleModelRows, type ModelRow } from '../../../shared/model-pick'
+
+/**
+ * Esc in a search box holding words clears the words; only the next Esc
+ * closes the menu. The menus close on Esc in a capture listener, ahead of the
+ * box, so they ask this first.
+ */
+export function searchHoldsEscape(e: { key: string; target: unknown }): boolean {
+  const target = e.target as { classList?: { contains: (c: string) => boolean }; value?: unknown } | null
+  return e.key === 'Escape' && target?.classList?.contains('cr-model-search') === true && typeof target.value === 'string' && target.value !== ''
+}
+
+/** A list this long gets the search box (and the fold); a short one shows whole. */
+const SEARCH_FROM = 12
 
 /**
  * Open a long list on the row it stands on (QA 2026-11-04: 84 rows, the
@@ -35,9 +48,43 @@ export interface ModelListProps {
   look?: 'rail' | 'menu'
 }
 
-export function ModelList({ rows, current, asked = null, disabled = false, onPick, onMouseDown, look = 'rail' }: ModelListProps): React.JSX.Element {
+export function ModelList({ rows: all, current, asked = null, disabled = false, onPick, onMouseDown, look = 'rail' }: ModelListProps): React.JSX.Element {
+  // FOLDED OR SEARCHED (owner 2026-11-04): a long catalog shows its newest
+  // rows, "N more" unfolds it, and the box searches every row.
+  const searchable = all.length > SEARCH_FROM
+  const [query, setQuery] = useState('')
+  const [unfolded, setUnfolded] = useState(false)
+  const { rows, hidden } = searchable ? visibleModelRows(all, { query, all: unfolded, keep: [current, asked] }) : { rows: all, hidden: 0 }
+  const extra = look === 'rail' ? 'cr-tune-row cr-model-more' : 'cr-model-more'
   return (
     <>
+      {searchable && (
+        <span className="cr-model-search-row" role="presentation">
+          <input
+            type="search"
+            className="cr-model-search"
+            placeholder="search models"
+            aria-label="Search models"
+            value={query}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // The box's own keys: never the zoom's ("/" opens the board), the
+              // prompt's, or the form's — Enter in a form would make an agent.
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                if (query.trim() && rows[0] && !disabled) onPick(rows[0].value)
+              }
+              if (e.key === 'Escape' && query) {
+                e.preventDefault()
+                setQuery('')
+              }
+              e.stopPropagation()
+            }}
+          />
+        </span>
+      )}
       {rows.map((row, i) => {
         const heading = i === 0 || rows[i - 1].section !== row.section
         const state = row.value === asked ? 'asked' : row.value === current ? 'current' : 'plain'
@@ -65,6 +112,17 @@ export function ModelList({ rows, current, asked = null, disabled = false, onPic
           </span>
         )
       })}
+      {query.trim() !== '' && rows.length === 0 && <span className="cr-model-none">no model matches “{query.trim()}”</span>}
+      {query.trim() === '' && hidden > 0 && (
+        <button type="button" className={extra} onMouseDown={onMouseDown} onClick={() => setUnfolded(true)}>
+          {hidden} more models…
+        </button>
+      )}
+      {query.trim() === '' && unfolded && (
+        <button type="button" className={extra} onMouseDown={onMouseDown} onClick={() => setUnfolded(false)}>
+          fewer
+        </button>
+      )}
     </>
   )
 }
