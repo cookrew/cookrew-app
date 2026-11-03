@@ -1,0 +1,20 @@
+Generating public/private ed25519 key pair.
+/tmp/wc-fix/k already exists.
+Overwrite (y/n)?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

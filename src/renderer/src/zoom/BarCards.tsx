@@ -6,6 +6,9 @@ import { ItemCard, type CrewFace, type ItemFace } from '../pets/ItemPets'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
 import type { AgentView, ItemView } from './zoom-model'
 import type { FaceBox } from './bar-pick'
+import { BarWaitCard } from './BarWaitCard'
+import { useWaitAnswer } from '../prompt/wait-answer'
+import { promptBox } from '../prompt/box-focus'
 import '../pets/pets.css'
 import './agent-card.css'
 
@@ -136,6 +139,15 @@ export function BarAgentCard({ agent, items, anchor, onOpen, onItem, onDelete, o
   onClose: () => void
 }): React.JSX.Element {
   const keep = useRef(() => getDraft(draftKey(agent.id)).trim() !== '').current
+  // Waiting on a menu: the card carries its rows (BarWaitCard.tsx), the box's own stand down.
+  const wait = useWaitAnswer(agent.id, promptBox.focus)
+  if (wait.view) {
+    return (
+      <BarCardFrame anchor={anchor} className="wc-card needs" label={`${agent.name} needs you`} keep={keep} onOutside={onOutside} onClose={onClose}>
+        <BarWaitCard agent={agent} view={wait.view} wait={wait} onOpen={onOpen} onReply={promptBox.focus} onClose={onClose} />
+      </BarCardFrame>
+    )
+  }
   return (
     <BarCardFrame anchor={anchor} className={`ag-card zv-shelf-card${agent.phase === 'waiting' ? ' needs' : ''}`} label={`${agent.name}'s card`} keep={keep} onOutside={onOutside} onClose={onClose}>
       <AgentCard agent={agent} items={items} onOpen={onOpen} onItem={onItem} onDelete={onDelete} onDraft={KEEP_DRAFT} />
