@@ -10,11 +10,12 @@
  * its size ON SCREEN on every frame, as a map draws its labels, and a word
  * that has no room at that size fades instead of shrinking.
  *
- *   a name        16 (body): under a face at every per-row pick, in the open
+ *   a name        14 (body): under a face at every per-row pick, in the open
  *                 card's head, in the full view's head
  *   a small word  11 (caption): a state, counts, a workspace's label, the
  *                 newest's caption, a machine's counts
- *   a machine     18 (title): its name at the devices stop and over its marks
+ *   a machine     16 (title): its name at the devices stop and over its marks
+ * (2026-11-03, a 360px Samsung: 16 / 18 read too big, one step down.)
  *
  * The painter (zoom-frame.ts · paint) draws the moving words at `pinned()`:
  * their size over the camera's scale on this frame. Words inside a picture (a
@@ -27,7 +28,7 @@ import { COL, ROW } from './zoom-layout'
 import { ramp } from './zoom-path'
 
 /** The phone's type scale, on screen, in CSS px (phone-type.css mirrors it). */
-export const PHONE_TYPE = { caption: 11, control: 13, body: 16, title: 18, display: 22 } as const
+export const PHONE_TYPE = { caption: 11, control: 12, body: 14, title: 16, display: 20, input: 16 } as const
 
 /** Each stop's camera scale at rest (zoom-frame.ts · restScales). */
 export interface RestScales {
@@ -88,7 +89,7 @@ export function sceneWords(s: RestScales, narrow: boolean): SceneWords {
   const status = pinned(SCENE_TYPE.small, STATUS.px, s.crew)
   // The counts' line ends above the next row's face, a couple of px clear.
   const countsBottom = UNDER_FACE.nameTop + UNDER_FACE.toStatus * name + UNDER_FACE.toCounts * status + COUNTS.line * status
-  // A name is cut short before its neighbour's, in its own px (it is drawn at 16 / 15 of them on screen).
+  // A name is cut short before its neighbour's, in its own px (it is drawn at body / 15 of them on screen).
   const pitch = COL * s.crew
   const nameMax = Math.max(40, Math.min(180, ((pitch - NAME_GAP) * NAME.px) / SCENE_TYPE.name))
   return {

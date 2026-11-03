@@ -66,7 +66,7 @@ describe('the phone type sheet', () => {
   it('sets every size through a role, never a number of its own', () => {
     const sizes = [...css.matchAll(/font-size:\s*([^;]+);/g)].map((m) => m[1].trim())
     expect(sizes.length).toBeGreaterThan(20)
-    for (const s of sizes) expect(s, s).toMatch(/var\(--ph-(caption|control|body|title|display)\)|^inherit$|^0\.875em$/)
+    for (const s of sizes) expect(s, s).toMatch(/var\(--ph-(caption|control|body|title|display|input)\)|^inherit$/)
   })
 
   it('is loaded by the app, last', () => {

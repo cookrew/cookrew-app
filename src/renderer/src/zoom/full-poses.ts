@@ -65,8 +65,8 @@ const DESK = {
 
 const PHONE = {
   avatar: { x: 28, y: -24, size: 28 },
-  /** A name is 16 on a phone wherever it stands (scene-words.ts · SCENE_TYPE): the head is no exception. */
-  name: { x: 60, y: -36, px: 16 },
+  /** A name is one size on a phone wherever it stands (scene-words.ts · SCENE_TYPE.name): the head is no exception. */
+  name: { x: 60, y: -36, px: 14 },
   line: { x: 60, y: -14 },
   transcript: { x: 15, y: 55 },
   cell: { left: 73, bottom: 55, pitch: 114, w: 104, h: 68 },
