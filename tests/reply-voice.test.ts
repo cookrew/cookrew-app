@@ -1,5 +1,6 @@
-// SPOKEN REPLIES IN THE DOUBAO VOICE (owner, 2026-11-03): "make the spoken
-// replies button read the final reply aloud in Doubao's voice and pace".
+// SPOKEN REPLIES IN A DOUBAO-LIKE LOCAL VOICE (owner, 2026-11-03): "read the
+// final reply aloud with a voice and pace like Doubao's, free, with what we
+// already have, not by calling Doubao".
 // The player (prompt/reply-voice.ts) against a fake audio element, a fake
 // browser voice and a fake Mac; the phone's route (/api/speak) over HTTP.
 
@@ -7,10 +8,10 @@ import http from 'node:http'
 import type net from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { SpeakError } from '../src/main/doubao-tts'
+import { SpeakError } from '../src/main/local-voice'
 
 interface Played {
-  readonly kind: 'doubao' | 'browser'
+  readonly kind: 'mac' | 'browser'
   readonly text: string
   readonly lang?: string
 }
@@ -18,6 +19,7 @@ interface Played {
 const played: Played[] = []
 const blobText = new Map<string, string>()
 let fetched: string[] = []
+let langs: Array<string | undefined> = []
 
 class FakeAudio {
   src = ''
@@ -33,7 +35,7 @@ class FakeAudio {
   play(): Promise<void> {
     const text = blobText.get(this.src)
     if (text !== undefined) {
-      played.push({ kind: 'doubao', text })
+      played.push({ kind: 'mac', text })
       setTimeout(() => this.listeners.get('ended')?.forEach((cb) => cb()), 1)
     }
     return Promise.resolve()
@@ -75,8 +77,9 @@ const stub = (api: Record<string, unknown>): void => {
 
 const mac = (fail: (text: string) => boolean = () => false) => ({
   speakAvailable: async () => true,
-  speakAudio: async (text: string) => {
+  speakAudio: async (text: string, _signal?: AbortSignal, lang?: string) => {
     fetched = [...fetched, text]
+    langs = [...langs, lang]
     if (fail(text)) throw new Error('voice down')
     return Object.assign(new Blob(['mp3']), { said: text })
   }
@@ -90,15 +93,16 @@ const load = async () => {
 beforeEach(() => {
   played.length = 0
   fetched = []
+  langs = []
   blobText.clear()
 })
 
 describe('reading a reply', () => {
-  it('in the Doubao voice, chunk by chunk, the markdown not read', async () => {
+  it("in the Mac's voice, chunk by chunk, the markdown not read", async () => {
     stub(mac())
     const voice = await load()
     await voice.readAloud('**Done.** Fixed `voice.ts`.\n\n```ts\nconst x = 1\n```')
-    expect(played).toEqual([{ kind: 'doubao', text: 'Done. Fixed voice.ts.' }])
+    expect(played).toEqual([{ kind: 'mac', text: 'Done. Fixed voice.ts.' }])
   })
 
   it('a long reply: every chunk, in order, the next fetched while one plays', async () => {
@@ -107,12 +111,12 @@ describe('reading a reply', () => {
     const reply = Array.from({ length: 30 }, (_, i) => `Sentence number ${i} is here.`).join(' ')
     await voice.readAloud(reply)
     expect(played.length).toBeGreaterThan(2)
-    expect(played.every((p) => p.kind === 'doubao')).toBe(true)
+    expect(played.every((p) => p.kind === 'mac')).toBe(true)
     expect(played.map((p) => p.text).join(' ')).toBe(reply)
     expect(fetched).toEqual(played.map((p) => p.text))
   })
 
-  it('no Doubao voice on this Mac: the browser reads, Chinese as Chinese', async () => {
+  it('no local voice on this Mac: the browser reads, Chinese as Chinese', async () => {
     stub({ speakAvailable: async () => false, speakAudio: async () => new Blob([]) })
     const voice = await load()
     await voice.readAloud('改好了，测试通过。')
@@ -122,9 +126,12 @@ describe('reading a reply', () => {
   it('a chunk the Mac cannot voice: the rest falls back to the browser', async () => {
     stub(mac((text) => text.startsWith('Second')))
     const voice = await load()
-    const reply = `First part ${'x'.repeat(60)}. Second part ${'y'.repeat(200)}.`
+    const reply = 'First it all went quite well. Second it broke. Third came after.'
     await voice.readAloud(reply)
-    expect(played.map((p) => p.kind)).toEqual(['doubao', 'browser'])
+    expect(played).toEqual([
+      { kind: 'mac', text: 'First it all went quite well.' },
+      { kind: 'browser', text: 'Second it broke. Third came after.' }
+    ])
   })
 
   it('reading flags while it plays; stopReading ends it at once', async () => {
@@ -149,7 +156,7 @@ describe('reading a reply', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     await voice.readAloud('New reply.')
     await first
-    expect(played.at(-1)).toEqual({ kind: 'doubao', text: 'New reply.' })
+    expect(played.at(-1)).toEqual({ kind: 'mac', text: 'New reply.' })
     expect(played.filter((p) => p.text.startsWith('Old')).length).toBeLessThan(2)
   })
 
@@ -184,6 +191,16 @@ describe('reading a reply', () => {
     expect(fresh.isPrimed()).toBe(false)
     fresh.stopReading()
     await reading
+  })
+
+  it('one voice per reading: Chinese anywhere is the Chinese voice, else the English one', async () => {
+    stub(mac())
+    const voice = await load()
+    await voice.readAloud('Merged it. 测试通过。')
+    expect(new Set(langs)).toEqual(new Set(['zh']))
+    langs = []
+    await voice.readAloud('Merged it. Tests pass.')
+    expect(new Set(langs)).toEqual(new Set(['en']))
   })
 
   it('only code: nothing is read', async () => {
@@ -225,26 +242,30 @@ describe('/api/speak', () => {
     })
 
   it('says whether the Mac has the voice', async () => {
-    const port = await startApi({ speak: { available: () => true, speak: async () => new Uint8Array() } })
+    const port = await startApi({ speak: { available: () => true, speak: async () => ({ audio: new Uint8Array(), type: 'audio/mp4' }), stop: () => undefined, warm: () => undefined } })
     expect((await call(port, {})).status).toBe(401)
     expect(await (await call(port, { token: PAIRING })).json()).toEqual({ available: true })
     const bare = await startApi({})
     expect(await (await call(bare, { token: PAIRING })).json()).toEqual({ available: false })
   })
 
-  it('answers the text as mp3', async () => {
+  it('answers the text as audio, in the voice its language asks for', async () => {
     const said: string[] = []
-    const speak = { available: () => true, speak: async (text: string) => (said.push(text), new Uint8Array([7, 8, 9])) }
+    const speak = {
+      available: () => true,
+      speak: async (text: string, _signal?: AbortSignal, lang?: string) => (said.push(`${lang}:${text}`), { audio: new Uint8Array([7, 8, 9]), type: 'audio/mp4' }),
+      stop: () => undefined, warm: () => undefined
+    }
     const port = await startApi({ speak })
     const response = await call(port, { method: 'POST', token: PAIRING, text: 'hello' })
     expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toBe('audio/mpeg')
+    expect(response.headers.get('content-type')).toBe('audio/mp4')
     expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([7, 8, 9])
-    expect(said).toEqual(['hello'])
+    expect(said).toEqual(['zh:hello'])
   })
 
   it('is a write: the read-only wall token may not spend the key', async () => {
-    const port = await startApi({ speak: { available: () => true, speak: async () => new Uint8Array([1]) } })
+    const port = await startApi({ speak: { available: () => true, speak: async () => ({ audio: new Uint8Array([1]), type: 'audio/mp4' }), stop: () => undefined, warm: () => undefined } })
     expect((await call(port, { method: 'POST', token: WALL, text: 'x' })).status).toBe(401)
   })
 
@@ -254,10 +275,11 @@ describe('/api/speak', () => {
     const begun = new Promise<void>((resolve) => { started = resolve })
     const speak = {
       available: () => true,
+      stop: () => undefined, warm: () => undefined,
       speak: (_text: string, s?: AbortSignal) => {
         signal = s
         started()
-        return new Promise<Uint8Array>((_resolve, reject) => s?.addEventListener('abort', () => reject(new SpeakError('Cancelled', 499))))
+        return new Promise<{ audio: Uint8Array; type: string }>((_resolve, reject) => s?.addEventListener('abort', () => reject(new SpeakError('Cancelled', 499))))
       }
     }
     const port = await startApi({ speak })
@@ -280,6 +302,7 @@ describe('/api/speak', () => {
     expect((await call(none, { method: 'POST', token: PAIRING, text: 'x' })).status).toBe(503)
     const busy = {
       available: () => true,
+      stop: () => undefined, warm: () => undefined,
       speak: async () => {
         throw new SpeakError('The voice is busy', 429)
       }
