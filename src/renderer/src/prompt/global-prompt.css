@@ -183,6 +183,51 @@
   border-top: 0;
 }
 
+/* THE EXTRAS (PromptExtras.tsx; owner, 2026-11-03): attach and 🔊 are drawn
+   flat, in the mic's shape beside them. The tray's 30 px squares are the
+   phone's keys row (styles.css), never this line's. */
+@media (min-width: 701px) {
+  .cr-prompt .voice-bar .cr-btn:not(.term-key) {
+    min-width: 0;
+    height: auto;
+    padding: 3px 8px;
+    font-size: 8.5px;
+  }
+
+  .cr-prompt .voice-bar .cr-btn:not(.term-key) .cr-icon {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+/* Only the agent's keys in the tray, where the keys are not drawn (a wide
+   screen with a mouse): no tray, so no empty gap before the mic. */
+@media (min-width: 701px) and (not (pointer: coarse)) {
+  .cr-prompt .voice-bar.keys-only {
+    display: none;
+  }
+}
+
+/* The ^ that shows or hides them (extras-pref.ts): narrower than a tool,
+   pointing down while they show. */
+.cr-prompt .cr-btn.cr-prompt-more {
+  padding: 3px 5px;
+  color: var(--sumi-ink-soft, var(--ink-soft));
+}
+
+.cr-prompt .cr-btn.cr-prompt-more.speaking {
+  color: var(--sumi-seal, var(--amber-deep));
+  box-shadow: inset 0 -2px 0 var(--sumi-seal, var(--amber-deep));
+}
+
+.cr-prompt .cr-prompt-more .cr-icon {
+  transition: transform 140ms ease;
+}
+
+.cr-prompt .cr-prompt-more.open .cr-icon {
+  transform: rotate(180deg);
+}
+
 /* Dictating (use-dictation.ts): the words so far stand in the box, not yet
    the draft, until the ear closes. */
 .cr-prompt.listening input {
@@ -265,6 +310,7 @@
 
   /* The thumb's buttons: a real tap size. Send ends the words' row; the mic
      and ⌨ end the chips' row. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-more,
   body.cookrew-mobile .cr-prompt .voice-mic,
   body.cookrew-mobile .cr-prompt .cr-prompt-keys,
   body.cookrew-mobile .cr-prompt > button[type='submit'] {
@@ -273,6 +319,16 @@
     height: 36px;
     margin-left: auto;
     justify-content: center;
+  }
+
+  /* The ^ leads the right-hand group; what follows it sits beside it. */
+  body.cookrew-mobile .cr-prompt .cr-prompt-more {
+    min-width: 36px;
+  }
+
+  body.cookrew-mobile .cr-prompt .cr-prompt-more ~ .voice-mic,
+  body.cookrew-mobile .cr-prompt .cr-prompt-more ~ .cr-prompt-keys {
+    margin-left: 0;
   }
 
   body.cookrew-mobile .cr-prompt > button[type='submit'] {
@@ -294,11 +350,14 @@
     color: var(--sumi-seal, var(--amber-deep));
   }
 
-  /* The agent's keys open by themselves while it waits on you (GlobalPrompt · keysFolded). */
-  body.cookrew-mobile .cr-prompt.keys-folded .voice-bar {
+  /* The agent's keys open by themselves while it waits on you (GlobalPrompt · keysFolded).
+     The extras the ^ shows keep the row; with none, the row goes too. */
+  body.cookrew-mobile .cr-prompt.keys-folded .voice-keys,
+  body.cookrew-mobile .cr-prompt.keys-folded .voice-bar.keys-only {
     display: none;
   }
 
+  body.cookrew-mobile .cr-prompt .cr-prompt-more .cr-icon,
   body.cookrew-mobile .cr-prompt .voice-mic .cr-icon,
   body.cookrew-mobile .cr-prompt .cr-prompt-keys .cr-icon,
   body.cookrew-mobile .cr-prompt > button[type='submit'] .cr-icon {

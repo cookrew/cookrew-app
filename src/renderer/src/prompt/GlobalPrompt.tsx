@@ -24,6 +24,9 @@ import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
 import { useDropZone } from './drop-zone'
+import { ExtrasToggle, PromptExtras, useFilePicker } from './PromptExtras'
+import { extrasShown, rememberExtras } from './extras-pref'
+import { useSpokenReplies } from './use-spoken-replies'
 import { PictureStrip, picturesOfDraft } from '../pictures/PictureStrip'
 import { shownWords, withoutLastPicture, withoutPicture, withShownWords } from './draft-pictures'
 import { keyboardCoverNow, riseOver, type RiseAnchor } from './rise-anchor'
@@ -58,6 +61,10 @@ import './global-prompt.css'
  * and wired to the agent it goes to. Typing "@" or "#" offers the names.
  * A screenshot pasted or a file dropped goes in as its path
  * (prompt-attach.ts).
+ *
+ * THE EXTRAS (owner, 2026-11-03): 📎 attach and 🔊 spoken replies stay in the
+ * box for a new agent too, flat like the mic, behind a ^ that shows or hides
+ * them (PromptExtras.tsx, extras-pref.ts).
  *
  * VOICE lands here too, and only here (use-dictation.ts): the mic, or ⌘
  * held, puts the words into the draft to be read and sent, for an agent or
@@ -342,6 +349,13 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // The whole box takes a dropped screenshot, with the transcripts view's cue over it.
   const formRef = useRef<HTMLFormElement>(null)
   const dropOver = useDropZone(formRef, attach.dropFiles)
+  const [extrasOn, setExtrasOn] = useState(extrasShown)
+  const toggleExtras = (): void => {
+    rememberExtras(!extrasOn)
+    setExtrasOn(!extrasOn)
+  }
+  const spoken = useSpokenReplies(to?.id ?? null, activity)
+  const browse = useFilePicker(attach.dropFiles)
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
   const [sel, setSel] = useState(0)
   const pending = held ? pendingName(shown, { '@': names, '#': artifacts.map((a) => a.name) }) : null
@@ -506,7 +520,22 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           if (e.key === 'Escape') e.currentTarget.blur()
         }}
       />
-      {to && <VoiceBar key={`voice:${to.id}`} terminalId={to.id} activity={activity} remote={to.remote} />}
+      <ExtrasToggle shown={extrasOn} speaking={spoken.on} onToggle={toggleExtras} />
+      {browse.input}
+      {(extrasOn || to) && (
+        <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null}>
+          {extrasOn && (
+            <PromptExtras
+              canAttach={!to?.remote}
+              attaching={attach.attaching}
+              onPick={attach.pickFiles}
+              onBrowse={browse.open}
+              speaking={spoken.on}
+              onSpeak={spoken.toggle}
+            />
+          )}
+        </VoiceBar>
+      )}
       {dictation.ear && (
         <button
           type="button"

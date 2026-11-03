@@ -4915,8 +4915,9 @@ body.cookrew-mobile .cr-dock.zoomed .dock-send {
 /* ONE row, not two. The cluster used to take a full-width row of its own
    above the action row; that cost the dock ~50px of height on the one
    screen where height is scarcest — the phone, where the dock and the
-   terminal share it. Keys now ride inline with attach/mic/speak/send, and
-   if a very narrow phone can't seat all nine the row scrolls sideways
+   terminal share it. Keys now ride in the prompt box's tray beside attach
+   and speak (prompt/global-prompt.css), and if a very narrow phone can't
+   seat them all the row scrolls sideways
    (same idiom as .popout-header) rather than wrapping the line back. */
 body.cookrew-mobile .cr-dock .voice-bar {
   flex-wrap: nowrap;

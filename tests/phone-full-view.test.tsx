@@ -104,6 +104,7 @@ describe('the box on a phone', () => {
     expect(phone).toMatch(/\.cr-prompt-to\s*\{[^}]*max-width: 38%/)
     // The model takes what the name leaves, up to its own width: grown from 0, it never wraps the row.
     expect(phone).toMatch(/\.cr-tune-menu\s*\{[^}]*flex: 1 1 0;[^}]*max-width: max-content/)
-    expect(phone).toMatch(/\.cr-prompt\.keys-folded \.voice-bar\s*\{\s*display: none;/)
+    // Folded, the keys go; the row goes too unless the ^ shows the extras on it.
+    expect(phone).toMatch(/\.cr-prompt\.keys-folded \.voice-keys,\s*body\.cookrew-mobile \.cr-prompt\.keys-folded \.voice-bar\.keys-only\s*\{\s*display: none;/)
   })
 })

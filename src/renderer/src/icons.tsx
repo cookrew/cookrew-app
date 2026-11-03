@@ -20,6 +20,8 @@ export type CrIconName =
   | 'plus'
   | 'caret-down'
   | 'caret-right'
+  /** The prompt box's ^: shows or hides its extra tools. */
+  | 'chevron-up'
   | 'check'
   | 'prev'
   | 'next'
@@ -164,6 +166,7 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
   plus: <path {...STROKE} strokeWidth={2.1} strokeLinecap="square" d="M8 2.6 V13.4 M2.6 8 H13.4" />,
   'caret-down': <path {...FILLED} d="M3.4 5.4 H12.6 L8 11.4 Z" />,
   'caret-right': <path {...FILLED} d="M5.4 3.4 V12.6 L11.4 8 Z" />,
+  'chevron-up': <path {...STROKE} strokeWidth={2} strokeLinecap="square" d="M3.4 10.4 L8 5.8 L12.6 10.4" />,
   check: <path {...STROKE} strokeWidth={2.1} strokeLinecap="square" d="M2.8 8.6 L6.4 12 L13.2 4.2" />,
   prev: <path {...FILLED} d="M10.8 2.8 L5 8 L10.8 13.2 Z" />,
   next: <path {...FILLED} d="M5.2 2.8 L11 8 L5.2 13.2 Z" />,
