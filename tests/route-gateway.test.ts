@@ -243,7 +243,8 @@ describe('the catalog', () => {
       expect(quotas).toHaveLength(3)
       expect(quotas[0]).toEqual({
         provider: 'claude', account: 'me@example.com', alias: null, plan: 'Max', kind: 'subscription',
-        windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.parse('2026-10-11T12:00:00Z'), display: null }], last: true, error: null
+        windows: [{ name: '5h', used: 12, limit: 100, resetsAt: Date.parse('2026-10-11T12:00:00Z'), display: null, remaining: null, unit: null, tokensUsed: null, valueUsed: null, since: null, estimateWhy: null }],
+        last: true, error: null, balance: null, until: null, resetCredits: null, readAt: null
       })
       expect(quotas[1]).toMatchObject({ provider: 'deepseek', kind: 'key', windows: [], last: false, account: null })
       expect(quotas[2]).toMatchObject({ provider: 'ollama', kind: 'local' })

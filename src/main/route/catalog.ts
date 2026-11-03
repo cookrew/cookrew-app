@@ -15,6 +15,14 @@ import type { RouteModel, RouteQuota, RouteQuotaWindow } from '../../shared/rout
  * remaining, limit, unit, display}], readAt, error?}]}`. The mapper takes
  * what a row has and leaves the rest null; a field it never saw is null,
  * never invented.
+ *
+ * 0.1.2597 (2026-11-03) says more, and the panel now shows it: a window's
+ * `used`/`remaining` are PERCENTS when it has no `limit`, `resetsAt` is
+ * real, `holds` is what the account spent in the window ({tokens, cost,
+ * priced, since}) and `holdsWhy` why there is no such figure ("low", "new",
+ * "stale"); a prepaid provider is `kind: "balance"` with a `balance`
+ * sentence; Codex adds `until` (the plan's end) and `resets` (window resets
+ * held: {count, until}).
  */
 
 export interface CatalogFetch {
@@ -83,13 +91,20 @@ const resetAt = (v: unknown): number | null => {
 
 function toWindow(name: string, row: unknown): RouteQuotaWindow {
   const r = asRecord(row)
+  const holds = asRecord(r?.holds)
   return {
     name,
     used: num(r?.used) ?? num(r?.usedPercent) ?? num(r?.utilization) ?? null,
     limit: num(r?.limit) ?? num(r?.total) ?? null,
-    // The real rows carry no reset time (round 2); the field stays for a gateway that does.
     resetsAt: resetAt(r?.resetsAt ?? r?.resets_at ?? r?.reset ?? r?.resetAt),
-    display: str(r?.display)
+    display: str(r?.display),
+    remaining: num(r?.remaining),
+    unit: str(r?.unit),
+    tokensUsed: num(holds?.tokens),
+    // An unpriced spend has no dollar figure: null, never a zero.
+    valueUsed: holds?.priced === true ? num(holds.cost) : null,
+    since: resetAt(holds?.since),
+    estimateWhy: str(r?.holdsWhy)
   }
 }
 
@@ -107,7 +122,10 @@ function kindOf(r: Record<string, unknown>, provider: string): RouteQuota['kind'
   const kind = (str(r.kind) ?? str(r.type) ?? '').toLowerCase()
   if (kind === 'key' || kind === 'api_key' || kind === 'apikey') return 'key'
   if (kind === 'local') return 'local'
+  if (kind === 'balance' || kind === 'prepaid') return 'balance'
   if (kind === 'subscription' || kind === 'account') return 'subscription'
+  // No kind said, but a balance given: a prepaid provider.
+  if (str(r.balance)) return 'balance'
   if (/^(ollama|lmstudio|lm-studio|vllm|local)/i.test(provider)) return 'local'
   if (str(r.account) ?? str(r.user) ?? str(r.email) ?? str(r.login) ?? str(r.plan)) return 'subscription'
   return 'key'
@@ -122,13 +140,24 @@ export function toQuota(row: unknown): RouteQuota | null {
     provider,
     // The real quotas row says `user`; the docs say account/email/login.
     account: str(r.account) ?? str(r.user) ?? str(r.email) ?? str(r.login) ?? null,
-    alias: str(r.alias),
+    // The real row names the account's product in `name` ("Claude Code"); only when `provider` said who it is.
+    alias: str(r.alias) ?? (str(r.provider) ? str(r.name) : null),
     plan: str(r.plan),
     kind: kindOf(r, provider),
     windows: windowsOf(r),
     last: r.last === true,
-    error: str(r.error)
+    error: str(r.error),
+    balance: str(r.balance),
+    until: resetAt(r.until),
+    resetCredits: resetCreditsOf(r.resets),
+    readAt: resetAt(r.readAt)
   }
+}
+
+function resetCreditsOf(v: unknown): RouteQuota['resetCredits'] {
+  const r = asRecord(v)
+  const count = num(r?.count)
+  return count === null ? null : { count, firstExpiresAt: resetAt(r?.until) }
 }
 
 /**

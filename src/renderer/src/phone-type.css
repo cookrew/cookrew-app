@@ -120,10 +120,10 @@
   }
 
   /* ── the routing panel (⋯ → Routing): rows and their buttons at control, their notes at caption ── */
-  :root:root :is(.cr-routing-status, .cr-routing-empty, .cr-routing-hrow, .cr-routing-arow, .cr-routing-menu, .cr-routing-model, .cr-routing-lrow, .cr-routing-default, .cr-routing-signin, .cr-routing-tick, .cr-routing-btn) {
+  :root:root :is(.cr-routing-status, .cr-routing-empty, .cr-routing-hrow, .cr-routing-arow, .cr-routing-acct, .cr-routing-menu, .cr-routing-model, .cr-routing-lrow, .cr-routing-default, .cr-routing-signin, .cr-routing-tick, .cr-routing-btn) {
     font-size: var(--ph-control);
   }
-  :root:root :is(.cr-routing-seg, .cr-routing-seg .k3, .cr-routing-source, .cr-routing-quota .l, .cr-routing-menu .c, .cr-routing-lrow .alt, .cr-routing-pick, .cr-routing-hint, .cr-routing-bad) {
+  :root:root :is(.cr-routing-seg, .cr-routing-seg .k3, .cr-routing-source, .cr-routing-quota .l, .cr-routing-win, .cr-routing-acct-f, .cr-routing-menu .c, .cr-routing-lrow .alt, .cr-routing-pick, .cr-routing-hint, .cr-routing-bad) {
     font-size: var(--ph-caption);
   }
   :root:root .cr-routing-seg :is(.cr-routing-btn, .cr-routing-tick) {

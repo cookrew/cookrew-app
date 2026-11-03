@@ -6,14 +6,14 @@
 // lines, the default picker with groups first, and the one thing the panel
 // never contains — a field for a key.
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { RoutingEntry, RoutingPanel, markRoutingSeen, shouldAutoOpen, ROUTING_SEEN_KEY } from '../src/renderer/src/routing/RoutingPanel'
 import { keyLineFor } from '../src/shared/route-lines'
 import { newestError } from '../src/renderer/src/routing/newest-error'
 import { WORKSPACE_CHANGED, workspaceKey } from '../src/renderer/src/routing/use-setup-terminal'
 import { findSetupCard, setupCardPosition } from '../src/renderer/src/routing/use-setup-terminal'
-import { cardRouteFixture, localTurnFixture, routeFixture } from '../src/shared/route-fixture'
+import { ROUTE_FIXTURE_NOW, cardRouteFixture, localTurnFixture, routeFixture } from '../src/shared/route-fixture'
 import { decisionFacts, harnessTicks, maskAccount, quotaBar, routeChoices, routeDialAllowed, routeDialLines, statusLine, windowLabel } from '../src/shared/route-view'
 import type { RouteState } from '../src/shared/route'
 import type { WorkspaceState } from '../src/shared/model'
@@ -114,9 +114,46 @@ describe('models and accounts', () => {
     const html = paint(routeFixture('online'))
     expect(html).toContain('Claude Max')
     expect(html).toContain("Claude Code&#x27;s /usage is temporarily unavailable")
-    expect(html).toContain('width:77%')
+    // The bar is what is LEFT: 77 of 100 used draws 23%.
+    expect(html).toContain('width:23%')
     expect(html).toContain('local · free')
-    expect(html).not.toContain('resets')
+    // A window the gateway gave no reset time is never given one.
+    const legacy = paint({ ...routeFixture('online'), quotas: routeFixture('online').quotas.slice(0, 4) })
+    expect(legacy).not.toContain('resets in')
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('draws every window of a subscription with what is left, the reset, and the tokens that is', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(ROUTE_FIXTURE_NOW)
+    const html = paint(routeFixture('online'))
+    expect(html).toContain('Codex Team')
+    expect(html).toContain('team@…')
+    expect(html).not.toContain('team@example.com')
+    expect(html).toContain('>5 hours<')
+    expect(html).toContain('100% left')
+    expect(html).toContain('44% left')
+    expect(html).toContain('width:44%')
+    expect(html).toContain('resets in 19h')
+    expect(html).toContain('≈10M tokens left · 13M used · $93 at API prices')
+    expect(html).toContain('too little use yet to estimate tokens')
+    expect(html).toContain('3 resets in hand · first expires in 3d')
+    expect(html).toContain('plan until 2027-03-28')
+  })
+
+  it('draws a prepaid provider as its balance', () => {
+    const html = paint(routeFixture('online'))
+    expect(html).toMatch(/<b>¥42\.10<\/b> <span class="small">prepaid balance<\/span>/)
+  })
+
+  it('groups the default and the MCP switch under Settings, and names what the hub shares', () => {
+    const html = paint(routeFixture('online'), { onSetSharedMcp: () => {} })
+    expect(html.indexOf('>Settings<')).toBeGreaterThan(html.indexOf('Codex Team'))
+    expect(html.indexOf('>Settings<')).toBeLessThan(html.indexOf('Default route for new cards'))
+    expect(html).toContain('hub shares context7, memory')
+    expect(paint({ ...routeFixture('online'), mcpServers: [] }, { onSetSharedMcp: () => {} })).toContain('hub shares nothing yet · add servers in Magpie › Library')
+    expect(paint({ ...routeFixture('online'), sharedMcp: false }, { onSetSharedMcp: () => {} })).not.toContain('hub shares')
   })
 
   it('shows an account as its local part and an ellipsis, never the whole email — the phone draws the same row', () => {
