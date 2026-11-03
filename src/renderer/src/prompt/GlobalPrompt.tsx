@@ -25,7 +25,7 @@ import { useDictation } from './use-dictation'
 import { usePromptAttach } from './use-prompt-attach'
 import { useDropZone } from './drop-zone'
 import { ExtrasToggle, PromptExtras, useFilePicker } from './PromptExtras'
-import { extrasShown, rememberExtras } from './extras-pref'
+import { extrasShown, rememberExtras, toolsOpen } from './extras-pref'
 import { useSpokenReplies } from './use-spoken-replies'
 import { PictureStrip, picturesOfDraft } from '../pictures/PictureStrip'
 import { shownWords, withoutLastPicture, withoutPicture, withShownWords } from './draft-pictures'
@@ -62,9 +62,10 @@ import './global-prompt.css'
  * A screenshot pasted or a file dropped goes in as its path
  * (prompt-attach.ts).
  *
- * THE EXTRAS (owner, 2026-11-03): 📎 attach and 🔊 spoken replies stay in the
- * box for a new agent too, flat like the mic, behind a ^ that shows or hides
- * them (PromptExtras.tsx, extras-pref.ts).
+ * THE TOOLS (owner, 2026-11-03): 📎 attach, 🔊 spoken replies and, with an
+ * agent in the box, its keys (arrows, paste, Esc), flat like the mic, for a
+ * new agent too, behind one ^ that shows or hides them all (PromptExtras.tsx,
+ * extras-pref.ts). It opens by itself while the agent waits on you.
  *
  * VOICE lands here too, and only here (use-dictation.ts): the mic, or ⌘
  * held, puts the words into the draft to be read and sent, for an agent or
@@ -261,23 +262,32 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // Words held back while the agent asked a question go in once it is done asking.
   const asked = useRef<{ id: string | null; waiting: boolean }>({ id: null, waiting: false })
   const phase = activity?.phase
-  // THE AGENT'S KEYS FOLD ON A PHONE (owner, 2026-11-02): the arrows, paste
-  // and Esc are for answering the agent, so they open by themselves while it
-  // waits on you and otherwise sit behind ⌨. A tap on ⌨ overrides that until
-  // the agent starts or stops waiting, or another agent takes the box.
+  // ONE FOLD FOR EVERY TOOL (owner, 2026-11-03): the ^ shows or hides attach,
+  // 🔊 and the agent's keys (arrows, paste, Esc) together; ⌨ is gone. The
+  // pick sticks (extras-pref.ts). The keys are for answering the agent, so
+  // the fold opens by itself while it waits on you (owner, 2026-11-02); a tap
+  // on the ^ overrides that until the agent starts or stops waiting, or
+  // another agent takes the box.
   const waitingOnYou = phase === 'waiting'
-  const [keysPick, setKeysPick] = useState<boolean | null>(null)
-  useEffect(() => setKeysPick(null), [to?.id, waitingOnYou])
-  const keysFolded = to !== null && !(keysPick ?? waitingOnYou)
+  const [extrasOn, setExtrasOn] = useState(extrasShown)
+  const [toolsPick, setToolsPick] = useState<boolean | null>(null)
+  useEffect(() => setToolsPick(null), [to?.id, waitingOnYou])
+  const toolsShown = toolsOpen(toolsPick, extrasOn, to !== null && waitingOnYou)
+  const toggleTools = (): void => {
+    const next = !toolsShown
+    setToolsPick(next)
+    setExtrasOn(next)
+    rememberExtras(next)
+  }
   // The keys come last on the phone's one row (global-prompt.css), past what
-  // the chips leave in view: when they open, by ⌨ or because the agent waits
-  // on you, the row is swiped to them (owner, 2026-11-03: "the arrows and
-  // ESC seem gone"). A wide screen's tools have no box, so nothing scrolls.
+  // the chips leave in view: when they open, by the ^ or because the agent
+  // waits on you, the row is swiped to them (owner, 2026-11-03: "the arrows
+  // and ESC seem gone"). A wide screen's tools have no box, so nothing scrolls.
   const toolsRef = useRef<HTMLSpanElement>(null)
   useLayoutEffect(() => {
     const row = toolsRef.current
-    if (row && to && !keysFolded) row.scrollLeft = row.scrollWidth
-  }, [keysFolded, to?.id])
+    if (row && to && toolsShown) row.scrollLeft = row.scrollWidth
+  }, [toolsShown, to?.id])
   useEffect(() => {
     const waiting = phase === 'waiting'
     const id = to?.id ?? null
@@ -358,11 +368,6 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // The whole box takes a dropped screenshot, with the transcripts view's cue over it.
   const formRef = useRef<HTMLFormElement>(null)
   const dropOver = useDropZone(formRef, attach.dropFiles)
-  const [extrasOn, setExtrasOn] = useState(extrasShown)
-  const toggleExtras = (): void => {
-    rememberExtras(!extrasOn)
-    setExtrasOn(!extrasOn)
-  }
   const spoken = useSpokenReplies(to?.id ?? null, activity)
   const browse = useFilePicker(attach.dropFiles)
   const [dismissedAt, setDismissedAt] = useState<string | null>(null)
@@ -396,7 +401,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   return (
     <form
       ref={formRef}
-      className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}${hearing ? ' listening' : ''}${keysFolded ? ' keys-folded' : ''}`}
+      className={`cr-prompt${to ? ' to-agent' : ' to-new'}${attach.attaching ? ' attaching' : ''}${hearing ? ' listening' : ''}`}
       onSubmit={(e) => {
         e.preventDefault()
         if (dictation.listening) return
@@ -531,36 +536,20 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       {/* The tools after the chips: one row on a phone, swiped sideways
           (global-prompt.css · .cr-prompt-tools); in line on a wide screen. */}
       <span className="cr-prompt-tools" ref={toolsRef}>
-      <ExtrasToggle shown={extrasOn} speaking={spoken.on} onToggle={toggleExtras} />
+      <ExtrasToggle shown={toolsShown} speaking={spoken.on} onToggle={toggleTools} />
       {browse.input}
-      {(extrasOn || to) && (
+      {toolsShown && (
         <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null}>
-          {extrasOn && (
-            <PromptExtras
-              canAttach={!to?.remote}
-              attaching={attach.attaching}
-              onPick={attach.pickFiles}
-              onBrowse={browse.open}
-              speaking={spoken.on}
-              reading={spoken.reading}
-              onSpeak={spoken.toggle}
-            />
-          )}
+          <PromptExtras
+            canAttach={!to?.remote}
+            attaching={attach.attaching}
+            onPick={attach.pickFiles}
+            onBrowse={browse.open}
+            speaking={spoken.on}
+            reading={spoken.reading}
+            onSpeak={spoken.toggle}
+          />
         </VoiceBar>
-      )}
-      {/* Phone only (global-prompt.css): the agent's keys, folded or open. */}
-      {to && (
-        <button
-          type="button"
-          className={`cr-btn sm cr-prompt-keys${keysFolded ? '' : ' open'}`}
-          title={keysFolded ? 'Show the agent\'s keys: arrows, paste, Esc' : 'Fold the agent\'s keys'}
-          aria-label="Agent keys"
-          aria-expanded={!keysFolded}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setKeysPick(keysFolded)}
-        >
-          <CrIcon name="keyboard" />
-        </button>
       )}
       </span>
       {/* Beside Send, out of the tools: on a phone the box's one row at rest is

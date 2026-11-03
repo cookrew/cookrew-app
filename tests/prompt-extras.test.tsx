@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { shouldSpeak } from '../src/renderer/src/prompt/use-spoken-replies'
 import { PromptExtras } from '../src/renderer/src/prompt/PromptExtras'
 import { shownWords, withAttached } from '../src/renderer/src/prompt/draft-pictures'
+import { toolsOpen } from '../src/renderer/src/prompt/extras-pref'
 
 type Store = Map<string, string>
 
@@ -111,11 +112,27 @@ describe('the ^ shows or hides them', () => {
     expect(shown).toContain('voice-speak')
   })
 
-  it('hidden with an agent in the box, the tray holds only its keys, and says so', async () => {
+  // Owner, 2026-11-03, later: "the arrows, paste and Esc go in there too".
+  it('the agent\'s keys sit behind the same ^: shown with the rest, after them', async () => {
+    const html = await render({ fullAgentId: 'a1' })
+    expect(html.indexOf('voice-speak')).toBeLessThan(html.indexOf('term-key'))
+    expect(html.indexOf('term-key')).toBeLessThan(html.indexOf('voice-mic'))
+    expect(html).not.toContain('aria-label="Agent keys"')
+  })
+
+  it('folded with an agent in the box: no tray at all, its keys gone with the rest', async () => {
     const html = await render({ fullAgentId: 'a1', store: new Map([['cookrew.prompt-extras', '0']]) })
-    expect(html).toMatch(/class="voice-bar nodrag keys-only"/)
+    expect(html).not.toContain('voice-bar')
+    expect(html).not.toContain('term-key')
     expect(html).not.toContain('voice-attach')
-    expect(html).toContain('term-key')
+  })
+
+  it('the agent waiting on you opens them by itself; a tap on the ^ then stands', () => {
+    expect(toolsOpen(null, false, true)).toBe(true)
+    expect(toolsOpen(null, false, false)).toBe(false)
+    expect(toolsOpen(null, true, false)).toBe(true)
+    expect(toolsOpen(false, true, true)).toBe(false)
+    expect(toolsOpen(true, false, false)).toBe(true)
   })
 })
 
@@ -160,13 +177,14 @@ describe('the paperclip puts any file in the draft', () => {
 })
 
 describe('drawn flat, like the mic', () => {
-  it('on a wide screen the tray tools leave the 30 px square for the mic\'s sm shape', () => {
+  it('on a wide screen every tool, the keys too, leaves the 30 px square for the mic\'s sm shape', () => {
     const wide = css.slice(css.indexOf('@media (min-width: 701px) {'))
-    expect(wide).toMatch(/\.cr-prompt \.voice-bar \.cr-btn:not\(\.term-key\)\s*\{[^}]*height: auto;[^}]*padding: 3px 8px;/)
+    expect(wide).toMatch(/\.cr-prompt \.voice-bar \.cr-btn,\s*\.cr-prompt \.voice-bar \.voice-keys \.cr-btn\.term-key\s*\{[^}]*height: auto;[^}]*padding: 3px 8px;/)
   })
 
-  it('a keys-only tray is not drawn where the keys are not', () => {
-    expect(css).toMatch(/@media \(min-width: 701px\) and \(not \(pointer: coarse\)\)\s*\{\s*\.cr-prompt \.voice-bar\.keys-only\s*\{\s*display: none;/)
+  it('the keys are drawn in the box at every width, not only on a touch screen', () => {
+    expect(css).toMatch(/^\.cr-prompt \.voice-keys \{\s*display: flex;/m)
+    expect(css).not.toMatch(/keys-only|keys-folded|cr-prompt-keys/)
   })
 })
 

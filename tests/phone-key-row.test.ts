@@ -21,9 +21,11 @@ describe("the phone's tools: one row after the chips", () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
     const at = box.indexOf('<span className="cr-prompt-tools"')
     expect(at).toBeGreaterThan(-1)
-    const end = box.indexOf('</span>', box.indexOf('cr-prompt-keys', at))
+    const end = box.indexOf('</span>', box.indexOf('</VoiceBar>', at))
     const inside = box.slice(at, end)
-    for (const part of ['<ExtrasToggle', '<VoiceBar', 'cr-prompt-keys']) expect(inside).toContain(part)
+    for (const part of ['<ExtrasToggle', '<VoiceBar']) expect(inside).toContain(part)
+    // 2026-11-03, later: ⌨ is gone; the ^ folds the keys with attach and 🔊.
+    expect(inside).not.toContain('cr-prompt-keys')
     expect(inside).not.toContain('voice-mic')
     expect(inside).not.toContain('type="submit"')
     expect(rule('.cr-prompt-tools')).toContain('display: contents;')
@@ -39,10 +41,9 @@ describe("the phone's tools: one row after the chips", () => {
     expect(css).not.toMatch(/\.cr-prompt \.voice-bar \{[^}]*flex-basis: 100%/)
   })
 
-  it('puts ⌄ ⌨ first, then the extras and the keys', () => {
+  it('puts the ^ first, then the extras and the keys', () => {
     const order = (sel: string): number => Number(rule(`  body.cookrew-mobile .cr-prompt .cr-prompt-tools > ${sel}`).match(/order: (\d+);/)?.[1])
-    expect(order('.cr-prompt-more')).toBeLessThan(order('.cr-prompt-keys'))
-    expect(order('.cr-prompt-keys')).toBeLessThan(order('.voice-bar'))
+    expect(order('.cr-prompt-more')).toBeLessThan(order('.voice-bar'))
   })
 
   it('draws every button in it at one size', () => {
@@ -53,8 +54,9 @@ describe("the phone's tools: one row after the chips", () => {
     expect(css).toMatch(/body\.cookrew-mobile \.cr-prompt \.voice-keys \{\s*display: contents;/)
   })
 
-  it('still lets ⌨ hide the terminal keys', () => {
-    expect(css).toMatch(/\.cr-prompt\.keys-folded \.voice-keys,\s*body\.cookrew-mobile \.cr-prompt\.keys-folded \.voice-bar\.keys-only \{\s*display: none;/)
+  it('lets the ^ hide the terminal keys with the rest: no tray while it is folded', () => {
+    expect(read('prompt', 'GlobalPrompt.tsx')).toMatch(/\{toolsShown && \(\s*<VoiceBar/)
+    expect(css).not.toMatch(/keys-folded|cr-prompt-keys/)
   })
 
   it('draws the four arrows as one icon turned four ways', () => {
@@ -67,7 +69,7 @@ describe("the phone's tools: one row after the chips", () => {
   it('swipes the row to the keys whenever they open', () => {
     const box = read('prompt', 'GlobalPrompt.tsx')
     expect(box).toContain('<span className="cr-prompt-tools" ref={toolsRef}>')
-    expect(box).toMatch(/if \(row && to && !keysFolded\) row\.scrollLeft = row\.scrollWidth\s*\}, \[keysFolded, to\?\.id\]\)/)
+    expect(box).toMatch(/if \(row && to && toolsShown\) row\.scrollLeft = row\.scrollWidth\s*\}, \[toolsShown, to\?\.id\]\)/)
   })
 
   it('fits all six keys in the ~235px two chips leave on a 412px phone', () => {
