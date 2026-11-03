@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import type { HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from '../../../shared/route'
-import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, quotaBar, routeChoices, statusLine, windowLabel, routeHead, ruleTitle } from '../../../shared/route-view'
+import type { HarnessRow, RouteDecision, RouteModel, RouteState } from '../../../shared/route'
+import { KEY_PRESETS, ROUTING_COPY, autoGroupItem, decisionFacts, harnessTicks, routeChoices, statusLine, routeHead, ruleTitle } from '../../../shared/route-view'
+import { mcpLibraryLine } from '../../../shared/quota-view'
+import { AccountCard } from './AccountCard'
 import { keyLineFor } from '../../../shared/route-lines'
 import { runningLabel, type SetupRunning } from './setup-line-state'
 import { cookrew } from '../api'
@@ -140,40 +142,6 @@ export function Harnesses({
   )
 }
 
-function Quota({ q }: { q: RouteQuota }): React.JSX.Element {
-  const bar = quotaBar(q)
-  return (
-    <div className="cr-routing-arow">
-      <span>
-        <b>{bar.title}</b>
-        <br />
-        <span className="small">{bar.sub || bar.kind}</span>
-      </span>
-      {bar.error !== null ? (
-        // The gateway could not read this one: the sentence, no bar.
-        <span className="cr-routing-bad" style={{ padding: 0 }}>
-          {bar.error}
-        </span>
-      ) : bar.fill === null ? (
-        <span className="small">{bar.reading}</span>
-      ) : (
-        <span className="cr-routing-quota">
-          <span className="l">
-            {/* The fullest window names the bar; its label is the gateway's own. */}
-            <span>{bar.reading.slice(0, bar.reading.indexOf(' '))}</span>
-            <span>{bar.reading.slice(bar.reading.indexOf(' ') + 1)}</span>
-          </span>
-          <span className="b">
-            <i className={bar.hot ? 'hot' : ''} style={{ width: `${Math.round(bar.fill * 100)}%` }} />
-          </span>
-        </span>
-      )}
-      <span className="small ws">{bar.error === null && q.windows.length > 1 ? `${q.windows[1].name} ${windowLabel(q.windows[1])}` : ''}</span>
-      <span className={`cr-routing-tick ${bar.error !== null ? 'dim' : 'ok'}`}>{q.kind}</span>
-    </div>
-  )
-}
-
 export function AddMenu({ setup, onRun, defaultOpen = false, running = null }: { setup: RouteState['setup']; onRun: RunLine; defaultOpen?: boolean; running?: SetupRunning | null }): React.JSX.Element {
   const busyFor = (line: string | null): string | null => (line === null ? null : runningLabel(running, line))
   const [open, setOpen] = useState(defaultOpen)
@@ -281,6 +249,7 @@ export function Accounts({
     )
   }
   const choices = routeChoices(state.models)
+  const now = Date.now()
   return (
     <>
       <div className="cr-routing-seg">
@@ -288,8 +257,9 @@ export function Accounts({
         <AddMenu setup={state.setup} onRun={onRun} running={running} />
       </div>
       {state.quotas.map((q) => (
-        <Quota key={`${q.provider}:${q.account ?? ''}`} q={q} />
+        <AccountCard key={`${q.provider}:${q.account ?? ''}`} q={q} now={now} />
       ))}
+      <div className="cr-routing-seg">{ROUTING_COPY.settingsLabel}</div>
       <div className="cr-routing-default" role="radiogroup" aria-label="Default route for new cards">
         <span className="cr-routing-seg" style={{ margin: 0 }}>
           {ROUTING_COPY.defaultLabel}
@@ -311,7 +281,7 @@ export function Accounts({
           )
         })}
       </div>
-      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} onSet={onSetSharedMcp} />}
+      {onSetSharedMcp && <SharedMcp on={state.sharedMcp} servers={state.mcpServers} onSet={onSetSharedMcp} />}
       <details className="cr-routing-fold">
         <summary>▸ Model catalogue · {state.models.length} · /v1/models</summary>
         <div>
@@ -325,7 +295,7 @@ export function Accounts({
 }
 
 /** One MCP hub for every agent (shared) or each agent its own (own); read at each agent's next spawn. */
-function SharedMcp({ on, onSet }: { on: boolean; onSet: (on: boolean) => void }): React.JSX.Element {
+function SharedMcp({ on, servers, onSet }: { on: boolean; servers: readonly string[] | null | undefined; onSet: (on: boolean) => void }): React.JSX.Element {
   const picks: { value: boolean; label: string }[] = [
     { value: true, label: ROUTING_COPY.mcpShared },
     { value: false, label: ROUTING_COPY.mcpOwn }
@@ -348,6 +318,7 @@ function SharedMcp({ on, onSet }: { on: boolean; onSet: (on: boolean) => void })
         </button>
       ))}
       <span className="small">{on ? ROUTING_COPY.mcpSharedNote : ROUTING_COPY.mcpOwnNote}</span>
+      {on && <span className="small cr-routing-mcplib">{mcpLibraryLine(servers)}</span>}
     </div>
   )
 }

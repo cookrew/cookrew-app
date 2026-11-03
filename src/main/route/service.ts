@@ -23,6 +23,7 @@ import type { GatewayMonitor, GatewayProbe } from './gateway'
 import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
 import { keyFor, readRouteKeys, type RouteKeys } from './route-keys'
 import { sharedMcpArgs } from './shared-mcp'
+import { readLibraryServers } from './library'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -83,6 +84,8 @@ export interface RouteServiceDeps {
   /** The per-harness gateway key names (~/.cookrew/route-keys.json); default reads the file. Injected for tests. */
   routeKeys?: () => RouteKeys
   dockCommands: () => readonly string[]
+  /** The server names in Magpie's library (library.ts); default reads the file. Injected for tests. */
+  libraryServers?: () => string[] | null
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
   now?: () => number
@@ -117,6 +120,8 @@ export class RouteService extends EventEmitter {
   private ownerDefault: string | null
   /** Hand every spawned agent Magpie's one MCP hub (shared-mcp.ts). On unless the owner turned it off. */
   private sharedMcp: boolean
+  /** What the hub shares, read with each probe (names only). */
+  private mcpServers: string[] | null = null
   private readonly offlineAtSpawn = new Set<string>()
   /** Cards whose running process was handed a route — the only ones a turn is followed for. */
   private readonly routed = new Set<string>()
@@ -133,6 +138,7 @@ export class RouteService extends EventEmitter {
     const settings = this.readSettings()
     this.ownerDefault = settings.defaultModel
     this.sharedMcp = settings.sharedMcp
+    this.mcpServers = this.readLibrary()
     this.scan = deps.scan ?? new HarnessScan({ home: deps.home, pathEnv: deps.pathEnv, dockCommands: deps.dockCommands, harnessOfCommand: (c) => deps.harnessOf(c) })
     this.decisions = new RouteDecisions({
       fetch: (input, init) => deps.fetch(input, init),
@@ -176,6 +182,7 @@ export class RouteService extends EventEmitter {
       checkedAt: probe.checkedAt,
       autoGroup: this.models.some((m) => m.id === 'group/auto'),
       sharedMcp: this.sharedMcp,
+      mcpServers: this.mcpServers,
       setup: { ...lines, addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
   }
@@ -424,7 +431,13 @@ export class RouteService extends EventEmitter {
     return Boolean(node.servedSession) || this.deps.isServed(node.id)
   }
 
+  private readLibrary(): string[] | null {
+    return (this.deps.libraryServers ?? (() => readLibraryServers({ home: this.deps.home, env: process.env })))()
+  }
+
   private async onProbe(probe: GatewayProbe): Promise<void> {
+    // The library changes in Magpie's own window; each probe (the panel opening, the held clock) reads it again.
+    this.mcpServers = this.readLibrary()
     try {
       if (probe.status !== 'online' || !probe.gateway) {
         this.models = []

@@ -20,6 +20,7 @@ export const ROUTING_COPY = {
   wiredByProbe: 'found on this machine',
   defaultNone: 'direct — pick a model to route new cards',
   defaultLabel: 'DEFAULT',
+  settingsLabel: 'Settings',
   mcpLabel: 'MCP',
   mcpShared: 'shared',
   mcpOwn: 'own',
