@@ -109,8 +109,18 @@ function ancestorSessionId() {
   return null
 }
 
-// `preset list` / `note read` style subcommands stay in args; flags are --key [value].
+// `preset list` / `note read` style subcommands stay in args; flags are
+// --key [value], except the boolean flags below, which are always bare.
 function parseArgv(argv) {
+  // Flags that never take a value, in any position. Without the list every
+  // `--key` took the token after it, so `note create --new "x"` sent "x" as the
+  // flag's value and made an EMPTY note, and `ask "A" --no-wait -` never read
+  // stdin. Kept in step with src/main/cli-flags.ts (this script is copied alone
+  // next to the socket and imports nothing from the app);
+  // tests/cli-bool-flags.test.ts runs this client against every name there.
+  // Declared inside the function: it runs before module-level consts below it
+  // are initialised, and a test lifts this function out by its source.
+  const BOOLEAN_FLAGS = new Set(['all', 'canvas', 'disabled', 'help', 'new', 'no-wait', 'rotate'])
   const args = []
   const flags = {}
   let cmd = null
@@ -119,7 +129,7 @@ function parseArgv(argv) {
     if (token.startsWith('--')) {
       const key = token.slice(2)
       const next = argv[i + 1]
-      if (next !== undefined && !next.startsWith('--')) {
+      if (!BOOLEAN_FLAGS.has(key) && next !== undefined && !next.startsWith('--')) {
         flags[key] = next
         i += 1
       } else {
@@ -146,8 +156,8 @@ if (execTail !== null && execTail.length === 0) {
   fail('usage: cookrew secret exec <name> -- <command…>', 1)
 }
 /**
- * `cookrew ask "Agent" -` and `cookrew recruit --prompt -`: a lone dash reads
- * the brief from stdin.
+ * `cookrew ask "Agent" -`, `cookrew recruit --prompt -` and `cookrew role save
+ * "Agent" "Role" --prompt -`: a lone dash reads the brief from stdin.
  *
  * WHY. A brief passed as an argument goes through the caller's shell, which
  * runs backticks and $(...), expands $VAR and history-expands ! before this
@@ -162,14 +172,17 @@ if (execTail !== null && execTail.length === 0) {
  */
 const STDIN_USAGE = {
   ask: `usage: cookrew ask "Agent" - <<'EOF'\n  your brief, any characters\nEOF\n(a lone - reads the brief from stdin, and stdin was empty)`,
-  recruit: `usage: cookrew recruit ["Name"] --prompt - <<'EOF'\n  its first prompt, any characters\nEOF\n(--prompt - reads the prompt from stdin, and stdin was empty)`
+  recruit: `usage: cookrew recruit ["Name"] --prompt - <<'EOF'\n  its first prompt, any characters\nEOF\n(--prompt - reads the prompt from stdin, and stdin was empty)`,
+  role: `usage: cookrew role save "Agent" "RoleName" --prompt - <<'EOF'\n  the role text, any characters\nEOF\n(--prompt - reads the role text from stdin, and stdin was empty)`
 }
-const stdinSlot =
-  cmd === 'ask' && args[1] === '-' && flags.raw === undefined
-    ? 'ask'
-    : cmd === 'recruit' && flags.prompt === '-'
-      ? 'recruit'
-      : null
+function stdinSlotFor() {
+  if (cmd === 'ask' && args[1] === '-' && flags.raw === undefined) return 'ask'
+  if (flags.prompt !== '-') return null
+  if (cmd === 'recruit') return 'recruit'
+  if (cmd === 'role' && args[0] === 'save') return 'role'
+  return null
+}
+const stdinSlot = stdinSlotFor()
 
 async function readStdin() {
   if (process.stdin.isTTY) return ''
@@ -181,7 +194,8 @@ async function readStdin() {
 const brief = stdinSlot === null ? null : (await readStdin()).replace(/\r?\n$/, '')
 if (brief !== null && brief.trim() === '') fail(STDIN_USAGE[stdinSlot], 1)
 const requestArgs = stdinSlot === 'ask' ? [args[0], brief, ...args.slice(2)] : args
-const requestFlags = stdinSlot === 'recruit' ? { ...flags, prompt: brief } : flags
+const promptFromStdin = stdinSlot === 'recruit' || stdinSlot === 'role'
+const requestFlags = promptFromStdin ? { ...flags, prompt: brief } : flags
 
 const request = {
   id: randomUUID(),
