@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, u
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { sessionIdentity } from '../src/main/session-identity'
 import { sandboxRoot } from '../src/main/session-sandbox'
 import { servedSessionCandidates, servedSessionKey, writtenSincePlan } from '../src/main/storage-gc-served'
 
@@ -48,6 +49,23 @@ describe('servedSessionKey — spelled by the rule that made the directory', () 
 
   it('segments an unsafe id the way the sandbox does', () => {
     expect(servedSessionKey('Svc X', 'Svc X-Ana/../-2')).toBe('svc-x/ana-----2')
+  })
+
+  it('finds every long-id sandbox of one pair, each under the key servedSessionKey spells', () => {
+    // Past 64 characters a segment is shortened (prefix + hash + ordinal);
+    // the sweep must still see one candidate per session and match the open
+    // set by name, or it would delete an open long-id sandbox.
+    const root = base()
+    const service = 'svc-'.padEnd(70, 's')
+    const account = 'acct-'.padEnd(70, 'a')
+    const ids = [1, 2, 3].map((n) => sessionIdentity(service, account, n).sessionId)
+    for (const id of ids) sandboxRoot(root, service, id)
+    const keys = ids.map((id) => servedSessionKey(service, id))
+    expect(new Set(keys).size).toBe(ids.length)
+    // safeSegment never emits a dot: the residue naming depends on it.
+    for (const key of keys) expect(key.includes('.'), key).toBe(false)
+    const found = servedSessionCandidates(path.join(root, 'sessions'))
+    expect(found?.map((c) => c.key).sort()).toEqual([...keys].sort())
   })
 })
 

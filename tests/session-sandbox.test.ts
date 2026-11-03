@@ -10,8 +10,10 @@ import {
   safeSegment,
   sandboxRoot,
   seatbeltProfile,
-  serviceRoot
+  serviceRoot,
+  sessionSegment
 } from '../src/main/session-sandbox'
+import { sessionIdentity } from '../src/main/session-identity'
 
 /**
  * SEC-S SLICE 1 — the sandbox, exercised rather than described.
@@ -338,5 +340,116 @@ describe.runIf(onMac)('a process under the profile cannot get out', () => {
     writeFileSync(path.join(ana, 'mine.txt'), 'mine')
     const out = run(ana, realpathSync(serviceRoot(base, 'svc')), `cat ${ana}/mine.txt`)
     expect(out).toContain('mine')
+  })
+})
+
+/**
+ * LONG IDS — shortened, never cut.
+ *
+ * safeSegment used to slice at 64 characters. A long service id plus a long
+ * account id then lost the ordinal digits at the end of the session id, so
+ * every session of that pair mapped to ONE sandbox and a new session inherited
+ * the last one's harness state. The legacy functions below are the old rule
+ * verbatim: every short id must keep the exact path it had, so no existing
+ * sandbox moves.
+ */
+const legacySafeSegment = (raw: string): string => {
+  const cleaned = raw.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '')
+  return cleaned.length > 0 ? cleaned.slice(0, 64) : 'unnamed'
+}
+const legacySessionSegment = (serviceId: string, sessionId: string): string => {
+  const service = legacySafeSegment(serviceId)
+  const session = legacySafeSegment(sessionId)
+  return session.startsWith(`${service}-`) ? session.slice(service.length + 1) : session
+}
+
+/** Exactly 64 characters: two ids that differ only after it used to collide. */
+const SHARED = 'research-crew-'.padEnd(64, 'x')
+
+/** A small deterministic PRNG, so the sweep below is the same every run. */
+const prng = (seed: number) => () => {
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  return seed / 2147483648
+}
+
+describe('long ids are shortened, never cut', () => {
+  it('gives two ids that share their first 64 characters two different segments', () => {
+    const a = safeSegment(`${SHARED}-alpha`)
+    const b = safeSegment(`${SHARED}-beta`)
+    expect(a).not.toBe(b)
+    for (const out of [a, b]) {
+      expect(out.length).toBeLessThanOrEqual(64)
+      // A readable prefix, and still a segment that cannot climb, hide or
+      // carry a dot (the residue naming splits on the first dot).
+      expect(out.startsWith('research-crew-')).toBe(true)
+      expect(out).toMatch(/^[a-z0-9][a-z0-9_-]*$/)
+    }
+  })
+
+  it('is stable, and a shortened segment is left alone when segmented again', () => {
+    const raw = `${SHARED}-alpha`
+    expect(safeSegment(raw)).toBe(safeSegment(raw))
+    expect(safeSegment(safeSegment(raw))).toBe(safeSegment(raw))
+  })
+
+  it('keeps two long service ids that share a 64-character prefix in two roots', () => {
+    expect(serviceRoot(base, `${SHARED}-a`)).not.toBe(serviceRoot(base, `${SHARED}-b`))
+  })
+
+  it('keeps the ordinal of a long service + account pair, so each session has its own sandbox', () => {
+    // 40 + 40: short enough apart, long enough together to pass 64.
+    const service = 'svc-'.padEnd(40, 's')
+    const account = 'acct-'.padEnd(40, 'a')
+    const ordinals = [1, 2, 12, 123456]
+    const segments = ordinals.map((n) =>
+      sessionSegment(service, sessionIdentity(service, account, n).sessionId)
+    )
+    expect(new Set(segments).size).toBe(ordinals.length)
+    segments.forEach((segment, i) => expect(segment.endsWith(`-${ordinals[i]}`), segment).toBe(true))
+    const first = sandboxRoot(base, service, sessionIdentity(service, account, 1).sessionId)
+    const second = sandboxRoot(base, service, sessionIdentity(service, account, 2).sessionId)
+    expect(first).not.toBe(second)
+  })
+
+  it('keeps the ordinal even when the account id alone is past the limit', () => {
+    const service = 'svc-'.padEnd(70, 's')
+    const ana = `${SHARED}-ana`
+    const bob = `${SHARED}-bob`
+    const seg = (account: string, n: number): string =>
+      sessionSegment(service, sessionIdentity(service, account, n).sessionId)
+    const all = [seg(ana, 1), seg(ana, 2), seg(bob, 1), seg(bob, 2)]
+    expect(new Set(all).size).toBe(4)
+    for (const s of all) {
+      expect(s.length).toBeLessThanOrEqual(64)
+      expect(s).toMatch(/^[a-z0-9][a-z0-9_-]*-[12]$/)
+    }
+  })
+
+  it('maps every short id exactly as before — no existing sandbox moves', () => {
+    const ids = ['ana', 'Ana', 'Svc X', 'a.b', '', '..', '-lead', 'trail-', 'svc-qa-orch-door', 'x'.repeat(64), `${'Y'.repeat(63)}!`]
+    for (const id of ids) expect(safeSegment(id), id).toBe(legacySafeSegment(id))
+    const pairs: Array<[string, string]> = [
+      ['svc-qa-orch-door', 'svc-qa-orch-door-ana-1'],
+      ['Svc X', 'Svc X-Ana/../-2'],
+      ['svc', 'ana-1'],
+      ['svc', ''],
+      ['', 'unnamed-ana-1'],
+      ['svc-'.padEnd(30, 's'), sessionIdentity('svc-'.padEnd(30, 's'), 'acct-'.padEnd(30, 'a'), 7).sessionId]
+    ]
+    for (const [service, session] of pairs) {
+      expect(sessionSegment(service, session), `${service} / ${session}`).toBe(legacySessionSegment(service, session))
+    }
+    // A sweep over random short ids, punctuation and case included.
+    const alphabet = 'abcXYZ019_-./@ '
+    const rand = prng(20261104)
+    const pick = (max: number): string =>
+      Array.from({ length: Math.floor(rand() * (max + 1)) }, () => alphabet[Math.floor(rand() * alphabet.length)]).join('')
+    for (let i = 0; i < 2000; i += 1) {
+      const service = pick(24)
+      const id = pick(64)
+      expect(safeSegment(id), id).toBe(legacySafeSegment(id))
+      const session = `${service}-${pick(64 - service.length - 1)}`.slice(0, 64)
+      expect(sessionSegment(service, session), session).toBe(legacySessionSegment(service, session))
+    }
   })
 })

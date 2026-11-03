@@ -29,9 +29,9 @@ export type ServedAssertFailure = 'malformed' | 'unknown_challenge' | 'bad_signa
 /**
  * The only shape a sub may take: exactly what `safeSegment` leaves unchanged
  * (lowercase, digits, `_`, `-`, no leading/trailing `-`), bounded well under
- * its 64-char truncation. See the assert() comment for what collapsing subs
- * costs — this regex is the whole defence, so widening it needs the same
- * reasoning re-done.
+ * its 64-char limit (past it a segment is shortened to prefix + hash). See the
+ * assert() comment for what collapsing subs costs — this regex is the whole
+ * defence, so widening it needs the same reasoning re-done.
  */
 export const SAFE_SUB = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/
 
