@@ -7,7 +7,9 @@ import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind, NewestThumb } from './ZoomParts'
 import { followDrafts } from '../prompt/draft-follow'
 import { InkRing, InkTie } from './InkAvatar'
-import { buildZoomModel } from './zoom-model'
+import { buildZoomModel, itemViewOf } from './zoom-model'
+import { ShelfCard } from './ShelfCard'
+import { draftKey, getDraft } from '../prompt/prompt-draft'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD, shelfPage } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
 import { PerRowPill } from './PerRowPill'
@@ -269,6 +271,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     return panMax.current > 0 && (z.dir === 'agents' ? z.v > 0.9 && z.v < 1.5 : z.v > -0.5 && z.v < 0.5)
   }
   const scrollBy = (dy: number): void => {
+    // The card stood by a face the scroll moves away: it goes, unless it holds a draft.
+    if (!shelfCardDraft()) closeShelfCard()
     panAt.current = Math.min(panMax.current, Math.max(0, panAt.current + dy))
     if (zoomStore.get().dir === 'items') setFirstRow(firstRowAt(panAt.current))
     motion.wake()
@@ -276,11 +280,40 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // The shelf's page: its "+N" chip turns it, "–" on the last goes back to the first.
   const shelf = shelfPage(layout.thumbs.shelf, shelfAt)
   const turnShelf = (): void => {
+    if (!shelfCardDraft()) closeShelfCard()
     const next = shelf.more?.last ? 0 : shelfAt + 1
     shelfRef.current = next
     setShelfAt(next)
     motion.wake()
   }
+  // AN AGENT TAPPED OVER THE ARTIFACTS opens its card on this page (owner,
+  // 2026-11-03; ShelfCard.tsx), the artifacts still under it: a face on the
+  // shelf or a coin under a thumbnail. The same agent again, or the card's
+  // face, is its full view. Anywhere else an agent's tap zooms as it did.
+  const [shelfCard, setShelfCard] = useState<{ id: string; anchor: string } | null>(null)
+  const shelfCardOpen = useRef(false)
+  shelfCardOpen.current = shelfCard !== null
+  const closeShelfCard = useCallback((): void => setShelfCard(null), [])
+  /** The open card's agent has words in its box (prompt-draft.ts: typed in the card or before). */
+  const shelfCardDraft = (): boolean => shelfCard !== null && getDraft(draftKey(shelfCard.id)).trim() !== ''
+  const atShelf = (): boolean => {
+    const z = zoomStore.get()
+    return z.dir === 'items' && z.full === null && Math.abs(z.v) < 0.5
+  }
+  const tapAgent = (id: string, anchor: string): void => {
+    if (!atShelf()) return motion.agent(id)
+    if (shelfCard?.id === id) {
+      closeShelfCard()
+      return zoomStore.jumpTo('agent', id)
+    }
+    setShelfCard({ id, anchor })
+  }
+  // A press outside on the artifacts only closes the card (ShelfCard eats its click); the bar and the header keep theirs.
+  const pressedOutside = useCallback((target: EventTarget | null): boolean => target instanceof Node && (overview.current?.contains(target) ?? false), [])
+  useEffect(() => {
+    const onShelf = zoom.dir === 'items' && zoom.full === null && Math.abs(zoom.v) < 0.5
+    if (!onShelf || (shelfCard && !model.agents.some((a) => a.id === shelfCard.id))) closeShelfCard()
+  }, [zoom.dir, zoom.v, zoom.full, model.agents, shelfCard, closeShelfCard])
   // THE WHEEL SCROLLS, IT NEVER ZOOMS (owner, 2026-10-31: the wheel is the
   // page's, and a list's). Up and down it scrolls the thumbnails (or a narrow
   // screen's crew), wherever the pointer is; a sideways one is the page's.
@@ -356,6 +389,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // An agent's card over the artifacts closes first, from its reply box too;
+      // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
+      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop')) {
+        e.preventDefault()
+        closeShelfCard()
+        return
+      }
       // The board's box and its panel own their Esc (BoardSearch.tsx).
       if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm, .cr-board-search, .cr-board-pop')) return
       e.preventDefault()
@@ -364,7 +404,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     // Capture, so a card that stops Escape on its way up does not keep us zoomed.
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [stepBack])
+  }, [stepBack, closeShelfCard])
   // A press that turned into a pinch or a drag is not the click that steps out.
   const moved = useRef(false)
   const swallowClick = useRef(false)
@@ -551,10 +591,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           ))}
           {model.frame.links.map((l) => {
             const a = agentOf.get(l.agent), i = itemOf.get(l.item)
-            return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? motion.agent(a.id) : motion.item(i.id)))} /> : null
+            return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? tapAgent(a.id, `link-coin:${l.key}`) : motion.item(i.id)))} /> : null
           })}
           {shownItems.map((i) => <ItemNode key={i.id} item={i} names={namesOf.get(i.id) ?? []} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
-          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => motion.agent(a.id))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
+          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => tapAgent(a.id, `agent-av:${a.id}`))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
           <button type="button" className="zv-shelf-more" ref={bind('shelfMore') as React.Ref<HTMLButtonElement>} style={CHIP_HIDDEN} onClick={turnShelf}
             title={shelf.more ? (shelf.more.last ? 'Back to the first agents' : `${shelf.more.rest} more agents`) : undefined}
             aria-label={shelf.more ? (shelf.more.last ? 'Back to the first agents' : `${shelf.more.rest} more agents`) : 'More agents'}>
@@ -603,6 +643,28 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         </div>
         <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
       </nav>
+      {shelfCard && agentOf.has(shelfCard.id) && (
+        <ShelfCard
+          key={shelfCard.id}
+          agent={agentOf.get(shelfCard.id)!}
+          items={(attachIndex.get(shelfCard.id) ?? []).flatMap((at) => itemViewOf(at.node, [shelfCard.id]) ?? [])}
+          anchor={registry.current.get(shelfCard.anchor) ?? null}
+          onOpen={() => {
+            closeShelfCard()
+            zoomStore.jumpTo('agent', shelfCard.id)
+          }}
+          onItem={(itemId) => {
+            closeShelfCard()
+            motion.item(itemId)
+          }}
+          onDelete={onDelete ? () => {
+            closeShelfCard()
+            onDelete(shelfCard.id)
+          } : undefined}
+          onOutside={pressedOutside}
+          onClose={closeShelfCard}
+        />
+      )}
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>
   )
