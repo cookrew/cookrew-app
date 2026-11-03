@@ -32,6 +32,8 @@
   display: flex;
   flex-direction: column;
   padding: 14px calc(14px + var(--fv-lane-right)) 10px calc(14px + var(--fv-lane-left));
+  /* The box floats over the stage's foot (prompt/global-prompt.css · THE BOX FLOATS AT EVERY WIDTH): the sheet ends above it. */
+  padding-bottom: var(--cr-float-h, 10px);
   background-color: var(--fv-paper);
   background-image: radial-gradient(var(--sumi-grain, rgba(120, 100, 70, 0.06)) 1px, transparent 1px);
   background-size: 3px 3px;

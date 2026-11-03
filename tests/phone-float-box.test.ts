@@ -3,7 +3,7 @@
 //
 //   the dock is no band: a fixed layer, the box a pill over the page; the stage
 //   runs to the screen's foot and what stood on the band clears the pill
-//   through one variable, --cr-float-h (only a phone defines it).
+//   through one variable, --cr-float-h (every width has it since; the phone its own).
 //   at rest the pill is ONE row: the left chip, the words, 🎤, Send. The model
 //   chip, ⌄, ⌨ and the keys float as a row above it while the box has focus,
 //   the agent waits on you, the ear listens or the extras are open.
@@ -18,12 +18,12 @@ const phone = box.slice(box.indexOf('THE BOX FLOATS, ONE ROW'))
 
 describe('the dock floats on a phone', () => {
   it('is a fixed, see-through layer that lets taps through around the pill', () => {
-    expect(phone).toMatch(/body\.cookrew-mobile \.cr-dock\.cr-dock \{[^}]*position: fixed;[^}]*background: transparent;[^}]*pointer-events: none;/)
+    expect(phone).toMatch(/body\.cookrew-mobile \.cr-app:not\(\.cr-embed\) > \.cr-dock\.cr-dock \{[^}]*position: fixed;[^}]*background: transparent;[^}]*pointer-events: none;/)
     expect(phone).toMatch(/\.dock-canvas > \* \{\s*pointer-events: auto;/)
   })
 
   it('defines the clearance only on a phone, and the full view and the zoom bar read it', () => {
-    expect(phone).toMatch(/body\.cookrew-mobile \{[^}]*--cr-float-h:/)
+    expect(phone).toMatch(/body\.cookrew-mobile \.cr-app:not\(\.cr-embed\) \{[^}]*--cr-float-h:/)
     expect(read('zoom', 'full-views.css')).toMatch(/padding-bottom: var\(--cr-float-h/)
     expect(read('zoom', 'zoom.css')).toMatch(/bottom: var\(--cr-float-h/)
   })
