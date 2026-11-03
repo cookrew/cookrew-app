@@ -85,6 +85,10 @@ describe('one pill for every tool', () => {
     expect(tray).not.toMatch(/^\s*background: /m)
   })
 
+  it("keeps the clip while the model menu is open (header.css's open rule sets the shorthand)", () => {
+    expect(rule(tray, ".cr-prompt .cr-tune-menu-btn:hover,\n.cr-prompt .cr-tune-menu.open .cr-tune-menu-btn,\n.cr-prompt .cr-prompt-tune:hover,\n.cr-prompt .cr-prompt-tune[aria-expanded='true']")).toContain('background-clip: padding-box;')
+  })
+
   it('the keys on paper-2 with no line, a hairline between them and the tools', () => {
     const key = rule(tray, '.cr-app .cr-prompt .cr-btn.cr-tray.term-key')
     expect(key).toContain('background-color: var(--sumi-paper-2')

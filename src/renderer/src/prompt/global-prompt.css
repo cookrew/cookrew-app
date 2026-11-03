@@ -399,8 +399,9 @@
     gap: 3px;
   }
 
-  /* The groups part by a little more than the buttons do. */
-  body .cr-prompt .voice-bar > :first-child,
+  /* The groups part by a little more than the buttons do (the first tool
+     outranks the tray pill's own margin: 0). */
+  .cr-app .cr-prompt .voice-bar > .cr-tray:first-child,
   body .cr-prompt .voice-bar .voice-keys {
     margin-left: 3px;
   }
@@ -650,6 +651,9 @@
 .cr-prompt .cr-prompt-tune:hover,
 .cr-prompt .cr-prompt-tune[aria-expanded='true'] {
   background-color: var(--sumi-card, var(--cream-hi));
+  /* header.css's open rule (0-3-0) sets the background shorthand, which
+     resets the clip: the fill would spread into the reach while open. */
+  background-clip: padding-box;
   box-shadow: inset 0 0 0 1px var(--sumi-ink-soft, var(--ink-soft));
   color: var(--sumi-seal, var(--amber-deep));
 }
