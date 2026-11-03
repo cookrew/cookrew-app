@@ -15,6 +15,15 @@ export interface RiseAnchor {
   left: number
   /** Px from the window's foot, as if no keyboard were up. */
   bottom: number
+  /** Px the top bar covers at the window's head: a tall menu stops under it (QA 2026-11-04). */
+  top?: number
+}
+
+/** Where the app's top bar ends, or 0 where there is none (the embed, a test). */
+export function topBarBottom(): number {
+  if (typeof document === 'undefined') return 0
+  const bar = document.querySelector('.cr-header')
+  return bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0
 }
 
 /** The keyboard's cover right now, as keyboard-inset.ts published it (0 when unset). */
@@ -29,8 +38,9 @@ export function keyboardCoverNow(): number {
 }
 
 /** A menu over a chip whose box is `rect`, `gap` px above it, the keyboard's cover taken out. */
-export function riseOver(rect: { left: number; top: number }, innerHeight: number, cover: number, gap = 6): RiseAnchor {
-  return { left: rect.left, bottom: Math.max(0, innerHeight - rect.top + gap - cover) }
+export function riseOver(rect: { left: number; top: number }, innerHeight: number, cover: number, gap = 6, top = 0): RiseAnchor {
+  const bottom = Math.max(0, innerHeight - rect.top + gap - cover)
+  return top > 0 ? { left: rect.left, bottom, top } : { left: rect.left, bottom }
 }
 
 /**
@@ -48,6 +58,6 @@ export function riseStyle(at: RiseAnchor, edge: number): CSSProperties {
   return {
     left: at.left,
     bottom: `calc(${at.bottom}px + var(--kb-inset, 0px))`,
-    maxHeight: `calc(100vh - ${at.bottom + edge}px - var(--kb-inset, 0px))`
+    maxHeight: `calc(100vh - ${at.bottom + edge + (at.top ?? 0)}px - var(--kb-inset, 0px))`
   }
 }

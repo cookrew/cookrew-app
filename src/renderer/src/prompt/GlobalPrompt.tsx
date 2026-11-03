@@ -31,7 +31,7 @@ import { extrasShown, rememberExtras, toolsOpen } from './extras-pref'
 import { useSpokenReplies } from './use-spoken-replies'
 import { PictureStrip, picturesOfDraft } from '../pictures/PictureStrip'
 import { shownWords, withoutLastPicture, withoutPicture, withShownWords } from './draft-pictures'
-import { keyboardCoverNow, riseOver, type RiseAnchor } from './rise-anchor'
+import { keyboardCoverNow, riseOver, type RiseAnchor, topBarBottom } from './rise-anchor'
 import './global-prompt.css'
 
 /**
@@ -441,7 +441,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             aria-expanded={picking !== null}
             title="The harness the new agent runs — or open a shell"
             onClick={(e) => {
-              const at = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow())
+              const at = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow(), 6, topBarBottom())
               setPicking((open) => (open ? null : at))
             }}
           >
