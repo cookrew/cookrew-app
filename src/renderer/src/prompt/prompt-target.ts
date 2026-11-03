@@ -66,6 +66,30 @@ export function boxTargetId({
   return id !== null && id === released?.id ? null : id
 }
 
+/**
+ * A PICK, AND HOW LONG IT LASTS: an agent chosen on the face's who-picker, or
+ * the agent a prompt just made (owner task, 2026-11-04: "after a prompt makes
+ * a new agent, the box follows it", so the next words are a follow-up). It
+ * stands in for the view's agent while the zoom is where it was when the pick
+ * was made (zoomMoveKey); the zoom's next deliberate move ends it. Keyed to
+ * the move rather than reset by one: the make moves the zoom itself (to the
+ * new agent's card), and a reset racing that move would drop the pick.
+ */
+export interface Pick {
+  readonly id: string
+  /** The zoom's move key when the pick was made. */
+  readonly at: string
+}
+
+export function pickNow(pick: Pick | null, moveKey: string): string | null {
+  return pick !== null && pick.at === moveKey ? pick.id : null
+}
+
+/** The pick kept through a move: dropped for good once the zoom has left where it was made. */
+export function pickAfterMove(pick: Pick | null, moveKey: string): Pick | null {
+  return pick !== null && pick.at !== moveKey ? null : pick
+}
+
 /** A let-go: the agent let go of, and who the view showed at that moment. */
 export interface Release {
   readonly id: string

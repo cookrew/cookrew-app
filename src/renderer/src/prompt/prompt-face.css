@@ -106,6 +106,35 @@
   animation: pf-pop 200ms ease-out;
 }
 
+/* It runs elsewhere (a served session): a small ↗ at the corner the other
+   marks leave free (the draft dot top-left, the ink's tick or z top-right,
+   the verb bottom-right). On the folded face and on the open box's chip. */
+.pf-remote {
+  position: absolute;
+  left: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--sumi-paper, var(--cream));
+  color: var(--sumi-ink, var(--ink));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    0 0 0 2px var(--sumi-card, var(--cream-hi));
+  font: 700 9px/1 var(--font-mono);
+  pointer-events: none;
+}
+
+.pf-chip-face .pf-remote {
+  left: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  font-size: 8px;
+}
+
 /* Nobody in the box: a dashed ring round the harness a new agent would run. */
 .pf-new .pf-disc {
   background: transparent;
@@ -360,17 +389,20 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
   height: 44px;
 }
 
-/* ── who the words go to (WhoPicker.tsx): a list over the face on a wide screen ── */
+/* ── who the words go to (WhoPicker.tsx): a list over the face on a wide screen,
+   its 'Send to…' field on top and the rows scrolling under it ── */
 .pf-who {
   position: absolute;
   z-index: 5;
   /* Over the chip it opens from. */
   left: 0;
   bottom: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
   width: 300px;
   max-height: min(60vh, 440px);
-  overflow: auto;
-  padding: 6px 8px 8px;
+  overflow: hidden;
+  padding: 8px;
   border-radius: 14px;
   background: var(--sumi-card, var(--cream-hi));
   box-shadow:
@@ -379,7 +411,43 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
   animation: pf-rise 180ms ease-out;
 }
 
-.pf-who h6 {
+/* Over the box's own input rules (global-prompt.css · .cr-prompt input): the field is not the words. */
+.cr-prompt .pf-who-find {
+  flex: none;
+  min-width: 0;
+  width: auto;
+  height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  outline: none;
+  background: var(--sumi-paper-2, var(--cream));
+  color: var(--sumi-ink, var(--ink));
+  font: 12.5px/1 var(--font-mono);
+}
+
+.cr-prompt .pf-who-find::placeholder {
+  color: var(--sumi-muted, var(--muted));
+}
+
+.cr-prompt .pf-who-find:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+}
+
+.pf-who-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.pf-who-none {
+  margin: 10px 8px 4px;
+  font: 12px/1.3 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.pf-who-title {
   margin: 8px 6px 4px;
   font: 400 10px/1.2 var(--font-mono);
   letter-spacing: 0.12em;
@@ -404,8 +472,20 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
 }
 
 .pf-who-row:hover,
-.pf-who-row[aria-selected='true'] {
+.pf-who-row[aria-current='true'] {
   background: var(--sumi-paper-2, var(--cream));
+}
+
+/* Where ⏎ points (the field keeps the focus: aria-activedescendant): the focus ring. */
+.pf-who-row[aria-selected='true'] {
+  box-shadow: inset 0 0 0 1.5px var(--sumi-ink, var(--ink));
+}
+
+.pf-who-enter {
+  flex: none;
+  margin-left: 6px;
+  font: 11px/1 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
 }
 
 .pf-who-row:focus-visible {
@@ -473,15 +553,27 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
     left: 0;
     right: 0;
     width: auto;
+    display: block;
+    max-height: none;
+    padding: 0;
+    border-radius: 20px;
+  }
+
+  /* No field on a phone: its taps pick, and the box keeps the keyboard. */
+  body.cookrew-mobile .pf-who-find,
+  body.cookrew-mobile .pf-who-enter {
+    display: none;
+  }
+
+  body.cookrew-mobile .pf-who-list {
     display: flex;
     overflow-x: auto;
     overflow-y: hidden;
     padding: 10px 4px 8px;
-    border-radius: 20px;
     scrollbar-width: none;
   }
 
-  body.cookrew-mobile .pf-who::-webkit-scrollbar {
+  body.cookrew-mobile .pf-who-list::-webkit-scrollbar {
     display: none;
   }
 
@@ -494,7 +586,7 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
     border-left: 1px solid var(--sumi-hair-2, var(--line));
   }
 
-  body.cookrew-mobile .pf-who h6 {
+  body.cookrew-mobile .pf-who-title {
     margin: 0 4px 6px;
     font-size: 9.5px;
   }
@@ -528,6 +620,11 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
     display: none;
   }
 
+  /* A phone's row has no ⏎: only the one in the box is marked. */
+  body.cookrew-mobile .pf-who-row[aria-selected='true'] {
+    box-shadow: none;
+  }
+
   /* The face is the one place to type (owner, 2026-11-04): a phone's open
      card drops its own reply box. A card floating in a full view keeps its. */
   body.cookrew-mobile:is(.cr-prompt-folded, .cr-prompt-open) .zv-reply:not(.cr-pet-card-ask) {
@@ -557,5 +654,70 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
 
   .pf-disc {
     transition: none;
+  }
+}
+
+/* ---- A FILE DRAGGED OVER THE FOLDED FACE (task "Face inputs", 2026-11-04) ----
+   The transcripts view's drop cue (styles.css · .attach-drop-hint), drawn
+   over the face: its dashed ring in the primary, a paperclip in place of the
+   face, and DROP TO ATTACH above it. Dropped, the box opens with the file. */
+.pf-face.pf-dropping .pf-disc {
+  transform: scale(1.12);
+}
+
+.pf-face.pf-dropping .pf-drop-cue {
+  position: absolute;
+  inset: -3px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px dashed var(--sumi-seal, var(--amber-deep));
+  background: color-mix(in srgb, var(--sumi-gold, var(--amber)) 88%, var(--sumi-card, var(--cream-hi)));
+  color: var(--sumi-on-gold, var(--ink));
+  pointer-events: none;
+  animation: pf-drop-in 160ms ease-out;
+}
+
+.pf-face.pf-dropping .pf-drop-cue > .cr-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.pf-face.pf-dropping .pf-verb,
+.pf-face.pf-dropping .pf-dot {
+  visibility: hidden;
+}
+
+/* Above the face, its right edge on the face's: the face stands at the bar's
+   right end (or in the corner), so the words grow leftward, never off-screen. */
+.pf-drop-words {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 8px);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--sumi-card, var(--cream-hi));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    var(--sumi-lift, 0 10px 28px rgba(40, 30, 15, 0.1));
+  color: var(--sumi-ink, var(--ink));
+  font: 11px/1.2 var(--font-pixel, ui-monospace, monospace);
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+@keyframes pf-drop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-face.pf-dropping .pf-drop-cue {
+    animation: none;
+  }
+  .pf-face.pf-dropping .pf-disc {
+    transform: none;
   }
 }

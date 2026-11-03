@@ -1535,6 +1535,7 @@ function Canvas(): React.JSX.Element {
           onOrch={setOrch}
           agents={promptAgents}
           artifacts={promptArtifacts}
+          workspaceName={workspace?.name ?? null}
           nodes={workspace?.nodes ?? NO_NODES}
           voiceFor={
             view === 'stage'

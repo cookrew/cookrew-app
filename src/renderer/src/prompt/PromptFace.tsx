@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { InkAvatar } from '../zoom/InkAvatar'
+import { CrIcon } from '../icons'
 import type { InkStatus } from '../zoom/ink-status'
 import { FaceTip } from './FaceTip'
 import './prompt-face.css'
@@ -17,6 +18,10 @@ import './prompt-face.css'
  *   empty   in the open box with no words: a tap chooses who (the picker).
  *   ready   in the open box with words: filled with the theme's primary, the
  *           ink turned to the colour on it; a tap sends.
+ *
+ * A FILE DRAGGED OVER THE FOLDED FACE (desktop) shows the drop cue over it:
+ * the face turns to a paperclip in the transcripts view's dashed ring, and
+ * DROP TO ATTACH stands above it; dropped, the box opens with it attached.
  *
  * A HOLD (450 ms, about a platform long-press; a finger or a pen, never a
  * mouse, whose Mac has ⌘-hold) talks to it: the ear opens while the finger stays, and the
@@ -43,6 +48,10 @@ export interface PromptFaceProps {
   mode: FaceMode
   /** Words wait in this face's draft. */
   draft?: boolean
+  /** A file is dragged over it: the drop cue shows. */
+  dropping?: boolean
+  /** The agent runs elsewhere (a served session): a small ↗ says so. */
+  remote?: boolean
   /** It opens the who-picker when tapped empty: whether that picker is open. */
   expanded?: boolean
   /** Keep the caret where it is when pressed (the box's own send key). */
@@ -73,12 +82,21 @@ const Arrow = (): React.JSX.Element => (
   </svg>
 )
 
+/** A remote agent's mark: it runs elsewhere (owner design, 2026-11-04). */
+export const RemoteMark = (): React.JSX.Element => (
+  <span className="pf-remote" aria-hidden="true">
+    ↗
+  </span>
+)
+
 export function PromptFace({
   buttonRef,
   agent,
   harness,
   mode,
   draft = false,
+  dropping = false,
+  remote = false,
   expanded,
   keepFocus = false,
   listening = false,
@@ -128,6 +146,8 @@ export function PromptFace({
     `pf-${mode}`,
     draft && mode !== 'ready' ? 'pf-has-draft' : '',
     listening ? 'pf-listening' : '',
+    dropping ? 'pf-dropping' : '',
+    agent && remote ? 'pf-is-remote' : '',
     className ?? ''
   ]
     .filter(Boolean)
@@ -185,6 +205,13 @@ export function PromptFace({
         </span>
         {mode === 'folded' && <span className="pf-verb">{agent ? <Arrow /> : <Plus />}</span>}
         {draft && mode !== 'ready' && <span className="pf-dot" aria-hidden="true" />}
+        {dropping && (
+          <span className="pf-drop-cue" aria-hidden="true">
+            <CrIcon name="attach" />
+            <span className="pf-drop-words">DROP TO ATTACH</span>
+          </span>
+        )}
+        {agent && remote && <RemoteMark />}
       </button>
       {tip && (
         <FaceTip anchor={anchor} id={tipId}>
