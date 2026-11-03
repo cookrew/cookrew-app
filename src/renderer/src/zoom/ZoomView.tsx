@@ -16,7 +16,9 @@ import { PerRowPill } from './PerRowPill'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { BAR_NAMES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { BarGroups } from './BarGroups'
+import { barCard } from './bar-pick'
 import { setFaceSlot } from '../prompt/face-slot'
 import { CrIcon } from '../icons'
 import { promptFold } from '../prompt/prompt-fold'
@@ -392,6 +394,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // A bar group's card (BarGroups.tsx) closes first, before the box or the view.
+      if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input')) {
+        e.preventDefault()
+        barCard.close()
+        return
+      }
       // An agent's card over the artifacts closes first, from its reply box too;
       // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
       // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card.
@@ -651,9 +659,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
                 <span className="zv-stop-word">{names[i]}</span>
               </button>
             ))}
-            <div className="zv-side" role="group" aria-label="Agents or artifacts">
-              {BAR_SIDES.map((s) => <button key={s.dir} type="button" aria-current={side === s.dir ? 'step' : undefined} onClick={() => motion.go(s.v, s.dir)}>{s.name}</button>)}
-            </div>
+            {/* The two sides are the groups of what needs you (BarGroups.tsx), each still its stop. */}
+            <BarGroups
+              workspaceId={workspaceId}
+              nodes={workspace?.nodes ?? null}
+              rows={crew.crew}
+              agents={agentOf}
+              attachIndex={attachIndex}
+              side={side}
+              narrow={narrow}
+              onStop={(v, dir) => motion.go(v, dir)}
+              onAgentFull={(id) => zoomStore.jumpTo('agent', id)}
+              onItemFull={(id) => motion.item(id)}
+              onDelete={onDelete}
+              onOutside={pressedOutside}
+            />
           </div>
         </div>
         <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>

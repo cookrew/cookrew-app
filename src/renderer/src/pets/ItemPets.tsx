@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useBusyAgents, useThumb } from '../activity-thumb-store'
-import { activeBrowserTab, type WorkspaceState } from '../../../shared/model'
+import { activeBrowserTab, type CanvasNode, type WorkspaceState } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { firstLine, hostPath, ownersOf } from '../stage/stage-select'
 import { faviconOf, petMax, pickItems } from './pet-pick'
@@ -47,6 +47,21 @@ export interface CrewFace {
 
 const NOTE_LINES = 8
 
+/** A browser or note as the troop's card draws it (and the bar's groups, zoom/BarGroups.tsx); null for anything else. */
+export function itemFaceOf(n: CanvasNode, ids: string[]): ItemFace | null {
+  if (n.kind === 'browser') {
+    const tab = activeBrowserTab(n)
+    const view = itemViewOf(n, ids)
+    return view ? { id: n.id, kind: 'browser', title: tab.title?.trim() || n.name, sub: hostPath(tab.url), owners: ids, icon: faviconOf(tab.url), view } : null
+  }
+  if (n.kind === 'note') {
+    const content = n.content ?? ''
+    const view = itemViewOf(n, ids)
+    return view ? { id: n.id, kind: 'note', title: n.name, sub: firstLine(content), owners: ids, body: content.split('\n').slice(0, NOTE_LINES).join('\n'), view } : null
+  }
+  return null
+}
+
 export function ItemPets({
   workspace,
   attachIndex,
@@ -73,23 +88,10 @@ export function ItemPets({
     [workspace]
   )
   // Newest first: nodes are kept in creation order.
-  const items = useMemo<ItemFace[]>(() => {
-    const out: ItemFace[] = []
-    for (const n of [...(workspace?.nodes ?? [])].reverse()) {
-      if (n.kind === 'browser') {
-        const tab = activeBrowserTab(n)
-        const ids = owners.get(n.id) ?? []
-        const view = itemViewOf(n, ids)
-        if (view) out.push({ id: n.id, kind: 'browser', title: tab.title?.trim() || n.name, sub: hostPath(tab.url), owners: ids, icon: faviconOf(tab.url), view })
-      } else if (n.kind === 'note') {
-        const content = n.content ?? ''
-        const ids = owners.get(n.id) ?? []
-        const view = itemViewOf(n, ids)
-        if (view) out.push({ id: n.id, kind: 'note', title: n.name, sub: firstLine(content), owners: ids, body: content.split('\n').slice(0, NOTE_LINES).join('\n'), view })
-      }
-    }
-    return out
-  }, [workspace, owners])
+  const items = useMemo<ItemFace[]>(
+    () => [...(workspace?.nodes ?? [])].reverse().flatMap((n) => itemFaceOf(n, owners.get(n.id) ?? []) ?? []),
+    [workspace, owners]
+  )
   // The agent on stage, then the agents that are working or need you.
   const focus = useMemo(() => (onStage ? [onStage, ...busy.filter((id) => id !== onStage)] : [...busy]), [busy, onStage])
   const picked = useMemo(() => pickItems(items, { owners, focus, max: petMax(window.innerWidth) }), [items, owners, focus])
@@ -185,12 +187,15 @@ export function ItemCard({
   item,
   crew,
   controls,
-  onAgent
+  onAgent,
+  since
 }: {
   item: ItemFace
   crew: ReadonlyMap<string, CrewFace>
   controls: CardControls
   onAgent: (id: string) => void
+  /** Why the bar's group holds it: "new · 2 m ago" (zoom/BarGroups.tsx). */
+  since?: string
 }): React.JSX.Element {
   const users = item.owners.flatMap((id) => {
     const face = crew.get(id)
@@ -207,6 +212,7 @@ export function ItemCard({
           <span className="cr-pet-card-meta">
             <span className="cr-pet-mood">{item.kind}</span>
             <span>{users.length === 0 ? 'no agent' : `used by ${users.length}`}</span>
+            {since && <span className="cr-pet-since">{since}</span>}
           </span>
         </span>
         <button type="button" className="cr-pet-card-open" onClick={controls.open} title={item.kind === 'browser' ? 'Open the page (or click its face again)' : 'Open the note (or click its face again)'}>

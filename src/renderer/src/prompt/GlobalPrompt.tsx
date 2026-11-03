@@ -38,6 +38,7 @@ import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
 import { boxFold, facePlace, promptFold, usePromptOpen } from './prompt-fold'
 import { flyFace, popFace, type Box } from './face-flip'
+import { barCard, useBarAgent } from '../zoom/bar-pick'
 import { useFaceSlot } from './face-slot'
 import { enterOpensBox, keepsBoxOpen, pressOnCanvas } from './enter-opens'
 import { latestUser, pickerRows } from './item-user'
@@ -172,7 +173,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   if (itemUser.current.key !== itemKey || (itemKey !== null && itemUser.current.id === null)) {
     itemUser.current = { key: itemKey, id: itemKey ? latestUser(itemOwners, crewRows) : null }
   }
-  const viewed = fullAgentId ?? cardAgent ?? itemUser.current.id
+  // An agent's card opened from the bar's group selects it too (zoom/bar-pick.ts).
+  const barAgent = useBarAgent()
+  const viewed = fullAgentId ?? cardAgent ?? barAgent ?? itemUser.current.id
   const known = (id: string): boolean => agents.some((a) => a.id === id)
   // While the box has focus, words showing in it hold its agent still: the
   // view may move on (a newly waiting agent takes the stage), the words being
@@ -581,7 +584,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     seen.current = { folded, id }
     const el = chipFace.current
     if (folded || !el) return
-    if (was.folded && lastFace.current) flyFace(el, lastFace.current, { box: formRef.current, rest: [chipName.current] })
+    // Opened from a bar group's face, it flies from that face; else from the folded one.
+    const from = barCard.takeFrom() ?? lastFace.current
+    if (was.folded && from) flyFace(el, from, { box: formRef.current, rest: [chipName.current] })
     else if (was.id !== id) popFace(el)
   }, [folded, to?.id])
   /** The box can send: words, or a bare Enter where the agent's terminal is in sight. */

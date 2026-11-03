@@ -55,9 +55,10 @@ describe('the path', () => {
   })
 
   // Owner, 2026-11-01: no slider; the agents view switches to the artifacts and back.
-  it('the last stop is a switch: agents | artifacts, each opening the workspace by its side', () => {
-    expect(BAR_SIDES.map((s) => s.name)).toEqual(['agents', 'artifacts'])
-    expect(BAR_SIDES.map((s) => [s.dir, s.v])).toEqual([['agents', 1], ['items', 0]])
+  // Owner, 2026-11-04: the pair became the groups (BarGroups.tsx), artifacts first, agents next to the face.
+  it('the last stop is a switch: artifacts | agents, each opening the workspace by its side', () => {
+    expect(BAR_SIDES.map((s) => s.name)).toEqual(['artifacts', 'agents'])
+    expect(BAR_SIDES.map((s) => [s.dir, s.v])).toEqual([['items', 0], ['agents', 1]])
     // Each side's v is that side's deepest bar stop.
     for (const s of BAR_SIDES) expect(s.v).toBe(BAR_STOPS[s.dir][BAR_STOPS[s.dir].length - 1])
     // Lit only once the view is in the workspace, and then it is the side it is on.
