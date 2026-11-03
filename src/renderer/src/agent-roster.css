@@ -2418,3 +2418,85 @@
   background: var(--amber);
   color: var(--ink);
 }
+
+/* ---- a browser's sites in the search results (site-lines.ts) ----
+   Each site its title over its WHOLE address (two lines at most, broken
+   anywhere: an address has no word breaks), the searched words marked. The
+   showing tab wears a dot; a site no word landed on is quieter. */
+.ags-browser-preview.searching {
+  align-items: flex-start;
+}
+
+.ags-sites {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ags-site {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.ags-site.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+
+.ags-site:not(.hit) {
+  opacity: 0.62;
+}
+
+.ags-site-title {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ags-site-url {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  user-select: text;
+}
+
+.ags-site-more {
+  padding-left: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* A searched word in an address stays on one line. */
+.ags-site-url mark {
+  white-space: nowrap;
+}
+
+/* A phone gives the addresses the thumbnail's width. */
+@media (max-width: 700px) {
+  .ags-browser-preview.searching .ags-browser-thumb {
+    display: none;
+  }
+}

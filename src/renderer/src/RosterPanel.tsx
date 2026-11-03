@@ -496,6 +496,7 @@ export function RosterPanel({
         selected={editing ? picked.has(node.id) : selected === node.id}
         selectable={editing}
         match={snippet}
+        query={searching ? query : null}
         onOpen={openElement}
       />
     )

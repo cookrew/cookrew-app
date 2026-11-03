@@ -586,3 +586,22 @@ body.cr-ink .ags-mark {
   background: var(--sumi-seal-fill);
   color: var(--sumi-on-seal);
 }
+
+/* ── a browser's sites in the board's search results ── */
+body.cr-ink .ags-site-title {
+  font-family: var(--font-serif);
+  font-size: 13px;
+  color: var(--sumi-ink);
+}
+
+body.cr-ink .ags-site-url {
+  color: var(--sumi-ink-soft);
+}
+
+body.cr-ink .ags-site.active::before {
+  background: var(--sumi-seal);
+}
+
+body.cr-ink .ags-site-more {
+  color: var(--sumi-muted);
+}
