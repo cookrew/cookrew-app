@@ -188,7 +188,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
   const agent = useCallback((id: string) => {
     const s = zoomStore.get()
     const action = agentClick(s.dir, moving.current.v, s.agent === id)
-    if (action.kind === 'jump-full') return zoomStore.jumpTo('agent', id)
+    if (action.kind === 'jump-card') return zoomStore.jumpTo('card', id)
     if (action.kind === 'refocus-full') {
       moving.current.pending = { id, full: true }
       return go(2, 'agents')
