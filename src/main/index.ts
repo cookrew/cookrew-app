@@ -80,7 +80,7 @@ import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
 import { MacListener } from './listen'
 import { hearAvailable, hearRecording } from './hear-file'
-import { createDoubaoVoice } from './doubao-tts'
+import { createLocalVoice } from './local-voice'
 import { polishTranscript } from './sous-polish'
 import { readSousVoiceConfig } from './sous-voice-config'
 import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
@@ -6269,22 +6269,27 @@ app.whenReady().then(() => {
     recording: (bytes: Uint8Array) => hearRecording(earOptions, bytes)
   }
   ipcMain.handle('listen:available', () => listener.available())
-  // Spoken replies in the Doubao voice (doubao-tts.ts): the box asks per
-  // chunk; the key stays in main. No key, and the box uses the browser's voice.
-  const replyVoice = createDoubaoVoice()
-  ipcMain.handle('speak:available', () => replyVoice.available())
+  // Spoken replies in the free local voice (local-voice.ts): the box asks per
+  // chunk. Not installed, and the box uses the browser's voice.
+  const replyVoice = createLocalVoice()
+  // Asked as a turn starts: the answer, and a warm voice by the time the reply lands.
+  ipcMain.handle('speak:available', () => {
+    replyVoice.warm()
+    return replyVoice.available()
+  })
   // Each chunk carries an id so a stopped reading can cancel it upstream.
   const speaking = new Map<string, AbortController>()
-  ipcMain.handle('speak:audio', async (_e, id: unknown, text: unknown) => {
+  ipcMain.handle('speak:audio', async (_e, id: unknown, text: unknown, lang: unknown) => {
     const key = typeof id === 'string' && id.length <= 64 ? id : null
     const controller = new AbortController()
     if (key) speaking.set(key, controller)
     try {
-      return await replyVoice.speak(text as string, controller.signal)
+      return await replyVoice.speak(text as string, controller.signal, lang === 'en' ? 'en' : 'zh')
     } finally {
       if (key) speaking.delete(key)
     }
   })
+  app.on('before-quit', () => replyVoice.stop())
   ipcMain.on('speak:cancel', (_e, id: unknown) => {
     if (typeof id === 'string') speaking.get(id)?.abort()
   })
@@ -6389,8 +6394,6 @@ app.whenReady().then(() => {
     uiBus,
     // The phone's mic, heard by the Mac's ears.
     hear: phoneEar,
-    // The same Doubao voice for the phone's spoken replies.
-    speak: replyVoice,
     // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
     inbox: () => inbox.read(),
     inboxAct,

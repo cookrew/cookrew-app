@@ -633,15 +633,15 @@ const api = {
   listenAvailable: () => ipcRenderer.invoke('listen:available'),
   listenStart: () => ipcRenderer.invoke('listen:start'),
   listenStop: () => ipcRenderer.invoke('listen:stop'),
-  // Spoken replies in the Doubao voice: main holds the key, the box gets mp3.
+  // Spoken replies in the Mac's local voice: main runs it, the box gets audio.
   speakAvailable: () => ipcRenderer.invoke('speak:available'),
-  speakAudio: (text: string, signal?: AbortSignal) => {
+  speakAudio: (text: string, signal?: AbortSignal, lang?: 'zh' | 'en') => {
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
     const cancel = (): void => ipcRenderer.send('speak:cancel', id)
     signal?.addEventListener('abort', cancel, { once: true })
     return ipcRenderer
-      .invoke('speak:audio', id, text)
-      .then((bytes: Uint8Array) => new Blob([new Uint8Array(bytes)], { type: 'audio/mpeg' }))
+      .invoke('speak:audio', id, text, lang)
+      .then((spoken: { audio: Uint8Array; type: string }) => new Blob([new Uint8Array(spoken.audio)], { type: spoken.type }))
       .finally(() => signal?.removeEventListener('abort', cancel))
   },
   onListenEvent: (cb: (event: unknown) => void) => {

@@ -1,12 +1,14 @@
 /**
- * A REPLY AS IT IS HEARD (prompt/reply-voice.ts, main/doubao-tts.ts).
+ * A REPLY AS IT IS HEARD (prompt/reply-voice.ts, main/local-voice.ts).
  *
  * An agent's final message is drawn for the eye: fenced code, `**stars**`,
  * tables, links, absolute paths. Read aloud as written, a voice spells out
  * every backtick and every `/Users/…/src/main/` segment. This turns the
  * markdown into the sentences a person would say, then packs those sentences
  * into chunks a speech engine takes one at a time. The first chunk is short,
- * so the voice starts while the rest is still being made.
+ * so the voice starts while the rest is still being made, and each chunk is
+ * at most RAMP times the one before: the local voice makes audio about three
+ * times faster than it plays, so chunk n is ready before chunk n-1 ends.
  */
 
 /** The most of one reply that is read: a few minutes of speech, never an essay. */
@@ -15,12 +17,15 @@ export const SPEAK_MAX_CHARS = 1500
 export interface ChunkSizes {
   /** The first chunk: short, so the first sound comes quickly. */
   readonly first?: number
-  /** Every chunk after it. */
+  /** The largest chunk after it. */
   readonly rest?: number
+  /** Each chunk at most this many times the one before (1 = no ramp). */
+  readonly ramp?: number
 }
 
-const DEFAULT_FIRST = 80
+const DEFAULT_FIRST = 36
 const DEFAULT_REST = 240
+const DEFAULT_RAMP = 2.5
 
 const CJK = /[\u3400-\u9fff\uf900-\ufaff]/
 const CJK_STOPS = '\u3002\uff01\uff1f\uff1b\u2026'
@@ -158,13 +163,14 @@ function joiner(left: string, right: string): string {
   return hasCjk(left.slice(-1)) || CJK_STOPS.includes(left.slice(-1)) ? (hasCjk(right.charAt(0)) ? '' : ' ') : ' '
 }
 
-/** Sentences packed into chunks: the first at most `first` long, the rest `rest`. */
+/** Sentences packed into chunks: the first at most `first` long, growing by `ramp` up to `rest`. */
 export function speechChunks(text: string, sizes: ChunkSizes = {}): string[] {
   const first = sizes.first ?? DEFAULT_FIRST
   const rest = sizes.rest ?? DEFAULT_REST
+  const ramp = sizes.ramp ?? DEFAULT_RAMP
   const out: string[] = []
   let current = ''
-  const limit = (): number => (out.length === 0 ? first : rest)
+  const limit = (): number => Math.min(rest, Math.round(first * ramp ** out.length))
   const add = (piece: string): void => {
     if (!piece) return
     const joined = current ? `${current}${joiner(current, piece)}${piece}` : piece

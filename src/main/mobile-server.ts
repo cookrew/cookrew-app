@@ -254,8 +254,6 @@ export interface MobileServerDeps {
   sous?: MobileApiDeps['sous']
   /** The Mac's ear for the phone's recordings — see MobileApiDeps; passed through as-is. */
   hear?: MobileApiDeps['hear']
-  /** The Mac's Doubao voice for the phone's spoken replies — see MobileApiDeps; passed through as-is. */
-  speak?: MobileApiDeps['speak']
   uiBus?: MobileApiDeps['uiBus']
   /** The HITL inbox (R3) — see MobileApiDeps; passed through as-is. */
   inbox?: MobileApiDeps['inbox']
