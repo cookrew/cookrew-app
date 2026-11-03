@@ -1650,6 +1650,13 @@
     min-height: 38px;
     font-size: 10.5px;
   }
+
+  /* Each stop as wide as its word, the rest shared (a 360px Samsung, 2026-11-03: equal
+     widths cut WORKSPACES and ARTIFACTS while DEVICES and AGENTS had room to spare). */
+  .zv-stops button,
+  .zv-side {
+    flex: 1 1 auto;
+  }
 }
 
 /* A finger needs room; a phone must not zoom the page to type a reply (iOS
@@ -1866,11 +1873,11 @@
     font-size: 32px;
     letter-spacing: 0.04em;
   }
-  /* The seal as the open workspace's own (13 on a 24 box, on screen): the label is drawn at 11 / 32. */
+  /* The seal as the open workspace's own (control on a 24 box, on screen): the label is drawn at 11 / 32. */
   .zv-mark .zv-mark-label .zv-seal {
     width: calc(24px * 32 / 11);
     height: calc(24px * 32 / 11);
-    font-size: calc(13px * 32 / 11);
+    font-size: calc(var(--ph-control, 12px) * 32 / 11);
     line-height: calc(24px * 32 / 11);
   }
 }

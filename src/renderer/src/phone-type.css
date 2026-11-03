@@ -4,14 +4,17 @@
    measured 22 different CSS sizes, 9.4 to 13px for the controls alone, 3px
    words at the overview stops and a 22px reply box on the open card. A phone
    app reads at a few sizes, each for one role, and never under 11 (iOS HIG
-   caption 2, Material label small); a text field is 16 so iOS never zooms
-   into it. This sheet is the phone's ONE place for type sizes:
+   caption 2, Material label small). This sheet is the phone's ONE place for
+   type sizes. The owner found the first scale too big on a 360px Samsung
+   (2026-11-03: names cut to "Fix…", the bar's stops cut, the crew all
+   words), so it is one step smaller, the 11 floor kept:
 
      caption   11   counts, states, badges, kickers, section heads
-     control   13   buttons, chips, tabs, stops, menu rows, crumbs' kin
-     body      16   reading text, transcripts, every text field
-     title     18   the open agent's name, the card's head
-     display   22   a stop's own heading
+     control   12   buttons, chips, tabs, stops, menu rows
+     body      14   reading text, transcripts, every name, the route
+     title     16   a machine's name
+     display   20   a stop's own heading
+     input     16   every text field: iOS zooms into a field under 16
 
    Chrome is unscaled: its words take the role's size here. The zoom's scene
    is drawn at each stop's camera scale: its words are pinned on SCREEN, the
@@ -26,10 +29,11 @@
 
 :root {
   --ph-caption: 11px;
-  --ph-control: 13px;
-  --ph-body: 16px;
-  --ph-title: 18px;
-  --ph-display: 22px;
+  --ph-control: 12px;
+  --ph-body: 14px;
+  --ph-title: 16px;
+  --ph-display: 20px;
+  --ph-input: 16px;
 }
 
 @media (max-width: 700px) {
@@ -43,7 +47,7 @@
   }
   /* An agent's full view: its name and state on the bar (header.css · route-slot.ts). */
   :root:root .cr-route-who b {
-    font-size: var(--ph-title);
+    font-size: var(--ph-body);
   }
   :root:root .cr-route-who small {
     font-size: var(--ph-caption);
@@ -76,7 +80,7 @@
   }
   :root:root .cr-board-input,
   :root:root body.cr-ink .cr-board-input {
-    font-size: var(--ph-body);
+    font-size: var(--ph-input);
   }
   :root:root .cr-board-loading {
     font-size: var(--ph-control);
@@ -97,7 +101,7 @@
   /* ── the dock's prompt box and its menus ── */
   :root:root .cr-prompt input,
   :root:root body.cookrew-mobile .cr-prompt input {
-    font-size: var(--ph-body);
+    font-size: var(--ph-input);
   }
   :root:root .cr-prompt-to,
   :root:root .cr-prompt-harness,
@@ -155,7 +159,7 @@
   }
 
   /* ── the full view: its head, its look switch, its strip of browsers and notes ── */
-  /* An agent's name is 16 wherever it stands: under its face, on its card, here (zoom/scene-words.ts). */
+  /* An agent's name is body wherever it stands: under its face, on its card, here (zoom/scene-words.ts). */
   :root:root .zv-fv-who b {
     font-size: var(--ph-body);
   }
@@ -207,10 +211,10 @@
   :root:root .zv-fullview .lod-overlay :is(.ctx-block-head, .ctx-block-idx, .ctx-block-title) {
     font-size: var(--ph-caption);
   }
-  /* Code in running text: a step down, as type does everywhere, never its own fixed size. */
+  /* Code in running text: a step down, to control. */
   :root:root .zv-fullview .lod-overlay .ctx-block-reply code,
   :root:root .zv-fullview .lod-overlay .look-chat .ctx-chat-bubble .ctx-block-reply code {
-    font-size: 0.875em;
+    font-size: var(--ph-control);
   }
   :root:root .zv-fullview .lod-overlay .ctx-block-reply pre code {
     font-size: var(--ph-control);
@@ -244,14 +248,14 @@
   :root:root .zv-body {
     max-height: min(80px, calc(88px / var(--zv-k-card, 1)));
     font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
-    line-height: calc(22px / var(--zv-k-card, 1));
+    line-height: calc(20px / var(--zv-k-card, 1));
   }
   :root:root .zv-body .ag-latest {
     font-size: inherit;
     line-height: inherit;
   }
   :root:root .zv-reply input {
-    font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
+    font-size: calc(var(--ph-input) / var(--zv-k-card, 1));
   }
   :root:root .zv-lk .zv-th .zv-nt b {
     font-size: calc(var(--ph-control) / var(--zv-k-card, 1));
@@ -292,6 +296,13 @@
   }
   :root:root .zv-newcap {
     transform-origin: 0 0;
+  }
+  /* Spaced capitals take room: a state and a workspace's label, spaced less on a phone (360px, five to a row). */
+  :root:root .zv-scene .zv-st {
+    letter-spacing: 0.06em;
+  }
+  :root:root .zv-scene .zv-grp {
+    letter-spacing: 0.08em;
   }
   /* A workspace's seal (its agents' count) at control, on its mark as on the open one. */
   :root:root .zv-scene .zv-grp .zv-seal {
