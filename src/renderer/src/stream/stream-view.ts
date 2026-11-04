@@ -15,6 +15,7 @@
 // the last time it was scattered a far jump auto-scrolled itself back to the
 // bottom halfway through landing.
 
+import { closingMessage } from '../../../shared/trace-blocks'
 import { checkpointViewModel, type TurnViewModel } from '../turn-view-model'
 import type { StreamBlock, StreamMarks, StreamRenderSource, StreamTail } from './stream-types'
 
@@ -56,7 +57,7 @@ export function streamBlockViewModel(
   if (block === null) return null
   return checkpointViewModel({
     prompt: block.prompt,
-    reply: block.reply,
+    reply: closingMessage(block),
     ...(marks?.title !== undefined ? { title: marks.title } : {})
   })
 }

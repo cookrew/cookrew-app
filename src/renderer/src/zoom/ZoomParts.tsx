@@ -2,7 +2,8 @@ import { memo, useState } from 'react'
 import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
-import { CardWords, QuickReply, useQuickReply } from './quick-reply'
+import { CardBody } from './CardBody'
+import { QuickReply, useQuickReply } from './quick-reply'
 import { typingOf } from './typing-line'
 import './agent-card.css'
 import type { AgentView, ItemView, MachineView } from './zoom-model'
@@ -239,9 +240,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
       {card && (
         <>
         {/* Its latest turn, as the floating card says it too (quick-reply.tsx). */}
-        <div ref={bind(`agent-body:${agent.id}`)} className="zv-body" style={HIDDEN}>
-          <CardWords agent={agent} sent={reply.sent} />
-        </div>
+        <CardBody agent={agent} sent={reply.sent} roomy={agent.browsers + agent.notes === 0} style={HIDDEN} frameRef={bind(`agent-body:${agent.id}`)} />
         <QuickReply agent={agent} reply={reply} className="zv-reply" style={HIDDEN} formRef={bind(`agent-reply:${agent.id}`)} />
         </>
       )}

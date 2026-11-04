@@ -717,16 +717,82 @@
   will-change: transform, opacity;
 }
 
-/* The latest block (AgentLatest.tsx, agent-card.css): four lines at most, one
-   each, so the strip of thumbnails starts at 113. */
+/* The latest block (CardBody.tsx, agent-card.css): four lines over a strip of
+   thumbnails, which starts at 113. With no strip the words take its room down
+   to the reply box, and unfolded they take it over the thumbnails too. */
 .zv-body {
+  --zv-words-room: 132px;
   width: 228px;
   max-height: 64px;
-  overflow: hidden;
   font: 11.5px/16px var(--zv-mono);
   color: var(--zv-ink-soft);
   transform-origin: 0 0;
   pointer-events: none;
+  transition: max-height 0.18s ease;
+}
+
+.zv-body:is(.roomy, .open) {
+  max-height: var(--zv-words-room);
+}
+
+/* Over the thumbnails (.zv-lk), which are its siblings on the floating card. */
+.zv-body.open {
+  z-index: 9;
+  background: var(--zv-card);
+}
+
+.zv-words {
+  max-height: inherit;
+  overflow: hidden;
+}
+
+/* Cut words take the tap; words that fit leave it to the card under them. */
+.zv-body:is(.more, .open) .zv-words {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.zv-body.open .zv-words {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: var(--zv-hair-2) transparent;
+  padding-bottom: 22px;
+  box-sizing: border-box;
+}
+
+.zv-body.more::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 22px;
+  background: linear-gradient(to bottom, transparent, var(--zv-card));
+  pointer-events: none;
+}
+
+.zv-more {
+  appearance: none;
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  padding: 1px 0 1px 8px;
+  border: 0;
+  background: var(--zv-card);
+  box-shadow: -6px 0 6px var(--zv-card);
+  font: 600 10px/14px var(--zv-mono);
+  color: var(--zv-seal-text);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.zv-more:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 1px;
 }
 
 .zv-body b {

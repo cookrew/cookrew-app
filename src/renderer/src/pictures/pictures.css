@@ -123,3 +123,8 @@
 .cr-prompt:has(.cr-prompt-pics) {
   flex-wrap: wrap;
 }
+
+/* The row typed in stays centred on the pill's round foot, as with no picture. */
+.cr-prompt:has(> .cr-prompt-pics) {
+  padding-bottom: 8px;
+}

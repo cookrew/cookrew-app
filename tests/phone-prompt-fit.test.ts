@@ -73,23 +73,60 @@ describe("every control a thumb's size (32px or more)", () => {
     expect(trayReach()).toBeGreaterThanOrEqual(32)
   })
 
-  it('🎤 and Send', () => {
+  // Owner, 2026-11-04 (Samsung at 324 wide): "the mic and Send stand past the bar".
+  // Drawn as the design draws them, 36x28 r8; the thumb keeps 32 through a clear reach.
+  it('🎤 and Send: drawn as the design, 32px with their reach', () => {
     const send = rule("  body .cr-prompt > .voice-mic,\n  body .cr-prompt > button[type='submit']")
-    expect(px(send, 'width')).toBeGreaterThanOrEqual(32)
-    expect(px(send, 'height')).toBeGreaterThanOrEqual(32)
+    expect(px(send, 'width')).toBe(36)
+    expect(px(send, 'height')).toBe(28)
+    const drawn = rule("  .cr-app .cr-prompt > .cr-btn.voice-mic,\n  .cr-app .cr-prompt > .cr-btn[type='submit']")
+    expect(px(drawn, 'border-radius')).toBe(8)
+    const reach = rule("  .cr-app .cr-prompt > .cr-btn.voice-mic::after,\n  .cr-app .cr-prompt > .cr-btn[type='submit']::after")
+    expect(reach).toContain('inset: -3px 0;')
+  })
+
+  it("Send's corner stays inside the pill's round end, with room to spare", () => {
+    const pill = rule('  body .cr-prompt')
+    const send = rule("  body .cr-prompt > .voice-mic,\n  body .cr-prompt > button[type='submit']")
+    const drawn = rule("  .cr-app .cr-prompt > .cr-btn.voice-mic,\n  .cr-app .cr-prompt > .cr-btn[type='submit']")
+    const R = px(pill, 'border-radius')
+    const H = px(pill, 'min-height')
+    const inset = Number(/padding: \d+px (\d+)px \d+px \d+px;/.exec(pill.slice(pill.lastIndexOf('padding:')))?.[1])
+    const r = px(drawn, 'border-radius')
+    // The corner's arc about its own centre, measured from the centre of the pill's end.
+    const top = (H - px(send, 'height')) / 2
+    const reachOut = Math.hypot(R - inset - r, R - top - r) + r
+    expect(R - reachOut).toBeGreaterThanOrEqual(3)
   })
 
   it('the chips and the × that lets go of the agent', () => {
-    expect(px(rule('  body .cr-prompt-to'), 'min-height')).toBeGreaterThanOrEqual(32)
+    // The chip is drawn 30 tall, as the design; the × keeps its 32px square, clear of the chip's edge.
+    expect(px(rule('  body .cr-prompt-to'), 'height')).toBe(30)
     const x = rule('  body .cr-prompt-to button')
     expect(px(x, 'width')).toBeGreaterThanOrEqual(32)
     expect(px(x, 'height')).toBeGreaterThanOrEqual(32)
-    expect(px(rule('  body .cr-prompt-new > .cr-prompt-harness'), 'height')).toBeGreaterThanOrEqual(32)
+    expect(px(rule('  body .cr-prompt-new > .cr-prompt-harness'), 'height')).toBe(30)
     expect(rule('.cr-prompt .cr-tune-menu-btn,\n.cr-prompt .cr-prompt-tune')).toContain('height: calc(var(--tray-h) + 2 * var(--tray-reach));')
     expect(trayReach()).toBeGreaterThanOrEqual(32)
   })
 
   it('the words row as tall as its buttons', () => {
     expect(px(rule('  body .cr-prompt input'), 'height')).toBeGreaterThanOrEqual(32)
+  })
+
+  it('🎤 and Send on a wide screen: the design\'s 32x24 r6, over .cr-btn.sm', () => {
+    const wide = css.slice(css.indexOf('@media (min-width: 701px)'))
+    const body = wide.slice(0, wide.indexOf('}'))
+    expect(body).toContain('.cr-app .cr-prompt > .cr-btn.voice-mic')
+    expect(px(body, 'width')).toBe(32)
+    expect(px(body, 'height')).toBe(24)
+    expect(px(body, 'border-radius')).toBe(6)
+  })
+
+  it("a draft's pictures lead the pill: the words, 🎤 and Send stay one row at its foot", () => {
+    const pics = rule('  body .cr-prompt > .cr-prompt-pics')
+    const pos = (body: string): number => Number(/order: (-?\d+);/.exec(body.slice(body.lastIndexOf('order:')))?.[1])
+    expect(pos(pics)).toBeLessThan(pos(rule('  body .cr-prompt-to,\n  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-harness)')))
+    expect(pos(pics)).toBeLessThan(pos(rule('  body .cr-prompt input')))
   })
 })

@@ -21,10 +21,19 @@ describe('checkpointViewModel', () => {
     expect(m).not.toBeNull()
     expect(m!.title).toBe('Lazy-load fix')
     expect(m!.ask).toBe('Fix the lazy-load bug') // first line only
-    expect(m!.latest).toEqual({ text: 'Done — the mirror now attaches on zoom.', tone: 'done' })
+    expect(m!.latest).toEqual({
+      text: 'Done — the mirror now attaches on zoom.',
+      tone: 'done',
+      full: 'Done — the mirror now attaches on zoom.\nmore detail',
+    })
     expect(m!.tools).toEqual([]) // no live tool trail at T1
     expect(m!.pendingInput).toBeNull()
     expect(m!.tail).toBeNull()
+  })
+
+  it('carries no second copy of a reply its one line already says', () => {
+    const m = checkpointViewModel({ prompt: 'ask', reply: '  Shipped.\n' })
+    expect(m!.latest).toEqual({ text: 'Shipped.', tone: 'done' })
   })
 
   it('is null when the checkpoint is null (nothing to show → stays "Ready")', () => {

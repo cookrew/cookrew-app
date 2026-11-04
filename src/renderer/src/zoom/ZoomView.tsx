@@ -344,7 +344,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const onWheel = useRef<(e: WheelEvent) => void>(() => undefined)
   onWheel.current = (e) => {
     if (e.ctrlKey) return
-    if ((e.target as Element | null)?.closest?.('textarea, input, select, [role="dialog"]')) return
+    if ((e.target as Element | null)?.closest?.('textarea, input, select, [role="dialog"], .zv-body.open')) return
     const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? size.h : 1
     const dx = e.deltaX * k
     const dy = e.deltaY * k

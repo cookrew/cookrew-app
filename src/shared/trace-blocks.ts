@@ -83,6 +83,21 @@ export interface TraceBlock {
   outcome?: 'failed' | 'interrupted'
 }
 
+/**
+ * THE WORDS A TURN ENDS ON. `reply` is every message of the turn joined, which
+ * is what a transcript reads; a card says the last of them, and the first line
+ * of the joined text was "let me look at the code" under a finished turn
+ * (owner, 2026-11-04). A step (its `at`) is what parts narration from the
+ * answer, so a multi-part answer with no step inside it stays whole, and a turn
+ * still on a step reads the last thing said before it. A reply with no placed
+ * step (codex: the reply is already the last message) is returned whole.
+ */
+export function closingMessage(block: Pick<TraceBlock, 'reply' | 'activity'>): string {
+  const end = block.reply.trimEnd().length
+  const cut = block.activity.reduce((last, call) => (call.at !== undefined && call.at < end && call.at > last ? call.at : last), 0)
+  return block.reply.slice(cut, end).trim()
+}
+
 /** Head of a tool input rendered into an activity line. */
 const ACTIVITY_ARG_CHARS = 80
 /** Head of a tool result snippet. */

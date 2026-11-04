@@ -20,7 +20,13 @@ import {
   type BrowserViewportState
 } from './browser-viewport'
 import { CdpClient } from './cdp-client'
-import { applySignInCompatibility, presentableUserAgent } from './browser-signin'
+import {
+  applySignInCompatibility,
+  cdpIdentityProbe,
+  presentableUserAgent,
+  readNativeIdentity,
+  type NativeIdentity
+} from './browser-signin'
 import { COPY_BINDING, PAGE_COPY_SCRIPT, PASTE_FUNCTION, copyText } from './page-copy'
 import { FIELDS_BINDING, FIELDS_WATCH, PAGE_FIELDS_SCRIPT, sanitizeFieldReport, type FieldReport } from './page-fields'
 
@@ -43,6 +49,9 @@ function httpJson<T>(url: string): Promise<T> {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** A browser build does not change what it is, so each is asked once. */
+const identityByBuild = new Map<string, NativeIdentity>()
 
 const POLL_INTERVAL_MS = 66
 const NAVIGATION_TIMEOUT_MS = 15_000
@@ -184,6 +193,10 @@ export class HeadlessInstance {
    * its automation tell. Empty until startup has read /json/version.
    */
   private userAgent = ''
+  /** Keys identityByBuild. Empty until startup has read /json/version. */
+  private browserBuild = ''
+  /** Chrome's own client hints, handed back with the UA. See browser-signin.ts. */
+  private identity: NativeIdentity | null = null
   private port = 0
   private closed = false
   private pollTimer: ReturnType<typeof setInterval> | null = null
@@ -276,7 +289,10 @@ export class HeadlessInstance {
     }
     this.browserCdp = browserCdp
 
+    // In this order: /json still lists a closing probe page for a moment, and
+    // firstPageTarget must not pick it.
     const initialTarget = await this.firstPageTarget()
+    this.identity = await this.nativeIdentity()
     await this.connectPage(active, initialTarget)
     for (const tab of tabs) {
       if (tab.id !== active.id) await this.createPage(tab)
@@ -311,9 +327,9 @@ export class HeadlessInstance {
           Browser?: string
         }>(`http://127.0.0.1:${this.port}/json/version`)
         if (version.webSocketDebuggerUrl) {
-          // Read here because this endpoint carries BOTH the headless UA and
-          // the real Chrome version, and every page attach needs the result.
-          this.userAgent = presentableUserAgent(version['User-Agent'] ?? '', version.Browser)
+          // Read here because every page attach needs the result.
+          this.userAgent = presentableUserAgent(version['User-Agent'] ?? '')
+          this.browserBuild = `${this.opts.executablePath}|${version.Browser ?? ''}`
           return version.webSocketDebuggerUrl
         }
       } catch {
@@ -322,6 +338,19 @@ export class HeadlessInstance {
       await sleep(100)
     }
     throw new Error('Chrome browser target never appeared')
+  }
+
+  private async nativeIdentity(): Promise<NativeIdentity | null> {
+    const known = identityByBuild.get(this.browserBuild)
+    if (known || !this.browserCdp) return known ?? null
+    // Before Target discovery starts, so the probe page is never taken for a popup.
+    const identity = await readNativeIdentity(
+      cdpIdentityProbe(this.browserCdp, async (targetId) => {
+        return (await this.targetById(targetId)).webSocketDebuggerUrl
+      })
+    )
+    if (identity) identityByBuild.set(this.browserBuild, identity)
+    return identity
   }
 
   private async targets(): Promise<TargetInfo[]> {
@@ -398,7 +427,7 @@ export class HeadlessInstance {
     // browser. It advertised HeadlessChrome and claimed a platform
     // authenticator it does not have, which left Google waiting forever on a
     // passkey no Touch ID could ever answer. See browser-signin.ts.
-    await applySignInCompatibility(cdp, { userAgent: this.userAgent })
+    await applySignInCompatibility(cdp, { userAgent: this.userAgent, identity: this.identity })
     await this.resizePage(page)
     await this.refreshPageState(page)
     return page

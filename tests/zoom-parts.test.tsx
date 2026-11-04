@@ -69,7 +69,7 @@ describe('an agent’s card', () => {
     expect(pets).not.toMatch(/<AgentLatest|<TurnView|function AgentCard/)
     const card = readFileSync('src/renderer/src/zoom/AgentCard.tsx', 'utf8')
     const node = readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')
-    for (const shared of ['<CardWords agent={agent} sent={reply.sent} />', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={agent.status} weight="large"']) {
+    for (const shared of ['<CardBody agent={agent} sent={reply.sent}', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={agent.status} weight="large"']) {
       expect(card).toContain(shared)
       expect(node).toContain(shared)
     }
