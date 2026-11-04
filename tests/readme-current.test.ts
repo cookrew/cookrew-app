@@ -29,6 +29,19 @@ describe('README', () => {
     }
   })
 
+  // Each of these read true from the code's names and false from what it does.
+  it('claims nothing the shipped app does not do', () => {
+    expect(readme).toContain('devices → workspaces → artifacts | agents')
+    // The full view has had no checkpoint row since 2026-11-03.
+    expect(readme).not.toMatch(/checkpoints/i)
+    // The CLI is copied alone next to the socket, so qrcode-terminal never loads.
+    expect(readme).not.toMatch(/cookrew mobile` prints a URL and a QR/)
+    // The relay link needs a Cookrew account.
+    expect(readme).toMatch(/Cookrew\s+account/)
+    // Every card that is not a plain page runs on the same Chrome-backed cast.
+    expect(readme).toMatch(/need\s+Chrome/)
+  })
+
   it('leaves development for last', () => {
     expect(headings.at(-1)).toBe('Development')
   })

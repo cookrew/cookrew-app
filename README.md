@@ -17,7 +17,8 @@ same crew, and every agent gets a `cookrew` CLI to talk to the others.
 | macOS, Apple Silicon | `Cookrew-<version>-arm64.dmg` |
 | Windows (preview) | `Cookrew-<version>-windows-preview-x64.exe` |
 
-There is no Intel Mac or Linux release. On Windows agents end when the app closes.
+There is no Intel Mac or Linux release. Windows is a preview: agents end when the app
+closes, and the `cookrew` CLI is not supported there.
 
 > **Not notarized yet.** Releases up to and including 0.4.0 are unsigned, so macOS
 > stops them on first launch. Until a release says it is notarized, drag Cookrew to
@@ -26,6 +27,9 @@ There is no Intel Mac or Linux release. On Windows agents end when the app close
 > ```bash
 > xattr -dr com.apple.quarantine /Applications/Cookrew.app
 > ```
+>
+> The 0.4.0 download also leaves `cookrew` out of its terminals. The next release
+> fixes that.
 
 ## Requirements
 
@@ -55,14 +59,16 @@ To keep agents across restarts today, start it from a terminal:
 
 The whole app is one zoom with named stops on the bar:
 
-**devices → workspaces → agents | artifacts**
+**devices → workspaces → artifacts | agents**
 
-Click a device, a workspace or a card to go in. Click the background, press Esc or
-use the back button to come out. An agent opens from the crew into its card, then
-into a full view. A switch on the bar flips a workspace between its agents and its
-artifacts. On a touch screen, pinch works too.
+Click this Mac, a workspace or a card to go in. Other Macs on your account are listed
+but open only on their own screen. Click the background, press Esc or use the back
+button to come out. An agent opens from the crew into its card, then into a full view.
+The last stop on the bar flips a workspace between its artifacts and its agents. On a
+touch screen, pinch works too.
 
-Press `/` to search everything on the board. The prompt box at the foot of the window
+Press `/` to search everything on the board. Esc and `/` belong to the terminal or text
+field while you are typing in one. The prompt box at the foot of the window
 talks to the agent you have open or named with `@agent`. With nobody targeted, it
 starts a new agent and names it from what you wrote. Hold ⌘ to dictate; speech is
 recognized on your Mac.
@@ -72,7 +78,7 @@ recognized on your Mac.
 An agent is a real terminal running a harness: Claude Code, Codex, OpenCode, Pi or a
 plain shell. Its face shows whether it is working, done or waiting on you, and a chime
 rings for those last two. The full view shows the same agent as a readable chat or as
-the live terminal, with its checkpoints alongside.
+the live terminal.
 
 One agent in a workspace can be the orch, which leads the crew and may restructure it.
 
@@ -87,16 +93,18 @@ What agents produce and use, on the other side of the same zoom:
 - **Notes**: markdown, stored as real `.md` files under `~/.cookrew/workspaces`.
 - **Screens and devices**: a browser card can also show a Mac display or window
   (`screen://main`, `window://App`), an Android phone (`adb://SERIAL`), a virtual
-  iPhone (`vphone://VM`) or a camera (`cam://0`). The Mac cards need Screen Recording
-  permission. Letting agents click and type on the Mac also needs Accessibility and
-  `COOKREW_COMPUTER_INPUT=1`.
+  iPhone (`vphone://VM`) or a camera (`cam://0`). These cards need Chrome, Chromium or
+  Edge installed, as above. An Android card needs `adb`, and a virtual iPhone needs a
+  running VM. The Mac cards need Screen Recording permission. Letting agents click and
+  type on the Mac also needs Accessibility and `COOKREW_COMPUTER_INPUT=1`.
 
 ## Phone
 
-`cookrew mobile` prints a URL and a QR code. Open it on the phone: no app to install.
-You get the same zoom, terminals, the prompt box and dictation. The phone connects over
-your Wi-Fi, over Tailscale, or from anywhere through the cookrew.dev relay.
-`cookrew mobile --rotate` revokes the pairing token.
+`cookrew mobile` prints the address to open on the phone: no app to install. You get
+the same zoom, terminals, the prompt box and dictation. Signed in with a Cookrew
+account, the link goes through the cookrew.dev relay and works from anywhere, and your
+profile shows it as a QR code. Without an account the phone connects directly, over
+your Wi-Fi or Tailscale. `cookrew mobile --rotate` revokes the pairing token.
 
 ## The cookrew CLI
 
@@ -117,9 +125,9 @@ cookrew browser create screen://main "My screen"
 cookrew team save "Reviewers"              # snapshot the crew as a reusable team
 ```
 
-Run `cookrew help` for the rest. Reaching a card by name wires you to it. Verbs that
-restructure the crew, such as `connect`, `dismiss` and `workspace switch`, are for the
-orch.
+Run `cookrew help` for the rest. Asking or checking an agent, reading or editing a note
+and driving a browser by name wires you to it. Verbs that restructure the crew, such as
+`connect`, `dismiss`, `team save` and `workspace switch`, are for the orch.
 
 ## License
 
