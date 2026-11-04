@@ -446,6 +446,13 @@ export type MenuAct =
   | { readonly kind: 'key'; readonly seq: string }
 
 const onWordsRow = (choice: WaitChoice): boolean => choice.cursor !== null && choice.options[choice.cursor]?.role === 'type'
+/**
+ * "Yes, and don't ask again for: cookrew note *": under its cursor the row is an
+ * input, so a digit lands in the rule it saves (measured, 2.1.316).
+ */
+const RULE_ROW_RE = /^yes, and don.?t ask again/i
+const isRuleRow = (option: WaitOption | undefined): boolean => RULE_ROW_RE.test(option?.label ?? '')
+const onRuleRow = (choice: WaitChoice): boolean => choice.cursor !== null && isRuleRow(choice.options[choice.cursor])
 const ticks = (choice: WaitChoice): boolean => choice.options.some((o) => o.role === 'toggle')
 
 /**
@@ -453,8 +460,8 @@ const ticks = (choice: WaitChoice): boolean => choice.options.some((o) => o.role
  * a digit takes a row at once, wherever the cursor is, but on the row to type
  * in a digit is a word, so from there rows are reached by arrows and Enter. In
  * a multi-select a digit on the words row only ticks it, and Submit has no
- * digit. Enter goes in a write of its own: in one burst with arrows the TUI
- * took the Enter on the row it started from.
+ * digit. A permission's rule row is an input too. Enter goes in a write of its
+ * own: in one burst with arrows the TUI took the Enter on the row it started from.
  */
 function rowKeys(choice: WaitChoice, index: number): string[] | null {
   const option = choice.options[index]
@@ -476,7 +483,7 @@ function rowKeys(choice: WaitChoice, index: number): string[] | null {
     const moves = moved()
     return moves === null ? null : [moves]
   }
-  if (option.role === 'submit' || onWordsRow(choice) || option.key.length !== 1) return thenEnter()
+  if (option.role === 'submit' || onWordsRow(choice) || onRuleRow(choice) || isRuleRow(option) || option.key.length !== 1) return thenEnter()
   // The row's own number: an unnumbered Submit stands between rows.
   return [option.key]
 }

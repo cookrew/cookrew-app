@@ -2339,7 +2339,10 @@ export class TurnTracker extends EventEmitter {
     const prevInPaste = t.inPaste
     const prevHeld = this.liveHeld(t)
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, prevHeld)
-    t.promptBuffer = fed.buffer
+    // A held menu stands in the box's place: a digit answers it and leaves
+    // nothing behind, or the agent reads as "composing" and refuses every ask.
+    const intoMenu = t.phase === 'waiting' && menuHeldOnScreen(t.session.viewportText())
+    t.promptBuffer = intoMenu ? prevBuffer : fed.buffer
     t.inPaste = fed.inPaste
     t.heldInput = fed.held
     t.heldAt = Date.now()
@@ -2352,11 +2355,14 @@ export class TurnTracker extends EventEmitter {
     // fallback's own tagged paste passes through this buffer too and must
     // not read as the owner composing.
     if (source !== 'dispatch') {
-      this.maintainOwnerEditing(t, terminalId, data, fed, {
-        buffer: prevBuffer,
-        inPaste: prevInPaste,
-        held: prevHeld
-      })
+      // Keys into a menu edit no box: no reservation to maintain.
+      if (!intoMenu) {
+        this.maintainOwnerEditing(t, terminalId, data, fed, {
+          buffer: prevBuffer,
+          inPaste: prevInPaste,
+          held: prevHeld
+        })
+      }
     } else if (
       fed.submitted.length > 0 &&
       fed.buffer.length === 0 &&

@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cleanTurnLines, tailLines } from '../src/shared/turn'
-import { choiceKeys, choiceSig, menuHeldOnScreen, parseWaitChoice, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
+import { answerKeys, choiceKeys, choiceSig, menuHeldOnScreen, parseWaitChoice, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
 
 const screen = (name: string): string => readFileSync(join(__dirname, 'fixtures', 'wait-choice', `${name}.txt`), 'utf8')
 const read = (name: string): WaitChoice => {
@@ -145,6 +145,28 @@ describe('a plan offered to an agent launched in bypass mode', () => {
   })
   it('the real status line still goes', () => {
     expect(cleanTurnLines('⏵⏵ bypass permissions on (shift+tab to cycle)\nhello\n')).toEqual(['hello', ''])
+  })
+})
+
+describe("the row that writes an always-allow rule (Menu QA F12)", () => {
+  // Under its cursor the row is an input: a digit lands in the rule, 'cookrew note *1'.
+  const ON_RULE = waitChoiceOfScreen(readFileSync(join(__dirname, 'fixtures', 'wait-choice', 'claude-rule-row-cursor.txt'), 'utf8')) as WaitChoice
+  it('reads as the row it is', () => {
+    expect(ON_RULE.cursor).toBe(1)
+    expect(ON_RULE.options[1].label).toMatch(/ask again for: cookrew note/)
+  })
+  it('from it, rows are reached by arrows and Enter, never a digit', () => {
+    expect(answerKeys(ON_RULE, { kind: 'row', index: 0 })).toEqual(['\x1b[A', '\r'])
+    expect(answerKeys(ON_RULE, { kind: 'row', index: 3 })).toEqual(['\x1b[B\x1b[B', '\r'])
+  })
+  it('on it, Enter takes it', () => {
+    expect(answerKeys(ON_RULE, { kind: 'row', index: 1 })).toEqual(['\r'])
+  })
+  it('from another row it is reached the same way: its digit may only open the field', () => {
+    expect(answerKeys({ ...ON_RULE, cursor: 0 }, { kind: 'row', index: 1 })).toEqual(['\x1b[B', '\r'])
+  })
+  it('other rows keep their digit', () => {
+    expect(answerKeys({ ...ON_RULE, cursor: 0 }, { kind: 'row', index: 3 })).toEqual(['4'])
   })
 })
 
