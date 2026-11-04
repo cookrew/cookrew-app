@@ -128,7 +128,7 @@ describe('the dock, with the TERMINAL button retired', () => {
         roles={[]}
         role={null}
         onRole={noop}
-       
+        orch={false}
         onOrch={noop}
         connectHint={null}
         onMake={noop}
