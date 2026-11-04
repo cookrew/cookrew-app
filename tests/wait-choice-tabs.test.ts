@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cleanTurnLines, tailLines } from '../src/shared/turn'
-import { answerKeys, choiceKeys, choiceSig, menuHeldOnScreen, parseWaitChoice, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
+import { answerKeys, choiceKeys, choiceSig, menuAsksOnScreen, menuHeldOnScreen, parseWaitChoice, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
 
 const screen = (name: string): string => readFileSync(join(__dirname, 'fixtures', 'wait-choice', `${name}.txt`), 'utf8')
 const read = (name: string): WaitChoice => {
@@ -167,6 +167,28 @@ describe("the row that writes an always-allow rule (Menu QA F12)", () => {
   })
   it('other rows keep their digit', () => {
     expect(answerKeys({ ...ON_RULE, cursor: 0 }, { kind: 'row', index: 3 })).toEqual(['4'])
+  })
+})
+
+describe('a menu that asks, sure enough to raise a wait from rest', () => {
+  const read = (name: string): string => readFileSync(join(__dirname, 'fixtures', 'wait-choice', `${name}.txt`), 'utf8')
+  const ASKS = ['claude-ask', 'claude-ask-multi-narrow-zh', 'claude-bash', 'claude-create', 'claude-edit', 'claude-edit-cursor-2', 'claude-plan', 'claude-plan-bypass', 'claude-rule-row-cursor', 'claude-tabs-multi', 'claude-tabs-q1', 'claude-tabs-q2', 'claude-tabs-q2-typed', 'claude-tabs-review', 'claude-herdr-recent-multi', 'codex-command']
+  it.each(ASKS)('%s asks', (name) => {
+    expect(menuAsksOnScreen(read(name))).toBe(true)
+  })
+  it('a picker does not, with or without the echo that names it (Claude)', () => {
+    const screen = `⏺ DONE\n\n${'─'.repeat(60)}\n  Select model\n  ❯ 1. Default\n    2. Opus\n  Enter to set as default · Esc to cancel\n`
+    expect(menuHeldOnScreen(screen)).toBe(true)
+    expect(menuAsksOnScreen(screen)).toBe(false)
+  })
+  it('a picker does not (Codex)', () => {
+    const screen = '• Done.\n\n  Select Model\n› 1. gpt-5 (current)\n  2. gpt-5-mini\n\n  Press enter to confirm or esc to go back\n'
+    expect(menuHeldOnScreen(screen)).toBe(true)
+    expect(menuAsksOnScreen(screen)).toBe(false)
+  })
+  it('a question tool asks even with no question mark in its question', () => {
+    const screen = '☐ Report\n\nPick what to include\n\n❯ 1. Summary\n  2. Diff\n  3. Type something.\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n'
+    expect(menuAsksOnScreen(screen)).toBe(true)
   })
 })
 

@@ -40,6 +40,7 @@ import {
   isUiCommand,
   detectAttention,
   detectLiveWork,
+  uiCommandOpen,
   detectTurnEnded,
   lastStatusLine,
   extractPromptEcho,
@@ -51,7 +52,7 @@ import {
   scrollLineOf,
   tailLines
 } from '../shared/turn'
-import { menuHeldOnScreen, waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { menuAsksOnScreen, menuHeldOnScreen, waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
@@ -2903,10 +2904,23 @@ export class TurnTracker extends EventEmitter {
    */
   private handleParsed(terminalId: string): void {
     const t = this.tracked.get(terminalId)
+    if (t?.agent && (t.phase === 'idle' || t.phase === 'replied')) {
+      // A question the tracker never saw open: a mirror attached to a pane
+      // already at it, where a narrow pane leaves herdr reading idle. A TUI at a
+      // menu prints nothing more, so this frame is the only chance.
+      const screen = t.session.viewportText()
+      if (menuAsksOnScreen(screen) && this.menuWaits(screen)) this.healBlocked(t)
+      return
+    }
     if (t?.phase !== 'waiting') return
     this.noteMenu(t, menuHeldOnScreen(t.session.viewportText()))
     t.outputRev += 1
     this.schedulePush(terminalId)
+  }
+
+  /** A menu held up for the owner to answer: no turn running, and no picker they opened themselves. */
+  private menuWaits(screen: string): boolean {
+    return menuHeldOnScreen(screen) && !detectLiveWork(screen) && !uiCommandOpen(screen)
   }
 
   /** What this frame says of the menu: back, or missing since the last one. */
@@ -3112,7 +3126,7 @@ export class TurnTracker extends EventEmitter {
     // A menu is its own proof, and herdr often reads such a pane as done: no
     // quiet to sit out, or the rows would come up to 2.5 s late.
     const screen = t.session.viewportText()
-    if (menuHeldOnScreen(screen) && !detectLiveWork(screen)) {
+    if (this.menuWaits(screen)) {
       this.raiseWait(t)
       return
     }
