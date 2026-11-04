@@ -21,6 +21,8 @@ import type { RenameOutcome } from '../../shared/rename-plan'
 import type { LevelsEvent } from '../../shared/strata'
 import { apiPath, clientBase } from './api-base'
 import { planeFetch } from './plane-fetch'
+import { RELAY_ANSWER_MS, joinInFlight } from './in-flight'
+import { RELAY_FULL_WORDS, isRelayFull, waitOutRelayFull } from './relay-full'
 import { planeHealth } from './plane-health'
 import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
@@ -145,7 +147,21 @@ async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions
   return own
 }
 
+/**
+ * One request as its caller sees it. A read waits out a full relay; a write
+ * hears about it at once (relay-full.ts says why). So does a caller with its
+ * own signal, which keeps its own deadline and its own retries.
+ */
 async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
+  const attempt = (): Promise<T> => reqAttempt<T>(path, method, body, parseOptions)
+  try {
+    return await (method === 'GET' && !parseOptions.signal ? waitOutRelayFull(attempt) : attempt())
+  } catch (error) {
+    throw isRelayFull(error) ? new HttpStatusError(RELAY_FULL_WORDS, 503) : error
+  }
+}
+
+async function reqAttempt<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
   const options: RequestInit = { method, ...(parseOptions.signal ? { signal: parseOptions.signal } : {}) }
   const headers: Record<string, string> = {}
   const token = authStore().token()
@@ -464,6 +480,16 @@ function checkAuthOnBoot(): void {
     .catch(() => undefined)
 }
 
+/**
+ * Taps on a tile, as one switch. Nothing on screen moves until the Mac answers,
+ * so a stalled Mac gets tapped again: six POSTs in six seconds on 2026-11-05,
+ * each holding a relay exchange.
+ */
+const switchTo = joinInFlight(
+  (id: string) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
+  RELAY_ANSWER_MS
+)
+
 export function createRemoteApi(): CookrewApi {
   checkAuthOnBoot()
   return {
@@ -473,7 +499,7 @@ export function createRemoteApi(): CookrewApi {
     createWorkspace: (name, dir, team) => req(apiPath('/api/workspaces'), 'POST', { name, dir, team }),
     templateImport: (team, position) =>
       req(apiPath('/api/templates/import'), 'POST', { team, position }),
-    switchWorkspace: (id) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
+    switchWorkspace: switchTo,
     renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
     setWorkspaceBrief: (id, brief) => req<WorkspaceList>(apiPath('/api/workspaces/brief'), 'POST', { id, brief }),
     removeWorkspace: (id) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}`), 'DELETE'),
