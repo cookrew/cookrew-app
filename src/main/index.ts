@@ -179,6 +179,7 @@ import {
 } from './door-seats'
 import { Factors } from './factors'
 import { SeatSettleQueue } from './seat-settle'
+import { emit, isFreshInstall, resumeTelemetry, setTelemetryOn, startTelemetry, telemetryStatus } from './telemetry'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
 import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
@@ -389,6 +390,11 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 // cap dropped the oldest id) cannot cost a transcript again. Installed here
 // and nowhere else — a unit test that constructs a store gets the no-op sink.
 installLineageSpill(new LineageSpill())
+
+// Asked before the store writes its first file: after that, every home looks
+// like an upgrade, and `installed` must not fire for everyone already here.
+const freshInstall = isFreshInstall()
+startTelemetry({ appVersion: app.getVersion() })
 
 const store = new WorkspaceStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
@@ -1849,6 +1855,8 @@ async function handleServedSlug(
       // The money moved. Report it to cookrew.dev as a bought seat, through
       // the queue that survives the registry being down (seat-settle.ts).
       onPaid: (payment) => {
+        // Before the early return below: a caller with no account still paid.
+        emit('paid')
         const template = serving.served.byService(payment.serviceId)
         const team = template ? (relayServing?.addressFor(template.slug)?.name ?? null) : null
         const username = payment.sub.startsWith(ACCOUNT_SUB_PREFIX)
@@ -6100,6 +6108,7 @@ app.whenReady().then(() => {
       console.error('Dock icon failed to load:', error)
     }
   }
+  if (freshInstall) emit('installed')
   // The cards routed before this restart are still routed (their node data
   // says so); seed them, then one probe before the first card spawns.
   routeService.seedRouted()
@@ -6127,6 +6136,8 @@ app.whenReady().then(() => {
         if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
       })
       .catch(() => undefined)
+    // Whatever the last run left queued for the funnel; off, it stays home.
+    void resumeTelemetry()
   }, 5_000)
 
   // Reclaim what the stores leaked. Deferred rather than awaited: it walks
@@ -7822,6 +7833,9 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The header's device step: this desktop by the name its account record
   // gives it (the name /me and the phone show), else the renderer's fallback.
   ipcMain.handle('machine:name', () => accounts.account()?.name ?? null)
+  // The ⋯ row's two questions (TelemetryRow.tsx).
+  ipcMain.handle('telemetry:status', () => telemetryStatus())
+  ipcMain.handle('telemetry:set', (_e, on: unknown) => (typeof on === 'boolean' ? setTelemetryOn(on) : telemetryStatus()))
   // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
   // pushed per window like the board, and the account's desktops from the
   // registry, cut to directory facts before they reach the renderer.

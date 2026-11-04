@@ -15,6 +15,7 @@ import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, toggleFullscreen, useFullscreen } from './fullscreen'
+import { TelemetryRow } from './TelemetryRow'
 import { isRemoteMode } from './api'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
@@ -171,6 +172,7 @@ export function HeaderMore({
               <span className="cr-more-label">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
             </button>
           )}
+          <TelemetryRow />
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
             <span className="cr-more-label">Refresh</span>
