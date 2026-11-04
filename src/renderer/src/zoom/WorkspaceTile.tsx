@@ -50,6 +50,9 @@ type TileProps = { mark: MarkView; open?: boolean; bind: Bind; onOpen: () => voi
 export const sameTile = (a: TileProps, b: TileProps): boolean =>
   sameDeck(a.mark.deck, b.mark.deck) && sameProps({ ...a, mark: { ...a.mark, deck: [] } }, { ...b, mark: { ...b.mark, deck: [] } })
 
+/** The digits a snug tile's split has room for: past them it says the total. */
+const SPLIT_DIGITS = 5
+
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
 export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, bind, onOpen, onOpenItems }: TileProps): React.JSX.Element {
@@ -89,7 +92,7 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
         {n > 0 ? <><span className="zv-seal">{n}</span><small>{n === 1 ? 'agent' : 'agents'}</small></> : <><em>no agents</em><span className="zv-zero">0</span></>}
       </div>
       {known && (
-        <div className="zv-tw zv-tile-cap items">
+        <div className="zv-tw zv-tile-cap items" data-long={`${browsers}${notes}`.length > SPLIT_DIGITS || undefined}>
           {total > 0 ? <><span className="zv-total">{total}</span><span className="zv-split"><Counts browsers={browsers} notes={notes} /></span></> : <><em>no artifacts</em><span className="zv-zero">0</span></>}
         </div>
       )}
