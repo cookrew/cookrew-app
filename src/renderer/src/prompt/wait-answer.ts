@@ -20,8 +20,13 @@ import { choiceId, choiceKeys, choiceSig, ESC, hasWordsRow, keyChoice, staysOpen
 
 export const FILL_MS = 600
 export const RETRY_MS = 5000
-/** How long "the menu moved on" stands. */
-const MOVED_MS = 4000
+/** How long the words for an answer that did not land stand. */
+const FAILED_MS = 4000
+/** Those words: the screen had moved on, or the answer was stopped on its way. */
+export const ANSWER_FAILED = {
+  moved: 'the menu moved on · nothing sent',
+  refused: 'that answer did not go through · try again'
+} as const
 
 export interface Answer {
   readonly sig: string
@@ -112,8 +117,8 @@ export interface WaitAnswering {
   readonly wordsRow: boolean
   /** Words from the box into that row (the draft is the caller's to clear; a refusal puts them back). */
   readonly sendWords: (words: string) => void
-  /** The screen had moved on from the menu answered: nothing was sent. */
-  readonly moved: boolean
+  /** Why the last answer did not land, in words; null when it did. */
+  readonly failed: string | null
 }
 
 export function useWaitAnswer(agentId: string | null, onType?: () => void): WaitAnswering {
@@ -139,23 +144,23 @@ export function useWaitAnswer(agentId: string | null, onType?: () => void): Wait
 
   // The answer goes as "this menu, this row": the main process checks it
   // against the screen and works the keys out there (main/menu-answer.ts).
-  const [moved, setMoved] = useState(false)
-  const movedTimer = useRef(0)
-  useEffect(() => () => window.clearTimeout(movedTimer.current), [])
+  const [failed, setFailed] = useState<string | null>(null)
+  const failedTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(failedTimer.current), [])
   const deliver = (act: MenuAct, choice: WaitChoice, onRefused?: () => void): void => {
     if (!agentId) return
-    const refused = (): void => {
+    const refused = (reason: keyof typeof ANSWER_FAILED): void => {
       waitAnswers.forget(agentId)
-      setMoved(true)
-      window.clearTimeout(movedTimer.current)
-      movedTimer.current = window.setTimeout(() => setMoved(false), MOVED_MS)
+      setFailed(ANSWER_FAILED[reason])
+      window.clearTimeout(failedTimer.current)
+      failedTimer.current = window.setTimeout(() => setFailed(null), FAILED_MS)
       onRefused?.()
     }
     cookrew()
       .answerMenu(agentId, { menu: choiceId(choice), act })
       .then((result) => {
-        if (!result.ok) refused()
-      }, refused)
+        if (!result.ok) refused(result.reason)
+      }, () => refused('refused'))
   }
   const send = (index: number, choice: WaitChoice, act: MenuAct): void => {
     if (!agentId) return
@@ -191,6 +196,6 @@ export function useWaitAnswer(agentId: string | null, onType?: () => void): Wait
       if (getDraft(draftKey(agentId)) === '') setDraft(draftKey(agentId), words)
     })
   }
-  return { view, menu: live !== null, answer: answerRow, key, step, wordsRow: hasWordsRow(live), sendWords, moved }
+  return { view, menu: live !== null, answer: answerRow, key, step, wordsRow: hasWordsRow(live), sendWords, failed }
 }
 

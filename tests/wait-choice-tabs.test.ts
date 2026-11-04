@@ -134,6 +134,20 @@ describe('a read through herdr (a card with no mirror)', () => {
   })
 })
 
+describe('a plan offered to an agent launched in bypass mode', () => {
+  const PLAN = readFileSync(join(__dirname, 'fixtures', 'wait-choice', 'claude-plan-bypass.txt'), 'utf8')
+  it('keeps the row that names the mode, which reads like the status line', () => {
+    const choice = waitChoiceOfScreen(PLAN)
+    expect(choice?.options.map((o) => o.key)).toEqual(['1', '2', '3'])
+    expect(choice?.options[0].label).toContain('BYPASS PERMISSIONS')
+    expect(choice?.cursor).toBe(0)
+    expect(menuHeldOnScreen(PLAN)).toBe(true)
+  })
+  it('the real status line still goes', () => {
+    expect(cleanTurnLines('⏵⏵ bypass permissions on (shift+tab to cycle)\nhello\n')).toEqual(['hello', ''])
+  })
+})
+
 describe('a menu held up, sure enough to decide a turn', () => {
   const read = (name: string): string => readFileSync(join(__dirname, 'fixtures', 'wait-choice', `${name}.txt`), 'utf8')
   const MENUS = ['claude-ask', 'claude-ask-multi-narrow-zh', 'claude-bash', 'claude-create', 'claude-edit', 'claude-plan', 'claude-tabs-multi', 'claude-tabs-q1', 'claude-tabs-q2', 'claude-tabs-review', 'claude-tabs-q2-typed', 'claude-edit-cursor-2', 'claude-herdr-recent-multi', 'codex-command']
