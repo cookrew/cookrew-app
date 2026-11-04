@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { glideBox, keyboardWatch, pageKeyboardEnv, setLiveKeyboard } from './keyboard-expect'
 
 /**
  * Keyboard inset (px): how far the on-screen keyboard covers the LAYOUT viewport
@@ -19,30 +20,35 @@ export function keyboardInset(innerHeight: number, viewportHeight: number, offse
  * keyboard: the viewport meta asks for `resizes-visual`, because resizing the
  * layout refits the zoomed terminal and resizes the pane it shares with the
  * desktop (tests/keyboard-viewport.test.ts). No visualViewport (desktop / older engines) → NO-OP: the inset stays
- * 0 and the variable is never set.
+ * 0 and the variable is never set. A keyboard about to rise is published ahead
+ * of its report (keyboard-expect.ts).
  */
 export function useKeyboardInset(): number {
   const [inset, setInset] = useState(0)
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
-    // scroll fires continuously during a keyboard drag; skip the DOM write
-    // (which invalidates root style) when the inset hasn't actually moved.
-    let last = -1
-    const apply = (): void => {
-      const next = keyboardInset(window.innerHeight, vv.height, vv.offsetTop)
-      if (next === last) return
-      last = next
-      setInset(next)
-      document.documentElement.style.setProperty('--kb-inset', `${next}px`)
-    }
+    // scroll fires continuously during a keyboard drag; the watch skips the DOM
+    // write (which invalidates root style) when the inset hasn't actually moved.
+    const watch = keyboardWatch(
+      pageKeyboardEnv((cover, glideFrom) => {
+        setInset(cover)
+        document.documentElement.style.setProperty('--kb-inset', `${cover}px`)
+        if (glideFrom !== null) glideBox(document.querySelector('.cr-prompt:not(.pf-leaving)'), cover - glideFrom)
+      })
+    )
+    const apply = (): void => watch.report(keyboardInset(window.innerHeight, vv.height, vv.offsetTop))
     apply()
+    setLiveKeyboard(watch)
     vv.addEventListener('resize', apply)
     vv.addEventListener('scroll', apply)
     return () => {
       vv.removeEventListener('resize', apply)
       vv.removeEventListener('scroll', apply)
+      setLiveKeyboard(null)
+      watch.dispose()
       document.documentElement.style.removeProperty('--kb-inset')
+      document.documentElement.style.removeProperty('--kb-band')
     }
   }, [])
   return inset

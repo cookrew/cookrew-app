@@ -132,9 +132,9 @@
 }
 
 /* The fold lands (fold-flight.ts): the box shuts over the bar's place, and the
-   bar, which paints over it, holds its chrome back meanwhile, as it does while
-   the box is open. Only the face shows on it, flying in; the bar then clips
-   back open out of the face. */
+   bar, which would show through it as it fades, holds its chrome back
+   meanwhile, as it does while the box is open; the bar then clips back open
+   out of the face. */
 body.cr-prompt-landing .zv-root:not([data-full='true']) .zv-controls {
   visibility: hidden;
   transition: none;
