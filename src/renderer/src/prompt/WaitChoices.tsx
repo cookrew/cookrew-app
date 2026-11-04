@@ -171,7 +171,7 @@ export function WaitChoices({ face, wait }: { face: WaitFace; wait: WaitAnswerin
         <WaitRows view={view} onAnswer={wait.answer} />
       </div>
       <div className="wc-foot" role="status">
-        <span>{wait.moved ? 'the menu moved on · nothing sent' : how}</span>
+        <span>{wait.failed ?? how}</span>
         <span>{what}</span>
       </div>
     </div>

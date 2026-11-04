@@ -611,6 +611,8 @@ const CHROME_RE = /^[\s─│┃╭╮╰╯┌┐└┘═║━┏┓┗┛┠
 const INPUT_BOX_RE = /^\s*[│┃]\s*>?\s*[│┃]?\s*$/
 const STATUS_RE =
   /esc to interrupt|\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle|for agents\b/i
+/** A numbered row is a menu's or a reply's own words, whatever they say: "1. Yes, and switch to BYPASS PERMISSIONS". */
+const NUMBERED_ROW_RE = /^\s*[❯›>▶►]?\s*\d{1,2}[.)]\s/
 
 /**
  * The pi/ifunk TUI closes with two status rows below its input box, and they
@@ -641,7 +643,7 @@ export function cleanTurnLines(text: string): string[] {
     (l, i) =>
       !CHROME_RE.test(l) &&
       !INPUT_BOX_RE.test(l) &&
-      !STATUS_RE.test(l) &&
+      (!STATUS_RE.test(l) || NUMBERED_ROW_RE.test(l)) &&
       !TMUX_STATUS_RE.test(l) &&
       !AGENT_METER_RE.test(l) &&
       !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? '')),

@@ -53,7 +53,7 @@ export function BarWaitCard({ agent, view, wait, onOpen, onReply, onClose }: {
           <WaitReviewList choice={view.choice} />
           <WaitRows view={view} onAnswer={wait.answer} small />
         </div>
-        {wait.moved && <p className="wc-moved" role="status">The menu moved on · nothing sent</p>}
+        {wait.failed && <p className="wc-moved" role="status">{wait.failed}</p>}
       </div>
       <div className="wc-foot wc-card-foot">
         <button type="button" onClick={onOpen}>

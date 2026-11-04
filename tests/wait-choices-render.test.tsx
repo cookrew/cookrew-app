@@ -13,7 +13,7 @@ import { cleanTurnLines, tailLines } from '../src/shared/turn'
 import { choiceSig, parseWaitChoice, type WaitChoice } from '../src/shared/wait-choice'
 import { WaitChoices, footWords, keysWord, rowLabel } from '../src/renderer/src/prompt/WaitChoices'
 import { BarWaitCard } from '../src/renderer/src/zoom/BarWaitCard'
-import { answerView, FILL_MS, keyAction, RETRY_MS, type WaitAnswering, type WaitView } from '../src/renderer/src/prompt/wait-answer'
+import { ANSWER_FAILED, answerView, FILL_MS, keyAction, RETRY_MS, type WaitAnswering, type WaitView } from '../src/renderer/src/prompt/wait-answer'
 import { promptPlaceholder } from '../src/renderer/src/prompt/prompt-words'
 import type { AgentView } from '../src/renderer/src/zoom/zoom-model'
 
@@ -23,7 +23,7 @@ const fixture = (name: string): WaitChoice => {
   if (!choice) throw new Error(name)
   return choice
 }
-const answering = (view: WaitView | null): WaitAnswering => ({ view, menu: view !== null, answer: () => undefined, key: () => false, step: () => undefined, wordsRow: false, sendWords: () => undefined, moved: false })
+const answering = (view: WaitView | null): WaitAnswering => ({ view, menu: view !== null, answer: () => undefined, key: () => false, step: () => undefined, wordsRow: false, sendWords: () => undefined, failed: null })
 const FACE = { id: 't1', name: 'Bar fusion', preset: 'claude', orch: false }
 const draw = (view: WaitView | null): string => renderToStaticMarkup(<WaitChoices face={FACE} wait={answering(view)} />)
 
@@ -76,6 +76,19 @@ describe('WaitChoices', () => {
     const html = draw({ choice: fixture('claude-ask'), sent: null })
     const described = /aria-describedby="([^"]+)"/.exec(html)?.[1]
     expect(html).toContain(`<small id="${described}">A warm, bold color.</small>`)
+  })
+})
+
+describe('an answer that did not land says why', () => {
+  const view = { choice: fixture('claude-edit-cursor-2'), sent: null }
+  const failing = (failed: string): string => renderToStaticMarkup(<WaitChoices face={FACE} wait={{ ...answering(view), failed }} />)
+  it('a refusal is not told as a menu that moved', () => {
+    const html = failing(ANSWER_FAILED.refused)
+    expect(html).toContain('did not go through')
+    expect(html).not.toContain('moved on')
+  })
+  it('a menu that moved says so', () => {
+    expect(failing(ANSWER_FAILED.moved)).toContain('the menu moved on')
   })
 })
 
