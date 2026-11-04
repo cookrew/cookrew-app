@@ -51,7 +51,7 @@ import {
   scrollLineOf,
   tailLines
 } from '../shared/turn'
-import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { menuHeldOnScreen, waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
@@ -444,6 +444,8 @@ interface TrackedTerminal {
   heldAt: number
   /** Epoch ms of the last menu answer (ANSWER_GRACE_MS); 0 when none. */
   answeredAt: number
+  /** The last chunk of a wait found a menu held up: its going is the answer landing. */
+  menuShown: boolean
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /**
@@ -2019,6 +2021,7 @@ export class TurnTracker extends EventEmitter {
       heldInput: '',
       heldAt: 0,
       answeredAt: 0,
+      menuShown: false,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
       startStatus: null,
@@ -2433,7 +2436,17 @@ export class TurnTracker extends EventEmitter {
     const screen = t.session.viewportText()
     if (detectLiveWork(screen)) return false
     if (Date.now() - t.answeredAt >= ANSWER_GRACE_MS) return true
-    return detectAttention(cleanTurnLines(screen))
+    return detectAttention(cleanTurnLines(screen)) || menuHeldOnScreen(screen)
+  }
+
+  /**
+   * An answer went to a menu by its own road (menu-answer.ts), which handleInput
+   * never sees. The phase stays: a tick or the next tab keeps the wait, and the
+   * screen says when the menu goes.
+   */
+  noteMenuAnswer(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (t) t.answeredAt = Date.now()
   }
 
   /** Can the held carry age out? Only a lone ESC over an empty box, no paste open. */
@@ -2640,6 +2653,19 @@ export class TurnTracker extends EventEmitter {
     const submits = feeds.some((fed) => fed.submitted.some((s) => s.length > 0))
     if (!submits) return 'allow'
     return this.preemptOnOwnerSubmit(terminalId, undefined)
+  }
+
+  /**
+   * The guard for keys answering a menu that menu-answer.ts just saw held up.
+   * A TUI draws its menu in the input box's place, so they reach the menu and
+   * never the box: a dispatched turn's own residue must not refuse the very
+   * Enter it waits for, and they open no turn, so layer 3 has nothing to preempt.
+   * Layer 1 stands (a delivery mid-paste), and so does a paste known stranded:
+   * the screen may trail the pane by a beat, and no Enter is worth that risk.
+   */
+  guardMenuKeys(terminalId: string, data: string): OwnerInputVerdict {
+    if (this.lease.holderOf(terminalId) !== null) return 'refused'
+    return this.lease.hasStrandedPaste(terminalId) && /[\r\n]/.test(data) ? 'refused' : 'allow'
   }
 
   /**
@@ -2856,6 +2882,16 @@ export class TurnTracker extends EventEmitter {
   private handleParsed(terminalId: string): void {
     const t = this.tracked.get(terminalId)
     if (t?.phase !== 'waiting') return
+    const shown = menuHeldOnScreen(t.session.viewportText())
+    const gone = t.menuShown && !shown
+    t.menuShown = shown
+    if (gone) {
+      // Whatever herdr still says: its blocked is the menu that just left, and
+      // the edge fires once. poll asks herdr again, and the grace keeps a stale
+      // blocked from raising the wait a second time.
+      t.phase = 'thinking'
+      t.answeredAt = Date.now()
+    }
     t.outputRev += 1
     this.schedulePush(terminalId)
   }
@@ -2867,11 +2903,14 @@ export class TurnTracker extends EventEmitter {
     // one place the derived-activity cache has to be invalidated from.
     t.outputRev += 1
     if (t.phase === 'waiting') {
-      // A question box repaints as it is navigated: while herdr still reads it
-      // as blocked and no spinner runs, that is the same question.
-      if (agentStatus(t.session.sessionName) !== 'blocked' || detectLiveWork(data) || detectLiveWork(t.session.viewportText())) {
-        t.phase = 'thinking'
-      }
+      // A question box repaints as it is navigated: while it stands on the
+      // screen (herdr often reads such a pane as done) or herdr reads it as
+      // blocked, and no spinner runs, that is the same question. This frame may
+      // be the last one: handleParsed sees the menu go.
+      const screen = t.session.viewportText()
+      t.menuShown = menuHeldOnScreen(screen)
+      const sameQuestion = t.menuShown || agentStatus(t.session.sessionName) === 'blocked'
+      if (!sameQuestion || detectLiveWork(data) || detectLiveWork(screen)) t.phase = 'thinking'
     } else if (
       t.agent &&
       (t.phase === 'replied' || t.phase === 'idle') &&
@@ -3026,7 +3065,7 @@ export class TurnTracker extends EventEmitter {
     const glanceStatus = parseAgentGlance(delta).status
     if (glanceStatus !== null && isLiveStatus(glanceStatus)) return
     const lines = cleanTurnLines(delta).filter((l) => !this.isPromptEcho(l, t.prompt))
-    if (reported === 'blocked' || detectAttention(lines)) {
+    if (reported === 'blocked' || detectAttention(lines) || menuHeldOnScreen(t.session.viewportText())) {
       // Blocked on the human — keep the poll alive; handleData resumes
       // 'thinking' when output flows again.
       t.phase = 'waiting'

@@ -395,10 +395,38 @@ function frameWidth(lines: readonly string[]): number | null {
  * last lines, cut to the TUI's frame. Null when it shows none.
  */
 export function waitChoiceOfScreen(screen: string): WaitChoice | null {
+  return parseWaitChoice(screenLines(screen))
+}
+
+function screenLines(screen: string): string[] {
   const lines = stripTermNoise(screen).split('\n').slice(-SCREEN_TAIL)
   const width = frameWidth(lines)
   const framed = width === null ? lines : lines.map((line) => clipped(line, width))
-  return parseWaitChoice(cleanTurnLines(framed.join('\n')))
+  return cleanTurnLines(framed.join('\n'))
+}
+
+/** Under the rows the transcript goes on, or the input box stands: the rows are history. */
+const PAST_RE = /^\s*(?:[⏺●•]\s|[❯›>](?:\s|$))/
+/** A plan's footer, which FOOTER_RE's words do not reach. */
+const PLAN_FOOTER_RE = /ctrl\+g to edit/i
+
+/**
+ * Is a TUI holding a menu up? Sure enough to decide a turn's phase and to let
+ * keys past the input box's guards, which the rows alone are not: a prompt echo
+ * or a draft in the box itself ("❯ 1. a" under a question) reads as a menu. So
+ * it takes what only a menu draws: its footer (wrapped in a narrow pane), its
+ * tabs, its review. Rows without them leave the answer to the box's guards.
+ */
+export function menuHeldOnScreen(screen: string): boolean {
+  const lines = screenLines(screen)
+  const block = blocksOf(lines).at(-1)
+  const choice = menuOf(lines)
+  if (!block || !choice) return false
+  const under = lines.slice(block.end)
+  if (under.some((line) => PAST_RE.test(line))) return false
+  if (choice.steps || choice.review) return true
+  const footer = under.map((line) => line.trim()).join(' ')
+  return FOOTER_RE.test(footer) || PLAN_FOOTER_RE.test(footer)
 }
 
 const DOWN = '\x1b[B'

@@ -3,6 +3,8 @@
 // gets it from its pane, and what stays on the screen stays open.
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { TurnTracker } from '../src/main/turn-tracker'
@@ -10,9 +12,17 @@ import type { PtySession } from '../src/main/pty'
 import { createBackendPhaseGate } from '../src/main/backend-phase-gate'
 import { mergeActivity } from '../src/renderer/src/turn-view-model'
 import { answerView, keyAction } from '../src/renderer/src/prompt/wait-answer'
-import { createMenuAnswerer, parseMenuRequest } from '../src/main/menu-answer'
+import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from '../src/main/menu-answer'
+import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { answerKeys, choiceId, choiceSig, hasWordsRow, staysOpen, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
 import type { TerminalActivity } from '../src/shared/turn'
+
+// herdr's word on the pane, which often lags the screen.
+const herdr = vi.hoisted(() => ({ status: null as string | null }))
+vi.mock('../src/main/herdr-agent-status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/main/herdr-agent-status')>()),
+  agentStatus: () => herdr.status
+}))
 
 const pick = (key: string, label: string): WaitChoice['options'][number] => ({ key, label, detail: null })
 const menu = (over: Partial<WaitChoice> = {}): WaitChoice => ({
@@ -54,6 +64,152 @@ describe('a menu read before the screen caught up', () => {
     expect(read()).toBe(before)
     session.emit('parsed')
     expect(read()).toBe('Which scope should this cover?')
+  })
+})
+
+describe('a menu on the screen is a wait, whatever the pane does to its words', () => {
+  // Footer wrapped at 43 columns: "Esc to / cancel", and no "Enter to select" among the attention words.
+  const NARROW = readFileSync(join(__dirname, 'fixtures', 'wait-choice', 'claude-tabs-multi.txt'), 'utf8')
+  // A question, then the owner's own pasted list: a cursor row under a "?", and no footer.
+  const ECHO = 'Which should go first?\n\n❯ 1. rename foo\n  2. rename bar\n\n⏺ Done.\n'
+  type Inner = { tracked: Map<string, { turnStartedAt: number; answeredAt: number }>; poll: (t: unknown) => void }
+  /** A poll of a turn long past its grace. */
+  const quietPoll = (turns: TurnTracker): void => {
+    const inner = turns as unknown as Inner
+    const t = inner.tracked.get('t1')
+    if (!t) throw new Error('not tracked')
+    t.turnStartedAt = 1
+    inner.poll(t)
+  }
+  class Quiet extends PaneSession {
+    text = NARROW
+    viewportText = (): string => this.text
+    fullText = (): string => this.text
+  }
+  const held = (): { turns: TurnTracker; session: Quiet; phase: () => string | undefined } => {
+    const session = new Quiet('t1')
+    const turns = new TurnTracker(async () => null)
+    turns.track(session as unknown as PtySession, true)
+    turns.observeBackendPhase('t1', 'waiting')
+    return { turns, session, phase: () => turns.list().find((a) => a.terminalId === 't1')?.phase }
+  }
+  it('a tick repaints the menu: the wait holds and the rows stay (herdr silent)', () => {
+    const { session, phase, turns } = held()
+    session.emit('data', 'repaint')
+    session.emit('parsed')
+    expect(phase()).toBe('waiting')
+    expect(turns.list()[0].waitChoice?.options.length).toBe(6)
+  })
+  it('the menu gone from the screen ends the wait', () => {
+    const { session, phase } = held()
+    session.emit('data', 'answer')
+    session.text = '⏺ Thanks.\n'
+    session.emit('parsed')
+    expect(phase()).toBe('thinking')
+  })
+  it('a menu gone ends the wait even under a stale blocked: that edge fires only once', () => {
+    const { session, phase } = held()
+    herdr.status = 'blocked'
+    try {
+      session.emit('data', 'esc')
+      session.text = '⏺ Thanks.\n'
+      session.emit('parsed')
+      expect(phase()).toBe('thinking')
+    } finally {
+      herdr.status = null
+    }
+  })
+  it('a free question still resumes on output, as ever', () => {
+    const { session, phase } = held()
+    session.text = 'Which file should I open?\n'
+    session.emit('data', 'more')
+    expect(phase()).toBe('thinking')
+  })
+  it('a spinner ends the wait at once, menu or no menu', () => {
+    const { session, phase } = held()
+    session.emit('data', '✻ Thinking… (esc to interrupt)')
+    expect(phase()).toBe('thinking')
+  })
+  it('a turn going quiet with a menu up waits, it does not read as a reply', () => {
+    const { session, turns, phase } = held()
+    session.emit('data', '✻ Thinking… (esc to interrupt)')
+    expect(phase()).toBe('thinking')
+    quietPoll(turns)
+    expect(phase()).toBe('waiting')
+  })
+  it('a finished reply that only looks like a menu ends as a reply, it never waits', () => {
+    const { session, turns, phase } = held()
+    session.emit('data', '✻ Thinking… (esc to interrupt)')
+    session.text = ECHO
+    quietPoll(turns)
+    // No prompt was seen, so the turn is dropped rather than recorded: at rest.
+    expect(phase()).toBe('idle')
+  })
+  it('an answer by the menu road is noted: a stale blocked is not believed past it', () => {
+    const { turns, session } = held()
+    const before = Date.now()
+    turns.noteMenuAnswer('t1')
+    expect((turns as unknown as Inner).tracked.get('t1')?.answeredAt).toBeGreaterThanOrEqual(before)
+    expect(session.text).toBe(NARROW)
+  })
+})
+
+describe('keys into a held menu, against the input box guards', () => {
+  const guarded = (holder: string | null, stranded = false): TurnTracker => {
+    const turns = new TurnTracker(async () => null)
+    ;(turns as unknown as { lease: unknown }).lease = { holderOf: () => holder, isContaminated: () => true, hasStrandedPaste: () => stranded }
+    return turns
+  }
+  it("a dispatched turn's residue refuses the box its Enter, and not the menu", () => {
+    const turns = guarded(null)
+    expect(turns.guardOwnerInput('t1', '\r')).toBe('refused')
+    expect(turns.guardMenuKeys('t1', '\r')).toBe('allow')
+  })
+  it('a delivery mid-paste stops them too', () => {
+    expect(guarded('dispatch').guardMenuKeys('t1', '1')).toBe('refused')
+  })
+  it('a paste known stranded stops an Enter, not a digit: the screen may trail the pane', () => {
+    const turns = guarded(null, true)
+    expect(turns.guardMenuKeys('t1', '\r')).toBe('refused')
+    expect(turns.guardMenuKeys('t1', '2')).toBe('allow')
+  })
+})
+
+describe('the phone answers a menu in a dispatched turn', () => {
+  const route = async (path: string, body: unknown): Promise<{ status: number; body: unknown }> => {
+    const deps = { pairingToken: 'pairing-token-invented', hasArmedDispatch: () => true } as unknown as MobileApiDeps
+    const server = http.createServer((request, response) => {
+      const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+      void handleMobileApi(request, response, url, deps).then((handled) => {
+        if (!handled) response.writeHead(404).end()
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const { port } = server.address() as AddressInfo
+      const reply = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer pairing-token-invented' },
+        body: JSON.stringify(body)
+      })
+      return { status: reply.status, body: await reply.json() }
+    } finally {
+      server.close()
+    }
+  }
+  it('the answer goes through: it is what the armed turn waits for', async () => {
+    const answered: string[] = []
+    setMenuAnswerer(async (id) => {
+      answered.push(id)
+      return { ok: true }
+    })
+    const reply = await route('/api/terminal/t1/menu', { menu: 'm', act: { kind: 'row', index: 0 } })
+    expect(reply).toEqual({ status: 200, body: { ok: true } })
+    expect(answered).toEqual(['t1'])
+  })
+  it('a new prompt is still held back by the same dispatch', async () => {
+    const reply = await route('/api/terminal/t1/input', { data: 'hello' })
+    expect(reply.status).toBe(409)
   })
 })
 
@@ -215,6 +371,39 @@ describe('an answer is checked against the screen', () => {
       expect(await answer('t', { menu: choiceId(shown), act: { kind: 'row', index: 0 } })).toEqual({ ok: false, reason: 'moved' })
       expect(sent).toEqual([])
     }
+  })
+  it('a menu gone between two writes takes no more: the Enter never reaches the box', async () => {
+    let screen = SCREEN
+    const sent: string[] = []
+    const answer = createMenuAnswerer({
+      screen: async () => screen,
+      send: (_id, keys) => {
+        sent.push(keys)
+        screen = '⏺ Thanks.\n'
+        return true
+      },
+      sleep: async () => undefined
+    })
+    expect(await answer('t', { menu: choiceId(shown), act: { kind: 'words', text: 'x' } })).toEqual({ ok: false, reason: 'moved' })
+    expect(sent.length).toBe(1)
+  })
+  it('says which road the keys take: a held menu, or rows and y/n lines the box guards still watch', async () => {
+    const roads: boolean[] = []
+    const yn = 'Proceed? (y/n)\n'
+    const echo = 'Which should go first?\n\n❯ 1. rename foo\n  2. rename bar\n\n⏺ Done.\n'
+    const answerOn = (screen: string): ReturnType<typeof createMenuAnswerer> =>
+      createMenuAnswerer({
+        screen: async () => screen,
+        send: (_id, _keys, inMenu) => {
+          roads.push(inMenu)
+          return true
+        },
+        sleep: async () => undefined
+      })
+    await answerOn(SCREEN)('t', { menu: choiceId(shown), act: { kind: 'row', index: 1 } })
+    await answerOn(yn)('t', { menu: choiceId(waitChoiceOfScreen(yn) as WaitChoice), act: { kind: 'row', index: 0 } })
+    await answerOn(echo)('t', { menu: choiceId(waitChoiceOfScreen(echo) as WaitChoice), act: { kind: 'row', index: 0 } })
+    expect(roads).toEqual([true, false, false])
   })
   it('keys refused stop there', async () => {
     const { sent, answer } = setup(SCREEN, () => false)

@@ -1547,7 +1547,9 @@ export async function handleMobileApi(
   // leaving it outside the choke point was a reservation with a side door.
   // Local canvas typing (IPC) is deliberately NOT serialized: the owner at
   // the keyboard outranks the machinery.
-  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw|menu)$/);
+  // /menu stays outside: a menu answer feeds the turn already running (a
+  // dispatched turn waits on exactly that) and never enters the input box.
+  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw)$/);
   if (
     httpProducerMatch &&
     method === "POST" &&

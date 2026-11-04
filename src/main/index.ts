@@ -2991,6 +2991,7 @@ function spawnTracked(t: {
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
   // preempted durably or the write is refused (Sol r4 P0-1).
   session.beforeOwnerInput = (terminalId, data) => turns.guardOwnerInput(terminalId, data)
+  session.beforeMenuKeys = (terminalId, data) => turns.guardMenuKeys(terminalId, data)
   // Liveness: a registered id's lease generation is never tombstone-evicted,
   // so a rebound terminal cannot be mistaken for a dead one (Sol r9).
   defaultProducerLease().registerTerminal(t.id)
@@ -7931,11 +7932,16 @@ function registerIpc(handlers: RestoreHandlers): void {
       if (shown !== null && waitChoiceOfScreen(shown)) return shown
       return paneRows(terminalId)
     },
-    send: (terminalId, keys) => {
+    send: (terminalId, keys, inMenu) => {
       idleSleep.touch(terminalId, Date.now())
+      const session = ptys.get(terminalId)
+      // No mirror under an armed dispatch: a wake flushes through the box's
+      // guards, where this Enter would read as a new prompt and preempt it.
+      if (!session && turns.hasArmedDispatch(terminalId)) return false
+      turns.noteMenuAnswer(terminalId)
       // A card with no mirror wakes one, as for any key.
       if (waker.hold(terminalId, keys)) return true
-      return ptys.get(terminalId)?.writeMenuKeys(keys) === 'allow'
+      return session?.writeMenuKeys(keys, inMenu) === 'allow'
     }
   })
   setMenuAnswerer(answerMenu)
