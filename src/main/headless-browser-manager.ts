@@ -28,6 +28,8 @@ export interface HeadlessBrowserManagerDeps {
   /** One store for installation-scope Chrome data shared by every profile. */
   sharedInstallationRoot?: () => string
   resolveNode: (browserId: string) => BrowserNodeData | null
+  /** Clock for "last used" (liveIds); Date.now by default. */
+  now?: () => number
   onPageState: (browserId: string, tabId: string, state: HeadlessPageState) => void
   onTabOpened: (browserId: string, tab: BrowserTab) => void
   onTabClosed: (browserId: string, tabId: string) => void
@@ -61,6 +63,8 @@ export class HeadlessBrowserManager {
   private readonly desired = new Map<string, BrowserNodeData>()
   /** Which device backs each live card (backingOf): a card re-addressed to another device gets a new instance. */
   private readonly backing = new Map<string, string>()
+  /** When an agent command or a viewer last touched each card's page (syncNode/get; never peek). */
+  private readonly lastUsed = new Map<string, number>()
   private shuttingDown = false
   private shutdownPromise: Promise<void> | null = null
 
@@ -95,6 +99,7 @@ export class HeadlessBrowserManager {
   async syncNode(node: BrowserNodeData): Promise<BrowserInstance | null> {
     if (!this.deps.enabled() || this.shuttingDown) return null
     this.desired.set(node.id, node)
+    this.touch(node.id)
     const live = this.instances.get(node.id)
     if (live && this.backing.get(node.id) !== backingOf(node)) {
       // Same card, another device: a phone card pointed at a second phone,
@@ -118,6 +123,21 @@ export class HeadlessBrowserManager {
   }
 
   /**
+   * Cards whose page is running or starting — with `usedSince`, only those an
+   * agent command or a viewer touched at or after that moment. A switch keeps
+   * these (index.ts · keptBrowsers); an idle page outside the resident
+   * workspaces may be stopped, its profile (logins, cookies) kept.
+   */
+  liveIds(usedSince?: number): string[] {
+    const ids = [...new Set([...this.instances.keys(), ...this.starting.keys()])]
+    return usedSince === undefined ? ids : ids.filter((id) => (this.lastUsed.get(id) ?? -Infinity) >= usedSince)
+  }
+
+  private touch(browserId: string): void {
+    this.lastUsed.set(browserId, (this.deps.now ?? Date.now)())
+  }
+
+  /**
    * An already-running instance, or null. Unlike get(), this NEVER starts one.
    *
    * For callers whose request must not cause a browser to launch — the card
@@ -133,6 +153,7 @@ export class HeadlessBrowserManager {
     const node = this.deps.resolveNode(browserId)
     if (!node) return null
     this.desired.set(browserId, node)
+    this.touch(browserId)
     return this.ensure(browserId)
   }
 
@@ -219,6 +240,7 @@ export class HeadlessBrowserManager {
     const pending = this.stopping.get(browserId)
     if (pending) return pending
     this.desired.delete(browserId)
+    this.lastUsed.delete(browserId)
     const operation = (async (): Promise<void> => {
       const stopping: Array<Promise<unknown>> = []
       const starting = this.starting.get(browserId)

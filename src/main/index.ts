@@ -248,6 +248,7 @@ import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
+import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { reapOrphanChrome } from './orphan-chrome'
 import { staleAgentIds } from './agent-reconcile'
@@ -4162,8 +4163,10 @@ sessionDrain.unref?.()
 const switchRunner = new SwitchRunner<TerminalNodeData, BrowserNodeData>({
   detach: (terminalId) => detachTerminalMirror(terminalId),
   boot: (terminal) => bootTerminal(terminal),
-  syncBrowsers: (browsers) => {
-    void browserManager.replaceNodes([...browsers]).catch(() => undefined)
+  // The plan's list is a snapshot from before the boots; the set to keep is
+  // read now (keptBrowserNodes), so nothing started meanwhile is stopped.
+  syncBrowsers: () => {
+    void browserManager.replaceNodes(keptBrowserNodes()).catch(() => undefined)
   },
   // The herdr workspace's chrome follows the focused Cookrew workspace.
   onBooted: () => reportWorkspaceBinding(),
@@ -4181,6 +4184,23 @@ function residentBrowsers(): BrowserNodeData[] {
   return store.resident().flatMap((id) =>
     store.workspaceState(id).nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
   )
+}
+
+/** A running page outside the resident workspaces survives a switch while used this recently. */
+const BROWSER_KEEP_IDLE_MS = 30 * 60_000
+
+/**
+ * What a switch keeps running (browser-reach.ts · keptBrowsers). Read when the
+ * switch SYNCS, not when it is planned: the boots in between yield to the
+ * loop, and a page an agent starts in that window must not be stopped by a
+ * list made before it existed.
+ */
+function keptBrowserNodes(): BrowserNodeData[] {
+  return keptBrowsers({
+    resident: residentBrowsers(),
+    recentlyUsed: browserManager.liveIds(Date.now() - BROWSER_KEEP_IDLE_MS),
+    nodeOf: activeBrowserNode
+  })
 }
 
 function bootTerminal(t: TerminalNodeData): void {
@@ -4206,8 +4226,8 @@ function detachTerminalMirror(terminalId: string): void {
   void boardProbe.invalidate(terminalId) // detached now: the probe's to watch
 }
 
-function addNode(node: CanvasNode): CanvasNode {
-  const added = store.addNode(node)
+function addNode(node: CanvasNode, workspaceId?: string): CanvasNode {
+  const added = store.addNode(node, workspaceId)
   adoptLiveNode(added)
   return added
 }
@@ -5650,8 +5670,14 @@ const interactiveBrowserEnabled = (): boolean => {
 }
 const desktopBrowserStreamToken = randomUUID()
 
+/**
+ * A browser card wherever it lives — the canvas on screen first (the cheap
+ * common case), then every other workspace. The headless page of a card in a
+ * workspace nobody is looking at keeps running (owner ruling 2026-11-04), so
+ * its viewers, page state and opened tabs must still find their card.
+ */
 function activeBrowserNode(browserId: string): BrowserNodeData | null {
-  const node = store.node(browserId)
+  const node = store.node(browserId) ?? store.nodeAcrossWorkspaces(browserId)?.node
   return node?.kind === 'browser' ? node : null
 }
 
@@ -5809,9 +5835,13 @@ const browserCast = createBrowserCast({
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   store,
   manager: browserManager,
-  addNode,
+  addNode: (node, workspaceId) => addNode(node, workspaceId),
   updateNode,
   connectNodes: (aId, bId) => void store.connectAcross(aId, bId),
+  // The caller's own workspace, whatever the window shows (browser-reach.ts).
+  resolveBrowser: (name, terminalId) =>
+    browserForCaller(store, terminalId, name, ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''))?.node,
+  homeOf: (terminalId) => store.ownerOf(terminalId),
   onUse: (signal) => void useSignals.emit(signal),
   shotsDir: path.join(app.getPath('userData'), 'use-shots')
 })
@@ -6532,6 +6562,7 @@ app.whenReady().then(() => {
     routines,
     browserCommand,
     createBrowserInWorkspace,
+    browserAnyWorkspace: interactiveBrowserEnabled,
     notify: showNotification,
     captureWindow,
     injectInput,

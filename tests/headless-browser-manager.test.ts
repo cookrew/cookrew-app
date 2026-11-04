@@ -30,7 +30,8 @@ function fakeInstance(start: () => Promise<void> = () => Promise.resolve()): Hea
 
 function managerWith(
   instanceFactory: (options: HeadlessOptions) => HeadlessInstance,
-  deleteProfile?: (browserId: string) => void | Promise<void>
+  deleteProfile?: (browserId: string) => void | Promise<void>,
+  now?: () => number
 ) {
   const nodes = new Map([[browser().id, browser()]])
   return new HeadlessBrowserManager({
@@ -42,7 +43,8 @@ function managerWith(
     onTabOpened: vi.fn(),
     onTabClosed: vi.fn(),
     deleteProfile,
-    makeInstance: instanceFactory
+    makeInstance: instanceFactory,
+    now
   })
 }
 
@@ -87,6 +89,36 @@ describe('HeadlessBrowserManager node ownership', () => {
     expect(instance.start).toHaveBeenCalledTimes(1)
     expect(instance.syncTabs).toHaveBeenCalledTimes(2)
     expect(manager.activeCount()).toBe(1)
+  })
+
+  it('lists the cards whose page is running, never a cold one', async () => {
+    // residentBrowsers() keeps these through a switch (owner ruling
+    // 2026-11-04): a page an agent is driving in a workspace nobody is looking
+    // at must not be stopped by the switch's replace-the-world call.
+    const manager = managerWith(vi.fn(() => fakeInstance()))
+    await manager.replaceNodes([browser(), browser('browser-2')])
+    expect(manager.liveIds()).toEqual([])
+    await manager.syncNode(browser())
+    expect(manager.liveIds()).toEqual(['browser-1'])
+  })
+
+  it('names only the pages used since a moment — an idle page may be reclaimed', async () => {
+    // Review finding (HIGH): keeping EVERY live page through every switch
+    // left no reclaim but delete or quit. A page counts as in use when an
+    // agent command or a viewer touched it (syncNode/get); a thumbnail peek
+    // is not use.
+    let clock = 1_000
+    const manager = managerWith(vi.fn(() => fakeInstance()), undefined, () => clock)
+    await manager.syncNode(browser())
+    clock = 5_000
+    await manager.syncNode(browser('browser-2'))
+    manager.peek('browser-1')
+    expect(manager.liveIds(4_000)).toEqual(['browser-2'])
+    clock = 9_000
+    await manager.get('browser-1')
+    expect(manager.liveIds(8_000)).toEqual(['browser-1'])
+    await manager.remove('browser-1')
+    expect(manager.liveIds(0)).toEqual(['browser-2'])
   })
 
   it('stops and forgets an instance when its node is removed', async () => {
