@@ -1336,11 +1336,12 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       const note = reachCard(request, deps, write.name, 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
       const written = deps.store.writeNote(note.id, write.content)
+      if (!written) throw new Error(`Note '${note.name}' was not written`)
       // Writing puts words in: agent → note.
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
       // The name follows the first line, so a write can rename the note —
       // the silent part of the old clobber. Say so.
-      return noteWriteReply(note.name, written?.name ?? note.name)
+      return noteWriteReply(note.name, written.name)
     }
     case 'edit': {
       const note = reachCard(request, deps, rest[0], 'note', 'note edit') as NoteNodeData
@@ -1352,7 +1353,9 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       if (!note.content.includes(oldText)) {
         throw new Error(`Text not found in note '${note.name}'`)
       }
-      deps.store.writeNote(note.id, note.content.replace(oldText, newText))
+      if (!deps.store.writeNote(note.id, note.content.replace(oldText, newText))) {
+        throw new Error(`Note '${note.name}' was not written`)
+      }
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('edit') ?? 'write' })
       return 'OK'
     }
