@@ -350,13 +350,18 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
 }
 
 @media (max-width: 700px) {
+  /* The design's chip: 30 tall, its face 24 and 3 in from its round end. */
   body .cr-prompt-to.pf-chip {
-    padding-left: 2px;
+    padding: 0 0 0 3px;
+  }
+
+  body .cr-prompt-to.pf-chip > button.pf-chip-who {
+    height: 30px;
   }
 
   body .pf-chip-face {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
   }
 
   body .cr-prompt-new > .cr-prompt-harness .pf-chip-face.pf-new {
