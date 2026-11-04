@@ -203,6 +203,7 @@ import { isChromiumErrorPage } from '../shared/browser-navigation'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
+  claudeCwdRepair,
   realCwd,
   resolveClaudeSessionId,
   resumeRoleSession,
@@ -2784,6 +2785,30 @@ function spawnTracked(t: {
   piSessionId?: string | null
   sessionLineage?: string[]
 }): void {
+  // A card whose Claude session lives under ANOTHER directory than its cwd
+  // (launched in an adopted pane that kept its old directory) moves to where
+  // the session is BEFORE anything below derives a path from the cwd: the
+  // resume check, the fork, the boot's `cd`. Left alone, a respawn boots a
+  // blank conversation under the same id, and the session observer never
+  // finds the transcript (2026-11-04: eight GOAT Team cards, every --no-wait
+  // ask to them interrupted at 60 s). Once moved, the file is found at the
+  // cwd and this never fires again.
+  // A served card is never moved: its sandbox is its boundary.
+  const home = store.ownerOf(t.id)
+  const repairedCwd =
+    isClaudeCommand(t.command) && t.claudeSessionId && !(home !== undefined && servedSpawnContexts.has(home))
+      ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId })
+      : null
+  if (repairedCwd !== null) {
+    console.error(`[cookrew] ${t.id}: cwd ${t.cwd} -> ${repairedCwd}, where its claude session lives`)
+    // Enrolled like any cwd a card moves to (terminal-cwd.ts), so a later move
+    // and its rollback treat it as the workspace's own directory.
+    const workspace = home === undefined ? undefined : store.list().workspaces.find((w) => w.id === home)
+    if (workspace && !workspace.dirs.includes(repairedCwd)) store.addWorkspaceDir(workspace.id, repairedCwd)
+    store.updateNodeUnsafe(t.id, { cwd: repairedCwd })
+    spawnTracked({ ...t, cwd: repairedCwd })
+    return
+  }
   const owner = store.ownerOf(t.id) ?? store.focusedId
   const servedCtx = servedSpawnContexts.get(owner)
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
@@ -3721,7 +3746,20 @@ const dispatchService = new DispatchService({
   wake: async (agentId) => (await wakeAgent(agentId)) !== undefined,
   // Observer probation: a native-file acceptance must see its watch actually
   // reconcile; a path that never materializes interrupts at 60s, not 10min.
-  observerLive: (agentId) => sessionSync.isVerified(agentId),
+  // Asked by the probation before it interrupts: a null from the last poll is
+  // not final — prove it once more on the file the spec names now
+  // (session-sync.ts · verifyNow). Only a transcript that exists nowhere
+  // still ends the dispatch.
+  observerLive: (agentId) => {
+    if (sessionSync.isVerified(agentId)) return true
+    const spec = traces.watchSpec(agentId)
+    if (spec === null) return false
+    const live = sessionSync.verifyNow(agentId, spec.file, spec.parse)
+    // A watch made here for a background agent owes its drain, exactly as
+    // beginWork's does: held by the dispatch's pin, then the quiet clock.
+    if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.focusedId) sessionSync.release(agentId)
+    return live
+  },
   persist: (record) => appendDispatchRecord(defaultDispatchRegistry(), record),
   loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
   persistTombstone: (tombstone) => appendDispatchTombstone(defaultDispatchRegistry(), tombstone),

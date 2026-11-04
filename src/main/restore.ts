@@ -10,7 +10,7 @@ import { buildForkedSessionLinesAtUuid } from '../shared/claude-fork'
 import { harnessFor } from './harness'
 import { planCheckpointRestore, pushRestorePoint } from './restore-plan'
 import { withSessionLineage } from './session-lineage'
-import { claudeSessionFile, isSessionUuid } from './claude-fork'
+import { claudeSessionFile, isSessionUuid, locateClaudeSessionFile } from './claude-fork'
 
 export interface RestoreExecutorDeps {
   store: {
@@ -185,7 +185,7 @@ async function restoreCheckpoint(
     return fail(id, node.name, checkpointIndex, 'The checkpoint session id is malformed — refusing to restore.')
   }
 
-  const sourceFile = claudeSessionFile(node.cwd, plan.cutoffSessionId ?? node.claudeSessionId, deps.projectsDir)
+  const sourceFile = locateClaudeSessionFile(node.cwd, plan.cutoffSessionId ?? node.claudeSessionId, deps.projectsDir)
   if (!existsSync(sourceFile)) {
     return fail(id, node.name, checkpointIndex, 'The bound session file no longer exists.')
   }
@@ -266,7 +266,7 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
   if (!isSessionUuid(point.sessionId)) {
     return fail(id, node.name, restorePointIndex(point), 'The undo stack session id is malformed — refusing to undo.')
   }
-  const targetFile = claudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
+  const targetFile = locateClaudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
   if (!existsSync(targetFile)) {
     return fail(id, node.name, restorePointIndex(point), 'The previous session file no longer exists — cannot undo.')
   }

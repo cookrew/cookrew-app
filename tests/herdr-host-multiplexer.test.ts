@@ -321,6 +321,22 @@ describe('boot command and env', () => {
     expect(boot).toContain("export PATH='/tmp/cli:/usr/bin'")
   })
 
+  it("starts the agent in the CARD's cwd, even in an adopted pane", () => {
+    // 2026-11-04: eight GOAT Team agents ran in goat-testnet/solis-orch while
+    // their cards said goat-dev — an adopted idle pane keeps whatever
+    // directory it had, and nothing moved the agent. Claude files its
+    // transcript by launch directory, so the session observer watched a path
+    // that never appeared and every --no-wait ask was interrupted at 60 s.
+    const boot = bootCommand(SPEC)
+    expect(boot.startsWith("cd '/work/repo'")).toBe(true)
+    expect(boot.indexOf("cd '/work/repo'")).toBeLessThan(boot.indexOf('exec '))
+  })
+
+  it('quotes the cwd so a path cannot break out of the cd', () => {
+    const boot = bootCommand({ ...SPEC, cwd: "/tmp/it's; rm -rf ~" })
+    expect(boot.startsWith("cd '/tmp/it'\\''s; rm -rf ~'")).toBe(true)
+  })
+
   it('falls back to a login shell when there is no command', () => {
     expect(bootCommand({ ...SPEC, command: '   ' }).endsWith('exec /bin/zsh -l')).toBe(true)
   })

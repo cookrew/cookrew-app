@@ -473,6 +473,34 @@ export class SessionTurnSync {
     return watched !== undefined && watched.history !== null
   }
 
+  /**
+   * Prove the observer NOW, for the dispatch probation, before it interrupts.
+   *
+   * isVerified() answers from whatever the last poll saw, and the probation
+   * used to take a null as final: an ask was interrupted while its agent
+   * answered (2026-11-03/04 — a watch at a stale-cwd path, and fresh recruits
+   * whose transcripts were on disk from the first second). Here the watch is
+   * installed on the file the spec names TODAY — replacing one that pointed
+   * elsewhere; pins and subscribers survive — and reconciled on the spot. A file that does not exist still answers false: a permanently
+   * wrong session ref is what the probation exists to catch.
+   */
+  verifyNow(terminalId: string, file: string, parse: SessionTurnParser): boolean {
+    const live = this.watched.get(terminalId)
+    if (live && live.file === file && live.history !== null) return true
+    if (live && live.file === file && live.parse === parse) {
+      this.reconcile(terminalId)
+      return this.isVerified(terminalId)
+    }
+    // A fresh watch, never rebind: rebind declares a ROTATION (the ledger
+    // continues across the seam), and a watch that never read a byte has no
+    // seam to continue. Pins and subscribers live outside the entry and stay;
+    // the drain state is carried over, or a background watch would poll on
+    // forever after its dispatch unpins.
+    this.watch(terminalId, file, parse)
+    if (live?.draining === true) this.release(terminalId)
+    return this.isVerified(terminalId)
+  }
+
   /** Permanent/rebind release: no dormant context may survive it. */
   unwatch(terminalId: string): void {
     this.dormant.delete(terminalId)
@@ -707,11 +735,23 @@ export class SessionTurnSync {
         this.suspend(terminalId)
       }
       this.fireStaleIfDue(terminalId)
-    } catch {
+    } catch (error) {
       // Session file not written yet (fresh --session-id boot) — keep polling,
       // and leave the terminal on the scrape so the turns it takes meanwhile
-      // are still recorded.
+      // are still recorded. ANY OTHER failure is said, once per terminal and
+      // message: swallowed, it left an observer unverified forever and the
+      // dispatch sweep interrupting asks with no trace of why (2026-11-03).
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') this.reportFailure(terminalId, error)
     }
+  }
+
+  private readonly reported = new Map<string, string>()
+
+  private reportFailure(terminalId: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error)
+    if (this.reported.get(terminalId) === message) return
+    this.reported.set(terminalId, message)
+    console.error(`[session-sync] ${terminalId}: reconcile failed — ${message}`)
   }
 }
 
