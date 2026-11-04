@@ -261,6 +261,14 @@
 }
 
 @media (min-width: 701px) {
+  /* 🎤 and Send drawn as the design (owner, 2026-11-04), over .cr-btn.sm's 20px and radius 5. */
+  .cr-app .cr-prompt > .cr-btn.voice-mic,
+  .cr-app .cr-prompt > .cr-btn[type='submit'] {
+    width: 32px;
+    height: 24px;
+    border-radius: 6px;
+  }
+
   .cr-prompt > .cr-prompt-to,
   .cr-prompt > .cr-prompt-new,
   .cr-prompt-tray > :not(.cr-prompt-tools) {
@@ -822,7 +830,8 @@
     align-items: center;
     gap: 4px;
     min-height: 48px;
-    padding: 4px;
+    /* The design's inset: 🎤 and Send stand clear of the pill's round end. */
+    padding: 5px 5px 5px 8px;
     border-radius: 24px;
     box-shadow:
       inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
@@ -868,21 +877,21 @@
   }
 
   /* A block, so a long harness ends in "…" (a flex button's text cannot);
-     32px tall, its words centred by the line. */
+     30px tall as the design, its words centred by the line. */
   body .cr-prompt-new > .cr-prompt-harness {
     display: block;
-    height: 32px;
+    height: 30px;
     padding: 0 10px;
-    line-height: 32px;
+    line-height: 30px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
 
-  /* @agent: the chip as tall as the row, and its × a thumb's square at its
-     end (2026-11-04: it was 12px wide). */
+  /* @agent: the chip drawn 30 tall as the design, and its × a thumb's 32px
+     square at its end (2026-11-04: it was 12px wide), clear of the chip's edge. */
   body .cr-prompt-to {
-    min-height: 32px;
+    height: 30px;
     padding: 0 0 0 10px;
     gap: 0;
   }
@@ -919,11 +928,36 @@
     /* Flat, as the desktop's (owner, 2026-11-03: "flat icons, the same as the desktop"). */
     width: 36px;
     min-width: 36px;
-    height: 32px;
+    height: 28px;
     margin: 0;
     padding: 0;
-    border-radius: 8px;
     justify-content: center;
+  }
+
+  /* DRAWN AS THE DESIGN (owner, 2026-11-04, a Samsung at 324 wide: "the mic and
+     Send stand past the bar"). 32 tall, radius 5 and 4px from the end, Send's
+     corner reached the pill's round end. 36x28 r8 at 5px leaves it 3.5px clear.
+     Above body.cr-ink .cr-btn.sm (0-3-1), whose radius won before. The thumb
+     keeps its 32px in a clear reach. */
+  .cr-app .cr-prompt > .cr-btn.voice-mic,
+  .cr-app .cr-prompt > .cr-btn[type='submit'] {
+    position: relative;
+    border-radius: 8px;
+  }
+
+  .cr-app .cr-prompt > .cr-btn.voice-mic::after,
+  .cr-app .cr-prompt > .cr-btn[type='submit']::after {
+    content: '';
+    position: absolute;
+    /* From inside the button's 1px border: 2px past its edge, 32 in all. */
+    inset: -3px 0;
+  }
+
+  /* A draft's pictures lead the pill, which grows upward from them: the row
+     typed in stays whole at its foot. They once shared the words' order and
+     the 100% basis broke the row, 🎤 and Send falling out under them. */
+  body .cr-prompt > .cr-prompt-pics {
+    order: -3;
   }
 
   body .cr-prompt > .voice-mic .cr-icon,
