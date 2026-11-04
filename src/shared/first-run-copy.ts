@@ -57,7 +57,7 @@ export const FIRST_SCREEN_COPY = {
 /** Real work, safe in any folder: two read it, one writes one new file. */
 export const EXAMPLE_TASKS = [
   'Explain what is in this folder',
-  'Find anything here that looks broken or out of date',
+  'Find broken or outdated files here',
   'Write a short README for this folder'
 ] as const
 
