@@ -3333,7 +3333,12 @@ function sleepSweep(): void {
     const running = store.terminalsAcross().filter((n) => sessions.has(sessionNameFor(n.id)))
     const facts = running.map((n) => ({
       id: n.id,
-      resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
+      // A session filed under another directory is resumable too: the spawn
+      // moves the card there first (claudeCwdRepair), so it is not a lost one.
+      resumable:
+        isClaudeCommand(n.command) &&
+        !!n.claudeSessionId &&
+        (canRestoreExact(n) || claudeCwdRepair({ cwd: n.cwd, sessionId: n.claudeSessionId }) !== null),
       served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
       busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
     }))
