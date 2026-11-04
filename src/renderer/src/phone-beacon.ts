@@ -11,6 +11,7 @@ import { planeFetch } from './plane-fetch'
 import { authHeaders } from './auth-gate'
 import { isRemoteMode } from './api'
 import { tapEventSource } from './sse-tap'
+import { RELAY_ANSWER_MS, skipWhileOut } from './in-flight'
 
 const BEACON_MS = 3000
 
@@ -99,18 +100,18 @@ export function markStage(stage: string): void {
 export function startPhoneBeacon(): void {
   if (!isRemoteMode()) return
   installTaps()
-  const send = (): void => {
-    try {
-      void planeFetch(apiPath('/api/beacon'), {
-        method: 'POST',
-        headers: { ...authHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify(vitals()),
-        keepalive: true
-      }).catch(() => undefined)
-    } catch {
-      // The black box must never be the crash.
-    }
-  }
+  // One out at a time: a stalled Mac would otherwise collect one exchange per
+  // tick, ten of the relay's sixteen before the first of them expires. Async,
+  // so a throw from vitals() is a rejection skipWhileOut already absorbs: the
+  // black box must never be the crash.
+  const send = skipWhileOut(async () => {
+    await planeFetch(apiPath('/api/beacon'), {
+      method: 'POST',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify(vitals()),
+      keepalive: true
+    })
+  }, RELAY_ANSWER_MS)
   send()
   window.setInterval(send, BEACON_MS)
 }
