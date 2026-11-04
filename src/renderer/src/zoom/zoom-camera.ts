@@ -6,12 +6,11 @@
  * zoom-frame.ts paints with these, tests pin them.
  */
 import { clamp01, ease, lerp } from './zoom-path'
-import { fitScale, type Box, type crewOf, type deviceOf, type Pos, type stackOf, type thumbsOf } from './zoom-layout'
+import { fitScale, SWS, TILE, type Box, type crewOf, type deviceOf, type Pos, type stackOf, type thumbsOf } from './zoom-layout'
 import { PHONE_TYPE, sceneWords, type RestScales, type SceneWords } from './scene-words'
 
 export const GROUP_BOX: Box = { w: 430, h: 320, cy: 0 }
-/** A workspace's mark on the device is its group at this scale. */
-export const SWS = 0.62
+export { SWS }
 
 export interface Layout {
   stack: ReturnType<typeof stackOf>
@@ -49,40 +48,38 @@ const CARD_SEEN = { x: CARD_RECT.x, y: -46, w: 244 - CARD_RECT.x, h: CARD_RECT.y
 /**
  * THE DEVICE STOP'S WORDS (Gauge, 2026-11-01: on a desktop the workspaces'
  * names and counts read at ~6px; on a phone the hint ran off the right edge).
- * A mark is drawn at SWS inside a device the camera fits into the window, so
- * a label set in CSS px is seen smaller by both: each grows back until it
- * reads at DEVICE_TEXT_PX at least, and is cut short before a neighbour's.
- *   markK, markMax    the other workspaces' labels (zoom.css · .zv-mark-label, 11px)
- *   openK, openW      the open workspace's own label (11px type), as large and as wide as theirs
- *   titleK, titleMax  the machine's name and hint over the marks (11px words), wrapping inside the device
- * A phone draws both 1:1 on screen at the workspaces stop, in its own type
- * (phone-type.css: caption, title); the painter keeps them so as it zooms.
+ * A tile is drawn at SWS inside a device the camera fits into the window, so a
+ * word set in CSS px is seen smaller by both: each is drawn back to 1:1 on
+ * screen and cut short inside its tile (owner, 2026-11-04: the labels ran over
+ * each other, so a tile's words now live inside its frame).
+ *   markK             a tile's words (workspace-tile.css cuts a name at the frame)
+ *   density           which words a tile has room for: roomy, snug, compact, tiny
+ *   titleK, titleMax  the machine's name over the tiles, short of the per-row pill on a phone
  */
 export const DEVICE_TEXT_PX = 11
-/** Room left between two marks' labels, in a mark's units. */
-const MARK_LABEL_GAP = 40
+/** A tile as wide as this on screen keeps every word; then only its numbers; then their totals; under that, its name alone. */
+const TILE_ROOMY_PX = 150
+const TILE_SNUG_PX = 125
+const TILE_COMPACT_PX = 92
+/** The per-row pill and the margins either side of the title on a phone (zoom.css · .zv-cols). */
+const PILL_ROOM = 178
+export type TileDensity = 'roomy' | 'snug' | 'compact' | 'tiny'
 export interface DeviceWords {
   cam: number
   markK: number
-  markMax: number
-  openK: number
-  openW: number
+  density: TileDensity
   titleK: number
   titleMax: number
-  /** A phone's open label, as wide as its neighbours' (in its own px: at caption it is drawn 1:1 on screen); Infinity on a desk. */
-  openMax: number
 }
-export function deviceWords(device: { box: Box; dx: number }, w: number, h: number, narrow: boolean): DeviceWords {
-  const cam = fitScale(device.box, w, h)
+type Device = ReturnType<typeof deviceOf>
+export function deviceWords(device: Device, w: number, h: number, narrow: boolean): DeviceWords {
+  const cam = deviceCam(device, w, h, narrow).S
   // A phone draws them 1:1 on screen, at its own type; a desk only grows its 11px words to DEVICE_TEXT_PX.
   const markK = narrow ? 1 / (SWS * cam) : Math.max(1, DEVICE_TEXT_PX / (11 * SWS * cam))
-  // The next mark stands dx away on the device: dx / SWS in a mark's own units.
-  const markMax = (device.dx / SWS - MARK_LABEL_GAP) / markK
   const titleK = narrow ? 1 / cam : Math.max(1, DEVICE_TEXT_PX / (11 * cam))
-  // The open label is 11px type: on a phone drawn at caption, as large as its neighbours'.
-  const openK = narrow ? (PHONE_TYPE.caption / 11) * markK : markK
-  const openW = markMax * markK
-  return { cam, markK, markMax, openK, openW, titleK, titleMax: (device.box.w - 100) / titleK, openMax: narrow ? openW / openK : Infinity }
+  const tilePx = TILE.w * SWS * cam
+  const density: TileDensity = tilePx >= TILE_ROOMY_PX ? 'roomy' : tilePx >= TILE_SNUG_PX ? 'snug' : tilePx >= TILE_COMPACT_PX ? 'compact' : 'tiny'
+  return { cam, markK, density, titleK, titleMax: narrow ? (w - PILL_ROOM) / (titleK * cam) : (device.box.w - 100) / titleK }
 }
 
 export interface Camera {
@@ -137,6 +134,34 @@ export const DESK_CARD_S = 1.4
 /** The stop bar over the bottom of a desktop's overview (zoom.css · .zv-controls: 14 up, 46 tall). */
 const DESK_BAR = 72
 const DESK_MARGIN = 16
+/**
+ * THE WORKSPACES STOP'S CAMERA (owner, 2026-11-04). A phone reads it as a page:
+ * the grid fills the width and starts at the top under the title and the
+ * per-row pill, whatever the count, and ends above the stop bar (it used to
+ * float in the middle, the title sliding under the pill). A desk centres it
+ * above its bar. On both a taller grid keeps its scale and scrolls, as the crew
+ * and the thumbnails do: shrunk to fit, its words would sit on its rings.
+ */
+export const PHONE_HEAD = 56
+const PHONE_SIDE = 16
+/** The rows a desk frames before the grid scrolls instead of shrinking. */
+const DESK_DEVICE_ROWS = 3
+export function deviceCam(device: Device, w: number, h: number, narrow: boolean, pan = 0): { S: number; Oy: number; panMax: number } {
+  const { box } = device
+  if (narrow) {
+    const S = Math.min(1, (w - PHONE_SIDE * 2) / box.w)
+    const panMax = Math.max(0, PHONE_HEAD + device.gridH * S + PHONE_MARGIN - (h - PHONE_BAR))
+    return { S, Oy: PHONE_HEAD - device.gridTop * S - Math.min(Math.max(pan, 0), panMax), panMax }
+  }
+  // Three rows and the two gaps between them, the same whether there are three rows or thirty.
+  const rows = (DESK_DEVICE_ROWS - 1) * device.rowH + SWS * device.tile.h
+  const framed = box.h - device.gridH + Math.min(device.gridH, rows)
+  const S = fitScale({ ...box, h: framed }, w, h - DESK_BAR)
+  const panMax = framed < box.h ? Math.max(0, DESK_MARGIN + box.h * S - (h - DESK_BAR)) : 0
+  if (panMax === 0) return { S, Oy: (h - DESK_BAR) / 2 - box.cy * S, panMax }
+  return { S, Oy: DESK_MARGIN - (box.cy - box.h / 2) * S - Math.min(Math.max(pan, 0), panMax), panMax }
+}
+
 export function deskCamera(L: Layout, z: number, focus: string | null, w: number, h: number): Camera {
   const fitAt = (b: Box): Cam => {
     const S = fitScale(b, w, h)
@@ -306,7 +331,7 @@ export function restScales(L: Layout, w: number, h: number, narrow: boolean): Re
     card: cardStopCamera(L, null, w, h, narrow).S,
     thumbs: thumbsCamera(L, w, h, narrow, 0).S,
     devices: fitScale(L.devicesBox, w, h),
-    marks: SWS * fitScale(L.device.box, w, h)
+    marks: SWS * deviceCam(L.device, w, h, narrow).S
   }
 }
 

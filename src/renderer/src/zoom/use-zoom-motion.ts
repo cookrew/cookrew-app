@@ -12,6 +12,9 @@ export interface ZoomPan {
   get: () => number
   shelf: () => number
   setMax: (max: number) => void
+  /** The workspaces' tiles' own scroll (ZoomView). */
+  tiles: () => number
+  setTilesMax: (max: number) => void
 }
 
 /** A shelf face's node stands at 12 + its place on the page, kept under the waiting dots (zoom.css · .zv-dot, 44). */
@@ -55,6 +58,8 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
       const dt = last ? Math.min(64, now - last) : 16
       last = now
+      // The two paths meet at the workspaces and draw the same there: nothing to cut, the zoom walks down the other side.
+      if (jump === target.jump && at.dir !== target.dir && at.v <= -1 + 0.001) at.dir = target.dir
       if (jump !== target.jump || at.dir !== target.dir) {
         // Across paths, keep only a snapshot of the old view, never a second live terminal.
         if (!reduced) {
@@ -107,8 +112,9 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       } else if (lastSelection.current !== null) {
         lastSelection.current = null
       }
-      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0, shelf: m.current.pan?.shelf() ?? 0 })
+      const out = paint(m.current.model, layout, els, { dir: at.dir, sv: at.v, focus, leaving: at.leaving, leavingAmt: at.amount, focusItem, w, h, narrow, pan: m.current.pan?.get() ?? 0, tilesPan: m.current.pan?.tiles() ?? 0, shelf: m.current.pan?.shelf() ?? 0 })
       m.current.pan?.setMax(out.panMax)
+      m.current.pan?.setTilesMax(out.tilesMax)
       // The real view fades in under the shell as the shell's own cover goes.
       env.style.setProperty('--zv-full-opacity', String(1 - out.cover))
       env.style.setProperty('--zv-cover', String(out.cover))
@@ -125,9 +131,11 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
       // the artifacts' shelf each face lies over the one before it, as the
       // troop's do (zoom-layout.ts · shelfPage): by z-index, never by moving
       // the nodes (a moved node drops the focus of the reply box it holds).
-      const onShelf = at.dir === 'items' ? Object.keys(shelfPage(layout.thumbs.shelf, m.current.pan?.shelf() ?? 0).x) : []
+      // Out at the workspaces the two paths draw the same fan, whichever one the view came back by.
+      const fanned = at.v < (at.dir === 'agents' ? 0.5 : -0.5)
+      const onShelf = at.dir === 'items' && !fanned ? Object.keys(shelfPage(layout.thumbs.shelf, m.current.pan?.shelf() ?? 0).x) : []
       const shelfRank = new Map(onShelf.map((id, k) => [id, Math.min(k, SHELF_RANKS)] as const))
-      for (const a of m.current.model.agents) {
+      for (const [i, a] of m.current.model.agents.entries()) {
         const el = els.agents.get(a.id)
         if (!el) continue
         // Open from the card stop until the way into the full view: its × must not ride along (full-poses.ts).
@@ -135,7 +143,7 @@ export function useZoomMotion(model: FrameModel, collect: () => FrameEls | null,
         const flag = open ? 'open' : ''
         if (el.node.dataset.card !== flag) el.node.dataset.card = flag
         const rank = shelfRank.get(a.id)
-        const level = rank !== undefined ? 10 + rank : a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10
+        const level = rank !== undefined ? 10 + rank : a.id === focus && at.v > 1.01 ? 40 : a.id === at.leaving ? 36 : 10 + (fanned ? Math.max(0, SHELF_RANKS - i) : 0)
         if (el.node.style.zIndex !== String(level + 2)) el.node.style.zIndex = String(level + 2)
         if (el.cardl.style.zIndex !== String(level)) el.cardl.style.zIndex = String(level)
       }

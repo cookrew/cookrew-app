@@ -35,5 +35,5 @@ export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: numbe
   const cy = scene.t[1] + (lt[1] + size.h / 2) * scene.s
   const hw = (size.w * lk * scene.s) / 2
   const hh = (size.h * lk * scene.s) / 2
-  return { L, out, scene, label: { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh, k: lk, o: Number(els.label.style.opacity) } }
+  return { L, out, els, scene, label: { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh, k: lk, o: Number(els.label.style.opacity) } }
 }

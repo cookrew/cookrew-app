@@ -102,7 +102,6 @@ export function sceneWords(s: RestScales, narrow: boolean): SceneWords {
       '--zv-k-card': s.card.toFixed(4),
       '--zv-k-thumbs': s.thumbs.toFixed(4),
       '--zv-k-devices': s.devices.toFixed(4),
-      '--zv-k-marks': s.marks.toFixed(4),
       '--zv-nm-max': `${Math.round(nameMax)}px`
     }
   }

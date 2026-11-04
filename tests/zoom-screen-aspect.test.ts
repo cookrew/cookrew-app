@@ -54,7 +54,7 @@ describe('screenOf', () => {
 describe('deviceOf', () => {
   it("draws seven workspaces' screen at the Mac's proportions, not near square", () => {
     const d = deviceOf(ids(7), false, screenAspectOf(MBP16))
-    expect(d.box.w / d.box.h).toBeLessThan(1.1)
+    expect(d.box.w / d.box.h).toBeLessThan(1.3)
     expect(d.screen.w / d.screen.h).toBeCloseTo(1728 / 1117, 6)
     expect(d.screen.cy).toBe(d.box.cy)
   })

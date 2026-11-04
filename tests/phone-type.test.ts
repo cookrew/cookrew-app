@@ -38,7 +38,7 @@ function frameAt(model: FrameModel, w: number, h: number, sv: number, narrow = t
   const els = {
     devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
     labelW: 200, labelH: 24, agents, links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null,
-    deviceLabel: part(), markLabels, markNones: [part()], machineWords: [part()]
+    deviceLabel: part(), markLabels, machineWords: [part()]
   } as unknown as FrameEls
   const L = layoutOf(model, narrow)
   paint(model, L, els, { dir, sv, w, h, narrow, focus: model.agents[0]?.id ?? null, leaving: null, leavingAmt: 0, focusItem: null })
@@ -147,12 +147,11 @@ describe("the crew's layout on a phone", () => {
     })
   })
 
-  it("the workspaces' labels are set for caption at the workspaces stop", () => {
+  it("a tile's words are drawn 1:1 at the workspaces stop", () => {
     for (const [w, h] of PHONES) {
       const L = layoutOf(modelOf(13), true)
       const dw = deviceWords(L.device, w, h, true)
-      expect(11 * dw.openK * restScales(L, w, h, true).marks).toBeCloseTo(PHONE_TYPE.caption, 2)
-      expect(dw.openMax).toBeLessThan(Infinity)
+      expect(dw.markK * restScales(L, w, h, true).marks).toBeCloseTo(1, 4)
     }
   })
 })
@@ -164,7 +163,6 @@ describe('a desk', () => {
     expect(words.live).toBe(false)
     expect(words.label).toEqual({ crew: 1, card: 1 })
     expect(words.vars).toEqual({})
-    expect(deviceWords(layoutOf(modelOf(13), false).device, 1440, 820, false).openMax).toBe(Infinity)
   })
 
   it('draws a name at its own size, scaled with the crew as before', () => {

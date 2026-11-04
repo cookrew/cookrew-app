@@ -305,10 +305,10 @@
 }
 
 /* ── the device: its workspaces, a mark each ──
-   The machine's name and hint grow (scale, from their top-left corner) to be
-   read where the device is seen small, and wrap inside the device's width
-   (ZoomView · deviceWords sets both inline): the hint takes a line of its own
-   rather than running off a phone's edge (Gauge, 2026-11-01). */
+   The machine's name and count grow (scale, from their top-left corner) to be
+   read where the device is seen small (ZoomView · deviceWords sets the width
+   inline); a long name is cut, short of the per-row pill. The tiles:
+   workspace-tile.css. */
 .zv-device-label {
   position: absolute;
   left: 0;
@@ -325,6 +325,9 @@
 }
 
 .zv-device-label b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font: 600 22px/1.1 var(--zv-serif);
   color: var(--zv-ink);
 }
@@ -334,96 +337,6 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--zv-ink-soft);
-}
-
-.zv-device-label small {
-  padding-left: 12px;
-  border-left: 1px solid var(--zv-hair-2);
-  font: italic 11px/1.3 var(--zv-mono);
-  color: var(--zv-muted);
-  white-space: normal;
-}
-
-/* Another workspace: drawn once, placed once (translate + scale inline). The
-   whole mark answers a click through one round hit area; its parts only show. */
-.zv-mark {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-  cursor: pointer;
-}
-
-.zv-mark::before {
-  content: '';
-  position: absolute;
-  left: -130px;
-  top: -150px;
-  width: 260px;
-  height: 300px;
-  border-radius: 50%;
-}
-
-.zv-mark > * {
-  pointer-events: none;
-}
-
-.zv-mark .zv-wash,
-.zv-mark .zv-ring,
-.zv-mark .zv-av,
-.zv-mark .zv-dot,
-.zv-mark .zv-grp {
-  will-change: auto;
-}
-
-.zv-mark-none {
-  position: absolute;
-  left: -60px;
-  top: -20px;
-  width: 120px;
-  text-align: center;
-  font: italic 13px/1 var(--zv-mono);
-  color: var(--zv-muted);
-}
-
-.zv-mark .zv-mark-dot {
-  transform: translate(38px, -52px);
-}
-
-.zv-mark .zv-mark-label {
-  top: 108px;
-  transform: translateX(-50%);
-  /* It grows from under the ring (ZoomView · deviceWords, inline), cut short before a neighbour's. */
-  transform-origin: 50% 0;
-}
-
-.zv-mark .zv-mark-label > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The open workspace's place on the device: a round, invisible button over
-   its mark (the mark itself is the scene's group). */
-.zv-workspace-hit {
-  appearance: none;
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 180px;
-  height: 180px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  cursor: zoom-in;
-}
-
-.zv-workspace-hit:focus-visible {
-  outline: 3px solid var(--zv-seal);
-  outline-offset: 4px;
 }
 
 /* ── the workspace's own ground: its wash and its ring ──
@@ -549,8 +462,7 @@
   outline-offset: 2px;
 }
 
-.zv-grp .zv-workspace-name,
-.zv-mark-label > span:last-child {
+.zv-grp .zv-workspace-name {
   color: var(--zv-ink);
 }
 
@@ -1383,14 +1295,6 @@
     background: var(--zv-seal);
   }
 
-  .zv-mark:hover .zv-mark-label {
-    color: var(--zv-ink);
-  }
-
-  .zv-workspace-hit:hover {
-    box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
-  }
-
   .zv-machine:hover {
     box-shadow: 0 14px 38px var(--zv-shadow);
   }
@@ -1450,7 +1354,8 @@
 
 .zv-stops button {
   appearance: none;
-  flex: 1 1 0;
+  /* As wide as its word, the rest shared: equal widths cut WORKSPACES while DEVICES had room to spare. */
+  flex: 1 1 auto;
   min-width: 0;
   margin: 0;
   padding: 5px 4px;
@@ -1661,11 +1566,30 @@
     min-height: 28px;
   }
 
-  /* Each stop as wide as its word, the rest shared (a 360px Samsung, 2026-11-03: equal
-     widths cut WORKSPACES and ARTIFACTS while DEVICES and AGENTS had room to spare). */
-  .zv-stops button,
   .zv-groups {
     flex: 1 1 auto;
+  }
+}
+
+/* The narrowest phones (owner, 2026-11-04: a 320px Samsung cut WORKSPACES, ARTIFACTS and
+   AGENTS): every word stays whole, the room comes out of the gaps around them. */
+@media (max-width: 340px) {
+  .zv-controls {
+    gap: 3px;
+    padding: 4px;
+  }
+  .zv-back {
+    width: 30px;
+    height: 30px;
+  }
+  .zv-stops {
+    gap: 0;
+  }
+  .zv-stops button {
+    padding: 0 1px;
+  }
+  .zv-groups {
+    margin-left: 3px;
   }
 }
 
@@ -1856,7 +1780,7 @@
   /* The open workspace's label in the marks' form: seal and name in 130px
      (380 when it grows by 2.9 on the device stop, as wide as theirs), its
      totals on a line below. */
-  .zv-grp:not(.zv-mark-label) {
+  .zv-grp {
     flex-wrap: wrap;
     /* In a zero-width scene a wrapping box would shrink to its widest part. */
     width: max-content;
@@ -1868,24 +1792,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .zv-grp:not(.zv-mark-label) .zv-tot {
+  .zv-grp .zv-tot {
     margin-left: 28px;
     padding-left: 2px;
     border-left: 0;
-  }
-  /* Drawn 1:1 on screen (zoom-frame.ts · deviceWords): its type is the phone's caption. */
-  .zv-mark .zv-mark-label {
-    gap: 4px;
-    max-width: 130px;
-    font-size: var(--ph-caption, 10px);
-    letter-spacing: 0.04em;
-  }
-  /* The seal as the open workspace's own: control on a 24 box. */
-  .zv-mark .zv-mark-label .zv-seal {
-    width: 24px;
-    height: 24px;
-    font-size: var(--ph-control, 11px);
-    line-height: 24px;
   }
 }
 
@@ -1929,6 +1839,29 @@
 
 .zv-cols > span {
   margin-right: 4px;
+}
+
+.zv-cols-glyph {
+  display: none;
+  width: 12px;
+  height: 12px;
+  margin: 0 3px 0 -3px;
+  fill: currentColor;
+}
+
+/* A phone: the title has the room, the pill keeps its numbers beside a small grid. */
+@media (max-width: 520px) {
+  .zv-cols {
+    top: 12px;
+    right: 16px;
+    padding: 3px 3px 3px 10px;
+  }
+  .zv-cols > span {
+    display: none;
+  }
+  .zv-cols-glyph {
+    display: block;
+  }
 }
 
 .zv-cols button {
@@ -2023,13 +1956,6 @@
 .zv-wsnew-cap {
   opacity: 1;
 }
-@media (max-width: 759px) {
-  .zv-mark .zv-wsnew,
-  .zv-mark .zv-wsnew-cap {
-    display: none;
-  }
-}
-
 /* THE BOX FLOATS over the stage's foot at every width (prompt/global-prompt.css):
    the zoom's bar stands just above it. The full view's bar is at the top already. */
 .zv-root:not([data-full='true']) .zv-controls {

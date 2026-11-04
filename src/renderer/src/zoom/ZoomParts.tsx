@@ -5,7 +5,7 @@ import { InkAvatar, InkRing } from './InkAvatar'
 import { CardWords, QuickReply, useQuickReply } from './quick-reply'
 import { typingOf } from './typing-line'
 import './agent-card.css'
-import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
+import type { AgentView, ItemView, MachineView } from './zoom-model'
 import { NEW_POSE } from './zoom-layout'
 import { useNameEdit } from './NameEdit'
 
@@ -245,54 +245,6 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
         <QuickReply agent={agent} reply={reply} className="zv-reply" style={HIDDEN} formRef={bind(`agent-reply:${agent.id}`)} />
         </>
       )}
-    </div>
-  )
-}, sameProps)
-
-/** Another workspace on the device: its ring, its agents' stack, its seal and name. */
-export const MarkNode = memo(function MarkNode({ mark, bind, onOpen, onOpenItems }: { mark: MarkView; bind: Bind; onOpen: () => void; onOpenItems?: () => void }): React.JSX.Element {
-  // A workspace opens two ways (draft · group-motion-pivot.html): its agents → the crew, its browsers → their thumbnails.
-  const items = (mark.browsers ?? 0) + (mark.notes ?? 0)
-  const n = mark.presets.length
-  const shown = mark.presets.slice(0, 9)
-  const mid = (shown.length - 1) / 2
-  return (
-    <div ref={bind(`mark:${mark.id}`)} className="zv-mark" title={`${mark.name} · ${n} agent${n === 1 ? '' : 's'} · open`} {...press(onOpen, `${mark.name}, ${n} agents`)}>
-      <div className="zv-wash" style={{ transform: 'translate(0px, -10px) scale(0.2, 0.42)', opacity: 0.6 }} />
-      <div className="zv-ring" style={{ transform: 'translate(0px, -10px)' }}>
-        <InkRing seed={3 + mark.name.length} />
-      </div>
-      {shown.map((preset, i) => {
-        const k = i - mid
-        return (
-          <div key={i} className="zv-av zv-mark-av" style={{ transform: `translate(${k * 8}px, ${-10 - (mid - Math.abs(k)) * 2.5}px) rotate(${k * 6}deg) scale(0.84)`, zIndex: i }}>
-            <InkAvatar id={`${mark.id}:${i}`} preset={preset} />
-          </div>
-        )
-      })}
-      {n === 0 && <div className="zv-none zv-mark-none">no agents</div>}
-      {mark.newest && onOpenItems && <NewestThumb item={mark.newest} workspace={mark.name} onOpen={onOpenItems} />}
-      {mark.waiting && <span className="zv-dot zv-mark-dot" />}
-      <div className="zv-grp zv-mark-label">
-        <span className="zv-seal">{n}</span>
-        <span>{mark.name}</span>
-        {items > 0 && onOpenItems && (
-          <button
-            type="button"
-            className="zv-tot"
-            aria-label={`Open ${mark.name} artifacts`}
-            // The mark around it opens the crew on a click or Enter: this one is the other way in.
-            onPointerDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpenItems()
-            }}
-          >
-            <Counts browsers={mark.browsers ?? 0} notes={mark.notes ?? 0} />
-          </button>
-        )}
-      </div>
     </div>
   )
 }, sameProps)
