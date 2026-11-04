@@ -685,9 +685,9 @@ export function detectAttention(lines: string[]): boolean {
 const SPINNER_LINE_RE = /^\s*[✻✽✳✢✶✦✺✹✸✷·∗*+]\s+(\S.*)$/
 /**
  * A spinner line counts as a status when it carries progress chrome:
- * ellipsis, parens, elapsed time ("Baked for 1m 6s"), or token counts.
+ * ellipsis, elapsed time ("Baked for 1m 6s"), or token counts.
  */
-const STATUS_HINT_RE = /…|\(|esc to interrupt|tokens|\b\d+m?\s?\d*s\b/i
+const STATUS_HINT_RE = /…|esc to interrupt|tokens|\b\d+m?\s?\d*s\b/i
 /** ⏺ entry: either Tool(args…) or a plain assistant message. */
 const ENTRY_RE = /^\s*[⏺●○]\s+(.*)$/
 /**
@@ -765,9 +765,13 @@ export function detectAgentActivity(chunk: string): boolean {
 const COMPLETED_STATUS_RE = /^\p{L}+ed for\s+\d/iu
 /**
  * In-flight markers on a spinner body: streaming ellipsis, parenthesised
- * progress, token counters, or the (older-TUI) interrupt hint.
+ * progress, token counters, or the (older-TUI) interrupt hint. Progress, not
+ * any parenthesis or the word "tokens": a line starts like a spinner far more
+ * often than it is one. A question tool's record ("· Which parts? (Alpha /
+ * Beta)") stays on the screen, and read as a turn still running it kept the
+ * wait for the next question from ever being raised.
  */
-const LIVE_HINT_RE = /…|\(|esc to interrupt|tokens/i
+const LIVE_HINT_RE = /…|esc to interrupt|[↓↑]\s*[\d.]+k?\s*tokens|\(\s*\d+(?:m\s?\d*s?|s)\b/i
 
 /**
  * True when a spinner status body reads as an in-flight turn, e.g.

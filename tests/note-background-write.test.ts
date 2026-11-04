@@ -4,7 +4,7 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceStore } from '../src/main/store'
 
 describe('a note in a background workspace', () => {
@@ -33,10 +33,11 @@ describe('a note in a background workspace', () => {
   it('its .md mirror lands in its own workspace, not the one on screen', async () => {
     const { store, noteId, dir, home, other } = start()
     store.writeNote(noteId, 'second words')
-    await new Promise((resolve) => setTimeout(resolve, 50))
     const notes = (id: string): string => path.join(dir, 'workspaces', id, 'notes')
-    const own = readdirSync(notes(home)).map((f) => readFileSync(path.join(notes(home), f), 'utf8'))
-    expect(own.join('')).toContain('second words')
+    await vi.waitFor(() => {
+      const own = readdirSync(notes(home)).map((f) => readFileSync(path.join(notes(home), f), 'utf8'))
+      expect(own.join('')).toContain('second words')
+    })
     expect(existsSync(notes(other)) ? readdirSync(notes(other)) : []).toEqual([])
   })
   it('an id that is no note anywhere is still refused', () => {
