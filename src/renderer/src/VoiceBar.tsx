@@ -74,7 +74,7 @@ const REPEAT_RATE_MS = 70
  * to leave. contextmenu is swallowed so an iOS/Android long-press never
  * pops the callout over the cluster.
  */
-function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
+function TermKeys({ terminalId, menuKey }: { terminalId: string; menuKey: ((seq: string) => void) | null }): React.JSX.Element {
   const timersRef = useRef<{ delay: number | null; interval: number | null }>({
     delay: null,
     interval: null
@@ -115,9 +115,12 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
     // clipboard read only in a real gesture (terminal-paste-bus.ts).
     if (result.fire) {
       if (key.action.kind === 'paste') requestTerminalPaste(terminalId)
+      else if (menuKey) menuKey(key.action.seq)
       else cookrew().ptyInput(terminalId, key.action.seq)
     }
-    if (result.startRepeat && key.action.kind === 'seq') {
+    // Not on a menu: each key is checked against its screen, so a hold's would
+    // queue, and the cursor would run on after the finger lifts.
+    if (result.startRepeat && key.action.kind === 'seq' && !menuKey) {
       const seq = key.action.seq
       timersRef.current.interval = window.setInterval(
         () => cookrew().ptyInput(terminalId, seq),
@@ -181,16 +184,19 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
  */
 export function VoiceBar({
   terminalId,
+  menuKey = null,
   children
 }: {
   /** The agent the keys drive; none for a new agent, and then no keys. */
   terminalId: string | null
+  /** Where the keys go while a menu stands (wait-answer.ts · trayKey). */
+  menuKey?: ((seq: string) => void) | null
   children?: React.ReactNode
 }): React.JSX.Element {
   return (
     <div className="voice-bar nodrag">
       {children}
-      {terminalId && <TermKeys terminalId={terminalId} />}
+      {terminalId && <TermKeys terminalId={terminalId} menuKey={menuKey} />}
     </div>
   )
 }

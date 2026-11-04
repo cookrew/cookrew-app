@@ -207,6 +207,13 @@ describe('the phone answers a menu in a dispatched turn', () => {
     expect(reply).toEqual({ status: 200, body: { ok: true } })
     expect(answered).toEqual(['t1'])
   })
+  it("the tray's Esc and arrows go the same way; anything else is not a menu key", async () => {
+    setMenuAnswerer(async () => ({ ok: true }))
+    expect((await route('/api/terminal/t1/menu', { menu: 'm', act: { kind: 'key', seq: '\x1b' } })).status).toBe(200)
+    for (const seq of ['\r', 'rm -rf x\r', '\x1b[200~', '']) {
+      expect((await route('/api/terminal/t1/menu', { menu: 'm', act: { kind: 'key', seq } })).status).toBe(400)
+    }
+  })
   it('a new prompt is still held back by the same dispatch', async () => {
     const reply = await route('/api/terminal/t1/input', { data: 'hello' })
     expect(reply.status).toBe(409)
@@ -404,6 +411,11 @@ describe('an answer is checked against the screen', () => {
     await answerOn(yn)('t', { menu: choiceId(waitChoiceOfScreen(yn) as WaitChoice), act: { kind: 'row', index: 0 } })
     await answerOn(echo)('t', { menu: choiceId(waitChoiceOfScreen(echo) as WaitChoice), act: { kind: 'row', index: 0 } })
     expect(roads).toEqual([true, false, false])
+  })
+  it("a tray key reaches the menu as itself", async () => {
+    const { sent, answer } = setup(SCREEN)
+    expect(await answer('t', { menu: choiceId(shown), act: { kind: 'key', seq: '\x1b[B' } })).toEqual({ ok: true })
+    expect(sent).toEqual(['\x1b[B'])
   })
   it('keys refused stop there', async () => {
     const { sent, answer } = setup(SCREEN, () => false)

@@ -434,6 +434,8 @@ const UP = '\x1b[A'
 const LEFT = '\x1b[D'
 const RIGHT = '\x1b[C'
 export const ESC = '\x1b'
+/** What a menu takes from the tray: its own navigation, never a word or an Enter. */
+export const MENU_KEYS: readonly string[] = [ESC, UP, DOWN, LEFT, RIGHT]
 
 /** What is asked of a menu. The main process turns it into keys against the screen as it stands (main/menu-answer.ts). */
 export type MenuAct =
@@ -441,6 +443,7 @@ export type MenuAct =
   | { readonly kind: 'esc' }
   | { readonly kind: 'step'; readonly dir: -1 | 1 }
   | { readonly kind: 'words'; readonly text: string }
+  | { readonly kind: 'key'; readonly seq: string }
 
 const onWordsRow = (choice: WaitChoice): boolean => choice.cursor !== null && choice.options[choice.cursor]?.role === 'type'
 const ticks = (choice: WaitChoice): boolean => choice.options.some((o) => o.role === 'toggle')
@@ -494,6 +497,7 @@ export function answerKeys(choice: WaitChoice, act: MenuAct): string[] | null {
   if (act.kind === 'esc') return [ESC]
   if (act.kind === 'row') return rowKeys(choice, act.index)
   if (act.kind === 'words') return wordsKeys(choice, act.text)
+  if (act.kind === 'key') return MENU_KEYS.includes(act.seq) ? [act.seq] : null
   // On the words row ← → are the caret's: step off it first.
   const arrow = act.dir < 0 ? LEFT : RIGHT
   return onWordsRow(choice) ? [UP, arrow] : [arrow]

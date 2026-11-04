@@ -1,4 +1,4 @@
-import { answerKeys, choiceId, menuHeldOnScreen, waitChoiceOfScreen, type MenuAct } from '../shared/wait-choice'
+import { answerKeys, choiceId, menuHeldOnScreen, MENU_KEYS, waitChoiceOfScreen, type MenuAct } from '../shared/wait-choice'
 
 /**
  * AN ANSWER TO A WAITING AGENT'S MENU, CHECKED AGAINST THE SCREEN (owner task,
@@ -40,8 +40,9 @@ export function parseMenuRequest(body: unknown): MenuAnswerRequest | null {
   const { menu, act } = body as { menu?: unknown; act?: unknown }
   if (typeof menu !== 'string' || menu.length === 0 || menu.length > MAX_MENU) return null
   if (typeof act !== 'object' || act === null) return null
-  const a = act as { kind?: unknown; index?: unknown; dir?: unknown; text?: unknown }
+  const a = act as { kind?: unknown; index?: unknown; dir?: unknown; text?: unknown; seq?: unknown }
   if (a.kind === 'esc') return { menu, act: { kind: 'esc' } }
+  if (a.kind === 'key' && typeof a.seq === 'string' && MENU_KEYS.includes(a.seq)) return { menu, act: { kind: 'key', seq: a.seq } }
   if (a.kind === 'row' && Number.isInteger(a.index) && (a.index as number) >= 0 && (a.index as number) < 100) return { menu, act: { kind: 'row', index: a.index as number } }
   if (a.kind === 'step' && (a.dir === 1 || a.dir === -1)) return { menu, act: { kind: 'step', dir: a.dir } }
   // Words are words: no control bytes ride in on them.
