@@ -18,6 +18,16 @@
 /** An hour of nothing (was ten minutes until the owner's 2026-11-01 ruling). */
 export const DEFAULT_IDLE_SLEEP_MS = 60 * 60_000
 
+/**
+ * What a boot costs each card. The first sighting used to start a whole window,
+ * and the app restarts several times a day, so a fleet idle for two days was
+ * never nominated (2026-11-05). The evidence gate knows how long an agent has
+ * really been quiet, so the clock only has to leave time for viewers to
+ * reconnect after the boot. Kept apart from the clock: the window can shrink
+ * a minute after a boot, and that must not spend the grace.
+ */
+export const BOOT_GRACE_MS = 5 * 60_000
+
 export interface SleepFacts {
   id: string
   /** Its harness can resume this exact conversation (otherwise sleep loses it). */
@@ -38,6 +48,8 @@ export function idleSleepMsFrom(raw: string | undefined): number {
 export class IdleSleep {
   /** Last moment each live terminal was seen busy (or first seen at all). */
   private readonly lastBusy = new Map<string, number>()
+  /** First sightings: not nominated before this moment, whatever the window. */
+  private readonly graceUntil = new Map<string, number>()
   /** Terminals this app put to sleep and has not seen wake since. */
   private readonly sleeping = new Set<string>()
 
@@ -50,29 +62,55 @@ export class IdleSleep {
 
   /**
    * One sweep over the terminals that have a running process. Returns the ids
-   * whose window has run out. The first sighting only starts the clock: an
-   * app that just booted knows nothing about how long anyone has been idle.
+   * whose window has run out, longest quiet first. A first sighting is never
+   * due: it waits out BOOT_GRACE_MS, because an app that just booted cannot yet
+   * see who is watching. `windowMs` is this sweep's window, shorter under
+   * memory pressure (machine-pressure.ts).
    */
-  due(live: readonly SleepFacts[], now: number): string[] {
+  due(live: readonly SleepFacts[], now: number, windowMs: number = this.idleMs): string[] {
     const seen = new Set<string>()
-    const out: string[] = []
+    const out: Array<{ id: string; last: number }> = []
     for (const f of live) {
       seen.add(f.id)
-      // Running again after we slept it: something woke it (LIVE, an ask).
-      if (this.sleeping.delete(f.id)) this.lastBusy.delete(f.id)
+      // Running again after we slept it: something woke it outside the waker,
+      // which claims this mark itself. Either way the evidence then counts
+      // from Claude's fresh status.
+      const wasWoken = this.sleeping.delete(f.id)
+      if (wasWoken) this.forget(f.id)
       if (this.idleMs <= 0 || !f.resumable || f.served) {
-        this.lastBusy.delete(f.id)
+        this.forget(f.id)
         continue
       }
       const last = this.lastBusy.get(f.id)
-      if (f.busy || last === undefined) {
+      if (f.busy) {
         this.lastBusy.set(f.id, now)
+        this.graceUntil.delete(f.id)
         continue
       }
-      if (now - last >= this.idleMs) out.push(f.id)
+      if (last === undefined) {
+        this.firstSight(f.id, now, wasWoken, windowMs)
+        continue
+      }
+      if (now < (this.graceUntil.get(f.id) ?? 0)) continue
+      if (now - last >= windowMs) out.push({ id: f.id, last })
     }
-    for (const id of [...this.lastBusy.keys()]) if (!seen.has(id)) this.lastBusy.delete(id)
-    return out
+    for (const id of [...this.lastBusy.keys()]) if (!seen.has(id)) this.forget(id)
+    return out.sort((a, b) => a.last - b.last).map((d) => d.id)
+  }
+
+  /**
+   * A boot knows nothing of how long this card has been quiet, so its clock is
+   * unset (the evidence supplies the truth once the grace is over). A card seen
+   * waking counts from now.
+   */
+  private firstSight(id: string, now: number, woken: boolean, windowMs: number): void {
+    this.lastBusy.set(id, woken ? now : Number.NEGATIVE_INFINITY)
+    if (!woken) this.graceUntil.set(id, now + Math.min(BOOT_GRACE_MS, windowMs))
+  }
+
+  private forget(id: string): void {
+    this.lastBusy.delete(id)
+    this.graceUntil.delete(id)
   }
 
   /**
@@ -85,7 +123,7 @@ export class IdleSleep {
   }
 
   markAsleep(id: string): void {
-    this.lastBusy.delete(id)
+    this.forget(id)
     this.sleeping.add(id)
   }
 

@@ -8,6 +8,21 @@ import path from 'node:path'
  * asserted from a test rather than trusted from a reading of the constructor.
  */
 
+/**
+ * No test run in a pane takes the whole machine. Left to its default, one vitest
+ * takes every core but one, in any repo and under any config, and agents all
+ * test at once: 2026-11-05, 36 workers on ten cores, load 135. The env reaches
+ * configs this repo does not own, such as a lane's scratch config or another
+ * project entirely. The MIN keys are not optional: vitest's default minimum is
+ * cores - 1, and a max below it fails the run (measured).
+ */
+export const TEST_WORKER_CAPS: Readonly<Record<string, string>> = {
+  VITEST_MAX_FORKS: '4',
+  VITEST_MIN_FORKS: '1',
+  VITEST_MAX_THREADS: '4',
+  VITEST_MIN_THREADS: '1'
+}
+
 export interface PaneEnvInput {
   terminalId: string
   /** The app's CLI command socket. Owner panes only — see below. */
@@ -52,6 +67,7 @@ export function paneEnv(input: PaneEnvInput): Record<string, string> {
   const infraPath = served ? (input.servedEnv?.PATH ?? '') : (input.ownerEnv.PATH ?? '')
   return {
     ...base,
+    ...TEST_WORKER_CAPS,
     TERM_PROGRAM: 'Cookrew',
     COOKREW_TERMINAL_ID: input.terminalId,
     ...(served
