@@ -1,4 +1,4 @@
-import { answerKeys, choiceId, waitChoiceOfScreen, type MenuAct } from '../shared/wait-choice'
+import { answerKeys, choiceId, menuHeldOnScreen, waitChoiceOfScreen, type MenuAct } from '../shared/wait-choice'
 
 /**
  * AN ANSWER TO A WAITING AGENT'S MENU, CHECKED AGAINST THE SCREEN (owner task,
@@ -24,8 +24,8 @@ export type MenuAnswerResult = { readonly ok: true } | { readonly ok: false; rea
 export interface MenuAnswerDeps {
   /** The screen as it stands: every byte received parsed. Null when it cannot be read. */
   screen: (terminalId: string) => Promise<string | null>
-  /** Write keys; false when they were refused. */
-  send: (terminalId: string, keys: string) => boolean
+  /** Write keys; false when they were refused. inMenu: a menu stands in the input box's place. */
+  send: (terminalId: string, keys: string, inMenu: boolean) => boolean
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -60,12 +60,19 @@ export function createMenuAnswerer(deps: MenuAnswerDeps): (terminalId: string, r
   const answer = async (terminalId: string, request: MenuAnswerRequest): Promise<MenuAnswerResult> => {
     const screen = await deps.screen(terminalId)
     const choice = screen === null ? null : waitChoiceOfScreen(screen)
-    if (!choice || choiceId(choice) !== request.menu) return { ok: false, reason: 'moved' }
+    if (screen === null || !choice || choiceId(choice) !== request.menu) return { ok: false, reason: 'moved' }
+    // Keys into a held menu skip the input box's guards, so it must still stand
+    // before each write: gone, an Enter would land in the box. Rows nothing
+    // proves a menu just keep those guards.
+    const inMenu = menuHeldOnScreen(screen)
     const writes = answerKeys(choice, request.act)
     if (writes === null) return { ok: false, reason: 'refused' }
     for (const [i, keys] of writes.entries()) {
-      if (i > 0) await sleep(GAP_MS)
-      if (keys && !deps.send(terminalId, keys)) return { ok: false, reason: 'refused' }
+      if (i > 0) {
+        await sleep(GAP_MS)
+        if (inMenu && !menuHeldOnScreen((await deps.screen(terminalId)) ?? '')) return { ok: false, reason: 'moved' }
+      }
+      if (keys && !deps.send(terminalId, keys, inMenu)) return { ok: false, reason: 'refused' }
     }
     // The TUI's turn to redraw, before the next answer reads it.
     await sleep(GAP_MS)

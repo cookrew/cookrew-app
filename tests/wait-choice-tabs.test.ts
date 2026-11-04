@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cleanTurnLines, tailLines } from '../src/shared/turn'
-import { choiceKeys, choiceSig, parseWaitChoice, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
+import { choiceKeys, choiceSig, menuHeldOnScreen, parseWaitChoice, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
 
 const screen = (name: string): string => readFileSync(join(__dirname, 'fixtures', 'wait-choice', `${name}.txt`), 'utf8')
 const read = (name: string): WaitChoice => {
@@ -131,5 +131,34 @@ describe('a read through herdr (a card with no mirror)', () => {
     expect(choice.question).toBe('Which notes should go in?')
     expect(labels(choice)).toEqual(['Alpha', 'Beta', 'Type something', 'Submit', 'Chat about this'])
     expect(choice.steps).toEqual({ done: 0, total: 1 })
+  })
+})
+
+describe('a menu held up, sure enough to decide a turn', () => {
+  const read = (name: string): string => readFileSync(join(__dirname, 'fixtures', 'wait-choice', `${name}.txt`), 'utf8')
+  const MENUS = ['claude-ask', 'claude-ask-multi-narrow-zh', 'claude-bash', 'claude-create', 'claude-edit', 'claude-plan', 'claude-tabs-multi', 'claude-tabs-q1', 'claude-tabs-q2', 'claude-tabs-review', 'claude-tabs-q2-typed', 'claude-edit-cursor-2', 'claude-herdr-recent-multi', 'codex-command']
+  it.each(MENUS)('%s holds one', (name) => {
+    expect(menuHeldOnScreen(read(name))).toBe(true)
+  })
+  it('the rows alone do not: a prompt echo under a question', () => {
+    const screen = 'Which should go first?\n\n❯ 1. rename foo\n  2. rename bar\n\n⏺ Done.\n'
+    expect(waitChoiceOfScreen(screen)).not.toBeNull()
+    expect(menuHeldOnScreen(screen)).toBe(false)
+  })
+  it('nor an echo over the idle box, its reply not yet drawn', () => {
+    const screen = 'Which should go first?\n\n❯ 1. rename foo\n  2. rename bar\n\n───────────────────────────────────\n❯ \n───────────────────────────────────\n  ? for shortcuts\n'
+    expect(menuHeldOnScreen(screen)).toBe(false)
+  })
+  it('nor a draft in the box itself, under a reply that asks (Claude)', () => {
+    const screen = '⏺ Should I rename these,\n  or leave them?\n\n───────────────────────────────────\n❯ 1. a\n  2. b\n───────────────────────────────────\n  ? for shortcuts\n'
+    expect(menuHeldOnScreen(screen)).toBe(false)
+  })
+  it('nor a draft in the box itself, under a reply that asks (Codex)', () => {
+    const screen = '• Should I rename these,\n  or leave them?\n\n› 1. a\n  2. b\n\n  ? for shortcuts\n'
+    expect(menuHeldOnScreen(screen)).toBe(false)
+  })
+  it('a reply with a numbered list over the idle box does not', () => {
+    const screen = '⏺ Two ways:\n  1. Patch it\n  2. Revert it\n\n  Which do you want?\n\n───────────────────────────────────\n❯ \n───────────────────────────────────\n  ? for shortcuts\n'
+    expect(menuHeldOnScreen(screen)).toBe(false)
   })
 })

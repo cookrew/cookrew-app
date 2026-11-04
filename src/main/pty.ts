@@ -485,6 +485,8 @@ export class PtySession extends EventEmitter {
    * shells.
    */
   beforeOwnerInput: ((terminalId: string, data: string) => OwnerInputVerdict) | null = null
+  /** The same for keys into a menu held up on the screen (TurnTracker.guardMenuKeys). */
+  beforeMenuKeys: ((terminalId: string, data: string) => OwnerInputVerdict) | null = null
 
   /**
    * The most recent refused owner write, while the refusal is CURRENT (Sol
@@ -740,9 +742,9 @@ export class PtySession extends EventEmitter {
    * they do not dirty it and the tracker does not read them as a prompt being
    * typed: a digit here would show up as a draft, and refuse the next dispatch.
    */
-  writeMenuKeys(data: string): OwnerInputVerdict {
+  writeMenuKeys(data: string, inMenu: boolean): OwnerInputVerdict {
     if (this.disposed) return 'refused'
-    const verdict = this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow'
+    const verdict = (inMenu ? this.beforeMenuKeys : this.beforeOwnerInput)?.(this.terminalId, data) ?? 'allow'
     if (verdict !== 'allow') {
       this.lastRefusalInfo = { verdict, at: Date.now() }
       return verdict
