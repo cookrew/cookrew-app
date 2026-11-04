@@ -36,23 +36,73 @@ export interface CrewItem {
 export const COL = 200
 /**
  * Where a workspace's newest browser stands beside its agents' stack, and its
- * scale (draft group-motion-pivot.html · NEW_POSE): the open workspace's and
- * every other mark's alike.
+ * scale (draft group-motion-pivot.html · NEW_POSE), as the group opens.
  */
 export const NEW_POSE = { x: 132, y: 34, s: 1.5 } as const
+/** A workspace's mark on the device is its group at this scale. */
+export const SWS = 0.62
+/**
+ * A WORKSPACE'S TILE (owner, 2026-11-04: "how the agents group and the
+ * artifacts group show on one page"). One bench: the agents' ring on the left,
+ * the artifacts' deck on the right, a name over both, each group its own door.
+ * In a mark's units (the group's own, drawn at SWS on the device), around the
+ * ring's group centre, so the open workspace's real ring stands in its tile.
+ */
+export const TILE = { left: -112, top: -186, w: 430, h: 350 } as const
+/** A tile's words on screen at a phone's picks, in px: its name's line over the ring, its counts' under it, and only a margin where it has no counts. */
+const TILE_HEAD_PX = { name: 28, caption: 21 }
+const TILE_FOOT_PX = { counts: 26, none: 8 }
+/** The picks where a phone's tile has room for its counts, and where its name is still set as a name. */
+const COUNTS_COLS = 3
+/** The width a phone's picks are reckoned at: the words' room is a few px off at any other. */
+const PHONE_REF_W = 350
+const RING = { top: -100, bottom: 80 }
+
+/**
+ * A tile's frame at a pick: the ring and the deck stay in their places, its
+ * words stay one size on screen, so the fewer pixels a mark's unit gets, the
+ * more units they take (owner, 2026-11-04: at 3 and 5 to a row the names sat
+ * on the rings).
+ */
+export function tileOf(narrow: boolean, cols: number): { top: number; h: number } {
+  if (!narrow || cols <= 2) return { top: TILE.top, h: TILE.h }
+  const px = (PHONE_REF_W - 32 - (cols - 1) * 12) / cols / TILE.w
+  const head = (cols > COUNTS_COLS ? TILE_HEAD_PX.caption : TILE_HEAD_PX.name) / px
+  const foot = (cols > COUNTS_COLS ? TILE_FOOT_PX.none : TILE_FOOT_PX.counts) / px
+  return { top: RING.top - head, h: RING.bottom - RING.top + head + foot }
+}
+
+/** The deck's centre and scale in the tile: a thumbnail of the artifacts' grid, as large as the ring can stand beside. */
+export const DECK_POSE = { x: 194, y: -10, s: 1.08 } as const
+/** Where the agents' door ends and the artifacts' begins. */
+export const TILE_SPLIT = 98
 export const ROW = 175
 
-/** The stack in the ring: drawn bottom → top, the first agent (an orchestrator if there is one) on top. */
+/** The most faces a ring fans out: past them it is a swirl of coins, not people (owner, 2026-11-04). */
+const FAN_SHOWN = 6
+/** The fan's reach inside the ring (its inner width less a face), and its steepest lean. */
+const FAN_REACH = 100
+const FAN_STEP = 20
+const FAN_LEAN = 16
+
+/** The fan of `n` faces, bottom → top: never more than FAN_SHOWN, a face's width apart at most. */
+export function fanOf(n: number): (Pos & { s: number; r: number })[] {
+  const m = Math.min(n, FAN_SHOWN)
+  const mid = (m - 1) / 2
+  const step = m > 1 ? Math.min(FAN_STEP, FAN_REACH / (m - 1)) : 0
+  const lean = mid > 0 ? Math.min(6, FAN_LEAN / mid) : 0
+  return Array.from({ length: m }, (_, i) => {
+    const k = i - mid
+    return { x: k * step, y: -10 - (mid - Math.abs(k)) * 2.5, s: 0.84, r: k * lean }
+  })
+}
+
+/** The stack in the ring: drawn bottom → top, the first agent (an orchestrator if there is one) on top; those the fan does not show wait under its first face. */
 export function stackOf(agents: readonly CrewAgent[]): Record<string, Pos & { s: number; r: number }> {
   const order = [...agents].reverse()
-  const mid = (order.length - 1) / 2
-  const out: Record<string, Pos & { s: number; r: number }> = {}
-  const step = order.length > 9 ? 72 / order.length : 8
-  order.forEach((a, i) => {
-    const k = i - mid
-    out[a.id] = { x: k * step, y: -10 - (mid - Math.abs(k)) * 2.5, s: 0.84, r: k * 6 }
-  })
-  return out
+  const fan = fanOf(order.length)
+  const under = order.length - fan.length
+  return Object.fromEntries(order.map((a, i) => [a.id, fan[Math.max(0, i - under)]]))
 }
 
 /** Orchestrators first, then the rest in their given order. */
@@ -297,15 +347,6 @@ export function shelfPage(shelf: Thumbs['shelf'], page: number): ShelfPage {
   return { x, more: { x: lastX + SHELF_FACE + SHELF_MORE_GAP, rest, last } }
 }
 
-/** How far a mark's tile (its wash, zoom-frame.ts · SWS) reaches above its centre on the device. */
-const TILE_TOP = 100
-/**
- * Room kept over the first row for the machine's name and hint, which grow to
- * be read and wrap (zoom-frame.ts · deviceWords): on a phone up to four lines
- * at ~1.7x (Gauge, 2026-11-01: the hint's second line ran into the first tile).
- */
-const TITLE_ROOM = { wide: 100, narrow: 180 }
-
 /** A machine's screen when its display is not known: a MacBook's 16:10. */
 export const DEFAULT_SCREEN_ASPECT = 16 / 10
 
@@ -333,28 +374,49 @@ export function screenOf(box: Box, aspect: number): Box {
 export const DEVICE_COLS = CREW_COLS
 export const defaultDeviceCols = (narrow: boolean): number => (narrow ? 2 : 3)
 
-/** The device: a mark per workspace, `cols` to a row (the pick, else the default), the open one where its slot is; its title ends `titleBottom`, clear of the first row's tiles; `screen` holds it at the display's proportions. */
+/** The device's title stands this far over the first row of tiles, and has this room above it (device units). */
+const TITLE_GAP = 14
+const TITLE_ROOM = { wide: 64, narrow: 46 }
+const TILE_GAP = { wide: 32, narrow: 24 }
+const FOOT = { wide: 12, narrow: 0 }
+const SIDE = { wide: 60, narrow: 0 }
+
+/**
+ * The device: a tile per workspace, `cols` to a row (the pick, else the
+ * default) in columns from the left, the open one where its slot is. `at` is
+ * each ring's place (the mark's origin); `gridTop` and `left` are the tiles'
+ * top and left edges; its title ends `titleBottom`, clear of the first row;
+ * `screen` holds it at the display's proportions.
+ */
 export function deviceOf(
   ids: readonly string[],
   narrow: boolean,
   aspect = DEFAULT_SCREEN_ASPECT,
   picked?: number
-): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number } {
-  const cols = picked ?? defaultDeviceCols(narrow)
-  const dx = narrow ? 260 : 330
-  const dy = narrow ? 260 : 320
+): { at: Record<string, Pos>; box: Box; screen: Box; titleBottom: number; dx: number; gridTop: number; gridH: number; rowH: number; left: number; tile: { top: number; h: number } } {
+  const pick = picked ?? defaultDeviceCols(narrow)
+  const cols = Math.max(1, Math.min(pick, ids.length))
+  const form = narrow ? 'narrow' : 'wide'
+  const tile = tileOf(narrow, cols)
+  const tw = SWS * TILE.w
+  const th = SWS * tile.h
+  const gap = TILE_GAP[form]
+  const dx = tw + gap
+  const dy = th + gap
   const rows = Math.max(1, Math.ceil(ids.length / cols))
+  const gridW = cols * dx - gap
+  const gridH = rows * dy - gap
+  const left = -gridW / 2
+  const gridTop = -gridH / 2
   const at: Record<string, Pos> = {}
   ids.forEach((id, g) => {
-    const row = Math.floor(g / cols)
-    const inRow = Math.min(cols, ids.length - row * cols)
-    at[id] = { x: ((g % cols) - (inRow - 1) / 2) * dx, y: (row - (rows - 1) / 2) * dy }
+    at[id] = { x: left + (g % cols) * dx - SWS * TILE.left, y: gridTop + Math.floor(g / cols) * dy - SWS * tile.top }
   })
-  const titleBottom = -((rows - 1) / 2) * dy - TILE_TOP - 14
-  const bottom = -20 + (rows * dy + 120) / 2
-  const top = Math.min(-20 - (rows * dy + 120) / 2, titleBottom - (narrow ? TITLE_ROOM.narrow : TITLE_ROOM.wide))
-  const box = { w: cols * dx + 120, h: bottom - top, cy: (top + bottom) / 2 }
-  return { at, box, screen: screenOf(box, aspect), titleBottom, dx }
+  const titleBottom = gridTop - TITLE_GAP
+  const top = titleBottom - TITLE_ROOM[form]
+  const bottom = -gridTop + FOOT[form]
+  const box = { w: gridW + SIDE[form], h: bottom - top, cy: (top + bottom) / 2 }
+  return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile }
 }
 
 /** The account's other machines: a row (wrapping) under this Mac's screen (deviceOf · screen), inside the devices camera. */

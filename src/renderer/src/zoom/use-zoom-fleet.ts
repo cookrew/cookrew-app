@@ -23,6 +23,7 @@ import type { WorkspaceList } from '../../../shared/model'
 import type { LevelsAgent, LevelsAttachment, LevelsEvent, LevelsSnapshot, LevelsWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/strata'
 import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
 import { foldLevels } from '../../../strata/fleet/levels-fold'
+import { DECK_SHOWN } from './zoom-model'
 import { cookrew, type CookrewApi } from '../api'
 
 export type ZoomFleetAgent = LevelsAgent
@@ -148,6 +149,19 @@ const liveWorkspace = (workspace: LevelsWorkspace): ZoomFleetWorkspace => ({
   counts: countsOf(workspace),
   newest: workspace.newest ?? lastBrowserOf(workspace)
 })
+
+/**
+ * WHAT A TILE'S DECK SHOWS (owner, 2026-11-04: artifacts on the same page as
+ * the agents, not only numbers): the newest browser on top, then the newest
+ * note, so a workspace of both shows both, then whatever came last. Each thing
+ * once, however many agents wear it.
+ */
+export function deckOf(w: Pick<ZoomFleetWorkspace, 'agents' | 'loose' | 'newest'>): ZoomFleetAttachment[] {
+  const listed = [...w.agents.flatMap((a) => a.attachments ?? []), ...w.loose].reverse()
+  const note = listed.find((a) => a.kind === 'note')
+  const order = [w.newest, note, ...listed].filter((a): a is ZoomFleetAttachment => !!a)
+  return [...new Map(order.map((a) => [a.id, a])).values()].slice(0, DECK_SHOWN)
+}
 
 /** A desktop older than the feed's `newest`: the last browser it lists, its tray before its agents'. */
 function lastBrowserOf(workspace: LevelsWorkspace): LevelsAttachment | null {
@@ -489,7 +503,7 @@ export interface ZoomFleetView {
     online: boolean
     detail: ZoomMachineDetail
     display: MachineDisplay | null
-    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; newest: { id: string; title: string; host: string | null } | null }[]
+    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
   }[]
 }
 
@@ -502,7 +516,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       online: m.online,
       detail: m.detail,
       display: m.display ?? null,
-      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, newest: w.newest ? { id: w.newest.id, title: w.newest.title, host: w.newest.host ?? null } : null }))
+      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))
     }))
   }
 }

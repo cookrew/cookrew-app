@@ -94,6 +94,11 @@
     font-size: var(--ph-control);
     letter-spacing: 0.02em;
   }
+  @media (max-width: 340px) {
+    :root:root .zv-stops button {
+      letter-spacing: 0;
+    }
+  }
   :root:root .zv-cols {
     font-size: var(--ph-caption);
   }
@@ -296,10 +301,15 @@
     font-size: calc(var(--ph-caption) / var(--zv-k-devices, 1));
   }
 
-  /* The workspaces stop: an empty workspace's "no agents", inside its ring. */
-  :root:root .zv-mark-none {
-    font-size: calc(var(--ph-caption) / var(--zv-k-marks, 1));
-    line-height: 1.15;
+  /* The workspaces stop: a tile's name reads as an agent's does, its counts at caption. */
+  :root:root .zv-tile-name {
+    font-size: var(--ph-body);
+  }
+  :root:root .zv-device[data-density='tiny'] .zv-tile-name {
+    font-size: var(--ph-caption);
+  }
+  :root:root :is(.zv-tile-cap, .zv-tile-wait) {
+    font-size: var(--ph-caption);
   }
 
   /* ONE SIZE WHEREVER THE CAMERA IS (owner, 2026-11-03). The painter draws the moving words at
@@ -324,12 +334,12 @@
   :root:root .zv-scene .zv-grp .zv-seal {
     font-size: var(--ph-control);
   }
-  /* The machine's name over its marks as under its screen: title; its counts and hint, caption
+  /* The machine's name over its tiles as under its screen: title; its count, caption
      (drawn 1:1 on screen at the workspaces stop: zoom-camera.ts · deviceWords). */
   :root:root .zv-device-label b {
     font-size: var(--ph-title);
   }
-  :root:root .zv-device-label :is(span, small) {
+  :root:root .zv-device-label span {
     font-size: var(--ph-caption);
   }
   /* The voice bar's keys (ESC, the arrows' row) as the prompt's other buttons. */
