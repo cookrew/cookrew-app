@@ -23,7 +23,7 @@ import {
   type ClaudeTraceAccumulator,
   type TraceBlockAccumulator
 } from '../shared/trace-blocks'
-import { claudeSessionFile } from './claude-fork'
+import { locateClaudeSessionFile } from './claude-fork'
 import { sessionChain } from './session-lineage-walk'
 import { reachableLineage } from './lineage-spill'
 import { isClaudeCommand } from '../shared/claude-fork'
@@ -455,7 +455,7 @@ export class TraceReader {
       .filter((sessionId) => !walked.includes(sessionId))
       .map((sessionId) => ({
         sessionId,
-        file: claudeSessionFile(node.cwd, sessionId, this.options.projectsDir)
+        file: locateClaudeSessionFile(node.cwd, sessionId, this.options.projectsDir)
       }))
       .filter((step) => existsSync(step.file))
   }
@@ -493,7 +493,7 @@ export class TraceReader {
     const currentSid = node.claudeSessionId
     const lineage = node.sessionLineage ?? []
     if (currentSid && lineage.length > 0) {
-      const currentFile = claudeSessionFile(node.cwd, currentSid, this.options.projectsDir)
+      const currentFile = locateClaudeSessionFile(node.cwd, currentSid, this.options.projectsDir)
       if (existsSync(currentFile)) {
         const seg = await this.segmentOfFile(currentFile)
         const firstCurrentIndex = seg.refs[0]?.index ?? 1
@@ -760,7 +760,7 @@ export class TraceReader {
 
   private claudeFile(node: TerminalNodeData): string | null {
     if (!isClaudeCommand(node.command) || !node.claudeSessionId) return null
-    const file = claudeSessionFile(node.cwd, node.claudeSessionId, this.options.projectsDir)
+    const file = locateClaudeSessionFile(node.cwd, node.claudeSessionId, this.options.projectsDir)
     return existsSync(file) ? file : null
   }
 

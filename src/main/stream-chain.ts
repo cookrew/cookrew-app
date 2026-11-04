@@ -21,7 +21,7 @@
 
 import { existsSync } from 'node:fs'
 import { isClaudeCommand } from '../shared/claude-fork'
-import { claudeSessionFile } from './claude-fork'
+import { locateClaudeSessionFile } from './claude-fork'
 import { sessionChain } from './session-lineage-walk'
 import { reachableLineage, type LineageBearingNode } from './lineage-spill'
 import type { TraceKind } from './trace'
@@ -105,7 +105,7 @@ export async function claudeStreamChain(
     .filter((sessionId) => !walkedIds.has(sessionId))
     .map((sessionId) => ({
       sessionId,
-      file: claudeSessionFile(node.cwd, sessionId, options.projectsDir)
+      file: locateClaudeSessionFile(node.cwd, sessionId, options.projectsDir)
     }))
 
   const files: StreamFile[] = []

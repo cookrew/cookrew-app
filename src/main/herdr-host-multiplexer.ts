@@ -230,6 +230,14 @@ const FLUSH_TYPEAHEAD = `perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null`
 export function bootCommand(spec: AttachSpec): string {
   const inner = commandWithArgs(spec)
   return [
+    // The CARD's directory, first. An adopted pane keeps whatever directory
+    // it had, and `pane split --cwd` only helps panes Cookrew creates — the
+    // same reason the env is exported below. Claude files its transcript by
+    // launch directory, so an agent started elsewhere is one whose session
+    // file Cookrew looks for in the wrong place (2026-11-04: eight GOAT Team
+    // agents, every --no-wait ask to them interrupted at 60 s). A cd that
+    // fails leaves the agent where the pane was, as before — never unstarted.
+    `cd ${posixQuote(spec.cwd)}`,
     `export TERM_PROGRAM=Cookrew`,
     `export COOKREW_TERMINAL_ID='${spec.terminalId}'`,
     `export COOKREW_SOCKET='${spec.socketPath}'`,
@@ -241,6 +249,11 @@ export function bootCommand(spec: AttachSpec): string {
     FLUSH_TYPEAHEAD,
     `exec ${inner}`
   ].join('; ')
+}
+
+/** One POSIX shell word: single-quoted, an embedded quote closed, escaped and reopened. */
+function posixQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`
 }
 
 /** Env every Cookrew pane needs, as herdr `--env KEY=VALUE` arguments — the route's too. */

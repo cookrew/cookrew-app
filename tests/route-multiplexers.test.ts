@@ -66,9 +66,11 @@ describe('tmux and herdr boot scripts', () => {
     const before = bootScript(base)
     expect(before).not.toContain('ANTHROPIC')
     expect(before.split('; ')).toHaveLength(6)
-    // Seven: the five exports, the typeahead flush before the exec (2026-11-01:
-    // a slow shell's queued boot lines reached the agent), and the exec.
-    expect(bootCommand(base).split('; ')).toHaveLength(7)
+    // Eight: the cd into the card's cwd (2026-11-04: an adopted pane kept its
+    // old directory and claude filed its transcript there), the five exports,
+    // the typeahead flush before the exec (2026-11-01: a slow shell's queued
+    // boot lines reached the agent), and the exec.
+    expect(bootCommand(base).split('; ')).toHaveLength(8)
   })
 
   it('herdr --env carries the route entries after the five of Cookrew', () => {
