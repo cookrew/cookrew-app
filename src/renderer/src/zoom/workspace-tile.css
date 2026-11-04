@@ -293,6 +293,23 @@
   display: inline;
 }
 
+/* A snug tile keeps the split while it fits, closer together; past that, the total. */
+.zv-device[data-density='snug'] .zv-tile-cap .zv-split {
+  gap: 4px;
+}
+
+.zv-device[data-density='snug'] .zv-tile-cap .zv-split > span {
+  gap: 2px;
+}
+
+.zv-device[data-density='snug'] .zv-tile-cap[data-long] .zv-split {
+  display: none;
+}
+
+.zv-device[data-density='snug'] .zv-tile-cap[data-long] .zv-total {
+  display: inline;
+}
+
 /* "No artifacts" has no room under a smaller deck: a plain zero says it. */
 .zv-device:is([data-density='snug'], [data-density='compact']) .zv-tile-cap em {
   display: none;

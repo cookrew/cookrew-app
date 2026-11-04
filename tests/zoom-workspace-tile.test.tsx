@@ -223,6 +223,11 @@ describe('a tile', () => {
     expect(render(mark())).not.toContain('aria-current')
   })
 
+  it('marks a split too long for a snug tile, which then says the total', () => {
+    expect(render(mark({ browsers: 230, notes: 91 }))).not.toContain('data-long')
+    expect(render(mark({ browsers: 230, notes: 191 }))).toContain('data-long')
+  })
+
   it('counts who is waiting', () => {
     expect(render(mark({ waiting: true, waitingCount: 3 }))).toContain('3 waiting')
     expect(render(mark())).not.toContain('zv-tile-wait')
