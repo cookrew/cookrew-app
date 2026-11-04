@@ -14,7 +14,7 @@ import { mergeActivity } from '../src/renderer/src/turn-view-model'
 import { answerView, keyAction } from '../src/renderer/src/prompt/wait-answer'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from '../src/main/menu-answer'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { answerKeys, choiceId, choiceSig, hasWordsRow, staysOpen, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
+import { answerKeys, choiceId, choiceSig, hasWordsRow, menuHeldOnScreen, staysOpen, waitChoiceOfScreen, type WaitChoice } from '../src/shared/wait-choice'
 import type { TerminalActivity } from '../src/shared/turn'
 
 // herdr's word on the pane, which often lags the screen.
@@ -192,6 +192,42 @@ describe('a menu on the screen is a wait, whatever the pane does to its words', 
     } finally {
       vi.useRealTimers()
     }
+  })
+  // Measured 2026-11-04: a menu up at 43 columns, herdr reading idle, a mirror
+  // attached after a restart: the card read replied, no rows, for good. A TUI
+  // at a menu prints nothing more, and herdr never said blocked.
+  const atRest = (text: string): { session: Quiet; phase: () => string | undefined; turns: TurnTracker } => {
+    const session = new Quiet('t1')
+    session.text = text
+    const turns = new TurnTracker(async () => null)
+    turns.track(session as unknown as PtySession, true)
+    return { session, turns, phase: () => turns.list().find((a) => a.terminalId === 't1')?.phase }
+  }
+  it('a menu found on a screen at rest is a wait, rows and all', () => {
+    const { session, phase, turns } = atRest(NARROW)
+    expect(phase()).toBe('idle')
+    session.emit('parsed')
+    expect(phase()).toBe('waiting')
+    expect(turns.list()[0].waitChoice?.options.length).toBe(6)
+  })
+  it("the owner's own picker is not: it reads as a menu, and no one is waiting on them", () => {
+    // The real shape (ui-command-open.test.ts): a rule between the echo and its rows.
+    const picker = `⏺ DONE\n\n❯ /model\n${'─'.repeat(60)}\n  Select model\n  ❯ 1. Default\n    2. Opus\n  Enter to set as default · Esc to cancel\n`
+    expect(menuHeldOnScreen(picker)).toBe(true)
+    const { session, phase } = atRest(picker)
+    session.emit('parsed')
+    expect(phase()).toBe('idle')
+  })
+  it('a picker nothing names is not either: a wait would reopen a finished turn', () => {
+    const picker = `⏺ DONE\n\n${'─'.repeat(60)}\n  Select model\n  ❯ 1. Default\n    2. Opus\n  Enter to set as default · Esc to cancel\n`
+    const { session, phase } = atRest(picker)
+    session.emit('parsed')
+    expect(phase()).toBe('idle')
+  })
+  it('nor is a plain screen at rest', () => {
+    const { session, phase } = atRest('⏺ Done.\n')
+    session.emit('parsed')
+    expect(phase()).toBe('idle')
   })
   it('a spinner in that beat ends the wait at once', () => {
     vi.useFakeTimers()
