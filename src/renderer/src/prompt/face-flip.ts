@@ -31,10 +31,38 @@ export function clipFrom(from: Box, box: Box): number {
   return Math.max(0, Math.min(box.width, from.left - box.left - 4))
 }
 
-/** Fly the chip's face from the folded face's place; the box opens behind it, the rest fades in. */
-export function flyFace(face: HTMLElement, from: Box, { box, rest }: { box: HTMLElement | null; rest: readonly (HTMLElement | null)[] }): void {
+/**
+ * A menu stands open in the box: fixed, it rides the cover by itself
+ * (rise-anchor.ts), and a transform on the box would make the box its frame
+ * and throw it across the screen for as long as the box moves.
+ */
+export function holdsMenu(box: Element): boolean {
+  return Boolean(box.querySelector?.('.cr-prompt-menu, .cr-tune-menu.open'))
+}
+
+/** Up from the foot ahead of a rising keyboard: quicker than a keyboard, so it is never under it. */
+export const RISE_MS = 220
+
+/** The box stands where the expected keyboard leaves it (keyboard-expect.ts): drawn from the foot, it rises there. */
+export function riseBox(box: HTMLElement | null, rise: number): void {
+  if (!box || !(rise > 0) || typeof box.animate !== 'function' || still() || holdsMenu(box)) return
+  box.animate([{ transform: `translateY(${rise}px)` }, { transform: 'none' }], { duration: RISE_MS, easing: EASE })
+}
+
+/**
+ * Fly the chip's face from the folded face's place; the box opens behind it,
+ * the rest fades in. With a keyboard coming (`rise`) the box rises with it and
+ * the face rides inside it, so the face's own move takes the rise out.
+ */
+export function flyFace(
+  face: HTMLElement,
+  from: Box,
+  { box, rest, rise = 0 }: { box: HTMLElement | null; rest: readonly (HTMLElement | null)[]; rise?: number }
+): void {
   if (typeof face.animate !== 'function') return
+  // Measured before the box starts rising: a running animation moves the rect.
   const move = flipFrom(from, face.getBoundingClientRect())
+  riseBox(box, rise)
   if (!move) return
   for (const el of rest) el?.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: still() ? 120 : 240, delay: still() ? 0 : 140, easing: 'ease-out', fill: 'backwards' })
   if (still()) return
@@ -44,7 +72,7 @@ export function flyFace(face: HTMLElement, from: Box, { box, rest }: { box: HTML
     box.animate([{ clipPath: `inset(0 0 0 ${clipFrom(from, r)}px ${round})` }, { clipPath: `inset(0 0 0 0 ${round})` }], { duration: FLY_MS, easing: EASE })
   }
   face.animate(
-    [{ transform: `translate(${move.dx}px, ${move.dy}px) scale(${move.s})` }, { transform: 'none' }],
+    [{ transform: `translate(${move.dx}px, ${move.dy - rise}px) scale(${move.s})` }, { transform: 'none' }],
     { duration: FLY_MS, easing: EASE }
   )
 }

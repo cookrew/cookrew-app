@@ -139,14 +139,17 @@ body,
    dock rises clear of BOTH and the translucent bar is left showing whatever is
    behind it — a dark card reads as a black stripe between the buttons row and
    the keyboard. Painting the band in the dock's own cream puts app chrome
-   behind that bar instead. Zero-height (so invisible) with no keyboard up. */
+   behind that bar instead. Zero-height (so invisible) with no keyboard up.
+   It paints over the stage and the dock, so it reads --kb-band, the keyboard
+   itself: never a keyboard only expected, or one on its way down
+   (keyboard-expect.ts), when the box and the face are moving through here. */
 .cr-app::after {
   content: '';
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  height: var(--kb-inset, 0px);
+  height: var(--kb-band, 0px);
   background: var(--cream-hi);
   z-index: 40;
   pointer-events: none;

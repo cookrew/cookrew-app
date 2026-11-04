@@ -8,10 +8,20 @@ import type { FacePlace } from './prompt-fold'
  * flyFace: the folded face is drawn from the chip's last place and settles at
  * the bar's end; the open box, hidden by the fold's own commit, is shut by a
  * ghost: a fixed copy of it taken in the render that folds it, while the DOM
- * still showed it open. Transform, clip and opacity only.
+ * still showed it open. The dock paints over the stage, so the ghost would
+ * cover the real face on the bar: a stand-in of the face flies over the ghost
+ * and hands over as it lands. Transform, clip and opacity only.
  */
 
 export const FOLD_MS = 300
+
+/**
+ * With the keyboard up the bar's end is under it, and the page hears of it
+ * going only once it has gone: the flight waits this long, then follows it
+ * down, its easing front-loaded, so the face stays over the keyboard's falling
+ * edge instead of diving behind it.
+ */
+export const KEYBOARD_HOLD_MS = 120
 
 /** Where the box stood: folded or not, the view's place for the face, and whether the face had it then. */
 export interface FoldSeen {
@@ -75,8 +85,14 @@ export function stageGhost(snap: FoldSnapshot, beside: HTMLElement): HTMLElement
   // Open menus (the picker, a harness or name list) leave with the fold, not with the box.
   for (const el of ghost.querySelectorAll('[role="listbox"], [role="menu"], [role="status"], [role="alert"]')) el.remove()
   for (const el of ghost.querySelectorAll<HTMLElement>('.pf-chip-face')) el.style.visibility = 'hidden'
-  const { box } = snap
-  Object.assign(ghost.style, {
+  ghost.style.display = snap.display
+  placeFixed(ghost, snap.box, beside)
+  return ghost
+}
+
+/** Put `el` exactly on `box`, fixed, right after `beside`, out of the pointer's way. */
+function placeFixed(el: HTMLElement, box: Box, beside: HTMLElement): void {
+  Object.assign(el.style, {
     position: 'fixed',
     left: `${box.left}px`,
     top: `${box.top}px`,
@@ -84,15 +100,30 @@ export function stageGhost(snap: FoldSnapshot, beside: HTMLElement): HTMLElement
     height: `${box.height}px`,
     margin: '0',
     boxSizing: 'border-box',
-    display: snap.display,
     pointerEvents: 'none'
   })
-  beside.after(ghost)
+  beside.after(el)
   // A transformed ancestor would carry `fixed` along with it: land it exactly.
-  const at = ghost.getBoundingClientRect()
-  ghost.style.left = `${box.left * 2 - at.left}px`
-  ghost.style.top = `${box.top * 2 - at.top}px`
-  return ghost
+  const at = el.getBoundingClientRect()
+  el.style.left = `${box.left * 2 - at.left}px`
+  el.style.top = `${box.top * 2 - at.top}px`
+}
+
+/**
+ * A copy of the folded face, right over the ghost, to fly in its place. Its
+ * dot stays with the real face, which pops it in on landing. None under reduced
+ * motion: nothing flies.
+ */
+export function stageFlyer(face: HTMLElement, ghost: HTMLElement | null): HTMLElement | null {
+  if (!ghost || still()) return null
+  const flyer = face.cloneNode(true) as HTMLElement
+  for (const name of ['id', 'title', 'aria-describedby', 'aria-label']) flyer.removeAttribute(name)
+  flyer.setAttribute('aria-hidden', 'true')
+  flyer.setAttribute('inert', '')
+  flyer.setAttribute('tabindex', '-1')
+  flyer.querySelector('.pf-dot')?.remove()
+  placeFixed(flyer, face.getBoundingClientRect(), ghost)
+  return flyer
 }
 
 /** How far the box's clip comes in on each side to shut round the face (4px clear of it). */
@@ -135,40 +166,48 @@ function fadeBack(f: Flight, face: HTMLElement, ghost: HTMLElement | null, stop:
   f.play(ghost, [{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: 'ease-out', fill: 'forwards' })?.finished.then(stop, stop)
 }
 
-/** The face from the chip's place to the bar's end (or, with no chip, fading in); its dot pops in as it lands. */
-function landFace(f: Flight, face: HTMLElement, from: Box | null, to: Box, dot: HTMLElement | null): void {
+/** The face (its stand-in, the real one waiting unseen) from the chip's place to the bar's end, or, with no chip, fading in; its dot pops in as it lands. */
+function landFace(f: Flight, face: HTMLElement, flyer: HTMLElement | null, from: Box | null, to: Box, dot: HTMLElement | null, hold: number): void {
   const move = from ? flipFrom(from, to) : null
+  if (flyer) f.play(face, [{ opacity: 0 }, { opacity: 0 }], { duration: hold + FOLD_MS })
+  const flying = flyer ?? face
   if (move) {
     f.play(
-      face,
+      flying,
       [
         { transformOrigin: '0 0', transform: `translate(${move.dx}px, ${move.dy}px) scale(${move.s})` },
         { transformOrigin: '0 0', transform: 'none' }
       ],
-      { duration: FOLD_MS, easing: EASE }
+      { duration: FOLD_MS, delay: hold, easing: EASE, fill: 'backwards' }
     )
-  } else f.play(face, [{ opacity: 0 }, { opacity: 1 }], { duration: FOLD_MS / 2, delay: FOLD_MS / 2, easing: 'ease-out', fill: 'backwards' })
+  } else f.play(flying, [{ opacity: 0 }, { opacity: 1 }], { duration: FOLD_MS / 2, delay: hold + FOLD_MS / 2, easing: 'ease-out', fill: 'backwards' })
   f.play(dot, [{ transform: 'scale(0)' }, { transform: 'scale(1.3)', offset: 0.6 }, { transform: 'none' }], {
     duration: 200,
-    delay: FOLD_MS - 40,
+    delay: hold + FOLD_MS - 40,
     easing: 'ease-out',
     fill: 'backwards'
   })
 }
 
-/** The ghost clips shut onto the face, from where its clip stood, and fades as it closes. */
-function shutBox(f: Flight, ghost: HTMLElement, snap: FoldSnapshot, to: Box): Animation | null {
-  const i = shutInsets(to, snap.box)
+/**
+ * The ghost clips shut onto the face, from where its clip stood, and fades as
+ * it closes. With the keyboard going (`cover`) it sinks with it to the foot,
+ * and shuts there.
+ */
+function shutBox(f: Flight, ghost: HTMLElement, snap: FoldSnapshot, to: Box, cover: number, hold: number): Animation | null {
+  const i = shutInsets(to, { ...snap.box, top: snap.box.top + cover })
   const shut = `inset(${i.top}px ${i.right}px ${i.bottom}px ${i.left}px round ${to.height / 2 + 4}px)`
   const from = snap.clip && snap.clip !== 'none' ? snap.clip : `inset(0px 0px 0px 0px round ${Math.min(24, snap.box.height / 2)}px)`
+  const sunk = cover > 0 ? { transform: `translateY(${cover}px)` } : {}
   return f.play(
     ghost,
     [
-      { clipPath: from, opacity: 1 },
-      { clipPath: shut, opacity: 1, offset: 0.8 },
-      { clipPath: shut, opacity: 0 }
+      { clipPath: from, opacity: 1, ...(cover > 0 ? { transform: 'none' } : {}) },
+      // Late, so its edge rides with the face and only the last of it fades.
+      { clipPath: shut, opacity: 1, offset: 0.95, ...sunk },
+      { clipPath: shut, opacity: 0, ...sunk }
     ],
-    { duration: FOLD_MS, easing: EASE, fill: 'forwards' }
+    { duration: FOLD_MS, delay: hold, easing: EASE, fill: 'both' }
   )
 }
 
@@ -182,22 +221,29 @@ function unrollBar(bar: HTMLElement, to: Box): void {
   })
 }
 
+interface FlyBackParts {
+  readonly dot: HTMLElement | null
+  readonly bar: HTMLElement | null
+  readonly page: { readonly classList: DOMTokenList } | null
+  /** The keyboard's cover as the fold begins: it is going down with the box's focus. */
+  readonly cover?: number
+  /** The face's stand-in over the ghost (stageFlyer). */
+  readonly flyer?: HTMLElement | null
+}
+
 /**
  * Fly the folded face back from the chip's place; the box (its ghost) clips
  * shut onto it, its left edge riding with the face; the draft dot pops in as
- * the face lands. The bar, which paints over the box, holds its chrome back
- * meanwhile (`page` gets cr-prompt-landing: only the face shows on it, as
+ * the face lands. The bar, which would show through the box as it shuts and
+ * fades, holds its chrome back meanwhile (`page` gets cr-prompt-landing, as
  * while the box was open), then clips back open leftward out of the face,
  * the reverse of the box's open, from half-way. The returned function stops
  * it all at once (a re-open mid-flight, the box going away): the bar comes
  * back without unrolling.
  */
-export function flyBack(
-  face: HTMLElement,
-  snap: FoldSnapshot,
-  { dot, bar, page }: { dot: HTMLElement | null; bar: HTMLElement | null; page: { readonly classList: DOMTokenList } | null }
-): () => void {
+export function flyBack(face: HTMLElement, snap: FoldSnapshot, { dot, bar, page, cover = 0, flyer = null }: FlyBackParts): () => void {
   const ghost = snap.ghost
+  const hold = cover > 0 ? KEYBOARD_HOLD_MS : 0
   const f = flight()
   let done = false
   let guard: ReturnType<typeof setTimeout> | null = null
@@ -207,6 +253,7 @@ export function flyBack(
     if (guard !== null) clearTimeout(guard)
     for (const run of f.runs) run.cancel?.()
     ghost?.remove()
+    flyer?.remove()
     page?.classList.remove(LANDING)
   }
   if (typeof face.animate !== 'function') {
@@ -215,16 +262,16 @@ export function flyBack(
   }
   // An animation settles only on a frame: a hidden page never paints one, so
   // the ghost is let go on time regardless.
-  if (ghost) guard = setTimeout(stop, (still() ? 120 : FOLD_MS) + 150)
+  if (ghost) guard = setTimeout(stop, (still() ? 120 : hold + FOLD_MS) + 150)
   if (still()) {
     fadeBack(f, face, ghost, stop)
     return stop
   }
   const to = face.getBoundingClientRect()
-  landFace(f, face, snap.face, to, dot)
+  landFace(f, face, flyer, snap.face, to, dot, hold)
   if (!ghost) return stop
   if (bar) page?.classList.add(LANDING)
-  shutBox(f, ghost, snap, to)?.finished.then(stop, stop)
+  shutBox(f, ghost, snap, to, cover, hold)?.finished.then(stop, stop)
   // Half-way the box has all but shut into the face (the easing front-loads
   // the move): the bar clips back open out of it, over what is left. Timed on
   // the flight's own clock (a still half-length run), so a slowed or paused
@@ -234,7 +281,7 @@ export function flyBack(
     page?.classList.remove(LANDING)
     if (bar) unrollBar(bar, to)
   }
-  f.play(ghost, [{ transform: 'none' }, { transform: 'none' }], { duration: FOLD_MS / 2 })?.finished.then(reveal, () => undefined)
+  f.play(ghost, [], { duration: FOLD_MS / 2, delay: hold })?.finished.then(reveal, () => undefined)
   return stop
 }
 
