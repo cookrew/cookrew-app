@@ -36,6 +36,7 @@ import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
 import { adoptRequestPictures } from './picture-adopt'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
+import { cmdBrowserScoped } from './cli-browser'
 import {
   DeliveryError,
   deliverAndConfirm,
@@ -127,6 +128,13 @@ export interface SocketServerDeps {
     terminalId: string
     workspaceId: string
   }) => { name: string; adopted: boolean }
+  /**
+   * True when browser cards are node-owned headless pages held by main, so a
+   * card of ANY workspace can be driven whatever the window shows
+   * (cli-browser.ts). Absent/false: the renderer's webviews, which exist only
+   * for the canvas on screen.
+   */
+  browserAnyWorkspace?: () => boolean
   notify: (message: string) => void
   /** Debug helper: capture the app window to a PNG, returns the file path. */
   captureWindow: () => Promise<string>
@@ -546,6 +554,25 @@ export function tryCallerWorkspaceId(
   }
 }
 
+/**
+ * A card of the CALLER's canvas by name — the canvas on screen only for a
+ * caller no workspace holds (a plain shell, a registry-only identity). Owner
+ * ruling 2026-11-04: what a command sees never depends on what the window
+ * shows, and a same-named card on screen must never be the one acted on.
+ */
+function callerCanvasNodeByName(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  name: string,
+  kind?: CanvasNode['kind']
+): CanvasNode | undefined {
+  const workspaceId = tryCallerWorkspaceId(request, deps) ?? deps.store.focusedId
+  const wanted = name.toLowerCase()
+  return deps.store
+    .workspaceState(workspaceId)
+    .nodes.find((n) => n.name.toLowerCase() === wanted && (kind === undefined || n.kind === kind))
+}
+
 function requireOrch(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
   const me = self(request, deps)
   if (!me.orch) throw new Error('This terminal is not the Orch')
@@ -709,6 +736,30 @@ export function cliWorkspaceScope(input: {
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
+  // Owner ruling 2026-11-04: every workspace works on its own. With the
+  // headless engine nothing about a browser depends on the canvas on screen.
+  if (deps.browserAnyWorkspace?.()) {
+    return cmdBrowserScoped({
+      me,
+      args: request.args,
+      flags: request.flags,
+      store: deps.store,
+      served: deps.isServed(me.id),
+      createScope: () => {
+        const homeId = deps.store.ownerOf(me.id)
+        return cliWorkspaceScope({
+          wanted: typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null,
+          all: deps.listWorkspaces().workspaces,
+          caller: homeId === undefined ? null : { id: homeId, name: workspaceName(deps, homeId) },
+          focused: deps.store.focusedId
+        })
+      },
+      browserCommand: deps.browserCommand,
+      createElsewhere: deps.createBrowserInWorkspace,
+      wire: (otherId, via) => wire(deps, me, otherId, via),
+      signal: deps.signal
+    })
+  }
   // DELIBERATELY focus, not the caller's workspace. Everything below resolves
   // through focused-scoped lookups (node/nodeByName) and browserCommand drives
   // the engine this process actually booted, so `active` here means "where a
@@ -930,8 +981,14 @@ function cmdListCanvas(request: CliRequest, deps: SocketServerDeps): string {
   const activeId = scope.id
   const nodes = deps.store.workspaceState(activeId).nodes
   const wsName = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)?.name ?? activeId
+  // The listed workspace's own cables — never the canvas on screen's.
+  const { connections } = deps.store.workspaceState(activeId)
   const terminalNames = (id: string): string[] =>
-    deps.store.connectedTo(id).filter((n) => n.kind === 'terminal').map((n) => n.name)
+    connections
+      .filter((c) => c.a === id || c.b === id)
+      .map((c) => nodes.find((n) => n.id === (c.a === id ? c.b : c.a)))
+      .filter((n): n is CanvasNode => n !== undefined && n.kind === 'terminal')
+      .map((n) => n.name)
   const lines: string[] = [`Everything on "${wsName}" (${nodes.length} card${nodes.length === 1 ? '' : 's'}):`]
   for (const kind of ['terminal', 'note', 'browser'] as const) {
     const group = nodes.filter((n) => n.kind === kind)
@@ -1309,7 +1366,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   }
 }
 
-function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   requireOrch(request, deps)
   const [fromName, toName] = request.args
   if (!fromName || !toName) throw new Error('Usage: cookrew connect "From" "To"')
@@ -1318,7 +1375,7 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   const resolve = (name: string): CanvasNode => {
     const found =
       reach.find((n) => n.name.toLowerCase() === name.toLowerCase()) ??
-      deps.store.nodeByName(name)
+      callerCanvasNodeByName(request, deps, name)
     if (!found) throw new Error(`'${name}' not found`)
     return found
   }
@@ -1563,12 +1620,12 @@ function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
  * flag could only be set at creation, which made "make X the orch" impossible
  * without destroying and recreating the card (and its session with it).
  */
-function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
   const name = request.args[0]
   if (!name) throw new Error('Usage: cookrew orch "Agent"')
-  const node = deps.store.nodeByName(name, 'terminal')
+  const node = callerCanvasNodeByName(request, deps, name, 'terminal')
   if (!node) throw new Error(`No terminal named '${name}' on the canvas`)
-  const workspaceId = (deps.store.workspaceOfNode(node.id) ?? deps.store.activeMeta()).id
+  const workspaceId = deps.store.ownerOf(node.id) ?? deps.store.focusedId
   const demoted: string[] = []
   for (const other of deps.store.workspaceState(workspaceId).nodes) {
     if (other.kind !== 'terminal' || other.id === node.id) continue
@@ -1876,7 +1933,7 @@ async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<str
   }
 }
 
-function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, agentName, roleName] = request.args
   switch (sub) {
     case 'list': {
@@ -1890,7 +1947,7 @@ function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
       if (!agentName || !roleName) {
         throw new Error('Usage: cookrew role save "Agent" "RoleName" --prompt "role instructions"')
       }
-      const node = deps.store.nodeByName(agentName, 'terminal')
+      const node = callerCanvasNodeByName(request, deps, agentName, 'terminal')
       if (!node) throw new Error(`No terminal named '${agentName}' on the canvas`)
       const prompt = request.flags.prompt
         ? String(request.flags.prompt)

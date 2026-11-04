@@ -139,5 +139,49 @@ describe('HeadlessBrowserCommandEngine', () => {
     await engine.run(['navigate', 'Shared', 'adb://default'], 'agent-1')
     expect(instance.navigate).toHaveBeenLastCalledWith('adb://default')
   })
-})
 
+  describe('a caller in a workspace that is not on screen (owner ruling 2026-11-04)', () => {
+    // Every workspace works on its own: driving or making a browser card
+    // follows the CALLER's workspace, never the canvas the window shows.
+    function scopedEngine(): { engine: HeadlessBrowserCommandEngine; home: string; shown: string } {
+      const home = store.focusedId
+      const shown = store.createWorkspace('Shown', '/tmp').id
+      store.switchWorkspace(shown)
+      const scoped = new HeadlessBrowserCommandEngine({
+        store,
+        manager,
+        addNode: (node, workspaceId) => store.addNode(node, workspaceId),
+        updateNode: (id, patch) => store.updateNode(id, patch),
+        connectNodes: (a, b) => void store.connectAcross(a, b),
+        resolveBrowser: (name, terminalId) => {
+          const ws = store.ownerOf(terminalId)
+          if (ws === undefined) return undefined
+          return store.workspaceState(ws).nodes.find(
+            (n): n is BrowserNodeData => n.kind === 'browser' && n.name === name
+          )
+        },
+        homeOf: (terminalId) => store.ownerOf(terminalId)
+      })
+      return { engine: scoped, home, shown }
+    }
+
+    it('drives a card of the caller\'s own workspace while another is shown', async () => {
+      const { engine: scoped } = scopedEngine()
+      await expect(scoped.run(['evaluate', 'Shared', 'document.title'], terminal().id)).resolves.toBe('shared-token')
+      expect(manager.syncNode).toHaveBeenCalledWith(expect.objectContaining({ id: browser().id }))
+    })
+
+    it('creates the card in the caller\'s own workspace, beside it and wired', async () => {
+      const { engine: scoped, home, shown } = scopedEngine()
+      await expect(scoped.run(['create', 'https://example.test/x', 'Away'], terminal().id)).resolves.toMatch(/Away/)
+      const made = store.workspaceState(home).nodes.find((n) => n.name === 'Away')
+      expect(made).toBeDefined()
+      expect(made?.position).toEqual({ x: 10 + 640 + 80, y: 20 })
+      expect(store.workspaceState(shown).nodes.some((n) => n.name === 'Away')).toBe(false)
+      expect(store.workspaceState(home).connections).toEqual(
+        expect.arrayContaining([expect.objectContaining({ a: terminal().id, b: made?.id })])
+      )
+      expect(manager.syncNode).toHaveBeenCalledWith(expect.objectContaining({ name: 'Away' }))
+    })
+  })
+})
