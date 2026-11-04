@@ -188,8 +188,8 @@ describe('keys into a held menu, against the input box guards', () => {
 })
 
 describe('the phone answers a menu in a dispatched turn', () => {
-  const route = async (path: string, body: unknown): Promise<{ status: number; body: unknown }> => {
-    const deps = { pairingToken: 'pairing-token-invented', hasArmedDispatch: () => true } as unknown as MobileApiDeps
+  const route = async (path: string, body: unknown, armed = true): Promise<{ status: number; body: unknown }> => {
+    const deps = { pairingToken: 'pairing-token-invented', hasArmedDispatch: () => armed, ptys: { get: () => undefined }, holdInput: () => true } as unknown as MobileApiDeps
     const server = http.createServer((request, response) => {
       const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
       void handleMobileApi(request, response, url, deps).then((handled) => {
@@ -225,6 +225,22 @@ describe('the phone answers a menu in a dispatched turn', () => {
     for (const seq of ['\r', 'rm -rf x\r', '\x1b[200~', '']) {
       expect((await route('/api/terminal/t1/menu', { menu: 'm', act: { kind: 'key', seq } })).status).toBe(400)
     }
+  })
+  it("the owner's Esc interrupts a dispatched turn from the phone, as the keyboard does", async () => {
+    for (const data of ['\x1b', '\x1b\x1b']) {
+      expect(await route('/api/terminal/t1/raw', { data })).toEqual({ status: 200, body: { ok: true } })
+    }
+  })
+  it('a batch already typed answers as typed when it comes again under a new dispatch', async () => {
+    const batch = { data: 'hello', id: 'page.retry1' }
+    expect((await route('/api/terminal/t9/raw', batch, false)).status).toBe(200)
+    expect((await route('/api/terminal/t9/raw', batch, true)).status).toBe(200)
+  })
+  it('nothing else rides /raw past the dispatch', async () => {
+    for (const data of ['hello', '\r', '\x1b[A', '\x1b\r', 'x\x1b', '']) {
+      expect((await route('/api/terminal/t1/raw', { data })).status).toBe(409)
+    }
+    expect((await route('/api/terminal/t1/raw', {})).status).toBe(409)
   })
   it('a new prompt is still held back by the same dispatch', async () => {
     const reply = await route('/api/terminal/t1/input', { data: 'hello' })

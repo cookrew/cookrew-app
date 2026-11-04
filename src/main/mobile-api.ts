@@ -1,3 +1,4 @@
+import { createEnterPacing } from "./enter-pacing";
 import { answerMenuRequest, parseMenuRequest } from "./menu-answer";
 import type http from "node:http";
 import type { TerminalSession } from "./terminal-session";
@@ -568,6 +569,17 @@ export function spendBootNonce(nonce: string | null, now = Date.now()): boolean 
     if (oldest === undefined) break;
     spentBootNonces.delete(oldest);
   }
+  return true;
+}
+
+/** The owner's Esc, alone; the raw queue batches a double tap into one request. */
+const BARE_ESC = /^\x1b+$/;
+const paceEnter = createEnterPacing();
+
+const DISPATCH_IN_FLIGHT = "agent has a dispatch in flight";
+
+function dispatchInFlight(response: http.ServerResponse): true {
+  respondJson(response, 409, { error: DISPATCH_IN_FLIGHT });
   return true;
 }
 
@@ -1549,14 +1561,14 @@ export async function handleMobileApi(
   // the keyboard outranks the machinery.
   // /menu stays outside: a menu answer feeds the turn already running (a
   // dispatched turn waits on exactly that) and never enters the input box.
-  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw)$/);
+  // /raw answers below, once its bytes are read: the owner's Esc goes through.
+  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask)$/);
   if (
     httpProducerMatch &&
     method === "POST" &&
     deps.hasArmedDispatch?.(httpProducerMatch[1]) === true
   ) {
-    respondJson(response, 409, { error: "agent has a dispatch in flight" });
-    return true;
+    return dispatchInFlight(response);
   }
 
   // An answer to a waiting agent's menu: checked against its screen, so a
@@ -1595,6 +1607,11 @@ export async function handleMobileApi(
     const session = ptys.get(terminalId);
     if (method === "POST" && ptyMatch[2] === "raw") {
       const body = await readJson<{ data?: string; id?: string }>(request);
+      // A dispatch holds /raw back, all but Esc (owner, 2026-11-04: a phone
+      // interrupts a dispatched turn as the keyboard does). It types nothing
+      // into the box, and the guard below still stops it mid-delivery.
+      const held = (): boolean => deps.hasArmedDispatch?.(terminalId) === true && !BARE_ESC.test(body.data ?? "");
+      if (typeof body.data !== "string" && held()) return dispatchInFlight(response);
       if (typeof body.data === "string") {
         const data = body.data;
         // /raw is a producer (Sol r7 P0-2): its bytes can be a prompt plus
@@ -1609,12 +1626,14 @@ export async function handleMobileApi(
         //
         // A batch the phone sent again after getting no answer carries the
         // same id, and is typed once (once-by-key.ts).
-        const submit = async (): Promise<RawVerdict> =>
-          deps.holdInput?.(terminalId, data) === true
-            ? { ok: true, submitted: false }
-            : session
-              ? ownerSubmit(session, data)
-              : null;
+        const submit = async (): Promise<RawVerdict> => {
+          // Inside the once: a batch already typed that comes again under a new
+          // dispatch answers as typed, or its words read as never sent.
+          if (held()) return { ok: false, reason: DISPATCH_IN_FLIGHT };
+          await paceEnter(terminalId, data);
+          if (deps.holdInput?.(terminalId, data) === true) return { ok: true, submitted: false };
+          return session ? ownerSubmit(session, data) : null;
+        };
         const verdict =
           typeof body.id === "string" && BATCH_ID.test(body.id)
             ? await rawInputOnce(`${terminalId}:${body.id}`, submit)

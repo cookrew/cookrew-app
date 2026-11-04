@@ -929,7 +929,7 @@ describe('POST /api/terminal/:id/{input,ask,raw} while a dispatch is armed', () 
         stubRequest('POST', { text: 'a competing prompt' }),
         response,
         url(`/api/terminal/term-1/${route}`),
-        { hasArmedDispatch: (id: string) => id === 'term-1' } as unknown as MobileApiDeps
+        { hasArmedDispatch: (id: string) => id === 'term-1', ptys: { get: () => undefined } } as unknown as MobileApiDeps
       )
       expect(handled).toBe(true)
       expect(captured.status).toBe(409)
