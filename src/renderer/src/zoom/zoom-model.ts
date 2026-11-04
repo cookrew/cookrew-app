@@ -160,7 +160,7 @@ export function itemViewOf(n: CanvasNode, owners: string[]): ItemView | null {
 export interface ZoomInput {
   nodes: readonly CanvasNode[]
   connections: readonly Connection[]
-  /** Every workspace's rows: the other workspaces' marks are drawn from them. */
+  /** Every workspace's rows, gone agents included: the other workspaces' marks fall back on them where `crews` has none. */
   rows: readonly AgentRow[]
   /** This workspace's crew (agent-rows.ts · crewOf): its agents. */
   crew: readonly AgentRow[]
@@ -168,6 +168,8 @@ export interface ZoomInput {
   workspaces: readonly WorkspaceMeta[]
   /** Each workspace's browsers and notes, where its desktop's feed counts them (use-zoom-fleet.ts). */
   counts?: ReadonlyMap<string, { browsers: number; notes: number }>
+  /** Who each workspace holds now, where its desktop's feed seats it: a tile's count, faces and waiting. */
+  crews?: ReadonlyMap<string, readonly SeatedAgent[]>
   /** What each workspace's deck shows, newest first, where its desktop's feed names it. */
   decks?: ReadonlyMap<string, readonly DeckSource[]>
   /** False while the open workspace's canvas is still on its way: `nodes` is empty for lack of it. */
@@ -186,6 +188,13 @@ export interface ZoomInput {
     workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number } | null }[]
   }[]
 }
+
+/** An agent as its desktop's feed seats it. */
+export interface SeatedAgent {
+  harness: string
+  phase: string
+}
+const waitingIn = (phases: readonly string[]): number => phases.filter((p) => p === 'waiting').length
 
 /** A thing a tile's deck shows, as its desktop's feed names it. */
 export interface DeckSource {
@@ -270,11 +279,17 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   const marks: MarkView[] = input.workspaces
     .filter((w) => w.id !== input.activeId)
     .map((w) => {
-      const rows = input.rows.filter((r) => r.workspaceId === w.id)
+      // The feed seats who is there now; the roster, all it knows without one, also keeps every agent it ever held.
+      const seated = input.crews?.get(w.id)
+      const rows = seated ? [] : input.rows.filter((r) => r.workspaceId === w.id)
+      const presets = seated ? seated.map((a) => a.harness) : rows.map((r) => r.preset)
       const counted = input.counts?.get(w.id)
-      const waitingCount = rows.filter((r) => r.phase === 'waiting').length
-      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: waitingCount > 0, waitingCount, browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, deck: (input.decks?.get(w.id) ?? []).map(deckView) }
+      const waitingCount = waitingIn((seated ?? rows).map((a) => a.phase))
+      return { id: w.id, name: w.name, presets, waiting: waitingCount > 0, waitingCount, browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, deck: (input.decks?.get(w.id) ?? []).map(deckView) }
     })
+  // The open workspace's crew, until its canvas comes: the feed's, or its tile would say "no agents".
+  const openSeated = input.loaded === false ? input.crews?.get(input.activeId) : undefined
+  const openWaiting = waitingIn((openSeated ?? agents).map((a) => a.phase))
   const order = input.workspaces.map((w) => w.id)
   if (!order.includes(input.activeId)) order.unshift(input.activeId)
 
@@ -301,9 +316,9 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     openMark: {
       id: input.activeId,
       name: input.name,
-      presets: agents.map((a) => a.preset),
-      waiting: agents.some((a) => a.phase === 'waiting'),
-      waitingCount: agents.filter((a) => a.phase === 'waiting').length,
+      presets: openSeated ? openSeated.map((a) => a.harness) : agents.map((a) => a.preset),
+      waiting: openWaiting > 0,
+      waitingCount: openWaiting,
       // Its canvas not read yet: unknown, not empty.
       browsers: input.loaded === false ? null : all.filter((n) => n.kind === 'browser').length,
       notes: input.loaded === false ? null : all.filter((n) => n.kind === 'note').length,
