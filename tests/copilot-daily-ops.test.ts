@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { collectLane, safeMerge, stopGroup } from '../scripts/copilot-daily-ops.mjs'
+import { collectLane, safeMerge, stopGroup, takeLock } from '../scripts/copilot-daily-ops.mjs'
 
 const git = (cwd: string, ...args: string[]): string =>
   spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).stdout.trim()
@@ -118,6 +118,18 @@ describe('landing a lane', () => {
     git(tree, 'commit', '-qm', 'lane')
     expect(safeMerge({ repo, branch: 'daily/x', message: 'land' }).merged).toBe(false)
     expect(readFileSync(path.join(repo, '.git', 'MERGE_HEAD'), 'utf8')).toBe(theirs)
+  })
+})
+
+describe('one run at a time', () => {
+  it('turns the second caller away until the first lets go', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'daily-lock-'))
+    const lock = path.join(dir, 'run.lock')
+    expect(takeLock(lock)).toBe(true)
+    expect(takeLock(lock)).toBe(false)
+    rmSync(lock, { recursive: true })
+    expect(takeLock(lock)).toBe(true)
+    rmSync(dir, { recursive: true, force: true })
   })
 })
 

@@ -41,6 +41,7 @@ const GATE_STEP_LIMIT_MS = 30 * 60_000
 const BUSY_POLL_MS = 5 * 60_000
 const BUSY_LIMIT_MS = 3 * 3_600_000
 const STALE_LANE_MS = 7 * 86_400_000
+const STALE_LOCK_MS = 6 * 3_600_000
 const MAX_BUFFER = 256 * 1024 * 1024
 const NOISY_EVENT = /^(assistant\.(tool_call|message)_delta|session\.background_tasks_changed|tool\.execution_partial_result)$/
 
@@ -336,6 +337,18 @@ export function runSession({ cwd, prompt, model, token, cap, startRemaining, log
       resolve({ message, stopped, code })
     })
   })
+}
+
+/** One run at a time. A lock left by a killed run stops holding after six hours. */
+export function takeLock(lock) {
+  mkdirSync(path.dirname(lock), { recursive: true })
+  if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock, { recursive: true })
+  try {
+    mkdirSync(lock)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Timing suites fail and tsc crawls on a saturated machine, so a lane waits for room. */

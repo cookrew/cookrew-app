@@ -13,36 +13,24 @@
  * how a lane is held apart. This runner merges into dev only when nothing got
  * worse, and never pushes. History is in ~/.cookrew/copilot-daily/history.jsonl.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import {
   acceptLane, dailyBudget, hardCap, mergeBlockers, ownerTask, pickTask, summaryOf, trustedIssues, weakenedTests
 } from './copilot-daily-lib.mjs'
 import {
   GITHUB_REPO, REPO, STATE, accountToken, collectLane, fetchQuota, gh, git, notify, openLanes, removeTree, run,
-  runGates, runSession, safeMerge, say, sweepStale, syncWithDev, waitForRoom
+  runGates, runSession, safeMerge, say, sweepStale, syncWithDev, takeLock, waitForRoom
 } from './copilot-daily-ops.mjs'
 
 const MIN_CREDITS = 15
 const DAY_MS = 86_400_000
-const STALE_LOCK_MS = 6 * 3_600_000
 const LOCK = path.join(STATE, 'run.lock')
 const HISTORY = path.join(STATE, 'history.jsonl')
 
 function option(name) {
   const at = process.argv.indexOf(name)
   return at === -1 ? undefined : process.argv[at + 1]
-}
-
-function takeLock() {
-  mkdirSync(STATE, { recursive: true })
-  if (existsSync(LOCK) && Date.now() - statSync(LOCK).mtimeMs > STALE_LOCK_MS) rmSync(LOCK, { recursive: true })
-  try {
-    mkdirSync(LOCK)
-    return true
-  } catch {
-    return false
-  }
 }
 
 function history() {
@@ -167,7 +155,7 @@ function status() {
 
 async function main() {
   if (process.argv.includes('--status')) return status()
-  if (!takeLock()) return say('another lane is running')
+  if (!takeLock(LOCK)) return say('another lane is running')
   try {
     return await daily()
   } finally {
