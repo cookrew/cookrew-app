@@ -1,5 +1,5 @@
 /* ── A WORKSPACE'S TILE (WorkspaceTile.tsx; owner, 2026-11-04) ──
-   One bench: the agents' ring on the left, the artifacts' deck on the right,
+   One bench: the agents' faces on the left, the artifacts' deck on the right,
    a name over both, each group a door. Everything is placed in a mark's units
    (zoom-layout.ts · TILE, DECK_POSE, TILE_SPLIT: keep the numbers here with
    them). What must look the same at every per-row pick (the hairline, the
@@ -21,7 +21,6 @@
   pointer-events: none;
 }
 
-.zv-mark .zv-ring,
 .zv-mark .zv-av {
   will-change: auto;
 }
@@ -29,9 +28,9 @@
 .zv-tile {
   position: absolute;
   left: -112px;
-  top: var(--zv-tile-top, -186px);
+  top: var(--zv-tile-top, -174px);
   width: 430px;
-  height: var(--zv-tile-h, 350px);
+  height: var(--zv-tile-h, 318px);
   border-radius: var(--zv-tile-r);
   background: var(--zv-card);
   box-shadow:
@@ -51,8 +50,8 @@
   appearance: none;
   position: absolute;
   z-index: 20;
-  top: var(--zv-tile-top, -186px);
-  height: var(--zv-tile-h, 350px);
+  top: var(--zv-tile-top, -174px);
+  height: var(--zv-tile-h, 318px);
   margin: 0;
   padding: 0;
   border: 0;
@@ -116,7 +115,7 @@
   box-shadow: 0 calc(1px * var(--zv-k, 1)) calc(2.5px * var(--zv-k, 1)) var(--zv-shadow);
 }
 
-/* Its edge in the ring's ink: the two groups weigh the same on the tile. */
+/* Its edge in the faces' ink: the two groups weigh the same on the tile. */
 .zv-sheet.zv-th::before {
   box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-rule);
 }
@@ -190,7 +189,7 @@
 
 .zv-tile-name {
   left: calc(-112px + var(--zv-pad) * var(--zv-k, 1));
-  top: calc(var(--zv-tile-top, -186px) + 7px * var(--zv-k, 1));
+  top: calc(var(--zv-tile-top, -174px) + 7px * var(--zv-k, 1));
   /* The frame's width in a word's own px, less the margins. */
   max-width: calc(430px / var(--zv-k, 1) - 2 * var(--zv-pad));
   overflow: hidden;
@@ -203,7 +202,7 @@
 /* Who is waiting, in the corner, in the red that always says so. */
 .zv-tile-wait {
   right: calc(-318px + 7px * var(--zv-k, 1));
-  top: calc(var(--zv-tile-top, -186px) + 7px * var(--zv-k, 1));
+  top: calc(var(--zv-tile-top, -174px) + 7px * var(--zv-k, 1));
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
@@ -222,7 +221,7 @@
 
 .zv-tile-cap {
   /* The frame's foot, from the mark's origin: its top and height are the pick's (tileOf). */
-  top: calc(var(--zv-tile-top, -186px) + var(--zv-tile-h, 350px) - 23px * var(--zv-k, 1));
+  top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1));
   display: flex;
   align-items: center;
   gap: 5px;

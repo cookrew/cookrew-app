@@ -1,13 +1,13 @@
 // THE WORKSPACES STOP IS ONE GRID OF TILES (owner, 2026-11-04, a 360px Samsung:
 // the title ran under PER ROW, the labels ran over each other, the seals were
 // squeezed, and a workspace's artifacts were only numbers). A tile holds its
-// two groups on one page: agents in the ring, artifacts in a deck of real
+// two groups on one page: agents in a fan, artifacts in a deck of real
 // things, each its own door, the open workspace in the same form.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { deviceCam, deviceWords, SWS } from '../src/renderer/src/zoom/zoom-frame'
-import { deviceOf, DECK_POSE, fanOf, stackOf, TILE, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
+import { BENCH, deviceOf, DECK_POSE, fanOf, stackOf, TILE, tileOf, TILE_SPLIT } from '../src/renderer/src/zoom/zoom-layout'
 import { deckOf } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { deckDepth, sameTile, WorkspaceTile } from '../src/renderer/src/zoom/WorkspaceTile'
 import { buildZoomModel, type MarkView } from '../src/renderer/src/zoom/zoom-model'
@@ -33,22 +33,24 @@ describe('the tiles', () => {
     expect(d.at.w6.x).toBeCloseTo(d.at.w0.x, 6)
   })
 
-  it('hold the ring and the deck inside the frame, the door between them', () => {
+  it('hold the faces and the deck inside the frame, the door between them', () => {
     const half = (168 * DECK_POSE.s) / 2
-    expect(TILE.left).toBeLessThan(-90)
+    const fan = fanOf(6).map((p) => p.x)
+    const face = 32 * fanOf(6)[0].s
+    expect(TILE.left).toBeLessThan(Math.min(...fan) - face)
     expect(DECK_POSE.x + half).toBeLessThan(TILE.left + TILE.w)
-    expect(TILE_SPLIT).toBeGreaterThan(90)
+    expect(TILE_SPLIT).toBeGreaterThan(Math.max(...fan) + face)
     expect(TILE_SPLIT).toBeLessThan(DECK_POSE.x - half)
   })
 })
 
 describe("a tile's frame at a pick", () => {
-  it("leaves the name and the counts their lines, off the ring, at a phone's every pick", () => {
+  it("leaves the name and the counts their lines, off the groups, at a phone's every pick", () => {
     for (const [cols, density] of [[2, 'roomy'], [3, 'compact'], [4, 'tiny'], [5, 'tiny']] as const) for (const [w, h] of PHONES) {
       const d = deviceOf(ids(8), true, undefined, cols)
       const px = SWS * deviceCam(d, w, h, true).S
-      const head = (-100 - d.tile.top) * px
-      const foot = (d.tile.top + d.tile.h - 80) * px
+      const head = (BENCH.top - d.tile.top) * px
+      const foot = (d.tile.top + d.tile.h - BENCH.bottom) * px
       expect(head, `${cols} at ${w}`).toBeGreaterThanOrEqual(density === 'tiny' ? 18 : 24)
       if (density !== 'tiny') expect(foot, `${cols} at ${w}`).toBeGreaterThanOrEqual(22)
     }
@@ -58,7 +60,7 @@ describe("a tile's frame at a pick", () => {
     const d = deviceOf(ids(3), true, undefined, 5)
     expect(d.tile).toEqual(tileOf(true, 3))
     const px = SWS * deviceCam(d, 360, 724, true).S
-    expect((d.tile.top + d.tile.h - 80) * px).toBeGreaterThanOrEqual(22)
+    expect((d.tile.top + d.tile.h - BENCH.bottom) * px).toBeGreaterThanOrEqual(22)
   })
 
   it('keeps one frame on a desk', () => {
@@ -81,13 +83,13 @@ describe('the phone camera at the workspaces stop', () => {
     }
   })
 
-  it('scrolls a tall grid at the same scale, its words still off the rings', () => {
+  it('scrolls a tall grid at the same scale, its words still off the groups', () => {
     for (const n of [13, 20, 30]) {
       const d = deviceOf(ids(n), true)
       const cam = deviceCam(d, 360, 724, true)
       expect(cam.S).toBeCloseTo(deviceCam(deviceOf(ids(4), true), 360, 724, true).S, 6)
       expect(cam.panMax).toBeGreaterThan(0)
-      expect((-100 - d.tile.top) * SWS * cam.S).toBeGreaterThanOrEqual(24)
+      expect((BENCH.top - d.tile.top) * SWS * cam.S).toBeGreaterThanOrEqual(24)
       const end = deviceCam(d, 360, 724, true, 1e6)
       expect(end.Oy + -d.gridTop * end.S).toBeLessThanOrEqual(724 - 58)
     }
@@ -233,12 +235,20 @@ describe('a tile', () => {
     expect(render(mark())).not.toContain('zv-tile-wait')
   })
 
-  it('leaves the ring and the faces to the scene when open', () => {
+  it('leaves the faces to the scene when open', () => {
     const html = render(mark(), true)
     expect(html).toContain('data-open="true"')
-    expect(html).not.toContain('zv-ring')
     expect(html).not.toContain('zv-av')
-    expect(render(mark())).toContain('zv-ring')
+    expect(render(mark())).toContain('zv-av')
+  })
+
+  // Owner, 2026-11-04: "the circle round the agents can go". The faces stand on the tile by themselves.
+  it('draws no ring round the agents, open or not, nor does the scene', () => {
+    expect(render(mark())).not.toContain('zv-ring')
+    expect(render(mark(), true)).not.toContain('zv-ring')
+    const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
+    expect(view).not.toContain("bind('ring')")
+    expect(readFileSync('src/renderer/src/zoom/zoom-frame.ts', 'utf8')).not.toContain('els.ring')
   })
 })
 

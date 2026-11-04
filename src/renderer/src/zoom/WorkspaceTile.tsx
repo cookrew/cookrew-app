@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { InkAvatar, InkRing } from './InkAvatar'
+import { InkAvatar } from './InkAvatar'
 import { Counts, Page, type Bind } from './ZoomParts'
 import { sameProps } from './same-props'
 import { DECK_POSE, fanOf } from './zoom-layout'
@@ -9,11 +9,11 @@ import './workspace-tile.css'
 /**
  * A WORKSPACE'S TILE (owner, 2026-11-04: "how the agents group and the
  * artifacts group show on one page"). One bench, one name, two groups, each
- * its own door: the agents' ring opens the crew, the artifacts' deck deals out
+ * its own door: the agents' faces open the crew, the artifacts' deck deals out
  * the grid. The doors say what they open, so the stop needs no hint line, and
  * every word lives inside the frame, so no label can run over its neighbour's.
  *
- * Every workspace draws this, the open one too: there the ring and its faces
+ * Every workspace draws this, the open one too: there the faces
  * are the scene's own, standing in the tile, so the tile goes and they go on
  * opening (zoom-frame.ts). The painter draws `.zv-tw` words at one size on
  * screen (paintDeviceWords); the rest rides the camera.
@@ -71,9 +71,6 @@ export const WorkspaceTile = memo(function WorkspaceTile({ mark, open = false, b
       <div className="zv-tile" />
       {!open && (
         <>
-          <div className="zv-ring" style={{ transform: 'translate(0px, -10px)' }}>
-            <InkRing seed={3 + mark.name.length} />
-          </div>
           {shown.map((preset, i) => (
             <div key={i} className="zv-av zv-mark-av" style={{ transform: `translate(${fan[i].x}px, ${fan[i].y}px) rotate(${fan[i].r}deg) scale(${fan[i].s})`, zIndex: i }}>
               <InkAvatar id={`${mark.id}:${i}`} preset={preset} />

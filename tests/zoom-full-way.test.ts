@@ -29,7 +29,7 @@ const nums = (t: string | undefined, fn: string): number[] =>
 function run(model: FrameModel, sv: number, w: number, h: number, narrow: boolean) {
   const agents = new Map(model.agents.map((a) => [a.id, agentEls()] as const))
   const els = {
-    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
+    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), label: part(), newCap: part(), machine: part(),
     labelW: 200, labelH: 24, agents, links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null, fullHead: part()
   } as unknown as FrameEls
   paint(model, layoutOf(model, narrow), els, { dir: 'agents', sv, focus: model.agents[0].id, leaving: null, leavingAmt: 0, focusItem: null, w, h, narrow })

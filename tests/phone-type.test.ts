@@ -36,7 +36,7 @@ function frameAt(model: FrameModel, w: number, h: number, sv: number, narrow = t
   const agents = new Map(model.agents.map((a) => [a.id, agentParts()] as const))
   const markLabels = [part(), part()]
   const els = {
-    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
+    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), label: part(), newCap: part(), machine: part(),
     labelW: 200, labelH: 24, agents, links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null,
     deviceLabel: part(), markLabels, machineWords: [part()]
   } as unknown as FrameEls

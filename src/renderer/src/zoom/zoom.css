@@ -390,23 +390,6 @@
   );
 }
 
-.zv-ring {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 220px;
-  height: 220px;
-  margin: -110px 0 0 -110px;
-  pointer-events: none;
-  will-change: transform, opacity;
-}
-
-.zv-ring svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
 /* A cable between two terminals: 400 long at scale 1, stretched from its left end. */
 .zv-tie {
   position: absolute;
