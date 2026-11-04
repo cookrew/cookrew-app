@@ -1,0 +1,40 @@
+⏺ User answered Claude's questions:
+  ⎿  · Which tower should we climb? → Pisa
+
+⏺ GOT=Pisa
+
+✻ Sautéed for 7s · done 7:48 PM
+
+❯ Run this with the Bash tool: cookrew note
+  create "mq-scratch-note" . Then call
+  AskUserQuestion, ONE question, header
+  "pick", text "Which lamp should we light?",
+  options "Red lamp" (description "Warm."),
+  "Green lamp" (description "Cool."), "Blue
+  lamp" (description "Cold."). After the
+  answer reply exactly GOT= and the answer,
+  then stop.
+
+⏺ Bash(cookrew note create "mq-scratch-note")
+  ⎿  Waiting…
+
+───────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you
+ — choose "switch to auto mode" below
+ Create a Cookrew note named mq-scratch-note
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ cookrew note create "mq-scratch-note"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+   1. Yes
+ ❯ 2. Yes, and don’t ask again for: cookrew
+                                    note *1
+   3. Yes, and switch to auto mode · auto mode
+      handles these prompts for you
+   4. No
+
+ Esc to cancel
+──────────────────── create-verify-notes-file ─

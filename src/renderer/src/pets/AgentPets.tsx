@@ -3,7 +3,8 @@ import { inkStatusOfRow } from '../zoom/ink-status'
 import { InkAvatar } from '../zoom/InkAvatar'
 import type { AttachmentIndex } from '../terminal-attachments'
 import type { Crew } from '../stage/crew-rows'
-import { AgentCard } from '../zoom/AgentCard'
+import { activityStore } from '../activity-thumb-store'
+import { AgentPetCard } from './AgentPetCard'
 import { agentViewOf, itemViewOf } from '../zoom/zoom-model'
 import { petMax, pickPets, type Pet, type PetMood } from './pet-pick'
 import { useOfToolLine, type ToolUse } from '../../../shared/use-signal'
@@ -100,14 +101,14 @@ export function AgentPets({
       more={column.more.map(member)}
       dockable={dock !== null}
       onOpen={onOpen}
-      cardClass={(id) => `ag-ink ag-card ${byId.get(id)?.mood ?? ''}`}
+      cardClass={(id) => (activityStore.get(id)?.waitChoice ? 'wc-card needs' : `ag-ink ag-card ${byId.get(id)?.mood ?? ''}`)}
       cardLabel={(id) => `${byId.get(id)?.row.name ?? 'Agent'}'s card`}
       renderCard={(id, controls) => {
         const pet = byId.get(id)
         if (!pet) return null
         const items = (attachIndex.get(id) ?? []).flatMap((a) => itemViewOf(a.node, [id]) ?? [])
         return (
-          <AgentCard
+          <AgentPetCard
             agent={agentViewOf(pet.row, attachIndex)}
             items={items}
             onOpen={controls.open}
@@ -120,6 +121,7 @@ export function AgentPets({
                 : undefined
             }
             onDraft={controls.draft}
+            onClose={controls.close}
             onItem={(itemId) => {
               controls.close()
               onOpen(itemId)

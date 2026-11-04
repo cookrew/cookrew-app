@@ -119,6 +119,18 @@ describe('a menu on the screen is a wait, whatever the pane does to its words', 
       herdr.status = null
     }
   })
+  it('a digit pressed at the menu leaves nothing in the box: the agent is not "composing" (F11)', () => {
+    const { session, turns } = held()
+    session.emit('input', '2')
+    expect((turns as unknown as { tracked: Map<string, { promptBuffer: string }> }).tracked.get('t1')?.promptBuffer).toBe('')
+    expect(turns.ownerComposing('t1')).toBe(false)
+  })
+  it('the same digit with no menu up is the owner typing, as ever', () => {
+    const { session, turns } = held()
+    session.text = 'Which file should I open?\n'
+    session.emit('input', '2')
+    expect(turns.ownerComposing('t1')).toBe(true)
+  })
   it('a free question still resumes on output, as ever', () => {
     const { session, phase } = held()
     session.text = 'Which file should I open?\n'
