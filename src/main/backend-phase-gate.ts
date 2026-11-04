@@ -16,6 +16,11 @@
  *
  * A pane that cannot be read leaves herdr's word standing, and a null (idle,
  * done, gone) always passes at once: retracting is never wrong.
+ *
+ * WAITING, the pane is the only place a mirrorless card can read the menu from
+ * (shared/wait-choice.ts), so it is handed on (`menu`), and read again while
+ * the word holds: a first read may catch a menu half drawn, and an answer given
+ * through a mirror since gone leaves the next question up with no word from herdr.
  */
 import { uiCommandOpen } from '../shared/turn'
 import type { TurnPhase } from '../shared/turn'
@@ -23,6 +28,10 @@ import type { TurnPhase } from '../shared/turn'
 const RECHECK_MS = 2000
 /** A picker left open for minutes is not worth a pane read every 2 s forever. */
 const MAX_RECHECKS = 150
+/** A menu settling just after herdr's word, then the pace of the watch, for half an hour of one word. */
+const MENU_SETTLE_MS = 1500
+const MENU_WATCH_MS = 6000
+const MAX_MENU_READS = 300
 
 export interface BackendPhaseGateDeps {
   /** The pane's recent text, or null when it cannot be read. */
@@ -31,6 +40,8 @@ export interface BackendPhaseGateDeps {
   current: (terminalId: string) => TurnPhase | null
   /** Hand the checked phase on (TurnTracker.observeBackendPhase). */
   apply: (terminalId: string, phase: TurnPhase | null, agent: boolean) => void
+  /** Read the menu of a terminal waiting on the human. */
+  menu?: (terminalId: string) => Promise<void>
   schedule?: (run: () => void, ms: number) => unknown
   cancel?: (handle: unknown) => void
 }
@@ -42,8 +53,9 @@ export interface BackendPhaseGate {
 export function createBackendPhaseGate(deps: BackendPhaseGateDeps): BackendPhaseGate {
   const schedule = deps.schedule ?? ((run, ms) => setTimeout(run, ms))
   const cancel = deps.cancel ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
-  /** Bumped on every observation, so a read that lands late is dropped. */
+  /** A number per observation, never reused, so a read that lands late is dropped. */
   const seq = new Map<string, number>()
+  let observed = 0
   const timers = new Map<string, unknown>()
   /** The last word seen per terminal: the oracle sweep repeats it, and a repeat is no news. */
   const last = new Map<string, string>()
@@ -55,12 +67,31 @@ export function createBackendPhaseGate(deps: BackendPhaseGateDeps): BackendPhase
     timers.delete(terminalId)
   }
 
+  /** Read the waiting pane again, as long as the same word holds. */
+  const watchMenu = (terminalId: string, mine: number, ms: number, reads = 0): void => {
+    timers.set(
+      terminalId,
+      schedule(() => {
+        timers.delete(terminalId)
+        if (seq.get(terminalId) !== mine || deps.current(terminalId) !== 'waiting') return
+        const next = (): void => {
+          if (seq.get(terminalId) === mine && reads < MAX_MENU_READS) watchMenu(terminalId, mine, MENU_WATCH_MS, reads + 1)
+        }
+        void Promise.resolve(deps.menu?.(terminalId)).then(next, next)
+      }, ms)
+    )
+  }
+
   const check = (terminalId: string, phase: TurnPhase, agent: boolean, mine: number, tries = 0): void => {
     void deps.read(terminalId).then(
       (screen) => {
         if (seq.get(terminalId) !== mine) return
         if (screen === null || !uiCommandOpen(screen)) {
           deps.apply(terminalId, phase, agent)
+          if (phase === 'waiting' && deps.menu) {
+            void deps.menu(terminalId).catch(() => undefined)
+            watchMenu(terminalId, mine, MENU_SETTLE_MS)
+          }
           return
         }
         deps.apply(terminalId, null, agent)
@@ -97,7 +128,8 @@ export function createBackendPhaseGate(deps: BackendPhaseGateDeps): BackendPhase
       if (last.get(terminalId) === word) return
       last.set(terminalId, word)
       clearTimer(terminalId)
-      const mine = (seq.get(terminalId) ?? 0) + 1
+      observed += 1
+      const mine = observed
       seq.set(terminalId, mine)
       // A tracked agent is checked too: a detach hands the stored phase to a
       // card with no mirror, so nothing unchecked may be stored.

@@ -612,7 +612,9 @@ export class PtySession extends EventEmitter {
         // process exit can arrive before viewportText contains its final error.
         this.attachOutputTail = (this.attachOutputTail + data).slice(-8192)
         this.lastOutputAt = Date.now()
-        this.screen.write(data)
+        // Parsed later than this line: what reads the screen for its meaning
+        // (a menu, main/turn-tracker.ts) waits for 'parsed', or it reads the last frame.
+        this.screen.write(data, () => this.emit('parsed'))
         this.emit('data', data)
       } catch (error) {
         console.error('PTY data handling failed:', error)
@@ -730,6 +732,32 @@ export class PtySession extends EventEmitter {
     // through here, so turn tracking can observe prompts uniformly.
     this.emit('input', data)
     return 'allow'
+  }
+
+  /**
+   * Keys answering the agent's own menu (main/menu-answer.ts). The owner's
+   * guard holds as for any key, but they never reach the agent's input box, so
+   * they do not dirty it and the tracker does not read them as a prompt being
+   * typed: a digit here would show up as a draft, and refuse the next dispatch.
+   */
+  writeMenuKeys(data: string): OwnerInputVerdict {
+    if (this.disposed) return 'refused'
+    const verdict = this.beforeOwnerInput?.(this.terminalId, data) ?? 'allow'
+    if (verdict !== 'allow') {
+      this.lastRefusalInfo = { verdict, at: Date.now() }
+      return verdict
+    }
+    this.lastRefusalInfo = null
+    this.proc.write(data)
+    return 'allow'
+  }
+
+  /** The screen once everything received so far is parsed: xterm parses after write returns. */
+  settledViewport(): Promise<string> {
+    return new Promise((resolve) => {
+      if (this.disposed) return resolve('')
+      this.screen.write('', () => resolve(this.viewportText()))
+    })
   }
 
   /**

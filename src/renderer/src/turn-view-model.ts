@@ -192,5 +192,5 @@ export function mergeActivity(
   if (incoming.mirrorless !== true || !known || known.mirrorless === true) return incoming
   // Still marked: the words are a mirror's, but the PHASE is the
   // multiplexer's guess, and the marker is what says so.
-  return { ...known, mirrorless: true, phase: incoming.phase, updatedAt: incoming.updatedAt }
+  return { ...known, mirrorless: true, phase: incoming.phase, waitChoice: incoming.waitChoice, updatedAt: incoming.updatedAt }
 }

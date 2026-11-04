@@ -13,9 +13,21 @@
  *         nothing much after it: a numbered list in a reply is not a menu.
  *   yn    a confirm ending the screen: "(y/n)?", "[Y/n]", npx's "(y)".
  *
+ * A QUESTION TOOL (AskUserQuestion) has more in it (tests/wait-choice-tabs.test.ts,
+ * keys measured on a live pane): a tab row of questions, a question with no
+ * "?", descriptions under each row, a row to type in, a chat row, and in a
+ * multi-select ticks and an unnumbered Submit. It can run to 30 lines on a
+ * narrow pane, so the whole screen is read here (waitChoiceOfScreen), not the
+ * activity's summary tail.
+ *
  * Read against real panes, Claude Code 2.1.316 and codex-cli 0.166.0
  * (tests/fixtures/wait-choice). Pure: no DOM, no terminal.
  */
+
+import { cleanTurnLines, stripTermNoise } from './turn'
+
+/** What a row does beyond picking: a tick, words typed in it, the multi-select's Submit, leaving to chat. */
+export type WaitRole = 'toggle' | 'type' | 'submit' | 'chat'
 
 export interface WaitOption {
   /** The key on the row: its number, or y / n. */
@@ -23,6 +35,16 @@ export interface WaitOption {
   readonly label: string
   /** A line under it (a question tool's description, a hint after " · "). */
   readonly detail: string | null
+  /** Absent: the row picks. */
+  readonly role?: WaitRole
+  /** A multi-select row's tick. */
+  readonly checked?: boolean
+}
+
+/** One answer on a question tool's Review tab. */
+export interface WaitReview {
+  readonly question: string
+  readonly answer: string
 }
 
 export interface WaitChoice {
@@ -35,6 +57,10 @@ export interface WaitChoice {
   readonly cursor: number | null
   /** The row that is the TUI's own Esc ("No", "Tell Claude what to change"): Esc, then type. */
   readonly escIndex: number | null
+  /** A question tool's tabs: how many of its questions are answered. */
+  readonly steps?: { readonly done: number; readonly total: number }
+  /** What the Review tab says will be sent. */
+  readonly review?: readonly WaitReview[]
 }
 
 const OPTION_RE = /^(\s*)([❯›>▶►]\s*)?(\d{1,2})[.)]\s+(\S.*)$/
@@ -50,6 +76,19 @@ const QUESTION_REACH = 10
  * echo (❯ or › not before a number).
  */
 const STOP_RE = /^\s*(?:[╌┄┈─━-]{6,}|[⏺●•☐☒]\s|[❯›]\s+(?!\d{1,2}[.)]\s))/
+/** A question tool's tab row: "←  ☒ dns-edge  ☐ scope  ✔ Submit  →". */
+const TABS_RE = /^\s*←\s.*[☐☒].*→\s*$/
+/** A multi-select's Submit: no number, its own cursor. */
+const SUBMIT_RE = /^\s*([❯›>▶►]\s*)?Submit\s*$/
+const TICK_RE = /^\[([ xX✔✓])\]\s+(.*)$/
+const CHAT_RE = /^chat about this\b/i
+const TYPE_RE = /^type something\.?$/i
+const QUOTE_RE = /^\s*[│┃]\s?/
+/** Most lines a question tool's question runs to. */
+const TOOL_QUESTION_REACH = 16
+/** How far up a screen a menu is looked for. */
+const SCREEN_TAIL = 80
+const FRAME_RE = /^[─━]{30,}/
 /** An entry of the transcript or a prompt echo: what came before this question. */
 const ENTRY_RE = /^\s*(?:[⏺●•]\s|[❯›]\s+(?!\d{1,2}[.)]\s))/
 const HEADING_RE = /^\s*[☐☒]\s*/
@@ -79,6 +118,7 @@ interface Row {
   readonly cursor: boolean
   readonly text: string
   readonly more: string[]
+  readonly submit?: true
 }
 
 const isBlank = (line: string): boolean => line.trim() === ''
@@ -105,6 +145,12 @@ function blocksOf(lines: readonly string[]): Array<{ rows: Row[]; end: number }>
     }
     if (!open || !last) return
     if (isBlank(line)) return
+    const submit = SUBMIT_RE.exec(line)
+    if (submit && TICK_RE.test(last.text)) {
+      open.rows.push({ at, indent: last.indent, number: last.number, cursor: submit[1] !== undefined, text: 'Submit', more: [], submit: true })
+      open.end = at + 1
+      return
+    }
     // Deeper than the row's number: its wrap, its description, its hint.
     if (line.search(/\S/) > last.indent + 1) {
       last.more.push(line.trim())
@@ -116,15 +162,23 @@ function blocksOf(lines: readonly string[]): Array<{ rows: Row[]; end: number }>
   return blocks
 }
 
+const CJK_RE = /[\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff00-\uff60]/u
+/** Wrapped lines back into one: Chinese takes no space where the pane broke it. */
+function joined(parts: readonly string[]): string {
+  return parts.reduce((text, part) => (text === '' ? part : `${text}${CJK_RE.test(text.at(-1) ?? '') && CJK_RE.test(part[0] ?? '') ? '' : ' '}${part}`), '')
+}
+
 /** A row's label and the line under it, hints out. */
 function optionOf(row: Row, key: string): WaitOption {
-  const [head, ...tail] = row.text.split(' · ')
+  const tick = TICK_RE.exec(row.text)
+  const [head, ...tail] = (tick ? tick[2] : row.text).split(' · ')
   const extra = [...(tail.length ? [tail.join(' · ')] : []), ...row.more].map((l) => l.replace(HINT_RE, '').trim()).filter((l) => l !== '' && !HINT_LINE_RE.test(l))
   // A wrapped label goes on in lower case; a description starts a sentence.
   const wraps = extra.length > 0 && /^[a-z(`]/.test(extra[0]) && row.more.length > 0 && tail.length === 0
   const label = (wraps ? `${head} ${extra[0]}` : head).replace(HINT_RE, '').trim()
   const rest = wraps ? extra.slice(1) : extra
-  return { key, label, detail: rest.length ? rest.join(' ') : null }
+  const option: WaitOption = { key, label, detail: rest.length ? joined(rest) : null }
+  return tick ? { ...option, role: 'toggle', checked: tick[1] !== ' ' } : option
 }
 
 /** The question: the topmost line asking something in the region over the rows, cut at its last "?". */
@@ -133,10 +187,10 @@ function questionOver(lines: readonly string[], top: number): { text: string; at
   for (let at = top - 1; at >= Math.max(0, top - QUESTION_REACH); at -= 1) {
     const line = lines[at]
     if (STOP_RE.test(line)) break
-    if (line.includes('?')) found = { text: line.trim(), at }
+    if (/[?？]/.test(line)) found = { text: line.trim(), at }
   }
   if (!found) return null
-  let text = found.text.slice(0, found.text.lastIndexOf('?') + 1)
+  let text = found.text.slice(0, Math.max(found.text.lastIndexOf('?'), found.text.lastIndexOf('？')) + 1)
   // A question the pane wrapped: its first half sits above, unfinished.
   for (let at = found.at - 1, n = 0; at >= 0 && n < 2; at -= 1, n += 1) {
     const above = lines[at].trim()
@@ -144,6 +198,46 @@ function questionOver(lines: readonly string[], top: number): { text: string; at
     text = `${above} ${text}`
   }
   return { text, at: found.at }
+}
+
+/** The tool's tab row over the rows, if it has one. */
+function tabsOver(lines: readonly string[], top: number): string | null {
+  return lines.slice(Math.max(0, top - TOOL_QUESTION_REACH - 4), top).findLast((l) => TABS_RE.test(l)) ?? null
+}
+
+/** A question tool's question: all of it, its quote bar out, whatever it ends in. */
+function toolQuestion(lines: readonly string[], top: number): { text: string; at: number } | null {
+  const said: string[] = []
+  let at = top
+  for (let i = top - 1; i >= Math.max(0, top - TOOL_QUESTION_REACH); i -= 1) {
+    const line = lines[i]
+    if (TABS_RE.test(line) || STOP_RE.test(line)) break
+    if (isBlank(line)) continue
+    said.unshift(line.replace(QUOTE_RE, '').trim())
+    at = i
+  }
+  return said.length ? { text: joined(said), at } : null
+}
+
+/** The Review tab: its question is the last line over the rows, the answers above it. */
+function reviewOver(lines: readonly string[], top: number): { asked: { text: string; at: number }; review: WaitReview[] } | null {
+  const from = lines.slice(0, top).findLastIndex((l) => /^\s*review your answers\s*$/i.test(l))
+  if (from < 0) return null
+  const askAt = lines.slice(0, top).findLastIndex((l) => !isBlank(l))
+  if (askAt <= from) return null
+  const review: WaitReview[] = []
+  let question: string[] = []
+  for (const line of lines.slice(from + 1, askAt)) {
+    const text = line.trim()
+    if (text === '') continue
+    if (text.startsWith('→')) {
+      review.push({ question: joined(question), answer: text.replace(/^→\s*/, '') })
+      question = []
+      continue
+    }
+    question = [...question, text.replace(/^[●•]\s*/, '')]
+  }
+  return { asked: { text: lines[askAt].trim(), at: askAt }, review }
 }
 
 /** The plain heading over the rows when nothing asks ("☐ Color"). */
@@ -201,21 +295,44 @@ function menuOf(lines: readonly string[]): WaitChoice | null {
   if (cursor === null && !after.some((l) => FOOTER_RE.test(l))) return null
 
   const top = block.rows[0].at
-  const asked = questionOver(lines, top)
+  const tabs = tabsOver(lines, top)
+  const tool = tabs !== null || askedByTool(lines, top, after)
+  const reviewed = tool ? reviewOver(lines, top) : null
+  const asked = reviewed?.asked ?? (tool ? toolQuestion(lines, top) : null) ?? questionOver(lines, top)
   // A cursor and no menu footer: only a real question makes it a menu (a
   // prompt echo "❯ 1. rename foo" is a cursor-looking row too).
   const footed = after.some((l) => FOOTER_RE.test(l))
   if (!footed && !asked) return null
   const question = asked?.text ?? headingOver(lines, top)
   if (!question) return null
-  const options = block.rows.map((row) => optionOf(row, String(row.number)))
+  const options = withRoles(block.rows.map((row) => (row.submit ? { key: '', label: row.text, detail: null, role: 'submit' as const } : optionOf(row, String(row.number)))), tool)
   const marked = block.rows.findIndex((r) => /\(esc\)\s*$/i.test(r.text))
   // Claude's "No" and "Tell Claude what to change" ARE its Esc (measured on
   // 2.1.316: either one rejects and hands the prompt back to be typed in).
-  const escByWord = askedByTool(lines, top, after) ? -1 : options.map((o) => ESC_LABEL_RE.test(o.label)).lastIndexOf(true)
+  const escByWord = tool ? -1 : options.map((o) => ESC_LABEL_RE.test(o.label)).lastIndexOf(true)
   const escIndex = marked >= 0 ? marked : escByWord >= 0 ? escByWord : null
   const sub = asked ? subOver(lines, asked.at, top, lines[asked.at]) : subOver(lines, top, top, question)
-  return { kind: 'menu', question, sub: sub === question ? null : sub, options, cursor, escIndex }
+  const steps = tabs === null ? null : { done: (tabs.match(/☒/g) ?? []).length, total: (tabs.match(/[☐☒]/g) ?? []).length }
+  return {
+    kind: 'menu',
+    question,
+    sub: sub === question ? null : sub,
+    options,
+    cursor,
+    escIndex,
+    ...(steps ? { steps } : {}),
+    ...(reviewed ? { review: reviewed.review } : {})
+  }
+}
+
+/** A question tool's last rows: the row to type in stands before Submit or the chat row, whatever words it holds. */
+function withRoles(options: readonly WaitOption[], tool: boolean): WaitOption[] {
+  if (!tool) return [...options]
+  const chat = options.findIndex((o) => CHAT_RE.test(o.label))
+  const submit = options.findIndex((o) => o.role === 'submit')
+  const end = submit >= 0 ? submit : chat
+  const typed = end > 0 ? end - 1 : options.findIndex((o) => TYPE_RE.test(o.label))
+  return options.map((option, i) => (i === chat ? { ...option, role: 'chat' } : i === typed ? { ...option, role: 'type' } : option))
 }
 
 function confirmOf(lines: readonly string[]): WaitChoice | null {
@@ -248,26 +365,122 @@ export function parseWaitChoice(lines: readonly string[]): WaitChoice | null {
   return menuOf(lines) ?? confirmOf(lines)
 }
 
-const DOWN = '\x1b[B'
-const UP = '\x1b[A'
-export const ESC = '\x1b'
+const WIDE_RE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]|[\u{1f300}-\u{1faff}]/u
+
+/** A line cut at a column: a Chinese character takes two. */
+function clipped(line: string, width: number): string {
+  let at = 0
+  let col = 0
+  for (const ch of line) {
+    col += WIDE_RE.test(ch) ? 2 : 1
+    if (col > width) return line.slice(0, at)
+    at += ch.length
+  }
+  return line
+}
 
 /**
- * The keys a row sends into the agent's terminal: its number for a menu row,
- * the Esc row too (Claude Code and Codex both take a number at once, wherever
- * the cursor is; Claude's "No" does what Esc does, measured), arrows from the
- * cursor and Enter past 9, a letter and Enter for a confirm. Null when the row
- * cannot be reached.
+ * The TUI's own width: the rule nearest over the menu's last row. A pane once
+ * wider keeps old text right of what the TUI redraws, and it would read as part
+ * of the rows; older rules further up may be of another width altogether.
  */
-export function choiceKeys(choice: WaitChoice, index: number): string | null {
+function frameWidth(lines: readonly string[]): number | null {
+  const lastRow = lines.findLastIndex((l) => OPTION_RE.test(l))
+  const rule = (lastRow < 0 ? lines : lines.slice(0, lastRow + 1)).findLast((l) => FRAME_RE.test(l)) ?? lines.findLast((l) => FRAME_RE.test(l))
+  return rule ? (FRAME_RE.exec(rule)?.[0].length ?? null) : null
+}
+
+/**
+ * The menu a whole screen shows (the tracker's viewport, a pane read): its
+ * last lines, cut to the TUI's frame. Null when it shows none.
+ */
+export function waitChoiceOfScreen(screen: string): WaitChoice | null {
+  const lines = stripTermNoise(screen).split('\n').slice(-SCREEN_TAIL)
+  const width = frameWidth(lines)
+  const framed = width === null ? lines : lines.map((line) => clipped(line, width))
+  return parseWaitChoice(cleanTurnLines(framed.join('\n')))
+}
+
+const DOWN = '\x1b[B'
+const UP = '\x1b[A'
+const LEFT = '\x1b[D'
+const RIGHT = '\x1b[C'
+export const ESC = '\x1b'
+
+/** What is asked of a menu. The main process turns it into keys against the screen as it stands (main/menu-answer.ts). */
+export type MenuAct =
+  | { readonly kind: 'row'; readonly index: number }
+  | { readonly kind: 'esc' }
+  | { readonly kind: 'step'; readonly dir: -1 | 1 }
+  | { readonly kind: 'words'; readonly text: string }
+
+const onWordsRow = (choice: WaitChoice): boolean => choice.cursor !== null && choice.options[choice.cursor]?.role === 'type'
+const ticks = (choice: WaitChoice): boolean => choice.options.some((o) => o.role === 'toggle')
+
+/**
+ * What a row sends, one entry per write. Measured on Claude Code 2.1.316:
+ * a digit takes a row at once, wherever the cursor is, but on the row to type
+ * in a digit is a word, so from there rows are reached by arrows and Enter. In
+ * a multi-select a digit on the words row only ticks it, and Submit has no
+ * digit. Enter goes in a write of its own: in one burst with arrows the TUI
+ * took the Enter on the row it started from.
+ */
+function rowKeys(choice: WaitChoice, index: number): string[] | null {
   const option = choice.options[index]
   if (!option) return null
-  if (choice.kind === 'yn') return `${option.key}\r`
-  if (index < 9) return String(index + 1)
-  if (choice.cursor === null) return null
-  const step = index - choice.cursor
-  return (step > 0 ? DOWN : UP).repeat(Math.abs(step)) + '\r'
+  if (choice.kind === 'yn') return [`${option.key}\r`]
+  const moved = (): string | null => {
+    if (choice.cursor === null) return null
+    const step = index - choice.cursor
+    return (step > 0 ? DOWN : UP).repeat(Math.abs(step))
+  }
+  const thenEnter = (): string[] | null => {
+    const moves = moved()
+    if (moves === null) return null
+    return moves ? [moves, '\r'] : ['\r']
+  }
+  if (option.role === 'type') {
+    if (index === choice.cursor) return []
+    if (!ticks(choice)) return [option.key]
+    const moves = moved()
+    return moves === null ? null : [moves]
+  }
+  if (option.role === 'submit' || onWordsRow(choice) || option.key.length !== 1) return thenEnter()
+  // The row's own number: an unnumbered Submit stands between rows.
+  return [option.key]
 }
+
+/** Row words typed from the box go to: move there, clear what it holds, type them, Enter where that takes it. */
+function wordsKeys(choice: WaitChoice, text: string): string[] | null {
+  const index = choice.options.findIndex((o) => o.role === 'type')
+  const move = index < 0 ? null : rowKeys(choice, index)
+  if (move === null) return null
+  // Measured: words go in at the row's caret; Ctrl-E Ctrl-U empties it from any place.
+  const clear = TYPE_RE.test(choice.options[index].label) ? [] : ['\x05\x15']
+  // A multi-select's words tick their row, and Enter there would untick it.
+  return [...move, ...clear, text, ...(ticks(choice) ? [] : ['\r'])]
+}
+
+/** The writes an act makes of this menu, in order; null when it cannot be done. */
+export function answerKeys(choice: WaitChoice, act: MenuAct): string[] | null {
+  if (act.kind === 'esc') return [ESC]
+  if (act.kind === 'row') return rowKeys(choice, act.index)
+  if (act.kind === 'words') return wordsKeys(choice, act.text)
+  // On the words row ← → are the caret's: step off it first.
+  const arrow = act.dir < 0 ? LEFT : RIGHT
+  return onWordsRow(choice) ? [UP, arrow] : [arrow]
+}
+
+/** A row's keys as one string. */
+export function choiceKeys(choice: WaitChoice, index: number): string | null {
+  return rowKeys(choice, index)?.join('') ?? null
+}
+
+/** A tick or a move to the words row: the menu stays up, showing what changed. */
+export const staysOpen = (option: WaitOption | undefined): boolean => option?.role === 'toggle' || option?.role === 'type'
+
+/** The row the box's words would go to, if the menu has one. */
+export const hasWordsRow = (choice: WaitChoice | null): boolean => choice?.options.some((o) => o.role === 'type') ?? false
 
 /**
  * The row a key pressed with the box empty answers: its digit, or a lower-case
@@ -278,7 +491,16 @@ export function keyChoice(choice: WaitChoice, key: string): number | null {
   return at >= 0 ? at : null
 }
 
+/**
+ * Which menu this is, ticks and typed words aside: what an answer names, so
+ * the main process can refuse it if the screen has moved on (two quick ticks
+ * are still the same menu).
+ */
+export function choiceId(choice: WaitChoice): string {
+  return [choice.kind, choice.question, choice.sub ?? '', ...choice.options.map((o) => (o.role === 'type' ? '\u0001' : o.label))].join('\u0000')
+}
+
 /** One question, wherever its cursor stands: an answered one is known when it shows again. */
 export function choiceSig(choice: WaitChoice): string {
-  return [choice.kind, choice.question, choice.sub ?? '', ...choice.options.map((o) => o.label)].join('\u0000')
+  return [choice.kind, choice.question, choice.sub ?? '', ...choice.options.map((o) => `${o.checked ? '✓' : ''}${o.label}`)].join('\u0000')
 }

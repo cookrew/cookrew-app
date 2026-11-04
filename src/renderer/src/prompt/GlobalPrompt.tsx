@@ -53,7 +53,7 @@ import { ItemRefChip } from './ItemRefChip'
 import { InkAvatar } from '../zoom/InkAvatar'
 import { WhoPicker } from './WhoPicker'
 import { WaitChoices } from './WaitChoices'
-import { useWaitAnswer } from './wait-answer'
+import { useWaitAnswer, type WaitAnswering } from './wait-answer'
 import { promptBox } from './box-focus'
 import './global-prompt.css'
 
@@ -455,6 +455,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
 
   // What Enter or Send does with the words (send-plan.ts): nothing in an empty box.
   const plan = sendPlan({ text, to, fullAgentId, mention: mentionTarget(text, agents) })
+  /** The wait on show (declared below, with the rest of it). */
+  const waitRef = useRef<WaitAnswering | null>(null)
   const submit = (): void => {
     setError(null)
     // The key dips only when its press sends something.
@@ -473,6 +475,18 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     if (plan.kind === 'agent') {
       // A bare Enter only where its terminal is in sight (send-plan.ts).
       const out = said(withItemRef(plan.words, attachedItem, artifacts))
+      // A menu is on the screen: words typed at it would land as keys, and
+      // their Enter would pick whatever row the cursor is on.
+      const menu = waitRef.current
+      if (menu?.menu && out.words.trim()) {
+        if (!menu.wordsRow) return setError('Answer the menu first: a row, or Esc.')
+        // Cleared now, not when it lands: a second Enter must find nothing to send.
+        setText('')
+        menu.sendWords(out.words)
+        wireRefs(plan.id, out.refs)
+        toast.leave(nameOf(plan.id), shownWords(plan.words))
+        return
+      }
       submitLine(plan.id, out.words.trim() ? out.words : '')
       wireRefs(plan.id, out.refs)
       toast.leave(nameOf(plan.id), shownWords(plan.words))
@@ -518,6 +532,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   // THE WAIT CHOICE BOX (WaitChoices.tsx): the menu the agent waits on, over
   // the box; its Esc row (and a bar card's) hands over to typing here.
   const wait = useWaitAnswer(to?.id ?? null, focusBox)
+  waitRef.current = wait
   useEffect(() => promptBox.register(() => inputRef.current?.focus()), [])
 
   // THE FOLD (prompt-fold.ts): the face stands on the zoom's bar at its stops,
@@ -873,7 +888,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu })}
+        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu, answers: wait.wordsRow })}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"
@@ -919,7 +934,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           }
           // An empty box answers the menu the agent waits on: a row's key, or Esc (WaitChoices.tsx).
           // Never a shifted letter (words start with one) nor an IME's keystroke (229).
-          if (!who && shown === '' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && wait.key(e.key)) {
+          if (!who && shown === '' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229 && !(wait.wordsRow && e.key !== 'Escape') && wait.key(e.key)) {
             e.preventDefault()
             return
           }

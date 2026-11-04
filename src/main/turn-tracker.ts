@@ -51,6 +51,7 @@ import {
   scrollLineOf,
   tailLines
 } from '../shared/turn'
+import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
@@ -407,6 +408,7 @@ interface ScrapeObservation {
 /** The half of a TerminalActivity that costs a full-buffer walk to produce. */
 interface DerivedActivity {
   lines: string[]
+  waitChoice: WaitChoice | null
   glance: TerminalActivity['glance']
   tailLines: TerminalActivity['tailLines']
 }
@@ -491,6 +493,7 @@ interface TrackedTerminal {
   titleTimer: NodeJS.Timeout | null
   onInput: (data: string, source?: 'dispatch') => void
   onData: (data: string) => void
+  onParsed: () => void
   onReplay: () => void
   onExit: () => void
 }
@@ -613,7 +616,7 @@ export class TurnTracker extends EventEmitter {
    * that answer for exactly the terminals that cannot answer for themselves;
    * the moment a mirror attaches, the real screen outranks it.
    */
-  private backendPhase = new Map<string, { phase: TurnPhase; agent: boolean; at: number }>()
+  private backendPhase = new Map<string, { phase: TurnPhase; agent: boolean; at: number; choice?: WaitChoice | null }>()
 
   /**
    * The local-producer serializer (Sol r3 P0-2c, synchronous-durable per
@@ -2043,6 +2046,7 @@ export class TurnTracker extends EventEmitter {
       titleTimer: null,
       onInput: (data, source) => this.handleInput(session.terminalId, data, source),
       onData: (data) => this.handleData(session.terminalId, data),
+      onParsed: () => this.handleParsed(session.terminalId),
       // A resize rewraps the mirror and re-emits as 'replay', deliberately NOT
       // 'data' (pty.resize: a synthetic repaint on 'data' would read as agent
       // activity and mint phantom checkpoints). The derived cache still has to
@@ -2073,6 +2077,7 @@ export class TurnTracker extends EventEmitter {
     }
     session.on('input', t.onInput)
     session.on('data', t.onData)
+    session.on('parsed', t.onParsed)
     session.on('replay', t.onReplay)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
@@ -2123,6 +2128,7 @@ export class TurnTracker extends EventEmitter {
     if (t.titleTimer) clearTimeout(t.titleTimer)
     t.session.removeListener('input', t.onInput)
     t.session.removeListener('data', t.onData)
+    t.session.removeListener('parsed', t.onParsed)
     t.session.removeListener('replay', t.onReplay)
     t.session.removeListener('exit', t.onExit)
     this.tracked.delete(terminalId)
@@ -2171,7 +2177,7 @@ export class TurnTracker extends EventEmitter {
     // BOTH fields: a phase that holds while agent-ness was written wrongly
     // (a spawn racing the store add) would latch a shell into an agent card.
     if (current?.phase === phase && current.agent === agent) return
-    this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now() })
+    this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now(), choice: current?.phase === phase ? current.choice : null })
     // A tracked terminal reports its own truth; announcing this one would
     // race the real screen for the same card. The one thing its screen cannot
     // report is a question that was already up when it attached.
@@ -2181,6 +2187,20 @@ export class TurnTracker extends EventEmitter {
     } else if (phase === 'waiting') {
       this.healBlocked(t)
     }
+  }
+
+  /**
+   * The menu a waiting pane shows, read by the caller (index.ts, as herdr says
+   * blocked): a mirrorless card has no screen of its own to read it from.
+   */
+  observeBackendChoice(terminalId: string, choice: WaitChoice | null): void {
+    const current = this.backendPhase.get(terminalId)
+    if (current?.phase !== 'waiting') return
+    // The whole of it: a cursor or an answer on the Review tab is news too.
+    if (JSON.stringify(current.choice ?? null) === JSON.stringify(choice)) return
+    this.backendPhase.set(terminalId, { ...current, choice })
+    if (!this.tracked.has(terminalId)) this.announce(this.backendActivity(terminalId, 'waiting', current.agent))
+    else this.schedulePush(terminalId)
   }
 
   /**
@@ -2237,6 +2257,7 @@ export class TurnTracker extends EventEmitter {
       prompt: null,
       pendingInput: null,
       lines: [],
+      waitChoice: this.backendPhase.get(terminalId)?.choice ?? null,
       reply: null,
       glance: null,
       title: null,
@@ -2827,6 +2848,18 @@ export class TurnTracker extends EventEmitter {
    * start, premature quiescence, tmux reattach mid-turn) — self-heal so a
    * working agent can never stay stuck on a green or idle card.
    */
+  /**
+   * The screen has caught up with bytes 'data' announced ahead of it (xterm
+   * parses later). A menu read in between is the last frame, and a TUI at a
+   * menu prints nothing more to correct it: read it again now.
+   */
+  private handleParsed(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (t?.phase !== 'waiting') return
+    t.outputRev += 1
+    this.schedulePush(terminalId)
+  }
+
   private handleData(terminalId: string, data: string): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
@@ -3262,6 +3295,10 @@ export class TurnTracker extends EventEmitter {
                     SUMMARY_TAIL
                   )
                 : tailLines(cleanTurnLines(t.session.viewportText()), SUMMARY_TAIL),
+              // The whole screen: a question tool's rows run past the tail
+              // above. The viewport only: a mirror's scrollback can hold old
+              // frames, and a question over another's rows is worse than none.
+              waitChoice: t.phase === 'waiting' ? waitChoiceOfScreen(t.session.viewportText()) : null,
               glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
               // Clip signal only when the tail is settled — mid-turn the
               // renderer shows the whole live stream anyway.
@@ -3285,6 +3322,8 @@ export class TurnTracker extends EventEmitter {
       prompt: t.prompt,
       pendingInput: pending.length > 0 ? pending : null,
       lines,
+      // A menu taller than the viewport comes from the pane's own read (index.ts).
+      waitChoice: derived.waitChoice ?? (t.phase === 'waiting' ? (this.backendPhase.get(terminalId)?.choice ?? null) : null),
       reply: t.reply,
       glance: derived.glance,
       title: t.title,

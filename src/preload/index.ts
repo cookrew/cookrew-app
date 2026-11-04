@@ -372,6 +372,7 @@ const api = {
   },
 
   ptyInput: (terminalId: string, data: string) => ipcRenderer.send('pty:input', terminalId, data),
+  answerMenu: (terminalId: string, answer: unknown) => ipcRenderer.invoke('menu:answer', terminalId, answer),
   terminalTuning: (terminalId: string) => ipcRenderer.invoke('terminal:tuning', terminalId),
   listTuning: () => ipcRenderer.invoke('tuning:list'),
   onTerminalTuning: (cb: (row: { terminalId: string; tuning: unknown }) => void) => {

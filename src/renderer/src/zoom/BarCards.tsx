@@ -41,7 +41,7 @@ const boxOf = (r: DOMRect): FaceBox => ({ left: r.left, top: r.top, width: r.wid
 
 /** The highest of the bar and the open prompt box over it: the card stands clear of both. */
 const boxTop = (): number => {
-  const tops = ['.cr-dock .cr-prompt', '.zv-controls'].map((sel) => document.querySelector(sel)?.getBoundingClientRect()).filter((r): r is DOMRect => !!r && r.height > 0).map((r) => r.top)
+  const tops = ['.cr-dock .cr-prompt', '.cr-prompt-tray', '.zv-controls'].map((sel) => document.querySelector(sel)?.getBoundingClientRect()).filter((r): r is DOMRect => !!r && r.height > 0).map((r) => r.top)
   return Math.min(window.innerHeight, ...tops)
 }
 
@@ -78,6 +78,8 @@ function BarCardFrame({ anchor, className, label, keep, onOutside, onClose, chil
       // The card's remove mark hangs past its corner (agent-card.css · .zv-del): it too stays on screen.
       const mark = el.querySelector<HTMLElement>('.zv-del')
       const over = mark ? Math.max(0, Math.ceil(mark.getBoundingClientRect().right - el.getBoundingClientRect().right)) : 0
+      // A long menu scrolls inside its card (wait-choices.css): it never runs under the bar or off the top.
+      if (el.classList.contains('wc-card')) el.style.maxHeight = `${Math.max(180, boxTop() - stageTop() - 20)}px`
       const next = barCardSpot(face, { width: el.offsetWidth + over, height: el.offsetHeight }, window.innerWidth, boxTop(), stageTop())
       setSpot((at) => (at && at.left === next.left && at.top === next.top ? at : next))
     }

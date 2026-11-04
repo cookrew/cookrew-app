@@ -32,7 +32,8 @@ export function promptPlaceholder({
   stop,
   workspace,
   item,
-  asks = false
+  asks = false,
+  answers = false
 }: {
   agent: { readonly name: string; readonly status: string } | null
   stop: WordsStop
@@ -42,8 +43,11 @@ export function promptPlaceholder({
   item: { readonly name: string } | null
   /** The agent waits on a question with no menu to tap: the words are its answer. */
   asks?: boolean
+  /** Its menu has a row to type in: the words go there (wait-answer.ts · wordsRowOf). */
+  answers?: boolean
 }): string {
   if (agent?.status === 'offline') return `${agent.name} is asleep · wakes on send`
+  if (agent && answers) return 'Or type your own answer…'
   if (agent) return asks ? `Answer ${agent.name}…` : `Reply to ${agent.name}…`
   if (stop === 'item' && item) return `New agent with #${item.name}…`
   if ((stop === 'devices' || stop === 'workspaces') && workspace?.trim()) return `New agent in ${workspace.trim()}…`
