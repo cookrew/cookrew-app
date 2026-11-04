@@ -111,6 +111,34 @@ export function releaseStage({ version, tags, published, mainVersion }) {
   return { version, stage: mainVersion === version ? 'tag' : 'pr' }
 }
 
+export function planLine({ version, stage, previous, commits, running }) {
+  if (running) return `A release of Cookrew is already running. Pressing again does nothing.`
+  const since = `${commits} commits since ${previous}.`
+  if (stage === 'draft') return `Cookrew ${version} is tagged. Publish takes the draft public.`
+  if (stage === 'tag') return `Cookrew ${version} is on main. Next is the tag.`
+  if (stage === 'pr') return `Cookrew ${version} is bumped on dev: ${since}`
+  return `Cookrew ${version}: ${since}`
+}
+
+/** The AppleScript of the button. It only asks; the launcher does the work, detached. */
+export function releaseButtonScript(launcher) {
+  return `set launcher to quoted form of "${launcher}"
+try
+  set plan to do shell script launcher & " plan"
+on error failure
+  display alert "Release Cookrew" message failure as critical
+  return
+end try
+set answer to button returned of (display dialog plan with title "Release Cookrew" buttons {"Cancel", "Draft", "Publish"} default button "Draft" cancel button "Cancel")
+if answer is "Publish" then
+  do shell script launcher & " publish"
+else
+  do shell script launcher & " draft"
+end if
+display notification "Running. Each step reports here." with title "Release Cookrew"
+`
+}
+
 export function missingAssets(names) {
   return ['.dmg', '.exe'].filter((suffix) => !names.some((name) => name.endsWith(suffix)))
 }

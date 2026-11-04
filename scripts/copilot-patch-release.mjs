@@ -5,6 +5,10 @@
  *   npm run daily:release -- --dry-run   # gates, build and notes (a small Copilot spend); no push
  *   npm run daily:release                # ... then dev -> main, tag, draft release
  *   npm run daily:release -- --publish   # ... and take the draft public once its installers are up
+ *   npm run daily:release -- --plan      # one line on where the release stands
+ *
+ * The usual way in is the Release Cookrew app, which `npm run daily:install`
+ * puts in ~/Applications, or `cookrew-release draft|publish` from any terminal.
  *
  * The bar is the one every release so far met: gates green with COOKREW_* unset
  * here, then mac + ubuntu CI on the PR, which also runs the suites the sandboxed
@@ -15,15 +19,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { laneEnv, missingAssets, releaseBar, releaseStage } from './copilot-daily-lib.mjs'
+import { laneEnv, missingAssets, planLine, releaseBar, releaseStage } from './copilot-daily-lib.mjs'
 import {
   GITHUB_REPO, REPO, STATE, accountToken, createTree, fetchQuota, gh, git, notify, reclaimTree, removeTree, run,
-  runGates, runSession, safeMerge, say, syncWithDev
+  runGates, runSession, safeMerge, say, syncWithDev, takeLock
 } from './copilot-daily-ops.mjs'
 
 const NOTES_CAP = 25
 const POLL_MS = 60_000
 const WAIT_LIMIT_MS = 60 * 60_000
+const LOCK = path.join(STATE, 'release.lock')
 const PR_FOOTER = '\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n'
 
 const fileVersion = (ref) => JSON.parse(git(REPO, 'show', `${ref}:package.json`)).version
@@ -127,6 +132,7 @@ async function landOnMain({ token, version, notes }) {
   const head = git(REPO, 'rev-parse', 'dev')
   const number = openPullRequest(token, version, notes)
   say(`PR #${number}: waiting for mac + ubuntu`)
+  notify(`${version}: dev pushed, PR #${number} waiting for CI`)
   await until(`CI still running on PR #${number}`, () => barPassed(token, number))
   gh(token, 'pr', 'merge', String(number), '-R', GITHUB_REPO, '--merge', '--subject', `Release ${version}`, '--match-head-commit', head)
 }
@@ -150,6 +156,7 @@ function buildFinished(token, tag) {
 /** Publishing early strands the installers: electron-builder only uploads to a draft. */
 async function finishDraft({ token, tag, version, publish }) {
   say(`waiting for the ${tag} build`)
+  notify(`${tag}: tagged, building installers`)
   await until(`the ${tag} build is unfinished`, () => buildFinished(token, tag))
   const { assets } = JSON.parse(gh(token, 'release', 'view', tag, '-R', GITHUB_REPO, '--json', 'assets'))
   const missing = missingAssets(assets.map((asset) => asset.name))
@@ -177,10 +184,17 @@ async function prepare({ version, stage, previous, token }) {
   }
 }
 
-async function main() {
+function printPlan({ version, stage, published }) {
+  const previous = previousTag(published)
+  const commits = Number(git(REPO, 'rev-list', '--count', '--no-merges', `${previous}..dev`))
+  process.stdout.write(`${planLine({ version, stage, previous, commits, running: existsSync(LOCK) })}\n`)
+}
+
+async function release() {
   const token = accountToken()
   const remote = readRemote(token)
   const { version, stage } = releaseStage({ ...remote, version: fileVersion('dev') })
+  if (process.argv.includes('--plan')) return printPlan({ version, stage, published: remote.published })
   const tag = `v${version}`
   const publish = process.argv.includes('--publish')
   say(`release ${version}: at ${stage}`)
@@ -196,6 +210,16 @@ async function main() {
   const url = `https://github.com/${GITHUB_REPO}/releases/tag/${tag}`
   say(`${publish ? 'published' : 'draft ready'}: ${url}`)
   return notify(`${version} ${publish ? 'published' : 'draft ready'}`)
+}
+
+async function main() {
+  if (process.argv.includes('--plan')) return release()
+  if (!takeLock(LOCK)) return notify('a release is already running')
+  try {
+    return await release()
+  } finally {
+    rmSync(LOCK, { recursive: true, force: true })
+  }
 }
 
 main().catch((error) => {

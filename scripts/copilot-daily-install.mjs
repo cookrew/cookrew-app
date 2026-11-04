@@ -5,15 +5,19 @@
  *   npm run daily:install               # install, runs daily at 04:30
  *   npm run daily:install -- --uninstall
  *
+ * Also installs the manual release trigger: the Release Cookrew app in
+ * ~/Applications (Spotlight, or drag it to the Dock) and ~/.cookrew/bin/cookrew-release.
+ *
  * Copies the runner to ~/.cookrew/bin like perf-eval-install.mjs, so the job
  * survives this checkout moving. Re-run after changing a script. A Mac asleep
  * at 04:30 runs the lane when it wakes.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { releaseButtonScript } from './copilot-daily-lib.mjs'
 
 const LABEL = 'dev.cookrew.copilot-daily'
 const HOUR = 4
@@ -26,6 +30,9 @@ const bin = path.join(homedir(), '.cookrew', 'bin')
 const state = path.join(homedir(), '.cookrew', 'copilot-daily')
 const plist = path.join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const domain = `gui/${process.getuid?.() ?? ''}`
+const launcher = path.join(bin, 'cookrew-release')
+const button = path.join(homedir(), 'Applications', 'Release Cookrew.app')
+const repo = process.env.COOKREW_DAILY_REPO ?? path.join(homedir(), 'workspace', 'cookrew-dev')
 
 function launchctl(...args) {
   try {
@@ -66,9 +73,38 @@ function plistXml(nodeBin, script) {
 `
 }
 
+/** Runs the release from the repo, detached, so closing whatever pressed it stops nothing. */
+function launcherScript() {
+  const log = path.join(state, 'release.log')
+  return `#!/bin/sh
+# cookrew-release plan|draft|publish|dry: the one way in for a manual release.
+export PATH=/opt/homebrew/bin:/usr/bin:/bin
+script='${path.join(repo, 'scripts', 'copilot-patch-release.mjs')}'
+case "$1" in
+  plan) exec node "$script" --plan ;;
+  draft) flag= ;;
+  publish) flag=--publish ;;
+  dry) flag=--dry-run ;;
+  *) echo 'usage: cookrew-release plan|draft|publish|dry' >&2; exit 2 ;;
+esac
+nohup node "$script" $flag >> '${log}' 2>&1 < /dev/null &
+echo 'release started, log in ${log}'
+`
+}
+
+function installButton() {
+  writeFileSync(launcher, launcherScript())
+  chmodSync(launcher, 0o755)
+  mkdirSync(path.dirname(button), { recursive: true })
+  rmSync(button, { recursive: true, force: true })
+  execFileSync('osacompile', ['-o', button], { input: releaseButtonScript(launcher), stdio: ['pipe', 'pipe', 'pipe'] })
+}
+
 function uninstall() {
   launchctl('bootout', `${domain}/${LABEL}`)
   if (existsSync(plist)) rmSync(plist)
+  rmSync(launcher, { force: true })
+  rmSync(button, { recursive: true, force: true })
   for (const file of SCRIPTS) rmSync(path.join(bin, file), { force: true })
   process.stdout.write(`removed ${LABEL} (history kept in ${state})\n`)
 }
@@ -80,9 +116,11 @@ function install() {
   // The Cellar path in execPath dies at the next brew cleanup, and the job with it, silently.
   const nodeBin = existsSync(STABLE_NODE) ? STABLE_NODE : process.execPath
   writeFileSync(plist, plistXml(nodeBin, path.join(bin, 'copilot-daily.mjs')))
+  installButton()
   launchctl('bootout', `${domain}/${LABEL}`)
   if (!launchctl('bootstrap', domain, plist)) throw new Error(`launchctl could not load ${plist}`)
   process.stdout.write(`installed ${LABEL}: daily at 0${HOUR}:${MINUTE}, log in ${state}/launchd.log\n`)
+  process.stdout.write(`installed ${button} and ${launcher}\n`)
 }
 
 if (process.platform !== 'darwin') {
