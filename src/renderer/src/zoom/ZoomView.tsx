@@ -125,6 +125,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     workspaces: fleetWorkspaces.length ? fleetWorkspaces.map((w) => ({ id: w.id, name: w.name, dir: '', dirs: [], icon: w.icon ?? '🗂' })) : (list?.workspaces ?? []), activeId: workspaceId ?? list?.activeId ?? 'local', name: workspace?.name ?? 'Workspace',
     machines: fleet.machines,
     counts: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, { browsers: w.counts.browsers, notes: w.counts.notes }] as const] : []))),
+    crews: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, w.agents] as const] : []))),
     decks: new Map(fleetWorkspaces.map((w) => [w.id, w.deck] as const)),
     loaded: workspace !== null && workspace !== undefined
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
