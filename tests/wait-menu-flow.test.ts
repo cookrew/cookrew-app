@@ -210,6 +210,13 @@ describe('a menu on the screen is a wait, whatever the pane does to its words', 
     expect(phase()).toBe('waiting')
     expect(turns.list()[0].waitChoice?.options.length).toBe(6)
   })
+  it('an earlier question\'s record over the menu is no spinner (a real pane, 43 columns)', () => {
+    const screen = readFileSync(join(__dirname, 'fixtures', 'wait-choice', 'claude-answered-above-menu.txt'), 'utf8')
+    const { session, phase, turns } = atRest(screen)
+    session.emit('parsed')
+    expect(phase()).toBe('waiting')
+    expect(turns.list()[0].waitChoice?.question).toBe('Which colour?')
+  })
   it("the owner's own picker is not: it reads as a menu, and no one is waiting on them", () => {
     // The real shape (ui-command-open.test.ts): a rule between the echo and its rows.
     const picker = `⏺ DONE\n\n❯ /model\n${'─'.repeat(60)}\n  Select model\n  ❯ 1. Default\n    2. Opus\n  Enter to set as default · Esc to cancel\n`

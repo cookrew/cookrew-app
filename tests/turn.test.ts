@@ -187,6 +187,22 @@ describe('detectAgentActivity', () => {
   })
 })
 
+describe('a line that only looks like a spinner', () => {
+  it('a question tool\'s record, kept on the screen above the next menu', () => {
+    expect(detectLiveWork('     · Which parts? (Alpha / Beta)')).toBe(false)
+    expect(detectLiveWork('     · Which color? → Blue')).toBe(false)
+  })
+  it('a bullet of a reply, with its parentheses and its words', () => {
+    expect(detectLiveWork('  * fix the bug (see above)')).toBe(false)
+    expect(detectLiveWork('  + how many tokens does it take?')).toBe(false)
+  })
+  it('a real one with no ellipsis still counts: its parentheses hold progress', () => {
+    expect(detectLiveWork('✶ Working (12s)')).toBe(true)
+    expect(detectLiveWork('✶ Working (1m 20s · ↓ 2.1k tokens)')).toBe(true)
+    expect(detectLiveWork('· ↓ 24 tokens)')).toBe(true)
+  })
+})
+
 describe('isLiveStatus', () => {
   it('recognises in-flight spinner bodies', () => {
     expect(isLiveStatus('Honking… (23m 20s · ↓ 24.5k tokens)')).toBe(true)
