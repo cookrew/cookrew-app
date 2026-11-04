@@ -26,7 +26,7 @@ const STATE_WORD: Record<ToolState, string> = {
   unknown: PREFLIGHT_COPY.UNKNOWN
 }
 
-function Row({ row, running, onRun }: { row: PreflightRow; running: SetupRunning | null; onRun: (line: string) => void }): React.JSX.Element {
+function Row({ row, running, held, onRun }: { row: PreflightRow; running: SetupRunning | null; held: boolean; onRun: (line: string) => void }): React.JSX.Element {
   const busy = row.fix ? runningLabel(running, row.fix.line) : null
   return (
     <li className={`fr-row ${row.state}`}>
@@ -41,7 +41,7 @@ function Row({ row, running, onRun }: { row: PreflightRow; running: SetupRunning
         <span className="fr-state">{STATE_WORD[row.state]}</span>
         {row.fix && (
           // One line at a time: a key pressed now belongs to the one running, a password maybe.
-          <button type="button" className="fr-fix" disabled={running !== null} title={row.fix.line} onClick={() => row.fix && onRun(row.fix.line)}>
+          <button type="button" className="fr-fix" disabled={held} title={row.fix.line} onClick={() => row.fix && onRun(row.fix.line)}>
             {busy ?? row.fix.label}
           </button>
         )}
@@ -53,6 +53,7 @@ function Row({ row, running, onRun }: { row: PreflightRow; running: SetupRunning
 export function PreflightView({
   rows,
   running,
+  released = false,
   error,
   onRun,
   onCheck,
@@ -63,6 +64,8 @@ export function PreflightView({
   /** Null while the first check runs. */
   rows: readonly PreflightRow[] | null
   running: SetupRunning | null
+  /** The person checked again: the fixes are theirs, whatever the pane seems to be doing. */
+  released?: boolean
   error: string | null
   onRun: (line: string) => void
   onCheck: () => void
@@ -82,7 +85,7 @@ export function PreflightView({
         ) : (
           <ul className="fr-rows">
             {rows.map((row) => (
-              <Row key={row.id} row={row} running={running} onRun={onRun} />
+              <Row key={row.id} row={row} running={running} held={running !== null && !released} onRun={onRun} />
             ))}
           </ul>
         )}
@@ -125,6 +128,8 @@ export function Preflight({ setup }: { setup: PreflightSetup }): React.JSX.Eleme
   const [rows, setRows] = useState<readonly PreflightRow[] | null>(null)
   /** Set by the first press: until then there is no terminal to look at. */
   const [pressed, setPressed] = useState(false)
+  /** The end of a line is read off the shell's prompt, and not every prompt can be read. */
+  const [released, setReleased] = useState(false)
   const live = useRef(true)
   /** A check reads the login shell: one at a time, however often the window takes focus. */
   const checking = useRef(false)
@@ -162,12 +167,17 @@ export function Preflight({ setup }: { setup: PreflightSetup }): React.JSX.Eleme
     <PreflightView
       rows={rows}
       running={setup.running}
+      released={released}
       error={setup.error?.text ?? null}
       onRun={(line) => {
         setPressed(true)
+        setReleased(false)
         void setup.run(line)
       }}
-      onCheck={check}
+      onCheck={() => {
+        setReleased(true)
+        check()
+      }}
       onContinue={onward}
       // No agent tool at all: the first screen could only make a card that dies, so this leaves the run.
       onSkip={() => void firstRun.advance('closed')}

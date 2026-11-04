@@ -295,7 +295,7 @@ import { doorMovedSentence } from '../shared/door-ownership'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
-import { prepareChoresDir } from './claude-trust'
+import { prepareChoresDir, trustDirectory } from './claude-trust'
 import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
@@ -4850,6 +4850,9 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   // A pick from the one list carries its route (model-pick.ts); an older bare alias is routed as before.
   const pickedRoute = !role && opts.command === undefined && opts.tune !== undefined ? newAgentLaunch(preset.command, opts.tune).route : undefined
   const placed = pickedRoute !== undefined ? { ...terminal, route: pickedRoute } : opts.tune === undefined ? terminal : routedNewAgent(terminal)
+  // The person chose this folder for the agent, on a screen saying what it may
+  // do there: the answer to Claude's trust dialog, which the prompt box cannot draw.
+  if (opts.patient === true && isClaudeCommand(terminal.command)) trustDirectory(terminal.cwd, path.join(app.getPath('home'), '.claude.json'))
   const added = store.addNode(placed)
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.

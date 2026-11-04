@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { ownerSubmit } from './ask'
+import { dialogOnScreen, waitChoiceOfScreen } from '../shared/wait-choice'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
 import { isClaudeCommand, stripSessionFlags } from '../shared/claude-fork'
@@ -213,6 +214,18 @@ export function forkContextReady(nodeId: string): Promise<void> {
  * Shared with the team-fork engine (teams.ts), which injects per-terminal
  * context the same way after a workspace switch boots the forked agents.
  */
+/**
+ * Ready, and asking nothing. A dialog can pass for a composer: the folder-trust
+ * one has a rule and a ❯ row, the bypass consent says "bypass permissions", and
+ * Enter on either takes the default row, which quits. Waits on any menu at all,
+ * so the person's answer (the prompt box draws these rows) comes first.
+ */
+function freeForFirstTask(session: PtySession): boolean {
+  if (!harnessReadyForInput(session)) return false
+  const screen = session.viewportText()
+  return waitChoiceOfScreen(screen) === null && !dialogOnScreen(screen)
+}
+
 export interface InjectOptions {
   timeoutMs?: number
   /**
@@ -228,7 +241,7 @@ export async function injectWhenReady(session: PtySession, preamble: string, opt
   const startedAt = Date.now()
   const ready = await new Promise<boolean>((resolve) => {
     const timer = setInterval(() => {
-      const now = harnessReadyForInput(session)
+      const now = onlyWhenReady ? freeForFirstTask(session) : harnessReadyForInput(session)
       if (now || Date.now() - startedAt >= timeoutMs) {
         clearInterval(timer)
         resolve(now)

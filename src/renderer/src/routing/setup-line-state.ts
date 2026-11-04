@@ -84,10 +84,13 @@ function answerOf(watch: LineWatch): string {
   return at < 0 ? (watch.echoed ? watch.tail : '') : watch.tail.slice(at + watch.line.length)
 }
 
+/** A line wider than the pane comes back wrapped: the shell breaks it where the row ends. */
+const unwrapped = (text: string): string => text.replace(/\s+/g, '')
+
 export function observeOutput(watch: LineWatch, chunk: string): LineWatch {
   if (watch.done) return watch
   const tail = (watch.tail + cleanOutput(chunk)).slice(-TAIL_MAX)
-  const echoed = watch.echoed || tail.includes(watch.line)
+  const echoed = watch.echoed || unwrapped(tail).includes(unwrapped(watch.line))
   const last = lastLine(tail)
   // The echo line itself ends in the command, never in a prompt character.
   const done = echoed && !last.endsWith(watch.line) && promptReturned(last)

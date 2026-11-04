@@ -430,6 +430,15 @@ export function menuHeldOnScreen(screen: string): boolean {
 }
 
 /**
+ * A selector's footer at the foot of the screen, whether or not its rows can be
+ * read: Claude's folder-trust dialog has no numbers, so it is no WaitChoice, and
+ * Enter there still answers it.
+ */
+export function dialogOnScreen(screen: string): boolean {
+  return screenLines(screen).slice(-MAX_AFTER - 2).some((line) => FOOTER_RE.test(line))
+}
+
+/**
  * Does a held menu ask something of the owner? Surer still, for a wait raised
  * from rest, which reopens a finished turn and rings: a picker they opened
  * themselves ("Select model") holds up rows and a footer too, and nothing always

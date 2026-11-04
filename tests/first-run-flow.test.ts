@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { observeOutput, startedLine } from '../src/renderer/src/routing/setup-line-state'
 import { createFirstRun } from '../src/renderer/src/first-run/first-run-state'
 import { createFirstFolder } from '../src/renderer/src/first-run/first-folder'
 import { firstHarness, realAgents, stepTurns, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
@@ -136,6 +139,27 @@ describe('the first agent', () => {
     const createTerminal = vi.fn(async () => ({ id: 'a2' }))
     await makeAgent({ createTerminal } as never, { name: 'Readme', preset: 'Claude Code', orch: false, prompt: 'do it' })
     expect(createTerminal.mock.calls[0]).toEqual([expect.not.objectContaining({ patient: expect.anything() })])
+  })
+})
+
+describe('a line long enough to wrap', () => {
+  const HOMEBREW = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+  it('is still seen as echoed, and its prompt coming back ends the watch', () => {
+    const cut = 60
+    let watch = startedLine(HOMEBREW)
+    watch = observeOutput(watch, `% ${HOMEBREW.slice(0, cut)} \r${HOMEBREW.slice(cut)}\r\n`)
+    expect(watch.echoed).toBe(true)
+    expect(watch.done).toBe(false)
+    watch = observeOutput(watch, '==> Installation successful!\r\n% ')
+    expect(watch.done).toBe(true)
+  })
+})
+
+describe('the first agent leads', () => {
+  it('is made the orchestrator, as the Conductor it stands in for was', () => {
+    const source = readFileSync(path.join(__dirname, '../src/renderer/src/prompt/GlobalPrompt.tsx'), 'utf8')
+    expect(source).toMatch(/orch: orch \|\| firstTask/)
   })
 })
 

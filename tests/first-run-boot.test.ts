@@ -32,6 +32,14 @@ describe('a real launch', () => {
     for (const at of writes) expect(source.slice(Math.max(0, at - 90), at)).toMatch(/if \(app\.isPackaged\)/)
   })
 
+  // A new Claude asks about a new folder in a dialog the prompt box cannot draw
+  // (its rows have no numbers), so the person would wait behind it unseen.
+  it('trusts the chosen folder for the first task alone, before the agent starts', () => {
+    const create = body('createTerminal')
+    expect(create).toMatch(/opts\.patient === true && isClaudeCommand\(terminal\.command\)\) trustDirectory\(terminal\.cwd/)
+    expect(create.indexOf('trustDirectory(')).toBeLessThan(create.indexOf('spawnTracked('))
+  })
+
   it('sets PATH before the terminal host is chosen', () => {
     expect(source.indexOf('widenedPath(process.env')).toBeLessThan(source.indexOf('new PtyManager('))
   })

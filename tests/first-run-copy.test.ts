@@ -35,6 +35,10 @@ describe('the first run’s words', () => {
     expect(TOOL_COPY.multiplexer.does).toMatch(/keeps your agents alive/i)
   })
 
+  it('says what choosing a folder allows: that sentence is what stands in for Claude’s trust dialog', () => {
+    expect(FIRST_SCREEN_COPY.LEDE).toMatch(/read, change and run files in the folder you choose/)
+  })
+
   it('offers exactly three example tasks, none of them destructive', () => {
     expect(EXAMPLE_TASKS).toHaveLength(3)
     expect(EXAMPLE_TASKS.filter((task) => /delete|remove|clean|reset|push/i.test(task))).toEqual([])

@@ -1,11 +1,26 @@
 // A prompt typed into a Claude pane before Claude reads its input loses its
 // first characters ("gent prompt inputbox…", 2026-11-01): the injection waits
 // for the composer to be drawn, not only for the boot output to go quiet.
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 const submitted: string[] = []
 vi.mock('../src/main/ask', () => ({ ownerSubmit: async (_s: unknown, bytes: string) => (submitted.push(bytes), { ok: true, submitted: true }) }))
 const { claudeComposerDrawn, injectWhenReady } = await import('../src/main/fork')
+
+const readFixture = (name: string): string => readFileSync(path.join(__dirname, 'fixtures/wait-choice', name), 'utf8')
+const BYPASS_CONSENT = [
+  '────────────────────────────────',
+  ' WARNING: Claude Code running in Bypass Permissions mode',
+  '',
+  ' By proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.',
+  '',
+  ' ❯ 1. No, exit',
+  '   2. Yes, I accept',
+  '',
+  ' Enter to confirm · Esc to cancel'
+].join('\n')
 
 const COMPOSER = ['', '────────────────────────────────', '❯ ', '────────────────────────────────', '  ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n')
 
@@ -69,6 +84,24 @@ describe('injectWhenReady', () => {
     await vi.advanceTimersByTimeAsync(1_500)
     await failed
     expect(submitted).toEqual([])
+    vi.useRealTimers()
+  })
+
+  // A dialog can read as a composer: the trust dialog has a rule and a ❯ row, and
+  // the bypass consent says "bypass permissions". Each one's default row exits.
+  it.each([
+    ['claude', 'claude-trust.txt', readFixture('claude-trust.txt')],
+    ['codex', 'codex-trust.txt', readFixture('codex-trust.txt')],
+    ['claude --permission-mode bypassPermissions', 'the bypass consent', BYPASS_CONSENT]
+  ])('a first task is held behind a dialog that reads as ready: %s, %s', async (command, _name, screen) => {
+    vi.useFakeTimers()
+    submitted.length = 0
+    const done = injectWhenReady(session(command, [...Array(100).fill(screen), COMPOSER]), 'first task', { timeoutMs: 120_000, onlyWhenReady: true })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(submitted).toEqual([])
+    await vi.advanceTimersByTimeAsync(30_000)
+    await done
+    expect(submitted).toEqual(['first task\r'])
     vi.useRealTimers()
   })
 

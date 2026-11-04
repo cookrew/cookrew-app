@@ -73,6 +73,11 @@ describe('the tool check on screen', () => {
     expect(html.match(/class="fr-fix"[^>]*disabled=""|disabled=""[^>]*class="fr-fix"/g)).toHaveLength(3)
   })
 
+  it('lets go of them when the person asks to check again: a prompt it cannot read must not lock the screen', () => {
+    const html = view(gaps, { running: { line: 'brew install tmux', lastLine: '', oauth: false, url: null }, released: true })
+    expect(html).not.toMatch(/class="fr-fix"[^>]*disabled=""|disabled=""[^>]*class="fr-fix"/)
+  })
+
   it('says why a press did nothing', () => {
     expect(view(gaps, { error: 'the Setup card did not appear on the canvas' })).toContain('role="alert"')
   })

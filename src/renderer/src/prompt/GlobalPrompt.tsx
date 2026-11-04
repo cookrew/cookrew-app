@@ -117,9 +117,10 @@ import './global-prompt.css'
  * Sous instead; if it was no command after all, it lands in the draft.
  *
  * THE FIRST SCREEN IS THIS BOX (first-run/FirstScreen.tsx): held open, asking
- * the screen's question, and it adds two things to a send: the folder the
- * agent will work in, and main holding the words until the agent can take them
- * (a new Claude opens on its sign-in). The rest is the ordinary new agent.
+ * the screen's question, and it adds three things to a send: the folder the
+ * agent will work in, main holding the words until the agent can take them (a
+ * new Claude opens on its sign-in), and the lead: this agent stands in for the
+ * Conductor a new Mac no longer boots. The rest is the ordinary new agent.
  */
 
 export interface PromptAgent {
@@ -453,7 +454,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     const { words: prompt, refs } = said(withItemRef(raw, attachedItem, artifacts))
     const tune = offeredPick(launchTune, offer, gateway)
     // Named from the words typed, not from the item riding ahead of them.
-    const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch, prompt, patient: firstTask, autoName: true, tune }, nodes)
+    const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch: orch || firstTask, prompt, patient: firstTask, autoName: true, tune }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) {

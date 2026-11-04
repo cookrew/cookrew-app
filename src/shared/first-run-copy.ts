@@ -46,7 +46,7 @@ export const FIX_LABELS = {
 
 export const FIRST_SCREEN_COPY = {
   ASK: 'What should your agent do?',
-  LEDE: 'It works in one folder on this Mac, and you can watch every step.',
+  LEDE: 'It can read, change and run files in the folder you choose. You can watch every step.',
   FOLDER: 'Choose a folder',
   FOLDER_CHANGE: 'Change',
   FOLDER_NOTE: 'Folder',
