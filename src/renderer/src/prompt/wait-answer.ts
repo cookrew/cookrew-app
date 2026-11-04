@@ -117,6 +117,12 @@ export interface WaitAnswering {
   readonly wordsRow: boolean
   /** Words from the box into that row (the draft is the caller's to clear; a refusal puts them back). */
   readonly sendWords: (words: string) => void
+  /**
+   * A key from the tray, while a menu stands. It goes the menu's way, not the
+   * terminal's: raw bytes are held back from a dispatched turn, whose menu is
+   * the one thing still to be answered.
+   */
+  readonly trayKey: ((seq: string) => void) | null
   /** Why the last answer did not land, in words; null when it did. */
   readonly failed: string | null
 }
@@ -196,6 +202,7 @@ export function useWaitAnswer(agentId: string | null, onType?: () => void): Wait
       if (getDraft(draftKey(agentId)) === '') setDraft(draftKey(agentId), words)
     })
   }
-  return { view, menu: live !== null, answer: answerRow, key, step, wordsRow: hasWordsRow(live), sendWords, failed }
+  const trayKey = live ? (seq: string): void => deliver({ kind: 'key', seq }, live) : null
+  return { view, menu: live !== null, answer: answerRow, key, step, wordsRow: hasWordsRow(live), sendWords, trayKey, failed }
 }
 

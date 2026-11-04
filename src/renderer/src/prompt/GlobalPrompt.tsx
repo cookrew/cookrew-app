@@ -1017,7 +1017,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       <span className="cr-prompt-tools">
       {browse.input}
       {toolsShown && (
-        <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null}>
+        <VoiceBar key={to ? `voice:${to.id}` : 'voice:new'} terminalId={to?.id ?? null} menuKey={wait.trayKey}>
           <PromptExtras
             canAttach={!to?.remote}
             attaching={attach.attaching}
