@@ -64,7 +64,9 @@ describe('an agent’s card', () => {
   // crew card — the same parts and the same AgentView — not a look-alike of its own.
   it('the agent group floats the crew card itself, from the same agent view', () => {
     const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
-    expect(pets).toContain('<AgentCard')
+    // Through AgentPetCard, which only swaps in the rows while a menu waits.
+    expect(pets).toContain('<AgentPetCard')
+    expect(readFileSync('src/renderer/src/pets/AgentPetCard.tsx', 'utf8')).toContain('<AgentCard')
     expect(pets).toContain('agent={agentViewOf(pet.row, attachIndex)}')
     expect(pets).not.toMatch(/<AgentLatest|<TurnView|function AgentCard/)
     const card = readFileSync('src/renderer/src/zoom/AgentCard.tsx', 'utf8')
