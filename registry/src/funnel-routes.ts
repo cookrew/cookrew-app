@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { FUNNEL_ROUTE, readFunnelPayload } from '../../src/shared/funnel-events'
 import { funnelLimiterKey, type FunnelCounts } from './funnel-counts'
-import { json, readJsonBody } from './http'
+import { json, readJsonBody, type BodyResult } from './http'
 import { Limiter, callerAddress } from './v2-limiter'
 import { signedIn, type V2Identity } from './v2-http'
 
@@ -20,12 +20,22 @@ import { signedIn, type V2Identity } from './v2-http'
 /** Five short fields. Anything near this size is not a funnel event. */
 const BODY_LIMIT = 512
 const PER_MINUTE = 120
+/** Five short fields arrive at once. The server has no request timeout: the relay needs that. */
+const BODY_DEADLINE_MS = 10_000
 
 export interface FunnelMount {
   readonly counts: FunnelCounts
   /** The one account that may read the totals; empty closes the route. */
   readonly owner: string
   readonly perMinute?: number
+  /**
+   * The hops in front of this process whose X-Forwarded-For may be believed.
+   * Without them every install behind a proxy shares one budget, so one noisy
+   * client spends everyone's. Named here rather than on v2 so that turning this
+   * on moves no sign-in limiter.
+   */
+  readonly trustedProxies?: readonly string[]
+  readonly bodyMs?: number
 }
 
 const PRIVATE = { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
@@ -34,16 +44,25 @@ export interface FunnelRoute {
   readonly handle: (request: IncomingMessage, response: ServerResponse, pathname: string) => boolean
 }
 
+const readWithin = async (request: IncomingMessage, ms: number): Promise<BodyResult> => {
+  const deadline = setTimeout(() => request.destroy(new Error('body deadline')), ms)
+  try {
+    return await readJsonBody(request, BODY_LIMIT)
+  } finally {
+    clearTimeout(deadline)
+  }
+}
+
 export function createFunnelRoute(mount: FunnelMount, v2: V2Identity | undefined): FunnelRoute {
   const limiter = new Limiter(mount.perMinute ?? PER_MINUTE)
 
   const take = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
-    const address = callerAddress(request.headers, request.socket.remoteAddress, v2?.trustedProxies ?? [])
+    const address = callerAddress(request.headers, request.socket.remoteAddress, mount.trustedProxies ?? [])
     if (!limiter.take(funnelLimiterKey(address))) return json(response, 429, { error: 'rate_limited' })
     if (!(request.headers['content-type'] ?? '').startsWith('application/json')) {
       return json(response, 415, { error: 'unsupported_media_type' })
     }
-    const body = await readJsonBody(request, BODY_LIMIT)
+    const body = await readWithin(request, mount.bodyMs ?? BODY_DEADLINE_MS)
     if (!body.ok) return json(response, body.reason === 'too_large' ? 413 : 400, { error: body.reason })
     const payload = readFunnelPayload(body.value)
     if (payload === null || !mount.counts.acceptsDay(payload.day)) return json(response, 400, { error: 'bad_event' })

@@ -133,18 +133,23 @@ export class FunnelCounts {
     this.days = new Map([...this.days].filter(([day]) => day >= cutoff))
     const snapshot = JSON.stringify(Object.fromEntries(this.days))
     const tmp = `${this.file}.${process.pid}.tmp`
-    this.writing = (async () => {
-      try {
-        mkdirSync(path.dirname(this.file), { recursive: true })
-        await writeFile(tmp, snapshot, { mode: 0o600 })
-        await rename(tmp, this.file)
-      } catch {
-        // A count that could not be written is a count lost, never a request failed.
-      } finally {
-        this.writing = null
-      }
-    })()
+    // Cleared by a .finally, never inside the write: a failure before the first
+    // await would clear it first and this assignment would then keep a settled
+    // promise forever, and the next flush would chase it until the heap ran out.
+    this.writing = this.write(tmp, snapshot).finally(() => {
+      this.writing = null
+    })
     return this.writing
+  }
+
+  private async write(tmp: string, snapshot: string): Promise<void> {
+    try {
+      mkdirSync(path.dirname(this.file), { recursive: true })
+      await writeFile(tmp, snapshot, { mode: 0o600 })
+      await rename(tmp, this.file)
+    } catch {
+      // A count that could not be written is a count lost, never a request failed.
+    }
   }
 }
 

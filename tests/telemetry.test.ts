@@ -224,7 +224,7 @@ describe('at most once per install', () => {
     expect(second.sent).toEqual([])
   })
 
-  it('the row is on disk before the request goes, so a crash cannot fire it twice', async () => {
+  it('the row is on disk before the request goes, so no later run emits it again', async () => {
     let onDisk: unknown = null
     const { telemetry } = on({
       fetch: async () => {
@@ -387,6 +387,19 @@ describe('sending', () => {
     const after = client({ fetch: line.fetch })
     await after.telemetry.resume()
     await after.telemetry.settled()
+    expect(line.sent).toHaveLength(SEND_TRIES)
+  })
+
+  it('a count of tries edited below zero does not buy more tries', async () => {
+    mkdirSync(base, { recursive: true })
+    writeFileSync(
+      telemetryFile(base),
+      JSON.stringify({ choice: true, events: { paid: { day: '2026-11-05', status: 'queued', tries: -1000 } } })
+    )
+    const line = wire([new Error('offline')])
+    const { telemetry } = client({ fetch: line.fetch })
+    await telemetry.resume()
+    await telemetry.settled()
     expect(line.sent).toHaveLength(SEND_TRIES)
   })
 

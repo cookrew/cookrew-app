@@ -22,8 +22,11 @@ import {
  * THE FUNNEL'S CLIENT: `emit('phone_paired')`, and everything else is here.
  *
  * AT MOST ONCE PER INSTALL. The row goes to ~/.cookrew/telemetry.json before the
- * request does, so a crash between the two costs a count, never a double. A
- * ledger that will not take the write sends nothing: unsure means no.
+ * request does, so no later run emits it again, and a ledger that will not take
+ * the write sends nothing: unsure means no. The one way a count can run over: a
+ * request the registry counted but whose answer never came back is retried, and
+ * the registry keeps nothing per install that could notice. That over-count is
+ * the price of retrying without server-side identity, bounded by SEND_TRIES.
  *
  * OFF MEANS IT STAYS HERE. While off (the default, shared/funnel-events.ts) an
  * event is a row in that file and nothing else: no request and no install id,
@@ -124,7 +127,7 @@ const readRow = (value: unknown): Row | null => {
   if (typeof value !== 'object' || value === null) return null
   const { day, status, tries } = value as Record<string, unknown>
   if (!isFunnelDay(day) || !isRowStatus(status)) return null
-  return { day, status, tries: typeof tries === 'number' ? tries : 0 }
+  return { day, status, tries: typeof tries === 'number' && tries > 0 ? tries : 0 }
 }
 
 /**

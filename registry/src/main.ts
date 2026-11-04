@@ -321,7 +321,12 @@ createRegistry({
   pulse: new Pulse(DATA),
   // The onboarding funnel. The registry has no site-wide owner role, so who may
   // read the totals is named at boot. No flag and no env: nobody can.
-  funnel: { counts: new FunnelCounts(DATA), owner: flag('funnel-owner', process.env.FUNNEL_OWNER ?? '') },
+  // Behind a proxy, name it (comma-separated peers) or every install shares one budget.
+  funnel: {
+    counts: new FunnelCounts(DATA),
+    owner: flag('funnel-owner', process.env.FUNNEL_OWNER ?? ''),
+    trustedProxies: flag('funnel-proxies', process.env.FUNNEL_PROXIES ?? '').split(',').filter(Boolean)
+  },
   // IDENTITY v2 — a username and a password, with devices attached. Built
   // from the same data directory as everything else, and sharing the token
   // key identity.ts already writes there, so one key signs every token this

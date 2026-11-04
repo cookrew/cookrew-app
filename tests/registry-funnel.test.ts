@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -42,7 +43,16 @@ interface Site {
 let dir = ''
 let site: Site | null = null
 
-async function up(options: { perMinute?: number; owner?: string; now?: () => number; mounted?: boolean } = {}): Promise<Site> {
+async function up(
+  options: {
+    perMinute?: number
+    owner?: string
+    now?: () => number
+    mounted?: boolean
+    trustedProxies?: readonly string[]
+    bodyMs?: number
+  } = {}
+): Promise<Site> {
   const now = options.now ?? ((): number => NOW)
   const counts = new FunnelCounts(dir, now)
   const server: Server = createRegistry({
@@ -51,7 +61,15 @@ async function up(options: { perMinute?: number; owner?: string; now?: () => num
     v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
     ...(options.mounted === false
       ? {}
-      : { funnel: { counts, owner: options.owner ?? 'drej', perMinute: options.perMinute ?? 1000 } })
+      : {
+          funnel: {
+            counts,
+            owner: options.owner ?? 'drej',
+            perMinute: options.perMinute ?? 1000,
+            ...(options.trustedProxies === undefined ? {} : { trustedProxies: options.trustedProxies }),
+            ...(options.bodyMs === undefined ? {} : { bodyMs: options.bodyMs })
+          }
+        })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const made: Site = {
@@ -159,6 +177,39 @@ describe('POST /v1/funnel', () => {
     expect(at.counts.totals().totals.installed).toBe(2)
   })
 
+  it('behind a named proxy each caller has its own budget', async () => {
+    const at = await up({ perMinute: 1, trustedProxies: ['127.0.0.1'] })
+    const from = (address: string): Promise<Response> =>
+      post(at, payload(), { 'content-type': 'application/json', 'x-forwarded-for': address })
+    expect((await from('203.0.113.1')).status).toBe(204)
+    expect((await from('203.0.113.1')).status).toBe(429)
+    expect((await from('203.0.113.2')).status).toBe(204)
+  })
+
+  it('with no proxy named, a forged header buys no fresh budget', async () => {
+    const at = await up({ perMinute: 1 })
+    const from = (address: string): Promise<Response> =>
+      post(at, payload(), { 'content-type': 'application/json', 'x-forwarded-for': address })
+    expect((await from('203.0.113.1')).status).toBe(204)
+    expect((await from('203.0.113.2')).status).toBe(429)
+  })
+
+  it('a body that never arrives does not hold the socket', async () => {
+    const at = await up({ bodyMs: 100 })
+    const socket = connect(Number(new URL(at.origin).port), '127.0.0.1')
+    socket.on('error', () => undefined)
+    socket.write('POST /v1/funnel HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n')
+    const closed = await new Promise<boolean>((resolve) => {
+      const giveUp = setTimeout(() => resolve(false), 3_000)
+      socket.on('close', () => {
+        clearTimeout(giveUp)
+        resolve(true)
+      })
+    })
+    socket.destroy()
+    expect(closed).toBe(true)
+  })
+
   it('does not exist on a registry that did not mount it', async () => {
     const at = await up({ mounted: false })
     expect((await post(at, payload())).status).toBe(404)
@@ -201,6 +252,16 @@ describe('what is kept', () => {
     expect(funnelLimiterKey('203.0.113.10')).not.toBe(key)
   })
 
+  it('a directory it cannot write loses the count and never spins the process', async () => {
+    writeFileSync(path.join(dir, 'a-file'), 'not a directory')
+    const counts = new FunnelCounts(path.join(dir, 'a-file', 'data'), () => NOW)
+    counts.add(payload())
+    await counts.flush()
+    counts.add(payload())
+    await counts.flush()
+    expect(counts.totals().totals.installed).toBe(2)
+  })
+
   it('survives a restart', async () => {
     const at = await up()
     await post(at, payload())
@@ -215,7 +276,6 @@ describe('what is kept', () => {
   })
 
   it('a torn file reads as empty and never takes the registry down', async () => {
-    const { writeFileSync } = await import('node:fs')
     writeFileSync(path.join(dir, 'funnel.json'), '{"2026-11-05":{"installed|mac')
     expect(new FunnelCounts(dir, () => NOW).totals().totals.installed).toBe(0)
     writeFileSync(path.join(dir, 'funnel.json'), JSON.stringify({ '2026-11-05': { 'prompt_sent|mac|0.4.0': 9, 'paid|mac|0.4.0': 'x' } }))

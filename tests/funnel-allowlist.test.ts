@@ -85,7 +85,10 @@ describe('reading a payload', () => {
     ['installId', '3F2B8C1E-9D4A-4E7B-8A6F-0C1D2E3F4A5B0'],
     ['day', '2026-11-05T13:37:00.000Z'],
     ['day', '1762349820000'],
-    ['day', 'yesterday']
+    ['day', 'yesterday'],
+    ['day', '2026-10-99'],
+    ['day', '2026-02-30'],
+    ['day', '2026-13-01']
   ])('refuses text in a narrow field: %s = %s', (key, value) => {
     expect(readFunnelPayload({ ...good, [key]: value })).toBeNull()
   })

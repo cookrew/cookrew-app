@@ -16,7 +16,7 @@ export function TelemetryRowView({ status, onToggle }: TelemetryRowViewProps): R
   return (
     <button
       type="button"
-      className={`cr-more-item${status.on ? ' on' : ''}`}
+      className={`cr-more-item tall${status.on ? ' on' : ''}`}
       aria-pressed={status.on}
       disabled={status.locked}
       onClick={onToggle}

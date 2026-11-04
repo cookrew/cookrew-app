@@ -61,7 +61,12 @@ export const isFunnelEvent = (value: unknown): value is FunnelEvent =>
 
 export const isOsFamily = (value: unknown): value is OsFamily => (OS_FAMILIES as readonly unknown[]).includes(value)
 
-export const isFunnelDay = (value: unknown): value is string => typeof value === 'string' && DAY.test(value)
+/** A real calendar day: the shape alone would take 2026-02-30 and keep it as a row. */
+export const isFunnelDay = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !DAY.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value)
+}
 
 export const isFunnelVersion = (value: unknown): value is string => typeof value === 'string' && VERSION.test(value)
 

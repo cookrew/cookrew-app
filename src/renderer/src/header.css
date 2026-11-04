@@ -225,6 +225,11 @@
   text-overflow: ellipsis;
 }
 
+/* A row with a note: the icon stays beside the label, not halfway down the note. */
+.cr-more-item.tall {
+  align-items: flex-start;
+}
+
 .cr-more-text {
   display: flex;
   flex: 1 1 auto;
