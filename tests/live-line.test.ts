@@ -27,6 +27,17 @@ beforeEach(() => {
   setDraft(draftKey('a1'), '')
 })
 
+describe('keys the Mac refused', () => {
+  it('never reached the line: the next send types the words again', async () => {
+    const { inputRefused } = await import('../src/renderer/src/prompt/input-refused')
+    typeLine('a1', 'hello')
+    inputRefused.emit('a1', 'hello')
+    ptyInput.mockReset()
+    submitLine('a1', 'hello')
+    expect(typedKeys()).toEqual(['hello', '\r'])
+  })
+})
+
 describe('keysFor', () => {
   it('types only what was added', () => {
     expect(keysFor('', 'fix')).toBe('fix')

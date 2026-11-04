@@ -76,8 +76,8 @@ export interface TraceBlock {
    * 'interrupted', 'error'/'length' → 'failed'. Always paired with
    * `final: true` — an abort/error IS positive evidence the turn ended,
    * just not well. Successful finality leaves it absent (absent-on-final
-   * means done, see TurnRecord.outcome). Claude has no in-file failure
-   * marker (an errored turn simply never writes end_turn), so Claude
+   * means done, see TurnRecord.outcome). Claude's markers are read by
+   * session-turns.ts (end_turn, its interruption line), not here, so Claude
    * blocks never carry it.
    */
   outcome?: 'failed' | 'interrupted'

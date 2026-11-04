@@ -57,7 +57,12 @@ export async function servedTurnReply(
         record.final === true &&
         promptAnswersDispatch(record.prompt, prompt)
     )
-    if (answer !== undefined) return answer.reply
+    if (answer !== undefined) {
+      // A turn cut short is not an answer, whatever partial words it left: the
+      // served caller must not take them for one.
+      if (answer.outcome !== undefined) throw new Error(`the served crew's turn ended ${answer.outcome}, with no finished reply`)
+      return answer.reply
+    }
     if (now() >= deadline) {
       throw new Error('the served crew completed no file-backed agent turn')
     }

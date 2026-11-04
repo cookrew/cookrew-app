@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AgentLatest } from './AgentLatest'
 import { draftKey, useDraft } from '../prompt/prompt-draft'
+import { noteSent } from '../prompt/input-refused'
 import { submitLine, typeLine, useLiveLine } from '../prompt/live-line'
 import { usePromptAttach } from '../prompt/use-prompt-attach'
 import type { AgentView } from './zoom-model'
@@ -57,6 +58,7 @@ export function useQuickReply(agentId: string, onDraft?: (text: string) => void,
   const send = (): void => {
     const text = draft.trim()
     if (!text) return
+    noteSent({ id: agentId, box: draftKey(agentId), words: text, at: Date.now() })
     submitLine(agentId, text)
     onDraft?.('')
     setSent(text)

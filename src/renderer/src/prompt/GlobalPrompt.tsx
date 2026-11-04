@@ -22,6 +22,7 @@ import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
+import { inputRefused, noteSent, takeRefused } from './input-refused'
 import { boxPin, boxTargetId, heldAfter, mentionTarget, pickAfterMove, pickNow, promptTargetOf, releaseAfter, zoomMoveKey, type Pick, type Release } from './prompt-target'
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
@@ -458,6 +459,17 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const plan = sendPlan({ text, to, fullAgentId, mention: mentionTarget(text, agents) })
   /** The wait on show (declared below, with the rest of it). */
   const waitRef = useRef<WaitAnswering | null>(null)
+  // The Mac would not take them: the words come back, and the box says why.
+  useEffect(
+    () =>
+      inputRefused.subscribe((id, data) => {
+        const back = takeRefused(id, data, Date.now())
+        if (!back) return
+        if (back.words && getDraft(back.box) === '') setDraft(back.box, back.words)
+        setError(`Not sent: ${agents.find((a) => a.id === id)?.name ?? 'the agent'} is still on a task it was given.`)
+      }),
+    [agents]
+  )
   const submit = (): void => {
     setError(null)
     // The key dips only when its press sends something.
@@ -465,6 +477,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     if (plan.kind === 'mention') {
       // "@Other …" goes to Other, whoever the box is carrying.
       const out = said(withItemRef(plan.words, attachedItem, artifacts))
+      noteSent({ id: plan.id, box: draftKey(to?.id ?? null), words: text, at: Date.now() })
       sendToAgent(plan.id, out.words)
       wireRefs(plan.id, out.refs)
       toast.leave(nameOf(plan.id), shownWords(plan.words))
@@ -488,6 +501,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         toast.leave(nameOf(plan.id), shownWords(plan.words))
         return
       }
+      noteSent({ id: plan.id, box: draftKey(to?.id ?? null), words: text, at: Date.now() })
       submitLine(plan.id, out.words.trim() ? out.words : '')
       wireRefs(plan.id, out.refs)
       toast.leave(nameOf(plan.id), shownWords(plan.words))

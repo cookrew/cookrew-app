@@ -71,6 +71,23 @@ describe('served replies come from completed harness turns', () => {
     expect(reply).toBe('new answer')
   })
 
+  it('a turn cut short is no answer, whatever partial words it left', async () => {
+    let history: TurnRecord[] = []
+    await expect(
+      servedTurnReply(
+        {
+          history: () => history,
+          deliver: async () => '',
+          wait: async () => {
+            history = [record({ reply: 'half a thou', outcome: 'interrupted' })]
+          },
+          now: () => 0
+        },
+        'Reply with exactly: CREW LINE OK'
+      )
+    ).rejects.toThrow('ended interrupted')
+  })
+
   it('refuses to substitute a PTY diff when no file-final turn appears', async () => {
     let now = 0
     await expect(
