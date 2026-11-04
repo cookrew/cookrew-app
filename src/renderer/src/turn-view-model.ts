@@ -21,8 +21,11 @@ export interface TurnViewModel {
   ask: string | null
   /** Tool calls in TUI order, oldest→newest. */
   tools: string[]
-  /** Live status verb, or the reply once the turn is done. */
-  latest: { text: string; tone: TurnTone } | null
+  /**
+   * Live status verb, or the reply once the turn is done. `text` is its first
+   * line; `full` the whole message, present only when it says more than that.
+   */
+  latest: { text: string; tone: TurnTone; full?: string } | null
   /** Typed-but-unsent input — visibly IN the box, never posing as an ask. */
   pendingInput: string | null
   /** Screen tail, when no turn is tracked (reattach after a restart). */
@@ -66,14 +69,14 @@ export function checkpointViewModel(cp: LatestCheckpoint | null): TurnViewModel 
   // line, and what it says stands in for a title until Sous has one.
   const notice = isHarnessNotice(cp.prompt)
   const ask = !notice && cp.prompt.trim() ? firstLine(cp.prompt) : null
-  const reply = cp.reply.trim() ? firstLine(cp.reply) : null
+  const reply = cp.reply.trim() ? said(cp.reply, 'done') : null
   const title = cp.title ? firstLine(cp.title) : notice ? noticeLine(cp.prompt) : null
   if (!ask && !reply && !title) return null
   return {
     title,
     ask,
     tools: [],
-    latest: reply ? { text: reply, tone: 'done' } : null,
+    latest: reply,
     pendingInput: null,
     tail: null,
   }
@@ -87,6 +90,13 @@ function firstLine(text: string): string {
       .find((l) => l.trim() !== '')
       ?.trim() ?? ''
   )
+}
+
+/** A message as a card holds it: its first line, and the rest when there is more. */
+function said(text: string, tone: TurnTone): NonNullable<TurnViewModel['latest']> {
+  const line = firstLine(text)
+  const whole = text.trim()
+  return whole === line ? { text: line, tone } : { text: line, tone, full: whole }
 }
 
 /** Drop the "(esc to interrupt · …)" chrome the TUI appends to its status. */
@@ -137,7 +147,6 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
     }
   }
 
-  const message = activity.glance?.message ? firstLine(activity.glance.message) : null
   const latest: TurnViewModel['latest'] =
     activity.phase === 'thinking'
       ? {
@@ -145,9 +154,9 @@ export function turnViewOf(activity: TerminalActivity | undefined): TurnViewMode
           tone: 'working',
         }
       : activity.phase === 'waiting'
-        ? { text: message ?? 'Needs your input', tone: 'waiting' }
+        ? said(activity.glance?.message || 'Needs your input', 'waiting')
         : activity.reply
-          ? { text: firstLine(activity.reply), tone: 'done' }
+          ? said(activity.reply, 'done')
           : null
 
   // A turn the harness started is nobody's ask (harness-notice.ts).

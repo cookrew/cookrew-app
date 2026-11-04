@@ -259,9 +259,16 @@
     font-size: calc(var(--ph-body) / var(--zv-k-card, 1));
     line-height: calc(18px / var(--zv-k-card, 1));
   }
+  :root:root .zv-body:is(.roomy, .open) {
+    max-height: var(--zv-words-room);
+  }
   :root:root .zv-body .ag-latest {
     font-size: inherit;
     line-height: inherit;
+  }
+  :root:root .zv-more {
+    font-size: calc(var(--ph-caption) / var(--zv-k-card, 1));
+    line-height: calc(16px / var(--zv-k-card, 1));
   }
   :root:root .zv-reply input {
     font-size: calc(var(--ph-input) / var(--zv-k-card, 1));
