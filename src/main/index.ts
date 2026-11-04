@@ -259,7 +259,8 @@ import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profi
 import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
 import { pressureOf, readMachineMemory, sleepColdLookups, sleepWindowMs, type PressureLevel } from './machine-pressure'
 import { staleAgentIds } from './agent-reconcile'
-import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
+import { IdleSleep, idleSleepMsFrom, type SleepFacts } from './agent-sleep'
+import { reasonAwake, sleepReport, writeSleepReport } from './sleep-report'
 import { AgentWaker } from './agent-wake'
 import { cronArmedIn, gatherSleepEvidence, paneHolder, quietSince, readProcTable, sessionMoved } from './agent-sleep-evidence'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
@@ -3288,13 +3289,33 @@ async function readMachinePressure(): Promise<void> {
 }
 
 /** Anything that means a person or a turn is using this agent right now. */
+function agentBusyWhy(id: string): string | null {
+  if (lazyTerminals.viewerCount(id) > 0) return 'viewer'
+  if (turns.inTurn(id)) return 'in a turn'
+  if (turns.ownerComposing(id)) return 'owner composing'
+  return agentStatus(sessionNameFor(id)) === 'working' ? 'herdr says working' : null
+}
+
 function agentBusy(id: string): boolean {
-  return (
-    lazyTerminals.viewerCount(id) > 0 ||
-    turns.inTurn(id) ||
-    turns.ownerComposing(id) ||
-    agentStatus(sessionNameFor(id)) === 'working'
-  )
+  return agentBusyWhy(id) !== null
+}
+
+/** What the evidence last said about a nominee it kept awake. */
+const sleepHolds = new Map<string, string>()
+const SLEEP_REPORT_FILE = path.join(homedir(), '.cookrew', 'sleep-sweep.json')
+
+function reportSleepSweep(
+  running: readonly TerminalNodeData[],
+  facts: readonly SleepFacts[],
+  nominated: ReadonlySet<string>,
+  windowMs: number
+): void {
+  const cards = running.map((node, index) => ({
+    id: node.id,
+    name: node.name,
+    why: reasonAwake(facts[index], agentBusyWhy(node.id), sleepHolds.get(node.id) ?? null, nominated.has(node.id))
+  }))
+  writeSleepReport(SLEEP_REPORT_FILE, sleepReport({ at: Date.now(), pressure: machinePressure, windowMs, cards }))
 }
 
 /** One multiplexer listing per sweep — the same price as the liveness sweep. */
@@ -3310,16 +3331,14 @@ function sleepSweep(): void {
     // phone) has a person at it that Cookrew's viewer count cannot see.
     const focused = new Set(mux.focusedSessions?.() ?? [])
     const running = store.terminalsAcross().filter((n) => sessions.has(sessionNameFor(n.id)))
-    const due = idleSleep.due(
-      running.map((n) => ({
-        id: n.id,
-        resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
-        served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
-        busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
-      })),
-      Date.now(),
-      windowMs
-    )
+    const facts = running.map((n) => ({
+      id: n.id,
+      resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
+      served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
+      busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
+    }))
+    const due = idleSleep.due(facts, Date.now(), windowMs)
+    reportSleepSweep(running, facts, new Set(due), windowMs)
     if (due.length > 0) void confirmSleep(due, windowMs)
   } catch (error) {
     console.error('Idle sleep sweep failed:', error)
@@ -3349,6 +3368,7 @@ async function confirmSleep(due: readonly string[], windowMs: number): Promise<v
       const now = Date.now()
       const holder = paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd, node.claudeSessionId)
       if (sessionMoved(holder, node.claudeSessionId)) {
+        sleepHolds.set(id, 'pane runs another session')
         idleSleep.restart(id, now)
         continue
       }
@@ -3356,13 +3376,16 @@ async function confirmSleep(due: readonly string[], windowMs: number): Promise<v
       const evidence = await gatherSleepEvidence({ holder, holders, procs, transcript, now })
       const quiet = quietSince(evidence, now)
       if (now - quiet.at < windowMs) {
+        sleepHolds.set(id, quiet.why)
         idleSleep.restart(id, quiet.at)
         continue
       }
       if (await cronArmedIn(transcript, now)) {
+        sleepHolds.set(id, 'a recurring cron is armed')
         idleSleep.restart(id, now)
         continue
       }
+      sleepHolds.delete(id)
       putAgentToSleep(id, now - quiet.at)
     }
   } catch (error) {
