@@ -1,6 +1,7 @@
 import { InkAvatar } from './InkAvatar'
 import { useNameEdit } from './NameEdit'
-import { CardWords, QuickReply, useQuickReply } from './quick-reply'
+import { CardBody } from './CardBody'
+import { QuickReply, useQuickReply } from './quick-reply'
 import { Counts, NOTE_GLYPH, Page } from './ZoomParts'
 import type { AgentView, ItemView } from './zoom-model'
 import './agent-card.css'
@@ -88,9 +89,7 @@ export function AgentCard({
           ×
         </button>
       )}
-      <div className="zv-body cr-pet-card-turn" style={at(body)}>
-        <CardWords agent={agent} sent={reply.sent} />
-      </div>
+      <CardBody agent={agent} sent={reply.sent} roomy={items.length === 0} className="zv-body cr-pet-card-turn" style={at(body)} />
       {items.length > 0 &&
         items.slice(0, CARD_THUMBS).map((item, k) => (
           <button key={item.id} type="button" className={`zv-lk ag-lk ${item.kind}`} style={at(thumb(k))} title={item.title} aria-label={`Open ${item.kind}: ${item.title}`} onClick={() => onItem(item.id)}>

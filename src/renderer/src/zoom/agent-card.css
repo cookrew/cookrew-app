@@ -3,7 +3,7 @@
    open it rather than drawing their own (owner, 2026-10-31). Its latest is
    the turn: headline, your ask, the tool it runs, the live status. */
 
-/* ── the latest block: four lines at most, one each ── */
+/* ── the latest block: one line each, the message as much as there is room for ── */
 .ag-latest {
   display: flex;
   flex-direction: column;
@@ -18,6 +18,58 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The message reads as the transcript's does, at the card's own size. */
+.ag-latest > :is(.ag-full, .ag-now.done),
+.zv-body.open .ag-latest > * {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.ag-full :is(p, ul, ol, pre, blockquote, table, h1, h2, h3, h4, h5, h6) {
+  margin: 0 0 6px;
+  font: inherit;
+}
+
+.ag-full > :last-child {
+  margin-bottom: 0;
+}
+
+.ag-full :is(h1, h2, h3, h4, h5, h6, strong, b) {
+  font-weight: 600;
+  color: var(--zv-ink);
+}
+
+.ag-full :is(ul, ol) {
+  padding-left: 14px;
+}
+
+.ag-full code {
+  font: inherit;
+  color: var(--zv-seal-text);
+}
+
+.ag-full pre {
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.ag-full table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.ag-full :is(th, td) {
+  padding: 0 8px 0 0;
+  text-align: left;
+}
+
+.ag-full.waiting .ag-dot {
+  float: left;
+  margin: 5px 6px 0 0;
 }
 
 .ag-title {

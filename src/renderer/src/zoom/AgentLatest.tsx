@@ -1,3 +1,4 @@
+import { MarkdownText } from '../MarkdownText'
 import type { TurnViewModel } from '../turn-view-model'
 
 /**
@@ -7,15 +8,15 @@ import type { TurnViewModel } from '../turn-view-model'
  * (ZoomParts.tsx · AgentNode) — and they disagreed: the pet's said the turn
  * (its headline, your ask, the tool it is running, the live status), the
  * zoom's one line. The owner ruled the turn is what both say, in the zoom
- * card's ink: four lines at most, one each, never wrapping, so the zoom
- * painter can place the strip of thumbnails under it at a fixed offset.
+ * card's ink: the headline, your ask and the tool one line each.
+ *
+ * THE REPLY IS READ, NOT QUOTED (owner, 2026-11-04): a finished turn's message
+ * or a question comes whole, as markdown, wrapping into the room the card has;
+ * what does not fit is CardBody's to unfold. A live status stays one line.
  *
  * Built from the same TurnViewModel the board card renders (turn-view-model.ts);
  * `fallback` is what is said when no turn is known at all.
  */
-
-/** Lines the block takes at most: the zoom card's geometry counts on it (zoom.css · .ag-latest). */
-export const LATEST_LINES = 4
 
 export function AgentLatest({ turn, fallback }: { turn: TurnViewModel | null; fallback: string }): React.JSX.Element {
   const tracked = turn && (turn.title !== null || turn.ask !== null || turn.tools.length > 0 || turn.latest !== null)
@@ -42,11 +43,16 @@ export function AgentLatest({ turn, fallback }: { turn: TurnViewModel | null; fa
           <i aria-hidden="true">›_</i> {tool}
         </span>
       )}
-      {turn.latest ? (
-        <span className={`ag-now ${turn.latest.tone}`} title={turn.latest.text}>
-          {turn.latest.tone !== 'done' && <i className="ag-dot" aria-hidden="true" />}
+      {turn.latest?.tone === 'working' ? (
+        <span className="ag-now working" title={turn.latest.text}>
+          <i className="ag-dot" aria-hidden="true" />
           {turn.latest.text}
         </span>
+      ) : turn.latest ? (
+        <div className={`ag-now ag-full ${turn.latest.tone}`}>
+          {turn.latest.tone === 'waiting' && <i className="ag-dot" aria-hidden="true" />}
+          <MarkdownText source={turn.latest.full ?? turn.latest.text} />
+        </div>
       ) : (
         <span className="ag-now done">Ready</span>
       )}

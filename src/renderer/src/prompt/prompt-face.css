@@ -637,6 +637,11 @@ body.cr-prompt-open .zv-root:not([data-full='true']) .zv-controls {
     display: none !important;
   }
 
+  /* Its room goes to the words, down to the card's foot. */
+  body.cookrew-mobile:is(.cr-prompt-folded, .cr-prompt-open) .zv-body:not(.cr-pet-card-turn) {
+    --zv-words-room: 168px;
+  }
+
   /* A phone's band is 56 + max(8, inset): the face (52) sits in it. */
   .pf-corner {
     right: 12px;

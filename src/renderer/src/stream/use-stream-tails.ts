@@ -21,6 +21,7 @@ import { cookrew, isRemoteMode } from '../api'
 import { pickStreamTransport } from './use-stream'
 import { readEach } from './read-each'
 import type { StreamTransport } from './stream-transport'
+import { closingMessage } from '../../../shared/trace-blocks'
 import type { LatestCheckpoint } from '../turn-view-model'
 
 /** With a push, the poll is only the backstop. Without one it IS freshness. */
@@ -49,7 +50,7 @@ async function previewOf(
   if (tail === null || tail.block === null) return null
   return {
     prompt: tail.block.prompt,
-    reply: tail.block.reply,
+    reply: closingMessage(tail.block),
     ...(tail.marks?.title !== undefined ? { title: tail.marks.title } : {})
   }
 }

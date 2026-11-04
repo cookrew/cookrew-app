@@ -165,7 +165,7 @@ describe('turnViewOf: a tracked turn is unchanged', () => {
         glance: { status: null, tools: ['Bash(git push)'], message: null }
       })
     )
-    expect(model.latest).toEqual({ text: 'Shipped.', tone: 'done' })
+    expect(model.latest).toEqual({ text: 'Shipped.', tone: 'done', full: 'Shipped.\ndetails' })
     expect(model.tools).toEqual([])
   })
 })
@@ -176,6 +176,19 @@ describe('turnViewOf: a tracked turn is unchanged', () => {
  * no matter what the model said. Guarded at the source because a .tsx test
  * would need `jsx` in tsconfig.node.json, which tests/** is compiled by.
  */
+describe('turnViewOf: the whole message rides beside its line', () => {
+  it('keeps a reply whole for the card that can read it out', () => {
+    const model = turnViewOf(activity({ phase: 'replied', prompt: 'ask', reply: 'Shipped.\n\n- one\n- two' }))
+    expect(model.latest).toEqual({ text: 'Shipped.', tone: 'done', full: 'Shipped.\n\n- one\n- two' })
+  })
+
+  it('keeps a whole question too', () => {
+    const glance = { status: null, tools: [], message: 'Allow Bash to run?\n1. Yes\n2. No' }
+    const model = turnViewOf(activity({ phase: 'waiting', prompt: 'ask', glance }))
+    expect(model.latest).toEqual({ text: 'Allow Bash to run?', tone: 'waiting', full: 'Allow Bash to run?\n1. Yes\n2. No' })
+  })
+})
+
 describe('TurnView binds the tail branch to an empty MODEL, not to a null ask', () => {
   it('does not take the tail path on `ask === null` alone', () => {
     expect(TURN_VIEW_SOURCE).not.toMatch(/if \(ask === null\) \{/)

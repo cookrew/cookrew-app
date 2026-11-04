@@ -7,7 +7,8 @@ import {
   parseCodexSessionMeta,
   parseCodexTrace,
   parsePiTrace,
-  traceIndexOf
+  traceIndexOf,
+  closingMessage
 } from '../src/shared/trace-blocks'
 
 const T0 = Date.parse('2026-07-22T10:00:00.000Z')
@@ -325,5 +326,40 @@ describe('compactMarkersOf (◆ rail markers from compact_boundary entries)', ()
       boundary(10, 1)
     ]
     expect(compactMarkersOf(lines)).toEqual([{ kind: 'compact', afterIndex: 1, preTokens: 10, postTokens: 1 }])
+  })
+})
+
+// THE WORDS A TURN ENDS ON (owner, 2026-11-04: the card said a turn's first
+// sentence, "let me look at the code", under a finished turn). `reply` joins
+// every message of the turn; a card says what the agent said last.
+describe('closingMessage', () => {
+  const call = (at?: number) => ({ tool: 'Bash', args: 'x', result: '', ...(at === undefined ? {} : { at }) })
+
+  it('drops the narration before the last step', () => {
+    const first = 'Looking at the code.'
+    const reply = `${first}\n\nAll done:\n- one\n\n- two`
+    expect(closingMessage({ reply, activity: [call(0), call(first.length)] })).toBe('All done:\n- one\n\n- two')
+  })
+
+  it('says the last thing said while a step is still running', () => {
+    const reply = 'One.\n\nTwo.\n\nThree.'
+    const activity = [call('One.'.length), call('One.\n\nTwo.'.length), call(reply.length), call(reply.length)]
+    expect(closingMessage({ reply, activity })).toBe('Three.')
+  })
+
+  it('keeps a multi-part answer whole: only a step parts it', () => {
+    expect(closingMessage({ reply: 'part one\n\npart two', activity: [] })).toBe('part one\n\npart two')
+  })
+
+  it('takes the whole reply where calls carry no place (codex: the reply is the last message)', () => {
+    expect(closingMessage({ reply: 'the answer\n\nin two paragraphs', activity: [call()] })).toBe('the answer\n\nin two paragraphs')
+  })
+
+  it('reads a call placed past the reply as no place at all', () => {
+    expect(closingMessage({ reply: 'short', activity: [call(9000)] })).toBe('short')
+  })
+
+  it('is empty for a turn that said nothing', () => {
+    expect(closingMessage({ reply: '', activity: [call(0)] })).toBe('')
   })
 })
