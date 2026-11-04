@@ -1273,6 +1273,7 @@ export class WorkspaceStore extends EventEmitter {
         return updated
       })
     }))
+    if (updated?.kind === 'note') void this.persistNoteFile(updated, hit.workspaceId)
     if (updated) this.spillLineage(updated, patch)
     return updated
   }
@@ -1328,7 +1329,8 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Write note content; renames the note when it has no custom name. */
   writeNote(id: string, content: string): NoteNodeData | undefined {
-    const note = this.node(id)
+    // Any canvas, as updateNode: the owner looking elsewhere is no reason to drop the words.
+    const note = this.node(id) ?? this.nodeAcrossWorkspaces(id)?.node
     if (!note || note.kind !== 'note') return undefined
     // AGAINST ITS OWN CANVAS, not the one on screen. A note written from an
     // agent's terminal while the owner is looking elsewhere would otherwise be
