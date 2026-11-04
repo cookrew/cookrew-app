@@ -78,6 +78,8 @@ interface Lane {
 
 /** Submit-capable per ownerSubmit's own classifier boundary. */
 const carriesEnter = (chunk: string): boolean => chunk.includes('\r') || chunk.includes('\n')
+/** Sent on their own: an Enter (see above), and an Esc, which merged into a batch would interrupt nothing. */
+const goesAlone = (chunk: string): boolean => carriesEnter(chunk) || chunk === '\x1b'
 
 const pageNonce = (): string =>
   typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -137,11 +139,11 @@ export function createRawInputQueue(
   const pump = (terminalId: string, lane: Lane): void => {
     if (lane.inFlight || lane.chunks.length === 0) return
     let data: string
-    if (carriesEnter(lane.chunks[0])) {
+    if (goesAlone(lane.chunks[0])) {
       data = lane.chunks.shift() as string
     } else {
       data = ''
-      while (lane.chunks.length > 0 && !carriesEnter(lane.chunks[0])) {
+      while (lane.chunks.length > 0 && !goesAlone(lane.chunks[0])) {
         data += lane.chunks.shift() as string
       }
     }

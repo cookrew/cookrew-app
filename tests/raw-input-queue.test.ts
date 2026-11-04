@@ -227,3 +227,25 @@ describe('an answer that refuses the keys', () => {
     expect(refused).toEqual([])
   })
 })
+
+describe('an Esc queued behind other keys', () => {
+  it('goes alone: merged into a batch it would be words, and no interrupt', () => {
+    const { push, sent, settle } = harness()
+    push('t', 'a')
+    push('t', 'b')
+    push('t', '\x1b')
+    push('t', 'c')
+    settle(0)
+    return Promise.resolve()
+      .then(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      .then(() => {
+        settle(1)
+        return new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      .then(() => {
+        settle(2)
+        return new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      .then(() => expect(sent.map((s) => s.data)).toEqual(['a', 'b', '\x1b', 'c']))
+  })
+})
