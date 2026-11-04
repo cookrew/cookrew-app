@@ -7,7 +7,7 @@ import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, type Bind, NewestThumb } from './ZoomParts'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
-import { InkRing, InkTie } from './InkAvatar'
+import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf } from './zoom-model'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
@@ -146,7 +146,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const collectNow = useCallback((): FrameEls | null => {
     const all = registry.current
     const get = (k: string): HTMLElement | null => all.get(k) ?? null
-    const base = ['devices', 'device', 'scene', 'panel', 'wash', 'ring', 'label', 'newCap', 'machine'] as const
+    const base = ['devices', 'device', 'scene', 'panel', 'wash', 'label', 'newCap', 'machine'] as const
     if (base.some((k) => !get(k))) return null
     const agents: FrameEls['agents'] = new Map()
     const links: FrameEls['links'] = new Map()
@@ -177,7 +177,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
   // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
@@ -641,7 +641,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           <div className="zv-device-label" ref={bind('deviceLabel')} style={{ maxWidth: Math.round(words.titleMax) }}>
             <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span>
           </div>
-          {/* In the grid's order, so Tab walks it as the eye does. The open tile's ring and faces are the scene's, over it. */}
+          {/* In the grid's order, so Tab walks it as the eye does. The open tile's faces are the scene's, over it. */}
           {model.frame.workspaces.map((id) => {
             if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', () => motion.go(1, 'agents'))} onOpenItems={stable('open-items', () => motion.go(0, 'items'))} />
             const m = markOf.get(id)
@@ -652,7 +652,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <div className="zv-panel" ref={bind('panel')} />
         <div className="zv-scene" ref={bind('scene')}>
           <div className="zv-wash" ref={bind('wash')} />
-          <div className="zv-ring" ref={bind('ring')}><InkRing /></div>
           {model.frame.ties.map((t) => <div key={t.key} className="zv-tie" ref={bind(`tie:${t.key}`)}><InkTie /></div>)}
           {model.agents.map((a) => (
             <div key={a.id} className="zv-cardl" ref={bind(`agent-cardl:${a.id}`)}>

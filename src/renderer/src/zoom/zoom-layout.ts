@@ -43,33 +43,35 @@ export const NEW_POSE = { x: 132, y: 34, s: 1.5 } as const
 export const SWS = 0.62
 /**
  * A WORKSPACE'S TILE (owner, 2026-11-04: "how the agents group and the
- * artifacts group show on one page"). One bench: the agents' ring on the left,
+ * artifacts group show on one page"). One bench: the agents' faces on the left,
  * the artifacts' deck on the right, a name over both, each group its own door.
- * In a mark's units (the group's own, drawn at SWS on the device), around the
- * ring's group centre, so the open workspace's real ring stands in its tile.
+ * No ring round the faces (owner, 2026-11-04): they stand on the tile. In a
+ * mark's units (the group's own, drawn at SWS on the device), around the
+ * group's centre, so the open workspace's real faces stand in its tile.
  */
-export const TILE = { left: -112, top: -186, w: 430, h: 350 } as const
-/** A tile's words on screen at a phone's picks, in px: its name's line over the ring, its counts' under it, and only a margin where it has no counts. */
+export const TILE = { left: -112, top: -174, w: 430, h: 318 } as const
+/** A tile's words on screen at a phone's picks, in px: its name's line over the bench, its counts' under it, and only a margin where it has no counts. */
 const TILE_HEAD_PX = { name: 28, caption: 21 }
 const TILE_FOOT_PX = { counts: 26, none: 8 }
 /** The picks where a phone's tile has room for its counts, and where its name is still set as a name. */
 const COUNTS_COLS = 3
 /** The width a phone's picks are reckoned at: the words' room is a few px off at any other. */
 const PHONE_REF_W = 350
-const RING = { top: -100, bottom: 80 }
+/** What the words stand clear of: the deck, the taller of the two groups, at its deepest. */
+export const BENCH = { top: -88, bottom: 60 } as const
 
 /**
- * A tile's frame at a pick: the ring and the deck stay in their places, its
+ * A tile's frame at a pick: the faces and the deck stay in their places, its
  * words stay one size on screen, so the fewer pixels a mark's unit gets, the
  * more units they take (owner, 2026-11-04: at 3 and 5 to a row the names sat
- * on the rings).
+ * on the groups).
  */
 export function tileOf(narrow: boolean, cols: number): { top: number; h: number } {
   if (!narrow || cols <= 2) return { top: TILE.top, h: TILE.h }
   const px = (PHONE_REF_W - 32 - (cols - 1) * 12) / cols / TILE.w
   const head = (cols > COUNTS_COLS ? TILE_HEAD_PX.caption : TILE_HEAD_PX.name) / px
   const foot = (cols > COUNTS_COLS ? TILE_FOOT_PX.none : TILE_FOOT_PX.counts) / px
-  return { top: RING.top - head, h: RING.bottom - RING.top + head + foot }
+  return { top: BENCH.top - head, h: BENCH.bottom - BENCH.top + head + foot }
 }
 
 /** The deck's centre and scale in the tile: a thumbnail of the artifacts' grid, as large as the ring can stand beside. */
@@ -78,12 +80,14 @@ export const DECK_POSE = { x: 194, y: -10, s: 1.08 } as const
 export const TILE_SPLIT = 98
 export const ROW = 175
 
-/** The most faces a ring fans out: past them it is a swirl of coins, not people (owner, 2026-11-04). */
+/** The most faces a fan shows: past them it is a swirl of coins, not people (owner, 2026-11-04). */
 const FAN_SHOWN = 6
-/** The fan's reach inside the ring (its inner width less a face), and its steepest lean. */
-const FAN_REACH = 100
-const FAN_STEP = 20
+/** The fan's reach (the agents' door less a face), and its steepest lean. */
+const FAN_REACH = 116
+const FAN_STEP = 23
 const FAN_LEAN = 16
+/** A face in the fan, of its size at the crew. */
+const FAN_FACE = 1.05
 
 /** The fan of `n` faces, bottom → top: never more than FAN_SHOWN, a face's width apart at most. */
 export function fanOf(n: number): (Pos & { s: number; r: number })[] {
@@ -93,11 +97,11 @@ export function fanOf(n: number): (Pos & { s: number; r: number })[] {
   const lean = mid > 0 ? Math.min(6, FAN_LEAN / mid) : 0
   return Array.from({ length: m }, (_, i) => {
     const k = i - mid
-    return { x: k * step, y: -10 - (mid - Math.abs(k)) * 2.5, s: 0.84, r: k * lean }
+    return { x: k * step, y: -10 - (mid - Math.abs(k)) * 2.5, s: FAN_FACE, r: k * lean }
   })
 }
 
-/** The stack in the ring: drawn bottom → top, the first agent (an orchestrator if there is one) on top; those the fan does not show wait under its first face. */
+/** The stack on the tile: drawn bottom → top, the first agent (an orchestrator if there is one) on top; those the fan does not show wait under its first face. */
 export function stackOf(agents: readonly CrewAgent[]): Record<string, Pos & { s: number; r: number }> {
   const order = [...agents].reverse()
   const fan = fanOf(order.length)

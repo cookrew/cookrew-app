@@ -20,7 +20,7 @@ export const LABEL = { w: 200, h: 24 }
 
 export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: number; w: number; h: number; narrow: boolean }, size: { w: number; h: number } = LABEL, agents: Map<string, AgentEls> = new Map()) {
   const els = {
-    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
+    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), label: part(), newCap: part(), machine: part(),
     labelW: size.w, labelH: size.h,
     agents, links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null
   } as unknown as FrameEls

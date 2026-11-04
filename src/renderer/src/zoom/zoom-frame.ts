@@ -89,7 +89,6 @@ export interface FrameEls {
   scene: Put
   panel: Put
   wash: Put
-  ring: Put
   label: Put
   labelW: number
   labelH: number
@@ -299,7 +298,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const live = sw.live
   paintDeviceWords(L, els, { live, zIn, dS, vS, camD, camDD: fit(L.devicesBox), dw: deviceWords(L.device, w, h, st.narrow), shown: deviceSeen })
 
-  // ── the wash and the ring: the workspace's own ground ──
+  // ── the wash: the workspace's own ground ──
   // At the workspaces stop its tile is its ground and its name: the group's own come as the tile goes.
   const inTile = ramp(zIn, -0.6, TILE_GONE[1])
   const wb = zIn < 0 ? GROUP_BOX : bA
@@ -310,8 +309,6 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   // The ground lies over the sheet now (the sheet is under the scene): it goes as a full view comes.
   const sheetIn = st.dir === 'agents' ? ramp(z, 2, 2.4) : ramp(I, 0, 0.4)
   put(els.wash, `translate(0px, ${f1(lerp(lerp(-10, wb.cy, ease(z)), tb.cy, pc))}px) scale(${f4(wsx)}, ${f4(wsy)})`, lerp(0.6, 0.55, ease(z)) * (1 - sheetIn) * inTile)
-  const open = ease(clamp01(z))
-  put(els.ring, `translate(0px, -10px) scale(${f4(1 + 1.7 * open)}) rotate(${(-18 * open).toFixed(2)}deg)`, (1 - ramp(z, 0.05, 0.75)) * (1 - ramp(P, 0, 0.3)))
 
   // ── the agents ──
   // The open card's words are set for the card stop's scale (phone-type.css · --zv-k-card): drawn at kc / S they read the same on every frame.
