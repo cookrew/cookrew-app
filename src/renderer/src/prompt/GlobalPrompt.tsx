@@ -57,6 +57,9 @@ import { WhoPicker } from './WhoPicker'
 import { WaitChoices } from './WaitChoices'
 import { useWaitAnswer, type WaitAnswering } from './wait-answer'
 import { promptBox } from './box-focus'
+import { firstFolder } from '../first-run/first-folder'
+import { useFirstRunStage } from '../first-run/first-run-state'
+import { FIRST_SCREEN_COPY } from '../../../shared/first-run-copy'
 import './global-prompt.css'
 
 /**
@@ -112,6 +115,11 @@ import './global-prompt.css'
  * held, puts the words into the draft to be read and sent, for an agent or
  * for a new one. A sentence addressed to Sous ("Sous, switch to …") goes to
  * Sous instead; if it was no command after all, it lands in the draft.
+ *
+ * THE FIRST SCREEN IS THIS BOX (first-run/FirstScreen.tsx): held open, asking
+ * the screen's question, and it adds two things to a send: the folder the
+ * agent will work in, and main holding the words until the agent can take them
+ * (a new Claude opens on its sign-in). The rest is the ordinary new agent.
  */
 
 export interface PromptAgent {
@@ -189,6 +197,7 @@ function useZoomMoveKey(): string {
 
 export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts, workspaceName = null }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
+  const firstTask = useFirstRunStage() === 'task'
   const crewRows = useCrewContext()?.crew ?? NO_ROWS
   const zoomFull = useZoomFull()
   const zoomItem = useZoomItem()
@@ -275,7 +284,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   useEffect(() => {
     setHarness(picked.current && harnesses.includes(picked.current) ? picked.current : lastHarness(harnesses))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offered])
+  }, [offered, firstTask])
   /** The harness menu, anchored over its chip: the dock clips anything that hangs out of it. */
   const [picking, setPicking] = useState<RiseAnchor | null>(null)
   useEffect(() => setPicking(null), [to?.id])
@@ -433,10 +442,18 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const makeNew = async (raw: string): Promise<void> => {
     setBusy(true)
     setError(null)
+    if (firstTask) {
+      const folder = await firstFolder.ready()
+      if (folder !== 'ready') {
+        setBusy(false)
+        if (folder === 'failed') setError(FIRST_SCREEN_COPY.FOLDER_FAILED)
+        return
+      }
+    }
     const { words: prompt, refs } = said(withItemRef(raw, attachedItem, artifacts))
     const tune = offeredPick(launchTune, offer, gateway)
     // Named from the words typed, not from the item riding ahead of them.
-    const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch, prompt, autoName: true, tune }, nodes)
+    const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch, prompt, patient: firstTask, autoName: true, tune }, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) {
@@ -561,7 +578,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const place = facePlace(zoomFull)
   const open = usePromptOpen()
   // An agent in the box holds it open, in place of the bar (prompt-fold.ts · boxFold).
-  const { canFold: foldable, folded, overBar } = boxFold({ place, slot: faceSlot !== null, pinned: to !== null, open })
+  const { canFold: foldable, folded, overBar } = boxFold({ place, slot: faceSlot !== null, pinned: to !== null || firstTask, open })
   // The who-picker lives in the fold store: the zoom's Esc and the phone's
   // back close it first (prompt-fold.ts · takeBack).
   const who = usePromptWho()
@@ -878,7 +895,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
             className="cr-prompt-harness"
             aria-haspopup="menu"
             aria-expanded={picking !== null}
-            title="The harness the new agent runs — or open a shell"
+            title="What the new agent runs — or open a shell"
             onClick={(e) => {
               const at = riseOver(e.currentTarget.getBoundingClientRect(), window.innerHeight, keyboardCoverNow(), 6, topBarBottom())
               setPicking((open) => (open ? null : at))
@@ -918,7 +935,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu, answers: wait.wordsRow })}
+        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu, answers: wait.wordsRow, first: firstTask })}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"

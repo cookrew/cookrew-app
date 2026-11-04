@@ -50,7 +50,7 @@ export const FIRST_SCREEN_COPY = {
   FOLDER: 'Choose a folder',
   FOLDER_CHANGE: 'Change',
   FOLDER_NOTE: 'Folder',
-  TRY: 'Or try one of these',
+  TRY: 'Try one of these, or type your own',
   FOLDER_FAILED: 'That folder could not be used. Try another one.'
 } as const
 

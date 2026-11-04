@@ -16,6 +16,7 @@ import { advancedStage, isFirstRunStage, openingStage, type FirstRunStage } from
  */
 
 export interface FirstRunFacts {
+  /** Anything but a new install with nothing on it. */
   hasContent: () => boolean
   hasAccount: () => boolean
 }
@@ -37,21 +38,19 @@ export class FirstRunStore {
     private readonly facts: FirstRunFacts
   ) {}
 
-  /** The stage, deciding it on the first read. `oldCardClosed` is the renderer's memory of the retired launch card. */
-  read(oldCardClosed: boolean): FirstRunStage {
+  /** The stage, deciding it on the first read: at boot, before the Conductor is seeded. */
+  read(): FirstRunStage {
     if (this.stage !== null) return this.stage
-    const saved = readSaved(this.file)
-    return this.keep(saved ?? this.opening(oldCardClosed))
+    return this.keep(readSaved(this.file) ?? this.opening())
   }
 
   advance(to: FirstRunStage): FirstRunStage {
-    const from = this.stage ?? readSaved(this.file) ?? this.opening(false)
-    return this.keep(advancedStage(from, to))
+    return this.keep(advancedStage(this.read(), to))
   }
 
-  private opening(oldCardClosed: boolean): FirstRunStage {
+  private opening(): FirstRunStage {
     try {
-      return openingStage({ saved: null, hasContent: this.facts.hasContent(), hasAccount: this.facts.hasAccount(), oldCardClosed })
+      return openingStage({ saved: null, hasContent: this.facts.hasContent(), hasAccount: this.facts.hasAccount() })
     } catch (error) {
       console.error('First run: the facts could not be read, closing it:', error)
       return 'closed'

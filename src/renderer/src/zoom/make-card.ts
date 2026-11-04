@@ -45,6 +45,8 @@ export interface AgentChoice {
   autoName?: boolean
   /** The model and effort it starts on (the prompt box's tune chip; shared/launch-tune). */
   tune?: LaunchTune
+  /** A person's first task: main holds it until the agent can really take it. */
+  patient?: boolean
 }
 
 /** A new agent in the active workspace; the zoom opens its card in the crew. */
@@ -59,6 +61,7 @@ export async function makeAgent(api: MakeApi, choice: AgentChoice, nodes: readon
       ...(choice.roleName ? { roleName: choice.roleName } : {}),
       ...(choice.prompt ? { prompt: choice.prompt } : {}),
       ...(choice.prompt && choice.autoName ? { autoName: true } : {}),
+      ...(choice.prompt && choice.patient ? { patient: true } : {}),
       ...(choice.tune && Object.keys(choice.tune).length > 0 ? { tune: choice.tune } : {})
     })
     // The next agent the prompt box makes takes the harness last used.

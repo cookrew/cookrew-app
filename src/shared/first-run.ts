@@ -28,12 +28,10 @@ export function advancedStage(from: FirstRunStage, to: FirstRunStage): FirstRunS
 export interface OpeningFacts {
   /** What the disk holds; null on the very first read. */
   saved: FirstRunStage | null
-  /** Any card in any workspace, or a second workspace. */
+  /** Not a new install, or any card, or a second workspace. */
   hasContent: boolean
   /** An account, or a handle from before accounts. */
   hasAccount: boolean
-  /** The old launch card was closed on this Mac: this person has been here. */
-  oldCardClosed: boolean
 }
 
 /**
@@ -41,7 +39,17 @@ export interface OpeningFacts {
  * run itself makes content: the Setup card and the first agent must not read
  * as "this person was already here".
  */
-export function openingStage({ saved, hasContent, hasAccount, oldCardClosed }: OpeningFacts): FirstRunStage {
+export function openingStage({ saved, hasContent, hasAccount }: OpeningFacts): FirstRunStage {
   if (saved !== null) return saved
-  return hasContent || hasAccount || oldCardClosed ? 'closed' : 'preflight'
+  return hasContent || hasAccount ? 'closed' : 'preflight'
+}
+
+/**
+ * THE CONDUCTOR WAITS. Every empty workspace used to boot one, on Claude with
+ * permissions bypassed, before anything had checked Claude was installed. On a
+ * new Mac that is the board's first agent, nobody asked for it, and it would
+ * read as this person having been here. It is seeded again past these screens.
+ */
+export function conductorWaits(stage: FirstRunStage): boolean {
+  return stage === 'preflight' || stage === 'task'
 }

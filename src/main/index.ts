@@ -145,7 +145,7 @@ import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
-import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
+import { FIRST_TASK_WAIT_MS, claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
 import { AgentRegistry } from './agent-registry'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
@@ -248,10 +248,11 @@ import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
-import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
+import { appendedPath, interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
 import { registerFirstRunIpc } from './first-run-ipc'
 import { FirstRunStore } from './first-run-store'
-import { machineProbe, probeTools } from './preflight'
+import { machineProbe, probeTools, readLoginShellDirs } from './preflight'
+import { conductorWaits } from '../shared/first-run'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
@@ -387,7 +388,14 @@ app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // Before anything probes for a tool: a Dock launch has no Homebrew on its PATH.
-process.env.PATH = widenedPath(process.env, homedir())
+// What the login shell adds lands a moment later, for the panes started after it.
+const adoptShellDirs = (dirs: readonly string[]): void => {
+  if (app.isPackaged) process.env.PATH = appendedPath(process.env.PATH, dirs)
+}
+if (app.isPackaged) {
+  process.env.PATH = widenedPath(process.env, homedir())
+  void readLoginShellDirs().then(adoptShellDirs)
+}
 
 // The durable lineage, installed BEFORE the store can patch a node: every
 // session id ever bound to a card gets a copy outside workspace.json, so the
@@ -949,6 +957,11 @@ const accounts = new Accounts({
 
 /** The handle the key in ~/.cookrew/registry holds, if this Mac ever served. */
 const legacyHandleNow = (): string | null => accounts.legacyHandle()
+/** How far a new person has got. Read first at boot: the seed below depends on it. */
+const firstRunStore = new FirstRunStore(path.join(app.getPath('userData'), 'first-run.json'), {
+  hasContent: () => !store.freshInstall || store.hasContent(),
+  hasAccount: () => accounts.account() !== null || legacyHandleNow() !== null
+})
 
 /**
  * WHICH NAME THIS MAC SERVES UNDER (identity v2, phase 6) — ASKED EACH TIME.
@@ -3883,7 +3896,7 @@ dispatchSweep.unref?.()
  * can act without stalling on approvals.
  */
 function seedConductorIfEmpty(): void {
-  if (store.terminals().length > 0) return
+  if (store.terminals().length > 0 || conductorWaits(firstRunStore.read())) return
   store.addNode({
     kind: 'terminal',
     id: randomUUID(),
@@ -4783,6 +4796,11 @@ interface CreateTerminalOpts {
    */
   autoName?: boolean
   /**
+   * A person's first task (the first screen): held until the agent's composer
+   * is drawn, through its sign-in, and never typed into anything else.
+   */
+  patient?: boolean
+  /**
    * The model and effort a new agent starts on (the prompt box's tune chip,
    * owner 2026-11-01): launch flags, checked against the harness's offer
    * (shared/launch-tune). A role or a `command` keeps its own line. Unknown:
@@ -4840,7 +4858,8 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   if (boot) {
     const session = ptys.get(added.id)
     if (session) {
-      injectWhenReady(session, boot).catch((error) => console.error('Boot prompt injection failed:', error))
+      const injected = opts.patient === true ? injectWhenReady(session, boot, { timeoutMs: FIRST_TASK_WAIT_MS, onlyWhenReady: true }) : injectWhenReady(session, boot)
+      injected.catch((error) => console.error('Boot prompt injection failed:', error))
     }
   }
   if (opts.autoName && first) {
@@ -6959,7 +6978,8 @@ app.whenReady().then(() => {
   void browserManager.replaceNodes(store.browsers()).catch(() => undefined)
   createWindow()
 
-  // First launch: seed the active workspace with a bypass-permission orch.
+  // Seed the active workspace with a bypass-permission orch. A new person's
+  // first run comes first: it holds this back (shared/first-run.ts).
   seedConductorIfEmpty()
 
   // Reap orphaned tmux sessions before booting: leaks from past
@@ -7656,16 +7676,14 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('lane:close', (_e, nodeId: string, force?: boolean) => laneClose(nodeId, force ?? false))
   ipcMain.handle('lane:auto', (_e, nodeId: string, on: boolean) => laneAuto(nodeId, on))
   registerFirstRunIpc(ipcMain, {
-    store: new FirstRunStore(path.join(app.getPath('userData'), 'first-run.json'), {
-      hasContent: () => store.hasContent(),
-      hasAccount: () => accounts.account() !== null || legacyHandleNow() !== null
-    }),
+    store: firstRunStore,
     probe: () =>
       probeTools(
         machineProbe({
           chrome: () => findChrome() !== null,
           magpie: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync),
-          host: () => multiplexer()?.id ?? null
+          host: () => multiplexer()?.id ?? null,
+          adoptDirs: adoptShellDirs
         })
       )
   })

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { loginShellDirs, probeTools, type ProbeDeps } from '../src/main/preflight'
-import { widenedPath } from '../src/main/launch-defaults'
+import { appendedPath, widenedPath } from '../src/main/launch-defaults'
 import { UNKNOWN_FACTS } from '../src/shared/preflight'
 
 /**
@@ -41,6 +41,14 @@ describe('the facts', () => {
   it('finds what only the login shell knows: the agents will run there', async () => {
     const facts = await probeTools(deps({ shellDirs: async () => ['/Users/new/.nvm/bin'], exists: (p) => p === '/Users/new/.nvm/bin/npm' }))
     expect(facts.npm).toBe('found')
+  })
+
+  // Panes run on the app's PATH, so a tool only the login shell knows would
+  // read Found and then fail to start. What the check found, the app takes on.
+  it('hands what the login shell added to the app, so a found tool can start', async () => {
+    const adoptDirs = vi.fn()
+    await probeTools(deps({ shellDirs: async () => ['/Users/new/.nvm/bin'], adoptDirs }))
+    expect(adoptDirs).toHaveBeenCalledWith(['/Users/new/.nvm/bin'])
   })
 
   it('still answers when the login shell cannot be read', async () => {
@@ -116,6 +124,16 @@ describe('a Dock launch gets the same tools as a terminal launch', () => {
 
   it('leaves another system’s PATH alone', () => {
     expect(widenedPath({ PATH: 'C:\\Windows' }, 'C:\\Users\\new', 'win32')).toBe('C:\\Windows')
+  })
+
+  it('keeps the PATH it was given to the character, whatever it adds', () => {
+    expect(widenedPath({ PATH: '/usr/bin::/bin' }, '/Users/new').startsWith('/usr/bin::/bin:')).toBe(true)
+  })
+
+  it('appends dirs not already there, and nothing else', () => {
+    expect(appendedPath('/a:/b', ['/b', '/c', ''])).toBe('/a:/b:/c')
+    expect(appendedPath(undefined, ['/c'])).toBe('/c')
+    expect(appendedPath('/a', [])).toBe('/a')
   })
 
   it('works from no PATH at all', () => {

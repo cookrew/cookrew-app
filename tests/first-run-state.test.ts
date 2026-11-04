@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { advancedStage, isFirstRunStage, openingStage, type FirstRunStage } from '../src/shared/first-run'
+import { advancedStage, conductorWaits, isFirstRunStage, openingStage, type FirstRunStage } from '../src/shared/first-run'
 
 /**
  * THE FIRST RUN IS ONE LINE, WALKED ONCE.
@@ -9,7 +9,7 @@ import { advancedStage, isFirstRunStage, openingStage, type FirstRunStage } from
  * anybody with an agent, a card, a second workspace or an account is not.
  */
 
-const fresh = { saved: null, hasContent: false, hasAccount: false, oldCardClosed: false }
+const fresh = { saved: null, hasContent: false, hasAccount: false }
 
 describe('who is new, decided on the first read', () => {
   it('opens at the tool check on a Mac with nothing on it', () => {
@@ -21,10 +21,6 @@ describe('who is new, decided on the first read', () => {
     expect(openingStage({ ...fresh, hasAccount: true })).toBe('closed')
   })
 
-  it('takes the old card closed as an answer: that person was here before', () => {
-    expect(openingStage({ ...fresh, oldCardClosed: true })).toBe('closed')
-  })
-
   it('keeps a saved stage whatever the facts say: content made during the run must not end it', () => {
     expect(openingStage({ ...fresh, saved: 'task', hasContent: true })).toBe('task')
     expect(openingStage({ ...fresh, saved: 'phone', hasAccount: true })).toBe('phone')
@@ -32,6 +28,19 @@ describe('who is new, decided on the first read', () => {
 
   it('stays closed for good, on an empty Mac too', () => {
     expect(openingStage({ ...fresh, saved: 'closed' })).toBe('closed')
+  })
+})
+
+describe('the Conductor a new Mac used to boot with', () => {
+  it('waits while the person is being shown how to start their own agent', () => {
+    expect(conductorWaits('preflight')).toBe(true)
+    expect(conductorWaits('task')).toBe(true)
+  })
+
+  it('is seeded as ever once those screens are past, and for everybody else', () => {
+    expect(conductorWaits('phone')).toBe(false)
+    expect(conductorWaits('second')).toBe(false)
+    expect(conductorWaits('closed')).toBe(false)
   })
 })
 

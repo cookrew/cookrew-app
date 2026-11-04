@@ -132,6 +132,7 @@ export class WorkspaceStore extends EventEmitter {
   constructor(private baseDir = DATA_DIR, options: WorkspaceStoreOptions = {}) {
     super()
     this.multiInstance = options.multiInstance ?? MULTI_INSTANCE_DEFAULT
+    this.freshInstall = !existsSync(registryFile(this.baseDir)) && !existsSync(legacyWorkspaceFile(this.baseDir))
     const loaded = loadRegistry(this.baseDir)
     this.registry = withSlugs(loaded)
     // Persist a backfill immediately: a slug is FROZEN, and a slug that only
@@ -858,6 +859,12 @@ export class WorkspaceStore extends EventEmitter {
   workspaceState(id: string): WorkspaceState {
     return this.stateOf(id)
   }
+
+  /**
+   * This launch made the registry: nobody has used this app here before. Read
+   * before the registry is seeded, so an install emptied by hand is not new.
+   */
+  readonly freshInstall: boolean
 
   /** Anything of the person's own on this Mac: a second workspace, or a card in any. */
   hasContent(): boolean {

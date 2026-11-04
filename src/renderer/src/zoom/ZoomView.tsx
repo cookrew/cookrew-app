@@ -7,6 +7,7 @@ import { thumbWants } from '../pets/thumb-wants'
 import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, type Bind, NewestThumb } from './ZoomParts'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
+import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf } from './zoom-model'
 import { ShelfCard } from './ShelfCard'
@@ -41,7 +42,7 @@ const ROW_BUFFER = 2
  * frame engine owns their transforms. No second terminal/browser is made
  * for the animation: the full view behind the shell is the real one.
  */
-export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, children }: {
+export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, firstRun, children }: {
   workspace: WorkspaceState | null
   workspaceId: string | null
   attachIndex: AttachmentIndex
@@ -49,9 +50,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   crew: Crew
   /** Asked to remove a card: the app's own confirm dialog answers (App: requestClose). */
   onDelete?: (id: string) => void
+  /** The first run's screens: they stand where a new person's empty board would. */
+  firstRun?: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   const root = useRef<HTMLDivElement>(null)
+  const firstStage = useFirstRunStage()
   const overview = useRef<HTMLDivElement>(null)
   const registry = useRef(new Map<string, HTMLElement>())
   /**
@@ -677,7 +681,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           </div>
           {newestAlone && <NewestThumb item={newestAlone} workspace={model.name} onOpen={stable('newest-alone', () => motion.go(0, 'items'))} thumbRef={bind('newThumb')} caption={false} />}
           <div className="zv-newcap" ref={bind('newCap')}>{newest ? <>newest · {newest.title}</> : null}</div>
-          {model.agents.length === 0 && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
+          {model.agents.length === 0 && firstStage !== null && firstStage !== 'preflight' && firstStage !== 'task' && <div className="zv-empty">No agents here yet. Add an agent from the dock.</div>}
         </div>
         {/* An item's full-view head, crisp, laid where the real one will be (StageView · zv-fv-head):
             the grown thumbnail fades into it rather than blowing its words up. */}
@@ -693,6 +697,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           )}
         </div>
       </div>
+      {firstRun}
       {/* Per row: at the crew and at the workspaces, each where its row is seen (owner, 2026-11-01). */}
       {zoom.dir === 'agents' && !zoom.full && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0 && (
         <PerRowPill what="agents" narrow={narrow} cols={crewCols ?? defaultCrewCols(narrow)} onPick={setCrewCols} />

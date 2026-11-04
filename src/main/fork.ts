@@ -39,6 +39,11 @@ const BOOT_POLL_MS = 300
 const BOOT_QUIET_MS = 1500
 /** Inject anyway after this long, so a chatty TUI can't stall the fork. */
 const BOOT_TIMEOUT_MS = 25000
+/**
+ * How long a person's first task waits for its agent. A new Claude opens on a
+ * theme picker and a sign-in, which take as long as they take.
+ */
+export const FIRST_TASK_WAIT_MS = 15 * 60_000
 
 /**
  * HAS CLAUDE DRAWN ITS INPUT BOX? (2026-11-01: a prompt made from the global
@@ -208,16 +213,29 @@ export function forkContextReady(nodeId: string): Promise<void> {
  * Shared with the team-fork engine (teams.ts), which injects per-terminal
  * context the same way after a workspace switch boots the forked agents.
  */
-export async function injectWhenReady(session: PtySession, preamble: string): Promise<void> {
+export interface InjectOptions {
+  timeoutMs?: number
+  /**
+   * Past the wait, give up rather than type. The default goes in anyway so a
+   * chatty TUI cannot stall a fork; a first task must not, because on a screen
+   * that is not the composer its Enter answers whatever is being asked.
+   */
+  onlyWhenReady?: boolean
+}
+
+export async function injectWhenReady(session: PtySession, preamble: string, options: InjectOptions = {}): Promise<void> {
+  const { timeoutMs = BOOT_TIMEOUT_MS, onlyWhenReady = false } = options
   const startedAt = Date.now()
-  await new Promise<void>((resolve) => {
+  const ready = await new Promise<boolean>((resolve) => {
     const timer = setInterval(() => {
-      if (harnessReadyForInput(session) || Date.now() - startedAt >= BOOT_TIMEOUT_MS) {
+      const now = harnessReadyForInput(session)
+      if (now || Date.now() - startedAt >= timeoutMs) {
         clearInterval(timer)
-        resolve()
+        resolve(now)
       }
     }, BOOT_POLL_MS)
   })
+  if (!ready && onlyWhenReady) throw new Error('the agent never took input; the prompt was not typed')
   const verdict = await ownerSubmit(session, `${preamble}\r`)
   if (!verdict.ok) throw new Error(verdict.reason)
 }

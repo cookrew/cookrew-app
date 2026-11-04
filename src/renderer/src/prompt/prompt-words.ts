@@ -1,5 +1,6 @@
 import { artifactRefs, type PromptArtifact } from './artifact-refs'
 import { BAR_NAMES, BAR_STOPS, barStop, type ZoomDir } from '../zoom/zoom-path'
+import { FIRST_SCREEN_COPY } from '../../../shared/first-run-copy'
 
 /**
  * THE PROMPT'S WORDS SAY WHO THEY GO TO (owner design, 2026-11-04; cut
@@ -33,7 +34,8 @@ export function promptPlaceholder({
   workspace,
   item,
   asks = false,
-  answers = false
+  answers = false,
+  first = false
 }: {
   agent: { readonly name: string; readonly status: string } | null
   stop: WordsStop
@@ -45,7 +47,10 @@ export function promptPlaceholder({
   asks?: boolean
   /** Its menu has a row to type in: the words go there (wait-answer.ts · wordsRowOf). */
   answers?: boolean
+  /** The first screen's box: it asks the screen's own question (first-run/). */
+  first?: boolean
 }): string {
+  if (first) return FIRST_SCREEN_COPY.ASK
   if (agent?.status === 'offline') return `${agent.name} is asleep · wakes on send`
   if (agent && answers) return 'Or type your own answer…'
   if (agent) return asks ? `Answer ${agent.name}…` : `Reply to ${agent.name}…`

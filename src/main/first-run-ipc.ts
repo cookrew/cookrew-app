@@ -8,27 +8,31 @@ import type { FirstRunStore } from './first-run-store'
  * them, and a phone is past the first run by the time it can reach this Mac.
  */
 
+/** The channels, as a table so tests/ipc-channels.test.ts can read what is registered. */
+export const FIRST_RUN_CHANNELS = ['first-run:read', 'first-run:advance', 'first-run:preflight'] as const
+
 export interface FirstRunIpcDeps {
   store: FirstRunStore
   probe: () => Promise<ToolFacts>
 }
 
 export function firstRunHandlers({ store, probe }: FirstRunIpcDeps): {
-  read: (oldCardClosed: unknown) => FirstRunStage
+  read: () => FirstRunStage
   advance: (to: unknown) => FirstRunStage
   preflight: () => Promise<PreflightRow[]>
 } {
   return {
-    read: (oldCardClosed) => store.read(oldCardClosed === true),
-    // Both come over the bridge: an unknown stage is no move, and answers where the run stands.
-    advance: (to) => (isFirstRunStage(to) ? store.advance(to) : store.read(false)),
+    read: () => store.read(),
+    // It comes over the bridge: an unknown stage is no move, and answers where the run stands.
+    advance: (to) => (isFirstRunStage(to) ? store.advance(to) : store.read()),
     preflight: async () => preflightRows(await probe())
   }
 }
 
 export function registerFirstRunIpc(ipc: Pick<IpcMain, 'handle'>, deps: FirstRunIpcDeps): void {
   const handlers = firstRunHandlers(deps)
-  ipc.handle('first-run:read', (_e, oldCardClosed: unknown) => handlers.read(oldCardClosed))
-  ipc.handle('first-run:advance', (_e, to: unknown) => handlers.advance(to))
-  ipc.handle('first-run:preflight', () => handlers.preflight())
+  const [read, advance, preflight] = FIRST_RUN_CHANNELS
+  ipc.handle(read, () => handlers.read())
+  ipc.handle(advance, (_e, to: unknown) => handlers.advance(to))
+  ipc.handle(preflight, () => handlers.preflight())
 }

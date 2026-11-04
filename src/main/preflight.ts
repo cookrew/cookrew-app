@@ -15,7 +15,9 @@ import { HarnessScan, onPath } from './route/setup'
  *
  * PATH IS WHERE THE AGENTS WILL RUN: the app's own, plus what the person's
  * login shell adds (nvm and friends only exist there), read once per check and
- * bounded, since an rc file may do anything.
+ * bounded, since an rc file may do anything. Panes start on the app's PATH, so
+ * what the shell added is handed to the app (`adoptDirs`): Found has to mean
+ * the agent can start, not that a shell somewhere could find it.
  */
 
 const PROBE_BUDGET_MS = 8_000
@@ -40,6 +42,8 @@ export interface ProbeDeps {
   /** The backend hosting terminals now. */
   host: () => string | null
   shellDirs: () => Promise<readonly string[]>
+  /** Give the app the dirs the login shell had, for the panes it starts next. */
+  adoptDirs?: (dirs: readonly string[]) => void
 }
 
 /** The directories on the marked line of the login shell's output. */
@@ -73,6 +77,7 @@ function agentState(agents: readonly AgentFact[] | null, id: string): { state: T
 
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
   const shell = await deps.shellDirs().catch(() => [] as readonly string[])
+  deps.adoptDirs?.(shell)
   const pathEnv = [deps.pathEnv ?? '', ...shell].filter((dir) => dir !== '').join(path.delimiter)
   const agents = await deps.agents(pathEnv).catch(() => null)
   const claude = agentState(agents, 'claude')
@@ -116,7 +121,7 @@ export function probeTools(deps: ProbeDeps, budgetMs = PROBE_BUDGET_MS): Promise
 }
 
 /** The real machine's checks; `chrome`, `magpie` and `host` come from what owns them. */
-export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host'>): ProbeDeps {
+export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host' | 'adoptDirs'>): ProbeDeps {
   const home = homedir()
   return {
     home,

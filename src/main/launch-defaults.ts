@@ -70,19 +70,26 @@ export function multiplexerPreference(env: Env = process.env): string {
   return env.COOKREW_MULTIPLEXER?.trim() || DEFAULT_MULTIPLEXER
 }
 
+/** `current` to the character, then each dir it does not hold yet. */
+export function appendedPath(current: string | undefined, dirs: readonly string[]): string {
+  const held = (current ?? '').split(':')
+  const missing = dirs.filter((dir, i) => dir !== '' && !held.includes(dir) && dirs.indexOf(dir) === i)
+  return [current ?? '', ...missing].filter((part) => part !== '').join(':')
+}
+
 /**
  * A DOCK LAUNCH GETS THE PATH OF NOBODY'S SHELL. launchd hands a GUI app
  * /usr/bin:/bin and little else, so `tmux` from Homebrew and `herdr` in
  * ~/.local/bin both failed their probe, and the app fell to the direct backend
  * (agents die with the window) on a Mac that had what it needed. The places
- * installers use are appended, never put first, so a terminal launch keeps its
- * PATH exactly and the person's own order still wins. Set before PtyManager is
- * built: the host is chosen there, once.
+ * installers use are appended, never put first, so the person's own order
+ * still wins. Set before PtyManager is built: the host is chosen there, once.
+ *
+ * PACKAGED APPS ONLY, by the caller. A launch from a terminal has the PATH its
+ * person chose, and a QA instance's safety rests on that: a PATH without herdr
+ * is what keeps a second Electron off the fleet's host.
  */
 export function widenedPath(env: Env, home: string, platform: string = process.platform): string {
-  const current = env.PATH ?? ''
-  if (platform === 'win32') return current
-  const dirs = current.split(':').filter((dir) => dir !== '')
-  const places = ['/opt/homebrew/bin', '/usr/local/bin', `${home}/.local/bin`, `${home}/.claude/local`]
-  return [...dirs, ...places.filter((dir) => !dirs.includes(dir))].join(':')
+  if (platform === 'win32') return env.PATH ?? ''
+  return appendedPath(env.PATH, ['/opt/homebrew/bin', '/usr/local/bin', `${home}/.local/bin`, `${home}/.claude/local`])
 }

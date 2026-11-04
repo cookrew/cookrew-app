@@ -123,6 +123,8 @@ import { CrewProvider, WithCrew } from './stage/crew-rows'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
 import { ZoomView } from './zoom/ZoomView'
+import { FirstRunHints } from './first-run/FirstRunHints'
+import { FirstRunScreens } from './first-run/FirstRunScreens'
 import { useZoomFull } from './zoom/zoom-store'
 import { zoomStore } from './zoom/zoom-store'
 import { importTeam, makeAgent, makeItem, type Made } from './zoom/make-card'
@@ -1487,7 +1489,7 @@ function Canvas(): React.JSX.Element {
               <TerminalAttachmentsContext.Provider value={attachIndex}>
                 <WithCrew>
                   {(crew) => (
-                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose}>
+                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose} firstRun={<FirstRunScreens nodes={workspace?.nodes ?? NO_NODES} setup={setupTerminal} />}>
                       {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
                     </ZoomView>
                   )}
@@ -1636,6 +1638,7 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        <FirstRunHints />
         {/* THE BROWSER HOST: every browser page lives in BrowserLayer and is
             drawn at the slot a stage pane or a terminal's lower half measures
             (attach-view.ts). It rode inside the canvas's LodOverlays, and

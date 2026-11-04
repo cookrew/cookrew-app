@@ -45,6 +45,43 @@ describe('injectWhenReady', () => {
     vi.useRealTimers()
   })
 
+  // A brand-new Claude opens on its theme picker, then sign-in (seen on 2.1.316):
+  // no composer for minutes. Typed at the boot ceiling, the words vanish and
+  // their Enter takes the picker's default, so a person's first task is lost.
+  it('a first task waits past the boot ceiling for a person still signing in', async () => {
+    vi.useFakeTimers()
+    submitted.length = 0
+    const screens = [...Array(200).fill('Choose the text style that looks best with your terminal'), COMPOSER]
+    const done = injectWhenReady(session('claude', screens), 'first task', { timeoutMs: 120_000, onlyWhenReady: true })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(submitted).toEqual([])
+    await vi.advanceTimersByTimeAsync(40_000)
+    await done
+    expect(submitted).toEqual(['first task\r'])
+    vi.useRealTimers()
+  })
+
+  it('a first task is never typed into a screen that did not become ready', async () => {
+    vi.useFakeTimers()
+    submitted.length = 0
+    const done = injectWhenReady(session('claude', ['Choose the text style']), 'first task', { timeoutMs: 1_000, onlyWhenReady: true })
+    const failed = expect(done).rejects.toThrow(/never took/)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await failed
+    expect(submitted).toEqual([])
+    vi.useRealTimers()
+  })
+
+  it('every other prompt keeps its ceiling, and goes in at it', async () => {
+    vi.useFakeTimers()
+    submitted.length = 0
+    const done = injectWhenReady(session('claude', ['still booting']), 'a fork preamble')
+    await vi.advanceTimersByTimeAsync(26_000)
+    await done
+    expect(submitted).toEqual(['a fork preamble\r'])
+    vi.useRealTimers()
+  })
+
   it('another harness goes on quiet alone, as before', async () => {
     vi.useFakeTimers()
     submitted.length = 0
