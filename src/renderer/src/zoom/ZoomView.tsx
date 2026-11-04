@@ -34,6 +34,8 @@ const CHIP_HIDDEN: React.CSSProperties = { opacity: 0 }
 
 /** Rows of thumbnails mounted past each edge of the view, so a scroll shows them already drawn. */
 const ROW_BUFFER = 2
+/** A failure as a person reads it: its message, without the class name String() puts in front. */
+const failureWords = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 /**
  * The real navigator, from devices through workspaces and crew to the real
@@ -104,7 +106,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const [size, setSize] = useState({ w: 1000, h: 700 })
   useEffect(() => {
     let alive = true
-    void cookrew().listWorkspaces().then((l) => alive && setList(l)).catch((e) => alive && setError(`Cannot read workspaces: ${String(e)}`))
+    void cookrew().listWorkspaces().then((l) => alive && setList(l)).catch((e) => alive && setError(`Cannot read workspaces: ${failureWords(e)}`))
     const off = cookrew().onWorkspaceList((l) => setList(l))
     void cookrew().machineName?.().then((s) => alive && s && setNameAsked(s.replace(/\.local$/i, ''))).catch(() => undefined)
     return () => { alive = false; off() }
@@ -549,7 +551,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       zoomStore.focusItem(null)
       if (side === 'items') zoomStore.go(0, 'items')
       else zoomStore.go(1, 'agents')
-    } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
+    } catch (e) { setError(`Cannot open workspace: ${failureWords(e)}`) }
   }, [])
   const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
   // The newest browser beside the stack: on its carrier's coin when one wears it, else drawn on its own.
