@@ -6,6 +6,8 @@
 // output quiescence ends it. These helpers are pure so they can be unit
 // tested without a PTY.
 
+import type { WaitChoice } from './wait-choice'
+
 /**
  * 'waiting' is vibe-island's "needs attention": the turn is not finished,
  * the agent went quiet on a permission prompt / question menu.
@@ -50,6 +52,12 @@ export interface TerminalActivity {
    * pending question while 'waiting'), otherwise a cleaned viewport tail.
    */
   lines: string[]
+  /**
+   * The menu the agent waits on, read off its WHOLE screen while phase is
+   * 'waiting' (shared/wait-choice.ts): `lines` is a 14-line tail, and a
+   * question tool runs to 30 on a narrow pane. Null or absent: no menu read.
+   */
+  waitChoice?: WaitChoice | null
   /** Cleaned reply text once the current turn completed. */
   reply: string | null
   /** Structured at-a-glance view of the turn, parsed from the agent TUI. */
@@ -482,7 +490,7 @@ const OSC_COLOR_REMNANT_RE = /\x1b?\]1[01];rgb:[0-9a-fA-F/]+\\?/g
 const TMUX_STATUS_RE = /^\s*cookrew ·/
 
 /** Strip terminal control noise that would otherwise pollute turn text. */
-function stripTermNoise(text: string): string {
+export function stripTermNoise(text: string): string {
   return text.replace(OSC_RE, '').replace(OSC_COLOR_REMNANT_RE, '')
 }
 

@@ -1,6 +1,6 @@
 import { useId } from 'react'
 import { InkAvatar } from './InkAvatar'
-import { WaitRows } from '../prompt/WaitChoices'
+import { WaitReviewList, WaitRows, WaitSteps } from '../prompt/WaitChoices'
 import type { WaitAnswering, WaitView } from '../prompt/wait-answer'
 import type { AgentView } from './zoom-model'
 
@@ -48,7 +48,12 @@ export function BarWaitCard({ agent, view, wait, onOpen, onReply, onClose }: {
         <p className="wc-q" id={qid}>
           {view.choice.question}
         </p>
-        <WaitRows view={view} onAnswer={wait.answer} small />
+        <WaitSteps choice={view.choice} onStep={wait.step} />
+        <div className="wc-scroll">
+          <WaitReviewList choice={view.choice} />
+          <WaitRows view={view} onAnswer={wait.answer} small />
+        </div>
+        {wait.moved && <p className="wc-moved" role="status">The menu moved on · nothing sent</p>}
       </div>
       <div className="wc-foot wc-card-foot">
         <button type="button" onClick={onOpen}>

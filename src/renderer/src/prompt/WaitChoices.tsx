@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import type { WaitChoice } from '../../../shared/wait-choice'
+import type { WaitChoice, WaitOption } from '../../../shared/wait-choice'
 import { InkAvatar } from '../zoom/InkAvatar'
 import type { WaitAnswering, WaitView } from './wait-answer'
 import './wait-choices.css'
@@ -33,7 +33,8 @@ export interface WaitFace {
 /** "1–3" or "y / n": the keys the footer offers. */
 export function keysWord(choice: WaitChoice): string {
   if (choice.kind === 'yn') return 'y / n'
-  const n = choice.options.length
+  // Submit has no number: only the rows that do.
+  const n = choice.options.filter((o) => /^\d+$/.test(o.key)).length
   return n === 1 ? '1' : `1–${Math.min(n, 9)}`
 }
 
@@ -41,7 +42,44 @@ export function keysWord(choice: WaitChoice): string {
 export function rowLabel(choice: WaitChoice, index: number): string {
   const option = choice.options[index]
   const esc = index === choice.escIndex ? ' (Esc, then type)' : ''
-  return `${option.key}: ${option.label}${esc}`
+  const typed = option.role === 'type' ? ' (type your answer in the box)' : ''
+  return `${option.key ? `${option.key}: ` : ''}${option.label}${esc}${typed}`
+}
+
+/** What a row's kind adds to its class. */
+const rowKind = (role: WaitOption['role']): string => (role ? ` ${role}` : '')
+
+/** A question tool's place: how many are answered, and a way to the others. */
+export function WaitSteps({ choice, onStep }: { choice: WaitChoice; onStep: (dir: -1 | 1) => void }): React.JSX.Element | null {
+  if (!choice.steps) return null
+  return (
+    <div className="wc-steps">
+      <button type="button" aria-label="Previous question" onClick={() => onStep(-1)}>
+        ‹
+      </button>
+      <span>
+        {choice.steps.done} of {choice.steps.total} answered
+      </span>
+      <button type="button" aria-label="Next question" onClick={() => onStep(1)}>
+        ›
+      </button>
+    </div>
+  )
+}
+
+/** The Review tab's answers: what is sent is seen first. */
+export function WaitReviewList({ choice }: { choice: WaitChoice }): React.JSX.Element | null {
+  if (!choice.review?.length) return null
+  return (
+    <dl className="wc-review">
+      {choice.review.map((item) => (
+        <div key={item.question}>
+          <dt>{item.question}</dt>
+          <dd>{item.answer}</dd>
+        </div>
+      ))}
+    </dl>
+  )
 }
 
 export function WaitRows({ view, onAnswer, small = false }: {
@@ -59,20 +97,23 @@ export function WaitRows({ view, onAnswer, small = false }: {
           <button
             key={`${index}:${option.label}`}
             type="button"
-            className={`wc-row${index === choice.cursor ? ' cursor' : ''}${filled ? ' sent' : ''}${sent !== null && !filled ? ' spent' : ''}`}
+            className={`wc-row${rowKind(option.role)}${option.checked ? ' checked' : ''}${index === choice.cursor ? ' cursor' : ''}${filled ? ' sent' : ''}${sent !== null && !filled ? ' spent' : ''}`}
             aria-label={rowLabel(choice, index)}
             aria-current={index === choice.cursor ? 'true' : undefined}
-            aria-describedby={option.detail && !small ? `${id}-${index}` : undefined}
+            aria-pressed={option.checked === undefined ? undefined : option.checked}
+            aria-describedby={option.detail ? `${id}-${index}` : undefined}
             disabled={sent !== null}
             // detail 0: Enter or Space on the row, not a pointer.
             onClick={(e) => onAnswer(index, e.detail === 0)}
           >
-            <kbd aria-hidden="true">{filled ? '✓' : option.key}</kbd>
+            <kbd aria-hidden="true">{filled ? '✓' : option.role === 'submit' ? '↵' : option.key}</kbd>
             <span className="wc-words">
               <span className="wc-label">{option.label}</span>
-              {option.detail && !small && <small id={`${id}-${index}`}>{option.detail}</small>}
+              {option.detail && <small id={`${id}-${index}`}>{option.detail}</small>}
             </span>
+            {option.checked !== undefined && <i className="wc-tick" aria-hidden="true">{option.checked ? '✓' : ''}</i>}
             {index === choice.escIndex && <em aria-hidden="true">esc · then type</em>}
+            {option.role === 'type' && <em aria-hidden="true">type · the box ↓</em>}
           </button>
         )
       })}
@@ -83,9 +124,11 @@ export function WaitRows({ view, onAnswer, small = false }: {
 /** The footer's two halves: how to answer, then what is going on. */
 export function footWords(view: WaitView): [string, string] {
   // A confirm reads a line: Esc means nothing to it, so none is offered.
-  if (view.sent === null) return [`tap · or ${keysWord(view.choice)}${view.choice.kind === 'menu' ? ' · esc cancels' : ''}`, 'its own menu, mirrored']
+  // With a row to type in, keys in the box are words: the rows are tapped.
+  const way = view.choice.options.some((o) => o.role === 'type') ? 'tap a row · or type below' : `tap · or ${keysWord(view.choice)}`
+  if (view.sent === null) return [`${way}${view.choice.kind === 'menu' ? ' · esc cancels' : ''}`, 'its own menu, mirrored']
   const option = view.choice.options[view.sent]
-  return [option ? `sent ${option.key} · the agent goes on` : 'esc sent · the agent goes on', 'closes as it works']
+  return [option ? `sent${option.key ? ` ${option.key}` : ''} · the agent goes on` : 'esc sent · the agent goes on', 'closes as it works']
 }
 
 /** The box over the prompt: the face, the question and the rows in a red frame. */
@@ -122,9 +165,13 @@ export function WaitChoices({ face, wait }: { face: WaitFace; wait: WaitAnswerin
           <span className="wc-sub">{choice.sub ? `${choice.sub} · the agent waits` : 'the agent waits'}</span>
         </div>
       </div>
-      <WaitRows view={view} onAnswer={wait.answer} />
+      <WaitSteps choice={choice} onStep={wait.step} />
+      <div className="wc-scroll">
+        <WaitReviewList choice={choice} />
+        <WaitRows view={view} onAnswer={wait.answer} />
+      </div>
       <div className="wc-foot" role="status">
-        <span>{how}</span>
+        <span>{wait.moved ? 'the menu moved on · nothing sent' : how}</span>
         <span>{what}</span>
       </div>
     </div>

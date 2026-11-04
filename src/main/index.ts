@@ -33,6 +33,8 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
+import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
+import { waitChoiceOfScreen } from '../shared/wait-choice'
 import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
@@ -361,7 +363,7 @@ import { TeamClipboard } from './team-clip'
 import { UNCOPYABLE_PHASES, type TurnPhase } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
-import { pageTurns } from '../shared/turn'
+import { pageTurns, uiCommandOpen } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 import { createPromptImageReader, imageRefOf } from './prompt-image'
@@ -2382,6 +2384,14 @@ const lazyTerminals = new LazyTerminalAttachments({
 const backendPhaseOf = (status: HerdrStatus): TurnPhase | null =>
   status === 'working' ? 'thinking' : status === 'blocked' ? 'waiting' : null
 
+/** The pane's rows as they stand, for a menu a mirror cannot show (none attached, or taller than its viewport). */
+const paneRows = async (terminalId: string): Promise<string | null> => {
+  const mux = multiplexer()
+  const name = sessionNameFor(terminalId)
+  if (mux instanceof HerdrHostMultiplexer) return mux.captureRowsAsync(name)
+  return mux?.capture(name) ?? null
+}
+
 // herdr's word reaches the tracker through the pane: a slash command's own
 // UI (the /model picker) is not a turn, whatever herdr's screen guess says.
 const herdrPhases = createBackendPhaseGate({
@@ -2395,7 +2405,11 @@ const herdrPhases = createBackendPhaseGate({
     const status = agentStatus(sessionNameFor(terminalId))
     return status ? backendPhaseOf(status) : null
   },
-  apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent)
+  apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent),
+  menu: async (terminalId) => {
+    const screen = await paneRows(terminalId)
+    if (screen !== null) turns.observeBackendChoice(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
+  }
 })
 
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
@@ -7909,6 +7923,26 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Terminal stream bridging renderer xterm <-> PTY
   const inputRefusalAnnounced = new Map<string, number>()
+  // An answer to a waiting agent's menu, checked against the screen (menu-answer.ts).
+  const answerMenu = createMenuAnswerer({
+    screen: async (terminalId) => {
+      const session = ptys.get(terminalId)
+      const shown = session ? await session.settledViewport() : null
+      if (shown !== null && waitChoiceOfScreen(shown)) return shown
+      return paneRows(terminalId)
+    },
+    send: (terminalId, keys) => {
+      idleSleep.touch(terminalId, Date.now())
+      // A card with no mirror wakes one, as for any key.
+      if (waker.hold(terminalId, keys)) return true
+      return ptys.get(terminalId)?.writeMenuKeys(keys) === 'allow'
+    }
+  })
+  setMenuAnswerer(answerMenu)
+  ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
+    const request = parseMenuRequest(body)
+    return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
+  })
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
     idleSleep.touch(terminalId, Date.now())
     // Keys for an offline agent wake it; they wait for it, then go in in order.

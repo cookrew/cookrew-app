@@ -526,6 +526,7 @@ export function createRemoteApi(): CookrewApi {
     // Parallel per-keystroke fetches could land REORDERED, and each paid its
     // own headers and round trip on the link where round trips are scarce.
     ptyInput: rawInput,
+    answerMenu: (terminalId: string, answer: unknown) => req(apiPath(`/api/terminal/${terminalId}/menu`), 'POST', answer),
     ptyJump: (terminalId, text) => post(apiPath(`/api/terminal/${terminalId}/jump`), { text }),
     // Same contract as the desktop's IPC call: never rejects, the failure
     // reason comes back as data so the reader is told what to fix.

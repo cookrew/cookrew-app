@@ -23,7 +23,7 @@ const fixture = (name: string): WaitChoice => {
   if (!choice) throw new Error(name)
   return choice
 }
-const answering = (view: WaitView | null): WaitAnswering => ({ view, menu: view !== null, answer: () => undefined, key: () => false })
+const answering = (view: WaitView | null): WaitAnswering => ({ view, menu: view !== null, answer: () => undefined, key: () => false, step: () => undefined, wordsRow: false, sendWords: () => undefined, moved: false })
 const FACE = { id: 't1', name: 'Bar fusion', preset: 'claude', orch: false }
 const draw = (view: WaitView | null): string => renderToStaticMarkup(<WaitChoices face={FACE} wait={answering(view)} />)
 

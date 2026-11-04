@@ -1,3 +1,4 @@
+import type { MenuAct } from '../../shared/wait-choice'
 import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
@@ -380,6 +381,8 @@ export interface CookrewApi {
   /** Native multi-file picker (desktop only; returns [] elsewhere). */
   pickFiles: () => Promise<string[]>;
   ptyInput: (terminalId: string, data: string) => void;
+  /** An answer to a waiting agent's menu, checked against its screen (main/menu-answer.ts). */
+  answerMenu: (terminalId: string, answer: { menu: string; act: MenuAct }) => Promise<{ ok: true } | { ok: false; reason: 'moved' | 'refused' }>;
   /**
    * THE DIALS (shared/agent-tuning): what the agent's last reply ran at, and
    * turning one.

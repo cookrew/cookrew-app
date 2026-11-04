@@ -10,8 +10,11 @@
   position: absolute;
   z-index: 5;
   left: 0;
-  bottom: calc(100% + 10px);
+  /* Over the floating tray too, while it shows (global-prompt.css · THE TRAY FLOATS). */
+  bottom: calc(100% + 10px + var(--cr-tray-lift, 0px));
   width: min(520px, 100%);
+  /* The header, the box and the keyboard take the rest: the rows scroll (.wc-scroll). */
+  max-height: calc(100dvh - 190px - var(--kb-inset, 0px) - var(--cr-tray-lift, 0px));
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -107,6 +110,109 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+/* A long menu scrolls here, its head and foot in view (a question tool's rows
+   with their descriptions are taller than a phone). */
+.wc-scroll {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* A question tool's place: ‹ 1 of 3 answered ›. */
+.wc-steps {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 400 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--sumi-muted, var(--muted));
+}
+
+.wc-steps button {
+  width: 32px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--sumi-paper-2, var(--cream));
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  color: var(--sumi-ink, var(--ink));
+  font: 600 15px/1 var(--sumi-serif, var(--font-serif));
+  cursor: pointer;
+}
+
+/* The answers on the Review tab. */
+.wc-review {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px;
+}
+
+.wc-review dt {
+  font: 400 10.5px/1.3 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.wc-review dd {
+  margin: 0;
+  font: 600 12.5px/1.3 var(--sumi-serif, var(--font-serif));
+}
+
+/* A multi-select's tick, at the row's end. */
+.wc-tick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1.5px var(--sumi-ink-soft, var(--ink));
+  font: 700 12px/1 var(--font-mono);
+  font-style: normal;
+}
+
+.wc-row.checked .wc-tick {
+  background: var(--sumi-ink, var(--ink));
+  color: var(--sumi-paper, var(--cream));
+  box-shadow: none;
+}
+
+/* The row to type in: an open line, the words come from the box. */
+.wc-row.type {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  border: 1px dashed var(--sumi-muted, var(--muted));
+}
+
+/* Submit sends what is ticked: the menu's primary. */
+.wc-row.submit {
+  background: var(--sumi-gold, var(--amber));
+  box-shadow: none;
+  color: var(--sumi-on-gold, var(--ink));
+  font-weight: 600;
+}
+
+.wc-row.submit kbd {
+  background: color-mix(in srgb, var(--sumi-on-gold, var(--ink)) 14%, transparent);
+}
+
+/* Leaving the menu to talk it over: quiet, and apart from the answers. */
+.wc-row.chat {
+  margin-top: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sumi-ink-soft, var(--ink));
 }
 
 /* A confirm: its two keys side by side. */
@@ -224,6 +330,11 @@
   color: var(--sumi-muted, var(--muted));
 }
 
+/* A description wraps; on a phone it reads at the caption size. */
+.wc-words small {
+  overflow-wrap: anywhere;
+}
+
 /* In a bar group's card: the same rows, smaller. */
 .wc-rows.small .wc-row {
   min-height: 28px;
@@ -295,6 +406,7 @@
    The pet card's frame (pets.css · .cr-pet-card), its border the waiting red. */
 .cr-pet-card.wc-card {
   gap: 8px;
+  overflow: hidden;
   border-color: var(--sumi-wait, var(--rose));
   background: var(--sumi-card, var(--cream-hi));
   color: var(--sumi-ink, var(--ink));
@@ -361,4 +473,25 @@
 
 .wc-card-foot button:hover {
   color: var(--sumi-ink, var(--ink));
+}
+
+/* The card's ask fills what its frame allows; its rows scroll (BarCards.tsx sets the frame's height). */
+.wc-card-ask {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wc-card-ask .wc-q,
+.wc-box .wc-q {
+  flex: none;
+  max-height: 7.5em;
+  overflow-y: auto;
+}
+
+.wc-moved {
+  margin: 0;
+  font: 400 10px/1.3 var(--font-mono);
+  color: var(--sumi-wait, var(--rose));
 }

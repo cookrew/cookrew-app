@@ -1,3 +1,4 @@
+import { answerMenuRequest, parseMenuRequest } from "./menu-answer";
 import type http from "node:http";
 import type { TerminalSession } from "./terminal-session";
 import { randomUUID } from "node:crypto";
@@ -1546,13 +1547,26 @@ export async function handleMobileApi(
   // leaving it outside the choke point was a reservation with a side door.
   // Local canvas typing (IPC) is deliberately NOT serialized: the owner at
   // the keyboard outranks the machinery.
-  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw)$/);
+  const httpProducerMatch = p.match(/^\/api\/terminal\/([^/]+)\/(input|ask|raw|menu)$/);
   if (
     httpProducerMatch &&
     method === "POST" &&
     deps.hasArmedDispatch?.(httpProducerMatch[1]) === true
   ) {
     respondJson(response, 409, { error: "agent has a dispatch in flight" });
+    return true;
+  }
+
+  // An answer to a waiting agent's menu: checked against its screen, so a
+  // card with no mirror takes one too (menu-answer.ts).
+  const menuMatch = p.match(/^\/api\/terminal\/([^/]+)\/menu$/);
+  if (menuMatch && method === "POST") {
+    const parsed = parseMenuRequest(await readJson<unknown>(request));
+    if (!parsed) {
+      respondJson(response, 400, { error: "Not a menu answer" });
+      return true;
+    }
+    respondJson(response, 200, await answerMenuRequest(menuMatch[1], parsed));
     return true;
   }
 

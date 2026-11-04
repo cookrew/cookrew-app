@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useReducer, useSyncExternalStore } from 'react'
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import { useActivity } from '../activity-thumb-store'
 import { cookrew } from '../api'
-import { choiceKeys, choiceSig, ESC, keyChoice, parseWaitChoice, type WaitChoice } from '../../../shared/wait-choice'
+import { draftKey, getDraft, setDraft } from './prompt-draft'
+import { choiceId, choiceKeys, choiceSig, ESC, hasWordsRow, keyChoice, staysOpen, type MenuAct, type WaitChoice } from '../../../shared/wait-choice'
 
 
 /**
@@ -19,6 +20,8 @@ import { choiceKeys, choiceSig, ESC, keyChoice, parseWaitChoice, type WaitChoice
 
 export const FILL_MS = 600
 export const RETRY_MS = 5000
+/** How long "the menu moved on" stands. */
+const MOVED_MS = 4000
 
 export interface Answer {
   readonly sig: string
@@ -70,12 +73,10 @@ export const waitAnswers = {
   }
 }
 
-/** The menu a waiting agent shows, read off its activity; null unless it waits on one. */
+/** The menu a waiting agent shows, read off its whole screen in the main process; null unless it waits on one. */
 export function useWaitChoice(agentId: string | null): WaitChoice | null {
   const activity = useActivity(agentId ?? '')
-  // A mirrorless activity has no lines to read: herdr says only that it waits.
-  const lines = agentId && activity?.phase === 'waiting' && !activity.mirrorless ? activity.lines : null
-  return useMemo(() => (lines ? parseWaitChoice(lines) : null), [lines])
+  return agentId && activity?.phase === 'waiting' ? (activity.waitChoice ?? null) : null
 }
 
 /**
@@ -86,6 +87,8 @@ export function useWaitChoice(agentId: string | null): WaitChoice | null {
 export function keyAction(view: WaitView | null, key: string): { index: number; keys: string } | null {
   if (!view || view.sent !== null) return null
   if (key === 'Escape') return view.choice.kind === 'menu' ? { index: view.choice.escIndex ?? -1, keys: ESC } : null
+  // On the row to type in, a digit is a word of the answer.
+  if (view.choice.cursor !== null && view.choice.options[view.choice.cursor]?.role === 'type') return null
   const index = keyChoice(view.choice, key)
   if (index === null) return null
   const keys = choiceKeys(view.choice, index)
@@ -103,6 +106,14 @@ export interface WaitAnswering {
   readonly answer: (index: number, byKey?: boolean) => void
   /** A key pressed with the box empty: a row's key, or Esc. True when it answered. */
   readonly key: (key: string) => boolean
+  /** Another question of a question tool. */
+  readonly step: (dir: -1 | 1) => void
+  /** The menu has a row to type in: the box's words are its answer. */
+  readonly wordsRow: boolean
+  /** Words from the box into that row (the draft is the caller's to clear; a refusal puts them back). */
+  readonly sendWords: (words: string) => void
+  /** The screen had moved on from the menu answered: nothing was sent. */
+  readonly moved: boolean
 }
 
 export function useWaitAnswer(agentId: string | null, onType?: () => void): WaitAnswering {
@@ -126,25 +137,60 @@ export function useWaitAnswer(agentId: string | null, onType?: () => void): Wait
     if (agentId && answer && !live && Date.now() - answer.at >= FILL_MS) waitAnswers.forget(agentId)
   })
 
-  const send = (index: number, keys: string, choice: WaitChoice): void => {
+  // The answer goes as "this menu, this row": the main process checks it
+  // against the screen and works the keys out there (main/menu-answer.ts).
+  const [moved, setMoved] = useState(false)
+  const movedTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(movedTimer.current), [])
+  const deliver = (act: MenuAct, choice: WaitChoice, onRefused?: () => void): void => {
     if (!agentId) return
-    cookrew().ptyInput(agentId, keys)
+    const refused = (): void => {
+      waitAnswers.forget(agentId)
+      setMoved(true)
+      window.clearTimeout(movedTimer.current)
+      movedTimer.current = window.setTimeout(() => setMoved(false), MOVED_MS)
+      onRefused?.()
+    }
+    cookrew()
+      .answerMenu(agentId, { menu: choiceId(choice), act })
+      .then((result) => {
+        if (!result.ok) refused()
+      }, refused)
+  }
+  const send = (index: number, choice: WaitChoice, act: MenuAct): void => {
+    if (!agentId) return
+    deliver(act, choice)
+    // A tick, a move to the row to type in: the menu stays, showing what changed.
+    if (staysOpen(choice.options[index])) return
     waitAnswers.set(agentId, { sig: choiceSig(choice), index, choice, at: Date.now() })
   }
+  const typeRow = (choice: WaitChoice, index: number): boolean => choice.options[index]?.role === 'type'
   const answerRow = (index: number, byKey = false): void => {
     if (!view || view.sent !== null) return
-    const keys = choiceKeys(view.choice, index)
-    if (keys === null) return
-    send(index, keys, view.choice)
-    if (index === view.choice.escIndex || byKey) onType?.()
+    if (choiceKeys(view.choice, index) === null) return
+    send(index, view.choice, { kind: 'row', index })
+    // A tick from the keyboard stays on its row: the next may be ticked too.
+    if (index === view.choice.escIndex || (byKey && !staysOpen(view.choice.options[index])) || typeRow(view.choice, index)) onType?.()
   }
   const key = (pressed: string): boolean => {
     const act = keyAction(view, pressed)
     if (!act || !view) return false
-    send(act.index, act.keys, view.choice)
-    if (act.index === view.choice.escIndex) onType?.()
+    send(act.index, view.choice, act.keys === ESC ? { kind: 'esc' } : { kind: 'row', index: act.index })
+    if (act.index === view.choice.escIndex || typeRow(view.choice, act.index)) onType?.()
     return true
   }
-  return { view, menu: live !== null, answer: answerRow, key }
+  const step = (dir: -1 | 1): void => {
+    if (!view || !agentId) return
+    deliver({ kind: 'step', dir }, view.choice)
+    waitAnswers.forget(agentId)
+  }
+  const sendWords = (words: string): void => {
+    if (!live || !agentId) return
+    deliver({ kind: 'words', text: words }, live, () => {
+      // Not sent: the words go back in the box, unless more are there.
+      if (getDraft(draftKey(agentId)) === '') setDraft(draftKey(agentId), words)
+    })
+  }
+  return { view, menu: live !== null, answer: answerRow, key, step, wordsRow: hasWordsRow(live), sendWords, moved }
 }
 

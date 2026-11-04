@@ -367,7 +367,9 @@ export function createDemoApi(): CookrewApi {
     readImage: () => Promise.resolve(null),
     pickFiles: () => Promise.resolve([]),
 
+    answerMenu: async () => ({ ok: false, reason: 'refused' }),
     ptyInput: (terminalId, data) => {
+
       const out = ptyListeners.get(terminalId)
       if (!out) return
       let buffer = lineBuffers.get(terminalId) ?? ''
