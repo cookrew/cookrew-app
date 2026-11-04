@@ -40,7 +40,10 @@ interface Step {
 }
 
 const builder = yaml.load(read('electron-builder.yml')) as BuilderConfig
-const workflow = yaml.load(read('.github/workflows/release.yml')) as { jobs: { build: { steps: Step[] } } }
+const workflow = yaml.load(read('.github/workflows/release.yml')) as {
+  env?: Record<string, string>
+  jobs: { build: { env?: Record<string, string>; steps: Step[] } }
+}
 const steps = workflow.jobs.build.steps
 
 /** The keys a plist turns on; a key named only in a comment does not count. */
@@ -174,7 +177,7 @@ describe('the herdr note in electron-builder.yml', () => {
 
 describe('release.yml', () => {
   const planStep = steps.find((step) => step.id === 'signing') as Step
-  const signedStep = steps.find((step) => step.if?.includes("steps.signing.outputs.sign == 'true'")) as Step
+  const signedStep = steps.find((step) => step.env?.CSC_LINK !== undefined) as Step
   const usesSecret = (step: Step): boolean => JSON.stringify(step).includes('secrets.')
 
   it('plans on macOS only', () => {
@@ -188,7 +191,8 @@ describe('release.yml', () => {
     for (const value of values) expect(value).toMatch(/^\$\{\{ secrets\.[A-Z0-9_]+ != '' \}\}$/)
   })
 
-  it('reads every named secret in the signed step', () => {
+  it('reads every named secret in the signed step, which runs only on a signing plan', () => {
+    expect(signedStep.if).toContain("steps.signing.outputs.sign == 'true'")
     const env = JSON.stringify(signedStep.env)
     for (const name of [
       'CSC_LINK',
@@ -213,6 +217,54 @@ describe('release.yml', () => {
     }
   })
 
+  // Env set above the steps reaches every step, Windows included, so the check
+  // above would miss a secret put there.
+  it('sets no secret at workflow or job level', () => {
+    expect(JSON.stringify(workflow.env ?? {})).not.toContain('secrets.')
+    expect(JSON.stringify(workflow.jobs.build.env ?? {})).not.toContain('secrets.')
+  })
+
+  // With no flag, electron-builder picks onTagOrDraft on CI, and any branch's
+  // dispatch can then overwrite a draft holding a verified tag build.
+  it('publishes from a tag and from nothing else, on both build steps', () => {
+    const plain = steps.find((step) => step.if?.includes("steps.signing.outputs.sign != 'true'")) as Step
+    expect(plain.run).toContain('--publish onTag')
+    expect(signedStep.run).toContain('--publish onTag')
+  })
+
+  // A build tool, its plugins and a native rebuild are code from npm. None of
+  // them needs a certificate, so none of them runs beside one.
+  it('bundles in a step of its own, so only electron-builder sees the secrets', () => {
+    const bundle = steps.findIndex((step) => step.run?.trim() === 'npx electron-vite build')
+    expect(bundle).toBeGreaterThan(-1)
+    expect(bundle).toBeLessThan(steps.indexOf(signedStep))
+    expect(usesSecret(steps[bundle])).toBe(false)
+    expect(signedStep.run).not.toContain('npm run')
+    expect(signedStep.run).toContain('npx electron-builder --mac')
+    expect(signedStep.run).toContain('-c.npmRebuild=false')
+  })
+
+  it('removes the .p8 when the signed step ends, however it ends', () => {
+    expect(signedStep.run).toMatch(/trap 'rm -f "\$APPLE_API_KEY"' EXIT/)
+  })
+
+  // build-cr-listen.mjs exits 0 when clang fails and a missing extraResource is
+  // only a warning, so without this a release ships with a dead hold-to-talk.
+  it('refuses to build for macOS without cr-listen', () => {
+    const check = steps.findIndex((step) => step.run?.includes('test -x resources/cr-listen/cr-listen'))
+    expect(check).toBeGreaterThan(-1)
+    expect(steps[check].if).toContain("runner.os == 'macOS'")
+    expect(check).toBeLessThan(steps.indexOf(signedStep))
+  })
+
+  // GitHub's images are not documented either way, and with assessments off
+  // spctl answers "override=security disabled", which verify rightly fails.
+  it('turns Gatekeeper on before verifying, and logs its state', () => {
+    const verify = steps.find((step) => step.run?.includes('scripts/verify-mac-release.sh')) as Step
+    expect(verify.run).toContain('spctl --status')
+    expect(verify.run).toContain('sudo spctl --global-enable')
+  })
+
   it('builds the plain way on Windows and on an unsigned macOS run', () => {
     const plain = steps.find((step) => step.if?.includes("steps.signing.outputs.sign != 'true'")) as Step
     expect(plain.run).toContain('matrix.script')
@@ -233,7 +285,10 @@ describe('release.yml', () => {
     expect(signedStep.run).toMatch(/export APPLE_API_KEY=/)
   })
 
-  it('verifies a notarized build before anything is uploaded', () => {
+  // On a tag electron-builder has already uploaded to the draft by now, so this
+  // gates the workflow artifact and turns the run red. The draft is the gate on
+  // the release itself: a person publishes it.
+  it('verifies a notarized build before the workflow artifact is uploaded', () => {
     const verify = steps.findIndex((step) => step.run?.includes('scripts/verify-mac-release.sh'))
     const upload = steps.findIndex((step) => step.uses?.startsWith('actions/upload-artifact'))
     expect(verify).toBeGreaterThan(steps.indexOf(signedStep))

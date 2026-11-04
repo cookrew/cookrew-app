@@ -23,10 +23,10 @@ on:
       - 'scripts/mac-signing-plan.mjs'
       - 'scripts/verify-mac-release.sh'
 
-# electron-builder publishes to a GitHub release when it detects a tag build,
-# and that path needs a token with release-write access. PR and dispatch runs
-# never enter it, which is exactly how the gap survived every green PR run and
-# surfaced only on the v0.1.0 tag itself.
+# electron-builder publishes to a GitHub release on a tag build, and that path
+# needs a token with release-write access. Both build steps pass --publish onTag:
+# left to itself on CI it picks onTagOrDraft, and a dispatch from any branch could
+# then overwrite the assets of a draft for the same version.
 #
 # It uploads to a DRAFT release, and a person publishes it. That draft is also
 # the gate on the Mac build: verification below runs after the upload, so a red
@@ -62,6 +62,13 @@ jobs:
       # that cannot be done cross-platform, and the reason this job exists.
       - run: npm ci
 
+      # build-cr-listen.mjs exits 0 when clang fails, so the app still runs on a
+      # broken dev machine, and a missing extraResource is only a warning. A
+      # release must not ship with hold-to-talk quietly gone.
+      - name: Require cr-listen
+        if: runner.os == 'macOS'
+        run: test -x resources/cr-listen/cr-listen
+
       # Which of the three macOS builds this is. Sees only whether each secret
       # exists; the Windows leg never runs it. Half a set fails the job here.
       - name: Plan macOS signing
@@ -83,13 +90,18 @@ jobs:
       # are a portability debt rather than a statement about the build.
       - name: Build
         if: steps.signing.outputs.sign != 'true'
-        run: npm run ${{ matrix.script }}
+        run: npm run ${{ matrix.script }} -- --publish onTag
         env:
           # Only meaningful on tag builds, where electron-builder publishes
           # the artifacts to the release for this tag.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Unsigned on purpose: do not pick up whatever the runner's keychain has.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # Its own step, so the build tool and its plugins run with no secrets.
+      - name: Bundle
+        if: steps.signing.outputs.sign == 'true'
+        run: npx electron-vite build
 
       # The only step that holds signing material. Kept apart from the plain
       # build because electron-builder acts on these variables wherever it sees
@@ -106,12 +118,14 @@ jobs:
             # as a path to the .p8, not the key's text.
             unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
             export APPLE_API_KEY="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY_ID.p8"
+            trap 'rm -f "$APPLE_API_KEY"' EXIT
             (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$APPLE_API_KEY")
           fi
           unset APPLE_API_KEY_P8
           # Forced here and only here: with a bad certificate this run goes red
-          # instead of quietly shipping unsigned.
-          npm run dist:mac -- -c.forceCodeSigning=true
+          # instead of quietly shipping unsigned. npm ci already rebuilt node-pty,
+          # so no native build runs beside the certificate.
+          npx electron-builder --mac --publish onTag -c.forceCodeSigning=true -c.npmRebuild=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NOTARIZE_WITH: ${{ steps.signing.outputs.notarize }}
@@ -130,6 +144,13 @@ jobs:
         # spctl has been seen to sit for minutes behind a busy syspolicyd.
         timeout-minutes: 15
         run: |
+          # With assessments off spctl accepts anything and verify would fail
+          # every build. Nothing documents what these images ship with.
+          status=$(spctl --status 2>&1 || true)
+          echo "$status"
+          case "$status" in
+            *disabled*) sudo spctl --global-enable ;;
+          esac
           for image in release/*.dmg; do
             bash scripts/verify-mac-release.sh "$image"
           done

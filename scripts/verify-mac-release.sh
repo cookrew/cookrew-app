@@ -82,8 +82,11 @@ verify_app() {
 
 detach_image() {
   [ -n "$mount_point" ] || return 0
-  hdiutil detach "$mount_point" -quiet 2>/dev/null || hdiutil detach "$mount_point" -force -quiet 2>/dev/null
-  rmdir "$mount_point" 2>/dev/null
+  if hdiutil detach "$mount_point" -quiet 2>/dev/null || hdiutil detach "$mount_point" -force -quiet 2>/dev/null; then
+    rmdir "$mount_point" 2>/dev/null
+  else
+    fail "hdiutil: could not detach $mount_point"
+  fi
   mount_point=""
 }
 

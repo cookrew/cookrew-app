@@ -13,8 +13,10 @@
 //   half of any set    job FAILS and names what is missing. Falling back to
 //                      unsigned here would ship the build the owner just paid
 //                      to stop shipping, on the day they thought it was fixed.
-//   a pull request     unsigned, whatever is set. A PR can edit the workflow,
-//                      so its run must never hold the key.
+//   a pull request     unsigned, whatever is set, which agrees with
+//                      electron-builder. A fork's PR gets no secrets at all; a
+//                      same-repo branch could edit the workflow to read them,
+//                      and only an environment restricted to tags stops that.
 //
 // Writes mode, sign and notarize to GITHUB_OUTPUT and the story to
 // GITHUB_STEP_SUMMARY. With neither set it prints to stdout, for a dry look.
@@ -88,7 +90,7 @@ function story(result) {
     }
   }
   if (result.reason === 'pull-request') {
-    return { summary: '## macOS build is unsigned\n\nThis is a pull request, and a pull request never holds the signing key.\n' }
+    return { summary: '## macOS build is unsigned\n\nThis is a pull request, and pull request builds are not signed.\n' }
   }
   return {
     annotation: '::warning title=macOS build is NOT signed::Gatekeeper will stop this download. See the job summary for the secrets to add.',

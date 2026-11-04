@@ -139,8 +139,9 @@ describe('mac-signing-plan', () => {
   })
 
   describe('on a pull request', () => {
-    // A PR can change this workflow, so its run must never hold the signing
-    // key. electron-builder refuses to sign there too; this keeps them agreed.
+    // electron-builder skips signing there too; this keeps the two agreed. It
+    // does not stop a same-repo branch that edits the workflow: only an
+    // environment restricted to tags does.
     it('stays unsigned even with every secret present', () => {
       const result = plan({ ...CERT, ...API_KEY }, 'pull_request')
       expect(result).toMatchObject({ code: 0, mode: 'unsigned', sign: 'false', notarize: 'none' })

@@ -36,6 +36,7 @@ if [ "$1" = attach ]; then
   exit 0
 fi
 if [ "$1" = detach ]; then
+  [ "\${FAKE_DETACH_EXIT:-0}" = 0 ] || exit "$FAKE_DETACH_EXIT"
   rm -rf "$2"/*
   exit 0
 fi
@@ -167,6 +168,15 @@ describe.skipIf(process.platform === 'win32')('verify-mac-release.sh', () => {
       const { code } = run([dmg()], { FAKE_DMG_APP: 'Cookrew.app', FAKE_STAPLER_EXIT: '65' })
       expect(code).toBe(1)
       expect(calls().some((line) => line.startsWith('hdiutil detach'))).toBe(true)
+    })
+
+    // A stuck mount on a release machine is a problem, not a footnote, and the
+    // verdict must not read READY over it.
+    it('fails when the image will not detach, and says so', () => {
+      const { code, out } = run([dmg()], { FAKE_DMG_APP: 'Cookrew.app', FAKE_DETACH_EXIT: '1' })
+      expect(code).toBe(1)
+      expect(out).toMatch(/FAIL.*detach/)
+      expect(out).not.toMatch(/READY: signed/)
     })
 
     it('fails when the image holds no app', () => {
