@@ -1,4 +1,4 @@
-import { EASE, still } from './prompt/face-flip'
+import { EASE, holdsMenu, still } from './prompt/face-flip'
 
 /**
  * THE KEYBOARD, EXPECTED (owner, 2026-11-04: the box's motion was all but cut
@@ -23,6 +23,10 @@ import { EASE, still } from './prompt/face-flip'
 export const NO_KEYBOARD_MS = 900
 /** A keyboard that reports on its way up has landed when it stops reporting. */
 export const SETTLE_MS = 160
+/** The band comes back this long after a keyboard said to be going that never went. */
+export const KEYBOARD_GONE_MS = 600
+/** Under this the viewport is only rounding: a fractional screen at rest is no keyboard. */
+const MIN_COVER = 2
 /** The first time: about what a phone's keyboard takes, its word row included. */
 const FIRST_GUESS = 0.4
 
@@ -43,7 +47,7 @@ export interface KeyboardEnv {
   recall(): number | null
   remember(cover: number): void
   viewHeight(): number
-  /** A screen a keyboard rises on. */
+  /** A screen a keyboard rises on, and a gesture that can raise one. */
   touch(): boolean
 }
 
@@ -57,25 +61,49 @@ export interface KeyboardWatch {
   dispose(): void
 }
 
+/** The band's height: the settled keyboard's, unless one is on its way, or on its way out. */
+function bandKeeper(band: (px: number) => void, truth: () => number, waiting: () => boolean): { show(): void; stay(): void; leaving(): void } {
+  let shown = -1
+  let going = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const show = (): void => {
+    const next = going || waiting() ? 0 : truth()
+    if (next === shown) return
+    shown = next
+    band(next)
+  }
+  const stay = (): void => {
+    if (timer !== null) clearTimeout(timer)
+    timer = null
+    going = false
+    show()
+  }
+  return {
+    show,
+    stay,
+    leaving() {
+      if (truth() === 0) return
+      stay()
+      going = true
+      show()
+      // Told it is going, it may not be (the focus went to a terminal): it stands again.
+      timer = setTimeout(stay, KEYBOARD_GONE_MS)
+    }
+  }
+}
+
 export function keyboardWatch(env: KeyboardEnv): KeyboardWatch {
   let truth = 0
   let expected: number | null = null
   let shown = -1
-  let going = false
-  let band = -1
   let timer: ReturnType<typeof setTimeout> | null = null
+  const band = bandKeeper(env.band, () => truth, () => expected !== null)
   const show = (glide: boolean): void => {
     const next = shownCover(truth, expected)
     if (next === shown) return
     const from = shown
     shown = next
     env.publish(next, glide && from >= 0 ? from : null)
-  }
-  const showBand = (): void => {
-    const next = going || expected !== null ? 0 : truth
-    if (next === band) return
-    band = next
-    env.band(next)
   }
   const clear = (): void => {
     if (timer !== null) clearTimeout(timer)
@@ -86,17 +114,18 @@ export function keyboardWatch(env: KeyboardEnv): KeyboardWatch {
     clear()
     expected = null
     show(true)
-    showBand()
+    band.show()
   }
   return {
-    report(cover) {
+    report(raw) {
+      const cover = raw < MIN_COVER ? 0 : Math.round(raw)
       if (cover === truth && shown !== -1) return
       truth = cover
-      if (cover === 0) going = false
-      showBand()
+      if (cover === 0) band.stay()
+      else band.show()
       clear()
       if (cover === 0 && expected !== null) return end()
-      show(false)
+      show(expected !== null)
       if (cover === 0) return
       timer = setTimeout(() => {
         end()
@@ -104,8 +133,7 @@ export function keyboardWatch(env: KeyboardEnv): KeyboardWatch {
       }, SETTLE_MS)
     },
     expect() {
-      going = false
-      showBand()
+      band.stay()
       if (expected !== null || truth > 0 || !env.touch()) return 0
       const guess = coverGuess(env.recall(), env.viewHeight())
       if (guess <= 0) return 0
@@ -118,11 +146,13 @@ export function keyboardWatch(env: KeyboardEnv): KeyboardWatch {
       return guess
     },
     leaving() {
-      going = true
-      showBand()
+      band.leaving()
       if (expected !== null) end()
     },
-    dispose: clear
+    dispose() {
+      clear()
+      band.stay()
+    }
   }
 }
 
@@ -134,8 +164,22 @@ const CORRECT_MS = 160
  * the frame of the fixed copies a fold flies in it (fold-flight.ts).
  */
 export function glideBox(box: Element | null, by: number): void {
-  if (!box || Math.abs(by) < 2 || typeof box.animate !== 'function' || still()) return
+  if (!box || Math.abs(by) < 2 || typeof box.animate !== 'function' || still() || holdsMenu(box)) return
   box.animate([{ transform: `translateY(${by}px)` }, { transform: 'none' }], { duration: CORRECT_MS, easing: EASE })
+}
+
+/**
+ * The page is in a user's gesture: a phone raises no keyboard for a focus
+ * without one (the app coming back refocuses its field). An engine that cannot
+ * say is taken at its word.
+ */
+export function inGesture(nav: { userActivation?: { isActive: boolean } }): boolean {
+  return nav.userActivation?.isActive ?? true
+}
+
+/** Whatever has the focus next keeps the keyboard up. */
+export function takesKeys(el: EventTarget | null): boolean {
+  return Boolean((el as Element | null)?.matches?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])'))
 }
 
 const storeKey = (): string => `cookrew-keyboard-cover:${window.innerHeight >= window.innerWidth ? 'tall' : 'wide'}`
@@ -162,7 +206,7 @@ export function pageKeyboardEnv(publish: KeyboardEnv['publish']): KeyboardEnv {
       }
     },
     viewHeight: () => window.innerHeight,
-    touch: () => typeof window.matchMedia === 'function' && window.matchMedia('(hover: none) and (pointer: coarse)').matches
+    touch: () => typeof window.matchMedia === 'function' && window.matchMedia('(hover: none) and (pointer: coarse)').matches && inGesture(navigator)
   }
 }
 

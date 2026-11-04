@@ -38,7 +38,7 @@ import { inkStatusOfRow } from '../zoom/ink-status'
 import type { AgentRow } from '../agent-rows'
 import { boxFold, facePlace, promptFold, usePromptOpen, usePromptWho, type FacePlace } from './prompt-fold'
 import { flyFace, popFace, riseBox, type Box } from './face-flip'
-import { expectKeyboard, keyboardLeaving } from '../keyboard-expect'
+import { expectKeyboard, keyboardLeaving, takesKeys } from '../keyboard-expect'
 import { barCard, useBarAgent } from '../zoom/bar-pick'
 import { fliesBack, flyBack, snapshotBox, stageFlyer, stageGhost, type FoldSnapshot } from './fold-flight'
 import { SentToast, pressKey, useSentToast } from './SentToast'
@@ -496,6 +496,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   const formRef = useRef<HTMLFormElement>(null)
   /** How far the box rises for the keyboard the open under way expects (keyboard-expect.ts). */
   const keyboardRise = useRef(0)
+  /** The keyboard up, if any, is the box's: it goes with the box's focus, and another field's does not. */
+  const typedHere = useRef(false)
   const dropOver = useDropZone(formRef, attach.dropFiles)
   const spoken = useSpokenReplies(to?.id ?? null, activity, agents)
   const browse = useFilePicker(attach.dropFiles)
@@ -673,12 +675,13 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     landing.current = null
     if (folded) {
       const face = faceRef.current
-      // Read before it is told: the box's focus goes with the fold, and the keyboard with it.
-      const cover = keyboardCoverNow()
-      keyboardLeaving()
+      // Read before it is told: the box's focus goes with the fold, and its keyboard with it.
+      const cover = typedHere.current ? keyboardCoverNow() : 0
+      if (typedHere.current) keyboardLeaving()
+      typedHere.current = false
       if (!snap || !face || !fliesBack(was, { folded, place, placed })) return
       const ghost = formRef.current ? stageGhost(snap, formRef.current) : null
-      landing.current = flyBack(face, snap, { dot: face.querySelector<HTMLElement>('.pf-dot'), bar: face.closest<HTMLElement>('.zv-controls'), page: document.body, cover, flyer: stageFlyer(face, ghost) })
+      landing.current = flyBack(face, snap, { dot: face.querySelector<HTMLElement>('.pf-dot'), bar: face.closest<HTMLElement>('.zv-controls'), page: document.body, cover, flyer: place === 'bar' ? stageFlyer(face, ghost) : null })
       return
     }
     const el = chipFace.current
@@ -901,12 +904,14 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         }}
         onFocus={() => {
           setHeld({ id: to?.id ?? null })
+          typedHere.current = true
           // A tap in an open box raises the keyboard too (openBox has already expected its own).
           riseBox(formRef.current, expectKeyboard())
         }}
-        onBlur={() => {
+        onBlur={(e) => {
           setHeld(null)
-          keyboardLeaving()
+          if (takesKeys(e.relatedTarget)) typedHere.current = false
+          else keyboardLeaving()
         }}
         onKeyDown={(e) => {
           // The zoom's keys (Esc steps out) are not this box's.

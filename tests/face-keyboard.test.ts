@@ -5,7 +5,7 @@
 // one, dropped if none comes. Rules here, stand-in elements for the animations;
 // the frames are checked headless against a simulated keyboard.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { coverGuess, keyboardWatch, shownCover, NO_KEYBOARD_MS, SETTLE_MS, type KeyboardEnv } from '../src/renderer/src/keyboard-expect'
+import { KEYBOARD_GONE_MS, coverGuess, inGesture, keyboardWatch, shownCover, takesKeys, NO_KEYBOARD_MS, SETTLE_MS, type KeyboardEnv } from '../src/renderer/src/keyboard-expect'
 import { flipFrom, flyFace, riseBox, RISE_MS, type Box } from '../src/renderer/src/prompt/face-flip'
 import { FOLD_MS, KEYBOARD_HOLD_MS, flyBack, shutInsets, type FoldSnapshot } from '../src/renderer/src/prompt/fold-flight'
 import { glideBox } from '../src/renderer/src/keyboard-expect'
@@ -75,6 +75,22 @@ describe('the cover to expect', () => {
   })
 })
 
+describe('what can raise a keyboard', () => {
+  it('a gesture: a focus coming back with the app raises none', () => {
+    expect(inGesture({ userActivation: { isActive: true } })).toBe(true)
+    expect(inGesture({ userActivation: { isActive: false } })).toBe(false)
+  })
+  it('an engine that cannot say is taken at its word', () => {
+    expect(inGesture({})).toBe(true)
+  })
+  it('a field that takes keys, whoever has the focus next', () => {
+    const el = (hit: boolean) => ({ matches: () => hit }) as unknown as Element
+    expect(takesKeys(el(true))).toBe(true)
+    expect(takesKeys(el(false))).toBe(false)
+    expect(takesKeys(null)).toBe(false)
+  })
+})
+
 describe('the band behind the keyboard', () => {
   beforeEach(() => void vi.useFakeTimers())
   afterEach(() => void vi.useRealTimers())
@@ -108,6 +124,23 @@ describe('the band behind the keyboard', () => {
     expect(e.shown.at(-1)).toBe(300)
     w.report(0)
     expect(e.shown.at(-1)).toBe(0)
+  })
+  it('comes back by itself if the keyboard stayed (the focus went to a terminal, say)', () => {
+    const e = env()
+    const w = keyboardWatch(e)
+    w.report(300)
+    w.leaving()
+    expect(e.bands.at(-1)).toBe(0)
+    vi.advanceTimersByTime(KEYBOARD_GONE_MS)
+    expect(e.bands.at(-1)).toBe(300)
+  })
+  it('a leaving with no keyboard up leaves nothing behind for the next one', () => {
+    const e = env()
+    const w = keyboardWatch(e)
+    w.report(0)
+    w.leaving()
+    w.report(300)
+    expect(e.bands.at(-1)).toBe(300)
   })
   it('comes back if the focus only moved to another field', () => {
     const e = env()
@@ -194,6 +227,25 @@ describe('the keyboard watch', () => {
     vi.advanceTimersByTime(NO_KEYBOARD_MS)
     expect(e.kept).toEqual([])
   })
+  it('a fraction of a pixel at rest is no keyboard, and a real cover is whole', () => {
+    const e = env()
+    const w = keyboardWatch(e)
+    w.report(0.4)
+    expect(e.shown).toEqual([0])
+    expect(w.expect()).toBe(300)
+    w.report(299.6)
+    vi.advanceTimersByTime(SETTLE_MS)
+    expect(e.kept).toEqual([300])
+  })
+  it('a keyboard taller than expected glides up to it', () => {
+    const e = env()
+    const w = keyboardWatch(e)
+    w.report(0)
+    w.expect()
+    w.report(340)
+    expect(e.shown.at(-1)).toBe(340)
+    expect(e.glides).toEqual([300])
+  })
   it('a plain keyboard, nothing expected, is published as it reports, unglided, once per change', () => {
     const e = env()
     const w = keyboardWatch(e)
@@ -245,6 +297,13 @@ describe('the open rises with the keyboard', () => {
     expect(box.calls[0].frames.at(-1)!.transform).toBe('none')
     expect(RISE_MS).toBeLessThan(250)
   })
+  it('with a menu open nothing moves on a transform: it would carry the menu, fixed, along with it', () => {
+    setReduced(false)
+    const box = Object.assign(fake(BOX), { querySelector: () => ({}) })
+    riseBox(box, COVER)
+    glideBox(box, -20)
+    expect(box.calls).toHaveLength(0)
+  })
   it('nothing rises for no cover, or under reduced motion', () => {
     setReduced(false)
     const box = fake(BOX)
@@ -262,6 +321,21 @@ describe('the open rises with the keyboard', () => {
     const move = flipFrom(FOLDED, CHIP)!
     expect(face.calls[0].frames[0].transform).toBe(`translate(${move.dx}px, ${move.dy - COVER}px) scale(${move.s})`)
     expect(box.calls.some((c) => c.frames[0].transform === `translateY(${COVER}px)`)).toBe(true)
+  })
+  it('a chip measured while the box rises still starts the face on the bar', () => {
+    setReduced(false)
+    // As a browser does: an animation running on the box moves the chip's rect.
+    let shift = 0
+    const box = fake(BOX)
+    const animate = box.animate.bind(box)
+    box.animate = ((frames: Frame[], options: KeyframeAnimationOptions) => {
+      if (frames[0].transform) shift = COVER
+      return animate(frames as unknown as Keyframe[], options)
+    }) as unknown as typeof box.animate
+    const face = Object.assign(fake(CHIP), { getBoundingClientRect: () => ({ ...CHIP, top: CHIP.top + shift }) })
+    flyFace(face, FOLDED, { box, rest: [], rise: COVER })
+    const move = flipFrom(FOLDED, CHIP)!
+    expect(face.calls[0].frames[0].transform).toBe(`translate(${move.dx}px, ${move.dy - COVER}px) scale(${move.s})`)
   })
   it('with no keyboard coming the flight is what it was', () => {
     setReduced(false)

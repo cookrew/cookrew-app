@@ -221,6 +221,16 @@ function unrollBar(bar: HTMLElement, to: Box): void {
   })
 }
 
+interface FlyBackParts {
+  readonly dot: HTMLElement | null
+  readonly bar: HTMLElement | null
+  readonly page: { readonly classList: DOMTokenList } | null
+  /** The keyboard's cover as the fold begins: it is going down with the box's focus. */
+  readonly cover?: number
+  /** The face's stand-in over the ghost (stageFlyer). */
+  readonly flyer?: HTMLElement | null
+}
+
 /**
  * Fly the folded face back from the chip's place; the box (its ghost) clips
  * shut onto it, its left edge riding with the face; the draft dot pops in as
@@ -231,25 +241,7 @@ function unrollBar(bar: HTMLElement, to: Box): void {
  * it all at once (a re-open mid-flight, the box going away): the bar comes
  * back without unrolling.
  */
-export function flyBack(
-  face: HTMLElement,
-  snap: FoldSnapshot,
-  {
-    dot,
-    bar,
-    page,
-    cover = 0,
-    flyer = null
-  }: {
-    dot: HTMLElement | null
-    bar: HTMLElement | null
-    page: { readonly classList: DOMTokenList } | null
-    /** The keyboard's cover as the fold begins: it is going down with the box's focus. */
-    cover?: number
-    /** The face's stand-in over the ghost (stageFlyer). */
-    flyer?: HTMLElement | null
-  }
-): () => void {
+export function flyBack(face: HTMLElement, snap: FoldSnapshot, { dot, bar, page, cover = 0, flyer = null }: FlyBackParts): () => void {
   const ghost = snap.ghost
   const hold = cover > 0 ? KEYBOARD_HOLD_MS : 0
   const f = flight()
