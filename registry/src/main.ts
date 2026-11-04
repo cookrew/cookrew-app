@@ -23,6 +23,8 @@
 //   GET  /me                         the same, as a page
 //   POST /v2/me/desktops/:id/cert    a Mac's own certificate, by ACME dns-01
 //   GET  /v2/me/desktops/:id/cert    pending / issued / failed
+//   POST /v1/funnel                  one onboarding event, into daily sums
+//   GET  /v1/funnel                  the totals, for the --funnel-owner account
 //
 // REACH v2.1 flags, ALL OPTIONAL and off by default:
 //   --dns-port 8753          bind UDP+TCP DNS on this port. Absent → no listener.
@@ -61,6 +63,7 @@ import { StarStore } from './stars'
 import { ReleaseCache } from './releases'
 import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
+import { FunnelCounts } from './funnel-counts'
 import { createV2 } from './v2-routes'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
@@ -316,6 +319,14 @@ createRegistry({
   releases: new ReleaseCache(),
   commits: new CommitsCache(),
   pulse: new Pulse(DATA),
+  // The onboarding funnel. The registry has no site-wide owner role, so who may
+  // read the totals is named at boot. No flag and no env: nobody can.
+  // Behind a proxy, name it (comma-separated peers) or every install shares one budget.
+  funnel: {
+    counts: new FunnelCounts(DATA),
+    owner: flag('funnel-owner', process.env.FUNNEL_OWNER ?? ''),
+    trustedProxies: flag('funnel-proxies', process.env.FUNNEL_PROXIES ?? '').split(',').filter(Boolean)
+  },
   // IDENTITY v2 — a username and a password, with devices attached. Built
   // from the same data directory as everything else, and sharing the token
   // key identity.ts already writes there, so one key signs every token this

@@ -28,6 +28,7 @@ import { mePage } from './site-account'
 import { serveShellAsset, shellPage, type ShellBundle } from './strata-shell'
 import { readSampleArt } from './site-art-manifest'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
+import { createFunnelRoute, type FunnelMount } from './funnel-routes'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -144,6 +145,8 @@ export interface RegistryDeps {
   strataMe?: boolean
   /** STRATA: where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
   lineSeenFile?: string
+  /** The onboarding funnel's daily sums (funnel-routes.ts). Absent → /v1/funnel does not exist. */
+  funnel?: FunnelMount
 }
 
 /** An account name: the same shape a handle has everywhere else on this site. */
@@ -166,6 +169,7 @@ export function createRegistry(deps: RegistryDeps): Server {
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
   /** The front page's sample fleet, drawn at the shell's build; null without a shell (the page stays as it was). */
   const sampleArt = readSampleArt(deps.shell)
+  const funnel = deps.funnel ? createFunnelRoute(deps.funnel, deps.v2) : null
 
   /**
    * What the write routes need, assembled once.
@@ -394,6 +398,9 @@ export function createRegistry(deps: RegistryDeps): Server {
       })
     )
       return
+
+    // ── THE ONBOARDING FUNNEL: POST an event, GET the owner's totals ──────
+    if (funnel && funnel.handle(request, response, url.pathname)) return
 
     // GET /install/:presetId — R21 Option A, the page for a reader with no app.
     //
