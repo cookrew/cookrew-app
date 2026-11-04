@@ -207,6 +207,7 @@ import {
   claudeSessionFile,
   claudeSpawnCommand,
   claudeCwdRepair,
+  locateClaudeSessionFile,
   realCwd,
   resolveClaudeSessionId,
   resumeRoleSession,
@@ -254,11 +255,12 @@ import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
-import { reapOrphanChrome } from './orphan-chrome'
+import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
+import { pressureOf, readMachineMemory, sleepColdLookups, sleepWindowMs, type PressureLevel } from './machine-pressure'
 import { staleAgentIds } from './agent-reconcile'
 import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
 import { AgentWaker } from './agent-wake'
-import { gatherSleepEvidence, paneHolder, quietSince, readProcTable } from './agent-sleep-evidence'
+import { cronArmedIn, gatherSleepEvidence, paneHolder, quietSince, readProcTable, sessionMoved } from './agent-sleep-evidence'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -3265,6 +3267,18 @@ setTimeout(reconcileAgentLiveness, 30_000).unref()
 const IDLE_SLEEP_MS = idleSleepMsFrom(process.env.COOKREW_IDLE_SLEEP_MS)
 const idleSleep = new IdleSleep(IDLE_SLEEP_MS)
 
+/** One sweep old: the read is async and the sweep it steers is on a minute clock. */
+let machinePressure: PressureLevel = 'normal'
+
+async function readMachinePressure(): Promise<void> {
+  const memory = await readMachineMemory()
+  if (!memory) return
+  const level = pressureOf(memory)
+  if (level === machinePressure) return
+  console.error(`[cookrew] machine pressure ${machinePressure} -> ${level}: swap ${Math.round(memory.swapUsedMb)} MB`)
+  machinePressure = level
+}
+
 /** Anything that means a person or a turn is using this agent right now. */
 function agentBusy(id: string): boolean {
   return (
@@ -3278,7 +3292,9 @@ function agentBusy(id: string): boolean {
 /** One multiplexer listing per sweep — the same price as the liveness sweep. */
 function sleepSweep(): void {
   if (IDLE_SLEEP_MS <= 0) return
+  void readMachinePressure()
   try {
+    const windowMs = sleepWindowMs(machinePressure, IDLE_SLEEP_MS)
     const mux = multiplexer()
     if (!mux?.available()) return
     const sessions = new Set(mux.listSessions())
@@ -3293,16 +3309,15 @@ function sleepSweep(): void {
         served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
         busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
       })),
-      Date.now()
+      Date.now(),
+      windowMs
     )
-    if (due.length > 0) void confirmSleep(due)
+    if (due.length > 0) void confirmSleep(due, windowMs)
   } catch (error) {
     console.error('Idle sleep sweep failed:', error)
   }
 }
 
-/** Cold pane-pid lookups are synchronous herdr calls: at most this many per pass. */
-const SLEEP_COLD_LOOKUPS = 2
 let confirmingSleep = false
 
 /**
@@ -3311,7 +3326,7 @@ let confirmingSleep = false
  * (status change, transcript or subagent write, a loop's next wakeup) must be
  * a whole window old. Otherwise the window restarts from that sign of life.
  */
-async function confirmSleep(due: readonly string[]): Promise<void> {
+async function confirmSleep(due: readonly string[], windowMs: number): Promise<void> {
   if (confirmingSleep) return
   confirmingSleep = true
   try {
@@ -3321,19 +3336,23 @@ async function confirmSleep(due: readonly string[]): Promise<void> {
       const node = store.nodeAcrossWorkspaces(id)?.node
       if (!node || node.kind !== 'terminal' || !node.claudeSessionId) continue
       // Left nominated: the next sweep warms it, a minute later.
-      if (!panePids.isWarm(id) && coldLookups++ >= SLEEP_COLD_LOOKUPS) continue
+      if (!panePids.isWarm(id) && coldLookups++ >= sleepColdLookups(machinePressure)) continue
       const holders = liveSessionHolders()
       const now = Date.now()
-      const evidence = await gatherSleepEvidence({
-        holder: paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd),
-        holders,
-        procs,
-        transcript: claudeSessionFile(node.cwd, node.claudeSessionId),
-        now
-      })
+      const holder = paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd, node.claudeSessionId)
+      if (sessionMoved(holder, node.claudeSessionId)) {
+        idleSleep.restart(id, now)
+        continue
+      }
+      const transcript = locateClaudeSessionFile(node.cwd, node.claudeSessionId)
+      const evidence = await gatherSleepEvidence({ holder, holders, procs, transcript, now })
       const quiet = quietSince(evidence, now)
-      if (now - quiet.at < IDLE_SLEEP_MS) {
+      if (now - quiet.at < windowMs) {
         idleSleep.restart(id, quiet.at)
+        continue
+      }
+      if (await cronArmedIn(transcript, now)) {
+        idleSleep.restart(id, now)
         continue
       }
       putAgentToSleep(id, now - quiet.at)
@@ -3347,6 +3366,18 @@ async function confirmSleep(due: readonly string[]): Promise<void> {
 const sleepSweepTimer = setInterval(sleepSweep, 60_000)
 sleepSweepTimer.unref()
 
+/** Old enough to be a leak, and clientless for long enough to not be a pause. */
+const HEADLESS_LEAK_AGE_MS = 2 * 60 * 60_000
+const HEADLESS_LEAK_QUIET_MS = 60 * 60_000
+const headlessReaper = new HeadlessReaper(HEADLESS_LEAK_AGE_MS, HEADLESS_LEAK_QUIET_MS)
+
+async function headlessLeakSweep(): Promise<void> {
+  const killed = await headlessReaper.sweep(Date.now())
+  if (killed.length > 0) console.error(`[cookrew] stopped ${killed.length} headless browser(s) nobody was driving`)
+}
+const headlessLeakTimer = setInterval(() => void headlessLeakSweep(), 10 * 60_000)
+headlessLeakTimer.unref()
+
 /**
  * End an idle agent's process and nothing else: the node, its wires, its
  * session id and its turn history all stay, so the wake is a plain resume.
@@ -3356,6 +3387,8 @@ sleepSweepTimer.unref()
 function putAgentToSleep(id: string, quietMs: number): void {
   const node = store.nodeAcrossWorkspaces(id)?.node
   if (!node || node.kind !== 'terminal' || agentBusy(id)) return
+  // Nomination read focus up to a pass ago, and a pass can run long.
+  if (multiplexer()?.focusedSessions?.().includes(sessionNameFor(id))) return
   lazyTerminals.forget(id)
   herdrPhases.observe(id, null, true)
   sessionSync.unwatch(id)
@@ -3366,7 +3399,12 @@ function putAgentToSleep(id: string, quietMs: number): void {
   idleSleep.markAsleep(id)
   const minutes = Math.round(quietMs / 60_000)
   store.withOpContext({ actor: 'agent' }, () =>
-    store.recordEvent('terminal.asleep', id, node.name, `idle ${minutes} min; wakes on the next ask, reply or LIVE`)
+    store.recordEvent(
+      'terminal.asleep',
+      id,
+      node.name,
+      `idle ${minutes} min${machinePressure === 'normal' ? '' : ` (memory pressure ${machinePressure})`}; wakes on the next ask, reply or LIVE`
+    )
   )
 }
 

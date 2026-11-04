@@ -24,8 +24,10 @@
 // sweep for every card).
 
 import { execFile } from 'node:child_process'
+import { createReadStream } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { isPaneAgent } from '../shared/pane-agent.mjs'
 import type { SessionHolder } from './claude-live-session'
@@ -129,12 +131,62 @@ export function loopStateOf(lines: readonly string[], now: number): LoopState {
   return { wakeAt, cronArmed: created > deleted }
 }
 
+/**
+ * The newest record's own timestamp, read from the end of the tail. Only a
+ * record's top-level stamp counts: the unstamped lines claude writes on its way
+ * out (last-prompt, cost-state) are not activity, and a tool result can carry
+ * any number of `timestamp` keys inside it.
+ */
+export function lastEntryAt(lines: readonly string[]): number | null {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i]) continue
+    try {
+      const at = Date.parse((JSON.parse(lines[i]) as { timestamp?: string }).timestamp ?? '')
+      if (Number.isFinite(at)) return at
+    } catch {
+      // A torn line at the tail's cut, or a half-written last line.
+    }
+  }
+  return null
+}
+
+/** Recurring crons auto-expire after seven days (the CronCreate tool's contract). */
+export const CRON_LIFETIME_MS = 7 * 24 * 60 * 60_000
+
+/**
+ * A recurring cron is held in the claude process and dies with it, and it can
+ * be days old: far outside the tail and the day loopStateOf believes. So the
+ * last question before a sleep reads the whole transcript, once per sleep, not
+ * per sweep. A transcript that cannot be read counts as armed.
+ */
+export async function cronArmedIn(transcript: string, now: number): Promise<boolean> {
+  const lines: string[] = []
+  try {
+    const reader = createInterface({ input: createReadStream(transcript, { encoding: 'utf8' }), crlfDelay: Infinity })
+    for await (const line of reader) if (line.includes('"Cron')) lines.push(line)
+  } catch {
+    return true
+  }
+  const uses = toolUsesIn(lines).filter((u) => now - u.at <= CRON_LIFETIME_MS)
+  const created = uses.filter((u) => u.name === 'CronCreate' && u.input.recurring !== false).length
+  return created > uses.filter((u) => u.name === 'CronDelete').length
+}
+
+/**
+ * The pane is running another conversation than the card names (a /clear, a
+ * rotation the oracle has not caught). Everything read from the card's id
+ * describes the wrong transcript, so this is never evidence for a sleep.
+ */
+export function sessionMoved(holder: SessionHolder | null, sessionId: string): boolean {
+  return holder !== null && holder.sessionId !== sessionId
+}
+
 export interface SleepEvidence {
   /** Claude's record for the pane's process; null when there is none to read. */
   claude: { status: string | null; since: number | null } | null
   /** What runningWorkUnder found. */
   running: readonly string[]
-  /** Newest write to the conversation or any of its subagents' transcripts. */
+  /** Newest record in the conversation, or newest write by any of its subagents. */
   lastWrite: number | null
   loop: LoopState
 }
@@ -159,16 +211,24 @@ export function quietSince(e: SleepEvidence, now: number): { at: number; why: st
   return { at, why }
 }
 
-/** The pane agent's own record, by the pane's pid (see pane-agent.mjs). */
+/**
+ * The pane agent's own record, by the pane's pid (see pane-agent.mjs). The cwd
+ * test exists to refuse a recycled pid, and a holder of this card's own session
+ * id has already passed it: an adopted pane can run in a directory the card
+ * does not name, and refusing it reads as "no record", which never sleeps.
+ */
 export function paneHolder(
   panePid: number | null,
   holders: readonly SessionHolder[],
   cwd: string,
-  real?: (dir: string) => string
+  real?: (dir: string) => string,
+  sessionId?: string
 ): SessionHolder | null {
   if (panePid === null) return null
   const holder = holders.find((h) => h.pid === panePid)
-  return holder && isPaneAgent(holder, cwd, real) ? holder : null
+  if (!holder) return null
+  if (sessionId !== undefined && holder.sessionId === sessionId && holder.kind !== 'bg') return holder
+  return isPaneAgent(holder, cwd, real) ? holder : null
 }
 
 /** One process listing per sweep that nominated anybody; null when ps fails (see gatherSleepEvidence). */
@@ -189,9 +249,16 @@ async function mtimeOf(file: string): Promise<number | null> {
   }
 }
 
-/** The transcript's newest write, or a subagent's under <session>/subagents/. */
-async function lastWriteOf(transcript: string): Promise<number | null> {
-  const own = await mtimeOf(transcript)
+/**
+ * The transcript's newest record, or a subagent's write under
+ * <session>/subagents/. The main transcript's mtime is NOT a sign of life:
+ * measured 2026-11-05, 36 of 37 idle agents had an mtime under an hour old on a
+ * file with no new line for up to two days, so with an hour's window nothing
+ * ever slept. It is only the fallback for a tail with no stamped record, where
+ * it errs awake. Subagent files showed honest mtimes and stay on them.
+ */
+async function lastWriteOf(transcript: string, lines: readonly string[]): Promise<number | null> {
+  const own = lastEntryAt(lines) ?? (await mtimeOf(transcript))
   const subDir = path.join(transcript.replace(/\.jsonl$/, ''), 'subagents')
   let subs: string[] = []
   try {
@@ -238,6 +305,6 @@ export async function gatherSleepEvidence(input: {
   const { holder, holders, procs, transcript, now } = input
   const claude = holder ? { status: holder.status ?? null, since: holder.statusSince ?? null } : null
   const running = !holder ? [] : procs ? runningWorkUnder(holder.pid, procs, holders) : ['(process list unreadable)']
-  const [lastWrite, lines] = await Promise.all([lastWriteOf(transcript), tailLines(transcript)])
-  return { claude, running, lastWrite, loop: loopStateOf(lines, now) }
+  const lines = await tailLines(transcript)
+  return { claude, running, lastWrite: await lastWriteOf(transcript, lines), loop: loopStateOf(lines, now) }
 }

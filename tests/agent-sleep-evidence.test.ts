@@ -10,7 +10,10 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   descendantsOf,
+  cronArmedIn,
   gatherSleepEvidence,
+  lastEntryAt,
+  sessionMoved,
   loopStateOf,
   paneHolder,
   parsePsTable,
@@ -154,6 +157,81 @@ describe('paneHolder', () => {
     expect(paneHolder(null, [own], '/w')).toBeNull()
     expect(paneHolder(68756, [own], '/elsewhere')).toBeNull()
   })
+
+  it('the card\'s own session id outranks the cwd: an adopted pane kept its old directory', () => {
+    // 2026-11-05: eight GOAT Team cards said goat-dev while their claude ran
+    // in solis-orch, so "no record for this pane" held them awake for days.
+    const own = holder()
+    expect(paneHolder(68756, [own], '/elsewhere', undefined, SID)).toBe(own)
+    expect(paneHolder(68756, [own], '/elsewhere', undefined, 'another-session')).toBeNull()
+    expect(paneHolder(68756, [holder({ kind: 'bg' })], '/elsewhere', undefined, SID)).toBeNull()
+  })
+})
+
+describe('sessionMoved — the pane runs another conversation than the card names', () => {
+  it('is a rotated session: the evidence read belongs to the wrong transcript', () => {
+    expect(sessionMoved(holder(), 'another-session')).toBe(true)
+  })
+
+  it('is not the card\'s own session, or a pane with no record', () => {
+    expect(sessionMoved(holder(), SID)).toBe(false)
+    expect(sessionMoved(null, SID)).toBe(false)
+  })
+})
+
+describe('cronArmedIn — the whole transcript, because a recurring cron outlives any tail', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sleep-cron-'))
+  const file = (name: string, lines: string[]) => {
+    const f = path.join(dir, name)
+    writeFileSync(f, `${lines.join('\n')}\n`)
+    return f
+  }
+
+  it('a recurring cron two days old is still armed: it lives in this process for seven', async () => {
+    const f = file('old.jsonl', [assistant(NOW - 48 * 60 * MIN, 'CronCreate', { cron: '7 * * * *', prompt: 'x' })])
+    expect(await cronArmedIn(f, NOW)).toBe(true)
+  })
+
+  it('has expired after seven days, and a deleted one is gone', async () => {
+    const expired = file('expired.jsonl', [assistant(NOW - 8 * 24 * 60 * MIN, 'CronCreate', { cron: '7 * * * *', prompt: 'x' })])
+    const deleted = file('deleted.jsonl', [
+      assistant(NOW - 60 * MIN, 'CronCreate', { cron: '7 * * * *', prompt: 'x' }),
+      assistant(NOW - 30 * MIN, 'CronDelete', { id: 'x' })
+    ])
+    expect(await cronArmedIn(expired, NOW)).toBe(false)
+    expect(await cronArmedIn(deleted, NOW)).toBe(false)
+  })
+
+  it('a one-shot two days old has fired; only the tail rule covers a fresh one', async () => {
+    const f = file('oneshot.jsonl', [assistant(NOW - 48 * 60 * MIN, 'CronCreate', { cron: '7 9 3 11 *', prompt: 'x', recurring: false })])
+    expect(await cronArmedIn(f, NOW)).toBe(false)
+  })
+
+  it('an unreadable transcript reads as armed: what cannot be read stays awake', async () => {
+    expect(await cronArmedIn(path.join(dir, 'gone.jsonl'), NOW)).toBe(true)
+  })
+})
+
+describe('lastEntryAt — what the transcript SAYS, not when the file was touched', () => {
+  const at = (t: number, type = 'assistant') => JSON.stringify({ type, timestamp: new Date(t).toISOString() })
+
+  it('is the newest stamped record, read from the end', () => {
+    expect(lastEntryAt([at(NOW - 9 * MIN), at(NOW - 3 * MIN), ''])).toBe(NOW - 3 * MIN)
+  })
+
+  it('skips the unstamped records claude writes on its way out, and torn lines', () => {
+    const lines = [at(NOW - 3 * MIN), JSON.stringify({ type: 'last-prompt', lastPrompt: 'hi' }), '{"torn']
+    expect(lastEntryAt(lines)).toBe(NOW - 3 * MIN)
+  })
+
+  it('does not take a timestamp nested inside a record for the record\'s own', () => {
+    const nested = JSON.stringify({ type: 'cost-state', detail: { timestamp: new Date(NOW).toISOString() } })
+    expect(lastEntryAt([at(NOW - 3 * MIN), nested])).toBe(NOW - 3 * MIN)
+  })
+
+  it('has no answer for a tail with no stamped record', () => {
+    expect(lastEntryAt(['{}', ''])).toBeNull()
+  })
 })
 
 describe('gatherSleepEvidence — the reader', () => {
@@ -172,6 +250,25 @@ describe('gatherSleepEvidence — the reader', () => {
     expect(e.running).toEqual(['command 20032'])
     expect(e.lastWrite).toBe(NOW - 2 * MIN)
     expect(e.loop.wakeAt).toBe(NOW + 20 * MIN)
+  })
+
+  it('a touched file is no sign of life: the transcript\'s own last record is', async () => {
+    // Measured 2026-11-05: 36 of 37 agents idle for up to two days had a
+    // transcript mtime under an hour old with not one new line in it, so the
+    // window never ran out and the fleet grew to 36 GB on a 16 GB machine.
+    const touched = path.join(dir, 'touched.jsonl')
+    writeFileSync(touched, `${JSON.stringify({ type: 'system', timestamp: new Date(NOW - 26 * 60 * MIN).toISOString() })}\n`)
+    utimesSync(touched, (NOW - MIN) / 1000, (NOW - MIN) / 1000)
+    const e = await gatherSleepEvidence({ holder: holder(), holders: [], procs: parsePsTable(''), transcript: touched, now: NOW })
+    expect(e.lastWrite).toBe(NOW - 26 * 60 * MIN)
+  })
+
+  it('a transcript with no stamped record falls back to its mtime, the awake side', async () => {
+    const blank = path.join(dir, 'blank.jsonl')
+    writeFileSync(blank, '{}\n')
+    utimesSync(blank, (NOW - MIN) / 1000, (NOW - MIN) / 1000)
+    const e = await gatherSleepEvidence({ holder: holder(), holders: [], procs: parsePsTable(''), transcript: blank, now: NOW })
+    expect(e.lastWrite).toBe(NOW - MIN)
   })
 
   it('a failed process listing reads as running work, never as permission to sleep', async () => {

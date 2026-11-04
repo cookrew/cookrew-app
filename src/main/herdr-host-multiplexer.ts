@@ -47,6 +47,7 @@
 // The PUSH path (agent status) is a different concern and does not come through
 // this interface; it holds a socket open, because that is what it needs.
 
+import { TEST_WORKER_CAPS } from './pane-env'
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -245,6 +246,7 @@ export function bootCommand(spec: AttachSpec): string {
     // is read by the pane's POSIX shell, so backslashes would be escapes.
     `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
+    ...Object.entries(TEST_WORKER_CAPS).map(([key, value]) => `export ${key}='${value}'`),
     ...routeExports(spec),
     FLUSH_TYPEAHEAD,
     `exec ${inner}`
@@ -266,6 +268,7 @@ export function envArgs(spec: AttachSpec): string[] {
     // value the pane's POSIX shell will see, not a host filesystem path.
     ['COOKREW_CLI', path.posix.join(spec.cliDir, 'cookrew')],
     ['PATH', spec.path],
+    ...Object.entries(TEST_WORKER_CAPS),
     ...Object.entries(spec.env ?? {})
   ].flatMap(([key, value]) => ['--env', `${key}=${value}`])
 }
