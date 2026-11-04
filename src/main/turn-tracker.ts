@@ -91,6 +91,11 @@ const LONE_ESC_PAIR_MS = 100
  */
 const ANSWER_GRACE_MS = 1500
 /**
+ * How long a menu must stay off the screen to count as gone. A TUI going from
+ * one menu to the next (Submit to Review) redraws through frames with neither.
+ */
+export const MENU_GONE_SETTLE_MS = 300
+/**
  * Paced Sous title-backfill: one record per tick so a burst never trips the
  * summarizer's breaker (which would null out a whole sequential pass).
  */
@@ -444,8 +449,12 @@ interface TrackedTerminal {
   heldAt: number
   /** Epoch ms of the last menu answer (ANSWER_GRACE_MS); 0 when none. */
   answeredAt: number
-  /** The last chunk of a wait found a menu held up: its going is the answer landing. */
+  /** A wait's screen held a menu up, and its going has not been settled. */
   menuShown: boolean
+  /** The rows last read, drawn while a missing menu settles. */
+  lastChoice: WaitChoice | null
+  /** Running while a menu is missing from the screen: see menuMissing. */
+  menuLeaving: ReturnType<typeof setTimeout> | null
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /**
@@ -2022,6 +2031,8 @@ export class TurnTracker extends EventEmitter {
       heldAt: 0,
       answeredAt: 0,
       menuShown: false,
+      lastChoice: null,
+      menuLeaving: null,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
       startStatus: null,
@@ -2221,8 +2232,7 @@ export class TurnTracker extends EventEmitter {
   private healBlocked(t: TrackedTerminal): void {
     if (!t.agent || (t.phase !== 'idle' && t.phase !== 'replied')) return
     this.resumeThinking(t)
-    t.phase = 'waiting'
-    this.push(t)
+    this.raiseWait(t)
   }
 
   /**
@@ -2385,13 +2395,16 @@ export class TurnTracker extends EventEmitter {
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
     if (fed.submitted.length > 0 || fed.buffer.trim().length > 0) t.sawInputThisTurn = true
+    // Words sent while a missing menu settles: nothing is left to answer, so
+    // they are a prompt of their own, and go the way a prompt goes.
+    if (t.menuLeaving !== null && fed.submitted.some((s) => s.length > 0)) this.leaveWait(t)
     if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
       // Enter on an approval/question menu answers the SAME real turn — resume
       // thinking with the original prompt and snapshot intact. A PROMPTLESS
       // 'waiting' turn is a self-heal boot phantom (e.g. a fresh Codex whose
       // boot screen tripped attention detection), NOT a menu to answer — the
       // submitted text is the real first prompt, so fall through to startTurn.
-      t.phase = 'thinking'
+      this.leaveWait(t)
       t.lastSubmitAt = 0
       t.answeredAt = Date.now()
       this.push(t)
@@ -2651,9 +2664,12 @@ export class TurnTracker extends EventEmitter {
     }
     if (!t || !t.agent) return 'allow'
     if (!this.pendingDispatch.has(terminalId)) return 'allow'
-    if (t.phase === 'waiting' && t.prompt !== null && feeds.some((fed) => fed.submitted.length > 0)) {
+    const words = feeds.some((fed) => fed.submitted.some((s) => s.length > 0))
+    const answering = t.phase === 'waiting' && t.prompt !== null && feeds.some((fed) => fed.submitted.length > 0)
+    if (answering && !(t.menuLeaving !== null && words)) {
       // A menu answer while a dispatch is armed feeds the CURRENT turn and
-      // produces no competing exchange — allowed, as ever.
+      // produces no competing exchange — allowed, as ever. Not words sent
+      // while a missing menu settles: those are a new prompt (handleInput).
       return 'allow'
     }
     const submits = feeds.some((fed) => fed.submitted.some((s) => s.length > 0))
@@ -2888,18 +2904,66 @@ export class TurnTracker extends EventEmitter {
   private handleParsed(terminalId: string): void {
     const t = this.tracked.get(terminalId)
     if (t?.phase !== 'waiting') return
-    const shown = menuHeldOnScreen(t.session.viewportText())
-    const gone = t.menuShown && !shown
-    t.menuShown = shown
-    if (gone) {
-      // Whatever herdr still says: its blocked is the menu that just left, and
-      // the edge fires once. poll asks herdr again, and the grace keeps a stale
-      // blocked from raising the wait a second time.
-      t.phase = 'thinking'
-      t.answeredAt = Date.now()
-    }
+    this.noteMenu(t, menuHeldOnScreen(t.session.viewportText()))
     t.outputRev += 1
     this.schedulePush(terminalId)
+  }
+
+  /** What this frame says of the menu: back, or missing since the last one. */
+  private noteMenu(t: TrackedTerminal, shown: boolean): void {
+    if (shown) {
+      t.menuShown = true
+      this.stopMenuLeaving(t)
+    } else if (t.menuShown) {
+      this.menuMissing(t)
+    }
+  }
+
+  /**
+   * A menu missing from the screen. Not gone yet: the wait and its rows hold
+   * while it settles, and only then does the answer count as landed, whatever
+   * herdr still says (its blocked is the menu that left, and the grace keeps
+   * that from raising the wait a second time).
+   */
+  private menuMissing(t: TrackedTerminal): void {
+    if (t.menuLeaving !== null) return
+    t.menuLeaving = setTimeout(() => {
+      t.menuLeaving = null
+      if (this.tracked.get(t.session.terminalId) !== t || t.phase !== 'waiting') return
+      t.outputRev += 1
+      if (menuHeldOnScreen(t.session.viewportText())) {
+        this.schedulePush(t.session.terminalId)
+        return
+      }
+      this.leaveWait(t)
+      t.answeredAt = Date.now()
+      this.push(t)
+    }, MENU_GONE_SETTLE_MS)
+  }
+
+  private stopMenuLeaving(t: TrackedTerminal): void {
+    if (t.menuLeaving !== null) clearTimeout(t.menuLeaving)
+    t.menuLeaving = null
+  }
+
+  /** A wait over, and its menu's mark and settle with it. */
+  private leaveWait(t: TrackedTerminal): void {
+    this.stopMenuLeaving(t)
+    t.menuShown = false
+    t.phase = 'thinking'
+  }
+
+  /** A wait raised, its mark read off the screen: a menu's going ends it, nothing else's does. */
+  private raiseWait(t: TrackedTerminal): void {
+    t.phase = 'waiting'
+    t.menuShown = menuHeldOnScreen(t.session.viewportText())
+    this.push(t)
+  }
+
+  /** The rows a waiting screen shows; the last ones while a missing menu settles. */
+  private shownChoice(t: TrackedTerminal): WaitChoice | null {
+    if (t.menuLeaving === null) t.lastChoice = waitChoiceOfScreen(t.session.viewportText())
+    return t.lastChoice
   }
 
   private handleData(terminalId: string, data: string): void {
@@ -2912,11 +2976,11 @@ export class TurnTracker extends EventEmitter {
       // A question box repaints as it is navigated: while it stands on the
       // screen (herdr often reads such a pane as done) or herdr reads it as
       // blocked, and no spinner runs, that is the same question. This frame may
-      // be the last one: handleParsed sees the menu go.
+      // be the last one: handleParsed reads the next.
       const screen = t.session.viewportText()
-      t.menuShown = menuHeldOnScreen(screen)
+      this.noteMenu(t, menuHeldOnScreen(screen))
       const sameQuestion = t.menuShown || agentStatus(t.session.sessionName) === 'blocked'
-      if (!sameQuestion || detectLiveWork(data) || detectLiveWork(screen)) t.phase = 'thinking'
+      if (!sameQuestion || detectLiveWork(data) || detectLiveWork(screen)) this.leaveWait(t)
     } else if (
       t.agent &&
       (t.phase === 'replied' || t.phase === 'idle') &&
@@ -3042,8 +3106,14 @@ export class TurnTracker extends EventEmitter {
     // quiet to be believed: waiting at once — unless a spinner is live, which
     // is the answer already running while herdr's blocked goes stale.
     if (reported === 'blocked' && this.blockedOnScreen(t)) {
-      t.phase = 'waiting'
-      this.push(t)
+      this.raiseWait(t)
+      return
+    }
+    // A menu is its own proof, and herdr often reads such a pane as done: no
+    // quiet to sit out, or the rows would come up to 2.5 s late.
+    const screen = t.session.viewportText()
+    if (menuHeldOnScreen(screen) && !detectLiveWork(screen)) {
+      this.raiseWait(t)
       return
     }
     // Hold while herdr says working — this survives long silent tool calls,
@@ -3074,8 +3144,7 @@ export class TurnTracker extends EventEmitter {
     if (reported === 'blocked' || detectAttention(lines) || menuHeldOnScreen(t.session.viewportText())) {
       // Blocked on the human — keep the poll alive; handleData resumes
       // 'thinking' when output flows again.
-      t.phase = 'waiting'
-      this.push(t)
+      this.raiseWait(t)
       return
     }
     // Prefer the parsed final assistant message over the raw tail — the tail
@@ -3206,6 +3275,7 @@ export class TurnTracker extends EventEmitter {
   }
 
   private stopTurnTimers(t: TrackedTerminal): void {
+    this.stopMenuLeaving(t)
     if (t.pollTimer) {
       clearInterval(t.pollTimer)
       t.pollTimer = null
@@ -3343,7 +3413,7 @@ export class TurnTracker extends EventEmitter {
               // The whole screen: a question tool's rows run past the tail
               // above. The viewport only: a mirror's scrollback can hold old
               // frames, and a question over another's rows is worse than none.
-              waitChoice: t.phase === 'waiting' ? waitChoiceOfScreen(t.session.viewportText()) : null,
+              waitChoice: t.phase === 'waiting' ? this.shownChoice(t) : null,
               glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
               // Clip signal only when the tail is settled — mid-turn the
               // renderer shows the whole live stream anyway.

@@ -7,7 +7,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { TurnTracker } from '../src/main/turn-tracker'
+import { MENU_GONE_SETTLE_MS, TurnTracker } from '../src/main/turn-tracker'
 import type { PtySession } from '../src/main/pty'
 import { createBackendPhaseGate } from '../src/main/backend-phase-gate'
 import { mergeActivity } from '../src/renderer/src/turn-view-model'
@@ -86,8 +86,9 @@ describe('a menu on the screen is a wait, whatever the pane does to its words', 
     viewportText = (): string => this.text
     fullText = (): string => this.text
   }
-  const held = (): { turns: TurnTracker; session: Quiet; phase: () => string | undefined } => {
+  const held = (text = NARROW): { turns: TurnTracker; session: Quiet; phase: () => string | undefined } => {
     const session = new Quiet('t1')
+    session.text = text
     const turns = new TurnTracker(async () => null)
     turns.track(session as unknown as PtySession, true)
     turns.observeBackendPhase('t1', 'waiting')
@@ -100,23 +101,131 @@ describe('a menu on the screen is a wait, whatever the pane does to its words', 
     expect(phase()).toBe('waiting')
     expect(turns.list()[0].waitChoice?.options.length).toBe(6)
   })
-  it('the menu gone from the screen ends the wait', () => {
-    const { session, phase } = held()
-    session.emit('data', 'answer')
-    session.text = '⏺ Thanks.\n'
-    session.emit('parsed')
-    expect(phase()).toBe('thinking')
+  it('the menu gone from the screen ends the wait, once it has stayed gone', () => {
+    vi.useFakeTimers()
+    try {
+      const { session, phase } = held()
+      session.emit('data', 'answer')
+      session.text = '⏺ Thanks.\n'
+      session.emit('parsed')
+      expect(phase()).toBe('waiting')
+      vi.advanceTimersByTime(MENU_GONE_SETTLE_MS)
+      expect(phase()).toBe('thinking')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  // F2 (Menu QA, 2026-11-04): Submit to Review redraws through a frame with no
+  // menu. The tracker took it for the menu's going, and on a pane herdr reads
+  // as done it took up to 2.9 s to come back.
+  it('a frame with no menu between two is not its going: the wait and the rows hold', () => {
+    vi.useFakeTimers()
+    try {
+      const { session, phase, turns } = held()
+      const REVIEW = readFileSync(join(__dirname, 'fixtures', 'wait-choice', 'claude-tabs-review.txt'), 'utf8')
+      session.emit('data', 'submit')
+      session.text = '\n'
+      session.emit('parsed')
+      session.emit('data', 'redraw')
+      expect(phase()).toBe('waiting')
+      expect(turns.list()[0].waitChoice?.options.length).toBe(6)
+      session.text = REVIEW
+      session.emit('parsed')
+      vi.advanceTimersByTime(MENU_GONE_SETTLE_MS * 2)
+      expect(phase()).toBe('waiting')
+      expect(turns.list()[0].waitChoice?.review).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  type Live = { tracked: Map<string, { prompt: string | null; menuShown: boolean }>; pendingDispatch: Map<string, unknown>; preemptOnOwnerSubmit: (id: string) => string }
+  it('Enter at the menu takes the mark with it: the next wait starts clean', () => {
+    const { session, turns } = held()
+    const t = (turns as unknown as Live).tracked.get('t1')
+    if (!t) throw new Error('not tracked')
+    t.prompt = 'the turn'
+    session.emit('data', 'repaint')
+    expect(t.menuShown).toBe(true)
+    session.emit('input', '\r')
+    expect(t.menuShown).toBe(false)
+  })
+  it('a wait with no menu on the screen raises with no mark', () => {
+    const { session, turns, phase } = held()
+    const t = (turns as unknown as Live).tracked.get('t1')
+    if (!t) throw new Error('not tracked')
+    session.emit('data', '✻ Thinking… (esc to interrupt)')
+    t.menuShown = true
+    session.text = 'Do you want to proceed?\n'
+    herdr.status = 'blocked'
+    try {
+      quietPoll(turns)
+    } finally {
+      herdr.status = null
+    }
+    expect(phase()).toBe('waiting')
+    expect(t.menuShown).toBe(false)
+  })
+  it('words sent while a menu settles are a new prompt, not an answer to it', () => {
+    vi.useFakeTimers()
+    try {
+      const { session, turns, phase } = held()
+      const live = turns as unknown as Live
+      const t = live.tracked.get('t1')
+      if (!t) throw new Error('not tracked')
+      t.prompt = 'the turn'
+      session.emit('data', 'esc')
+      session.text = '\n'
+      session.emit('parsed')
+      live.pendingDispatch.set('t1', { id: 'd', prompt: 'x', armedAt: 0 })
+      let preempted = 0
+      live.preemptOnOwnerSubmit = () => {
+        preempted += 1
+        return 'ok'
+      }
+      turns.guardOwnerInput('t1', 'hello\r')
+      expect(preempted).toBe(1)
+      session.emit('input', 'hello\r')
+      expect(t.prompt).toBe('hello')
+      expect(phase()).toBe('thinking')
+      vi.advanceTimersByTime(MENU_GONE_SETTLE_MS)
+      expect(phase()).toBe('thinking')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('a spinner in that beat ends the wait at once', () => {
+    vi.useFakeTimers()
+    try {
+      const { session, phase } = held()
+      session.emit('data', 'answer')
+      session.text = '\n'
+      session.emit('parsed')
+      session.emit('data', '✻ Thinking… (esc to interrupt)')
+      expect(phase()).toBe('thinking')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('a menu coming up mid-turn waits at the next poll, with no quiet to sit out', () => {
+    const { session, turns, phase } = held()
+    session.emit('data', '✻ Thinking… (esc to interrupt)')
+    session.idleFor = (): number => 0
+    quietPoll(turns)
+    expect(phase()).toBe('waiting')
   })
   it('a menu gone ends the wait even under a stale blocked: that edge fires only once', () => {
+    vi.useFakeTimers()
     const { session, phase } = held()
     herdr.status = 'blocked'
     try {
       session.emit('data', 'esc')
       session.text = '⏺ Thanks.\n'
       session.emit('parsed')
+      vi.advanceTimersByTime(MENU_GONE_SETTLE_MS)
       expect(phase()).toBe('thinking')
     } finally {
       herdr.status = null
+      vi.useRealTimers()
     }
   })
   it('a digit pressed at the menu leaves nothing in the box: the agent is not "composing" (F11)', () => {
@@ -132,8 +241,7 @@ describe('a menu on the screen is a wait, whatever the pane does to its words', 
     expect(turns.ownerComposing('t1')).toBe(true)
   })
   it('a free question still resumes on output, as ever', () => {
-    const { session, phase } = held()
-    session.text = 'Which file should I open?\n'
+    const { session, phase } = held('Which file should I open?\n')
     session.emit('data', 'more')
     expect(phase()).toBe('thinking')
   })

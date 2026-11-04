@@ -78,12 +78,38 @@ export class DeliveryError extends Error {
   readonly outcome: AskOutcome
   readonly exitCode: number
 
-  constructor(outcome: AskOutcome, agentName: string) {
-    super(`${agentName}: ${outcome} — ${ASK_REMEDY[outcome]}`)
+  constructor(outcome: AskOutcome, agentName: string, said?: string) {
+    super(said ?? `${agentName}: ${outcome} — ${ASK_REMEDY[outcome]}`)
     this.name = 'DeliveryError'
     this.outcome = outcome
     this.exitCode = ASK_EXIT[outcome]
   }
+}
+
+/** What an ended dispatch's record says; the fields `cookrew dispatch` reads. */
+export interface EndedDispatch {
+  readonly state: string
+  readonly agentName?: string
+  readonly turnIndex?: number
+  readonly error?: string
+}
+
+/**
+ * A dispatch that ENDED without completing: not exit 0, by the ask verb's rule,
+ * and always in the record's own words. A turn index means the transcript saw
+ * that turn end, so nothing is running and the caution about resending would be
+ * false. With none, nobody saw the end: `interrupted` is deliberately not
+ * `failed`, the work may well have happened, and the caution stands.
+ */
+export function dispatchEndError(record: EndedDispatch, dispatchId: string): DeliveryError {
+  const name = record.agentName ?? dispatchId
+  const facts = [
+    `${name}: ${record.state}`,
+    ...(record.turnIndex !== undefined ? [`turn ${record.turnIndex}`] : []),
+    ...(record.error ? [record.error.replace(/^interrupted:\s*/, '')] : [])
+  ].join(' · ')
+  const next = record.turnIndex !== undefined ? 'the turn is over; what it did stands, ask again if it is still wanted' : ASK_REMEDY.unverifiable
+  return new DeliveryError('unverifiable', name, `${facts} — ${next}`)
 }
 
 /**
