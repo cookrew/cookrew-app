@@ -59,6 +59,20 @@ describe('the open tile while its canvas is on its way', () => {
     expect(m.openMark).toMatchObject({ waiting: true, waitingCount: 1 })
   })
 
+  // The feed's verdict is the board's: a probe counts too. A tile must not say 2 waiting left and 1 open.
+  it('waits as the feed says once open too, the same number as when it was left', () => {
+    const seated = new Map([['w1', [{ harness: 'claude', phase: 'waiting' }, { harness: 'claude', phase: 'working' }]]])
+    expect(buildZoomModel({ ...base, crews: seated, loaded: true }).openMark).toMatchObject({ waiting: true, waitingCount: 1 })
+  })
+
+  it('waits as its crew says where the feed has not seated it', () => {
+    const quiet = buildZoomModel({ ...base, loaded: true }).openMark
+    expect(quiet.waitingCount).toBe(0)
+    const live = [row('t1', 'w1', 'waiting'), ...rows.slice(1)]
+    const m = buildZoomModel({ ...base, rows: live, crew: crewOf(nodes, live, { id: 'w1', name: 'w1' }), loaded: true })
+    expect(m.openMark).toMatchObject({ waiting: true, waitingCount: 1 })
+  })
+
   it('says its crew once it has one', () => {
     const m = buildZoomModel({ ...base, crews, loaded: true })
     expect(m.openMark.presets).toEqual(['Claude Code'])

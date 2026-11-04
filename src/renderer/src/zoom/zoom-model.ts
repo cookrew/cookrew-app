@@ -288,8 +288,10 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       return { id: w.id, name: w.name, presets, waiting: waitingCount > 0, waitingCount, browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, deck: (input.decks?.get(w.id) ?? []).map(deckView) }
     })
   // The open workspace's crew, until its canvas comes: the feed's, or its tile would say "no agents".
-  const openSeated = input.loaded === false ? input.crews?.get(input.activeId) : undefined
-  const openWaiting = waitingIn((openSeated ?? agents).map((a) => a.phase))
+  const openFeed = input.crews?.get(input.activeId)
+  const openSeated = input.loaded === false ? openFeed : undefined
+  // Who waits is the feed's verdict, a probe's included: the same number open as when the tile was left.
+  const openWaiting = waitingIn((openFeed ?? agents).map((a) => a.phase))
   const order = input.workspaces.map((w) => w.id)
   if (!order.includes(input.activeId)) order.unshift(input.activeId)
 
