@@ -195,3 +195,35 @@ describe('a keystroke batch that got no answer', () => {
     expect(calls).toEqual(['a', 'a', 'a', 'b'])
   })
 })
+
+describe('an answer that refuses the keys', () => {
+  it('is told once, with what it refused, and the lane moves on', async () => {
+    const refused: Array<[string, string]> = []
+    const answers = [Promise.reject(new Error('409')), Promise.resolve()]
+    const sent: string[] = []
+    const push = createRawInputQueue(
+      (_id, data) => {
+        sent.push(data)
+        return answers.shift() as Promise<unknown>
+      },
+      { refused: (id, data) => refused.push([id, data]) }
+    )
+    push('t', 'hello')
+    push('t', '\r')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(refused).toEqual([['t', 'hello']])
+    expect(sent).toEqual(['hello', '\r'])
+  })
+  it('a failure with no answer is not a refusal: it goes again', async () => {
+    const refused: string[] = []
+    const answers = [Promise.reject(new Error('offline')), Promise.resolve()]
+    const push = createRawInputQueue(() => answers.shift() as Promise<unknown>, {
+      retryable: () => true,
+      refused: (_id, data) => refused.push(data)
+    })
+    push('t', 'x')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(refused).toEqual([])
+  })
+})

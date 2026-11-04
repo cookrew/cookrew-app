@@ -12,6 +12,8 @@ import type { TurnRecord } from './turn'
 /** Longest reply text carried into a TurnRecord (head kept). */
 const MAX_REPLY_CHARS = 4000
 
+const INTERRUPTED = '[Request interrupted'
+
 /**
  * User records that are UI/command noise, not conversation prompts:
  * slash-command wrappers, local command output, interruptions, caveats.
@@ -19,7 +21,7 @@ const MAX_REPLY_CHARS = 4000
 export function isNoisePrompt(text: string): boolean {
   return (
     /^\s*<(?:command-name|command-message|command-args|local-command-stdout)/.test(text) ||
-    text.startsWith('[Request interrupted') ||
+    text.startsWith(INTERRUPTED) ||
     text.startsWith('Caveat: ')
   )
 }
@@ -45,6 +47,18 @@ interface SessionEntry extends PromptEntryLike {
 interface ContentBlock {
   type?: string
   text?: string
+}
+
+/**
+ * Claude's own record that the owner stopped the turn: "[Request interrupted
+ * by user]", with " for tool use" when a tool's menu was refused (measured on
+ * 2.1.316, Esc on a question and on a permission).
+ */
+function stoppedByOwner(entry: PromptEntryLike): boolean {
+  if (entry.type !== 'user' || entry.isMeta === true) return false
+  const content = entry.message?.content
+  const words = Array.isArray(content) ? (content as ContentBlock[]).find((b) => b?.type === 'text')?.text : content
+  return typeof words === 'string' && words.startsWith(INTERRUPTED)
 }
 
 /**
@@ -290,7 +304,7 @@ export function createSessionTurnAccumulator(): SessionTurnAccumulator {
         // Same submission — collapse: adopt the continuation prompt/identity,
         // keep the accumulated reply and timestamps. A resend REOPENS the
         // exchange, so any finality the superseded sibling earned is dropped.
-        const { final: _reopened, ...kept } = last
+        const { final: _reopened, outcome: _outcome, ...kept } = last
         turns[turns.length - 1] = {
           ...kept,
           prompt: step.id.prompt,
@@ -324,17 +338,17 @@ export function createSessionTurnAccumulator(): SessionTurnAccumulator {
       // nonempty reply text is NOT completion evidence (the same record keeps
       // extending with later tool/result entries).
       //
-      // FAILURE outcomes (Sol r3 P1): Claude writes NO marker for an errored
-      // or interrupted turn — the tail simply never gets its end_turn — so
-      // there is no TurnRecord.outcome to set here, deliberately. The turn
-      // stays open until the next-user boundary closes it (finality with
-      // outcome absent, i.e. done: the file holds no failure evidence, and
-      // fabricating one from silence would violate quiet-is-non-terminal).
-      // Codex (`turn_aborted`) and pi ('aborted'/'error'/'length') DO write
+      // FAILURE outcomes (Sol r3 P1): an ERRORED Claude turn writes no marker
+      // — the tail simply never gets its end_turn — so it stays open until
+      // the next-user boundary closes it (finality with outcome absent, i.e.
+      // done: fabricating failure from silence would violate
+      // quiet-is-non-terminal). An INTERRUPTED one does write its own: see
+      // stoppedByOwner below. More from the agent after that reopens the turn.
+      // Codex (`turn_aborted`) and pi ('aborted'/'error'/'length') write
       // native failure markers; theirs are classified in trace-blocks.ts.
       const reply = assistantText(entry)
       const closed = entry.message?.stop_reason === 'end_turn'
-      const { final: _open, ...rest } = current
+      const { final: _open, outcome: _outcome, ...rest } = current
       turns[turns.length - 1] = {
         ...rest,
         endedAt,
@@ -343,7 +357,9 @@ export function createSessionTurnAccumulator(): SessionTurnAccumulator {
       }
       return
     }
-    turns[turns.length - 1] = { ...current, endedAt }
+    // Positive evidence, not quiet: nothing after it closes the turn, since
+    // Claude rests here and a dispatch would wait out its ten-minute sweep.
+    turns[turns.length - 1] = stoppedByOwner(entry) ? { ...current, endedAt, final: true, outcome: 'interrupted' } : { ...current, endedAt }
   }
 
   return {

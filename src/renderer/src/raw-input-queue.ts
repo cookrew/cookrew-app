@@ -57,6 +57,8 @@ export interface RawInputQueueOptions {
   readonly giveUpMs?: number
   /** Did this failure come WITHOUT an answer? Only those are sent again. */
   readonly retryable?: (error: unknown) => boolean
+  /** The Mac answered and would not take them: they will not go again. */
+  readonly refused?: (terminalId: string, data: string, error: unknown) => void
   /** Names this page's batches; the Mac keys its memory of them by it. */
   readonly nonce?: string
   readonly now?: () => number
@@ -124,7 +126,11 @@ export function createRawInputQueue(
     }
     sent.then(
       () => finish(false),
-      (error: unknown) => finish(retryable(error))
+      (error: unknown) => {
+        const again = retryable(error)
+        if (!again && !settled) options.refused?.(terminalId, batch.data, error)
+        finish(again)
+      }
     )
   }
 

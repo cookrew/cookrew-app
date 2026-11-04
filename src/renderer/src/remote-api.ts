@@ -1,3 +1,4 @@
+import { inputRefused } from './prompt/input-refused'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
@@ -308,7 +309,10 @@ const rawInput = createRawInputQueue(
     retryable: (error) =>
       error instanceof HttpStatusError
         ? error.status >= 502 && error.status <= 504
-        : !(error instanceof AuthError) && !(error instanceof SyntaxError)
+        : !(error instanceof AuthError) && !(error instanceof SyntaxError),
+    refused: (terminalId, data, error) => {
+      if (error instanceof HttpStatusError && error.status === 409) inputRefused.emit(terminalId, data)
+    }
   }
 )
 

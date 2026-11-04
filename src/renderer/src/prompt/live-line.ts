@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useActivity, activityStore } from '../activity-thumb-store'
+import { inputRefused } from './input-refused'
 import { cookrew } from '../api'
 import { artifactRefs, expandRefs, pendingName, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
@@ -40,6 +41,13 @@ let lines = new Map<string, Line>()
 const withLine = (agentId: string, line: Line): void => {
   lines = new Map(lines).set(agentId, line)
 }
+
+// Keys refused never reached the line: it holds what was last seen on it, so
+// the next send types the words again instead of a bare Enter.
+inputRefused.subscribe((agentId) => {
+  const line = lines.get(agentId)
+  if (line) withLine(agentId, { ...line, typed: line.seen })
+})
 
 /** The keys that turn one input line into another: back over what differs, type the rest. */
 export function keysFor(from: string, to: string): string {

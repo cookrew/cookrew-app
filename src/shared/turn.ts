@@ -153,10 +153,10 @@ export interface TurnRecord {
    * 'error'/'length' → 'failed'. SUCCESSFUL finality leaves this ABSENT —
    * absent-on-a-final-record means done, which keeps every historical ledger
    * row (none of which carry the field) reading as the success it was, and
-   * matches the tracker's absent-final-is-done treatment. Claude writes no
-   * end_turn on an errored turn, so a Claude record never carries this: its
-   * failure shape is a tail that stays open until the next-user boundary
-   * closes it (as done — the file holds no failure evidence to report).
+   * matches the tracker's absent-final-is-done treatment. Claude's own
+   * "[Request interrupted by user…]" line → 'interrupted'. It writes no
+   * end_turn on an errored turn, so that shape is a tail that stays open until
+   * the next-user boundary closes it (as done — no failure evidence to report).
    * Quiet is still non-terminal; only positive native evidence lands here.
    */
   outcome?: 'done' | 'failed' | 'interrupted'
