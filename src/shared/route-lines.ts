@@ -7,10 +7,16 @@
  * and the relay, and a renderer must not turn an arbitrary string it was
  * handed into shell. So the renderer refuses anything that is not one of
  * these shapes, whoever sent it — and the shapes admit no shell
- * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the two fixed
+ * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the fixed
  * install pipes, `&`, `<`, `>`, quote (but the plugin path's own single
  * quotes), `\`, newline. A key line ends in a space: the user pastes the
  * key and presses Enter themselves.
+ *
+ * THE ONE EXCEPTION IS WHOLE LINES, NOT SHAPES: FIRST_RUN_LINES are compared
+ * character for character, so nothing a sender chooses can reach them. They
+ * are the first-run tool check's fixes for a Mac that has neither npm nor
+ * Homebrew, Homebrew's own installer among them (its `$(...)` is required:
+ * piped into bash it has no terminal to ask for the password on).
  */
 
 /**
@@ -41,7 +47,17 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^brew install [A-Za-z0-9][A-Za-z0-9._/@-]*$/
 ]
 
+/** Exact lines, for the first-run tool check (shared/preflight.ts). */
+export const FIRST_RUN_LINES: ReadonlySet<string> = new Set([
+  'curl -fsSL https://claude.ai/install.sh | bash',
+  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+  'brew install --cask google-chrome',
+  'open https://www.google.com/chrome/',
+  'open https://ollama.com/download'
+])
+
 export function setupLineAllowed(line: string): boolean {
+  if (FIRST_RUN_LINES.has(line)) return true
   if (line.length > 400 || /[\r\n\x00]/.test(line)) return false
   return ROUTE_LINE_PATTERNS.some((pattern) => pattern.test(line))
 }

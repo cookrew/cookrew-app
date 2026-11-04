@@ -248,7 +248,10 @@ import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
-import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
+import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
+import { registerFirstRunIpc } from './first-run-ipc'
+import { FirstRunStore } from './first-run-store'
+import { machineProbe, probeTools } from './preflight'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
@@ -382,6 +385,9 @@ import { sweepStorageInWorker } from './storage-gc-worker'
 app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Before anything probes for a tool: a Dock launch has no Homebrew on its PATH.
+process.env.PATH = widenedPath(process.env, homedir())
 
 // The durable lineage, installed BEFORE the store can patch a node: every
 // session id ever bound to a card gets a copy outside workspace.json, so the
@@ -7649,6 +7655,20 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   ipcMain.handle('lane:close', (_e, nodeId: string, force?: boolean) => laneClose(nodeId, force ?? false))
   ipcMain.handle('lane:auto', (_e, nodeId: string, on: boolean) => laneAuto(nodeId, on))
+  registerFirstRunIpc(ipcMain, {
+    store: new FirstRunStore(path.join(app.getPath('userData'), 'first-run.json'), {
+      hasContent: () => store.hasContent(),
+      hasAccount: () => accounts.account() !== null || legacyHandleNow() !== null
+    }),
+    probe: () =>
+      probeTools(
+        machineProbe({
+          chrome: () => findChrome() !== null,
+          magpie: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync),
+          host: () => multiplexer()?.id ?? null
+        })
+      )
+  })
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })

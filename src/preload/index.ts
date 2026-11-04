@@ -266,6 +266,9 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  firstRunRead: (oldCardClosed: boolean) => ipcRenderer.invoke('first-run:read', oldCardClosed),
+  firstRunAdvance: (to: string) => ipcRenderer.invoke('first-run:advance', to),
+  firstRunPreflight: () => ipcRenderer.invoke('first-run:preflight'),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */

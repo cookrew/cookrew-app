@@ -859,6 +859,12 @@ export class WorkspaceStore extends EventEmitter {
     return this.stateOf(id)
   }
 
+  /** Anything of the person's own on this Mac: a second workspace, or a card in any. */
+  hasContent(): boolean {
+    const { workspaces } = this.registry
+    return workspaces.length > 1 || workspaces.some((w) => this.stateOf(w.id).nodes.length > 0)
+  }
+
   /** Terminal node ids of ONE workspace (active from memory, inactive from disk). */
   terminalIdsOf(workspaceId: string): string[] {
     return this.stateOf(workspaceId)

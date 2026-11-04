@@ -1,4 +1,6 @@
 import type { MenuAct } from '../../shared/wait-choice'
+import type { FirstRunStage } from '../../shared/first-run'
+import type { PreflightRow } from '../../shared/preflight'
 import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
@@ -890,6 +892,16 @@ export interface CookrewApi {
     avatar?: string | null;
   }) => Promise<AccountResult<AccountProfile>>;
   accountWorkspacesReachable?: (on: boolean) => Promise<AccountStatus>;
+  /**
+   * THE FIRST RUN (main/first-run-store.ts). Absent on the phone: there the
+   * person is by definition past it. `oldCardClosed` is this Mac's memory of
+   * the retired launch card, which only the renderer can read.
+   */
+  firstRunRead?: (oldCardClosed: boolean) => Promise<FirstRunStage>;
+  /** Forward only; answers where the run stands now. */
+  firstRunAdvance?: (to: FirstRunStage) => Promise<FirstRunStage>;
+  /** One row per tool. Never rejects on a failed check: that row is "unknown". */
+  firstRunPreflight?: () => Promise<readonly PreflightRow[]>;
   /** The one URL the popout draws as a QR, or null when there is none yet. */
   accountPairingUrl?: () => Promise<PairingHandout | null>;
   /** Phones this Mac has let in, listed beside the registry's devices. */
