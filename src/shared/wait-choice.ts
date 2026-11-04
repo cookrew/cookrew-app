@@ -429,6 +429,19 @@ export function menuHeldOnScreen(screen: string): boolean {
   return FOOTER_RE.test(footer) || PLAN_FOOTER_RE.test(footer)
 }
 
+/**
+ * Does a held menu ask something of the owner? Surer still, for a wait raised
+ * from rest, which reopens a finished turn and rings: a picker they opened
+ * themselves ("Select model") holds up rows and a footer too, and nothing always
+ * names it. It asks nothing; a question ends in one, or comes from a question tool.
+ */
+export function menuAsksOnScreen(screen: string): boolean {
+  if (!menuHeldOnScreen(screen)) return false
+  const choice = waitChoiceOfScreen(screen)
+  if (!choice) return false
+  return /[?？]/.test(choice.question) || choice.steps !== undefined || choice.review !== undefined || choice.options.some((o) => o.role === 'chat')
+}
+
 const DOWN = '\x1b[B'
 const UP = '\x1b[A'
 const LEFT = '\x1b[D'

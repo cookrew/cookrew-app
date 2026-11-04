@@ -33,6 +33,7 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
+import { createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
 import { waitChoiceOfScreen } from '../shared/wait-choice'
 import { createBackendPhaseGate } from './backend-phase-gate'
@@ -7949,8 +7950,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     const request = parseMenuRequest(body)
     return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
   })
-  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
-    idleSleep.touch(terminalId, Date.now())
+  const typeInto = createPacedInput((terminalId, data) => {
     // Keys for an offline agent wake it; they wait for it, then go in in order.
     if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
@@ -7974,6 +7974,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         )
       }
     }
+  })
+  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    idleSleep.touch(terminalId, Date.now())
+    typeInto(terminalId, data)
   })
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)

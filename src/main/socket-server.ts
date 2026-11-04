@@ -38,7 +38,7 @@ import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
 import { cmdBrowserScoped } from './cli-browser'
 import {
-  DeliveryError,
+  dispatchEndError,
   deliverAndConfirm,
   replyText,
   terminalDeliveryDeps
@@ -1198,16 +1198,11 @@ function cmdDispatch(request: CliRequest, deps: SocketServerDeps): string {
     error?: string
     hasReply?: boolean
   }
+  if (record.state === 'failed' || record.state === 'interrupted') throw dispatchEndError(record, dispatchId)
   const lines = [`${record.agentName ?? dispatchId}: ${record.state}`]
   if (record.turnIndex !== undefined) lines.push(`turn ${record.turnIndex}`)
   if (record.hasReply) lines.push('reply recorded')
   if (record.error) lines.push(record.error)
-  // A dispatch that ENDED without completing must not exit 0 — the same rule
-  // the ask verb follows. `interrupted` is deliberately not `failed`: the work
-  // may well have happened, we simply stopped being able to see it.
-  if (record.state === 'failed' || record.state === 'interrupted') {
-    throw new DeliveryError('unverifiable', record.agentName ?? dispatchId)
-  }
   return lines.join(' · ')
 }
 
