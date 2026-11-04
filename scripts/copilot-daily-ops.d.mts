@@ -6,4 +6,5 @@ import type { ChildProcess } from 'node:child_process'
 
 export function collectLane(input: { repo: string; lane: string; tree: string; subject: string; body: string }): boolean
 export function safeMerge(input: { repo: string; branch: string; message: string }): { merged: boolean; reason: string }
+export function takeLock(lock: string): boolean
 export function stopGroup(child: ChildProcess, graceMs?: number): void

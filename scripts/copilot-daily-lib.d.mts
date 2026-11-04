@@ -44,6 +44,14 @@ export function releaseStage(input: {
   mainVersion: string
 }): { version: string; stage: 'bump' | 'pr' | 'tag' | 'draft' }
 export function missingAssets(names: string[]): string[]
+export function planLine(input: {
+  version: string
+  stage: string
+  previous: string
+  commits: number
+  running: boolean
+}): string
+export function releaseButtonScript(launcher: string): string
 export function vitestOutcome(report: unknown, root: string): GateRun
 export function typeFailures(input: { ok: boolean; output: string; config: string }): string[]
 export function trustedIssues<T extends Issue>(issues: T[], attempted: string[]): T[]

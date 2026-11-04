@@ -16,7 +16,9 @@ import {
   parseTscErrors,
   parseVitestFailures,
   pickTask,
+  planLine,
   releaseBar,
+  releaseButtonScript,
   releaseStage,
   summaryOf,
   tooBusy,
@@ -111,6 +113,41 @@ describe('where a release picks up', () => {
   it('finishes a tagged version that never went public, instead of cutting another', () => {
     const tagged = { ...state, version: '0.4.1', mainVersion: '0.4.1', tags: ['v0.4.0', 'v0.4.1'] }
     expect(releaseStage(tagged)).toEqual({ version: '0.4.1', stage: 'draft' })
+  })
+})
+
+describe('what the release button says before it is pressed', () => {
+  const plan = { version: '0.4.1', stage: 'bump', previous: 'v0.4.0', commits: 103, running: false }
+
+  it('names the version and how much goes out', () => {
+    expect(planLine(plan)).toBe('Cookrew 0.4.1: 103 commits since v0.4.0.')
+  })
+
+  it('says a stopped release will resume, not start over', () => {
+    expect(planLine({ ...plan, stage: 'draft' })).toBe('Cookrew 0.4.1 is tagged. Publish takes the draft public.')
+    expect(planLine({ ...plan, stage: 'tag' })).toBe('Cookrew 0.4.1 is on main. Next is the tag.')
+    expect(planLine({ ...plan, stage: 'pr' })).toBe('Cookrew 0.4.1 is bumped on dev: 103 commits since v0.4.0.')
+  })
+
+  it('warns when one is already under way', () => {
+    expect(planLine({ ...plan, running: true })).toContain('already running')
+  })
+})
+
+describe('the release button', () => {
+  const script = releaseButtonScript('/Users/me/.cookrew/bin/cookrew-release')
+
+  it('asks first, and Cancel is the way out', () => {
+    expect(script).toContain('buttons {"Cancel", "Draft", "Publish"}')
+    expect(script).toContain('cancel button "Cancel"')
+  })
+
+  it('defaults to the draft, so a stray Return publishes nothing', () => {
+    expect(script).toContain('default button "Draft"')
+  })
+
+  it('runs the launcher it was given', () => {
+    expect(script).toContain('/Users/me/.cookrew/bin/cookrew-release')
   })
 })
 
