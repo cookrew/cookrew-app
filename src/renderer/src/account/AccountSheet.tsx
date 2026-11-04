@@ -66,13 +66,16 @@ export function AccountSheet({
   initial = 'signin',
   legacy = null,
   onClose,
+  onHaveCode,
   onDone,
 }: {
-  /** The tab to open on. The first-run card's two buttons choose it. */
+  /** The tab to open on. The account card's two buttons choose it. */
   initial?: 'signin' | 'register'
   /** The handle this Mac held before passwords, when it has one (phase 6). */
   legacy?: { handle: string } | null
   onClose: () => void
+  /** To the card with the code field: the way in for a person holding a code. */
+  onHaveCode?: () => void
   onDone: (status: AccountStatus, via: SheetDone) => void
 }): React.JSX.Element {
   const [state, setState] = useState<SheetState>(legacy === null ? initial : 'legacy')
@@ -333,6 +336,11 @@ export function AccountSheet({
             <p className="gs-foot-note">
               {state === 'legacy' ? ACCOUNT_COPY.LEGACY_KEEP_SERVING : ACCOUNT_COPY.NOT_NOW}
             </p>
+            {state === 'signin' && onHaveCode && (
+              <button className="gs-ghost" onClick={onHaveCode}>
+                {ACCOUNT_COPY.ASK_HAVE_CODE}
+              </button>
+            )}
           </>
         )}
       </div>

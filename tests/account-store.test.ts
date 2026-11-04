@@ -170,7 +170,7 @@ describe('a reserved prefix gets the REAL reason', () => {
     // use lowercase left the person retyping a name that could never work.
     const view = fields({ username: 'acct-x', check: 'free' })
     expect(view.username.tag).toBe('reserved')
-    expect(view.username.note).toBe('acct- is reserved for the doors — pick another name.')
+    expect(view.username.note).toBe('acct- is reserved — pick another name.')
     expect(view.username.note).not.toBe(ACCOUNT_COPY.USERNAME_INVALID)
     expect(view.canClaim).toBe(false)
   })

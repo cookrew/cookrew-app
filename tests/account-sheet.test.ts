@@ -14,12 +14,13 @@ import {
   SIGNIN_TRIES_PER_MINUTE,
   claimView,
   crossingFor,
-  firstRunView,
+  accountAskView,
   joinLede,
   registerView,
   signInView,
   triesFor,
 } from '../src/renderer/src/account/account-store'
+import { accountAskable, onAccountAsk, requestAccountAsk } from '../src/renderer/src/account/open-request'
 
 const STRONG = 'correct-horse-battery'
 
@@ -238,50 +239,65 @@ describe('the three crossings — a wrong tab is never a dead end (D9)', () => {
   })
 })
 
-describe('the first-run card (D8) — once, and only on a fresh install', () => {
-  const fresh = { status: status(), workspaceCount: 1, dismissed: false }
+// THE ACCOUNT MOVED LATER (first run, 2026-11-05): this card no longer greets a
+// fresh Mac, so "placed once, on a fresh install" became "drawn when a person
+// reaches something that needs an account". firstRunView's facts (status,
+// workspace count, dismissed) went with it; the buttons and the join half are
+// the same promises as before.
+describe('the account card (D8) — asked for by what the person reached', () => {
+  it('says what was reached: the phone away from this Wi-Fi', () => {
+    const view = accountAskView('phone')
+    expect(view.title).toBe(ACCOUNT_COPY.ASK_PHONE_TITLE)
+    expect(view.lede).toBe(ACCOUNT_COPY.ASK_PHONE_LEDE)
+  })
 
-  it('is placed when there is no account, no v1 key and no workspace of the person’s own', () => {
-    const view = firstRunView(fresh)
-    expect(view).not.toBeNull()
-    expect(view?.title).toBe(ACCOUNT_COPY.FIRST_RUN_TITLE)
-    expect(view?.lede).toBe(ACCOUNT_COPY.FIRST_RUN_LEDE)
+  it('says what was reached: a code from another device', () => {
+    const view = accountAskView('join')
+    expect(view.title).toBe(ACCOUNT_COPY.ASK_JOIN_TITLE)
+    expect(view.lede).toBe(ACCOUNT_COPY.ASK_JOIN_LEDE)
+  })
+
+  it('tells the person nothing here waits on an account', () => {
+    expect(ACCOUNT_COPY.ASK_PHONE_LEDE).toContain('keeps working without one')
+    expect(ACCOUNT_COPY.ASK_JOIN_LEDE).toContain('Nothing on this Mac needs an account')
   })
 
   it('offers SIGN IN WITH PASSWORD · CREATE AN ACCOUNT · NOT NOW, in that order', () => {
-    const view = firstRunView(fresh)
-    expect(view?.buttons.map((b) => b.label)).toEqual([
+    const view = accountAskView('phone')
+    expect(view.buttons.map((b) => b.label)).toEqual([
       'SIGN IN WITH PASSWORD',
       'CREATE AN ACCOUNT',
       'NOT NOW',
     ])
-    expect(view?.buttons.map((b) => b.action)).toEqual(['signin', 'register', 'dismiss'])
+    expect(view.buttons.map((b) => b.action)).toEqual(['signin', 'register', 'dismiss'])
   })
 
-  it('carries the JOIN half now that cut 2 ships it (V3-10)', () => {
-    // It was null while there was nowhere for a code to go; the constant in
-    // the store is still the one place that decides.
-    const view = firstRunView(fresh)
-    expect(view?.join).toEqual({
-      ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK,
-      how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW,
-      label: ACCOUNT_COPY.JOIN_FIELD_LABEL,
-      go: ACCOUNT_COPY.JOIN_GO,
-    })
-    // The half says where a code comes from, which is the question a person
-    // standing at a blank Mac actually has.
-    expect(view?.join?.how).toContain('ADD A MAC')
+  it('carries the JOIN half on both asks (V3-10)', () => {
+    for (const reason of ['phone', 'join'] as const) {
+      const view = accountAskView(reason)
+      expect(view.join).toEqual({
+        ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK,
+        how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW,
+        label: ACCOUNT_COPY.JOIN_FIELD_LABEL,
+        go: ACCOUNT_COPY.JOIN_GO,
+      })
+      // The half says where a code comes from, which is the question a person
+      // standing at a blank Mac actually has.
+      expect(view.join?.how).toContain('ADD A MAC')
+    }
   })
+})
 
-  it('is not placed once it was closed, or once anything exists here', () => {
-    expect(firstRunView({ ...fresh, dismissed: true })).toBeNull()
-    expect(firstRunView({ ...fresh, status: status({ username: 'drej' }) })).toBeNull()
-    expect(firstRunView({ ...fresh, status: status({ legacy: { handle: 'drej' } }) })).toBeNull()
-    expect(firstRunView({ ...fresh, workspaceCount: 2 })).toBeNull()
-  })
-
-  it('waits until both facts are known rather than flashing on a guess', () => {
-    expect(firstRunView({ ...fresh, status: null })).toBeNull()
-    expect(firstRunView({ ...fresh, workspaceCount: null })).toBeNull()
+describe('the seam that asks', () => {
+  it('reaches the surface, and says when nothing is listening', () => {
+    expect(accountAskable()).toBe(false)
+    expect(requestAccountAsk('phone')).toBe(false)
+    const heard: string[] = []
+    const off = onAccountAsk((reason) => heard.push(reason))
+    expect(accountAskable()).toBe(true)
+    expect(requestAccountAsk('phone')).toBe(true)
+    expect(heard).toEqual(['phone'])
+    off()
+    expect(accountAskable()).toBe(false)
   })
 })

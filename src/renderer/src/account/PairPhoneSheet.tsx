@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { qrMatrix, qrPath } from '../../../shared/qr'
-import { pairingPopoutView, type PairingPopoutView } from '../../../shared/pairing-qr'
+import { PAIRING_COPY, pairingPopoutView, type PairingPopoutView } from '../../../shared/pairing-qr'
 import type { PairingHandout } from '../../../shared/account-v2'
+import { accountAskable, requestAccountAsk } from './open-request'
 import '../grant-surface.css'
 
 /**
@@ -61,14 +62,31 @@ export function PairPhoneSheet({ onClose }: { onClose: () => void }): React.JSX.
         {!asked ? (
           <p className="gs-sub">Reading this Mac&rsquo;s pairing URL&hellip;</p>
         ) : (
-          <PairBody view={pairingPopoutView(handout)} />
+          <PairBody
+            view={pairingPopoutView(handout)}
+            onAnywhere={
+              accountAskable()
+                ? () => {
+                    onClose()
+                    requestAccountAsk('phone')
+                  }
+                : undefined
+            }
+          />
         )}
       </div>
     </div>
   )
 }
 
-export function PairBody({ view }: { view: PairingPopoutView }): React.JSX.Element {
+export function PairBody({
+  view,
+  onAnywhere,
+}: {
+  view: PairingPopoutView
+  /** Off this Wi-Fi a phone needs an account: the one place this Mac asks for it. */
+  onAnywhere?: () => void
+}): React.JSX.Element {
   return (
     <>
       <p className="gs-sub">{view.sentence}</p>
@@ -78,6 +96,11 @@ export function PairBody({ view }: { view: PairingPopoutView }): React.JSX.Eleme
         {view.deviceIdPrefix ? ` · id ${view.deviceIdPrefix}` : ''}
       </p>
       <p className="gs-hint">{view.rotateNote}</p>
+      {view.mode === 'direct' && onAnywhere && (
+        <button className="gs-ghost" onClick={onAnywhere}>
+          {PAIRING_COPY.ANYWHERE}
+        </button>
+      )}
     </>
   )
 }

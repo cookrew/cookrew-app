@@ -13,12 +13,14 @@ import { Header } from '../src/renderer/src/Header'
 import { AccountAvatar } from '../src/renderer/src/account/Avatar'
 import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
 import { FirstRunCard } from '../src/renderer/src/account/FirstRunCard'
+import { PairBody } from '../src/renderer/src/account/PairPhoneSheet'
+import { PAIRING_COPY } from '../src/shared/pairing-qr'
 import { JoinCard } from '../src/renderer/src/account/JoinCard'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
 import { ProfileSheet } from '../src/renderer/src/account/ProfileSheet'
 import { ResumeSession } from '../src/renderer/src/account/ResumeSession'
-import { ACCOUNT_COPY, firstRunView } from '../src/renderer/src/account/account-store'
+import { ACCOUNT_COPY, accountAskView } from '../src/renderer/src/account/account-store'
 
 /**
  * The Electron bridge, as the surface feature-detects it. Set on globalThis
@@ -219,13 +221,10 @@ describe('the account sheet, for a handle from before passwords', () => {
   })
 })
 
-describe('the first-run card paints as a card, not a wall (D8)', () => {
-  const view = firstRunView({
-    status: status({ username: null }),
-    workspaceCount: 1,
-    dismissed: false,
-  })
-  const html = view === null ? '' : renderToStaticMarkup(<FirstRunCard view={view} onAction={() => undefined} />)
+// The card is asked for now (accountAskView), not placed on a fresh Mac; the
+// paint is the same promise. See tests/account-sheet.test.ts.
+describe('the account card paints as a card, not a wall (D8)', () => {
+  const html = renderToStaticMarkup(<FirstRunCard view={accountAskView('phone')} onAction={() => undefined} />)
 
   it('has no scrim and no dialog role: the canvas behind it keeps working', () => {
     expect(html).not.toContain('gs-scrim')
@@ -571,16 +570,10 @@ describe('the card a join code opens (v3, D8)', () => {
   })
 })
 
-describe('the first-run card’s JOIN half (v3, D8)', () => {
-  // A fresh Mac: no account, and only the seeded workspace.
-  const view = firstRunView({
-    status: status({ username: null }),
-    workspaceCount: 1,
-    dismissed: false,
-  })
+describe('the account card’s JOIN half (v3, D8)', () => {
+  const view = accountAskView('join')
 
   it('draws a field and a JOIN when there is somewhere for a code to go', () => {
-    if (view === null) throw new Error('the first-run card should be placed here')
     const html = renderToStaticMarkup(
       <FirstRunCard view={view} onAction={() => undefined} onJoin={() => undefined} />,
     )
@@ -593,9 +586,47 @@ describe('the first-run card’s JOIN half (v3, D8)', () => {
   })
 
   it('draws no field at all when there is nowhere for a code to go', () => {
-    if (view === null) throw new Error('the first-run card should be placed here')
     const html = renderToStaticMarkup(<FirstRunCard view={view} onAction={() => undefined} />)
     expect(html).not.toContain(ACCOUNT_COPY.FIRST_RUN_JOIN_ASK)
     expect(html).not.toContain('placeholder="7KQ4-M2XB"')
+  })
+})
+
+describe('account moved later: the sheet keeps the way in for a person with a code', () => {
+  const sheet = (over: Partial<React.ComponentProps<typeof AccountSheet>> = {}): string =>
+    renderToStaticMarkup(<AccountSheet onClose={() => undefined} onDone={() => undefined} {...over} />)
+
+  it('offers the code field from the avatar’s sheet', () => {
+    expect(sheet({ onHaveCode: () => undefined })).toContain(ACCOUNT_COPY.ASK_HAVE_CODE)
+  })
+
+  it('draws no such way where nothing can take a code', () => {
+    expect(sheet()).not.toContain(ACCOUNT_COPY.ASK_HAVE_CODE)
+  })
+
+  it('is about signing in, so a migrating handle does not get it', () => {
+    expect(sheet({ onHaveCode: () => undefined, legacy: { handle: 'drej' } })).not.toContain(ACCOUNT_COPY.ASK_HAVE_CODE)
+  })
+})
+
+describe('account moved later: the phone asks only past this Wi-Fi', () => {
+  const body = (mode: 'relay' | 'direct', onAnywhere?: () => void): string =>
+    renderToStaticMarkup(
+      <PairBody
+        onAnywhere={onAnywhere}
+        view={{ mode, qr: 'https://192.168.1.2:8643/?token=x', sentence: 's', rotateNote: 'r', desktopName: 'Mac', deviceIdPrefix: null }}
+      />,
+    )
+
+  it('offers the way on the Wi-Fi-only QR', () => {
+    expect(body('direct', () => undefined)).toContain(PAIRING_COPY.ANYWHERE)
+  })
+
+  it('has nothing to ask for on the relay QR', () => {
+    expect(body('relay', () => undefined)).not.toContain(PAIRING_COPY.ANYWHERE)
+  })
+
+  it('offers nothing with no account surface to answer it', () => {
+    expect(body('direct')).not.toContain(PAIRING_COPY.ANYWHERE)
   })
 })
