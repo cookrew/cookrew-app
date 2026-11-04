@@ -1,7 +1,7 @@
 {
   "name": "cookrew",
   "version": "0.4.0",
-  "description": "Cookrew — an open-source spatial canvas for AI agents. Terminals, notes, browsers and physics cables on an infinite canvas, orchestrated through a Unix-socket CLI.",
+  "description": "Cookrew — a desktop app for running a crew of AI coding agents. One zoom from your devices down to a single agent, with artifacts, a phone companion and a CLI agents use to reach each other.",
   "main": "out/main/index.js",
   "type": "module",
   "license": "MIT",

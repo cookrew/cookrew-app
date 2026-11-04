@@ -1,102 +1,152 @@
-<p align="center"><img src="resources/icon.png" width="128" alt="Cookrew — the C hand"></p>
+<p align="center"><img src="resources/icon.png" width="128" alt="Cookrew"></p>
 
 # Cookrew
 
-An open-source spatial workspace for AI agents — the desktop half of Cookrew, the multiplayer kitchen for humans & agents.
-Terminals, sticky notes, and live browsers live together on an infinite canvas,
-wired with cables — and every connected agent gets a `cookrew` CLI to talk to its
-neighbors, read/write notes, drive browsers, recruit teammates, and schedule routines.
+A desktop app for running a crew of AI coding agents on your own machine. One view
+zooms from your devices down to a single agent's terminal, your phone reaches the
+same crew, and every agent gets a `cookrew` CLI to talk to the others.
 
-Built with Electron + React, so it runs on macOS, Linux, and Windows.
+[cookrew.dev](https://cookrew.dev)
 
-## Features
+## Download
 
-- **Infinite canvas** — dark dotted grid, pan/zoom, minimap, drag/resize nodes
-- **Terminal nodes** — real PTYs (node-pty) rendered with xterm.js; agent presets
-  (Claude Code, Codex, OpenCode, Pi, plain shell); Orch flag for orchestrator terminals
-- **Notes** — markdown sticky notes, auto-named from their first line (rename-on-edit),
-  persisted as real `.md` files under `~/.cookrew/notes`
-- **Connections** — dashed cables between any nodes; connectivity defines what an
-  agent can see and touch through the CLI
-- **Browsers** — embedded browser nodes with per-browser isolated sessions and a full
-  automation surface (snapshot with `@e1` refs, click, fill, type, key, navigate,
-  evaluate, scroll, text/html extraction)
-- **Voice mode** (Agent Grid-inspired) — agents talk back: `cookrew voice on` speaks every
-  completed `ask` through macOS `say`; pick the voice (`cookrew voice list/set`), speed
-  (`voice rate`), or speak ad hoc (`voice say "..."`)
-- **Mobile companion** (Agent Grid-inspired) — `cookrew mobile` prints a QR; the phone's
-  browser gets a native-feeling client (LAN HTTP, no install): terminal tabs, live
-  output tail, prompt composer, 🎙️ voice dictation and spoken replies via the
-  browser's own Web Speech API
-- **`cookrew` CLI** — auto-installed into every terminal's PATH (`COOKREW_SOCKET`,
-  `COOKREW_TERMINAL_ID`, `COOKREW_CLI` env vars), speaking newline-delimited JSON over a
-  Unix socket to the app:
-  - `cookrew list` / `cookrew ask "Agent" "prompt"` / `cookrew ask "Agent" --raw "2\n"` / `cookrew check "Agent"`
-  - `cookrew note create|read|write|edit|delete`
-  - `cookrew browser create|snapshot|click|fill|type|key|navigate|evaluate|scroll|text|html|info`
-  - `cookrew recruit "Name" --preset "Codex"` / `cookrew dismiss` / `cookrew connect` (Orch only)
-  - `cookrew routine create "Nightly" --command "..." --every 30m|--daily 02:00` + list/run/enable/disable/delete
-  - `cookrew notify "message"` — desktop notification
-- **ask engine** — prompts are written into the target PTY; a headless xterm mirrors
-  every terminal in the main process, detects output quiescence, and returns the newly
-  produced text, blocking until the reply is complete
-- **Workspace persistence** — the whole canvas (nodes, connections) is restored on
-  launch from `~/.cookrew/workspace.json`
+**[Get the latest release](https://github.com/cookrew/cookrew-app/releases/latest)**
 
-## Run it
+| Platform | File |
+| --- | --- |
+| macOS, Apple Silicon | `Cookrew-<version>-arm64.dmg` |
+| Windows (preview) | `Cookrew-<version>-windows-preview-x64.exe` |
+
+There is no Intel Mac or Linux release. On Windows agents end when the app closes.
+
+> **Not notarized yet.** Releases up to and including 0.4.0 are unsigned, so macOS
+> stops them on first launch. Until a release says it is notarized, drag Cookrew to
+> Applications and clear the quarantine flag before opening it:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Cookrew.app
+> ```
+
+## Requirements
+
+- macOS 11 or later on Apple Silicon.
+- [Node.js](https://nodejs.org) on your PATH. The `cookrew` command runs on it.
+- At least one agent CLI: Claude Code, Codex, OpenCode or Pi. A plain shell works too.
+
+Optional, and each one turns something on:
+
+- **[herdr](https://herdr.dev)** or **tmux**: agents keep running when Cookrew closes.
+  Install herdr with `curl -fsSL https://herdr.dev/install.sh | sh`. Without either,
+  closing the app ends the agents.
+- **Google Chrome, Chromium or Microsoft Edge**: agents and the phone can drive
+  browser cards.
+- **[Tailscale](https://tailscale.com)**: the phone reaches this Mac away from home
+  without the cookrew.dev relay.
+
+Cookrew finds herdr and tmux on its own PATH, and macOS gives an app opened from
+Finder or the Dock a minimal one that includes neither `~/.local/bin` nor Homebrew.
+To keep agents across restarts today, start it from a terminal:
 
 ```bash
-npm install        # rebuilds node-pty against Electron's ABI
-npm run dev        # dev app with HMR
-npm test           # vitest unit tests
-npm run build      # production bundles in out/
+/Applications/Cookrew.app/Contents/MacOS/Cookrew
 ```
 
-If `node-pty` fails to rebuild with `'functional' file not found`, your macOS
-CommandLineTools are missing their libc++ headers; work around with:
+## The zoom view
+
+The whole app is one zoom with named stops on the bar:
+
+**devices → workspaces → agents | artifacts**
+
+Click a device, a workspace or a card to go in. Click the background, press Esc or
+use the back button to come out. An agent opens from the crew into its card, then
+into a full view. A switch on the bar flips a workspace between its agents and its
+artifacts. On a touch screen, pinch works too.
+
+Press `/` to search everything on the board. The prompt box at the foot of the window
+talks to the agent you have open or named with `@agent`. With nobody targeted, it
+starts a new agent and names it from what you wrote. Hold ⌘ to dictate; speech is
+recognized on your Mac.
+
+## Agents
+
+An agent is a real terminal running a harness: Claude Code, Codex, OpenCode, Pi or a
+plain shell. Its face shows whether it is working, done or waiting on you, and a chime
+rings for those last two. The full view shows the same agent as a readable chat or as
+the live terminal, with its checkpoints alongside.
+
+One agent in a workspace can be the orch, which leads the crew and may restructure it.
+
+The Claude Code preset starts with `--permission-mode bypassPermissions`, and Cookrew
+is not sandboxed: agents can do what your user account can do.
+
+## Artifacts
+
+What agents produce and use, on the other side of the same zoom:
+
+- **Browsers**: live pages an agent can read and drive, with tabs.
+- **Notes**: markdown, stored as real `.md` files under `~/.cookrew/workspaces`.
+- **Screens and devices**: a browser card can also show a Mac display or window
+  (`screen://main`, `window://App`), an Android phone (`adb://SERIAL`), a virtual
+  iPhone (`vphone://VM`) or a camera (`cam://0`). The Mac cards need Screen Recording
+  permission. Letting agents click and type on the Mac also needs Accessibility and
+  `COOKREW_COMPUTER_INPUT=1`.
+
+## Phone
+
+`cookrew mobile` prints a URL and a QR code. Open it on the phone: no app to install.
+You get the same zoom, terminals, the prompt box and dictation. The phone connects over
+your Wi-Fi, over Tailscale, or from anywhere through the cookrew.dev relay.
+`cookrew mobile --rotate` revokes the pairing token.
+
+## The cookrew CLI
+
+Cookrew puts `cookrew` (or `crew`, for short) on the PATH of every terminal it runs.
+It is the whole agent API, with no SDK to install.
+
+```bash
+cookrew list                               # who and what is wired to you
+cookrew ask "Atlas" "why is CI red?"       # send a prompt, wait for the reply
+cookrew ask "Atlas" "run the suite" --no-wait
+cookrew status                             # thinking, waiting, replied or idle
+cookrew check "Atlas"                      # read an agent's terminal
+cookrew recruit --prompt "port the parser" # start a teammate, named from the prompt
+cookrew note create "Release checklist"
+cookrew browser create https://example.com "Docs"
+cookrew browser snapshot "Docs"
+cookrew browser create screen://main "My screen"
+cookrew team save "Reviewers"              # snapshot the crew as a reusable team
+```
+
+Run `cookrew help` for the rest. Reaching a card by name wires you to it. Verbs that
+restructure the crew, such as `connect`, `dismiss` and `workspace switch`, are for the
+orch.
+
+## License
+
+MIT
+
+## Development
+
+```bash
+npm install        # rebuilds node-pty for Electron, builds cr-listen
+npm run dev        # the app, with hot reload
+npm test
+npm run typecheck
+npm run dist:mac   # dmg and zip in release/
+```
+
+If `node-pty` fails with `'functional' file not found`, your Command Line Tools are
+missing their libc++ headers:
 
 ```bash
 export CXX="c++ -isystem $(xcrun --show-sdk-path)/usr/include/c++/v1"
 npx electron-rebuild -f -w node-pty
 ```
 
-## Architecture
+Releases come from `.github/workflows/release.yml` on a `v*` tag. It signs and notarizes
+the Mac build when the secrets are set, and says so in the job summary when they are
+not. To check a build the way macOS will, without launching it:
 
+```bash
+scripts/verify-mac-release.sh release/Cookrew-<version>-arm64.dmg
 ```
-┌────────────────────────── Electron main ──────────────────────────┐
-│  WorkspaceStore (source of truth, ~/.cookrew/*.json + notes/*.md)    │
-│  PtyManager     (node-pty sessions + headless-xterm mirrors)      │
-│  ask engine     (prompt → PTY, quiescence detection, output diff) │
-│  RoutineScheduler (cron-lite: --every / --daily)                  │
-│  Socket server  (Unix socket, newline-delimited JSON = CLI API)   │
-└──────┬──────────────────────────────┬─────────────────────────────┘
-       │ IPC (state sync, pty stream) │ browser commands
-┌──────▼──────────────────────────────▼─────────────────────────────┐
-│  Renderer: React + React Flow canvas                              │
-│  TerminalNode (xterm.js) · NoteNode (marked) · BrowserNode         │
-│  (webview + snapshot/refs engine) · CableEdge · Toolbar · MiniMap  │
-└───────────────────────────────────────────────────────────────────┘
-       ▲
-       │ Unix socket (COOKREW_SOCKET)
-  cookrew CLI (cli/cookrew.mjs, copied next to the socket, on every PTY's PATH)
-```
-
-Design choices:
-
-- The CLI is the entire agent API — agents need zero SDKs, just a binary on PATH.
-- Connectivity is authorization: `cookrew` only reaches nodes wired to your terminal.
-- Orch-gated verbs (recruit, dismiss, connect, routines, notify) keep ordinary
-  agents from restructuring the canvas.
-- Notes rename themselves from their first line unless the user pins a custom name.
-
-## Roadmap (not yet implemented)
-
-- Stations (git-isolated per-branch working trees via worktrees; one station per branch)
-- Roles (`role.json` presets injected as recruit context) and `--replace` swaps
-- Menu — command palette, prompt composer, file-tree nodes, groups/tidy
-- Remote environments (SSH/Docker bridge over TCP with per-terminal tokens)
-- Sous — local-model sous-chef companion
-
-## License
-
-MIT
