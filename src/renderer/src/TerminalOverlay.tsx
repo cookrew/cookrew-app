@@ -16,6 +16,7 @@ import type { TerminalNodeData } from '../../shared/model'
 import type { TerminalActivity, TurnPhase } from '../../shared/turn'
 import type { LodLayout, ScreenRect } from './zoom-lod'
 import { useActivity } from './activity-thumb-store'
+import { pageInView } from './page-in-view'
 import { useCanvasUi } from './canvas-ui'
 import { cookrew, isRemoteMode } from './api'
 import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-transcript-state'
@@ -1149,14 +1150,15 @@ function TerminalOverlay({
   // scrollback. Null (no clip) while a turn runs or when no boundary was found.
   const clipRows = tailClipRows(phase, activity?.tailLines ?? null)
 
-  // Acknowledge-on-view: a mounted overlay means the user is LOOKING at this
-  // terminal (desktop zoom / phone popout), so a completed turn is read the
-  // moment it is — or becomes — visible here. The tracker demotes replied →
-  // idle and keeps prompt/reply/title; every other phase ignores the signal,
-  // so this can never end a live or waiting turn. Compact-card glances don't
-  // count: no overlay, no signal.
+  // Acknowledge-on-view: a mounted overlay in a window in view means the user
+  // is LOOKING at this terminal (desktop zoom / phone popout), so a completed
+  // turn is read the moment it is — or becomes — visible here. One that lands
+  // while the window is away stays unread (page-in-view.ts). The tracker
+  // demotes replied → idle and keeps prompt/reply/title; every other phase
+  // ignores the signal, so this can never end a live or waiting turn.
+  // Compact-card glances don't count: no overlay, no signal.
   useEffect(() => {
-    if (phase === 'replied') cookrew().turnSeen(node.id)
+    if (phase === 'replied' && pageInView()) cookrew().turnSeen(node.id)
   }, [phase, node.id])
 
   // The turn came to rest after a widen it was too busy to redraw for: the
