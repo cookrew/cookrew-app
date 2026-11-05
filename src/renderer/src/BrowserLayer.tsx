@@ -31,7 +31,7 @@ import { CrIcon } from './icons'
 import { browserRenderMode, nextCapability, type StreamClient } from './browser-stream'
 import { browserHostsToRender } from './browser-host-policy'
 import { attachView, useAttachView } from './attach-view'
-import { hostMachine } from './host-machine'
+import { hostPlatform, machineCopy } from '../../shared/machine-words'
 
 const THUMB_INTERVAL_MS = 5000
 const THUMB_WIDTH = 512
@@ -664,7 +664,7 @@ function BrowserTabView({
       // A use card has no page to put in a web surface; only the headless
       // stream can draw it (main/pixel-instance.ts, main/vphone-instance.ts).
       const use = parseUseUrl(tab.url)?.use ?? 'phone'
-      const what = use === 'computer' ? `a screen on ${hostMachine()}` : use === 'hardware' ? 'a camera' : 'a phone'
+      const what = use === 'computer' ? `a screen on ${machineCopy('this Mac', hostPlatform())}` : use === 'hardware' ? 'a camera' : 'a phone'
       return visible ? (
         <div className="browser-body browser-blocked">
           <span>

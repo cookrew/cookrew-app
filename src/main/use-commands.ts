@@ -4,7 +4,7 @@ import { parseUseUrl, type Use, type UseTarget } from '../shared/use-url'
 import type { UsePoint, UseSignal } from '../shared/use-signal'
 import type { BrowserInstance } from './browser-instance'
 import { vphoneKeyName, type Gesture } from './vphone-input'
-import { thisMachine } from '../shared/machine-word'
+import { machineCopy } from '../shared/machine-words'
 
 /**
  * THE AGENT'S HAND ON A SCREEN CARD (computer, phone, hardware use).
@@ -188,7 +188,7 @@ export function shotName(requested: string | undefined, ctx: Pick<UseCommandCont
 const slug = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'card'
 
 export const SERVED_USE_REFUSED =
-  `A served session cannot use ${thisMachine(process.platform)}'s screens, cameras or phones — those belong to the owner, not to a caller`
+  `A served session cannot use ${machineCopy('this Mac', process.platform)}'s screens, cameras or phones — those belong to the owner, not to a caller`
 
 /**
  * THE SERVED-SESSION GATE FOR USES (required, like the secrets gate).

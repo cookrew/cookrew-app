@@ -31,7 +31,7 @@ export interface TeamClipDeps {
    * first. Cards, not processes, so a failed paste still leaves something to
    * recover.
    */
-  stopCut?: (nodeIds: string[], fromWorkspaceId: string) => Promise<void>
+  stopCut?: (nodeIds: string[], fromWorkspaceId: string, intoWorkspaceId: string) => Promise<void>
   /**
    * Remove the cut sources AFTER a successful paste. Owns the per-node
    * teardown: an active-workspace node has a live process/browser behind it
@@ -176,7 +176,7 @@ export class TeamClipboard {
         ? staged.filter((n) => n.kind === 'terminal').map((n) => n.id)
         : []
     if (carrySessions.length > 0 && this.deps.stopCut) {
-      await this.deps.stopCut(carrySessions, clip.fromWorkspaceId)
+      await this.deps.stopCut(carrySessions, clip.fromWorkspaceId, this.deps.activeId())
     }
     const result = await this.deps.paste({
       nodeIds: clip.nodeIds,

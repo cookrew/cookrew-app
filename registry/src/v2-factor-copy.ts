@@ -20,6 +20,7 @@ export type FactorError =
   | 'not_offered'
   | 'no_factor'
   | 'password_required'
+  | 'provider_required'
   | 'expired'
   | 'denied'
   | 'too_many_attempts'
@@ -44,6 +45,7 @@ const SENTENCES: Record<FactorError, string> = {
   not_offered: 'This account cannot be opened that way. Choose one of the ways it offers.',
   no_factor: 'This account has no way to finish a sign-in on a new device. Use a recovery code on a device it already knows.',
   password_required: 'Type your password to take a factor off the account.',
+  provider_required: 'This account has no password. Sign in with your provider again to do this.',
   expired: 'That sign-in took too long, so it was dropped. Start again with your password.',
   denied: 'That sign-in was denied on your other device. Nothing was attached.',
   too_many_attempts: 'Too many tries on this sign-in. Start again.',

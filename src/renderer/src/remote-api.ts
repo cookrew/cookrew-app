@@ -1,4 +1,6 @@
 import { inputRefused } from './prompt/input-refused'
+import type { StrayPane } from '../../shared/stray-pane'
+import type { LaunchFailure } from '../../shared/launch-failure'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
@@ -33,6 +35,7 @@ import { seated, settleSeat, takeSeat } from './device-seat'
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { WorkspaceMeta } from '../../shared/model'
+import { fetchGauges, relayDesktopGauges, storedDesktopToken } from './relay-gauges'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -739,6 +742,9 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>(apiPath('/api/agents'))
       return result.agents
     },
+    launchCheck: async (id) => (await req<{ failure: LaunchFailure | null }>(apiPath(`/api/terminal/${id}/launch-check`))).failure,
+    listStrayPanes: async () => (await req<{ strays: StrayPane[] }>(apiPath('/api/strays'))).strays,
+    endStrayPane: (session) => req(apiPath(`/api/strays/${session}/end`), 'POST'),
     onAgentChanged: (cb) => subscribe('agent', cb),
     // The changes above are all a page hears of the roster, so a stream that
     // dropped may have missed one: an agent woken while the phone slept stayed
@@ -787,6 +793,9 @@ export function createRemoteApi(): CookrewApi {
       }
     },
     zoomFleetMachines: () => relayAccountMachines(clientBase()),
+    // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
+    machineGauges: () => fetchGauges(apiPath('/api/levels/gauges'), authStore().token(), planeFetch),
+    machineGaugesOf: (machineId) => relayDesktopGauges(clientBase(), machineId, storedDesktopToken),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
       req(apiPath(`/api/agents/${id}/restore`), 'POST', {
@@ -879,6 +888,11 @@ export function createRemoteApi(): CookrewApi {
         // has none to be missing, so there is nothing here that could be
         // pending.
         passwordPending: false,
+        // The same: how the Mac unlocks is the Mac's own, and a phone has no lock.
+        passwordless: false,
+        unlockBy: 'password',
+        passcodePending: false,
+        touchId: { available: false, on: false },
         // Which registry the DESKTOP is pointed at is the desktop's business
         // and the desktop's screen; a phone reading the companion cannot know
         // it and must not guess.

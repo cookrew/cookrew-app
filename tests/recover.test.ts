@@ -71,3 +71,12 @@ describe('recoverErrorToast (thrown/rejected recover → honest error toast)', (
     })
   })
 })
+
+describe('a recover that meant to boot and could not', () => {
+  it('says why, and does not promise a later resume', () => {
+    const toast = recoverToastFor({ ok: true, id: 'a', name: 'Lark', workspaceId: 'w', workspaceName: 'Alpha', spawned: false, legacy: false, exact: true, blocked: 'Command not found: claude.' })
+    expect(toast.tone).toBe('warn')
+    expect(toast.text).toContain('Command not found: claude.')
+    expect(toast.text).not.toContain('resumes')
+  })
+})

@@ -1,3 +1,4 @@
+import { proofBody, type StepUpProof } from '../shared/step-up'
 import type { AccountResult } from '../shared/account-v2'
 import {
   APPROVAL_COPY,
@@ -125,10 +126,10 @@ export class Factors {
    * NOT ACTIVE YET, and the sheet says so — the factor exists on the account
    * only once `confirmTotp` has sent a code the registry accepted.
    */
-  async enrolTotp(): Promise<AccountResult<TotpEnrolment>> {
+  async enrolTotp(proof?: { stepUp: string }): Promise<AccountResult<TotpEnrolment>> {
     const result = await this.accounts.call<{ secret?: string; otpauth?: string }>(
       '/v2/me/totp/enrol',
-      { method: 'POST' },
+      { method: 'POST', ...(proof === undefined ? {} : { body: JSON.stringify(proof) }) },
     )
     if (!result.ok) return result
     const { secret, otpauth } = result.value
@@ -154,11 +155,11 @@ export class Factors {
    * Take the authenticator off — with the password, which the registry gates
    * this on. A DELETE with a body is unusual and it is the contract.
    */
-  removeTotp(current: string): Promise<AccountResult<void>> {
-    if (current.length === 0) return Promise.resolve(needsPassword())
+  removeTotp(proof: StepUpProof): Promise<AccountResult<void>> {
+    if (proof === '') return Promise.resolve(needsPassword())
     return this.accounts.call<void>('/v2/me/totp', {
       method: 'DELETE',
-      body: JSON.stringify({ current }),
+      body: JSON.stringify(proofBody(proof)),
       parse: false,
     })
   }
@@ -170,9 +171,10 @@ export class Factors {
    * not a party to the WebAuthn ceremony, and re-shaping a challenge in the
    * middle of one is how a passkey ends up bound to the wrong thing.
    */
-  passkeyOptions(): Promise<AccountResult<Record<string, unknown>>> {
+  passkeyOptions(proof?: { stepUp: string }): Promise<AccountResult<Record<string, unknown>>> {
     return this.accounts.call<Record<string, unknown>>('/v2/me/passkeys/options', {
       method: 'POST',
+      ...(proof === undefined ? {} : { body: JSON.stringify(proof) }),
     })
   }
 
@@ -194,12 +196,12 @@ export class Factors {
     })
   }
 
-  removePasskey(id: string, current: string): Promise<AccountResult<void>> {
+  removePasskey(id: string, proof: StepUpProof): Promise<AccountResult<void>> {
     if (id.length === 0) return Promise.resolve({ ok: false, reason: 'unknown' })
-    if (current.length === 0) return Promise.resolve(needsPassword())
+    if (proof === '') return Promise.resolve(needsPassword())
     return this.accounts.call<void>(`/v2/me/passkeys/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      body: JSON.stringify({ current }),
+      body: JSON.stringify(proofBody(proof)),
       parse: false,
     })
   }

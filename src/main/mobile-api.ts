@@ -8,6 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
+import type { CloseOutcome } from "./terminal-close";
+import type { StrayPane } from "../shared/stray-pane";
+import type { LaunchFailure } from "../shared/launch-failure";
 import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { CableSignalBus } from "./cable-signal";
@@ -49,7 +52,7 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
-import { TheMachine } from "../shared/machine-word";
+import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
@@ -153,6 +156,11 @@ const SOUS_MAX_TEXT = 2000;
 export interface MobileOps {
   /** The window picker's routes (use-source-routes.ts); absent answers 503. */
   useSources?: UseSourceService;
+  /** Could this offline card start now? Null when nothing stands in its way. */
+  checkLaunch: (id: string) => LaunchFailure | null;
+  /** Live panes no card reaches (orphan-reap.ts). */
+  listStrayPanes: () => Promise<StrayPane[]>;
+  endStrayPane: (session: string) => Promise<CloseOutcome>;
   addNode: (node: CanvasNode) => CanvasNode;
   updateNode: (
     id: string,
@@ -163,7 +171,7 @@ export interface MobileOps {
    * same path as IPC node:rename and `cookrew rename`. Checks its arguments.
    */
   renameNode: (id: string, name: unknown) => RenameOutcome;
-  removeNode: (id: string) => void | Promise<void>;
+  removeNode: (id: string) => CloseOutcome | Promise<CloseOutcome>;
   createTerminal: (opts: {
     name: string;
     preset: string;
@@ -198,7 +206,7 @@ export interface MobileOps {
   removeWorkspace: (
     id: string,
     options?: { worktree?: boolean },
-  ) => WorkspaceList | Promise<WorkspaceList>;
+  ) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   setPrimaryDir: (id: string, dir: string) => WorkspaceList;
@@ -1246,8 +1254,8 @@ export async function handleMobileApi(
     return true;
   }
   if (nodeMatch && method === "DELETE") {
-    await ops.removeNode(nodeMatch[1]);
-    respondJson(response, 200, { ok: true });
+    // 200 either way: a survivor keeps its card, and the event stream says why.
+    respondJson(response, 200, await ops.removeNode(nodeMatch[1]));
     return true;
   }
 
@@ -1753,7 +1761,7 @@ export async function handleMobileApi(
           if (held()) return { ok: false, reason: DISPATCH_IN_FLIGHT };
           await paceEnter(terminalId, data);
           if (deps.holdInput?.(terminalId, data) === true) return { ok: true, submitted: false };
-          return session ? ownerSubmit(session, data) : null;
+          return session ? ownerSubmit(session, data, { keyboard: true }) : null;
         };
         const verdict =
           typeof body.id === "string" && BATCH_ID.test(body.id)
@@ -1865,7 +1873,7 @@ export async function handleMobileApi(
   }
   if (p === "/api/listen" && method === "POST") {
     if (!deps.hear?.available()) {
-      respondJson(response, 503, { error: `${TheMachine(process.platform)} has no ear to hear with` });
+      respondJson(response, 503, { error: `${machineCopy('This Mac', process.platform)} has no ear to hear with` });
       return true;
     }
     try {
@@ -1886,7 +1894,7 @@ export async function handleMobileApi(
   }
   if (p === "/api/speak" && method === "POST") {
     if (!deps.speak) {
-      respondJson(response, 503, { error: `${TheMachine(process.platform)} has no voice to speak with` });
+      respondJson(response, 503, { error: `${machineCopy('This Mac', process.platform)} has no voice to speak with` });
       return true;
     }
     // The phone stopped reading (or left): stop the upstream request with it.
@@ -2262,6 +2270,20 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/agents") {
     respondJson(response, 200, { agents: deps.agents.list() });
+    return true;
+  }
+  const launchMatch = p.match(/^\/api\/terminal\/([^/]+)\/launch-check$/);
+  if (launchMatch && method === "GET") {
+    respondJson(response, 200, { failure: deps.ops.checkLaunch(launchMatch[1]) });
+    return true;
+  }
+  if (method === "GET" && p === "/api/strays") {
+    respondJson(response, 200, { strays: await deps.ops.listStrayPanes() });
+    return true;
+  }
+  const strayMatch = p.match(/^\/api\/strays\/([^/]+)\/end$/);
+  if (strayMatch && method === "POST") {
+    respondJson(response, 200, await deps.ops.endStrayPane(strayMatch[1]));
     return true;
   }
   // ENDPOINT RESTORE: rewind an agent in place to any checkpoint (+ undo).

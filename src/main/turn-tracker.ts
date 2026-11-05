@@ -629,6 +629,8 @@ export class TurnTracker extends EventEmitter {
    * the moment a mirror attaches, the real screen outranks it.
    */
   private backendPhase = new Map<string, { phase: TurnPhase; agent: boolean; at: number; choice?: WaitChoice | null }>()
+  /** What a pane with no mirror last showed (observePane). */
+  private paneLines = new Map<string, { lines: string[]; agent: boolean; at: number }>()
 
   /**
    * The local-producer serializer (Sol r3 P0-2c, synchronous-durable per
@@ -2096,6 +2098,7 @@ export class TurnTracker extends EventEmitter {
     session.on('replay', t.onReplay)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
+    this.paneLines.delete(session.terminalId)
     // herdr may have reported the question before this mirror existed.
     if (this.backendPhase.get(session.terminalId)?.phase === 'waiting') this.healBlocked(t)
   }
@@ -2157,6 +2160,21 @@ export class TurnTracker extends EventEmitter {
    * through it: reading one scalar by constructing N full activities is how a
    * cheap question becomes O(terminals x scrollback).
    */
+  /**
+   * Forget what was typed in this pane and never submitted. A hidden prompt is
+   * opening: keys from here on are sealed, so no Enter would ever come to clear
+   * the buffer, and whatever was typed ahead of the seal would stay on the card.
+   */
+  dropDraft(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    t.promptBuffer = ''
+    t.inPaste = false
+    t.heldInput = ''
+    this.lease.clearOwnerEditing(terminalId)
+    this.schedulePush(terminalId)
+  }
+
   phaseOf(terminalId: string): TurnPhase | undefined {
     // TRACKED ONLY, deliberately. hasLiveWork reads this, and its working set
     // is exactly what the backend hint emits — answering from a guess pins
@@ -2250,6 +2268,32 @@ export class TurnTracker extends EventEmitter {
     }
   }
 
+  /**
+   * What a pane with no mirror shows now, for a card with no record of its own
+   * (pane-follow.ts). A tracked terminal reports its own truth, and this must
+   * not race it.
+   */
+  observePane(terminalId: string, text: string, agent: boolean): void {
+    if (this.tracked.has(terminalId)) return
+    const lines = tailLines(cleanTurnLines(text), SUMMARY_TAIL)
+    const known = this.paneLines.get(terminalId)
+    if (known && known.lines.join('\n') === lines.join('\n')) return
+    this.paneLines.set(terminalId, { lines, agent, at: Date.now() })
+    this.announce(this.paneActivity(terminalId))
+  }
+
+  /** The pane ended, or a mirror took over. */
+  forgetPane(terminalId: string): void {
+    this.paneLines.delete(terminalId)
+  }
+
+  private paneActivity(terminalId: string): TerminalActivity {
+    const read = this.paneLines.get(terminalId)
+    const backend = this.backendPhase.get(terminalId)
+    const base = this.backendActivity(terminalId, backend?.phase ?? this.restingPhase(terminalId), backend?.agent ?? read?.agent ?? false)
+    return read ? { ...base, paneRead: true, lines: read.lines, updatedAt: read.at } : base
+  }
+
   /** What a mirrorless terminal rests at: unread reply, else idle. */
   private restingPhase(terminalId: string): TurnPhase {
     const last = this.liveHistory(terminalId).at(-1)
@@ -2317,9 +2361,9 @@ export class TurnTracker extends EventEmitter {
       .filter((a): a is TerminalActivity => a !== null)
     // Mirrorless terminals the backend has an opinion about, appended once
     // each — a tracked terminal is already above and must not appear twice.
-    const skeletons = [...this.backendPhase.entries()]
-      .filter(([id]) => !this.tracked.has(id))
-      .map(([id, known]) => this.backendActivity(id, known.phase, known.agent))
+    const skeletons = [...new Set([...this.backendPhase.keys(), ...this.paneLines.keys()])]
+      .filter((id) => !this.tracked.has(id))
+      .map((id) => this.paneActivity(id))
     return [...live, ...skeletons]
   }
 

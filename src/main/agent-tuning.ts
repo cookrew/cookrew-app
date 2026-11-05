@@ -504,6 +504,7 @@ export function applyTuning(
 const RELAUNCH_REFUSAL: Partial<Record<RelaunchVerdict, string>> = {
   busy: 'mid-turn, waiting for an answer, or taking a prompt — pick again once it replies',
   unrestorable: 'saved for its next start — a restart now would lose its conversation',
+  blocked: 'not applied — it could not start again, so it was left running as it is',
   gone: 'no such terminal'
 }
 

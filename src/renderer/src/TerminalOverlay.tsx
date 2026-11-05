@@ -41,6 +41,8 @@ import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { LOOK_LABEL, LOOK_TITLE, TranscriptLookContext, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { shouldAttachTerminal } from './terminal-view-mode'
+import { AgentFailure } from './zoom/AgentFailure'
+import { useCrewContext } from './stage/crew-rows'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
@@ -396,7 +398,12 @@ function TerminalOverlay({
   // element, so the memoised rows are not re-rendered by a new one each frame.
   const chatFace = useMemo(() => <AgentAvatar id={node.id} orch={node.orch === true} status="idle" preset={node.preset} />, [node.id, node.orch, node.preset])
   // Chat or the raw terminal (transcript-look.ts): one class on the box.
-  const [look, setLook] = useTranscriptLook()
+  const [chosenLook, setLook] = useTranscriptLook()
+  // A plain shell keeps no record to read: its LIVE pane is all there is, and
+  // opening one on "No conversation yet" read as the card having lost it.
+  const recordless = node.command.trim().length === 0
+  const look = recordless ? 'live' : chosenLook
+  const failure = useCrewContext()?.crew.find((row) => row.id === node.id)?.failure ?? null
   // Read by the terminal's mount-once setup: is the live view on screen?
   const lookRef = useRef(look)
   lookRef.current = look
@@ -1498,7 +1505,12 @@ function TerminalOverlay({
         </TranscriptView>
         </TranscriptLookContext.Provider>
         </TranscriptFaceContext.Provider>
-        {isRecordLook(look) && noConversation && phase !== 'thinking' && (
+        {failure && (
+          <div className="chat-failure" role="status">
+            <AgentFailure failure={failure} />
+          </div>
+        )}
+        {!failure && isRecordLook(look) && noConversation && phase !== 'thinking' && (
           <div className="chat-empty">
             <span>No conversation yet.</span>
             <button type="button" className="cr-btn sm" onClick={() => switchLook('live')}>
@@ -1516,7 +1528,7 @@ function TerminalOverlay({
           />
         )}
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
-        {primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
+        {primary && !recordless && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
         </div>
         {/* CHAT and LOG are plain reading with their own scrollbar (transcript-paper.css,
             owner 2026-11-01 and 11-03): of the rail they keep only the tag that names

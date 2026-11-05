@@ -237,8 +237,10 @@ export function bootCommand(spec: AttachSpec): string {
     // launch directory, so an agent started elsewhere is one whose session
     // file Cookrew looks for in the wrong place (2026-11-04: eight GOAT Team
     // agents, every --no-wait ask to them interrupted at 60 s). A cd that
-    // fails leaves the agent where the pane was, as before — never unstarted.
-    `cd ${posixQuote(spec.cwd)}`,
+    // fails ends the boot: the launch check catches a missing folder first, and
+    // a husk it could not catch must not start an agent in whatever folder its
+    // pane had, with its permissions bypassed.
+    `cd ${posixQuote(spec.cwd)} || exit 1`,
     `export TERM_PROGRAM=Cookrew`,
     `export COOKREW_TERMINAL_ID='${spec.terminalId}'`,
     `export COOKREW_SOCKET='${spec.socketPath}'`,
@@ -491,6 +493,8 @@ export interface HerdrHostOptions {
    * Overridable so tests do not busy-wait the real grace.
    */
   settleMs?: number
+  /** Is this folder certainly gone? A husk's boot is refused then. Absent: nothing is. */
+  folderGone?: (dir: string) => boolean
 }
 
 export interface HerdrServerSpawnSpec {
@@ -568,6 +572,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private readonly settleMs: number
+  private readonly folderGone: (dir: string) => boolean
   private readonly sleep: (ms: number) => void
   private probed: boolean | null = null
   private serverUp = false
@@ -604,6 +609,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.asyncRunner = options.asyncRunner ?? createAsyncHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
+    this.folderGone = options.folderGone ?? (() => false)
     this.settleMs = options.settleMs ?? 2000
     this.sleep = options.sleep ?? sleepSync
   }
@@ -996,6 +1002,40 @@ export class HerdrHostMultiplexer implements Multiplexer {
     return this.paneFor(name) !== null
   }
 
+  /**
+   * readPanes answers [] for a listing that failed, which is right for "what
+   * can I show" and wrong for "is it dead". Always a fresh read: a kill is
+   * verified against the server, never a snapshot.
+   */
+  sessionPresence(name: string): boolean | null {
+    if (!this.available()) return false
+    try {
+      const panes = parsePaneListStrict(this.herdr(['pane', 'list']))
+      return panes === null ? null : panes.some((pane) => pane.label === name)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * A fresh listing off the main thread, for a close polling until a pane is
+   * gone. A server that is not running holds no panes (herdr keeps layout, not
+   * processes), which is an answer; any other failure rejects.
+   */
+  async liveSessions(): Promise<ReadonlySet<string>> {
+    if (!this.available()) return new Set()
+    let raw: string
+    try {
+      raw = await this.runAsync(['pane', 'list'], 3000)
+    } catch (error) {
+      if (/server_not_running/.test(String(error))) return new Set()
+      throw error
+    }
+    const panes = parsePaneListStrict(raw)
+    if (panes === null) throw new Error('herdr pane list was malformed')
+    return new Set(panes.map((pane) => pane.label).filter((label): label is string => typeof label === 'string' && label.length > 0))
+  }
+
   listSessions(): string[] {
     return this.panes()
       .map((pane) => pane.label)
@@ -1091,6 +1131,9 @@ export class HerdrHostMultiplexer implements Multiplexer {
       return
     }
 
+    // The launch check passes a husk (a pane is there): it is here that a boot
+    // would start. A `cd` would fail it, but only after a dozen seconds of verify.
+    if (existing && this.folderGone(spec.cwd)) throw new Error(`the folder ${spec.cwd} is gone, so '${spec.sessionName}' was not booted`)
     const pane = existing ?? this.adoptOrCreate(spec)
     if (!pane?.pane_id) throw new Error(`herdr could not create a pane for '${spec.sessionName}'`)
 

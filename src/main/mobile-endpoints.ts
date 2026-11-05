@@ -13,7 +13,7 @@ import { isTailnetAddress, type CertHosts, type TailnetIdentity } from './tailsc
 import { MOBILE_PORT, MOBILE_HTTPS_PORT } from './mobile-ports'
 import { reachSlots } from './reach-slots'
 import { trustedName } from '../shared/reach-names'
-import { TheMachine, thisMachine } from '../shared/machine-word'
+import { machineCopy } from '../shared/machine-words'
 
 export type EndpointKind = 'tailscale' | 'lan' | 'other' | 'loopback'
 
@@ -72,9 +72,9 @@ const LABELS: Record<EndpointKind, string> = {
   // The phone needs Tailscale installed and signed into the same tailnet —
   // say so, because otherwise this line looks like a broken URL.
   tailscale: 'Tailscale — works anywhere, if the phone is on the same tailnet',
-  lan: `Same Wi-Fi as ${thisMachine(process.platform)}`,
+  lan: `Same Wi-Fi as ${machineCopy('this Mac', process.platform)}`,
   other: 'Other interface — may not be reachable',
-  loopback: `${TheMachine(process.platform)} only`
+  loopback: `${machineCopy('This Mac', process.platform)} only`
 }
 
 function octets(address: string): number[] | null {

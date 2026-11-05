@@ -36,6 +36,7 @@ import {
   type FacetEvent,
 } from './agent-facets'
 import { TeamForkPicker } from './TeamForkPicker'
+import { StrayPanes } from './StrayPanes'
 import { useCanvasUi } from './canvas-ui'
 import { useActivitiesSnapshot, useThumbsSnapshot } from './activity-thumb-store'
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
@@ -649,6 +650,8 @@ export function RosterPanel({
             roster lands with Forge&apos;s registry.
           </div>
         )}
+
+        <StrayPanes onSay={(text) => setToast({ tone: 'warn', text })} />
 
         {/* Facets from the registry + event log — structured narrowing, which
             is what these records can answer well. Conversation text is NOT

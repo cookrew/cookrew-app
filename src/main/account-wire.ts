@@ -51,6 +51,16 @@ export const REFUSALS: Record<string, AccountRefusal> = {
   // can be done — only the first half of which is true.
   password_required: 'password_required',
   step_up: 'step_up',
+  // Third-party sign-in. Named so each keeps its own sentence on screen.
+  provider_required: 'provider_required',
+  wrong_identity: 'wrong_identity',
+  link_taken: 'link_taken',
+  link_exists: 'link_exists',
+  link_paused: 'link_paused',
+  last_sign_in: 'last_sign_in',
+  ticket_gone: 'ticket_gone',
+  flow_over: 'expired',
+  provider_down: 'provider_down',
 }
 
 /**

@@ -8,6 +8,7 @@ import {
 } from '../shared/account-v2'
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import type { AccountSession } from './account-v2'
+import type { MintedDevice } from './account-oauth'
 
 /**
  * THE SECOND-FACTOR LADDER, MAIN'S HALF — and the one thing it has to hold.
@@ -62,15 +63,19 @@ const LADDERS_MAX = 8
 export class LadderPasswords {
   private readonly now: () => number
   private readonly ttlMs: number
-  private held = new Map<string, { password: string; at: number }>()
+  private held = new Map<string, { password: string; at: number; key: MintedDevice | null }>()
 
   constructor(now: () => number = Date.now, ttlMs = LADDER_TTL_MS) {
     this.now = now
     this.ttlMs = ttlMs
   }
 
-  /** Pair a password with the pending the registry just opened for it. */
-  remember(pending: string, password: string): void {
+  /**
+   * Pair a password with the pending the registry just opened for it. A provider
+   * ladder has no password and brings the key it offered instead: held here, a
+   * retry's key can never be mistaken for the key of a ladder that was dropped.
+   */
+  remember(pending: string, password: string, key: MintedDevice | null = null): void {
     const at = this.now()
     this.sweep(at)
     // Bounded as well as timed. A caller that could open pendings faster than
@@ -81,7 +86,7 @@ export class LadderPasswords {
       if (!oldest) break
       this.held.delete(oldest[0])
     }
-    this.held.set(pending, { password, at })
+    this.held.set(pending, { password, at, key })
   }
 
   /**
@@ -94,6 +99,11 @@ export class LadderPasswords {
     const at = this.now()
     this.sweep(at)
     return this.held.get(pending)?.password ?? null
+  }
+
+  /** The key this ladder offered, when a provider opened it on a Mac with no file. */
+  keyFor(pending: string): MintedDevice | null {
+    return this.held.get(pending)?.key ?? null
   }
 
   /** This ladder is over, however it ended. */
@@ -113,6 +123,16 @@ export class LadderPasswords {
     }
   }
 }
+
+/**
+ * A LADDER A PROVIDER OPENED HAS NO PASSWORD TO HOLD.
+ *
+ * The rungs read "nothing held" as "this ladder went cold", so a provider's
+ * ladder is remembered under this marker. The empty string cannot be a real
+ * entry: a password step never runs on an empty field. `landSession` reads it
+ * as "there is no password, so derive no verifier".
+ */
+export const NO_PASSWORD = ''
 
 const FACTORS: readonly LadderFactor[] = ['passkey', 'totp', 'approve', 'recovery']
 
@@ -189,7 +209,7 @@ export interface LadderPort {
   /** The passwords of the sign-ins half done on this Mac. */
   passwords: LadderPasswords
   /** Write the session and re-derive the unlock verifier. One place, always. */
-  land: (password: string, body: Record<string, unknown>) => SignInAnswer<AccountSession>
+  land: (password: string, body: Record<string, unknown>, key: MintedDevice | null) => SignInAnswer<AccountSession>
 }
 
 /**
@@ -273,13 +293,16 @@ export async function askForApproval(
 export async function waitForApproval(
   port: LadderPort,
   pending: string,
-  options: { everyMs?: number; forMs?: number } = {},
+  options: { everyMs?: number; forMs?: number; signal?: AbortSignal } = {},
 ): Promise<SignInAnswer<AccountSession>> {
   const password = port.passwords.for(pending)
   if (password === null) return { ok: false, reason: 'expired' }
   const everyMs = options.everyMs ?? APPROVAL_POLL_MS
   const until = port.now() + Math.min(options.forMs ?? LADDER_TTL_MS, LADDER_TTL_MS)
   for (;;) {
+    // Stopped, not over: the pending still stands and the password is kept, so
+    // another rung can finish this. Whoever stopped it knows what it means.
+    if (options.signal?.aborted) return { ok: false, reason: 'expired' }
     const answer = await climbOne(
       port,
       pending,
@@ -290,8 +313,23 @@ export async function waitForApproval(
     )
     if (answer !== 'waiting') return answer
     if (port.now() + everyMs >= until) return { ok: false, reason: 'expired' }
-    await new Promise((resolve) => setTimeout(resolve, everyMs))
+    await pause(everyMs, options.signal)
   }
+}
+
+/** The gap between two polls, cut short by a stop. */
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      { once: true },
+    )
+  })
 }
 
 /**
@@ -321,8 +359,9 @@ async function climbOne(
   if (response.status === 429) return { ok: false, reason: 'rate_limited' }
   const body = await bodyOf(response)
   if (response.status === 201) {
+    const key = port.passwords.keyFor(pending)
     port.passwords.forget(pending)
-    return port.land(password, body)
+    return port.land(password, body, key)
   }
   const refused = classify(response.status, body)
   if (ladderIsOver(refused.reason)) port.passwords.forget(pending)

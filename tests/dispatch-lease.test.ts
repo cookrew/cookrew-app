@@ -11,6 +11,7 @@
 // - every leg releases in a finally, so the terminal's window frees whether
 //   the delivery succeeded, failed or was displaced.
 
+import { paneInputs } from '../src/main/pane-input'
 import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import {
@@ -381,6 +382,33 @@ describe('owner composing vs dispatch (Sol r8 P0-1)', () => {
     expect(service.get('dsp-1')).toMatchObject({
       state: 'interrupted',
       error: 'interrupted: owner took the input box'
+    })
+  })
+
+  it('a pane at a hidden prompt takes no brief: it would go to cookrew.dev as a password', async () => {
+    let prompts = 0
+    const delivered: string[] = []
+    const retracted: string[] = []
+    const service = new DispatchService(
+      deps({
+        promptAgent: async () => {
+          prompts += 1
+          return 'done'
+        },
+        noteDelivered: (_agentId, prompt) => delivered.push(prompt),
+        retractDelivered: (_agentId, prompt) => retracted.push(prompt)
+      })
+    )
+    const response = await service.dispatch('agent-1', { text: PROMPT })
+    expect(response.status).toBe(202)
+    const release = paneInputs.seal('agent-1')
+    await settle(service)
+    release()
+    expect(prompts).toBe(0)
+    expect(retracted).toEqual(delivered)
+    expect(service.get('dsp-1')).toMatchObject({
+      state: 'interrupted',
+      error: 'interrupted: the pane is at a hidden prompt'
     })
   })
 

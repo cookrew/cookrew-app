@@ -575,6 +575,22 @@
   font-size: 8.5px;
 }
 
+/* Why this card is not running: over a transcript as much as over an empty chat, so it brings its own paper. */
+.lod-overlay .chat-failure {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 50%;
+  width: min(560px, calc(100% - 32px));
+  padding: 12px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
 /* A chat with nothing in it yet (TerminalOverlay · noConversation). */
 .lod-overlay .popout-main.look-records {
   position: relative;

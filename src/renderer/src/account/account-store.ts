@@ -1,4 +1,5 @@
 import { V3_COPY, accountCopy } from '../../../shared/account-copy'
+import { hostPlatform, machineCopy, machineTable } from '../../../shared/machine-words'
 import { lanRevokeEnds } from '../../../shared/lan-token-mode'
 import {
   LOCK_CHOICES,
@@ -42,7 +43,7 @@ import {
  * the table does not carry are taken from the mock they appear in, named after
  * the screen.
  */
-export const ACCOUNT_COPY = {
+export const ACCOUNT_COPY = machineTable({
   /**
    * D1 hover, no account — now from the one source (V3-07).
    *
@@ -222,7 +223,7 @@ export const ACCOUNT_COPY = {
   /** D2, phase 6: the name is already this person's, on another device's key. */
   LEGACY_ELSEWHERE:
     'This name belongs to a key on another device — set the password there, or use that device to link this one.',
-} as const
+} as const, hostPlatform())
 
 /**
  * "You are @drej here already — set a password to keep it." (phase 6)
@@ -335,6 +336,9 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       return ACCOUNT_COPY.REGISTRY_NO_V2
     case 'legacy':
       return legacyTakenSentence(username)
+    // A person changing their mind in a browser: nothing to say.
+    case 'cancelled':
+      return ''
     case 'session-expired':
     case 'bad_credentials':
       // THE SENTENCE AND THE FIELD TRAVEL TOGETHER. It is a constant so that
@@ -371,9 +375,9 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
         ? accountCopy('d12.last-device', { handle: normaliseUsername(username) })
         : accountCopy('d12.last-device.unnamed')
     case 'no_account':
-      return 'There is no account on this Mac yet.'
+      return machineCopy('There is no account on this Mac yet.', hostPlatform())
     case 'bad_device':
-      return 'cookrew.dev does not know this Mac as a device on the account. Sign in again here.'
+      return machineCopy('cookrew.dev does not know this Mac as a device on the account. Sign in again here.', hostPlatform())
     case 'unknown':
     default:
       // NOT "something went wrong": that sentence was on screen for eleven
@@ -1006,7 +1010,7 @@ export function factorRows(
   }))
   const addPasskey: FactorRow = {
     id: 'passkey',
-    label: 'Add a passkey (Touch ID)',
+    label: (hostPlatform() ?? 'darwin') === 'darwin' ? 'Add a passkey (Touch ID)' : 'Add a passkey',
     // RECOMMENDED only while there is none: a card that keeps recommending
     // something already done stops being read.
     state: enrolled.length === 0 ? 'RECOMMENDED' : '',

@@ -1,7 +1,7 @@
 import { BrowserWindow, session, systemPreferences } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import type { CameraHost } from './cam-device'
-import { thisMachine } from '../shared/machine-word'
+import { machineCopy } from '../shared/machine-words'
 
 /**
  * THE CAPTURE HOST: ONE HIDDEN WINDOW THAT HOLDS THE CAMERAS.
@@ -32,7 +32,7 @@ const SCRIPT = `
 window.__cams = window.__cams || new Map()
 window.__camOpen = async (want) => {
   const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput')
-  if (all.length === 0) throw new Error('No camera is connected to ${thisMachine(process.platform)}')
+  if (all.length === 0) throw new Error('No camera is connected to ${machineCopy('this Mac', process.platform)}')
   const index = /^\\d+$/.test(want) ? Number(want) : -1
   const device = index >= 0 ? all[index] : all.find((d) => d.label.toLowerCase().includes(want.toLowerCase()))
   if (!device) throw new Error('No camera matches ' + JSON.stringify(want) + ' (cameras: ' + all.map((d, i) => i + ' ' + (d.label || 'unnamed')).join(', ') + ')')
