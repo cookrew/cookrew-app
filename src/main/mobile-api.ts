@@ -1,4 +1,4 @@
-import { createEnterPacing } from "./enter-pacing";
+import { blockAsPaste, createEnterPacing } from "./enter-pacing";
 import { answerMenuRequest, parseMenuRequest } from "./menu-answer";
 import type http from "node:http";
 import type { TerminalSession } from "./terminal-session";
@@ -1795,8 +1795,11 @@ export async function handleMobileApi(
           // dispatch answers as typed, or its words read as never sent.
           if (held()) return { ok: false, reason: DISPATCH_IN_FLIGHT };
           await paceEnter(terminalId, data);
-          if (deps.holdInput?.(terminalId, data) === true) return { ok: true, submitted: false };
-          return session ? ownerSubmit(session, data, { keyboard: true }) : null;
+          const node = store?.nodeAcrossWorkspaces(terminalId)?.node;
+          const agent = node?.kind === "terminal" && node.command.trim().length > 0;
+          const keys = agent ? blockAsPaste(data) : data;
+          if (deps.holdInput?.(terminalId, keys) === true) return { ok: true, submitted: false };
+          return session ? ownerSubmit(session, keys, { keyboard: true }) : null;
         };
         const verdict =
           typeof body.id === "string" && BATCH_ID.test(body.id)

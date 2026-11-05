@@ -11,7 +11,7 @@ vi.mock('../src/renderer/src/api', () => ({ cookrew: () => ({ ptyInput }) }))
 
 const { activityStore } = await import('../src/renderer/src/activity-thumb-store')
 const { draftKey, getDraft, setDraft } = await import('../src/renderer/src/prompt/prompt-draft')
-const { QUIET_MS, endLine, keysFor, lineTextFor, observeLine, resetLinesForTests, submitLine, typeLine } = await import(
+const { LINE_MAX, QUIET_MS, endLine, keysFor, lineTextFor, observeLine, resetLinesForTests, submitLine, typeLine } = await import(
   '../src/renderer/src/prompt/live-line'
 )
 
@@ -35,6 +35,83 @@ describe('keys the Mac refused', () => {
     ptyInput.mockReset()
     submitLine('a1', 'hello')
     expect(typedKeys()).toEqual(['hello', '\r'])
+  })
+})
+
+// Measured 2026-11-05: Claude folds a long paste into one [Pasted text] token,
+// and a single Backspace takes the whole token. The box would still hold 1499
+// characters, and Enter send nothing.
+describe('a draft too long for the agent\'s line', () => {
+  const long = 'x'.repeat(LINE_MAX + 1)
+  it('waits in the draft: nothing of it reaches the line', () => {
+    typeLine('a1', long)
+    expect(typedKeys()).toEqual([])
+  })
+  it('goes whole with Enter, in one write', () => {
+    typeLine('a1', long)
+    submitLine('a1', long)
+    expect(typedKeys()).toEqual([long, '\r'])
+  })
+  it('an edit in the box stays in the box until then', () => {
+    typeLine('a1', long)
+    typeLine('a1', long.slice(0, -1))
+    submitLine('a1', long.slice(0, -1))
+    expect(typedKeys()).toEqual([long.slice(0, -1), '\r'])
+  })
+  it('what was typed before it stays on the line, and the rest follows', () => {
+    typeLine('a1', 'hello ')
+    typeLine('a1', `hello ${long}`)
+    submitLine('a1', `hello ${long}`)
+    expect(typedKeys()).toEqual(['hello ', long, '\r'])
+  })
+  it('counts bytes: Chinese fills the line sooner', () => {
+    typeLine('a1', '中'.repeat(LINE_MAX / 2))
+    expect(typedKeys()).toEqual([])
+  })
+  const later = (): number => Date.now() + QUIET_MS + 1
+  const words = 'y'.repeat(LINE_MAX + 1)
+  it('a key typed in LIVE does not replace a draft that waits in the box', () => {
+    setDraft(draftKey('a1'), words)
+    typeLine('a1', words)
+    observeLine('a1', activity({ pendingInput: 'x' }), later())
+    expect(getDraft(draftKey('a1'))).toBe(words)
+  })
+  it('nor does Enter in the terminal on the part that was on the line', () => {
+    typeLine('a1', 'hello')
+    observeLine('a1', activity({ pendingInput: 'hello' }), later())
+    setDraft(draftKey('a1'), `hello${words}`)
+    typeLine('a1', `hello${words}`)
+    observeLine('a1', activity({ pendingInput: '' }), later())
+    expect(getDraft(draftKey('a1'))).toBe(`hello${words}`)
+  })
+  it('a long paste in LIVE comes back to the box, and its Enter clears it, as ever', () => {
+    observeLine('a1', activity({ pendingInput: '' }), later())
+    observeLine('a1', activity({ pendingInput: words }), later())
+    expect(getDraft(draftKey('a1'))).toBe(words)
+    observeLine('a1', activity({ pendingInput: '' }), later())
+    expect(getDraft(draftKey('a1'))).toBe('')
+  })
+  const pastedInLive = (): void => {
+    observeLine('a1', activity({ pendingInput: '' }), later())
+    observeLine('a1', activity({ pendingInput: words }), later())
+  }
+  it('a line that may be folded is cleared and sent again: one Backspace would take it all', () => {
+    pastedInLive()
+    const edited = words.slice(0, -1)
+    typeLine('a1', edited)
+    submitLine('a1', edited)
+    expect(typedKeys()).toEqual(['\x7f'.repeat(words.length + 16) + edited, '\r'])
+  })
+  it('words added after it just follow it', () => {
+    pastedInLive()
+    typeLine('a1', `${words} more`)
+    submitLine('a1', `${words} more`)
+    expect(typedKeys()).toEqual([' more', '\r'])
+  })
+  it('cut back under the limit it syncs again', () => {
+    typeLine('a1', long)
+    typeLine('a1', 'short')
+    expect(typedKeys()).toEqual(['short'])
   })
 })
 

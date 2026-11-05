@@ -33,7 +33,7 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
-import { createPacedInput } from './enter-pacing'
+import { blockAsPaste, createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
 import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
 import { aboutOfScreen, wholeBrief } from '../shared/wait-about'
@@ -8663,7 +8663,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     const request = parseMenuRequest(body)
     return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
   })
-  const typeInto = createPacedInput((terminalId, data) => {
+  const typeInto = createPacedInput((terminalId, typed) => {
+    const data = isAgentTerminal(terminalId) ? blockAsPaste(typed) : typed
     // Keys for an offline agent wake it; they wait for it, then go in in order.
     if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
