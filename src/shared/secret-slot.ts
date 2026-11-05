@@ -18,6 +18,16 @@ export const SECRET_SLOT_MARK = '🔒'
 
 export const isSecretName = (name: string): boolean => SECRET_NAME_RE.test(name)
 
+/**
+ * What the owner typed, as a name an agent can type (`DeepSeek key` →
+ * `deepseek-key`), or null when nothing of it is left. A name is a word on a
+ * command line, so a name in another script has no spelling here.
+ */
+export const secretNameFrom = (raw: string): string | null => {
+  const slug = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 64).replace(/-+$/, '')
+  return isSecretName(slug) ? slug : null
+}
+
 /** The one spelling of a slot line. */
 export const secretSlotLine = (name: string): string => `${SECRET_SLOT_MARK} ${name}`
 

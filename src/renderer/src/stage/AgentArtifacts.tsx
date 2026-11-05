@@ -16,7 +16,7 @@
 // An agent with none draws no column and says nothing (owner, 2026-11-03: "no
 // browser or note" is not shown): the transcript takes the room, and the
 // make buttons still stand in the head.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CanvasNode } from '../../../shared/model'
 import { cookrew } from '../api'
@@ -25,10 +25,12 @@ import { useCanvasUi } from '../canvas-ui'
 import { CrIcon } from '../icons'
 import { thumbWants } from '../pets/thumb-wants'
 import type { TerminalAttachment } from '../terminal-attachments'
-import { makeItemFor } from '../zoom/make-card'
+import { focusSlot } from '../nodes/secret-focus'
+import { makeItemFor, makeSecretFor } from '../zoom/make-card'
 import { itemViewOf, type ItemView } from '../zoom/zoom-model'
 import { Page } from '../zoom/ZoomParts'
 import { artifactsShown, useArtifactsShown } from './artifacts-shown'
+import { SecretMaker } from './SecretMaker'
 
 export function AgentArtifacts({
   agent,
@@ -51,7 +53,7 @@ export function AgentArtifacts({
   const shown = useArtifactsShown()
   const open = useAttachView()
   const openId = open?.terminalId === agent.id ? open.itemId : null
-  const [making, setMaking] = useState<'note' | 'browser' | null>(null)
+  const [making, setMaking] = useState<'note' | 'browser' | 'secret' | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => setError(null), [agent.id])
 
@@ -73,11 +75,20 @@ export function AgentArtifacts({
 
   // The new card opens under the transcript once it is among the agent's own:
   // opened sooner, the terminal closes it again as unwired (TerminalOverlay).
-  const [opening, setOpening] = useState<{ id: string; kind: 'note' | 'browser' } | null>(null)
+  const [opening, setOpening] = useState<{ id: string; kind: 'note' | 'browser'; slot?: string } | null>(null)
+  const slotTimer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (slotTimer.current !== null) clearTimeout(slotTimer.current)
+    },
+    []
+  )
   useEffect(() => {
     if (!opening) return
     if (items.some((item) => item.node.id === opening.id)) {
       attachView.open(agent.id, opening.id, opening.kind)
+      // A secret opens on its field: the value is what the owner came to give.
+      if (opening.slot) focusSlot(opening.slot, 8, slotTimer)
       setOpening(null)
       return
     }
@@ -92,6 +103,19 @@ export function AgentArtifacts({
     setMaking(null)
     if (!made.ok) setError(made.error)
     else if (made.id) setOpening({ id: made.id, kind })
+  }
+
+  const makeSecret = async (name: string): Promise<boolean> => {
+    setMaking('secret')
+    setError(null)
+    const made = await makeSecretFor(cookrew(), name, agent, nodes)
+    setMaking(null)
+    if (!made.ok) {
+      setError(made.error)
+      return false
+    }
+    if (made.id) setOpening({ id: made.id, kind: 'note', slot: made.slot })
+    return true
   }
 
   const makeButtons = (
@@ -110,6 +134,7 @@ export function AgentArtifacts({
           <b aria-hidden="true">+</b>
         </button>
       ))}
+      <SecretMaker agentName={agent.name} busy={making !== null} onMake={makeSecret} />
     </span>
   )
 

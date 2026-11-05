@@ -52,8 +52,8 @@ export const STRIP_PX = 44
 const STRIP_FACE = 28
 const STRIP_STEP = 16
 const STRIP_OWN = 14 + 6 + 6 + 28
-/** The tools (CHAT ✎+ ⊕+, 124 px), the row's insets and gap, and one face's step of slack for a wider label or font. */
-const STRIP_SHARED = 148 + STRIP_STEP
+/** The tools (CHAT ✎+ ⊕+ 🔒+, 162 px), the row's insets and gap, and one face's step of slack for a wider label or font. */
+const STRIP_SHARED = 186 + STRIP_STEP
 export const stripFaces = (side: Side, viewportWidth: number): number =>
   side === 'right'
     ? Math.max(3, Math.floor((viewportWidth - STRIP_SHARED - STRIP_OWN - STRIP_FACE) / STRIP_STEP) + 1)
