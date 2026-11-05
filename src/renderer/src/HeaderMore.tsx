@@ -17,6 +17,7 @@ import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { isRemoteMode } from './api'
+import { startSpeechCheck } from './speech-check'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -171,6 +172,13 @@ export function HeaderMore({
             >
               <CrIcon name="fullscreen" />
               <span className="cr-more-label">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
+            </button>
+          )}
+          {/* TEMPORARY (speech-check.ts): delete with it. */}
+          {isRemoteMode() && (
+            <button type="button" className="cr-more-item" title="Run the browser's own speech recognizer and log what it does" onClick={startSpeechCheck}>
+              <CrIcon name="mic" />
+              <span className="cr-more-label">Test browser speech</span>
             </button>
           )}
           <TelemetryRow />
