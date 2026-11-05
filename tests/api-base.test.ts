@@ -29,8 +29,12 @@ const RENDERER = path.join(__dirname, '..', 'src', 'renderer', 'src')
  * forced the question the old exemption deferred: a socket built from the page
  * origin by hand was harmless while the page origin WAS the transport, and is
  * a silent bug the moment the data plane can move without the address bar.
+ *
+ * relay-gauges.ts addresses ANOTHER desktop, under that desktop's own relay
+ * prefix: apiPath would point it at this Mac, the one wrong answer it must not
+ * give. This Mac's own gauges go through apiPath, in remote-api.ts.
  */
-const EXEMPT = new Set(['browser-stream.ts'])
+const EXEMPT = new Set(['browser-stream.ts', 'relay-gauges.ts'])
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {

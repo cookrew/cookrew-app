@@ -26,6 +26,7 @@ import { CrIcon } from '../icons'
 import { promptFold, takeBack } from '../prompt/prompt-fold'
 import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
+import { GaugePanel } from './MachineGauges'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
@@ -576,6 +577,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
+      <GaugePanel localName={machine} />
       <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })

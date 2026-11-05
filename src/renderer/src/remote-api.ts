@@ -31,6 +31,7 @@ import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
 import { relayAccountMachines } from './relay-machines'
+import { fetchGauges, relayDesktopGauges, storedDesktopToken } from './relay-gauges'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -763,6 +764,9 @@ export function createRemoteApi(): CookrewApi {
       }
     },
     zoomFleetMachines: () => relayAccountMachines(clientBase()),
+    // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
+    machineGauges: () => fetchGauges(apiPath('/api/levels/gauges'), authStore().token(), planeFetch),
+    machineGaugesOf: (machineId) => relayDesktopGauges(clientBase(), machineId, storedDesktopToken),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
       req(apiPath(`/api/agents/${id}/restore`), 'POST', {
