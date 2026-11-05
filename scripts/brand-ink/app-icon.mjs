@@ -9,7 +9,7 @@
 //        The Dock icon is read at startup (src/main/index.ts · app.dock.setIcon), so the running
 //        app picks it up on the next launch; packaged builds bundle the .icns.
 // Web:   src/renderer/public/{favicon.svg,apple-touch-icon.png,icon-192.png,icon-512.png,
-//        manifest.webmanifest}. These are SQUARE and full-bleed on purpose: iOS and Android
+//        icon-maskable-512.png,manifest.webmanifest}. These are SQUARE and full-bleed on purpose: iOS and Android
 //        apply their own mask, so a corner radius baked in would be rounded twice. They sit at
 //        the web root because the companion reads a first path segment as a workspace slug —
 //        /brand/icon.svg is answered "No workspace at /brand".
@@ -44,8 +44,11 @@ const GLASSES = [
   [65.4, 47.6, 0.45], [63.25, 44.6, 0.35], [61.1, 47.6, 0.45],
   ...lens(L, 0, -1.04, 10.4)
 ]
-const PEN = { width: 7, nib: 0.12, angle: 0, jitter: 0.05, dry: 0.08 }
-const GLASS_PEN = { width: 3.2, nib: 0.5, angle: -0.6, jitter: 0.1, dry: 0.2 }
+// dry: 0, unlike the site's pens. A dry pen ends its stroke in bristle hairlines, which this
+// script does not draw (see brush below), so a dry tail is simply missing: at 0.2 the first O
+// stood open by a third of its ring, and the C stopped short of 5 o'clock.
+const PEN = { width: 7, nib: 0.12, angle: 0, jitter: 0.05, dry: 0 }
+const GLASS_PEN = { width: 3.2, nib: 0.5, angle: -0.6, jitter: 0.1, dry: 0 }
 
 const tidy = (d) => d.replace(/(\d+\.\d)\d+/g, '$1').replace(/\.0(?=\D)/g, '')
 // The mark is drawn ~10× its own size, so the brush is sampled finer than the site's and the
@@ -57,16 +60,20 @@ const brush = (pts, pen) => tidy(I.brushFromLine(I.resample(I.spline(pts), 0.5),
  *  the C's outer edge (r 19.5 + a 7-wide brush) to the right lens's (r 11 + 3.2). */
 const BOX = { x: 26.8, y: 27, w: 62.4, h: 46 }
 
+/** 76% of the tile: an icon is read at 16 px, so the mark keeps a wide margin. */
+const ICON_SHARE = 0.76
+/** Android's launchers keep only a centred circle of 40% radius, so the box's corners fit in it. */
+const MASKABLE_SHARE = 0.64
+
 /**
  * The COO on a paper square. `rounded` bakes the macOS corner in (the .icns has to carry it);
  * the web icons leave the square square and let the platform mask it.
  */
-function stamp({ rounded }) {
+function stamp({ rounded, share = ICON_SHARE }) {
   // `GLASSES` opens on a short arm above the right lens — it reads as a whisker at icon
   // size, so the mark is just C and two eyes.
   const strokes = [brush(C, PEN), brush(GLASSES.slice(3), GLASS_PEN)]
-  // 76% of the tile: an icon is read at 16 px, so the mark keeps a wide margin.
-  const s = (TILE * 0.76) / BOX.w
+  const s = (TILE * share) / BOX.w
   const tx = TILE / 2 - (BOX.x + BOX.w / 2) * s
   const ty = TILE / 2 - (BOX.y + BOX.h / 2) * s
   const body = strokes.map((d, i) => `<path id="s${i}" d="${d}"/>`).join('')
@@ -147,6 +154,8 @@ const square = render(stamp({ rounded: false }), 'web')
 for (const [px, name] of [[512, 'icon-512.png'], [192, 'icon-192.png'], [180, 'apple-touch-icon.png']]) {
   execFileSync('sips', ['-s', 'format', 'png', '-Z', String(px), square, '--out', join(webOut, name)], { stdio: 'ignore' })
 }
+const maskable = render(stamp({ rounded: false, share: MASKABLE_SHARE }), 'maskable')
+execFileSync('sips', ['-s', 'format', 'png', '-Z', '512', maskable, '--out', join(webOut, 'icon-maskable-512.png')], { stdio: 'ignore' })
 const manifest = {
   name: 'Cookrew',
   short_name: 'Cookrew',
@@ -160,9 +169,10 @@ const manifest = {
   theme_color: PAPER,
   icons: [
     { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-    { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
+    { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: 'icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
   ]
 }
 writeFileSync(join(webOut, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2) + '\n')
 
-console.log('wrote resources/icon.{png,icns} and src/renderer/public/{favicon.svg,apple-touch-icon.png,icon-192,512.png,manifest.webmanifest}')
+console.log('wrote resources/icon.{png,icns} and src/renderer/public/{favicon.svg,apple-touch-icon.png,icon-192,512.png,icon-maskable-512.png,manifest.webmanifest}')
