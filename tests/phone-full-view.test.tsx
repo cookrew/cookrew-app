@@ -84,17 +84,20 @@ describe('the box on a phone', () => {
     return renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: 'l', agents, harnesses: ['Claude Code'], nodes: [], ...over }))
   }
 
-  it('says no name in the placeholder: the chip and the bar already do', async () => {
+  // 2026-11-04 (prompt words): the placeholder says who the words go to.
+  it('says who the words go to in the placeholder', async () => {
     const html = await draw()
-    expect(html).toContain('placeholder="Reply… · # a note or browser"')
+    expect(html).toContain('placeholder="Reply to Lark…"')
     expect(html).not.toContain('placeholder="Prompt Lark')
   }, 20_000)
 
-  it('folds the agent\'s keys behind ⌨ while the agent is not asking', async () => {
+  // 2026-11-03, later: the keys fold behind the ^ with attach and 🔊; ⌨ is gone.
+  it('folds the agent\'s keys with the other tools, behind the one ^', async () => {
     const html = await draw()
-    expect(html).toContain('aria-label="Agent keys"')
-    expect(html).toContain('aria-expanded="false"')
-    expect(html).toMatch(/class="cr-prompt to-agent[^"]* keys-folded/)
+    expect(html).not.toContain('aria-label="Agent keys"')
+    expect(html).toMatch(/aria-label="More tools"/)
+    // The ^ after the keys in the markup (the wide row's order); a phone draws it first (tray-tools.test.tsx).
+    expect(html.lastIndexOf('term-key')).toBeLessThan(html.indexOf('cr-prompt-more'))
   })
 
   it('puts Send on the first row and caps the chips so the second never wraps', () => {
@@ -104,6 +107,7 @@ describe('the box on a phone', () => {
     expect(phone).toMatch(/\.cr-prompt-to\s*\{[^}]*max-width: 38%/)
     // The model takes what the name leaves, up to its own width: grown from 0, it never wraps the row.
     expect(phone).toMatch(/\.cr-tune-menu\s*\{[^}]*flex: 1 1 0;[^}]*max-width: max-content/)
-    expect(phone).toMatch(/\.cr-prompt\.keys-folded \.voice-bar\s*\{\s*display: none;/)
+    // No ⌨ fold of its own any more: the ^ takes the keys away with the rest.
+    expect(phone).not.toContain('keys-folded')
   })
 })

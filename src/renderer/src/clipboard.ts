@@ -69,3 +69,34 @@ function execCommandCopy(text: string): boolean {
   active?.focus?.()
   return copied
 }
+
+/**
+ * Write text that is not here yet — inside the tap that asked for it.
+ *
+ * Safari writes the clipboard only from a user gesture, and a page's copy
+ * comes back from the card a round trip after the Copy tap. A ClipboardItem
+ * whose data is a PROMISE is the way through: the write is started in the tap
+ * and finishes when the text arrives. Call this synchronously from the tap's
+ * handler. Elsewhere, or when that fails, the text is written the plain way
+ * once it comes. Resolves with the text and whether it reached the clipboard.
+ */
+export async function writeClipboardLater(
+  text: Promise<string | null>
+): Promise<{ text: string | null; ok: boolean }> {
+  const board = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+  const Item = (globalThis as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem
+  if (board?.write && Item) {
+    const blob = text.then((value) => {
+      if (!value) throw new Error('nothing was copied')
+      return new Blob([value], { type: 'text/plain' })
+    })
+    try {
+      await board.write([new Item({ 'text/plain': blob })])
+      return { text: await text, ok: true }
+    } catch {
+      // A browser without promise items, or nothing selected: the plain way below.
+    }
+  }
+  const value = await text
+  return { text: value, ok: value ? await writeClipboardText(value) : false }
+}

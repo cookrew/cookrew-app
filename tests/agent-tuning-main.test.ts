@@ -617,7 +617,7 @@ describe('the state the rail is handed', () => {
         at: Date.parse('2026-09-27T03:00:00.000Z')
       },
       asks: [{ knob: 'effort', value: 'low', at: Date.parse('2026-09-27T04:00:00.000Z') }],
-      caveat: 'this also becomes the default every new agent boots on',
+      caveat: 'the agent restarts in place to take it, same conversation',
       records: ['model', 'effort']
     })
   })

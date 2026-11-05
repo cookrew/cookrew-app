@@ -152,6 +152,22 @@
   background: var(--amber-soft);
 }
 
+/* A found update, seen without opening the menu. */
+.cr-more-btn.update {
+  position: relative;
+}
+
+.cr-more-btn.update::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sumi-wait, var(--danger, #c0392b));
+}
+
 .cr-more-btn .cr-icon {
   width: 14px;
   height: 14px;
@@ -223,6 +239,43 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A row with a note: the icon stays beside the label, not halfway down the note. */
+.cr-more-item.tall {
+  align-items: flex-start;
+}
+
+.cr-more-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* The one row that has to say something: what it sends, readable without hovering. */
+.cr-more-note {
+  max-width: 214px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  color: var(--muted);
+}
+
+.cr-more-item.on .cr-more-note {
+  color: var(--ink);
+}
+
+.cr-more-item:disabled {
+  cursor: default;
+}
+
+.cr-more-item:disabled:hover {
+  background: none;
 }
 
 .cr-more-item kbd {

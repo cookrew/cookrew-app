@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { cmdRecruit, cmdRename } from '../src/main/socket-server'
 import type { SocketServerDeps } from '../src/main/socket-server'
 import { WorkspaceStore } from '../src/main/store'
-import { planRename } from '../src/main/agent-rename'
+import { renameCardIn } from '../src/main/agent-rename'
 import type { CanvasNode, CliRequest, TerminalNodeData } from '../src/shared/model'
 
 const terminal = (id: string, name: string, orch = false): TerminalNodeData => ({
@@ -25,15 +25,22 @@ function setup(options: { sousName?: string | null; deliver?: 'ok' | 'refused'; 
   store.createWorkspace('Other', '/tmp/other-repo')
   const spawnTerminal = vi.fn()
   const addWorkspaceDir = vi.fn()
-  const renameCard = vi.fn((id: string, wanted: string, onClash: 'refuse' | 'suffix') => {
-    const hit = store.nodeAcrossWorkspaces(id)
-    if (!hit) return { ok: false as const, error: 'gone' }
-    const plan = planRename({ id, current: hit.node.name, wanted, siblings: store.workspaceState(hit.workspaceId).nodes, onClash })
-    if (plan.ok && plan.changed) {
-      store.updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name })
-    }
-    return plan
-  })
+  // The app's own rename path (agent-rename.ts), on this store.
+  const renameCard = vi.fn((id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string) =>
+    renameCardIn(
+      {
+        find: (nodeId) => store.nodeAcrossWorkspaces(nodeId),
+        siblings: (workspaceId) => store.workspaceState(workspaceId).nodes,
+        update: (nodeId, patch) => store.updateNode(nodeId, patch),
+        pin: (nodeId) => store.updateNodeUnsafe(nodeId, { nameByHand: true })
+      },
+      id,
+      wanted,
+      onClash,
+      onClash === 'refuse',
+      by
+    )
+  )
   const autoNameTerminal = vi.fn(async (id: string) =>
     options.sousName ? renameCard(id, options.sousName, 'suffix') : null
   )
@@ -139,6 +146,33 @@ describe('cookrew recruit --prompt', () => {
     expect(recruits(store, home, me.id).map((n) => n.name)).toEqual(['Scout'])
   })
 
+  // 2026-11-03, six of six: "Prompt delivered" over an empty composer. With
+  // the card's view wired, the brief waits for the harness and "delivered"
+  // needs evidence; without it the card stays, the dispatch is closed and the
+  // command fails with the plain sentence.
+  it('says "Card created, brief NOT confirmed" and fails when the brief never shows up on the card', async () => {
+    const { store, deps, home } = setup()
+    const interrupt = vi.fn()
+    const witness = { readyForInput: () => true, turnRunning: () => false, turnCount: () => 0, screen: () => '' }
+    const watched = { ...deps, dispatch: { ...deps.dispatch!, get: () => ({ state: 'running' }), interrupt }, recruitWitness: witness, recruitTiming: { confirmMs: 0, retryMs: 1 } } as unknown as SocketServerDeps
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    await expect(cmdRecruit(request('recruit', ['Scout'], me.id, { prompt: 'look around' }), watched)).rejects.toThrow(
+      /Recruited "Scout"[\s\S]*Card created, brief NOT confirmed[\s\S]*no turn started[\s\S]*cookrew check "Scout"/
+    )
+    expect(interrupt).toHaveBeenCalledWith('d-1', expect.stringMatching(/not confirmed/))
+    expect(recruits(store, home, me.id).map((n) => n.name)).toEqual(['Scout'])
+  })
+
+  it('says which evidence confirmed the brief', async () => {
+    const { store, deps } = setup()
+    const sentence = 'look around the repo and list the open TODOs'
+    const witness = { readyForInput: () => true, turnRunning: () => false, turnCount: () => 0, screen: () => `❯ ${sentence}` }
+    const watched = { ...deps, dispatch: { ...deps.dispatch!, get: () => ({ state: 'running' }) }, recruitWitness: witness, recruitTiming: { retryMs: 1 } } as unknown as SocketServerDeps
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    const told = await cmdRecruit(request('recruit', ['Scout'], me.id, { prompt: sentence }), watched)
+    expect(told).toMatch(/Prompt delivered \(dispatch d-1, seen on its screen\)/)
+  })
+
   it('refuses a prompt for a bare shell, and an empty --prompt', async () => {
     const { store, deps } = setup()
     const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
@@ -234,6 +268,18 @@ describe('cookrew rename', () => {
     expect(() => cmdRename(request('rename', ['Faraway', 'Mine'], caller.id), open.deps)).toThrow(/not you or a card in your workspace or wired to you/)
   })
 
+  it('only the Orch itself renames the Orch; and the renamer is named', () => {
+    const { store, deps } = setup()
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    const orch = store.addNode(terminal('t2', 'Conductor', true)) as TerminalNodeData
+    expect(() => cmdRename(request('rename', ['Conductor', 'Finch Jr'], me.id), deps)).toThrow(/is the Orch\. Only it/)
+    expect(store.node(orch.id)?.name).toBe('Conductor')
+    cmdRename(request('rename', ['Door'], orch.id), deps)
+    expect(store.node(orch.id)?.name).toBe('Door')
+    const renameCard = (deps as unknown as { renameCard: { mock: { calls: unknown[][] } } }).renameCard
+    expect(renameCard.mock.calls.at(-1)?.[3]).toBe('"Conductor" (orch, cookrew rename)')
+  })
+
   it('refuses a name another card wears, and an unchanged one is not an error', () => {
     const { store, deps } = setup()
     const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
@@ -241,6 +287,16 @@ describe('cookrew rename', () => {
     expect(() => cmdRename(request('rename', ['Conductor'], me.id), deps)).toThrow(/already a card/)
     expect(store.node(me.id)?.name).toBe('Finch')
     expect(cmdRename(request('rename', ['Finch'], me.id), deps)).toMatch(/already called that/)
+  })
+
+  it('renames the caller when its canvas is not the one on screen', () => {
+    const { store, deps, home } = setup()
+    const me = store.addNode(terminal('t1', 'Finch')) as TerminalNodeData
+    const other = store.list().workspaces.find((w) => w.id !== home)!.id
+    store.switchWorkspace(other)
+    expect(store.focusedId).not.toBe(home)
+    expect(cmdRename(request('rename', ['Robin'], me.id), deps)).toBe('Renamed "Finch" → "Robin"')
+    expect(store.nodeAcrossWorkspaces(me.id)?.node.name).toBe('Robin')
   })
 
   it('says how to use it', () => {

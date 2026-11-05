@@ -4,6 +4,8 @@ import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
 import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
+import { cookrew } from './api'
+import { openSourcePicker } from './use/source-picker-store'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -27,8 +29,8 @@ export type DockTool =
  * (stage/AgentArtifacts.tsx), so it is wired to the agent that holds it.
  *
  * And so is TERMINAL (owner, 2026-11-01): the prompt box's ＋ menu
- * (prompt/HarnessMenu.tsx) carries all its row held — the harnesses, a bare
- * shell, the roles, the saved teams, the import and ORCH. Its row below only
+ * (prompt/HarnessMenu.tsx) carries the harnesses, a bare shell and the roles;
+ * the saved teams, the import and ORCH are retired from it (owner, 2026-11-03). Its row below only
  * opens on a canvas brought back, where TERMINAL arms a placement.
  */
 const TOOLS: readonly DockTool[] = [
@@ -95,6 +97,8 @@ interface DockProps {
   nodes: readonly CanvasNode[]
   /** The workspace's notes and browsers, for the prompt's "#Name". */
   artifacts?: readonly PromptArtifact[]
+  /** The active workspace's name, for the prompt's words at the outer stops. */
+  workspaceName?: string | null
   /**
    * Zoomed-in browser: the whole bar stands down so the page keeps its height.
    * The controls that DO apply there (viewport fit, keyboard, open in browser)
@@ -141,6 +145,7 @@ export function Dock({
   agents,
   nodes,
   artifacts,
+  workspaceName = null,
   browserFor,
   boardFor
 }: DockProps): React.JSX.Element {
@@ -159,11 +164,9 @@ export function Dock({
   const acts = {
     shell: harnesses.includes(SHELL_PRESET),
     roles: roles.map((r) => r.name),
-    teams: savedTeams,
     onPreset,
     onRole,
-    onImportServed,
-    onOrch,
+    ...(cookrew().useSources ? { onSource: () => openSourcePicker() } : {}),
     making
   }
   const tools = dockTools()
@@ -214,7 +217,7 @@ export function Dock({
             ))}
           </div>
         )}
-        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} />}
+        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.

@@ -14,6 +14,13 @@ import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { setTheme, useTheme } from './color-scheme'
+import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
+import { TelemetryRow } from './TelemetryRow'
+import { UpdateRows, useUpdateStatus } from './UpdateRow'
+import { WatchPairRow } from './WatchPairRow'
+import { RemoteSwitchRow } from './use/RemoteSwitch'
+import { WatchPairSheet } from './WatchPairSheet'
+import { isRemoteMode } from './api'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -42,8 +49,14 @@ export function HeaderMore({
   demo
 }: HeaderMoreProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const [pairingWatch, setPairingWatch] = useState(false)
   const sounds = useSoundsOn()
   const theme = useTheme()
+  const fullscreen = useFullscreen()
+  const update = useUpdateStatus()
+  // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
+  const offerFullscreen =
+    isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document) && !installedFullscreen(document, pageMedia)
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
@@ -85,11 +98,12 @@ export function HeaderMore({
   }, [open, close])
 
   return (
+    <>
     <div className="cr-more" ref={root}>
       <button
         type="button"
-        className={`cr-more-btn${open ? ' on' : ''}${busyCount > 0 ? ' busy' : ''}`}
-        aria-label="More"
+        className={`cr-more-btn${open ? ' on' : ''}${busyCount > 0 ? ' busy' : ''}${update?.available ? ' update' : ''}`}
+        aria-label={update?.available ? `More, Cookrew ${update.available.version} is available` : 'More'}
         aria-expanded={open}
         aria-controls="cr-more-menu"
         title="More"
@@ -154,6 +168,27 @@ export function HeaderMore({
             <CrIcon name="terminal" />
             <span className="cr-more-label">{theme === 'root' ? 'Theme: Root' : 'Theme: Ink'}</span>
           </button>
+          <WatchPairRow
+            onPair={() => {
+              close()
+              setPairingWatch(true)
+            }}
+          />
+          <RemoteSwitchRow />
+          {offerFullscreen && (
+            <button
+              type="button"
+              className={`cr-more-item${fullscreen ? ' on' : ''}`}
+              aria-pressed={fullscreen}
+              title="Hide the browser's address bar and the phone's status and navigation bars"
+              onClick={() => void toggleFullscreen(document)}
+            >
+              <CrIcon name="fullscreen" />
+              <span className="cr-more-label">{fullscreen ? 'Exit full screen' : 'Full screen'}</span>
+            </button>
+          )}
+          {update && <UpdateRows status={update} />}
+          <TelemetryRow />
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
             <span className="cr-more-label">Refresh</span>
@@ -161,5 +196,7 @@ export function HeaderMore({
         </div>
       )}
     </div>
+    {pairingWatch && <WatchPairSheet onClose={() => setPairingWatch(false)} />}
+    </>
   )
 }

@@ -47,13 +47,14 @@
 // The PUSH path (agent status) is a different concern and does not come through
 // this interface; it holds a socket open, because that is what it needs.
 
+import { TEST_WORKER_CAPS } from './pane-env'
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { commandWithArgs, routeExports } from './tmux-multiplexer'
 import { promptViaHerdr, submitViaHerdr, waitForAgentState } from './herdr-agent-wait'
 import { isTransientHerdrError, runWithHerdrRetry } from './herdr-retry'
-import { herdrAgentName, uniqueHerdrAgentName } from './herdr-agent-name'
+import { herdrAgentName, planAgentNames, uniqueHerdrAgentName, type ListedAgent } from './herdr-agent-name'
 import {
   sanitizeAgentEnv,
   type AttachSpawn,
@@ -230,6 +231,16 @@ const FLUSH_TYPEAHEAD = `perl -MPOSIX -e 'tcflush(0, TCIFLUSH)' 2>/dev/null`
 export function bootCommand(spec: AttachSpec): string {
   const inner = commandWithArgs(spec)
   return [
+    // The CARD's directory, first. An adopted pane keeps whatever directory
+    // it had, and `pane split --cwd` only helps panes Cookrew creates — the
+    // same reason the env is exported below. Claude files its transcript by
+    // launch directory, so an agent started elsewhere is one whose session
+    // file Cookrew looks for in the wrong place (2026-11-04: eight GOAT Team
+    // agents, every --no-wait ask to them interrupted at 60 s). A cd that
+    // fails ends the boot: the launch check catches a missing folder first, and
+    // a husk it could not catch must not start an agent in whatever folder its
+    // pane had, with its permissions bypassed.
+    `cd ${posixQuote(spec.cwd)} || exit 1`,
     `export TERM_PROGRAM=Cookrew`,
     `export COOKREW_TERMINAL_ID='${spec.terminalId}'`,
     `export COOKREW_SOCKET='${spec.socketPath}'`,
@@ -237,10 +248,16 @@ export function bootCommand(spec: AttachSpec): string {
     // is read by the pane's POSIX shell, so backslashes would be escapes.
     `export COOKREW_CLI='${path.posix.join(spec.cliDir, 'cookrew')}'`,
     `export PATH='${spec.path}'`,
+    ...Object.entries(TEST_WORKER_CAPS).map(([key, value]) => `export ${key}='${value}'`),
     ...routeExports(spec),
     FLUSH_TYPEAHEAD,
     `exec ${inner}`
   ].join('; ')
+}
+
+/** One POSIX shell word: single-quoted, an embedded quote closed, escaped and reopened. */
+function posixQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`
 }
 
 /** Env every Cookrew pane needs, as herdr `--env KEY=VALUE` arguments — the route's too. */
@@ -253,6 +270,7 @@ export function envArgs(spec: AttachSpec): string[] {
     // value the pane's POSIX shell will see, not a host filesystem path.
     ['COOKREW_CLI', path.posix.join(spec.cliDir, 'cookrew')],
     ['PATH', spec.path],
+    ...Object.entries(TEST_WORKER_CAPS),
     ...Object.entries(spec.env ?? {})
   ].flatMap(([key, value]) => ['--env', `${key}=${value}`])
 }
@@ -475,6 +493,8 @@ export interface HerdrHostOptions {
    * Overridable so tests do not busy-wait the real grace.
    */
   settleMs?: number
+  /** Is this folder certainly gone? A husk's boot is refused then. Absent: nothing is. */
+  folderGone?: (dir: string) => boolean
 }
 
 export interface HerdrServerSpawnSpec {
@@ -552,6 +572,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
   private readonly startServer: () => void
   private readonly waitForServerMs: number
   private readonly settleMs: number
+  private readonly folderGone: (dir: string) => boolean
   private readonly sleep: (ms: number) => void
   private probed: boolean | null = null
   private serverUp = false
@@ -588,6 +609,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     this.asyncRunner = options.asyncRunner ?? createAsyncHerdrRunner(env)
     this.startServer = options.startServer ?? (() => spawnHerdrServer(env))
     this.waitForServerMs = options.waitForServerMs ?? 5000
+    this.folderGone = options.folderGone ?? (() => false)
     this.settleMs = options.settleMs ?? 2000
     this.sleep = options.sleep ?? sleepSync
   }
@@ -980,6 +1002,40 @@ export class HerdrHostMultiplexer implements Multiplexer {
     return this.paneFor(name) !== null
   }
 
+  /**
+   * readPanes answers [] for a listing that failed, which is right for "what
+   * can I show" and wrong for "is it dead". Always a fresh read: a kill is
+   * verified against the server, never a snapshot.
+   */
+  sessionPresence(name: string): boolean | null {
+    if (!this.available()) return false
+    try {
+      const panes = parsePaneListStrict(this.herdr(['pane', 'list']))
+      return panes === null ? null : panes.some((pane) => pane.label === name)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * A fresh listing off the main thread, for a close polling until a pane is
+   * gone. A server that is not running holds no panes (herdr keeps layout, not
+   * processes), which is an answer; any other failure rejects.
+   */
+  async liveSessions(): Promise<ReadonlySet<string>> {
+    if (!this.available()) return new Set()
+    let raw: string
+    try {
+      raw = await this.runAsync(['pane', 'list'], 3000)
+    } catch (error) {
+      if (/server_not_running/.test(String(error))) return new Set()
+      throw error
+    }
+    const panes = parsePaneListStrict(raw)
+    if (panes === null) throw new Error('herdr pane list was malformed')
+    return new Set(panes.map((pane) => pane.label).filter((label): label is string => typeof label === 'string' && label.length > 0))
+  }
+
   listSessions(): string[] {
     return this.panes()
       .map((pane) => pane.label)
@@ -1071,13 +1127,13 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // re-reports for the same reason: herdr persists pane LAYOUT, not the
       // metadata a source reported.
       this.reportAgent(existing, spec)
-      if (spec.card) {
-        this.reportPaneCardTo(existing, spec.card)
-        this.nameAgentOn(existing.pane_id, spec.card.title)
-      }
+      if (spec.card) this.reportPaneCardTo(existing, spec.card)
       return
     }
 
+    // The launch check passes a husk (a pane is there): it is here that a boot
+    // would start. A `cd` would fail it, but only after a dozen seconds of verify.
+    if (existing && this.folderGone(spec.cwd)) throw new Error(`the folder ${spec.cwd} is gone, so '${spec.sessionName}' was not booted`)
     const pane = existing ?? this.adoptOrCreate(spec)
     if (!pane?.pane_id) throw new Error(`herdr could not create a pane for '${spec.sessionName}'`)
 
@@ -1114,13 +1170,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // chrome then shows Cookrew's card name and role instead of a raw shell.
     if (spec.card) {
       this.reportPaneCardTo(namedPane, spec.card)
-      this.nameAgentOn(namedPane.pane_id, spec.card.title)
+      // Named once herdr has detected the agent it just booted — async, so
+      // the attach pays no fork for it.
+      setTimeout(() => void this.reconcileAgentNames(), 8_000).unref?.()
     }
   }
 
   /**
    * The Cookrew card behind this pane, in herdr's own chrome: the pane
-   * title is the card's name, the display-agent its role (or harness), and
+   * title is the card's name, the display-agent the card's name too (herdr's panel shows it), and
    * the workspace/cwd ride as metadata tokens. Display-only — Cookrew's
    * control flow never reads any of it back.
    */
@@ -1160,11 +1218,11 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * A rename's whole herdr half — the tab and herdr's agent name — off ONE
    * pane listing: every herdr call is a synchronous fork on the main thread.
    */
-  followRename(name: string, label: string): void {
+  followRename(name: string, label: string, cardId?: string): void {
     const pane = this.paneFor(name)
     if (!pane) return
     this.renameTabOf(pane, label)
-    this.nameAgentOn(pane.pane_id, label)
+    this.nameAgentOn(pane.pane_id, label, cardId)
   }
 
   private renameTabOf(pane: HerdrPane | null, label: string): void {
@@ -1186,10 +1244,62 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * `herdr agent get|prompt|wait <name>` then reach the card by the name it
    * wears. A card name herdr cannot hold clears herdr's, so it never keeps a
    * name the card gave up. Display-only, best effort, like the pane title.
+   *
+   * A rename lands here at once. Attaching names nothing: the panes'
+   * names are kept by reconcileAgentNames, off the main thread.
    */
-  nameAgent(name: string, cardName: string): void {
+  nameAgent(name: string, cardName: string, cardId?: string): void {
     const pane = this.paneFor(name)
-    if (pane) this.nameAgentOn(pane.pane_id, cardName)
+    if (pane) this.nameAgentOn(pane.pane_id, cardName, cardId)
+  }
+
+  private reconciling = false
+
+  /**
+   * herdr's agent names, put back where they dropped (owner, 2026-11-03).
+   * herdr clears a name when the agent in its pane exits or is replaced — a
+   * claude restarted in its pane, a codex relaunched — and nothing tells
+   * Cookrew. One async `agent list` per tick reads every Cookrew pane's name
+   * against its card's (the title Cookrew reported), and only the panes that
+   * drifted are renamed, async too. It is also what names the panes of
+   * workspaces nobody has opened since boot. Returns how many were renamed.
+   */
+  async reconcileAgentNames(): Promise<number> {
+    if (this.reconciling || !this.available()) return 0
+    this.reconciling = true
+    try {
+      const listed = parseEnvelope(await this.runAsync(['agent', 'list'], 3000))?.agents
+      if (!Array.isArray(listed)) return 0
+      const plan = planAgentNames(listed as ListedAgent[], this.agentNames)
+      for (const kept of plan.keep) {
+        if ((this.agentNames.get(kept.paneId)?.card ?? kept.card) === kept.card) {
+          this.agentNames.set(kept.paneId, { card: kept.card, name: kept.name as string })
+        }
+      }
+      let renamed = 0
+      for (const change of plan.rename) {
+        // A rename that landed while this tick read the list outranks it.
+        const now = this.agentNames.get(change.paneId)
+        if (now && now.card !== change.card) continue
+        try {
+          await this.runAsync(['agent', 'rename', change.paneId, change.name ?? '--clear'], 3000)
+          // A direct rename that landed during the await wrote the newer
+          // card; this tick's answer is stale, and the next one repairs herdr.
+          const after = this.agentNames.get(change.paneId)
+          if (after && after.card !== change.card) continue
+          if (change.name === null) this.agentNames.delete(change.paneId)
+          else this.agentNames.set(change.paneId, { card: change.card, name: change.name })
+          renamed += 1
+        } catch {
+          // Taken meanwhile, or the agent left: the next tick reads again.
+        }
+      }
+      return renamed
+    } catch {
+      return 0
+    } finally {
+      this.reconciling = false
+    }
   }
 
   /** The name each pane's agent was last given, by the card name it came from. */
@@ -1199,10 +1309,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * One fork in the usual case. herdr refuses a name another live agent
    * wears, and only then are the live names read for a free suffix. The name
    * a pane was given last is tried first, so a card that lost a clash once
-   * keeps its suffix on every later attach instead of losing it again.
+   * keeps its suffix on every later rename instead of losing it again.
    */
-  private nameAgentOn(paneId: string, cardName: string): void {
-    const base = herdrAgentName(cardName)
+  private nameAgentOn(paneId: string, cardName: string, cardId?: string): void {
+    const base = herdrAgentName(cardName, cardId)
     if (base === null) {
       this.agentNames.delete(paneId)
       this.quiet(['agent', 'rename', paneId, '--clear'])
@@ -1231,7 +1341,9 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // Fall through: the name could not be given.
     }
     // Whatever refused it, the pane must not keep a name the card gave up.
-    this.agentNames.delete(paneId)
+    // The card is still remembered (name: base), so a reconcile tick read
+    // before this rename cannot put the old card's name back.
+    this.agentNames.set(paneId, { card: cardName, name: base })
     this.quiet(['agent', 'rename', paneId, '--clear'])
   }
 
@@ -1739,6 +1851,21 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // recent-unwrapped: scrollback with herdr's soft wrapping undone, which
       // is what a scraper wants and what `capture-pane -p` approximates.
       return this.herdr(['pane', 'read', pane.pane_id, '--source', 'recent-unwrapped'])
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Rows as they stand on the pane, not unwrapped: `recent-unwrapped` joins a
+   * row that fills the width to the next, and a menu's rows are read by column
+   * (shared/wait-choice.ts). `lines` reaches further back than herdr's default.
+   */
+  async captureRowsAsync(name: string, lines?: number): Promise<string | null> {
+    const pane = this.paneFromInventory(name)
+    if (!pane) return null
+    try {
+      return await this.runAsync(['pane', 'read', pane.pane_id, '--source', 'recent', ...(lines ? ['--lines', String(lines)] : [])], 5000)
     } catch {
       return null
     }

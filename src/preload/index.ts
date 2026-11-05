@@ -7,6 +7,72 @@ ipcRenderer.on('app:deep-link', (_e, link: unknown) => {
   else heldDeepLinks = [...heldDeepLinks, link]
 })
 
+/**
+ * A browser card's live view, straight from main (browser-cast-ipc.ts). Main
+ * answers an ask with one end of a MessageChannel, paired by nonce. The port
+ * stays HERE: the page gets post/close and its own callbacks, which is all a
+ * view needs and keeps the port itself out of the main world.
+ */
+interface BrowserStreamHandlers {
+  onOpen: () => void
+  onMessage: (message: unknown) => void
+  onClose: () => void
+}
+const browserStreamWaiters = new Map<string, (port: MessagePort) => void>()
+ipcRenderer.on('browser-stream:port', (event, info: { nonce?: unknown } | null) => {
+  const port = event.ports[0]
+  const nonce = typeof info?.nonce === 'string' ? info.nonce : ''
+  const waiter = browserStreamWaiters.get(nonce)
+  browserStreamWaiters.delete(nonce)
+  if (waiter && port) waiter(port)
+  else port?.close()
+})
+
+function openBrowserStream(
+  browserId: string,
+  handlers: BrowserStreamHandlers
+): { post: (message: unknown) => void; close: () => void } {
+  const nonce = crypto.randomUUID()
+  let port: MessagePort | null = null
+  let closed = false
+  const queued: unknown[] = []
+  const end = (): void => {
+    if (closed) return
+    closed = true
+    browserStreamWaiters.delete(nonce)
+    port?.close()
+    handlers.onClose()
+  }
+  browserStreamWaiters.set(nonce, (answer) => {
+    if (closed) return answer.close()
+    port = answer
+    answer.onmessage = (event: MessageEvent): void => {
+      const data = event.data as { t?: unknown } | null
+      // Main says goodbye before it closes its end (the card's instance was
+      // replaced or removed): the view redials, the same as a dropped socket.
+      if (data?.t === 'bye') return end()
+      handlers.onMessage(data)
+    }
+    answer.start()
+    for (const message of queued.splice(0)) answer.postMessage(message)
+    handlers.onOpen()
+  })
+  ipcRenderer.send('browser-stream:open', browserId, nonce)
+  return {
+    post: (message) => {
+      if (closed) return
+      if (port) port.postMessage(message)
+      else queued.push(message)
+    },
+    close: () => {
+      if (closed) return
+      closed = true
+      browserStreamWaiters.delete(nonce)
+      port?.close()
+    }
+  }
+}
+
 const api = {
   getWorkspace: () => ipcRenderer.invoke('workspace:get'),
   // The owner's grant surface. Main refuses any sender that is not the owner
@@ -86,6 +152,7 @@ const api = {
   accountRevoke: (input: { deviceId: string; password: string }) =>
     ipcRenderer.invoke('account:revoke', input),
   accountSignOut: (password: string) => ipcRenderer.invoke('account:signOut', password),
+  accountDelete: (input: { confirm: string; password: string }) => ipcRenderer.invoke('account:delete', input),
   accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
   /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
    *  renderer's copy, so this cannot be talked into writing chosen bytes. */
@@ -160,6 +227,21 @@ const api = {
     ipcRenderer.invoke('account:grantSeat', input),
   accountEndSeat: (input: { slug: string; id: string }) =>
     ipcRenderer.invoke('account:endSeat', input),
+  // Third-party sign-in. The browser trip runs in main; nothing here carries a
+  // verifier, a handoff or a ticket.
+  accountOAuthProviders: () => ipcRenderer.invoke('account:oauthProviders'),
+  accountOAuthStart: (provider: string) => ipcRenderer.invoke('account:oauthStart', provider),
+  accountOAuthCancel: () => ipcRenderer.invoke('account:oauthCancel'),
+  accountOAuthClaim: (username: string) => ipcRenderer.invoke('account:oauthClaim', username),
+  accountOAuthLink: (input: { provider: string; current?: string; rescue?: string }) =>
+    ipcRenderer.invoke('account:oauthLink', input),
+  accountOAuthUnlink: (input: { provider: string; current?: string }) =>
+    ipcRenderer.invoke('account:oauthUnlink', input),
+  accountSetPasscode: (input: { next: string; current?: string }) =>
+    ipcRenderer.invoke('account:setPasscode', input),
+  accountSetTouchId: (on: boolean) => ipcRenderer.invoke('account:setTouchId', on),
+  accountUnlockTouchId: () => ipcRenderer.invoke('account:unlockTouchId'),
+  accountRescueUnlock: (code: string) => ipcRenderer.invoke('account:rescueUnlock', code),
   /** Who is at this desktop's served doors right now (D7's avatars). */
   onServingCallers: (cb: (rows: unknown) => void) => {
     const listener = (_e: unknown, rows: unknown): void => cb(rows)
@@ -194,11 +276,26 @@ const api = {
   },
   addNode: (node: unknown) => ipcRenderer.invoke('node:add', node),
   updateNode: (id: string, patch: unknown) => ipcRenderer.invoke('node:update', id, patch),
+  renameNode: (id: string, name: string) => ipcRenderer.invoke('node:rename', id, name),
   removeNode: (id: string) => ipcRenderer.invoke('node:remove', id),
   connectNodes: (a: string, b: string) => ipcRenderer.invoke('node:connect', a, b),
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  useSources: () => ipcRenderer.invoke('use:sources'),
+  openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
+  openScreenSettings: (pane?: string) => ipcRenderer.invoke('use:screen-settings', pane),
+  remoteAccess: () => ipcRenderer.invoke('use:remote-access'),
+  remoteControl: (ask: unknown) => ipcRenderer.invoke('use:remote-control', ask),
+  remoteRestart: () => ipcRenderer.invoke('use:remote-restart'),
+  setRemoteSwitch: (on: boolean) => ipcRenderer.invoke('use:remote-switch', on),
+  stopRemote: () => ipcRenderer.invoke('use:remote-stop'),
+  remoteHost: () => ipcRenderer.invoke('use:remote-host'),
+  onRemoteHost: (cb: (view: unknown) => void) => {
+    const listener = (_e: unknown, view: unknown): void => cb(view)
+    ipcRenderer.on('use:remote-host', listener)
+    return () => ipcRenderer.removeListener('use:remote-host', listener)
+  },
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
@@ -274,7 +371,11 @@ const api = {
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   setWorkspaceBrief: (id: string, brief: string) => ipcRenderer.invoke('workspace:brief', id, brief),
-  removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
+  setWorkspaceIcon: (id: string, icon: string) => ipcRenderer.invoke('workspace:icon', id, icon),
+  checkWorkspace: (name: string, dir: string) => ipcRenderer.invoke('workspace:check', name, dir),
+  workspaceRemovePlan: (id: string) => ipcRenderer.invoke('workspace:removePlan', id),
+  removeWorkspace: (id: string, options?: { worktree?: boolean }) =>
+    ipcRenderer.invoke('workspace:remove', id, options),
   addWorkspaceDir: (id: string, dir: string) => ipcRenderer.invoke('workspace:dir:add', id, dir),
   removeWorkspaceDir: (id: string, dir: string) =>
     ipcRenderer.invoke('workspace:dir:remove', id, dir),
@@ -305,6 +406,7 @@ const api = {
   },
 
   ptyInput: (terminalId: string, data: string) => ipcRenderer.send('pty:input', terminalId, data),
+  answerMenu: (terminalId: string, answer: unknown) => ipcRenderer.invoke('menu:answer', terminalId, answer),
   terminalTuning: (terminalId: string) => ipcRenderer.invoke('terminal:tuning', terminalId),
   listTuning: () => ipcRenderer.invoke('tuning:list'),
   onTerminalTuning: (cb: (row: { terminalId: string; tuning: unknown }) => void) => {
@@ -465,6 +567,9 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  launchCheck: (id: string) => ipcRenderer.invoke('agents:launch-check', id),
+  listStrayPanes: () => ipcRenderer.invoke('strays:list'),
+  endStrayPane: (session: string) => ipcRenderer.invoke('strays:end', session),
   onAgentChanged: (cb: (entry: unknown) => void) => {
     const listener = (_e: unknown, entry: unknown): void => cb(entry)
     ipcRenderer.on('agents:changed', listener)
@@ -484,7 +589,18 @@ const api = {
   },
   /** This desktop's name for the header's device step (its account record); null when it has none. */
   machineName: () => ipcRenderer.invoke('machine:name'),
-  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's levels feed, a snapshot
+  /** The usage-data switch; it lives on this machine, so the phone has no such call. */
+  telemetryStatus: () => ipcRenderer.invoke('telemetry:status'),
+  setTelemetry: (on: boolean) => ipcRenderer.invoke('telemetry:set', on),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
+  restartToUpdate: () => ipcRenderer.invoke('update:restart'),
+  onUpdateStatus: (cb: (status: unknown) => void) => {
+    const listener = (_e: unknown, status: unknown): void => cb(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
+  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's fleet feed, a snapshot
   // first, then every delta, pushed; the release closes this window's stream
   // when its last reader goes. A refused hold (the companion is not up yet)
   // is said, so the reader can ask again.
@@ -503,6 +619,7 @@ const api = {
     }
   },
   zoomFleetMachines: () => ipcRenderer.invoke('zoom-fleet:machines'),
+  machineGauges: () => ipcRenderer.invoke('zoom-fleet:gauges'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),
@@ -526,6 +643,11 @@ const api = {
     ipcRenderer.send('browser:thumb', browserId, dataUrl),
   interactiveBrowserEnabled: () => ipcRenderer.invoke('browser:interactive-enabled'),
   browserStreamToken: () => ipcRenderer.invoke('browser:stream-token'),
+  watchCode: () => ipcRenderer.invoke('watch:code'),
+  watchState: () => ipcRenderer.invoke('watch:state'),
+  watchInvite: (current: string) => ipcRenderer.invoke('watch:invite', current),
+  watchForget: () => ipcRenderer.invoke('watch:forget'),
+  openBrowserStream,
   onCmdW: (cb: () => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('app:cmd-w', listener)
@@ -566,6 +688,15 @@ const api = {
   listenAvailable: () => ipcRenderer.invoke('listen:available'),
   listenStart: () => ipcRenderer.invoke('listen:start'),
   listenStop: () => ipcRenderer.invoke('listen:stop'),
+  // Spoken replies in the Mac's local voice: main runs it, the box gets audio.
+  speakAvailable: () => ipcRenderer.invoke('speak:available'),
+  // Strings only: the context bridge clones an AbortSignal into a plain
+  // object with no addEventListener, so cancelling is by request id.
+  speakAudio: (text: string, lang?: 'zh' | 'en', requestId?: string) =>
+    ipcRenderer
+      .invoke('speak:audio', requestId ?? null, text, lang)
+      .then((spoken: { audio: Uint8Array; type: string }) => new Blob([new Uint8Array(spoken.audio)], { type: spoken.type })),
+  speakCancel: (requestId: string) => ipcRenderer.send('speak:cancel', requestId),
   onListenEvent: (cb: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown): void => cb(event)
     ipcRenderer.on('listen:event', listener)
@@ -599,5 +730,9 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('cookrew', api)
+// Read by shared/machine-words.ts as the copy tables load, so it has to be here
+// before any page script runs. The phone and the site never get it, and their
+// sentences stand as written.
+contextBridge.exposeInMainWorld('cookrewPlatform', process.platform)
 
 export type CookrewApi = typeof api

@@ -3,11 +3,12 @@
  * the tune switch sits in the prompt box; with nobody targeted it picks what
  * the new agent starts on).
  *
- * A live agent is tuned by typing `/model` or `/effort` into its pane
- * (agent-tuning.ts). A new one is not typed into: its pane is still booting,
- * and claude's slash commands also save the pick as the machine's default for
- * every later session. So a new agent takes its pick as LAUNCH FLAGS instead,
- * which apply to that session only.
+ * A new agent is not typed into: its pane is still booting, and claude's
+ * slash commands also save the pick as the machine's default for every later
+ * session. So a new agent takes its pick as LAUNCH FLAGS instead, which apply
+ * to that session only. A live claude agent is tuned the same way since
+ * 2026-11-01: launchCommand rewrites its card's command and it restarts in
+ * place on its own session (main/agent-relaunch).
  *
  * EVERY HARNESS THAT TAKES THE FLAGS gets the pick (owner 2026-11-01), each
  * spelled its own way:
@@ -145,12 +146,14 @@ export function launchCommand(command: string, raw: unknown, offer: LaunchOffer 
  * 2026-11-02). The route's args come after the command, and codex's `-m`
  * outranks the route's `-c model=`, so a codex catalog slug would be sent to
  * the Magpie provider; opencode would get `--model` twice; pi a thinking level
- * picked for another model. Claude keeps its flags: `--model opus` resolves
- * through the env the route sets.
+ * picked for another model. Claude loses its `--model` too (QA 2026-11-03):
+ * the alias was meant to resolve through the route's env, but the env block of
+ * ~/.claude/settings.json outranks it, so `--model sonnet` ran group/smart on a
+ * card routed to claude-opus-5-5. Its `--effort` stays: it holds on a route.
  */
 export function withoutRoutedPick(command: string, harness: string | null | undefined): string {
   const knobs: readonly LaunchKnob[] =
-    harness === 'codex' || harness === 'opencode' ? ['model'] : harness === 'pi' ? ['model', 'effort'] : []
+    harness === 'codex' || harness === 'opencode' || harness === 'claude' ? ['model'] : harness === 'pi' ? ['model', 'effort'] : []
   const spelling = harness ? SPELLING[harness as LaunchHarness] : undefined
   return knobs.reduce((line, knob) => {
     const strip = spelling?.[knob]?.strip

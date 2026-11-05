@@ -22,6 +22,8 @@ export const SETUP_LINES: RouteState['setup'] = {
 }
 
 const NOW = 1_791_000_000_000
+/** The fixture's clock: its reset times and readings are relative to it. */
+export const ROUTE_FIXTURE_NOW = NOW
 
 export function routeFixture(status: RouteState['status'] = 'online', over: Partial<RouteState> = {}): RouteState {
   const online = status === 'online'
@@ -31,6 +33,7 @@ export function routeFixture(status: RouteState['status'] = 'online', over: Part
     why: null,
     defaultModel: online ? 'group/smart' : null,
     sharedMcp: true,
+    mcpServers: online ? ['context7', 'memory'] : null,
     providers: online ? 3 : 0,
     models: online
       ? [
@@ -52,7 +55,19 @@ export function routeFixture(status: RouteState['status'] = 'online', over: Part
           { provider: 'codex', account: 'drej@example.com', alias: 'ChatGPT Plus', plan: 'Plus', kind: 'subscription', windows: [{ name: '5h', used: 0, limit: 130, resetsAt: null, display: '0 / 130' }, { name: 'week', used: 77, limit: 100, resetsAt: null, display: '77 / 100' }], last: false, error: null },
           { provider: 'deepseek', account: null, alias: 'DeepSeek', plan: null, kind: 'key', windows: [], last: false, error: null },
           // Synthesised from the catalogue: a local provider has no quota.
-          { provider: 'ollama', account: null, alias: null, plan: null, kind: 'local', windows: [], last: false, error: null }
+          { provider: 'ollama', account: null, alias: null, plan: null, kind: 'local', windows: [], last: false, error: null },
+          // The shape magpie 0.1.2597 answers (2026-11-03): percent windows, a reset time, the window's spend.
+          {
+            provider: 'codex', account: 'team@example.com', alias: 'Codex Team', plan: 'team', kind: 'subscription', last: false, error: null,
+            windows: [
+              { name: '5 hours', used: 0, limit: null, remaining: 100, resetsAt: NOW + 4 * 3_600_000, display: null, estimateWhy: 'low' },
+              { name: '7 days', used: 56, limit: null, remaining: 44, resetsAt: NOW + 19 * 3_600_000, display: null, tokensUsed: 13_089_171, valueUsed: 92.99, since: NOW - 6 * 86_400_000, estimateWhy: null }
+            ],
+            resetCredits: { count: 3, firstExpiresAt: NOW + 3 * 86_400_000 },
+            until: Date.parse('2027-03-28T16:39:59Z'),
+            readAt: NOW - 120_000
+          },
+          { provider: 'kimi', account: null, alias: 'Kimi', plan: null, kind: 'balance', windows: [], last: false, error: null, balance: '¥42.10' }
         ]
       : [],
     live: online

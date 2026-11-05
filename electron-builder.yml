@@ -1,32 +1,36 @@
-# Packaging. Cookrew had none — on any platform — so `npm run build` produced
-# out/ and nothing installable. This adds the first distributable.
+# Packaging. `npm run dist:mac` builds the dmg and the zip; release.yml signs,
+# notarizes and publishes them when the secrets are there.
 #
-# WINDOWS IS A DEGRADED TARGET ON PURPOSE
-# ---------------------------------------
+# WHO HOSTS A TERMINAL, AND WHY WINDOWS IS A PREVIEW
+# --------------------------------------------------
 # Cookrew's headline behaviour is that agents survive a restart, which comes
-# from running each terminal inside a multiplexer session. tmux does not exist
-# on Windows, and herdr — the only cross-platform candidate — cannot host a
-# terminal (its attach returns a TUI, not the pane: 60,666 bytes where tmux
-# returns 2,090, and typed input is never echoed back).
+# from running each terminal inside a multiplexer session. The order is herdr
+# (the default, launch-defaults.ts), then tmux, then `direct`: a plain node-pty
+# spawn that ends with the app. herdr hosts through `agent attach` under a
+# Cookrew-owned config; herdr-host-multiplexer.ts records the measurements and
+# why an earlier verdict in this file said the opposite.
 #
-# pty.ts already degrades to a plain node-pty spawn when no multiplexer is
-# available, so the Windows build RUNS. What it loses is persistence: closing
-# the app ends the agents. That is a real product tradeoff, so the build is
-# marked accordingly rather than shipped as if it were at parity.
+# Neither herdr nor tmux is in the bundle. Both are looked up on PATH, so a
+# machine without them runs `direct` and closing the app ends the agents.
+#
+# tmux does not exist on Windows, and Cookrew's herdr host has not been run
+# there, so `direct` is what the Windows build is taken to run on. That is a real
+# product tradeoff, so the build is marked accordingly rather than shipped as if
+# it were at parity.
 
 appId: dev.cookrew.app
 productName: Cookrew
+# Before signing, so the signature covers them: only this app may open a secret.
+afterPack: scripts/after-pack-fuses.cjs
 copyright: Copyright © 2026 Cookrew
 
 directories:
   output: release
   buildResources: resources
 
-# out/ is what electron-vite emits; cli/ ships because agents invoke `cookrew`
-# from inside their panes and the wrapper is installed from this copy.
+# out/ is what electron-vite emits.
 files:
   - out/**/*
-  - cli/**/*
   - package.json
 
 asarUnpack:
@@ -36,16 +40,41 @@ asarUnpack:
 # cookrew://import/@handle/team and its kin — the link a team's page on
 # cookrew.dev hands to the app. Parsed in src/main/deep-link.ts; the OS
 # registration is claimed at launch (app.setAsDefaultProtocolClient).
+# Written into the app as app-update.yml: where a running build looks for the
+# next one. The feed is the published release's latest-mac.yml and latest.yml.
+publish:
+  provider: github
+  owner: cookrew
+  repo: cookrew-app
+
 protocols:
   name: Cookrew
   schemes:
     - cookrew
 
-# The Mac's ear for Sous (resources/cr-listen, built at postinstall). Shipped
-# beside the app, not inside the asar: it is a binary main spawns.
+# Real files beside the asar, for everything main reads at
+# process.resourcesPath. tests/release-signing.test.ts holds this list to main's
+# reads: 0.4.0 shipped without four of them, and a downloaded app had no
+# `cookrew` in any pane because the copy of a missing file threw.
+# The fuses are flipped in the hook below. KEEP RunAsNode ON there: the `cookrew`
+# shim runs on this app's binary with ELECTRON_RUN_AS_NODE (src/main/cli-shim.ts).
+# With the fuse off that command opens a second instance of the app instead.
 extraResources:
+  # The Mac's ear for Sous (resources/cr-listen, built at postinstall): a binary
+  # main spawns.
   - from: resources/cr-listen/cr-listen
     to: cr-listen
+  # The CLI. Main copies it next to the socket, and every pane gets it on PATH.
+  - from: cli
+    to: cli
+  # What a pane runs for a remote-import card and a local import.
+  - from: resources/orch-line.mjs
+    to: orch-line.mjs
+  - from: resources/orch-mirror.mjs
+    to: orch-mirror.mjs
+  # The dock icon main sets at launch.
+  - from: resources/icon.png
+    to: icon.png
   # The Magpie agent plugin (resources/magpie): `magpie plugin add <this dir>`
   # puts a Cookrew row on magpie's Agents page (route program, D1b).
   - from: resources/magpie
@@ -61,12 +90,24 @@ mac:
   target:
     - dmg
     - zip
-  # Without these two strings macOS refuses the microphone and the recognizer
-  # outright instead of asking — the hold-⌘-to-talk feature would fail in
-  # silence, which is the one way it must not fail.
+  # Gatekeeper opens a download only if it is signed with a Developer ID under
+  # the hardened runtime and notarized. Each entitlement is justified in its
+  # plist; the helpers and cr-listen get the inherit file.
+  hardenedRuntime: true
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.inherit.plist
+  # Notarizes and staples the app before the dmg and zip are built, so both carry
+  # the ticket. The login comes from the environment (release.yml); with none
+  # electron-builder logs a warning and moves on, so an unsigned build still
+  # succeeds.
+  notarize: true
+  # Without these strings macOS refuses the microphone, the recognizer and the
+  # camera outright instead of asking — hold-⌘-to-talk would fail in silence,
+  # which is the one way it must not fail.
   extendInfo:
-    NSMicrophoneUsageDescription: Cookrew listens while you hold ⌘ so Sous can drive the canvas and take dictation.
+    NSMicrophoneUsageDescription: Cookrew listens while you hold ⌘, so you can talk to your agents.
     NSSpeechRecognitionUsageDescription: Speech is recognized on this Mac, on device; nothing you say leaves it.
+    NSCameraUsageDescription: Cookrew shows a camera as a card when you or an agent opens one.
 
 win:
   icon: resources/icon.png

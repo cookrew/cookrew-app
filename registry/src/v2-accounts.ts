@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { passwordGate } from './v2-hash-gate'
+import { SESSION_TTL_MS } from './v2-tokens'
 import {
   hashPassword,
   hashRecoveryCode,
@@ -9,6 +10,7 @@ import {
   passwordIsAcceptable,
   recoveryCodeMatches,
   sanitiseJwk,
+  unusablePassword,
   verifyPassword,
   type Hashed
 } from './v2-secrets'
@@ -20,8 +22,9 @@ import {
   isTeamSlug,
   type DoorClaim
 } from '../../src/shared/door-ownership'
-import type { MachineProfile } from '../../src/shared/strata'
+import type { MachineProfile } from '../../src/shared/fleet'
 import { BAD, readAppVersion, readProfile } from './v2-fleet'
+import type { ProviderId, VerifiedEmail } from '../../src/shared/oauth'
 
 /**
  * IDENTITY v2 — THE ACCOUNT STORE.
@@ -50,7 +53,7 @@ const DEVICE_NAME_MAX = 64
 const WORKSPACE_NAME_MAX = 64
 const WORKSPACES_MAX = 64
 /** Sessions per account. Fifty devices' worth of open tabs, then the oldest goes. */
-const SESSIONS_MAX = 50
+export const SESSIONS_MAX = 50
 /**
  * Revoked ids kept PER ACCOUNT.
  *
@@ -60,7 +63,7 @@ const SESSIONS_MAX = 50
  * hundred devices in April. A cap per account cannot be spent by anyone but
  * its owner.
  */
-const REVOKED_MAX = 200
+export const REVOKED_MAX = 200
 const RECOVERY_CODES = 8
 
 /**
@@ -120,7 +123,7 @@ export interface V2Desktop {
    */
   reach: V2Reach | null
   /**
-   * STRATA: what kind of machine this is, as the desktop probed it, and the
+   * What kind of machine this is, as the desktop probed it, and the
    * app it runs (v2-fleet.ts reads both). Optional because records are older
    * than the probe: a desktop that never sent one is drawn as `unknown`.
    */
@@ -135,9 +138,35 @@ export interface V2Session {
   issuedAt: number
 }
 
+/**
+ * ONE PROVIDER IDENTITY THAT OPENS THIS ACCOUNT.
+ *
+ * `subject` is the provider's immutable id and the only key: `login` is shown
+ * to the owner and never compared. `pausedAt` means "not me" was pressed on a
+ * sign-in through this link, so it opens nothing until the owner links it again.
+ */
+export interface V2Link {
+  provider: ProviderId
+  subject: string
+  login: string | null
+  linkedAt: number
+  pausedAt?: number
+}
+
 export interface V2Account {
   username: string
+  /** Unusable random bytes when `passwordless`; see `unusablePassword`. */
   password: Hashed
+  /**
+   * This account began at a provider and has no password.
+   *
+   * THE OPTIONAL FIELDS BELOW ARE OLDER FILES' SILENCE: an account written
+   * before them is a password account with no links and no email.
+   */
+  passwordless?: boolean
+  links?: readonly V2Link[]
+  /** Copied from a provider's verified claim. Owner-only, and never a key. */
+  email?: VerifiedEmail | null
   displayName: string
   avatar: string | null
   claimedAt: number
@@ -157,9 +186,32 @@ export interface V2Account {
   revoked?: readonly { id: string; at: number }[]
 }
 
+/**
+ * WHAT A DELETED ACCOUNT LEAVES IN THIS FILE, and it holds no name.
+ *
+ * `digest` keeps the username from ever being claimed again: a new holder would
+ * inherit its links, its published presets and the trust of everyone who knew
+ * it. `revoked` keeps its tokens dead. A door verifies offline against /v2/keys,
+ * so if these ids left with the account a stolen session would start working
+ * there again until it expired.
+ */
+export interface V2Retired {
+  digest: string
+  at: number
+  revoked: readonly string[]
+}
+
+/** No token outlives this: a session lasts SESSION_TTL_MS and renewal needs the account. */
+const RETIRED_REVOKED_MS = SESSION_TTL_MS + 24 * 60 * 60 * 1000
+
+const retiredDigest = (username: string): string =>
+  createHash('sha256').update(`cookrew-retired:${username.trim().toLowerCase()}`).digest('hex')
+
 interface Persisted {
   version: 2
   accounts: V2Account[]
+  /** Optional because files are older than this code. */
+  retired?: V2Retired[]
 }
 
 /** A door that changed hands, and the machine it was taken from. */
@@ -189,10 +241,19 @@ export type CreateRefusal = 'taken' | 'bad_username' | 'weak_password' | 'bad_de
 export type Refused<R extends string> = { ok: false; reason: R }
 export type Attached = { ok: true; account: V2Account; device: V2Device }
 
+/**
+ * ONE ID, ONE KEY. An id is public (it is in a certificate's name) and the key is
+ * the proof, so the same id arriving with another key is a stranger wearing the
+ * device's name: it would skip the ladder as "known" and then replace the key.
+ */
+const sameKey = (held: Record<string, string>, offered: Record<string, string>): boolean =>
+  held.kty === offered.kty && held.crv === offered.crv && held.x === offered.x && held.y === offered.y
+
 export class V2Accounts {
   private readonly file: string
   private readonly now: () => number
   private accounts: readonly V2Account[] = []
+  private retired: readonly V2Retired[] = []
   /** Names being claimed right now — see `create`, which awaits a hash midway. */
   private readonly claiming = new Set<string>()
   /**
@@ -255,6 +316,7 @@ export class V2Accounts {
       }
     }
     this.accounts = held.accounts as V2Account[]
+    this.retired = Array.isArray(held.retired) ? held.retired : []
     this.reindex()
   }
 
@@ -271,7 +333,11 @@ export class V2Accounts {
 
   /** Temp file then rename: a reader never sees half a write, whatever happens. */
   private save(): void {
-    const body: Persisted = { version: 2, accounts: [...this.accounts] }
+    const body: Persisted = {
+      version: 2,
+      accounts: [...this.accounts],
+      ...(this.retired.length === 0 ? {} : { retired: [...this.retired] })
+    }
     const temp = `${this.file}.${process.pid}.tmp`
     try {
       writeFileSync(temp, JSON.stringify(body), { mode: 0o600 })
@@ -344,7 +410,46 @@ export class V2Accounts {
    * are both opaque to a door: it refuses a token naming either.
    */
   revokedIds(): string[] {
-    return this.accounts.flatMap((a) => (a.revoked ?? []).map((r) => r.id))
+    const held = this.accounts.flatMap((a) => (a.revoked ?? []).map((r) => r.id))
+    const cutoff = this.now() - RETIRED_REVOKED_MS
+    return [...held, ...this.retired.filter((r) => r.at >= cutoff).flatMap((r) => r.revoked)]
+  }
+
+  /** Was this name deleted? It stays taken for good, and no name is stored. */
+  isRetired(username: string): boolean {
+    const digest = retiredDigest(username)
+    return this.retired.some((r) => r.digest === digest)
+  }
+
+  /**
+   * THE ACCOUNT GOES. The caller has proved the owner and cleared every other
+   * store first (v2-delete.ts), so this is the last step of a delete: nothing
+   * authenticates after it, and the name zone stops answering for its desktops.
+   */
+  close(username: string): boolean {
+    const account = this.get(username)
+    if (account === null) return false
+    const revoked = [
+      ...account.devices.map((d) => d.id),
+      ...account.sessions.map((s) => s.jti),
+      ...(account.revoked ?? []).map((r) => r.id)
+    ]
+    const { accounts, retired } = this
+    const emptied = { ...account, desktops: [] }
+    this.trackDesktops(account, emptied)
+    this.accounts = accounts.filter((a) => a !== account)
+    this.retired = [...retired, { digest: retiredDigest(username), at: this.now(), revoked }]
+    try {
+      this.save()
+    } catch (error) {
+      // Nothing stored changed, so nothing here may look as if it did: the owner
+      // has to be able to sign in and ask again.
+      this.accounts = accounts
+      this.retired = retired
+      this.trackDesktops(emptied, account)
+      throw error
+    }
+    return true
   }
 
   /** The ids one account has taken back — for tests and for a person's own page. */
@@ -400,7 +505,7 @@ export class V2Accounts {
     if (!USERNAME.test(username) || username.startsWith(RESERVED_PREFIX)) {
       return { ok: false, reason: 'bad_username' }
     }
-    if (this.has(username)) return { ok: false, reason: 'taken' }
+    if (this.has(username) || this.isRetired(username)) return { ok: false, reason: 'taken' }
     if (!passwordIsAcceptable(input.password)) return { ok: false, reason: 'weak_password' }
     const device = this.readDevice(input.device)
     if (device === null) return { ok: false, reason: 'bad_device' }
@@ -446,6 +551,62 @@ export class V2Accounts {
   }
 
   /**
+   * CLAIM A NAME WITH A PROVIDER'S PROOF INSTEAD OF A PASSWORD.
+   *
+   * The same rules `create` keeps for the name and the device, and no awaited
+   * hash, so nothing can land between the check and the write.
+   */
+  createWithProvider(input: {
+    username: unknown
+    device: unknown
+    link: V2Link
+    email: VerifiedEmail | null
+  }): Attached | Refused<Exclude<CreateRefusal, 'weak_password'> | 'link_taken'> {
+    const username = typeof input.username === 'string' ? input.username.trim() : ''
+    if (!USERNAME.test(username) || username.startsWith(RESERVED_PREFIX)) {
+      return { ok: false, reason: 'bad_username' }
+    }
+    if (this.has(username) || this.claiming.has(username) || this.isRetired(username)) {
+      return { ok: false, reason: 'taken' }
+    }
+    if (this.findByLink(input.link.provider, input.link.subject) !== null) return { ok: false, reason: 'link_taken' }
+    const device = this.readDevice(input.device)
+    if (device === null || this.ownerOfDevice(device.id) !== null) return { ok: false, reason: 'bad_device' }
+    const account: V2Account = {
+      username,
+      password: unusablePassword(),
+      passwordless: true,
+      links: [input.link],
+      email: input.email,
+      displayName: '',
+      avatar: null,
+      claimedAt: this.now(),
+      devices: [device],
+      desktops: [],
+      sessions: [],
+      recovery: [],
+      revoked: []
+    }
+    this.accounts = [...this.accounts, account]
+    this.trackDesktops(null, account)
+    this.save()
+    return { ok: true, account, device }
+  }
+
+  /** The account this provider identity opens, or null. Never by email. */
+  findByLink(provider: ProviderId, subject: string): V2Account | null {
+    return (
+      this.accounts.find((a) => a.links?.some((l) => l.provider === provider && l.subject === subject)) ?? null
+    )
+  }
+
+  /** One change to one account, for the stores that sit beside this one. */
+  amend(username: string, change: (account: V2Account) => V2Account): void {
+    const account = this.get(username)
+    if (account !== null) this.replace(change(account))
+  }
+
+  /**
    * The password path. Same refusal and same cost for a name nobody has taken
    * and a password that is wrong — see verifyPassword, which stretches against
    * a decoy rather than returning early.
@@ -482,8 +643,9 @@ export class V2Accounts {
     if ((account.revoked ?? []).some((r) => r.id === device.id)) return { ok: false, reason: 'bad_device' }
 
     const known = account.devices.find((d) => d.id === device.id)
+    if (known && !sameKey(known.jwk, device.jwk)) return { ok: false, reason: 'bad_device' }
     const attached: V2Device = known
-      ? { ...known, kind: device.kind, name: device.name, jwk: device.jwk, lastSeenAt: this.now() }
+      ? { ...known, kind: device.kind, name: device.name, lastSeenAt: this.now() }
       : device
     const next: V2Account = {
       ...account,
@@ -512,6 +674,8 @@ export class V2Accounts {
     if (device === null) return false
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return false
+    const known = account.devices.find((d) => d.id === device.id)
+    if (known && !sameKey(known.jwk, device.jwk)) return false
     return !(account.revoked ?? []).some((r) => r.id === device.id)
   }
 

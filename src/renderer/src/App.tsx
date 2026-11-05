@@ -37,6 +37,7 @@ import { BoardSearch } from './BoardSearch'
 import { Dock } from './Dock'
 import { tuningStore } from './tuning-store'
 import { CardMenu, type CardMenuAnchor } from './CardMenu'
+import { onCardMenuRequest } from './card-menu-request'
 import { LodOverlays } from './LodOverlays'
 import { browserInFullView } from './dock-target'
 import { BrowserLayer, useInteractiveBrowserCapability } from './BrowserLayer'
@@ -101,8 +102,9 @@ const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default:
 const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default: m.StageView })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
+import { SourcePicker } from './use/SourcePicker'
+import { RemoteHostBanner } from './use/RemoteHostBanner'
 import { useAccountSurface } from './account/AccountSurface'
-import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
 import { planeFetch } from './plane-fetch'
@@ -319,7 +321,13 @@ function Canvas(): React.JSX.Element {
    * nobody does. The wall shows each one as a tilted screen carrying a
    * snapshot of its canvas, and you pick the picture — and it is where a
    * workspace is made, given directories or removed, too. */
-  const wall = useWorkspaceWall({ stageRef, workspace, onActivity: () => setMetricsOpen(true) })
+  const wall = useWorkspaceWall({
+    stageRef,
+    workspace,
+    onActivity: () => setMetricsOpen(true),
+    onArrived: () => zoomStore.go(1, 'agents')
+  })
+  useEffect(() => onCardMenuRequest(setCardMenu), [])
   // R1 · the Routing panel: the gateway's state (pushed), the Setup card its
   // buttons type into, and one self-opening on first boot while nothing is
   // installed. Everything else about it is a menu entry in the header.
@@ -747,8 +755,8 @@ function Canvas(): React.JSX.Element {
       ) {
         return
       }
-      const nodeEl = target.closest('.react-flow__node') as HTMLElement | null
-      const nodeId = nodeEl?.dataset.id
+      const nodeEl = target.closest('[data-card-id]') as HTMLElement | null
+      const nodeId = nodeEl?.dataset.cardId
       if (!nodeId) return
       sx = e.clientX
       sy = e.clientY
@@ -1325,11 +1333,13 @@ function Canvas(): React.JSX.Element {
   // cards at the desktop overview, 2.5 commits per pan frame (perf lane L6,
   // scripts/perf-dom-probe.mjs, 2026-09-06). Clipping is read through a ref so
   // the hover handlers never change identity when the toggle flips.
-  const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
-    // Right-click edits the card under the cursor (touch gets the same menu
-    // via long-press — see the stage effect above).
+  // Right-click edits the card under the cursor (touch gets the same menu via
+  // long-press — see the stage effect above).
+  const onStageContextMenu = useCallback((e: React.MouseEvent) => {
+    const nodeId = (e.target as Element).closest<HTMLElement>('[data-card-id]')?.dataset.cardId
+    if (!nodeId) return
     e.preventDefault()
-    setCardMenu({ nodeId: node.id, x: e.clientX, y: e.clientY })
+    setCardMenu({ nodeId, x: e.clientX, y: e.clientY })
   }, [])
   const onNodeMouseEnter = useCallback((_e: React.MouseEvent, n: Node) => {
     if (clippingRef.current) setHoverId(n.id)
@@ -1470,9 +1480,9 @@ function Canvas(): React.JSX.Element {
           zoomedAgent={view === 'stage' ? (stageShowing?.zoomed ? stageShowing.name : null) : (terminals.find((t) => t.id === zoomedTerminalId)?.name ?? null)}
           stageWorkspace={view === 'stage' ? (stageShowing?.workspaceName ?? null) : null}
           avatar={account.avatar}
-          search={<BoardSearch workspace={workspace} activeWorkspaceId={activeWsId} attentionCount={attentionCount} />}
+          search={<BoardSearch workspace={workspace} activeWorkspaceId={activeWsId} attentionCount={attentionCount} onAction={(id) => (id === 'new-workspace' ? wall.openCreate() : wall.openRename())} />}
         />
-        <div className="cr-stage" ref={stageRef}>
+        <div className="cr-stage" ref={stageRef} onContextMenu={onStageContextMenu}>
           {/* THE CANVAS IS RETIRED (owner, 2026-10-30): it is not rendered, so
               it costs no CPU or GPU. Every card opens on the stage below, and
               the agents and the browsers and notes ride over every page as
@@ -1487,7 +1497,7 @@ function Canvas(): React.JSX.Element {
               <TerminalAttachmentsContext.Provider value={attachIndex}>
                 <WithCrew>
                   {(crew) => (
-                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose}>
+                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose} onNewWorkspace={wall.openCreate}>
                       {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
                     </ZoomView>
                   )}
@@ -1535,6 +1545,7 @@ function Canvas(): React.JSX.Element {
           onOrch={setOrch}
           agents={promptAgents}
           artifacts={promptArtifacts}
+          workspaceName={workspace?.name ?? null}
           nodes={workspace?.nodes ?? NO_NODES}
           voiceFor={
             view === 'stage'
@@ -1566,6 +1577,15 @@ function Canvas(): React.JSX.Element {
             <MetricsPanel onClose={() => setMetricsOpen(false)} />
           </Suspense>
         )}
+        {/* A new card goes on the stage at once; a re-pointed one is already there. */}
+        <SourcePicker
+          onOpened={(card, made) => {
+            if (!made) return
+            stageSelect.set({ kind: 'item', id: card.id })
+            zoomStore.jumpTo('item', card.id)
+            if (viewRef.current !== 'stage') setView('stage')
+          }}
+        />
         {importServedOpen && (
           <ImportServedSheet
             /* A second link while the sheet is open is a new question: remount
@@ -1602,10 +1622,12 @@ function Canvas(): React.JSX.Element {
           <ConfirmClose
             node={closingNode}
             activity={closingActivity ?? null}
+            nodes={workspace?.nodes ?? []}
             onCancel={() => setClosingId(null)}
             onConfirm={() => confirmClose(closingNode.id)}
           />
         )}
+        {cardMenu && workspace && <CardMenu anchor={cardMenu} workspace={workspace} onClose={() => setCardMenu(null)} />}
         {/* The screen wall covers the stage it hands back to, so it is mounted
             after the canvas and measures that stage rather than guessing. */}
         {wall.element}
@@ -1635,6 +1657,7 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        <RemoteHostBanner />
         {/* THE BROWSER HOST: every browser page lives in BrowserLayer and is
             drawn at the slot a stage pane or a terminal's lower half measures
             (attach-view.ts). It rode inside the canvas's LodOverlays, and

@@ -1,3 +1,4 @@
+import { machineCopy } from '../src/shared/machine-words'
 import { describe, expect, it } from 'vitest'
 import { renderMobileHelp, renderRotated } from '../src/main/mobile-cli-text'
 import { mobileEndpoints } from '../src/main/mobile-endpoints'
@@ -33,7 +34,7 @@ describe('renderMobileHelp', () => {
     expect(lanAt).toBeGreaterThan(-1)
     // Tailnet first: it is the address that keeps working off the LAN.
     expect(tailscaleAt).toBeLessThan(lanAt)
-    expect(text).toContain('Same Wi-Fi as this Mac')
+    expect(text).toContain(machineCopy('Same Wi-Fi as this Mac', process.platform))
   })
 
   it('explains what Tailscale would buy when it is not running', () => {
@@ -227,7 +228,7 @@ describe('the pairing URL', () => {
       pairing: RELAY
     })
     expect(text).toContain('https://192.168.2.13:8643/?token=tok')
-    expect(text).toContain('Same Wi-Fi as this Mac')
+    expect(text).toContain(machineCopy('Same Wi-Fi as this Mac', process.platform))
   })
 
   it('is absent entirely when this Mac has no account', () => {

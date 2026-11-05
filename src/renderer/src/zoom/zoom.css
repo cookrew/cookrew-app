@@ -299,16 +299,55 @@
   color: var(--zv-ink-soft);
 }
 
-.zv-machine:focus-visible {
+/* The frame's own control: the whole bezel, drawn by .zv-machine under it. */
+.zv-machine-open {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  cursor: zoom-in;
+}
+
+.zv-machine-open:focus-visible {
   outline: 3px solid var(--zv-seal);
   outline-offset: 6px;
 }
 
+/* Scaled from its corner by the painter, so it reads and presses at this size on screen. */
+.zv-machine-share {
+  appearance: none;
+  justify-self: start;
+  transform-origin: left top;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--zv-ink-soft);
+  border-radius: 999px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 12px/1.2 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-machine-share:hover {
+  border-color: var(--zv-seal);
+}
+
+.zv-machine-share:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
 /* ── the device: its workspaces, a mark each ──
-   The machine's name and hint grow (scale, from their top-left corner) to be
-   read where the device is seen small, and wrap inside the device's width
-   (ZoomView · deviceWords sets both inline): the hint takes a line of its own
-   rather than running off a phone's edge (Gauge, 2026-11-01). */
+   The machine's name and count grow (scale, from their top-left corner) to be
+   read where the device is seen small (ZoomView · deviceWords sets the width
+   inline); a long name is cut, short of the per-row pill. The tiles:
+   workspace-tile.css. */
 .zv-device-label {
   position: absolute;
   left: 0;
@@ -325,6 +364,9 @@
 }
 
 .zv-device-label b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font: 600 22px/1.1 var(--zv-serif);
   color: var(--zv-ink);
 }
@@ -334,96 +376,6 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--zv-ink-soft);
-}
-
-.zv-device-label small {
-  padding-left: 12px;
-  border-left: 1px solid var(--zv-hair-2);
-  font: italic 11px/1.3 var(--zv-mono);
-  color: var(--zv-muted);
-  white-space: normal;
-}
-
-/* Another workspace: drawn once, placed once (translate + scale inline). The
-   whole mark answers a click through one round hit area; its parts only show. */
-.zv-mark {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-  cursor: pointer;
-}
-
-.zv-mark::before {
-  content: '';
-  position: absolute;
-  left: -130px;
-  top: -150px;
-  width: 260px;
-  height: 300px;
-  border-radius: 50%;
-}
-
-.zv-mark > * {
-  pointer-events: none;
-}
-
-.zv-mark .zv-wash,
-.zv-mark .zv-ring,
-.zv-mark .zv-av,
-.zv-mark .zv-dot,
-.zv-mark .zv-grp {
-  will-change: auto;
-}
-
-.zv-mark-none {
-  position: absolute;
-  left: -60px;
-  top: -20px;
-  width: 120px;
-  text-align: center;
-  font: italic 13px/1 var(--zv-mono);
-  color: var(--zv-muted);
-}
-
-.zv-mark .zv-mark-dot {
-  transform: translate(38px, -52px);
-}
-
-.zv-mark .zv-mark-label {
-  top: 108px;
-  transform: translateX(-50%);
-  /* It grows from under the ring (ZoomView · deviceWords, inline), cut short before a neighbour's. */
-  transform-origin: 50% 0;
-}
-
-.zv-mark .zv-mark-label > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The open workspace's place on the device: a round, invisible button over
-   its mark (the mark itself is the scene's group). */
-.zv-workspace-hit {
-  appearance: none;
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 180px;
-  height: 180px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  cursor: zoom-in;
-}
-
-.zv-workspace-hit:focus-visible {
-  outline: 3px solid var(--zv-seal);
-  outline-offset: 4px;
 }
 
 /* ── the workspace's own ground: its wash and its ring ──
@@ -475,23 +427,6 @@
     rgba(0, 0, 0, 0.16) calc(100% - 24px),
     transparent 100%
   );
-}
-
-.zv-ring {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 220px;
-  height: 220px;
-  margin: -110px 0 0 -110px;
-  pointer-events: none;
-  will-change: transform, opacity;
-}
-
-.zv-ring svg {
-  display: block;
-  width: 100%;
-  height: 100%;
 }
 
 /* A cable between two terminals: 400 long at scale 1, stretched from its left end. */
@@ -549,8 +484,7 @@
   outline-offset: 2px;
 }
 
-.zv-grp .zv-workspace-name,
-.zv-mark-label > span:last-child {
+.zv-grp .zv-workspace-name {
   color: var(--zv-ink);
 }
 
@@ -805,16 +739,82 @@
   will-change: transform, opacity;
 }
 
-/* The latest block (AgentLatest.tsx, agent-card.css): four lines at most, one
-   each, so the strip of thumbnails starts at 113. */
+/* The latest block (CardBody.tsx, agent-card.css): four lines over a strip of
+   thumbnails, which starts at 113. With no strip the words take its room down
+   to the reply box, and unfolded they take it over the thumbnails too. */
 .zv-body {
+  --zv-words-room: 132px;
   width: 228px;
   max-height: 64px;
-  overflow: hidden;
   font: 11.5px/16px var(--zv-mono);
   color: var(--zv-ink-soft);
   transform-origin: 0 0;
   pointer-events: none;
+  transition: max-height 0.18s ease;
+}
+
+.zv-body:is(.roomy, .open) {
+  max-height: var(--zv-words-room);
+}
+
+/* Over the thumbnails (.zv-lk), which are its siblings on the floating card. */
+.zv-body.open {
+  z-index: 9;
+  background: var(--zv-card);
+}
+
+.zv-words {
+  max-height: inherit;
+  overflow: hidden;
+}
+
+/* Cut words take the tap; words that fit leave it to the card under them. */
+.zv-body:is(.more, .open) .zv-words {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.zv-body.open .zv-words {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: var(--zv-hair-2) transparent;
+  padding-bottom: 22px;
+  box-sizing: border-box;
+}
+
+.zv-body.more::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 22px;
+  background: linear-gradient(to bottom, transparent, var(--zv-card));
+  pointer-events: none;
+}
+
+.zv-more {
+  appearance: none;
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  padding: 1px 0 1px 8px;
+  border: 0;
+  background: var(--zv-card);
+  box-shadow: -6px 0 6px var(--zv-card);
+  font: 600 10px/14px var(--zv-mono);
+  color: var(--zv-seal-text);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.zv-more:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 1px;
 }
 
 .zv-body b {
@@ -1316,6 +1316,26 @@
   will-change: transform, opacity;
 }
 
+/* An agent's card over the artifacts (ShelfCard.tsx): the troop's card,
+   arriving from the face it opened under. */
+.zv-shelf-card {
+  transform-origin: top center;
+  animation: zv-shelf-card-in 150ms ease-out both;
+}
+
+@keyframes zv-shelf-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zv-shelf-card {
+    animation: none;
+  }
+}
+
 /* ── hover: a seal ring, never a transform (the painter owns transforms) ── */
 @media (hover: hover) {
   .zv-av:hover {
@@ -1361,14 +1381,6 @@
   .zv-grp button.zv-seal:hover {
     color: var(--zv-on-seal);
     background: var(--zv-seal);
-  }
-
-  .zv-mark:hover .zv-mark-label {
-    color: var(--zv-ink);
-  }
-
-  .zv-workspace-hit:hover {
-    box-shadow: inset 0 0 0 1.5px var(--zv-hair-2);
   }
 
   .zv-machine:hover {
@@ -1430,7 +1442,8 @@
 
 .zv-stops button {
   appearance: none;
-  flex: 1 1 0;
+  /* As wide as its word, the rest shared: equal widths cut WORKSPACES while DEVICES had room to spare. */
+  flex: 1 1 auto;
   min-width: 0;
   margin: 0;
   padding: 5px 4px;
@@ -1448,18 +1461,8 @@
   cursor: pointer;
 }
 
-/* The last stop is the switch (owner, 2026-11-01): agents | artifacts, one
-   outlined pair, so in the workspace the other side is one press away. */
-.zv-side {
-  display: flex;
-  flex: 2 1 0;
-  min-width: 0;
-  gap: 2px;
-  margin-left: 6px;
-  border-radius: 999px;
-  outline: 1px solid var(--zv-hair-2);
-  outline-offset: 1px;
-}
+/* The last stop is the switch (owner, 2026-11-01): the outlined pair is the
+   two groups of what needs you now (BarGroups.tsx, bar-groups.css). */
 
 .zv-stops button[aria-current] {
   background: var(--zv-ink);
@@ -1621,7 +1624,7 @@
   }
 
   .zv-stops button {
-    min-height: 32px;
+    min-height: 28px;
     padding: 0 2px;
     letter-spacing: 0.04em;
   }
@@ -1641,24 +1644,46 @@
     display: inline;
   }
 
+  /* The desktop's sizes (owner, 2026-11-03: "flat icons, the same as the desktop"). */
   .zv-back {
-    width: 38px;
-    height: 38px;
+    width: 34px;
+    height: 34px;
   }
 
   .zv-stops button {
-    min-height: 38px;
-    font-size: 10.5px;
+    min-height: 28px;
+  }
+
+  .zv-groups {
+    flex: 1 1 auto;
+  }
+}
+
+/* The narrowest phones (owner, 2026-11-04: a 320px Samsung cut WORKSPACES, ARTIFACTS and
+   AGENTS): every word stays whole, the room comes out of the gaps around them. */
+@media (max-width: 340px) {
+  .zv-controls {
+    gap: 3px;
+    padding: 4px;
+  }
+  .zv-back {
+    width: 30px;
+    height: 30px;
+  }
+  .zv-stops {
+    gap: 0;
+  }
+  .zv-stops button {
+    padding: 0 1px;
+  }
+  .zv-groups {
+    margin-left: 3px;
   }
 }
 
 /* A finger needs room; a phone must not zoom the page to type a reply (iOS
    zooms into a field under 16 px). */
 @media (pointer: coarse) {
-  .zv-stops button {
-    min-height: 40px;
-  }
-
   .zv-reply input {
     font-size: 16px;
   }
@@ -1843,7 +1868,7 @@
   /* The open workspace's label in the marks' form: seal and name in 130px
      (380 when it grows by 2.9 on the device stop, as wide as theirs), its
      totals on a line below. */
-  .zv-grp:not(.zv-mark-label) {
+  .zv-grp {
     flex-wrap: wrap;
     /* In a zero-width scene a wrapping box would shrink to its widest part. */
     width: max-content;
@@ -1855,23 +1880,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .zv-grp:not(.zv-mark-label) .zv-tot {
+  .zv-grp .zv-tot {
     margin-left: 28px;
     padding-left: 2px;
     border-left: 0;
-  }
-  .zv-mark .zv-mark-label {
-    gap: 12px;
-    max-width: 380px;
-    font-size: 32px;
-    letter-spacing: 0.04em;
-  }
-  /* The seal's number as large as the name beside it: both read at caption (zoom-frame.ts · deviceWords). */
-  .zv-mark .zv-mark-label .zv-seal {
-    width: 52px;
-    height: 52px;
-    font-size: 32px;
-    line-height: 52px;
   }
 }
 
@@ -1886,8 +1898,8 @@
     display: none;
   }
   .zv-root[data-full='true'] .zv-back {
-    width: 36px;
-    height: 36px;
+    width: 34px;
+    height: 34px;
   }
 }
 
@@ -1917,6 +1929,29 @@
   margin-right: 4px;
 }
 
+.zv-cols-glyph {
+  display: none;
+  width: 12px;
+  height: 12px;
+  margin: 0 3px 0 -3px;
+  fill: currentColor;
+}
+
+/* A phone: the title has the room, the pill keeps its numbers beside a small grid. */
+@media (max-width: 520px) {
+  .zv-cols {
+    top: 12px;
+    right: 16px;
+    padding: 3px 3px 3px 10px;
+  }
+  .zv-cols > span {
+    display: none;
+  }
+  .zv-cols-glyph {
+    display: block;
+  }
+}
+
 .zv-cols button {
   appearance: none;
   width: 26px;
@@ -1941,12 +1976,6 @@
   outline-offset: 2px;
 }
 
-@media (max-width: 700px) {
-  .zv-cols button {
-    width: 32px;
-    height: 32px;
-  }
-}
 
 /* A screenshot on its way into the reply (prompt/prompt-attach.ts), or why
    it did not go: in the same place as "sent ✓", held while it saves. */
@@ -2015,9 +2044,43 @@
 .zv-wsnew-cap {
   opacity: 1;
 }
-@media (max-width: 759px) {
-  .zv-mark .zv-wsnew,
-  .zv-mark .zv-wsnew-cap {
-    display: none;
+/* THE BOX FLOATS over the stage's foot at every width (prompt/global-prompt.css):
+   the zoom's bar stands just above it. The full view's bar is at the top already. */
+.zv-root:not([data-full='true']) .zv-controls {
+  bottom: var(--cr-float-h, calc(14px + env(safe-area-inset-bottom, 0px)));
+}
+
+/* The WORKSPACES stop's own way to make one, in words: it had no ＋, and the
+   only way in was four unlabelled clicks away. */
+.zv-new-workspace {
+  position: absolute;
+  z-index: 44;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 6px 18px var(--zv-shadow);
+  color: var(--zv-ink);
+  font: 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+.zv-new-workspace:hover { box-shadow: inset 0 0 0 1px var(--zv-ink-soft), 0 6px 18px var(--zv-shadow) }
+/* On a phone the top corner is the device's own title, so the door sits above
+   the bar, where a thumb already is. */
+@media (max-width: 700px) {
+  .zv-new-workspace {
+    top: auto;
+    left: 50%;
+    bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    white-space: nowrap;
   }
 }

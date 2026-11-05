@@ -335,6 +335,11 @@ export function rewriteCookiePath(cookie: string, path: string): string {
  *
  * A relative reference (`board`) resolves against the path this exchange was
  * for, which is what a browser would have done with the desktop's answer.
+ *
+ * A credential on the redirect moves to the fragment, where the app already
+ * looks for it. The browser would otherwise send it straight back through the
+ * ingress, and its access log. No build of the app issues one any more; a Mac
+ * that has not updated still can.
  */
 export function rewriteLocation(
   value: string,
@@ -343,7 +348,10 @@ export function rewriteLocation(
   try {
     const target = new URL(value, `https://desktop.invalid${at.path}`)
     if (target.host === at.host) return value
-    return `${at.prefix}${target.pathname}${target.search}${target.hash}`
+    const token = target.searchParams.get('token')
+    if (token === null) return `${at.prefix}${target.pathname}${target.search}${target.hash}`
+    target.searchParams.delete('token')
+    return `${at.prefix}${target.pathname}${target.search}#pair=${encodeURIComponent(token)}`
   } catch {
     // Not a location this can reason about. Left alone rather than guessed at.
     return value
@@ -384,10 +392,12 @@ export interface CanvasRelay {
   /** Is this account's desktop holding a line right now? */
   live(username: string, deviceId: string): boolean
   /**
-   * STRATA: every desktop of the account — online now, and when its line was
+   * Every desktop of the account — online now, and when its line was
    * last seen by this process (null: not since it started).
    */
   presence(username: string): ReadonlyMap<string, DesktopPresence>
+  /** The account was deleted: its desktops' lines end, and when they were seen is forgotten. */
+  hangUp(username: string, deviceIds: readonly string[]): void
   /** Answered it? False when the path belongs to somebody else. */
   handle(request: IncomingMessage, response: ServerResponse, parts: string[], url: URL): boolean
   stats(): CanvasRelayStats
@@ -406,7 +416,7 @@ export interface CanvasRelayDeps {
   headDeadlineMs?: number
   idleDeadlineMs?: number
   bodyBudget?: number
-  /** STRATA: where line sightings persist (v2-line-seen.ts); absent = memory only. */
+  /** Where line sightings persist (v2-line-seen.ts); absent = memory only. */
   seenFile?: string
 }
 
@@ -483,7 +493,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const holding = new Map<string, Set<string>>()
   /** Request bytes buffered right now, across every exchange. */
   let buffering = 0
-  /** STRATA: when each line was last opened, beaten or closed — presence's lastSeenAt, kept across a restart. */
+  /** When each line was last opened, beaten or closed — presence's lastSeenAt, kept across a restart. */
   const nowMs = deps.now ?? ((): number => Date.now())
   const seen = createLineSeen(deps.seenFile ?? null, nowMs)
   const sawLine = (name: string): void => seen.see(name)
@@ -664,7 +674,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     v2Json(response, 200, { live: hub.has(canvasName(signed.account.username, deviceId)) })
   }
 
-  /** STRATA: the account's desktops, each with its line's state — one read for the whole fleet. */
+  /** The account's desktops, each with its line's state — one read for the whole fleet. */
   const presence = (username: string): Map<string, DesktopPresence> => {
     const account = deps.v2.accounts.get(username)
     const out = new Map<string, DesktopPresence>()
@@ -676,7 +686,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   }
 
   /**
-   * ONE QUESTION FOR THE WHOLE FLEET (strata), where the account page used to
+   * ONE QUESTION FOR THE WHOLE FLEET, where the account page used to
    * ask relay-status once per desktop. The same gate and the same answer as
    * relay-status — only the reader's own desktops, never a stranger's — plus
    * the cap the relay holds them to, so a page can say "8 of 11 online".
@@ -971,6 +981,13 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   return {
     hub,
     live: (username, deviceId) => hub.has(canvasName(username, deviceId)),
+    hangUp: (username, deviceIds) => {
+      for (const deviceId of deviceIds) {
+        const name = canvasName(username, deviceId)
+        dropLink(name, 'account deleted')
+        seen.forget(name)
+      }
+    },
     presence,
     stats: () => ({ links: live.size, ...counts }),
     stop: () => {

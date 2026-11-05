@@ -31,7 +31,7 @@ const TEAM = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}
 const USERNAME = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
 /** A door reports a checkout id, not a document: enough to look one up. */
 const RECEIPT_MAX = 512
-const SEATS_MAX = 20_000
+export const SEATS_MAX = 20_000
 
 export type SeatSource = 'bought' | 'granted'
 /** The two rails a door can settle a purchase on, and report back here. */
@@ -274,6 +274,20 @@ export class V2Seats {
     }
     // Oldest ended first, which is what `slice(-n)` keeps: the tail.
     return [...ended.slice(-(SEATS_MAX - live.length)), ...live]
+  }
+
+  /**
+   * AN ACCOUNT WAS DELETED. Every seat it held, and every seat at its teams,
+   * ends. A bought one stays as the record of a sale, which both sides may need
+   * for their accounts; a granted one was never money and goes.
+   */
+  closeAccount(username: string): void {
+    const at = this.now()
+    const touches = (seat: V2Seat): boolean => seat.account === username || seat.team.startsWith(`@${username}/`)
+    this.seats = this.seats
+      .filter((seat) => !touches(seat) || seat.source === 'bought')
+      .map((seat) => (touches(seat) && seat.endedAt === undefined ? { ...seat, endedAt: at } : seat))
+    this.save()
   }
 
   /**

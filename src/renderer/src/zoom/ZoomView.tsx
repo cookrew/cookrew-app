@@ -1,21 +1,34 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceList, WorkspaceState } from '../../../shared/model'
+import { countOf } from '../../../shared/workspace-door'
 import type { AttachmentIndex } from '../terminal-attachments'
-import { cookrew } from '../api'
+import { cookrew, isDemoMode, isRemoteMode } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
-import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind, NewestThumb } from './ZoomParts'
+import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, MachineNode, type Bind, NewestThumb } from './ZoomParts'
+import { openSourcePicker } from '../use/source-picker-store'
+import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
-import { InkRing, InkTie } from './InkAvatar'
-import { buildZoomModel } from './zoom-model'
+import { InkTie } from './InkAvatar'
+import { buildZoomModel, itemViewOf } from './zoom-model'
+import { ShelfCard } from './ShelfCard'
+import { draftKey, getDraft } from '../prompt/prompt-draft'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD, shelfPage } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
 import { PerRowPill } from './PerRowPill'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
 import { useZoom, zoomStore } from './zoom-store'
 import { useZoomMotion } from './use-zoom-motion'
-import { BAR_NAMES, BAR_SIDES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { BAR_NAMES, BAR_STOPS, barSide, barStop, stepOut } from './zoom-path'
+import { BarGroups } from './BarGroups'
+import { barCard } from './bar-pick'
+import { setFaceSlot } from '../prompt/face-slot'
+import { CrIcon } from '../icons'
+import { promptFold, takeBack } from '../prompt/prompt-fold'
+import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
+import { GaugePanel } from './MachineGauges'
+import { RemoteDeskPanel } from './RemoteDeskPanel'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
@@ -25,6 +38,8 @@ const CHIP_HIDDEN: React.CSSProperties = { opacity: 0 }
 
 /** Rows of thumbnails mounted past each edge of the view, so a scroll shows them already drawn. */
 const ROW_BUFFER = 2
+/** A failure as a person reads it: its message, without the class name String() puts in front. */
+const failureWords = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 /**
  * The real navigator, from devices through workspaces and crew to the real
@@ -32,7 +47,9 @@ const ROW_BUFFER = 2
  * frame engine owns their transforms. No second terminal/browser is made
  * for the animation: the full view behind the shell is the real one.
  */
-export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, children }: {
+export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, onNewWorkspace, children }: {
+  /** The create sheet: the WORKSPACES stop says so in words. */
+  onNewWorkspace?: () => void
   workspace: WorkspaceState | null
   workspaceId: string | null
   attachIndex: AttachmentIndex
@@ -95,7 +112,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const [size, setSize] = useState({ w: 1000, h: 700 })
   useEffect(() => {
     let alive = true
-    void cookrew().listWorkspaces().then((l) => alive && setList(l)).catch((e) => alive && setError(`Cannot read workspaces: ${String(e)}`))
+    void cookrew().listWorkspaces().then((l) => alive && setList(l)).catch((e) => alive && setError(`Cannot read workspaces: ${failureWords(e)}`))
     const off = cookrew().onWorkspaceList((l) => setList(l))
     void cookrew().machineName?.().then((s) => alive && s && setNameAsked(s.replace(/\.local$/i, ''))).catch(() => undefined)
     return () => { alive = false; off() }
@@ -116,7 +133,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     workspaces: fleetWorkspaces.length ? fleetWorkspaces.map((w) => ({ id: w.id, name: w.name, dir: '', dirs: [], icon: w.icon ?? '🗂' })) : (list?.workspaces ?? []), activeId: workspaceId ?? list?.activeId ?? 'local', name: workspace?.name ?? 'Workspace',
     machines: fleet.machines,
     counts: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, { browsers: w.counts.browsers, notes: w.counts.notes }] as const] : []))),
-    newest: new Map(fleetWorkspaces.flatMap((w) => (w.newest ? [[w.id, w.newest] as const] : [])))
+    crews: new Map(fleetWorkspaces.flatMap((w) => (w.counts ? [[w.id, w.agents] as const] : []))),
+    decks: new Map(fleetWorkspaces.map((w) => [w.id, w.deck] as const)),
+    loaded: workspace !== null && workspace !== undefined
   }), [workspace?.nodes, workspace?.connections, workspace?.name, workspaceId, rows, crew.crew, attachIndex, list, fleetWorkspaces, fleet.machines])
   const modelRef = useRef(model)
   modelRef.current = model
@@ -136,7 +155,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const collectNow = useCallback((): FrameEls | null => {
     const all = registry.current
     const get = (k: string): HTMLElement | null => all.get(k) ?? null
-    const base = ['devices', 'device', 'scene', 'panel', 'wash', 'ring', 'label', 'newCap', 'machine'] as const
+    const base = ['devices', 'device', 'scene', 'panel', 'wash', 'label', 'newCap', 'machine'] as const
     if (base.some((k) => !get(k))) return null
     const agents: FrameEls['agents'] = new Map()
     const links: FrameEls['links'] = new Map()
@@ -167,7 +186,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     for (const t of modelRef.current.frame.ties) { const el = get(`tie:${t.key}`); if (el) ties.set(t.key, el) }
     for (const m of modelRef.current.marks) { const el = get(`mark:${m.id}`); if (el) marks.set(m.id, el) }
-    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, ring: get('ring')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore') }
+    return { devices: get('devices')!, device: get('device')!, scene: get('scene')!, panel: get('panel')!, wash: get('wash')!, label: get('label')!, labelW: get('label')!.offsetWidth, labelH: get('label')!.offsetHeight, newCap: get('newCap')!, machine: get('machine')!, agents, links, items, ties, marks, next: get('newseat'), fullHead: get('fullHead'), newThumb: get('newThumb'), shelfMore: get('shelfMore'), ...deviceWordEls(get('deviceLabel'), [...marks.values(), ...(get('openMark') ? [get('openMark')!] : [])], get('devices')!) }
   }, [])
   // THE CREW SCROLLS ON A PHONE (zoom-frame.ts · phoneCamera), THE THUMBNAILS
   // ON ANY SCREEN (deskThumbs, phoneThumbs): drawn at a readable size, a tall
@@ -175,11 +194,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // thumbnails is the agents' group: one row, a page at a time (shelfPage).
   const panAt = useRef(0)
   const panMax = useRef(0)
+  // The workspaces' tiles scroll apart from the crew and the thumbnails: back at a side, its own scroll is where it was.
+  const tilesAt = useRef(0)
+  const tilesMax = useRef(0)
   const [shelfAt, setShelfAt] = useState(0)
   const shelfRef = useRef(0)
   shelfRef.current = shelfAt
   const pan = useMemo(() => ({
     get: () => panAt.current,
+    tiles: () => tilesAt.current,
+    setTilesMax: (max: number) => {
+      tilesMax.current = max
+      if (tilesAt.current > max) tilesAt.current = max
+    },
     shelf: () => shelfRef.current,
     setMax: (max: number) => {
       panMax.current = max
@@ -264,11 +291,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     setFirstRow(zoomStore.get().dir === 'items' ? firstRowAt(panAt.current) : 0)
   }, [layout, size, narrow]) // eslint-disable-line react-hooks/exhaustive-deps
   /** The crew stop on a narrow screen, or the thumbnails, with more than fits: where a drag or the wheel scrolls. */
+  const atTiles = (): boolean => Math.abs(zoomStore.get().v + 1) < 0.1
   const canPan = (): boolean => {
+    if (atTiles()) return tilesMax.current > 0
     const z = zoomStore.get()
     return panMax.current > 0 && (z.dir === 'agents' ? z.v > 0.9 && z.v < 1.5 : z.v > -0.5 && z.v < 0.5)
   }
+  const panNow = (): number => (atTiles() ? tilesAt.current : panAt.current)
   const scrollBy = (dy: number): void => {
+    if (atTiles()) {
+      tilesAt.current = Math.min(tilesMax.current, Math.max(0, tilesAt.current + dy))
+      motion.wake()
+      return
+    }
+    // The card stood by a face the scroll moves away: it goes, unless it holds a draft.
+    if (!shelfCardDraft()) closeShelfCard()
     panAt.current = Math.min(panMax.current, Math.max(0, panAt.current + dy))
     if (zoomStore.get().dir === 'items') setFirstRow(firstRowAt(panAt.current))
     motion.wake()
@@ -276,18 +313,47 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // The shelf's page: its "+N" chip turns it, "–" on the last goes back to the first.
   const shelf = shelfPage(layout.thumbs.shelf, shelfAt)
   const turnShelf = (): void => {
+    if (!shelfCardDraft()) closeShelfCard()
     const next = shelf.more?.last ? 0 : shelfAt + 1
     shelfRef.current = next
     setShelfAt(next)
     motion.wake()
   }
+  // AN AGENT TAPPED OVER THE ARTIFACTS opens its card on this page (owner,
+  // 2026-11-03; ShelfCard.tsx), the artifacts still under it: a face on the
+  // shelf or a coin under a thumbnail. The same agent again, or the card's
+  // face, is its full view. Anywhere else an agent's tap zooms as it did.
+  const [shelfCard, setShelfCard] = useState<{ id: string; anchor: string } | null>(null)
+  const shelfCardOpen = useRef(false)
+  shelfCardOpen.current = shelfCard !== null
+  const closeShelfCard = useCallback((): void => setShelfCard(null), [])
+  /** The open card's agent has words in its box (prompt-draft.ts: typed in the card or before). */
+  const shelfCardDraft = (): boolean => shelfCard !== null && getDraft(draftKey(shelfCard.id)).trim() !== ''
+  const atShelf = (): boolean => {
+    const z = zoomStore.get()
+    return z.dir === 'items' && z.full === null && Math.abs(z.v) < 0.5
+  }
+  const tapAgent = (id: string, anchor: string): void => {
+    if (!atShelf()) return motion.agent(id)
+    if (shelfCard?.id === id) {
+      closeShelfCard()
+      return zoomStore.jumpTo('agent', id)
+    }
+    setShelfCard({ id, anchor })
+  }
+  // A press outside on the artifacts only closes the card (ShelfCard eats its click); the bar and the header keep theirs.
+  const pressedOutside = useCallback((target: EventTarget | null): boolean => target instanceof Node && (overview.current?.contains(target) ?? false), [])
+  useEffect(() => {
+    const onShelf = zoom.dir === 'items' && zoom.full === null && Math.abs(zoom.v) < 0.5
+    if (!onShelf || (shelfCard && !model.agents.some((a) => a.id === shelfCard.id))) closeShelfCard()
+  }, [zoom.dir, zoom.v, zoom.full, model.agents, shelfCard, closeShelfCard])
   // THE WHEEL SCROLLS, IT NEVER ZOOMS (owner, 2026-10-31: the wheel is the
   // page's, and a list's). Up and down it scrolls the thumbnails (or a narrow
   // screen's crew), wherever the pointer is; a sideways one is the page's.
   const onWheel = useRef<(e: WheelEvent) => void>(() => undefined)
   onWheel.current = (e) => {
     if (e.ctrlKey) return
-    if ((e.target as Element | null)?.closest?.('textarea, input, select, [role="dialog"]')) return
+    if ((e.target as Element | null)?.closest?.('textarea, input, select, [role="dialog"], .zv-body.open')) return
     const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? size.h : 1
     const dx = e.deltaX * k
     const dy = e.deltaY * k
@@ -348,31 +414,95 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // NO WHEEL ZOOM (owner, 2026-10-31): the wheel is the page's, and in a list it
   // scrolls that list. Zoom in and out are clicks (motion.agent / motion.item for
   // in, the background and the back button for out), plus the stops and Esc.
-  const stepBack = useCallback(() => {
+  /** One stop out; false at the outermost, where there is nowhere further. */
+  const stepBack = useCallback((): boolean => {
     const z = zoomStore.get()
     const next = stepOut(z.dir, z.v)
-    if (next !== z.v) motion.go(next, z.dir)
+    if (next === z.v) return false
+    motion.go(next, z.dir)
+    return true
   }, [motion.go])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // A bar group's card (BarGroups.tsx) closes first, before the box or the view.
+      if (barCard.get() && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
+        e.preventDefault()
+        barCard.close()
+        return
+      }
+      // An agent's card over the artifacts closes first, from its reply box too;
+      // an IME's Escape and the overlays over it (⌘K, the board) keep theirs.
+      // A name's field (NameEdit.tsx) owns its Escape: it cancels the rename, not the card;
+      // the who-picker's field (WhoPicker.tsx) closes the picker first.
+      if (shelfCardOpen.current && !e.isComposing && !(e.target as Element | null)?.closest?.('.cmd, .cr-board-search, .cr-board-pop, .cr-name-input, .pf-who')) {
+        e.preventDefault()
+        closeShelfCard()
+        return
+      }
       // The board's box and its panel own their Esc (BoardSearch.tsx).
       if ((e.target as Element | null)?.closest?.('input, textarea, [contenteditable="true"], .xterm, .cr-board-search, .cr-board-pop')) return
+      // The box's own buttons and picker keep their Esc while the box can fold
+      // or its picker is open; in an agent's full view it steps out as before.
+      if ((e.target as Element | null)?.closest?.('.cr-prompt') && (promptFold.get().foldable || promptFold.get().picker)) return
       e.preventDefault()
-      stepBack()
+      // The picker closes first, then an open prompt box folds; the view
+      // stays. Only then does the zoom step out (prompt/prompt-fold.ts · takeBack).
+      takeBack(stepBack)
     }
     // Capture, so a card that stops Escape on its way up does not keep us zoomed.
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [stepBack])
+  }, [stepBack, closeShelfCard])
+  // BACK ON A WEB PAGE (the phone companion; prompt/back-guard.ts): Android's
+  // back and the browser's take the Esc order, one step a press: an agent's
+  // card over the artifacts, the picker, a box open for nobody, then the zoom
+  // one stop out. At the outermost stop back leaves the page, as it always did.
+  // The desktop app has no back, so it keeps no entries. Nothing is pushed
+  // before the owner's first touch: Chrome skips history entries a page adds
+  // without one, and back would then skip past the page.
+  const backSteps = useRef({ stepBack, closeShelfCard })
+  backSteps.current = { stepBack, closeShelfCard }
+  useEffect(() => {
+    if (!isRemoteMode() && !isDemoMode()) return
+    const holder = backHolder(window, window.history)
+    const release = holder.hold({
+      wants: () => {
+        if ((navigator as { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) return false
+        const z = zoomStore.get()
+        return barCard.get() !== null || shelfCardOpen.current || promptFold.wantsBack() || stepOut(z.dir, z.v) !== z.v
+      },
+      back: () => {
+        // A bar group's card first (BarGroups.tsx), as Esc closes it first.
+        if (barCard.get()) return barCard.close()
+        if (shelfCardOpen.current) return backSteps.current.closeShelfCard()
+        takeBack(backSteps.current.stepBack)
+      }
+    })
+    const offFold = promptFold.subscribe(holder.sync)
+    const offZoom = zoomStore.subscribe(holder.sync)
+    const offBar = barCard.subscribe(holder.sync)
+    return () => {
+      offFold()
+      offZoom()
+      offBar()
+      release()
+    }
+  }, [])
   // A press that turned into a pinch or a drag is not the click that steps out.
   const moved = useRef(false)
   const swallowClick = useRef(false)
+  const deckBrowsers = model.openMark.deck.filter((i) => i.kind === 'browser').map((i) => i.id).join(' ')
+  const onTiles = zoom.v < -0.5
   useEffect(() => {
-    thumbWants.claim('zoom', seenBrowsers ? seenBrowsers.split(' ') : [])
+    // The open tile's deck wears real pictures too, before the grid they deal into.
+    // First where they are what is seen: the wants are capped, and the grid's come first at the grid.
+    const lists = onTiles ? [deckBrowsers, seenBrowsers] : [seenBrowsers, deckBrowsers]
+    thumbWants.claim('zoom', [...new Set(lists.flatMap((l) => l.split(' ')))].filter(Boolean))
     return () => thumbWants.release('zoom')
-  }, [seenBrowsers])
+  }, [seenBrowsers, deckBrowsers, onTiles])
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
+  const markOf = useMemo(() => new Map(model.marks.map((m) => [m.id, m])), [model.marks])
   // One names list per item, so a row scrolled into view does not draw every mounted thumbnail again (ItemNode is memo'd).
   const namesOf = useMemo(() => new Map(model.items.map((i) => [i.id, i.owners.map((id) => agentOf.get(id)?.name ?? id)])), [model.items, agentOf])
   // The grid's items and the coins' others: a coin's face is drawn either way.
@@ -387,18 +517,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       const el = registry.current.get(`mark:${m.id}`)
       const at = device.at[m.id]
       if (el && at) el.style.transform = `translate(${at.x}px, ${at.y}px) scale(${SWS})`
-      const label = el?.querySelector<HTMLElement>('.zv-mark-label')
-      if (label) {
-        label.style.transform = `translateX(-50%) scale(${words.markK.toFixed(4)})`
-        label.style.maxWidth = `${Math.round(words.markMax)}px`
-      }
     }
-    // A phone's open label grows no wider than its neighbours' (deviceWords · openMax), so it is cut, never drawn smaller.
-    const openLabel = registry.current.get('label')
-    if (openLabel) {
-      openLabel.style.maxWidth = Number.isFinite(words.openMax) ? `${Math.floor(Math.min(130, words.openMax))}px` : ''
-      fontsVersion.current += 1
-    }
+    const open = registry.current.get('openMark')
+    if (open) open.style.transform = `translate(${activeSlot.x}px, ${activeSlot.y}px) scale(${SWS})`
+    fontsVersion.current += 1
     const machineEl = registry.current.get('machine')
     if (machineEl) {
       // The screen at the display's proportions (zoom-layout.ts · screenOf), the device view centred in it.
@@ -409,13 +531,24 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
     }
     // The account's other machines: rows under this Mac's screen, inside the devices camera.
     const others = model.machines.filter((m) => !m.local)
-    const places = machinesAt(others.length, device.screen, device.box.w < 700)
+    const places = machinesAt(others.length, device.screen, narrow)
     others.forEach((m, i) => {
       const el = registry.current.get(`machinecard:${m.id}`)
       const at = places.at[i]
       if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
     })
-  }, [device, words, model.marks, model.machines])
+    // Back on a desk, the words a phone's painter held at one size go back to their sheet.
+    if (!narrow) {
+      for (const el of root.current?.querySelectorAll<HTMLElement & { _t?: string; _o?: number }>('.zv-machine-label, .zv-machinecard-label') ?? []) {
+        el.style.transform = ''
+        el.style.opacity = ''
+        el.style.visibility = ''
+        el._t = undefined
+        el._o = undefined
+      }
+    }
+    motion.wake()
+  }, [device, words, model.marks, model.machines, narrow, motion.wake])
   const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents') => {
     setError(null)
     try {
@@ -424,7 +557,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       zoomStore.focusItem(null)
       if (side === 'items') zoomStore.go(0, 'items')
       else zoomStore.go(1, 'agents')
-    } catch (e) { setError(`Cannot open workspace: ${String(e)}`) }
+    } catch (e) { setError(`Cannot open workspace: ${failureWords(e)}`) }
   }, [])
   const ghostItem = zoom.item ? (model.items.find((i) => i.id === zoom.item) ?? model.coinItems.find((i) => i.id === zoom.item) ?? null) : null
   // The newest browser beside the stack: on its carrier's coin when one wears it, else drawn on its own.
@@ -448,13 +581,15 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
+      <GaugePanel localName={machine} />
+      <RemoteDeskPanel />
       <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
           moved.current = false
           panned.current = false
           drag.current = pointers.current.size === 1 && canPan()
-            ? { x: e.clientX, y: e.clientY, pan: panAt.current, scrolling: false }
+            ? { x: e.clientX, y: e.clientY, pan: panNow(), scrolling: false }
             : null
           if (pointers.current.size === 2) {
             pinch.current = { distance: distance(), v: zoomStore.get().v }
@@ -480,7 +615,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             if (!d.scrolling && Math.abs(dy) > 6 && Math.abs(dy) >= Math.abs(dx)) d.scrolling = true
             if (d.scrolling) {
               panned.current = true
-              scrollBy(d.pan + dy - panAt.current)
+              scrollBy(d.pan + dy - panNow())
             }
           }
           const p = pinch.current
@@ -500,30 +635,31 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           if (swallowClick.current) { swallowClick.current = false; return }
           if (moved.current || pinch.current !== null) return
           // A node, a card, a button, a field: its own click, which zooms in.
-          if ((e.target as Element).closest('button, input, textarea, form, a, [role="button"], .zv-m, .zv-card, .zv-ip, .zv-lk, .zv-mark, .zv-machine, .zv-machinecard, .zv-workspace-hit')) return
+          if ((e.target as Element).closest('button, input, textarea, form, a, [role="button"], .zv-m, .zv-card, .zv-ip, .zv-lk, .zv-mark, .zv-machine, .zv-machinecard')) return
           stepBack()
         }}>
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => (
             <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(`${m.name} is listed, not readable from here: open it on that Mac.`)} />
           ))}
-          <button type="button" className="zv-machine" ref={bind('machine') as React.Ref<HTMLButtonElement>} onClick={() => motion.go(-1)} aria-label={`Open ${machine}`}>
-            <span className="zv-machine-deck" />
-            <span className="zv-machine-label"><b>{machine}</b><small>{model.frame.workspaces.length} workspaces · {model.deviceAgents} agents</small></span>
-          </button>
+          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
         </div>
-        <div className="zv-device" ref={bind('device')}>
-          <div className="zv-device-label" style={{ transform: `translate(${-device.box.w / 2 + 50}px, ${device.titleBottom}px) scale(${words.titleK.toFixed(4)}) translateY(-100%)`, maxWidth: Math.round(words.titleMax) }}>
-            <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span><small>agents open the crew · browsers open thumbnails</small>
+        <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
+          {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
+          <div className="zv-device-label" ref={bind('deviceLabel')} style={{ maxWidth: Math.round(words.titleMax) }}>
+            <b>{machine}</b><span>{countOf(model.frame.workspaces.length, 'workspace')}</span>
           </div>
-          {model.marks.map((m) => <MarkNode key={m.id} mark={m} bind={bind} onOpen={stable(`mark:${m.id}`, () => void switchWorkspace(m.id))} onOpenItems={stable(`mark-items:${m.id}`, () => void switchWorkspace(m.id, 'items'))} />)}
-          <button className="zv-workspace-hit" type="button" style={{ transform: `translate(${activeSlot.x - 90}px, ${activeSlot.y - 90}px)` }} onClick={() => motion.go(1, 'agents')} aria-label={`Open ${model.name} agents`} />
+          {/* In the grid's order, so Tab walks it as the eye does. The open tile's faces are the scene's, over it. */}
+          {model.frame.workspaces.map((id) => {
+            if (id === model.frame.active) return <WorkspaceTile key={id} mark={model.openMark} open bind={bind} onOpen={stable('open-agents', () => motion.go(1, 'agents'))} onOpenItems={stable('open-items', () => motion.go(0, 'items'))} />
+            const m = markOf.get(id)
+            return m ? <WorkspaceTile key={id} mark={m} bind={bind} onOpen={stable(`mark:${id}`, () => void switchWorkspace(id))} onOpenItems={stable(`mark-items:${id}`, () => void switchWorkspace(id, 'items'))} /> : null
+          })}
         </div>
         {/* The full view's sheet, UNDER the scene: the open card's parts travel over it to their places (full-poses.ts). */}
         <div className="zv-panel" ref={bind('panel')} />
         <div className="zv-scene" ref={bind('scene')}>
           <div className="zv-wash" ref={bind('wash')} />
-          <div className="zv-ring" ref={bind('ring')}><InkRing /></div>
           {model.frame.ties.map((t) => <div key={t.key} className="zv-tie" ref={bind(`tie:${t.key}`)}><InkTie /></div>)}
           {model.agents.map((a) => (
             <div key={a.id} className="zv-cardl" ref={bind(`agent-cardl:${a.id}`)}>
@@ -532,10 +668,10 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           ))}
           {model.frame.links.map((l) => {
             const a = agentOf.get(l.agent), i = itemOf.get(l.item)
-            return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? motion.agent(a.id) : motion.item(i.id)))} /> : null
+            return a && i ? <LinkNode key={l.key} k={l.key} agent={a} item={i} shared={i.owners.length} bind={bind} onClick={stable(`link:${l.key}`, () => (zoomStore.get().dir === 'items' ? tapAgent(a.id, `link-coin:${l.key}`) : motion.item(i.id)))} /> : null
           })}
           {shownItems.map((i) => <ItemNode key={i.id} item={i} names={namesOf.get(i.id) ?? []} bind={bind} onClick={stable(`item:${i.id}`, () => motion.item(i.id))} onDelete={onDelete ? stable(`item-del:${i.id}`, () => onDelete(i.id)) : undefined} />)}
-          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => motion.agent(a.id))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
+          {model.agents.map((a) => <AgentNode key={a.id} agent={a} card={cardIds.has(a.id)} bind={bind} onOpen={stable(`agent:${a.id}`, () => tapAgent(a.id, `agent-av:${a.id}`))} onDelete={onDelete ? stable(`agent-del:${a.id}`, () => onDelete(a.id)) : undefined} />)}
           <button type="button" className="zv-shelf-more" ref={bind('shelfMore') as React.Ref<HTMLButtonElement>} style={CHIP_HIDDEN} onClick={turnShelf}
             title={shelf.more ? (shelf.more.last ? 'Back to the first agents' : `${shelf.more.rest} more agents`) : undefined}
             aria-label={shelf.more ? (shelf.more.last ? 'Back to the first agents' : `${shelf.more.rest} more agents`) : 'More agents'}>
@@ -569,6 +705,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {zoom.dir === 'agents' && !zoom.full && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0 && (
         <PerRowPill what="agents" narrow={narrow} cols={crewCols ?? defaultCrewCols(narrow)} onPick={setCrewCols} />
       )}
+      {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && onNewWorkspace && (
+        <button type="button" className="zv-new-workspace" onClick={onNewWorkspace}>
+          <span aria-hidden="true">＋</span> New workspace
+        </button>
+      )}
       {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1 && (
         <PerRowPill what="workspaces" narrow={narrow} cols={deviceCols ?? defaultDeviceCols(narrow)} onPick={setDeviceCols} />
       )}
@@ -576,15 +717,67 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">
           <div className="zv-stops">
-            {stops.map((v, i) => <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} onClick={() => motion.go(v)}>{names[i]}</button>)}
-            <div className="zv-side" role="group" aria-label="Agents or artifacts">
-              {BAR_SIDES.map((s) => <button key={s.dir} type="button" aria-current={side === s.dir ? 'step' : undefined} onClick={() => motion.go(s.v, s.dir)}>{s.name}</button>)}
-            </div>
+            {/* Narrow, the stops you are not on wear the header's own marks and give the face its room (zoom.css). */}
+            {stops.map((v, i) => (
+              <button key={v} type="button" aria-current={selectedStop === v ? 'step' : undefined} aria-label={names[i]} onClick={() => motion.go(v)}>
+                <CrIcon name={v === BAR_STOPS[zoom.dir][0] ? 'device' : 'canvas'} className="zv-stop-ic" />
+                <span className="zv-stop-word">{names[i]}</span>
+              </button>
+            ))}
+            {/* The two sides are the groups of what needs you (BarGroups.tsx), each still its stop. */}
+            <BarGroups
+              workspaceId={workspaceId}
+              nodes={workspace?.nodes ?? null}
+              rows={crew.crew}
+              agents={agentOf}
+              attachIndex={attachIndex}
+              side={side}
+              narrow={narrow}
+              onStop={(v, dir) => motion.go(v, dir)}
+              onAgentFull={(id) => zoomStore.jumpTo('agent', id)}
+              onItemFull={(id) => motion.item(id)}
+              onDelete={onDelete}
+              onOutside={pressedOutside}
+            />
           </div>
         </div>
         <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
+        {/* The prompt's face, folded: the send key at the bar's end (prompt/face-slot.ts). */}
+        <span className="zv-face-slot" ref={setFaceSlot} />
       </nav>
+      {shelfCard && agentOf.has(shelfCard.id) && (
+        <ShelfCard
+          key={shelfCard.id}
+          agent={agentOf.get(shelfCard.id)!}
+          items={(attachIndex.get(shelfCard.id) ?? []).flatMap((at) => itemViewOf(at.node, [shelfCard.id]) ?? [])}
+          anchor={registry.current.get(shelfCard.anchor) ?? null}
+          onOpen={() => {
+            closeShelfCard()
+            zoomStore.jumpTo('agent', shelfCard.id)
+          }}
+          onItem={(itemId) => {
+            closeShelfCard()
+            motion.item(itemId)
+          }}
+          onDelete={onDelete ? () => {
+            closeShelfCard()
+            onDelete(shelfCard.id)
+          } : undefined}
+          onOutside={pressedOutside}
+          onClose={closeShelfCard}
+        />
+      )}
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>
   )
+}
+
+/** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */
+function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords' | 'machineShare'> {
+  return {
+    deviceLabel: title,
+    markLabels: marks.flatMap((m) => [...m.querySelectorAll<HTMLElement>('.zv-tw')]),
+    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')],
+    machineShare: devices.querySelector<HTMLElement>('.zv-machine-share')
+  }
 }

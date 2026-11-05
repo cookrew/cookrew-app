@@ -1,0 +1,60 @@
+# The watch app. Everything but the entry point is the package beside this file.
+#   node ../scripts/watch-local.mjs [APPLE_TEAM_ID]
+#   xcodegen generate && open CookrewWatch.xcodeproj
+name: CookrewWatch
+options:
+  bundleIdPrefix: dev.cookrew
+  createIntermediateGroups: true
+  deploymentTarget:
+    watchOS: "10.0"
+    iOS: "17.0"
+packages:
+  CookrewWatch:
+    path: .
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  # Apple's watch-only shape: a stub that carries the watch app onto the phone's
+  # install list, and the app itself. There is no iPhone app.
+  Cookrew:
+    type: application.watchapp2-container
+    platform: iOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cookrew.watch
+        INFOPLIST_KEY_CFBundleDisplayName: Cookrew
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: CookrewWatchApp
+  CookrewWatchApp:
+    type: application
+    platform: watchOS
+    sources:
+      - App
+    settings:
+      base:
+        PRODUCT_NAME: Cookrew Watch
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cookrew.watch.watchkitapp
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Cookrew
+        WKApplication: true
+        WKWatchOnly: true
+        WKCompanionAppBundleIdentifier: dev.cookrew.watch
+        CookrewBase: $(COOKREW_BASE)
+        CookrewRegistry: $(COOKREW_REGISTRY)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Cookrew reaches your Mac on this network.
+    dependencies:
+      - package: CookrewWatch
+        product: CookrewWatchUI

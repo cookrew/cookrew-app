@@ -3,6 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { cardPlacement, clampSpot, nameTagSpot, petClick, petHome, readSpot, type PetSpot } from './pet-pick'
 import { CONTENT_FRAMES, MORPH_EASE, MORPH_MS, morphFrames } from './pet-morph'
 import { CARD_PARTS, FACE_PARTS, FULL_PARTS, findParts, pageZoomEnv, waitFor, zoomStep } from './pet-zoom'
+import { FLOOR_PARTS, stageFloorNow } from './stage-floor'
 import { dockedSpot, nearDock, PHONE_PX, rowSpot, sheetBox, sheetOf, stripFaces, stripPage, type Box } from './pet-dock'
 import './pets.css'
 
@@ -97,19 +98,15 @@ const store = (key: string, value: string): void => {
   }
 }
 
-/** The stage, between the app's header and its bottom bar: where a card may open. */
+/** The stage, between the app's header and its bottom bar (or the phone's floating box): where a card may open. */
 const stageBand = (): { top: number; bottom: number } => {
   const stage = document.querySelector('.cr-stage')
   if (!stage) return { top: 0, bottom: window.innerHeight }
-  const r = stage.getBoundingClientRect()
-  return { top: Math.max(0, r.top), bottom: Math.min(window.innerHeight, r.bottom) }
+  return { top: Math.max(0, stage.getBoundingClientRect().top), bottom: stageFloorNow() }
 }
 
-/** The bed's height above the window's bottom: where the stage ends. */
-const bedGap = (): number => {
-  const stage = document.querySelector('.cr-stage')
-  return stage ? window.innerHeight - stage.getBoundingClientRect().bottom : 0
-}
+/** The bed's height above the window's bottom: where the stage ends, or the floating box begins. */
+const bedGap = (): number => window.innerHeight - stageFloorNow()
 
 export function PetTroop({
   side,
@@ -206,8 +203,12 @@ export function PetTroop({
     keep()
     window.addEventListener('resize', keep)
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(keep) : null
-    const stage = document.querySelector('.cr-stage')
-    if (ro && stage) ro.observe(stage)
+    // The phone's box floats over the stage's foot: its height moves the bed
+    // too, and so does its tray, which floats over it and shows and hides.
+    for (const sel of FLOOR_PARTS) {
+      const part = document.querySelector(sel)
+      if (ro && part) ro.observe(part)
+    }
     return () => {
       window.removeEventListener('resize', keep)
       ro?.disconnect()

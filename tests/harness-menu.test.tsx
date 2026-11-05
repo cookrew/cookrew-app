@@ -1,6 +1,6 @@
 // THE ＋ MENU TAKES OVER THE TERMINAL BUTTON (owner, 2026-11-01: "add a Shell
 // and the button on the left can retire"). Everything the button's preset row held — a
-// bare shell, the roles, the saved teams, the import, ORCH — sits under the
+// bare shell, the roles — sits under the
 // prompt box's harness chip, and the button is gone from the zoom view.
 //
 // Static markup the house way, plus a walk of the element tree to press the
@@ -26,11 +26,8 @@ const HARNESSES = ['Claude Code', 'Codex', 'OpenCode', 'Pi']
 const actsWith = (over: Partial<NewMenuActs> = {}): NewMenuActs => ({
   shell: true,
   roles: ['Reviewer'],
-  teams: ['baymax-home', 'cookrew-alpha'],
   onPreset: () => undefined,
   onRole: () => undefined,
-  onImportServed: () => undefined,
-  onOrch: () => undefined,
   making: false,
   ...over
 })
@@ -54,15 +51,14 @@ const press = (tree: ReactNode, label: string): void => {
 describe('the ＋ menu', () => {
   beforeEach(stubStorage)
 
-  it('offers the harnesses as picks, then Shell, the roles, the teams, the import and ORCH', () => {
-    const html = renderToStaticMarkup(<HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} orch={false} acts={actsWith()} onDone={() => undefined} />)
+  it('offers the harnesses as picks, then Shell and the roles; no teams, no import, no ORCH (retired 2026-11-03)', () => {
+    const html = renderToStaticMarkup(<HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} acts={actsWith()} onDone={() => undefined} />)
     for (const name of HARNESSES) expect(html).toContain(`aria-checked="${name === 'Codex'}">${name}</button>`)
-    const order = ['OPEN NOW', '>Shell<', 'Reviewer', 'YOUR TEAMS', 'baymax-home', 'cookrew-alpha', '+ Import a team', 'ORCH']
+    const order = ['OPEN NOW', '>Shell<', 'Reviewer']
     const at = order.map((s) => html.indexOf(s))
     expect(at.every((i) => i > html.indexOf('>Pi<'))).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
-    expect(html).toContain('type="checkbox"')
-    expect(html).not.toContain('checked=""')
+    for (const gone of ['YOUR TEAMS', 'Import a team', 'ORCH', 'type="checkbox"']) expect(html).not.toContain(gone)
   })
 
   it('Shell, a role and a team are made at once, and the menu closes', () => {
@@ -70,44 +66,37 @@ describe('the ＋ menu', () => {
     const roles: string[] = []
     const done = vi.fn()
     const acts = actsWith({ onPreset: (n) => void presets.push(n), onRole: (n) => void roles.push(n) })
-    const tree = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, orch: false, acts, onDone: done })
+    const tree = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts, onDone: done })
     press(tree, 'Shell')
     press(tree, 'Reviewer')
-    press(tree, 'cookrew-alpha')
-    expect(presets).toEqual([SHELL_PRESET, 'cookrew-alpha'])
+    expect(presets).toEqual([SHELL_PRESET])
     expect(roles).toEqual(['Reviewer'])
-    expect(done).toHaveBeenCalledTimes(3)
+    expect(done).toHaveBeenCalledTimes(2)
   })
 
-  it('a harness is only picked; ORCH toggles and keeps the menu open', () => {
+  it('a harness is only picked', () => {
     const picks: string[] = []
-    const orch: boolean[] = []
     const done = vi.fn()
-    const tree = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: (n) => void picks.push(n), orch: true, acts: actsWith({ onOrch: (on) => void orch.push(on) }), onDone: done })
+    const tree = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: (n) => void picks.push(n), acts: actsWith(), onDone: done })
     press(tree, 'Pi')
     expect(picks).toEqual(['Pi'])
-    const box = elements(tree).find((e) => e.type === 'input')
-    box?.props.onChange?.({ target: { checked: false } })
-    expect(orch).toEqual([false])
     expect(done).not.toHaveBeenCalled()
   })
 
   it('while a card is being made the acts hold still, the picks do not', () => {
-    const html = renderToStaticMarkup(<HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} orch={false} acts={actsWith({ making: true })} onDone={() => undefined} />)
-    // Shell + 1 role + 2 teams.
-    expect(html.match(/disabled=""/g)?.length).toBe(4)
+    const html = renderToStaticMarkup(<HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} acts={actsWith({ making: true })} onDone={() => undefined} />)
+    // Shell + 1 role.
+    expect(html.match(/disabled=""/g)?.length).toBe(2)
   })
 
   it('with nothing to open, it is the harness list alone', () => {
-    const html = renderToStaticMarkup(<HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} orch={false} onDone={() => undefined} />)
+    const html = renderToStaticMarkup(<HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} onDone={() => undefined} />)
     expect(html).not.toContain('OPEN NOW')
-    expect(html).not.toContain('ORCH')
     const bare = renderToStaticMarkup(
-      <HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} orch={false} acts={actsWith({ shell: false, roles: [], teams: [], onImportServed: undefined })} onDone={() => undefined} />
+      <HarnessMenu at={AT} harnesses={HARNESSES} harness="Codex" onPick={() => undefined} acts={actsWith({ shell: false, roles: [] })} onDone={() => undefined} />
     )
     expect(bare).not.toContain('OPEN NOW')
-    expect(bare).not.toContain('YOUR TEAMS')
-    expect(bare).toContain('ORCH')
+    expect(bare.match(/<button/g)?.length).toBe(HARNESSES.length)
   })
 
   it('a shell opened from the menu leaves the harness the box was on', () => {
@@ -166,7 +155,26 @@ describe('the dock, with the TERMINAL button retired', () => {
     expect(html).not.toContain('cr-dock-tools')
   })
 
-  it('the chip says ORCH while the next agent will lead', async () => {
-    expect(await render({ orch: true })).toContain('ORCH</small> ▾')
+  it('the chip no longer wears ORCH', async () => {
+    expect(await render({ orch: true })).not.toContain('ORCH')
+  })
+})
+
+describe('the ＋ menu reaches the window picker', () => {
+  it('offers a window or screen under OPEN NOW, and the press closes the menu', () => {
+    const onSource = vi.fn()
+    const onDone = vi.fn()
+    const tree = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts: actsWith({ onSource }), onDone })
+    expect(renderToStaticMarkup(tree)).toContain('Window or screen')
+    press(tree, 'Window or screen')
+    expect(onSource).toHaveBeenCalledOnce()
+    expect(onDone).toHaveBeenCalledOnce()
+  })
+
+  it('stands alone when there is no shell and no role, and is absent where nothing can share', () => {
+    const alone = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts: actsWith({ shell: false, roles: [], onSource: () => undefined }), onDone: () => undefined })
+    expect(renderToStaticMarkup(alone)).toContain('OPEN NOW')
+    const none = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts: actsWith(), onDone: () => undefined })
+    expect(renderToStaticMarkup(none)).not.toContain('Window or screen')
   })
 })

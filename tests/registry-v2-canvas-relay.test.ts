@@ -175,6 +175,8 @@ const mobileServer = (): Server =>
 
 interface Linked {
   ready: Promise<string>
+  /** Has the relay ended the downlink? */
+  ended: () => boolean
   close: () => void
 }
 
@@ -218,8 +220,12 @@ function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobil
   }
 
   const opens = new Map<string, { method: string; path: string; headers: Record<string, string> }>()
+  let hungUp = false
   const down = httpRequest(address, { method: 'GET', headers }, (res) => {
     let buffer = ''
+    res.on('close', () => {
+      hungUp = true
+    })
     res.setEncoding('utf8')
     res.on('data', (text: string) => {
       buffer += text
@@ -255,6 +261,7 @@ function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobil
   down.end()
   return {
     ready,
+    ended: () => hungUp,
     close: () => {
       up.destroy()
       down.destroy()
@@ -414,6 +421,30 @@ describe('the canvas link, and who may open one', () => {
       headers: { authorization: `Bearer ${desktopToken}` }
     })
     expect(res.status).toBe(403)
+  })
+
+  it('ends the line when the account is deleted, and it cannot be dialled again', async () => {
+    const mac = await claim('goes-away', 'desktop')
+    const filed = await fetch(`${site.origin}/v2/me/desktops/${mac.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${mac.token}` },
+      body: JSON.stringify({ name: 'Studio', workspaces: [] })
+    })
+    expect(filed.status).toBe(204)
+    const line = linkDesktop(site.origin, mac.token, mac.id, mobile.origin)
+    await line.ready
+    const status = (): Promise<Response> =>
+      fetch(`${site.origin}/v2/me/desktops/${mac.id}/relay-status`, { headers: { authorization: `Bearer ${mac.token}` } })
+    expect(await (await status()).json()).toEqual({ live: true })
+    const gone = await fetch(`${site.origin}/v2/me`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${mac.token}` },
+      body: JSON.stringify({ confirm: 'goes-away', current: PASSWORD })
+    })
+    expect(gone.status).toBe(204)
+    await until(() => line.ended(), 'the downlink to end')
+    expect((await status()).status).toBe(401)
+    line.close()
   })
 
   it('refuses an uplink for a name nobody is holding a downlink for', async () => {
@@ -629,7 +660,7 @@ describe('a phone of the account, reaching its own canvas', () => {
       { headers: asPhone(), redirect: 'manual' }
     )
     expect(res.status).toBe(303)
-    expect(res.headers.get('location')).toBe(`${prefix()}/?token=abc`)
+    expect(res.headers.get('location')).toBe(`${prefix()}/#pair=abc`)
   })
 
   it('moves a redirect the Mac wrote to its OWN origin under the prefix too', async () => {
@@ -1071,7 +1102,10 @@ describe('the header and cookie rules, by themselves', () => {
 
   it('rewrites a Location by where it points, and only then', () => {
     const at = { prefix: '/relay/@u/desktop/d', path: '/?open=x', host: 'cookrew.dev' }
-    expect(rewriteLocation('/?token=abc', at)).toBe('/relay/@u/desktop/d/?token=abc')
+    // A redirect the browser would follow is a URL the ingress would log, so the
+    // credential moves to the fragment, which no request ever carries.
+    expect(rewriteLocation('/?token=abc', at)).toBe('/relay/@u/desktop/d/#pair=abc')
+    expect(rewriteLocation('/board?token=abc&x=1', at)).toBe('/relay/@u/desktop/d/board?x=1#pair=abc')
     expect(rewriteLocation('https://127.0.0.1:8639/board', at)).toBe('/relay/@u/desktop/d/board')
     expect(rewriteLocation('https://192.168.1.24:8643/x#y', at)).toBe('/relay/@u/desktop/d/x#y')
     // Ours: left exactly as written, whatever the scheme in front of it.

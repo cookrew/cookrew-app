@@ -76,3 +76,39 @@ describe('the name on the account', () => {
     )
   })
 })
+
+describe('a machine that is not a Mac (the Solis box, 2026-11-05)', () => {
+  it('is named for its platform when it has no model', () => {
+    expect(modelLabel('', 'linux')).toBe('Linux')
+    expect(modelLabel('', 'win32')).toBe('Windows PC')
+    expect(modelLabel('', 'freebsd')).toBe('Computer')
+    expect(modelLabel('   ', 'linux')).toBe('Linux')
+  })
+
+  it('stays a Mac on a Mac', () => {
+    expect(modelLabel('', 'darwin')).toBe('Mac')
+    expect(modelLabel('MacBookPro18,3', 'darwin')).toBe('MacBook Pro')
+  })
+
+  it('has no Mac in an empty hostname', () => {
+    expect(hostLabel('', 'linux')).toBe('this-machine')
+    expect(hostLabel('', 'darwin')).toBe('this-mac')
+  })
+
+  it('reaches the account as "<platform> · <host>"', () => {
+    expect(
+      deviceDisplayName({ model: '', host: 'solis-model-test', taken: [], platform: 'linux' }),
+    ).toBe('Linux · solis-model-test')
+  })
+
+  it('still counts a collision', () => {
+    expect(
+      deviceDisplayName({
+        model: '',
+        host: 'solis-model-test',
+        taken: ['Linux · solis-model-test'],
+        platform: 'linux',
+      }),
+    ).toBe('Linux · solis-model-test (2)')
+  })
+})

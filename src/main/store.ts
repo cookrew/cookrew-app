@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
 import {
@@ -21,6 +22,7 @@ import {
   WorkspaceList,
   WorkspaceMeta,
   WorkspaceState,
+  legacyNoteName,
   noteNameFromContent,
   normalizeDirs,
   uniqueName
@@ -33,6 +35,7 @@ import { lineageIdsOf } from './session-lineage'
 import type { CookrewEvent, EventActor } from './event-log'
 import { upgradeNode } from './node-upgrades'
 import { multiInstanceDefault } from './launch-defaults'
+import { isWorkspaceIcon } from '../shared/workspace-door'
 import type { RecoverableSnapshot } from './recoverable'
 
 const DATA_DIR = path.join(homedir(), '.cookrew')
@@ -124,14 +127,31 @@ export class WorkspaceStore extends EventEmitter {
    */
   private readonly hydrated = new Map<string, HydratedSession>()
 
-  /** Which resident workspace a seat is looking at. A label, not a lifetime. */
+  /** Which workspace the desktop is looking at. A label, not a lifetime. */
   private focused: string
+
+  /**
+   * WHAT ONE REQUEST IS LOOKING AT, when that is not the desktop's workspace.
+   *
+   * Focus was one value for every device, so a phone choosing a workspace moved
+   * the desktop's screen (box user test 2, bug 10; ruling 11-04: switching is
+   * focus only). A phone now names the workspace it is on with each request,
+   * and for that request's whole async life every focus-bound read and write
+   * answers for that workspace. `focused` itself never moves.
+   */
+  private readonly seat = new AsyncLocalStorage<string | undefined>()
+
+  /** The last file operation queued for each note (queueNoteFile). */
+  private readonly noteFiles = new Map<string, Promise<void>>()
 
   private readonly multiInstance: boolean
 
   constructor(private baseDir = DATA_DIR, options: WorkspaceStoreOptions = {}) {
     super()
     this.multiInstance = options.multiInstance ?? MULTI_INSTANCE_DEFAULT
+    // Turns the context hooks on NOW. The first enterWith of a process turns them
+    // on mid-flight, and work already waiting at that moment inherited that seat.
+    this.seat.enterWith(undefined)
     const loaded = loadRegistry(this.baseDir)
     this.registry = withSlugs(loaded)
     // Persist a backfill immediately: a slug is FROZEN, and a slug that only
@@ -207,6 +227,43 @@ export class WorkspaceStore extends EventEmitter {
     return true
   }
 
+  /**
+   * The workspace this call is FOR: the seat when the request has one that
+   * still exists, the desktop's focus otherwise. Every focus-bound read and
+   * write goes through here; only what is about the desktop's screen itself
+   * (switching, the 'change' push, eviction) reads `focused` directly.
+   */
+  private get here(): string {
+    const seat = this.seat.getStore()
+    return seat !== undefined && this.registry.workspaces.some((w) => w.id === seat) ? seat : this.focused
+  }
+
+  /** What the desktop's window shows, whoever is asking. */
+  get deskId(): string {
+    return this.focused
+  }
+
+  /** Run `work` as a device whose seat is this workspace. */
+  inSeat<T>(workspaceId: string, work: () => T): T {
+    return this.seat.run(workspaceId, work)
+  }
+
+  /** Take a seat for the rest of the current request (mobile-api's choke point). */
+  enterSeat(workspaceId: string): void {
+    this.seat.enterWith(workspaceId)
+  }
+
+  /**
+   * A SEAT ENDS AT THE STORE'S DOOR. A listener is the desktop's push, the event
+   * log, every phone's stream: none of them is the request that caused the
+   * event, so none may read that request's seat as focus. Without this a phone
+   * editing its own canvas made `broadcast` send that canvas to the desktop.
+   */
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    if (this.seat.getStore() === undefined) return super.emit(event, ...args)
+    return this.seat.exit(() => super.emit(event, ...args))
+  }
+
   /** Test seam: the data dir this store was built against. */
   get baseDirForTests(): string {
     return this.baseDir
@@ -221,20 +278,25 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Which workspace a seat is looking at. */
   get focusedId(): string {
-    return this.focused
+    return this.here
   }
 
   /** The focused workspace's canvas. */
   get focusedState(): WorkspaceState {
-    return this.hydrate(this.focused).state
+    return this.hydrate(this.here).state
   }
 
   /** Meta of the focused workspace, or undefined if the registry is empty. */
   focusedMeta(): WorkspaceMeta | undefined {
-    return this.registry.workspaces.find((w) => w.id === this.focused)
+    return this.registry.workspaces.find((w) => w.id === this.here)
   }
 
   list(): WorkspaceList {
+    return { workspaces: this.registry.workspaces, activeId: this.here }
+  }
+
+  /** The list as the desktop sees it: what every 'workspaces' listener is told. */
+  private deskList(): WorkspaceList {
     return { workspaces: this.registry.workspaces, activeId: this.focused }
   }
 
@@ -280,7 +342,7 @@ export class WorkspaceStore extends EventEmitter {
     this.forgetParked(meta.id)
     saveWorkspaceState(this.baseDir, meta.id, { name: meta.name, dir, dirs: [dir], nodes: [], connections: [] })
     saveRegistry(this.baseDir, this.registry)
-    this.emit('workspaces', this.list())
+    this.emit('workspaces', this.deskList())
     this.emitOp('workspace.created', meta.id, meta.name, meta.id)
     return meta
   }
@@ -326,7 +388,7 @@ export class WorkspaceStore extends EventEmitter {
       console.error('Failed to mirror forked note files:', error)
     }
     saveRegistry(this.baseDir, this.registry)
-    this.emit('workspaces', this.list())
+    this.emit('workspaces', this.deskList())
     this.emitOp('workspace.created', meta.id, meta.name, meta.id, 'team fork')
     return meta
   }
@@ -337,6 +399,9 @@ export class WorkspaceStore extends EventEmitter {
    * target meta, or throws if the id is unknown.
    */
   switchWorkspace(id: string): WorkspaceMeta {
+    // A switch moves the DESKTOP, so it never runs as a seat: removing the
+    // workspace on the desktop's screen from a phone lands here.
+    if (this.seat.getStore() !== undefined) return this.seat.exit(() => this.switchWorkspace(id))
     const target = this.registry.workspaces.find((w) => w.id === id)
     if (!target) throw new Error(`Workspace '${id}' not found`)
     if (id === this.focused) return target
@@ -372,7 +437,7 @@ export class WorkspaceStore extends EventEmitter {
     this.hydrate(id)
 
     this.emit('switch', { previousTerminalIds })
-    this.emit('workspaces', this.list())
+    this.emit('workspaces', this.deskList())
     this.emit('change', this.focusedState)
     this.emitOp(
       'workspace.switched',
@@ -385,7 +450,11 @@ export class WorkspaceStore extends EventEmitter {
     return target
   }
 
-  renameWorkspace(id: string, name: string): void {
+  renameWorkspace(id: string, raw: string): void {
+    const name = raw.trim()
+    if (!name) throw new Error('Give the workspace a name.')
+    const taken = this.registry.workspaces.find((w) => w.id !== id && w.name.toLowerCase() === name.toLowerCase())
+    if (taken) throw new Error(`Another workspace is already called "${taken.name}".`)
     this.registry = {
       ...this.registry,
       workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, name } : w))
@@ -394,9 +463,21 @@ export class WorkspaceStore extends EventEmitter {
     const session = this.hydrated.get(id)
     if (session) session.state = { ...session.state, name }
     saveRegistry(this.baseDir, this.registry)
-    this.emit('workspaces', this.list())
-    if (id === this.focused) this.emit('change', this.focusedState)
+    this.emit('workspaces', this.deskList())
+    if (id === this.focused) this.emit('change', this.hydrate(this.focused).state)
     this.emitOp('workspace.renamed', id, name, id)
+  }
+
+  /** A workspace's mark. Throws on an unknown workspace or anything but one short mark. */
+  setWorkspaceIcon(id: string, icon: unknown): void {
+    if (!this.registry.workspaces.some((w) => w.id === id)) throw new Error(`Workspace '${id}' not found`)
+    if (!isWorkspaceIcon(icon)) throw new Error('Pick one icon.')
+    this.registry = {
+      ...this.registry,
+      workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, icon: icon.trim() } : w))
+    }
+    saveRegistry(this.baseDir, this.registry)
+    this.emit('workspaces', this.deskList())
   }
 
   /**
@@ -415,7 +496,7 @@ export class WorkspaceStore extends EventEmitter {
       workspaces: this.registry.workspaces.map((w) => (w.id === id ? withBrief(w, checked.brief) : w))
     }
     saveRegistry(this.baseDir, this.registry)
-    this.emit('workspaces', this.list())
+    this.emit('workspaces', this.deskList())
   }
 
   /**
@@ -458,7 +539,7 @@ export class WorkspaceStore extends EventEmitter {
     } catch (error) {
       console.error('Failed to delete workspace files:', error)
     }
-    this.emit('workspaces', this.list())
+    this.emit('workspaces', this.deskList())
     return switchedTo
   }
 
@@ -489,7 +570,7 @@ export class WorkspaceStore extends EventEmitter {
       saveWorkspaceState(this.baseDir, id, { ...state, dir: primary, dirs })
     }
     saveRegistry(this.baseDir, this.registry)
-    this.emit('workspaces', this.list())
+    this.emit('workspaces', this.deskList())
     return this.list()
   }
 
@@ -547,7 +628,7 @@ export class WorkspaceStore extends EventEmitter {
   }
 
   private mutate(next: WorkspaceState): void {
-    this.mutateIn(this.focused, next)
+    this.mutateIn(this.here, next)
   }
 
   /**
@@ -615,7 +696,7 @@ export class WorkspaceStore extends EventEmitter {
   workspaceOfNode(id: string): WorkspaceMeta | undefined {
     if (this.focusedState.nodes.some((n) => n.id === id)) return this.activeMeta()
     for (const meta of this.registry.workspaces) {
-      if (meta.id === this.focused) continue
+      if (meta.id === this.here) continue
       try {
         const raw = JSON.parse(
           readFileSync(workspaceFile(this.baseDir, meta.id), 'utf8')
@@ -764,7 +845,7 @@ export class WorkspaceStore extends EventEmitter {
     details?: string,
     durationMs?: number
   ): void {
-    this.recordEventIn(this.focused, type, entityId, entityName, details, durationMs)
+    this.recordEventIn(this.here, type, entityId, entityName, details, durationMs)
   }
 
   private createdType(kind: CanvasNode['kind']): string {
@@ -1009,7 +1090,7 @@ export class WorkspaceStore extends EventEmitter {
     const a = this.nodeAcrossWorkspaces(aId)
     const b = this.nodeAcrossWorkspaces(bId)
     if (!a || !b) throw new Error('Cannot connect: node not found in any workspace')
-    if (a.workspaceId === this.focused && b.workspaceId === this.focused) {
+    if (a.workspaceId === this.here && b.workspaceId === this.here) {
       return this.connect(aId, bId)
     }
     const matches = (c: Connection): boolean =>
@@ -1037,7 +1118,7 @@ export class WorkspaceStore extends EventEmitter {
 
   /** addNode into any workspace; unique-named within THAT workspace. */
   addNodeToWorkspace(workspaceId: string, node: CanvasNode): CanvasNode {
-    if (workspaceId === this.focused) return this.addNode(node)
+    if (workspaceId === this.here) return this.addNode(node)
     if (!this.registry.workspaces.some((w) => w.id === workspaceId)) {
       throw new Error(`Workspace '${workspaceId}' not found`)
     }
@@ -1131,7 +1212,7 @@ export class WorkspaceStore extends EventEmitter {
     if (!hit) return
     // Active-workspace removals route through removeNode so the op event
     // (and any kind-specific cleanup) is emitted exactly once.
-    if (hit.workspaceId === this.focused) {
+    if (hit.workspaceId === this.here) {
       this.removeNode(id)
       return
     }
@@ -1141,6 +1222,7 @@ export class WorkspaceStore extends EventEmitter {
       nodes: s.nodes.filter((n) => n.id !== id),
       connections: s.connections.filter((c) => c.a !== id && c.b !== id)
     }))
+    if (hit.node.kind === 'note') this.forgetNoteFile(hit.node.id, hit.workspaceId)
     this.emitOp(this.removedType(hit.node.kind), hit.node.id, hit.node.name, hit.workspaceId)
   }
 
@@ -1163,7 +1245,7 @@ export class WorkspaceStore extends EventEmitter {
    * uniqueness check, the file on disk and the event all follow the node
    * instead of the window.
    */
-  addNode(node: CanvasNode, workspaceId: string = this.focused): CanvasNode {
+  addNode(node: CanvasNode, workspaceId: string = this.here): CanvasNode {
     const state = this.stateOf(workspaceId)
     const upgraded = upgradeNode(node)
     const named: CanvasNode = {
@@ -1196,7 +1278,10 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Allow-listed update — the only mutation surface exposed to IPC/mobile. */
   updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
-    const node = this.node(id)
+    // Any canvas, not only the one on screen: `cookrew rename` and Sous name
+    // cards of background workspaces, and a focused-only lookup answered
+    // "renamed" while nothing changed. updateNodeUnsafe falls through.
+    const node = this.node(id) ?? this.nodeAcrossWorkspaces(id)?.node
     if (!node) return undefined
     const allowed = WorkspaceStore.PATCHABLE[node.kind]
     const safe = Object.fromEntries(
@@ -1260,7 +1345,7 @@ export class WorkspaceStore extends EventEmitter {
   ): CanvasNode | undefined {
     const hit = this.nodeAcrossWorkspaces(id)
     if (!hit) return undefined
-    if (hit.workspaceId === this.focused) return this.updateNodeUnsafe(id, patch)
+    if (hit.workspaceId === this.here) return this.updateNodeUnsafe(id, patch)
     let updated: CanvasNode | undefined
     this.patchWorkspace(hit.workspaceId, (state) => ({
       ...state,
@@ -1270,19 +1355,21 @@ export class WorkspaceStore extends EventEmitter {
         return updated
       })
     }))
+    if (updated?.kind === 'note') void this.persistNoteFile(updated, hit.workspaceId)
     if (updated) this.spillLineage(updated, patch)
     return updated
   }
 
   removeNode(id: string): void {
     const node = this.node(id)
-    if (node) this.captureRecoverable(node, this.focused)
+    if (node) this.captureRecoverable(node, this.here)
     this.mutate({
       ...this.focusedState,
       nodes: this.focusedState.nodes.filter((n) => n.id !== id),
       connections: this.focusedState.connections.filter((c) => c.a !== id && c.b !== id)
     })
-    if (node) this.emitOp(this.removedType(node.kind), node.id, node.name, this.focused)
+    if (node?.kind === 'note') this.forgetNoteFile(node.id, this.here)
+    if (node) this.emitOp(this.removedType(node.kind), node.id, node.name, this.here)
   }
 
   connect(aId: string, bId: string): Connection {
@@ -1296,7 +1383,7 @@ export class WorkspaceStore extends EventEmitter {
       'connection.made',
       conn.id,
       `${this.node(aId)?.name ?? aId} ↔ ${this.node(bId)?.name ?? bId}`,
-      this.focused
+      this.here
     )
     return conn
   }
@@ -1306,14 +1393,14 @@ export class WorkspaceStore extends EventEmitter {
       ...this.focusedState,
       connections: this.focusedState.connections.filter((c) => c.id !== connectionId)
     })
-    this.emitOp('connection.removed', connectionId, '', this.focused)
+    this.emitOp('connection.removed', connectionId, '', this.here)
   }
 
   // ---- notes ----
 
   createNote(
     partial: Omit<NoteNodeData, 'kind' | 'id' | 'name'>,
-    workspaceId: string = this.focused
+    workspaceId: string = this.here
   ): NoteNodeData {
     const name = uniqueName(
       noteNameFromContent(partial.content),
@@ -1325,13 +1412,14 @@ export class WorkspaceStore extends EventEmitter {
 
   /** Write note content; renames the note when it has no custom name. */
   writeNote(id: string, content: string): NoteNodeData | undefined {
-    const note = this.node(id)
+    // Any canvas, as updateNode: the owner looking elsewhere is no reason to drop the words.
+    const note = this.node(id) ?? this.nodeAcrossWorkspaces(id)?.node
     if (!note || note.kind !== 'note') return undefined
     // AGAINST ITS OWN CANVAS, not the one on screen. A note written from an
     // agent's terminal while the owner is looking elsewhere would otherwise be
     // renamed to avoid collisions it does not have, and keep one it does.
-    const siblings = this.stateOf(this.ownerOf(id) ?? this.focused).nodes
-    const name = note.customName
+    const siblings = this.stateOf(this.ownerOf(id) ?? this.here).nodes
+    const name = note.customName || note.name === legacyNoteName(content)
       ? note.name
       : uniqueName(
           noteNameFromContent(content),
@@ -1340,14 +1428,38 @@ export class WorkspaceStore extends EventEmitter {
     return this.updateNode(id, { content, name }) as NoteNodeData
   }
 
-  private async persistNoteFile(note: NoteNodeData, workspaceId = this.focused): Promise<void> {
-    try {
-      const dir = this.notesDirOf(workspaceId)
+  /**
+   * One note's file work, in the order it was asked for. Writes are background
+   * work, so a delete that did not queue behind them could finish first and the
+   * write would put the words back on disk.
+   */
+  private queueNoteFile(id: string, work: () => Promise<void>): Promise<void> {
+    const next = (this.noteFiles.get(id) ?? Promise.resolve())
+      .then(work)
+      .catch((error) => console.error('Failed to update note file:', error))
+      .finally(() => {
+        if (this.noteFiles.get(id) === next) this.noteFiles.delete(id)
+      })
+    this.noteFiles.set(id, next)
+    return next
+  }
+
+  private persistNoteFile(note: NoteNodeData, workspaceId = this.here): Promise<void> {
+    const dir = this.notesDirOf(workspaceId)
+    return this.queueNoteFile(note.id, async () => {
       await fs.mkdir(dir, { recursive: true })
       await fs.writeFile(path.join(dir, `${note.id}.md`), note.content, 'utf8')
-    } catch (error) {
-      console.error('Failed to persist note file:', error)
-    }
+    })
+  }
+
+  /**
+   * THE FILE GOES WITH THE CARD (box user test 2, bug 12). The dialog promises
+   * the text is gone, and someone deleting a note to remove something sensitive
+   * is relying on that being true of the disk as well as the screen.
+   */
+  private forgetNoteFile(id: string, workspaceId: string): void {
+    const file = path.join(this.notesDirOf(workspaceId), `${id}.md`)
+    void this.queueNoteFile(id, () => fs.rm(file, { force: true }))
   }
 }
 

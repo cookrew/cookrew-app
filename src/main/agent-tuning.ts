@@ -1,5 +1,7 @@
 // Reading and turning an agent's two dials (shared/agent-tuning) — the main
-// half: the session file is the readout, the PTY is the control.
+// half: the session file is the readout; the control is a line typed into the
+// PTY, or for a harness whose dials are launch flags (claude) a restart in
+// place on the new command (agent-relaunch.ts).
 //
 // Nothing here knows about Electron. The PTY table and the node store arrive
 // as two functions, so the whole path — refuse mid-turn, type one line,
@@ -18,8 +20,13 @@ import {
   type TuneAsk,
   type TuneKnob,
 } from '../shared/agent-tuning'
+import { launchOffer } from '../shared/launch-tune'
 import type { TerminalNodeData } from '../shared/model'
+import type { RelaunchVerdict } from './agent-relaunch'
+import { launchPick, type LaunchPatch } from './claude-model-route'
 import { harnessFor, type HarnessWatchOptions } from './harness'
+
+export type { RelaunchVerdict } from './agent-relaunch'
 
 /**
  * How far back a COLD read looks, in escalating steps.
@@ -342,6 +349,17 @@ export class TuneAsks {
   forget(terminalId: string): void {
     this.byTerminal.delete(terminalId)
   }
+
+  /**
+   * One knob's asks, superseded: an RTE pick decides a routed card's model,
+   * so an older MDL ask — settled once — would read as refused against the
+   * new route's replies (QA 2026-11-03: `group/smart ! opus`).
+   */
+  forgetKnob(terminalId: string, knob: TuneKnob): void {
+    const kept = (this.byTerminal.get(terminalId) ?? []).filter((ask) => ask.knob !== knob)
+    if (kept.length > 0) this.byTerminal.set(terminalId, kept)
+    else this.byTerminal.delete(terminalId)
+  }
 }
 
 export interface TuneDeps {
@@ -364,6 +382,27 @@ export interface TuneDeps {
    * no RTE dial, exactly the rail before the program.
    */
   routeChoices?: (terminalId: string) => readonly string[] | null
+  /**
+   * Save this launch command on the card and restart the agent in place on
+   * it, when that is safe (agent-relaunch.ts). For a harness whose dials are
+   * launch flags (HarnessTuning.relaunch); absent, its line is typed instead.
+   */
+  relaunch?: (terminalId: string, patch: LaunchPatch) => RelaunchVerdict
+  /**
+   * Where the card's turns go, for a model pick (claude-model-route.ts): a
+   * routed card's model is its route. Absent: direct, no catalog.
+   */
+  routeFor?: (node: TerminalNodeData) => {
+    routed: boolean
+    catalog: readonly string[]
+    /** A gateway model's effort levels (its catalog row). */
+    levelsOf?: (id: string) => readonly string[]
+  }
+  /**
+   * The effort levels this card's model takes (owner 2026-11-04): the
+   * gateway's catalog row for a routed card. Absent or null: claude's own.
+   */
+  effortChoices?: (terminalId: string) => readonly string[] | null
 }
 
 export type TuneResult = { ok: true; ask: TuneAsk } | { ok: false; reason: string }
@@ -387,6 +426,8 @@ export function tuningStateOf(deps: TuneDeps, terminalId: string): AgentTuningSt
   // The RTE dial reads from CardRouteState, never from the session file; it
   // is listed here only so the rail knows the card has one and what it offers.
   const typed = [...knobs]
+  const effortChoices = knobs.includes('effort') ? (deps.effortChoices?.(terminalId) ?? null) : null
+  if (effortChoices && effortChoices.length > 0) choices.effort = effortChoices
   const routeChoices = deps.routeChoices?.(terminalId) ?? null
   if (routeChoices) {
     knobs.push('route')
@@ -430,10 +471,18 @@ export function applyTuning(
   // Against the HARNESS's values when it names them, not the shared defaults.
   // For pi this is the difference between setting a model and opening a picker
   // that swallows the pane's input.
+  // A command the flag cannot ride (launch-tune.launchOffer) would restart on
+  // nothing new: its line is typed instead, as before.
+  const relaunching = harness.tuning.relaunch === true && deps.relaunch !== undefined && launchOffer(node.command) !== null
   const offered =
-    harness.tuning.values?.(knob, readTuning(subjectOf(node), deps.watch ?? {})) ?? null
-  const allowed = offered === null ? tuneValueOk(knob, value) : offered.includes(value)
+    knob === 'effort' && relaunching
+      ? (deps.effortChoices?.(terminalId) ?? null)
+      : (harness.tuning.values?.(knob, readTuning(subjectOf(node), deps.watch ?? {})) ?? null)
+  // A relaunched model pick is one of the one list's rows (model-pick.ts):
+  // launchPick checks it against the gateway's catalog, which this check cannot.
+  const allowed = relaunching && knob === 'model' ? true : offered === null || offered.length === 0 ? tuneValueOk(knob, value) : offered.includes(value) && tuneValueOk(knob, value)
   if (!allowed) return { ok: false, reason: `not a ${knob} this agent offers` }
+  if (relaunching) return relaunchTuning(deps, node, knob, value)
   const line = harness.tuning.line(knob, value)
   if (line === null) return { ok: false, reason: `this agent has no ${knob} dial` }
 
@@ -448,5 +497,34 @@ export function applyTuning(
 
   const ask: TuneAsk = { knob, value, at: (deps.now ?? Date.now)() }
   deps.asks.record(terminalId, ask)
+  return { ok: true, ask }
+}
+
+/** Why a relaunch did not take the pick now, in the rail's words. */
+const RELAUNCH_REFUSAL: Partial<Record<RelaunchVerdict, string>> = {
+  busy: 'mid-turn, waiting for an answer, or taking a prompt — pick again once it replies',
+  unrestorable: 'saved for its next start — a restart now would lose its conversation',
+  blocked: 'not applied — it could not start again, so it was left running as it is',
+  gone: 'no such terminal'
+}
+
+/**
+ * Turn a dial that is a launch flag: the card's command takes the flag (an old
+ * one replaced) and main restarts the agent on it. The ask is remembered when
+ * the agent restarted or will wake on it; the next reply confirms it.
+ */
+function relaunchTuning(deps: TuneDeps, node: TerminalNodeData, knob: TuneKnob, value: string): TuneResult {
+  // The route knob never comes here (applyTuning refuses it before), so the knob is a launch flag.
+  const where = deps.routeFor?.(node) ?? { routed: false, catalog: [] }
+  // What it runs at now, carried onto a new model (owner 2026-11-04: keep it).
+  const effort = knob === 'model' ? ((deps.cache ?? new TuningCache()).of(subjectOf(node), deps.watch ?? {})?.effort ?? null) : null
+  const plan = launchPick({ command: node.command, knob: knob as 'model' | 'effort', value, effort, ...where })
+  if ('error' in plan) return { ok: false, reason: plan.error }
+  const verdict = deps.relaunch?.(node.id, plan) ?? 'gone'
+  const refusal = RELAUNCH_REFUSAL[verdict]
+  if (refusal !== undefined) return { ok: false, reason: refusal }
+  const ask: TuneAsk = { knob, value, at: (deps.now ?? Date.now)() }
+  // Nothing was sent, so there is nothing for a reply to confirm.
+  if (verdict !== 'unchanged') deps.asks.record(node.id, ask)
   return { ok: true, ask }
 }

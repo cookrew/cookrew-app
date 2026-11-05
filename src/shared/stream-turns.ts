@@ -178,6 +178,8 @@ export function traceBlockOf(block: TraceBlock & StreamBlockExtras): TraceBlock 
     reply: block.reply,
     activity: block.activity,
     ...(block.thoughts !== undefined ? { thoughts: block.thoughts } : {}),
+    ...(block.added !== undefined ? { added: block.added } : {}),
+    ...(block.queued !== undefined ? { queued: block.queued } : {}),
     startedAt: block.startedAt,
     endedAt: block.endedAt,
     ...(block.final !== undefined ? { final: block.final } : {}),

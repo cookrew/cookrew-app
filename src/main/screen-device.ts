@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Roi, UseTarget } from '../shared/use-url'
+import { windowAppName } from '../shared/use-url'
 import { macKeyCode, type MacInput, type MacOp, type MacScreens, type MacWindow } from './mac-bridge'
-import type { PixelDevice, PixelFrame } from './pixel-instance'
+import { DeviceBlockedError, DeviceGoneError, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
 import type { Gesture, ScreenPoints } from './vphone-input'
+import { machineCopy } from '../shared/machine-words'
 
 /**
  * A REGION OF THIS MAC'S SCREEN, AS A PIXEL DEVICE (computer use).
@@ -25,24 +27,32 @@ import type { Gesture, ScreenPoints } from './vphone-input'
  * whose last lookup is older than that, so a click never lands where the
  * window used to be.
  *
- * TWO GRANTS GATE IT, and each refusal is a sentence: Screen Recording (no
- * frames, no titles without it), and input, which is off unless the owner
- * set COOKREW_COMPUTER_INPUT=1 — a viewer that may drive this Mac is a
- * decision, never a default — and then also needs Accessibility.
+ * A BOUND CARD (`?id=`, what the picker writes) holds that one window. Its
+ * id must still be on screen and still be the app's; nothing else of that
+ * name stands in. Missing from the on-screen list it is asked after directly:
+ * alive but off screen is an ordinary offline that recovers by itself, and
+ * only a window macOS no longer knows is gone (DeviceGoneError).
+ *
+ * THE DESK DECIDES (remote-desk.ts). Before every frame and every gesture
+ * this asks what stands in the way: the lock, Screen Recording, the display.
+ * A blocked screen gives no frame and takes no input. Input is off unless the
+ * machine switch is on, because a viewer that may drive this Mac is a decision,
+ * never a default; a viewer also has to hold the card's own grant.
  */
 
 export interface ScreenDeps {
   list(): Promise<MacScreens>
+  /** The app holding this window id anywhere (off screen too), or null when macOS no longer knows it. */
+  windowAlive(id: number): Promise<{ readonly app: string } | null>
   /** Runs `screencapture` with these args; the file is the last one. */
   capture(args: readonly string[]): Promise<void>
   read(file: string): Promise<Buffer>
   remove(file: string): Promise<void>
   /** JPEG in, JPEG out: crop (as FRACTIONS of the image, 0..1) then fit the long side. */
   encode(jpeg: Buffer, crop: Roi | null, maxSide: number): Buffer
-  screenAccess(): string
-  inputEnabled(): boolean
-  accessibility(): boolean
+  remote: RemoteGate
   hand(): MacInput
+  readClipboard?: () => string
   now?: () => number
   tmp?: string
 }
@@ -50,12 +60,7 @@ export interface ScreenDeps {
 export const SCREEN_FRAME_MAX_SIDE = 1920
 const RELIST_MS = 1000
 
-export const SCREEN_RECORDING_OFF =
-  'Screen Recording is off for Cookrew — turn it on in System Settings › Privacy & Security › Screen & System Audio Recording, then restart Cookrew'
-export const COMPUTER_INPUT_OFF =
-  'Driving this Mac is off — start Cookrew with COOKREW_COMPUTER_INPUT=1 to let viewers and agents click and type here'
-export const ACCESSIBILITY_OFF =
-  'Accessibility is off for Cookrew — turn it on in System Settings › Privacy & Security › Accessibility'
+const sameApp = (a: string, b: string): boolean => windowAppName(a).toLowerCase() === windowAppName(b).toLowerCase()
 
 /** The window an address names: exact app name first, then a name that contains it; the title must contain the detail. Front-most wins. */
 export function findWindow(windows: readonly MacWindow[], app: string, title: string | null): MacWindow | null {
@@ -95,33 +100,33 @@ export class ScreenDevice implements PixelDevice {
   private readonly file: string
   private readonly now: () => number
 
+  readonly remote: RemoteGate
+  readonly readClipboard?: () => string
+
   constructor(
     readonly target: UseTarget,
     private readonly deps: ScreenDeps
   ) {
+    this.remote = deps.remote
+    this.readClipboard = deps.readClipboard
     this.now = deps.now ?? Date.now
     this.file = path.join(deps.tmp ?? tmpdir(), `cookrew-roi-${randomUUID()}.jpg`)
   }
 
   private async resolve(force = false): Promise<Region> {
     if (!force && this.region && this.now() - this.listedAt < RELIST_MS) return this.region
-    if (this.deps.screenAccess() !== 'granted') throw new Error(SCREEN_RECORDING_OFF)
     const screens = await this.deps.list()
     this.screens = screens
     this.listedAt = this.now()
     let area: { x: number; y: number; width: number; height: number }
     let window: MacWindow | null = null
     if (this.target.kind === 'window') {
-      window = findWindow(screens.windows, this.target.name, this.target.detail)
-      if (!window) {
-        const what = this.target.detail ? `'${this.target.name}' window titled '${this.target.detail}'` : `'${this.target.name}' window`
-        throw new Error(`No ${what} is on screen — open it, or bring it to this Space`)
-      }
+      window = this.target.windowId ? await this.boundWindow(screens, this.target.windowId) : this.namedWindow(screens)
       area = window
     } else {
       const index = this.target.name === 'main' ? 1 : Number(this.target.name)
       const display = screens.displays.find((d) => d.index === index)
-      if (!display) throw new Error(`Display ${this.target.name} is not connected (this Mac has ${screens.displays.length})`)
+      if (!display) throw new Error(`Display ${this.target.name} is not connected (${machineCopy('this Mac', process.platform)} has ${screens.displays.length})`)
       area = display
     }
     const roi = clipRoi(area, this.target.roi)
@@ -130,12 +135,40 @@ export class ScreenDevice implements PixelDevice {
     return this.region
   }
 
+  private namedWindow(screens: MacScreens): MacWindow {
+    const window = findWindow(screens.windows, this.target.name, this.target.detail)
+    if (window) return window
+    const what = this.target.detail ? `'${this.target.name}' window titled '${this.target.detail}'` : `'${this.target.name}' window`
+    throw new Error(`No ${what} is on screen — open it, or bring it to this Space`)
+  }
+
+  /** The bound window, or the reason it cannot be shown. A failed lookup throws as itself: that proves nothing closed. */
+  private async boundWindow(screens: MacScreens, id: number): Promise<MacWindow> {
+    const closed = new DeviceGoneError('window', `The '${this.target.name}' window this card showed has closed`)
+    const window = screens.windows.find((w) => w.id === id)
+    if (window) {
+      if (!sameApp(window.app, this.target.name)) throw closed
+      return window
+    }
+    const alive = await this.deps.windowAlive(id)
+    if (!alive || !sameApp(alive.app, this.target.name)) throw closed
+    throw new Error(`The '${this.target.name}' window is minimised or on another Space — bring it back to see it here`)
+  }
+
+  /** Throws what stands in the way, in the words the card shows. */
+  private async mustBeReadable(afterFailure = false): Promise<void> {
+    const blocked = await this.deps.remote.blocked(afterFailure ? { afterFailure } : undefined)
+    if (blocked) throw new DeviceBlockedError(blocked)
+  }
+
   async open(): Promise<ScreenPoints> {
+    await this.mustBeReadable()
     const region = await this.resolve(true)
     return { width: region.width, height: region.height }
   }
 
   async capture(): Promise<PixelFrame> {
+    await this.mustBeReadable()
     const region = await this.resolve()
     const args = region.window
       ? ['-x', '-o', '-t', 'jpg', `-l${region.window.id}`, this.file]
@@ -155,7 +188,9 @@ export class ScreenDevice implements PixelDevice {
     } catch (error) {
       // The window may be gone: look it up afresh next time.
       this.listedAt = Number.NEGATIVE_INFINITY
-      if (this.deps.screenAccess() !== 'granted') throw new Error(SCREEN_RECORDING_OFF)
+      await this.mustBeReadable(true)
+      // A bound window: say what happened to it, not what screencapture said.
+      if (this.target.windowId) await this.resolve(true)
       throw error instanceof Error ? error : new Error(String(error))
     } finally {
       await this.deps.remove(this.file).catch(() => undefined)
@@ -163,14 +198,13 @@ export class ScreenDevice implements PixelDevice {
   }
 
   inputRefusal(): string | null {
-    if (!this.deps.inputEnabled()) return COMPUTER_INPUT_OFF
-    if (!this.deps.accessibility()) return ACCESSIBILITY_OFF
-    return null
+    return this.deps.remote.inputRefusal()
   }
 
   async perform(gesture: Gesture): Promise<void> {
     const refusal = this.inputRefusal()
     if (refusal) throw new Error(refusal)
+    await this.mustBeReadable()
     // A window card's input is checked against the window list AS IT IS NOW:
     // the card shows the window even when something covers it (captured by
     // id), but a click lands on whatever is on top and keys go to whatever
@@ -197,8 +231,8 @@ export class ScreenDevice implements PixelDevice {
         break
       case 'input.key': {
         const code = macKeyCode(String(p.name))
-        if (code === null) throw new Error(`no '${String(p.name)}' key on this Mac`)
-        op = { op: 'key', code }
+        if (code === null) throw new Error(`no '${String(p.name)}' key on ${machineCopy('this Mac', process.platform)}`)
+        op = p.mods === 'cmd' ? { op: 'key', code, cmd: true } : { op: 'key', code }
         break
       }
       case 'input.type':

@@ -170,7 +170,7 @@ describe('the bar offers the places, the card fills them', () => {
     expect(overlay).not.toContain("(['chat', 'live'] as const)")
     // A full view's head takes it (head-tools.ts); with none, the transcript's box (popout-main) keeps it.
     const main = overlay.slice(overlay.indexOf('<div ref={mainRef}'), overlay.indexOf('<CheckpointTimeline'))
-    expect(main).toContain('{primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}')
+    expect(main).toContain('{primary && !recordless && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}')
     expect(overlay).toContain('useContext(HeadToolsContext)')
   })
 
@@ -206,8 +206,8 @@ describe('the bar offers the places, the card fills them', () => {
     expect(menu).toContain('closeZoomMenu()')
   })
 
-  it('shows the "YOU ❯" line no more; a picked checkpoint keeps its row, the way back to live', () => {
-    expect(overlay).toContain('{selectedIndex !== null && (\n        <div className="popout-ask"')
+  it('shows the "YOU ❯" line no more, nor a picked checkpoint’s row (owner 2026-11-03)', () => {
+    expect(overlay).not.toContain('className="popout-ask"')
     expect(overlay).not.toContain('(selectedIndex !== null || activity?.prompt) && (')
   })
 
@@ -218,7 +218,7 @@ describe('the bar offers the places, the card fills them', () => {
   })
 
   it('lets only the primary overlay draw the toggle and fill ⋯ when several are mounted', () => {
-    expect(overlay).toContain('{primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}')
+    expect(overlay).toContain('{primary && !recordless && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}')
     expect(overlay).toContain('{primary && zoomSlots.menu !== null &&')
   })
 })

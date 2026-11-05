@@ -30,6 +30,8 @@ export type Gesture = VphoneCall
 export interface GestureMapperOptions {
   /** A wheel is a scroll on a desktop, not a swipe of its delta (a phone has no wheel). */
   readonly wheelAsScroll?: boolean
+  /** A computer has shortcuts: Ctrl or ⌘ with a key is a chord, not a typed letter. */
+  readonly chords?: boolean
 }
 
 export interface ScreenPoints {
@@ -60,6 +62,10 @@ export const vphoneKeyName = (key: string): string | null => KEY_NAMES[key] ?? n
 
 const isAsciiPrintable = (text: string): boolean => /^[\x20-\x7e]+$/.test(text)
 
+/** CDP's modifier bits: the two a phone's bar and a desktop viewer mean a shortcut with. */
+const CHORD_MODIFIERS = 2 | 4
+const CHORD_KEY = /^[a-z0-9]$/i
+
 const num = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
 
@@ -87,6 +93,10 @@ export class VphoneGestureMapper {
         return this.touch(command.params)
       case 'Input.dispatchKeyEvent':
         return this.key(command.params)
+      case 'Input.insertText':
+        // Committed text — a paste, a phone keyboard's word, an IME's result.
+        // An uncommitted composition (imeSetComposition) has no screen to show on.
+        return this.text(command.params)
       default:
         return []
     }
@@ -95,6 +105,10 @@ export class VphoneGestureMapper {
   private mouse(params: Record<string, unknown>): VphoneCall[] {
     const x = num(params.x)
     const y = num(params.y)
+    // A screen has one kind of touch: a right or middle click is not a tap.
+    if ((params.type === 'mousePressed' || params.type === 'mouseReleased') && params.button !== undefined && params.button !== 'left') {
+      return []
+    }
     switch (params.type) {
       case 'mousePressed':
         if (x === null || y === null) return []
@@ -171,10 +185,21 @@ export class VphoneGestureMapper {
     return [swipe(press.x, press.y, x, y, seconds)]
   }
 
+  private text(params: Record<string, unknown>): VphoneCall[] {
+    const text = typeof params.text === 'string' ? params.text : ''
+    if (text.length === 0) return []
+    return isAsciiPrintable(text)
+      ? [{ method: 'input.type', params: { text } }]
+      : [{ method: 'input.paste', params: { text } }]
+  }
+
   private key(params: Record<string, unknown>): VphoneCall[] {
     if (params.type !== 'keyDown') return []
     const text = typeof params.text === 'string' ? params.text : ''
     const key = typeof params.key === 'string' ? params.key : ''
+    if (this.options.chords && ((num(params.modifiers) ?? 0) & CHORD_MODIFIERS) !== 0 && CHORD_KEY.test(key)) {
+      return [{ method: 'input.key', params: { name: key.toLowerCase(), mods: 'cmd' } }]
+    }
     const named = vphoneKeyName(key)
     if (named) return [{ method: 'input.key', params: { name: named } }]
     if (text.length === 0) return []

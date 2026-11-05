@@ -31,6 +31,7 @@ import type { TurnRecord } from '../shared/turn'
 import {
   claudeProjectDir,
   claudeSessionFile,
+  findClaudeSessionHome,
   isSessionUuid,
   resolveExistingClaudeSession
 } from './claude-fork'
@@ -112,6 +113,14 @@ function carryClaudeSession(
   options: SessionMoveOptions,
   stored: string | null
 ): SessionMoveOutcome {
+  // A card whose cwd drifted from where claude was launched holds no file at
+  // fromCwd; its stored session still exists, filed under the launch dir
+  // (claude-session-home.ts). Carry THAT — the conversation the agent had.
+  const drifted =
+    stored !== null && isSessionUuid(stored) && !existsSync(claudeSessionFile(options.fromCwd, stored, options.projectsDir))
+      ? findClaudeSessionHome(stored, { projectsDir: options.projectsDir })
+      : null
+  if (drifted) return copyInto(options, stored as string, drifted.file)
   const ref = resolveExistingClaudeSession({
     command: options.node.command,
     cwd: options.fromCwd,
@@ -124,6 +133,11 @@ function carryClaudeSession(
   if (!ref || !isSessionUuid(ref)) return { kind: 'unavailable' }
   const source = claudeSessionFile(options.fromCwd, ref, options.projectsDir)
   if (!existsSync(source)) return { kind: 'unavailable' }
+  return copyInto(options, ref, source)
+}
+
+/** Copy `source` into the new directory's project dir under the same id. */
+function copyInto(options: SessionMoveOptions, ref: string, source: string): SessionMoveOutcome {
   const targetDir = claudeProjectDir(options.toCwd, options.projectsDir)
   const target = path.join(targetDir, `${ref}.jsonl`)
   if (target !== source) {

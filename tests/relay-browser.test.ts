@@ -1,12 +1,37 @@
 // THE BROWSER CARD ON THE RELAY, AND A TAILNET THAT IS NOT WORTH IT
 // (2026-10-18: "relay can't open the browser; tailnet opens nothing").
 import http from 'node:http'
+import { Socket } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { bridgeablePath, createSocketBridge } from '../src/main/socket-bridge'
 import type { LoopbackSocket, LoopbackSocketDeps } from '../src/main/ws-client'
 import { BridgeWebSocket, type BridgeStream } from '../src/renderer/src/path/bridge-socket'
 import { tailnetWorthIt, TAILNET_WARM_MAX_MS, warmRoundTrip } from '../src/renderer/src/path/plane-quality'
 import { switchPlaneIfBetter, type PlaneSwitchDeps } from '../src/renderer/src/path/plane-switch'
+
+describe('the credential a bridged socket dials with', () => {
+  const dialled = (path: string, credential: string | null): string => {
+    let dial = ''
+    const bridge = createSocketBridge({
+      dial: (d) => {
+        dial = d.path
+        return { send: () => undefined, close: () => undefined, pause: () => undefined, resume: () => undefined } as LoopbackSocket
+      }
+    })
+    const response = new http.ServerResponse(new http.IncomingMessage(new Socket()))
+    bridge.open(path, response, credential)
+    return dial
+  }
+
+  it('is added on this machine when the phone sent it as a header', () => {
+    expect(dialled('/api/browser/b1/stream?w=390', 'abc')).toBe('/api/browser/b1/stream?w=390&token=abc')
+    expect(dialled('/api/browser/b1/stream', 'a b')).toBe('/api/browser/b1/stream?token=a%20b')
+  })
+
+  it('leaves a path alone that already brought one, as a page from before this does', () => {
+    expect(dialled('/api/browser/b1/stream?token=t', 'other')).toBe('/api/browser/b1/stream?token=t')
+  })
+})
 
 describe('which sockets may be bridged', () => {
   it('is the browser card stream and nothing else', () => {

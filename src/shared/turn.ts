@@ -6,6 +6,8 @@
 // output quiescence ends it. These helpers are pure so they can be unit
 // tested without a PTY.
 
+import type { WaitChoice } from './wait-choice'
+
 /**
  * 'waiting' is vibe-island's "needs attention": the turn is not finished,
  * the agent went quiet on a permission prompt / question menu.
@@ -37,6 +39,11 @@ export interface TerminalActivity {
    * on every activity derived from a real screen.
    */
   mirrorless?: true
+  /**
+   * `lines` were read off the pane just now (main/pane-follow.ts), so this is
+   * the card's screen, though still no verified turn. Only with `mirrorless`.
+   */
+  paneRead?: true
   phase: TurnPhase
   /** Prompt that started the current turn, best-effort echo of typed input. */
   prompt: string | null
@@ -50,6 +57,12 @@ export interface TerminalActivity {
    * pending question while 'waiting'), otherwise a cleaned viewport tail.
    */
   lines: string[]
+  /**
+   * The menu the agent waits on, read off its WHOLE screen while phase is
+   * 'waiting' (shared/wait-choice.ts): `lines` is a 14-line tail, and a
+   * question tool runs to 30 on a narrow pane. Null or absent: no menu read.
+   */
+  waitChoice?: WaitChoice | null
   /** Cleaned reply text once the current turn completed. */
   reply: string | null
   /** Structured at-a-glance view of the turn, parsed from the agent TUI. */
@@ -145,10 +158,10 @@ export interface TurnRecord {
    * 'error'/'length' → 'failed'. SUCCESSFUL finality leaves this ABSENT —
    * absent-on-a-final-record means done, which keeps every historical ledger
    * row (none of which carry the field) reading as the success it was, and
-   * matches the tracker's absent-final-is-done treatment. Claude writes no
-   * end_turn on an errored turn, so a Claude record never carries this: its
-   * failure shape is a tail that stays open until the next-user boundary
-   * closes it (as done — the file holds no failure evidence to report).
+   * matches the tracker's absent-final-is-done treatment. Claude's own
+   * "[Request interrupted by user…]" line → 'interrupted'. It writes no
+   * end_turn on an errored turn, so that shape is a tail that stays open until
+   * the next-user boundary closes it (as done — no failure evidence to report).
    * Quiet is still non-terminal; only positive native evidence lands here.
    */
   outcome?: 'done' | 'failed' | 'interrupted'
@@ -482,7 +495,7 @@ const OSC_COLOR_REMNANT_RE = /\x1b?\]1[01];rgb:[0-9a-fA-F/]+\\?/g
 const TMUX_STATUS_RE = /^\s*cookrew ·/
 
 /** Strip terminal control noise that would otherwise pollute turn text. */
-function stripTermNoise(text: string): string {
+export function stripTermNoise(text: string): string {
   return text.replace(OSC_RE, '').replace(OSC_COLOR_REMNANT_RE, '')
 }
 
@@ -603,6 +616,8 @@ const CHROME_RE = /^[\s─│┃╭╮╰╯┌┐└┘═║━┏┓┗┛┠
 const INPUT_BOX_RE = /^\s*[│┃]\s*>?\s*[│┃]?\s*$/
 const STATUS_RE =
   /esc to interrupt|\? for shortcuts|bypass(?:ing)? permissions|shift\+tab to cycle|for agents\b/i
+/** A numbered row is a menu's or a reply's own words, whatever they say: "1. Yes, and switch to BYPASS PERMISSIONS". */
+const NUMBERED_ROW_RE = /^\s*[❯›>▶►]?\s*\d{1,2}[.)]\s/
 
 /**
  * The pi/ifunk TUI closes with two status rows below its input box, and they
@@ -633,7 +648,7 @@ export function cleanTurnLines(text: string): string[] {
     (l, i) =>
       !CHROME_RE.test(l) &&
       !INPUT_BOX_RE.test(l) &&
-      !STATUS_RE.test(l) &&
+      (!STATUS_RE.test(l) || NUMBERED_ROW_RE.test(l)) &&
       !TMUX_STATUS_RE.test(l) &&
       !AGENT_METER_RE.test(l) &&
       !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? '')),
@@ -675,9 +690,9 @@ export function detectAttention(lines: string[]): boolean {
 const SPINNER_LINE_RE = /^\s*[✻✽✳✢✶✦✺✹✸✷·∗*+]\s+(\S.*)$/
 /**
  * A spinner line counts as a status when it carries progress chrome:
- * ellipsis, parens, elapsed time ("Baked for 1m 6s"), or token counts.
+ * ellipsis, elapsed time ("Baked for 1m 6s"), or token counts.
  */
-const STATUS_HINT_RE = /…|\(|esc to interrupt|tokens|\b\d+m?\s?\d*s\b/i
+const STATUS_HINT_RE = /…|esc to interrupt|tokens|\b\d+m?\s?\d*s\b/i
 /** ⏺ entry: either Tool(args…) or a plain assistant message. */
 const ENTRY_RE = /^\s*[⏺●○]\s+(.*)$/
 /**
@@ -755,9 +770,13 @@ export function detectAgentActivity(chunk: string): boolean {
 const COMPLETED_STATUS_RE = /^\p{L}+ed for\s+\d/iu
 /**
  * In-flight markers on a spinner body: streaming ellipsis, parenthesised
- * progress, token counters, or the (older-TUI) interrupt hint.
+ * progress, token counters, or the (older-TUI) interrupt hint. Progress, not
+ * any parenthesis or the word "tokens": a line starts like a spinner far more
+ * often than it is one. A question tool's record ("· Which parts? (Alpha /
+ * Beta)") stays on the screen, and read as a turn still running it kept the
+ * wait for the next question from ever being raised.
  */
-const LIVE_HINT_RE = /…|\(|esc to interrupt|tokens/i
+const LIVE_HINT_RE = /…|esc to interrupt|[↓↑]\s*[\d.]+k?\s*tokens|\(\s*\d+(?:m\s?\d*s?|s)\b/i
 
 /**
  * True when a spinner status body reads as an in-flight turn, e.g.

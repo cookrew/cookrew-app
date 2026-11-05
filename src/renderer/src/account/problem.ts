@@ -1,5 +1,6 @@
 import type { AccountRefusal, AccountResult } from '../../../shared/account-v2'
 import { refusalSentence } from './account-store'
+import { hostPlatform, machineTable } from '../../../shared/machine-words'
 
 /**
  * WHY IT DID NOT WORK — in the account surface's own words, never in one word
@@ -25,11 +26,12 @@ import { refusalSentence } from './account-store'
  */
 
 /** What was being attempted, said as the start of a sentence. */
-export const DOING = {
+export const DOING = machineTable({
   PROFILE: 'Your account could not be read from cookrew.dev',
   DEVICES: 'The devices on your account could not be read',
   REVOKE: 'That device could not be revoked',
   SIGN_OUT: 'This Mac could not sign out',
+  DELETE_ACCOUNT: 'Your account could not be deleted',
   FORGET: 'That phone could not be forgotten',
   DISPLAY_NAME: 'That name could not be saved',
   FACTORS: 'Your security settings could not be read',
@@ -49,7 +51,7 @@ export const DOING = {
   DECIDE: 'That answer did not reach cookrew.dev',
   SEATS: 'The seats on your account could not be read',
   SEAT: 'That seat could not be changed',
-} as const
+} as const, hostPlatform())
 
 export type Doing = (typeof DOING)[keyof typeof DOING]
 

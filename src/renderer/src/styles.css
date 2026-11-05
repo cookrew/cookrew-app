@@ -139,14 +139,17 @@ body,
    dock rises clear of BOTH and the translucent bar is left showing whatever is
    behind it — a dark card reads as a black stripe between the buttons row and
    the keyboard. Painting the band in the dock's own cream puts app chrome
-   behind that bar instead. Zero-height (so invisible) with no keyboard up. */
+   behind that bar instead. Zero-height (so invisible) with no keyboard up.
+   It paints over the stage and the dock, so it reads --kb-band, the keyboard
+   itself: never a keyboard only expected, or one on its way down
+   (keyboard-expect.ts), when the box and the face are moving through here. */
 .cr-app::after {
   content: '';
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  height: var(--kb-inset, 0px);
+  height: var(--kb-band, 0px);
   background: var(--cream-hi);
   z-index: 40;
   pointer-events: none;
@@ -363,6 +366,43 @@ body.cookrew-mobile .cr-logo-mark {
 
 .confirm-close.danger .confirm-close-note {
   color: var(--ink);
+}
+
+/* A note's sealed values: the choice to take them, and what stays for another note. */
+.confirm-close-secrets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.confirm-close-secret {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  cursor: pointer;
+}
+.confirm-close-secret input {
+  margin: 3px 0 0;
+}
+.confirm-close-secret b,
+.confirm-close-kept b {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.confirm-close-secret small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.confirm-close-kept {
+  color: var(--muted);
+}
+.confirm-close-error {
+  color: var(--rose);
 }
 
 .confirm-close-actions {
@@ -2128,6 +2168,151 @@ a.card-close {
   background: color-mix(in srgb, var(--note-text) 8%, transparent);
   color: var(--note-text);
 }
+/* THE VAULT in a secret note (nodes/SecretVault.tsx): hairlines on the note's
+   own paper, a value cell that only looks like a field when it is touched. */
+.cr-vault {
+  margin: 10px 14px 0;
+  color: var(--note-text);
+  font-size: 12.5px;
+}
+.cr-vault-head,
+.cr-vault-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  gap: 2px 12px;
+  align-items: center;
+}
+.cr-vault-head {
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--note-text);
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+}
+.cr-vault-row {
+  min-height: 36px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.cr-vault-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cr-vault-name .cr-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  opacity: 0.6;
+}
+.cr-vault-name b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 12.5px var(--font-mono);
+}
+.cr-vault-row.sealed .cr-vault-name .cr-icon {
+  opacity: 1;
+}
+.cr-vault-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cr-vault input[type='password'],
+.cr-vault input[type='text'] {
+  flex: 1;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 4px;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: 12.5px var(--font-mono);
+}
+.cr-vault input[type='password']:hover,
+.cr-vault input[type='text']:hover {
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+.cr-vault input[type='password']:focus,
+.cr-vault input[type='text']:focus {
+  background: var(--cream-hi, #fffef5);
+  box-shadow: inset 0 0 0 1.5px var(--note-text);
+}
+.cr-vault-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  opacity: 0.75;
+}
+.cr-vault-state.error {
+  color: var(--rose);
+  opacity: 1;
+  white-space: normal;
+}
+.cr-vault-served {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 3px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.cr-vault-add {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px dashed var(--line-soft);
+  background: transparent;
+  color: inherit;
+  font: 12px var(--font-mono);
+  text-align: left;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.cr-vault-add:hover,
+.cr-vault-add:focus-visible {
+  opacity: 1;
+}
+.cr-vault-how {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  opacity: 0.65;
+}
+@media (max-width: 700px) {
+  /* Name and state on a line, the value under them at full width. */
+  .cr-vault-head {
+    display: none;
+  }
+  .cr-vault-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 6px 0;
+  }
+  .cr-vault-value {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .cr-vault-served {
+    grid-column: 1 / -1;
+  }
+  /* A phone zooms the page into a field under 16px. */
+  .cr-vault input[type='password'],
+  .cr-vault input[type='text'] {
+    font-size: 16px;
+  }
+}
+
 .cr-secret-slots {
   flex: 0 0 auto;
   border-top: 1.5px dashed var(--note-text);
@@ -2162,6 +2347,10 @@ a.card-close {
   background: var(--cream-hi, #fffef5);
   color: var(--ink, #2d2a20);
   min-width: 0;
+}
+@media (max-width: 700px) {
+  /* A phone zooms the page into a field under 16px. */
+  .cr-secret-slot input[type='password'] { font-size: 16px; }
 }
 .cr-secret-slot-how {
   grid-column: 1 / -1;
@@ -2299,7 +2488,9 @@ a.card-close {
 /* Interactive stream: the view takes touch/keys (Fresco styles the affordances +
    the live indicator; this is structural). */
 .browser-frame.streaming {
-  cursor: pointer;
+  /* The page's own pointer, not a hand: a hover is forwarded, so the remote
+     page shows its links and fields itself. */
+  cursor: default;
   touch-action: none; /* we forward touch/drag as input, not native scroll */
 }
 
@@ -2814,6 +3005,23 @@ a.card-close {
 
 .voice-speak.on {
   background: var(--amber);
+}
+
+/* Reading a reply aloud: the lit speaker breathes until the reading ends. */
+.voice-speak.reading {
+  animation: cr-voice-reading 1.4s ease-in-out infinite;
+}
+
+@keyframes cr-voice-reading {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-speak.reading {
+    animation: none;
+  }
 }
 
 .voice-attach.busy {
@@ -3598,6 +3806,7 @@ body.cookrew-mobile .react-flow__pane {
 
 body.cookrew-mobile .cr-header {
   padding-left: max(14px, env(safe-area-inset-left));
+  padding-right: max(10px, env(safe-area-inset-right));
   padding-top: max(10px, env(safe-area-inset-top));
   -webkit-app-region: no-drag;
   flex-wrap: nowrap;
@@ -4913,8 +5122,9 @@ body.cookrew-mobile .cr-dock.zoomed .dock-send {
 /* ONE row, not two. The cluster used to take a full-width row of its own
    above the action row; that cost the dock ~50px of height on the one
    screen where height is scarcest — the phone, where the dock and the
-   terminal share it. Keys now ride inline with attach/mic/speak/send, and
-   if a very narrow phone can't seat all nine the row scrolls sideways
+   terminal share it. Keys now ride in the prompt box's tray beside attach
+   and speak (prompt/global-prompt.css), and if a very narrow phone can't
+   seat them all the row scrolls sideways
    (same idiom as .popout-header) rather than wrapping the line back. */
 body.cookrew-mobile .cr-dock .voice-bar {
   flex-wrap: nowrap;
@@ -5403,6 +5613,21 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 /* A field and its verdict on one line — the reason is always beside it. */
+.cr-acct-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cr-acct-provider {
+  width: 100%;
+}
+
+.cr-acct-handle .gs-input {
+  width: 100%;
+}
+
 .cr-acct-row {
   display: flex;
   align-items: center;
@@ -6349,3 +6574,85 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 .vi-mini-brief { font-size: 9px }
 .popout-brief { max-width: 260px; flex: 0 1 auto }
 .ags-brief { font-size: 11px; margin-top: 1px }
+
+/* The phone's input bar above its keyboard for a browser card (RemoteKeyBar.tsx). */
+.remote-keybar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(20, 17, 10, 0.92);
+  color: #fff;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.remote-keybar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.remote-keybar-text.composing {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.remote-keybar-btn {
+  flex: none;
+  min-width: 44px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 14px;
+}
+
+.remote-keybar-btn:active {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* A page's copy the phone could not write by itself: one tap writes it. */
+.browser-frame-copychip {
+  position: absolute;
+  left: 50%;
+  bottom: 48px;
+  z-index: 4;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-frame-note {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  z-index: 4;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+}

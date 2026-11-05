@@ -32,6 +32,12 @@ interface Seen {
 
 export type ChimeMemory = ReadonlyMap<string, Seen>
 
+/** One agent's ring: which agent, and why (spoken replies name it: prompt/announce.ts). */
+export interface Ring {
+  readonly id: string
+  readonly kind: ChimeKind
+}
+
 export const EMPTY_CHIME_MEMORY: ChimeMemory = new Map()
 
 const inTurn = (phase: TurnPhase): boolean => phase === 'thinking' || phase === 'waiting'
@@ -66,8 +72,8 @@ export function stepChimes(
   memory: ChimeMemory,
   activities: Readonly<Record<string, TerminalActivity>>,
   now: number
-): { memory: ChimeMemory; chimes: readonly ChimeKind[] } {
-  const chimes: ChimeKind[] = []
+): { memory: ChimeMemory; chimes: readonly ChimeKind[]; rings: readonly Ring[] } {
+  const rings: Ring[] = []
   const next = new Map<string, Seen>()
   for (const [id, activity] of Object.entries(activities)) {
     if (!activity.agent) continue
@@ -78,9 +84,9 @@ export function stepChimes(
     }
     const { seen, chime } = advance(before, activity.phase, now)
     next.set(id, seen)
-    if (chime !== null) chimes.push(chime)
+    if (chime !== null) rings.push({ id, kind: chime })
   }
-  return { memory: next, chimes }
+  return { memory: next, chimes: rings.map((ring) => ring.kind), rings }
 }
 
 /** Many agents at once ring once: needs-you outranks done. */

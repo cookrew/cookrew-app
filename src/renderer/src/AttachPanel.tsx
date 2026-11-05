@@ -6,11 +6,13 @@
 // and can go full window; a note reads as markdown and edits in place.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { activeBrowserTab } from '../../shared/model'
+import { secretSlotsOf, withSlotLine, withWords, withoutSlotLines } from '../../shared/secret-slot'
 import { noteIsWhole } from '../../shared/wire-canvas'
 import { cookrew } from './api'
 import { attachView, type AttachView } from './attach-view'
 import { CrIcon } from './icons'
 import { renderNoteMarkdown } from './note-markdown'
+import { SecretVault } from './nodes/SecretVault'
 import { FIND_FROM, filterAttachments, type TerminalAttachment } from './terminal-attachments'
 import type { ScreenRect } from './zoom-lod'
 
@@ -152,18 +154,55 @@ function BrowserSlot({ full, cardRect }: { full: boolean; cardRect: ScreenRect }
   return <div ref={ref} className="attach-slot" />
 }
 
+function SecretNoteBody({
+  words,
+  canWrite,
+  onEdit,
+  children
+}: {
+  words: string
+  canWrite: boolean
+  onEdit: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div className="attach-note-scroll" onDoubleClick={onEdit}>
+      {words.length > 0 ? (
+        <div className="note-body attach-note-words" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(words) }} />
+      ) : (
+        // With no words the table can fill the page, and a phone has nowhere
+        // left to double-click: the way in is a line of its own.
+        canWrite && (
+          <button type="button" className="attach-note-addwords" onClick={onEdit}>
+            Write about these secrets…
+          </button>
+        )
+      )}
+      {children}
+    </div>
+  )
+}
+
 function NoteView({ item }: { item: Extract<TerminalAttachment, { kind: 'note' }> }): React.JSX.Element {
   const note = item.node
   const whole = noteIsWhole(note)
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(note.content)
+  const slots = secretSlotsOf(note.content)
+  // A secret note's editor holds its words alone: the slot lines are the table's.
+  const secret = slots.length > 0
+  const editable = secret ? withoutSlotLines(note.content) : note.content
+  const [draft, setDraft] = useState(editable)
   useEffect(() => {
-    if (!editing) setDraft(note.content)
-  }, [note.content, editing])
+    if (!editing) setDraft(editable)
+  }, [editable, editing])
+  const canWrite = !note.locked && whole
+  const edit = (): void => {
+    if (canWrite) setEditing(true)
+  }
   const commit = (): void => {
     setEditing(false)
     // Never over a body we only half have (see NoteNode).
-    if (whole && draft !== note.content) void cookrew().updateNode(note.id, { content: draft })
+    if (whole && draft !== editable) void cookrew().updateNode(note.id, { content: secret ? withWords(note.content, draft) : draft })
   }
   return (
     <>
@@ -176,6 +215,7 @@ function NoteView({ item }: { item: Extract<TerminalAttachment, { kind: 'note' }
         <textarea
           className="note-editor attach-note-editor"
           value={draft}
+          placeholder={secret ? 'Write about these secrets…' : undefined}
           autoFocus
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
@@ -185,12 +225,22 @@ function NoteView({ item }: { item: Extract<TerminalAttachment, { kind: 'note' }
             if (e.key === 'Escape') commit()
           }}
         />
+      ) : secret ? (
+        // A SECRET NOTE: its words, then its vault, in one scroll. A double-click
+        // edits the words, as any note edits.
+        <SecretNoteBody words={editable} canWrite={canWrite} onEdit={edit}>
+          <SecretVault
+            names={slots}
+            canAdd={canWrite}
+            onAddSlot={async (name) => {
+              await cookrew().updateNode(note.id, { content: withSlotLine(note.content, name) })
+            }}
+          />
+        </SecretNoteBody>
       ) : (
         <div
           className="note-body attach-note-body"
-          onDoubleClick={() => {
-            if (!note.locked && whole) setEditing(true)
-          }}
+          onDoubleClick={edit}
           dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(note.content || '*Double-click to write…*') }}
         />
       )}

@@ -1,5 +1,5 @@
 import { readJsonBody } from './http'
-import { refuse, v2Json, type Signed, type V2Context } from './v2-http'
+import { overloaded, refuse, v2Json, type Signed, type V2Context } from './v2-http'
 import { factorError } from './v2-factor-copy'
 import { factorsFor } from './v2-factor-routes'
 import { asking } from './v2-http'
@@ -91,6 +91,21 @@ export interface StepUpBody {
 
 const SMALL_BODY = 16 * 1024
 
+/**
+ * MAY THIS SITTING TRY A PASSWORD NOW? False means the refusal is already written.
+ *
+ * A session can reach a password check at will, so a stolen one must pay for a
+ * guess what a sign-in pays, and each guess is scrypt work on the process holding
+ * every door. Counted per sitting and never per account: a thief who burned the
+ * account's budget would lock the owner out of changing the password.
+ */
+export function mayGuessPassword(ctx: V2Context, signed: Signed): boolean {
+  if (overloaded(ctx.response)) return false
+  if (ctx.v2.limits.sessions.take(`step-up|${signed.claims.jti}`)) return true
+  refuse(ctx.response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+  return false
+}
+
 /** Does this account hold something stronger than its password? */
 export function hasStepUpFactor(ctx: V2Context, username: string): boolean {
   const account = ctx.v2.accounts.get(username)
@@ -154,7 +169,7 @@ export async function stepUpHeld(
   }
 
   // A rung already climbed for THIS act, spent here and never again.
-  if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp)) return true
+  if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp, signed.claims.jti)) return true
 
   /**
    * THE PASSWORD, WHEN ONE WAS BROUGHT. Judged on what the caller offered: a
@@ -162,6 +177,7 @@ export async function stepUpHeld(
    * is a wrong password rather than an invitation to climb a ladder instead.
    */
   if (typeof body.current === 'string' && body.current !== '') {
+    if (!mayGuessPassword(ctx, signed)) return false
     if (!(await ctx.v2.accounts.verifyPassword(username, body.current))) {
       refuse(ctx.response, 401, 'bad_credentials')
       return false
@@ -169,8 +185,21 @@ export async function stepUpHeld(
     return true
   }
 
+  /**
+   * NO PASSWORD TO ASK FOR, SO SAY WHAT WILL DO INSTEAD.
+   *
+   * A provider round trip from this session is the proof a passwordless account
+   * has: it arrives as `stepUp` like a climbed rung (v2-oauth-routes.ts). The
+   * holder of a stolen session cannot make one, for the same reason they cannot
+   * type a password.
+   */
+  const providers = (account.links ?? []).map((link) => link.provider)
   if (!hasStepUpFactor(ctx, username)) {
-    v2Json(ctx.response, 403, factorError('password_required'))
+    v2Json(
+      ctx.response,
+      403,
+      account.passwordless === true ? { ...factorError('provider_required'), providers } : factorError('password_required')
+    )
     return false
   }
 
@@ -181,7 +210,10 @@ export async function stepUpHeld(
    * empty — the fail-closed branch below stays unreachable, and stays.
    */
   const elsewhere = account.devices.some((d) => d.id !== signed.claims.dev)
-  const next = factorsFor(ctx.v2, account).filter((factor) => factor !== 'approve' || elsewhere)
+  // A delete asks for the owner's own proof. The other device would be shown an
+  // ordinary join prompt, and nobody should erase an account by answering one.
+  const canAsk = elsewhere && act !== 'delete-account'
+  const next = factorsFor(ctx.v2, account).filter((factor) => factor !== 'approve' || canAsk)
   if (next.length === 0) {
     // Cannot happen — hasStepUpFactor said there is one — and it FAILS CLOSED
     // if it ever does. A gate's default branch must not be "let them through".
@@ -211,6 +243,7 @@ export async function stepUpHeld(
     next,
     pending: pending.id,
     expiresAt: pending.expiresAt,
+    ...(account.passwordless === true ? { providers } : {}),
     /**
      * ONLY WITH THE RUNG IT BELONGS TO. The digits are the approve rung's
      * whole mechanism — read off this screen, typed on the other one — and
@@ -221,6 +254,18 @@ export async function stepUpHeld(
     ...(next.includes('approve') ? { match: pending.match } : {})
   })
   return false
+}
+
+/**
+ * THE GATE, ON AN ACCOUNT WITH NO PASSWORD. Answers whether to carry on.
+ *
+ * A rescue code or a factor is a way past every other step-up, so on an account
+ * whose only proof is its provider, a bearer must not be able to mint one. A
+ * password account is left exactly as it was: its clients send nothing here.
+ */
+export async function heldIfPasswordless(ctx: V2Context, signed: Signed, act: StepUpAct): Promise<boolean> {
+  if (signed.account.passwordless !== true) return true
+  return (await readAndStepUp(ctx, signed, act)).ok
 }
 
 /** Read a body and step up in one go, for routes that need nothing else. */

@@ -2,11 +2,13 @@ import { memo, useState } from 'react'
 import { sameProps } from './same-props'
 import { useThumb } from '../activity-thumb-store'
 import { InkAvatar, InkRing } from './InkAvatar'
-import { CardWords, QuickReply, useQuickReply } from './quick-reply'
+import { CardBody } from './CardBody'
+import { QuickReply, useQuickReply } from './quick-reply'
 import { typingOf } from './typing-line'
 import './agent-card.css'
-import type { AgentView, ItemView, MarkView, MachineView } from './zoom-model'
+import type { AgentView, ItemView, MachineView } from './zoom-model'
 import { NEW_POSE } from './zoom-layout'
+import { useNameEdit } from './NameEdit'
 
 /**
  * A workspace's newest browser beside its agents' stack (draft
@@ -207,13 +209,15 @@ export const ItemNode = memo(function ItemNode({ item, names, bind, onClick, onD
 export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onOpen, onDelete }: { agent: AgentView; card?: boolean; bind: Bind; onOpen: () => void; onDelete?: () => void }): React.JSX.Element {
   const reply = useQuickReply(agent.id, undefined, card)
   const typing = typingOf(reply.draft, agent.turn?.pendingInput, agent.name)
+  // A click on the name opens, as the face does; a double-click renames it in place (NameEdit.tsx).
+  const title = useNameEdit(agent.id, agent.name, { onPress: onOpen })
   return (
-    <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
+    <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`} data-card-id={agent.id}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>
-      <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)}>
-        {agent.name}
+      <div ref={bind(`agent-nm:${agent.id}`)} className="zv-nm" {...press(onOpen, `${agent.name}, ${agent.word}`)} {...title.hostProps}>
+        {title.view}
       </div>
       {onDelete && (
         // Deletion is a small mark on the open card, never a stray click: the
@@ -236,9 +240,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
       {card && (
         <>
         {/* Its latest turn, as the floating card says it too (quick-reply.tsx). */}
-        <div ref={bind(`agent-body:${agent.id}`)} className="zv-body" style={HIDDEN}>
-          <CardWords agent={agent} sent={reply.sent} />
-        </div>
+        <CardBody agent={agent} sent={reply.sent} roomy={agent.browsers + agent.notes === 0} style={HIDDEN} frameRef={bind(`agent-body:${agent.id}`)} />
         <QuickReply agent={agent} reply={reply} className="zv-reply" style={HIDDEN} formRef={bind(`agent-reply:${agent.id}`)} />
         </>
       )}
@@ -246,53 +248,36 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
   )
 }, sameProps)
 
-/** Another workspace on the device: its ring, its agents' stack, its seal and name. */
-export const MarkNode = memo(function MarkNode({ mark, bind, onOpen, onOpenItems }: { mark: MarkView; bind: Bind; onOpen: () => void; onOpenItems?: () => void }): React.JSX.Element {
-  // A workspace opens two ways (draft · group-motion-pivot.html): its agents → the crew, its browsers → their thumbnails.
-  const items = (mark.browsers ?? 0) + (mark.notes ?? 0)
-  const n = mark.presets.length
-  const shown = mark.presets.slice(0, 9)
-  const mid = (shown.length - 1) / 2
+/**
+ * This machine on the devices stop: its frame opens it, and the words under it
+ * carry the way to its screen, one tap to the picker. The frame's own button has no
+ * handler: its press bubbles to the card, which is also what a press on the
+ * words reaches, and the share button keeps its press to itself.
+ */
+export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: string; detail: string; bind: Bind; onOpen: () => void; onShare: (() => void) | null }): React.JSX.Element {
   return (
-    <div ref={bind(`mark:${mark.id}`)} className="zv-mark" title={`${mark.name} · ${n} agent${n === 1 ? '' : 's'} · open`} {...press(onOpen, `${mark.name}, ${n} agents`)}>
-      <div className="zv-wash" style={{ transform: 'translate(0px, -10px) scale(0.2, 0.42)', opacity: 0.6 }} />
-      <div className="zv-ring" style={{ transform: 'translate(0px, -10px)' }}>
-        <InkRing seed={3 + mark.name.length} />
-      </div>
-      {shown.map((preset, i) => {
-        const k = i - mid
-        return (
-          <div key={i} className="zv-av zv-mark-av" style={{ transform: `translate(${k * 8}px, ${-10 - (mid - Math.abs(k)) * 2.5}px) rotate(${k * 6}deg) scale(0.84)`, zIndex: i }}>
-            <InkAvatar id={`${mark.id}:${i}`} preset={preset} />
-          </div>
-        )
-      })}
-      {n === 0 && <div className="zv-none zv-mark-none">no agents</div>}
-      {mark.newest && onOpenItems && <NewestThumb item={mark.newest} workspace={mark.name} onOpen={onOpenItems} />}
-      {mark.waiting && <span className="zv-dot zv-mark-dot" />}
-      <div className="zv-grp zv-mark-label">
-        <span className="zv-seal">{n}</span>
-        <span>{mark.name}</span>
-        {items > 0 && onOpenItems && (
+    <div className="zv-machine" ref={bind('machine')} onClick={onOpen}>
+      <button type="button" className="zv-machine-open" aria-label={`Open ${name}`} />
+      <span className="zv-machine-deck" />
+      <span className="zv-machine-label">
+        <b>{name}</b>
+        <small>{detail}</small>
+        {onShare && (
           <button
             type="button"
-            className="zv-tot"
-            aria-label={`Open ${mark.name} artifacts`}
-            // The mark around it opens the crew on a click or Enter: this one is the other way in.
-            onPointerDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
+            className="zv-machine-share"
             onClick={(e) => {
               e.stopPropagation()
-              onOpenItems()
+              onShare()
             }}
           >
-            <Counts browsers={mark.browsers ?? 0} notes={mark.notes ?? 0} />
+            Remote desktop
           </button>
         )}
-      </div>
+      </span>
     </div>
   )
-}, sameProps)
+}
 
 /**
  * Another machine on the devices stop, from the real fleet: its frame, the

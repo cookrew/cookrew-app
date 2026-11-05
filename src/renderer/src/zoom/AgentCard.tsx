@@ -1,5 +1,7 @@
 import { InkAvatar } from './InkAvatar'
-import { CardWords, QuickReply, useQuickReply } from './quick-reply'
+import { useNameEdit } from './NameEdit'
+import { CardBody } from './CardBody'
+import { QuickReply, useQuickReply } from './quick-reply'
 import { Counts, NOTE_GLYPH, Page } from './ZoomParts'
 import type { AgentView, ItemView } from './zoom-model'
 import './agent-card.css'
@@ -65,14 +67,16 @@ export function AgentCard({
   onDraft: (text: string) => void
 }): React.JSX.Element {
   const reply = useQuickReply(agent.id, onDraft)
+  // Its name renames on a double-click, as the crew card's does (NameEdit.tsx).
+  const title = useNameEdit(agent.id, agent.name)
   const { origin, face, name, meta, body, thumb, coin } = CARD_POSE
   return (
     <div className="ag-plate" style={{ left: origin, top: origin }}>
       <button type="button" className="zv-av cr-pet-card-face" style={{ transform: `scale(${face})` }} title={`Open ${agent.name} in full`} aria-label={`Open ${agent.name} in full`} onClick={onOpen}>
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </button>
-      <div className="zv-nm cr-pet-card-name" style={at(name)}>
-        {agent.name}
+      <div className="zv-nm cr-pet-card-name" style={at(name)} {...title.hostProps}>
+        {title.view}
       </div>
       <div className="ag-meta cr-pet-card-meta" style={at(meta)}>
         <span className={`zv-st ${agent.status}`}>{agent.word}</span>
@@ -85,9 +89,7 @@ export function AgentCard({
           ×
         </button>
       )}
-      <div className="zv-body cr-pet-card-turn" style={at(body)}>
-        <CardWords agent={agent} sent={reply.sent} />
-      </div>
+      <CardBody agent={agent} sent={reply.sent} roomy={items.length === 0} className="zv-body cr-pet-card-turn" style={at(body)} />
       {items.length > 0 &&
         items.slice(0, CARD_THUMBS).map((item, k) => (
           <button key={item.id} type="button" className={`zv-lk ag-lk ${item.kind}`} style={at(thumb(k))} title={item.title} aria-label={`Open ${item.kind}: ${item.title}`} onClick={() => onItem(item.id)}>

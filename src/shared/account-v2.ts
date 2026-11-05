@@ -1,3 +1,6 @@
+import { hostPlatform, machineCopy } from './machine-words'
+import type { LinkedProvider, ProviderId, VerifiedEmail } from './oauth'
+
 /**
  * THE ACCOUNT, as both halves of the app describe it.
  *
@@ -47,6 +50,14 @@ export interface AccountDesktop {
   doors?: readonly { team: string; since: number }[]
 }
 
+/** The device a sign-in offers. Public: the key here is the public half. */
+export interface AccountDeviceInput {
+  id: string
+  kind: 'desktop'
+  name: string
+  jwk: Record<string, unknown>
+}
+
 /** The registry's answer to GET /v2/me. Directory facts, never content (P1). */
 export interface AccountProfile {
   username: string
@@ -57,6 +68,11 @@ export interface AccountProfile {
   desktops: readonly AccountDesktop[]
   /** Codes minted and not yet spent, when the registry reports it. */
   recoveryCodesLeft?: number
+  /** Optional, like everything an older registry would not send. */
+  hasPassword?: boolean
+  /** Copied from a provider's verified claim. Never typed. */
+  email?: VerifiedEmail | null
+  links?: readonly LinkedProvider[]
 }
 
 /**
@@ -103,6 +119,20 @@ export interface AccountStatus {
    * so, and the unlock channel reads it to know the local check cannot run.
    */
   passwordPending: boolean
+  /**
+   * THE ACCOUNT HAS NO PASSWORD: it began at a provider. Every prompt that
+   * would ask for one offers the provider instead.
+   */
+  passwordless: boolean
+  /** What unlocks this Mac. A passcode is this Mac's alone. */
+  unlockBy: 'password' | 'passcode'
+  /**
+   * No password was typed here and no passcode is chosen yet, so the idle lock
+   * has nothing to check and stays disarmed until there is one.
+   */
+  passcodePending: boolean
+  /** Offered only on a passcode Mac, and only where the hardware can. */
+  touchId: { available: boolean; on: boolean }
   /**
    * THE APP IS POINTED AT A REGISTRY THIS ACCOUNT WAS NOT CLAIMED AT.
    *
@@ -166,6 +196,12 @@ export const LOCK_CHOICES = [
 
 /** The floor. Twelve, stated once, read by the field and by the claim. */
 export const MIN_PASSWORD = 12
+
+/**
+ * A PASSCODE IS NOT A PASSWORD, so its floor is lower. It opens one screen on
+ * one Mac under five-tries-then-a-minute, and it never leaves that Mac.
+ */
+export const MIN_PASSCODE = 6
 
 /** Lowercase letters, digits and dashes, 1–32. */
 const USERNAME = /^[a-z0-9-]{1,32}$/
@@ -278,6 +314,23 @@ export type AccountRefusal =
   // exists — which a SETTLE reads as success, because it is what it asked for.
   | 'not_found'
   | 'already_seated'
+  // ── third-party sign-in ──
+  //
+  // 'cancelled' is the person changing their mind, which is not an error to
+  // apologise for. 'wrong_identity' is a provider account that is not this
+  // Mac's. 'locked' refuses a provider act behind the lock, because a browser
+  // already signed in to the provider would otherwise answer for a passer-by.
+  | 'cancelled'
+  | 'wrong_identity'
+  | 'locked'
+  | 'link_taken'
+  | 'link_exists'
+  | 'link_paused'
+  | 'last_sign_in'
+  | 'ticket_gone'
+  | 'provider_down'
+  | 'provider_required'
+  | 'weak_passcode'
   // Phase 6. 'legacy' is a name held by a key with no password yet — not free
   // and not somebody else's; 'no_passwords_yet' is a cookrew.dev that predates
   // accounts, where the honest answer is that nothing changes.
@@ -342,6 +395,16 @@ export type SignInAnswer<T> =
   | { ok: true; value: T }
   | { ok: false; reason: 'second_factor'; step: SecondFactorStep; message?: string }
   | { ok: false; reason: Exclude<AccountRefusal, 'second_factor'>; message?: string }
+
+/**
+ * WHAT A PROVIDER SIGN-IN ANSWERS: a sign-in's answers, and one more.
+ *
+ * Nobody has this identity, so there is a name to choose. The ticket stays in
+ * main; these are only the words to draw the question with.
+ */
+export type ProviderSignInAnswer<T> =
+  | SignInAnswer<T>
+  | { ok: false; reason: 'new_identity'; provider: ProviderId; suggest: string; free: boolean; email: string | null }
 
 /**
  * Is this refusal the end of the ladder, or may the card stay on the rung?
@@ -417,4 +480,5 @@ export interface AdmittedPhone {
 export const registryMismatchSentence = (at: {
   signedInAt: string
   pointedAt: string
-}): string => `This Mac is signed in at ${at.signedInAt}; the app is pointed at ${at.pointedAt}.`
+}): string =>
+  machineCopy(`This Mac is signed in at ${at.signedInAt}; the app is pointed at ${at.pointedAt}.`, hostPlatform())

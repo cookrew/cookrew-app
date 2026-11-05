@@ -88,6 +88,24 @@ describe('carrySessionToCwd — Claude', () => {
     expect(readFileSync(fx.targetFile, 'utf8')).toBe(readFileSync(fx.sourceFile, 'utf8'))
   })
 
+  it('carries from where the session REALLY lives when the card cwd drifted from it', () => {
+    // Review finding (2026-11-04): a card whose cwd said goat-dev while claude
+    // ran in solis-orch answered `unavailable` here, the respawn's cwd repair
+    // then moved the card BACK, and `cookrew terminal cwd` reported a move
+    // that never happened. The transcript is found by id wherever it is.
+    const fx = claudeFixture()
+    const drifted = path.join(path.dirname(fx.fromCwd), 'card-said-this')
+    mkdirSync(drifted, { recursive: true })
+    const outcome = carrySessionToCwd({
+      node: claudeNode(),
+      fromCwd: drifted,
+      toCwd: fx.toCwd,
+      projectsDir: fx.projectsDir
+    })
+    expect(outcome).toEqual({ kind: 'carried', sessionRef: SESSION_ID })
+    expect(readFileSync(fx.targetFile, 'utf8')).toBe(readFileSync(fx.sourceFile, 'utf8'))
+  })
+
   it('leaves the origin file standing — the move is a copy, not a rename', () => {
     const fx = claudeFixture()
     carrySessionToCwd({

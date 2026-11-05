@@ -1,18 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { keyMsgsForInput } from '../src/renderer/src/useRemoteKeyboard'
+import { desktopKeyAction, inputModeFor, keyMsgsForInput, type DesktopKeyEvent } from '../src/renderer/src/useRemoteKeyboard'
 
 // The mobile keyboard bridge forwards typing to the remote field via the SAME
 // whitelisted key vocabulary as hardware keys (keyMsg → Input.dispatchKeyEvent).
 // beforeinput is the reliable mobile signal (soft keyboards skip per-key keydown).
 describe('keyMsgsForInput — mobile beforeinput → whitelisted key vocab', () => {
-  it('insertText forwards one key message per character (text carried)', () => {
-    expect(keyMsgsForInput('insertText', 'ab')).toEqual([
-      { t: 'key', key: 'a', code: '', text: 'a' },
-      { t: 'key', key: 'b', code: '', text: 'b' }
-    ])
+  it('one typed character is a key (the page sees keydown, text carried)', () => {
+    expect(keyMsgsForInput('insertText', 'a')).toEqual([{ t: 'key', key: 'a', code: '', text: 'a' }])
   })
-  it('composition text is forwarded per character too', () => {
-    expect(keyMsgsForInput('insertCompositionText', '你好').map((m) => m.t)).toEqual(['key', 'key'])
+  it('a suggestion, an autocorrect or an emoji goes in whole as text, never split into keys', () => {
+    expect(keyMsgsForInput('insertText', 'hello')).toEqual([{ t: 'text', text: 'hello' }])
+    expect(keyMsgsForInput('insertText', '😀')).toEqual([{ t: 'text', text: '😀' }])
+    expect(keyMsgsForInput('insertReplacementText', 'their')).toEqual([{ t: 'text', text: 'their' }])
+  })
+  it('a paste from the soft keyboard goes as a paste: the page gets its paste event', () => {
+    expect(keyMsgsForInput('insertFromPaste', '你好世界')).toEqual([{ t: 'paste', text: '你好世界' }])
+    expect(keyMsgsForInput('insertFromPaste', '')).toEqual([])
+  })
+  it('composition is NOT forwarded from beforeinput — each update sent per character typed garbage (n, ni, then the word)', () => {
+    expect(keyMsgsForInput('insertCompositionText', '你好')).toEqual([])
+    expect(keyMsgsForInput('insertFromComposition', '你好')).toEqual([])
   })
   it('line break / paragraph → Enter', () => {
     expect(keyMsgsForInput('insertLineBreak', null)).toEqual([{ t: 'key', key: 'Enter', code: 'Enter' }])
@@ -30,5 +37,76 @@ describe('keyMsgsForInput — mobile beforeinput → whitelisted key vocab', () 
     expect(keyMsgsForInput('formatBold', 'x')).toEqual([])
     expect(keyMsgsForInput('insertText', null)).toEqual([])
     expect(keyMsgsForInput('insertText', '')).toEqual([])
+  })
+})
+
+const key = (over: Partial<DesktopKeyEvent>): DesktopKeyEvent => ({
+  key: 'a',
+  code: 'KeyA',
+  keyCode: 65,
+  isComposing: false,
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  ...over
+})
+
+describe('desktopKeyAction — a desktop keydown in the hidden field', () => {
+  it('a plain letter is one key with its text', () => {
+    expect(desktopKeyAction(key({}))).toEqual({ kind: 'send', msg: { t: 'key', key: 'a', code: 'KeyA', text: 'a' } })
+  })
+  it('⌘A goes as a key with the Meta bit and no text (the server adds selectAll)', () => {
+    expect(desktopKeyAction(key({ metaKey: true }))).toEqual({
+      kind: 'send',
+      msg: { t: 'key', key: 'a', code: 'KeyA', mods: 4 }
+    })
+  })
+  it('⇧ + arrow keeps the Shift bit so the selection extends', () => {
+    expect(desktopKeyAction(key({ key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, shiftKey: true }))).toEqual({
+      kind: 'send',
+      msg: { t: 'key', key: 'ArrowLeft', code: 'ArrowLeft', mods: 8 }
+    })
+  })
+  it('an IME composing (229, Process, isComposing) or a dead key is left to the field', () => {
+    expect(desktopKeyAction(key({ keyCode: 229 })).kind).toBe('ime')
+    expect(desktopKeyAction(key({ key: 'Process' })).kind).toBe('ime')
+    expect(desktopKeyAction(key({ isComposing: true })).kind).toBe('ime')
+    expect(desktopKeyAction(key({ key: 'Dead', code: 'KeyE', altKey: true })).kind).toBe('ime')
+  })
+  it('⌘V and Ctrl+V let the native paste happen (it carries this Mac’s clipboard)', () => {
+    expect(desktopKeyAction(key({ key: 'v', code: 'KeyV', metaKey: true })).kind).toBe('paste')
+    expect(desktopKeyAction(key({ key: 'v', code: 'KeyV', ctrlKey: true })).kind).toBe('paste')
+  })
+  it('Escape stays the app’s; a modifier alone rides on the next key', () => {
+    expect(desktopKeyAction(key({ key: 'Escape', code: 'Escape', keyCode: 27 })).kind).toBe('bubble')
+    expect(desktopKeyAction(key({ key: 'Shift', code: 'ShiftLeft', keyCode: 16, shiftKey: true })).kind).toBe('ignore')
+    expect(desktopKeyAction(key({ key: 'Meta', code: 'MetaLeft', keyCode: 91, metaKey: true })).kind).toBe('ignore')
+  })
+})
+
+describe('inputModeFor — the phone keyboard a page field asks for', () => {
+  it('a number field gets the number pad, an email field the email keyboard', () => {
+    expect(inputModeFor('decimal')).toBe('decimal')
+    expect(inputModeFor('email')).toBe('email')
+    expect(inputModeFor('search')).toBe('search')
+  })
+  it('text, a password, or nothing at all is the plain keyboard', () => {
+    expect(inputModeFor('text')).toBe('text')
+    expect(inputModeFor('password')).toBe('text')
+    expect(inputModeFor(undefined)).toBe('text')
+  })
+})
+
+describe('the phone listens to the NATIVE beforeinput', () => {
+  // React's onBeforeInput is built from the legacy `textInput` event and has no
+  // inputType: a phone's single letters and its Backspace never got through.
+  const read = (file: string): string =>
+    require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'renderer', 'src', file), 'utf8')
+  it('the hook attaches a real beforeinput listener', () => {
+    expect(read('useRemoteKeyboard.ts')).toContain("addEventListener('beforeinput'")
+  })
+  it('the frame does not route the key field through React’s onBeforeInput', () => {
+    expect(read('MobileBrowserFrame.tsx')).not.toContain('onBeforeInput=')
   })
 })

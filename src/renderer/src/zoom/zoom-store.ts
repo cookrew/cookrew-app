@@ -76,9 +76,13 @@ export const zoomStore = {
     state = { ...state, item: id }
     emit()
   },
-  /** Straight across to the other side's full view (a crossfade, not a zoom). */
-  jumpTo(kind: 'agent' | 'item', id: string): void {
-    state = kind === 'agent' ? { ...state, dir: 'agents', v: 3, agent: id, full: 'agent', jump: state.jump + 1 } : { ...state, dir: 'items', v: 1, item: id, full: 'item', jump: state.jump + 1 }
+  /** Straight across to the other side's full view, or an agent's card (a crossfade, not a zoom). */
+  jumpTo(kind: 'agent' | 'item' | 'card', id: string): void {
+    state = kind === 'agent'
+      ? { ...state, dir: 'agents', v: 3, agent: id, full: 'agent', jump: state.jump + 1 }
+      : kind === 'card'
+        ? { ...state, dir: 'agents', v: 2, agent: id, full: null, jump: state.jump + 1 }
+        : { ...state, dir: 'items', v: 1, item: id, full: 'item', jump: state.jump + 1 }
     persist()
     emit()
   },

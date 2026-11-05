@@ -40,6 +40,7 @@ import {
   isUiCommand,
   detectAttention,
   detectLiveWork,
+  uiCommandOpen,
   detectTurnEnded,
   lastStatusLine,
   extractPromptEcho,
@@ -51,6 +52,8 @@ import {
   scrollLineOf,
   tailLines
 } from '../shared/turn'
+import { menuAsksOnScreen, menuHeldOnScreen, waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { aboutOfScreen, wholeBrief, type WaitAbout } from '../shared/wait-about'
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
@@ -89,6 +92,16 @@ const LONE_ESC_PAIR_MS = 100
  * blocked is believed only while the screen still shows a question.
  */
 const ANSWER_GRACE_MS = 1500
+/**
+ * How long a menu must stay off the screen to count as gone. A TUI going from
+ * one menu to the next (Submit to Review) redraws through frames with neither.
+ */
+export const MENU_GONE_SETTLE_MS = 300
+/** Reads of a pane's history one wait may make, and their pace: a box's countdown repaints every second. */
+const BOX_READS = 4
+const BOX_READ_GAP_MS = 1000
+/** How soon a box already whole is read again once its pane has printed: the next box can end like this one. */
+const BOX_RECHECK_MS = 5000
 /**
  * Paced Sous title-backfill: one record per tick so a burst never trips the
  * summarizer's breaker (which would null out a whole sequential pass).
@@ -407,6 +420,7 @@ interface ScrapeObservation {
 /** The half of a TerminalActivity that costs a full-buffer walk to produce. */
 interface DerivedActivity {
   lines: string[]
+  waitChoice: WaitChoice | null
   glance: TerminalActivity['glance']
   tailLines: TerminalActivity['tailLines']
 }
@@ -442,6 +456,24 @@ interface TrackedTerminal {
   heldAt: number
   /** Epoch ms of the last menu answer (ANSWER_GRACE_MS); 0 when none. */
   answeredAt: number
+  /** A wait's screen held a menu up, and its going has not been settled. */
+  menuShown: boolean
+  /** The rows last read, drawn while a missing menu settles. */
+  lastChoice: WaitChoice | null
+  /** A box taller than the screen, as the pane's history has it, for this wait. */
+  boxRead: WaitAbout | null
+  /** That read: in hand, how many this wait, when the last began. */
+  boxReading: boolean
+  boxReads: number
+  boxReadAt: number
+  /** Moves on when what was read no longer counts: a read begun before it is dropped. */
+  boxGen: number
+  /** outputRev as the last read landed: anything past it was printed since. */
+  boxReadRev: number
+  /** The next try at a box nothing else will wake: a quiet one prints nothing more. */
+  boxRetry: ReturnType<typeof setTimeout> | null
+  /** Running while a menu is missing from the screen: see menuMissing. */
+  menuLeaving: ReturnType<typeof setTimeout> | null
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
   lastSubmitAt: number
   /**
@@ -491,6 +523,7 @@ interface TrackedTerminal {
   titleTimer: NodeJS.Timeout | null
   onInput: (data: string, source?: 'dispatch') => void
   onData: (data: string) => void
+  onParsed: () => void
   onReplay: () => void
   onExit: () => void
 }
@@ -613,7 +646,9 @@ export class TurnTracker extends EventEmitter {
    * that answer for exactly the terminals that cannot answer for themselves;
    * the moment a mirror attaches, the real screen outranks it.
    */
-  private backendPhase = new Map<string, { phase: TurnPhase; agent: boolean; at: number }>()
+  private backendPhase = new Map<string, { phase: TurnPhase; agent: boolean; at: number; choice?: WaitChoice | null }>()
+  /** What a pane with no mirror last showed (observePane). */
+  private paneLines = new Map<string, { lines: string[]; agent: boolean; at: number }>()
 
   /**
    * The local-producer serializer (Sol r3 P0-2c, synchronous-durable per
@@ -633,6 +668,13 @@ export class TurnTracker extends EventEmitter {
    * stand as exchange identity.
    */
   onOwnerPreempt: ((terminalId: string) => boolean | void) | null = null
+
+  /**
+   * The pane's rows reaching further back than a mirror's viewport: where a
+   * permission box taller than the screen keeps its top (shared/wait-about.ts).
+   * Null: such a box shows what the screen has of it.
+   */
+  paneHistory: ((terminalId: string) => Promise<string | null>) | null = null
 
   /**
    * All injectable for tests; store null = in-memory only. The lease defaults
@@ -746,6 +788,8 @@ export class TurnTracker extends EventEmitter {
    * something to have proven the file path works for it.
    */
   private fileBacked = new Set<string>()
+  /** Terminals rested on a turn their file had not closed: the rest lands when it does (restOf). */
+  private owedRest = new Set<string>()
 
   /**
    * terminalId → the dispatch its NEXT completed turn answers (v4 §3). Set by
@@ -1203,6 +1247,7 @@ export class TurnTracker extends EventEmitter {
     ) {
       this.openTurnFacts.delete(terminalId)
     }
+    if (tail?.final === true && this.owedRest.delete(terminalId)) this.settleRest(terminalId, tail)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()
@@ -1416,7 +1461,10 @@ export class TurnTracker extends EventEmitter {
    */
   seen(terminalId: string): void {
     const t = this.tracked.get(terminalId)
-    if (!t || t.phase !== 'replied') return
+    // No mirror here (a card read on a watch, a phone): the ledger still says
+    // unread, and only this read can settle it.
+    if (!t) return this.markLastRecordSeen(terminalId)
+    if (t.phase !== 'replied') return
     t.phase = 'idle'
     this.markLastRecordSeen(terminalId)
     this.push(t)
@@ -1973,6 +2021,7 @@ export class TurnTracker extends EventEmitter {
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
+    this.owedRest.delete(terminalId)
     this.snapshots.delete(terminalId)
     this.store?.remove(terminalId)
     this.scrapeHistory?.forget(terminalId)
@@ -2016,6 +2065,16 @@ export class TurnTracker extends EventEmitter {
       heldInput: '',
       heldAt: 0,
       answeredAt: 0,
+      menuShown: false,
+      lastChoice: null,
+      boxRead: null,
+      boxReading: false,
+      boxReads: 0,
+      boxReadAt: 0,
+      boxGen: 0,
+      boxReadRev: 0,
+      boxRetry: null,
+      menuLeaving: null,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
       startStatus: null,
@@ -2043,6 +2102,7 @@ export class TurnTracker extends EventEmitter {
       titleTimer: null,
       onInput: (data, source) => this.handleInput(session.terminalId, data, source),
       onData: (data) => this.handleData(session.terminalId, data),
+      onParsed: () => this.handleParsed(session.terminalId),
       // A resize rewraps the mirror and re-emits as 'replay', deliberately NOT
       // 'data' (pty.resize: a synthetic repaint on 'data' would read as agent
       // activity and mint phantom checkpoints). The derived cache still has to
@@ -2059,8 +2119,9 @@ export class TurnTracker extends EventEmitter {
     // cards render ask+reply from tracker state, which would otherwise come
     // back blank-idle even though history survived on disk. An unread last
     // turn returns as 'replied' (TURN COMPLETE) — a restart must not count
-    // as acknowledgement. A mid-turn agent self-heals to 'thinking' from its
-    // live spinner output moments later.
+    // as acknowledgement; one its file has not closed rests instead (restOf).
+    // A mid-turn agent self-heals to 'thinking' from its live spinner output
+    // moments later.
     if (agent) {
       const history = this.liveHistory(session.terminalId)
       const last = history[history.length - 1]
@@ -2068,14 +2129,16 @@ export class TurnTracker extends EventEmitter {
         t.prompt = last.prompt
         t.reply = last.reply
         t.title = last.title ?? null
-        t.phase = last.seenAt === undefined ? 'replied' : 'idle'
+        t.phase = this.restOf(session.terminalId, last)
       }
     }
     session.on('input', t.onInput)
     session.on('data', t.onData)
+    session.on('parsed', t.onParsed)
     session.on('replay', t.onReplay)
     session.on('exit', t.onExit)
     this.tracked.set(session.terminalId, t)
+    this.paneLines.delete(session.terminalId)
     // herdr may have reported the question before this mirror existed.
     if (this.backendPhase.get(session.terminalId)?.phase === 'waiting') this.healBlocked(t)
   }
@@ -2123,6 +2186,7 @@ export class TurnTracker extends EventEmitter {
     if (t.titleTimer) clearTimeout(t.titleTimer)
     t.session.removeListener('input', t.onInput)
     t.session.removeListener('data', t.onData)
+    t.session.removeListener('parsed', t.onParsed)
     t.session.removeListener('replay', t.onReplay)
     t.session.removeListener('exit', t.onExit)
     this.tracked.delete(terminalId)
@@ -2136,6 +2200,21 @@ export class TurnTracker extends EventEmitter {
    * through it: reading one scalar by constructing N full activities is how a
    * cheap question becomes O(terminals x scrollback).
    */
+  /**
+   * Forget what was typed in this pane and never submitted. A hidden prompt is
+   * opening: keys from here on are sealed, so no Enter would ever come to clear
+   * the buffer, and whatever was typed ahead of the seal would stay on the card.
+   */
+  dropDraft(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    t.promptBuffer = ''
+    t.inPaste = false
+    t.heldInput = ''
+    this.lease.clearOwnerEditing(terminalId)
+    this.schedulePush(terminalId)
+  }
+
   phaseOf(terminalId: string): TurnPhase | undefined {
     // TRACKED ONLY, deliberately. hasLiveWork reads this, and its working set
     // is exactly what the backend hint emits — answering from a guess pins
@@ -2171,7 +2250,7 @@ export class TurnTracker extends EventEmitter {
     // BOTH fields: a phase that holds while agent-ness was written wrongly
     // (a spawn racing the store add) would latch a shell into an agent card.
     if (current?.phase === phase && current.agent === agent) return
-    this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now() })
+    this.backendPhase.set(terminalId, { phase, agent, at: current?.phase === phase ? current.at : Date.now(), choice: current?.phase === phase ? current.choice : null })
     // A tracked terminal reports its own truth; announcing this one would
     // race the real screen for the same card. The one thing its screen cannot
     // report is a question that was already up when it attached.
@@ -2181,6 +2260,20 @@ export class TurnTracker extends EventEmitter {
     } else if (phase === 'waiting') {
       this.healBlocked(t)
     }
+  }
+
+  /**
+   * The menu a waiting pane shows, read by the caller (index.ts, as herdr says
+   * blocked): a mirrorless card has no screen of its own to read it from.
+   */
+  observeBackendChoice(terminalId: string, choice: WaitChoice | null): void {
+    const current = this.backendPhase.get(terminalId)
+    if (current?.phase !== 'waiting') return
+    // The whole of it: a cursor or an answer on the Review tab is news too.
+    if (JSON.stringify(current.choice ?? null) === JSON.stringify(choice)) return
+    this.backendPhase.set(terminalId, { ...current, choice })
+    if (!this.tracked.has(terminalId)) this.announce(this.backendActivity(terminalId, 'waiting', current.agent))
+    else this.schedulePush(terminalId)
   }
 
   /**
@@ -2198,8 +2291,7 @@ export class TurnTracker extends EventEmitter {
   private healBlocked(t: TrackedTerminal): void {
     if (!t.agent || (t.phase !== 'idle' && t.phase !== 'replied')) return
     this.resumeThinking(t)
-    t.phase = 'waiting'
-    this.push(t)
+    this.raiseWait(t)
   }
 
   /**
@@ -2216,10 +2308,81 @@ export class TurnTracker extends EventEmitter {
     }
   }
 
+  /**
+   * What a pane with no mirror shows now, for a card with no record of its own
+   * (pane-follow.ts). A tracked terminal reports its own truth, and this must
+   * not race it.
+   */
+  observePane(terminalId: string, text: string, agent: boolean): void {
+    if (this.tracked.has(terminalId)) return
+    const lines = tailLines(cleanTurnLines(text), SUMMARY_TAIL)
+    const known = this.paneLines.get(terminalId)
+    if (known && known.lines.join('\n') === lines.join('\n')) return
+    this.paneLines.set(terminalId, { lines, agent, at: Date.now() })
+    this.announce(this.paneActivity(terminalId))
+  }
+
+  /** The pane ended, or a mirror took over. */
+  forgetPane(terminalId: string): void {
+    this.paneLines.delete(terminalId)
+  }
+
+  private paneActivity(terminalId: string): TerminalActivity {
+    const read = this.paneLines.get(terminalId)
+    const backend = this.backendPhase.get(terminalId)
+    const base = this.backendActivity(terminalId, backend?.phase ?? this.restingPhase(terminalId), backend?.agent ?? read?.agent ?? false)
+    return read ? { ...base, paneRead: true, lines: read.lines, updatedAt: read.at } : base
+  }
+
   /** What a mirrorless terminal rests at: unread reply, else idle. */
   private restingPhase(terminalId: string): TurnPhase {
-    const last = this.liveHistory(terminalId).at(-1)
-    return last && last.seenAt === undefined ? 'replied' : 'idle'
+    return this.restOf(terminalId, this.liveHistory(terminalId).at(-1))
+  }
+
+  /**
+   * The agent's own file has not closed its last turn. Only a file-backed
+   * record can say so: a scrape record is minted when its turn ended and
+   * carries no `final`. Reads the loaded history alone, because the gate asks
+   * this of every terminal on every sweep and liveHistory would hydrate a ledger
+   * for each. Open is not running: Claude marks no interrupted turn, which is
+   * why the pane decides that (backend-phase-gate.ts).
+   */
+  turnOpen(terminalId: string): boolean {
+    if (!this.fileBacked.has(terminalId)) return false
+    const last = this.histories.get(terminalId)?.at(-1)
+    return last !== undefined && last.final !== true
+  }
+
+  /**
+   * What a terminal rests at on this record. An unread turn is a reply only
+   * once it has ended (owner, 2026-11-05: after a restart a running agent read
+   * DONE, its open turn taken for an unread reply). An open turn rests, and the
+   * reply it may yet be is owed: herdr can fall quiet before the file is read,
+   * so afterCommit lands it with the finality.
+   */
+  private restOf(terminalId: string, last: TurnRecord | undefined): TurnPhase {
+    if (!last || last.seenAt !== undefined) return 'idle'
+    if (!this.turnOpen(terminalId)) return 'replied'
+    this.owedRest.add(terminalId)
+    return 'idle'
+  }
+
+  /** A turn rested as open has closed: the card takes the rest it was owed. */
+  private settleRest(terminalId: string, last: TurnRecord): void {
+    const t = this.tracked.get(terminalId)
+    if (t) {
+      // A running turn is its own truth, and afterCommit pushes what changes here.
+      if (t.phase !== 'idle') return
+      t.prompt = last.prompt
+      t.reply = last.reply
+      t.title = last.title ?? null
+      t.phase = this.restOf(terminalId, last)
+      return
+    }
+    // herdr still says working: its own retraction reads the closed turn.
+    if (this.backendPhase.has(terminalId)) return
+    // A session file means an agent, so nothing here asks.
+    this.announce(this.backendActivity(terminalId, this.restOf(terminalId, last), true))
   }
 
   /**
@@ -2237,6 +2400,7 @@ export class TurnTracker extends EventEmitter {
       prompt: null,
       pendingInput: null,
       lines: [],
+      waitChoice: this.backendPhase.get(terminalId)?.choice ?? null,
       reply: null,
       glance: null,
       title: null,
@@ -2282,9 +2446,9 @@ export class TurnTracker extends EventEmitter {
       .filter((a): a is TerminalActivity => a !== null)
     // Mirrorless terminals the backend has an opinion about, appended once
     // each — a tracked terminal is already above and must not appear twice.
-    const skeletons = [...this.backendPhase.entries()]
-      .filter(([id]) => !this.tracked.has(id))
-      .map(([id, known]) => this.backendActivity(id, known.phase, known.agent))
+    const skeletons = [...new Set([...this.backendPhase.keys(), ...this.paneLines.keys()])]
+      .filter((id) => !this.tracked.has(id))
+      .map((id) => this.paneActivity(id))
     return [...live, ...skeletons]
   }
 
@@ -2315,7 +2479,10 @@ export class TurnTracker extends EventEmitter {
     const prevInPaste = t.inPaste
     const prevHeld = this.liveHeld(t)
     const fed = feedPromptBuffer(t.promptBuffer, data, t.inPaste, prevHeld)
-    t.promptBuffer = fed.buffer
+    // A held menu stands in the box's place: a digit answers it and leaves
+    // nothing behind, or the agent reads as "composing" and refuses every ask.
+    const intoMenu = t.phase === 'waiting' && menuHeldOnScreen(t.session.viewportText())
+    t.promptBuffer = intoMenu ? prevBuffer : fed.buffer
     t.inPaste = fed.inPaste
     t.heldInput = fed.held
     t.heldAt = Date.now()
@@ -2328,11 +2495,14 @@ export class TurnTracker extends EventEmitter {
     // fallback's own tagged paste passes through this buffer too and must
     // not read as the owner composing.
     if (source !== 'dispatch') {
-      this.maintainOwnerEditing(t, terminalId, data, fed, {
-        buffer: prevBuffer,
-        inPaste: prevInPaste,
-        held: prevHeld
-      })
+      // Keys into a menu edit no box: no reservation to maintain.
+      if (!intoMenu) {
+        this.maintainOwnerEditing(t, terminalId, data, fed, {
+          buffer: prevBuffer,
+          inPaste: prevInPaste,
+          held: prevHeld
+        })
+      }
     } else if (
       fed.submitted.length > 0 &&
       fed.buffer.length === 0 &&
@@ -2355,13 +2525,16 @@ export class TurnTracker extends EventEmitter {
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
     if (fed.submitted.length > 0 || fed.buffer.trim().length > 0) t.sawInputThisTurn = true
+    // Words sent while a missing menu settles: nothing is left to answer, so
+    // they are a prompt of their own, and go the way a prompt goes.
+    if (t.menuLeaving !== null && fed.submitted.some((s) => s.length > 0)) this.leaveWait(t)
     if (t.phase === 'waiting' && fed.submitted.length > 0 && t.prompt !== null) {
       // Enter on an approval/question menu answers the SAME real turn — resume
       // thinking with the original prompt and snapshot intact. A PROMPTLESS
       // 'waiting' turn is a self-heal boot phantom (e.g. a fresh Codex whose
       // boot screen tripped attention detection), NOT a menu to answer — the
       // submitted text is the real first prompt, so fall through to startTurn.
-      t.phase = 'thinking'
+      this.leaveWait(t)
       t.lastSubmitAt = 0
       t.answeredAt = Date.now()
       this.push(t)
@@ -2412,7 +2585,19 @@ export class TurnTracker extends EventEmitter {
     const screen = t.session.viewportText()
     if (detectLiveWork(screen)) return false
     if (Date.now() - t.answeredAt >= ANSWER_GRACE_MS) return true
-    return detectAttention(cleanTurnLines(screen))
+    return detectAttention(cleanTurnLines(screen)) || menuHeldOnScreen(screen)
+  }
+
+  /**
+   * An answer went to a menu by its own road (menu-answer.ts), which handleInput
+   * never sees. The phase stays: a tick or the next tab keeps the wait, and the
+   * screen says when the menu goes.
+   */
+  noteMenuAnswer(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    t.answeredAt = Date.now()
+    this.forgetBox(t)
   }
 
   /** Can the held carry age out? Only a lone ESC over an empty box, no paste open. */
@@ -2611,14 +2796,30 @@ export class TurnTracker extends EventEmitter {
     }
     if (!t || !t.agent) return 'allow'
     if (!this.pendingDispatch.has(terminalId)) return 'allow'
-    if (t.phase === 'waiting' && t.prompt !== null && feeds.some((fed) => fed.submitted.length > 0)) {
+    const words = feeds.some((fed) => fed.submitted.some((s) => s.length > 0))
+    const answering = t.phase === 'waiting' && t.prompt !== null && feeds.some((fed) => fed.submitted.length > 0)
+    if (answering && !(t.menuLeaving !== null && words)) {
       // A menu answer while a dispatch is armed feeds the CURRENT turn and
-      // produces no competing exchange — allowed, as ever.
+      // produces no competing exchange — allowed, as ever. Not words sent
+      // while a missing menu settles: those are a new prompt (handleInput).
       return 'allow'
     }
     const submits = feeds.some((fed) => fed.submitted.some((s) => s.length > 0))
     if (!submits) return 'allow'
     return this.preemptOnOwnerSubmit(terminalId, undefined)
+  }
+
+  /**
+   * The guard for keys answering a menu that menu-answer.ts just saw held up.
+   * A TUI draws its menu in the input box's place, so they reach the menu and
+   * never the box: a dispatched turn's own residue must not refuse the very
+   * Enter it waits for, and they open no turn, so layer 3 has nothing to preempt.
+   * Layer 1 stands (a delivery mid-paste), and so does a paste known stranded:
+   * the screen may trail the pane by a beat, and no Enter is worth that risk.
+   */
+  guardMenuKeys(terminalId: string, data: string): OwnerInputVerdict {
+    if (this.lease.holderOf(terminalId) !== null) return 'refused'
+    return this.lease.hasStrandedPaste(terminalId) && /[\r\n]/.test(data) ? 'refused' : 'allow'
   }
 
   /**
@@ -2827,6 +3028,183 @@ export class TurnTracker extends EventEmitter {
    * start, premature quiescence, tmux reattach mid-turn) — self-heal so a
    * working agent can never stay stuck on a green or idle card.
    */
+  /**
+   * The screen has caught up with bytes 'data' announced ahead of it (xterm
+   * parses later). A menu read in between is the last frame, and a TUI at a
+   * menu prints nothing more to correct it: read it again now.
+   */
+  private handleParsed(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (t?.agent && (t.phase === 'idle' || t.phase === 'replied')) {
+      // A question the tracker never saw open: a mirror attached to a pane
+      // already at it, where a narrow pane leaves herdr reading idle. A TUI at a
+      // menu prints nothing more, so this frame is the only chance.
+      const screen = t.session.viewportText()
+      if (menuAsksOnScreen(screen) && this.menuWaits(screen)) this.healBlocked(t)
+      return
+    }
+    if (t?.phase !== 'waiting') return
+    this.noteMenu(t, menuHeldOnScreen(t.session.viewportText()))
+    t.outputRev += 1
+    this.schedulePush(terminalId)
+  }
+
+  /** A menu held up for the owner to answer: no turn running, and no picker they opened themselves. */
+  private menuWaits(screen: string): boolean {
+    return menuHeldOnScreen(screen) && !detectLiveWork(screen) && !uiCommandOpen(screen)
+  }
+
+  /** What this frame says of the menu: back, or missing since the last one. */
+  private noteMenu(t: TrackedTerminal, shown: boolean): void {
+    if (shown) {
+      t.menuShown = true
+      this.stopMenuLeaving(t)
+      return
+    }
+    // The box back on the screen may be another, however alike their ends.
+    this.doubtBox(t)
+    if (t.menuShown) this.menuMissing(t)
+  }
+
+  /**
+   * A menu missing from the screen. Not gone yet: the wait and its rows hold
+   * while it settles, and only then does the answer count as landed, whatever
+   * herdr still says (its blocked is the menu that left, and the grace keeps
+   * that from raising the wait a second time).
+   */
+  private menuMissing(t: TrackedTerminal): void {
+    if (t.menuLeaving !== null) return
+    t.menuLeaving = setTimeout(() => {
+      t.menuLeaving = null
+      if (this.tracked.get(t.session.terminalId) !== t || t.phase !== 'waiting') return
+      t.outputRev += 1
+      if (menuHeldOnScreen(t.session.viewportText())) {
+        this.schedulePush(t.session.terminalId)
+        return
+      }
+      this.leaveWait(t)
+      t.answeredAt = Date.now()
+      this.push(t)
+    }, MENU_GONE_SETTLE_MS)
+  }
+
+  private stopMenuLeaving(t: TrackedTerminal): void {
+    if (t.menuLeaving !== null) clearTimeout(t.menuLeaving)
+    t.menuLeaving = null
+  }
+
+  /** A wait over, and its menu's mark and settle with it. */
+  private leaveWait(t: TrackedTerminal): void {
+    this.stopMenuLeaving(t)
+    t.menuShown = false
+    t.phase = 'thinking'
+  }
+
+  /** A wait raised, its mark read off the screen: a menu's going ends it, nothing else's does. */
+  private raiseWait(t: TrackedTerminal): void {
+    t.phase = 'waiting'
+    this.forgetBox(t)
+    t.menuShown = menuHeldOnScreen(t.session.viewportText())
+    this.push(t)
+  }
+
+  /** The rows a waiting screen shows; the last ones while a missing menu settles. */
+  private shownChoice(t: TrackedTerminal): WaitChoice | null {
+    if (t.menuLeaving === null) t.lastChoice = this.withWholeBox(t, waitChoiceOfScreen(t.session.viewportText()))
+    return t.lastChoice
+  }
+
+  /** This wait's box is over: the next one's top is not its top, however alike their ends. */
+  private forgetBox(t: TrackedTerminal): void {
+    this.doubtBox(t)
+    t.boxReads = 0
+    t.boxReadAt = 0
+    if (t.boxRetry !== null) clearTimeout(t.boxRetry)
+    t.boxRetry = null
+  }
+
+  /** What was read may not be this box: the card goes back to what the screen shows until it is read again. */
+  private doubtBox(t: TrackedTerminal): void {
+    t.boxRead = null
+    t.boxGen += 1
+  }
+
+  /** A box taller than the screen, filled in from the pane once that has been read. */
+  private withWholeBox(t: TrackedTerminal, choice: WaitChoice | null): WaitChoice | null {
+    if (!choice?.about?.partial) return choice
+    const whole = wholeBrief(choice, t.boxRead)
+    if (whole.about?.partial) {
+      this.readBox(t)
+      return whole
+    }
+    t.boxReads = 0
+    if (t.outputRev !== t.boxReadRev) this.recheckBox(t)
+    return whole
+  }
+
+  /**
+   * The pane printed under a box already whole. It may only be a countdown, or
+   * it may be a new box with the same end, and the screen cannot tell them
+   * apart: only the history can. A quiet pane costs nothing.
+   */
+  private recheckBox(t: TrackedTerminal): void {
+    const early = t.boxReadAt + BOX_RECHECK_MS - Date.now()
+    if (early > 0) this.retryBox(t, early)
+    else this.readBox(t)
+  }
+
+  /** An answer found the card behind the screen: what it shows is read again. */
+  refreshBox(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    this.forgetBox(t)
+    t.outputRev += 1
+    this.schedulePush(terminalId)
+  }
+
+  /** Comes round again by itself, for a box that prints nothing more. */
+  private retryBox(t: TrackedTerminal, afterMs: number): void {
+    if (t.boxRetry !== null) return
+    const id = t.session.terminalId
+    t.boxRetry = setTimeout(() => {
+      t.boxRetry = null
+      if (this.tracked.get(id) !== t || t.phase !== 'waiting') return
+      t.outputRev += 1
+      this.schedulePush(id)
+    }, afterMs)
+    t.boxRetry.unref?.()
+  }
+
+  /** Off the push's path: the answer lands on a later one. A TUI's countdown repaints, so it is paced, and failures counted. */
+  private readBox(t: TrackedTerminal): void {
+    const read = this.paneHistory
+    if (!read || t.boxReading || t.boxReads >= BOX_READS) return
+    const now = Date.now()
+    const early = t.boxReadAt + BOX_READ_GAP_MS - now
+    if (early > 0) {
+      this.retryBox(t, early)
+      return
+    }
+    const id = t.session.terminalId
+    t.boxReading = true
+    t.boxReads += 1
+    t.boxReadAt = now
+    const gen = t.boxGen
+    void read(id)
+      .then((history) => {
+        // Forgotten or doubted meanwhile: this read may be the last box's.
+        if (t.boxGen === gen) t.boxRead = history === null ? null : aboutOfScreen(history)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        t.boxReading = false
+        if (this.tracked.get(id) !== t || t.phase !== 'waiting') return
+        t.outputRev += 1
+        t.boxReadRev = t.outputRev
+        this.schedulePush(id)
+      })
+  }
+
   private handleData(terminalId: string, data: string): void {
     const t = this.tracked.get(terminalId)
     if (!t) return
@@ -2834,11 +3212,14 @@ export class TurnTracker extends EventEmitter {
     // one place the derived-activity cache has to be invalidated from.
     t.outputRev += 1
     if (t.phase === 'waiting') {
-      // A question box repaints as it is navigated: while herdr still reads it
-      // as blocked and no spinner runs, that is the same question.
-      if (agentStatus(t.session.sessionName) !== 'blocked' || detectLiveWork(data) || detectLiveWork(t.session.viewportText())) {
-        t.phase = 'thinking'
-      }
+      // A question box repaints as it is navigated: while it stands on the
+      // screen (herdr often reads such a pane as done) or herdr reads it as
+      // blocked, and no spinner runs, that is the same question. This frame may
+      // be the last one: handleParsed reads the next.
+      const screen = t.session.viewportText()
+      this.noteMenu(t, menuHeldOnScreen(screen))
+      const sameQuestion = t.menuShown || agentStatus(t.session.sessionName) === 'blocked'
+      if (!sameQuestion || detectLiveWork(data) || detectLiveWork(screen)) this.leaveWait(t)
     } else if (
       t.agent &&
       (t.phase === 'replied' || t.phase === 'idle') &&
@@ -2933,7 +3314,7 @@ export class TurnTracker extends EventEmitter {
     t.prompt = last?.prompt ?? null
     t.reply = last?.reply ?? null
     t.title = last?.title ?? null
-    t.phase = last && last.seenAt === undefined ? 'replied' : 'idle'
+    t.phase = this.restOf(t.session.terminalId, last)
     this.push(t)
   }
 
@@ -2964,8 +3345,14 @@ export class TurnTracker extends EventEmitter {
     // quiet to be believed: waiting at once — unless a spinner is live, which
     // is the answer already running while herdr's blocked goes stale.
     if (reported === 'blocked' && this.blockedOnScreen(t)) {
-      t.phase = 'waiting'
-      this.push(t)
+      this.raiseWait(t)
+      return
+    }
+    // A menu is its own proof, and herdr often reads such a pane as done: no
+    // quiet to sit out, or the rows would come up to 2.5 s late.
+    const screen = t.session.viewportText()
+    if (this.menuWaits(screen)) {
+      this.raiseWait(t)
       return
     }
     // Hold while herdr says working — this survives long silent tool calls,
@@ -2993,11 +3380,10 @@ export class TurnTracker extends EventEmitter {
     const glanceStatus = parseAgentGlance(delta).status
     if (glanceStatus !== null && isLiveStatus(glanceStatus)) return
     const lines = cleanTurnLines(delta).filter((l) => !this.isPromptEcho(l, t.prompt))
-    if (reported === 'blocked' || detectAttention(lines)) {
+    if (reported === 'blocked' || detectAttention(lines) || menuHeldOnScreen(t.session.viewportText())) {
       // Blocked on the human — keep the poll alive; handleData resumes
       // 'thinking' when output flows again.
-      t.phase = 'waiting'
-      this.push(t)
+      this.raiseWait(t)
       return
     }
     // Prefer the parsed final assistant message over the raw tail — the tail
@@ -3128,6 +3514,7 @@ export class TurnTracker extends EventEmitter {
   }
 
   private stopTurnTimers(t: TrackedTerminal): void {
+    this.stopMenuLeaving(t)
     if (t.pollTimer) {
       clearInterval(t.pollTimer)
       t.pollTimer = null
@@ -3262,6 +3649,10 @@ export class TurnTracker extends EventEmitter {
                     SUMMARY_TAIL
                   )
                 : tailLines(cleanTurnLines(t.session.viewportText()), SUMMARY_TAIL),
+              // The whole screen: a question tool's rows run past the tail
+              // above. The viewport only: a mirror's scrollback can hold old
+              // frames, and a question over another's rows is worse than none.
+              waitChoice: t.phase === 'waiting' ? this.shownChoice(t) : null,
               glance: t.agent && inTurn ? parseAgentGlance(rawDelta) : null,
               // Clip signal only when the tail is settled — mid-turn the
               // renderer shows the whole live stream anyway.
@@ -3285,6 +3676,8 @@ export class TurnTracker extends EventEmitter {
       prompt: t.prompt,
       pendingInput: pending.length > 0 ? pending : null,
       lines,
+      // A menu taller than the viewport comes from the pane's own read (index.ts).
+      waitChoice: derived.waitChoice ?? (t.phase === 'waiting' ? (this.backendPhase.get(terminalId)?.choice ?? null) : null),
       reply: t.reply,
       glance: derived.glance,
       title: t.title,

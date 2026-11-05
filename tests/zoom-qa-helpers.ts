@@ -20,7 +20,7 @@ export const LABEL = { w: 200, h: 24 }
 
 export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: number; w: number; h: number; narrow: boolean }, size: { w: number; h: number } = LABEL, agents: Map<string, AgentEls> = new Map()) {
   const els = {
-    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), ring: part(), label: part(), newCap: part(), machine: part(),
+    devices: part(), device: part(), scene: part(), panel: part(), wash: part(), label: part(), newCap: part(), machine: part(),
     labelW: size.w, labelH: size.h,
     agents, links: new Map(), items: new Map(), ties: new Map(), marks: new Map(), next: null
   } as unknown as FrameEls
@@ -35,5 +35,5 @@ export function paintAt(model: FrameModel, st: Partial<FrameState> & { sv: numbe
   const cy = scene.t[1] + (lt[1] + size.h / 2) * scene.s
   const hw = (size.w * lk * scene.s) / 2
   const hh = (size.h * lk * scene.s) / 2
-  return { L, out, scene, label: { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh, k: lk, o: Number(els.label.style.opacity) } }
+  return { L, out, els, scene, label: { left: cx - hw, right: cx + hw, top: cy - hh, bottom: cy + hh, k: lk, o: Number(els.label.style.opacity) } }
 }

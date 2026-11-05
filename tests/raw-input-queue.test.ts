@@ -121,12 +121,12 @@ describe('a keystroke request that never answers', () => {
     push('t1', 'b')
     push('t1', 'c')
     expect(sent).toEqual(['a'])
-    await new Promise((r) => setTimeout(r, 40))
+    // No answer is not "not typed": the same batch goes again, and the Mac
+    // types its id once (main/once-by-key.ts). Polled: the deadline and the
+    // resend are real timers, and a busy runner can take longer than either.
+    await expect.poll(() => sent, { timeout: 3000 }).toEqual(['a', 'a', 'bc'])
     expect(signals[0].aborted).toBe(true)
     expect((signals[0].reason as Error).name).toBe('TimeoutError')
-    // No answer is not "not typed": the same batch goes again, and the Mac
-    // types its id once (main/once-by-key.ts).
-    expect(sent).toEqual(['a', 'a', 'bc'])
   })
 
   it('leaves an answered request alone', async () => {
@@ -193,5 +193,59 @@ describe('a keystroke batch that got no answer', () => {
     push('t1', 'b')
     await new Promise((r) => setTimeout(r, 900))
     expect(calls).toEqual(['a', 'a', 'a', 'b'])
+  })
+})
+
+describe('an answer that refuses the keys', () => {
+  it('is told once, with what it refused, and the lane moves on', async () => {
+    const refused: Array<[string, string]> = []
+    const answers = [Promise.reject(new Error('409')), Promise.resolve()]
+    const sent: string[] = []
+    const push = createRawInputQueue(
+      (_id, data) => {
+        sent.push(data)
+        return answers.shift() as Promise<unknown>
+      },
+      { refused: (id, data) => refused.push([id, data]) }
+    )
+    push('t', 'hello')
+    push('t', '\r')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(refused).toEqual([['t', 'hello']])
+    expect(sent).toEqual(['hello', '\r'])
+  })
+  it('a failure with no answer is not a refusal: it goes again', async () => {
+    const refused: string[] = []
+    const answers = [Promise.reject(new Error('offline')), Promise.resolve()]
+    const push = createRawInputQueue(() => answers.shift() as Promise<unknown>, {
+      retryable: () => true,
+      refused: (_id, data) => refused.push(data)
+    })
+    push('t', 'x')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(refused).toEqual([])
+  })
+})
+
+describe('an Esc queued behind other keys', () => {
+  it('goes alone: merged into a batch it would be words, and no interrupt', () => {
+    const { push, sent, settle } = harness()
+    push('t', 'a')
+    push('t', 'b')
+    push('t', '\x1b')
+    push('t', 'c')
+    settle(0)
+    return Promise.resolve()
+      .then(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      .then(() => {
+        settle(1)
+        return new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      .then(() => {
+        settle(2)
+        return new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      .then(() => expect(sent.map((s) => s.data)).toEqual(['a', 'b', '\x1b', 'c']))
   })
 })

@@ -58,12 +58,8 @@ const rowView = async (entry: StreamCheckpoint): Promise<string> => {
       row={projected}
       label={checkpointRowTitle(projected, 'conclusion')}
       active={false}
-      acting={false}
       loading={false}
       titleShift={0}
-      actions={null}
-      onPressStart={() => undefined}
-      onPressEnd={() => undefined}
       onSelect={() => undefined}
     />
   )

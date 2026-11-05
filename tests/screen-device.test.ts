@@ -2,9 +2,12 @@
 // address names, what screencapture is asked for, how a roi is cut, how a
 // gesture lands in global points and never outside the region, and the two
 // grants that refuse in words.
+import { machineCopy } from '../src/shared/machine-words'
 import { describe, expect, it } from 'vitest'
 import type { MacOp, MacScreens } from '../src/main/mac-bridge'
-import { ACCESSIBILITY_OFF, COMPUTER_INPUT_OFF, SCREEN_RECORDING_OFF, ScreenDevice, clipRoi, findWindow, type ScreenDeps } from '../src/main/screen-device'
+import { DeviceBlockedError, DeviceGoneError, type RemoteGate } from '../src/main/pixel-instance'
+import { ScreenDevice, clipRoi, findWindow, type ScreenDeps } from '../src/main/screen-device'
+import type { RemoteState, RemoteStateId } from '../src/shared/remote-access'
 import { parseUseUrl } from '../src/shared/use-url'
 
 const screens: MacScreens = {
@@ -19,6 +22,27 @@ const screens: MacScreens = {
   ]
 }
 
+const blockedBy = (id: RemoteStateId): RemoteState => ({
+  id, platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false,
+  build: { settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' }
+})
+
+const INPUT_OFF = 'Remote control of this Mac is off.'
+
+/** The desk, as a card sees it: nothing in the way, and input allowed, unless a test says otherwise. */
+function gate(over: Partial<RemoteGate> = {}): RemoteGate {
+  return {
+    blocked: async () => null,
+    inputRefusal: () => null,
+    agentRefusal: () => null,
+    mayDrive: () => true,
+    cardControl: () => ({ switchOn: true, until: null, heldBy: null, awake: false, machine: 'darwin' }),
+    admit: () => null,
+    enter: () => () => undefined,
+    ...over
+  }
+}
+
 function bed(url: string, over: Partial<ScreenDeps> = {}) {
   const captured: string[][] = []
   const ops: MacOp[] = []
@@ -26,6 +50,7 @@ function bed(url: string, over: Partial<ScreenDeps> = {}) {
   let now = 0
   const deps: ScreenDeps = {
     list: async () => screens,
+    windowAlive: async () => null,
     capture: async (args) => {
       captured.push([...args])
     },
@@ -35,9 +60,7 @@ function bed(url: string, over: Partial<ScreenDeps> = {}) {
       crops.push(crop)
       return Buffer.from('jpeg')
     },
-    screenAccess: () => 'granted',
-    inputEnabled: () => true,
-    accessibility: () => true,
+    remote: gate(),
     hand: () => ({ send: async (op: MacOp) => void ops.push(op) }) as never,
     now: () => now,
     tmp: '/tmp',
@@ -110,27 +133,62 @@ describe('ScreenDevice', () => {
 
   it('says what is missing: the window, Screen Recording, the input switch, Accessibility', async () => {
     await expect(bed('window://Xcode').device.open()).rejects.toThrow(/No 'Xcode' window is on screen/)
-    await expect(bed('screen://3').device.open()).rejects.toThrow(/Display 3 is not connected \(this Mac has 2\)/)
-    await expect(bed('screen://main', { screenAccess: () => 'denied' }).device.open()).rejects.toThrow(SCREEN_RECORDING_OFF)
-    const off = bed('screen://main', { inputEnabled: () => false })
-    expect(off.device.inputRefusal()).toBe(COMPUTER_INPUT_OFF)
-    await off.device.open()
-    await expect(off.device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(COMPUTER_INPUT_OFF)
+    await expect(bed('screen://3').device.open()).rejects.toThrow(machineCopy('Display 3 is not connected (this Mac has 2)', process.platform))
+    await expect(bed('screen://main', { remote: gate({ blocked: async () => blockedBy('needs-screen-recording') }) }).device.open()).rejects.toBeInstanceOf(DeviceBlockedError)
+    const off = bed('screen://main', { remote: gate({ inputRefusal: () => INPUT_OFF }) })
+    expect(off.device.inputRefusal()).toBe(INPUT_OFF)
+    await expect(off.device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(INPUT_OFF)
     expect(off.ops).toEqual([])
-    expect(bed('screen://main', { accessibility: () => false }).device.inputRefusal()).toBe(ACCESSIBILITY_OFF)
   })
 
-  it('a capture that fails while Screen Recording is off says so, not the tool’s own words', async () => {
+  it('a capture that fails is checked against the desk: a revoked grant says so, not the tool\u2019s own words', async () => {
+    const asked: Array<boolean | undefined> = []
     let granted = true
     const { device } = bed('screen://main', {
-      screenAccess: () => (granted ? 'granted' : 'denied'),
+      remote: gate({
+        blocked: async (options) => {
+          asked.push(options?.afterFailure)
+          return granted ? null : blockedBy('needs-screen-recording')
+        }
+      }),
       capture: async () => {
         throw new Error('screencapture: could not create image from display')
       }
     })
     await device.open()
+    await expect(device.capture()).rejects.toThrow('screencapture')
+    expect(asked).toContain(true)
     granted = false
-    await expect(device.capture()).rejects.toThrow(SCREEN_RECORDING_OFF)
+    await expect(device.capture()).rejects.toBeInstanceOf(DeviceBlockedError)
+  })
+
+  it('a locked Mac gives no frame and takes no capture at all', async () => {
+    let locked = false
+    const { device, captured } = bed('screen://main', { remote: gate({ blocked: async () => (locked ? blockedBy('locked') : null) }) })
+    await device.open()
+    await device.capture()
+    const before = captured.length
+    locked = true
+    await expect(device.capture()).rejects.toBeInstanceOf(DeviceBlockedError)
+    expect(captured).toHaveLength(before)
+  })
+
+  it('no gesture reaches the hand on a locked Mac, however it was allowed a moment ago', async () => {
+    let locked = false
+    const { device, ops } = bed('screen://main', { remote: gate({ blocked: async () => (locked ? blockedBy('locked') : null) }) })
+    await device.open()
+    locked = true
+    await expect(device.perform({ method: 'input.type', params: { text: 'hunter2' } })).rejects.toBeInstanceOf(DeviceBlockedError)
+    await expect(device.perform({ method: 'input.key', params: { name: 'return' } })).rejects.toBeInstanceOf(DeviceBlockedError)
+    expect(ops).toEqual([])
+  })
+
+  it('a chord goes as a chord: Command held on the key', async () => {
+    const { device, ops } = bed('screen://main')
+    await device.open()
+    await device.perform({ method: 'input.key', params: { name: 'c', mods: 'cmd' } })
+    await device.perform({ method: 'input.key', params: { name: 'return' } })
+    expect(ops).toEqual([{ op: 'key', code: 8, cmd: true }, { op: 'key', code: 36 }])
   })
 
   it('a window card refuses a click where another window covers it, and keys when it is not in front', async () => {
@@ -149,5 +207,75 @@ describe('ScreenDevice', () => {
     await device.open()
     await device.perform({ method: 'input.key', params: { name: 'return' } })
     expect(ops).toEqual([{ op: 'key', code: 36 }])
+  })
+})
+
+describe('a card bound to one window', () => {
+  const without = (id: number): MacScreens => ({ ...screens, windows: screens.windows.filter((w) => w.id !== id) })
+
+  it('follows the id, whatever else carries the same name', async () => {
+    const { device, captured } = bed('window://Simulator?id=43')
+    expect(await device.open()).toEqual({ width: 900, height: 700 })
+    await device.capture()
+    expect(captured[0]).toContain('-l43')
+  })
+
+  it('a closed window is gone, and never falls back to another window of that app', async () => {
+    const { device, captured } = bed('window://Simulator?id=43', { list: async () => without(43), windowAlive: async () => null })
+    const failure = await device.open().catch((e: unknown) => e)
+    expect(failure).toBeInstanceOf(DeviceGoneError)
+    expect((failure as DeviceGoneError).gone).toBe('window')
+    expect((failure as Error).message).toMatch(/closed/)
+    expect(captured).toEqual([])
+  })
+
+  it('an id another app now holds is gone too: an old address never shows a stranger', async () => {
+    const { device } = bed('window://Safari?id=43')
+    await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+    const offscreen = bed('window://Safari?id=99', { windowAlive: async () => ({ app: 'Messages' }) })
+    await expect(offscreen.device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+  })
+
+  it('minimised or on another Space is not closed: it says so and stays a plain offline', async () => {
+    const { device } = bed('window://Simulator?id=43', { list: async () => without(43), windowAlive: async () => ({ app: 'Simulator' }) })
+    const failure = await device.open().catch((e: unknown) => e)
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).not.toBeInstanceOf(DeviceGoneError)
+    expect((failure as Error).message).toMatch(/minimised or on another Space/)
+  })
+
+  it('a failed lookup is not proof the window closed', async () => {
+    const { device } = bed('window://Simulator?id=43', {
+      list: async () => without(43),
+      windowAlive: async () => {
+        throw new Error('osascript timed out')
+      }
+    })
+    const failure = await device.open().catch((e: unknown) => e)
+    expect(failure).not.toBeInstanceOf(DeviceGoneError)
+  })
+
+  it('a window that closes between frames reports gone on that very frame, not a capture error', async () => {
+    let open = true
+    const { device, tick } = bed('window://Simulator?id=43', {
+      list: async () => (open ? screens : without(43)),
+      windowAlive: async () => null,
+      capture: async () => {
+        if (!open) throw new Error('screencapture: could not create image from window')
+      }
+    })
+    await device.open()
+    await device.capture()
+    open = false
+    tick(10)
+    await expect(device.capture()).rejects.toBeInstanceOf(DeviceGoneError)
+  })
+
+  it('gating is unchanged: input stays off, and the desk refuses first', async () => {
+    const { device } = bed('window://Simulator?id=43', { remote: gate({ inputRefusal: () => INPUT_OFF }) })
+    expect(device.inputRefusal()).toBe(INPUT_OFF)
+    await expect(device.perform({ method: 'input.tap', params: { x: 1, y: 1 } } as never)).rejects.toThrow(INPUT_OFF)
+    const denied = bed('window://Simulator?id=43', { remote: gate({ blocked: async () => blockedBy('needs-screen-recording') }) })
+    await expect(denied.device.open()).rejects.toBeInstanceOf(DeviceBlockedError)
   })
 })

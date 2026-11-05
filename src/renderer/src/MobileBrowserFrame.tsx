@@ -9,25 +9,53 @@ import {
   shouldPollFrame
 } from './browser-frame'
 import {
+  buttonName,
   emptyTouchGesture,
+  fieldAt,
+  keyMsg,
+  pasteMsg,
   frameSource,
   inputWithFrameSeq,
-  keyMsg,
   mobileViewportPreference,
+  modsOf,
+  moveMsg,
+  pinchMsg,
+  pinchScaleFromWheel,
   pointerMsg,
   releaseTouchGesture,
   streamSurfaceState,
   updateTouchGesture,
   viewToFramePoint,
+  wheelDeltaPx,
   wheelMsg,
   type CastInputMsg,
+  type FieldMode,
   type StreamSurfaceState,
   type StreamTouchPointer
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
+import { NO_ZOOM, panZoom, pinchZoom, zoomedFit, type FrameZoom } from './frame-zoom'
 import { thumbStore, useThumb } from './activity-thumb-store'
-import { handOffFrame, posterSource, shouldHandOff } from './browser-poster'
+import { stepOut } from './zoom/zoom-path'
+import { zoomStore } from './zoom/zoom-store'
+import { handOffBlob, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
+import { FramePainter } from './frame-painter'
+import { createInputPump } from './input-pump'
+import { RemoteKeyBar } from './RemoteKeyBar'
+import { LONG_PRESS_MS, stillHolding, type HoldStart } from './touch-select'
+import { readClipboardText, writeClipboardLater, writeClipboardText } from './clipboard'
+
+/** A touch that moved less than this (view px), and let go sooner than TAP_MS, is a tap. */
+const TAP_SLOP_PX = 12
+const TAP_MS = 650
+/** The page's own focus may raise the keyboard this long after a tap (Android allows it; iOS ignores it). */
+const FOCUS_RAISE_WINDOW_MS = 2500
+/** Right after a raise, a stale "nothing focused" report must not close it again. */
+const RAISE_GRACE_MS = 700
+/** How long a Copy waits for the page to say what it copied. */
+const COPY_WAIT_MS = 1500
+const CTRL = 2
 
 /**
  * Shared LIVE browser viewport for phone and desktop. In headless mode, both
@@ -63,9 +91,23 @@ export function MobileBrowserFrame({
   const [streamFrameLoaded, setStreamFrameLoaded] = useState(false)
   const [view, setView] = useState({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
-  const [coarsePointer, setCoarsePointer] = useState(false)
+  const [frameZoom, setFrameZoom] = useState<FrameZoom>(NO_ZOOM)
+  // Read at mount, not after: the first viewport offer must already say phone or desktop.
+  const [coarsePointer, setCoarsePointer] = useState(
+    () => typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  )
+  /** The canvas holds a picture from this open (it survives a reconnect). */
+  const [hasPicture, setHasPicture] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const paintedFrameSeq = useRef<number | null>(null)
+  /**
+   * The painted frame's own pixel size, set in the same breath as its seq:
+   * input is mapped against exactly the frame the server will map it back
+   * with (its context is per seq), never against a size React has not caught
+   * up with yet.
+   */
+  const paintedSize = useRef({ w: 0, h: 0 })
   /**
    * THE CARD'S OWN PICTURE, read here for two reasons and fetched for neither.
    * It is the POSTER under the status chip while the stream has no decoded
@@ -75,38 +117,80 @@ export function MobileBrowserFrame({
    * guess (browser-poster.ts).
    */
   const poster = useThumb(browserId)
-  const lastPaintedRef = useRef<string | null>(null)
+  /** The last painted live frame's JPEG: the card's picture at zoom-out. */
+  const lastPaintedRef = useRef<Blob | null>(null)
   const wasOpenRef = useRef(open)
   const mobilePreference = mobileViewportPreference(view.w, coarsePointer)
-  const stream = useBrowserStream(browserId, open, streamEnabled, desktopStreamToken, {
-    width: view.w,
-    height: view.h,
-    mobile: mobilePreference
-  })
+  // A fine pointer has a keyboard: its keys come as keys, not a soft keyboard's input.
+  const desktopInput = !coarsePointer
+  // NO 2x ASK (2026-11-03, measured): headless Chrome's screencast ignores
+  // deviceScaleFactor and keeps streaming 1x frames while the still-frame
+  // fallback (captureScreenshot) honours it, so a 2x ask made frames
+  // alternate 1x/2x and input mapped against the wrong size. The server
+  // still accepts a scale (cast-viewport.ts) for when a source honours it.
+  const scale = 1
+  const stream = useBrowserStream(
+    browserId,
+    open,
+    streamEnabled,
+    desktopStreamToken,
+    {
+      width: view.w,
+      height: view.h,
+      mobile: mobilePreference,
+      ...(scale > 1 ? { scale } : {})
+    },
+    // A touch viewer asks where the page's text fields are, so a tap on one
+    // raises the keyboard (page-fields.ts).
+    { watchFields: !desktopInput }
+  )
   const streaming = frameSource(stream.status) === 'stream'
 
   // Observers still see and drive the shared frame. The viewport owner controls
   // layout fit only; input requires a decoded, live frame at the current revision.
-  const frameReady = streaming && stream.live && stream.frameUrl !== null && streamFrameLoaded
+  const frameReady = streaming && stream.live && stream.hasFrame && streamFrameLoaded
   // A use card whose device refuses input (a Mac nobody may drive, a camera)
   // is watched only: no pointer handlers that would send into a void.
   const interactive = frameReady && stream.canDrive && (stream.deviceStatus?.input ?? true)
-  // Mobile keyboard bridge: the stream is an image, so tapping a remote input
-  // can't raise the phone keyboard. The ⌨ button focuses a hidden field within
-  // the tap gesture (the only way iOS shows the keyboard) and forwards typing.
-  const kbd = useRemoteKeyboard(stream.send)
+  const sendFrameInput = useCallback((msg: CastInputMsg): void => {
+    const frameSeq = paintedFrameSeq.current
+    if (frameSeq !== null) stream.send(inputWithFrameSeq(msg, frameSeq))
+  }, [stream.send])
+  // Keyboard bridge: the stream is a picture, so a hidden field takes the keys.
+  // Desktop: focused by the first click into the page. Phone: the ⌨ button
+  // focuses it within the tap gesture (the only way iOS shows the keyboard).
+  const kbd = useRemoteKeyboard(stream.send, desktopInput ? 'desktop' : 'touch')
+  const kbdRef = useRef(kbd)
+  kbdRef.current = kbd
+  const tapStart = useRef<{ x: number; y: number; at: number } | null>(null)
+  const lastTapAt = useRef(0)
+  const raisedAt = useRef(0)
+  const [fieldMode, setFieldMode] = useState<FieldMode>('text')
+  /** A short word on the frame: "Copied", "Nothing selected". */
+  const [note, setNote] = useState<string | null>(null)
+  /** A copy this phone could not write without a tap (iOS), offered as one. */
+  const [localOffer, setLocalOffer] = useState<string | null>(null)
+  const copyOffer = localOffer ?? stream.copyOffer
+  useEffect(() => {
+    if (note === null) return
+    const timer = setTimeout(() => setNote(null), 1800)
+    return () => clearTimeout(timer)
+  }, [note])
 
   useEffect(() => {
     // The zoom-out EDGE: the last painted live frame becomes the card's
     // picture — once, here, never per frame. Read before the reset below
     // forgets it.
     if (shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null })) {
-      handOffFrame(thumbStore, browserId, lastPaintedRef.current as string)
+      handOffBlob(thumbStore, browserId, lastPaintedRef.current as Blob)
     }
     wasOpenRef.current = open
     lastPaintedRef.current = null
     paintedFrameSeq.current = null
+    paintedSize.current = { w: 0, h: 0 }
     setStreamFrameLoaded(false)
+    setHasPicture(false)
+    setFrameZoom(NO_ZOOM)
     if (!open) {
       setLoaded(false)
       setNatural({ w: 0, h: 0 })
@@ -118,7 +202,7 @@ export function MobileBrowserFrame({
   useEffect(
     () => () => {
       if (wasOpenRef.current && lastPaintedRef.current !== null) {
-        handOffFrame(thumbStore, browserId, lastPaintedRef.current)
+        handOffBlob(thumbStore, browserId, lastPaintedRef.current)
       }
     },
     [browserId]
@@ -128,6 +212,42 @@ export function MobileBrowserFrame({
     paintedFrameSeq.current = null
     setStreamFrameLoaded(false)
   }, [streaming, stream.frameRevision])
+
+  // THE PAINTER: frames go from the stream to the canvas without React.
+  // Only the frame's size and "painted at this revision" ever re-render.
+  const { subscribeFrames, latestFrame, receipt } = stream
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!open || !canvas) return
+    const painter = new FramePainter(canvas, {
+      onPainted: (frame) => {
+        receipt(frame.seq)
+        paintedFrameSeq.current = frame.seq
+        paintedSize.current = { w: frame.width, h: frame.height }
+        lastPaintedRef.current = frame.blob
+        const box = boxRef.current
+        if (box) {
+          // Probe-facing, set here rather than rendered: per frame, never a render.
+          box.dataset.frameSeq = String(frame.seq)
+          box.dataset.lastFrameAt = String(Date.now())
+        }
+        setNatural((current) =>
+          current.w === frame.width && current.h === frame.height ? current : { w: frame.width, h: frame.height }
+        )
+        setStreamFrameLoaded(true)
+        setHasPicture(true)
+      },
+      onSkipped: receipt
+    })
+    const pending = latestFrame()
+    if (pending) painter.push(pending)
+    const unsubscribe = subscribeFrames((frame) => painter.push(frame))
+    return () => {
+      unsubscribe()
+      painter.dispose()
+    }
+  }, [open, browserId, subscribeFrames, latestFrame, receipt])
+
 
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return
@@ -187,21 +307,42 @@ export function MobileBrowserFrame({
     }
   }, [fallback, streaming, open])
 
-  // Both sources report their pixel size via the <img> natural size (the stream
-  // frame's JPEG dims, the thumb's PNG dims) — used as the letterbox + coord basis.
-  const fit = fitContain(natural.w, natural.h, view.w, view.h)
+  // Both sources report their pixel size — the stream's on the canvas, the
+  // thumb's via the <img> — used as the letterbox + input-coord basis.
+  const baseFit = fitContain(natural.w, natural.h, view.w, view.h)
+  // A computer's screen zooms HERE, on the viewer: it is the only way to read a
+  // Mac on a phone, and it moves the rect every mapping already reads.
+  const computerCard = stream.deviceStatus?.use === 'computer'
+  // Held inside the view on every render: a phone turned sideways moves its edges.
+  const fit = computerCard ? zoomedFit(baseFit, panZoom(frameZoom, baseFit, view, 0, 0)) : baseFit
+  const zoomRef = useRef({ fit: baseFit, view, control: false })
+  zoomRef.current = { fit: baseFit, view, control: interactive }
+  /** Leaving the card is what ends a viewer: the stream closes as it goes. */
+  const endSession = (): void => {
+    const zoom = zoomStore.get()
+    zoomStore.go(stepOut(zoom.dir, zoom.v), zoom.dir)
+  }
+  // A screen that went blind leaves nothing behind to become the card's picture.
+  const blind = stream.deviceStatus?.remote !== undefined
+  useEffect(() => {
+    if (!blind) return
+    lastPaintedRef.current = null
+    thumbStore.delete(browserId)
+  }, [blind, browserId])
 
-  // Headless: the live frame, else the card's picture as the poster, else
+  // Headless: the live canvas, else the card's picture as the poster, else
   // nothing. The legacy flag-off phone keeps its own /thumb poll while open.
-  // Reconnecting keeps the last live frame: a dropped socket is a chip, not a blank card.
-  const holdingFrame = stream.reconnecting && stream.frameUrl !== null
-  const src = holdingFrame
-    ? stream.frameUrl
-    : fallback === 'thumb' && !streaming
-      ? open
-        ? frameSrc(browserId, seq)
-        : null
-      : posterSource({ streaming, frameUrl: stream.frameUrl, poster })
+  // Reconnecting keeps the last picture: a dropped line is a chip, not a blank card.
+  const holdingFrame = stream.reconnecting && hasPicture
+  const canvasShown = (streaming || holdingFrame) && hasPicture
+  const imgSrc =
+    streaming || holdingFrame
+      ? null
+      : fallback === 'thumb'
+        ? open
+          ? frameSrc(browserId, seq)
+          : null
+        : (poster ?? null)
   // In stream mode the placeholder shows until the view is genuinely live, so a
   // frozen frame reads as "connecting…", not an interactive surface. Headless
   // with a poster: the picture shows and the status chip says the state — the
@@ -209,10 +350,8 @@ export function MobileBrowserFrame({
   const showPlaceholder = holdingFrame
     ? false
     : streaming
-      ? !frameReady && !(stream.deviceStatus !== null && stream.frameUrl !== null)
-      : fallback === 'loading'
-        ? poster === undefined
-        : !loaded
+      ? !frameReady && !(stream.deviceStatus !== null && hasPicture)
+      : fallback === 'loading' ? poster === undefined : !loaded
   const surfaceState = streamSurfaceState({
     open,
     status: stream.status,
@@ -227,7 +366,8 @@ export function MobileBrowserFrame({
       : stream.deviceStatus?.state === 'connecting' && !stream.live
         ? 'connecting to the device'
         : streamStatusText(surfaceState, stream)
-  const showControl = streaming && stream.controlAvailable
+  // Fitting the viewport means nothing on a machine's screen: nobody reshapes a Mac from here.
+  const showControl = streaming && stream.controlAvailable && !computerCard
   const controlDisabled = stream.agentHeld || stream.transitioning
   const controlLabel = stream.agentHeld
     ? 'Viewport fit is held while the agent is driving'
@@ -237,20 +377,152 @@ export function MobileBrowserFrame({
         ? 'Release viewport fit'
         : 'Fit browser to this view'
 
+  // THE PAGE'S FOCUS, on a phone: a field that loses focus closes the keyboard
+  // a tap on it raised; a field the page focuses itself, right after a tap,
+  // raises it (Android lets a focus that close to a gesture show the keyboard).
+  const { subscribeFields } = stream
+  useEffect(() => {
+    if (desktopInput) return
+    let closing: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = subscribeFields((fields) => {
+      const keys = kbdRef.current
+      if (fields.focus.editable) {
+        if (closing) clearTimeout(closing)
+        closing = null
+        setFieldMode(fields.focus.mode)
+        if (!keys.open && Date.now() - lastTapAt.current < FOCUS_RAISE_WINDOW_MS) {
+          keys.raise({ mode: fields.focus.mode, auto: true })
+          raisedAt.current = Date.now()
+        }
+        return
+      }
+      if (!keys.open || !keys.auto || Date.now() - raisedAt.current < RAISE_GRACE_MS) return
+      if (closing) clearTimeout(closing)
+      closing = setTimeout(() => {
+        closing = null
+        if (kbdRef.current.auto) kbdRef.current.close()
+      }, 250)
+    })
+    return () => {
+      unsubscribe()
+      if (closing) clearTimeout(closing)
+    }
+  }, [desktopInput, subscribeFields])
+
+  // ---- clipboard, both ways ----
+  /** Copy what is selected on the page onto THIS device, written inside the tap (clipboard.ts). */
+  const copyFromPage = (): void => {
+    const copied = stream.expectCopy(COPY_WAIT_MS)
+    stream.send(keyMsg('c', 'KeyC', CTRL))
+    void writeClipboardLater(copied).then(({ text, ok }) => {
+      if (ok) setNote('Copied')
+      else if (text) setLocalOffer(text)
+      else setNote('Nothing selected')
+    })
+  }
+  /** This device's clipboard into the page's field, as a paste the page sees. */
+  const pasteIntoPage = (): void => {
+    void readClipboardText().then((text) => {
+      const msg = text ? pasteMsg(text) : null
+      if (msg) stream.send(msg)
+      else setNote(text === null ? 'This phone will not share its clipboard here' : 'The clipboard is empty')
+    })
+  }
+  const takeCopyOffer = (): void => {
+    const text = copyOffer
+    if (text === null) return
+    void writeClipboardText(text).then((ok) => setNote(ok ? 'Copied' : 'Could not copy'))
+    setLocalOffer(null)
+    stream.clearCopyOffer()
+  }
+
+  /**
+   * A TAP ON A TEXT FIELD RAISES THE KEYBOARD. Decided here, synchronously, in
+   * the touch's own handler — the only place iOS will show a keyboard for a
+   * focus — against where the page last said its fields are.
+   */
+  /** A touch on the frame's own controls (or the bar, portaled but still a React child) is not a tap on the page. */
+  const onControl = (e: React.TouchEvent): boolean =>
+    e.target instanceof Element && e.target.closest('button, textarea, .remote-keybar') !== null
+  const onTouchStart = (e: React.TouchEvent): void => {
+    if (onControl(e)) {
+      tapStart.current = null
+      return
+    }
+    if (e.touches.length === 1) selectedThisTouch.current = false
+    const touch = e.touches.length === 1 ? e.touches[0] : null
+    tapStart.current = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null
+  }
+  const onTouchEnd = (e: React.TouchEvent): void => {
+    const start = tapStart.current
+    tapStart.current = null
+    if (selectedThisTouch.current) return // a selection, not a tap on a field
+    if (!interactive || desktopInput || !start || e.touches.length > 0 || e.changedTouches.length !== 1) return
+    const touch = e.changedTouches[0]
+    if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > TAP_SLOP_PX || Date.now() - start.at > TAP_MS) return
+    lastTapAt.current = Date.now()
+    const point = framePointAt(touch.clientX, touch.clientY)
+    const fields = stream.latestFields()
+    if (!point || !fields || fields.revision !== stream.frameRevision) return
+    const field = fieldAt(fields, point)
+    if (!field) return
+    const r = boxRef.current?.getBoundingClientRect()
+    setFieldMode(field.mode)
+    kbd.raise({ mode: field.mode, auto: true, at: r ? { x: touch.clientX - r.left, y: touch.clientY - r.top } : undefined })
+    raisedAt.current = Date.now()
+  }
+
   // ---- input forwarding (stream mode only): map view point → FRAME px, then send
   // the compact `t`-tagged message; Forge maps FRAME px → page px + whitelists. ----
   const touchGesture = useRef(emptyTouchGesture())
   const mousePointerId = useRef<number | null>(null)
   const mouseLastPoint = useRef<{ x: number; y: number } | null>(null)
-  const sendFrameInput = useCallback((msg: CastInputMsg): void => {
-    const frameSeq = paintedFrameSeq.current
-    if (frameSeq !== null) stream.send(inputWithFrameSeq(msg, frameSeq))
-  }, [stream.send])
+  const mouseButton = useRef<number>(0)
+  // Moves, wheels and pinch steps arrive faster than a frame; one of each goes
+  // per animation frame, and a click flushes what is pending before it.
+  const [pump] = useState(() => createInputPump(sendFrameInput))
+  pump.retarget(sendFrameInput)
+  useEffect(() => () => pump.cancel(), [pump])
+
+  // PRESS AND HOLD SELECTS (touch-select.ts): the held finger becomes a mouse
+  // that double-pressed, so the word is selected and a drag extends it.
+  const holdStart = useRef<HoldStart | null>(null)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const selecting = useRef<{ pointerId: number; last: { x: number; y: number } } | null>(null)
+  /** This touch became a selection: its lift is not a tap (no keyboard raised). */
+  const selectedThisTouch = useRef(false)
+  const stopHold = (): void => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    holdTimer.current = null
+    holdStart.current = null
+  }
+  useEffect(() => () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+  }, [])
+  const startSelecting = (): void => {
+    const start = holdStart.current
+    stopHold()
+    const gesture = touchGesture.current
+    const contact = gesture.contacts[0]
+    if (!start || gesture.contacts.length !== 1 || !contact || contact.pointerId !== start.pointerId) return
+    touchGesture.current = emptyTouchGesture()
+    sendFrameInput({ t: 'touchcancel' })
+    const point = { x: contact.x, y: contact.y }
+    selecting.current = { pointerId: start.pointerId, last: point }
+    selectedThisTouch.current = true
+    sendFrameInput(pointerMsg('down', point, 2))
+    if (typeof navigator.vibrate === 'function') navigator.vibrate(12)
+  }
 
   // If freshness disappears mid-gesture, release every remote contact before
   // input is disabled so Chromium is never left with a stuck mouse or touch.
   useEffect(() => {
     if (interactive) return
+    pump.cancel()
+    stopHold()
+    const held = selecting.current
+    selecting.current = null
+    if (held) sendFrameInput(pointerMsg('up', held.last, 2))
     const touches = touchGesture.current
     const touchRelease = releaseTouchGesture(touches)
     touchGesture.current = emptyTouchGesture()
@@ -267,19 +539,27 @@ export function MobileBrowserFrame({
       boxRef.current.releasePointerCapture(pointerId)
     }
     if (pointerId !== null && mouseLastPoint.current) {
-      sendFrameInput(pointerMsg('up', mouseLastPoint.current))
+      sendFrameInput(pointerMsg('up', mouseLastPoint.current, 1, { button: buttonName(mouseButton.current) }))
     }
-  }, [interactive, sendFrameInput])
+  }, [interactive, sendFrameInput, pump])
 
-  const framePoint = (e: React.PointerEvent): { x: number; y: number } | null => {
+  const framePointAt = (clientX: number, clientY: number): { x: number; y: number } | null => {
     const box = boxRef.current
     if (!box || natural.w <= 0) return null
     const r = box.getBoundingClientRect()
-    return viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
+    const size = streaming && paintedSize.current.w > 0 ? paintedSize.current : natural
+    return viewToFramePoint(clientX - r.left, clientY - r.top, fit, size.w, size.h)
   }
+  const framePoint = (e: React.PointerEvent): { x: number; y: number } | null => framePointAt(e.clientX, e.clientY)
   const touchPoint = (e: React.PointerEvent): StreamTouchPointer | null => {
     const point = framePoint(e)
     return point ? { pointerId: e.pointerId, ...point } : null
+  }
+  /** Desktop: the keys follow the click, with the IME's window where the click was. */
+  const takeKeys = (e: React.PointerEvent): void => {
+    if (!desktopInput) return
+    const r = boxRef.current?.getBoundingClientRect()
+    kbd.focusAt(r ? e.clientX - r.left : 0, r ? e.clientY - r.top : 0)
   }
   const onPointerDown = (e: React.PointerEvent): void => {
     if (!interactive) return
@@ -290,10 +570,17 @@ export function MobileBrowserFrame({
       const update = updateTouchGesture(touchGesture.current, 'start', point)
       if (!update) return // At most two active touch pointers.
       e.preventDefault()
-      boxRef.current?.focus()
+      // No focus move: the key field keeps the keyboard up while the page is tapped.
       touchGesture.current = update.state
       e.currentTarget.setPointerCapture(e.pointerId)
       sendFrameInput(update.message)
+      // One finger on a web page may become a selection; a second is a pinch.
+      // A device's screen (a use card) keeps its own touch.
+      if (update.state.contacts.length === 1 && stream.deviceStatus === null) {
+        stopHold()
+        holdStart.current = { pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY }
+        holdTimer.current = setTimeout(startSelecting, LONG_PRESS_MS)
+      } else stopHold()
       return
     }
 
@@ -301,16 +588,30 @@ export function MobileBrowserFrame({
     const point = framePoint(e)
     if (!point) return
     e.preventDefault()
-    boxRef.current?.focus()
+    // A click mid-composition commits it where it was being typed, first —
+    // never into the field the click is about to focus.
+    kbd.endComposition()
+    takeKeys(e)
     mousePointerId.current = e.pointerId
     mouseLastPoint.current = point
+    mouseButton.current = e.button
     e.currentTarget.setPointerCapture(e.pointerId)
+    pump.flush()
     // e.detail is the click multiplicity — a double-click carries 2 so the page
     // can select a word (3 = triple → select line/all).
-    sendFrameInput(pointerMsg('down', point, e.detail))
+    sendFrameInput(pointerMsg('down', point, e.detail, { button: buttonName(e.button), mods: modsOf(e) }))
   }
   const onPointerMove = (e: React.PointerEvent): void => {
     if (!interactive) return
+    const held = selecting.current
+    if (held && held.pointerId === e.pointerId) {
+      const point = framePoint(e)
+      if (!point) return
+      held.last = point
+      pump.move(moveMsg(point, 1))
+      return
+    }
+    if (holdStart.current && !stillHolding(holdStart.current, e.pointerId, e.clientX, e.clientY)) stopHold()
     if (touchGesture.current.contacts.some((contact) => contact.pointerId === e.pointerId)) {
       const point = touchPoint(e)
       if (!point) return
@@ -320,13 +621,25 @@ export function MobileBrowserFrame({
       sendFrameInput(update.message)
       return
     }
-    if (e.pointerId !== mousePointerId.current) return
+    if (e.pointerType === 'touch') return
+    const dragging = e.pointerId === mousePointerId.current
+    // Not pressed: a HOVER, so menus open, links underline and tooltips show.
+    if (!dragging && mousePointerId.current !== null) return
     const point = framePoint(e)
     if (!point) return
-    mouseLastPoint.current = point
-    sendFrameInput(pointerMsg('move', point))
+    if (dragging) mouseLastPoint.current = point
+    pump.move(moveMsg(point, dragging ? e.buttons : 0, modsOf(e)))
   }
   const onPointerUp = (e: React.PointerEvent): void => {
+    if (holdStart.current?.pointerId === e.pointerId) stopHold()
+    const held = selecting.current
+    if (held && held.pointerId === e.pointerId) {
+      selecting.current = null
+      if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+      pump.flush()
+      sendFrameInput(pointerMsg('up', framePoint(e) ?? held.last, 2))
+      return
+    }
     const contact = touchGesture.current.contacts.find((point) => point.pointerId === e.pointerId)
     if (contact) {
       const point = touchPoint(e) ?? contact
@@ -350,7 +663,10 @@ export function MobileBrowserFrame({
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
     const point = framePoint(e) ?? mouseLastPoint.current
-    if (point) sendFrameInput(pointerMsg('up', point, e.detail))
+    pump.flush()
+    if (point) {
+      sendFrameInput(pointerMsg('up', point, e.detail, { button: buttonName(mouseButton.current), mods: modsOf(e) }))
+    }
   }
   /**
    * Scroll is forwarded to the remote page, so the local surface must NOT also
@@ -364,17 +680,83 @@ export function MobileBrowserFrame({
    * Held in a ref and attached once: the handler closes over fit/natural/stream,
    * which change on almost every render, and re-registering a wheel listener
    * that often is its own problem.
+   *
+   * A TRACKPAD PINCH arrives as ctrl+wheel (Chromium's convention): it zooms
+   * the page (Input.synthesizePinchGesture) instead of scrolling it — a ctrl
+   * wheel forwarded as a wheel only scrolled. Two-finger swipes carry dx too.
    */
   const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
   onWheelRef.current = (e: WheelEvent): void => {
+    if (computerCard && e.ctrlKey) {
+      // A trackpad pinch zooms the picture, not the Mac.
+      e.preventDefault()
+      const r = boxRef.current?.getBoundingClientRect()
+      const at = { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) }
+      setFrameZoom((zoom) => pinchZoom(zoom, baseFit, view, pinchScaleFromWheel(e.deltaY), at))
+      return
+    }
     if (!interactive) return
-    const box = boxRef.current
-    if (!box || natural.w <= 0) return
+    const p = framePointAt(e.clientX, e.clientY)
+    if (!p) return
     e.preventDefault()
-    const r = box.getBoundingClientRect()
-    const p = viewToFramePoint(e.clientX - r.left, e.clientY - r.top, fit, natural.w, natural.h)
-    sendFrameInput(wheelMsg(p, e.deltaY))
+    if (e.ctrlKey) {
+      pump.pinch(p, pinchScaleFromWheel(e.deltaY))
+      return
+    }
+    const { dx, dy } = wheelDeltaPx(e, view.h)
+    pump.wheel(p, dx, dy, modsOf(e))
   }
+  // Two fingers zoom and move the picture, always; one finger moves it while it
+  // is only being watched. Native and not passive, so the page itself stays put.
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box || !computerCard) return
+    let pinch: { distance: number; x: number; y: number } | null = null
+    let drag: { x: number; y: number } | null = null
+    const onControl = (e: TouchEvent): boolean => e.target instanceof Element && e.target.closest('button, .rp-bar, .rp-cover, .remote-keybar') !== null
+    const pairOf = (e: TouchEvent): { distance: number; x: number; y: number } => {
+      const [a, b] = [e.touches[0], e.touches[1]]
+      const r = box.getBoundingClientRect()
+      return { distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), x: (a.clientX + b.clientX) / 2 - r.left, y: (a.clientY + b.clientY) / 2 - r.top }
+    }
+    const start = (e: TouchEvent): void => {
+      if (onControl(e)) return
+      if (e.touches.length === 2) {
+        pinch = pairOf(e)
+        drag = null
+      } else if (e.touches.length === 1 && !zoomRef.current.control) drag = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    }
+    const move = (e: TouchEvent): void => {
+      const { fit: base, view: size } = zoomRef.current
+      if (pinch && e.touches.length === 2) {
+        e.preventDefault()
+        const now = pairOf(e)
+        const was = pinch
+        pinch = now
+        setFrameZoom((zoom) => panZoom(pinchZoom(zoom, base, size, was.distance > 0 ? now.distance / was.distance : 1, now), base, size, now.x - was.x, now.y - was.y))
+      } else if (drag && e.touches.length === 1) {
+        e.preventDefault()
+        const touch = e.touches[0]
+        const was = drag
+        drag = { x: touch.clientX, y: touch.clientY }
+        setFrameZoom((zoom) => panZoom(zoom, base, size, touch.clientX - was.x, touch.clientY - was.y))
+      }
+    }
+    const end = (e: TouchEvent): void => {
+      if (e.touches.length < 2) pinch = null
+      if (e.touches.length === 0) drag = null
+    }
+    box.addEventListener('touchstart', start, { passive: true })
+    box.addEventListener('touchmove', move, { passive: false })
+    box.addEventListener('touchend', end)
+    box.addEventListener('touchcancel', end)
+    return () => {
+      box.removeEventListener('touchstart', start)
+      box.removeEventListener('touchmove', move)
+      box.removeEventListener('touchend', end)
+      box.removeEventListener('touchcancel', end)
+    }
+  }, [computerCard])
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
@@ -382,13 +764,6 @@ export function MobileBrowserFrame({
     box.addEventListener('wheel', onWheel, { passive: false })
     return () => box.removeEventListener('wheel', onWheel)
   }, [])
-  const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!interactive) return
-    if (e.key === 'Escape') return // let harness shortcuts bubble
-    e.preventDefault()
-    e.stopPropagation()
-    stream.send(keyMsg(e.key, e.code))
-  }
 
   return (
     <div
@@ -397,9 +772,8 @@ export function MobileBrowserFrame({
       data-browser-id={browserId}
       data-stream-status={stream.status}
       data-stream-state={surfaceState}
-      data-frame-seq={stream.frameSeq ?? 'none'}
       data-frame-revision={stream.frameRevision ?? 'none'}
-      data-last-frame-at={stream.lastFrameAt ?? 'none'}
+      data-stream-line={stream.direct ? 'port' : 'socket'}
       data-last-frame-fresh={stream.live ? 'true' : 'false'}
       data-interactive={interactive ? 'true' : 'false'}
       data-viewport-owner={stream.isOwner ? 'self' : (stream.owner ?? 'none')}
@@ -416,12 +790,15 @@ export function MobileBrowserFrame({
       data-offer-mobile={mobilePreference ? 'true' : 'false'}
       // Interactive drive ONLY while frames are actively flowing (not merely WS
       // open); the tabIndex lets it take keys.
-      tabIndex={interactive ? 0 : undefined}
+      tabIndex={interactive && desktopInput ? 0 : undefined}
       onPointerDown={interactive ? onPointerDown : undefined}
       onPointerMove={interactive ? onPointerMove : undefined}
       onPointerUp={interactive ? onPointerUp : undefined}
       onPointerCancel={interactive ? onPointerUp : undefined}
-      onKeyDown={interactive ? onKeyDown : undefined}
+      onTouchStart={interactive && !desktopInput ? onTouchStart : undefined}
+      onTouchEnd={interactive && !desktopInput ? onTouchEnd : undefined}
+      // The page's own context menu, not the app's: a right click is the page's.
+      onContextMenu={interactive ? (event) => event.preventDefault() : undefined}
     >
       <span className="browser-frame-status" role="status" aria-live="polite" aria-atomic="true">
         {statusText}
@@ -457,7 +834,20 @@ export function MobileBrowserFrame({
               <CrIcon name={stream.isOwner ? 'check' : 'select'} />
             </button>
           )}
-          {interactive && (
+          {interactive && !desktopInput && (
+            <button
+              type="button"
+              className="browser-frame-btn"
+              title="Copy what is selected on the page"
+              aria-label="Copy what is selected on the page"
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={copyFromPage}
+            >
+              <span aria-hidden="true">⧉</span>
+            </button>
+          )}
+          {interactive && !desktopInput && (
             <button
               type="button"
               className={`browser-frame-btn${kbd.open ? ' on' : ''}`}
@@ -476,34 +866,80 @@ export function MobileBrowserFrame({
           {actions}
         </div>
       )}
-      {/* Hidden keystroke capture — focused within the ⌨ gesture so the phone
-          keyboard rises; typing forwards to the remote field via keyMsg. */}
+      {/* Hidden keystroke capture — the desktop's after a click into the page,
+          the phone's within the ⌨ gesture so its keyboard rises. Keys, IME
+          compositions and pastes forward to the remote field (useRemoteKeyboard). */}
       <textarea
         ref={kbd.inputRef}
+        className="browser-frame-keys"
         aria-hidden="true"
         tabIndex={-1}
         autoCapitalize="off"
         autoCorrect="off"
         spellCheck={false}
-        onBeforeInput={kbd.onBeforeInput}
         onInput={kbd.onInput}
         onKeyDown={kbd.onKeyDown}
+        onCompositionStart={kbd.onCompositionStart}
+        onCompositionUpdate={kbd.onCompositionUpdate}
+        onCompositionEnd={kbd.onCompositionEnd}
+        onPaste={kbd.onPaste}
+        onCopy={kbd.onCopy}
+        onCut={kbd.onCut}
         onBlur={kbd.onBlur}
         style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, border: 0, padding: 0, pointerEvents: 'none' }}
       />
+      {!desktopInput && kbd.open && interactive && (
+        <RemoteKeyBar
+          composition={kbd.composition}
+          mode={fieldMode}
+          note={note}
+          onPaste={pasteIntoPage}
+          onCopy={copyFromPage}
+          onSelectAll={() => stream.send(keyMsg('a', 'KeyA', CTRL))}
+          onHide={kbd.close}
+        />
+      )}
+      {copyOffer !== null && (
+        <button
+          type="button"
+          className="browser-frame-copychip"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={takeCopyOffer}
+        >
+          Copied on the page · tap to copy here
+        </button>
+      )}
+      {note !== null && !kbd.open && <span className="browser-frame-note" role="status">{note}</span>}
       {/* The live dot keeps the corner to itself now that the controls sit in
           the dock — nothing left up here to make room for. */}
-      {frameReady && <span className="browser-frame-live" aria-hidden="true" />}
+      {frameReady && !computerCard && <span className="browser-frame-live" aria-hidden="true" />}
       <UseOverlay
         card={browserId}
         box={fit.width > 0 ? fit : null}
         status={stream.deviceStatus}
         reconnecting={stream.reconnecting}
+        live={stream.live}
+        hasPicture={hasPicture}
+        lastFrameAt={boxRef.current?.dataset.lastFrameAt ? Number(boxRef.current.dataset.lastFrameAt) : null}
+        zoomed={frameZoom.k > 1}
+        onFit={() => setFrameZoom(NO_ZOOM)}
+        onEnd={endSession}
       />
-      {src && (
+      {/* The live view: drawn by the painter, frame by frame, outside React. */}
+      <canvas
+        ref={canvasRef}
+        className={`browser-frame-img browser-frame-canvas${canvasShown && !showPlaceholder ? ' ready' : ''}`}
+        aria-hidden="true"
+        style={
+          canvasShown && fit.width > 0
+            ? { width: fit.width, height: fit.height, left: fit.left, top: fit.top }
+            : { width: 0, height: 0 }
+        }
+      />
+      {imgSrc && (
         <img
           className={`browser-frame-img${showPlaceholder ? '' : ' ready'}`}
-          src={src}
+          src={imgSrc}
           alt=""
           draggable={false}
           style={
@@ -512,18 +948,13 @@ export function MobileBrowserFrame({
               : undefined
           }
           onLoad={(e) => {
-            // Both sources report their pixel size here (frame JPEG / thumb PNG);
-            // it's the letterbox + input-coord basis. No client ack — Forge paces
-            // the stream server-side (screencast-pace) on socket drain.
+            // The poster's / thumb's pixel size is the letterbox basis until a
+            // live frame is painted (then the canvas's size is).
             const img = e.currentTarget
             if (img.naturalWidth > 0 && (img.naturalWidth !== natural.w || img.naturalHeight !== natural.h)) {
               setNatural({ w: img.naturalWidth, h: img.naturalHeight })
             }
-            if (streaming) {
-              paintedFrameSeq.current = stream.frameSeq
-              lastPaintedRef.current = src
-              setStreamFrameLoaded(true)
-            } else setLoaded(true)
+            setLoaded(true)
           }}
           onError={() => undefined}
         />

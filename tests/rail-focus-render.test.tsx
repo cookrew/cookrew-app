@@ -1,12 +1,10 @@
-// THE ROW ACTIONS ARE IN THE MARKUP, ON A TWO-CHECKPOINT CARD (D2, canvas QA
-// 2026-09-07, dev 91c7314).
+// WHAT THE RAIL RENDERS ONCE A FOCUS IS PRESENT, ON A TWO-CHECKPOINT CARD (D2,
+// canvas QA 2026-09-07, dev 91c7314).
 //
-// QA could not reach ROLE / FORK / ⟲ REWIND by real input. Two halves:
-// the FOCUS never existed on a short card (tests/rail-focus-policy.test.ts owns
-// that arithmetic), and the actions themselves were reachable only through a
-// 1500ms press-and-hold on a fan row that existed only while a pointer was held
-// down. This file owns the second half — what the rail actually RENDERS once a
-// focus is present, and how the stylesheet reveals it.
+// The FOCUS never existed on a short card (tests/rail-focus-policy.test.ts owns
+// that arithmetic); this file owns what the rail draws once it does. The row
+// used to carry ROLE / FORK / ⟲ REWIND; the owner retired all three on
+// 2026-11-03, so the tag names the turn and nothing more.
 //
 // House pattern: no jsdom. renderToStaticMarkup over a stubbed window, and
 // vi.resetModules + dynamic import for the module-scope globals api-base and
@@ -19,8 +17,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { rowsOfIndex } from '../src/renderer/src/stream/stream-rows'
 import type { StreamCheckpoint } from '../src/renderer/src/stream/stream-types'
 
-/** A desktop bridge that can save a role and rewind — both actions are
- *  feature-detected, so without this the rail renders FORK alone. */
+/** A desktop bridge that COULD save a role, fork and rewind — so a tag with no
+ *  actions on it is the rail's choice, not a missing capability. */
 const stubDesktop = (): void => {
   const store = new Map<string, string>()
   const storage = {
@@ -73,7 +71,7 @@ const shortCard = async (props: Record<string, unknown> = {}): Promise<string> =
   )
 }
 
-describe('a focused checkpoint brings its actions with it', () => {
+describe('a focused checkpoint names its turn and carries no actions', () => {
   // The focus is SEEDED from the incoming scroll position now, not computed in
   // an effect — which is why a static render can see the tag at all, and why a
   // card that opens already on a checkpoint has its tag on the FIRST paint.
@@ -83,13 +81,11 @@ describe('a focused checkpoint brings its actions with it', () => {
     expect(markup).toContain('cr-ckpt-fan-focus')
   })
 
-  it('carries ROLE, FORK and ⟲ REWIND inside it', async () => {
+  it('carries no ROLE, FORK or ⟲ REWIND (retired 2026-11-03)', async () => {
     const markup = await shortCard({ activeIndex: 2, markerFrac: 0.5 })
-    const tag = markup.slice(markup.indexOf('cr-ckpt-scrub-preview'))
-    expect(tag).toContain('cr-ckpt-row-actions')
-    expect(tag).toContain('ROLE')
-    expect(tag).toContain('FORK')
-    expect(tag).toContain('⟲ REWIND')
+    expect(markup).not.toContain('cr-ckpt-row-actions')
+    expect(markup).not.toContain('cr-ckpt-action')
+    for (const action of ['ROLE', 'FORK', 'REWIND']) expect(markup).not.toContain(action)
   })
 
   it('draws no tag at the live tail, which is still the resting state', async () => {
@@ -101,19 +97,6 @@ describe('a focused checkpoint brings its actions with it', () => {
     const markup = await shortCard({ activeIndex: 2, markerFrac: 0.5, allowActions: false })
     expect(markup).toContain('cr-ckpt-scrub-preview')
     expect(markup).not.toContain('cr-ckpt-row-actions')
-  })
-})
-
-describe('the stylesheet reveals them for a pinned focus, with no hold', () => {
-  const css = readFileSync(join(__dirname, '../src/renderer/src/styles.css'), 'utf8')
-
-  it('.acting is what shows the strip — the class the pinned focus row takes', () => {
-    expect(css).toContain('.cr-ckpt-row.acting .cr-ckpt-row-actions')
-  })
-
-  it('hover and focus-within remain, so the desktop pointer is unchanged', () => {
-    expect(css).toContain('.cr-ckpt-row:hover .cr-ckpt-row-actions')
-    expect(css).toContain('.cr-ckpt-row:focus-within .cr-ckpt-row-actions')
   })
 })
 
@@ -139,8 +122,10 @@ describe('the rail hands the focus to the policy, not to the scroll', () => {
     )
   })
 
-  it('a pinned focus row reveals its actions without the 1500ms hold', () => {
-    expect(rail).toContain('acting={acting === row.index || (isActive && pinned)}')
+  it('holds no row actions and no press-and-hold to reveal them', () => {
+    for (const gone of ['forkTerminal', 'restoreCheckpoint', 'SaveRoleInline', 'createHoldReveal', 'rowActions']) {
+      expect(rail).not.toContain(gone)
+    }
   })
 
   it('the idle fade cannot hide a pinned tag out from under the user', () => {
@@ -149,5 +134,31 @@ describe('the rail hands the focus to the policy, not to the scroll', () => {
 
   it('LIVE is the way out of a pin, and always obeyed', () => {
     expect(rail).toContain("nextFocus(state, { kind: 'live', at: Date.now() })")
+  })
+})
+
+// CHAT AND LOG KEEP ONLY THE TAG (owner, 2026-11-03): no line, no ticks, no CP
+// count and no live dot, and the native scrollbar is the way through; but the
+// tag that names the turn in view while scrolling stays (its ROLE / FORK /
+// ⟲ REWIND went the same day).
+describe('a tag-only rail, for CHAT and LOG', () => {
+  it('draws the focus tag alone, and no bar at all', async () => {
+    const markup = await shortCard({ activeIndex: 2, markerFrac: 0.5, tagOnly: true })
+    expect(markup).toContain('cr-ckpt-rail tag-only')
+    expect(markup).toContain('cr-ckpt-scrub-preview')
+    const tag = markup.slice(markup.indexOf('cr-ckpt-scrub-preview'))
+    expect(tag).toContain('T2')
+    for (const action of ['ROLE', 'FORK', 'REWIND']) expect(tag).not.toContain(action)
+    for (const part of ['cr-ckpt-mini', 'cr-ckpt-line', 'cr-ckpt-count', 'cr-ckpt-livedot', 'cr-ckpt-here']) expect(markup).not.toContain(part)
+  })
+
+  it('draws nothing at the live tail', async () => {
+    const markup = await shortCard({ tagOnly: true })
+    expect(markup).not.toContain('cr-ckpt-scrub-preview')
+  })
+
+  it('lets the transcript under it take every press: only the tag’s rows are hit', () => {
+    const css = readFileSync(join(__dirname, '../src/renderer/src/agent-roster.css'), 'utf8')
+    expect(css).toMatch(/\.cr-ckpt-rail\.tag-only \{[^}]*pointer-events: none;/)
   })
 })

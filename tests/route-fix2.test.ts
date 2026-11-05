@@ -73,8 +73,8 @@ describe('4 · quotas as the real gateway answers them', () => {
 
   it('maps the error row, the display string, the email, and no reset time', () => {
     const quotas = toQuotas(real)
-    expect(quotas[0]).toEqual({ provider: 'claude', account: 'owner@example.com', alias: null, plan: 'max', kind: 'subscription', windows: [], last: false, error: "Claude Code's /usage is temporarily unavailable" })
-    expect(quotas[1].windows).toEqual([{ name: 'Credits', used: 0, limit: 130, resetsAt: null, display: '0 / 130' }])
+    expect(quotas[0]).toEqual({ provider: 'claude', account: 'owner@example.com', alias: 'Claude Code', plan: 'max', kind: 'subscription', windows: [], last: false, error: "Claude Code's /usage is temporarily unavailable", balance: null, until: null, resetCredits: null, readAt: null })
+    expect(quotas[1].windows).toEqual([expect.objectContaining({ name: 'Credits', used: 0, limit: 130, resetsAt: null, display: '0 / 130' })])
     expect(quotas[1].error).toBeNull()
   })
 

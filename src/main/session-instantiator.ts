@@ -121,11 +121,30 @@ export interface Ender {
   cleanup(target: EndTarget): void
 }
 
+/**
+ * What a PREVIOUS run left behind: every ordinal for this pair that still has
+ * a path under the sessions root — live sandboxes, ended ones retention has
+ * not aged out yet, and their backup residue. The session table is memory-only
+ * (served-persist.ts), so without this a restart forgets every ordinal it ever
+ * minted and a returning account is handed ordinal 1 again — onto its old
+ * sandbox, inheriting that run's harness state and grant files.
+ *
+ * SYNCHRONOUS on purpose: it is read inside mintNew before the ordinal is
+ * reserved, and the reservation is only race-free because nothing between the
+ * read and the reserve can yield. It only reads; it never removes anything.
+ * A history it cannot read must THROW, not answer empty — "no ordinals" is
+ * exactly the answer that reuses a path.
+ */
+export interface OrdinalHistory {
+  onDisk(serviceId: string, accountId: string): readonly number[]
+}
+
 export interface InstantiatorDeps {
   templates: TemplateSource
   minter: Minter
   route: ConductorRoute
   ender: Ender
+  history: OrdinalHistory
 }
 
 /** The outcome of admitting a call: the session, and whether this call minted it. */
@@ -166,6 +185,15 @@ export class SessionInstantiator {
    * a just-deleted path is the exact hazard nextOrdinal is written to avoid.
    */
   private readonly usedOrdinals = new Map<string, number[]>()
+  /**
+   * (service,account) → the ordinals a previous run left on disk, read ONCE,
+   * before this run's first mint for the pair. Once read it cannot grow: from
+   * then on every path this process creates is in usedOrdinals. Kept apart
+   * from usedOrdinals so `hadSession` stays about THIS run — a sandbox from
+   * the last run raises the floor, it does not turn a first visit after a
+   * reboot into "the aftermath of an end".
+   */
+  private readonly diskOrdinals = new Map<string, readonly number[]>()
   /**
    * (service,account) → an in-flight first-mint, so two concurrent first calls
    * from the same caller JOIN one mint instead of racing to make two workspaces
@@ -315,15 +343,29 @@ export class SessionInstantiator {
     return newest
   }
 
+  /** The last run's ordinals for a pair, read from disk on first need only. */
+  private onDiskFor(key: string, serviceId: string, accountId: string): readonly number[] {
+    const known = this.diskOrdinals.get(key)
+    if (known) return known
+    const read = Object.freeze([...this.deps.history.onDisk(serviceId, accountId)])
+    this.diskOrdinals.set(key, read)
+    return read
+  }
+
   private async mintNew(serviceId: string, accountId: string): Promise<SessionRecord> {
     const key = pairKey(serviceId, accountId)
+    // Above every ordinal that ever had a path, this run's AND the last run's.
+    // A history read that throws rejects this mint before anything is reserved,
+    // and is asked again on the retry.
+    const onDisk = this.onDiskFor(key, serviceId, accountId)
     const used = this.usedOrdinals.get(key) ?? []
-    const ordinal = nextOrdinal(used)
+    const ordinal = nextOrdinal([...onDisk, ...used])
     const identity = sessionIdentity(serviceId, accountId, ordinal)
 
     // RESERVE the ordinal synchronously, before any await, so two mints for the
     // same account (two startNew, or a startNew beside an admit) cannot both
-    // take it — JS runs this to the `await` below without interleaving.
+    // take it — JS runs this (the disk read included) to the `await` below
+    // without interleaving.
     this.usedOrdinals.set(key, [...used, ordinal])
 
     // Resolve the pin ONCE, here, then mint. The template read is pure and

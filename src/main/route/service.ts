@@ -15,6 +15,7 @@ import {
   type RouteTurnFacts
 } from '../../shared/route'
 import type { HarnessId } from '../harness'
+import { withoutRoutedPick } from '../../shared/launch-tune'
 import { ROUTABLE, routeEnv, type RouteEnv } from '../route-env'
 import { fetchCatalog, fetchQuotas, providersOf, withLocalRows, type CatalogFetch } from './catalog'
 import { RouteDecisions, pushLive } from './decisions'
@@ -23,6 +24,7 @@ import type { GatewayMonitor, GatewayProbe } from './gateway'
 import { ADD_KEY_STEM, HarnessScan, groupLineFor, setupLines } from './setup'
 import { keyFor, readRouteKeys, type RouteKeys } from './route-keys'
 import { sharedMcpArgs } from './shared-mcp'
+import { readLibraryServers } from './library'
 
 /**
  * THE ROUTE SERVICE — one object main keeps, every route question answered
@@ -66,6 +68,13 @@ export interface RouteServiceDeps {
   isServed: (terminalId: string) => boolean
   harnessOf: (command: string) => HarnessId | null
   phaseOf: (terminalId: string) => TurnPhase | undefined
+  /**
+   * A prompt is on its way in, which the phase cannot show yet (QA
+   * 2026-11-03): a restart now loses it. Absent: nothing is in delivery.
+   */
+  delivering?: (terminalId: string) => boolean
+  /** A card's route was set: what the model dial asked of it before is superseded (TuneAsks.forgetKnob). */
+  onRouteSet?: (terminalId: string) => void
   canRestoreExact: (node: TerminalNodeData) => boolean
   /** Kill and respawn the card in place with exact context; true when it did. */
   respawn: (terminalId: string) => Promise<boolean>
@@ -83,6 +92,8 @@ export interface RouteServiceDeps {
   /** The per-harness gateway key names (~/.cookrew/route-keys.json); default reads the file. Injected for tests. */
   routeKeys?: () => RouteKeys
   dockCommands: () => readonly string[]
+  /** The server names in Magpie's library (library.ts); default reads the file. Injected for tests. */
+  libraryServers?: () => string[] | null
   /** The harness scan (installed, signed in, in dock), cached; injected for tests. */
   scan?: HarnessScan
   now?: () => number
@@ -117,6 +128,8 @@ export class RouteService extends EventEmitter {
   private ownerDefault: string | null
   /** Hand every spawned agent Magpie's one MCP hub (shared-mcp.ts). On unless the owner turned it off. */
   private sharedMcp: boolean
+  /** What the hub shares, read with each probe (names only). */
+  private mcpServers: string[] | null = null
   private readonly offlineAtSpawn = new Set<string>()
   /** Cards whose running process was handed a route — the only ones a turn is followed for. */
   private readonly routed = new Set<string>()
@@ -133,6 +146,7 @@ export class RouteService extends EventEmitter {
     const settings = this.readSettings()
     this.ownerDefault = settings.defaultModel
     this.sharedMcp = settings.sharedMcp
+    this.mcpServers = this.readLibrary()
     this.scan = deps.scan ?? new HarnessScan({ home: deps.home, pathEnv: deps.pathEnv, dockCommands: deps.dockCommands, harnessOfCommand: (c) => deps.harnessOf(c) })
     this.decisions = new RouteDecisions({
       fetch: (input, init) => deps.fetch(input, init),
@@ -176,6 +190,7 @@ export class RouteService extends EventEmitter {
       checkedAt: probe.checkedAt,
       autoGroup: this.models.some((m) => m.id === 'group/auto'),
       sharedMcp: this.sharedMcp,
+      mcpServers: this.mcpServers,
       setup: { ...lines, addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
   }
@@ -273,6 +288,15 @@ export class RouteService extends EventEmitter {
   }
 
   /**
+   * A respawn of this card loses nothing: its session resumes exactly, or it
+   * has nothing to lose. The dials ask the same before a relaunch
+   * (agent-relaunch.ts), so the two restarts can never disagree.
+   */
+  restorable(node: TerminalNodeData): boolean {
+    return this.deps.canRestoreExact(node) || this.fresh(node) || (this.deps.sessionOnDisk?.(node) ?? false)
+  }
+
+  /**
    * Nothing to restore is also nothing to lose: a card with no session id of
    * any harness and no recorded turn can be respawned at once, where the
    * exact-context gate would refuse for want of anything to restore.
@@ -324,13 +348,15 @@ export class RouteService extends EventEmitter {
       if (!ROUTE_ID_RE.test(route)) return { error: 'not a route id' }
       if (this.models.length > 0 && !this.models.some((m) => m.id === route)) return { error: `not in the catalog: ${route}` }
     }
-    this.deps.updateNode(terminalId, { route })
+    // A routed claude card runs its route's model: a `--model` left on the
+    // card would outrank it once it went direct again, so it goes now.
+    const command = route !== DIRECT && this.deps.harnessOf(node.command) === 'claude' ? withoutRoutedPick(node.command, 'claude') : node.command
+    this.deps.updateNode(terminalId, command === node.command ? { route } : { route, command })
+    this.deps.onRouteSet?.(terminalId)
     const phase = this.deps.phaseOf(terminalId)
-    const idle = phase === undefined || phase === 'idle' || phase === 'replied'
+    const idle = (phase === undefined || phase === 'idle' || phase === 'replied') && !(this.deps.delivering?.(terminalId) ?? false)
     const after = this.deps.node(terminalId)
-    const restorable = (node: TerminalNodeData): boolean =>
-      this.deps.canRestoreExact(node) || this.fresh(node) || (this.deps.sessionOnDisk?.(node) ?? false)
-    if (idle && after && (after.routeEffective ?? null) !== route && restorable(after)) {
+    if (idle && after && (after.routeEffective ?? null) !== route && this.restorable(after)) {
       await this.deps.respawn(terminalId)
     }
     this.emitCard(terminalId)
@@ -417,7 +443,13 @@ export class RouteService extends EventEmitter {
     return Boolean(node.servedSession) || this.deps.isServed(node.id)
   }
 
+  private readLibrary(): string[] | null {
+    return (this.deps.libraryServers ?? (() => readLibraryServers({ home: this.deps.home, env: process.env })))()
+  }
+
   private async onProbe(probe: GatewayProbe): Promise<void> {
+    // The library changes in Magpie's own window; each probe (the panel opening, the held clock) reads it again.
+    this.mcpServers = this.readLibrary()
     try {
       if (probe.status !== 'online' || !probe.gateway) {
         this.models = []
@@ -450,6 +482,11 @@ export class RouteService extends EventEmitter {
       this.announcePending = false
       this.emit('route', this.state())
     }, ANNOUNCE_MS)
+  }
+
+  /** A card's route was saved elsewhere (a model pick, agent-relaunch.ts): the rail and the phone hear it. */
+  cardChanged(terminalId: string): void {
+    this.emitCard(terminalId)
   }
 
   private emitCard(terminalId: string): void {

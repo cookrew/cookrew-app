@@ -2,7 +2,7 @@
  * THE ZOOM'S DEVICES, from real data: what the navigator's "devices" and
  * "device" stops draw. Two feeds, joined per machine:
  *
- *   this desktop   its own levels feed (subscribeZoomFleet: a snapshot, then
+ *   this desktop   its own fleet feed (subscribeZoomFleet: a snapshot, then
  *                  deltas, folded as /me folds its streams): every workspace,
  *                  focused or background, with its agents, their wired notes
  *                  and browsers, the loose tray and the counts. Until the feed
@@ -20,13 +20,14 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { WorkspaceList } from '../../../shared/model'
-import type { LevelsAgent, LevelsAttachment, LevelsEvent, LevelsSnapshot, LevelsWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/strata'
+import type { FleetAgent, FleetAttachment, FleetEvent, FleetSnapshot, FleetWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/fleet'
 import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
-import { foldLevels } from '../../../strata/fleet/levels-fold'
+import { foldFleet } from '../../../shared/fleet-fold'
+import { DECK_SHOWN } from './zoom-model'
 import { cookrew, type CookrewApi } from '../api'
 
-export type ZoomFleetAgent = LevelsAgent
-export type ZoomFleetAttachment = LevelsAttachment
+export type ZoomFleetAgent = FleetAgent
+export type ZoomFleetAttachment = FleetAttachment
 
 export interface ZoomCounts {
   agents: number
@@ -106,7 +107,7 @@ export const RETRY_MAX_MS = 30_000
 export type FeedLink = 'connecting' | 'live' | 'none'
 
 export interface FleetParts {
-  levels: LevelsSnapshot | null
+  snapshot: FleetSnapshot | null
   /** 'none' = this surface has no feed. */
   link: FeedLink
   list: WorkspaceList | null
@@ -115,7 +116,7 @@ export interface FleetParts {
   account: AccountMachines | null
 }
 
-const countsOf = (workspace: LevelsWorkspace): ZoomCounts => ({
+const countsOf = (workspace: FleetWorkspace): ZoomCounts => ({
   ...workspace.counts,
   waiting: workspace.agents.filter((a) => a.phase === 'waiting').length,
   working: workspace.agents.filter((a) => a.phase === 'thinking').length
@@ -136,7 +137,7 @@ const sumCounts = (workspaces: readonly ZoomFleetWorkspace[]): ZoomCounts | null
     { agents: 0, notes: 0, browsers: 0, waiting: 0, working: 0 }
   )
 
-const liveWorkspace = (workspace: LevelsWorkspace): ZoomFleetWorkspace => ({
+const liveWorkspace = (workspace: FleetWorkspace): ZoomFleetWorkspace => ({
   id: workspace.id,
   name: workspace.name,
   icon: workspace.icon,
@@ -149,8 +150,21 @@ const liveWorkspace = (workspace: LevelsWorkspace): ZoomFleetWorkspace => ({
   newest: workspace.newest ?? lastBrowserOf(workspace)
 })
 
+/**
+ * WHAT A TILE'S DECK SHOWS (owner, 2026-11-04: artifacts on the same page as
+ * the agents, not only numbers): the newest browser on top, then the newest
+ * note, so a workspace of both shows both, then whatever came last. Each thing
+ * once, however many agents wear it.
+ */
+export function deckOf(w: Pick<ZoomFleetWorkspace, 'agents' | 'loose' | 'newest'>): ZoomFleetAttachment[] {
+  const listed = [...w.agents.flatMap((a) => a.attachments ?? []), ...w.loose].reverse()
+  const note = listed.find((a) => a.kind === 'note')
+  const order = [w.newest, note, ...listed].filter((a): a is ZoomFleetAttachment => !!a)
+  return [...new Map(order.map((a) => [a.id, a])).values()].slice(0, DECK_SHOWN)
+}
+
 /** A desktop older than the feed's `newest`: the last browser it lists, its tray before its agents'. */
-function lastBrowserOf(workspace: LevelsWorkspace): LevelsAttachment | null {
+function lastBrowserOf(workspace: FleetWorkspace): FleetAttachment | null {
   const listed = [...workspace.agents.flatMap((a) => a.attachments), ...workspace.loose]
   return listed.findLast((a) => a.kind === 'browser') ?? null
 }
@@ -183,27 +197,27 @@ const machineOf = (row: AccountMachine): ZoomFleetMachine => ({
 })
 
 function localMachine(parts: FleetParts, row: AccountMachine | undefined): ZoomFleetMachine {
-  const { levels, list } = parts
-  const focusedWorkspaceId = levels ? levels.focusedWorkspaceId : (list?.activeId || null)
-  const workspaces = levels
-    ? levels.workspaces.map(liveWorkspace)
+  const { snapshot, list } = parts
+  const focusedWorkspaceId = snapshot ? snapshot.focusedWorkspaceId : (list?.activeId || null)
+  const workspaces = snapshot
+    ? snapshot.workspaces.map(liveWorkspace)
     : list
       ? list.workspaces.map((w) => listedWorkspace(w, focusedWorkspaceId))
       : (row?.workspaces ?? []).map((w) => listedWorkspace(w, null))
   return {
     id: row?.id ?? LOCAL_MACHINE_ID,
-    name: levels?.machine.name || row?.name || parts.name || 'This desktop',
+    name: snapshot?.machine.name || row?.name || parts.name || 'This desktop',
     local: true,
     // Read by this surface right now: up, whatever the registry last heard.
     online: true,
-    lastSeenAt: levels?.at ?? row?.lastSeenAt ?? null,
-    appVersion: levels?.machine.appVersion ?? row?.appVersion ?? null,
-    profile: levels?.machine.profile ?? row?.profile ?? null,
-    display: levels?.machine.display ?? null,
-    detail: parts.link === 'none' ? 'listed' : parts.link === 'live' && levels ? 'live' : 'connecting',
+    lastSeenAt: snapshot?.at ?? row?.lastSeenAt ?? null,
+    appVersion: snapshot?.machine.appVersion ?? row?.appVersion ?? null,
+    profile: snapshot?.machine.profile ?? row?.profile ?? null,
+    display: snapshot?.machine.display ?? null,
+    detail: parts.link === 'none' ? 'listed' : parts.link === 'live' && snapshot ? 'live' : 'connecting',
     focusedWorkspaceId,
     workspaces,
-    counts: levels ? sumCounts(workspaces) : null
+    counts: snapshot ? sumCounts(workspaces) : null
   }
 }
 
@@ -258,7 +272,7 @@ const isAnswer = (value: unknown): value is AccountMachines =>
 export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOptions = {}): ZoomFleetStore {
   const { graceMs = LOAD_GRACE_MS, stopGraceMs = STOP_GRACE_MS, refreshMs = ACCOUNT_REFRESH_MS, retryMs = RETRY_MS, sight = null } = options
   const listeners = new Set<() => void>()
-  let state: State = { levels: null, link: 'connecting', list: null, name: null, account: null, listFailed: false, graceOver: false }
+  let state: State = { snapshot: null, link: 'connecting', list: null, name: null, account: null, listFailed: false, graceOver: false }
   let fleet: ZoomFleet = { machines: composeFleet(state), error: null, loading: true }
   let accountKey = ''
   let running = false
@@ -274,9 +288,9 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
 
   const derive = (s: State): ZoomFleet => {
     const hasAccount = typeof api().zoomFleetMachines === 'function'
-    const localSettled = s.levels !== null || (s.link === 'none' && (s.list !== null || s.listFailed))
+    const localSettled = s.snapshot !== null || (s.link === 'none' && (s.list !== null || s.listFailed))
     const accountSettled = !hasAccount || s.account !== null
-    const localError = s.levels === null && s.list === null && s.listFailed && s.link === 'none' ? LOCAL_UNREADABLE : null
+    const localError = s.snapshot === null && s.list === null && s.listFailed && s.link === 'none' ? LOCAL_UNREADABLE : null
     const accountError = s.account && !s.account.ok ? (ACCOUNT_SENTENCE[s.account.reason] ?? null) : null
     return {
       machines: composeFleet(s),
@@ -310,11 +324,11 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     }, delay)
   }
 
-  const onEvent = (event: LevelsEvent): void => {
-    const folded = foldLevels(state.levels, event)
+  const onEvent = (event: FleetEvent): void => {
+    const folded = foldFleet(state.snapshot, event)
     if (folded.ok) {
       retries = 0
-      set({ levels: folded.levels, link: 'live' })
+      set({ snapshot: folded.snapshot, link: 'live' })
       return
     }
     // A missed delta cannot be rebuilt from the ones after it: reopen, which starts on a snapshot.
@@ -451,7 +465,7 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
 
 // ── the hook ────────────────────────────────────────────────────────────────
 
-const documentSight: Sight = {
+export const documentSight: Sight = {
   hidden: () => document.visibilityState === 'hidden',
   watch: (changed) => {
     document.addEventListener('visibilitychange', changed)
@@ -477,7 +491,7 @@ export function useZoomFleet(): ZoomFleet {
 /**
  * The fleet as the zoom view draws it: each machine's name and state, each
  * workspace's name, icon, counts and its agents' harness and phase. The
- * fleet itself changes on every levels delta, a working agent's reply and
+ * fleet itself changes on every fleet delta, a working agent's reply and
  * status line included, and the zoom view re-rendered for each (about ten
  * times a second at the full stop, profiled 2026-11-01) to draw none of it.
  */
@@ -489,7 +503,7 @@ export interface ZoomFleetView {
     online: boolean
     detail: ZoomMachineDetail
     display: MachineDisplay | null
-    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; newest: { id: string; title: string; host: string | null } | null }[]
+    workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
   }[]
 }
 
@@ -502,7 +516,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       online: m.online,
       detail: m.detail,
       display: m.display ?? null,
-      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, newest: w.newest ? { id: w.newest.id, title: w.newest.title, host: w.newest.host ?? null } : null }))
+      workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))
     }))
   }
 }

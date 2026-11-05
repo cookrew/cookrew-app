@@ -4,6 +4,7 @@ import { parseUseUrl, type Use, type UseTarget } from '../shared/use-url'
 import type { UsePoint, UseSignal } from '../shared/use-signal'
 import type { BrowserInstance } from './browser-instance'
 import { vphoneKeyName, type Gesture } from './vphone-input'
+import { machineCopy } from '../shared/machine-words'
 
 /**
  * THE AGENT'S HAND ON A SCREEN CARD (computer, phone, hardware use).
@@ -187,20 +188,23 @@ export function shotName(requested: string | undefined, ctx: Pick<UseCommandCont
 const slug = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'card'
 
 export const SERVED_USE_REFUSED =
-  "A served session cannot use this Mac's screens, cameras or phones — those belong to the owner, not to a caller"
+  `A served session cannot use ${machineCopy('this Mac', process.platform)}'s screens, cameras or phones — those belong to the owner, not to a caller`
 
 /**
  * THE SERVED-SESSION GATE FOR USES (required, like the secrets gate).
  *
  * A served pane runs a CALLER's work under Seatbelt; the uses run in main,
  * outside it, with the owner's own grants — Screen Recording, the camera,
- * the attached phone, and with COOKREW_COMPUTER_INPUT the keyboard. So a
+ * the attached phone, and with the machine switch on, the keyboard. So a
  * served caller may not create or navigate a card to a use address, nor
  * touch a card any of whose tabs is one (a tab switch would make it one).
  * `cardUrls` answers a card's tab addresses by name, or [] for no card.
+ * `sources` is the picker (use-source-service.ts): the list of what is on the
+ * owner's screen is refused outright, whatever it is asked with.
  */
 export function servedUseRefusal(args: readonly string[], cardUrls: (name: string) => readonly string[]): string | null {
   const [sub, first, second] = args
+  if (sub === 'sources') return SERVED_USE_REFUSED
   const addresses = sub === 'create' ? [first] : sub === 'navigate' || sub === 'tab-new' ? [second] : []
   const card = sub === 'create' ? second : first
   const all = [...addresses, ...(card ? cardUrls(card) : [])]

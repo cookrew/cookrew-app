@@ -17,7 +17,6 @@ import {
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
-import type { SampleArt } from './site-art-manifest'
 import { MOTION, PROMO, type Motion } from './site-motion'
 
 /**
@@ -62,12 +61,6 @@ export interface HomeInput {
    * cannot learn this any other way — it runs no script, by design.
    */
   account?: string | null
-  /**
-   * The sample fleet's pictures, from the strata shell's bundle. With them the
-   * first screen is the sample at three levels and the promo moves down to
-   * the features; without (no shell deployed) the page is as it was.
-   */
-  art?: SampleArt | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */
@@ -113,7 +106,7 @@ function teamCard(d: ListedDoor, stars: number, today: DoorPulse): string {
 export function presetCard(p: PresetSummary): string {
   return `<article class="team">
 <div class="head"><span class="led off" style="background:var(--violet-hi)"></span><a class="ttl" href="/install/${esc(p.id)}">${esc(p.name)}</a><span class="chip">V${p.version}</span></div>
-<div class="screen crt"><div class="l">preset — a signed team file</div><div class="l d">by @${esc(p.author)} · ${p.visibility === 'identified' ? 'account needed' : 'public'}</div></div>
+<div class="screen crt"><div class="l">preset — a signed team file</div><div class="l d">by @${esc(p.author)} · ${p.visibility === 'identified' ? 'sign in to install' : 'public'}</div></div>
 <div class="body"><p class="dim">Reviewed in the app before anything is installed.</p></div>
 <div class="foot"><span class="price free">download · review first</span><span class="sp"></span><a class="btn sm primary" href="/install/${esc(p.id)}">Review in Cookrew</a></div>
 </article>`

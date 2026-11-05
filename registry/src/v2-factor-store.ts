@@ -179,6 +179,12 @@ export class V2Factors {
     return this.records.find((r) => r.userHandle === handle)?.username ?? null
   }
 
+  /** An account was deleted: its passkeys, its authenticator and its alarm go. */
+  forget(username: string): void {
+    this.records = this.records.filter((r) => r.username !== username)
+    this.save()
+  }
+
   /**
    * The account a credential id belongs to. A credential id is unique to the
    * authenticator that made it, so this is what makes the passwordless sheet

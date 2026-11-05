@@ -82,10 +82,32 @@ class FakeEnder {
   }
 }
 
+// What a previous run left on disk, per (service, account): the ordinals that
+// already have a sandbox path. Counts every read so a test can prove the disk
+// is asked once per pair, before the first mint, and never again. Can be told
+// to fail, to prove an unreadable history refuses the mint instead of guessing.
+class FakeHistory {
+  readonly onDiskByPair = new Map<string, number[]>()
+  readonly reads: string[] = []
+  failNext = false
+  leave(serviceId: string, accountId: string, ordinals: number[]): void {
+    this.onDiskByPair.set(`${serviceId}/${accountId}`, ordinals)
+  }
+  onDisk(serviceId: string, accountId: string): readonly number[] {
+    this.reads.push(`${serviceId}/${accountId}`)
+    if (this.failNext) {
+      this.failNext = false
+      throw new Error('sessions dir unreadable')
+    }
+    return this.onDiskByPair.get(`${serviceId}/${accountId}`) ?? []
+  }
+}
+
 let templates: FakeTemplates
 let minter: FakeMinter
 let route: FakeRoute
 let ender: FakeEnder
+let history: FakeHistory
 let inst: SessionInstantiator
 
 beforeEach(() => {
@@ -93,7 +115,8 @@ beforeEach(() => {
   minter = new FakeMinter()
   route = new FakeRoute()
   ender = new FakeEnder()
-  const deps: InstantiatorDeps = { templates, minter, route, ender }
+  history = new FakeHistory()
+  const deps: InstantiatorDeps = { templates, minter, route, ender, history }
   inst = new SessionInstantiator(deps)
 })
 
@@ -311,5 +334,80 @@ describe('conductorFor — only the orch answers (design S5)', () => {
     route.present = false
     const ana = await inst.admit('svc', 'ana')
     expect(inst.conductorFor(ana.session.identity.sessionId)).toBeNull()
+  })
+})
+
+describe('after a restart, a mint lands above every ordinal that ever had a path', () => {
+  // The app restarted: the in-memory ledger is empty, but ~/.cookrew/sessions
+  // still holds last run's ana-1 and ana-3 (and the sweep has not aged them
+  // out). Minting ana-1 again would land on the old sandbox and inherit its
+  // .claude state and grant files.
+  it('seeds from the disk before the first mint, so the new ordinal is highest + 1', async () => {
+    history.leave('svc', 'ana', [1, 3])
+    const ana = await inst.admit('svc', 'ana')
+    expect(ana.created).toBe(true)
+    expect(ana.session.ordinal).toBe(4)
+    expect(minter.minted.map((m) => m.sessionId)).toEqual(['svc-ana-4'])
+  })
+
+  it('asks the disk once per pair, and per pair only', async () => {
+    history.leave('svc', 'ana', [2])
+    const first = await inst.admit('svc', 'ana')
+    const second = await inst.startNew('svc', 'ana')
+    inst.end(second.identity.sessionId)
+    await inst.startNew('svc', 'ana')
+    expect([first.session.ordinal, second.ordinal]).toEqual([3, 4])
+    expect(history.reads).toEqual(['svc/ana'])
+    // Another account, and the same account on another service, are their own pairs.
+    await inst.admit('svc', 'bob')
+    await inst.admit('other', 'ana')
+    expect(history.reads).toEqual(['svc/ana', 'svc/bob', 'other/ana'])
+  })
+
+  it('never reads the disk for a reuse', async () => {
+    await inst.admit('svc', 'ana')
+    await inst.admit('svc', 'ana')
+    expect(history.reads).toEqual(['svc/ana'])
+  })
+
+  it('keeps the synchronous reservation: concurrent first mints still take distinct ordinals', async () => {
+    history.leave('svc', 'ana', [5])
+    minter.block()
+    const a = inst.startNew('svc', 'ana')
+    const b = inst.startNew('svc', 'ana')
+    const c = inst.admit('svc', 'ana')
+    minter.let()
+    const [one, two, three] = await Promise.all([a, b, c])
+    expect([one.ordinal, two.ordinal, three.session.ordinal].sort()).toEqual([6, 7, 8])
+    expect(minter.minted).toHaveLength(3)
+  })
+
+  it('an unreadable history refuses the mint, burns nothing, and is asked again on retry', async () => {
+    history.leave('svc', 'ana', [2])
+    history.failNext = true
+    await expect(inst.admit('svc', 'ana')).rejects.toThrow('sessions dir unreadable')
+    expect(minter.minted).toHaveLength(0)
+    expect(inst.sessions()).toHaveLength(0)
+    const retry = await inst.admit('svc', 'ana')
+    expect(retry.session.ordinal).toBe(3)
+    expect(history.reads).toEqual(['svc/ana', 'svc/ana'])
+  })
+
+  it('a failed mint after seeding still releases only its own ordinal', async () => {
+    history.leave('svc', 'ana', [4])
+    minter.failOnce()
+    await expect(inst.admit('svc', 'ana')).rejects.toThrow('mint failed')
+    const retry = await inst.admit('svc', 'ana')
+    expect(retry.session.ordinal).toBe(5)
+  })
+
+  it('leaves hadSession about THIS run: a sandbox from the last run does not make a first visit an aftermath', async () => {
+    history.leave('svc', 'ana', [1])
+    expect(inst.hadSession('svc', 'ana')).toBe(false)
+    minter.failOnce()
+    await expect(inst.admit('svc', 'ana')).rejects.toThrow('mint failed')
+    expect(inst.hadSession('svc', 'ana')).toBe(false)
+    await inst.admit('svc', 'ana')
+    expect(inst.hadSession('svc', 'ana')).toBe(true)
   })
 })

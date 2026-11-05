@@ -7,6 +7,8 @@ import { advanceClock, type ActivityClock } from '../activity-clock'
 import { useRoster } from '../agent-registry'
 import { buildAgentRows, checkpointWanted, crewOf, type AgentRow } from '../agent-rows'
 import { useStreamTails } from '../stream/use-stream-tails'
+import { forgetTyped, holdLines } from '../prompt/live-line'
+import { cookrew } from '../api'
 import type { WorkspaceState } from '../../../shared/model'
 
 /** One clock for every relative label on the stage. */
@@ -82,7 +84,21 @@ const CrewContext = createContext<Crew | null>(null)
 
 export function CrewProvider({ workspace, workspaceId, children }: { workspace: WorkspaceState | null; workspaceId: string | null; children: ReactNode }): React.JSX.Element {
   const crew = useCrew(workspace, workspaceId)
+  useEffect(() => holdLines(crew.crew.filter((row) => row.failure).map((row) => row.id)), [crew.crew])
+  useEffect(
+    () =>
+      cookrew().onEvent?.((raw) => {
+        const event = raw as { type?: string; entityId?: string }
+        if (event.type === 'terminal.keys-lost' && event.entityId) forgetTyped(event.entityId)
+      }),
+    []
+  )
   return createElement(CrewContext.Provider, { value: crew }, children)
+}
+
+/** The provider's crew, or null outside one (a test, the embed): its readers draw without it. */
+export function useCrewContext(): Crew | null {
+  return useContext(CrewContext)
 }
 
 /** Renders `children(crew)` with the provider's crew; re-renders with it. */

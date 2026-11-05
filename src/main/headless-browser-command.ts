@@ -17,7 +17,8 @@ import { handlesUseCommand, runUseCommand } from './use-commands'
 export interface HeadlessBrowserCommandDeps {
   store: WorkspaceStore
   manager: HeadlessBrowserManager
-  addNode: (node: CanvasNode) => CanvasNode
+  /** Add a card to a workspace; without one, to the canvas on screen. */
+  addNode: (node: CanvasNode, workspaceId?: string) => CanvasNode
   updateNode: (id: string, patch: Partial<CanvasNode>) => CanvasNode | undefined
   connectNodes: (aId: string, bId: string) => void
   /** Every acting command, as the cursor the owner watches (shared/use-signal.ts). */
@@ -25,6 +26,13 @@ export interface HeadlessBrowserCommandDeps {
   /** Where `screenshot` without a file name saves. */
   shotsDir?: string
   now?: () => number
+  /**
+   * The card a name means for THIS caller (browser-reach.ts) — its own
+   * workspace first, whatever the window shows. Absent: the canvas on screen.
+   */
+  resolveBrowser?: (name: string, terminalId: string) => BrowserNodeData | undefined
+  /** The workspace holding a terminal, where its new cards go. Absent: on screen. */
+  homeOf?: (terminalId: string) => string | undefined
 }
 
 /** The centre of the element a selector names, in viewport points — where the cursor goes for a DOM action. */
@@ -58,6 +66,27 @@ const SNAPSHOT_SCRIPT = `(() => {
   }
   return 'viewport: ' + innerWidth + 'x' + innerHeight + '  url: ' + location.href + '  title: ' + document.title + '\\n' + out.join('\\n')
 })()`
+
+/**
+ * Set a form field's value the way a keystroke does.
+ *
+ * React (and every framework copying its value tracker) keeps an OWN `value`
+ * accessor on a controlled input that records each write. A plain
+ * `el.value = x` goes through it, so the `input` event that follows compares
+ * equal, onChange never fires, the framework's state stays empty and its next
+ * render puts the empty value back — the Solis login e-mail that emptied
+ * itself between two commands (2026-11-04). Writing through the PROTOTYPE's
+ * setter skips the tracker. Anything without a native value setter (a
+ * contenteditable) keeps the plain assignment.
+ */
+const SET_VALUE = `((el, value) => {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+    : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
+    : el instanceof HTMLInputElement ? HTMLInputElement.prototype : null
+  const setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value')?.set : undefined
+  if (setter) setter.call(el, value)
+  else el.value = value
+})`
 
 function selectorFor(selector: string): string {
   if (selector.startsWith('@')) {
@@ -95,7 +124,7 @@ export class HeadlessBrowserCommandEngine {
 
     const browserName = rest[0]
     if (!browserName) throw new Error(`Usage: cookrew browser ${sub} "Browser" ...`)
-    const node = this.findBrowser(browserName)
+    const node = this.findBrowser(browserName, terminalId)
     if (sub === 'tabs') return this.runTabCommand(sub, node, rest.slice(1))
 
     const instance = await this.requireInstance(node)
@@ -151,7 +180,7 @@ export class HeadlessBrowserCommandEngine {
           return withElement(
             instance,
             params[0],
-            `el.focus(); el.value = ${JSON.stringify(params[1] ?? '')};
+            `el.focus(); ${SET_VALUE}(el, ${JSON.stringify(params[1] ?? '')});
              el.dispatchEvent(new Event('input', { bubbles: true }));
              el.dispatchEvent(new Event('change', { bubbles: true }));
              return 'Filled'`
@@ -160,7 +189,7 @@ export class HeadlessBrowserCommandEngine {
           return withElement(
             instance,
             params.length > 1 ? params[0] : ':focus',
-            `el.focus(); el.value = (el.value || '') + ${JSON.stringify(params[params.length - 1] ?? '')};
+            `el.focus(); ${SET_VALUE}(el, (el.value || '') + ${JSON.stringify(params[params.length - 1] ?? '')});
              el.dispatchEvent(new Event('input', { bubbles: true }));
              return 'Typed'`
           )
@@ -209,13 +238,16 @@ export class HeadlessBrowserCommandEngine {
   private async create(params: string[], terminalId: string): Promise<string> {
     const [url, requestedName] = params
     if (!url) throw new Error('Usage: cookrew browser create URL ["Name"] [--workspace <name>] [--new]')
-    // A caller parked in ANOTHER workspace is refused before it gets here
-    // (cmdBrowser). What remains is a caller no workspace file holds at all —
-    // a terminal resolved from the durable registry after a reboot. It has no
-    // position to anchor to and cannot own an edge, so the browser is created
-    // unconnected and says so, instead of writing an edge to an id that exists
-    // nowhere (the dangling edge this used to leave behind).
-    const terminal = this.deps.store.node(terminalId)
+    // The card goes to the caller's own workspace (homeOf), on screen or not,
+    // anchored beside its caller and wired to it. A caller no workspace holds
+    // at all — a terminal resolved from the durable registry after a reboot —
+    // has no position to anchor to and cannot own an edge, so its browser is
+    // created on the canvas on screen, unconnected, and says so, instead of
+    // writing an edge to an id that exists nowhere.
+    const home = this.deps.homeOf?.(terminalId)
+    const terminal =
+      this.deps.store.node(terminalId) ??
+      (home === undefined ? undefined : this.deps.store.nodeAcrossWorkspaces?.(terminalId)?.node)
     const base = terminal?.position ?? { x: 0, y: 0 }
     const width = terminal?.size.width ?? 640
     const id = randomUUID()
@@ -230,7 +262,7 @@ export class HeadlessBrowserCommandEngine {
       position: { x: base.x + width + 80, y: base.y },
       size: { width: 720, height: 560 }
     }
-    const added = this.deps.addNode(node) as BrowserNodeData
+    const added = this.deps.addNode(node, home) as BrowserNodeData
     if (terminal) this.deps.connectNodes(terminalId, added.id)
     await this.deps.manager.syncNode(added)
     return terminal
@@ -257,8 +289,10 @@ export class HeadlessBrowserCommandEngine {
     })
   }
 
-  private findBrowser(name: string): BrowserNodeData {
-    const node = this.deps.store.nodeByName(name, 'browser')
+  private findBrowser(name: string, terminalId: string): BrowserNodeData {
+    const node = this.deps.resolveBrowser
+      ? this.deps.resolveBrowser(name, terminalId)
+      : this.deps.store.nodeByName(name, 'browser')
     if (!node || node.kind !== 'browser') {
       throw new Error(`Browser '${name}' not found. Run 'cookrew list'.`)
     }
@@ -343,7 +377,7 @@ export class HeadlessBrowserCommandEngine {
 const TAB_COMMANDS = new Set(['tabs', 'tab-new', 'tab-select', 'tab-close'])
 
 /** The card with its active tab pointed at `url` — what it would be, re-addressed. */
-function withActiveUrl(node: BrowserNodeData, url: string): BrowserNodeData {
+export function withActiveUrl(node: BrowserNodeData, url: string): BrowserNodeData {
   const active = activeBrowserTab(node)
   return { ...node, url, tabs: browserTabs(node).map((tab) => (tab.id === active.id ? { ...tab, url, title: '' } : tab)) }
 }

@@ -11,7 +11,9 @@
 import { useAgentTuning } from './use-agent-tuning'
 import { useCardRoute } from './use-card-route'
 import { TuneMenu } from './TuneMenu'
-import { routeDialAllowed, routeDialInput } from '../../../shared/route-view'
+import { routeDialAllowed, routeDialInput, routeDialLines } from '../../../shared/route-view'
+import { currentModelValue, modelAskState, modelRows } from '../../../shared/model-pick'
+import type { ModelDialProps } from './ModelDial'
 import type { TurnPhase } from '../../../shared/turn'
 import { tuneSummary } from '../zoom-bar'
 
@@ -46,9 +48,35 @@ export function CardTune({ terminalId, phase, remote, onMouseDown, rise = false,
         }
       }
     : null
+  // THE ONE MODEL LIST (owner 2026-11-04): a claude card with a route dial
+  // gets one MDL dial for model and route alike. Every pick goes to main as a
+  // model pick (claude-model-route.ts), which saves the route and the flags
+  // and restarts once, keeping the effort it runs at.
+  const merged = tuning.state?.harness === 'claude' && routeDial !== null && !routeDial.notRoutable && routeDial.choices.length > 0
+  const reading = tuning.state?.tuning ?? null
+  const current = merged ? currentModelValue(cardRoute.state?.route ?? null, reading) : null
+  const lines = routeDialLines(cardRoute.state)
+  const model: ModelDialProps | null = merged
+    ? {
+        rows: modelRows(routeDial.choices),
+        current,
+        reading: reading?.model ?? null,
+        ask: modelAskState(tuning.state?.asks ?? [], current, reading),
+        // A direct card has no route turn: the last one is from before it went direct.
+        turn: cardRoute.state?.route === 'direct' ? null : lines.turn,
+        note: lines.note,
+        open: tuning.open === 'model',
+        onOpen: (open) => tuning.setOpen(open ? 'model' : null),
+        onPick: (value) => {
+          tuning.turn('model', value)
+          onTurned?.()
+        }
+      }
+    : null
   if (tuning.view === null) return null
   return (
     <TuneMenu
+      model={model}
       view={tuning.view}
       open={tuning.open}
       onOpen={tuning.setOpen}

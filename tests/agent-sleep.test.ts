@@ -7,7 +7,7 @@
 // agents were idle. 2026-11-01: the window is an hour, and this clock only
 // nominates — agent-sleep-evidence.test.ts covers who actually sleeps.
 import { describe, expect, it } from 'vitest'
-import { IdleSleep, idleSleepMsFrom, type SleepFacts } from '../src/main/agent-sleep'
+import { BOOT_GRACE_MS, IdleSleep, idleSleepMsFrom, type SleepFacts } from '../src/main/agent-sleep'
 
 const MIN = 60_000
 const facts = (over: Partial<SleepFacts> = {}): SleepFacts => ({
@@ -15,10 +15,52 @@ const facts = (over: Partial<SleepFacts> = {}): SleepFacts => ({
 })
 
 describe('IdleSleep — who is due to sleep', () => {
-  it('never sleeps an agent on first sight: the clock starts when we start watching', () => {
-    const s = new IdleSleep(10 * MIN)
+  it('never sleeps an agent on first sight, but a boot only buys the grace, not a window', () => {
+    // 2026-11-05: the app restarts many times a day, and each boot gave every
+    // card a fresh hour, so a fleet that was idle for a day never got nominated.
+    const s = new IdleSleep(60 * MIN)
     expect(s.due([facts()], 0)).toEqual([])
-    expect(s.due([facts()], 9 * MIN)).toEqual([])
+    expect(s.due([facts()], BOOT_GRACE_MS - 1)).toEqual([])
+    expect(s.due([facts()], BOOT_GRACE_MS)).toEqual(['a'])
+  })
+
+  it('the boot grace survives a window that shrinks right after boot', () => {
+    // Review, 2026-11-05: a grace kept as a backdated clock was erased by the
+    // first pressure reading, a minute after every boot under pressure.
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts()], 0)
+    expect(s.due([facts()], MIN, 30 * MIN)).toEqual([])
+    expect(s.due([facts()], BOOT_GRACE_MS - 1, 15 * MIN)).toEqual([])
+    expect(s.due([facts()], BOOT_GRACE_MS, 15 * MIN)).toEqual(['a'])
+  })
+
+  it('after the grace the evidence sets the clock: a card quiet for a minute waits its window', () => {
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts()], 0)
+    expect(s.due([facts()], BOOT_GRACE_MS)).toEqual(['a'])
+    s.restart('a', BOOT_GRACE_MS - MIN)
+    expect(s.due([facts()], BOOT_GRACE_MS + 58 * MIN)).toEqual([])
+    expect(s.due([facts()], BOOT_GRACE_MS + 59 * MIN)).toEqual(['a'])
+  })
+
+  it('a window shorter than the boot grace still waits only its own window', () => {
+    const s = new IdleSleep(2 * MIN)
+    s.due([facts()], 0)
+    expect(s.due([facts()], 2 * MIN)).toEqual(['a'])
+  })
+
+  it('the window can shrink for one sweep: pressure nominates sooner', () => {
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts({ busy: true })], 0)
+    expect(s.due([facts()], 20 * MIN)).toEqual([])
+    expect(s.due([facts()], 20 * MIN, 15 * MIN)).toEqual(['a'])
+  })
+
+  it('the longest-quiet agent is nominated first', () => {
+    const s = new IdleSleep(60 * MIN)
+    s.due([facts({ id: 'recent', busy: true }), facts({ id: 'oldest', busy: true })], 0)
+    s.touch('recent', 30 * MIN)
+    expect(s.due([facts({ id: 'recent' }), facts({ id: 'oldest' })], 100 * MIN)).toEqual(['oldest', 'recent'])
   })
 
   it('sleeps after the idle window', () => {
@@ -67,10 +109,11 @@ describe('IdleSleep — who is due to sleep', () => {
   })
 
   it('forgets terminals that are gone, so a reborn id starts clean', () => {
-    const s = new IdleSleep(10 * MIN)
+    const s = new IdleSleep(60 * MIN)
     s.due([facts()], 0)
     s.due([], 5 * MIN)
-    expect(s.due([facts()], 11 * MIN)).toEqual([])
+    expect(s.due([facts()], 6 * MIN)).toEqual([])
+    expect(s.due([facts()], 6 * MIN + BOOT_GRACE_MS - 1)).toEqual([])
   })
 
   it('is off when the window is zero', () => {
@@ -83,7 +126,7 @@ describe('IdleSleep — who is due to sleep', () => {
 describe('IdleSleep.restart — the evidence moves the clock', () => {
   it('counts the window from the newest sign of life the evidence found', () => {
     const s = new IdleSleep(60 * MIN)
-    s.due([facts()], 0)
+    s.due([facts({ busy: true })], 0)
     expect(s.due([facts()], 60 * MIN)).toEqual(['a'])
     // Claude said busy at minute 60: a fresh hour from there.
     s.restart('a', 60 * MIN)
@@ -101,7 +144,7 @@ describe('IdleSleep.restart — the evidence moves the clock', () => {
 
   it('never moves the clock backwards, and ignores ids it does not watch', () => {
     const s = new IdleSleep(60 * MIN)
-    s.due([facts()], 0)
+    s.due([facts({ busy: true })], 0)
     s.touch('a', 30 * MIN)
     s.restart('a', 10 * MIN)
     expect(s.due([facts()], 89 * MIN)).toEqual([])

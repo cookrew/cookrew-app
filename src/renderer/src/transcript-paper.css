@@ -225,8 +225,10 @@
 
 /* A PLAIN CONVERSATION (owner, 2026-11-01): the turn the reader is at wears
    no gold edge and no tint, and an exchange has no checkpoint heading over it
-   (its "T1 …" pill repeated the prompt word for word). The checkpoints stay
-   with LOG and LIVE, and their rail (TerminalOverlay · look !== 'chat'). */
+   (its "T1 …" pill repeated the prompt word for word). Of the checkpoint rail
+   only its tag stays, naming the turn in view while scrolling, with ROLE /
+   FORK / REWIND (CheckpointTimeline · tagOnly); LIVE keeps the whole rail.
+   LOG reads the same way (THE LOG LOOK, below). */
 .lod-overlay .look-chat .ctx-block.active {
   background: transparent;
   box-shadow: none;
@@ -271,6 +273,18 @@
 
 .lod-overlay .look-chat .ctx-block-prompt::before {
   content: none;
+}
+
+/* Yours, sent and not read yet: the agent takes it at its next step. */
+.lod-overlay .look-chat .ctx-block-queued {
+  opacity: 0.62;
+}
+
+.lod-overlay .look-chat .ctx-queued-tag {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font: 11px/1.3 var(--font-mono);
 }
 
 /* Nobody's: a harness notice sits between the two sides, small and quiet. */
@@ -453,16 +467,12 @@
   border: 0;
 }
 
-/* THE TERMINAL KEEPS CLEAR OF THE CHECKPOINT RAIL (owner's recording,
-   2026-11-01): the rail is 30px laid over the right edge, and the terminal
-   under it was fitted to the whole width, so its last columns ran under the
-   rail. The room is kept in every look, so the terminal is the same size in
-   chat, log and live, and the rail arriving after its checkpoints load does
-   not resize the shared pane. */
-.lod-overlay .popout-main.look-records .ctx-live,
-.lod-overlay .popout-main.look-live .ctx-live {
-  right: 30px;
-}
+/* THE TERMINAL TAKES THE WHOLE WIDTH (owner, 2026-11-03). It kept 30px clear
+   for the checkpoint rail (2026-11-01: its last columns ran under the rail).
+   LIVE has no rail now, and in CHAT and LOG the rail is only a tag over a
+   hidden terminal, so no look reserves the column: the terminal is the same
+   size in every look and switching never resizes the shared pane. */
+
 
 .lod-overlay .look-records .ctx-live::before,
 .lod-overlay .look-live .ctx-live::before {
@@ -565,6 +575,22 @@
   font-size: 8.5px;
 }
 
+/* Why this card is not running: over a transcript as much as over an empty chat, so it brings its own paper. */
+.lod-overlay .chat-failure {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 50%;
+  width: min(560px, calc(100% - 32px));
+  padding: 12px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--cream-hi);
+  color: var(--ink);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
 /* A chat with nothing in it yet (TerminalOverlay · noConversation). */
 .lod-overlay .popout-main.look-records {
   position: relative;
@@ -646,6 +672,46 @@
   display: block;
 }
 
+/* LIVE SCROLLS BY ITS OWN BAR (owner, 2026-11-03): the history the terminal
+   holds is the herdr pane's own (live-scroll.ts seeds it), and its scrollbar
+   comes back, thin and quiet, where the rail was. The trace surface's rule
+   hides it everywhere else (styles.css · ONE scrollbar total). The phone
+   scrolls the sheet over the terminal (above): it too. */
+
+.lod-overlay .look-live .popout-terminal .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-live .popout-terminal .xterm-viewport::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-live .popout-terminal .xterm-viewport::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
+}
+
+.lod-overlay .look-live .cr-live-sheet {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-live .cr-live-sheet::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-live .cr-live-sheet::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
+}
+
 .cr-live-sheet-hist {
   white-space: pre;
   overflow: hidden;
@@ -711,6 +777,16 @@
   display: none;
 }
 
+/* The queue, as the terminal prints it: dim, and tagged. */
+.lod-overlay .look-log .ctx-block-queued {
+  opacity: 0.62;
+}
+
+.lod-overlay .look-log .ctx-queued-tag {
+  margin-left: 8px;
+  color: var(--muted);
+}
+
 .lod-overlay .look-log .ctx-block-said {
   margin-top: 8px;
   font: 13px/1.5 var(--font-mono);
@@ -738,8 +814,33 @@
   font: 13px/1.5 var(--font-mono);
 }
 
+/* Plain reading, as the chat (owner, 2026-11-03): no gold edge or tint on the
+   turn the reader is at, no "T1 …" heading over an exchange, and the record's
+   own thin scrollbar in place of the rail, which only LIVE keeps. */
+.lod-overlay .look-log .ctx-block.active {
+  background: transparent;
+  box-shadow: none;
+}
+
 .lod-overlay .look-log .ctx-block-head {
-  opacity: 0.7;
+  display: none;
+}
+
+.lod-overlay .look-log > .ctx-transcript {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sumi-muted, #6f675b) transparent;
+}
+
+.lod-overlay .look-log > .ctx-transcript::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.lod-overlay .look-log > .ctx-transcript::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--sumi-muted, #6f675b) padding-box;
 }
 
 .lod-overlay .look-log .ctx-block-prompt {

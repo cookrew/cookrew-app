@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What EVERYTHING ELSE in the bundle may do: Electron's helper apps, its
+  frameworks, node-pty's spawn-helper and pty.node, and cr-listen.
+  electron-builder cannot tell these apart, it signs every nested binary with
+  this one file, so the list is the union of what any of them needs.
+
+  node-pty needs nothing of its own. spawn-helper forks and execs a shell,
+  pty.node is loaded into the main process and runs under that process's
+  entitlements.
+
+  The camera is not here: Chromium's capture helpers run with no device
+  entitlement of their own and macOS checks the main app, the same way Chrome's
+  helpers are signed.
+-->
+<plist version="1.0">
+<dict>
+  <!-- V8 runs in the renderer helpers too, and Chromium's GPU helper needs it for the same reason. Without this the window opens blank. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- For cr-listen, which opens the microphone itself with AVAudioEngine under its own signature. The main app's grant should already cover it, but this cannot be tested without a Developer ID certificate, it costs nothing, and the failure would be a silent dead hold-to-talk. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

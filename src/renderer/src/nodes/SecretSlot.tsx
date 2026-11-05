@@ -19,6 +19,9 @@ import { afterSeal, type SecretListing } from '../../../shared/secret-slot'
  *
  * `served` is a flag with no reader yet (secret-cli.ts refuses every served
  * pane this round); it is kept so the owner's choice survives.
+ *
+ * The retired canvas card draws this block; an open note draws the vault
+ * (SecretVault.tsx), which shares this copy and the put.
  */
 
 export interface SecretSlotProps {
@@ -54,7 +57,7 @@ export const sealedWhen = (updatedAt: number, now = Date.now()): string => {
   return sameDay ? `updated ${clock}` : `updated ${at.toISOString().slice(0, 10)} ${clock}`
 }
 
-const defaultPut = (name: string, value: string, served: boolean): Promise<SecretListing> => {
+export const defaultPut = (name: string, value: string, served: boolean): Promise<SecretListing> => {
   const api = cookrew()
   if (!api.secretPut) return Promise.reject(new Error('this bridge has no secrets store'))
   return api.secretPut(name, value, served)

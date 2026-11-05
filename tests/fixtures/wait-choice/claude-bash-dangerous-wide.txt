@@ -1,0 +1,45 @@
+  echo one-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo two-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo three-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo four-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo five-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo six-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo seven-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  echo eight-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+  rm -rf /tmp/wc-fix/legal-data scratchpad/legal/shots/*
+  ls scratchpad/legal/shots | wc -l
+
+⏺ Bash(cd /Users/anon/.cache/wc-fix-legal
+      OUT=/tmp/wc-fix/legal/out.mjs; echo building-the-bundle-with-a-long-enough-line --format=esm --platform=node
+      --minify --outfi…)
+  ⎿  Waiting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Rebuild bundle and re-shoot pages on own ports
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ cd /Users/anon/.cache/wc-fix-legal
+ │ OUT=/tmp/wc-fix/legal/out.mjs; echo building-the-bundle-with-a-long-enough-line --format=esm --platform=node
+ │ --minify --outfile=$OUT --log-level=error
+ │ for i in 1 2 3 4 5 6 7 8 9 10; do echo waiting-for-the-port-to-open-on-the-loopback-address $i; done
+ │ echo one-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo two-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo three-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo four-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo five-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo six-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo seven-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ echo eight-line-of-the-command-that-runs-well-past-the-width-of-a-phone-pane-so-it-wraps
+ │ rm -rf /tmp/wc-fix/legal-data scratchpad/legal/shots/*
+ │ ls scratchpad/legal/shots | wc -l
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ Dangerous rm operation on statically-unresolvable target: /Users/anon/.cache/wc-fix-legal/scratchpad/legal/shots/*
+ ⚠ Claude Code will automatically block this request in 1:54, to avoid holding up an unattended session
+
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend
+

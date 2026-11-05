@@ -55,3 +55,27 @@ describe('injectWhenReady', () => {
     vi.useRealTimers()
   })
 })
+
+// One readiness predicate for a fresh pane: the fork preamble and the recruit
+// brief (recruit-delivery.ts) both wait on it rather than on a fixed sleep.
+describe('harnessReadyForInput', () => {
+  const pane = (command: string, idle: number, screen: string) => ({ command, idleFor: () => idle, viewportText: () => screen })
+
+  it('a pane that has painted nothing yet is not ready', async () => {
+    const { harnessReadyForInput } = await import('../src/main/fork')
+    expect(harnessReadyForInput(pane('claude', Number.POSITIVE_INFINITY, COMPOSER))).toBe(false)
+  })
+
+  it('a Claude pane needs quiet AND its composer — the banner alone or a busy repaint is not ready', async () => {
+    const { harnessReadyForInput } = await import('../src/main/fork')
+    expect(harnessReadyForInput(pane('claude', 10_000, ' ▐▛███▜▌   Claude Code v2.9'))).toBe(false)
+    expect(harnessReadyForInput(pane('claude', 200, COMPOSER))).toBe(false)
+    expect(harnessReadyForInput(pane('claude --model opus', 10_000, COMPOSER))).toBe(true)
+  })
+
+  it('another harness is ready once its boot output goes quiet; the node command can stand in for the session’s', async () => {
+    const { harnessReadyForInput } = await import('../src/main/fork')
+    expect(harnessReadyForInput(pane('codex', 10_000, '> '))).toBe(true)
+    expect(harnessReadyForInput({ ...pane('', 10_000, ''), command: '' }, 'claude')).toBe(false)
+  })
+})

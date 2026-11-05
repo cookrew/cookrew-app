@@ -71,7 +71,7 @@ export const FAQ: Faq[] = [
   },
   {
     q: 'Is my code sent to cookrew.dev?',
-    a: `No. A served session runs on the author’s machine inside a sandbox. Between a caller and a door, every byte is sealed in the caller’s browser or app (${FACTS.relayCipher}) to the door’s key; the relay moves ciphertext it cannot read. Your own local canvas never touches cookrew.dev unless you serve a team.`
+    a: `cookrew.dev does not store your code. A served session runs on the author’s machine inside a sandbox. A call carried by the relay is sealed in the caller’s browser or app (${FACTS.relayCipher}) to the door’s key, so the relay moves ciphertext it cannot read. Your own canvas stays on your machine unless you serve a team, publish a preset, or open your Mac through the relay, a path that is not end-to-end sealed yet (see ${SITE_ORIGIN}/privacy).`
   },
   {
     q: 'Can I use a team from a browser or from my phone?',
@@ -208,7 +208,7 @@ export const FEATURES: FeatureSpec[] = [
     pts: ['One cookrew.dev link: served on the author’s side, opened on yours', 'The relay carries bytes it cannot read; the author can end a session any time', '200 signed delivery · 401 sign in · 402 pay · 403 not covered — money goes straight to the author', 'Each team page carries the team’s own terminal, the same PTY the placed card gets'],
     frames: ['market'],
     faq: [
-      { q: 'Can the team’s author see what I type?', a: 'The session runs on their machine, so the agents you talk to run there; the author can end the session but the relay in between reads nothing.' },
+      { q: 'Can the team’s author see what I type?', a: 'Yes. The session runs on their machine, so the author can see what you send and what their agents do with it, and can end the session. The relay in between cannot read it.' },
       { q: 'What can a served team access on my computer?', a: 'Nothing. It runs on the author’s machine in a sandbox; your browser or app only carries keystrokes and screen bytes.' }
     ],
     related: ['harnesses', 'checkpoints', 'workspaces']
@@ -265,7 +265,7 @@ export function llmsText(): string {
     `- Harnesses: ${FACTS.harnesses.join(', ')}`,
     `- Platforms: ${FACTS.platforms.join(', ')}`,
     `- Tests green: ${FACTS.testsGreen.value} (${FACTS.testsGreen.date}, ${FACTS.testsGreen.note})`,
-    `- Relay cipher: ${FACTS.relayCipher}; the relay reads nothing`,
+    `- Relay cipher: ${FACTS.relayCipher}; the relay cannot read calls to a served team. An owner reaching their own Mac through the relay is not end-to-end sealed yet (${SITE_ORIGIN}/privacy)`,
     '',
     '## FAQ',
     '',

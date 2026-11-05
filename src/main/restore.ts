@@ -10,7 +10,7 @@ import { buildForkedSessionLinesAtUuid } from '../shared/claude-fork'
 import { harnessFor } from './harness'
 import { planCheckpointRestore, pushRestorePoint } from './restore-plan'
 import { withSessionLineage } from './session-lineage'
-import { claudeSessionFile, isSessionUuid } from './claude-fork'
+import { claudeSessionFile, isSessionUuid, locateClaudeSessionFile } from './claude-fork'
 
 export interface RestoreExecutorDeps {
   store: {
@@ -28,7 +28,9 @@ export interface RestoreExecutorDeps {
   }
   spawnTracked: (
     node: Pick<TerminalNodeData, 'id' | 'command' | 'cwd' | 'claudeSessionId' | 'codexSessionRef' | 'opencodeSessionId'>
-  ) => void
+  ) => boolean | void
+  /** Why this card could not boot again, asked before a kill that would need it to. */
+  cannotStart?: (node: TerminalNodeData) => string | null
   /**
    * Live turn phase for a terminal ('idle' | 'thinking' | 'waiting' |
    * 'replied'), null when untracked. Restore/undo KILL the CLI — doing that
@@ -57,6 +59,10 @@ export interface RestoreExecutorDeps {
   projectsDir?: string
 }
 
+/**
+ * @deprecated the in-place rewind behind ⟲ REWIND was retired from the checkpoint rail by the owner on 2026-11-03. Still wired
+ * for the earlier-sessions panel and the phone route; do not grow it.
+ */
 export function createRestoreHandlers(deps: RestoreExecutorDeps): {
   restoreCheckpoint: (
     id: string,
@@ -181,7 +187,7 @@ async function restoreCheckpoint(
     return fail(id, node.name, checkpointIndex, 'The checkpoint session id is malformed — refusing to restore.')
   }
 
-  const sourceFile = claudeSessionFile(node.cwd, plan.cutoffSessionId ?? node.claudeSessionId, deps.projectsDir)
+  const sourceFile = locateClaudeSessionFile(node.cwd, plan.cutoffSessionId ?? node.claudeSessionId, deps.projectsDir)
   if (!existsSync(sourceFile)) {
     return fail(id, node.name, checkpointIndex, 'The bound session file no longer exists.')
   }
@@ -203,6 +209,9 @@ async function restoreCheckpoint(
   // torn while writing the session file undo depends on.
   const stillBusy = busyReason(deps, id)
   if (stillBusy) return fail(id, node.name, checkpointIndex, stillBusy)
+  // Before the kill: ending a running agent that cannot start again loses it.
+  const cannot = deps.cannotStart?.(node) ?? null
+  if (cannot) return fail(id, node.name, checkpointIndex, cannot)
 
   const destFile = claudeSessionFile(node.cwd, newSessionId, deps.projectsDir)
   const previousSessionId = node.claudeSessionId
@@ -235,7 +244,9 @@ async function restoreCheckpoint(
     return fail(id, node.name, checkpointIndex, 'Failed to rebind the agent to the restored session.')
   }
 
-  deps.spawnTracked(updated as TerminalNodeData)
+  if (deps.spawnTracked(updated as TerminalNodeData) === false) {
+    return fail(id, node.name, checkpointIndex, 'The agent was rebound, but it could not be started: see its card.')
+  }
 
   return {
     ok: true,
@@ -262,13 +273,15 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
   if (!isSessionUuid(point.sessionId)) {
     return fail(id, node.name, restorePointIndex(point), 'The undo stack session id is malformed — refusing to undo.')
   }
-  const targetFile = claudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
+  const targetFile = locateClaudeSessionFile(node.cwd, point.sessionId, deps.projectsDir)
   if (!existsSync(targetFile)) {
     return fail(id, node.name, restorePointIndex(point), 'The previous session file no longer exists — cannot undo.')
   }
 
   const busy = busyReason(deps, id)
   if (busy) return fail(id, node.name, restorePointIndex(point), busy)
+  const cannot = deps.cannotStart?.(node) ?? null
+  if (cannot) return fail(id, node.name, restorePointIndex(point), cannot)
 
   try {
     await deps.ptys.killAndWait(id)
@@ -288,7 +301,9 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
     return fail(id, node.name, restorePointIndex(point), 'Failed to rebind the agent during undo.')
   }
 
-  deps.spawnTracked(updated as TerminalNodeData)
+  if (deps.spawnTracked(updated as TerminalNodeData) === false) {
+    return fail(id, node.name, restorePointIndex(point), 'The agent was rebound, but it could not be started: see its card.')
+  }
 
   return {
     ok: true,

@@ -129,7 +129,7 @@ async function addTotp(token: string): Promise<string> {
 /* ── the list itself ───────────────────────────────────────────────────────── */
 
 describe('the step-up list', () => {
-  it('names the seven acts the architecture note names, in its order', () => {
+  it('names the seven acts the architecture note names, in its order, then the provider acts', () => {
     expect(STEP_UP_ACTS).toEqual([
       'change-password',
       'remove-factor',
@@ -137,7 +137,11 @@ describe('the step-up list', () => {
       'mint-join-code',
       'take-over-door',
       'end-seat',
-      'not-me'
+      'not-me',
+      'link-provider',
+      'unlink-provider',
+      'add-factor',
+      'delete-account'
     ])
   })
 
@@ -716,11 +720,16 @@ describe('H4 · the enforcement map is not a claim, it is a test', () => {
       'mint-join-code': () => call('POST', '/v2/me/join-codes', {}, bearer(owner.token)),
       'end-seat': () =>
         call('DELETE', `/v2/teams/@${owner.username}/alpha/seats/${randomUUID()}`, undefined, bearer(owner.token)),
-      'not-me': () => call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token))
+      'not-me': () => call('POST', `/v2/me/approvals/${approval}`, { decision: 'not-me' }, bearer(owner.token)),
+      // No provider is configured here, so this refuses before the gate. The
+      // gate itself is driven in registry-v2-oauth-http.
+      'link-provider': () => call('POST', '/v2/oauth/github/start', { intent: 'link' }, bearer(owner.token)),
+      'unlink-provider': () => call('DELETE', '/v2/me/links/github', {}, bearer(owner.token)),
+      'delete-account': () => call('DELETE', '/v2/me', { confirm: owner.username }, bearer(owner.token))
     }
 
     for (const act of STEP_UP_ACTS) {
-      if (STEP_UP_ENFORCEMENT[act] === 'none') continue
+      if (STEP_UP_ENFORCEMENT[act] === 'none' || STEP_UP_ENFORCEMENT[act] === 'passwordless') continue
       const res = await bareCall[act]()
       // NEVER a success. Which refusal differs by act — a missing password is
       // 403, a seat at a team nobody serves is a 404 before the gate is even

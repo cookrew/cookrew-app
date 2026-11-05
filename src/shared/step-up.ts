@@ -1,3 +1,5 @@
+import { hostPlatform, machineCopy } from './machine-words'
+
 /**
  * THE ACTS THAT ASK AGAIN.
  *
@@ -34,6 +36,10 @@ export type StepUpAct =
   | 'take-over-door'
   | 'end-seat'
   | 'not-me'
+  | 'link-provider'
+  | 'unlink-provider'
+  | 'add-factor'
+  | 'delete-account'
 
 /**
  * The list, in the order the architecture note states it. Exported as an array
@@ -47,8 +53,21 @@ export const STEP_UP_ACTS: readonly StepUpAct[] = [
   'mint-join-code',
   'take-over-door',
   'end-seat',
-  'not-me'
+  'not-me',
+  'link-provider',
+  'unlink-provider',
+  'add-factor',
+  'delete-account'
 ]
+
+/**
+ * THE BODY A PROOF TRAVELS IN: a typed password, or the id a climbed rung or a
+ * provider round trip left. One spelling, so no route's caller can drift.
+ */
+export type StepUpProof = string | { stepUp: string }
+
+export const proofBody = (proof: StepUpProof): { current: string } | { stepUp: string } =>
+  typeof proof === 'string' ? { current: proof } : proof
 
 export const isStepUpAct = (value: unknown): value is StepUpAct =>
   typeof value === 'string' && (STEP_UP_ACTS as readonly string[]).includes(value)
@@ -75,11 +94,15 @@ export const isStepUpAct = (value: unknown): value is StepUpAct =>
  *                changing the password is the one act that CLEARS the alarm:
  *                behind the gate it would be a lock with its key inside.
  *   `none`     — no registry route exists for this act in this cut.
+ *   `passwordless` — the gate, on an account with no password and only there.
+ *                A password account's clients ask for nothing on these routes
+ *                and keep working unchanged; that leaves its bearer able to
+ *                reach them, which is the older gap and is named as one.
  *
  * The registry's own test suite drives every act in this table over HTTP, so a
  * route that loses its threshold cannot leave this file still claiming one.
  */
-export type StepUpEnforcement = 'gate' | 'password' | 'none'
+export type StepUpEnforcement = 'gate' | 'password' | 'none' | 'passwordless'
 
 export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   /** POST /v2/me/password — and the only way out of a raised alarm. */
@@ -100,7 +123,15 @@ export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   /** DELETE /v2/teams/@owner/team/seats/:id. */
   'end-seat': 'gate',
   /** POST /v2/me/approvals/:id with {decision:'not-me'}. */
-  'not-me': 'gate'
+  'not-me': 'gate',
+  /** POST /v2/oauth/:provider/start with {intent:'link'}. */
+  'link-provider': 'gate',
+  /** DELETE /v2/me/links/:provider. */
+  'unlink-provider': 'gate',
+  /** POST /v2/me/recovery-codes · /v2/me/totp/enrol · /v2/me/passkeys/options. */
+  'add-factor': 'passwordless',
+  /** DELETE /v2/me. */
+  'delete-account': 'gate'
 }
 
 /**
@@ -116,7 +147,11 @@ export const STEP_UP_SENTENCE: Record<StepUpAct, string> = {
   'remove-factor': 'Prove it is you before taking a factor off the account.',
   'revoke-device': 'Prove it is you before taking another device off the account.',
   'mint-join-code': 'Prove it is you before adding a machine to the account.',
-  'take-over-door': 'Prove it is you before taking a door over from another Mac.',
+  'take-over-door': machineCopy('Prove it is you before taking a door over from another Mac.', hostPlatform()),
   'end-seat': 'Prove it is you before ending somebody else’s seat.',
-  'not-me': 'Prove it is you before locking the account down.'
+  'not-me': 'Prove it is you before locking the account down.',
+  'link-provider': 'Prove it is you before adding a way to sign in.',
+  'unlink-provider': 'Prove it is you before removing a way to sign in.',
+  'add-factor': 'Prove it is you before adding a way back into the account.',
+  'delete-account': 'Prove it is you before deleting this account.'
 }

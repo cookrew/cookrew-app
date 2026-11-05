@@ -1,0 +1,102 @@
+/* RENAME BY HAND (NameEdit.tsx): a card's name, turned into a field in place. */
+
+/* The element that draws a name holds its refusal under it (the zoom's names are absolute already). */
+.cr-name-host {
+  position: relative;
+  font: inherit;
+  cursor: default;
+}
+/* A name clipped with an ellipsis lets its field and its refusal out; a closed name saying a
+   refusal keeps its own ellipsis on the text, so a long name never spills over its neighbour. */
+:is(.zv-nm, .zv-fv-who b.cr-name-host):has(> .cr-name-input, > .cr-name-error) {
+  overflow: visible;
+  z-index: 5;
+}
+:is(.zv-nm, .zv-fv-who b.cr-name-host):has(> .cr-name-error) > .cr-name-text {
+  display: block;
+  max-width: inherit;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The card being renamed draws over its neighbours while the field or its refusal is up, just
+   above the painter's open-card levels (use-zoom-motion.ts: 8 to 43, inline, hence !important). */
+.zv-m:has(.cr-name-input, .cr-name-error) {
+  z-index: 44 !important;
+}
+
+.cr-name-input {
+  box-sizing: content-box;
+  min-width: 6ch;
+  max-width: 100%;
+  field-sizing: content;
+  margin: -2px -6px;
+  padding: 1px 5px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+  color: var(--sumi-ink, var(--fv-ink, var(--ink, currentColor)));
+  background: var(--sumi-paper, var(--fv-paper, var(--paper, #fffdf8)));
+  border: 1px solid var(--sumi-ink, var(--fv-ink, currentColor));
+  border-radius: 4px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sumi-wait, #c0392b) 22%, transparent);
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.cr-name-input[aria-invalid='true'] {
+  border-color: var(--sumi-wait, var(--danger, #c0392b));
+}
+
+.cr-name-error {
+  position: absolute;
+  left: -6px;
+  top: calc(100% + 5px);
+  z-index: 60;
+  width: max-content;
+  max-width: min(320px, 80vw);
+  padding: 3px 7px;
+  font: 500 11px/1.35 var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  color: var(--sumi-wait, var(--danger, #c0392b));
+  background: var(--sumi-paper, var(--fv-paper, var(--paper, #fffdf8)));
+  border: 1px solid color-mix(in srgb, var(--sumi-wait, #c0392b) 45%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+  pointer-events: none;
+}
+
+/* The phone's bar clips its name with an ellipsis; the field and its refusal must not be. */
+.cr-route-who b.cr-name-host {
+  overflow: visible;
+}
+.cr-route-who .cr-name-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cr-route-who .cr-name-input {
+  width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+/* The bar (z 50) sits under the troop (pets.css · .cr-pets, z 55): the refusal under the bar's name
+   would be drawn behind the faces, so the bar rises over them while it says one. */
+.cr-header:has(.cr-name-input, .cr-name-error) {
+  z-index: 56;
+}
+/* The bar is a phone's width: its refusal wraps under the name rather than run off the screen. */
+.cr-route-who .cr-name-error {
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: none;
+}
+/* The phone's head clips its name the same way. */
+.zv-fv-who b.cr-name-host.editing {
+  overflow: visible;
+}

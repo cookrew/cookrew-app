@@ -1,5 +1,5 @@
 // WHEN EACH DESKTOP'S RELAY LINE WAS LAST SEEN, kept across a registry restart
-// (strata · FleetMachine.lastSeenAt).
+// (FleetMachine.lastSeenAt).
 //
 // The relay sees a line open, beat and close in memory; without this file a
 // restart forgot all of it until each desktop next filed its record. One small
@@ -20,6 +20,8 @@ export const SEEN_MAX = 50_000
 export interface LineSeen {
   get(name: string): number | undefined
   see(name: string): void
+  /** The line's account was deleted. */
+  forget(name: string): void
   /** Write now if anything changed (tests, shutdown). */
   flush(): void
 }
@@ -57,6 +59,10 @@ export function createLineSeen(file: string | null, now: () => number = Date.now
 
   return {
     get: (name) => seen.get(name),
+    forget: (name) => {
+      if (seen.delete(name)) dirty = true
+      flush()
+    },
     see: (name) => {
       if (!seen.has(name) && seen.size >= SEEN_MAX) return
       seen.set(name, now())

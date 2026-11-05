@@ -60,6 +60,15 @@ export class StarStore {
     return { stars: accounts.size, starred }
   }
 
+  /** An account was deleted: the stars it gave and the stars on its teams go. */
+  forgetAccount(account: string): void {
+    for (const [team, accounts] of this.byTeam) {
+      if (team.startsWith(`${account}/`)) this.byTeam.delete(team)
+      else accounts.delete(account)
+    }
+    this.flush()
+  }
+
   count(handle: string, name: string): number {
     return this.byTeam.get(`${handle}/${name}`)?.size ?? 0
   }

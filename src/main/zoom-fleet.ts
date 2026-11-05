@@ -1,13 +1,15 @@
 /**
  * THE ZOOM NAVIGATOR'S DEVICES, main side (renderer: zoom/use-zoom-fleet.ts).
  *
- *   zoom-fleet:subscribe     hold this desktop's levels feed; every LevelsEvent
+ *   zoom-fleet:subscribe     hold this desktop's fleet feed; every FleetEvent
  *   zoom-fleet:unsubscribe   is pushed on zoom-fleet:event — a snapshot first,
  *                            then deltas, from the same service the companion's
- *                            /api/levels stream serves, so the window and the
+ *                            /api/fleet stream serves, so the window and the
  *                            phone cannot drift apart
  *   zoom-fleet:machines      the account's desktops (shared/zoom-fleet.ts),
  *                            from the registry under this Mac's session
+ *   zoom-fleet:gauges        this desktop's machine gauges, or null; the one
+ *                            watch the phone's route reads (machine-gauges.ts)
  *
  * A hold is refcounted per sender, and released without a word when the page
  * reloads, the renderer crashes or the webContents ends (the board hold's
@@ -17,10 +19,11 @@
  * again.
  */
 import type { AccountRefusal, AccountResult } from '../shared/account-v2'
-import type { LevelsEvent } from '../shared/strata'
+import type { FleetEvent } from '../shared/fleet'
 import { parseAccountMachines, type AccountMachines, type AccountMachinesRefusal } from '../shared/zoom-fleet'
 import { navigationEndsHold, type NavigationDetails } from './board-hold'
-import type { LevelsService } from './levels/service'
+import { sharedGaugeWatch } from './machine-gauges'
+import type { FleetService } from './fleet/service'
 
 export const ZOOM_FLEET_EVENT_CHANNEL = 'zoom-fleet:event'
 
@@ -28,7 +31,7 @@ export const ZOOM_FLEET_EVENT_CHANNEL = 'zoom-fleet:event'
 export interface FleetSender {
   readonly id: number
   isDestroyed(): boolean
-  send(channel: string, payload: LevelsEvent): void
+  send(channel: string, payload: FleetEvent): void
   on(event: string, listener: (...args: unknown[]) => void): unknown
   removeListener(event: string, listener: (...args: unknown[]) => void): unknown
 }
@@ -48,20 +51,20 @@ interface Hold {
   release: () => void
 }
 
-export function createFleetHolds(service: () => LevelsService | null): FleetHolds {
+export function createFleetHolds(service: () => FleetService | null): FleetHolds {
   const holds = new Map<number, Hold>()
 
-  const openStream = (levels: LevelsService, sender: FleetSender): (() => void) =>
-    levels.subscribe((event) => {
+  const openStream = (feed: FleetService, sender: FleetSender): (() => void) =>
+    feed.subscribe((event) => {
       if (!sender.isDestroyed()) sender.send(ZOOM_FLEET_EVENT_CHANNEL, event)
     })
 
-  const open = (levels: LevelsService, sender: FleetSender): Hold => {
+  const open = (feed: FleetService, sender: FleetSender): Hold => {
     const gone = (): void => release()
     const navigated = (details: unknown): void => {
       if (navigationEndsHold(details as NavigationDetails | undefined)) release()
     }
-    const hold: Hold = { count: 1, stream: openStream(levels, sender), release: () => undefined }
+    const hold: Hold = { count: 1, stream: openStream(feed, sender), release: () => undefined }
     // A release from an earlier cycle cannot end a newer hold: the map must still point at this one.
     const release = (): void => {
       if (holds.get(sender.id) !== hold) return
@@ -80,16 +83,16 @@ export function createFleetHolds(service: () => LevelsService | null): FleetHold
 
   return {
     subscribe: (sender) => {
-      const levels = service()
-      if (!levels) return false
+      const feed = service()
+      if (!feed) return false
       try {
         const held = holds.get(sender.id)
         if (!held) {
-          holds.set(sender.id, open(levels, sender))
+          holds.set(sender.id, open(feed, sender))
           return true
         }
         // The new stream first: a build that throws leaves the window its old one.
-        const stream = openStream(levels, sender)
+        const stream = openStream(feed, sender)
         held.stream()
         held.stream = stream
         held.count += 1
@@ -142,8 +145,8 @@ const senderOf = (event: unknown): FleetSender | null => {
 }
 
 export interface ZoomFleetIpcDeps extends AccountMachinesDeps {
-  /** This desktop's levels service (mobile-server.ts · localLevelsService); null before the companion starts. */
-  service: () => LevelsService | null
+  /** This desktop's fleet service (mobile-server.ts · localFleetService); null before the companion starts. */
+  service: () => FleetService | null
 }
 
 export function registerZoomFleetIpc(handle: Handle, deps: ZoomFleetIpcDeps): FleetHolds {
@@ -157,5 +160,13 @@ export function registerZoomFleetIpc(handle: Handle, deps: ZoomFleetIpcDeps): Fl
     return sender ? holds.unsubscribe(sender) : false
   })
   handle('zoom-fleet:machines', () => accountMachines(deps))
+  handle('zoom-fleet:gauges', () =>
+    sharedGaugeWatch()
+      .read()
+      .catch((error: unknown) => {
+        console.error('The machine gauges could not be read:', error)
+        return null
+      })
+  )
   return holds
 }

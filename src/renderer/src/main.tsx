@@ -14,31 +14,24 @@ import { cookrew, isRemoteMode } from './api'
 import { watchBuild } from './build-watch'
 import { reloadForNewBuildNow } from './crash-report'
 import { scheduleWebglWarmup } from './gpu-warmup'
-import { bootEmbedMode } from './embed/embed-mode'
 import { applyColorScheme, applyTheme, storedTheme } from './color-scheme'
 import { watchUserInput } from './user-input'
-
-// STRATA EMBED MODE (`?embed=agent`, framed by cookrew.dev's shell only): one
-// agent's full view, nothing else. Read before anything starts, because embed
-// mode skips the phone's beacon, the build-watch reload and — the one that
-// matters — the path switch, which would move this document's data plane to a
-// LAN origin or an RTC link and break the shell's same-origin frame.
-const embed = bootEmbedMode()
+import { startInstalledCover } from './fullscreen'
 
 // Light or dark before the first paint: a browser follows the system, the
 // desktop app stays paper (color-scheme.ts).
 applyColorScheme(isRemoteMode())
+if (isRemoteMode()) startInstalledCover()
 // The theme too (ink or root), so a root page never paints one paper frame.
 applyTheme(storedTheme())
 // The ink theme before the first paint: a passive effect in App would flash the
 // old tokens for a frame on every boot.
 document.body.classList.add('cr-ink')
-const EmbedRoot = lazy(() => import('./embed/EmbedRoot'))
-// THE CANVAS APP IS A CHUNK OF ITS OWN, so an embed never downloads it (it was
-// most of the 1.7 MB index). The classic boot asks for it on this very line,
-// before anything below runs, so its fetch overlaps the rest of the boot.
-const appModule = embed ? null : import('./App')
-const App = lazy(() => appModule ?? import('./App'))
+// THE CANVAS APP IS A CHUNK OF ITS OWN (it was most of the 1.7 MB index). Asked
+// for on this very line, before anything below runs, so its fetch overlaps the
+// rest of the boot.
+const appModule = import('./App')
+const App = lazy(() => appModule)
 
 // PAIRING, FIRST — before anything on this page can make a request.
 //
@@ -53,16 +46,16 @@ authStore()
 
 // The phone's black box: self-reported vitals every 3 s, because no Apple
 // inspection channel survives contact with this device (see phone-beacon.ts).
-if (!embed) startPhoneBeacon()
+startPhoneBeacon()
 
 // A companion on the relay or the tailnet keeps looking for the Mac on the
 // nearer network, and moves the session there without asking. A no-op on the
 // desktop and on a phone already on the LAN (see path/companion.ts).
-if (!embed) startCompanionPathSwitch()
+startCompanionPathSwitch()
 
 // A resident Home Screen app reloads itself when the Mac serves another
 // build, at the next switch away or back — never under a finger (build-watch.ts).
-const onBuild = isRemoteMode() && !embed ? cookrew().onBuild : undefined
+const onBuild = isRemoteMode() ? cookrew().onBuild : undefined
 if (onBuild) {
   watchBuild({
     onBuild,
@@ -79,15 +72,9 @@ watchUserInput()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {embed ? (
-      <Suspense fallback={null}>
-        <EmbedRoot mode={embed} />
-      </Suspense>
-    ) : (
-      <Suspense fallback={null}>
-        <App />
-      </Suspense>
-    )}
+    <Suspense fallback={null}>
+      <App />
+    </Suspense>
   </React.StrictMode>
 )
 

@@ -50,18 +50,18 @@ const spy = (
 }
 
 describe('paneCardFor', () => {
-  it('is the node’s name, its role and its OWN workspace', () => {
+  it('is the node’s name — in herdr’s panel too — and its OWN workspace', () => {
     expect(paneCardFor(terminal(), 'Cookrew Dev')).toEqual({
       terminalId: '7d4ff650-a24b-4b88-b382-2c06e1b99c92',
       title: 'Forge',
-      agent: 'Developer',
+      agent: 'Forge',
       workspace: 'Cookrew Dev',
       cwd: '/Users/drej/workspace/cookrew-dev'
     })
   })
 
-  it('falls back to the preset when the card has no role', () => {
-    expect(paneCardFor(terminal({ role: null }), 'Cookrew Dev').agent).toBe('Claude Code')
+  it('shows the name alone, Chinese as it is, with or without a role (owner, 2026-11-03)', () => {
+    expect(paneCardFor(terminal({ role: null, name: '顶栏模型切换' }), 'Cookrew Dev').agent).toBe('顶栏模型切换')
   })
 })
 

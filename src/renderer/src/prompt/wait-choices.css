@@ -1,0 +1,552 @@
+/* ---- THE WAIT CHOICE BOX (prompt/WaitChoices.tsx; owner task 2026-11-04,
+   cut docs/avatar-send-tasks/g-choice) ----
+   Over the open box, from its left: 520 wide on a desktop, the box's width on
+   a phone. The card's paper in a red 1.5 px frame; the question in serif, the
+   labels in mono; rows on paper-2, the TUI's cursor row outlined in ink, the
+   sent one filled with the primary. Tokens only (--sumi-*), so Ink, Ink night
+   and Root follow. */
+
+.wc-box {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  /* Over the floating tray too, while it shows (global-prompt.css · THE TRAY FLOATS). */
+  bottom: calc(100% + 10px + var(--cr-tray-lift, 0px));
+  width: min(520px, 100%);
+  /* The header, the box and the keyboard take the rest: the rows scroll (.wc-scroll). */
+  max-height: calc(100dvh - 190px - var(--kb-inset, 0px) - var(--cr-tray-lift, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 9px 6px;
+  border-radius: 12px;
+  background: var(--sumi-card, var(--cream-hi));
+  color: var(--sumi-ink, var(--ink));
+  box-shadow:
+    inset 0 0 0 1.5px var(--sumi-wait, var(--rose)),
+    var(--sumi-lift, 0 10px 28px rgba(40, 30, 15, 0.12));
+  text-align: left;
+  pointer-events: auto;
+  animation: wc-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+/* Answered: it lets go as the agent goes on (the fill reads first). */
+.wc-box.answered {
+  animation: wc-out 160ms ease-in 480ms forwards;
+}
+
+@keyframes wc-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes wc-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.wc-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.wc-face {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+}
+
+.wc-face svg,
+.wc-card-face svg {
+  width: 100%;
+  height: 100%;
+}
+
+.wc-ask {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wc-who {
+  overflow: hidden;
+  font: 400 9.5px/1.3 var(--font-mono);
+  color: var(--sumi-wait, var(--rose));
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wc-who b {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wc-q {
+  margin: 0;
+  font: 600 13px/1.3 var(--sumi-serif, var(--font-serif));
+  overflow-wrap: anywhere;
+}
+
+.wc-sub {
+  overflow: hidden;
+  font: 400 10px/1.4 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wc-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* A long menu scrolls here, its head and foot in view (a question tool's rows
+   with their descriptions are taller than a phone). */
+.wc-scroll {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* A question tool's place: ‹ 1 of 3 answered ›. */
+.wc-steps {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 400 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--sumi-muted, var(--muted));
+}
+
+.wc-steps button {
+  width: 32px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--sumi-paper-2, var(--cream));
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  color: var(--sumi-ink, var(--ink));
+  font: 600 15px/1 var(--sumi-serif, var(--font-serif));
+  cursor: pointer;
+}
+
+/* The answers on the Review tab. */
+.wc-review {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px;
+}
+
+.wc-review dt {
+  font: 400 10.5px/1.3 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.wc-review dd {
+  margin: 0;
+  font: 600 12.5px/1.3 var(--sumi-serif, var(--font-serif));
+}
+
+/* What the agent asks to do (shared/wait-about.ts): read before a row is
+   tapped. A long command scrolls in its own frame, so the rows stay in reach. */
+.wc-about {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 2px;
+}
+
+.wc-about-title {
+  margin: 0;
+  font: 400 12px/1.35 var(--font-body, system-ui, sans-serif);
+  overflow-wrap: anywhere;
+}
+
+.wc-about-note {
+  margin: 0;
+  font: 400 10.5px/1.4 var(--font-mono);
+  color: var(--sumi-wait, var(--rose));
+  overflow-wrap: anywhere;
+}
+
+.wc-about-cut {
+  font: 400 9.5px/1.3 var(--font-mono);
+  color: var(--sumi-muted, var(--muted));
+}
+
+.wc-about-body {
+  margin: 2px 0 0;
+  /* Gives way on a short screen: every row of the menu stays in sight. */
+  max-height: clamp(64px, calc(100dvh - 560px - var(--kb-inset, 0px)), 132px);
+  padding: 5px 7px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 7px;
+  background: var(--sumi-paper-2, var(--cream));
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  color: var(--sumi-ink, var(--ink));
+  font: 400 10.5px/1.4 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wc-about-body:focus-visible {
+  outline: 2px solid var(--sumi-seal, var(--amber-deep));
+  outline-offset: 1px;
+}
+
+/* A multi-select's tick, at the row's end. */
+.wc-tick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1.5px var(--sumi-ink-soft, var(--ink));
+  font: 700 12px/1 var(--font-mono);
+  font-style: normal;
+}
+
+.wc-row.checked .wc-tick {
+  background: var(--sumi-ink, var(--ink));
+  color: var(--sumi-paper, var(--cream));
+  box-shadow: none;
+}
+
+/* The row to type in: an open line, the words come from the box. */
+.wc-row.type {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  border: 1px dashed var(--sumi-muted, var(--muted));
+}
+
+/* Submit sends what is ticked: the menu's primary. */
+.wc-row.submit {
+  background: var(--sumi-gold, var(--amber));
+  box-shadow: none;
+  color: var(--sumi-on-gold, var(--ink));
+  font-weight: 600;
+}
+
+.wc-row.submit kbd {
+  background: color-mix(in srgb, var(--sumi-on-gold, var(--ink)) 14%, transparent);
+}
+
+/* Leaving the menu to talk it over: quiet, and apart from the answers. */
+.wc-row.chat {
+  margin-top: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sumi-ink-soft, var(--ink));
+}
+
+/* A confirm: its two keys side by side. */
+.wc-rows.yn {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.wc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  padding: 4px 9px 4px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--sumi-paper-2, var(--cream));
+  box-shadow: inset 0 0 0 1px var(--sumi-hair-2, var(--line));
+  color: var(--sumi-ink, var(--ink));
+  font: 400 12px/1.3 var(--font-body, system-ui, sans-serif);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 160ms ease-out,
+    opacity 160ms ease-out;
+}
+
+.wc-rows.yn .wc-row {
+  justify-content: center;
+}
+
+.wc-row:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--sumi-ink-soft, var(--ink));
+}
+
+.wc-row:focus-visible {
+  outline: 2px solid var(--sumi-seal, var(--amber-deep));
+  outline-offset: 1px;
+}
+
+/* The TUI's cursor is on this row: Enter there would take it. */
+.wc-row.cursor {
+  box-shadow: inset 0 0 0 1.5px var(--sumi-ink, var(--ink));
+}
+
+.wc-row.sent {
+  background: var(--sumi-gold, var(--amber));
+  box-shadow: none;
+  color: var(--sumi-on-gold, var(--ink));
+}
+
+.wc-row.spent {
+  opacity: 0.45;
+}
+
+.wc-row:disabled {
+  cursor: default;
+}
+
+.wc-row kbd {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--sumi-hair, rgba(0, 0, 0, 0.06));
+  font: 600 11px/1 var(--font-mono);
+}
+
+.wc-words {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wc-rows:not(.yn) .wc-words {
+  flex: 1 1 auto;
+}
+
+.wc-label {
+  overflow-wrap: anywhere;
+}
+
+.wc-words small {
+  font-size: 10px;
+  color: var(--sumi-muted, var(--muted));
+}
+
+.wc-row.sent .wc-words small {
+  color: inherit;
+}
+
+.wc-row em {
+  flex: none;
+  font: 400 9.5px/1.3 var(--font-mono);
+  font-style: normal;
+  color: var(--sumi-muted, var(--muted));
+  white-space: nowrap;
+}
+
+.wc-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 0 2px;
+  font: 400 9px/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sumi-muted, var(--muted));
+}
+
+/* A description wraps; on a phone it reads at the caption size. */
+.wc-words small {
+  overflow-wrap: anywhere;
+}
+
+/* In a bar group's card: the same rows, smaller. */
+.wc-rows.small .wc-row {
+  min-height: 28px;
+  font-size: 11.5px;
+}
+
+/* ---- A phone: the box's own width, rows a thumb tall, long options wrap. */
+@media (max-width: 700px) {
+  .wc-box {
+    right: 0;
+    width: auto;
+    gap: 8px;
+    padding: 10px 10px 8px;
+    border-radius: 16px;
+  }
+
+  .wc-face {
+    width: 26px;
+    height: 26px;
+  }
+
+  .wc-who {
+    font-size: 10px;
+  }
+
+  .wc-q {
+    font-size: 15px;
+  }
+
+  .wc-sub {
+    font-size: 11px;
+  }
+
+  .wc-rows {
+    gap: 6px;
+  }
+
+  .wc-row,
+  .wc-rows.small .wc-row {
+    min-height: 40px;
+    padding: 6px 12px 6px 8px;
+    border-radius: 11px;
+    font: 400 14px/1.3 var(--font-body, system-ui, sans-serif);
+  }
+
+  .wc-row kbd {
+    min-width: 26px;
+    height: 26px;
+    font-size: 12px;
+  }
+
+  .wc-foot {
+    font-size: 9.5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wc-box,
+  .wc-box.answered {
+    animation: none;
+  }
+
+  .wc-row {
+    transition: none;
+  }
+}
+
+/* ---- A BAR GROUP'S CARD for a waiting agent (zoom/BarWaitCard.tsx) ----
+   The pet card's frame (pets.css · .cr-pet-card), its border the waiting red. */
+.cr-pet-card.wc-card {
+  gap: 8px;
+  overflow: hidden;
+  border-color: var(--sumi-wait, var(--rose));
+  background: var(--sumi-card, var(--cream-hi));
+  color: var(--sumi-ink, var(--ink));
+}
+
+.wc-card-face {
+  flex: none;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.wc-card-face {
+  width: 36px;
+  height: 36px;
+}
+
+.wc-card-name {
+  font: 600 14px/1.2 var(--sumi-serif, var(--font-serif));
+}
+
+.wc-card-needs {
+  font: 600 9.5px/1.3 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sumi-wait, var(--rose));
+}
+
+.wc-card-x {
+  flex: none;
+  align-self: flex-start;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px 0 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--sumi-muted, var(--muted));
+  font: 400 18px/1 var(--font-mono);
+  cursor: pointer;
+}
+
+.wc-card-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wc-card-foot button {
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.wc-card-foot button:hover {
+  color: var(--sumi-ink, var(--ink));
+}
+
+/* The card's ask fills what its frame allows; its rows scroll (BarCards.tsx sets the frame's height). */
+.wc-card-ask {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wc-card-ask .wc-q,
+.wc-box .wc-q {
+  flex: none;
+  max-height: 7.5em;
+  overflow-y: auto;
+}
+
+.wc-moved {
+  margin: 0;
+  font: 400 10px/1.3 var(--font-mono);
+  color: var(--sumi-wait, var(--rose));
+}
+
+.wc-moved::first-letter {
+  text-transform: uppercase;
+}

@@ -12,14 +12,14 @@ export type CrIconName =
   | 'collapse'
   | 'close'
   | 'mic'
-  /** The agent's keys (arrows, paste, Esc), folded behind one button on a phone. */
-  | 'keyboard'
   | 'speaker'
   | 'send'
   | 'attach'
   | 'plus'
   | 'caret-down'
   | 'caret-right'
+  /** The prompt box's ^: shows or hides its extra tools. */
+  | 'chevron-up'
   | 'check'
   | 'prev'
   | 'next'
@@ -35,12 +35,21 @@ export type CrIconName =
   | 'translate'
   | 'external'
   | 'clipboard'
+  /** The agent's arrow keys (VoiceBar.tsx): one shape, four ways, so all four read alike. */
+  | 'arrow-left'
+  | 'arrow-down'
+  | 'arrow-up'
+  | 'arrow-right'
   /** Gated marketplace preset: the chip's lock badge (§8). */
   | 'lock'
   /** The header's More menu. */
   | 'more'
   /** The route's device step: this desktop. */
   | 'device'
+  /** The phone's Full screen row in ⋯: four corners of the screen. */
+  | 'fullscreen'
+  /** ⋯ → Apple Watch: pair one. */
+  | 'watch'
 
 const STROKE = {
   fill: 'none',
@@ -136,12 +145,6 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <path d="M8 11.9 V13.9" strokeLinecap="square" />
     </g>
   ),
-  keyboard: (
-    <g {...STROKE}>
-      <rect x="1.6" y="4" width="12.8" height="8.4" rx="1.2" />
-      <path d="M4 6.6 H4.6 M6.6 6.6 H7.2 M9 6.6 H9.6 M11.4 6.6 H12 M5 9.8 H11" strokeLinecap="square" />
-    </g>
-  ),
   speaker: (
     <g>
       <path {...FILLED} d="M2.2 5.8 H5 L8.8 2.6 V13.4 L5 10.2 H2.2 Z" />
@@ -164,7 +167,33 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
   plus: <path {...STROKE} strokeWidth={2.1} strokeLinecap="square" d="M8 2.6 V13.4 M2.6 8 H13.4" />,
   'caret-down': <path {...FILLED} d="M3.4 5.4 H12.6 L8 11.4 Z" />,
   'caret-right': <path {...FILLED} d="M5.4 3.4 V12.6 L11.4 8 Z" />,
+  'chevron-up': <path {...STROKE} strokeWidth={2} strokeLinecap="square" d="M3.4 10.4 L8 5.8 L12.6 10.4" />,
   check: <path {...STROKE} strokeWidth={2.1} strokeLinecap="square" d="M2.8 8.6 L6.4 12 L13.2 4.2" />,
+  // The send arrow's shape, turned four ways.
+  'arrow-right': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M2.4 8 H12.2" />
+      <path d="M8.6 3.6 L13 8 L8.6 12.4" />
+    </g>
+  ),
+  'arrow-left': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M13.6 8 H3.8" />
+      <path d="M7.4 3.6 L3 8 L7.4 12.4" />
+    </g>
+  ),
+  'arrow-up': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M8 13.6 V3.8" />
+      <path d="M3.6 7.4 L8 3 L12.4 7.4" />
+    </g>
+  ),
+  'arrow-down': (
+    <g {...STROKE} strokeWidth={2} strokeLinecap="square">
+      <path d="M8 2.4 V12.2" />
+      <path d="M3.6 8.6 L8 13 L12.4 8.6" />
+    </g>
+  ),
   prev: <path {...FILLED} d="M10.8 2.8 L5 8 L10.8 13.2 Z" />,
   next: <path {...FILLED} d="M5.2 2.8 L11 8 L5.2 13.2 Z" />,
   canvas: (
@@ -217,6 +246,20 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       <rect x="2.2" y="6.9" width="2.4" height="2.4" />
       <rect x="6.8" y="6.9" width="2.4" height="2.4" />
       <rect x="11.4" y="6.9" width="2.4" height="2.4" />
+    </g>
+  ),
+  fullscreen: (
+    <path
+      {...STROKE}
+      strokeWidth={1.8}
+      strokeLinecap="square"
+      d="M2.6 6 V2.6 H6 M10 2.6 H13.4 V6 M13.4 10 V13.4 H10 M6 13.4 H2.6 V10"
+    />
+  ),
+  watch: (
+    <g {...STROKE}>
+      <rect x="4.2" y="4" width="7.6" height="8" rx="2" />
+      <path d="M5.8 4 L6.2 1.6 H9.8 L10.2 4 M5.8 12 L6.2 14.4 H9.8 L10.2 12" strokeLinejoin="round" />
     </g>
   ),
   device: (

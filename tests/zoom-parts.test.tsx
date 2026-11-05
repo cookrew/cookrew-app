@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AgentNode, ItemNode, LinkNode, MachineNode, MarkNode, type Bind } from '../src/renderer/src/zoom/ZoomParts'
+import { AgentNode, ItemNode, LinkNode, MachineNode, type Bind } from '../src/renderer/src/zoom/ZoomParts'
 import type { AgentView, ItemView, MachineView, MarkView } from '../src/renderer/src/zoom/zoom-model'
 
 const bind: Bind = () => () => undefined
@@ -64,12 +64,14 @@ describe('an agent’s card', () => {
   // crew card — the same parts and the same AgentView — not a look-alike of its own.
   it('the agent group floats the crew card itself, from the same agent view', () => {
     const pets = readFileSync('src/renderer/src/pets/AgentPets.tsx', 'utf8')
-    expect(pets).toContain('<AgentCard')
+    // Through AgentPetCard, which only swaps in the rows while a menu waits.
+    expect(pets).toContain('<AgentPetCard')
+    expect(readFileSync('src/renderer/src/pets/AgentPetCard.tsx', 'utf8')).toContain('<AgentCard')
     expect(pets).toContain('agent={agentViewOf(pet.row, attachIndex)}')
     expect(pets).not.toMatch(/<AgentLatest|<TurnView|function AgentCard/)
     const card = readFileSync('src/renderer/src/zoom/AgentCard.tsx', 'utf8')
     const node = readFileSync('src/renderer/src/zoom/ZoomParts.tsx', 'utf8')
-    for (const shared of ['<CardWords agent={agent} sent={reply.sent} />', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={agent.status} weight="large"']) {
+    for (const shared of ['<CardBody agent={agent} sent={reply.sent}', 'useQuickReply(agent.id', '<QuickReply agent={agent} reply={reply}', 'status={agent.status} weight="large"']) {
       expect(card).toContain(shared)
       expect(node).toContain(shared)
     }
@@ -139,34 +141,8 @@ describe('a link and an item', () => {
   })
 })
 
-describe('a workspace and a machine', () => {
-  it('seals the agent count and names the workspace', () => {
-    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code', 'Codex'], waiting: true, browsers: null, notes: null, newest: null }
-    const html = renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} />)
-    expect(html).toContain('Home')
-    expect(html).toContain('zv-seal">2<')
-    expect(html).toContain('zv-mark-dot')
-  })
-
-  // Owner 2026-11-02, "like the draft": a workspace opens two ways, by its
-  // agents (the crew) or by its browsers (their thumbnails). The other
-  // workspaces' marks had no way in by their browsers, nor their totals.
-  it('wears its totals, and they open it by its browsers', () => {
-    const mark: MarkView = { id: 'w2', name: 'Home', presets: ['Claude Code'], waiting: false, browsers: 3, notes: 2, newest: null }
-    const html = renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)
-    expect(html).toMatch(/<button type="button" class="zv-tot" aria-label="Open Home artifacts">/)
-    expect(html).toContain('3 browsers')
-    expect(html).toContain('2 notes')
-  })
-
-  it('draws no totals it does not know, and none for a workspace that holds nothing', () => {
-    const unknown: MarkView = { id: 'w3', name: 'Lab', presets: [], waiting: false, browsers: null, notes: null, newest: null }
-    const empty: MarkView = { ...unknown, browsers: 0, notes: 0 }
-    for (const mark of [unknown, empty]) {
-      expect(renderToStaticMarkup(<MarkNode mark={mark} bind={bind} onOpen={() => undefined} onOpenItems={() => undefined} />)).not.toContain('zv-tot')
-    }
-  })
-
+// A workspace's tile: zoom-workspace-tile.test.tsx.
+describe('a machine', () => {
   it('shows a machine’s workspaces, and says “listed only” when it cannot be read', () => {
     const machine: MachineView = { id: 'm2', name: 'Mac mini', local: false, online: true, detail: 'listed', workspaces: [{ id: 'z', name: 'Home lab', presets: [], waiting: false }], agents: null, waiting: null }
     const html = renderToStaticMarkup(<MachineNode machine={machine} bind={bind} onOpen={() => undefined} />)

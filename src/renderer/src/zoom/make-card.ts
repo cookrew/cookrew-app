@@ -1,4 +1,5 @@
 import type { CanvasNode } from '../../../shared/model'
+import { secretNameFrom, secretSlotLine, secretSlotsOf } from '../../../shared/secret-slot'
 import type { LaunchTune } from '../../../shared/launch-tune'
 import type { CookrewApi } from '../api'
 import { zoomStore } from './zoom-store'
@@ -120,19 +121,67 @@ export async function makeItemFor(
     kind === 'note'
       ? { kind: 'note', id: crypto.randomUUID(), name, customName: null, content: '', locked: false, position, size: { width: 280, height: 220 } }
       : { kind: 'browser', id: crypto.randomUUID(), name, url: 'https://example.com', position, size: { width: 720, height: 560 } }
+  return storeAndWire(api, node, agent, kind)
+}
+
+type WireApi = Partial<Pick<CookrewApi, 'addNode' | 'connectNodes'>>
+
+/** The card stored, then given to the agent. */
+async function storeAndWire(api: WireApi, node: CanvasNode, agent: { id: string; name: string }, what: string): Promise<Made> {
   let id: string
   try {
-    const created = await api.addNode(node)
+    const created = await api.addNode?.(node)
     id = created?.id ?? node.id
   } catch (e) {
-    return { ok: false, error: `That ${kind} could not be made: ${String(e)}` }
+    return { ok: false, error: `That ${what} could not be made: ${String(e)}` }
   }
   try {
-    await api.connectNodes(agent.id, id)
+    await api.connectNodes?.(agent.id, id)
   } catch (e) {
-    return { ok: false, error: `The ${kind} was made but could not be given to ${agent.name}: ${String(e)}` }
+    return { ok: false, error: `The ${what} was made but could not be given to ${agent.name}: ${String(e)}` }
   }
   return { ok: true, id }
+}
+
+/**
+ * A NOTE MADE AS A SECRET (owner, 2026-11-05): its whole body is the slot
+ * `🔒 <name>` (shared/secret-slot.ts), so the value, typed into the slot's own
+ * field, goes to the store and never into the note. A note of this workspace
+ * that already holds the slot is given to the agent instead of a second one:
+ * two notes on one name are two fields on one secret. Wired like any note
+ * made inside an agent (makeItemFor).
+ */
+export async function makeSecretFor(
+  api: WireApi,
+  raw: string,
+  agent: { id: string; name: string },
+  nodes: readonly CanvasNode[] = []
+): Promise<{ ok: true; id: string | null; slot: string } | { ok: false; error: string }> {
+  if (!api.addNode || !api.connectNodes) return { ok: false, error: 'This build cannot create a secret.' }
+  const slot = secretNameFrom(raw)
+  if (slot === null) return { ok: false, error: 'A secret is named in letters, digits and dashes: agents type it in a command.' }
+  const holder = nodes.find((n) => n.kind === 'note' && secretSlotsOf(n.content).includes(slot))
+  if (holder) {
+    try {
+      await api.connectNodes(agent.id, holder.id)
+    } catch (e) {
+      return { ok: false, error: `${holder.name} holds that secret but could not be given to ${agent.name}: ${String(e)}` }
+    }
+    return { ok: true, id: holder.id, slot }
+  }
+  const name = freeName(slot, nodes.filter((n) => n.kind === 'note').map((n) => n.name))
+  const note: CanvasNode = {
+    kind: 'note',
+    id: crypto.randomUUID(),
+    name,
+    customName: name,
+    content: `${secretSlotLine(slot)}\n`,
+    locked: false,
+    position: nextSpot(nodes),
+    size: { width: 280, height: 220 }
+  }
+  const made = await storeAndWire(api, note, agent, 'secret')
+  return made.ok ? { ...made, slot } : made
 }
 
 /** A saved team opens a session of its own: a new workspace, switched to. */

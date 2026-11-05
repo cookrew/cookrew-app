@@ -22,8 +22,7 @@ import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-t
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import { tailClipRows } from './transcript'
-import { checkpointRowTitle } from './stream/stream-rows'
-import { streamPagerOf } from './stream/stream-pager'
+import { recordedTail, streamPagerOf } from './stream/stream-pager'
 import { useStream } from './stream/use-stream'
 import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -42,10 +41,14 @@ import { AgentAvatar, StatusCoin } from './nodes/AgentAvatar'
 import { TranscriptFaceContext } from './transcript-face'
 import { LOOK_LABEL, LOOK_TITLE, TranscriptLookContext, isRecordLook, nextLook, useTranscriptLook, type TranscriptLook } from './transcript-look'
 import { shouldAttachTerminal } from './terminal-view-mode'
+import { AgentFailure } from './zoom/AgentFailure'
+import { useCrewContext } from './stage/crew-rows'
 import { installLocalScroll, type LocalScroll } from './live-scroll'
 import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
 import { closeZoomMenu, useZoomSlots } from './zoom-bar'
+import { requestRename } from './zoom/rename-request'
+import { requestCardMenu } from './card-menu-request'
 import { CardTune } from './nodes/CardTune'
 import { isNight, themeNow, useNight, useTheme } from './color-scheme'
 import { PAPER_THEME, terminalTheme } from './terminal-theme'
@@ -62,7 +65,7 @@ import { createTurnRedraw } from './turn-redraw'
  * in the main process, so nothing is lost between mounts.
  */
 /** Menu name for a code, degrading to the code itself rather than to blank. */
-function languageName(code: string | null): string {
+export function languageName(code: string | null): string {
   if (code === null) return 'another language'
   return languageByCode(code)?.name ?? code
 }
@@ -119,11 +122,6 @@ function TerminalOverlayFor({ node, rect, primary }: { node: TerminalNodeData; r
   return <TerminalOverlay node={node} activity={activity} rect={rect} primary={primary} />
 }
 
-function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
-}
-
 /** The header line carries the agent's live status, not its name. */
 /**
  * When a served session was admitted, said the way a person would.
@@ -131,7 +129,7 @@ function clip(text: string, max: number): string {
  * "today 09:14" while it is today, then the date — a bare timestamp on a
  * three-day-old session reads as if it just happened.
  */
-function openedLabel(at: number): string {
+export function openedLabel(at: number): string {
   const when = new Date(at)
   const time = when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   const today = new Date()
@@ -247,6 +245,8 @@ function TerminalOverlay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [stream.index, stream.total, stream.blocksAround, stream.blocksAfter]
   )
+
+  const liveTail = useMemo(() => recordedTail(stream.tail), [stream.tail])
 
   // WHY the rail is empty or stale, for a remote card — a named state from
   // the door, rendered as a sentence in the session strip (P10). Re-read
@@ -391,14 +391,6 @@ function TerminalOverlay({
     if (active.index === selectedIndex) return
     setSelectedIndex(active.index)
   }
-  const selectedRow =
-    selectedIndex !== null ? (rows.find((r) => r.index === selectedIndex) ?? null) : null
-  // ONE TITLE RULE, from the mark. checkpointRowTitle is the same function the
-  // rail's rows use, so the ask line and the rail can no longer disagree about
-  // what a checkpoint is called — they did, whenever the ledger held a title
-  // the trace listing did not.
-  const selectedTitle =
-    selectedRow === null ? '' : checkpointRowTitle(selectedRow, titleMode)
 
   const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
 
@@ -406,7 +398,12 @@ function TerminalOverlay({
   // element, so the memoised rows are not re-rendered by a new one each frame.
   const chatFace = useMemo(() => <AgentAvatar id={node.id} orch={node.orch === true} status="idle" preset={node.preset} />, [node.id, node.orch, node.preset])
   // Chat or the raw terminal (transcript-look.ts): one class on the box.
-  const [look, setLook] = useTranscriptLook()
+  const [chosenLook, setLook] = useTranscriptLook()
+  // A plain shell keeps no record to read: its LIVE pane is all there is, and
+  // opening one on "No conversation yet" read as the card having lost it.
+  const recordless = node.command.trim().length === 0
+  const look = recordless ? 'live' : chosenLook
+  const failure = useCrewContext()?.crew.find((row) => row.id === node.id)?.failure ?? null
   // Read by the terminal's mount-once setup: is the live view on screen?
   const lookRef = useRef(look)
   lookRef.current = look
@@ -1291,6 +1288,30 @@ function TerminalOverlay({
             <div className="cr-more-group" role="presentation">
               {node.name}
             </div>
+            {/* Opens the name's own field in the full view's head (the phone's bar): zoom/NameEdit.tsx. */}
+            <button
+              type="button"
+              className="cr-more-item"
+              onClick={() => {
+                closeZoomMenu()
+                requestRename(node.id)
+              }}
+            >
+              <CrIcon name="note" />
+              <span className="cr-more-label">Rename</span>
+            </button>
+            {/* SAVE ROLE, FORK, LANE: right-click went with the canvas. */}
+            <button
+              type="button"
+              className="cr-more-item"
+              onClick={(event) => {
+                closeZoomMenu()
+                requestCardMenu(node.id, event.clientX, event.clientY)
+              }}
+            >
+              <CrIcon name="fork" />
+              <span className="cr-more-label">Role, fork, lane…</span>
+            </button>
             {/* Translate keeps ⋯ open: its language list opens from this row. */}
             <div className="cr-more-row cr-zoom-translate" role="presentation">
               <TranslateButton
@@ -1352,29 +1373,9 @@ function TerminalOverlay({
           {clipNote}
         </div>
       )}
-      {/* Only while a checkpoint is picked: then it says which one and is the way
-          back to live. The plain "YOU ❯ <last prompt>" line is gone (owner 2026-10-31). */}
-      {selectedIndex !== null && (
-        <div className="popout-ask" title={selectedRow?.promptHead ?? selectedTitle ?? activity?.prompt ?? ''}>
-          <span className="popout-ask-label">
-            {/* Identity, not array position: T-number matches transcript + rail. */}
-            {selectedIndex === null ? 'YOU ❯' : `CHECKPOINT T${selectedIndex} ❯`}
-          </span>
-          <span className="popout-ask-text">
-            {selectedIndex !== null ? clip(selectedTitle, 300) : clip(activity?.prompt ?? '', 300)}
-          </span>
-          {selectedIndex !== null && (
-            <button
-              className="cr-btn sm popout-ask-live"
-              title="Back to live"
-              onMouseDown={keepFocus}
-              onClick={goLive}
-            >
-              LIVE
-            </button>
-          )}
-        </div>
-      )}
+      {/* No checkpoint row in any look (owner, 2026-11-03): CHAT and LOG are plain
+          reading, and LIVE has no rail to pick a checkpoint from; the bottom of the
+          transcript is the live end. */}
       {/* SAY WHICH WORDS THESE ARE.
           A translated body is still prose in a card that usually holds the
           agent's own words, and the difference is invisible once you are
@@ -1497,13 +1498,19 @@ function TerminalOverlay({
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}
           refreshToken={0}
+          liveTail={liveTail}
 >
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />
         </TranscriptView>
         </TranscriptLookContext.Provider>
         </TranscriptFaceContext.Provider>
-        {isRecordLook(look) && noConversation && phase !== 'thinking' && (
+        {failure && (
+          <div className="chat-failure" role="status">
+            <AgentFailure failure={failure} />
+          </div>
+        )}
+        {!failure && isRecordLook(look) && noConversation && phase !== 'thinking' && (
           <div className="chat-empty">
             <span>No conversation yet.</span>
             <button type="button" className="cr-btn sm" onClick={() => switchLook('live')}>
@@ -1521,11 +1528,13 @@ function TerminalOverlay({
           />
         )}
         {openItem !== null && openView !== null && <AttachPanel key={openItem.node.id} item={openItem} view={openView} cardRect={rect} />}
-        {primary && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
+        {primary && !recordless && (headTools ? createPortal(lookToggle, headTools) : lookToggle)}
         </div>
-        {/* CHAT is a plain conversation with its own scrollbar (transcript-paper.css,
-            owner 2026-11-01); LOG and LIVE keep the checkpoint rail. */}
-        {look !== 'chat' && (
+        {/* CHAT and LOG are plain reading with their own scrollbar (transcript-paper.css,
+            owner 2026-11-01 and 11-03): of the rail they keep only the tag that names
+            the turn in view while scrolling (no row actions since 2026-11-03). LIVE has none:
+            the terminal's own scrollbar moves through the pane's history. */}
+        {isRecordLook(look) && (
         <CheckpointTimeline
           terminalId={node.id}
           rows={rows}
@@ -1540,6 +1549,7 @@ function TerminalOverlay({
           lineageReach={!remote}
           ended={doorState?.kind === 'ended'}
           anomalyNote={stream.anomalyNote}
+          tagOnly
           onGoto={gotoCheckpoint}
           onLive={goLive}
           onScrub={(fraction) => transcriptRef.current?.scrubTo(fraction)}

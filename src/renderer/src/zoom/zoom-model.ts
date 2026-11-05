@@ -12,6 +12,7 @@ import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
+import type { LaunchFailure } from '../../../shared/launch-failure'
 
 export interface AgentView {
   id: string
@@ -24,6 +25,8 @@ export interface AgentView {
   /** What its face draws (ink-status.ts · inkStatusOfRow); the word and its colour follow it. */
   status: InkStatus
   word: string
+  /** Why it is not running, when that is more than resting: the card says so in place of a latest. */
+  failure?: LaunchFailure | null
   line: string
   browsers: number
   notes: number
@@ -45,11 +48,13 @@ export interface MarkView {
   name: string
   presets: string[]
   waiting: boolean
+  /** How many of its agents wait for an answer. */
+  waitingCount: number
   /** Its browsers and notes, from its desktop's feed; null when the feed has none (never a made-up zero). */
   browsers: number | null
   notes: number | null
-  /** Its newest browser, drawn beside its stack as the way in by its browsers; null when the feed names none. */
-  newest: ItemView | null
+  /** What its tile's deck shows, newest first (use-zoom-fleet.ts · deckOf); empty when the feed names none. */
+  deck: ItemView[]
 }
 export interface ZoomModel {
   frame: FrameModel
@@ -64,6 +69,8 @@ export interface ZoomModel {
   /** The items agents wear as coins that the thumbs grid does not draw: their coins need a face too. */
   coinItems: ItemView[]
   marks: MarkView[]
+  /** The open workspace in the same form: its tile's words and deck (its ring and faces are the scene's). */
+  openMark: MarkView
   /** Every machine from the real fleet, this desktop first. */
   machines: MachineView[]
   name: string
@@ -104,8 +111,9 @@ export const COINS_PER_AGENT = 4
 
 /** One line of what an agent last said or does now. */
 export function lineOf(row: AgentRow | undefined, brief: string | null | undefined): string {
+  if (row?.failure) return row.failure.why
   const t = row?.turn
-  return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || brief?.trim() || 'Nothing said yet.'
+  return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || t?.tail?.trim() || brief?.trim() || 'Nothing said yet.'
 }
 
 /**
@@ -156,7 +164,7 @@ export function itemViewOf(n: CanvasNode, owners: string[]): ItemView | null {
 export interface ZoomInput {
   nodes: readonly CanvasNode[]
   connections: readonly Connection[]
-  /** Every workspace's rows: the other workspaces' marks are drawn from them. */
+  /** Every workspace's rows, gone agents included: the other workspaces' marks fall back on them where `crews` has none. */
   rows: readonly AgentRow[]
   /** This workspace's crew (agent-rows.ts · crewOf): its agents. */
   crew: readonly AgentRow[]
@@ -164,8 +172,12 @@ export interface ZoomInput {
   workspaces: readonly WorkspaceMeta[]
   /** Each workspace's browsers and notes, where its desktop's feed counts them (use-zoom-fleet.ts). */
   counts?: ReadonlyMap<string, { browsers: number; notes: number }>
-  /** Each workspace's newest browser, where its desktop's feed names it. */
-  newest?: ReadonlyMap<string, { id: string; title: string; host: string | null }>
+  /** Who each workspace holds now, where its desktop's feed seats it: a tile's count, faces and waiting. */
+  crews?: ReadonlyMap<string, readonly SeatedAgent[]>
+  /** What each workspace's deck shows, newest first, where its desktop's feed names it. */
+  decks?: ReadonlyMap<string, readonly DeckSource[]>
+  /** False while the open workspace's canvas is still on its way: `nodes` is empty for lack of it. */
+  loaded?: boolean
   activeId: string
   name: string
   /** The real fleet: this desktop and the account's others, from use-zoom-fleet.ts. */
@@ -181,6 +193,28 @@ export interface ZoomInput {
   }[]
 }
 
+/** An agent as its desktop's feed seats it. */
+export interface SeatedAgent {
+  harness: string
+  phase: string
+}
+const waitingIn = (phases: readonly string[]): number => phases.filter((p) => p === 'waiting').length
+
+/** A thing a tile's deck shows, as its desktop's feed names it. */
+export interface DeckSource {
+  id: string
+  kind: 'browser' | 'note'
+  title: string
+  host?: string | null
+}
+/** How many things a tile's deck shows by name; the rest is its depth. */
+export const DECK_SHOWN = 3
+const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
+
+/** The word over a card that is not resting but stuck. */
+export const failureWord = (failure: LaunchFailure | null | undefined): string | null =>
+  failure ? (failure.blocked ? 'could not start' : 'stopped') : null
+
 /** One agent as every view draws it, from its row in the crew (agent-rows.ts · crewOf). */
 export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentView {
   const list = attachIndex.get(row.id) ?? []
@@ -194,8 +228,9 @@ export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentV
     phase,
     unread: row.unread === true,
     status,
-    word: statusWord(status),
+    word: failureWord(row.failure) ?? statusWord(status),
     line: lineOf(row, row.brief),
+    failure: row.failure ?? null,
     browsers: list.filter((a) => a.kind === 'browser').length,
     notes: list.filter((a) => a.kind === 'note').length,
     turn: row.turn ?? null
@@ -253,12 +288,19 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
   const marks: MarkView[] = input.workspaces
     .filter((w) => w.id !== input.activeId)
     .map((w) => {
-      const rows = input.rows.filter((r) => r.workspaceId === w.id)
+      // The feed seats who is there now; the roster, all it knows without one, also keeps every agent it ever held.
+      const seated = input.crews?.get(w.id)
+      const rows = seated ? [] : input.rows.filter((r) => r.workspaceId === w.id)
+      const presets = seated ? seated.map((a) => a.harness) : rows.map((r) => r.preset)
       const counted = input.counts?.get(w.id)
-      const nb = input.newest?.get(w.id)
-      const newest: ItemView | null = nb ? { id: nb.id, kind: 'browser', title: nb.title, host: nb.host ?? '', tint: tintOf(nb.id), initial: itemInitial(nb.title), line: '', owners: [] } : null
-      return { id: w.id, name: w.name, presets: rows.map((r) => r.preset), waiting: rows.some((r) => r.phase === 'waiting'), browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, newest }
+      const waitingCount = waitingIn((seated ?? rows).map((a) => a.phase))
+      return { id: w.id, name: w.name, presets, waiting: waitingCount > 0, waitingCount, browsers: counted?.browsers ?? null, notes: counted?.notes ?? null, deck: (input.decks?.get(w.id) ?? []).map(deckView) }
     })
+  // The open workspace's crew, until its canvas comes: the feed's, or its tile would say "no agents".
+  const openFeed = input.crews?.get(input.activeId)
+  const openSeated = input.loaded === false ? openFeed : undefined
+  // Who waits is the feed's verdict, a probe's included: the same number open as when the tile was left.
+  const openWaiting = waitingIn((openFeed ?? agents).map((a) => a.phase))
   const order = input.workspaces.map((w) => w.id)
   if (!order.includes(input.activeId)) order.unshift(input.activeId)
 
@@ -282,6 +324,18 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       return node ? itemViewOf(node, owners.get(node.id) ?? []) : null
     })(),
     marks,
+    openMark: {
+      id: input.activeId,
+      name: input.name,
+      presets: openSeated ? openSeated.map((a) => a.harness) : agents.map((a) => a.preset),
+      waiting: openWaiting > 0,
+      waitingCount: openWaiting,
+      // Its canvas not read yet: unknown, not empty.
+      browsers: input.loaded === false ? null : all.filter((n) => n.kind === 'browser').length,
+      notes: input.loaded === false ? null : all.filter((n) => n.kind === 'note').length,
+      // The open workspace's own things: their real thumbnails, not the feed's names.
+      deck: [...new Set([all.find((n) => n.kind === 'browser'), all.find((n) => n.kind === 'note'), ...all.slice(0, DECK_SHOWN)])].flatMap((n) => n ?? []).slice(0, DECK_SHOWN).flatMap((n) => itemViewOf(n, []) ?? [])
+    },
     machines: (input.machines ?? []).map((m) => ({
       id: m.id,
       name: m.name,

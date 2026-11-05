@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
 import { cookrew, type UnlockAnswer } from '../api'
 import { initialsOf, lockNote, type LockWaiting } from './account-store'
+import { PROVIDER_COPY, providerRefusal } from './provider-store'
 import '../grant-surface.css'
 
 /**
@@ -44,10 +45,45 @@ export function LockScreen({
    */
   const [names, setNames] = useState<readonly string[]>([])
   const field = useRef<HTMLInputElement>(null)
+  /**
+   * THE WAY BACK FROM A FORGOTTEN PASSCODE IS A RESCUE CODE, NEVER THE PROVIDER.
+   * A browser already signed in to GitHub answers without a person, so a
+   * provider button here would let anyone at this Mac through the lock.
+   */
+  const [rescue, setRescue] = useState<string | null>(null)
+  const [rescueError, setRescueError] = useState<string | null>(null)
+  const passcode = status.unlockBy === 'passcode'
+  const word = passcode ? 'passcode' : 'password'
 
   useEffect(() => {
     field.current?.focus()
   }, [])
+
+  const touchId = (): void => {
+    const call = cookrew().accountUnlockTouchId
+    if (!call || busy) return
+    setBusy(true)
+    void call()
+      .then((answer) => {
+        if (answer.ok) onUnlocked(status.requests)
+      })
+      .catch((err: unknown) => console.error('touch id:', err))
+      .finally(() => setBusy(false))
+  }
+
+  const spendRescue = (): void => {
+    const call = cookrew().accountRescueUnlock
+    if (!call || busy || rescue === null || rescue === '') return
+    setBusy(true)
+    setRescueError(null)
+    void call(rescue)
+      .then((result) => {
+        if (result.ok) onUnlocked(status.requests)
+        else setRescueError(providerRefusal(result.reason, result.message))
+      })
+      .catch(() => setRescueError('That did not go through. Try again.'))
+      .finally(() => setBusy(false))
+  }
 
   useEffect(() => {
     if (status.requests <= 0) {
@@ -113,8 +149,8 @@ export function LockScreen({
           ref={field}
           type="password"
           className="gs-input"
-          aria-label="Password"
-          placeholder="password"
+          aria-label={passcode ? 'Passcode' : 'Password'}
+          placeholder={word}
           value={password}
           autoComplete="current-password"
           onChange={(e) => setPassword(e.target.value)}
@@ -123,6 +159,38 @@ export function LockScreen({
         <button className="gs-primary" disabled={busy || password.length === 0} onClick={unlock}>
           UNLOCK
         </button>
+        {status.touchId?.on && (
+          <button className="gs-ghost" disabled={busy} onClick={touchId}>
+            USE TOUCH ID
+          </button>
+        )}
+        {passcode && rescue === null && (
+          <button className="gs-ghost" onClick={() => setRescue('')}>
+            {PROVIDER_COPY.FORGOT_PASSCODE}
+          </button>
+        )}
+        {rescue !== null && (
+          <>
+            <p className="gs-sub">{PROVIDER_COPY.RESCUE_WHY}</p>
+            <input
+              className="gs-input"
+              aria-label="Recovery code"
+              placeholder="recovery code"
+              autoComplete="off"
+              value={rescue}
+              onChange={(e) => setRescue(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && spendRescue()}
+            />
+            {rescueError && (
+              <p className="gs-paste-error" role="alert">
+                {rescueError}
+              </p>
+            )}
+            <button className="gs-ghost" disabled={busy || rescue === ''} onClick={spendRescue}>
+              USE THIS CODE
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

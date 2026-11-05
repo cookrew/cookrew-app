@@ -1,26 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TerminalActivity } from '../../shared/turn'
+import { useCallback, useEffect, useRef } from 'react'
 import { cookrew } from './api'
-import { AttachButton } from './AttachButton'
 import { CrIcon, type CrIconName } from './icons'
 import { requestTerminalPaste } from './terminal-paste-bus'
 import { keyGesture, type KeyGestureState } from './touch-key-gesture'
 
 /**
- * The agent's tools inside the global prompt box (prompt/GlobalPrompt.tsx),
- * desktop AND phone: attach, a 🔊 toggle that reads the agent's reply aloud
- * when its turn completes, and the keys a touch keyboard lacks. Dictation is
- * not here: the box has the one mic (prompt/use-dictation.ts).
+ * The tools tray inside the global prompt box (prompt/GlobalPrompt.tsx),
+ * desktop AND phone: the box's extras (attach, spoken replies) and the keys a
+ * touch keyboard lacks. Dictation is not here: the box has the one mic
+ * (prompt/use-dictation.ts); the 🔊 switch is prompt/use-spoken-replies.ts.
  */
-
-function speak(text: string): void {
-  const gist = (text || 'done').replace(/\s+/g, ' ').trim().slice(0, 300)
-  const utterance = new SpeechSynthesisUtterance(gist)
-  speechSynthesis.cancel()
-  speechSynthesis.speak(utterance)
-}
-
-const SPEAK_PREF_KEY = 'cookrew-speak-replies'
 
 /**
  * What a tap on one of these does: send a PTY sequence, or ask the zoomed
@@ -34,7 +23,8 @@ interface TermKey {
   /** Hold-to-repeat. Never for Escape, never for paste. */
   repeat: boolean
   action: TermKeyAction
-  /** Drawn instead of the label — the paste key has no glyph of its own. */
+  /** Drawn instead of the label: paste has no glyph of its own, and a font
+   *  draws ← → smaller than ↓ ↑ (owner's phone, 2026-11-03). */
   icon?: CrIconName
 }
 
@@ -42,22 +32,19 @@ interface TermKey {
  * Control keys the touch keyboard cannot send — plus PASTE, which is not a
  * key at all. The phone has no other door to the clipboard (iOS shows its
  * callout only on a long-pressed editable, and xterm's is hidden), and this
- * row is already where the thumb is. It sits between → and Escape by the
- * owner's placement.
+ * row is already where the thumb is.
+ *
+ * Esc ← ↓ ↑ → paste, in the design's one pill form (owner, 2026-11-04; the
+ * cut "Tray tools"): global-prompt.css · THE TRAY'S TOOLS, ONE FORM. No
+ * numbers: a waiting agent's menu is answered from the choice box.
  */
 const TERM_KEYS: TermKey[] = [
-  { label: '←', title: 'Arrow left', repeat: true, action: { kind: 'seq', seq: '\x1b[D' } },
-  { label: '↓', title: 'Arrow down', repeat: true, action: { kind: 'seq', seq: '\x1b[B' } },
-  { label: '↑', title: 'Arrow up', repeat: true, action: { kind: 'seq', seq: '\x1b[A' } },
-  { label: '→', title: 'Arrow right', repeat: true, action: { kind: 'seq', seq: '\x1b[C' } },
-  {
-    label: 'PASTE',
-    title: 'Paste from the clipboard',
-    repeat: false,
-    action: { kind: 'paste' },
-    icon: 'clipboard'
-  },
-  { label: 'ESC', title: 'Escape', repeat: false, action: { kind: 'seq', seq: '\x1b' } }
+  { label: 'Esc', title: 'Escape', repeat: false, action: { kind: 'seq', seq: '\x1b' } },
+  { label: '←', title: 'Arrow left', repeat: true, action: { kind: 'seq', seq: '\x1b[D' }, icon: 'arrow-left' },
+  { label: '↓', title: 'Arrow down', repeat: true, action: { kind: 'seq', seq: '\x1b[B' }, icon: 'arrow-down' },
+  { label: '↑', title: 'Arrow up', repeat: true, action: { kind: 'seq', seq: '\x1b[A' }, icon: 'arrow-up' },
+  { label: '→', title: 'Arrow right', repeat: true, action: { kind: 'seq', seq: '\x1b[C' }, icon: 'arrow-right' },
+  { label: 'PASTE', title: 'Paste from the clipboard', repeat: false, action: { kind: 'paste' }, icon: 'clipboard' }
 ]
 
 /** Hold-to-repeat cadence: a pause before the first repeat, then ~14/s. */
@@ -87,7 +74,7 @@ const REPEAT_RATE_MS = 70
  * to leave. contextmenu is swallowed so an iOS/Android long-press never
  * pops the callout over the cluster.
  */
-function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
+function TermKeys({ terminalId, menuKey }: { terminalId: string; menuKey: ((seq: string) => void) | null }): React.JSX.Element {
   const timersRef = useRef<{ delay: number | null; interval: number | null }>({
     delay: null,
     interval: null
@@ -128,9 +115,12 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
     // clipboard read only in a real gesture (terminal-paste-bus.ts).
     if (result.fire) {
       if (key.action.kind === 'paste') requestTerminalPaste(terminalId)
+      else if (menuKey) menuKey(key.action.seq)
       else cookrew().ptyInput(terminalId, key.action.seq)
     }
-    if (result.startRepeat && key.action.kind === 'seq') {
+    // Not on a menu: each key is checked against its screen, so a hold's would
+    // queue, and the cursor would run on after the finger lifts.
+    if (result.startRepeat && key.action.kind === 'seq' && !menuKey) {
       const seq = key.action.seq
       timersRef.current.interval = window.setInterval(
         () => cookrew().ptyInput(terminalId, seq),
@@ -153,7 +143,7 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
         <button
           key={key.title}
           type="button"
-          className={`cr-btn sm term-key${key.icon ? ' term-key-icon' : ''}`}
+          className={`cr-btn sm cr-tray term-key${key.icon ? ' term-key-icon' : ''}`}
           tabIndex={-1}
           title={key.title}
           aria-label={key.title}
@@ -185,55 +175,28 @@ function TermKeys({ terminalId }: { terminalId: string }): React.JSX.Element {
   )
 }
 
+/**
+ * The tray of the prompt box's tools (prompt/GlobalPrompt.tsx), drawn while
+ * its ^ shows them: the extras it is handed (attach, spoken replies:
+ * prompt/PromptExtras.tsx) and, with an agent in the box, its keys (arrows,
+ * paste, Esc). A wide screen draws the tray in line; a phone puts it on the
+ * tools row (global-prompt.css).
+ */
 export function VoiceBar({
   terminalId,
-  activity,
-  remote = false
+  menuKey = null,
+  children
 }: {
-  terminalId: string
-  activity: TerminalActivity | undefined
-  /** The terminal is a line into a session elsewhere: nothing here attaches. */
-  remote?: boolean
+  /** The agent the keys drive; none for a new agent, and then no keys. */
+  terminalId: string | null
+  /** Where the keys go while a menu stands (wait-answer.ts · trayKey). */
+  menuKey?: ((seq: string) => void) | null
+  children?: React.ReactNode
 }): React.JSX.Element {
-  const [speakReplies, setSpeakReplies] = useState(
-    () => localStorage.getItem(SPEAK_PREF_KEY) === '1'
-  )
-
-  // Read the reply aloud when the turn lands on 'replied' while toggled on.
-  const prevPhase = useRef(activity?.phase)
-  useEffect(() => {
-    const phase = activity?.phase
-    if (speakReplies && phase === 'replied' && prevPhase.current !== 'replied' && activity?.reply) {
-      speak(activity.reply)
-    }
-    prevPhase.current = phase
-  }, [activity?.phase, activity?.reply, speakReplies])
-
-  const toggleSpeak = (): void => {
-    const next = !speakReplies
-    setSpeakReplies(next)
-    localStorage.setItem(SPEAK_PREF_KEY, next ? '1' : '0')
-    if (next) speak('Spoken replies on')
-    else speechSynthesis.cancel()
-  }
-
-  // mousedown-preventDefault keeps focus in the zoomed xterm — clicking a
-  // dock button must not stop the user's typing mid-prompt.
-  const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
-
   return (
     <div className="voice-bar nodrag">
-      {!remote && <AttachButton terminalId={terminalId} />}
-      <button
-        type="button"
-        className={`cr-btn sm voice-speak${speakReplies ? ' on' : ''}`}
-        title="Speak replies aloud"
-        onMouseDown={keepFocus}
-        onClick={toggleSpeak}
-      >
-        <CrIcon name="speaker" />
-      </button>
-      <TermKeys terminalId={terminalId} />
+      {children}
+      {terminalId && <TermKeys terminalId={terminalId} menuKey={menuKey} />}
     </div>
   )
 }

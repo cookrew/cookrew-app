@@ -1,0 +1,149 @@
+/* ---- FACE MOTION (owner design 2026-11-04, motion table) ----
+   The folded face's hover tip (FaceTip.tsx) and the words leaving as a toast
+   (SentToast.tsx); the fold's flight itself is script (fold-flight.ts).
+   Transform and opacity only; under reduced motion nothing moves. Every colour
+   is a palette token, so Ink, its night and Root follow. */
+
+/* The tip: over the folded face, never on it, never in the pointer's way. */
+.pf-tip-layer {
+  display: contents;
+}
+
+.pf-tip {
+  position: fixed;
+  z-index: 70;
+  left: 0;
+  top: 0;
+  display: none;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100vw - 16px);
+  padding: 5px 8px 5px 9px;
+  border-radius: 7px;
+  background: var(--sumi-ink, var(--ink));
+  color: var(--sumi-card, var(--cream-hi));
+  box-shadow: var(--sumi-lift, 0 10px 28px rgba(40, 30, 15, 0.1));
+  font: 400 11px/1.3 var(--font-mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.pf-tip-layer[data-shown] .pf-tip {
+  display: inline-flex;
+  animation: pf-tip-in 120ms ease-out;
+}
+
+.pf-tip b {
+  font-family: var(--sumi-serif, var(--font-serif));
+  font-weight: 600;
+}
+
+.pf-tip kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  font: inherit;
+  font-size: 10px;
+}
+
+@keyframes pf-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+/* No hover, no tip: a finger's press is the tap itself. */
+@media (hover: none) {
+  .pf-tip {
+    display: none !important;
+  }
+}
+
+/* The words leave: up out of the box in 180 ms, read, gone. */
+.cr-prompt-sent-live {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.cr-prompt-sent {
+  max-width: min(100%, 520px);
+  overflow: hidden;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: var(--sumi-card, var(--cream-hi));
+  color: var(--sumi-ink, var(--ink));
+  box-shadow:
+    inset 0 0 0 1px var(--sumi-hair-2, var(--line)),
+    var(--sumi-lift, 0 10px 28px rgba(40, 30, 15, 0.1));
+  font: 400 12px/1.35 var(--font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  animation:
+    cr-sent-rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards,
+    cr-sent-go 180ms ease-in 1600ms forwards;
+}
+
+.cr-prompt-sent b {
+  margin-right: 4px;
+  font-family: var(--sumi-serif, var(--font-serif));
+  font-weight: 600;
+}
+
+.cr-prompt-sent-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@keyframes cr-sent-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+}
+
+@keyframes cr-sent-go {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-tip-layer[data-shown] .pf-tip,
+  .cr-prompt-sent {
+    animation: none;
+  }
+}
+
+/* The fold lands (fold-flight.ts): the box shuts over the bar's place, and the
+   bar, which would show through it as it fades, holds its chrome back
+   meanwhile, as it does while the box is open; the bar then clips back open
+   out of the face. */
+body.cr-prompt-landing .zv-root:not([data-full='true']) .zv-controls {
+  visibility: hidden;
+  transition: none;
+}
+
+body.cr-prompt-landing .zv-root:not([data-full='true']) .zv-face-slot {
+  visibility: visible;
+}
+
+body.cr-prompt-landing .zv-face-slot::before {
+  visibility: hidden;
+}

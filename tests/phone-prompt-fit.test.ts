@@ -1,0 +1,132 @@
+// THE PHONE'S BOX FITS (2026-11-04, phone evals): at 412px an agent's full view
+// drew the box's last buttons past the screen's right edge, Send among them.
+// The eval's page carried no companion class, so the box kept the wide
+// screen's one row (chip, words, ^, 📎, 🔊, six keys, 🎤, Send) in 412px. Now:
+//   the width alone lays the box out as the phone's (a narrow window is as
+//   narrow as a phone); the tray above the words wraps what does not fit onto
+//   a line of its own instead of swiping it out of sight; and every control
+//   is a thumb's size, 32px or more, the type untouched.
+// Later that day (task "Phone tray chips float"): the tray is a row of chips
+//   of its own, floating over the pill, and it SWIPES sideways (no scrollbar):
+//   wrapped, it grew a second and third line over the page. The swipe shows
+//   its last keys' edge, so they are never out of sight without a sign.
+// 2026-11-04, later (the cut "Tray tools"): the tray's tools are pills drawn
+// 28px tall inside a clear 2px border, so the thumb still gets 32px.
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const read = (...p: string[]): string => readFileSync(join(__dirname, '../src/renderer/src', ...p), 'utf8')
+const css = read('prompt', 'global-prompt.css')
+/** Every declaration written for `selector`, in order (the phone's float block adds to the first). */
+const rule = (selector: string): string => {
+  const bodies: string[] = []
+  for (let at = css.indexOf(`${selector} {`); at > -1; at = css.indexOf(`${selector} {`, at + 1)) bodies.push(css.slice(at, css.indexOf('}', at)))
+  expect(bodies.length, selector).toBeGreaterThan(0)
+  return bodies.join('\n')
+}
+/** The value that wins: the last `prop: Npx;` written. */
+const px = (body: string, prop: string): number => Number([...body.matchAll(new RegExp(`(?:^|[\\s;{])${prop}: (\\d+)px;`, 'g'))].at(-1)?.[1] ?? NaN)
+
+describe('the width alone lays the box out as the phone', () => {
+  it('needs no companion class in any of the box rules', () => {
+    expect(css).not.toContain('body.cookrew-mobile')
+    expect(css).toMatch(/@media \(max-width: 700px\) \{\s*(\/\*[\s\S]*?\*\/\s*)?body \.cr-prompt \{/)
+  })
+})
+
+describe('the tray above the words', () => {
+  it('swipes sideways on one line instead of wrapping over the page', () => {
+    const row = rule('  body .cr-prompt .cr-prompt-tray')
+    expect(row).toContain('flex-wrap: nowrap;')
+    expect(row).toContain('overflow-x: auto;')
+    expect(row).not.toContain('flex-wrap: wrap;')
+  })
+
+  it("lays the tray's buttons out in the row, the agent's keys as one group", () => {
+    expect(rule('  body .cr-prompt .cr-prompt-tools')).toContain('display: contents;')
+    expect(rule('  body .cr-prompt .cr-prompt-tools > .voice-bar')).toContain('display: contents;')
+    const keys = rule('  body .cr-prompt .voice-keys')
+    expect(keys).toContain('display: flex;')
+    expect(keys).toContain('flex: none;')
+    expect(keys).toContain('flex-wrap: nowrap;')
+  })
+
+  it('reaches past the pill to the screen edges, so the swipe has room and a cut chip shows there is more', () => {
+    const row = rule('  body .cr-prompt .cr-prompt-tray')
+    expect(row).toContain('left: -8px;')
+    expect(row).toContain('right: -8px;')
+  })
+})
+
+describe("every control a thumb's size (32px or more)", () => {
+  /** The pill's reach on a phone: its drawn height and the clear border round it. */
+  const trayReach = (): number => {
+    const phone = rule('  body .cr-prompt')
+    return px(phone, '--tray-h') + 2 * px(phone, '--tray-reach')
+  }
+
+  it('the tools, the ^ and the keys: one pill, 32px with its reach', () => {
+    const pill = rule('.cr-app .cr-prompt .cr-btn.cr-tray')
+    expect(pill).toContain('height: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    expect(pill).toContain('min-width: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    expect(trayReach()).toBeGreaterThanOrEqual(32)
+  })
+
+  // Owner, 2026-11-04 (Samsung at 324 wide): "the mic and Send stand past the bar".
+  // Drawn as the design draws them, 36x28 r8; the thumb keeps 32 through a clear reach.
+  it('🎤 and Send: drawn as the design, 32px with their reach', () => {
+    const send = rule("  body .cr-prompt > .voice-mic,\n  body .cr-prompt > button[type='submit']")
+    expect(px(send, 'width')).toBe(36)
+    expect(px(send, 'height')).toBe(28)
+    const drawn = rule("  .cr-app .cr-prompt > .cr-btn.voice-mic,\n  .cr-app .cr-prompt > .cr-btn[type='submit']")
+    expect(px(drawn, 'border-radius')).toBe(8)
+    const reach = rule("  .cr-app .cr-prompt > .cr-btn.voice-mic::after,\n  .cr-app .cr-prompt > .cr-btn[type='submit']::after")
+    expect(reach).toContain('inset: -3px 0;')
+  })
+
+  it("Send's corner stays inside the pill's round end, with room to spare", () => {
+    const pill = rule('  body .cr-prompt')
+    const send = rule("  body .cr-prompt > .voice-mic,\n  body .cr-prompt > button[type='submit']")
+    const drawn = rule("  .cr-app .cr-prompt > .cr-btn.voice-mic,\n  .cr-app .cr-prompt > .cr-btn[type='submit']")
+    const R = px(pill, 'border-radius')
+    const H = px(pill, 'min-height')
+    const inset = Number(/padding: \d+px (\d+)px \d+px \d+px;/.exec(pill.slice(pill.lastIndexOf('padding:')))?.[1])
+    const r = px(drawn, 'border-radius')
+    // The corner's arc about its own centre, measured from the centre of the pill's end.
+    const top = (H - px(send, 'height')) / 2
+    const reachOut = Math.hypot(R - inset - r, R - top - r) + r
+    expect(R - reachOut).toBeGreaterThanOrEqual(3)
+  })
+
+  it('the chips and the × that lets go of the agent', () => {
+    // The chip is drawn 30 tall, as the design; the × keeps its 32px square, clear of the chip's edge.
+    expect(px(rule('  body .cr-prompt-to'), 'height')).toBe(30)
+    const x = rule('  body .cr-prompt-to button')
+    expect(px(x, 'width')).toBeGreaterThanOrEqual(32)
+    expect(px(x, 'height')).toBeGreaterThanOrEqual(32)
+    expect(px(rule('  body .cr-prompt-new > .cr-prompt-harness'), 'height')).toBe(30)
+    expect(rule('.cr-prompt .cr-tune-menu-btn,\n.cr-prompt .cr-prompt-tune')).toContain('height: calc(var(--tray-h) + 2 * var(--tray-reach));')
+    expect(trayReach()).toBeGreaterThanOrEqual(32)
+  })
+
+  it('the words row as tall as its buttons', () => {
+    expect(px(rule('  body .cr-prompt input'), 'height')).toBeGreaterThanOrEqual(32)
+  })
+
+  it('🎤 and Send on a wide screen: the design\'s 32x24 r6, over .cr-btn.sm', () => {
+    const wide = css.slice(css.indexOf('@media (min-width: 701px)'))
+    const body = wide.slice(0, wide.indexOf('}'))
+    expect(body).toContain('.cr-app .cr-prompt > .cr-btn.voice-mic')
+    expect(px(body, 'width')).toBe(32)
+    expect(px(body, 'height')).toBe(24)
+    expect(px(body, 'border-radius')).toBe(6)
+  })
+
+  it("a draft's pictures lead the pill: the words, 🎤 and Send stay one row at its foot", () => {
+    const pics = rule('  body .cr-prompt > .cr-prompt-pics')
+    const pos = (body: string): number => Number(/order: (-?\d+);/.exec(body.slice(body.lastIndexOf('order:')))?.[1])
+    expect(pos(pics)).toBeLessThan(pos(rule('  body .cr-prompt-to,\n  body .cr-prompt .cr-prompt-new:has(> .cr-prompt-harness)')))
+    expect(pos(pics)).toBeLessThan(pos(rule('  body .cr-prompt input')))
+  })
+})

@@ -98,3 +98,25 @@ export function useDropZone(zone: React.RefObject<HTMLElement | null>, onFiles: 
   }, [zone])
   return over
 }
+
+/**
+ * The same zone on an element that comes and goes (the folded face, mounted
+ * only while the box is folded): listens while `el` is there, and the cue goes
+ * with it.
+ */
+export function useDropOn(el: HTMLElement | null, onFiles: (files: File[]) => void): boolean {
+  const [over, setOver] = useState(false)
+  const take = useRef(onFiles)
+  useEffect(() => {
+    take.current = onFiles
+  })
+  useEffect(() => {
+    if (!el) return
+    const stop = listenDropZone(el, { onOver: setOver, onFiles: (files) => take.current(files) })
+    return () => {
+      stop()
+      setOver(false)
+    }
+  }, [el])
+  return over
+}

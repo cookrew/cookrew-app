@@ -29,6 +29,7 @@ import { itemInitial } from '../zoom/zoom-model'
 import '../zoom/full-views.css'
 import { useFullRouteSlot } from '../route-slot'
 import { fullRouteWords } from './full-route'
+import { NameHost } from '../zoom/NameEdit'
 
 /** How many of each kind an agent carries, for the head. */
 const tally = (list: readonly { kind: string }[]): { browsers: number; notes: number } => ({
@@ -155,7 +156,8 @@ export function StageView({
                 {itemFaceLetter(pickedItem)}
               </span>
               <span className="zv-fv-who">
-                <b>{pickedItem.title}</b>
+                {/* A note's title is its name: a double-click renames it. A browser's is its page's. */}
+                {pickedItem.kind === 'note' ? <NameHost key={pickedItem.id} id={pickedItem.id} name={pickedItem.title} /> : <b>{pickedItem.title}</b>}
                 <small>{pickedItem.kind} · {pickedItem.sub}</small>
               </span>
               <span className="zv-fv-used">
@@ -184,7 +186,8 @@ export function StageView({
                     <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} status={shownStatus} />
                   </span>
                   <span className="cr-route-who" title={shown.name}>
-                    <b>{shown.name}</b>
+                    {/* On the phone one tap on the name renames it, as ⋯ → Rename does. */}
+                    <NameHost key={shown.id} id={shown.id} name={shown.name} tap menu />
                     <small>
                       {fullRouteWords(shownStatus, counts).map((word, i) => (
                         <span key={word} className={i === 0 ? shownStatus : undefined}>
@@ -203,7 +206,8 @@ export function StageView({
                     <InkAvatar id={shown.id} preset={shown.preset} orch={shown.orch} status={shownStatus} weight="large" />
                   </span>
                   <span className="zv-fv-who">
-                    <b>{shown.name}</b>
+                    {/* A double-click on the name renames it in place; ⋯ → Rename opens the same field. */}
+                    <NameHost key={shown.id} id={shown.id} name={shown.name} menu />
                     <small>
                       <span className={`zv-fv-state ${shownStatus}`}>{statusWord(shownStatus)}</span>
                       {counts.browsers > 0 && <span>{counts.browsers} browser{counts.browsers === 1 ? '' : 's'}</span>}

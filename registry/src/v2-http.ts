@@ -15,6 +15,10 @@ import type { NamesFeature } from './names'
 import { createHelloBurn, helloBurnTtlMs, type HelloBurn } from './hello-nonces'
 import { V2Requests } from './v2-requests'
 import { V2Events } from './v2-events'
+import { V2Links } from './v2-links'
+import { OAuthFlows } from './v2-oauth-flows'
+import { createProviders, type OAuthConfig, type OAuthProvider } from './v2-oauth-providers'
+import type { ProviderId } from '../../src/shared/oauth'
 import { HELLO_SKEW_MS } from './hello-verify'
 
 /**
@@ -88,6 +92,8 @@ export interface V2Identity {
      * route that can be asked without bound is a way to flush it (H5).
      */
     requests: Limiter
+    /** Starting and redeeming a provider trip, per address. */
+    oauth: Limiter
   }
   /** Nonces handed out for a renewal signature: single-use, two minutes. */
   renewNonces: RenewNonces
@@ -106,6 +112,10 @@ export interface V2Identity {
   requests: V2Requests
   /** Identity v3: account:changed, the roster's own feed. */
   events: V2Events
+  /** Which provider identities open which account. */
+  links: V2Links
+  /** Third-party sign-in. An empty `providers` is the off state. */
+  oauth: { providers: ReadonlyMap<ProviderId, OAuthProvider>; flows: OAuthFlows }
   /**
    * The canonical public origin, when the deployment knows it. WebAuthn
    * compares an assertion's origin and rpId against a string; null means
@@ -127,11 +137,14 @@ export interface V2Options {
     renewPerMinute?: number
     /** Seat and reach asks, per asker. Lowered by a test to reach the cap. */
     requestsPerHour?: number
+    oauthPerMinute?: number
   }
   trustedProxies?: readonly string[]
   now?: () => number
   /** The origin a browser sees — https://cookrew.dev in production. */
   origin?: string
+  /** Client ids and secrets. Absent means no provider and no button. */
+  oauth?: OAuthConfig
 }
 
 /**
@@ -167,7 +180,8 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       // is not a person, and a guest who reloads a team page a few times is
       // nowhere near it.
       requests: new Limiter(options.limits?.requestsPerHour ?? 20, 60 * 60_000, options.now),
-      renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now)
+      renew: new Limiter(options.limits?.renewPerMinute ?? 5, 60_000, options.now),
+      oauth: new Limiter(options.limits?.oauthPerMinute ?? 20, 60_000, options.now)
     },
     joinCodes: new JoinCodes(options.now),
     renewNonces: createRenewNonces(options.now),
@@ -176,6 +190,11 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     factors: createFactorState(base, { now: options.now }),
     requests: new V2Requests(options.now),
     events: new V2Events(options.now),
+    links: new V2Links(accounts, options.now),
+    oauth: {
+      providers: createProviders(options.oauth, { now: options.now }),
+      flows: new OAuthFlows(options.now)
+    },
     origin: options.origin ?? null
   }
 }
@@ -202,13 +221,18 @@ export interface V2Context {
    */
   names?: NamesFeature
   /**
+   * An account is being deleted: take what it holds outside /v2 (listings, stars,
+   * live lines, the v1 key). Synchronous, and called before the account goes.
+   */
+  accountGone?: (account: V2Account) => void
+  /**
    * The v1 identity service, for the migration routes only (phase 6): a
    * handle it knows is RESERVED for the key that holds it. Absent on a
    * registry with no v1 credentials, where nothing has to be migrated.
    */
   legacy?: LegacyIdentity
   /**
-   * STRATA: whether each of an account's desktops holds its relay line now,
+   * Whether each of an account's desktops holds its relay line now,
    * and when it last did (v2-canvas-relay.ts owns the lines). Absent → every
    * desktop reads offline, which is the truth for a registry with no relay.
    */

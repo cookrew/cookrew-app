@@ -272,6 +272,48 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     }
   }, 45_000)
 
+  it('presents Chrome with its own client hints, and refuses a passkey at once', async () => {
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir: path.join(profileDir, 'identity'),
+      width: 720,
+      height: 560,
+      tabs: [{ id: 'identity-tab', url: `${origin}/identity`, title: '' }],
+      activeTabId: 'identity-tab'
+    })
+    await instance.start()
+    try {
+      await instance.evaluate(`location.href = ${JSON.stringify(`${origin}/identity-again`)}`)
+      await expect.poll(async () => (await instance.pageInfo()).url).toBe(`${origin}/identity-again`)
+
+      const agent = (await instance.evaluate('navigator.userAgent')) as string
+      expect(agent).not.toContain('Headless')
+      expect(agent).toMatch(/Chrome\/\d+\.0\.0\.0/)
+
+      const hints = JSON.parse(
+        (await instance.evaluate(`navigator.userAgentData.getHighEntropyValues(
+          ['architecture', 'fullVersionList', 'platformVersion']
+        ).then(JSON.stringify)`)) as string
+      ) as { brands: unknown[]; fullVersionList: unknown[]; architecture: string; platformVersion: string }
+      expect(hints.brands.length).toBeGreaterThan(0)
+      expect(hints.fullVersionList.length).toBeGreaterThan(0)
+      expect(hints.architecture).not.toBe('')
+      expect(hints.platformVersion).not.toBe('')
+
+      const refusal = await instance.evaluate(`(async () => {
+        const started = performance.now()
+        const name = await navigator.credentials.get({
+          publicKey: { challenge: new Uint8Array(32), timeout: 180000 }
+        }).catch((error) => error.name)
+        return { name, ms: performance.now() - started }
+      })()`)
+      expect(refusal).toMatchObject({ name: 'NotAllowedError' })
+      expect((refusal as { ms: number }).ms).toBeLessThan(1000)
+    } finally {
+      await instance.stop()
+    }
+  }, 30_000)
+
   it('leaves zero process after the bounded SIGKILL fallback', async () => {
     const instance = new HeadlessInstance({
       executablePath: chrome as string,

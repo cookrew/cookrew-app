@@ -1,0 +1,45 @@
+ ▐▛███▛█   Claude Code v2.1.316
+▝▜██████▀  Opus 5.5 with high effort · API Usage Billing
+ ▝▝   ▝▝   /private/tmp/wc-fix/claude
+
+
+❯ Change a.ts so the constant is 2. Use the Edit tool directly, no questions.
+
+  Thought for 3s, read 1 file (ctrl+o to expand)
+
+⏺ Update(a.ts)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Edit file
+ a.ts
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 1 -export const a = 1
+ 1 +export const a = 2
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to make this edit to a.ts?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session
+      (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

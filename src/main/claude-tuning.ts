@@ -72,16 +72,16 @@ export const claudeTuning: HarnessTuning = {
   line: (knob, value) => (tuneValueOk(knob, value) ? `/${knob} ${value}` : null),
 
   /**
-   * BOTH SLASH COMMANDS ALSO WRITE ~/.claude/settings.json.
-   *
-   * Claude answers "Set model to X and saved as your default for new
-   * sessions", and that default is global to the machine — every agent that
-   * boots afterwards starts there, whoever turned the dial. That used to take
-   * a deliberately typed command; a rail makes it one click, so the rail says
-   * it at the moment of picking rather than leaving it to be discovered when
-   * the next teammate boots on a model nobody chose for them.
+   * NOT TYPED: RELAUNCHED (owner 2026-11-01). Both slash commands also write
+   * ~/.claude/settings.json ("saved as your default for new sessions"), so a
+   * pick made for one agent became the boot model of every agent after it,
+   * and the typed line shared the input box with the prompt being written.
+   * The pick rides `--model` / `--effort` instead, which hold for this session
+   * only, and the agent restarts in place on its own session to take them.
+   * `line` stays for a bridge that cannot restart an agent.
    */
-  caveat: 'this also becomes the default every new agent boots on',
+  relaunch: true,
+  caveat: 'the agent restarts in place to take it, same conversation',
 
   read: (record) => {
     if (typeof record !== 'object' || record === null) return null

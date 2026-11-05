@@ -466,6 +466,12 @@ export class ProducerLease {
     )
   }
 
+  /** A cancelled delivery's paste is KNOWN in the box, residue aside. */
+  hasStrandedPaste(terminalId: string): boolean {
+    this.adopt(terminalId)
+    return this.contaminated.get(terminalId) === this.generationOf(terminalId)
+  }
+
   /** Is the refusing fact specifically an unconfirmed dispatch delivery? */
   hasDispatchResidue(terminalId: string): boolean {
     this.adopt(terminalId)

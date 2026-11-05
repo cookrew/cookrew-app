@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CanvasNode, NoteNodeData, TerminalNodeData, WorkspaceState } from '../../shared/model'
+import type { CanvasNode, TerminalNodeData, WorkspaceState } from '../../shared/model'
 import type { TurnRecord } from '../../shared/turn'
 import { cookrew, isDemoMode, isRemoteMode } from './api'
 import { cardAffordances } from './card-affordances'
@@ -192,16 +192,17 @@ function RenamePane({ node, onDone }: { node: CanvasNode; onDone: () => void }):
       return
     }
     setBusy(true)
-    // Notes derive their name from content unless the user pins one — a
-    // rename IS a pin, so it must land on customName too or the next
-    // content edit silently renames the card back (store.writeNote).
-    const patch =
-      node.kind === 'note'
-        ? { name: trimmed, customName: (node as NoteNodeData).customName ?? trimmed }
-        : { name: trimmed }
-    void cookrew()
-      .updateNode(node.id, patch)
-      .then(() => onDone())
+    // The one rename path (main/agent-rename.ts): a clash refused in the
+    // CLI's words, a note's name pinned against its content, an agent's
+    // against Sous.
+    // Through a promise, so a preload older than the renderer (no renameNode) is an error said, not a stuck pane.
+    void Promise.resolve()
+      .then(() => cookrew().renameNode(node.id, trimmed))
+      .then((outcome) => {
+        if (outcome.ok) return onDone()
+        setBusy(false)
+        setError(outcome.error)
+      })
       .catch((e: unknown) => {
         setBusy(false)
         setError(e instanceof Error ? e.message : String(e))

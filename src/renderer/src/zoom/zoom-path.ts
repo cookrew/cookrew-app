@@ -66,10 +66,12 @@ export function barStop(dir: ZoomDir, v: number): number {
  * THE SWITCH (owner, 2026-11-01): no slider; the bar's last stop is two,
  * agents | artifacts, the two ways into a workspace. In it, the other one is
  * the switch across; above it, each opens the workspace by its side.
+ * THE GROUPS (owner, 2026-11-04; zoom/BarGroups.tsx): each side is a group of
+ * what needs you, ARTIFACTS first, AGENTS next to the prompt's face.
  */
 export const BAR_SIDES: readonly { dir: ZoomDir; v: number; name: string }[] = [
-  { dir: 'agents', v: 1, name: 'agents' },
-  { dir: 'items', v: 0, name: 'artifacts' }
+  { dir: 'items', v: 0, name: 'artifacts' },
+  { dir: 'agents', v: 1, name: 'agents' }
 ]
 
 /** The side lit at v: the one the view is on once it is in the workspace (a card, a full view too); none above it. */
@@ -96,9 +98,10 @@ export function settle(dir: ZoomDir, v: number): number {
 }
 
 /** What a click on an agent does, from where the view is (and which agent holds the focus). */
-export type AgentClick = { kind: 'set'; v: number } | { kind: 'switch'; v: number } | { kind: 'refocus-full' } | { kind: 'jump-full' }
+export type AgentClick = { kind: 'set'; v: number } | { kind: 'switch'; v: number } | { kind: 'refocus-full' } | { kind: 'jump-card' }
 export function agentClick(dir: ZoomDir, v: number, isFocus: boolean): AgentClick {
-  if (dir === 'items' && v > -0.05) return { kind: 'jump-full' }
+  // From the artifacts, an agent opens its card first, not its full view (owner, 2026-11-03).
+  if (dir === 'items' && v > -0.05) return { kind: 'jump-card' }
   if (v < -1.05) return { kind: 'set', v: -1 }
   if (v < 0.5) return { kind: 'set', v: 1 }
   if (isFocus) return { kind: 'set', v: v < 1.5 ? 2 : 3 }

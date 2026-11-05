@@ -9,12 +9,12 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machinesAt, shelfPage, stackOf, thumbsOf, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
-import { sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
+import { crewOf, deviceOf, fitScale, machinesAt, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
 export * from './zoom-camera'
-import { GROUP_BOX, SWS, boxAt, cardStopLabel, crewLabelAt, deskCamera, deviceWords, keepOnScreen, phoneCamera, phoneThumbs, thumbsCamera, wordsOf, type Layout } from './zoom-camera'
+import { GROUP_BOX, SWS, boxAt, type DeviceWords, cardStopLabel, crewLabelAt, deskCamera, deviceCam, deviceWords, keepOnScreen, phoneCamera, phoneThumbs, thumbsCamera, wordsOf, type Layout } from './zoom-camera'
 
 export interface AgentModel {
   id: string
@@ -89,7 +89,6 @@ export interface FrameEls {
   scene: Put
   panel: Put
   wash: Put
-  ring: Put
   label: Put
   labelW: number
   labelH: number
@@ -99,6 +98,13 @@ export interface FrameEls {
   items: Map<string, { node: Put; ttl: Put }>
   ties: Map<string, Put>
   marks: Map<string, Put>
+  /** The machine's title over its marks (ZoomView · .zv-device-label). */
+  deviceLabel?: Put | null
+  /** The tiles' words and the machines' names: drawn at one size on a phone (paintDeviceWords). */
+  markLabels?: Put[]
+  machineWords?: Put[]
+  /** The share button among those words: a control, so it keeps a thumb's size (paintDeviceWords). */
+  machineShare?: Put | null
   /** The empty seat at the end of the crew: the way a new agent is made. */
   next: Put | null
   /** An item's full-view head, crisp (ZoomView · zv-fv-ghost): the page's words arrive in it, never blown up. */
@@ -122,6 +128,8 @@ export interface FrameState {
   narrow: boolean
   /** How far the crew (a narrow screen) or the thumbnails (any screen) are scrolled down, in px (the cameras clamp it). */
   pan?: number
+  /** How far the workspaces' tiles are scrolled down, in px: their own, apart from the crew's (deviceCam clamps it). */
+  tilesPan?: number
   /** The page of the shelf over the thumbnails: taps on its "+N" chip, wrapping (zoom-layout.ts · shelfPage). */
   shelf?: number
 }
@@ -132,6 +140,8 @@ export interface FrameOut {
   scale: number
   /** How far the crew (a narrow screen) or the thumbnails can scroll, in px: 0 when they fit. */
   panMax: number
+  /** How far the workspaces' tiles can scroll, in px: 0 when they fit. */
+  tilesMax: number
 }
 
 const f1 = (n: number): string => n.toFixed(1)
@@ -156,6 +166,47 @@ export function put(el: Put | null | undefined, transform: string | null, opacit
     el.style.visibility = o === 0 ? 'hidden' : ''
   }
 }
+
+/**
+ * How much of a picture's words show (its thumbnails' titles, lines, hosts):
+ * --zv-wo on the picture, read by phone-type.css. Written only when it changes.
+ */
+export function wordsSeen(el: (HTMLElement & { _w?: string }) | null | undefined, seen: number): void {
+  if (!el) return
+  const v = (Math.round(seen * 100) / 100).toString()
+  if (el._w === v) return
+  el._w = v
+  el.style.setProperty('--zv-wo', v)
+}
+
+/**
+ * THE DEVICE LAYERS' WORDS (scene-words.ts): the machine's title over its
+ * tiles, the tiles' words and the machines' names. A desk scales them once
+ * with the tile; a phone draws each at its size on screen on every frame, and
+ * those that would stand over the next tile (toward the devices) fade.
+ */
+function paintDeviceWords(L: Layout, els: FrameEls, d: { live: boolean; zIn: number; dS: number; vS: number; camD: number; camDD: number; dw: DeviceWords; shown: number }): void {
+  const back = d.live ? d.camD / d.dS : 1
+  const seen = d.live ? ramp(d.zIn, -1.5, -1.15) : 1
+  // On a phone it stands in the head over the grid, beside the per-row pill, whatever the camera's scale.
+  const titleY = d.live ? L.device.gridTop - TITLE_LIFT_PX / d.camD : L.device.titleBottom
+  put(els.deviceLabel, `translate(${f1(L.device.left)}px, ${f1(titleY)}px) scale(${f4(d.dw.titleK * back)}) translateY(-100%)`, seen)
+  // Past the tiles the layer is gone: nothing to write on a frame nobody sees.
+  if (d.shown > 0) for (const word of els.markLabels ?? []) put(word, `scale(${f4(d.dw.markK * back)})`, seen)
+  // The words shrink with the machine they name; a thumb does not. Scaled back to 1:1 on screen.
+  put(els.machineShare, `scale(${f4(1 / (d.live ? d.camDD : d.vS))})`)
+  if (!d.live) return
+  for (const word of els.machineWords ?? []) put(word, `scale(${f4(d.camDD / d.vS)})`)
+}
+/** The title's foot over the first row of tiles on a phone, in px: centred on the per-row pill (zoom.css · .zv-cols). */
+const TITLE_LIFT_PX = 12
+
+/** Between these zooms the tile has left (the device layer's fade, paint): what it stood for comes only then, or two sets of words stand on each other. */
+const TILE_GONE = [-0.3, -0.05] as const
+
+/** A coin's width and its count badge's type (zoom.css · .zv-coin, .zv-badge). */
+const COIN_PX = 22
+const BADGE_PX = 8
 
 /** The machine's screen holds the device view at this scale. */
 const SDEV = 0.5
@@ -202,7 +253,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   let aOy = cam.Oy
   let panMax = cam.panMax
   const slot: Pos = L.device.at[model.active] ?? { x: 0, y: 0 }
-  const camD = fit(L.device.box)
+  const dc = deviceCam(L.device, w, h, st.narrow, st.tilesPan ?? 0)
+  const camD = dc.S
   let dS: number
   let dOx: number
   let dOy: number
@@ -213,7 +265,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const s0 = camDD * SDEV
     dS = Math.exp(lerp(Math.log(s0), Math.log(camD), k))
     dOx = w / 2
-    dOy = lerp(h / 2 - camDD * L.devicesBox.cy - s0 * L.device.box.cy, h / 2 - camD * L.device.box.cy, k)
+    dOy = lerp(h / 2 - camDD * L.devicesBox.cy - s0 * L.device.box.cy, dc.Oy, k)
     aS = dS * SWS
     aOx = dOx + dS * slot.x
     aOy = dOy + dS * slot.y
@@ -222,7 +274,7 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
       const k = ease(zIn + 1)
       aS = Math.exp(lerp(Math.log(camD * SWS), Math.log(aS), k))
       aOx = lerp(w / 2 + camD * slot.x, aOx, k)
-      aOy = lerp(h / 2 + camD * (slot.y - L.device.box.cy), aOy, k)
+      aOy = lerp(dc.Oy + camD * slot.y, aOy, k)
     }
     dS = aS / SWS
     dOx = aOx - dS * slot.x
@@ -237,12 +289,22 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const Ox = lerp(aOx, w / 2, pk)
   const Oy = lerp(aOy, iOy, pk)
   put(els.scene, `translate(${f1(Ox)}px, ${f1(Oy)}px) scale(${f4(S)})`)
-  put(els.device, `translate(${f1(dOx)}px, ${f1(dOy)}px) scale(${f4(dS)})`, (1 - ramp(zIn, -0.4, -0.05)) * (1 - pc))
+  const deviceSeen = (1 - ramp(zIn, -0.4, -0.05)) * (1 - pc)
+  put(els.device, `translate(${f1(dOx)}px, ${f1(dOy)}px) scale(${f4(dS)})`, deviceSeen)
+  // Out at the devices the tiles are a picture on the machine's screen: the doors must not take its click.
+  const doors = zIn < -1.05 || deviceSeen < 0.05 ? 'none' : ''
+  if (els.device.style.pointerEvents !== doors) els.device.style.pointerEvents = doors
   const vS = dS / SDEV
   put(els.devices, `translate(${f1(dOx)}px, ${f1(dOy + dS * L.device.box.cy)}px) scale(${f4(vS)})`, (1 - ramp(zIn, -1.4, -1.05)) * (1 - pc))
   put(els.machine, null, 1)
+  // A phone draws every word at one size on screen, whatever the camera does this frame (scene-words.ts).
+  const sw = wordsOf(L, w, h, st.narrow)
+  const live = sw.live
+  paintDeviceWords(L, els, { live, zIn, dS, vS, camD, camDD: fit(L.devicesBox), dw: deviceWords(L.device, w, h, st.narrow), shown: deviceSeen })
 
-  // ── the wash and the ring: the workspace's own ground ──
+  // ── the wash: the workspace's own ground ──
+  // At the workspaces stop its tile is its ground and its name: the group's own come as the tile goes.
+  const inTile = ramp(zIn, -0.6, TILE_GONE[1])
   const wb = zIn < 0 ? GROUP_BOX : bA
   // A grid that scrolls has the screenful under it, not a sheet as tall as the grid: the grid slides over it.
   const tb: Box = tc.panMax > 0 ? { w: L.thumbs.box.w, h: h / iS, cy: (h / 2 - iOy) / iS } : L.thumbs.box
@@ -250,13 +312,12 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   const wsy = lerp(lerp(0.42, wb.h / WASH.h, ease(z)), tb.h / WASH.h, pc)
   // The ground lies over the sheet now (the sheet is under the scene): it goes as a full view comes.
   const sheetIn = st.dir === 'agents' ? ramp(z, 2, 2.4) : ramp(I, 0, 0.4)
-  put(els.wash, `translate(0px, ${f1(lerp(lerp(-10, wb.cy, ease(z)), tb.cy, pc))}px) scale(${f4(wsx)}, ${f4(wsy)})`, lerp(0.6, 0.55, ease(z)) * (1 - sheetIn))
-  const open = ease(clamp01(z))
-  put(els.ring, `translate(0px, -10px) scale(${f4(1 + 1.7 * open)}) rotate(${(-18 * open).toFixed(2)}deg)`, (1 - ramp(z, 0.05, 0.75)) * (1 - ramp(P, 0, 0.3)))
+  put(els.wash, `translate(0px, ${f1(lerp(lerp(-10, wb.cy, ease(z)), tb.cy, pc))}px) scale(${f4(wsx)}, ${f4(wsy)})`, lerp(0.6, 0.55, ease(z)) * (1 - sheetIn) * inTile)
 
   // ── the agents ──
-  // A phone draws the words under a face, and in the open card's head, at the type scale on screen (scene-words.ts).
-  const sw = wordsOf(L, w, h, st.narrow)
+  // The open card's words are set for the card stop's scale (phone-type.css · --zv-k-card): drawn at kc / S they read the same on every frame.
+  const kc = sw.rest.card
+  const cardK = live ? kc / S : 1
   const gone = 1 - ramp(P, 0, 0.25)
   const cardAmt = (id: string): number => (id === st.focus ? clamp01(z - 1) : id === st.leaving ? st.leavingAmt : 0)
   const zOf = (id: string): number => (z <= 1 ? z : 1 + cardAmt(id))
@@ -319,21 +380,27 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const nx = ease(ramp(n, 0, 0.6))
     const ny = ease(ramp(n, 0.4, 1))
     const nmIn = ramp(z, 0.5, 0.95)
+    // A phone's name never pops in at a smaller size: it fades in at its own.
+    const pop = live ? 1 : lerp(0.7, 1, nmIn)
     // The open card's words travel to the head; the others' fade as they dock.
     const words = focused ? headOut : 1 - ramp(z, 2, 2.2)
-    // The words' factors: the crew's under the face, the card's in its head for the
-    // open card (the others keep the crew's into the card stop, 1 on the shelf).
-    const fN = lerp(focused ? lerp(sw.crew.name, sw.card.name, ny) : lerp(sw.crew.name, 1, ease(clamp01(z - 1))), sw.shelf.name, pm)
-    const fS = lerp(focused ? lerp(sw.crew.status, sw.card.status, ny) : lerp(sw.crew.status, 1, ease(clamp01(z - 1))), 1, pm)
+    // The words' factors: on a phone their size on screen over this frame's camera, the same at
+    // the crew, on the card, on the way between and on the shelf; 1 on a desk.
+    const fN = live ? pinned(SCENE_TYPE.name, SCENE_CSS.name, S) : 1
+    const fS = live ? pinned(SCENE_TYPE.small, SCENE_CSS.small, S) : 1
     // Drawn at f about its centre, a word keeps the top (and, in the card's head, the left) it has at 1.
     const grow = (f: number, s0: number, wd: number, ht: number, left: number): { dx: number; dy: number } => ({ dx: left * (wd / 2) * s0 * (f - 1), dy: (ht / 2) * s0 * (f - 1) })
     const U = UNDER_FACE
     const stTop = U.nameTop + U.toStatus * fN
-    const cntTop = stTop + U.toCounts * fS
-    const nA = { x: lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny) + (1 - nmIn) * -14, s: lerp(0.7, 1, nmIn), o: nmIn * words }
+    // THE CREW SHOWS NO STATE WORD (owner, 2026-11-03: "the agents page needs no done / idle under
+    // them"): the face's ink says it. The word shows in the open card's head and the full view's;
+    // under a face, the counts take its line.
+    const cntTop = stTop
+    const nA = { x: lerp(-e.nmW / 2, 30, nx), y: lerp(U.nameTop, -24, ny) + (1 - nmIn) * -14, s: pop, o: nmIn * words }
     // The troop's faces carry no names: a face's title says who it is (ZoomParts · AgentNode).
     const nB = { x: -e.nmW / 2, y: 22, s: SHELF_NAME_S, o: 0 }
-    const ns = lerp(nA.s, nB.s, pm)
+    // On a phone the name keeps its size onto the shelf too, where it fades.
+    const ns = live ? 1 : lerp(nA.s, nB.s, pm)
     const ng = grow(fN, ns, e.nmW, e.nmH ?? 18, nx)
     const nm = { x: lerp(nA.x, nB.x, pm) + ng.dx, y: lerp(nA.y, nB.y, pm) + ng.dy, k: ns * fN }
     if (focused && into > 0) {
@@ -350,20 +417,20 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const stP = { x: lerp(-e.stW / 2, 30, nx) + sg.dx, y: lerp(stTop, -2, ny) + (1 - stIn) * -18 + sg.dy, k: fS }
     if (focused && into > 0) {
       const at = local(FV.line.x, FV.line.y, x, y)
-      const k = 1 / S
+      const k = live ? fS : 1 / S
       stP.x = lerp(stP.x, at.x - (e.stW / 2) * (1 - k), into)
       stP.y = lerp(stP.y, at.y - ((e.stH ?? 13) / 2) * (1 - k), into)
       stP.k = lerp(stP.k, k, into)
     }
-    put(e.st, `translate(${f1(stP.x)}px, ${f1(stP.y)}px)${stP.k === 1 ? '' : ` scale(${f4(stP.k)})`}`, stIn * gone * words)
+    put(e.st, `translate(${f1(stP.x)}px, ${f1(stP.y)}px)${stP.k === 1 ? '' : ` scale(${f4(stP.k)})`}`, stIn * gone * words * nx)
     const cntIn = ramp(z, 0.62, 0.95)
     // Where the crew has no room for the counts' line, they show in the open card's head only.
-    const cntRoom = sw.crew.counts ? 1 : nx
+    const cntRoom = sw.counts ? 1 : nx
     const cg = grow(fS, 1, e.cntW, 11, nx)
     const cP = { x: lerp(-e.cntW / 2, 30 + (e.stW + 10) * fS, nx) + cg.dx, y: lerp(cntTop, -1, ny) + (1 - cntIn) * -10 + cg.dy, k: fS }
     if (focused && into > 0) {
       const at = local(FV.line.x + e.stW + 10, FV.line.y, x, y)
-      const k = 1 / S
+      const k = live ? fS : 1 / S
       cP.x = lerp(cP.x, at.x - (e.cntW / 2) * (1 - k), into)
       cP.y = lerp(cP.y, at.y - (11 / 2) * (1 - k), into)
       cP.k = lerp(cP.k, k, into)
@@ -372,29 +439,34 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     // The typed words: centred by their own CSS (their width moves with every
     // key, the measured ones only with the model), on the counts' line when
     // there are none. The open card's reply box holds them, so they go there.
-    const dftTop = e.cntW > 0 && sw.crew.counts ? cntTop + U.toDraft * fS : stTop + U.toCounts * fS
+    const dftTop = e.cntW > 0 && sw.counts ? cntTop + U.toDraft * fS : stTop
     put(e.dft, `translate(0px, ${f1(dftTop + (1 - cntIn) * -10)}px)${fS === 1 ? '' : ` scale(${f4(fS)})`}`, cntIn * gone * words * (1 - nx))
     const b = ramp(zi, 1.6, 1.97)
     // The last words go to the transcript's top, and hand over to it; the
     // reply box goes down to the prompt it becomes.
     const bodyAt = focused && into > 0 ? local(FV.transcript.x, FV.transcript.y, x, y) : null
-    const bodyK = bodyAt ? lerp(1, 1 / S, into) : 1
+    const bodyK = live ? cardK : bodyAt ? lerp(1, 1 / S, into) : 1
     // On the card (AgentCard.tsx draws the floating card from the same spot).
     const bodyCard = { x: -18, y: 32 + (1 - b) * 10 }
     const bx = bodyAt ? lerp(bodyCard.x, bodyAt.x, into) : bodyCard.x
     const by = bodyAt ? lerp(bodyCard.y, bodyAt.y, into) : bodyCard.y
     put(e.body, `translate(${f1(bx)}px, ${f1(by)}px)${bodyK === 1 ? '' : ` scale(${f4(bodyK)})`}`, b * gone * (focused ? 1 - ramp(z, 2.88, 2.99) : words))
-    put(e.emp, null, ramp(zi, 1.6, 1.97) * gone * (focused ? 1 - toFull : words))
+    put(e.emp, live ? `scale(${f4(cardK)})` : null, ramp(zi, 1.6, 1.97) * gone * (focused ? 1 - toFull : words))
     const replyAt = focused && into > 0 ? local(FV.reply.x, FV.reply.y, x, y) : null
-    const rk = replyAt ? lerp(1, 1 / S, into) : 1
+    const rk = live ? cardK : replyAt ? lerp(1, 1 / S, into) : 1
     // .zv-reply sits at (-18, 170), 228x30, scaled about its centre.
-    const rMove = replyAt ? `translate(${f1(lerp(0, replyAt.x + 18 - 114 * (1 - rk), into))}px, ${f1(lerp(0, replyAt.y - 170 - 15 * (1 - rk), into))}px) scale(${f4(rk)})` : null
+    const rMove = replyAt
+      ? `translate(${f1(lerp(0, replyAt.x + 18 - 114 * (1 - rk), into))}px, ${f1(lerp(0, replyAt.y - 170 - 15 * (1 - rk), into))}px) scale(${f4(rk)})`
+      : live && Math.abs(rk - 1) > 1e-3
+        ? `scale(${f4(rk)})`
+        : null
     put(e.reply, rMove ?? (e.reply?._t ? 'none' : null), ramp(zi, 1.7, 2) * gone * (focused ? 1 - ramp(z, 2.2, 2.6) : words))
     if (e.dot) {
       const k = ease(ramp(z, 0.15, 0.7))
       const dx = lerp(38, x + 22 * s, k)
       const dy = lerp(-52, y - 22 * s, k)
-      put(e.dot, `translate(${f1(dx)}px, ${f1(dy)}px)`, (1 - ramp(iz * pc, 0, 0.35)) * onShelf * (focused ? 1 - toFull : 1 - ramp(z, 2, 2.2)))
+      // At the workspaces stop the tile's count says who waits.
+      put(e.dot, `translate(${f1(dx)}px, ${f1(dy)}px)`, ramp(zIn, TILE_GONE[0], TILE_GONE[1]) * (1 - ramp(iz * pc, 0, 0.35)) * onShelf * (focused ? 1 - toFull : 1 - ramp(z, 2, 2.2)))
     }
   })
 
@@ -467,8 +539,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const cell = focusedAgent && into > 0 && A.grow > 0.5 ? FV.cell(l.k) : null
     const fade = (cell ? cell.o * (1 - ramp(z, 2.88, 2.99)) : focusedAgent ? 1 - toFull : 1 - ramp(z, 2, 2.25)) * (1 - ramp(iz * pc, 0, 0.3))
     const seen = docks ? lerp(A.o, 1, ramp(P, 0, 0.3)) : A.o * (1 - ramp(P, 0, 0.25))
-    // The newest's thumbnail beside the stack, as its caption: on a phone, not as specks on the device's marks.
-    const newIn = st.narrow && l.key === model.newest ? ramp(zIn, -0.6, -0.2) : 1
+    // The newest's thumbnail beside the stack, as its caption: out of the tile's deck, which stands for it at the workspaces stop.
+    const newIn = l.key === model.newest ? ramp(zIn, TILE_GONE[0], TILE_GONE[1]) : 1
     // The focused item's agents: from under its thumbnail to the page's "used by".
     const usedAt = st.dir === 'items' && l.item === st.focusItem && docks && iz > 0 ? local(FV.usedBy(l.j).x, FV.usedBy(l.j).y) : null
     const cellAt = cell ? local(cell.x, cell.y) : usedAt
@@ -478,35 +550,36 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const ly = cellAt ? lerp(y, cellAt.y, go) : y
     const lsTo = cell ? cell.w / (70 * S) : 20 / (22 * S)
     const lFade = usedAt ? (1 - ramp(I, 0.86, 0.99)) * (1 - ramp(z, 2, 2.25)) : fade
-    put(el.node, `translate(${f1(lx)}px, ${f1(ly)}px) scale(${f4(cellAt ? lerp(ls, lsTo, go) : ls)})`, seen * lFade * newIn)
-    put(el.th, `scale(${f4(lerp(A.thsx, 22 / 70, k1))}, ${f4(lerp(A.thsy, 22 / 46, k1))})`, A.th * (1 - ramp(P, 0, 0.25)))
+    const nodeK = cellAt ? lerp(ls, lsTo, go) : ls
+    const thx = lerp(A.thsx, 22 / 70, k1)
+    const thy = lerp(A.thsy, 22 / 46, k1)
+    put(el.node, `translate(${f1(lx)}px, ${f1(ly)}px) scale(${f4(nodeK)})`, seen * lFade * newIn)
+    put(el.th, `scale(${f4(thx)}, ${f4(thy)})`, A.th * (1 - ramp(P, 0, 0.25)))
+    // Its words are set for the open card (--zv-k-card): a phone shows them only at that size.
+    if (live) wordsSeen(el.th, near(S * nodeK * Math.min(thx, thy), kc) * (1 - ramp(P, 0, 0.1)))
     // A cell has no coin: it folds away on the way.
     put(el.coin, `translate(${f1(lerp(A.cx, 0, k1))}px, ${f1(lerp(A.cy, 0, k1))}px) perspective(240px) rotateY(${(180 * flip).toFixed(1)}deg) scale(${lerp(A.cs, 1, k1).toFixed(3)})`, cell ? 1 - ramp(into, 0, 0.5) : 1)
-    if (el.badge) put(el.badge, null, A.o * (1 - ramp(z, 1.25, 1.55)) * (1 - ramp(P, 0, 0.25)))
+    // A phone draws the count at caption, on a coin large enough to carry it (dense crews: none).
+    const coinPx = COIN_PX * S * nodeK
+    const badgeK = live ? ` scale(${f4(pinned(SCENE_TYPE.small, BADGE_PX, S * nodeK))})` : null
+    if (el.badge) put(el.badge, badgeK && badgeK.trim(), A.o * (1 - ramp(z, 1.25, 1.55)) * (1 - ramp(P, 0, 0.25)) * (live ? ramp(coinPx, 14, 18) : 1))
   }
 
-  // ── the items' own thumbnails: each grows out of its first coin into the grid ──
+  // ── the items' own thumbnails: dealt out of the tile's deck into the grid (only the artifacts' path shows them) ──
   const pageIn = st.dir === 'items' && st.focusItem !== null ? ease(ramp(I, 0, 0.85)) : 0
   const asideAt = new Map(model.items.filter((i) => i.id !== st.focusItem).map((i, k) => [i.id, k] as const))
   for (const it of model.items) {
     const el = els.items.get(it.id)
     if (!el) continue
     const grid = L.thumbs.at[it.id] ?? { x: 0, y: 0 }
-    const first = firstLink.get(it.id)
-    const A = first ? linkAt.get(first.key) : undefined
-    const from = A ?? { x: 0, y: 0, s: 0.3, grow: 0 }
-    const w0 = lerp(22, 70, from.grow) * from.s
-    const h0 = lerp(22, 46, from.grow) * from.s
-    const gs = lerp(0.34, 0.42, from.grow)
-    const k1 = ease(ramp(P, 0.06, 0.46))
     const k2 = ease(ramp(P, 0.5, 0.94))
-    const sx = lerp(lerp(w0 / 168, gs, k1), 1, k2)
-    const sy = lerp(lerp(h0 / 108, gs, k1), 1, k2)
+    const sx = lerp(DECK_POSE.s, 1, k2)
+    const sy = sx
     const mine = it.id === st.focusItem
     // Into its full view (draft · ifull()): the thumbnail grows into the page;
     // the others step aside to the left (a phone: they only fade).
-    let nx = lerp(from.x, grid.x, k2)
-    let ny = lerp(from.y, grid.y, k2)
+    let nx = lerp(DECK_POSE.x, grid.x, k2)
+    let ny = lerp(DECK_POSE.y, grid.y, k2)
     let nsx = sx
     let nsy = sy
     // Grown, the thumbnail's words would be blown up: it fades by half-way, into the crisp head.
@@ -533,7 +606,11 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
       }
     }
     put(el.node, `translate(${f1(nx)}px, ${f1(ny)}px) scale(${f4(nsx)}, ${f4(nsy)})`, ramp(P, 0.04, 0.3) * out)
-    put(el.ttl, null, ramp(P, 0.7, 0.96) * (1 - ramp(iz, 0, 0.25)))
+    // Its words are set for the grid (--zv-k-thumbs): a phone shows them only at that size,
+    // so a thumbnail growing out of its coin or into its page carries none.
+    const gridWords = live ? near(S * Math.min(nsx, nsy), sw.rest.thumbs) : 1
+    if (live) wordsSeen(el.node, gridWords)
+    put(el.ttl, null, ramp(P, 0.7, 0.96) * (1 - ramp(iz, 0, 0.25)) * gridWords)
   }
 
   // ── ties: the cables between terminals, at the crew ──
@@ -558,11 +635,10 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   }
 
   // ── the label: under the ring, then the crew's corner, then above the shelf ──
-  // The device draws this group small (SWS inside the device's fit): its label grows there as its neighbours' do (deviceWords), back to 1 by the crew.
-  const dw = deviceWords(L.device, w, h, st.narrow)
-  // From the crew on, a phone draws it at caption on screen: the crew's factor, the card's toward the card stop.
-  const lz = st.dir === 'agents' ? lerp(sw.label.crew, sw.label.card, ease(clamp01(z - 1))) : sw.label.crew
-  const lk = lerp(lerp(lerp(1, lz, ease(clamp01(zIn))), sw.label.thumbs, pc), Math.min(dw.openK, dw.openW / Math.max(1, els.labelW)), 1 - ramp(zIn, -1, -0.3))
+  // A phone draws it at caption on screen on every frame, from the group to the artifacts.
+  // At the workspaces stop the tile wears the name: this one comes as the tile goes.
+  const lk = live ? pinned(SCENE_TYPE.small, SCENE_CSS.small, S) : 1
+  const labIn = ramp(zIn, TILE_GONE[0], TILE_GONE[1])
   const la = { x: -els.labelW / 2, y: 108 + (lk - 1) * 10 }
   const lb = crewLabelAt(L, st.narrow, sw.label.crew)
   const lc = { x: -L.thumbs.box.w / 2 + 50, y: L.thumbs.shelfY - 70 }
@@ -579,22 +655,26 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   let labSeen = 1
   if (z > 1 && st.dir === 'agents') {
     const k = ease(clamp01(z - 1))
-    const kc = sw.label.card
-    const spot = cardStopLabel(L, st.focus, w, h, st.narrow, { w: els.labelW * kc, h: els.labelH * kc })
+    const lc = sw.label.card
+    const spot = cardStopLabel(L, st.focus, w, h, st.narrow, { w: els.labelW * lc, h: els.labelH * lc })
     if (spot) {
-      // The spot is the label's top-left on screen; drawn at kc about its centre, it starts that much further in.
-      const sx = lerp(Ox + lab.x * S, spot.x - ((1 - kc) * els.labelW * S) / 2, k)
-      const sy = lerp(Oy + lab.y * S, spot.y - ((1 - kc) * els.labelH * S) / 2, k)
+      // The spot is the label's top-left on screen; drawn at lk about its centre, it starts that much further in.
+      const kk = live ? lk : lc
+      const sx = lerp(Ox + lab.x * S, spot.x - ((1 - kk) * els.labelW * S) / 2, k)
+      const sy = lerp(Oy + lab.y * S, spot.y - ((1 - kk) * els.labelH * S) / 2, k)
       labAt = { x: (sx - Ox) / S, y: (sy - Oy) / S }
     } else labSeen = 1 - k
   }
-  put(els.label, `translate(${f1(labAt.x)}px, ${f1(labAt.y)}px)${Math.abs(lk - 1) < 1e-4 ? '' : ` scale(${f4(lk)})`}`, labSeen * (1 - toFull) * (1 - ramp(iz * pc, 0, 0.3)))
-  // On a phone the caption shows from the group out of the device, never as specks on the device's marks.
-  const capIn = st.narrow ? ramp(zIn, -0.6, -0.2) : 1
+  put(els.label, `translate(${f1(labAt.x)}px, ${f1(labAt.y)}px)${Math.abs(lk - 1) < 1e-4 ? '' : ` scale(${f4(lk)})`}`, labSeen * labIn * (1 - toFull) * (1 - ramp(iz * pc, 0, 0.3)))
+  // The caption shows from the group out of the device: at the workspaces stop the tile's deck says it.
+  const capIn = ramp(zIn, TILE_GONE[0], TILE_GONE[1])
   const newSeen = (1 - ramp(z, 0.05, 0.3)) * (1 - pc) * capIn
-  put(els.newCap, `translate(${f1(NEW_POSE.x - 52)}px, ${f1(NEW_POSE.y + 40)}px)`, model.newest || els.newThumb ? newSeen : 0)
+  const capK = live ? ` scale(${f4(pinned(SCENE_TYPE.small, SCENE_CSS.newCap, S))})` : ''
+  put(els.newCap, `translate(${f1(NEW_POSE.x - 52)}px, ${f1(NEW_POSE.y + 40)}px)${capK}`, model.newest || els.newThumb ? newSeen : 0)
   // Carried by nobody's coin, it stands there on its own and goes as the group opens (draft · newestPose).
   put(els.newThumb, null, model.newest ? 0 : newSeen)
+  // A phone shows it as a picture: the caption beside it says what it is.
+  if (live && els.newThumb) wordsSeen(els.newThumb, 0)
 
   // ── the full-view panel: in screen space, from the focused card (or thumbnail) to the whole view ──
   let fromRect: { x: number; y: number; w: number; h: number } | null = null
@@ -622,5 +702,5 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
   // The shelf's "+N" chip: after its page's last face, as the thumbnails unfold, gone into an item's full view.
   const more = shelf.more
   put(els.shelfMore, more ? `translate(${f1(more.x - SHELF_FACE / 2)}px, ${f1(L.thumbs.shelf.y - SHELF_FACE / 2)}px)` : null, more ? ease(ramp(P, 0.4, 0.9)) * (1 - ramp(iz * pc, 0, 0.35)) : 0)
-  return { cover, scale: S, panMax }
+  return { cover, scale: S, panMax, tilesMax: dc.panMax }
 }

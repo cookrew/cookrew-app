@@ -156,6 +156,36 @@ describe('parseSessionTurns', () => {
     expect(turns[0].prompt).toBe('real prompt')
   })
 
+  // Measured on Claude Code 2.1.316 (2026-11-04): Esc on a question or a
+  // permission writes the rejected tool's result, then this line, then rests.
+  describe('a turn the owner stopped', () => {
+    const declined = [
+      user('ask me something', T('00:00')),
+      assistant([{ type: 'tool_use', id: 't1', name: 'AskUserQuestion', input: {} }], T('00:01'), 'tool_use'),
+      user([{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'The user doesn\'t want to proceed with this tool use.' }], T('00:02')),
+      user([text('[Request interrupted by user for tool use]')], T('00:02'))
+    ]
+    it('is over, and says how: nothing else will ever close it', () => {
+      const [turn] = parseSessionTurns(declined)
+      expect(turn.final).toBe(true)
+      expect(turn.outcome).toBe('interrupted')
+    })
+    it('the same for an Esc mid-thought', () => {
+      const [turn] = parseSessionTurns([user('go', T('00:00')), user('[Request interrupted by user]', T('00:01'))])
+      expect(turn).toMatchObject({ final: true, outcome: 'interrupted' })
+    })
+    it('more from the agent reopens it, and the outcome goes with the finality', () => {
+      const [turn] = parseSessionTurns([...declined, assistant([text('carrying on')], T('00:03'), 'tool_use')])
+      expect(turn.final).toBeUndefined()
+      expect(turn.outcome).toBeUndefined()
+    })
+    it('the next prompt is a turn of its own, and the stopped one stays stopped', () => {
+      const turns = parseSessionTurns([...declined, user('say PONG', T('00:04')), assistant([text('PONG')], T('00:05'), 'end_turn')])
+      expect(turns.map((t) => t.outcome)).toEqual(['interrupted', undefined])
+      expect(turns[1].final).toBe(true)
+    })
+  })
+
   it('keeps the LAST assistant text as the reply', () => {
     const turns = parseSessionTurns([
       user('do it', T('00:00')),

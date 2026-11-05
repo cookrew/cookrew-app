@@ -208,14 +208,17 @@ describe('the box, drawn', () => {
     const { GlobalPrompt } = await import('../src/renderer/src/prompt/GlobalPrompt')
     const agents = [{ id: 'l', name: 'Lark', remote: false }]
     const full = renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: 'l', agents, harnesses: ['Claude Code', 'Codex'], nodes: [] }))
-    expect(full).toContain('@Lark')
-    expect(full).toContain('placeholder="Reply… · # a note or browser"')
+    expect(full).toMatch(/class="cr-prompt-to pf-chip"[^]*<b>Lark<\/b>/)
+    expect(full).toContain('placeholder="Reply to Lark…"')
     expect(full).toContain('voice-bar')
     expect(full.match(/aria-label="Send"/g)?.length).toBe(1)
     const none = renderToStaticMarkup(createElement(GlobalPrompt, { fullAgentId: null, agents, harnesses: ['Claude Code', 'Codex'], nodes: [] }))
     expect(none).toContain('＋ Claude Code ▾')
-    expect(none).toContain('Describe a task for a new agent')
-    expect(none).not.toContain('voice-bar')
+    expect(none).toContain('placeholder="Describe a task for a new agent…"')
+    // The extras stay for a new agent (owner, 2026-11-03); the agent's keys do not.
+    expect(none).toContain('voice-attach')
+    expect(none).toContain('voice-speak')
+    expect(none).not.toContain('term-key')
   })
 })
 

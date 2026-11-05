@@ -12,6 +12,31 @@ import { createScrubber, REDACTED } from '../src/main/scrub'
 import { SOUS_GATEWAY_KEY_FALLBACK, sousGatewayKey } from '../src/main/sous-config'
 import type { InboxRow } from '../src/shared/inbox-rank'
 
+describe('a served pane and the owner\'s screen', () => {
+  it('names the frames and screenshots on disk, and the remote desktop file', () => {
+    const paths = ownerSecretPaths('/h/.cookrew', '/h', 'cookrew', {})
+    for (const p of ['/h/Library/Application Support/cookrew/use-capture', '/h/Library/Application Support/cookrew/use-shots', '/h/.cookrew/remote-control.json']) expect(paths).toContain(p)
+  })
+
+  it('the profile refuses the tools and the window server a capture needs', () => {
+    const profile = seatbeltProfile({ sandbox: '/s/svc/a', siblingRoot: '/s/svc', sessionsRoot: '/s', secretPaths: [] })
+    const rules = [
+      '(deny process-exec (literal "/usr/sbin/screencapture"))',
+      '(deny process-exec (literal "/usr/bin/osascript"))',
+      '(deny process-exec (literal "/usr/bin/open"))',
+      '(deny process-exec (literal "/bin/launchctl"))',
+      '(deny mach-lookup (global-name "com.apple.windowserver.active"))',
+      // A copied binary gets past a literal path. These are what stop it.
+      '(deny mach-lookup (global-name "com.apple.replayd"))',
+      '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd"))'
+    ]
+    for (const rule of rules) {
+      expect(profile).toContain(rule)
+      expect(profile.indexOf(rule)).toBeGreaterThan(profile.indexOf('(allow process-exec process-fork signal)'))
+    }
+  })
+})
+
 describe('the served deny list (item 1)', () => {
   const paths = ownerSecretPaths('/home/owner/.cookrew', '/home/owner', undefined, { XDG_CONFIG_HOME: '/xdg' })
   it('names Magpie\'s config under ~/.config and under XDG, the Sous ledger and facts, the route file and the Sous key', () => {

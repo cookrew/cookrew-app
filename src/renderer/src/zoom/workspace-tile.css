@@ -1,0 +1,333 @@
+/* ── A WORKSPACE'S TILE (WorkspaceTile.tsx; owner, 2026-11-04) ──
+   One bench: the agents' faces on the left, the artifacts' deck on the right,
+   a name over both, each group a door. Everything is placed in a mark's units
+   (zoom-layout.ts · TILE, DECK_POSE, TILE_SPLIT: keep the numbers here with
+   them). What must look the same at every per-row pick (the hairline, the
+   corners, the words' margins) is multiplied by --zv-k, how many of a mark's
+   units make a pixel on screen at rest (zoom-camera.ts · deviceWords). */
+
+.zv-mark {
+  --zv-tile-r: calc(12px * var(--zv-k, 1));
+  --zv-pad: 11px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.zv-mark > * {
+  pointer-events: none;
+}
+
+.zv-mark .zv-av {
+  will-change: auto;
+}
+
+.zv-tile {
+  position: absolute;
+  left: -112px;
+  top: var(--zv-tile-top, -174px);
+  width: 430px;
+  height: var(--zv-tile-h, 318px);
+  border-radius: var(--zv-tile-r);
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-hair-2),
+    0 calc(1px * var(--zv-k, 1)) calc(3px * var(--zv-k, 1)) var(--zv-shadow-sm);
+}
+
+/* The open one: in ink. The header says its name too; this says which tile that is. */
+.zv-mark[data-open] .zv-tile {
+  box-shadow:
+    inset 0 0 0 calc(1.5px * var(--zv-k, 1)) var(--zv-ink),
+    0 calc(1px * var(--zv-k, 1)) calc(3px * var(--zv-k, 1)) var(--zv-shadow-sm);
+}
+
+/* ── the two doors: the tile's two halves, under the words, over the groups ── */
+.zv-mark > .zv-door {
+  appearance: none;
+  position: absolute;
+  z-index: 20;
+  top: var(--zv-tile-top, -174px);
+  height: var(--zv-tile-h, 318px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  /* The layer's: the painter closes the doors where the tiles are only a picture (zoom-frame.ts). */
+  pointer-events: inherit;
+  transition: background-color 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.zv-door.agents {
+  left: -112px;
+  width: 210px;
+  border-radius: var(--zv-tile-r) 0 0 var(--zv-tile-r);
+}
+
+.zv-door.items {
+  left: 98px;
+  width: 220px;
+  border-radius: 0 var(--zv-tile-r) var(--zv-tile-r) 0;
+}
+
+/* Nothing to open on its right: the agents' door is the whole tile. */
+.zv-door.agents.whole {
+  width: 430px;
+  border-radius: var(--zv-tile-r);
+}
+
+.zv-door:active {
+  background: var(--zv-wash);
+}
+
+@media (hover: hover) {
+  .zv-door:hover {
+    background: var(--zv-wash);
+  }
+}
+
+.zv-door:focus-visible {
+  outline: calc(2px * var(--zv-k, 1)) solid var(--zv-seal);
+  outline-offset: calc(-2px * var(--zv-k, 1));
+}
+
+/* ── the deck: real things, a sheet each; its depth is how much the workspace holds ── */
+.zv-deck {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+}
+
+.zv-sheet {
+  position: absolute;
+  left: -84px;
+  top: -54px;
+  width: 168px;
+  height: 108px;
+  border-radius: calc(3px * var(--zv-k, 1));
+  box-shadow: 0 calc(1px * var(--zv-k, 1)) calc(2.5px * var(--zv-k, 1)) var(--zv-shadow);
+}
+
+/* Its edge in the faces' ink: the two groups weigh the same on the tile. */
+.zv-sheet.zv-th::before {
+  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-rule);
+}
+
+.zv-sheet.zv-th.blank::before {
+  box-shadow: inset 0 0 0 calc(1px * var(--zv-k, 1)) var(--zv-hair-2);
+}
+
+.zv-sheet.blank {
+  background: var(--zv-card);
+}
+
+.zv-sheet.empty {
+  border: calc(1px * var(--zv-k, 1)) dashed var(--zv-hair-2);
+  box-shadow: none;
+}
+
+.zv-mark .zv-sheet .zv-bar {
+  height: 20px;
+  padding-left: 0;
+}
+
+.zv-mark .zv-sheet .zv-shot {
+  height: calc(100% - 20px);
+}
+
+.zv-mark .zv-sheet .zv-pg {
+  gap: 9px;
+  padding: 11px 13px;
+}
+
+.zv-mark .zv-sheet .zv-pg b {
+  height: 26px;
+  border-radius: 4px;
+}
+
+.zv-mark .zv-sheet .zv-pg i {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.zv-mark .zv-sheet .zv-nt {
+  gap: 11px;
+  padding: 24px 16px 0;
+}
+
+.zv-mark .zv-sheet .zv-nt i {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--zv-hair-2);
+}
+
+.zv-sheet.zv-th.note {
+  border-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% 100%, 0 100%);
+}
+
+.zv-sheet.zv-th.note::after {
+  width: 22px;
+  height: 22px;
+}
+
+/* ── the words: 1:1 on screen, inside the frame; the painter scales them about these corners ── */
+.zv-tw {
+  position: absolute;
+  z-index: 21;
+  white-space: nowrap;
+  color: var(--zv-ink-soft);
+}
+
+.zv-tile-name {
+  left: calc(-112px + var(--zv-pad) * var(--zv-k, 1));
+  top: calc(var(--zv-tile-top, -174px) + 7px * var(--zv-k, 1));
+  /* The frame's width in a word's own px, less the margins. */
+  max-width: calc(430px / var(--zv-k, 1) - 2 * var(--zv-pad));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform-origin: 0 0;
+  font: 600 14px/1.3 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+/* Who is waiting, in the corner, in the red that always says so. */
+.zv-tile-wait {
+  right: calc(-318px + 7px * var(--zv-k, 1));
+  top: calc(var(--zv-tile-top, -174px) + 7px * var(--zv-k, 1));
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  box-sizing: border-box;
+  transform-origin: 100% 0;
+  background: var(--zv-wait);
+  color: var(--zv-on-seal);
+  font: 600 10px/16px var(--zv-mono);
+  text-align: center;
+}
+
+.zv-mark[data-waiting] .zv-tile-name {
+  max-width: calc(430px / var(--zv-k, 1) - 2 * var(--zv-pad) - 20px);
+}
+
+.zv-tile-cap {
+  /* The frame's foot, from the mark's origin: its top and height are the pick's (tileOf). */
+  top: calc(var(--zv-tile-top, -174px) + var(--zv-tile-h, 318px) - 23px * var(--zv-k, 1));
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 16px;
+  transform-origin: 0 0;
+  font: 10px/16px var(--zv-mono);
+  letter-spacing: 0.02em;
+}
+
+.zv-tile-cap {
+  overflow: hidden;
+}
+
+/* Each caption inside its door, in its own px. */
+.zv-tile-cap.agents {
+  left: calc(-112px + var(--zv-pad) * var(--zv-k, 1));
+  max-width: calc(210px / var(--zv-k, 1) - var(--zv-pad));
+}
+
+.zv-tile-cap.items {
+  left: 104px;
+  max-width: calc(214px / var(--zv-k, 1) - 4px);
+}
+
+.zv-tile-cap small {
+  font: inherit;
+}
+
+.zv-tile-cap em {
+  font-style: italic;
+  color: var(--zv-muted);
+}
+
+.zv-tile-cap .zv-seal {
+  flex: none;
+  width: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 2px;
+  font: 600 10px/16px var(--zv-mono);
+}
+
+.zv-tile-cap .zv-split,
+.zv-tile-cap .zv-split > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.zv-tile-cap .zv-split {
+  gap: 7px;
+}
+
+.zv-tile-cap :is(.zv-total, .zv-zero) {
+  display: none;
+}
+
+/* What a smaller tile lets go: the word beside the seal, then the split, then the counts. */
+.zv-device[data-density='snug'] .zv-tile-cap small,
+.zv-device[data-density='compact'] .zv-tile-cap small,
+.zv-device[data-density='compact'] .zv-tile-cap .zv-split {
+  display: none;
+}
+
+.zv-device[data-density='compact'] .zv-tile-cap .zv-total {
+  display: inline;
+}
+
+/* A snug tile keeps the split while it fits, closer together; past that, the total. */
+.zv-device[data-density='snug'] .zv-tile-cap .zv-split {
+  gap: 4px;
+}
+
+.zv-device[data-density='snug'] .zv-tile-cap .zv-split > span {
+  gap: 2px;
+}
+
+.zv-device[data-density='snug'] .zv-tile-cap[data-long] .zv-split {
+  display: none;
+}
+
+.zv-device[data-density='snug'] .zv-tile-cap[data-long] .zv-total {
+  display: inline;
+}
+
+/* "No artifacts" has no room under a smaller deck: a plain zero says it. */
+.zv-device:is([data-density='snug'], [data-density='compact']) .zv-tile-cap em {
+  display: none;
+}
+
+.zv-device:is([data-density='snug'], [data-density='compact']) .zv-tile-cap .zv-zero {
+  display: inline;
+  color: var(--zv-muted);
+}
+
+.zv-device[data-density='tiny'] .zv-tile-cap {
+  display: none;
+}
+
+/* Tiny, the name takes the caption's size: more of it reads than at its own. */
+.zv-device[data-density='tiny'] .zv-tile-name {
+  font-size: 10px;
+}
+
+.zv-device[data-density='tiny'] .zv-mark {
+  --zv-pad: 6px;
+}

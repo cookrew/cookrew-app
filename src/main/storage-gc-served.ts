@@ -90,8 +90,8 @@ export function servedSessionCandidates(sessionsRoot: string): GcCandidate[] | n
 /**
  * Has this sandbox been written to since the plan was made? Asked once more,
  * immediately before `rm -rf`, because the plan's open set is a snapshot and
- * the mint is not atomic: `sandboxRoot` creates (or, after a restart, RE-USES
- * — ordinals restart at 1) the directory before the instantiator registers
+ * the mint is not atomic: `sandboxRoot` creates (or, if one is somehow still
+ * there, RE-USES) the directory before the instantiator registers
  * the session, and the fork it awaits takes seconds. A sweep that measured
  * the old directory before that mint would otherwise delete a booting crew's
  * HOME. `sandboxRoot` refreshes the directory's mtime for exactly this

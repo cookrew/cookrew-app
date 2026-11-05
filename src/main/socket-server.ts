@@ -1,5 +1,6 @@
+import type { CloseOutcome } from './terminal-close'
 import net from 'node:net'
-import { existsSync, unlinkSync } from 'node:fs'
+import { removeLines, type WorkspaceCheck, type WorkspaceRemovePlan } from '../shared/workspace-door'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
@@ -19,7 +20,10 @@ import {
 } from '../shared/model'
 import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
+import { claimSocket, type SocketClaim } from './socket-claim'
+import { noteWriteReply, parseNoteWrite } from './note-write-guard'
 import { reachByName, type ReachKind } from './ask-reach'
+import { adoptedNoteAnswer, findClaimedNote } from './note-adopt'
 import type { PairingHandout } from '../shared/account-v2'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { renderMobileHelp, renderRotated } from './mobile-cli-text'
@@ -28,18 +32,22 @@ import { AgentRegistry, AgentRegistryEntry } from './agent-registry'
 import { planRecruitTarget } from '../shared/workspace-dirs'
 import { cleanAgentName, nameFromPrompt } from '../shared/agent-name'
 import type { RenameOutcome } from './agent-rename'
-import { deliverToRecruit } from './recruit-delivery'
+import { deliverToRecruit, type RecruitDeliveryOptions, type RecruitEvidence, type RecruitWitness } from './recruit-delivery'
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
+import { adoptRequestPictures } from './picture-adopt'
 import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
+import { cmdBrowserScoped } from './cli-browser'
 import {
-  DeliveryError,
+  dispatchEndError,
   deliverAndConfirm,
   replyText,
   terminalDeliveryDeps
 } from './ask-delivery'
-import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import { cmdSecret, isServedPane, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import { LOGIN_EXIT, LoginDoor, LoginRefused, type AccountDoor, type LoginAudit, type LoginConnection } from './login-cli'
+import { paneInputs } from './pane-input'
 import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
@@ -48,12 +56,18 @@ import type { SousCommandInput, SousCommandResult } from './sous-control'
 import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
+import { staleBooleanFlagError } from './cli-flags'
+import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
+  /** A brief's pictures copied into the attach store, the brief naming the copies (picture-adopt.ts). */
+  adoptPictures?: (text: string) => Promise<string>
   store: WorkspaceStore
   ptys: PtyManager
   /** Spawn a terminal's PTY with turn tracking (same path as IPC creation). */
-  spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
+  spawnTerminal: (t: { id: string; command: string; cwd: string }) => unknown
+  /** End a teammate and take its card, once the process is proved gone (index.ts · removeNode). */
+  dismissTerminal: (id: string) => Promise<CloseOutcome>
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
   /**
@@ -63,6 +77,15 @@ export interface SocketServerDeps {
    * silently falling back to a blocking ask the caller did not ask for.
    */
   dispatch?: DispatchService
+  /**
+   * The conductor's view of a card `cookrew recruit --prompt` just made
+   * (recruit-delivery.ts): the brief waits for the harness's input prompt and
+   * is called delivered only on evidence. Absent, the engine's record alone
+   * decides, as in a test server with no panes.
+   */
+  recruitWitness?: RecruitWitness
+  /** Test seam for the recruit brief's windows; production uses the defaults. */
+  recruitTiming?: Pick<RecruitDeliveryOptions, 'admissionMs' | 'readyMs' | 'confirmMs' | 'retryMs'>
   /**
    * Light the cable between the asking pane and the agent it asks
    * (cable-signal.ts): once when the prompt is submitted, once when the reply
@@ -78,7 +101,7 @@ export interface SocketServerDeps {
    * agent name (index.ts · renameCard). Absent in a test server that has
    * none: `cookrew rename` then says so.
    */
-  renameCard?: (id: string, wanted: string, onClash: 'refuse' | 'suffix') => RenameOutcome
+  renameCard?: (id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string) => RenameOutcome
   /**
    * Sous's name for a card recruited from a prompt, once it answers (null: it
    * had none, or the card was renamed meanwhile). index.ts · autoNameTerminal.
@@ -90,6 +113,14 @@ export interface SocketServerDeps {
    */
   secrets?: SecretsStore
   audit?: (event: SecretAudit) => void
+  /**
+   * `cookrew login`, `logout`, `whoami` (login-cli.ts). A function because the
+   * account's channels are registered after this server starts. Null or absent:
+   * the verbs refuse.
+   */
+  account?: () => AccountDoor | null
+  /** The line each attempt leaves in the event log. Never anything typed. */
+  auditLogin?: (event: LoginAudit) => void
   /**
    * Was this terminal spawned for a served session? Read for the secret verbs
    * only, and REQUIRED: an optional predicate fails open when nobody wires it.
@@ -111,6 +142,13 @@ export interface SocketServerDeps {
     terminalId: string
     workspaceId: string
   }) => { name: string; adopted: boolean }
+  /**
+   * True when browser cards are node-owned headless pages held by main, so a
+   * card of ANY workspace can be driven whatever the window shows
+   * (cli-browser.ts). Absent/false: the renderer's webviews, which exist only
+   * for the canvas on screen.
+   */
+  browserAnyWorkspace?: () => boolean
   notify: (message: string) => void
   /** Debug helper: capture the app window to a PNG, returns the file path. */
   captureWindow: () => Promise<string>
@@ -137,11 +175,15 @@ export interface SocketServerDeps {
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => WorkspaceCheck
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (nameOrId: string) => Promise<WorkspaceRemovePlan>
   /** FEATURE 1: workspace pre-populated from a saved team template. */
   createWorkspaceFromTeam: (name: string, dir: string, team: string) => Promise<WorkspaceMeta>
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
   /** Workspace v2: remove + multi-directory + per-terminal cwd + git. */
-  removeWorkspace: (nameOrId: string) => WorkspaceList
+  removeWorkspace: (nameOrId: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
   setPrimaryDir: (id: string, dir: string) => WorkspaceList
@@ -159,13 +201,26 @@ export interface SocketServerDeps {
   roleDelete: (name: string) => boolean
 }
 
+export interface SocketServerHandle {
+  server: net.Server
+  /**
+   * Settles (never rejects) once the path is probed: owned, or left to the
+   * Cookrew already answering on it (socket-claim.ts). Release it on quit.
+   */
+  claim: Promise<SocketClaim>
+}
+
 /**
  * Newline-delimited JSON server on a Unix socket. This is the `cookrew` CLI's
  * backend over the local bridge socket.
+ *
+ * The path is shared by every Cookrew under this TMPDIR, so it is never
+ * taken from a live owner: a second instance runs without a CLI socket
+ * instead of cutting the whole fleet off theirs.
  */
-export function startSocketServer(deps: SocketServerDeps): net.Server {
+export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
   const { ptys } = deps
-  if (existsSync(ptys.socketPath)) unlinkSync(ptys.socketPath)
+  const login = loginDoorFor(deps)
 
   const server = net.createServer((socket) => {
     let buffer = ''
@@ -175,31 +230,74 @@ export function startSocketServer(deps: SocketServerDeps): net.Server {
       while (newline !== -1) {
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
-        void handleLine(line, socket, deps)
+        void handleLine(line, socket, deps, login)
         newline = buffer.indexOf('\n')
       }
     })
     socket.on('error', () => socket.destroy())
   })
 
-  server.listen(ptys.socketPath)
-  return server
+  const claim = claimSocket(server, ptys.socketPath).then(
+    (outcome) => {
+      if (!outcome.owned) {
+        console.warn(
+          `Cookrew CLI socket left alone at ${outcome.path}: ${outcome.reason}. ` +
+            'This instance runs without one.'
+        )
+      }
+      return outcome
+    },
+    (error: unknown): SocketClaim => {
+      console.error(`Starting the CLI socket at ${ptys.socketPath} failed:`, error)
+      return { owned: false, path: ptys.socketPath, reason: 'binding failed', release: () => undefined }
+    }
+  )
+  return { server, claim }
+}
+
+/**
+ * THE ONE PLACE A TYPED ANSWER EXISTS AS A REQUEST FIELD.
+ *
+ * `cookrew login` sends what a person typed in `secret`, never in `args` or
+ * `flags`, and it comes off here, ahead of everything: from this line on
+ * `request` cannot carry a password into a dispatch, a log, an error or a
+ * retry, whatever is added to those later. Only the login door gets it.
+ */
+const takeSecret = (sent: CliRequest & { secret?: unknown }): { request: CliRequest; secret: string | undefined } => {
+  const { secret, ...request } = sent
+  return { request, secret: typeof secret === 'string' ? secret : undefined }
+}
+
+const LOGIN_VERBS: ReadonlySet<string> = new Set(['login', 'logout'])
+
+/** A verb that speaks for the account, not for a card. */
+const answerAccountVerb = (
+  request: CliRequest,
+  secret: string | undefined,
+  connection: LoginConnection,
+  login: LoginDoor
+): Promise<string> | null => {
+  if (LOGIN_VERBS.has(request.cmd)) return login.handle(request, secret, connection)
+  return request.cmd === 'whoami' ? Promise.resolve().then(() => login.whoami(request)) : null
 }
 
 async function handleLine(
   line: string,
   socket: net.Socket,
-  deps: SocketServerDeps
+  deps: SocketServerDeps,
+  login: LoginDoor
 ): Promise<void> {
-  let request: CliRequest
+  let sent: CliRequest
   try {
-    request = JSON.parse(line) as CliRequest
+    sent = JSON.parse(line) as CliRequest
   } catch {
     socket.write(JSON.stringify({ id: 'unknown', ok: false, error: 'Bad request JSON' }) + '\n')
     return
   }
+  const { request, secret } = takeSecret(sent)
   try {
-    const output = await retryTransient(() => dispatch(request, deps))
+    const output = await (answerAccountVerb(request, secret, socket, login) ??
+      retryTransient(() => dispatch(request, deps)))
     respond(socket, { id: request.id, ok: true, output })
   } catch (error) {
     respond(socket, {
@@ -262,8 +360,16 @@ function respond(socket: net.Socket, response: CliResponse): void {
 
 // ---- command dispatch ----
 
-async function dispatch(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<string> {
+  // A brief's pictures outside the attach store go into it, so the phone can draw them (picture-adopt.ts).
+  const request = deps.adoptPictures ? await adoptRequestPictures(sent, deps.adoptPictures) : sent
   const { cmd, args } = request
+  // A lone - the client did not expand would reach the agent as its brief.
+  const unread = stdinPlaceholderError(request)
+  if (unread) throw new Error(unread)
+  // A valueless flag that arrives with a value swallowed one of the args.
+  const swallowed = staleBooleanFlagError(request)
+  if (swallowed) throw new Error(swallowed)
   switch (cmd) {
     case 'list':
       return cmdList(request, deps)
@@ -496,6 +602,25 @@ export function tryCallerWorkspaceId(
   }
 }
 
+/**
+ * A card of the CALLER's canvas by name — the canvas on screen only for a
+ * caller no workspace holds (a plain shell, a registry-only identity). Owner
+ * ruling 2026-11-04: what a command sees never depends on what the window
+ * shows, and a same-named card on screen must never be the one acted on.
+ */
+function callerCanvasNodeByName(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  name: string,
+  kind?: CanvasNode['kind']
+): CanvasNode | undefined {
+  const workspaceId = tryCallerWorkspaceId(request, deps) ?? deps.store.focusedId
+  const wanted = name.toLowerCase()
+  return deps.store
+    .workspaceState(workspaceId)
+    .nodes.find((n) => n.name.toLowerCase() === wanted && (kind === undefined || n.kind === kind))
+}
+
 function requireOrch(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
   const me = self(request, deps)
   if (!me.orch) throw new Error('This terminal is not the Orch')
@@ -659,6 +784,30 @@ export function cliWorkspaceScope(input: {
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const me = self(request, deps)
+  // Owner ruling 2026-11-04: every workspace works on its own. With the
+  // headless engine nothing about a browser depends on the canvas on screen.
+  if (deps.browserAnyWorkspace?.()) {
+    return cmdBrowserScoped({
+      me,
+      args: request.args,
+      flags: request.flags,
+      store: deps.store,
+      served: deps.isServed(me.id),
+      createScope: () => {
+        const homeId = deps.store.ownerOf(me.id)
+        return cliWorkspaceScope({
+          wanted: typeof request.flags.workspace === 'string' ? String(request.flags.workspace) : null,
+          all: deps.listWorkspaces().workspaces,
+          caller: homeId === undefined ? null : { id: homeId, name: workspaceName(deps, homeId) },
+          focused: deps.store.focusedId
+        })
+      },
+      browserCommand: deps.browserCommand,
+      createElsewhere: deps.createBrowserInWorkspace,
+      wire: (otherId, via) => wire(deps, me, otherId, via),
+      signal: deps.signal
+    })
+  }
   // DELIBERATELY focus, not the caller's workspace. Everything below resolves
   // through focused-scoped lookups (node/nodeByName) and browserCommand drives
   // the engine this process actually booted, so `active` here means "where a
@@ -880,8 +1029,14 @@ function cmdListCanvas(request: CliRequest, deps: SocketServerDeps): string {
   const activeId = scope.id
   const nodes = deps.store.workspaceState(activeId).nodes
   const wsName = deps.listWorkspaces().workspaces.find((w) => w.id === activeId)?.name ?? activeId
+  // The listed workspace's own cables — never the canvas on screen's.
+  const { connections } = deps.store.workspaceState(activeId)
   const terminalNames = (id: string): string[] =>
-    deps.store.connectedTo(id).filter((n) => n.kind === 'terminal').map((n) => n.name)
+    connections
+      .filter((c) => c.a === id || c.b === id)
+      .map((c) => nodes.find((n) => n.id === (c.a === id ? c.b : c.a)))
+      .filter((n): n is CanvasNode => n !== undefined && n.kind === 'terminal')
+      .map((n) => n.name)
   const lines: string[] = [`Everything on "${wsName}" (${nodes.length} card${nodes.length === 1 ? '' : 's'}):`]
   for (const kind of ['terminal', 'note', 'browser'] as const) {
     const group = nodes.filter((n) => n.kind === kind)
@@ -921,7 +1076,7 @@ function cmdListAll(deps: SocketServerDeps): string {
 
 async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
-  if (!name) throw new Error('Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" --raw "bytes"')
+  if (!name) throw new Error(`Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" - <<'EOF' (brief on stdin) | cookrew ask "Agent" --raw "bytes"`)
   const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
   let session = deps.ptys.get(target.id)
   let cold = false
@@ -1091,16 +1246,11 @@ function cmdDispatch(request: CliRequest, deps: SocketServerDeps): string {
     error?: string
     hasReply?: boolean
   }
+  if (record.state === 'failed' || record.state === 'interrupted') throw dispatchEndError(record, dispatchId)
   const lines = [`${record.agentName ?? dispatchId}: ${record.state}`]
   if (record.turnIndex !== undefined) lines.push(`turn ${record.turnIndex}`)
   if (record.hasReply) lines.push('reply recorded')
   if (record.error) lines.push(record.error)
-  // A dispatch that ENDED without completing must not exit 0 — the same rule
-  // the ask verb follows. `interrupted` is deliberately not `failed`: the work
-  // may well have happened, we simply stopped being able to see it.
-  if (record.state === 'failed' || record.state === 'interrupted') {
-    throw new DeliveryError('unverifiable', record.agentName ?? dispatchId)
-  }
   return lines.join(' · ')
 }
 
@@ -1138,9 +1288,12 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
  * node's `servedSession`, which marks the owner's receipt of a session
  * served somewhere else.
  */
-export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
-  const refuse = (why: string): SecretCliError =>
+export function ownerPaneOf(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  refuse: (why: string) => Error = (why) =>
     new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused)
+): TerminalNodeData {
   if (typeof request.flags.as === 'string') throw refuse('--as names another pane')
   if (!request.terminalId) throw refuse('this shell is not a Cookrew terminal')
   const identity = resolveCallerTerminalId({
@@ -1155,6 +1308,46 @@ export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): Termin
   return node
 }
 
+/** The caller of `cookrew login`: the rule `cookrew secret` keeps, in its own words. */
+function loginPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  // Nothing is read here, so the rule's own "never readable from" loses a word.
+  const refuse = (why: string): LoginRefused =>
+    new LoginRefused(`refused: signing in is the owner's — ${why.replace('readable ', '')}`, LOGIN_EXIT.refused)
+  // The refusal a person on a windowless machine meets first, over SSH, so it
+  // says where to go rather than only what this shell is not.
+  if (!request.terminalId && typeof request.flags.as !== 'string') {
+    throw refuse('this shell is not a Cookrew terminal. Run it in a Shell card (cookrew recruit --preset Shell)')
+  }
+  const pane = ownerPaneOf(request, deps, refuse)
+  if (isServedPane(pane)) throw refuse('never from a served session')
+  return pane
+}
+
+/**
+ * An agent's tools only run in its turn, so a pane mid-turn is not a person at
+ * a shell. `waiting` is a turn too: the agent is held at its own menu.
+ */
+const agentMidTurn = (terminalId: string, deps: SocketServerDeps): boolean => {
+  // A pane with no mirror here is tracked by nobody; herdr still knows.
+  const phase = deps.turns.phaseOf(terminalId) ?? deps.turns.backendPhaseFor(terminalId)
+  return phase === 'thinking' || phase === 'waiting'
+}
+
+function loginDoorFor(deps: SocketServerDeps): LoginDoor {
+  return new LoginDoor({
+    account: () => deps.account?.() ?? null,
+    ownerPane: (request) => loginPaneOf(request, deps),
+    agentBusy: (terminalId) => agentMidTurn(terminalId, deps),
+    driven: (terminalId) => paneInputs.driven(terminalId),
+    // By id, so it holds whether or not a session here is mirroring the pane.
+    seal: (terminalId) => {
+      deps.turns.dropDraft(terminalId)
+      return paneInputs.seal(terminalId)
+    },
+    audit: (event) => deps.auditLogin?.(event)
+  })
+}
+
 /** `cookrew secret …` (secret-cli.ts), with the caller held to ownerPaneOf. */
 function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
   if (!deps.secrets) {
@@ -1167,12 +1360,32 @@ function cmdSecretVerb(request: CliRequest, deps: SocketServerDeps): string {
   })
 }
 
+/** Wire the caller to a note it tried to create again, and say whose it is. */
+function adoptNote(me: TerminalNodeData, note: NoteNodeData, deps: SocketServerDeps): string {
+  const alreadyWired = connectedOf(deps.store, me.id).some((hit) => hit.node.id === note.id)
+  if (!alreadyWired) deps.store.connectAcross(me.id, note.id)
+  const holders = connectedOf(deps.store, note.id)
+    .map((hit) => hit.node)
+    .filter((node) => node.kind === 'terminal' && node.id !== me.id)
+    .map((node) => node.name)
+  return adoptedNoteAnswer(note, holders, alreadyWired)
+}
+
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, ...rest] = request.args
   const me = self(request, deps)
   switch (sub) {
     case 'create': {
       const content = rest[0] ?? ''
+      // A NOTE WITH THE SAME NAME IS THE SAME NOTE (note-adopt.ts): a first
+      // line naming a note already on the caller's canvas wires the caller to
+      // it and leaves its content alone, unless the caller says --new.
+      if (!request.flags.new) {
+        const home = deps.store.ownerOf(me.id)
+        const canvas = home ? deps.store.workspaceState(home) : deps.store.focusedState
+        const existing = findClaimedNote(content, canvas.nodes)
+        if (existing) return adoptNote(me, existing, deps)
+      }
       // THE CALLER'S CANVAS, NEVER THE ONE ON SCREEN. A note is made beside
       // the terminal that asked for it, and that terminal belongs to exactly
       // one workspace; using the focused one put every agent's card on
@@ -1203,12 +1416,18 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       return [`[${lines.length} lines total]`, ...numbered].join('\n')
     }
     case 'write': {
-      const note = reachCard(request, deps, rest[0], 'note', 'note write') as NoteNodeData
+      // Refused before the card is reached: a write with no content (or a
+      // stray flag) must neither clobber the note nor lay a cable to it.
+      const write = parseNoteWrite(rest, request.flags)
+      const note = reachCard(request, deps, write.name, 'note', 'note write') as NoteNodeData
       if (note.locked) throw new Error(`Note '${note.name}' is locked`)
-      deps.store.writeNote(note.id, rest[1] ?? '')
+      const written = deps.store.writeNote(note.id, write.content)
+      if (!written) throw new Error(`Note '${note.name}' was not written`)
       // Writing puts words in: agent → note.
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('write') ?? 'write' })
-      return 'OK'
+      // The name follows the first line, so a write can rename the note —
+      // the silent part of the old clobber. Say so.
+      return noteWriteReply(note.name, written.name)
     }
     case 'edit': {
       const note = reachCard(request, deps, rest[0], 'note', 'note edit') as NoteNodeData
@@ -1220,7 +1439,9 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
       if (!note.content.includes(oldText)) {
         throw new Error(`Text not found in note '${note.name}'`)
       }
-      deps.store.writeNote(note.id, note.content.replace(oldText, newText))
+      if (!deps.store.writeNote(note.id, note.content.replace(oldText, newText))) {
+        throw new Error(`Note '${note.name}' was not written`)
+      }
       deps.signal?.({ from: me.id, to: note.id, kind: noteVerbKind('edit') ?? 'write' })
       return 'OK'
     }
@@ -1234,7 +1455,7 @@ export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
   }
 }
 
-function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   requireOrch(request, deps)
   const [fromName, toName] = request.args
   if (!fromName || !toName) throw new Error('Usage: cookrew connect "From" "To"')
@@ -1243,7 +1464,7 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
   const resolve = (name: string): CanvasNode => {
     const found =
       reach.find((n) => n.name.toLowerCase() === name.toLowerCase()) ??
-      deps.store.nodeByName(name)
+      callerCanvasNodeByName(request, deps, name)
     if (!found) throw new Error(`'${name}' not found`)
     return found
   }
@@ -1254,7 +1475,7 @@ function cmdConnect(request: CliRequest, deps: SocketServerDeps): string {
 }
 
 const RECRUIT_USAGE =
-  'Usage: cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]\n' +
+  'Usage: cookrew recruit ["Name"] [--prompt "task" | --prompt - <<\'EOF\'] [--preset P] [--role R] [--dir PATH]\n' +
   '  With --prompt and no name, the agent is named from its prompt (Sous), the way /rename titles a chat.'
 
 /**
@@ -1333,6 +1554,8 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
     return node
   })
   deps.spawnTerminal(added)
+  // A command chosen by the caller runs with no keyboard anywhere near it.
+  if (request.flags.command) paneInputs.noteDriven(added.id)
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
 
@@ -1343,8 +1566,12 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
       ? deps.autoNameTerminal(added.id, added.name, prompt).catch(() => null)
       : Promise.resolve(null),
     prompt && deps.dispatch
-      ? deliverToRecruit(deps.dispatch, { nodeId: added.id, sentence: prompt, originId: me.id }).then(
-          ({ dispatchId }) => ({ ok: true as const, dispatchId }),
+      ? deliverToRecruit(
+          deps.dispatch,
+          { nodeId: added.id, sentence: prompt, originId: me.id },
+          { ...deps.recruitTiming, ...(deps.recruitWitness ? { witness: deps.recruitWitness } : {}) }
+        ).then(
+          ({ dispatchId, evidence }) => ({ ok: true as const, dispatchId, evidence }),
           (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) })
         )
       : Promise.resolve(null)
@@ -1363,14 +1590,27 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
       `⚠ "${name}" lives in workspace "${wsName(plan.workspaceId)}", not the active one — switch with: cookrew workspace switch "${wsName(plan.workspaceId)}"`
     )
   }
-  if (delivered?.ok) lines.push(`Prompt delivered (dispatch ${delivered.dispatchId}). Follow it: cookrew status "${name}"`)
+  if (delivered?.ok) {
+    lines.push(`Prompt delivered (dispatch ${delivered.dispatchId}${EVIDENCE_WORDS[delivered.evidence ?? 'record']}). Follow it: cookrew status "${name}"`)
+  }
   if (delivered && !delivered.ok) {
     // The card exists either way; say so, and fail, so a script does not
-    // carry on as if the work had started.
-    lines.push(`⚠ The prompt did not reach "${name}": ${delivered.error}. Send it again: cookrew ask "${name}" "…"`)
+    // carry on as if the work had started. An unconfirmed brief may still be
+    // in the box, so the remedy is to look before sending a second copy.
+    lines.push(
+      `⚠ Card created, brief NOT confirmed: ${delivered.error}. Until it is, the prompt did not reach "${name}" — ` +
+        `look first (cookrew check "${name}"), then send it again: cookrew ask "${name}" "…"`
+    )
     throw new Error(lines.join('\n'))
   }
   return lines.join('\n')
+}
+
+/** How `cookrew recruit` names the evidence a brief landed on. */
+const EVIDENCE_WORDS: Record<RecruitEvidence | 'record', string> = {
+  turn: ', its turn started',
+  composer: ', seen on its screen',
+  record: ''
 }
 
 const RENAME_KINDS: Record<string, ReachKind> = { agent: 'terminal', terminal: 'terminal', note: 'note', browser: 'browser' }
@@ -1431,7 +1671,15 @@ export function cmdRename(request: CliRequest, deps: SocketServerDeps): string {
   const [first, second] = request.args
   if (first === undefined || request.args.length > 2) throw new Error(usage)
   const target = second === undefined ? me : renameTarget(request, deps, me, first)
-  const done = deps.renameCard(target.id, second ?? first, 'refuse')
+  // The Orch is the workspace's door: its name is how the team and served
+  // callers reach it, so only it — or the owner, in the card menu — renames it.
+  if (target.kind === 'terminal' && (target as TerminalNodeData).orch && target.id !== me.id) {
+    throw new Error(`"${target.name}" is the Orch. Only it, or the owner from the card menu, can rename it.`)
+  }
+  const by = `"${me.name}" (${me.orch ? 'orch' : 'agent'}, cookrew rename)`
+  const done = deps.store.withOpContext({ actor: me.orch ? 'orch' : 'agent', via: 'rename' }, () =>
+    deps.renameCard!(target.id, second ?? first, 'refuse', by)
+  )
   if (!done.ok) throw new Error(done.error)
   if (!done.changed) return `"${done.name}" is already called that.`
   return `Renamed "${target.name}" → "${done.name}"`
@@ -1463,12 +1711,12 @@ function cmdFork(request: CliRequest, deps: SocketServerDeps): string {
  * flag could only be set at creation, which made "make X the orch" impossible
  * without destroying and recreating the card (and its session with it).
  */
-function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
   const name = request.args[0]
   if (!name) throw new Error('Usage: cookrew orch "Agent"')
-  const node = deps.store.nodeByName(name, 'terminal')
+  const node = callerCanvasNodeByName(request, deps, name, 'terminal')
   if (!node) throw new Error(`No terminal named '${name}' on the canvas`)
-  const workspaceId = (deps.store.workspaceOfNode(node.id) ?? deps.store.activeMeta()).id
+  const workspaceId = deps.store.ownerOf(node.id) ?? deps.store.focusedId
   const demoted: string[] = []
   for (const other of deps.store.workspaceState(workspaceId).nodes) {
     if (other.kind !== 'terminal' || other.id === node.id) continue
@@ -1483,14 +1731,12 @@ function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
     : `"${name}" is now the orch`
 }
 
-function cmdDismiss(request: CliRequest, deps: SocketServerDeps): string {
+async function cmdDismiss(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   requireOrch(request, deps)
   const target = findConnected(request, deps, request.args[0], 'terminal')
-  deps.ptys.kill(target.id)
-  deps.store.withOpContext({ actor: 'orch', via: 'dismiss' }, () =>
-    deps.store.removeNodeAcross(target.id)
-  )
-  deps.agents.deactivate(target.id)
+  const closed = await deps.dismissTerminal(target.id)
+  // The card stays, as the only handle on what is still running.
+  if (!closed.ok) throw new Error(`"${target.name}" did not stop: ${closed.error}`)
   return `Dismissed "${target.name}"`
 }
 
@@ -1557,7 +1803,7 @@ export interface SousDoor {
   cancel?: (token: string, caller?: { surface: SousSurface; callerId?: string }) => boolean
 }
 
-async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+export async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   if (sub === 'list' || sub === undefined) {
     const { workspaces, activeId } = deps.listWorkspaces()
@@ -1577,12 +1823,16 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
         throw new Error('Usage: cookrew workspace create "Name" --dir PATH [--team "Template"]')
       }
       const dir = request.flags.dir ? String(request.flags.dir) : ''
+      // The same check as the sheet: refused here in its sentence, and what
+      // the sheet would have said first goes under the answer.
+      const check = deps.checkWorkspace(name, dir)
+      if (!check.ok) throw new Error(check.reason)
       if (request.flags.team) {
         const meta = await deps.createWorkspaceFromTeam(name, dir, String(request.flags.team))
-        return `Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`
+        return [`Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`, ...check.notes].join('\n')
       }
       const meta = deps.createWorkspace(name, dir)
-      return `Created and switched to workspace "${meta.name}" (${meta.dir})`
+      return [`Created and switched to workspace "${meta.name}" (${meta.dir})`, ...check.notes].join('\n')
     }
     case 'switch': {
       if (!name) throw new Error('Usage: cookrew workspace switch "Name"')
@@ -1590,9 +1840,11 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
       return `Switched to workspace "${meta.name}"`
     }
     case 'remove': {
-      if (!name) throw new Error('Usage: cookrew workspace remove "Name"')
-      deps.removeWorkspace(name)
-      return `Removed workspace "${name}"`
+      if (!name) throw new Error('Usage: cookrew workspace remove "Name" [--remove-worktree]')
+      const worktree = request.flags['remove-worktree'] === true
+      const plan = await deps.workspaceRemovePlan(name)
+      const list = await deps.removeWorkspace(name, { worktree })
+      return [`Removed workspace "${plan.name}".`, ...removeLines(plan, true, worktree), ...(list.notice ? [list.notice] : [])].join('\n')
     }
     default:
       throw new Error('Usage: cookrew workspace list|create|switch|remove|dir ...')
@@ -1776,7 +2028,7 @@ async function cmdTeam(request: CliRequest, deps: SocketServerDeps): Promise<str
   }
 }
 
-function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
+export function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
   const [sub, agentName, roleName] = request.args
   switch (sub) {
     case 'list': {
@@ -1790,7 +2042,7 @@ function cmdRole(request: CliRequest, deps: SocketServerDeps): string {
       if (!agentName || !roleName) {
         throw new Error('Usage: cookrew role save "Agent" "RoleName" --prompt "role instructions"')
       }
-      const node = deps.store.nodeByName(agentName, 'terminal')
+      const node = callerCanvasNodeByName(request, deps, agentName, 'terminal')
       if (!node) throw new Error(`No terminal named '${agentName}' on the canvas`)
       const prompt = request.flags.prompt
         ? String(request.flags.prompt)
@@ -1820,9 +2072,10 @@ function cmdPreset(): string {
   ].join('\n')
 }
 
-const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
+export const HELP_TEXT = `Cookrew — an open-source spatial workspace for AI agents.
 
 Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
+  (flags go anywhere; --new --no-wait --all --canvas --help --rotate --disabled never take a value)
   cookrew list                                  List connected agents, notes, and browsers
   cookrew list --workspace [<name>]             Every card in your workspace (or the one named)
   cookrew ask "Agent" "prompt"                  Send a prompt to any agent in your workspace, wait for the reply
@@ -1831,13 +2084,17 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew ask "Agent" --raw "bytes"             Send raw input (\\n or \\r Enter, \\t Tab, \\e ESC, \\xNN byte)
   cookrew check "Agent"                         Read the agent's current terminal output
   cookrew ask "Agent" "prompt" --no-wait        Dispatch without blocking; prints a dispatchId
+  cookrew ask "Agent" - <<'EOF'                 A lone - reads the brief from stdin, byte for byte: the shell
+    brief with \`backticks\`, $(…), $VARS, !      runs nothing inside a QUOTED heredoc. Prefer it for any brief
+  EOF                                           with code in it (--no-wait may sit anywhere)
   cookrew dispatch <dispatchId>                 What became of THAT dispatch (id-correlated)
   cookrew status ["Agent"]                      Busy/idle from the TURN TRACKER, not herdr:
                                                 thinking | waiting (blocked on you) | replied
                                                 (turn ENDED, needs a fresh dispatch) | idle
-  cookrew note create ["content"]               Create a connected note on the canvas
+  cookrew note create ["content"] [--new]       Create a connected note on the canvas (a first line naming
+                                                a note already there wires you to it instead; --new forces a second)
   cookrew note read "Name" [offset] [limit]     Read a note with line numbers
-  cookrew note write "Name" "content"           Replace a note's content
+  cookrew note write "Name" "content"           Replace a note's content ("" clears it)
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a note wired to you (destructive)
   cookrew secret exec <name> -- <command…>      Run a command with the secret as COOKREW_SECRET_<NAME> in its environment
@@ -1845,6 +2102,10 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
                                                 (owner panes only; every read is logged)
+  cookrew login [username]                      Sign this machine in, in an owner pane: hidden password, then the second factor
+  cookrew login --github                        The same with no password: GitHub's device flow, for a machine with no browser
+  cookrew logout                                Take this machine off the account, in an owner pane
+  cookrew whoami                                The account and device this machine is signed in as
   cookrew browser create URL ["Name"] [--workspace <name>] [--new]
                                                 Create a browser card in YOUR workspace
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...
@@ -1860,7 +2121,8 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew recruit ["Name"] [--prompt "task"] [--preset P] [--role R] [--dir PATH]
                                                 Spawn a teammate wired to you, in your workspace (any agent);
                                                 --prompt is its first prompt, and with no name it is named
-                                                from the prompt (Sous). --dir elsewhere is Orch only
+                                                from the prompt (Sous). --dir elsewhere is Orch only;
+                                                --prompt - <<'EOF' reads the prompt from stdin, like ask -
   cookrew rename ["Card"] "New name"            Rename yourself, or any agent, note or browser of your
                                                 workspace (--kind agent|note|browser when two share a name);
                                                 for an agent herdr's pane title, tab and agent name follow
@@ -1881,6 +2143,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew team save ["Name"]                    (Orch) Snapshot the team (nodes, layout, turn histories)
   cookrew team fork [--name N] [--from "Team"]  (Orch) Fork the whole canvas (or a saved team) into a new workspace
   cookrew role save "Agent" "RoleName" --prompt "..."   Save an agent as a reusable role
+  cookrew role save "Agent" "RoleName" --prompt - <<'EOF'   The role text from stdin, like ask -
   cookrew role list                             List saved roles
   cookrew role delete "RoleName"                (Orch) Remove a saved role
   cookrew notify "message"                      (Orch) Desktop notification`

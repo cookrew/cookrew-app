@@ -95,30 +95,33 @@ function lockupStrokes(k, withCentre, step) {
 
 const HERO = svg({ id: 'ikh', viewBox: '20 22 190 56', cls: 'cr-ink-lockup', strokes: lockupStrokes(1, true, 0.9), label: 'COOKREW', draw: true })
 /**
- * THE HEADER'S MARK: the COO on its own — the brush C round the first lens and the glasses,
- * no word (the owner asked on 2026-11-01 for the site header to wear the same mark as the app
- * icon). Drawn clean, without the lockup's noise filter or bristle hairlines: at 42 px wide
- * that tooth is a jagged edge rather than texture, and the same is true of the icon.
+ * THE SMALL MARKS: the Co, the brush C round the first lens and nothing else (scheme 7 of
+ * coo-logo-schemes.html, the owner's pick for every icon on 2026-11-05; the site header wears
+ * what the app icon wears, as asked on 2026-11-01). Drawn clean, without the lockup's noise
+ * filter or bristle hairlines: at 31 px that tooth is a jagged edge rather than texture.
  */
+const CO_BOX = { x: 25.9, y: 26.3, w: 37.3, h: 46.8 }
+/** Heavier than the lockup's pens, so the C and the lens hold at 16 px. dry: 0 because only the
+ *  bodies are drawn: a dry pen leaves its tail to the bristles, and that opened the ring. */
+const coPaths = (id) =>
+  [brush(C, { ...PEN, width: 9, dry: 0 }, 1.2), brush(FIRST_O, { ...GLASS_PEN, width: 4.6, dry: 0 }, 1.2)]
+    .map((stroke, i) => `<path id="${id}${i}" d="${stroke.body}"/>`)
+    .join('')
+
 function cooMark() {
-  const box = { x: 26.8, y: 27, w: 62.4, h: 46 }
-  // The glasses' stroke opens on a short arm above the right lens; at header size it reads as
-  // a whisker, so the mark starts at the lens.
-  const strokes = [brush(C, PEN, 1.2), brush(GLASSES.slice(3), GLASS_PEN, 1.2)]
-  const body = strokes.map((stroke, i) => `<path id="ikm${i}" d="${stroke.body}"/>`).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" class="mark-coo" viewBox="${box.x} ${box.y} ${box.w} ${box.h}" width="42" height="31" role="img" aria-label="Cookrew" fill="currentColor">${body}</svg>`
+  const box = CO_BOX
+  const body = coPaths('ikm')
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="mark-coo" viewBox="${box.x} ${box.y} ${box.w} ${box.h}" width="25" height="31" role="img" aria-label="Cookrew" fill="currentColor">${body}</svg>`
 }
 const MARK = cooMark()
-const FAVICON = svg({
-  id: 'ikf',
-  viewBox: '20 20 60 60',
-  cls: 'fav',
-  strokes: [brush(C, scaled(PEN, 1.75), 1.6), brush(FIRST_O, scaled(GLASS_PEN, 1.9), 1.6)],
-  label: 'Cookrew',
-  width: 64,
-  height: 64,
-  paper: { x: 20, y: 20, w: 60 }
-})
+/** The Co on a paper tile, the mark's longer side at the app icon's 76% of it. */
+function coFavicon() {
+  const w = +(CO_BOX.h / 0.76).toFixed(1)
+  const x = +(CO_BOX.x + CO_BOX.w / 2 - w / 2).toFixed(1)
+  const y = +(CO_BOX.y + CO_BOX.h / 2 - w / 2).toFixed(1)
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="fav" viewBox="${x} ${y} ${w} ${w}" width="64" height="64" role="img" aria-label="Cookrew" fill="#1b1814"><rect x="${x}" y="${y}" width="${w}" height="${w}" rx="${+(w * 0.22).toFixed(1)}" fill="#f4efe4"/>${coPaths('ikf')}</svg>`
+}
+const FAVICON = coFavicon()
 
 // The order and pace of coo-stroke.html's play(): C 0–0.95 s, glasses from 1.05 s for 1.1 s,
 // the word from 2.25 s for 1.5 s.

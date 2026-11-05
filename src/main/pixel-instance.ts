@@ -1,6 +1,7 @@
 import type { CdpInputCommand } from '../shared/cast-input'
 import type { ViewportMetrics } from '../shared/cast-viewport'
 import type { BrowserTab } from '../shared/model'
+import { remoteView, type CardControl, type RemoteState, type ViewerWho } from '../shared/remote-access'
 import type { UseStatus } from '../shared/use-signal'
 import type { UseTarget } from '../shared/use-url'
 import { BrowserViewportCoordinator, type BrowserViewportState } from './browser-viewport'
@@ -43,6 +44,11 @@ export const PIXEL_HEARTBEAT_MS = 700
  * wakes it at once (registerViewportViewer).
  */
 export const PIXEL_UNWATCHED_POLL_MS = 5000
+/**
+ * Offline with nobody watching: each look is a helper process, and a card can
+ * sit on a locked Mac all night. A viewer arriving looks at once.
+ */
+export const PIXEL_OFFLINE_UNWATCHED_POLL_MS = 30_000
 /** The longest gap between two tries at an offline device. */
 export const PIXEL_MAX_BACKOFF_MS = 5000
 /**
@@ -53,8 +59,52 @@ export const PIXEL_MAX_BACKOFF_MS = 5000
  */
 export const PIXEL_OPEN_TIMEOUT_MS = 15_000
 export const PIXEL_CAPTURE_TIMEOUT_MS = 10_000
+/**
+ * A device gone for good is looked at about once a minute, not at the offline
+ * backoff: each look is a helper process, and a closed window's card can sit
+ * in a workspace for days. A viewer arriving looks at once.
+ */
+export const PIXEL_GONE_POLL_MS = 60_000
 
-function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+/** What a card was bound to no longer exists, as opposed to not answering right now. */
+export class DeviceGoneError extends Error {
+  constructor(
+    readonly gone: NonNullable<UseStatus['gone']>,
+    message: string
+  ) {
+    super(message)
+    this.name = 'DeviceGoneError'
+  }
+}
+
+/** The screen cannot be read right now, for a reason the card should say in full. */
+export class DeviceBlockedError extends Error {
+  constructor(readonly state: RemoteState) {
+    const view = remoteView(state, 'here')
+    // What `cookrew browser status` prints, so it stands alone: the title carries the state.
+    super(`${view.title}. ${view.sentence}`)
+    this.name = 'DeviceBlockedError'
+  }
+}
+
+/** The remote desk as one card sees it (remote-desk.ts · remoteGate). */
+export interface RemoteGate {
+  /** What stands in the way of reading the screen; null when nothing does. */
+  blocked(options?: { afterFailure?: boolean }): Promise<RemoteState | null>
+  /** Why nothing may drive this machine. */
+  inputRefusal(): string | null
+  /** Why an agent's hand may not, which Stop also holds. */
+  agentRefusal(): string | null
+  /** This viewer holds control of this card, right now. */
+  mayDrive(who: ViewerWho): boolean
+  cardControl(who: ViewerWho): CardControl
+  /** Why this viewer may not watch; null when it may. */
+  admit(who: ViewerWho): { readonly message: string; readonly state: RemoteState } | null
+  /** A viewer arrived; the answer is its leaving. */
+  enter(viewerId: string, who: ViewerWho): () => void
+}
+
+export function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`${what} did not answer in ${Math.round(ms / 1000)} s`)), ms)
@@ -83,6 +133,10 @@ export interface PixelDevice {
   navigate?: (url: string) => Promise<void>
   title?: () => string
   close?: () => Promise<void>
+  /** A computer's screen: every viewer and every input goes through this. Absent on phones and cameras. */
+  readonly remote?: RemoteGate
+  /** What the machine's clipboard holds, read after a viewer's own copy chord. */
+  readClipboard?: () => string
 }
 
 export interface PixelInstanceOptions {
@@ -90,13 +144,30 @@ export interface PixelInstanceOptions {
   readonly device: PixelDevice
   readonly now?: () => number
   readonly schedule?: (fn: () => void, ms: number) => () => void
+  /** How long a copy chord gets to land in the clipboard. */
+  readonly copyDelayMs?: number
+  /** The card went blind: nothing it showed before may stand in for now. */
+  readonly onBlocked?: () => void
 }
 
+/** Who is asking when an agent reads a screen: never at the Mac, so Stop and a served workspace reach it. */
+const AGENT_VIEWER: ViewerWho = { key: 'agent', name: 'An agent', here: false }
+const COPY_DELAY_MS = 200
+/** The most a copy carries to a viewer: a clipboard can hold a whole file. */
+const MAX_COPY_CHARS = 64 * 1024
+
 const FALLBACK_POINTS: ScreenPoints = { width: 800, height: 600 }
+
+const sameRemote = (a: RemoteState | undefined, b: RemoteState | undefined): boolean =>
+  a?.id === b?.id && a?.then === b?.then && a?.detail === b?.detail && a?.waiting === b?.waiting && a?.until === b?.until
+
+const isCopyChord = (gesture: Gesture): boolean =>
+  gesture.method === 'input.key' && gesture.params.mods === 'cmd' && (gesture.params.name === 'c' || gesture.params.name === 'x')
 
 export class PixelInstance {
   readonly frameListeners = new Set<(jpegBase64: string, meta: FrameMeta) => void>()
   readonly statusListeners = new Set<(status: UseStatus) => void>()
+  readonly copyListeners = new Set<(text: string) => void>()
   onExit: () => void = () => undefined
   onPageState: (tabId: string, state: HeadlessPageState) => void = () => undefined
   onTabOpened: (tab: BrowserTab) => void = () => undefined
@@ -113,6 +184,7 @@ export class PixelInstance {
   private polling = false
   private latest: string | null = null
   private lastEmitAt = 0
+  private lastFrameAt: number | null = null
   private lastInputAt = Number.NEGATIVE_INFINITY
   private failures = 0
   private pollAgainSoon = false
@@ -144,7 +216,8 @@ export class PixelInstance {
   }
 
   private mapperFor(points: ScreenPoints): VphoneGestureMapper {
-    return new VphoneGestureMapper(this.now, points, { wheelAsScroll: this.opts.device.target.use === 'computer' })
+    const computer = this.opts.device.target.use === 'computer'
+    return new VphoneGestureMapper(this.now, points, { wheelAsScroll: computer, chords: computer })
   }
 
   private inputAllowed(): boolean {
@@ -170,7 +243,9 @@ export class PixelInstance {
   }
 
   private cadence(): number {
+    if (this.statusNow.gone) return PIXEL_GONE_POLL_MS
     if (this.failures > 0) {
+      if (this.frameListeners.size === 0 && this.opts.device.remote) return PIXEL_OFFLINE_UNWATCHED_POLL_MS
       return Math.min(PIXEL_MAX_BACKOFF_MS, PIXEL_IDLE_POLL_MS * 2 ** Math.min(this.failures - 1, 6))
     }
     if (this.now() - this.lastInputAt < PIXEL_FAST_WINDOW_MS) return PIXEL_FAST_POLL_MS
@@ -192,6 +267,7 @@ export class PixelInstance {
       const frame = await withDeadline(this.opts.device.capture(), PIXEL_CAPTURE_TIMEOUT_MS, 'the device')
       if (frame.points) this.adoptPoints(frame.points)
       this.failures = 0
+      this.lastFrameAt = this.now()
       this.setStatus('live', null)
       const changed = frame.jpeg !== this.latest
       const due = this.now() - this.lastEmitAt >= PIXEL_HEARTBEAT_MS
@@ -202,7 +278,10 @@ export class PixelInstance {
       // A device that failed after opening may come back a different size
       // (another phone on the cable, the window reopened): open it again.
       this.opened = false
-      this.setStatus('offline', error instanceof Error ? error.message : String(error))
+      const remote = error instanceof DeviceBlockedError ? { ...error.state, lastSeenAt: this.lastFrameAt } : undefined
+      // Never a stale picture standing in for a screen that cannot be read.
+      if (remote) this.blind()
+      this.setStatus('offline', error instanceof Error ? error.message : String(error), error instanceof DeviceGoneError ? error.gone : undefined, remote)
     } finally {
       this.polling = false
     }
@@ -219,11 +298,20 @@ export class PixelInstance {
     this.viewportCoordinator.setDefault({ ...this.points, mobile: this.mobile })
   }
 
-  private setStatus(state: UseStatus['state'], message: string | null): void {
+  private blind(): void {
+    this.latest = null
+    this.opts.onBlocked?.()
+  }
+
+  private setStatus(state: UseStatus['state'], message: string | null, gone?: UseStatus['gone'], remote?: RemoteState): void {
     const input = this.inputAllowed()
     const prev = this.statusNow
-    if (prev.state === state && prev.message === message && prev.input === input) return
-    this.statusNow = { state, message, use: this.opts.device.target.use, input }
+    if (prev.state === state && prev.message === message && prev.input === input && prev.gone === gone && sameRemote(prev.remote, remote)) return
+    this.statusNow = { state, message, use: this.opts.device.target.use, input, ...(gone ? { gone } : {}), ...(remote ? { remote } : {}) }
+    this.tellStatus()
+  }
+
+  private tellStatus(): void {
     for (const listener of this.statusListeners) {
       try {
         listener(this.statusNow)
@@ -231,6 +319,45 @@ export class PixelInstance {
         // A viewer's listener never stops the device.
       }
     }
+  }
+
+  /** Something the viewers read changed outside the device: a grant, the machine switch. */
+  refreshStatus(): void {
+    if (this.closed) return
+    this.statusNow = { ...this.statusNow, input: this.inputAllowed() }
+    this.tellStatus()
+  }
+
+  /** The lock lifted, or something else this card was waiting for: look now, not at the next backoff. */
+  wake(): void {
+    if (!this.closed && !this.polling) this.schedule(PIXEL_FAST_POLL_MS)
+  }
+
+  /** This viewer's own reading of a status: who may drive is not the same for everyone. */
+  statusFor(status: UseStatus, who: ViewerWho): UseStatus {
+    const remote = this.opts.device.remote
+    if (!remote) return status
+    return { ...status, input: status.input && remote.mayDrive(who), control: remote.cardControl(who) }
+  }
+
+  mayDrive(who: ViewerWho): boolean {
+    return this.opts.device.remote?.mayDrive(who) ?? true
+  }
+
+  /** The status a viewer who may not watch is left with; null when it may. */
+  refusalFor(who: ViewerWho): UseStatus | null {
+    const refusal = this.opts.device.remote?.admit(who) ?? null
+    if (!refusal) return null
+    return { state: 'offline', message: refusal.message, use: this.opts.device.target.use, input: false, remote: refusal.state }
+  }
+
+  enterViewer(viewerId: string, who: ViewerWho): (() => void) | null {
+    return this.opts.device.remote?.enter(viewerId, who) ?? null
+  }
+
+  /** Input here needs a viewer with a name: a route with none is refused, not ignored. */
+  get needsViewer(): boolean {
+    return this.opts.device.remote !== undefined
   }
 
   private emit(jpeg: string): void {
@@ -247,11 +374,30 @@ export class PixelInstance {
 
   // MARK: input
 
-  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): void {
+  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params'], who?: ViewerWho): void {
     if (this.closed || !this.inputAllowed()) return
+    const remote = this.opts.device.remote
+    // The last gate, so every route is behind it: a viewer holding control, on
+    // a screen that is live. A caller with no name for its viewer gets nothing.
+    if (remote && (who === undefined || !remote.mayDrive(who) || this.statusNow.state !== 'live')) return
     const gestures = this.mapper.map({ method, params } as CdpInputCommand)
     if (gestures.length === 0) return
-    this.perform(gestures)
+    // Asked again per gesture: a queue can outlast the grant that filled it.
+    this.perform(gestures, false, remote && who ? () => remote.mayDrive(who) : undefined)
+    if (gestures.some(isCopyChord)) this.readCopyLater()
+  }
+
+  /** The chord went to the machine; what it copied is in the machine's clipboard a moment later. */
+  private readCopyLater(): void {
+    const read = this.opts.device.readClipboard
+    if (!read) return
+    const heard = (): void => {
+      const text = this.closed ? '' : read().slice(0, MAX_COPY_CHARS)
+      if (text.length === 0) return
+      for (const listener of this.copyListeners) listener(text)
+    }
+    const after = this.opts.copyDelayMs ?? COPY_DELAY_MS
+    void this.inputQueue.then(() => setTimeout(heard, after))
   }
 
   /**
@@ -261,14 +407,15 @@ export class PixelInstance {
    */
   async act(gestures: readonly Gesture[]): Promise<void> {
     if (this.closed) throw new Error('this card is closed')
-    const refusal = this.opts.device.inputRefusal?.() ?? null
+    const refusal = this.opts.device.inputRefusal?.() ?? this.opts.device.remote?.agentRefusal() ?? null
     if (refusal) throw new Error(refusal)
     if (!this.opts.device.perform) throw new Error(`a ${this.opts.device.target.use} camera is watched, not driven`)
     if (!this.opened) throw new Error(this.statusNow.message ?? 'the device is not connected yet')
-    await this.perform(gestures, true)
+    // Stop can land while these wait their turn behind each other.
+    await this.perform(gestures, true, () => (this.opts.device.remote?.agentRefusal() ?? null) === null)
   }
 
-  private perform(gestures: readonly Gesture[], surface = false): Promise<void> {
+  private perform(gestures: readonly Gesture[], surface = false, stillAllowed?: () => boolean): Promise<void> {
     const device = this.opts.device
     if (!device.perform) return Promise.resolve()
     this.lastInputAt = this.now()
@@ -276,7 +423,7 @@ export class PixelInstance {
     // Serialised: a tap must never overtake the swipe before it. Called ON
     // the device: a class's perform reads its own fields (adb's serial).
     for (const gesture of gestures) {
-      this.inputQueue = this.inputQueue.then(() => device.perform?.(gesture)).then(
+      this.inputQueue = this.inputQueue.then(() => (stillAllowed && !stillAllowed() ? undefined : device.perform?.(gesture))).then(
         () => undefined,
         (error: unknown) => {
           failure = failure ?? error
@@ -300,7 +447,7 @@ export class PixelInstance {
   }
 
   async snapshot(): Promise<string | null> {
-    return this.latest
+    return this.opts.device.remote?.admit(AGENT_VIEWER) ? null : this.latest
   }
 
   async evaluate(_expression: string): Promise<unknown> {
@@ -364,6 +511,10 @@ export class PixelInstance {
 
   get processId(): number | null {
     return null
+  }
+
+  get stopped(): boolean {
+    return this.closed
   }
 
   async stop(): Promise<HeadlessStopResult> {

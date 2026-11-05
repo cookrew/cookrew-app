@@ -9,6 +9,7 @@
 //   EVERY channel refuses a sender that is not the owner window's top frame.
 //   THE CALL SITE in main registers them through the wrapper, not one by one.
 
+import { machineCopy } from '../src/shared/machine-words'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -259,7 +260,7 @@ describe('the handlers', () => {
       message: string
     }
     expect(answer.ok).toBe(false)
-    expect(answer.message).toContain('The lock setting could not be saved on this Mac')
+    expect(answer.message).toContain(machineCopy('The lock setting could not be saved on this Mac', process.platform))
     expect(answer.message).toContain('EROFS')
   })
 

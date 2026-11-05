@@ -15,6 +15,7 @@ import {
 } from './session-turns'
 import type { TurnRecord } from './turn'
 import type { TraceImage } from './prompt-images'
+import { deliveredWords, queueAfter, queuedWords, type ClaudeAttachment } from './claude-queue'
 
 /** One tool invocation inside a block, TUI-faithful (unified-scroll TODO). */
 export interface TraceToolCall {
@@ -35,6 +36,14 @@ export interface TraceToolCall {
 export interface TraceThought {
   at: number
   calls: number
+  text: string
+}
+
+/** Words you sent into the running turn, where the agent read them: `reply`'s length then, and how many calls and thoughts it held. */
+export interface TraceAddedPrompt {
+  at: number
+  calls: number
+  thoughts: number
   text: string
 }
 
@@ -60,6 +69,10 @@ export interface TraceBlock {
   activity: TraceToolCall[]
   /** The agent's thinking, in order; absent when it wrote none (codex keeps its reasoning encrypted). */
   thoughts?: TraceThought[]
+  /** What you said while this turn ran, in order (claude-queue.ts); absent when you said nothing. It opens no checkpoint. */
+  added?: TraceAddedPrompt[]
+  /** Words sent and not read yet, oldest first. Only the newest turn can be waiting (TranscriptRow). */
+  queued?: string[]
   startedAt: number
   endedAt: number
   /**
@@ -76,11 +89,26 @@ export interface TraceBlock {
    * 'interrupted', 'error'/'length' → 'failed'. Always paired with
    * `final: true` — an abort/error IS positive evidence the turn ended,
    * just not well. Successful finality leaves it absent (absent-on-final
-   * means done, see TurnRecord.outcome). Claude has no in-file failure
-   * marker (an errored turn simply never writes end_turn), so Claude
+   * means done, see TurnRecord.outcome). Claude's markers are read by
+   * session-turns.ts (end_turn, its interruption line), not here, so Claude
    * blocks never carry it.
    */
   outcome?: 'failed' | 'interrupted'
+}
+
+/**
+ * THE WORDS A TURN ENDS ON. `reply` is every message of the turn joined, which
+ * is what a transcript reads; a card says the last of them, and the first line
+ * of the joined text was "let me look at the code" under a finished turn
+ * (owner, 2026-11-04). A step (its `at`) is what parts narration from the
+ * answer, so a multi-part answer with no step inside it stays whole, and a turn
+ * still on a step reads the last thing said before it. A reply with no placed
+ * step (codex: the reply is already the last message) is returned whole.
+ */
+export function closingMessage(block: Pick<TraceBlock, 'reply' | 'activity'>): string {
+  const end = block.reply.trimEnd().length
+  const cut = block.activity.reduce((last, call) => (call.at !== undefined && call.at < end && call.at > last ? call.at : last), 0)
+  return block.reply.slice(cut, end).trim()
 }
 
 /** Head of a tool input rendered into an activity line. */
@@ -130,6 +158,11 @@ interface ClaudeEntry {
   timestamp?: string
   message?: { content?: unknown }
   compactMetadata?: { preTokens?: number; postTokens?: number }
+  /** A `queue-operation` record's move and its words (claude-queue.ts). */
+  operation?: string
+  content?: unknown
+  /** An `attachment` record's body. */
+  attachment?: ClaudeAttachment
 }
 
 interface ClaudeContentBlock {
@@ -187,6 +220,13 @@ function claudeImagesOf(entry: ClaudeEntry): TraceImage[] {
     images.push({ uuid: entry.uuid, i, ...(typeof n === 'number' ? { n } : {}) })
   }
   return images
+}
+
+/** Shows the queue on the turn it is waiting on; a new list each time, never one grown in place. */
+function showQueue(block: TraceBlock, queue: readonly string[]): void {
+  const words = queuedWords(queue)
+  if (words.length > 0) block.queued = words
+  else delete block.queued
 }
 
 /**
@@ -269,6 +309,8 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
   const assigner = new CheckpointAssigner()
   // tool_use id → its call object, for filling results (tool_use_id match).
   const pendingCalls = new Map<string, TraceToolCall>()
+  // Claude Code's prompt queue, as its records have moved it (claude-queue.ts).
+  let queue: readonly string[] = []
   let at = -1
   return {
     feed(lines: string[]): void {
@@ -298,6 +340,11 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
             if (images.length > 0) current.images = [...(current.images ?? []), ...images]
             continue
           }
+          // A new turn drains the queue. Whatever a dead session left in line
+          // would otherwise wait on this turn for ever; a prompt really still
+          // waiting comes back as a delivery.
+          queue = []
+          if (current !== null) showQueue(current, queue)
           const startedAt = timeMs(entry.timestamp, current?.endedAt ?? 0)
           current = {
             id: checkpointIdentity(step.id),
@@ -314,7 +361,19 @@ export function createClaudeTraceAccumulator(): ClaudeTraceAccumulator {
           blockLines.push(at)
           continue
         }
+        if (entry.type === 'queue-operation') {
+          queue = queueAfter(queue, entry)
+          if (current !== null) showQueue(current, queue)
+          continue
+        }
         if (!current) continue
+        if (entry.type === 'attachment') {
+          const words = deliveredWords(entry.attachment)
+          if (words === null) continue
+          const added = { at: current.reply.length, calls: current.activity.length, thoughts: current.thoughts?.length ?? 0, text: words }
+          current.added = [...(current.added ?? []), added]
+          continue
+        }
         // tool_result entries arrive as user records with array content.
         if (entry.type === 'user' && Array.isArray(content)) {
           for (const raw of content as ClaudeContentBlock[]) {

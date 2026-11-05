@@ -26,6 +26,8 @@ import path from 'node:path'
 import type { TurnRecord } from '../shared/turn'
 import { parseClaudeTrace } from '../shared/trace-blocks'
 import { mayAdopt, sessionAuthority, type LiveClaudeView } from './claude-session-adoption'
+import { claudeLaunchDir, findClaudeSessionHome } from './claude-session-home'
+export { claudeLaunchDir, dirForSlug, findClaudeSessionHome, forgetClaudeSessionHomes } from './claude-session-home'
 import {
   buildForkedSessionLinesAtTurn,
   buildForkedSessionLinesAtUuid,
@@ -107,7 +109,35 @@ export function claudeWatchFile(
 ): string | null {
   const id = node.claudeSessionId
   if (!id || !isSessionUuid(id)) return null
-  return claudeSessionFile(node.cwd, id, options.projectsDir)
+  return locateClaudeSessionFile(node.cwd, id, options.projectsDir)
+}
+
+/**
+ * The transcript of a session to READ: at the card's cwd when it is there,
+ * else wherever claude really filed it (claude-session-home.ts), else the
+ * cwd path — a session not written yet appears there. For readers only
+ * (watch, rail, lineage, restore source); a WRITE target stays claudeSessionFile.
+ */
+export function locateClaudeSessionFile(cwd: string, sessionId: string, projectsDir?: string): string {
+  const expected = claudeSessionFile(cwd, sessionId, projectsDir)
+  if (existsSync(expected) || !isSessionUuid(sessionId)) return expected
+  return findClaudeSessionHome(sessionId, { projectsDir })?.file ?? expected
+}
+
+/**
+ * The directory a card must move to so its session resumes: the launch
+ * directory of a transcript that lives under ANOTHER project dir than the
+ * card's cwd — else null. Without the move, a respawn `cd`s into the card's
+ * cwd, finds no file there and boots a BLANK conversation under the same id.
+ */
+export function claudeCwdRepair(input: { cwd: string; sessionId: string; projectsDir?: string }): string | null {
+  if (!isSessionUuid(input.sessionId)) return null
+  if (existsSync(claudeSessionFile(input.cwd, input.sessionId, input.projectsDir))) return null
+  const home = findClaudeSessionHome(input.sessionId, { projectsDir: input.projectsDir })
+  if (!home) return null
+  const launch = claudeLaunchDir(home.file)
+  if (launch === null) return null
+  return realCwd(launch) === realCwd(input.cwd) ? null : launch
 }
 
 export interface ResolveSessionOptions {

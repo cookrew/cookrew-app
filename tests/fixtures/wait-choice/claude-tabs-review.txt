@@ -1,0 +1,28 @@
+  cover?" options "All nodes", "Only       Usage Billing                                            
+  edge". Question 3 header "report": "Pick ad/menu-probe                                            
+  what to include in the report" with                                                               
+  multiSelect true, options "Summary",                                                              
+  "Timeline", "Diff". After my answers      Do no real work and change no files. Call the           
+  come back just say DONE and stop.        e 3 questions (each with the options listed, every       
+                                           tion 1 header "dns-edge": "testnet3 的 dns-edge          
+───────────────────────────────────────────换 EIP", "原地重启", "临时缓解", "暂时不动". Question 2  
+←  ☒ dns-edge ☒ scope  ☒ report  ✔ Submit →cover?" options "All nodes", "Only edge". Question 3     
+                                            the report" with multiSelect true, options "Summary",   
+                                            back just say DONE and stop.                            
+Review your answers                        ─────────────────────────────────────────────────────────
+                                            →                                                       
+ ● testnet3 的 dns-edge                                                                             
+   还在跑未修复的内核，怎么修？            么修？                                                   
+   → 原地重启                                                                                       
+ ● Which scope should this cover?                                                                   
+   → edge only please                       的内核。                                                
+ ● Pick what to include in the report                                                               
+   → Summary, Diff                                                                                  
+                                                                                                    
+Ready to submit your answers?                                                                       
+                                                                                                    
+❯ 1. Submit answers                                                                                 
+  2. Cancel                                                                                         
+                                           ─────────────────────────────────────────────────────────
+                                                                                                    
+                                                                                                    

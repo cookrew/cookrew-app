@@ -1,0 +1,40 @@
+                                           
+❯ Call the AskUserQuestion tool exactly    
+  once with two questions. First, single   
+  choice, header Colour: Which colour?     
+  options Red and Blue. Second,            
+  multiSelect true, header Parts: Which    
+  parts? options Alpha and Beta. Do        
+  nothing else. When answered, reply GOT=  
+  and the answers.                         
+                                           
+⏺ User declined to answer questions        
+  ⎿  · Which colour? (Red / Blue)          
+     · Which parts? (Alpha / Beta)         
+                                           
+✻ Crunched for 3s · done 12:09 AM          
+                                           
+❯ Call the AskUserQuestion tool exactly    
+  once with two questions. First, single   
+  choice, header Colour: Which colour?     
+  options Red and Blue. Second,            
+  multiSelect true, header Parts: Which    
+  parts? options Alpha and Beta. Do        
+  nothing else. When answered, reply GOT=  
+  and the answers.                         
+───────────────────────────────────────────
+←  ☐ Colour  ☐ Parts  ✔ Submit  →          
+                                           
+Which colour?                              
+                                           
+❯ 1. Red                                   
+     Red.                                  
+  2. Blue                                  
+     Blue.                                 
+  3. Type something.                       
+───────────────────────────────────────────
+  4. Chat about this                       
+                                           
+Enter to select · Tab/Arrow keys to        
+navigate · Esc to cancel                   
+                                           

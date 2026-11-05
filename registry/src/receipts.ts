@@ -40,6 +40,13 @@ export interface Receipt {
   amount: string
   asset: 'USDC'
   at: number
+  /**
+   * Settled by anything but the dev stand-in. Absent on every receipt the
+   * stand-in ever wrote, which is every receipt from before production had no
+   * facilitator: those proved nothing, and they sit in the same file, so
+   * outside a stand-in registry they open nothing.
+   */
+  verified?: true
 }
 
 export class ReceiptStore {

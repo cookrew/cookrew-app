@@ -1,3 +1,4 @@
+import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES, DELETE_ACCOUNT_WARNING } from '../../src/shared/account-delete'
 import { webCopy } from './v3-copy'
 import { day, esc, page, type Page } from './site-shell'
 import { desktopsSection } from './site-reach'
@@ -89,6 +90,15 @@ export interface FactorSummary {
   totp: boolean
 }
 
+/** This page can check a password and cannot make a provider trip. */
+const DELETE_IN_THE_APP =
+  '<p class="meta">This account has no password to confirm with here. Delete it from your profile in the Cookrew app, where your sign-in provider can confirm it.</p>'
+
+const deleteForm = (username: string): string =>
+  `<p class="row"><input id="me-delete-name" autocomplete="off" spellcheck="false" placeholder="Type ${esc(username)} to confirm" aria-label="Type your username to confirm">
+<input id="me-delete-password" type="password" autocomplete="current-password" placeholder="Your password" aria-label="Your password">
+<button class="btn" data-delete-account>Delete my account</button></p>`
+
 export function mePage(
   input: { account: V2Account; currentDeviceId: string; factors?: FactorSummary } | null
 ): Page {
@@ -177,6 +187,12 @@ ${authenticatorRow(factors.totp)}
 <pre class="cmd" id="me-codes" hidden></pre>
 <div class="totp-panel" id="me-totp" hidden></div>
 
+<details style="margin-top:30px"><summary>Delete account</summary>
+<p class="lede">${esc(DELETE_ACCOUNT_WARNING)}</p>
+<p class="meta">This deletes:</p><ul>${DELETE_ACCOUNT_TAKES.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
+<p class="meta">This stays:</p><ul>${DELETE_ACCOUNT_KEEPS.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
+${account.passwordless === true ? DELETE_IN_THE_APP : deleteForm(account.username)}
+</details>
 </div>`
   )
 }

@@ -1,0 +1,29 @@
+ │ -it-wraps
+ │ echo six-line-of-the-command-that-runs-
+ │ well-past-the-width-of-a-phone-pane-so-
+ │ it-wraps
+ │ echo seven-line-of-the-command-that-run
+ │ s-well-past-the-width-of-a-phone-pane-s
+ │ o-it-wraps
+ │ echo eight-line-of-the-command-that-run
+ │ s-well-past-the-width-of-a-phone-pane-s
+ │ o-it-wraps
+ │ rm -rf /tmp/wc-fix/legal-data
+ │ scratchpad/legal/shots/*
+ │ ls scratchpad/legal/shots | wc -l
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ Dangerous rm operation on
+ │ statically-unresolvable target:
+ │ /Users/anon/.cache/wc-fix-legal/scratch
+ │ pad/legal/shots/*
+ ⚠ Claude Code will automatically block
+ this request in 1:56, to avoid holding up
+ an unattended session
+
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend
+

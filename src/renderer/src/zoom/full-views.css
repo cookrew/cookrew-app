@@ -32,6 +32,8 @@
   display: flex;
   flex-direction: column;
   padding: 14px calc(14px + var(--fv-lane-right)) 10px calc(14px + var(--fv-lane-left));
+  /* The box floats over the stage's foot (prompt/global-prompt.css · THE BOX FLOATS AT EVERY WIDTH): the sheet ends above it. */
+  padding-bottom: var(--cr-float-h, 10px);
   background-color: var(--fv-paper);
   background-image: radial-gradient(var(--sumi-grain, rgba(120, 100, 70, 0.06)) 1px, transparent 1px);
   background-size: 3px 3px;
@@ -251,6 +253,44 @@
   width: 13px;
   height: 13px;
 }
+/* 🔒+ asks for a name under its button, right edge to right edge. */
+.zv-fv-arts-secret {
+  position: relative;
+  display: inline-flex;
+}
+.zv-fv-arts-secret-box {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 6px;
+  align-items: center;
+  width: 240px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--fv-paper, #fffef8);
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2), 0 6px 18px rgba(0, 0, 0, 0.18);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.zv-fv-arts-secret-box input {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--fv-hair-2);
+  color: var(--fv-ink);
+  font: 12px var(--fv-mono);
+}
+.zv-fv-arts-secret-box small {
+  grid-column: 1 / -1;
+  font: 10.5px/1.3 var(--fv-mono);
+  color: var(--fv-soft);
+}
 .zv-fv-arts-btn b {
   position: absolute;
   right: 2px;
@@ -410,13 +450,6 @@
   color: var(--fv-ink);
 }
 .zv-fullview .lod-overlay .look-log .ctx-block.active { background: transparent; }
-.zv-fullview .lod-overlay .look-log .ctx-block-head {
-  opacity: 1;
-  font: 10px/1 var(--fv-mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--fv-muted);
-}
 .zv-fullview .lod-overlay .look-log .ctx-block-prompt {
   margin: 0;
   padding: 0;
@@ -507,7 +540,9 @@
    It wears the demo's page now (group-motion-pivot.html · .ipage): rounded
    10px, one hairline, a soft shadow, and its address bar on the second paper
    over a hairline. BrowserLayer draws it outside .zv-fullview, so the ink
-   tokens are read directly. Full window (browser-full) stays edge to edge. */
+   tokens are read directly. Full window (browser-full) wears the same address
+   bar but no frame at all: edge to edge, no edge, no corner, no shadow
+   (owner, 2026-11-04). */
 .browser-lod.browser-embedded:not(.browser-full) .popout {
   border: 0;
   border-radius: 10px;
@@ -516,22 +551,28 @@
     inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16)),
     0 6px 20px rgba(40, 30, 15, 0.08);
 }
-.browser-lod.browser-embedded:not(.browser-full) .popout-header {
+.browser-lod.browser-full .popout {
+  border: 0;
+  border-radius: 0;
+  background: var(--sumi-paper, #f4efe4);
+  box-shadow: none;
+}
+.browser-lod.browser-embedded .popout-header {
   background: var(--sumi-paper-2, #ebe3d3);
   border-bottom: 1px solid var(--sumi-hair, rgba(29, 26, 22, 0.1));
 }
-.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn {
+.browser-lod.browser-embedded .popout-header .cr-btn {
   border: 0;
   border-radius: 6px;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--sumi-hair-2, rgba(29, 26, 22, 0.16));
   color: var(--sumi-ink, #1d1a16);
 }
-.browser-lod.browser-embedded:not(.browser-full) .popout-header .cr-btn:hover {
+.browser-lod.browser-embedded .popout-header .cr-btn:hover {
   background: var(--sumi-paper, #f4efe4);
 }
-.browser-lod.browser-embedded:not(.browser-full) .browser-address,
-.browser-lod.browser-embedded:not(.browser-full) .browser-idplate {
+.browser-lod.browser-embedded .browser-address,
+.browser-lod.browser-embedded .browser-idplate {
   border-radius: 6px;
   font-family: var(--font-mono, ui-monospace, monospace);
 }
@@ -539,6 +580,8 @@
 /* A phone is one column: the head wraps, the tabs shrink. */
 @media (max-width: 700px) {
   .zv-fullview { padding: 8px 8px 6px; }
+  /* The phone's box floats over the stage's foot (global-prompt.css · THE BOX FLOATS): the sheet ends above it. */
+  .zv-fullview { padding-bottom: var(--cr-float-h, 6px); }
   .zv-fullview::after { inset: 66px 8px 8px; }
   .zv-fv-head { gap: 9px; padding: 2px 4px 8px; }
   .zv-fv-ink { width: 34px; height: 34px; }
@@ -559,6 +602,8 @@
   .zv-fv-art { width: 104px; height: 68px; }
   .zv-fv-art > .zv-th em { font-size: 9px; }
   .zv-fv-arts-btn { width: 32px; height: 30px; }
+  /* A phone zooms the page into a field under 16px. */
+  .zv-fv-arts-secret-box input { font-size: 16px; }
   .zv-fv-tools .zv-fv-arts-btn { width: 32px; height: 30px; }
   .zv-fv-tools .cr-look-toggle.cr-look-corner { height: 30px; }
 }

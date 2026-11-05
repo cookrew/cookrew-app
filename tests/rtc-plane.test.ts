@@ -1,6 +1,7 @@
 // WHICH REQUESTS RIDE THE DIRECT LINK (rtc-plane.ts), AND WHEN THE PLANE
 // MOVES ONTO IT AND BACK (path/rtc-adopt.ts).
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { bareWindow } from './support/memory-storage'
 import { dataPlane, resetDataPlane, setDataPlane, subscribeDataPlane, fallBackToRelay } from '../src/renderer/src/data-plane'
 import { linkPath, openEventSource, rtcLink, setRtcLink, viaLink } from '../src/renderer/src/rtc-plane'
 import { adoptRtcLink } from '../src/renderer/src/path/rtc-adopt'
@@ -71,9 +72,11 @@ describe('routing', () => {
     setRtcLink(link)
     setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
     expect(viaLink('/api/board')).toEqual({ link, path: '/api/board' })
+    vi.stubGlobal('window', bareWindow())
     const source = openEventSource('/api/events')
     expect(source).toBeInstanceOf(RtcEventSource)
     source.close()
+    vi.unstubAllGlobals()
   })
 
   it('stops carrying the moment the link closes', () => {

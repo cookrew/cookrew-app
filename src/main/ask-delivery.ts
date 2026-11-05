@@ -21,6 +21,7 @@
 // the whole reason `unsubmitted` and `dropped` are separate outcomes with
 // opposite remedies (see shared/ask-outcome.ts).
 
+import { paneInputs } from './pane-input'
 import { ASK_EXIT, ASK_REMEDY, classifyDelivery, type AskOutcome } from '../shared/ask-outcome'
 import { promptLanded } from './dispatch'
 import { multiplexer, sessionNameFor } from './pty'
@@ -61,7 +62,9 @@ export function terminalDeliveryDeps(
         return null
       }
     },
-    submit: () => write('\r'),
+    // A retry of an Enter sent earlier must not submit a password half typed
+    // at a prompt that has opened since.
+    submit: (terminalId) => (paneInputs.sealed(terminalId) ? undefined : write('\r')),
     settle: () => new Promise((resolve) => setTimeout(resolve, SUBMIT_SETTLE_MS))
   }
 }
@@ -78,12 +81,38 @@ export class DeliveryError extends Error {
   readonly outcome: AskOutcome
   readonly exitCode: number
 
-  constructor(outcome: AskOutcome, agentName: string) {
-    super(`${agentName}: ${outcome} — ${ASK_REMEDY[outcome]}`)
+  constructor(outcome: AskOutcome, agentName: string, said?: string) {
+    super(said ?? `${agentName}: ${outcome} — ${ASK_REMEDY[outcome]}`)
     this.name = 'DeliveryError'
     this.outcome = outcome
     this.exitCode = ASK_EXIT[outcome]
   }
+}
+
+/** What an ended dispatch's record says; the fields `cookrew dispatch` reads. */
+export interface EndedDispatch {
+  readonly state: string
+  readonly agentName?: string
+  readonly turnIndex?: number
+  readonly error?: string
+}
+
+/**
+ * A dispatch that ENDED without completing: not exit 0, by the ask verb's rule,
+ * and always in the record's own words. A turn index means the transcript saw
+ * that turn end, so nothing is running and the caution about resending would be
+ * false. With none, nobody saw the end: `interrupted` is deliberately not
+ * `failed`, the work may well have happened, and the caution stands.
+ */
+export function dispatchEndError(record: EndedDispatch, dispatchId: string): DeliveryError {
+  const name = record.agentName ?? dispatchId
+  const facts = [
+    `${name}: ${record.state}`,
+    ...(record.turnIndex !== undefined ? [`turn ${record.turnIndex}`] : []),
+    ...(record.error ? [record.error.replace(/^interrupted:\s*/, '')] : [])
+  ].join(' · ')
+  const next = record.turnIndex !== undefined ? 'the turn is over; what it did stands, ask again if it is still wanted' : ASK_REMEDY.unverifiable
+  return new DeliveryError('unverifiable', name, `${facts} — ${next}`)
 }
 
 /**

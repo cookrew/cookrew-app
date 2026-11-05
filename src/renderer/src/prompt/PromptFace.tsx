@@ -1,0 +1,227 @@
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { InkAvatar } from '../zoom/InkAvatar'
+import { CrIcon } from '../icons'
+import type { InkStatus } from '../zoom/ink-status'
+import { FaceTip } from './FaceTip'
+import './prompt-face.css'
+
+/**
+ * THE FACE THAT IS THE SEND KEY (owner, 2026-11-04; design
+ * docs/avatar-send-design-2026-11-04.html). The prompt's target drawn as its
+ * real ink face (InkAvatar: its harness mark, its ensō, its live state), or,
+ * with nobody in the box, a dashed ring round the harness a new agent would
+ * run.
+ *
+ *   folded  on the zoom's bar (or alone in a corner): a small badge says what
+ *           a tap leads to, → for an agent, ＋ for a new one; a seal dot says
+ *           words wait in its draft. A tap opens the box.
+ *   empty   in the open box with no words: a tap chooses who (the picker).
+ *   ready   in the open box with words: filled with the theme's primary, the
+ *           ink turned to the colour on it; a tap sends.
+ *
+ * A FILE DRAGGED OVER THE FOLDED FACE (desktop) shows the drop cue over it:
+ * the face turns to a paperclip in the transcripts view's dashed ring, and
+ * DROP TO ATTACH stands above it; dropped, the box opens with it attached.
+ *
+ * A HOLD (450 ms, about a platform long-press; a finger or a pen, never a
+ * mouse, whose Mac has ⌘-hold) talks to it: the ear opens while the finger stays, and the
+ * words land in its draft on release, never sent (owner design, 2026-11-03).
+ */
+
+import type { LaunchFailure } from '../../../shared/launch-failure'
+
+export interface FaceAgent {
+  readonly id: string
+  readonly name: string
+  readonly preset: string
+  readonly orch: boolean
+  readonly status: InkStatus
+  /** Why it is not running, when that is more than resting (shared/launch-failure.ts). */
+  readonly failure?: LaunchFailure | null
+}
+
+export type FaceMode = 'folded' | 'empty' | 'ready'
+
+const HOLD_MS = 450
+
+export interface PromptFaceProps {
+  buttonRef?: React.Ref<HTMLButtonElement>
+  agent: FaceAgent | null
+  /** The harness a new agent runs: its mark, when nobody is in the box. */
+  harness: string
+  mode: FaceMode
+  /** Words wait in this face's draft. */
+  draft?: boolean
+  /** A file is dragged over it: the drop cue shows. */
+  dropping?: boolean
+  /** The agent runs elsewhere (a served session): a small ↗ says so. */
+  remote?: boolean
+  /** It opens the who-picker when tapped empty: whether that picker is open. */
+  expanded?: boolean
+  /** Keep the caret where it is when pressed (the box's own send key). */
+  keepFocus?: boolean
+  listening?: boolean
+  type?: 'button' | 'submit'
+  disabled?: boolean
+  label: string
+  title?: string
+  /** A desktop hover tip over the face (FaceTip.tsx), in place of the title. */
+  tip?: React.ReactNode
+  className?: string
+  onTap: (e: React.MouseEvent<HTMLButtonElement>) => void
+  /** A hold began (the ear opens) and ended (it closes). Absent: no hold. */
+  onHold?: () => void
+  onHoldEnd?: () => void
+}
+
+const Plus = (): React.JSX.Element => (
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 3v10M3 8h10" />
+  </svg>
+)
+
+const Arrow = (): React.JSX.Element => (
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M3 8h10M9 4l4 4-4 4" />
+  </svg>
+)
+
+/** A remote agent's mark: it runs elsewhere (owner design, 2026-11-04). */
+export const RemoteMark = (): React.JSX.Element => (
+  <span className="pf-remote" aria-hidden="true">
+    ↗
+  </span>
+)
+
+export function PromptFace({
+  buttonRef,
+  agent,
+  harness,
+  mode,
+  draft = false,
+  dropping = false,
+  remote = false,
+  expanded,
+  keepFocus = false,
+  listening = false,
+  type = 'button',
+  disabled = false,
+  label,
+  title,
+  tip,
+  className,
+  onTap,
+  onHold,
+  onHoldEnd
+}: PromptFaceProps): React.JSX.Element {
+  const timer = useRef<number | null>(null)
+  const tipId = useId()
+  // The tip listens on the face itself: the element, kept as state so it mounts with it.
+  const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null)
+  // Stable, so the ref the caller passed is called once per element, not once per render.
+  const setButton = useCallback(
+    (el: HTMLButtonElement | null): void => {
+      setAnchor(el)
+      if (typeof buttonRef === 'function') buttonRef(el)
+      else if (buttonRef) (buttonRef as React.MutableRefObject<HTMLButtonElement | null>).current = el
+    },
+    [buttonRef]
+  )
+  const held = useRef(false)
+  /** The click that follows a hold's release is the hold's, not a tap. */
+  const swallow = useRef(false)
+  const clear = (): void => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    timer.current = null
+  }
+  // A face going away takes its pending hold with it.
+  useEffect(() => clear, [])
+  const endHold = (released: boolean): void => {
+    clear()
+    // Only a hold the finger lifted from ends in a click to drop.
+    swallow.current = released && held.current
+    if (!held.current) return
+    held.current = false
+    onHoldEnd?.()
+  }
+  const classes = [
+    'pf-face',
+    agent ? 'pf-agent' : 'pf-new',
+    `pf-${mode}`,
+    draft && mode !== 'ready' ? 'pf-has-draft' : '',
+    listening ? 'pf-listening' : '',
+    dropping ? 'pf-dropping' : '',
+    agent && remote ? 'pf-is-remote' : '',
+    className ?? ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+  return (
+    <>
+      <button
+        ref={setButton}
+        type={type}
+        className={classes}
+        aria-label={label}
+        // A tip of its own stands in for the title, whose native tip lands under the cursor.
+        title={tip ? undefined : (title ?? label)}
+        aria-describedby={tip ? tipId : undefined}
+        disabled={disabled}
+        aria-haspopup={expanded === undefined ? undefined : 'listbox'}
+        aria-expanded={expanded}
+        onMouseDown={keepFocus ? (e) => e.preventDefault() : undefined}
+        onPointerDown={(e) => {
+          swallow.current = false
+          if (!onHold || e.button !== 0 || e.pointerType === 'mouse') return
+          held.current = false
+          // The release must come back here even if the finger slides off.
+          e.currentTarget.setPointerCapture?.(e.pointerId)
+          timer.current = window.setTimeout(() => {
+            timer.current = null
+            held.current = true
+            onHold()
+          }, HOLD_MS)
+        }}
+        onPointerUp={() => endHold(true)}
+        onPointerCancel={() => endHold(false)}
+        // A long press must not open the phone's context menu over the face.
+        onContextMenu={(e) => {
+          if (onHold) e.preventDefault()
+        }}
+        onClick={(e) => {
+          // A keyboard's click (Enter, Space) is never a hold's.
+          if (swallow.current && e.detail > 0) {
+            swallow.current = false
+            e.preventDefault()
+            return
+          }
+          onTap(e)
+        }}
+      >
+        <span className="pf-disc">
+          <InkAvatar
+            id={agent?.id ?? `new:${harness}`}
+            preset={agent?.preset ?? harness}
+            orch={agent?.orch ?? false}
+            status={agent?.status ?? 'idle'}
+            weight="regular"
+          />
+        </span>
+        {mode === 'folded' && <span className="pf-verb">{agent ? <Arrow /> : <Plus />}</span>}
+        {draft && mode !== 'ready' && <span className="pf-dot" aria-hidden="true" />}
+        {dropping && (
+          <span className="pf-drop-cue" aria-hidden="true">
+            <CrIcon name="attach" />
+            <span className="pf-drop-words">DROP TO ATTACH</span>
+          </span>
+        )}
+        {agent && remote && <RemoteMark />}
+      </button>
+      {tip && (
+        <FaceTip anchor={anchor} id={tipId}>
+          {tip}
+        </FaceTip>
+      )}
+    </>
+  )
+}

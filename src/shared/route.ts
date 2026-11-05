@@ -48,6 +48,17 @@ export interface RouteQuotaWindow {
   resetsAt: number | null
   /** The gateway's own rendering ("0 / 130"), when it gives one. */
   display: string | null
+  /** What is left, as the gateway says it: a percent when there is no limit, else in `unit`. */
+  remaining?: number | null
+  /** "credits", "requests"…; null for a percent window. */
+  unit?: string | null
+  /** Tokens this account spent in the window (the gateway's `holds.tokens`), since `since`. */
+  tokensUsed?: number | null
+  /** What those tokens would have cost at API prices, in dollars; null when unpriced. */
+  valueUsed?: number | null
+  since?: number | null
+  /** Why the gateway gives no token figure for this window ("low", "new", "stale"); null when it gives one. */
+  estimateWhy?: string | null
 }
 
 export interface RouteQuota {
@@ -55,8 +66,16 @@ export interface RouteQuota {
   account: string | null
   alias: string | null
   plan: string | null
-  kind: 'subscription' | 'key' | 'local'
+  kind: 'subscription' | 'key' | 'local' | 'balance'
   windows: RouteQuotaWindow[]
+  /** A prepaid balance in the gateway's own words ("$64.90 · ¥-0.00"); null for anything else. */
+  balance?: string | null
+  /** When the subscription itself ends. */
+  until?: number | null
+  /** Window resets the account holds (Codex), and when the first of them expires. */
+  resetCredits?: { count: number; firstExpiresAt: number | null } | null
+  /** When the gateway last read this account. */
+  readAt?: number | null
   last: boolean
   /** The gateway could not read this one ("Claude Code's /usage is temporarily unavailable"). */
   error: string | null
@@ -154,6 +173,8 @@ export interface RouteState {
   autoGroup: boolean
   /** Every agent Cookrew spawns is handed Magpie's one MCP hub (main/route/shared-mcp.ts); on unless turned off. */
   sharedMcp: boolean
+  /** The servers in Magpie's library, the ones the hub shares (names only); null when the library could not be read. */
+  mcpServers?: string[] | null
   /** addKeyLine is the BARE stem `magpie provider add ` ending in one space: the renderer appends the preset, the user pastes the key. */
   setup: Omit<RouteSetupLines, 'addKeyLine'> & { addKeyLine: string }
 }

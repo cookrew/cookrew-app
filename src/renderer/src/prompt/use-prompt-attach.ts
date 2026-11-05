@@ -3,7 +3,7 @@ import { cookrew } from '../api'
 import { getDraft } from './prompt-draft'
 import { pathsForFiles } from '../dropped-files'
 import { insertAttached, pastedImages, saveClipboardImages, type Caret } from './prompt-attach'
-import { withPictures } from './draft-pictures'
+import { withAttached } from './draft-pictures'
 
 /**
  * A prompt box's screenshots (prompt-attach.ts): ⌘V of an image, or a file
@@ -15,8 +15,12 @@ export interface PromptAttach {
   readonly onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => void
   readonly onDragOver: (e: React.DragEvent) => void
   readonly onDrop: (e: React.DragEvent) => void
-  /** Files dropped somewhere else that this box takes (page-drop.ts). */
+  /** Files dropped somewhere else that this box takes (page-drop.ts), or a phone's picker chose. */
   readonly dropFiles: (files: File[]) => void
+  /** Pictures pasted somewhere else that this box takes (the folded face's ⌘V). */
+  readonly takeImages: (images: File[]) => void
+  /** The paperclip on a desktop: the native file dialog, its picks into the draft. */
+  readonly pickFiles: () => void
   /** A screenshot is being saved. */
   readonly attaching: boolean
 }
@@ -61,7 +65,7 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, asi
     setSaving((n) => n + 1)
     save()
       .then((paths) => {
-        if (aside) return write(withPictures(getDraft(draftKey), paths))
+        if (aside) return write(withAttached(getDraft(draftKey), paths))
         const { text, caret } = insertAttached(then, getDraft(draftKey), at, paths)
         write(text)
         const input = inputRef.current
@@ -80,12 +84,16 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, asi
     if (files.length > 0) attach(() => pathsForFiles(files, cookrew()))
   }
 
+  const takeImages = (images: File[]): void => {
+    if (images.length > 0) attach(() => saveClipboardImages(images, cookrew()))
+  }
+
   return {
     onPaste: (e) => {
       const images = pastedImages(e.clipboardData)
       if (images.length === 0) return
       e.preventDefault()
-      attach(() => saveClipboardImages(images, cookrew()))
+      takeImages(images)
     },
     onDragOver: (e) => {
       if (!carrying(e)) return
@@ -100,6 +108,21 @@ export function usePromptAttach({ draftKey, write, inputRef, refusal = null, asi
       dropFiles(Array.from(e.dataTransfer.files))
     },
     dropFiles,
+    takeImages,
+    // The dialog first: "attaching…" is for the saving, not the choosing.
+    // A dialog closed with nothing picked hands back [] and leaves the draft be.
+    pickFiles: () => {
+      if (refusal) return onError(refusal)
+      cookrew()
+        .pickFiles()
+        .then((paths) => {
+          if (paths.length > 0) attach(async () => paths)
+        })
+        .catch((error: unknown) => {
+          console.error('File dialog failed:', error)
+          if (mounted.current) onError(`Could not open the file dialog: ${error instanceof Error ? error.message : String(error)}`)
+        })
+    },
     attaching: saving > 0
   }
 }

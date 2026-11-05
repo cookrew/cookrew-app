@@ -1,18 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
-import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
 import { cachedDispatchReader, wireInbox } from './inbox-wiring'
 import { createWindowHold } from './inbox-window-hold'
-import { deliverToRecruit } from './recruit-delivery'
+import { deliverToRecruit, type RecruitWitness } from './recruit-delivery'
 import { nameAgent } from './agent-namer'
-import { planRename, stillStandIn, type RenameOutcome } from './agent-rename'
+import { autoNameIn, renameByHand, renameCardIn, type RenameDeps, type RenameOutcome } from './agent-rename'
 import { recruitPatch, spawnInjectionFor } from './recruit-node'
 import { placeBeside, type Alternate, type DecideCandidate, type Harness } from '../shared/sous-decide'
 import { SousLedger } from './sous-ledger'
@@ -33,6 +33,10 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
+import { blockAsPaste, createPacedInput } from './enter-pacing'
+import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
+import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { aboutOfScreen, wholeBrief } from '../shared/wait-about'
 import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
@@ -74,11 +78,13 @@ import { sousBreakerState, sousReadiness, summarizeTurn } from './sous'
 import { translateBody } from './sous-translate'
 import { remoteSousHost } from './sous-remote-config'
 import { TRANSLATE_MAX_CHARS } from '../shared/translate'
-import { startSocketServer, type SousDoor } from './socket-server'
+import { startSocketServer, type SocketServerHandle, type SousDoor } from './socket-server'
 import { RoutineScheduler } from './routines'
 import { VoiceEngine } from './voice'
 import { SousController } from './sous-control'
 import { MacListener } from './listen'
+import { hearAvailable, hearRecording } from './hear-file'
+import { createLocalVoice } from './local-voice'
 import { polishTranscript } from './sous-polish'
 import { readSousVoiceConfig } from './sous-voice-config'
 import type { IntentRoster, Surface as SousSurface } from '../shared/sous-intent'
@@ -87,7 +93,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
-  localLevelsService,
+  localFleetService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -102,6 +108,8 @@ import {
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
+import { electronSealer, excludeFromBackup } from './secrets-seal'
+import { noticeGate, secretNotice, withSecretActivity, type SecretActivityType, type SecretChange } from './secret-activity'
 import { createRtcHost } from './rtc-peer'
 import { createSocketBridge } from './socket-bridge'
 import { BUILD_CHECK_MS, readBuildId } from './build-id'
@@ -113,6 +121,8 @@ import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
 import { VphoneInstance } from './vphone-instance'
 import { createSocketGuest, vphoneSocketPath } from './vphone-socket'
 import { createUseInstances } from './use-instances'
+import { createUseSourceService } from './use-source-service'
+import { emptySourceList } from '../shared/use-sources'
 import { UseSignalBus } from './use-signal-bus'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
@@ -141,10 +151,11 @@ import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
-import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, injectWhenReady } from './fork'
-import { AgentRegistry } from './agent-registry'
+import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
+import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
+import { HARNESS_FACTS } from './route/setup'
 import { AgentExportStore } from './agent-export'
-import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
 import { WorkspaceShots } from './workspace-shots'
@@ -161,7 +172,10 @@ import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
-import { registerAccountIpc } from './account-ipc'
+import { mintWatchInvite, registerAccountIpc } from './account-ipc'
+import type { AccountDoor, LoginAudit } from './login-cli'
+import { paneInputs } from './pane-input'
+import { injectWindowInput } from './ui-input'
 import { localDeviceName } from './device-name'
 import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
@@ -175,6 +189,8 @@ import {
 } from './door-seats'
 import { Factors } from './factors'
 import { SeatSettleQueue } from './seat-settle'
+import { emit, isFreshInstall, resumeTelemetry, setTelemetryOn, startTelemetry, telemetryStatus } from './telemetry'
+import { TELEMETRY_DEFAULT_ON } from '../shared/funnel-events'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
 import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
@@ -201,6 +217,8 @@ import { isChromiumErrorPage } from '../shared/browser-navigation'
 import {
   claudeSessionFile,
   claudeSpawnCommand,
+  claudeCwdRepair,
+  locateClaudeSessionFile,
   realCwd,
   resolveClaudeSessionId,
   resumeRoleSession,
@@ -219,6 +237,18 @@ import {
   type TuneDeps
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
+import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
+import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '../shared/remote-access'
+import { parseUseUrl } from '../shared/use-url'
+import { readMacListedApp, readMacSession } from './mac-bridge'
+import { linuxScreenRefusal } from './linux-screen'
+import { createRemoteDesk, remoteGate } from './remote-desk'
+import { createUpdateCheck } from './update-check'
+import { electronUpdateInstaller } from './update-install'
+import type { UpdateStatus } from '../shared/update-check'
+import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
+import { createRemoteTray } from './remote-tray'
+import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
 import { blocksResume, holderOf, liveSessionHolders, planHeldSessionFork } from './claude-live-session'
@@ -238,17 +268,24 @@ import type { PresetPricing } from '../shared/preset-manifest'
 import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
+import { createBrowserCastIpc } from './browser-cast-ipc'
+import { WatchPairing } from './watch-pairing'
+import { createWatchHost } from './watch-host'
+import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
-import { HeadlessBrowserCommandEngine } from './headless-browser-command'
+import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
+import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
-import { reapOrphanChrome } from './orphan-chrome'
+import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
+import { pressureOf, readMachineMemory, sleepColdLookups, sleepWindowMs, type PressureLevel } from './machine-pressure'
 import { staleAgentIds } from './agent-reconcile'
-import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
+import { IdleSleep, idleSleepMsFrom, type SleepFacts } from './agent-sleep'
+import { reasonAwake, sleepReport, writeSleepReport } from './sleep-report'
 import { AgentWaker } from './agent-wake'
-import { gatherSleepEvidence, paneHolder, quietSince, readProcTable } from './agent-sleep-evidence'
+import { cronArmedIn, gatherSleepEvidence, paneHolder, quietSince, readProcTable, sessionMoved } from './agent-sleep-evidence'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -270,6 +307,7 @@ import {
   TeamStore,
   copyTeam,
   forkTeam,
+  resolveTargetDir,
   workspaceFromTemplate,
   entryAgentOf,
   orchAgentOf,
@@ -292,6 +330,9 @@ import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
+import { openWorkspace, workspaceCheck } from './workspace-door'
+import { inspectForks, planWorkspaceRemove, removeFork, type ForkScope } from './workspace-fork-check'
+import type { WorkspaceRemovePlan } from '../shared/workspace-door'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
@@ -351,13 +392,22 @@ import { PinStore } from './pin-store'
 import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
 import { TeamClipboard } from './team-clip'
+import { TerminalCloser, type CloseOutcome, type Survivor } from './terminal-close'
+import { blockStands, cleanTail, commandWord, exitFailure, launchBlock } from './launch-check'
+import { takePaneExit } from './pane-exit'
+import { PaneFollower } from './pane-follow'
+import type { LaunchFailure } from '../shared/launch-failure'
+import type { EventActor } from './event-log'
+import { provedSessions, strayPanes } from './orphan-reap'
+import type { StrayPane } from '../shared/stray-pane'
 import { UNCOPYABLE_PHASES, type TurnPhase } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
-import { pageTurns } from '../shared/turn'
+import { pageTurns, uiCommandOpen } from '../shared/turn'
 import type { TurnPageRequest } from '../shared/turn'
 import { defaultAttachmentsDir, saveAttachment } from './attachments'
 import { createPromptImageReader, imageRefOf } from './prompt-image'
+import { adoptPictures } from './picture-adopt'
 import { servedSessionKey } from './storage-gc-served'
 import { sweepStorageInWorker } from './storage-gc-worker'
 
@@ -379,6 +429,11 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 // cap dropped the oldest id) cannot cost a transcript again. Installed here
 // and nowhere else — a unit test that constructs a store gets the no-op sink.
 installLineageSpill(new LineageSpill())
+
+// Asked before the store writes its first file: after that, every home looks
+// like an upgrade, and `installed` must not fire for everyone already here.
+const freshInstall = isFreshInstall()
+startTelemetry({ appVersion: app.getVersion(), defaultOn: app.isPackaged && TELEMETRY_DEFAULT_ON })
 
 const store = new WorkspaceStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
@@ -402,7 +457,18 @@ function recordPins(nodes: readonly CanvasNode[], pin: VersionPinRecord): void {
     }
   }
 }
-const ptys = new PtyManager()
+const ptys = new PtyManager({ instance: app.getPath('userData') })
+// Another live Cookrew owns the herdr session (a QA run with its own userData
+// slips past the single-instance lock below). This one has not run a single
+// session command and must not: on 2026-09-18 such an instance closed all 56
+// panes of the fleet. See host-claim.ts.
+if (ptys.hostRefusal) {
+  console.error(ptys.hostRefusal)
+  // A Dock launch has no console: without the box the app just never appears.
+  // showErrorBox is allowed before 'ready' and blocks until dismissed.
+  dialog.showErrorBox('Cookrew is already running', ptys.hostRefusal)
+  app.exit(1)
+}
 // Liveness covers EXISTENCE, not attachment: every terminal node — including
 // inactive-workspace agents this process never spawns an attach for — pins
 // its lease generation against tombstone eviction, and any write-ahead
@@ -584,12 +650,20 @@ const ownerGrant = new OwnerGrant({
 })
 const callConversations = new CallConversationStore()
 /**
- * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file per name. The
+ * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file of ciphertext per
+ * name, the key in the keychain under this app's ACL (secrets-seal.ts). The
  * value goes in from the note slot (IPC `secret:put`, or the phone's owner-
  * token PUT) and comes out through `cookrew secret read` in an owner pane,
  * and through nothing else — not an event, not workspace state, not a log.
  */
-const secrets = createSecretsStore()
+const secrets = createSecretsStore({
+  sealer: electronSealer(safeStorage),
+  // Elsewhere a machine with no keyring keeps the 0600 file: refusing there
+  // would take the slots away. A Mac always has a keychain to refuse from.
+  requireSealer: process.platform === 'darwin',
+  excludeFromBackup: (dir) => excludeFromBackup(dir, { warn: (message) => console.error(`[cookrew] ${message}`) }),
+  warn: (message) => console.error(`[cookrew] ${message}`)
+})
 /**
  * THE DIRECT LINK BY WEBRTC (rtc-peer.ts): a phone on the relay offers, this
  * Mac answers on exactly the addresses it publishes — the LAN first, then
@@ -624,6 +698,57 @@ const scrub = createScrubber({
   onChange: (listener) => void secrets.onChange(listener)
 })
 /** The audit line every read and every missing read leaves: name only. */
+/** The account for `cookrew login`, once its channels are registered. */
+let accountDoor: AccountDoor | null = null
+
+/**
+ * A SIGN-IN ATTEMPT FROM A TERMINAL, ON THE RECORD, whichever way it went: a
+ * refusal is the line an agent's try leaves. Nothing typed ever reaches this.
+ */
+const auditLogin = (event: LoginAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    // A sign-in that went through got past every check for a person.
+    actor: event.type === 'account.login-refused' ? 'agent' : 'user',
+    timestamp: Date.now(),
+    details: scrub(event.details)
+  })
+}
+
+/**
+ * A secret's activity, said aloud (secret-activity.ts). The toast is for the
+ * owner at the window, so this is for the one who is not; it costs the gate's
+ * quiet only when it actually speaks.
+ */
+const secretNoticeGate = noticeGate()
+const noticeSecret = (type: SecretActivityType, who: string, name: string): void => {
+  if (mainWindow?.isFocused()) return
+  if (secretNoticeGate(`${type}|${who}|${name}`)) showNotification(secretNotice(type, who, name))
+}
+
+/** A seal or a delete from a door the owner uses. The name stays in `details`, the one field the wall loses. */
+const recordSecretChange = (change: SecretChange): void => {
+  const workspaceId = store.focusedId
+  events.append({
+    type: change.type,
+    entityId: 'secrets',
+    entityName: change.source,
+    workspaceId,
+    workspaceName: store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'user',
+    timestamp: Date.now(),
+    details: scrub(change.name)
+  })
+  noticeSecret(change.type, change.source, change.name)
+}
+
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
@@ -668,6 +793,7 @@ const auditSecret = (event: SecretAudit): void => {
       )
     )
   })
+  noticeSecret(event.type, hit?.node.name ?? event.terminalId, event.name)
 }
 /**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
@@ -736,16 +862,10 @@ const routeService = new RouteService({
   },
   harnessOf: (command) => harnessFor(command)?.id ?? null,
   phaseOf: (id) => turns.phaseOf(id),
+  delivering: (id) => turnUnseen(id),
+  onRouteSet: (id) => tuneAsks.forgetKnob(id, 'model'),
   canRestoreExact: (node) => canRestoreExact(node),
-  // In place, with exact context: the kill drops the PTY, the spawn resumes
-  // the same session under the new env (the recover path's own guarantee).
-  respawn: async (id) => {
-    const node = store.nodeAcrossWorkspaces(id)?.node
-    if (!node || node.kind !== 'terminal') return false
-    if (ptys.get(id)) ptys.kill(id)
-    spawnTracked(node)
-    return true
-  },
+  respawn: async (id) => respawnInPlace(id),
   dockCommands: () => PRESETS.map((p) => p.command),
   hasTurns: (id) => turns.history(id).length > 0,
   // The session file the node names, on disk: the harness resumes it itself,
@@ -805,6 +925,7 @@ const serving: Serving = wireServing({
           // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
           bootTerminals: (id) => {
             servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            remoteDesk.workspaceServed(id)
             const booted = bootWorkspaceInPlace(
               {
                 nodesOf: (wid) => callNodesOf(wid),
@@ -891,8 +1012,14 @@ const accounts = new Accounts({
   // host, and a name already on the account gets a counter — decided here,
   // never at the registry, which files what it is sent.
   deviceName: localDeviceName(),
-  // STRATA: the record also says what kind of machine this is (machine-profile.ts).
+  // The record also says what kind of machine this is (machine-profile.ts).
   machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
+  // A provider's login page opens in the system browser and never in a window
+  // of ours: a person must not type a GitHub password into a page this app
+  // controls. The scheme is asked rather than assumed, because a development
+  // copy shares its bundle id with every other Electron on the machine.
+  openBrowser: (url) => shell.openExternal(url),
+  schemeHandled: () => app.isPackaged || app.isDefaultProtocolClient(DEEP_LINK_SCHEME),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -1198,7 +1325,13 @@ canvasLink.onDrop(canvasBridge.reset)
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
+  // No account, or no passcode chosen yet: nothing could open this lock, so it
+  // does not close.
+  armed: () => accounts.lockable(),
+  waiting: () => accounts.providerTripping(),
   onChange: (locked) => {
+    // A provider trip in flight belongs to whoever just walked away.
+    if (locked) accounts.providerCancel()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:locked', locked)
     }
@@ -1442,6 +1575,7 @@ const v2CallTokens = RELAY_ORIGIN
       // be a second answer, and the two would drift.
       onRevoked: (revoked) => {
         for (const device of admittedDevices.prune(revoked)) {
+          remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the
           // owner with no idea which phone in their hand just stopped working.
           console.error(
@@ -1834,6 +1968,8 @@ async function handleServedSlug(
       // The money moved. Report it to cookrew.dev as a bought seat, through
       // the queue that survives the registry being down (seat-settle.ts).
       onPaid: (payment) => {
+        // Before the early return below: a caller with no account still paid.
+        emit('paid')
         const template = serving.served.byService(payment.serviceId)
         const team = template ? (relayServing?.addressFor(template.slug)?.name ?? null) : null
         const username = payment.sub.startsWith(ACCOUNT_SUB_PREFIX)
@@ -2369,6 +2505,44 @@ const lazyTerminals = new LazyTerminalAttachments({
 const backendPhaseOf = (status: HerdrStatus): TurnPhase | null =>
   status === 'working' ? 'thinking' : status === 'blocked' ? 'waiting' : null
 
+/** The pane's rows as they stand, for a menu a mirror cannot show (none attached, or taller than its viewport). */
+const paneRows = async (terminalId: string): Promise<string | null> => {
+  const mux = multiplexer()
+  const name = sessionNameFor(terminalId)
+  if (mux instanceof HerdrHostMultiplexer) return mux.captureRowsAsync(name)
+  return mux?.capture(name) ?? null
+}
+
+/** Rows a permission box may run to on a narrow pane: a long command, wrapped at a phone's 43 columns. */
+const BOX_HISTORY_ROWS = 600
+
+/** Further back than paneRows, where a box taller than the screen keeps its top. */
+const paneHistory = async (terminalId: string): Promise<string | null> => {
+  const mux = multiplexer()
+  return mux instanceof HerdrHostMultiplexer ? mux.captureRowsAsync(sessionNameFor(terminalId), BOX_HISTORY_ROWS) : null
+}
+turns.paneHistory = paneHistory
+
+/** A menu read off a pane, its box whole if the box outgrew those rows. */
+const withPaneBox = async (terminalId: string, choice: WaitChoice | null): Promise<WaitChoice | null> => {
+  if (!choice?.about?.partial) return choice
+  const history = await paneHistory(terminalId)
+  return history === null ? choice : wholeBrief(choice, aboutOfScreen(history))
+}
+
+/** The latest read of each pane's menu: the gate's reads overlap, and a slow one must not land over a newer. */
+const menuReads = new Map<string, number>()
+
+/** The menu a pane shows, for a card with no mirror to read it from. */
+const readPaneMenu = async (terminalId: string): Promise<void> => {
+  const mine = (menuReads.get(terminalId) ?? 0) + 1
+  menuReads.set(terminalId, mine)
+  const screen = await paneRows(terminalId)
+  if (screen === null) return
+  const choice = await withPaneBox(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
+  if (menuReads.get(terminalId) === mine) turns.observeBackendChoice(terminalId, choice)
+}
+
 // herdr's word reaches the tracker through the pane: a slash command's own
 // UI (the /model picker) is not a turn, whatever herdr's screen guess says.
 const herdrPhases = createBackendPhaseGate({
@@ -2382,7 +2556,9 @@ const herdrPhases = createBackendPhaseGate({
     const status = agentStatus(sessionNameFor(terminalId))
     return status ? backendPhaseOf(status) : null
   },
-  apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent)
+  apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent),
+  menu: readPaneMenu,
+  turnOpen: (terminalId) => turns.turnOpen(terminalId)
 })
 
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
@@ -2461,6 +2637,9 @@ const deepLinks = createDeepLinkQueue((link) => {
 })
 
 function acceptDeepLink(raw: string): void {
+  // A PROVIDER'S WAY BACK STOPS HERE. It carries a handoff, so it never joins
+  // the queue to the renderer; `accounts` drops it unless it started this trip.
+  if (accounts.oauthReturn(raw)) return
   const link = parseDeepLink(raw)
   if (link === null) {
     // The link itself is not logged: it is whatever a stranger's page put in
@@ -2581,11 +2760,15 @@ function beginBootTiming(terminalId: string): boolean {
   return true
 }
 
-function recordSpawn(terminalId: string, session: PtySession): void {
+/** Terminals whose close is under way, for the whole removal: see spawnTracked. */
+const closingTerminals = new Set<string>()
+
+/** A card as the registry records it. */
+function registryInput(terminalId: string): AgentRegistryUpsert | null {
   const hit = store.nodeAcrossWorkspaces(terminalId)
-  if (!hit || hit.node.kind !== 'terminal') return
+  if (!hit || hit.node.kind !== 'terminal') return null
   const meta = store.list().workspaces.find((w) => w.id === hit.workspaceId)
-  agents.upsert({
+  return {
     id: hit.node.id,
     name: hit.node.name,
     preset: hit.node.preset,
@@ -2596,9 +2779,131 @@ function recordSpawn(terminalId: string, session: PtySession): void {
     workspaceName: meta?.name ?? hit.workspaceId,
     orch: hit.node.orch,
     sessionRef: nodeSessionRef(hit.node as TerminalNodeData)
+  }
+}
+
+/** What the pane's boot script will export, so a check here is a check there. */
+const paneSearchPath = (): string => `${ptys.runtimeDir}:${process.env.PATH ?? ''}`
+
+/** The multiplexer's strict word on one pane: null when it could not say. */
+function panePresence(id: string): boolean | null {
+  const mux = multiplexer()
+  const name = sessionNameFor(id)
+  if (!mux) return false
+  return mux.sessionPresence ? mux.sessionPresence(name) : mux.sessionExists(name)
+}
+
+/** Every live session now, or a rejection when the backend cannot be read. */
+async function liveNow(): Promise<ReadonlySet<string>> {
+  const mux = multiplexer()
+  if (!mux) return new Set()
+  return mux.liveSessions ? mux.liveSessions() : new Set(mux.listSessions())
+}
+
+type LaunchSubject = { id: string; command: string; cwd: string; claudeSessionId?: string | null }
+
+/** What would stop this card booting, whatever runs now. Never a served one: its sandbox is its own. */
+function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
+  const home = store.ownerOf(t.id)
+  if (home !== undefined && servedSpawnContexts.has(home)) return null
+  // spawnTracked moves a card to where its claude session lives first, so the check looks there too.
+  const repaired = isClaudeCommand(t.command) && t.claudeSessionId ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId }) : null
+  return launchBlock({
+    cwd: repaired ?? t.cwd,
+    command: t.command,
+    path: paneSearchPath(),
+    // The direct backend boots through a login shell, whose PATH this cannot see.
+    checkCommand: multiplexer()?.capabilities.persistsAcrossRestart === true,
+    installLine: (word) => HARNESS_FACTS.find((harness) => harness.bin === word)?.installLine ?? null
   })
-  session.once('exit', () => {
-    if (!session.wasDisposed) agents.deactivate(terminalId)
+}
+
+/**
+ * What stops this card starting now. A running agent whose folder went away is
+ * still running, so a pane that is there, or may be, blocks nothing. Asked last:
+ * it costs a fork, and only a card with a cause pays it. `live` saves a sweep that
+ * fork per card. A strict read, never the admission cache: a cold cache says no pane.
+ */
+function launchBlockOf(t: LaunchSubject, live?: ReadonlySet<string>): LaunchFailure | null {
+  const block = bootBlockOf(t)
+  if (!block) return null
+  const open = live ? live.has(sessionNameFor(t.id)) : panePresence(t.id) !== false
+  return open ? null : block
+}
+
+/** Put the failure on the card. `announce` when someone just tried, not when a sweep looked. */
+function noteLaunchFailure(terminalId: string, failure: LaunchFailure, announce: boolean): void {
+  const input = registryInput(terminalId)
+  if (!input) return
+  const known = agents.lookup(terminalId)?.failure
+  if (known?.kind === failure.kind && known.why === failure.why) return
+  agents.fail(input, failure)
+  if (announce) store.recordEventIn(input.workspaceId, 'terminal.launch-failed', terminalId, input.name, failure.why)
+}
+
+/**
+ * Could this offline card start now? Asked before words are sent to it (the box
+ * keeps them when the answer is no) and by the sweep. A cause that has gone
+ * lifts its failure, so a folder put back is not a card still saying it is lost.
+ */
+function checkLaunch(terminalId: string, announce = true, live?: ReadonlySet<string>): LaunchFailure | null {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal' || ptys.get(terminalId)) return null
+  const block = launchBlockOf(hit.node as TerminalNodeData, live)
+  if (block) {
+    noteLaunchFailure(terminalId, block, announce)
+    return agents.lookup(terminalId)?.failure ?? block
+  }
+  const known = agents.lookup(terminalId)?.failure
+  if (!known?.blocked) return null
+  if (blockStands(known, bootBlockOf(hit.node as TerminalNodeData))) return known
+  agents.clearFailure(terminalId)
+  return null
+}
+
+/** The cards on one workspace's screen: a stat each and one listing, never the whole machine. */
+async function refreshLaunchBlocks(workspaceId: string): Promise<void> {
+  try {
+    const live = await liveNow()
+    for (const id of store.terminalIdsOf(workspaceId)) checkLaunch(id, false, live)
+  } catch (error) {
+    console.error('Checking which cards can start failed:', error)
+  }
+}
+
+/** What a mirror's process ending says about it, when the process did end. */
+function failureOfExit(terminalId: string, session: PtySession, exitCode: number): LaunchFailure | null {
+  const name = sessionNameFor(terminalId)
+  // An attach client can go while its pane runs on: that is no death to report.
+  if (multiplexer()?.sessionExists(name) === true) return null
+  const record = takePaneExit(ptys.runtimeDir, name)
+  const command = session.command ?? ''
+  return exitFailure({
+    name: commandWord(command) ?? store.nodeAcrossWorkspaces(terminalId)?.node.name ?? 'It',
+    agent: command.trim().length > 0,
+    // An attach client's own code says nothing of the pane; with no backend between, it IS the agent's.
+    exitCode: record?.exitCode ?? (session.usesTmux ? null : exitCode),
+    signal: record?.signal ?? null,
+    tail: record && record.tail.length > 0 ? record.tail : cleanTail(session.outputTail),
+    ranMs: Date.now() - session.startedAt,
+    reattached: session.reattached
+  })
+}
+
+/** recordSpawn runs again for a REUSED session; the death is to be read once. */
+const exitWatched = new WeakSet<PtySession>()
+
+function recordSpawn(terminalId: string, session: PtySession): void {
+  const input = registryInput(terminalId)
+  if (!input) return
+  agents.upsert(input)
+  if (exitWatched.has(session)) return
+  exitWatched.add(session)
+  session.once('exit', (exitCode: number) => {
+    if (session.wasDisposed) return
+    const failure = failureOfExit(terminalId, session, exitCode)
+    if (failure) noteLaunchFailure(terminalId, failure, true)
+    else agents.deactivate(terminalId)
   })
 }
 
@@ -2622,6 +2927,21 @@ function paneCard(t: BindableTerminal): PaneCardInfo {
   // may live on a canvas nobody is looking at (pane-bindings.ts).
   const owner = store.ownerOf(t.id)
   return paneCardFor(t, owner ? workspaceName(owner) : store.focusedState.name)
+}
+
+/**
+ * herdr's agent names, kept (herdr-host-multiplexer.ts · reconcileAgentNames):
+ * a name drops whenever an agent restarts in its pane. One async listing per
+ * tick, single-flight inside the backend; the first tick also names the
+ * panes of workspaces not attached since boot.
+ */
+const AGENT_NAME_TICK_MS = 30_000
+function keepAgentNames(): void {
+  const tick = (): void => {
+    void multiplexer()?.reconcileAgentNames?.().catch(() => 0)
+  }
+  setTimeout(tick, 10_000).unref()
+  setInterval(tick, AGENT_NAME_TICK_MS).unref()
 }
 
 /**
@@ -2746,7 +3066,10 @@ function adoptablePiSession(terminalId: string, cwd: string): string | null {
   )
 }
 
-/** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
+/**
+ * Spawn (or reuse) a PTY for a terminal node and register turn tracking. False
+ * when no session came of it: the card says why, and the caller must not say it started.
+ */
 function spawnTracked(t: {
   id: string
   command: string
@@ -2756,7 +3079,40 @@ function spawnTracked(t: {
   opencodeSessionId?: string | null
   piSessionId?: string | null
   sessionLineage?: string[]
-}): void {
+}): boolean {
+  // A card being closed takes no new pane: it would outlive the card, or be
+  // what the close's own retry ends.
+  if (closingTerminals.has(t.id)) return false
+  // A card whose Claude session lives under ANOTHER directory than its cwd
+  // (launched in an adopted pane that kept its old directory) moves to where
+  // the session is BEFORE anything below derives a path from the cwd: the
+  // resume check, the fork, the boot's `cd`. Left alone, a respawn boots a
+  // blank conversation under the same id, and the session observer never
+  // finds the transcript (2026-11-04: eight GOAT Team cards, every --no-wait
+  // ask to them interrupted at 60 s). Once moved, the file is found at the
+  // cwd and this never fires again.
+  // A served card is never moved: its sandbox is its boundary.
+  const home = store.ownerOf(t.id)
+  const repairedCwd =
+    isClaudeCommand(t.command) && t.claudeSessionId && !(home !== undefined && servedSpawnContexts.has(home))
+      ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId })
+      : null
+  if (repairedCwd !== null) {
+    console.error(`[cookrew] ${t.id}: cwd ${t.cwd} -> ${repairedCwd}, where its claude session lives`)
+    // Enrolled like any cwd a card moves to (terminal-cwd.ts), so a later move
+    // and its rollback treat it as the workspace's own directory.
+    const workspace = home === undefined ? undefined : store.list().workspaces.find((w) => w.id === home)
+    if (workspace && !workspace.dirs.includes(repairedCwd)) store.addWorkspaceDir(workspace.id, repairedCwd)
+    store.updateNodeUnsafe(t.id, { cwd: repairedCwd })
+    return spawnTracked({ ...t, cwd: repairedCwd })
+  }
+  // Before any pane exists: a pane that cannot start only hides why. Under herdr
+  // a bad folder would not even fail, the agent starts wherever the pane was.
+  const blocked = ptys.get(t.id) ? null : launchBlockOf(t)
+  if (blocked) {
+    noteLaunchFailure(t.id, blocked, true)
+    return false
+  }
   const owner = store.ownerOf(t.id) ?? store.focusedId
   const servedCtx = servedSpawnContexts.get(owner)
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
@@ -2903,19 +3259,31 @@ function spawnTracked(t: {
   const mcpArgs = cardNode?.kind === 'terminal' && !served ? routeService.sharedMcpFor(cardNode) : []
   const spawnRoute = route && !served ? { env: route.env, args: [...route.args, ...mcpArgs] } : null
   // A routed card runs the route's model: a launch pick's model gives way to it.
-  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : effective
+  // A direct claude card's alias is spelled for the gateway its own settings name (claude-model-route.ts).
+  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
   const fresh = !ptys.get(t.id)
-  const session = ptys.spawn(
-    {
-      terminalId: t.id,
-      command: launched,
-      cwd: t.cwd,
-      card,
-      served,
-      ...(spawnRoute ? { route: spawnRoute } : {})
-    },
-    owner
-  )
+  let session: PtySession
+  try {
+    session = ptys.spawn(
+      {
+        terminalId: t.id,
+        command: launched,
+        cwd: t.cwd,
+        card,
+        served,
+        ...(spawnRoute ? { route: spawnRoute } : {})
+      },
+      owner
+    )
+  } catch (error) {
+    // A husk the check let by (it has a pane) refuses here: the card says why.
+    const block = bootBlockOf(t)
+    if (!block) throw error
+    noteLaunchFailure(t.id, block, true)
+    return false
+  }
+  // A new process owes nothing to an old death still on file.
+  if (fresh && !session.reattached) takePaneExit(ptys.runtimeDir, sessionNameFor(t.id))
   // The route is RECORDED only when a process was created: a tmux reattach
   // rode a surviving session and ignored the boot command, so what this
   // spawn computed never reached it; the card then reads "applies on restart".
@@ -2924,6 +3292,7 @@ function spawnTracked(t: {
   // tracker BEFORE the byte reaches the child; a dispatch in flight is
   // preempted durably or the write is refused (Sol r4 P0-1).
   session.beforeOwnerInput = (terminalId, data) => turns.guardOwnerInput(terminalId, data)
+  session.beforeMenuKeys = (terminalId, data) => turns.guardMenuKeys(terminalId, data)
   // Liveness: a registered id's lease generation is never tombstone-evicted,
   // so a rebound terminal cannot be mistaken for a dead one (Sol r9).
   defaultProducerLease().registerTerminal(t.id)
@@ -3072,6 +3441,7 @@ function spawnTracked(t: {
   // is harness-generic (harness-integration-contract): any 'file'-capable
   // harness with a bound session ref gets durable history, not just Claude.
   watchSessionTurns(t.id)
+  return ptys.get(t.id) !== undefined
 }
 
 /** Claude sessions owned by OTHER terminals — current bindings AND lineage.
@@ -3143,6 +3513,26 @@ function dampedSpawnSession(
  * tiny reads per sweep, and a card whose process has moved house is rebound
  * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
  */
+/** A pane that went with nobody attached: tmux may have kept what happened (pane-exit.ts). */
+function noteDetachedDeath(id: string): void {
+  const record = takePaneExit(ptys.runtimeDir, sessionNameFor(id))
+  const entry = agents.lookup(id)
+  const failure =
+    record && entry
+      ? exitFailure({
+          name: commandWord(entry.command) ?? entry.name,
+          agent: entry.command.trim().length > 0,
+          exitCode: record.exitCode,
+          signal: record.signal,
+          tail: record.tail,
+          ranMs: Number.POSITIVE_INFINITY,
+          reattached: true
+        })
+      : null
+  if (failure) noteLaunchFailure(id, failure, false)
+  else agents.deactivate(id)
+}
+
 /**
  * THE REGISTRY OUTLIVES NOTHING IT DESCRIBES (agent-reconcile.ts).
  *
@@ -3155,6 +3545,7 @@ function dampedSpawnSession(
  * is marked when the multiplexer cannot be seen: blindness is not absence.
  */
 function reconcileAgentLiveness(): void {
+  void refreshLaunchBlocks(store.focusedId)
   try {
     const mux = multiplexer()
     if (!mux?.available()) return
@@ -3167,7 +3558,7 @@ function reconcileAgentLiveness(): void {
     )
     const exempt = new Set(entries.filter((e) => servedSpawnContexts.has(e.workspaceId)).map((e) => e.id))
     const stale = staleAgentIds({ entries, observable: true, live, exempt })
-    for (const id of stale) agents.deactivate(id)
+    for (const id of stale) noteDetachedDeath(id)
     if (stale.length > 0) {
       console.error(`Reconciled ${stale.length} stale agent entr${stale.length === 1 ? 'y' : 'ies'}`)
     }
@@ -3196,20 +3587,54 @@ setTimeout(reconcileAgentLiveness, 30_000).unref()
 const IDLE_SLEEP_MS = idleSleepMsFrom(process.env.COOKREW_IDLE_SLEEP_MS)
 const idleSleep = new IdleSleep(IDLE_SLEEP_MS)
 
+/** One sweep old: the read is async and the sweep it steers is on a minute clock. */
+let machinePressure: PressureLevel = 'normal'
+
+async function readMachinePressure(): Promise<void> {
+  const memory = await readMachineMemory()
+  if (!memory) return
+  const level = pressureOf(memory)
+  if (level === machinePressure) return
+  console.error(`[cookrew] machine pressure ${machinePressure} -> ${level}: swap ${Math.round(memory.swapUsedMb)} MB`)
+  machinePressure = level
+}
+
 /** Anything that means a person or a turn is using this agent right now. */
+function agentBusyWhy(id: string): string | null {
+  if (lazyTerminals.viewerCount(id) > 0) return 'viewer'
+  if (turns.inTurn(id)) return 'in a turn'
+  if (turns.ownerComposing(id)) return 'owner composing'
+  return agentStatus(sessionNameFor(id)) === 'working' ? 'herdr says working' : null
+}
+
 function agentBusy(id: string): boolean {
-  return (
-    lazyTerminals.viewerCount(id) > 0 ||
-    turns.inTurn(id) ||
-    turns.ownerComposing(id) ||
-    agentStatus(sessionNameFor(id)) === 'working'
-  )
+  return agentBusyWhy(id) !== null
+}
+
+/** What the evidence last said about a nominee it kept awake. */
+const sleepHolds = new Map<string, string>()
+const SLEEP_REPORT_FILE = path.join(homedir(), '.cookrew', 'sleep-sweep.json')
+
+function reportSleepSweep(
+  running: readonly TerminalNodeData[],
+  facts: readonly SleepFacts[],
+  nominated: ReadonlySet<string>,
+  windowMs: number
+): void {
+  const cards = running.map((node, index) => ({
+    id: node.id,
+    name: node.name,
+    why: reasonAwake(facts[index], agentBusyWhy(node.id), sleepHolds.get(node.id) ?? null, nominated.has(node.id))
+  }))
+  writeSleepReport(SLEEP_REPORT_FILE, sleepReport({ at: Date.now(), pressure: machinePressure, windowMs, cards }))
 }
 
 /** One multiplexer listing per sweep — the same price as the liveness sweep. */
 function sleepSweep(): void {
   if (IDLE_SLEEP_MS <= 0) return
+  void readMachinePressure()
   try {
+    const windowMs = sleepWindowMs(machinePressure, IDLE_SLEEP_MS)
     const mux = multiplexer()
     if (!mux?.available()) return
     const sessions = new Set(mux.listSessions())
@@ -3217,23 +3642,25 @@ function sleepSweep(): void {
     // phone) has a person at it that Cookrew's viewer count cannot see.
     const focused = new Set(mux.focusedSessions?.() ?? [])
     const running = store.terminalsAcross().filter((n) => sessions.has(sessionNameFor(n.id)))
-    const due = idleSleep.due(
-      running.map((n) => ({
-        id: n.id,
-        resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
-        served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
-        busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
-      })),
-      Date.now()
-    )
-    if (due.length > 0) void confirmSleep(due)
+    const facts = running.map((n) => ({
+      id: n.id,
+      // A session filed under another directory is resumable too: the spawn
+      // moves the card there first (claudeCwdRepair), so it is not a lost one.
+      resumable:
+        isClaudeCommand(n.command) &&
+        !!n.claudeSessionId &&
+        (canRestoreExact(n) || claudeCwdRepair({ cwd: n.cwd, sessionId: n.claudeSessionId }) !== null),
+      served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
+      busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
+    }))
+    const due = idleSleep.due(facts, Date.now(), windowMs)
+    reportSleepSweep(running, facts, new Set(due), windowMs)
+    if (due.length > 0) void confirmSleep(due, windowMs)
   } catch (error) {
     console.error('Idle sleep sweep failed:', error)
   }
 }
 
-/** Cold pane-pid lookups are synchronous herdr calls: at most this many per pass. */
-const SLEEP_COLD_LOOKUPS = 2
 let confirmingSleep = false
 
 /**
@@ -3242,7 +3669,7 @@ let confirmingSleep = false
  * (status change, transcript or subagent write, a loop's next wakeup) must be
  * a whole window old. Otherwise the window restarts from that sign of life.
  */
-async function confirmSleep(due: readonly string[]): Promise<void> {
+async function confirmSleep(due: readonly string[], windowMs: number): Promise<void> {
   if (confirmingSleep) return
   confirmingSleep = true
   try {
@@ -3252,21 +3679,29 @@ async function confirmSleep(due: readonly string[]): Promise<void> {
       const node = store.nodeAcrossWorkspaces(id)?.node
       if (!node || node.kind !== 'terminal' || !node.claudeSessionId) continue
       // Left nominated: the next sweep warms it, a minute later.
-      if (!panePids.isWarm(id) && coldLookups++ >= SLEEP_COLD_LOOKUPS) continue
+      if (!panePids.isWarm(id) && coldLookups++ >= sleepColdLookups(machinePressure)) continue
       const holders = liveSessionHolders()
       const now = Date.now()
-      const evidence = await gatherSleepEvidence({
-        holder: paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd),
-        holders,
-        procs,
-        transcript: claudeSessionFile(node.cwd, node.claudeSessionId),
-        now
-      })
+      const holder = paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd, node.claudeSessionId)
+      if (sessionMoved(holder, node.claudeSessionId)) {
+        sleepHolds.set(id, 'pane runs another session')
+        idleSleep.restart(id, now)
+        continue
+      }
+      const transcript = locateClaudeSessionFile(node.cwd, node.claudeSessionId)
+      const evidence = await gatherSleepEvidence({ holder, holders, procs, transcript, now })
       const quiet = quietSince(evidence, now)
-      if (now - quiet.at < IDLE_SLEEP_MS) {
+      if (now - quiet.at < windowMs) {
+        sleepHolds.set(id, quiet.why)
         idleSleep.restart(id, quiet.at)
         continue
       }
+      if (await cronArmedIn(transcript, now)) {
+        sleepHolds.set(id, 'a recurring cron is armed')
+        idleSleep.restart(id, now)
+        continue
+      }
+      sleepHolds.delete(id)
       putAgentToSleep(id, now - quiet.at)
     }
   } catch (error) {
@@ -3278,6 +3713,18 @@ async function confirmSleep(due: readonly string[]): Promise<void> {
 const sleepSweepTimer = setInterval(sleepSweep, 60_000)
 sleepSweepTimer.unref()
 
+/** Old enough to be a leak, and clientless for long enough to not be a pause. */
+const HEADLESS_LEAK_AGE_MS = 2 * 60 * 60_000
+const HEADLESS_LEAK_QUIET_MS = 60 * 60_000
+const headlessReaper = new HeadlessReaper(HEADLESS_LEAK_AGE_MS, HEADLESS_LEAK_QUIET_MS)
+
+async function headlessLeakSweep(): Promise<void> {
+  const killed = await headlessReaper.sweep(Date.now())
+  if (killed.length > 0) console.error(`[cookrew] stopped ${killed.length} headless browser(s) nobody was driving`)
+}
+const headlessLeakTimer = setInterval(() => void headlessLeakSweep(), 10 * 60_000)
+headlessLeakTimer.unref()
+
 /**
  * End an idle agent's process and nothing else: the node, its wires, its
  * session id and its turn history all stay, so the wake is a plain resume.
@@ -3287,17 +3734,23 @@ sleepSweepTimer.unref()
 function putAgentToSleep(id: string, quietMs: number): void {
   const node = store.nodeAcrossWorkspaces(id)?.node
   if (!node || node.kind !== 'terminal' || agentBusy(id)) return
+  // Nomination read focus up to a pass ago, and a pass can run long.
+  if (multiplexer()?.focusedSessions?.().includes(sessionNameFor(id))) return
   lazyTerminals.forget(id)
   herdrPhases.observe(id, null, true)
   sessionSync.unwatch(id)
   turns.untrack(id)
-  if (ptys.get(id)) ptys.kill(id)
-  else ptys.killDetached(id)
+  ptys.kill(id)
   agents.deactivate(id)
   idleSleep.markAsleep(id)
   const minutes = Math.round(quietMs / 60_000)
   store.withOpContext({ actor: 'agent' }, () =>
-    store.recordEvent('terminal.asleep', id, node.name, `idle ${minutes} min; wakes on the next ask, reply or LIVE`)
+    store.recordEvent(
+      'terminal.asleep',
+      id,
+      node.name,
+      `idle ${minutes} min${machinePressure === 'normal' ? '' : ` (memory pressure ${machinePressure})`}; wakes on the next ask, reply or LIVE`
+    )
   )
 }
 
@@ -3307,31 +3760,51 @@ function putAgentToSleep(id: string, quietMs: number): void {
  * slept, its pane was closed, herdr restarted. A cold agent resumes its own
  * session; a pane herdr still holds is only re-attached.
  */
+/** Does the multiplexer still hold this terminal's pane (whether or not a mirror is attached)? */
+function paneAlive(id: string): boolean {
+  const mux = multiplexer()
+  const name = sessionNameFor(id)
+  if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
+  return mux?.sessionExists(name) === true
+}
+
+/** Words that reached no process: the box takes them back, and everyone else hears why. */
+function noteInputLost(id: string): void {
+  const hit = store.nodeAcrossWorkspaces(id)
+  const failure = agents.lookup(id)?.failure
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEventIn(
+      hit?.workspaceId ?? store.focusedId,
+      'terminal.input-lost',
+      id,
+      hit?.node.name ?? id,
+      failure ? `${failure.why} ${failure.fix}` : 'it is offline and would not start — the prompt was not delivered'
+    )
+  )
+}
+
 const waker = new AgentWaker<PtySession>({
   session: (id) => ptys.get(id),
   isTerminal: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'terminal',
-  paneAlive: (id) => {
-    const mux = multiplexer()
-    const name = sessionNameFor(id)
-    if (mux instanceof HerdrHostMultiplexer) return mux.sessionExistsCached(name)
-    return mux?.sessionExists(name) === true
-  },
+  paneAlive,
   boot: (id) => ensureTerminalMirror(id),
   // A respawned TUI paints its resumed transcript and swallows the CRs sent
   // meanwhile (ask-cold-start); Claude can also sit silent before drawing
   // anything, so a Claude session waits for its input box as well.
   ready: (session) =>
     waitForReady(session, {
-      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined
+      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined,
+      gone: () => ptys.get(session.terminalId) !== session
     }),
   sleep: { take: (id) => idleSleep.takeAsleep(id), mark: (id) => idleSleep.markAsleep(id) },
   // Never a silent drop (Sol r8): the words went nowhere, so say so.
   lost: (id, chunks) => {
     if (chunks.length === 0) return
-    const node = store.nodeAcrossWorkspaces(id)?.node
-    store.withOpContext({ actor: 'agent' }, () =>
-      store.recordEvent('terminal.input-refused', id, node?.name ?? id, 'it is offline and would not start — the prompt was not delivered')
-    )
+    if (chunks.some((chunk) => /[\r\n]/.test(chunk))) return noteInputLost(id)
+    // Keys with no Enter are a draft on its way, and the box still has it. Only
+    // its line has to hear (live-line.ts): it would count them as typed.
+    const hit = store.nodeAcrossWorkspaces(id)
+    if (hit) store.recordEventIn(hit.workspaceId, 'terminal.keys-lost', id, hit.node.name)
   },
   warn: (message) => console.warn(message)
 })
@@ -3690,7 +4163,20 @@ const dispatchService = new DispatchService({
   wake: async (agentId) => (await wakeAgent(agentId)) !== undefined,
   // Observer probation: a native-file acceptance must see its watch actually
   // reconcile; a path that never materializes interrupts at 60s, not 10min.
-  observerLive: (agentId) => sessionSync.isVerified(agentId),
+  // Asked by the probation before it interrupts: a null from the last poll is
+  // not final — prove it once more on the file the spec names now
+  // (session-sync.ts · verifyNow). Only a transcript that exists nowhere
+  // still ends the dispatch.
+  observerLive: (agentId) => {
+    if (sessionSync.isVerified(agentId)) return true
+    const spec = traces.watchSpec(agentId)
+    if (spec === null) return false
+    const live = sessionSync.verifyNow(agentId, spec.file, spec.parse)
+    // A watch made here for a background agent owes its drain, exactly as
+    // beginWork's does: held by the dispatch's pin, then the quiet clock.
+    if (store.nodeAcrossWorkspaces(agentId)?.workspaceId !== store.focusedId) sessionSync.release(agentId)
+    return live
+  },
   persist: (record) => appendDispatchRecord(defaultDispatchRegistry(), record),
   loadRecords: () => readDispatchRecords(defaultDispatchRegistry()),
   persistTombstone: (tombstone) => appendDispatchTombstone(defaultDispatchRegistry(), tombstone),
@@ -3723,6 +4209,28 @@ const dispatchService = new DispatchService({
     return outcome === 'submitted'
   }
 })
+
+/**
+ * The conductor's view of a card a recruit just made (recruit-delivery.ts):
+ * the brief waits for the harness's own input prompt — the readiness a forked
+ * agent waits for — and is called delivered only on a turn that started or
+ * the text on the card's screen. Every read is the PTY mirror or the tracker,
+ * never a backend fork: these are polled while the CLI waits.
+ */
+const recruitWitness: RecruitWitness = {
+  readyForInput: (id) => {
+    const session = ptys.get(id)
+    if (!session) return false
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    return harnessReadyForInput(session, node?.kind === 'terminal' ? node.command : session.command)
+  },
+  turnRunning: (id) => {
+    const phase = turns.phaseOf(id)
+    return phase === 'thinking' || phase === 'waiting'
+  },
+  turnCount: (id) => (turns.isTracked(id) ? turns.history(id).length : null),
+  screen: (id) => ptys.get(id)?.viewportText() ?? null
+}
 
 // Backend death reaches the dispatch plane the moment the supervisor sees it:
 // every open record the dead server hosted is stamped interrupted (billed as
@@ -3770,15 +4278,16 @@ dispatchSweep.unref?.()
  * default orch preset — Claude with bypassed permissions — so the conductor
  * can act without stalling on approvals.
  */
-function seedConductorIfEmpty(): void {
-  if (store.terminals().length > 0) return
-  store.addNode({
+function seedConductorIfEmpty(workspaceId: string = store.focusedId): void {
+  const state = store.workspaceState(workspaceId)
+  if (state.nodes.some((node) => node.kind === 'terminal')) return
+  store.addNodeToWorkspace(workspaceId, {
     kind: 'terminal',
     id: randomUUID(),
     name: 'Conductor',
     preset: DEFAULT_ORCH_PRESET.name,
     command: DEFAULT_ORCH_PRESET.command,
-    cwd: store.focusedState.dir,
+    cwd: state.dir,
     orch: true,
     role: null,
     position: { x: 240, y: 200 },
@@ -3794,11 +4303,8 @@ function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
   return store.list()
 }
 
-function createWorkspace(name: string, dir: string): WorkspaceMeta {
-  const meta = store.createWorkspace(name, dir || store.focusedState.dir)
-  store.switchWorkspace(meta.id) // fires 'switch' → PTY teardown/spawn
-  seedConductorIfEmpty()
-  return meta
+function createWorkspace(name: string, dir: string, options: { stay?: boolean } = {}): WorkspaceMeta {
+  return openWorkspace(store, { name, dir, stay: options.stay === true, seed: seedConductorIfEmpty })
 }
 
 function switchWorkspace(nameOrId: string): WorkspaceMeta {
@@ -3819,11 +4325,9 @@ function endServedSession(sessionId: string): { stopped: number } {
   const record = serving.instantiator.sessions().find((s) => s.identity.sessionId === sessionId)
   const stopped = serving.instantiator.end(sessionId)
   if (record && store.list().workspaces.some((w) => w.id === record.workspaceId)) {
-    try {
-      removeWorkspace(record.workspaceId)
-    } catch (error) {
+    removeWorkspace(record.workspaceId).catch((error) =>
       console.error(`ending ${sessionId}: its workspace could not be removed: ${String(error)}`)
-    }
+    )
   }
   // The face goes with the session. What we remember of a caller is about a
   // LIVE session, so a record that outlived one would draw somebody who left.
@@ -3832,42 +4336,118 @@ function endServedSession(sessionId: string): { stopped: number } {
   return stopped
 }
 
-function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
+/** A fork's reach: where its worktrees live, and who else holds a folder. */
+function forkScope(workspaceId: string): ForkScope {
+  return {
+    worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees'),
+    otherDirs: store.list().workspaces.filter((w) => w.id !== workspaceId).flatMap((w) => w.dirs)
+  }
+}
+
+/** What removing this workspace would stop, delete and leave (the remove sheet). */
+async function workspaceRemovePlan(nameOrId: string): Promise<WorkspaceRemovePlan> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
-  const browserIds = store.browserIdsOf(meta.id)
-  // A workspace that is gone should not keep a picture of itself (the screen
-  // wall). Dropped here, where the removal is known, rather than left for the
-  // sweep that runs when the wall next opens.
-  workspaceShots.forget(meta.id)
-  // A served session's workspace: the session ends WITH it. Otherwise the
-  // record lingers open with no conductor and every caller read is a 503.
-  const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
-  if (servedHere) serving.instantiator.end(servedHere.identity.sessionId)
-  // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
-  // only switches away (detach) and rm's the state dir, so without this each
-  // terminal's tmux session (a claude CLI, bypassPermissions) would leak
-  // forever with no node left to reach it. Done before the switch-away so the
-  // active workspace's terminals are killed, not merely detached. Kills are
-  // by tmux session name, so parked (detached) terminals are reached too.
-  for (const id of store.terminalIdsOf(meta.id)) {
-    store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
-    // An open dispatch dies WITH its workspace — interrupted (infrastructure),
-    // never left submitted/busy until the sweep (Sol r1 P1).
-    retireTerminal(id, 'workspace removed')
-    defaultProducerLease().forgetTerminal(id)
-    defaultProducerLease().clearProvenanceOnDeath(id)
-    ptys.killDetached(id)
-    turns.untrack(id)
-    // Keep turn history as the recovery signal (see removeNode, R2 fix).
-    agents.deactivate(id)
+  const state = store.workspaceState(meta.id)
+  const forks = await inspectForks(state.dirs, forkScope(meta.id))
+  return planWorkspaceRemove({ id: meta.id, name: meta.name, state, forks })
+}
+
+/**
+ * Remove a workspace and, when asked, the fork's worktree and branch. They go
+ * LAST: its agents are stopped first, and each fork is checked again in
+ * removeFork, so a change made since the offer keeps them. What could not go
+ * comes back as a sentence, because by then the workspace itself has gone.
+ */
+async function removeWorkspaceWith(
+  nameOrId: string,
+  options: { worktree?: boolean } = {}
+): Promise<ReturnType<WorkspaceStore['list']>> {
+  const plan = options.worktree ? await workspaceRemovePlan(nameOrId) : null
+  const scope = plan ? forkScope(plan.id) : null
+  const list = await removeWorkspace(nameOrId)
+  if (!plan || !scope) return list
+  const results = await Promise.all(plan.forks.filter((f) => f.removable).map((fork) => removeFork(fork, scope)))
+  const notice = results.flatMap((r) => (r.ok ? [] : [r.reason])).join(' ')
+  return notice ? { ...list, notice } : list
+}
+
+const removingWorkspaces = new Map<string, Promise<ReturnType<WorkspaceStore['list']>>>()
+
+/**
+ * Delete a workspace, and every process it holds. Its terminals end FIRST, and
+ * a survivor stops the delete: the workspace and its cards are the only way
+ * anyone reaches that process again. One delete at a time per workspace, and the
+ * last one left is counted with the ones already going.
+ */
+async function removeWorkspace(nameOrId: string): Promise<ReturnType<WorkspaceStore['list']>> {
+  const meta =
+    store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
+  if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  const underway = removingWorkspaces.get(meta.id)
+  if (underway) return underway
+  if (store.list().workspaces.length - removingWorkspaces.size <= 1) throw new Error('Cannot remove the last workspace')
+  const run = endWorkspace(meta).finally(() => removingWorkspaces.delete(meta.id))
+  removingWorkspaces.set(meta.id, run)
+  return run
+}
+
+/** Passes over a workspace's terminals: one, and a card recruited during the wait gets the next. */
+const WORKSPACE_END_PASSES = 3
+
+async function endWorkspace(meta: WorkspaceMeta): Promise<ReturnType<WorkspaceStore['list']>> {
+  const ended = new Set<string>()
+  try {
+    // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
+    // only switches away (detach) and rm's the state dir, so without this each
+    // terminal's tmux session (a claude CLI, bypassPermissions) would leak
+    // forever with no node left to reach it. Done before the switch-away so the
+    // active workspace's terminals are killed, not merely detached. Kills are
+    // by session name, so parked (detached) terminals are reached too.
+    for (let pass = 0; ; pass += 1) {
+      const ids = store.terminalIdsOf(meta.id).filter((id) => !ended.has(id))
+      if (ids.length === 0) break
+      if (pass === WORKSPACE_END_PASSES) throw new Error(`"${meta.name}" was not removed: cards kept arriving while it closed`)
+      for (const id of ids) store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
+      // An open dispatch dies WITH its workspace — interrupted (infrastructure),
+      // never left submitted/busy until the sweep (Sol r1 P1).
+      const survivors = await endTerminals(ids, 'workspace removed')
+      const gone = new Set(survivors.map(({ id }) => id))
+      for (const id of ids.filter((candidate) => !gone.has(candidate))) {
+        ended.add(id)
+        defaultProducerLease().forgetTerminal(id)
+        turns.untrack(id)
+        // Keep turn history as the recovery signal (see removeNode, R2 fix).
+        agents.deactivate(id)
+      }
+      if (survivors.length > 0) {
+        const names = survivors.map(({ id }) => store.nodeAcrossWorkspaces(id)?.node.name ?? id).join(', ')
+        const stopped = ended.size > 0 ? ` ${ended.size} other agent(s) did stop.` : ''
+        const why = `${names} did not stop (${survivors[0].error}).${stopped}`
+        // The wall logs a rejection and no more, and some agents did end: this is what says so.
+        store.recordEventIn(meta.id, 'workspace.remove-failed', meta.id, meta.name, why)
+        throw new Error(`"${meta.name}" was not removed: ${why}`)
+      }
+    }
+    // No await from the last look to the delete: nothing can arrive between them.
+    const browserIds = store.browserIdsOf(meta.id)
+    // A workspace that is gone should not keep a picture of itself (the screen
+    // wall). Dropped here, where the removal is known, rather than left for the
+    // sweep that runs when the wall next opens.
+    workspaceShots.forget(meta.id)
+    // A served session's workspace: the session ends WITH it. Otherwise the
+    // record lingers open with no conductor and every caller read is a 503.
+    const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
+    if (servedHere) serving.instantiator.end(servedHere.identity.sessionId)
+    store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
+    void Promise.all(browserIds.map((id) => browserManager.discard(id))).catch((error) =>
+      console.error('Failed to discard removed workspace browser profiles:', error)
+    )
+    return store.list()
+  } finally {
+    for (const id of ended) closingTerminals.delete(id)
   }
-  store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
-  void Promise.all(browserIds.map((id) => browserManager.discard(id))).catch((error) =>
-    console.error('Failed to discard removed workspace browser profiles:', error)
-  )
-  return store.list()
 }
 
 // ---- workspace directories + per-terminal cwd (workspace v2) ----
@@ -4019,6 +4599,12 @@ async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> 
       },
       kill: (id) => ptys.killAndWait(id),
       spawn: (node) => spawnTracked(node),
+      // Only a process is at stake: a card with none may move onto an unmounted folder.
+      cannotStart: (node, target) => {
+        if (!ptys.get(node.id) && panePresence(node.id) === false) return null
+        const block = bootBlockOf({ id: node.id, command: node.command, cwd: target })
+        return block ? `${block.why} ${block.fix} ${node.name} was left running.` : null
+      },
       carry: (move) => carrySessionToCwd({ ...move, turns: turns.history(move.node.id) }),
       dirExists: (target) => {
         try {
@@ -4110,8 +4696,10 @@ sessionDrain.unref?.()
 const switchRunner = new SwitchRunner<TerminalNodeData, BrowserNodeData>({
   detach: (terminalId) => detachTerminalMirror(terminalId),
   boot: (terminal) => bootTerminal(terminal),
-  syncBrowsers: (browsers) => {
-    void browserManager.replaceNodes([...browsers]).catch(() => undefined)
+  // The plan's list is a snapshot from before the boots; the set to keep is
+  // read now (keptBrowserNodes), so nothing started meanwhile is stopped.
+  syncBrowsers: () => {
+    void browserManager.replaceNodes(keptBrowserNodes()).catch(() => undefined)
   },
   // The herdr workspace's chrome follows the focused Cookrew workspace.
   onBooted: () => reportWorkspaceBinding(),
@@ -4129,6 +4717,23 @@ function residentBrowsers(): BrowserNodeData[] {
   return store.resident().flatMap((id) =>
     store.workspaceState(id).nodes.filter((n): n is BrowserNodeData => n.kind === 'browser')
   )
+}
+
+/** A running page outside the resident workspaces survives a switch while used this recently. */
+const BROWSER_KEEP_IDLE_MS = 30 * 60_000
+
+/**
+ * What a switch keeps running (browser-reach.ts · keptBrowsers). Read when the
+ * switch SYNCS, not when it is planned: the boots in between yield to the
+ * loop, and a page an agent starts in that window must not be stopped by a
+ * list made before it existed.
+ */
+function keptBrowserNodes(): BrowserNodeData[] {
+  return keptBrowsers({
+    resident: residentBrowsers(),
+    recentlyUsed: browserManager.liveIds(Date.now() - BROWSER_KEEP_IDLE_MS),
+    nodeOf: activeBrowserNode
+  })
 }
 
 function bootTerminal(t: TerminalNodeData): void {
@@ -4154,20 +4759,28 @@ function detachTerminalMirror(terminalId: string): void {
   void boardProbe.invalidate(terminalId) // detached now: the probe's to watch
 }
 
-function addNode(node: CanvasNode): CanvasNode {
-  const added = store.addNode(node)
+function addNode(node: CanvasNode, workspaceId?: string): CanvasNode {
+  const added = store.addNode(node, workspaceId)
   adoptLiveNode(added)
   return added
 }
 
-function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefined {
-  const existing = store.node(id)
+/**
+ * Every patch to a card. `by` names who renamed it when a rename came from
+ * somewhere other than the owner's own hands (`cookrew rename`, Sous): the
+ * rename is recorded either way (`<kind>.renamed`, old name in details).
+ */
+function updateNode(id: string, patch: Partial<CanvasNode>, by?: string): CanvasNode | undefined {
+  const existing = store.node(id) ?? store.nodeAcrossWorkspaces(id)?.node
   if (existing?.kind === 'note' && typeof (patch as { content?: string }).content === 'string') {
     const { content, ...rest } = patch as { content: string } & Partial<CanvasNode>
     const written = store.writeNote(id, content)
     return Object.keys(rest).length > 0 ? store.updateNode(id, rest) : written
   }
   const updated = store.updateNode(id, patch)
+  if (existing && updated && 'name' in patch && updated.name !== existing.name) {
+    recordRename(updated, existing.name, by)
+  }
   // A rename is metadata: syncing would START a cold card's browser just to
   // relabel it, and `cookrew rename` reaches every card of a workspace.
   if (updated?.kind === 'browser' && Object.keys(patch).some((key) => key !== 'name')) {
@@ -4185,7 +4798,7 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
     const mux = multiplexer()
     mux?.reportPaneCard?.(sessionNameFor(id), card)
     if ('name' in patch) {
-      if (mux?.followRename) mux.followRename(sessionNameFor(id), updated.name)
+      if (mux?.followRename) mux.followRename(sessionNameFor(id), updated.name, id)
       else mux?.renameTab?.(sessionNameFor(id), updated.name)
       agents.rename(id, updated.name)
     }
@@ -4193,50 +4806,58 @@ function updateNode(id: string, patch: Partial<CanvasNode>): CanvasNode | undefi
   return updated
 }
 
+/** The audit line of a rename: who, from what, to what (event log + SSE). */
+function recordRename(node: CanvasNode, was: string, by?: string): void {
+  const owner = store.ownerOf(node.id)
+  if (!owner) return
+  try {
+    store.recordEventIn(owner, `${node.kind}.renamed`, node.id, node.name, `was "${was}"${by ? ` · by ${by}` : ''}`)
+  } catch (error) {
+    console.error('Could not record a rename:', error)
+  }
+}
+
 function workspaceName(id: string): string {
   return store.list().workspaces.find((w) => w.id === id)?.name ?? id
 }
 
 /**
- * Rename a card (agent-rename.ts): checked against its workspace's other
- * cards, then through updateNode, so an agent's herdr pane title, tab and
- * agent name follow and a browser's page re-syncs. A note's new name is
- * pinned (customName), as the card menu's RENAME does, or its next edit
- * would name it from its content again. Shared by `cookrew rename`.
+ * The one rename path (agent-rename.ts) on this process's store: every
+ * rename lands through updateNode, so an agent's herdr pane title, tab and
+ * agent name follow and the rename is recorded.
  */
-function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
-  const hit = store.nodeAcrossWorkspaces(id)
-  if (!hit) return { ok: false, error: 'That card is not on any canvas.' }
-  const plan = planRename({
-    id,
-    current: hit.node.name,
-    wanted,
-    siblings: store.workspaceState(hit.workspaceId).nodes,
-    onClash
-  })
-  if (plan.ok && plan.changed) {
-    updateNode(id, hit.node.kind === 'note' ? { name: plan.name, customName: plan.name } : { name: plan.name })
-  }
-  return plan
+const renameDeps: RenameDeps = {
+  find: (id) => store.nodeAcrossWorkspaces(id),
+  siblings: (workspaceId) => store.workspaceState(workspaceId).nodes,
+  update: (id, patch, by) => updateNode(id, patch, by),
+  pin: (id) => store.updateNodeUnsafe(id, { nameByHand: true })
+}
+
+/**
+ * Rename a card (agent-rename.ts · renameCardIn): checked against its
+ * workspace's other cards; a note's new name is pinned against its content,
+ * a chosen agent name against Sous. Shared by `cookrew rename`, the voice,
+ * and the owner's hands (renameByHand: IPC node:rename, the phone's route).
+ */
+function renameCard(id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string): RenameOutcome {
+  // A name refused on a clash is one somebody chose (`cookrew rename`, the voice): it is pinned.
+  return renameCardIn(renameDeps, id, wanted, onClash, onClash === 'refuse', by)
 }
 
 /** renameCard for an agent only: `cookrew recruit`, Sous, and a name picked from a prompt. */
-function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix'): RenameOutcome {
+function renameTerminal(id: string, wanted: string, onClash: 'refuse' | 'suffix', by?: string): RenameOutcome {
   if (store.nodeAcrossWorkspaces(id)?.node.kind !== 'terminal') return { ok: false, error: 'That agent is not on any canvas.' }
-  return renameCard(id, wanted, onClash)
+  return renameCard(id, wanted, onClash, by)
 }
 
 /**
  * The name Sous picks for a card made from a prompt (agent-namer.ts), once it
- * answers. Null when it has nothing better, or when the card was renamed
- * while it thought: the card then wears a choice, and a guess never
+ * answers. Null when it has nothing better, or when the card wears a choice
+ * by then (renamed while it thought, or pinned by hand): a guess never
  * overwrites one.
  */
 async function autoNameTerminal(id: string, standIn: string, prompt: string): Promise<RenameOutcome | null> {
-  const picked = await nameAgent(prompt)
-  if (!picked) return null
-  if (!stillStandIn(store.nodeAcrossWorkspaces(id)?.node.name, standIn)) return null
-  return renameTerminal(id, picked, 'suffix')
+  return autoNameIn({ ...renameDeps, pick: nameAgent }, id, standIn, prompt)
 }
 
 /**
@@ -4286,12 +4907,12 @@ function recoverAgent(id: string): RecoverResult {
     // Only report spawned when we actually (re)booted — an already-live
     // process is a no-op double-recover (LOW).
     const exact = canRestoreExact(hit.node as TerminalNodeData)
-    const didSpawn = bootsTerminalsFor(hit.workspaceId) && !ptys.get(id) && exact
-    const forked = didSpawn && heldSession(hit.node as TerminalNodeData)
-    if (didSpawn) spawnTracked(hit.node)
+    const wanted = bootsTerminalsFor(hit.workspaceId) && !ptys.get(id) && exact
+    const forked = wanted && heldSession(hit.node as TerminalNodeData)
+    const didSpawn = wanted && spawnTracked(hit.node)
     return {
       ok: true, id, name: hit.node.name, workspaceId: hit.workspaceId,
-      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact, forked
+      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact, forked, ...notStarted(id, wanted, didSpawn)
     }
   }
 
@@ -4314,13 +4935,13 @@ function recoverAgent(id: string): RecoverResult {
     // EXACT-CONTEXT gate: boot only when the exact session is restorable —
     // never a fresh/stray session masquerading as recovery.
     const exact = canRestoreExact(added)
-    const didSpawn = plan.spawn && exact
-    const forked = didSpawn && heldSession(added)
-    if (didSpawn) spawnTracked(added)
+    const wanted = plan.spawn && exact
+    const forked = wanted && heldSession(added)
+    const didSpawn = wanted && spawnTracked(added)
     recoverable.remove(id)
     return {
       ok: true, id, name: added.name, workspaceId: plan.targetWorkspaceId,
-      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact, forked
+      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact, forked, ...notStarted(id, wanted, didSpawn)
     }
   }
 
@@ -4342,13 +4963,19 @@ function recoverAgent(id: string): RecoverResult {
   const orch = activeOrch()
   if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
   const exact = canRestoreExact(added)
-  const didSpawn = bootsTerminalsFor(targetWs) && exact
-  const forked = didSpawn && heldSession(added)
-  if (didSpawn) spawnTracked(added)
+  const wanted = bootsTerminalsFor(targetWs) && exact
+  const forked = wanted && heldSession(added)
+  const didSpawn = wanted && spawnTracked(added)
   return {
     ok: true, id, name: added.name, workspaceId: targetWs,
-    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact, forked
+    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact, forked, ...notStarted(id, wanted, didSpawn)
   }
+}
+
+/** A recover that meant to boot and could not: the toast says why, not "resumes later". */
+function notStarted(id: string, wanted: boolean, didSpawn: boolean): { blocked?: string } {
+  if (!wanted || didSpawn) return {}
+  return { blocked: agents.lookup(id)?.failure?.why ?? 'it would not start' }
 }
 
 /**
@@ -4363,6 +4990,8 @@ function recoverAgent(id: string): RecoverResult {
 function retireTerminal(id: string, why: string): void {
   dispatchService.interruptAgent(id, why)
   turns.clearOpenTurnFact(id)
+  turns.forgetPane(id)
+  paneFollower.forget(id)
   // A dead generation's lease holder becomes invisible and its late release
   // a no-op — a reborn id must never inherit a stranded submission window.
   defaultProducerLease().retire(id)
@@ -4381,6 +5010,116 @@ function retireTerminal(id: string, why: string): void {
   tuningAnnounced.delete(id)
 }
 
+/** How long a pane the boot sweep closed gets before it is looked at again. */
+const SWEEP_CONFIRM_MS = 4000
+
+/** The boot sweep closed these. Said once they are seen gone: one still there stays on the board. */
+function noteSwept(sessions: readonly string[]): void {
+  if (sessions.length === 0) return
+  const confirm = async (): Promise<void> => {
+    const live = await liveNow()
+    for (const session of sessions.filter((name) => !live.has(name))) {
+      const entry = agents.list().find((candidate) => sessionNameFor(candidate.id) === session)
+      if (entry) agents.deactivate(entry.id)
+      store.recordEvent('terminal.swept', entry?.id ?? session, entry?.name ?? session, 'it had no card, so it was closed at launch')
+    }
+  }
+  setTimeout(() => void confirm().catch((error) => console.error('Confirming the boot sweep failed:', error)), SWEEP_CONFIRM_MS).unref()
+}
+
+/** Live panes no card reaches, for the board. Empty when the store cannot be read whole. */
+async function listStrayPanes(): Promise<StrayPane[]> {
+  const mux = multiplexer()
+  if (!mux) return []
+  try {
+    return strayPanes([...(await liveNow())], store.allTerminalIdsStrict(), agents.list())
+  } catch (error) {
+    console.error('Listing panes with no card failed:', error)
+    return []
+  }
+}
+
+/** End a stray by hand: the same proof the sweep needs, asked again at the moment of the act. */
+async function endStrayPane(session: string): Promise<CloseOutcome> {
+  const stray = (await listStrayPanes()).find((pane) => pane.session === session)
+  if (!stray) return { ok: false, error: 'That pane is not running without a card any more.' }
+  if (!ptys.holdsHostClaim()) return { ok: false, error: 'This app does not own the terminal server, so it ends nothing.' }
+  if (!stray.proved || stray.terminalId === null) {
+    return { ok: false, error: 'Nothing proves this app started that pane, so it was left running.' }
+  }
+  const closed = await terminalCloser.close(stray.terminalId)
+  if (!closed.ok) return closed
+  agents.deactivate(stray.terminalId)
+  store.recordEvent('terminal.killed', stray.terminalId, stray.name ?? session, 'a pane with no card')
+  return closed
+}
+
+/** How often a card with no mirror re-reads its pane. */
+const PANE_FOLLOW_MS = 2000
+
+/** A terminal whose card has only its pane to go on: no session file behind it. */
+const hasNoRecord = (command: string): boolean => harnessFor(command)?.turns !== 'file'
+
+const paneFollower = new PaneFollower({
+  candidates: () =>
+    store.focusedState.nodes
+      .filter((node) => node.kind === 'terminal' && !ptys.get(node.id) && !closingTerminals.has(node.id) && hasNoRecord(node.command) && !node.servedSession)
+      .map((node) => node.id),
+  live: async (ids) => {
+    const sessions = await liveNow()
+    return new Set(ids.filter((id) => sessions.has(sessionNameFor(id))))
+  },
+  capture: async (id) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(id)
+    return (mux?.captureAsync ? await mux.captureAsync(name) : mux?.capture(name)) ?? null
+  },
+  // Asked again: a capture takes a while, and the card may have gone or got a mirror.
+  publish: (id, text) => {
+    if (store.nodeAcrossWorkspaces(id) && !ptys.get(id) && !closingTerminals.has(id)) turns.observePane(id, text, isAgentTerminal(id))
+  },
+  gone: (id) => {
+    turns.forgetPane(id)
+    noteDetachedDeath(id)
+  }
+})
+const paneFollowTimer = setInterval(() => void paneFollower.tick(), PANE_FOLLOW_MS)
+paneFollowTimer.unref()
+
+const terminalCloser = new TerminalCloser({
+  kill: (id) => ptys.killAndWait(id),
+  survived: (id, why) => {
+    const hit = store.nodeAcrossWorkspaces(id)
+    console.error(`Terminal ${id} survived its close: ${why}`)
+    store.recordEventIn(hit?.workspaceId ?? store.focusedId, 'terminal.kill-failed', id, hit?.node.name ?? id, why)
+  }
+})
+
+/**
+ * Retire these terminals and end them, returning the ones that would not go.
+ * The ended stay in closingTerminals until the caller's removal is done, or a
+ * mirror or a wake could boot a pane under a card about to be deleted. A survivor
+ * is taken back: its card is the only handle on it, so it must see and reach it.
+ */
+async function endTerminals(ids: readonly string[], why: string): Promise<Survivor[]> {
+  for (const id of ids) {
+    closingTerminals.add(id)
+    retireTerminal(id, why)
+  }
+  const survivors = await terminalCloser.closeAll(ids)
+  for (const { id } of survivors) {
+    closingTerminals.delete(id)
+    const hit = store.nodeAcrossWorkspaces(id)
+    if (hit?.node.kind !== 'terminal' || panePresence(id) !== true) continue
+    try {
+      spawnTracked(hit.node as TerminalNodeData)
+    } catch (error) {
+      console.error(`Taking back terminal ${id} failed:`, error)
+    }
+  }
+  return survivors
+}
+
 /**
  * The node store and the PTY table, as the two functions agent-tuning wants.
  *
@@ -4389,6 +5128,130 @@ function retireTerminal(id: string, why: string): void {
  * mobile call site is how the two surfaces would come to disagree about which
  * cache they read and whose asks they remember.
  */
+/**
+ * In place, with exact context: the kill ends the pane, the spawn resumes the
+ * same session under the card's current command and env (the recover path's
+ * own guarantee). The route dial and the model/effort dials both restart here.
+ *
+ * killAndWait, not kill: kill returns before the pane is torn down, and a
+ * spawn that lands first re-attaches to the dying pane, ignoring the new
+ * command; and kill does nothing for a pane running with no mirror attached.
+ * The node is read AFTER the wait, so the spawn takes the command as saved.
+ */
+async function respawnInPlace(id: string): Promise<boolean> {
+  const current = store.nodeAcrossWorkspaces(id)?.node
+  if (current?.kind !== 'terminal') return false
+  // Before the kill: ending a running agent that cannot start again loses it.
+  const cannot = bootBlockOf(current as TerminalNodeData)
+  if (cannot) {
+    console.error(`respawn ${id}: ${cannot.why} It was left running.`)
+    return false
+  }
+  try {
+    await ptys.killAndWait(id)
+  } catch (error) {
+    console.error(`respawn ${id}: the old pane would not end, so nothing was started`, error)
+    return false
+  }
+  const node = store.nodeAcrossWorkspaces(id)?.node
+  if (!node || node.kind !== 'terminal') return false
+  return spawnTracked(node)
+}
+
+/**
+ * Work a restart would cut that the turn phase cannot show (QA 2026-11-03): an
+ * open dispatch, a held submission window, undelivered text in the box — and,
+ * for a card the tracker does not follow (no mirror), herdr saying it works or
+ * asks. herdr errs towards idle, so it only ever adds a refusal.
+ */
+function turnUnseen(id: string): boolean {
+  if (dispatchService.hasOpenDispatch(id) || defaultProducerLease().holderOf(id) !== null || defaultProducerLease().isContaminated(id)) return true
+  if (turns.phaseOf(id) !== undefined) return false
+  const status = agentStatus(sessionNameFor(id))
+  return status === 'working' || status === 'blocked'
+}
+
+/** Where a card's turns go, for a model pick: routed through the gateway (its catalog and levels), or direct. */
+function cardRouteFor(node: TerminalNodeData): { routed: boolean; catalog: readonly string[]; levelsOf: (id: string) => readonly string[] } {
+  const state = routeService.state()
+  const levelsOf = (id: string): readonly string[] => state.models.find((m) => m.id === id)?.levels ?? []
+  if (state.status !== 'online') return { routed: false, catalog: [], levelsOf }
+  return { routed: routeService.routeOf(node) !== 'direct', catalog: state.models.map((m) => m.id), levelsOf }
+}
+
+/** The effort levels a claude card's model takes: its route's catalog row, else null (claude's own). */
+function cardEffortChoices(id: string): readonly string[] | null {
+  const node = store.nodeAcrossWorkspaces(id)?.node
+  if (node?.kind !== 'terminal' || !isClaudeCommand(node.command)) return null
+  const where = cardRouteFor(node)
+  if (!where.routed) return null
+  const levels = where.levelsOf(routeService.routeOf(node))
+  return levels.length > 0 ? levels : null
+}
+
+/** A direct claude line, with an alias `--model` sent as the gateway's id when claude's settings route claude there. */
+function directClaudeLine(command: string): string {
+  if (!isClaudeCommand(command) || !/\s--model[=\s]/.test(command)) return command
+  let settings: unknown = null
+  try {
+    settings = JSON.parse(readFileSync(path.join(homedir(), '.claude', 'settings.json'), 'utf8'))
+  } catch {
+    return command
+  }
+  if (!claudeSettingsGateway(settings)) return command
+  const state = routeService.state()
+  return state.status === 'online' ? withGatewayModel(command, state.models.map((m) => m.id)) : command
+}
+
+/**
+ * A new claude agent's model pick on a card the default route will take: the
+ * pick becomes its route, as a live pick on a routed card does, so the route
+ * cannot outrank it (claude-model-route.ts).
+ */
+function routedNewAgent(node: TerminalNodeData): TerminalNodeData {
+  const model = /\s--model(?:=|\s+)(\S+)/.exec(node.command)?.[1]
+  if (model === undefined || !isClaudeCommand(node.command)) return node
+  const where = cardRouteFor(node)
+  if (!where.routed) return node
+  const plan = launchPick({ command: node.command, knob: 'model', value: model, ...where })
+  return 'route' in plan && plan.route !== undefined ? { ...node, command: plan.command, route: plan.route } : node
+}
+
+/** A new agent's launch from the prompt box's pick: claude reads the one list (claude-model-route.newAgentPlan). */
+function newAgentLaunch(command: string, tune: unknown): { command: string; route?: string } {
+  const offer = launchOfferFor(command)
+  if (!isClaudeCommand(command)) return { command: launchCommand(command, tune, offer) }
+  const state = routeService.state()
+  const online = state.status === 'online'
+  return newAgentPlan({
+    command,
+    tune,
+    offer,
+    catalog: online ? state.models.map((m) => m.id) : [],
+    levelsOf: (id) => state.models.find((m) => m.id === id)?.levels ?? []
+  })
+}
+
+/** A model or effort pick, as a launch flag: saved on the card, then a restart in place (agent-relaunch.ts). */
+function relaunchDeps(): RelaunchDeps {
+  return {
+    node: (id) => {
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      return node?.kind === 'terminal' ? node : null
+    },
+    phaseOf: (id) => turns.phaseOf(id),
+    delivering: (id) => turnUnseen(id),
+    save: (id, patch) => {
+      store.updateNodeUnsafe(id, patch)
+      if (patch.route !== undefined) routeService.cardChanged(id)
+    },
+    live: (id) => ptys.get(id) !== undefined || paneAlive(id),
+    restorable: (node) => routeService.restorable(node),
+    cannotStart: (node) => bootBlockOf(node)?.why ?? null,
+    respawn: (id) => void respawnInPlace(id)
+  }
+}
+
 function tuneDeps(): TuneDeps {
   return {
     // ACROSS WORKSPACES, not just the focused one. store.node() searches only
@@ -4402,6 +5265,9 @@ function tuneDeps(): TuneDeps {
       return node?.kind === 'terminal' ? node : null
     },
     write: (id, data) => ptys.get(id)?.write(data),
+    relaunch: (id, patch) => relaunchInPlace(relaunchDeps(), id, patch),
+    routeFor: (node) => cardRouteFor(node),
+    effortChoices: (id) => cardEffortChoices(id),
     asks: tuneAsks,
     cache: tuningCache,
     // The RTE dial: offered only when the gateway is online and the card's
@@ -4460,35 +5326,48 @@ function announceTuning(terminalId: string): void {
   tuningBus.emit('tuning', row)
 }
 
-async function removeNode(id: string): Promise<void> {
-  // A removed remote card forgets its door; a re-import signs in afresh.
-  doorTranscripts.delete(id)
-  doorWatch.forget(id)
-  const node = store.node(id)
-  // "END THIS SESSION" means at the door, too. The card is the caller's only
-  // handle on a session running at someone else's app; closing it without
-  // telling the door left that session — its workspace, its agents — running
-  // there for nobody. Best effort and off the critical path: the card goes
-  // whatever the door says, and a door that cannot be reached is logged.
-  if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
-  retireTerminal(id, 'terminal removed')
-  defaultProducerLease().forgetTerminal(id)
-  routeService.forget(id)
-  // A permanently removed uuid never returns: its input-provenance fact
-  // protects nothing and would otherwise sit in the WAL forever.
-  defaultProducerLease().clearProvenanceOnDeath(id)
+/**
+ * Close a card. A terminal's card goes only once its process has: see
+ * terminal-close.ts. Its own workspace, not the one on screen: a phone can close
+ * a card while the desktop looks elsewhere (focus is only focus, ruling 11-04).
+ */
+async function removeNode(id: string, opContext: { actor?: EventActor; via?: string | null } = {}): Promise<CloseOutcome> {
+  const node = store.nodeAcrossWorkspaces(id)?.node
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
   // recovery net (resolveClaudeSessionId matches it to the real session when
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
   // clearing it destroyed a recovery signal for nothing (R2 fix).
-  ptys.kill(id)
-  browserThumbs.forget(id)
-  const browserStopped = node?.kind === 'browser'
-    ? browserManager.discard(id)
-    : browserManager.remove(id)
-  store.removeNode(id)
-  agents.deactivate(id)
-  await browserStopped
+  // killAndWait clears the input-provenance fact, and only on a proven death:
+  // a surviving pane's box is still real.
+  if (node?.kind === 'terminal') {
+    const [survivor] = await endTerminals([id], 'terminal removed')
+    if (survivor) return { ok: false, error: survivor.error }
+  }
+  try {
+    // Everything below only once the process is gone: a card that keeps a
+    // survivor keeps its door, its route and its lease.
+    // A removed remote card forgets its door; a re-import signs in afresh.
+    doorTranscripts.delete(id)
+    doorWatch.forget(id)
+    // "END THIS SESSION" means at the door, too. The card is the caller's only
+    // handle on a session running at someone else's app; closing it without
+    // telling the door left that session — its workspace, its agents — running
+    // there for nobody. Best effort and off the critical path: the card goes
+    // whatever the door says, and a door that cannot be reached is logged.
+    if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
+    defaultProducerLease().forgetTerminal(id)
+    routeService.forget(id)
+    browserThumbs.forget(id)
+    const browserStopped = node?.kind === 'browser'
+      ? browserManager.discard(id)
+      : browserManager.remove(id)
+    store.withOpContext(opContext, () => store.removeNodeAcross(id))
+    agents.deactivate(id)
+    await browserStopped
+    return { ok: true }
+  } finally {
+    closingTerminals.delete(id)
+  }
 }
 
 /** Fork an agent from one of its turns — shared by IPC, CLI and mobile. */
@@ -4554,7 +5433,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     // The catalogs are read only when a pick came with the ask: most terminals bring none.
     command:
       opts.command ??
-      (role ? role.command : opts.tune === undefined ? preset.command : launchCommand(preset.command, opts.tune, launchOfferFor(preset.command))),
+      (role ? role.command : opts.tune === undefined ? preset.command : newAgentLaunch(preset.command, opts.tune).command),
     cwd: opts.cwd ?? store.focusedState.dir,
     orch: opts.orch ?? false,
     role: role ? role.name : null,
@@ -4562,7 +5441,10 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     position: opts.position ?? { ...DEFAULT_CANVAS_POSITION },
     size: DEFAULT_TERMINAL_SIZE
   }
-  const added = store.addNode(terminal)
+  // A pick from the one list carries its route (model-pick.ts); an older bare alias is routed as before.
+  const pickedRoute = !role && opts.command === undefined && opts.tune !== undefined ? newAgentLaunch(preset.command, opts.tune).route : undefined
+  const placed = pickedRoute !== undefined ? { ...terminal, route: pickedRoute } : opts.tune === undefined ? terminal : routedNewAgent(terminal)
+  const added = store.addNode(placed)
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
   const first = typeof opts.prompt === 'string' && terminal.command.trim() ? opts.prompt.trim() : ''
@@ -4571,6 +5453,8 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     const session = ptys.get(added.id)
     if (session) {
       injectWhenReady(session, boot).catch((error) => console.error('Boot prompt injection failed:', error))
+    } else if (first) {
+      noteInputLost(added.id)
     }
   }
   if (opts.autoName && first) {
@@ -4581,8 +5465,8 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
 
 // ---- team fork / save + roles (spec: team-fork-roles v1, Forge lane) ----
 
-async function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  const meta = await teamForkInner(spec)
+async function teamFork(spec: TeamForkSpec, options: { stay?: boolean } = {}): Promise<WorkspaceMeta> {
+  const meta = await forkTeam(forkDepsFor(options), spec)
   store.recordEvent('team.forked', meta.id, meta.name)
   return meta
 }
@@ -4687,14 +5571,24 @@ const teamClipboard = new TeamClipboard({
   // lookup could remove the freshly pasted card instead of the source.
   // The source is inactive by construction (same-workspace cut refused),
   // but its cut agents' detached sessions are still ALIVE — end them now
-  // (killDetached reaches sessions with no live PTY), not at the next
+  // (kill reaches sessions with no live PTY), not at the next
   // startup reap. Moved notes/browsers have nothing to tear down.
   // A cut MOVES the session, so the copy will resume the very file the source
   // is still appending to. An inactive workspace's agents are detached, not
   // dead, so they are ended here — before the paste, not after it. killAndWait
   // throws on a survivor rather than letting `new-session -A` reattach it.
-  stopCut: async (nodeIds, fromWorkspaceId) => {
+  stopCut: async (nodeIds, fromWorkspaceId, intoWorkspaceId) => {
     const state = store.workspaceState(fromWorkspaceId)
+    const targetDirs = store.list().workspaces.find((w) => w.id === intoWorkspaceId)?.dirs ?? []
+    // All of them before any kill, and where the paste will boot them, which is
+    // the target's folder unless it also lists theirs. A card with no process
+    // has nothing to lose, so it goes and its new card says what it needs.
+    for (const node of state.nodes) {
+      if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
+      if (!ptys.get(node.id) && panePresence(node.id) === false) continue
+      const block = bootBlockOf({ id: node.id, command: node.command, cwd: resolveTargetDir(node.cwd, undefined, targetDirs) })
+      if (block) throw new Error(`"${node.name}" was not moved: ${block.why} It was left running.`)
+    }
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
       retireTerminal(node.id, 'terminal cut')
@@ -4711,7 +5605,6 @@ const teamClipboard = new TeamClipboard({
       defaultProducerLease().forgetTerminal(node.id)
       defaultProducerLease().clearProvenanceOnDeath(node.id)
       ptys.kill(node.id)
-      ptys.killDetached(node.id)
       agents.deactivate(node.id)
     }
     store.removeNodesFromWorkspace(fromWorkspaceId, nodeIds)
@@ -4746,8 +5639,25 @@ async function teamPaste(): Promise<TeamCopyResult> {
   return result
 }
 
-function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  return forkTeam(teamForkDeps(), spec)
+/**
+ * A fork a phone asked for boots where it stands: the phone takes its own seat
+ * on the new workspace, and the desktop stays on what it was showing.
+ */
+function forkDepsFor(options: { stay?: boolean }): Parameters<typeof forkTeam>[0] {
+  if (!options.stay) return teamForkDeps()
+  return {
+    ...teamForkDeps(),
+    bootTerminals: (id) => {
+      bootWorkspaceInPlace(
+        {
+          nodesOf: (wid) => callNodesOf(wid),
+          boot: (node) => bootTerminal(node as TerminalNodeData),
+          onError: (node, error) => console.error(`boot failed for ${node.id}:`, error)
+        },
+        id
+      )
+    }
+  }
 }
 
 /**
@@ -4758,9 +5668,12 @@ function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
 async function createWorkspaceFromTeam(
   name: string,
   dir: string,
-  team: string
+  team: string,
+  options: { stay?: boolean } = {}
 ): Promise<WorkspaceMeta> {
-  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.focusedState.dir, team })
+  const verdict = workspaceCheck(store, name, dir)
+  if (!verdict.ok) throw new Error(verdict.reason)
+  return workspaceFromTemplate(forkDepsFor(options), { name, dir: verdict.dir, team })
 }
 
 /**
@@ -5341,42 +6254,7 @@ function roleSaveInner(input: RoleSaveInput): AgentRole {
  */
 async function injectInput(args: string[]): Promise<string> {
   if (!mainWindow) throw new Error('No window')
-  const wc = mainWindow.webContents
-  const [sub, ...rest] = args
-  if (sub === 'click') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-    return `Clicked ${x},${y}`
-  }
-  if (sub === 'dblclick') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    for (const clickCount of [1, 2]) {
-      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount })
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount })
-    }
-    return `Double-clicked ${x},${y}`
-  }
-  if (sub === 'type') {
-    for (const char of rest.join(' ')) {
-      wc.sendInputEvent({ type: 'char', keyCode: char })
-      await new Promise((resolve) => setTimeout(resolve, 15))
-    }
-    return `Typed ${rest.join(' ').length} chars`
-  }
-  if (sub === 'key') {
-    const keyCode = rest[0]
-    // Optional modifiers as a 2nd arg: "meta", "meta+shift", etc.
-    const modifiers = rest[1]
-      ? (rest[1].split(/[+,]/) as Array<'shift' | 'control' | 'meta' | 'alt'>)
-      : undefined
-    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
-    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
-    return `Pressed ${keyCode}${rest[1] ? ` +${rest[1]}` : ''}`
-  }
-  throw new Error('Usage: cookrew ui click X Y | dblclick X Y | type "text" | key Enter')
+  return injectWindowInput(mainWindow.webContents, args)
 }
 
 /**
@@ -5426,7 +6304,7 @@ const browserThumbs = new BrowserThumbCache({
   // ordinary, not an error: the card keeps its last frame and the next poll
   // tries again.
   capture: async (browserId) =>
-    interactiveBrowserEnabled()
+    interactiveBrowserEnabled() && !showsThisMachine(browserId)
       ? ((await browserManager.peek(browserId)?.snapshot().catch(() => null)) ?? null)
       : null
 })
@@ -5459,8 +6337,14 @@ const interactiveBrowserEnabled = (): boolean => {
 }
 const desktopBrowserStreamToken = randomUUID()
 
+/**
+ * A browser card wherever it lives — the canvas on screen first (the cheap
+ * common case), then every other workspace. The headless page of a card in a
+ * workspace nobody is looking at keeps running (owner ruling 2026-11-04), so
+ * its viewers, page state and opened tabs must still find their card.
+ */
 function activeBrowserNode(browserId: string): BrowserNodeData | null {
-  const node = store.node(browserId)
+  const node = store.node(browserId) ?? store.nodeAcrossWorkspaces(browserId)?.node
   return node?.kind === 'browser' ? node : null
 }
 
@@ -5546,13 +6430,93 @@ const browserCacheRoot = (): string =>
 // viewers and trusted agent commands both resolve through this manager.
 // THE USES (use-instances.ts): a Mac display or window, an adb phone, a
 // camera — each a browser card the cast streams and the agent drives.
-// Driving THIS Mac from a viewer or an agent is a decision, never a default.
+// Driving THIS Mac from a viewer or an agent is a decision, never a default:
+// the remote desk holds it, and everything below asks.
+const sessionReader = createSessionReader({
+  read: () => (process.platform === 'darwin' ? readMacSession() : linuxSession(process.env, commandRun))
+})
+// Fixed for the life of this process, and read once: it is a helper process.
+let listedApp: string | null = null
+if (process.platform === 'darwin') {
+  void readMacListedApp().then((bundle) => {
+    listedApp = bundle
+  })
+}
+function currentBuild(): RemoteBuild {
+  return remoteBuild({
+    execPath: process.execPath,
+    packaged: app.isPackaged,
+    persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
+    servedLive: servedSpawnContexts.size > 0,
+    listedApp
+  })
+}
+let keepAwakeId: number | null = null
+const remoteDesk = createRemoteDesk({
+  platform: process.platform,
+  build: currentBuild,
+  linuxRefusal: () => linuxScreenRefusal(process.env),
+  screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
+  accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
+  session: () => sessionReader.read(),
+  settings: remoteSettingsFile(path.join(homedir(), '.cookrew', 'remote-control.json')),
+  servedWorkspace,
+  workspaceOfCard: (card) => store.nodeAcrossWorkspaces(card)?.workspaceId ?? null,
+  cardName: (card) => store.nodeAcrossWorkspaces(card)?.node.name ?? card,
+  record: (type, card, name, details) => store.recordEvent(type, card, name, details),
+  keepAwake: {
+    start: () => {
+      keepAwakeId ??= powerSaveBlocker.start('prevent-display-sleep')
+    },
+    stop: () => {
+      if (keepAwakeId !== null) powerSaveBlocker.stop(keepAwakeId)
+      keepAwakeId = null
+    }
+  },
+  host: (view) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:remote-host', view)
+    remoteTray.show(view)
+  },
+  refreshCards: () => useInstances.refresh(),
+  dropViewers: (cards) => {
+    for (const card of cards) browserCast.drop(card)
+  },
+  openSettings: async (pane) => useInstances.sources()?.openSettings(pane),
+  relaunch: () => {
+    app.relaunch()
+    app.quit()
+  },
+  wakeDisplay: async () => {
+    await (process.platform === 'darwin' ? commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']) : commandRun('xset', ['dpms', 'force', 'on']))
+  }
+})
+const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
+/** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
+function viewerWho(credential: string | null): ViewerWho {
+  const id = credential ? admittedDevices.deviceFor(credential) : null
+  if (id === null) return { key: 'root', name: 'A paired device', here: false }
+  return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
+}
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
-  computerInput: () => process.env.COOKREW_COMPUTER_INPUT === '1'
+  remote: (card) => remoteGate(remoteDesk, card),
+  blocked: () => remoteDesk.blocked(),
+  onBlocked: (card) => browserThumbs.forget(card)
 })
+/**
+ * A card showing this machine's own screen. Its picture is shown to a viewer
+ * the host can see and nobody else: a thumbnail has no name, no banner and no
+ * Stop, so neither the wall nor the phone's grid gets one, and a watch gets no frame.
+ */
+const showsThisMachine = (card: string): boolean => {
+  const node = store.nodeAcrossWorkspaces(card)?.node
+  return node?.kind === 'browser' && parseUseUrl(activeBrowserTab(node).url)?.use === 'computer'
+}
 const useSignals = new UseSignalBus()
-useSignals.on((signal) => mainWindow?.webContents.send('use:signal', signal))
+useSignals.on((signal) => {
+  mainWindow?.webContents.send('use:signal', signal)
+  if (signal.use === 'computer') remoteDesk.noteAgent(signal.card, store.nodeAcrossWorkspaces(signal.agent)?.node.name ?? 'An agent', signal.verb)
+})
 
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
@@ -5581,8 +6545,25 @@ const browserManager = new HeadlessBrowserManager({
   },
   uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
   // Declared below; called only after boot, never during construction.
-  onInstanceGone: (browserId) => browserCast.drop(browserId)
+  onInstanceGone: (browserId) => {
+    remoteDesk.cardGone(browserId)
+    browserCast.drop(browserId)
+    browserCastIpc.drop(browserId)
+  }
 })
+
+/**
+ * The desktop's own view of a card's Chrome: a MessagePort from main, raw
+ * JPEG bytes, no socket and no token (browser-cast-ipc.ts). The phone keeps
+ * the WebSocket below.
+ */
+const browserCastIpc = createBrowserCastIpc({
+  getInstance: (browserId) => browserManager.get(browserId),
+  enabled: interactiveBrowserEnabled
+})
+
+/** The wrist's credential (watch-pairing.ts): module scope, because rotating every session ends it too. */
+const watchPairing = new WatchPairing()
 
 const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
@@ -5599,17 +6580,50 @@ const browserCast = createBrowserCast({
   // The TV wall's read-only token is deliberately NOT accepted: this socket
   // carries pointer and key INPUT, so admitting a read-only credential here
   // would hand it a write it does not have anywhere else.
-  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one))
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one)),
+  who: viewerWho
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   store,
   manager: browserManager,
-  addNode,
+  addNode: (node, workspaceId) => addNode(node, workspaceId),
   updateNode,
   connectNodes: (aId, bId) => void store.connectAcross(aId, bId),
+  // The caller's own workspace, whatever the window shows (browser-reach.ts).
+  resolveBrowser: (name, terminalId) =>
+    browserForCaller(store, terminalId, name, ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? ''))?.node,
+  homeOf: (terminalId) => store.ownerOf(terminalId),
   onUse: (signal) => void useSignals.emit(signal),
   shotsDir: path.join(app.getPath('userData'), 'use-shots')
+})
+
+/** A caller's session runs here: the use surfaces are refused (use-source-service.ts). */
+function servedWorkspace(workspaceId: string): boolean {
+  if (servedSpawnContexts.has(workspaceId)) return true
+  return store.workspaceState(workspaceId).nodes.some((node) => node.kind === 'terminal' && ptys.isServed(node.id))
+}
+
+// THE WINDOW PICKER: the sheet's one service, over IPC here and HTTP for the phone.
+const useSources = createUseSourceService({
+  provider: () => useInstances.sources(),
+  servedWorkspace,
+  desk: remoteDesk,
+  who: viewerWho,
+  cardAt: (workspaceId, url) =>
+    store.workspaceState(workspaceId).nodes.find((node): node is BrowserNodeData => node.kind === 'browser' && activeBrowserTab(node).url === url) ?? null,
+  addCard: (workspaceId, card) => addNode(card, workspaceId) as BrowserNodeData,
+  findCard: (id) => {
+    const found = store.nodeAcrossWorkspaces(id)
+    return found?.node.kind === 'browser' ? { workspaceId: found.workspaceId, node: found.node } : null
+  },
+  readdress: async (node, url, name) => {
+    // updateNode syncs the card, and the manager swaps its device (backingOf).
+    updateNode(node.id, { url, tabs: withActiveUrl(node, url).tabs })
+    renameCardIn(renameDeps, node.id, name, 'suffix', false)
+    const updated = store.nodeAcrossWorkspaces(node.id)?.node
+    return updated?.kind === 'browser' ? updated : node
+  }
 })
 
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
@@ -5712,6 +6726,13 @@ function createWindow(): void {
   // the queue is re-read then rather than waiting out the poll (D6).
   mainWindow.on('focus', () => void requests.refresh())
 
+  // The window holds the owner's bridge: a page only ever leaves it for the
+  // browser. Followed in here it would inherit the preload (owner-grant.ts · isOwnerPage).
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isOwnerPage(url, ownerPageUrl())) return
+    event.preventDefault()
+    if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
+  })
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -5768,6 +6789,7 @@ if (!app.requestSingleInstanceLock()) {
   // its argv to the instance holding the lock, and that argv carries the link.
   app.on('second-instance', (_event, argv) => {
     focusMainWindow()
+    if (argv.some((arg) => accounts.oauthReturn(arg))) return
     const link = deepLinkInArgv(argv)
     if (link) deepLinks.push(link)
   })
@@ -5794,7 +6816,21 @@ if (selfHosted) {
   app.exit(1)
 }
 
+/**
+ * The CLI socket this process serves, if it owns the shared path at all
+ * (socket-claim.ts). Released on quit, and only while the path is still ours.
+ */
+let cliSocket: SocketServerHandle | null = null
+
 app.whenReady().then(() => {
+  // Before anything reads a secret: a value still in the clear goes under the key.
+  try {
+    const moved = secrets.migrate()
+    if (moved.sealed.length > 0) console.error(`[cookrew] secrets sealed: ${moved.sealed.join(', ')}`)
+    if (moved.failed.length > 0) console.error(`[cookrew] secrets left as they were: ${moved.failed.join(', ')}`)
+  } catch (error) {
+    console.error('[cookrew] secrets could not be moved', error)
+  }
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -5807,6 +6843,7 @@ app.whenReady().then(() => {
       console.error('Dock icon failed to load:', error)
     }
   }
+  if (freshInstall) emit('installed')
   // The cards routed before this restart are still routed (their node data
   // says so); seed them, then one probe before the first card spawns.
   routeService.seedRouted()
@@ -5834,6 +6871,8 @@ app.whenReady().then(() => {
         if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
       })
       .catch(() => undefined)
+    // Whatever the last run left queued for the funnel; off, it stays home.
+    void resumeTelemetry()
   }, 5_000)
 
   // Reclaim what the stores leaked. Deferred rather than awaited: it walks
@@ -5918,6 +6957,10 @@ app.whenReady().then(() => {
     ptys,
     traces,
     spawnTracked,
+    cannotStart: (node) => {
+      const block = bootBlockOf(node)
+      return block ? `${block.why} ${block.fix} The agent was left running.` : null
+    },
     // Restore/undo kill the CLI; refuse while a turn is in flight so the
     // session file is never truncated out from under a writing process.
     phaseOf: (id) => turns.listVerified().find((a) => a.terminalId === id)?.phase ?? null,
@@ -5961,20 +7004,24 @@ app.whenReady().then(() => {
     roster: sousRoster,
     activeWorkspaceId: () => store.focusedId,
     switchWorkspace: (id) => void switchWorkspace(id),
-    createTerminal: ({ preset, name }) => {
-      // To the right of everything on the canvas, so a spoken "create" never
-      // lands under an existing card.
-      const nodes = store.focusedState.nodes
-      const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
-      const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
-      return { id: node.id, name: node.name }
+    createTerminal: ({ preset, name, workspaceId }) => {
+      const make = (): { id: string; name: string } => {
+        // To the right of everything on the canvas, so a spoken "create" never
+        // lands under an existing card.
+        const nodes = store.focusedState.nodes
+        const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
+        const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
+        return { id: node.id, name: node.name }
+      }
+      return workspaceId ? store.inSeat(workspaceId, make) : make()
     },
+    seats: () => store.isMultiInstance,
     createBrowser: async (anchorId, name) => {
       await browserCommand(['create', 'about:blank', name], anchorId)
     },
     connect: (a, b) => store.connectAcross(a, b),
     rename: (id, name) => {
-      const renamed = renameTerminal(id, name, 'refuse')
+      const renamed = renameTerminal(id, name, 'refuse', 'Sous (voice)')
       if (!renamed.ok) throw new Error(renamed.error)
     },
     // Short by nature (one spoken sentence), so the owner-submit primitive is
@@ -5999,7 +7046,9 @@ app.whenReady().then(() => {
     polish: (text) => polishTranscript(text),
     ui: (command, workspaceId) => {
       const event: UiCommandEvent = { workspaceId, command }
-      mainWindow?.webContents.send('ui:command', event)
+      // The desktop zooms for what it is showing: a phone on another workspace
+      // zooming its own card must not pull this window after it.
+      if (workspaceId === store.deskId) mainWindow?.webContents.send('ui:command', event)
       uiBus.emit('command', event)
     },
     note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice'),
@@ -6042,7 +7091,7 @@ app.whenReady().then(() => {
       // engine (retrying the boot-time 503s of a card made a moment ago),
       // delivered by herdr once the harness is at its prompt, on the ledger.
       deliver: async (input) => {
-        const { dispatchId } = await deliverToRecruit(dispatchService, input)
+        const { dispatchId } = await deliverToRecruit(dispatchService, input, { witness: recruitWitness })
         // The ledger learns how the delivery ended once the engine settles it.
         if (input.token) {
           const token = input.token
@@ -6204,7 +7253,11 @@ app.whenReady().then(() => {
     })
     if (!verdict.ok) return { ok: false, error: verdict.error }
     try {
-      const { dispatchId } = await deliverToRecruit(dispatchService, { nodeId: verdict.nodeId, sentence: verdict.text, originId: null })
+      const { dispatchId } = await deliverToRecruit(
+        dispatchService,
+        { nodeId: verdict.nodeId, sentence: verdict.text, originId: null },
+        { witness: recruitWitness }
+      )
       sousLedger.write({ token, dispatchId, outcome: 'delivered', dismissed: false })
       void dispatchService.settled(dispatchId).then(() => {
         const record = dispatchService.get(dispatchId)
@@ -6224,18 +7277,18 @@ app.whenReady().then(() => {
 
   // THE MAC'S EAR. One recognizer child per hold of ⌘; the roster's names go
   // in as hints so "cookrew dev" is not heard as "cooker Dev".
-  const listener = new MacListener({
+  const earOptions = {
     binary: app.isPackaged
       ? path.join(process.resourcesPath, 'cr-listen')
       : path.join(dirname, '../../resources/cr-listen/cr-listen'),
     // Two ears: the owner's locale first (its partials are what the pill
     // shows), en-US alongside because that is the ear that spells the
     // roster's English names right. Same audio, one microphone.
-    locales: () => {
+    locales: (): string[] => {
       const primary = readSousVoiceConfig().locale
       return primary === 'en-US' ? [primary] : [primary, 'en-US']
     },
-    hints: () => {
+    hints: (): string[] => {
       const roster = sousRoster()
       return [
         'Sous',
@@ -6245,17 +7298,49 @@ app.whenReady().then(() => {
         ...roster.presets
       ]
     }
-  })
+  }
+  const listener = new MacListener(earOptions)
+  // The same ears for a recording the phone made (hear-file.ts, POST /api/listen).
+  const phoneEar = {
+    available: () => hearAvailable(earOptions),
+    locale: () => earOptions.locales()[0] ?? null,
+    recording: (bytes: Uint8Array) => hearRecording(earOptions, bytes)
+  }
   ipcMain.handle('listen:available', () => listener.available())
+  // Spoken replies in the free local voice (local-voice.ts): the box asks per
+  // chunk. Not installed, and the box uses the browser's voice.
+  const replyVoice = createLocalVoice()
+  // Asked as a turn starts: the answer, and a warm voice by the time the reply lands.
+  ipcMain.handle('speak:available', () => {
+    replyVoice.warm()
+    return replyVoice.available()
+  })
+  // Each chunk carries an id so a stopped reading can cancel it upstream.
+  const speaking = new Map<string, AbortController>()
+  ipcMain.handle('speak:audio', async (_e, id: unknown, text: unknown, lang: unknown) => {
+    const key = typeof id === 'string' && id.length <= 64 ? id : null
+    const controller = new AbortController()
+    if (key) speaking.set(key, controller)
+    try {
+      return await replyVoice.speak(text as string, controller.signal, lang === 'en' ? 'en' : 'zh')
+    } finally {
+      if (key) speaking.delete(key)
+    }
+  })
+  app.on('before-quit', () => replyVoice.stop())
+  ipcMain.on('speak:cancel', (_e, id: unknown) => {
+    if (typeof id === 'string') speaking.get(id)?.abort()
+  })
   ipcMain.handle('listen:start', () =>
     listener.start((event) => mainWindow?.webContents.send('listen:event', event))
   )
   ipcMain.handle('listen:stop', () => listener.stop())
 
-  startSocketServer({
+  cliSocket = startSocketServer({
     store,
     ptys,
     spawnTerminal: spawnTracked,
+    dismissTerminal: (id) => removeNode(id, { actor: 'orch', via: 'dismiss' }),
     agents,
     turns,
     sous: sousDoor,
@@ -6263,6 +7348,11 @@ app.whenReady().then(() => {
     // each read leaves in the event log.
     secrets,
     audit: auditSecret,
+    // `cookrew login`, `logout`, `whoami`: the account's own functions, and the
+    // line each attempt leaves. The door is registered further down, so this
+    // reads it when asked.
+    account: () => accountDoor,
+    auditLogin,
     // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
     // seat (pty.ts), or any pane on a workspace this app serves out
     // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
@@ -6274,16 +7364,21 @@ app.whenReady().then(() => {
     // route uses, so a CLI-minted dispatch and an API-minted one are one
     // record with one lifecycle.
     dispatch: dispatchService,
+    // `cookrew recruit --prompt`: the brief waits for the harness and needs
+    // evidence it landed before the command says "delivered".
+    recruitWitness,
     // `cookrew rename` and `cookrew recruit --prompt`: the same rename the
     // prompt box's model-picked name goes through, herdr's chrome included.
     renameCard,
     autoNameTerminal,
+    adoptPictures: (text) => adoptPictures(text, defaultAttachmentsDir()),
     // The cable between the asking pane and the agent it asks lights twice.
     signal: (moment) => void cableSignals.emit(moment),
     forkTerminal,
     routines,
     browserCommand,
     createBrowserInWorkspace,
+    browserAnyWorkspace: interactiveBrowserEnabled,
     notify: showNotification,
     captureWindow,
     injectInput,
@@ -6291,13 +7386,21 @@ app.whenReady().then(() => {
     mobileUrls,
     mobileEndpoints: mobileEndpointList,
     uncoveredCertHosts,
-    rotatePairingToken: rotateActivePairingToken,
+    // Ending every session ends the watch's too.
+    rotatePairingToken: () => {
+      watchPairing.unpair()
+      // Whoever came in on the old token: a socket outlives the token that opened it.
+      remoteDesk.forgetDevice('root')
+      return rotateActivePairingToken()
+    },
     pairingHandout: currentPairingHandout,
     listWorkspaces,
     createWorkspace,
+    checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),
+    workspaceRemovePlan,
     createWorkspaceFromTeam,
     switchWorkspace,
-    removeWorkspace,
+    removeWorkspace: removeWorkspaceWith,
     addWorkspaceDir,
     removeWorkspaceDir,
     setPrimaryDir,
@@ -6346,6 +7449,8 @@ app.whenReady().then(() => {
     // Sous's door for the phone and for voice-gateway; `ui` events for both.
     sous: sousDoor,
     uiBus,
+    // The phone's mic, heard by the Mac's ears.
+    hear: phoneEar,
     // The inbox (R3): the same rows the desktop box lists; a stream holds it open.
     inbox: () => inbox.read(),
     inboxAct,
@@ -6376,7 +7481,7 @@ app.whenReady().then(() => {
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
     // The sealed slots, for the phone's note editor: names out, values in.
-    secrets,
+    secrets: withSecretActivity(secrets, 'Phone', recordSecretChange),
     // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
     rtc: rtcHost,
     // The browser card's socket over plain HTTP, for a phone on the relay.
@@ -6459,8 +7564,6 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
-    // STRATA: the levels detail reuses a cached git answer, never causes one.
-    gitPeek: (dir) => gitCache.peek(dir),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
     // The route program's four endpoints, the stream's two frames, and the
@@ -6521,24 +7624,35 @@ app.whenReady().then(() => {
     // Each preset's `launch` offer is read per request (launch-offers.ts).
     presets: withLaunchOffers(PRESETS),
     ops: {
+      useSources,
+      checkLaunch,
+      listStrayPanes,
+      endStrayPane,
       addNode,
       updateNode,
+      renameNode: (id, name) => renameByHand(renameDeps, id, name),
       removeNode,
       createTerminal,
       forkTerminal,
       listWorkspaces,
-      createWorkspace: (name: string, dir: string, team?: string) =>
-        team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir),
+      createWorkspace: (name, dir, team, options) =>
+        team ? createWorkspaceFromTeam(name, dir, team, options) : createWorkspace(name, dir, options),
+      checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),
       switchWorkspace,
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
         return store.list()
       },
+      setWorkspaceIcon: (id, icon) => {
+        store.setWorkspaceIcon(id, icon)
+        return store.list()
+      },
+      workspaceRemovePlan,
       setWorkspaceBrief: (id, brief) => {
         store.setWorkspaceBrief(id, brief)
         return store.list()
       },
-      removeWorkspace,
+      removeWorkspace: removeWorkspaceWith,
       addWorkspaceDir,
       removeWorkspaceDir,
       setPrimaryDir,
@@ -6628,12 +7742,22 @@ app.whenReady().then(() => {
   // Fail SAFE: if any workspace's terminals can't be enumerated (corrupt
   // workspace.json), reap NOTHING rather than mistake owned sessions for
   // orphans.
+  // The single-instance lock is held by now, so a live claim under our own
+  // userData can only be a predecessor still exiting: take it over.
+  ptys.confirmHostClaim()
   try {
-    const reaped = ptys.reapOrphanSessions(store.allTerminalIdsStrict())
+    const reaped = ptys.reapOrphanSessions(store.allTerminalIdsStrict(), provedSessions(agents.list()))
     if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned agent session(s)`)
+    noteSwept(reaped)
   } catch (error) {
     console.error('Skipping orphan reap: could not enumerate all workspace terminals', error)
   }
+  void refreshLaunchBlocks(store.focusedId)
+  void listStrayPanes().then((strays) => {
+    if (strays.length === 0) return
+    const line = strays.length === 1 ? '1 pane' : `${strays.length} panes`
+    store.recordEvent('terminal.strays', 'strays', line, 'running with no card; see the search board')
+  })
 
   // Terminals stay detached on cold start. Herdr keeps their processes alive;
   // a settled semantic zoom acquires the local PTY mirror on demand. Working
@@ -6643,6 +7767,7 @@ app.whenReady().then(() => {
   // resident ones ensureSession will reattach. A herdr server replaced under
   // the fleet keeps the panes and forgets what they were called.
   reportPaneBindings()
+  keepAgentNames()
 
   // File this Mac's workspaces under the account, by NAME AND ID only (P1).
   // Best effort and never awaited: a registry that is down must not delay a
@@ -6711,6 +7836,15 @@ app.whenReady().then(() => {
   networkWatch.start()
   powerMonitor.on('resume', () => void networkWatch.check('wake'))
   powerMonitor.on('unlock-screen', () => void networkWatch.check('unlock'))
+  // The lock is heard here first: the card should not wait out a cache or a backoff.
+  for (const event of ['lock-screen', 'unlock-screen', 'resume', 'suspend'] as const) {
+    powerMonitor.on(event as 'resume', () => {
+      sessionReader.invalidate()
+      remoteDesk.sessionChanged()
+      useInstances.wake()
+    })
+  }
+  remoteDesk.start()
 
   // The certificate, once the account and the addresses are known. Best
   // effort and never awaited: an order is seconds of polling at the registry
@@ -6755,6 +7889,7 @@ app.on('before-quit', (event) => {
   // deliveries) and await the bounded TERM→KILL settlements (Sol r10).
   defaultProducerLease().retireAll()
   browserCast.shutdown()
+  browserCastIpc.shutdown()
   // The line goes down BEFORE the app does, so the registry stops handing the
   // owner's phone a name whose Mac is quitting — a downlink the process drops
   // silently is a relay that claims this desktop for as long as it takes the
@@ -6769,6 +7904,9 @@ app.on('before-quit', (event) => {
   turns.flushHistories()
   turns.disposeAll()
   ptys.disposeAll()
+  // The shared CLI path goes only if it still holds the socket we bound: a
+  // live app's socket is never ours to remove (2026-09-18).
+  void cliSocket?.claim.then((claim) => claim.release()).catch(() => undefined)
   // The bounded drain: asks, then every tracked herdr child. The fold drain
   // that used to close this list went with the fold (T4) — nothing writes the
   // turn ledger any more, so there is no unproven rename left to outlive us.
@@ -6800,6 +7938,20 @@ function broadcast(): void {
   }
 }
 
+/** The address the owner's page is served from, as the window was told to load it. */
+function ownerPageUrl(): string | null {
+  return process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(path.join(dirname, '../renderer/index.html')).href
+}
+
+/** The owner's window, its top frame, showing the owner's page. */
+function publishUpdateStatus(status: UpdateStatus): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:status', status)
+}
+
+function ownerFrame(event: { sender: unknown; senderFrame: { parent: unknown; url?: string } | null }): boolean {
+  return isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents) && isOwnerPage(event.senderFrame?.url, ownerPageUrl())
+}
+
 function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
@@ -6812,6 +7964,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   // work you looked away from was never interrupted. Only what is not resident
   // is torn down, which flag-off makes the outgoing workspace — today's
   // behaviour exactly.
+  store.on('switch', () => {
+    void refreshLaunchBlocks(store.focusedId)
+    // The cards just came on screen: they should not wait out the interval.
+    void paneFollower.tick()
+  })
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
     // The DECISION lives in workspace-switch.ts and the EXECUTION in
     // switch-runner.ts; this handler only connects them. Both were once one
@@ -6864,7 +8021,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   const ownerOnly =
     <A extends unknown[], R>(op: (...args: A) => R) =>
     (event: Electron.IpcMainInvokeEvent, ...args: A): R | { ok: false; reason: string } => {
-      if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) {
+      if (!ownerFrame(event)) {
         console.error('[cookrew] grant refused: sender is not the owner window top frame')
         return { ok: false, reason: 'not_owner' }
       }
@@ -6875,7 +8032,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   //
   // Registered through the SAME ownerOnly wrapper, by construction: the module
   // hands over a table and this is the only place a guard could be forgotten.
-  registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+  accountDoor = registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
     requests,
@@ -6888,7 +8045,11 @@ function registerIpc(handlers: RestoreHandlers): void {
     pairingHandout: currentPairingHandout,
     admitted: {
       list: () => admittedDevices.list(),
-      forget: (deviceId) => admittedDevices.forget(deviceId)
+      forget: (deviceId) => {
+        const forgotten = admittedDevices.forget(deviceId)
+        remoteDesk.forgetDevice(`device:${deviceId}`)
+        return forgotten
+      }
     },
     publishReach: (reason) => {
       // The reachability toggle and a fresh claim both land here, and both
@@ -6913,6 +8074,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     // free of Electron; the CODES come from main's own memory, never from the
     // call, so the renderer chooses the file and nothing else. 0600, because
     // eight of these open the account.
+    // The OS draws this prompt, and it is macOS only. Elsewhere there is none.
+    touchId: {
+      available: () => process.platform === 'darwin' && systemPreferences.canPromptTouchID(),
+      prompt: (reason) =>
+        systemPreferences.promptTouchID(reason).then(
+          () => true,
+          () => false
+        )
+    },
     saveCodes: async (codes) => {
       if (!mainWindow) return { ok: false, reason: 'no_window' }
       const picked = await dialog.showSaveDialog(mainWindow, {
@@ -7019,6 +8189,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
   )
+  ipcMain.handle('workspace:check', (_e, name: string, dir: string) => workspaceCheck(store, name, dir))
   // Import a template as a session: one workspace, one orch terminal over HTTP.
   ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
     importTemplateAsSession(team, position)
@@ -7256,8 +8427,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     store.setWorkspaceBrief(id, brief)
     return store.list()
   })
+  ipcMain.handle('workspace:icon', (_e, id: string, icon: unknown) => {
+    store.setWorkspaceIcon(id, icon)
+    return store.list()
+  })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
-  ipcMain.handle('workspace:remove', (_e, id: string) => removeWorkspace(id))
+  ipcMain.handle('workspace:removePlan', (_e, id: string) => workspaceRemovePlan(id))
+  ipcMain.handle('workspace:remove', (_e, id: string, options?: { worktree?: boolean }) =>
+    removeWorkspaceWith(id, options)
+  )
   ipcMain.handle('workspace:dir:add', (_e, id: string, dir: string) => addWorkspaceDir(id, dir))
   ipcMain.handle('workspace:dir:remove', (_e, id: string, dir: string) =>
     removeWorkspaceDir(id, dir)
@@ -7294,11 +8472,12 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
   // The sealed slots (R4): the zoom editor's SEAL button and its listing.
   // The value crosses IPC once, into the store, and is never sent back.
+  const desktopSecrets = withSecretActivity(secrets, 'This Mac', recordSecretChange)
   ipcMain.handle('secret:put', (_e, name: string, value: string, served?: boolean) =>
-    secrets.put(name, value, { served: served === true })
+    desktopSecrets.put(name, value, { served: served === true })
   )
   ipcMain.handle('secret:list', () => secrets.list())
-  ipcMain.handle('secret:remove', (_e, name: string) => secrets.remove(name))
+  ipcMain.handle('secret:remove', (_e, name: string) => desktopSecrets.remove(name))
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
   ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
   ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
@@ -7462,6 +8641,9 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
+  ipcMain.handle('agents:launch-check', (_e, id: string) => checkLaunch(id))
+  ipcMain.handle('strays:list', () => listStrayPanes())
+  ipcMain.handle('strays:end', (_e, session: string) => endStrayPane(session))
   // Activity Board snapshot for the desktop panel — same builder the HTTP
   // route and the SSE push use, so the three can never drift apart.
   ipcMain.handle('board:list', (_e, window?: unknown) =>
@@ -7479,11 +8661,41 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The header's device step: this desktop by the name its account record
   // gives it (the name /me and the phone show), else the renderer's fallback.
   ipcMain.handle('machine:name', () => accounts.account()?.name ?? null)
-  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
+  // The ⋯ row's two questions (TelemetryRow.tsx).
+  ipcMain.handle('telemetry:status', () => telemetryStatus())
+  ipcMain.handle('telemetry:set', (_e, on: unknown) => (typeof on === 'boolean' ? setTelemetryOn(on) : telemetryStatus()))
+  // And the update check's (UpdateRow.tsx). Packaged only, so a source build answers null and shows no row.
+  const updateCheck = app.isPackaged
+    ? createUpdateCheck({
+        version: app.getVersion(),
+        file: path.join(homedir(), '.cookrew', 'update-check.json'),
+        // Electron's own stack, not Node's: it honours the system proxy.
+        fetch: (url, init) => net.fetch(url, init),
+        publish: publishUpdateStatus,
+        installer: electronUpdateInstaller()
+      })
+    : null
+  ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
+  ipcMain.handle('update:set', (event, on: unknown) => {
+    if (updateCheck === null) return null
+    if (typeof on !== 'boolean' || !ownerFrame(event)) return updateCheck.status()
+    const status = updateCheck.setOn(on)
+    publishUpdateStatus(status)
+    return status
+  })
+  // A restart ends the app, so the owner reads what it does to agents first.
+  ipcMain.handle('update:restart', async (event) => {
+    if (updateCheck === null || !ownerFrame(event) || !mainWindow) return false
+    const { title, sentence, yes } = restartConfirm(currentBuild(), 'here')
+    const { response } = await dialog.showMessageBox(mainWindow, { type: 'question', message: title, detail: sentence, buttons: [yes, 'Later'], defaultId: 0, cancelId: 1 })
+    return response === 0 && updateCheck.restart()
+  })
+  updateCheck?.start()
+  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's fleet feed,
   // pushed per window like the board, and the account's desktops from the
   // registry, cut to directory facts before they reach the renderer.
   registerZoomFleetIpc(ipcMain.handle.bind(ipcMain), {
-    service: localLevelsService,
+    service: localFleetService,
     authed: (pathname) => accounts.authed<unknown>(pathname),
     deviceId: () => accounts.account()?.deviceId ?? null
   })
@@ -7496,13 +8708,61 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   ipcMain.handle('workspace:get', () => store.focusedState)
   ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
-  ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
+  // ownerOnly: this token makes a socket the Mac's own viewer, unseen by the host and past Stop.
+  ipcMain.handle('browser:stream-token', ownerOnly(() => desktopBrowserStreamToken))
+  // A card's live view, straight from main: the owner window's top frame
+  // asks, main answers with one end of a fresh MessageChannel (the nonce
+  // pairs the answer with the ask). Anything else asking gets nothing — a
+  // browser card's page has no ipcRenderer, and a frame below the top is not
+  // the owner (owner-grant.ts · isOwnerSender).
+  ipcMain.on('browser-stream:open', (event, browserId: unknown, nonce: unknown) => {
+    if (!ownerFrame(event)) return
+    if (typeof browserId !== 'string' || browserId.length === 0 || browserId.length > 200) return
+    if (typeof nonce !== 'string' || nonce.length === 0 || nonce.length > 100) return
+    const { port1, port2 } = new MessageChannelMain()
+    browserCastIpc.open(browserId, port1)
+    event.sender.postMessage('browser-stream:port', { nonce }, [port2])
+  })
 
   ipcMain.handle('node:add', (_e, node: CanvasNode) => addNode(node))
   ipcMain.handle('node:update', (_e, id: string, patch: Partial<CanvasNode>) =>
     updateNode(id, patch)
   )
+  // The owner's rename by hand (zoom card, full view head): the same path as
+  // `cookrew rename`, so a clash is answered in the same words, and pinned.
+  ipcMain.handle('node:rename', (_e, id: unknown, name: unknown) => renameByHand(renameDeps, id, name))
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
+  // The window picker, for the window on this desktop: the workspace it shows.
+  ipcMain.handle('use:sources', async () => {
+    const answer = await useSources.list(store.focusedId, MAC_VIEWER)
+    return answer.ok ? answer.value : emptySourceList('unavailable', answer.error)
+  })
+  ipcMain.handle('use:open-source', async (_e, pick: unknown) => {
+    const answer = await useSources.open(store.focusedId, pick, MAC_VIEWER)
+    return answer.ok ? { ok: true, card: answer.value.card } : { ok: false, error: answer.error }
+  })
+  ipcMain.handle('use:screen-settings', ownerOnly(async (pane: unknown) => {
+    const answer = await useSources.openSettings(store.focusedId, pane, 'here')
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  }))
+  // THE REMOTE DESK, from the Mac's own window. The switch and Stop exist only
+  // here: there is no route to either, so nothing away from the Mac can reach them.
+  // Straight to the desk: the Mac must reach its own switch from any workspace, a served one above all.
+  ipcMain.handle('use:remote-access', ownerOnly(() => remoteDesk.access('here')))
+  ipcMain.handle('use:remote-control', ownerOnly(async (ask: unknown) => {
+    const answer = await useSources.control(store.focusedId, ask, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error, ...(answer.state ? { state: answer.state } : {}) }
+  }))
+  ipcMain.handle('use:remote-restart', ownerOnly(async () => {
+    const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  }))
+  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => (typeof on === 'boolean' ? remoteDesk.setSwitch(on) : { ok: false, error: 'On or off' })))
+  ipcMain.handle('use:remote-stop', ownerOnly(() => {
+    remoteDesk.stopAll()
+    return { ok: true }
+  }))
+  ipcMain.handle('use:remote-host', ownerOnly(() => remoteDesk.hostView()))
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
   // and mirrors a legitimate cross-workspace edge. store.connect writes an edge
@@ -7565,8 +8825,85 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   // Terminal stream bridging renderer xterm <-> PTY
   const inputRefusalAnnounced = new Map<string, number>()
-  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
-    idleSleep.touch(terminalId, Date.now())
+  // An answer to a waiting agent's menu, checked against the screen (menu-answer.ts).
+  const answerMenu = createMenuAnswerer({
+    screen: async (terminalId) => {
+      const session = ptys.get(terminalId)
+      const shown = session ? await session.settledViewport() : null
+      if (shown !== null && waitChoiceOfScreen(shown)) return shown
+      return paneRows(terminalId)
+    },
+    send: (terminalId, keys, inMenu) => {
+      idleSleep.touch(terminalId, Date.now())
+      const session = ptys.get(terminalId)
+      // No mirror under an armed dispatch: a wake flushes through the box's
+      // guards, where this Enter would read as a new prompt and preempt it.
+      if (!session && turns.hasArmedDispatch(terminalId)) return false
+      turns.noteMenuAnswer(terminalId)
+      // A card with no mirror wakes one, as for any key.
+      if (waker.hold(terminalId, keys)) return true
+      return session?.writeMenuKeys(keys, inMenu) === 'allow'
+    },
+    whole: withPaneBox,
+    moved: (terminalId) => {
+      turns.refreshBox(terminalId)
+      void readPaneMenu(terminalId).catch(() => undefined)
+    }
+  })
+  setMenuAnswerer(answerMenu)
+  // The wrist's routes (watch-routes.ts): a token of its own, a short list of routes.
+  const watchHost = createWatchHost({
+      pairing: watchPairing,
+      deviceName: () => localDeviceName(),
+      endpoints: mobileEndpointList,
+      httpPort: MOBILE_PORT,
+      canvas: (workspaceId) => store.workspaceState(workspaceId),
+      node: (id) => store.nodeAcrossWorkspaces(id)?.node,
+      thumbViewed: noteBrowserViewed,
+      thumb: (id) => browserThumbs.frame(id),
+      browser: (id) => browserManager.get(id),
+      // The last agent's harness; a bare shell takes no first prompt, so it is no harness to start one on.
+      lastPreset: () =>
+        [...agents.list()].filter((entry) => entry.active && entry.command.trim().length > 0).sort((a, b) => b.spawnedAt - a.spawnedAt)[0]?.preset ?? 'Claude Code',
+      screen: (id) => ptys.get(id)?.viewportText() ?? null,
+      createTerminal,
+      stop: async (terminalId) => {
+        const session = ptys.get(terminalId)
+        if (!session) return false
+        return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
+      },
+      accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
+      invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
+    })
+  setWatchHost(watchHost)
+  ipcMain.handle(
+    'watch:code',
+    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases(), claims: watchPairing.claims }))
+  )
+  ipcMain.handle(
+    'watch:state',
+    ownerOnly(() => ({
+      paired: watchPairing.paired,
+      pending: watchPairing.pending(),
+      account: watchHost.accountKind(),
+      sealed: true,
+      claims: watchPairing.claims
+    }))
+  )
+  ipcMain.handle(
+    'watch:invite',
+    ownerOnly((current: unknown) => inviteWatch(watchHost, typeof current === 'string' ? current : '', true))
+  )
+  ipcMain.handle(
+    'watch:forget',
+    ownerOnly(() => watchPairing.unpair())
+  )
+  ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
+    const request = parseMenuRequest(body)
+    return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
+  })
+  const typeInto = createPacedInput((terminalId, typed) => {
+    const data = isAgentTerminal(terminalId) ? blockAsPaste(typed) : typed
     // Keys for an offline agent wake it; they wait for it, then go in in order.
     if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
@@ -7590,6 +8927,11 @@ function registerIpc(handlers: RestoreHandlers): void {
         )
       }
     }
+  })
+  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    paneInputs.noteWindowKey(terminalId, data)
+    idleSleep.touch(terminalId, Date.now())
+    typeInto(terminalId, data)
   })
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)
@@ -7726,8 +9068,14 @@ function registerIpc(handlers: RestoreHandlers): void {
    * forever. The DESKTOP loop's entry point only: a phone reaches the same
    * cache through /api/browser/:id/thumb, which no longer waits on this.
    */
-  ipcMain.handle('browser:snapshot', async (_e, browserId: unknown) => {
+  ipcMain.handle('browser:snapshot', async (event, browserId: unknown) => {
     if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
+    // The Mac looking at its own screen, in its own window: the one place that
+    // picture needs no banner. It skips the cache that serves everyone else.
+    if (showsThisMachine(browserId)) {
+      const jpeg = ownerFrame(event) ? await browserManager.peek(browserId)?.snapshot().catch(() => null) : null
+      return jpeg ? `data:image/jpeg;base64,${jpeg}` : null
+    }
     await browserThumbs.refresh(browserId)
     return browserThumbs.dataUrl(browserId)
   })

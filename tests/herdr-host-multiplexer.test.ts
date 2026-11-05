@@ -321,6 +321,24 @@ describe('boot command and env', () => {
     expect(boot).toContain("export PATH='/tmp/cli:/usr/bin'")
   })
 
+  it("starts the agent in the CARD's cwd, even in an adopted pane", () => {
+    // 2026-11-04: eight GOAT Team agents ran in goat-testnet/solis-orch while
+    // their cards said goat-dev — an adopted idle pane keeps whatever
+    // directory it had, and nothing moved the agent. Claude files its
+    // transcript by launch directory, so the session observer watched a path
+    // that never appeared and every --no-wait ask was interrupted at 60 s.
+    const boot = bootCommand(SPEC)
+    expect(boot.startsWith("cd '/work/repo'")).toBe(true)
+    expect(boot.indexOf("cd '/work/repo'")).toBeLessThan(boot.indexOf('exec '))
+    // A husk the launch check could not catch must not start an agent in the wrong folder.
+    expect(boot).toContain("cd '/work/repo' || exit 1;")
+  })
+
+  it('quotes the cwd so a path cannot break out of the cd', () => {
+    const boot = bootCommand({ ...SPEC, cwd: "/tmp/it's; rm -rf ~" })
+    expect(boot.startsWith("cd '/tmp/it'\\''s; rm -rf ~'")).toBe(true)
+  })
+
   it('falls back to a login shell when there is no command', () => {
     expect(bootCommand({ ...SPEC, command: '   ' }).endsWith('exec /bin/zsh -l')).toBe(true)
   })
@@ -330,7 +348,14 @@ describe('boot command and env', () => {
     expect(args).toContain('COOKREW_TERMINAL_ID=abc-123')
     expect(args).toContain('COOKREW_SOCKET=/tmp/sock')
     expect(args).toContain('COOKREW_CLI=/tmp/cli/cookrew')
-    expect(args.filter((a) => a === '--env')).toHaveLength(5)
+    expect(args.filter((a) => a === '--env')).toHaveLength(9)
+  })
+
+  it('caps test workers on both roads into a pane: the --env pairs and the boot script', () => {
+    expect(envArgs(SPEC)).toContain('VITEST_MAX_FORKS=4')
+    expect(envArgs(SPEC)).toContain('VITEST_MIN_FORKS=1')
+    expect(bootCommand(SPEC)).toContain("export VITEST_MAX_FORKS='4'")
+    expect(bootCommand(SPEC)).toContain("export VITEST_MIN_THREADS='1'")
   })
 })
 
@@ -730,6 +755,13 @@ describe('husk recovery — a restored label is not a recovered agent', () => {
     expect(runner.calls.some((c) => c.args[1] === 'send-text' && c.args[2] === 'w1:p1')).toBe(true)
     expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
     expect(runner.calls.some((c) => c.args[0] === 'workspace')).toBe(false)
+  })
+
+  it('refuses before any boot is typed when its folder is gone: nothing may start wherever the pane was', () => {
+    const runner = husk(shellInfo, '-zsh')
+    const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10, folderGone: () => true })
+    expect(() => mux.ensureSession(SPEC)).toThrow(/folder/)
+    expect(runner.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
   })
 
   it('re-REPORTS the agent after a husk reboot — registration died with the server', () => {
@@ -1208,14 +1240,11 @@ describe('the card binding — Cookrew names in herdr chrome', () => {
     expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
   })
 
-  it('names herdr\'s agent after the card on every attach, after the agent is reported', () => {
+  it('attaching names no agent — no extra fork on the main thread; the reconcile does it', () => {
     const runner = fakeRunner({ ...LIVE_REPLIES, 'agent rename': '{"result":{}}' })
     new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner })
       .ensureSession(SPEC_WITH_CARD)
-    const at = (pred: (c: Call) => boolean): number => runner.calls.findIndex(pred)
-    const rename = at((c) => c.args[0] === 'agent' && c.args[1] === 'rename')
-    expect(runner.calls[rename]?.args.slice(3)).toEqual(['reviewer'])
-    expect(rename).toBeGreaterThan(at((c) => c.args[1] === 'release-agent'))
+    expect(runner.calls.some((c) => c.args[0] === 'agent' && c.args[1] === 'rename')).toBe(false)
   })
 
   it('does NOT report when the spec carries no card — tmux/direct parity', () => {
@@ -1393,9 +1422,16 @@ describe('nameAgent — herdr\'s own agent name follows the card', () => {
     expect(renames(base)).toEqual([['w2:pA7', 'rename-anyone']])
   })
 
-  it('clears herdr\'s name when the card\'s has no slug, so it never keeps a stale one', () => {
+  it('names a Chinese card in pinyin, and a card with nothing readable by its id', () => {
     const runner = herdrWith([], [])
     named(runner, '顶栏模型切换')
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner }).nameAgent('cookrew_abc', '🦊', 'abc-123')
+    expect(renames(runner)).toEqual([['w2:pA7', 'dinglanmoxingqiehuan'], ['w2:pA7', 'card-abc123']])
+  })
+
+  it('clears herdr\'s name when there is no name and no id, so it never keeps a stale one', () => {
+    const runner = herdrWith([], [])
+    named(runner, '🦊')
     expect(renames(runner)).toEqual([['w2:pA7', '--clear']])
   })
 
@@ -1406,5 +1442,58 @@ describe('nameAgent — herdr\'s own agent name follows the card', () => {
 
     const broken = fakeRunner({ 'pane list': PANES, 'agent list': 'not json' })
     expect(() => named(broken, 'Reviewer')).not.toThrow()
+  })
+})
+
+describe('reconcileAgentNames — names that dropped are put back, off the main thread', () => {
+  const AGENT = (pane: string, title: string, name?: string): unknown => ({
+    pane_id: pane, title, ...(name ? { name } : {}), tokens: { cookrew_terminal: `t-${pane}` }
+  })
+  function backend(agents: unknown[], refuse: string[] = []) {
+    const sync = fakeRunner({})
+    const asyncCalls: string[][] = []
+    const asyncRunner: AsyncCliRunner = async (args) => {
+      asyncCalls.push(args)
+      if (args[0] === 'agent' && args[1] === 'list') return JSON.stringify({ result: { agents } })
+      if (args[0] === 'agent' && args[1] === 'rename' && refuse.includes(args[3])) throw new Error('in use')
+      return '{"result":{}}'
+    }
+    const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner: sync, asyncRunner })
+    const renames = (): string[][] => asyncCalls.filter((a) => a[0] === 'agent' && a[1] === 'rename').map((a) => a.slice(2))
+    return { mux, sync, renames }
+  }
+
+  it('renames only the Cookrew panes whose name dropped, and nothing synchronously', async () => {
+    const { mux, sync, renames } = backend([
+      AGENT('w1:p1', 'Reviewer'),
+      AGENT('w1:p2', 'Finch', 'finch'),
+      AGENT('w1:p3', '顶栏模型切换'),
+      { pane_id: 'w1:p9', name: 'outsider' }
+    ])
+    expect(await mux.reconcileAgentNames()).toBe(2)
+    expect(renames()).toEqual([['w1:p1', 'reviewer'], ['w1:p3', 'dinglanmoxingqiehuan']])
+    expect(sync.calls.filter((c) => c.args[0] === 'agent')).toEqual([])
+  })
+
+  it('keeps a suffix a pane already won, and suffixes past names that stay', async () => {
+    const { mux, renames } = backend([
+      AGENT('w1:p1', 'Reviewer', 'reviewer-2'),
+      AGENT('w1:p2', 'Reviewer'),
+      { pane_id: 'w1:p9', name: 'reviewer' }
+    ])
+    await mux.reconcileAgentNames()
+    expect(renames()).toEqual([['w1:p2', 'reviewer-3']])
+  })
+
+  it('clears a name the card no longer reads as, and survives a broken listing', async () => {
+    const { mux, renames } = backend([AGENT('w1:p1', '🦊', 'old-name')])
+    await mux.reconcileAgentNames()
+    expect(renames()).toEqual([['w1:p1', 'card-tw1p1']])
+
+    const broken = new HerdrHostMultiplexer({
+      session: 'cookrewtest', configPath: '/c', runner: fakeRunner({}),
+      asyncRunner: async () => 'not json'
+    })
+    await expect(broken.reconcileAgentNames()).resolves.toBe(0)
   })
 })

@@ -8,8 +8,11 @@ import type {
   WorkspaceState
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
+import { cardNameOf } from '../../shared/use-sources'
+import { demoRemoteAccess, demoSources } from './use/demo-sources'
 import { rankInbox } from '../../shared/inbox-rank'
 import { checkBrief } from '../../shared/workspace-brief'
+import { planRename } from '../../shared/rename-plan'
 import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
 
@@ -181,7 +184,13 @@ export function createDemoApi(): CookrewApi {
     for (const listener of wsListeners) listener(list)
   }
 
+  let telemetry = { on: false, locked: false }
   const api: CookrewApi = {
+    telemetryStatus: async () => telemetry,
+    setTelemetry: async (on) => {
+      telemetry = { ...telemetry, on }
+      return telemetry
+    },
     // The demo has no Ollama behind it. Say that, rather than hand back
     // untranslated text and let it read as a translation that did nothing.
     translateHost: () => Promise.resolve(null),
@@ -245,6 +254,36 @@ export function createDemoApi(): CookrewApi {
       wsBroadcast()
       return Promise.resolve({ workspaces: metas, activeId })
     },
+    setWorkspaceIcon: (id, icon) => {
+      const meta = metas.find((m) => m.id === id)
+      if (meta) meta.icon = icon
+      wsBroadcast()
+      return Promise.resolve({ workspaces: metas, activeId })
+    },
+    // The demo has no disk: every folder passes, the rest of the check is real.
+    checkWorkspace: (name, dir) => {
+      const wanted = name.trim() || 'Workspace'
+      const finalName = uniqueName(wanted, metas.map((m) => m.name))
+      const owner = metas.find((m) => m.dir === dir.trim())
+      const notes = [
+        ...(finalName !== wanted ? [`"${wanted}" is taken, so this one will be called "${finalName}".`] : []),
+        ...(owner ? [`"${owner.name}" already works in this folder, so their agents will share its files.`] : [])
+      ]
+      return Promise.resolve({ ok: true, name: finalName, dir: dir.trim() || '~', notes, suggestedDir: '~' })
+    },
+    workspaceRemovePlan: (id) => {
+      const meta = metas.find((m) => m.id === id)
+      const nodes = states.get(id)?.nodes ?? []
+      return Promise.resolve({
+        id,
+        name: meta?.name ?? id,
+        stops: nodes.filter((n) => n.kind === 'terminal').map((n) => n.name),
+        notes: nodes.filter((n) => n.kind === 'note').length,
+        browsers: nodes.filter((n) => n.kind === 'browser').length,
+        keeps: meta?.dirs ?? [],
+        forks: []
+      })
+    },
     // Workspace v2 stubs: the demo has one in-memory dir, no git, no picker.
     removeWorkspace: () => Promise.resolve({ workspaces: metas, activeId }),
     addWorkspaceDir: () => Promise.resolve({ workspaces: metas, activeId }),
@@ -273,6 +312,23 @@ export function createDemoApi(): CookrewApi {
       wsListeners.add(cb)
       return () => wsListeners.delete(cb)
     },
+    useSources: () => Promise.resolve(demoSources()),
+    openUseSource: (pick) => {
+      const list = demoSources()
+      const source = [...list.windows, ...list.screens].find((s) => s.id === pick.source)
+      if (!source) return Promise.resolve({ ok: false as const, error: 'That window is no longer in the list — pick another' })
+      const id = `demo-use-${Date.now()}`
+      const name = uniqueName(cardNameOf(source), state.nodes.map((n) => n.name))
+      const card: CanvasNode = { kind: 'browser', id, name, url: source.address, position: { x: 0, y: 0 }, size: { width: 720, height: 560 } }
+      broadcast({ ...state, nodes: [...state.nodes, card] })
+      return Promise.resolve({ ok: true as const, card: { id, name, url: source.address } })
+    },
+    openScreenSettings: () => Promise.resolve({ ok: true as const }),
+    remoteAccess: () => Promise.resolve(demoRemoteAccess()),
+    remoteControl: () => Promise.resolve({ ok: true as const }),
+    remoteRestart: () => Promise.resolve({ ok: true as const }),
+    setRemoteSwitch: () => Promise.resolve({ ok: true as const }),
+    stopRemote: () => Promise.resolve({ ok: true as const }),
     addNode: (node) => {
       const typed = node as CanvasNode
       const named = {
@@ -300,6 +356,17 @@ export function createDemoApi(): CookrewApi {
       })
       if (updated) broadcast({ ...state, nodes })
       return Promise.resolve(updated)
+    },
+    // Planned as the main process plans it (shared/rename-plan.ts): a clash refused, a note's name pinned.
+    renameNode: (id, name) => {
+      const node = state.nodes.find((n) => n.id === id)
+      if (!node) return Promise.resolve({ ok: false as const, error: 'That card is not on any canvas.' })
+      const plan = planRename({ id, current: node.name, wanted: name, siblings: state.nodes, onClash: 'refuse' })
+      if (plan.ok) {
+        const pin: Partial<CanvasNode> = node.kind === 'note' ? { customName: plan.name } : node.kind === 'terminal' ? { nameByHand: true } : {}
+        broadcast({ ...state, nodes: state.nodes.map((n) => (n.id === id ? ({ ...n, name: plan.name, ...pin } as CanvasNode) : n)) })
+      }
+      return Promise.resolve(plan)
     },
     removeNode: (id) => {
       broadcast({
@@ -355,7 +422,9 @@ export function createDemoApi(): CookrewApi {
     readImage: () => Promise.resolve(null),
     pickFiles: () => Promise.resolve([]),
 
+    answerMenu: async () => ({ ok: false, reason: 'refused' }),
     ptyInput: (terminalId, data) => {
+
       const out = ptyListeners.get(terminalId)
       if (!out) return
       let buffer = lineBuffers.get(terminalId) ?? ''

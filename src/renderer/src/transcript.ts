@@ -53,6 +53,18 @@ export function mergeTrace(
 }
 
 /**
+ * THE OPEN TURN, AS IT GROWS. A window is fetched when the stream gets longer,
+ * and a turn in progress does not make it longer: words you send into it, its
+ * steps and its answer all land on the row already loaded. The live tail is that
+ * row whole, so it takes the row's place with no fetch. Only that row: a tail
+ * not loaded is a window's business (the pager, its eviction, the reader's place).
+ */
+export function withLiveTail(loaded: TraceBlock[], tail: TraceBlock | null): TraceBlock[] {
+  if (tail === null || !loaded.some((block) => block.id === tail.id)) return loaded
+  return loaded.map((block) => (block.id === tail.id ? tail : block))
+}
+
+/**
  * Cap the loaded set to `max` blocks around an anchor identity (BLOCK 3 real
  * windowing — off-screen blocks are evicted so memory is bounded under a
  * 100+ checkpoint history). Keeps a contiguous window; the anchor (the block
@@ -265,6 +277,8 @@ export interface HoldReveal {
  * touch equivalent of the desktop row-hover) to reveal its SAVE ROLE / FORK
  * actions; a release before `ms` is a plain tap and reveals nothing. Uses the
  * global timer (fake-timer testable). Pure control-flow — unit-tested.
+ *
+ * @deprecated the actions it revealed were retired from the checkpoint rail by the owner on 2026-11-03; nothing calls it now.
  */
 export function createHoldReveal(onReveal: (index: number) => void, ms: number): HoldReveal {
   let timer: ReturnType<typeof setTimeout> | null = null

@@ -2,7 +2,7 @@
 // takes a slug, unique among its live agents, so the card's name is read
 // into one — or into none, and herdr's is cleared rather than left stale.
 import { describe, expect, it } from 'vitest'
-import { herdrAgentName, uniqueHerdrAgentName, HERDR_AGENT_NAME } from '../src/main/herdr-agent-name'
+import { herdrAgentName, planAgentNames, uniqueHerdrAgentName, HERDR_AGENT_NAME } from '../src/main/herdr-agent-name'
 
 describe('herdrAgentName', () => {
   it('slugs a card name the way herdr accepts one', () => {
@@ -13,13 +13,16 @@ describe('herdrAgentName', () => {
     expect(herdrAgentName('snake_case_name')).toBe('snake-case-name')
   })
 
-  it('keeps the latin part of a mixed name', () => {
-    expect(herdrAgentName('改名Agent')).toBe('agent')
-    expect(herdrAgentName('顶栏 Model 切换')).toBe('model')
+  it('reads a Chinese name as toneless pinyin, one word per run of characters', () => {
+    expect(herdrAgentName('顶栏模型切换')).toBe('dinglanmoxingqiehuan')
+    expect(herdrAgentName('改名Agent')).toBe('gaiming-agent')
+    expect(herdrAgentName('顶栏 Model 切换')).toBe('dinglan-model-qiehuan')
+    expect(herdrAgentName('评审 (2)')).toBe('pingshen-2')
   })
 
-  it('has no name for a card named only in characters herdr cannot hold', () => {
-    expect(herdrAgentName('顶栏模型切换')).toBeNull()
+  it('falls back to the card id when nothing in the name is readable', () => {
+    expect(herdrAgentName('🦊✨', '623a1a96-5832-42a4')).toBe('card-623a1a96')
+    expect(herdrAgentName('—', 'ABC-def')).toBe('card-abcdef')
     expect(herdrAgentName('   ')).toBeNull()
     expect(herdrAgentName('—')).toBeNull()
   })
@@ -38,7 +41,7 @@ describe('herdrAgentName', () => {
   })
 
   it('always answers a name herdr would accept', () => {
-    for (const raw of ['Finch', 'Claude Code (8)', '9lives', 'x', 'Z'.repeat(80), 'a-b_c', 'Ölçek Ünite']) {
+    for (const raw of ['Finch', 'Claude Code (8)', '9lives', 'x', 'Z'.repeat(80), 'a-b_c', 'Ölçek Ünite', '一二三四五六七八九十一二三四五六七八九十', '3号机']) {
       const name = herdrAgentName(raw)
       if (name !== null) expect(name).toMatch(HERDR_AGENT_NAME)
     }
@@ -59,5 +62,21 @@ describe('uniqueHerdrAgentName', () => {
     const name = uniqueHerdrAgentName(base, new Set([base]))
     expect(name).toBe(`${'a'.repeat(30)}-2`)
     expect(name).toMatch(HERDR_AGENT_NAME)
+  })
+})
+
+describe('planAgentNames', () => {
+  const ours = (pane: string, title: string, name?: string) => ({
+    pane_id: pane, title, ...(name ? { name } : {}), tokens: { cookrew_terminal: `t-${pane}` }
+  })
+
+  it('keeps a long name that won a suffix, cut the way uniqueHerdrAgentName cuts it', () => {
+    const title = '手机 inputbox 优化 去掉没用 搜索按钮'
+    const base = herdrAgentName(title)!
+    expect(base.length).toBeGreaterThan(30)
+    const won = uniqueHerdrAgentName(base, new Set([base]))
+    const plan = planAgentNames([ours('p1', title, base), ours('p2', title, won)], new Map())
+    expect(plan.rename).toEqual([])
+    expect(plan.keep.map((k) => k.name)).toEqual([base, won])
   })
 })

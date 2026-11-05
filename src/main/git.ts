@@ -29,12 +29,12 @@ interface CacheEntry {
 }
 
 /** Run `git <args>` in cwd with no shell; resolve stdout or reject on error. */
-export function git(cwd: string, args: string[]): Promise<string> {
+export function git(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
       args,
-      { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true },
+      { cwd, timeout, windowsHide: true },
       (error, stdout) => {
         if (error) reject(error)
         else resolve(stdout.toString().trim())
@@ -104,16 +104,6 @@ export class GitInfoCache {
       entry.settled = info
     })
     return pending
-  }
-
-  /**
-   * The settled answer for a directory if one is cached and fresh, else
-   * undefined — never a query. For a reader that may only reuse (strata's
-   * agent detail), not cause, a git fork.
-   */
-  peek(dir: string, now = Date.now()): GitInfo | undefined {
-    const hit = this.cache.get(dir)
-    return hit && now - hit.at < CACHE_TTL_MS ? hit.settled : undefined
   }
 
   /** Drop a directory's cached result (e.g. after a worktree add). */

@@ -1,0 +1,34 @@
+───────────────────────────────────────────
+←  ☐ dns-edge  ☐ v…  ☐ u… ☐ u…  ✔ Submit  →
+                                           
+                                           
+│ testnet3 的 dns-edge 还在跑未修复的内核  
+│ 6.12.100，公网开放 53 和                 
+│ 8753；ns1/2/3.d.example.dev 的 glue      
+│ 都指向它的非固定 IP                      
+│ 203.0.113.45。怎么修？                  
+                                           
+❯ 1. 先换 EIP 再换节点 (Recommended)       
+     绑定 EIP，把 Cloudflare 上的 glue     
+     改过去，再按正常流程滚动节点组。最稳，
+     也消除了 IP 不能丢的隐患，但需要有    
+     Cloudflare 权限的人配合。             
+  2. 原地补齐后重启                        
+     生成 6.12.113 的 initramfs，切换默认启
+     动项后重启。改动最少，但要在这台小内存
+     机器上再操作一次，我没有 ec2:RebootIns
+     tances，起不来时很难恢复。            
+  3. 先加临时缓解                          
+     丢弃带 IP 选项的 TCP 包，并设置 net.mp
+     tcp.enabled=0，彻底修复以后再做。不用 
+     重启，但只能降低风险，内核仍未修复。  
+  4. 暂时不动                              
+     保持现状。testnet                     
+     这台机器继续带着漏洞暴露在公网。      
+  5. Type something.                       
+───────────────────────────────────────────
+  6. Chat about this                       
+                                           
+Enter to select · Tab/Arrow keys to        
+navigate · Esc to cancel                   
+                                           

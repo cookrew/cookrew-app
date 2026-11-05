@@ -5,16 +5,22 @@ import { describe, expect, it, vi } from 'vitest'
 import type { UseStatus } from '../src/shared/use-signal'
 import { parseUseUrl } from '../src/shared/use-url'
 import {
+  DeviceBlockedError,
+  DeviceGoneError,
   PIXEL_FAST_POLL_MS,
+  PIXEL_GONE_POLL_MS,
   PIXEL_HEARTBEAT_MS,
   PIXEL_IDLE_POLL_MS,
   PIXEL_MAX_BACKOFF_MS,
+  PIXEL_OFFLINE_UNWATCHED_POLL_MS,
   PIXEL_OPEN_TIMEOUT_MS,
   PIXEL_UNWATCHED_POLL_MS,
   PixelInstance,
-  type PixelDevice
+  type PixelDevice,
+  type RemoteGate
 } from '../src/main/pixel-instance'
 import type { Gesture } from '../src/main/vphone-input'
+import type { RemoteState, RemoteStateId, ViewerWho } from '../src/shared/remote-access'
 
 /** A clock and a scheduler the test turns by hand: run() fires the one pending tick. */
 function manual() {
@@ -255,5 +261,242 @@ describe('PixelInstance', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('PixelInstance · a device that is gone for good', () => {
+  const gone = () => {
+    const clock = manual()
+    let alive = false
+    const opened = { count: 0 }
+    const device: PixelDevice = {
+      target: parseUseUrl('window://Safari?id=4')!,
+      open: async () => {
+        opened.count += 1
+        if (!alive) throw new DeviceGoneError('window', "'Safari' closed")
+        return { width: 100, height: 100 }
+      },
+      capture: async () => ({ jpeg: 'AAA' })
+    }
+    const instance = new PixelInstance({ url: 'window://Safari?id=4', device, now: clock.now, schedule: clock.schedule })
+    return { clock, instance, opened, revive: () => (alive = true) }
+  }
+
+  it('tells its viewers it is gone, and stops spending a helper process every few seconds on it', async () => {
+    const { clock, instance } = gone()
+    await instance.start()
+    expect(instance.status).toMatchObject({ state: 'offline', message: "'Safari' closed", gone: 'window' })
+    expect(clock.due).toBe(PIXEL_GONE_POLL_MS)
+  })
+
+  it('is still a card: a viewer arriving looks again, and a device back is live with gone cleared', async () => {
+    const { clock, instance, opened, revive } = gone()
+    await instance.start()
+    instance.registerViewportViewer('v1')
+    expect(clock.due).toBe(PIXEL_FAST_POLL_MS)
+    await clock.run()
+    expect(opened.count).toBe(2)
+    revive()
+    await clock.run()
+    expect(instance.status.state).toBe('live')
+    expect(instance.status.gone).toBeUndefined()
+  })
+
+  it('an ordinary failure carries no gone', async () => {
+    const { state, device } = fakeDevice()
+    state.attached = false
+    const clock = manual()
+    const instance = new PixelInstance({ url: 'adb://default', device, now: clock.now, schedule: clock.schedule })
+    await instance.start()
+    expect(instance.status.gone).toBeUndefined()
+  })
+})
+
+
+describe('a screen behind the remote desk', () => {
+  const phone: ViewerWho = { key: 'device:p', name: 'Pixel', here: false }
+  const state = (id: RemoteStateId): RemoteState => ({
+    id, platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false,
+    build: { settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' }
+  })
+
+  function rig(over: Partial<RemoteGate> = {}) {
+    const clock = manual()
+    const gestures: Gesture[] = []
+    let blocked: RemoteState | null = null
+    const allow = new Set<string>()
+    const remote: RemoteGate = {
+      blocked: async () => blocked,
+      inputRefusal: () => null,
+      agentRefusal: () => null,
+      mayDrive: (who) => allow.has(who.key),
+      cardControl: (who) => ({ switchOn: true, until: allow.has(who.key) ? 99 : null, heldBy: null, awake: false, machine: 'darwin' }),
+      admit: () => null,
+      enter: () => () => undefined,
+      ...over
+    }
+    const device: PixelDevice = {
+      target: parseUseUrl('screen://main')!,
+      remote,
+      open: async () => ({ width: 1000, height: 800 }),
+      capture: async () => {
+        if (blocked) throw new DeviceBlockedError(blocked)
+        return { jpeg: `frame-${clock.now()}` }
+      },
+      perform: async (gesture) => void gestures.push(gesture)
+    }
+    const instance = new PixelInstance({ url: 'screen://main', device, now: clock.now, schedule: clock.schedule })
+    return { clock, gestures, instance, allow, block: (next: RemoteState | null) => (blocked = next) }
+  }
+
+  const tap = (instance: PixelInstance, who?: ViewerWho): void => {
+    instance.dispatchInput('Input.dispatchMouseEvent', { type: 'mousePressed', x: 10, y: 10, button: 'left' }, who)
+    instance.dispatchInput('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 10, y: 10, button: 'left' }, who)
+  }
+
+  it('says the state on the card, in words, and keeps the time of the last real frame', async () => {
+    const { clock, instance, block } = rig()
+    await instance.start()
+    const seen = clock.now()
+    block(state('locked'))
+    await clock.run()
+    expect(instance.status.state).toBe('offline')
+    expect(instance.status.remote?.id).toBe('locked')
+    expect(instance.status.remote?.lastSeenAt).toBe(seen)
+    expect(instance.status.message).toContain('locked')
+  })
+
+  it('never keeps a stale frame: a blocked card has nothing to show or to screenshot', async () => {
+    const { clock, instance, block } = rig()
+    await instance.start()
+    expect(await instance.snapshot()).not.toBeNull()
+    block(state('locked'))
+    await clock.run()
+    expect(await instance.snapshot()).toBeNull()
+  })
+
+  it('recovers by itself when the lock lifts, with the same viewers', async () => {
+    const { clock, instance, block } = rig()
+    const frames = vi.fn()
+    instance.frameListeners.add(frames)
+    await instance.start()
+    block(state('locked'))
+    await clock.run()
+    frames.mockClear()
+    block(null)
+    await clock.run()
+    expect(instance.status.state).toBe('live')
+    expect(instance.status.remote).toBeUndefined()
+    expect(frames).toHaveBeenCalled()
+  })
+
+  it('wake() looks at once instead of waiting out the backoff', async () => {
+    const { clock, instance, block } = rig()
+    await instance.start()
+    block(state('locked'))
+    await clock.run()
+    instance.frameListeners.add(() => undefined)
+    block(null)
+    instance.wake()
+    expect(clock.due).toBe(PIXEL_FAST_POLL_MS)
+  })
+
+  it('an offline card nobody watches looks rarely: each look is a process', async () => {
+    const { clock, instance, block } = rig()
+    await instance.start()
+    block(state('locked'))
+    await clock.run()
+    expect(clock.due).toBe(PIXEL_OFFLINE_UNWATCHED_POLL_MS)
+    instance.frameListeners.add(() => undefined)
+    await clock.run()
+    expect(clock.due).toBeLessThanOrEqual(PIXEL_MAX_BACKOFF_MS)
+  })
+
+  it('input needs a named viewer who may drive: no name, no input', async () => {
+    const { clock, gestures, instance, allow } = rig()
+    await instance.start()
+    tap(instance)
+    tap(instance, phone)
+    await clock.run()
+    expect(gestures).toEqual([])
+    allow.add(phone.key)
+    tap(instance, phone)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(gestures.map((g) => g.method)).toEqual(['input.tap'])
+  })
+
+  it('no viewer input goes to a screen that is not live', async () => {
+    const { clock, gestures, instance, allow, block } = rig()
+    allow.add(phone.key)
+    await instance.start()
+    block(state('locked'))
+    await clock.run()
+    tap(instance, phone)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(gestures).toEqual([])
+  })
+
+  it('each viewer reads its own input and control off the same status', async () => {
+    const { instance, allow } = rig()
+    await instance.start()
+    allow.add(phone.key)
+    expect(instance.statusFor(instance.status, phone)).toMatchObject({ input: true, control: { until: 99 } })
+    expect(instance.statusFor(instance.status, { key: 'other', name: 'x', here: false })).toMatchObject({ input: false, control: { until: null } })
+  })
+
+  it('after Stop an agent gets no picture, and its queued gestures do not run', async () => {
+    let stopped = false
+    const { instance, gestures } = rig({ agentRefusal: () => (stopped ? 'Stopped at the Mac' : null), admit: () => (stopped ? { message: 'Stopped', state: state('stopped') } : null) })
+    await instance.start()
+    const acting = instance.act([{ method: 'input.tap', params: { x: 1, y: 1 } }, { method: 'input.tap', params: { x: 2, y: 2 } }])
+    stopped = true
+    await acting
+    expect(gestures).toEqual([])
+    expect(await instance.snapshot()).toBeNull()
+  })
+
+  it('a card with no desk behind it is unchanged', async () => {
+    const clock = manual()
+    const gestures: Gesture[] = []
+    const device: PixelDevice = {
+      target: parseUseUrl('adb://default')!,
+      open: async () => ({ width: 400, height: 800 }),
+      capture: async () => ({ jpeg: 'x' }),
+      perform: async (gesture) => void gestures.push(gesture)
+    }
+    const instance = new PixelInstance({ url: 'adb://default', device, now: clock.now, schedule: clock.schedule })
+    await instance.start()
+    tap(instance)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(gestures).toHaveLength(1)
+    expect(instance.statusFor(instance.status, phone)).toBe(instance.status)
+  })
+
+  it('refreshStatus tells the viewers again, so a grant reaches them without a device change', async () => {
+    const { instance } = rig()
+    const heard = vi.fn()
+    await instance.start()
+    instance.statusListeners.add(heard)
+    instance.refreshStatus()
+    expect(heard).toHaveBeenCalledTimes(1)
+  })
+
+  it('a copy on the Mac reaches the viewer that asked, from the machine clipboard', async () => {
+    const clock = manual()
+    const copied = vi.fn()
+    const device: PixelDevice = {
+      target: parseUseUrl('screen://main')!,
+      remote: { blocked: async () => null, inputRefusal: () => null, agentRefusal: () => null, mayDrive: () => true, cardControl: () => ({ switchOn: true, until: 1, heldBy: null, awake: false, machine: 'darwin' }), admit: () => null, enter: () => () => undefined },
+      open: async () => ({ width: 100, height: 100 }),
+      capture: async () => ({ jpeg: 'x' }),
+      perform: async () => undefined,
+      readClipboard: () => '123456'
+    }
+    const instance = new PixelInstance({ url: 'screen://main', device, now: clock.now, schedule: clock.schedule, copyDelayMs: 0 })
+    instance.copyListeners.add(copied)
+    await instance.start()
+    instance.dispatchInput('Input.dispatchKeyEvent', { type: 'keyDown', key: 'c', code: 'KeyC', modifiers: 2 }, phone)
+    await new Promise((r) => setTimeout(r, 5))
+    expect(copied).toHaveBeenCalledWith('123456')
   })
 })

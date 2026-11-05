@@ -33,6 +33,9 @@ export type EventKind =
   | 'door-moved'
   | 'not-me'
   | 'request'
+  /** A provider identity joined or left the account. `device` names which provider. */
+  | 'linked'
+  | 'unlinked'
 
 /** account:changed, as every surface reads it. `seq` is the poll cursor. */
 export interface AccountEvent {
@@ -56,7 +59,7 @@ export interface EventInput {
 export type EventListener = (username: string, event: AccountEvent) => void
 
 /** More than a device catches up on in one poll; older ones fall off the tail. */
-const PER_ACCOUNT = 100
+export const PER_ACCOUNT = 100
 
 /**
  * WHICH KINDS A FULL TAIL MAY DROP — one, and it is the only one a party
@@ -88,6 +91,11 @@ export class V2Events {
 
   constructor(now: () => number = Date.now) {
     this.now = now
+  }
+
+  /** An account was deleted: its feed goes with it. */
+  forget(username: string): void {
+    this.log.delete(username)
   }
 
   /**

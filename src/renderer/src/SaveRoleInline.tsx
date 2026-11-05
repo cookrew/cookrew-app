@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import { saveRoleFromCheckpoint } from './role-checkpoint'
 
+/** @deprecated the rail's ROLE action was retired from the checkpoint rail by the owner on 2026-11-03; nothing renders this now. */
 export function SaveRoleInline({
   terminalId,
   checkpoint,

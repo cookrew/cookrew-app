@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { TerminalActivity } from '../../../shared/turn'
 import { useActivity, activityStore } from '../activity-thumb-store'
+import { inputRefused } from './input-refused'
 import { cookrew } from '../api'
 import { artifactRefs, expandRefs, pendingName, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
@@ -24,6 +25,16 @@ import { shownWords, withShownWords } from './draft-pictures'
  */
 
 const BACKSPACE = '\x7f'
+/**
+ * The longest draft kept on the agent's line, in bytes. Claude folds a long paste
+ * into one [Pasted text] token, and a single Backspace takes all of it: the box
+ * would still hold the words and Enter send nothing (measured: 1535 characters,
+ * 0 received; 535 stayed unfolded). Past this the words wait in the draft and go
+ * whole with Enter. Under main's paste limit (enter-pacing.ts), so what is on the
+ * line is always plain keys.
+ */
+export const LINE_MAX = 500
+const overLine = (text: string): boolean => new TextEncoder().encode(text).length > LINE_MAX
 /** After a keystroke here the tracker's reading lags behind it: ours is the truth for this long. */
 export const QUIET_MS = 1200
 
@@ -41,6 +52,13 @@ const withLine = (agentId: string, line: Line): void => {
   lines = new Map(lines).set(agentId, line)
 }
 
+// Keys refused never reached the line: it holds what was last seen on it, so
+// the next send types the words again instead of a bare Enter.
+inputRefused.subscribe((agentId) => {
+  const line = lines.get(agentId)
+  if (line) withLine(agentId, { ...line, typed: line.seen })
+})
+
 /** The keys that turn one input line into another: back over what differs, type the rest. */
 export function keysFor(from: string, to: string): string {
   const was = Array.from(from)
@@ -48,6 +66,20 @@ export function keysFor(from: string, to: string): string {
   let same = 0
   while (same < was.length && same < next.length && was[same] === next[same]) same += 1
   return BACKSPACE.repeat(was.length - same) + next.slice(same).join('')
+}
+
+/** The tracker's reading is trimmed: what it left off the end is still on the line. */
+const SPARE_BACKSPACES = 16
+
+/**
+ * keysFor, for a line that may be folded: only one that came from LIVE gets this
+ * long. Words after it just follow it, but any other edit clears it and types it
+ * all again. Backspaces clear a fold and plain words alike, and spare ones fall on
+ * an empty line (measured; Ctrl-U only takes one wrapped row of unfolded words).
+ */
+function lineKeys(from: string, to: string): string {
+  if (!overLine(from) || to.startsWith(from)) return keysFor(from, to)
+  return BACKSPACE.repeat(Array.from(from).length + SPARE_BACKSPACES) + to
 }
 
 /**
@@ -77,6 +109,28 @@ export function lineTextFor(
   return expandRefs(body, artifactRefs(body, artifacts))
 }
 
+/** Cards that cannot start: the draft stays in the box and goes whole on a send. */
+let held: ReadonlySet<string> = new Set()
+
+/**
+ * The cards whose line has nothing behind it. A line newly held forgets what it
+ * typed: those keys reached no process, and counting them left a later send
+ * with only its Enter to send.
+ */
+export function holdLines(ids: readonly string[]): void {
+  const next = new Set(ids)
+  for (const id of next) {
+    if (!held.has(id)) withLine(id, { ...lineOf(id), typed: '', seen: '', editedAt: Date.now() })
+  }
+  held = next
+}
+
+/** Keys a failed wake lost (main's `terminal.keys-lost`): a send must carry those words itself. */
+export function forgetTyped(agentId: string): void {
+  const line = lineOf(agentId)
+  withLine(agentId, { ...line, typed: line.seen })
+}
+
 function lineOf(agentId: string): Line {
   const known = lines.get(agentId)
   if (known) return known
@@ -87,17 +141,18 @@ function lineOf(agentId: string): Line {
 }
 
 /**
- * Bring the agent's input line to `text`. Withheld while it asks a question,
- * unless `force` (an explicit send); the draft keeps the words either way.
+ * Bring the agent's input line to `text`. Withheld while it asks a question, or
+ * while the text is past LINE_MAX, unless `force` (an explicit send); the draft
+ * keeps the words either way.
  */
 export function typeLine(agentId: string, text: string, force = false): void {
   const line = lineOf(agentId)
   const now = Date.now()
-  if (!force && activityStore.get(agentId)?.phase === 'waiting') {
+  if (!force && (held.has(agentId) || overLine(text) || activityStore.get(agentId)?.phase === 'waiting')) {
     withLine(agentId, { ...line, editedAt: now })
     return
   }
-  const keys = keysFor(line.typed, text)
+  const keys = lineKeys(line.typed, text)
   withLine(agentId, { ...line, typed: text, editedAt: now })
   if (keys) cookrew().ptyInput(agentId, keys)
 }
@@ -137,6 +192,9 @@ export function observeLine(agentId: string, activity: TerminalActivity | undefi
     return
   }
   withLine(agentId, { ...read, typed: pending })
+  // A draft waiting in the box is not on the line: the line has no say over it.
+  const draft = getDraft(draftKey(agentId))
+  if (overLine(draft) && draft.trim() !== known.typed.trim()) return
   setDraft(draftKey(agentId), pending)
 }
 
