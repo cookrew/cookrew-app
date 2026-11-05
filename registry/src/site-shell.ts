@@ -696,7 +696,7 @@ footer nav a{border-radius:5px}
 .legal-table{margin:14px 0}.legal-table table.cmp{margin:0;box-shadow:none}.legal table.cmp td:last-child{background:none}
 @media (max-width:700px){.legal-table thead{display:none}.legal-toc ol{columns:1}.legal-table tr,.legal-table tbody th,.legal-table td{display:block}.legal-table table.cmp tbody th{padding-bottom:0;border-bottom:none}.legal-table table.cmp td{padding-top:6px;padding-bottom:6px;border-bottom:none}.legal-table tr{padding:6px 0;border-bottom:1px solid var(--line-soft)}.legal-table tbody tr:last-child{border-bottom:none}.legal-table td::before{content:attr(data-label);display:block;font:600 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}}
 .legal section.legal-planned{margin-top:26px;padding:18px 20px;border:1px dashed var(--seal);border-radius:12px;background:var(--wash)}.legal-chip{display:inline-block;margin-bottom:10px}
-mark.ph{background:var(--amber);color:var(--ink);padding:0 4px;border-radius:3px;font:600 .9em var(--font-mono)}
+mark.ph{background:var(--amber);color:#1d1a16;padding:0 4px;border-radius:3px;font:600 .9em var(--font-mono)}
 .term{background:var(--cream-hi)}.term .out{font:13px/1.5 var(--font-mono);color:var(--ink)}
 .term .out .d{color:var(--muted)}.term .out .g{color:var(--amber-deep)}.term .out .h{color:var(--hp)}.term .out .r{color:var(--rose)}
 .term .gate{background:color-mix(in srgb,var(--cream) 82%,transparent);backdrop-filter:blur(2px)}

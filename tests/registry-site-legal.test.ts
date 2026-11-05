@@ -14,13 +14,17 @@ import { CommitsCache } from '../registry/src/github-commits'
 import { KEEP_DAYS as PULSE_DAYS, Pulse } from '../registry/src/pulse'
 import { KEEP_DAYS as FUNNEL_DAYS } from '../registry/src/funnel-counts'
 import { SEEN_KEEP_MS } from '../registry/src/v2-line-seen'
-import { REVOKED_MAX, SESSIONS_MAX } from '../registry/src/v2-accounts'
+import { REVOKED_MAX, SESSIONS_MAX, V2Accounts } from '../registry/src/v2-accounts'
+import { JOIN_CODE_TTL_MS } from '../registry/src/v2-join-codes'
+import { EXPIRED_RETENTION_MS } from '../registry/src/terms'
+import { REACH_TTL_MS as DNS_CARD_TTL_MS } from '../registry/src/dns-zone'
 import { SEATS_MAX } from '../registry/src/v2-seats'
 import { REACH_TTL_MS, SEAT_TTL_MS } from '../registry/src/v2-requests'
 import { PENDING_TTL_MS } from '../registry/src/v2-pending'
 import { SESSION_TTL_MS } from '../registry/src/v2-tokens'
 import { PER_ACCOUNT as EVENTS_KEPT } from '../registry/src/v2-events'
-import { FAQ, FACTS, FEATURES } from '../registry/src/site-content'
+import { FAQ, FACTS, FEATURES, llmsText } from '../registry/src/site-content'
+import { desktopsSection } from '../registry/src/site-reach'
 import { sitemapXml } from '../registry/src/site-seo'
 import { SITE_STYLE } from '../registry/src/site-shell'
 import { installPageHtml } from '../registry/src/install-page'
@@ -45,15 +49,18 @@ import { FUNNEL_EVENTS, FUNNEL_PAYLOAD_KEYS, TELEMETRY_DEFAULT_ON } from '../src
 const CONFIG = { rpId: 'localhost', origin: 'http://localhost:8790', tokenTtlMs: 600_000, challengeTtlMs: 90_000 }
 const DAY_MS = 86_400_000
 const MINUTE_MS = 60_000
+const HOUR_MS = 3_600_000
 
 let dir = ''
+let store: RegistryStore
 let origin = ''
 let close: () => Promise<void> = async () => undefined
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'site-legal-'))
+  store = new RegistryStore(dir)
   const server = createRegistry({
-    store: new RegistryStore(dir),
+    store,
     log: new TransparencyLog(dir),
     identity: new IdentityService(dir, CONFIG),
     doors: new DoorStore(dir, { allowPrivate: true }),
@@ -146,14 +153,21 @@ describe('the footer of every page', () => {
 })
 
 describe('placeholders', () => {
-  it('stay visible and are marked, in both documents', () => {
+  // Written against the value, so filling one in is not a test failure.
+  const shown = (value: string): string => (value.startsWith('[') ? `<mark class="ph">${value}</mark>` : value)
+
+  it('stay visible and are marked, in both documents, until they are filled in', () => {
     const privacy = privacyPage().body
     const terms = termsPage().body
     for (const value of [LEGAL_ENTITY, CONTACT_EMAIL]) {
-      expect(privacy).toContain(`<mark class="ph">${value}</mark>`)
-      expect(terms).toContain(`<mark class="ph">${value}</mark>`)
+      expect(privacy).toContain(shown(value))
+      expect(terms).toContain(shown(value))
     }
-    expect(terms).toContain(`<mark class="ph">${GOVERNING_LAW}</mark>`)
+    expect(terms).toContain(shown(GOVERNING_LAW))
+  })
+
+  it('stay readable in dark mode: amber takes a fixed dark ink, not the theme ink', () => {
+    expect(SITE_STYLE).toMatch(/mark\.ph\{[^}]*color:#1d1a16/)
   })
 
   it('no bracketed word is left unmarked', () => {
@@ -256,7 +270,7 @@ describe('the words match the code', () => {
     expect(privacy).toContain(TELEMETRY_DEFAULT_ON ? 'On by default' : 'Off by default')
   })
 
-  it('carries each retention figure the code enforces', () => {
+  it('names each limit the code enforces, by reading the constant', () => {
     const retention = wordsOf(PRIVACY.sections.find((s) => s.id === 'retention') as LegalSection)
     expect(retention).toContain(`${PULSE_DAYS} days`)
     expect(retention).toContain(`${FUNNEL_DAYS} days`)
@@ -265,6 +279,9 @@ describe('the words match the code', () => {
     expect(retention).toContain(`${SEAT_TTL_MS / DAY_MS} days`)
     expect(retention).toContain(`${PENDING_TTL_MS / MINUTE_MS} minutes`)
     expect(retention).toContain(`${REACH_TTL_MS / MINUTE_MS} minutes`)
+    expect(retention).toContain(`Join codes: ${JOIN_CODE_TTL_MS / MINUTE_MS} minutes`)
+    expect(retention).toContain(`${EXPIRED_RETENTION_MS / HOUR_MS} hours after it expires`)
+    expect(retention).toContain(`${DNS_CARD_TTL_MS / HOUR_MS} hours old`)
     expect(retention).toContain(`last ${SESSIONS_MAX} sessions`)
     expect(retention).toContain(`last ${REVOKED_MAX}`)
     expect(retention).toContain(`last ${EVENTS_KEPT}`)
@@ -277,10 +294,55 @@ describe('the words match the code', () => {
     expect(relay).toMatch(/not end-to-end encrypted/i)
   })
 
-  it('never claims a delete button the registry does not have', () => {
-    const route = wordsOf(PRIVACY.sections.find((s) => s.id === 'choices') as LegalSection)
-    expect(route).toMatch(/no delete-account button/i)
-    expect(route).toContain(CONTACT_EMAIL)
+  it('the Mac path is unsealed wherever you are, and OPEN starts on it even at home', () => {
+    const relay = wordsOf(PRIVACY.sections.find((s) => s.id === 'relay') as LegalSection)
+    expect(relay).toMatch(/not end-to-end encrypted yet, wherever you are/)
+    expect(relay).toMatch(/OPEN on your account page always starts on this path, even at home/)
+    expect(relay).not.toMatch(/from outside your network/)
+    expect(relay).not.toMatch(/does not touch cookrew\.dev/)
+  })
+
+  it('the seal is claimed for relay-carried calls only, and the relay still sees the caller', () => {
+    const relay = wordsOf(PRIVACY.sections.find((s) => s.id === 'relay') as LegalSection)
+    expect(relay).toMatch(/Calls carried by the relay are sealed/)
+    expect(relay).toMatch(/without the relay and without this seal/)
+    expect(relay).toMatch(/your IP address, your session cookie/)
+    expect(relay).toMatch(/In a browser, this rests on cookrew\.dev serving/)
+    expect(privacy).not.toMatch(/Calls to a served team are sealed/)
+  })
+
+  it('warns that a pairing token can reach web logs, instead of promising it cannot', () => {
+    const relay = wordsOf(PRIVACY.sections.find((s) => s.id === 'relay') as LegalSection)
+    expect(relay).toMatch(/carry your pairing token in their address/)
+    expect(relay).not.toMatch(/We do not log or store that content/)
+  })
+
+  it('a limited or priced preset is described as public, because its files are', async () => {
+    const address = store.putBlob(Buffer.from('{"team":"gated"}'))
+    expect((await fetch(`${origin}/v1/blobs/${address}`)).status).toBe(200)
+    const row = wordsOf(PRIVACY.sections.find((s) => s.id === 'stored') as LegalSection)
+    expect(row).toMatch(/Treat all of it as public/)
+    expect(row).toMatch(/gates only the manifest/)
+    expect(allWords(TERMS.sections)).toMatch(/gate its manifest and not its files/)
+    expect(allWords(TERMS.sections)).not.toMatch(/as its visibility allows/)
+  })
+
+  it('what is published is excepted from what is never stored', () => {
+    const never = wordsOf(PRIVACY.sections.find((s) => s.id === 'never') as LegalSection)
+    expect(never).toMatch(/unless you publish part of a canvas in a preset/)
+  })
+
+  it('only claims what the registry itself does with an address', () => {
+    expect(privacy).not.toMatch(/and is never written down/)
+    expect(privacy).toMatch(/never writes it down/)
+  })
+
+  it('the deletion section stands: the account store has no way to delete one', () => {
+    const deleting = Object.getOwnPropertyNames(V2Accounts.prototype).filter((name) => /delete|erase|remove|purge/i.test(name))
+    expect(deleting).toEqual([])
+    const choices = wordsOf(PRIVACY.sections.find((s) => s.id === 'choices') as LegalSection)
+    expect(choices).toMatch(/no delete-account button/i)
+    expect(choices).toContain(CONTACT_EMAIL)
   })
 
   it('the FAQ no longer says a canvas never touches cookrew.dev', () => {
@@ -288,5 +350,16 @@ describe('the words match the code', () => {
     expect(answer).not.toMatch(/never touches cookrew\.dev unless you serve a team\.$/)
     expect(answer).toMatch(/relay/)
     expect(answer).toContain('/privacy')
+    expect(answer).not.toMatch(/every byte is sealed/)
+    expect(answer).not.toMatch(/from outside your network/)
+  })
+
+  it('the rest of the site no longer contradicts the page', () => {
+    expect(llmsText()).not.toContain('the relay reads nothing')
+    const author = FEATURES.flatMap((f) => f.faq).find((f) => f.q === 'Can the team’s author see what I type?')?.a ?? ''
+    expect(author).toMatch(/^Yes\./)
+    const machines = desktopsSection('mira', [])
+    expect(machines).not.toContain('never holds what is on a canvas')
+    expect(machines).toContain('href="/privacy#relay"')
   })
 })

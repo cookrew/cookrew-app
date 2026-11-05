@@ -1,7 +1,9 @@
 import { FUNNEL_EVENTS, FUNNEL_PAYLOAD_KEYS, TELEMETRY_DEFAULT_ON } from '../../src/shared/funnel-events'
 import { GITHUB_REPO, FACTS } from './site-content'
+import { REACH_TTL_MS as DNS_CARD_TTL_MS } from './dns-zone'
 import { KEEP_DAYS as FUNNEL_KEEP_DAYS } from './funnel-counts'
 import { KEEP_DAYS as PULSE_KEEP_DAYS } from './pulse'
+import { EXPIRED_RETENTION_MS } from './terms'
 import { REVOKED_MAX, SESSIONS_MAX } from './v2-accounts'
 import { PER_ACCOUNT as EVENTS_KEPT } from './v2-events'
 import { JOIN_CODE_TTL_MS } from './v2-join-codes'
@@ -20,10 +22,10 @@ import { SESSION_TTL_MS } from './v2-tokens'
  * into a marked panel; its text must also say so in its own first line, since
  * a sentence gets quoted without its panel.
  *
- * Every retention figure below is read from the constant that enforces it, so
- * changing a limit changes the page. A statement with no constant behind it
- * (what the relay can read, that no delete route exists) has to be re-read by
- * hand when that code moves.
+ * A retention figure with a constant in the registry is read from it, so
+ * changing that limit changes the page. Everything else has to be re-read by
+ * hand when its code moves: what the relay can read, that no delete route
+ * exists, that preset files are ungated, and the app's own 30-day sweep.
  *
  * The three placeholders are filled here, once. Until then the renderer marks
  * them on the page.
@@ -35,8 +37,10 @@ export const GOVERNING_LAW = '[GOVERNING LAW]'
 
 const UPDATED = '2026-11-05'
 const DAY_MS = 86_400_000
+const HOUR_MS = 3_600_000
 const MINUTE_MS = 60_000
 const days = (ms: number): number => ms / DAY_MS
+const hours = (ms: number): number => ms / HOUR_MS
 const minutes = (ms: number): number => ms / MINUTE_MS
 
 export type LegalBlock =
@@ -74,10 +78,10 @@ export const PRIVACY: LegalDoc = {
       blocks: [
         {
           ul: [
-            'Cookrew is a desktop app. Your code, prompts, terminals and transcripts live on your own machines, and cookrew.dev does not store them.',
+            'Cookrew is a desktop app. Your code, prompts, terminals and transcripts live on your own machines, and cookrew.dev does not store them, apart from anything you choose to publish in a preset.',
             'A cookrew.dev account is a username and a password. The site does not ask for an email address.',
             'There are no ads, no third-party analytics scripts and no tracking cookies here, and we do not sell personal data.',
-            'Calls to a served team are sealed end to end, so the relay carries bytes it cannot read.',
+            'Calls to a served team that travel over the relay are sealed end to end, so the relay cannot read them.',
             'One exception you should know about: reaching your own Mac through the relay is not end-to-end encrypted yet. See “What passes through the relay”.',
             'Whatever you choose to publish, such as a team listing or a preset, is public.'
           ]
@@ -119,42 +123,42 @@ export const PRIVACY: LegalDoc = {
               [
                 'Devices',
                 'Device ID, kind (desktop, phone or browser), the device’s name, its public key, and when it was added and last seen.',
-                'Your own devices.'
+                'Your own devices. A team you call receives the calling device’s ID in your call token, and a Mac with a certificate has its ID in a public name (see “Who else sees your data”).'
               ],
               [
                 'Sessions',
                 'Session ID, which device it is on and when it was issued, plus the IDs of sessions and devices you have ended.',
-                'Your own devices. Ended IDs are published so a team’s machine can refuse them. They are random and name nobody.'
+                'Your own devices. Ended IDs are published so a team’s machine can refuse them. They are random, and the list carries no usernames.'
               ],
               [
                 'Desktops',
-                'For each machine you attach: its name, your workspace names and IDs (never their contents), which teams it holds, its hardware and OS profile (kind, model, vendor, OS version, architecture, CPU count, memory), the app version, when its relay line was last seen, and a signed card of its private network addresses (LAN and tailnet) with their certificate fingerprints.',
+                'For each machine you attach: its name, your workspace names and IDs (never their contents), which teams it holds, its hardware and OS profile (kind, model and label, vendor, OS version, architecture, CPU count, memory, and the probe facts behind the kind), the app version, when its relay line was last seen, and a signed card of its private network addresses (LAN and tailnet) with their certificate fingerprints.',
                 'Your own devices.'
               ],
               [
                 'Served teams',
                 'Owner, team name and title, the name of its lead agent, the number of agents, its address and how it is reached, its access type, price and payment rails, its public seal key, and the summary, tags and agent tool names the owner wrote.',
-                'Public, including as data at /v1/doors. A team on the relay lists the relay’s address, so your home network is not exposed. A team listed on a direct address publishes that address.'
+                'Public, including as data at /v1/doors. A team on the relay lists the relay’s address, so your home network is not exposed. A team listed on a direct address publishes that address. When it was last refreshed, whether it is live and today’s line and call counts are public too.'
               ],
               [
                 'Seats',
                 'Team, account, whether the seat was bought or granted, who granted it or which payment rail settled it, its start, expiry and end, and a receipt reference.',
-                'You and the team’s owner. Guests seated at the same team see your username.'
+                'You and the team’s owner, apart from the receipt reference, which nobody is shown. Guests seated at the same team see your username.'
               ],
               [
                 'Stripe references',
                 'For a seat paid by card: the word “stripe” and the Stripe Checkout Session ID the team’s owner reports. For a seat paid over x402: “x402” and a short digest of the payment. Nothing else about the payment.',
-                'No page or API shows the reference. It is kept so a seat can be matched to the owner’s own books.'
+                'No page or API shows the reference. It stays in the registry’s records as the link between a seat and its payment.'
               ],
               ['Stars', 'Your account, the team and when you starred it.', 'The count is public. Which teams you starred is not.'],
               [
                 'Published presets',
-                'The preset’s manifest and files, and an entry in a transparency log: the preset, its version, the author key, the publishing identity and the time.',
-                'The log is public. A preset is public or limited to signed-in accounts, as its author chose.'
+                'The preset’s manifest and files: its card names, notes, roles, agent commands and prompts, and browser card URLs, with local paths masked and a secret scan before publishing. Also an entry in a transparency log: the preset, its version, the author key, the publishing identity and the time.',
+                'Treat all of it as public. The log and the list of presets are public. An author can limit a preset to signed-in accounts or price it, but that gates only the manifest: anyone with a preset’s address can fetch its files, and the public list gives that address.'
               ],
               [
                 'Preset sales',
-                'If you sell or buy a priced preset: the seller’s payout wallet address, and the buyer’s receipt (account, preset, version, transaction reference, amount and time).',
+                'If you sell or buy a priced preset: the seller’s payout wallet address, the buyer’s receipt (account, preset, version, transaction reference, amount and time), and a record of each price quote (a single-use code, who and what it was for, and when it expires).',
                 'Buyers see the payout address in the price quote. Receipts stay private.'
               ],
               [
@@ -170,10 +174,10 @@ export const PRIVACY: LegalDoc = {
     },
     {
       id: 'counts',
-      heading: 'Anonymous counts',
+      heading: 'Visit counts',
       blocks: [
         {
-          p: 'The registry counts what happens on the site per UTC day: views of each page, and lines opened and calls carried to each served team. Those counts hold no account, no cookie and no network address.'
+          p: 'The registry counts what happens on the site per UTC day: views of each page, and lines opened and calls carried to each served team. A count names the page or team, which can include its owner’s username, and never the visitor: it holds no caller account, no cookie and no network address.'
         }
       ]
     },
@@ -183,13 +187,13 @@ export const PRIVACY: LegalDoc = {
       blocks: [
         { p: FUNNEL_DEFAULT },
         {
-          p: `When it is on, the app sends each of five setup steps at most once per install: ${FUNNEL_EVENTS.join(', ')}. The paid step comes from the seller’s app, never the buyer’s.`
+          p: `When it is on, the app sends each of five setup steps once per install: ${FUNNEL_EVENTS.join(', ')}. If the registry’s answer is lost the app retries, so a step can occasionally be counted twice. The paid step comes from the seller’s app, never the buyer’s.`
         },
         {
           p: `Each one carries exactly five fields (${FUNNEL_PAYLOAD_KEYS.join(', ')}): the step, the app version, the OS family, a random install ID tied to nothing else, and the UTC day. The registry refuses anything with more. Prompts, paths, names and output are never part of it.`
         },
         {
-          p: 'The registry checks the install ID and then drops it. It keeps only a daily total per step, OS family and app version, so it cannot say which install got how far. Your network address is used for rate limiting in a keyed form that dies with the process, and is never written down.'
+          p: 'The registry checks the install ID and then drops it. It keeps only a daily total per step, OS family and app version, so it cannot say which install got how far. The registry uses your network address for rate limiting in a keyed form that dies with the process, and never writes it down. The web logs described under “Server logs” are separate.'
         }
       ]
     },
@@ -199,7 +203,7 @@ export const PRIVACY: LegalDoc = {
       blocks: [
         {
           ul: [
-            'Your prompts, transcripts, terminal output, code, files, file paths or canvases. The relay passes traffic through memory and writes none of it to disk.',
+            'Your prompts, transcripts, terminal output, code, files, file paths or canvases, unless you publish part of a canvas in a preset (see “What the registry stores”). The relay passes traffic through memory and writes none of it to disk.',
             'Card numbers, bank details, billing addresses or wallet private keys.',
             'Your logins or API keys for Claude, Codex or any other agent provider.',
             'Email addresses, phone numbers or postal addresses. The site does not ask for them.',
@@ -218,10 +222,16 @@ export const PRIVACY: LegalDoc = {
           p: 'The relay exists because a machine at home usually cannot be dialled from outside. Your machine holds a line open to cookrew.dev and traffic travels down it. There are two kinds of traffic, and they are not equally private.'
         },
         {
-          p: `Calls to a served team are sealed. Your browser or app encrypts every request and reply to the team’s own key (${FACTS.relayCipher}), and only the team’s machine can open them. The relay cannot read them. It can see the outside of each exchange: which team, the request method and path, how many bytes, the status of the answer, and when.`
+          p: `Calls carried by the relay are sealed. Your browser or app encrypts every request and reply to the team’s own key (${FACTS.relayCipher}), and only the team’s machine can open them, so the relay cannot read them. It can see the outside of each exchange: which team, the request method and path, how many bytes, the status of the answer, and when. While a call is open it can also see who is calling: your IP address, your session cookie if you are signed in, and the call token the registry issues you. The registry stores none of that.`
         },
         {
-          p: 'Reaching your own Mac from outside your network is not end-to-end encrypted yet. When your phone or a browser opens your Mac through cookrew.dev, the connection is encrypted on each side of the relay, but the registry process handles the traffic in readable form while it forwards it: your canvas, terminal output, transcripts and pairing token. We do not log or store that content, but whoever operates the relay could technically read it, so do not treat this path as private from us. On your own Wi-Fi or tailnet your devices connect directly, and this traffic does not touch cookrew.dev.'
+          p: 'In a browser, this rests on cookrew.dev serving the team’s real key and honest encryption code, because both come from this site. A team listed on a direct network address is called straight at that address, without the relay and without this seal, so its protection depends on how that address is served.'
+        },
+        {
+          p: 'Reaching your own Mac through cookrew.dev is not end-to-end encrypted yet, wherever you are. OPEN on your account page always starts on this path, even at home. The app can move to a direct connection when it finds one, and shows which path it is on, but the app itself loads through the relay and traffic stays there until then.'
+        },
+        {
+          p: 'On this path the connection is encrypted on each side of the relay, but the registry process handles the traffic in readable form while it forwards it: your canvas, terminal output, transcripts and pairing token. The registry does not log or store that content, but whoever operates the relay could technically read it, so do not treat this path as private from us. Some live streams also carry your pairing token in their address, and the web logs described under “Server logs” can record addresses. Only a connection that never goes through the relay avoids all of this, such as opening the app at your Mac’s own address on your Wi-Fi or tailnet.'
         },
         { p: 'Neither kind of traffic is written to the registry’s disk. It is held in memory only long enough to forward it.' }
       ]
@@ -231,7 +241,7 @@ export const PRIVACY: LegalDoc = {
       heading: 'Server logs',
       blocks: [
         {
-          p: 'The registry prints operational lines to its log. For a call to a served team: the team, the method and path, and a stream ID. For your own Mac: your username, the device ID, when the session opened and closed, and the bytes each way. These lines hold no IP address and no content.'
+          p: 'The registry prints operational lines to its log. For a call to a served team: the team, the method and path, and a stream ID. For your own Mac: your username, the device ID, when the session opened and closed, and the bytes each way. When a team moves between machines: the new machine’s name. These lines hold no IP address and no content.'
         },
         {
           p: 'The load balancer and proxy in front of the registry can record ordinary web logs: IP address, time and the address requested. These logs sit with the hosting platform, not in the registry’s data files, and last as long as that platform keeps them. We use them only to run and protect the service.'
@@ -244,11 +254,11 @@ export const PRIVACY: LegalDoc = {
       blocks: [
         {
           ul: [
-            'The owner of a team you call. Your session runs on their machine, so they receive your username and everything you send, and they can see what their agents do with it. Their agents send it on to whichever AI providers they use. By default the app clears a finished session’s workspace about 30 days after its last write, but it is their machine and we have no control over it. Do not send a team anything you would not give its owner.',
+            'The owner of a team you call. Your session runs on their machine, so they receive your username, your device ID and everything you send, and they can see what their agents do with it. Their agents send it on to whichever AI providers they use. By default the app clears a finished session’s workspace about 30 days after its last write, but it is their machine and we have no control over it. Do not send a team anything you would not give its owner.',
             'Stripe. Card checkout for a seat is hosted by Stripe on the team owner’s own Stripe account, so your card and billing details go to Stripe and the owner, and not to us. Stripe’s privacy policy applies.',
             'Public blockchains. A USDC payment over x402 is recorded on a public chain by its nature.',
             'GitHub. Pictures and videos on these pages load from raw.githubusercontent.com, and app downloads come from GitHub, so GitHub sees your IP address and browser details when that happens. Fonts come from cookrew.dev itself.',
-            'Let’s Encrypt and public certificate logs. If your Mac asks for a certificate, its name under d.cookrew.dev goes to Let’s Encrypt and appears in public certificate transparency logs. While your Mac publishes it, a name under d.cookrew.dev also resolves in public DNS to the private network address it spells out.',
+            'Let’s Encrypt and public certificate logs. If your Mac asks for a certificate, its name under d.cookrew.dev, which contains its device ID, goes to Let’s Encrypt and appears in public certificate transparency logs. While your Mac publishes it, a name under d.cookrew.dev also resolves in public DNS to the private network address it spells out.',
             'Our infrastructure providers. The registry is hosted on Amazon Web Services. Cloudflare runs cookrew.dev’s DNS and does not sit in front of site traffic.',
             'Authorities, when the law requires us to disclose what we hold.'
           ]
@@ -261,7 +271,7 @@ export const PRIVACY: LegalDoc = {
       heading: 'Cookies and browser storage',
       blocks: [
         {
-          p: 'These keep you signed in and hold your device key. None of them follow you across sites, and pages that have nothing to do run no script at all.'
+          p: 'These keep you signed in, hold your device key, and keep your Mac’s app settings when you open it here. None of them follow you across sites, and pages that have nothing to do run no script at all.'
         },
         {
           table: {
@@ -271,7 +281,12 @@ export const PRIVACY: LegalDoc = {
               ['cr_account', 'Cookie, ends with its token', 'An older sign-in token, still used by accounts from before passwords.'],
               ['Device key', 'IndexedDB', 'A private key that cannot be exported from this browser. It proves this is the same device.'],
               ['cr_token:<device>', 'localStorage', 'The pairing token for a Mac you reach from this browser.'],
-              ['Sign-in and checkout markers', 'sessionStorage, ends with the tab', 'Small flags for a sign-in or a checkout in progress.']
+              ['Sign-in and checkout markers', 'sessionStorage, ends with the tab', 'Small values for a sign-in or a checkout in progress.'],
+              [
+                'Your Mac’s app',
+                'localStorage, and cookies limited to the relay path',
+                'When you open your Mac through the relay, its app runs on this site and keeps its own settings here, such as theme and connection path.'
+              ]
             ]
           }
         }
@@ -302,12 +317,16 @@ export const PRIVACY: LegalDoc = {
               ],
               ['Team listings', 'Until the owner withdraws them. A listing does not expire on its own.'],
               ['Stars', 'Until you remove them.'],
-              ['Private network addresses', 'Until your Mac replaces its card or your account is deleted. Public DNS stops answering for a card more than a day old.'],
+              ['Private network addresses', `Until your Mac replaces its card or your account is deleted. Public DNS stops answering for a card more than ${hours(DNS_CARD_TTL_MS)} hours old.`],
+              ['Certificates', 'Kept for the Mac they belong to. There is no way yet to remove one from the registry, and public certificate logs keep theirs permanently.'],
               ['Presets and the transparency log', 'Permanently. There is no unpublish, and the log is append-only by design.'],
-              ['Preset receipts and payout addresses', 'Kept, so that a purchase stays valid. A price quote is dropped about a day after it expires.'],
+              [
+                'Preset receipts, payout addresses and quotes',
+                `Receipts and payout addresses are kept, so that a purchase stays valid. A price quote stops counting ${hours(EXPIRED_RETENTION_MS)} hours after it expires, and leaves the file when the file is next cleaned up.`
+              ],
               ['Page and call counts', `${PULSE_KEEP_DAYS} days.`],
               ['Setup count daily totals', `${FUNNEL_KEEP_DAYS} days.`],
-              ['Last-seen time of a relay line', `${days(SEEN_KEEP_MS)} days after it was last seen.`],
+              ['Last-seen time of a relay line', `Forgotten at the first restart after ${days(SEEN_KEEP_MS)} days without being seen.`],
               ['Server logs', 'As long as the hosting platform keeps them.']
             ]
           }
@@ -324,7 +343,7 @@ export const PRIVACY: LegalDoc = {
             'Change it. You can change your display name, avatar, password and sign-in factors.',
             'Remove it. You can take a device off your account, sign out, remove a star and withdraw a team listing.',
             'Turn off the setup counts at any time from the row in the app’s ⋯ menu.',
-            `Delete your account. There is no delete-account button yet, so write to ${CONTACT_EMAIL}. We hold no email address for you, so we will ask you to prove the account is yours, for example by signing in. We then delete your account, devices, desktops, sign-in factors, stars and team listings. Published presets and their log entries stay, and seat records that a team’s owner relies on may stay.`
+            `Delete your account. There is no delete-account button yet, so write to ${CONTACT_EMAIL}. We hold no email address for you, so we will ask you to prove the account is yours, for example by signing in. We then delete your account, devices, desktops, sign-in factors, stars, team listings, payout address and older key record. Published presets and their log entries stay. Seat records and purchase receipts that others rely on may stay, certificates stay as described above, and counts and logs age out on their own schedule.`
           ]
         },
         {
@@ -484,10 +503,10 @@ export const TERMS: LegalDoc = {
       heading: 'What you publish',
       blocks: [
         {
-          p: 'You keep ownership of what you publish: listings, presets and profile details. You give us a worldwide, royalty-free permission to store, copy, display and distribute it as needed to run the services, and to let others use a published preset as its visibility allows.'
+          p: 'You keep ownership of what you publish: listings, presets and profile details. You give us a worldwide, royalty-free permission to store, copy, display and distribute it as needed to run the services, and to let others use a published preset.'
         },
         {
-          p: 'Published presets and the public log are permanent by design, and there is no unpublish. Check what you publish, and never publish secrets or anything you do not have the right to share. We may still take content out of public view where the law requires it or these terms are broken.'
+          p: 'Published presets and the public log are permanent by design, and there is no unpublish. Treat everything in a preset as public, even one you limit or price: those settings gate its manifest and not its files. Check what you publish, and never publish secrets or anything you do not have the right to share. We may still take content out of public view where the law requires it or these terms are broken.'
         }
       ]
     },
