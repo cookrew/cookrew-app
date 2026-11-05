@@ -20,6 +20,7 @@
     func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> { .same }
     func input(_ input: BrowserInput, to id: String) async throws {}
     func note(_ id: String) async throws -> NoteBody { NoteBody(name: "", content: "") }
+    func unpair() async throws {}
   }
 
   /** The watch's glass: its corners, and the clock the system draws over any app. */
@@ -207,6 +208,84 @@
     }
   }
 
+  /** Every pairing screen, one file each, for looking at one by one. */
+  @MainActor private func pairingScreens(out: URL) {
+    let pad = { (typed: String, error: String?) in AnyView(CodePad(typed: typed, error: error, onKey: { _ in }, onDelete: {})) }
+    let note = { (title: String, words: String, action: String) in AnyView(NoticeView(title: title, words: words, action: action, onAction: {}, onStartOver: {})) }
+    let screens: [(String, AnyView)] = [
+      ("welcome", AnyView(WelcomeView(onCode: {}, onDigits: {}))),
+      ("pad-empty", pad("", nil)),
+      ("pad-typing", pad("K7QM2X", nil)),
+      ("pad-wrong", pad("K7QM2XPD", "Wrong or expired code")),
+      ("joining", AnyView(JoinSteps(done: [], now: "Joining your account…"))),
+      ("finding", AnyView(JoinSteps(done: ["Joined your account"], now: "Finding your Mac…"))),
+      ("paired", AnyView(JoinSteps(done: ["Joined your account", "Paired with MacBook Pro"], now: nil))),
+      ("mac-away", note("Can't reach your Mac", "You're in your account. Wake the Mac, then try again.", "Try again")),
+      ("this-watch", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: "drej", line: .relay, onForget: {}))),
+      ("this-watch-no-account", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: nil, line: .direct, onForget: {}))),
+      ("new-agent", AnyView(NewAgentPage(store: WatchStore(api: NoAPI()))))
+    ]
+    for (name, view) in screens {
+      write(Glass(size: CGSize(width: 198, height: 242), palette: .day) { view }, scale: 2, to: out.appending(path: "pair-\(name).png"))
+      write(Glass(size: CGSize(width: 176, height: 215), palette: .day) { view }, scale: 2, to: out.appending(path: "pair-\(name)-41.png"))
+    }
+    print("drew \(screens.count) pairing screens")
+  }
+
+  /** Holds what the Keychain would, for a run with none. */
+  private final class Held: @unchecked Sendable {
+    var account: WatchAccount?
+  }
+
+  /**
+   * The real act against a real registry and relay, for the integration test:
+   * join, claim, read the cards down the relay, renew, read again, forget.
+   * One line per fact; tests/watch-join.integration.test.ts reads them.
+   */
+  @MainActor private func join(registry origin: String, code: String) async {
+    guard let url = URL(string: origin) else { return print("bad registry") }
+    let api = HTTPRegistryAPI(origin: url)
+    let device = WatchDevice()
+    let held = Held()
+    let outcome = await pairWatch(
+      code: code, held: nil, device: device, name: "Apple Watch", registry: origin, api: api, now: nowMs(),
+      keep: { held.account = $0 }, step: { print("step \($0)") }
+    )
+    guard case .paired(let session, let account) = outcome else { return print("failed \(outcome)") }
+    print("paired \(session.desktop) as \(account.username)")
+    print("bases \(session.bases.map(\.kind).joined(separator: ","))")
+    guard let road = session.bases.last, let relay = URL(string: road.url) else { return print("no relay") }
+    let keeper = AccountKeeper(account: account, device: device, api: api, keep: { held.account = $0 })
+    let line = HTTPWatchAPI(bases: [relay], token: session.token, relay: keeper)
+    do {
+      if case .new(let reply, _) = try await line.cards(tag: nil) { print("cards \(reply.cards.count) line \(line.line)") }
+      let home = HTTPWatchAPI(bases: session.urls, token: session.token, relay: keeper)
+      if case .new(let reply, _) = try await home.cards(tag: nil) { print("cards-home \(reply.cards.count) line \(home.line)") }
+      print("renewed \(await keeper.renew()) \(held.account?.token != account.token)")
+      if case .new(let reply, _) = try await line.cards(tag: nil) { print("cards-after-renew \(reply.cards.count)") }
+      try await line.unpair()
+      print("unpaired")
+      _ = try await line.cards(tag: nil)
+      print("still-open")
+    } catch {
+      print("stopped \(error)")
+    }
+    let again = await pairWatch(
+      code: code, held: held.account, device: device, name: "Apple Watch", registry: origin, api: api, now: nowMs(),
+      keep: { held.account = $0 }, step: { _ in }
+    )
+    print("second-claim \(again)")
+    if let token = held.account?.token {
+      await api.signOut(token: token)
+      do {
+        _ = try await api.desktops(token: token)
+        print("session-still-open")
+      } catch {
+        print("session-ended \(error)")
+      }
+    }
+  }
+
   private func picture(of data: Data) -> CGImage? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -217,6 +296,14 @@
     @MainActor static func main() async {
       let out = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "/tmp/watch-shots")
       try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+      if CommandLine.arguments.count >= 5, CommandLine.arguments[2] == "join" {
+        await join(registry: CommandLine.arguments[3], code: CommandLine.arguments[4])
+        return
+      }
+      if CommandLine.arguments.count >= 3, CommandLine.arguments[2] == "pairing" {
+        pairingScreens(out: out)
+        return
+      }
       if CommandLine.arguments.count >= 5, CommandLine.arguments[2] == "live", let base = URL(string: CommandLine.arguments[3]) {
         await live(out: out, base: base, code: CommandLine.arguments[4])
         return

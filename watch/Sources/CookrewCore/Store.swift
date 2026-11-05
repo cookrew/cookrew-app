@@ -82,6 +82,8 @@ public final class WatchStore {
   /** A word on the card: why the last thing did not go. */
   public private(set) var notice: String?
   public private(set) var unpaired = false
+  /** The relay refused the session and no road answered: a new code is what brings it back. */
+  public private(set) var signedOut = false
 
   @ObservationIgnored private let api: WatchAPI
   @ObservationIgnored private let now: () -> Date
@@ -133,15 +135,19 @@ public final class WatchStore {
         tag = nextTag
         adopt(reply.cards)
       }
+      signedOut = false
     } catch WatchError.unpaired {
       unpaired = true
+    } catch WatchError.signedOut {
+      signedOut = true
+      link = .lost
     } catch {
-      if link == .live { link = .lost }
+      link = .lost
     }
   }
 
   func adopt(_ next: [Card]) {
-    let first = link == .connecting && cards.isEmpty
+    let first = link != .live && cards.isEmpty
     let events = first ? [] : eventsBetween(cards, next)
     cards = next
     link = .live

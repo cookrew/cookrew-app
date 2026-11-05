@@ -7,7 +7,7 @@ import type { CanvasNode, Connection } from '../shared/model'
 import type { BrowserInstance } from './browser-instance'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { watchBases } from './watch-bases'
-import type { WatchHost } from './watch-routes'
+import type { WatchAccountKind, WatchHost, WatchInvite } from './watch-routes'
 import type { WatchPairing } from './watch-pairing'
 
 export interface WatchHostDeps {
@@ -27,6 +27,8 @@ export interface WatchHostDeps {
   readonly stop: (terminalId: string) => Promise<boolean>
   /** What the terminal shows now; null when nothing is attached. */
   readonly screen: (terminalId: string) => string | null
+  readonly accountKind: () => WatchAccountKind
+  readonly invite: (current: string, here: boolean) => Promise<WatchInvite>
 }
 
 export function createWatchHost(deps: WatchHostDeps): WatchHost {
@@ -68,6 +70,8 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
     menuOnScreen(terminalId) {
       const screen = deps.screen(terminalId)
       return screen !== null && menuHeldOnScreen(screen)
-    }
+    },
+    accountKind: deps.accountKind,
+    invite: deps.invite
   }
 }

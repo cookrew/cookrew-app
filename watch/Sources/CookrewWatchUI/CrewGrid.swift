@@ -6,11 +6,13 @@ import SwiftUI
 
 public struct CrewGrid: View {
   let store: WatchStore
+  let onThisWatch: () -> Void
   let onPick: (String) -> Void
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, onPick: @escaping (String) -> Void) {
+  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}, onPick: @escaping (String) -> Void) {
     self.store = store
+    self.onThisWatch = onThisWatch
     self.onPick = onPick
   }
 
@@ -40,6 +42,16 @@ public struct CrewGrid: View {
             }
           }
         }
+        Button(action: onThisWatch) {
+          Text("THIS WATCH")
+            .font(InkType.word())
+            .tracking(1)
+            .foregroundStyle(ink.muted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 10).fill(ink.card))
+        }
+        .buttonStyle(.plain)
       }
       .padding(.horizontal, 10)
       .padding(.top, 6)

@@ -381,14 +381,29 @@ public struct CardPage: View {
 /** The page after the last card: the box with nobody on it makes a new agent. */
 public struct NewAgentPage: View {
   let store: WatchStore
+  let onThisWatch: () -> Void
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore) {
+  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}) {
     self.store = store
+    self.onThisWatch = onThisWatch
   }
 
   public var body: some View {
     VStack(spacing: 0) {
+      // The one page there always is: with no cards it is the only way to this watch's own page.
+      Button(action: onThisWatch) {
+        Text("THIS WATCH")
+          .font(InkType.word())
+          .tracking(1)
+          .foregroundStyle(ink.muted)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .frame(height: 26)
+          .padding(.leading, 10)
+          .padding(.trailing, clockRoom)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
       Spacer(minLength: 0)
       ZStack {
         Circle().strokeBorder(ink.dim, style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))

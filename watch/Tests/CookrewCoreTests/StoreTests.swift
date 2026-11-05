@@ -11,9 +11,11 @@ private final class FakeAPI: WatchAPI, @unchecked Sendable {
   let calls = Calls()
   var replies: [[Card]] = []
   var failure: WatchError?
+  var failsAtOnce: WatchError?
   var reads = 0
 
   func cards(tag: String?) async throws -> Fresh<CardsReply> {
+    if let failsAtOnce { throw failsAtOnce }
     if let failure, reads > 0 { throw failure }
     let index = min(reads, replies.count - 1)
     reads += 1
@@ -31,6 +33,7 @@ private final class FakeAPI: WatchAPI, @unchecked Sendable {
   func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> { .same }
   func input(_ input: BrowserInput, to id: String) async throws { try await act("input \(id): \(input)") }
   func note(_ id: String) async throws -> NoteBody { NoteBody(name: "n", content: "c") }
+  func unpair() async throws { try await act("unpair") }
 }
 
 private actor Waits {
@@ -94,6 +97,33 @@ struct StoreTests {
     await store.refresh()
     await store.refresh()
     #expect(events.items == [.needsYou("A"), .done("B")])
+  }
+
+  @Test("a session gone from the relay costs nothing that works: the wrist keeps polling and says so")
+  func signedOutKeepsTheMac() async {
+    let (store, api, _, _) = await harness([[card("a", .idle)]])
+    api.failure = .signedOut
+    await store.refresh()
+    #expect(store.signedOut)
+    #expect(!store.unpaired)
+    api.failure = nil
+    await store.refresh()
+    #expect(!store.signedOut)
+  }
+
+  @Test("a first read that fails says the Mac is offline, and the read that works buzzes nothing")
+  func firstReadFails() async {
+    let api = FakeAPI()
+    api.replies = [[card("a", .waiting, choice: menu)]]
+    api.failsAtOnce = .unreachable
+    let events = EventLog()
+    let store = WatchStore(api: api, feel: { events.items.append($0) })
+    await store.refresh()
+    #expect(store.link == .lost)
+    api.failsAtOnce = nil
+    await store.refresh()
+    #expect(store.link == .live)
+    #expect(events.items.isEmpty)
   }
 
   @Test("the box says who it goes to")
