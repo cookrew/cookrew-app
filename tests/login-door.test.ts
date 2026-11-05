@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events'
 import { LoginDoor, LoginRefused, type AccountDoor, type LoginAudit, type LoginTurn } from '../src/main/login-cli'
 import type { CliRequest, TerminalNodeData } from '../src/shared/model'
 import type { LadderFactor, SecondFactorStep, SignInAnswer } from '../src/shared/account-v2'
+import type { DeviceCode } from '../src/main/account-oauth'
 
 const PASSWORD = 'SENTINEL-password-never-repeat'
 const CODE = '845120'
@@ -57,7 +58,7 @@ function fixture(
   const released: string[] = []
   const account: AccountDoor = {
     platform: 'linux',
-    who: () => ({ username: null, deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null }),
+    who: () => ({ username: null, deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false }),
     signIn: vi.fn(async () => landed),
     resume: vi.fn(async () => landed),
     climbCode: vi.fn(async () => landed),
@@ -66,6 +67,12 @@ function fixture(
     abandon: vi.fn(),
     signOut: vi.fn(async () => ({ ok: true as const, value: {} })),
     devices: vi.fn(async () => ({ ok: true as const, value: [] })),
+    providerDevice: vi.fn(async (onCode: (code: DeviceCode) => void) => {
+      onCode({ userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: 0 })
+      return landed
+    }),
+    providerClaim: vi.fn(async () => landed),
+    abandonClaim: vi.fn(),
     ...over
   }
   const door = new LoginDoor({
@@ -244,7 +251,7 @@ describe('the password step', () => {
 
   it('names the account and the device as cookrew.dev filed it', async () => {
     const f = fixture({
-      who: () => ({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null }),
+      who: () => ({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null, passwordless: false, passcodePending: false }),
       devices: async () => ({
         ok: true,
         value: [{ id: 'dev-1', name: 'Linux · solis-model-test', kind: 'desktop' }] as never
@@ -252,8 +259,8 @@ describe('the password step', () => {
     })
     ;(f.account as { who: AccountDoor['who'] }).who = vi
       .fn()
-      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null })
-      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null })
+      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false })
+      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null, passwordless: false, passcodePending: false })
     await f.open()
     const turn = await f.send('answer', PASSWORD)
     expect(turn.exit).toBe(0)
@@ -267,8 +274,8 @@ describe('the password step', () => {
     const f = fixture({ devices: async () => ({ ok: false, reason: 'offline' }) })
     ;(f.account as { who: AccountDoor['who'] }).who = vi
       .fn()
-      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null })
-      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: true, registry: null, mismatch: null })
+      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false })
+      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: true, registry: null, mismatch: null, passwordless: false, passcodePending: false })
     await f.open()
     const turn = await f.send('answer', PASSWORD)
     expect(turn.say.join(' ')).toContain('Linux · box')
@@ -304,7 +311,9 @@ describe('an account already here', () => {
     deviceName: 'Linux · box',
     sessionLive: live,
     registry: 'https://cookrew.dev',
-    mismatch: null
+    mismatch: null,
+    passwordless: false,
+    passcodePending: false
   })
 
   it('says who, asks nothing, seals nothing', async () => {
@@ -334,7 +343,7 @@ describe('an account already here', () => {
 
   it('will not renew against the wrong registry', async () => {
     const f = fixture({
-      who: () => ({ ...held(false)(), mismatch: { signedInAt: 'https://cookrew.dev', pointedAt: 'http://127.0.0.1:9' } })
+      who: () => ({ ...held(false)(), mismatch: { signedInAt: 'https://cookrew.dev', pointedAt: 'http://127.0.0.1:9' }, passwordless: false, passcodePending: false })
     })
     const turn = await f.open([])
     expect(turn.exit).toBe(1)
@@ -605,7 +614,7 @@ describe('nothing waits for ever', () => {
     const f = fixture({
       who: () => {
         if (broken) throw new Error('the file could not be read')
-        return { username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null }
+        return { username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false }
       }
     })
     await expect(f.open()).rejects.toThrow('could not be read')
@@ -629,7 +638,9 @@ describe('logout', () => {
     deviceName: 'Linux · box',
     sessionLive: true,
     registry: 'https://cookrew.dev',
-    mismatch: null
+    mismatch: null,
+    passwordless: false,
+    passcodePending: false
   })
 
   it('asks for the password, hidden, then leaves through the existing sign-out', async () => {
@@ -677,7 +688,7 @@ describe('whoami', () => {
   }
 
   it('names the account, the device and the registry', () => {
-    const line = whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: true, registry: 'https://cookrew.dev', mismatch: null })
+    const line = whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: true, registry: 'https://cookrew.dev', mismatch: null, passwordless: false, passcodePending: false })
     expect(line).toContain('@drej')
     expect(line).toContain('Linux · box')
     expect(line).toContain('https://cookrew.dev')
@@ -685,7 +696,7 @@ describe('whoami', () => {
 
   it('exits 1 when nobody is signed in, so a script can branch on it', async () => {
     const refused = await refusal(async () =>
-      whoami({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null })
+      whoami({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false })
     )
     expect(refused.exitCode).toBe(1)
     expect(refused.message).toContain('cookrew login')
@@ -693,7 +704,7 @@ describe('whoami', () => {
 
   it('says a session has ended rather than naming a dead one as live', async () => {
     const refused = await refusal(async () =>
-      whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null })
+      whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false })
     )
     expect(refused.exitCode).toBe(1)
     expect(refused.message).toContain('ended')
@@ -722,5 +733,221 @@ describe('nothing typed comes back out', () => {
     expect(all).not.toContain(PASSWORD)
     expect(all).not.toContain(RESCUE)
     expect(all).not.toContain('pending-1')
+  })
+})
+
+describe('cookrew login --github', () => {
+  const GITHUB = { tty: true, github: true }
+  const newIdentity = {
+    ok: false as const,
+    reason: 'new_identity' as const,
+    provider: 'github' as const,
+    suggest: 'octo-cat',
+    free: true,
+    email: null
+  }
+  const coded = (answer: unknown) =>
+    vi.fn(async (onCode: (code: DeviceCode) => void) => {
+      onCode({ userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: 0 })
+      return answer
+    }) as unknown as AccountDoor['providerDevice']
+
+  it('asks for no password, seals the pane from the start, and shows the code before it waits', async () => {
+    const f = fixture()
+    const first = await f.open([], GITHUB)
+    expect(first).toMatchObject({ wait: { other: false } })
+    expect(first.ask).toBeUndefined()
+    expect(f.sealed).toEqual(['term-owner'])
+    const code = await f.send('wait')
+    expect(code.say.join(' ')).toContain('WDJB-MJHT')
+    expect(code.say.join(' ')).toContain('https://github.com/login/device')
+    expect(code.wait).toBeDefined()
+    const done = await f.send('wait')
+    expect(done.exit).toBe(0)
+    expect(f.account.signIn).not.toHaveBeenCalled()
+    expect(f.released).toEqual(['term-owner'])
+  })
+
+  it('a new identity asks for a name, and Enter takes the suggestion', async () => {
+    const f = fixture({ providerDevice: coded(newIdentity) })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    const asked = await f.send('wait')
+    expect(asked.ask).toMatchObject({ kind: 'text' })
+    expect(asked.ask?.prompt).toContain('octo-cat')
+    expect(asked.say.join(' ')).toContain('cookrew login')
+    expect((await f.send('answer', '')).exit).toBe(0)
+    expect(f.account.providerClaim).toHaveBeenCalledWith('octo-cat')
+  })
+
+  it('a clash asks again, keeping the conversation', async () => {
+    const claim = vi.fn<AccountDoor['providerClaim']>()
+    claim.mockResolvedValueOnce({ ok: false, reason: 'taken' })
+    claim.mockResolvedValueOnce(landed)
+    const f = fixture({ providerDevice: coded({ ...newIdentity, free: false }), providerClaim: claim })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    await f.send('wait')
+    const again = await f.send('answer', 'octo-cat')
+    expect(again.ask).toBeDefined()
+    expect(again.say.join(' ')).toContain('@octo-cat is taken')
+    expect((await f.send('answer', 'octo-two')).exit).toBe(0)
+  })
+
+  it('leaving at the name question forgets the proven identity', async () => {
+    const f = fixture({ providerDevice: coded(newIdentity) })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    await f.send('wait')
+    f.connection.emit('close')
+    expect(f.account.abandonClaim).toHaveBeenCalled()
+    expect(f.released).toEqual(['term-owner'])
+  })
+
+  it('a ladder climbs the same rungs a password would reach', async () => {
+    const f = fixture({ providerDevice: coded(ladder(['totp'])) })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    const asked = await f.send('wait')
+    expect(asked.ask?.kind).toBe('hidden')
+    expect((await f.send('answer', CODE)).exit).toBe(0)
+    expect(f.account.climbCode).toHaveBeenCalledWith('pending-1', 'totp', CODE)
+  })
+
+  it('stopping at GitHub is said plainly, and the code that was never shown changes nothing', async () => {
+    const f = fixture({ providerDevice: coded({ ok: false, reason: 'cancelled' }) })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    const done = await f.send('wait')
+    expect(done.exit).toBe(1)
+    expect(done.say.join(' ')).toContain('Nothing was attached')
+  })
+
+  it('a refusal before any code ends at once', async () => {
+    const answer = vi.fn(async () => ({ ok: false as const, reason: 'offline' as const })) as unknown as AccountDoor['providerDevice']
+    const f = fixture({ providerDevice: answer })
+    await f.open([], GITHUB)
+    expect((await f.send('wait')).exit).toBe(1)
+  })
+
+  it('the terminal going aborts the wait', async () => {
+    let seen: AbortSignal | null = null
+    let finish: (answer: SignInAnswer<unknown>) => void = () => undefined
+    const hanging = vi.fn((onCode: (code: DeviceCode) => void, signal: AbortSignal) => {
+      seen = signal
+      onCode({ userCode: 'A', verificationUri: 'https://x', expiresAt: 0 })
+      return new Promise<SignInAnswer<unknown>>((resolve) => {
+        finish = resolve
+      })
+    }) as unknown as AccountDoor['providerDevice']
+    const f = fixture({ providerDevice: hanging })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    f.connection.emit('close')
+    expect((seen as AbortSignal | null)?.aborted).toBe(true)
+    finish({ ok: false, reason: 'cancelled' })
+    await vi.waitFor(() => expect(f.audits.some((a) => a.type === 'account.login-refused')).toBe(true))
+  })
+
+  it('a session that came back after the terminal left still lands, and the log says so', async () => {
+    let finish: (answer: SignInAnswer<unknown>) => void = () => undefined
+    const hanging = vi.fn((onCode: (code: DeviceCode) => void) => {
+      onCode({ userCode: 'A', verificationUri: 'https://x', expiresAt: 0 })
+      return new Promise<SignInAnswer<unknown>>((resolve) => {
+        finish = resolve
+      })
+    }) as unknown as AccountDoor['providerDevice']
+    const f = fixture({ providerDevice: hanging })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    f.connection.emit('close')
+    expect(f.audits).toEqual([])
+    finish(landed)
+    await vi.waitFor(() => expect(f.audits.map((a) => a.details).join(' ')).toContain('after the terminal left'))
+  })
+
+  it('does not time out while a person is at GitHub', async () => {
+    let finish: (answer: SignInAnswer<unknown>) => void = () => undefined
+    const hanging = vi.fn((onCode: (code: DeviceCode) => void) => {
+      onCode({ userCode: 'A', verificationUri: 'https://x', expiresAt: 0 })
+      return new Promise<SignInAnswer<unknown>>((resolve) => {
+        finish = resolve
+      })
+    }) as unknown as AccountDoor['providerDevice']
+    const f = fixture({ providerDevice: hanging }, 'login', { idleMs: 5, hangUpMs: 5 })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    const last = f.send('wait')
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    finish(landed)
+    expect((await last).exit).toBe(0)
+  })
+
+  it('the agent gates hold for this flag too', async () => {
+    const f = fixture({}, 'login', { busy: true })
+    expect((await refusal(() => f.open([], GITHUB))).exitCode).toBe(3)
+    const quiet = fixture()
+    expect((await refusal(() => quiet.open([], { github: true }))).exitCode).toBe(3)
+  })
+
+  it('a signed-in machine is told so and asks GitHub nothing', async () => {
+    const who = () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive: true, registry: null, mismatch: null, passwordless: true, passcodePending: false })
+    const f = fixture({ who })
+    expect((await f.open([], GITHUB)).exit).toBe(0)
+    expect(f.account.providerDevice).not.toHaveBeenCalled()
+  })
+
+  it('says when no passcode protects this machine yet', async () => {
+    const who = () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, passwordless: true, passcodePending: true })
+    const f = fixture({ who })
+    await f.open([], GITHUB)
+    await f.send('wait')
+    const done = await f.send('wait')
+    expect(done.say.join(' ')).toContain('passcode')
+  })
+})
+
+describe('cookrew login --github, when the poll beats the second wait', () => {
+  it('the ending is still collected, and only then is the door free', async () => {
+    const f = fixture()
+    await f.open([], { tty: true, github: true })
+    await f.send('wait')
+    await vi.waitFor(() => expect(f.audits).toHaveLength(1))
+    await expect(refusal(() => fixture().open([], {}))).resolves.toBeDefined()
+    expect((await f.send('wait')).exit).toBe(0)
+    expect((await f.open([], { tty: true, github: true })).wait).toBeDefined()
+  })
+})
+
+describe('a password resume on a Mac still waiting for a passcode', () => {
+  it('does not claim no password was typed', async () => {
+    const who = () => ({ username: 'drej', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: true })
+    const f = fixture({ who })
+    await f.open(['drej'])
+    const done = await f.send('answer', PASSWORD)
+    expect(done.exit).toBe(0)
+    expect(done.say.join(' ')).not.toContain('No password was typed')
+  })
+})
+
+describe('a passwordless account at the terminal', () => {
+  const who = (sessionLive: boolean) => () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive, registry: null, mismatch: null, passwordless: true, passcodePending: false })
+
+  it('is never asked for a password it cannot have', async () => {
+    const f = fixture({ who: who(false) })
+    const first = await f.open([])
+    expect(first.ask).toBeUndefined()
+    expect(first.exit).toBe(1)
+    expect(first.say.join(' ')).toContain('cookrew login --github')
+    expect(f.account.resume).not.toHaveBeenCalled()
+  })
+
+  it('cookrew logout says where to do it, and opens no browser on a box with no screen', async () => {
+    const f = fixture({ who: who(true) }, 'logout')
+    const first = await f.open([])
+    expect(first.ask).toBeUndefined()
+    expect(first.exit).toBe(1)
+    expect(first.say.join(' ')).toContain('no password')
+    expect(f.account.signOut).not.toHaveBeenCalled()
   })
 })

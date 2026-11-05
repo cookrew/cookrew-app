@@ -9,6 +9,7 @@ import type { AgentRegistryEntry } from './agent-registry'
 import { turnFailure } from '../../shared/turn-failure'
 import type { TerminalActivity } from '../../shared/turn'
 import type { CanvasNode, TerminalNodeData } from '../../shared/model'
+import type { LaunchFailure } from '../../shared/launch-failure'
 
 /**
  * Rows for the agents sidebar: the durable roster (who exists, everywhere)
@@ -41,6 +42,8 @@ export interface AgentRow {
   turnCount: number
   /** THE BRIEF the card was recruited for (TerminalNodeData.brief) — display only; null or absent when none or unknown here. */
   brief?: string | null
+  /** Why it is not running, when that is more than resting. */
+  failure?: LaunchFailure | null
   /**
    * THE sort key, descending. Start time while a turn is in flight, last
    * output once it is done — never a value that moves on its own, or the list
@@ -192,6 +195,7 @@ function rowOf(
     turn,
     turnCount: activity?.turnCount ?? 0,
     brief,
+    failure: entry.failure ?? null,
     lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
 }

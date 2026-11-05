@@ -21,6 +21,8 @@
 //                 restart now would boot an empty conversation.
 //   restarted     saved, and the agent restarts on its own session.
 //   unchanged     the pick is what the card already carries: nothing to do.
+//   blocked       it runs, and could not boot again (its folder or command is
+//                 gone): nothing is saved, and it goes on as it is.
 //
 // What is saved is a patch: the launch command, and for a routed claude card's
 // model the route too (claude-model-route.ts), so one restart takes both.
@@ -29,7 +31,7 @@ import type { TerminalNodeData } from '../shared/model'
 import type { TurnPhase } from '../shared/turn'
 import type { LaunchPatch } from './claude-model-route'
 
-export type RelaunchVerdict = 'restarted' | 'unchanged' | 'asleep' | 'busy' | 'unrestorable' | 'gone'
+export type RelaunchVerdict = 'restarted' | 'unchanged' | 'asleep' | 'busy' | 'unrestorable' | 'blocked' | 'gone'
 
 export interface RelaunchDeps {
   node: (id: string) => TerminalNodeData | null
@@ -48,6 +50,8 @@ export interface RelaunchDeps {
   restorable: (node: TerminalNodeData) => boolean
   /** Kill and spawn again, reading the card after the kill (index.ts respawnInPlace). */
   respawn: (id: string) => void
+  /** Why this card could not boot on the patch: nothing is saved or killed for it. */
+  cannotStart?: (node: TerminalNodeData) => string | null
 }
 
 /** The phases a restart cannot hurt: nothing being written, nothing being asked. */
@@ -60,6 +64,7 @@ export function relaunchInPlace(deps: RelaunchDeps, id: string, patch: LaunchPat
   if (node === null) return 'gone'
   if (patch.command === node.command && (patch.route === undefined || patch.route === node.route)) return 'unchanged'
   if (!settled(deps.phaseOf(id)) || deps.delivering(id)) return 'busy'
+  if (deps.live(id) && deps.cannotStart?.({ ...node, ...patch })) return 'blocked'
   deps.save(id, patch)
   if (!deps.live(id)) return 'asleep'
   if (!deps.restorable({ ...node, ...patch })) return 'unrestorable'

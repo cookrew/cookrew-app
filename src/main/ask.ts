@@ -831,7 +831,7 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
  */
 export async function waitForReady(
   session: Pick<PtySession, 'fullText'>,
-  options: { minMs?: number; quietMs?: number; pollMs?: number; timeoutMs?: number; drawn?: () => boolean } = {}
+  options: { minMs?: number; quietMs?: number; pollMs?: number; timeoutMs?: number; drawn?: () => boolean; gone?: () => boolean } = {}
 ): Promise<boolean> {
   const minMs = options.minMs ?? 800
   const quietMs = options.quietMs ?? 1200
@@ -842,6 +842,8 @@ export async function waitForReady(
   let quietSince = started
   while (Date.now() - started < timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, pollMs))
+    // Dead is not slow: words waiting on it should hear so now, not at the deadline.
+    if (options.gone?.() === true) return false
     const now = session.fullText()
     if (now !== last) {
       last = now

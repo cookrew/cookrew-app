@@ -8,6 +8,8 @@
  *                            phone cannot drift apart
  *   zoom-fleet:machines      the account's desktops (shared/zoom-fleet.ts),
  *                            from the registry under this Mac's session
+ *   zoom-fleet:gauges        this desktop's machine gauges, or null; the one
+ *                            watch the phone's route reads (machine-gauges.ts)
  *
  * A hold is refcounted per sender, and released without a word when the page
  * reloads, the renderer crashes or the webContents ends (the board hold's
@@ -20,6 +22,7 @@ import type { AccountRefusal, AccountResult } from '../shared/account-v2'
 import type { LevelsEvent } from '../shared/strata'
 import { parseAccountMachines, type AccountMachines, type AccountMachinesRefusal } from '../shared/zoom-fleet'
 import { navigationEndsHold, type NavigationDetails } from './board-hold'
+import { sharedGaugeWatch } from './machine-gauges'
 import type { LevelsService } from './levels/service'
 
 export const ZOOM_FLEET_EVENT_CHANNEL = 'zoom-fleet:event'
@@ -157,5 +160,13 @@ export function registerZoomFleetIpc(handle: Handle, deps: ZoomFleetIpcDeps): Fl
     return sender ? holds.unsubscribe(sender) : false
   })
   handle('zoom-fleet:machines', () => accountMachines(deps))
+  handle('zoom-fleet:gauges', () =>
+    sharedGaugeWatch()
+      .read()
+      .catch((error: unknown) => {
+        console.error('The machine gauges could not be read:', error)
+        return null
+      })
+  )
   return holds
 }

@@ -221,6 +221,18 @@ export interface Multiplexer {
   available(): boolean
 
   sessionExists(name: string): boolean
+  /**
+   * sessionExists for a caller that will act on "no": null when the backend
+   * could not answer, where sessionExists reads a failed listing as an empty
+   * one. Optional: a backend whose false is always a real no leaves it out.
+   */
+  sessionPresence?(name: string): boolean | null
+  /**
+   * Every live session name, for a caller that polls and acts on "gone". REJECTS
+   * when the backend could not be read: an empty set is a real answer. Off the
+   * main thread where the backend can do that.
+   */
+  liveSessions?(): Promise<ReadonlySet<string>>
   /** Session names this backend owns — never foreign ones. */
   listSessions(): string[]
   /**

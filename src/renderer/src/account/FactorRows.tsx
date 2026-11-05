@@ -103,6 +103,7 @@ export function RemoveFactorRow({
   row,
   current,
   busy = false,
+  passwordless = false,
   onCurrent,
   onConfirm,
   onCancel,
@@ -110,6 +111,8 @@ export function RemoveFactorRow({
   row: FactorRow
   current: string
   busy?: boolean
+  /** No password to ask for: the provider confirms it instead. */
+  passwordless?: boolean
   onCurrent: (value: string) => void
   onConfirm: () => void
   onCancel: () => void
@@ -119,16 +122,18 @@ export function RemoveFactorRow({
       <label className="gs-label" htmlFor="cr-acct-factorpass">
         {removeFactorPrompt(row)}
       </label>
-      <input
-        id="cr-acct-factorpass"
-        type="password"
-        className="gs-input"
-        autoComplete="current-password"
-        value={current}
-        onChange={(e) => onCurrent(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && onConfirm()}
-      />
-      <button className="gs-revoke" disabled={busy || current.length === 0} onClick={onConfirm}>
+      {!passwordless && (
+        <input
+          id="cr-acct-factorpass"
+          type="password"
+          className="gs-input"
+          autoComplete="current-password"
+          value={current}
+          onChange={(e) => onCurrent(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && onConfirm()}
+        />
+      )}
+      <button className="gs-revoke" disabled={busy || (!passwordless && current.length === 0)} onClick={onConfirm}>
         REMOVE IT
       </button>
       <button className="gs-ghost" onClick={onCancel}>

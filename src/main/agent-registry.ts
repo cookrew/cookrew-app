@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import type { LaunchFailure } from '../shared/launch-failure'
 
 export interface AgentRegistryEntry {
   /** Terminal node id — stable across restarts, keys everything. */
@@ -33,11 +34,13 @@ export interface AgentRegistryEntry {
   spawnedAt: number
   /** False after dismiss/kill/agent exit; flips back true on re-spawn. */
   active: boolean
+  /** Why it is not running, when that is more than resting. Cleared by a real spawn. */
+  failure?: LaunchFailure | null
   updatedAt: number
 }
 
 /** Caller-supplied fields for a spawn; lifecycle fields are registry-owned. */
-export type AgentRegistryUpsert = Omit<AgentRegistryEntry, 'spawnedAt' | 'active' | 'updatedAt'>
+export type AgentRegistryUpsert = Omit<AgentRegistryEntry, 'spawnedAt' | 'active' | 'updatedAt' | 'failure'>
 
 function isEntry(value: unknown): value is AgentRegistryEntry {
   const e = value as AgentRegistryEntry
@@ -120,14 +123,44 @@ export class AgentRegistry {
       sessionRef: input.sessionRef ?? prior?.sessionRef ?? null,
       spawnedAt: prior?.spawnedAt ?? Date.now(),
       active: true,
+      failure: null,
       updatedAt: Date.now()
     }
-    this.entries = prior
-      ? this.entries.map((e) => (e.id === input.id ? entry : e))
+    this.put(entry)
+    return entry
+  }
+
+  /**
+   * It is not running, and here is why. Reached for a card that never spawned
+   * as well, whose roster row is the only place to say so.
+   */
+  fail(input: AgentRegistryUpsert, failure: LaunchFailure): AgentRegistryEntry {
+    const prior = this.lookup(input.id)
+    const entry: AgentRegistryEntry = {
+      ...input,
+      sessionRef: input.sessionRef ?? prior?.sessionRef ?? null,
+      spawnedAt: prior?.spawnedAt ?? Date.now(),
+      active: false,
+      failure,
+      updatedAt: Date.now()
+    }
+    this.put(entry)
+    return entry
+  }
+
+  /** What stopped it is gone, though nothing has started yet. */
+  clearFailure(id: string): void {
+    const prior = this.lookup(id)
+    if (!prior?.failure) return
+    this.put({ ...prior, failure: null, updatedAt: Date.now() })
+  }
+
+  private put(entry: AgentRegistryEntry): void {
+    this.entries = this.lookup(entry.id)
+      ? this.entries.map((e) => (e.id === entry.id ? entry : e))
       : [...this.entries, entry]
     this.save()
     this.announce(entry)
-    return entry
   }
 
   /** Update a harness session ref after a lazy bind (codex/opencode). */

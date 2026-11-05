@@ -42,6 +42,19 @@ export interface Hashed {
   hash: string
 }
 
+/**
+ * A PASSWORD RECORD NO PASSWORD MATCHES — what a passwordless account holds.
+ *
+ * Random bytes of the right length, not a hash of anything, so there is no
+ * preimage to find and nothing to stretch. It exists instead of `null` because
+ * `V2Accounts.load` refuses to boot on an account with no hash: a null here
+ * would turn a registry rollback into a registry that will not start.
+ */
+export const unusablePassword = (): Hashed => ({
+  salt: randomBytes(16).toString('base64url'),
+  hash: randomBytes(KEY_LEN).toString('base64url')
+})
+
 export const MIN_PASSWORD = 12
 export const MAX_PASSWORD = 256
 

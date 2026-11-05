@@ -39,6 +39,11 @@ export interface TerminalActivity {
    * on every activity derived from a real screen.
    */
   mirrorless?: true
+  /**
+   * `lines` were read off the pane just now (main/pane-follow.ts), so this is
+   * the card's screen, though still no verified turn. Only with `mirrorless`.
+   */
+  paneRead?: true
   phase: TurnPhase
   /** Prompt that started the current turn, best-effort echo of typed input. */
   prompt: string | null

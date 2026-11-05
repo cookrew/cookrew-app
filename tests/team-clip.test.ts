@@ -22,6 +22,7 @@ interface Fake {
       preserveIdentity?: string[]
     }[]
     removed: { nodeIds: string[]; fromWorkspaceId: string }[]
+    stopped: { nodeIds: string[]; fromWorkspaceId: string; intoWorkspaceId: string }[]
     failPaste: boolean
     resolvePaste: (() => void) | null
   }
@@ -41,6 +42,7 @@ function fake(): Fake {
     working: new Set(),
     pastes: [],
     removed: [],
+    stopped: [],
     failPaste: false,
     resolvePaste: null
   }
@@ -54,6 +56,9 @@ function fake(): Fake {
     },
     activeNodes: () => deps.workspaceState(world.activeId).nodes,
     isWorking: (id) => world.working.has(id),
+    stopCut: async (nodeIds, fromWorkspaceId, intoWorkspaceId) => {
+      world.stopped.push({ nodeIds, fromWorkspaceId, intoWorkspaceId })
+    },
     paste: (spec) => {
       world.pastes.push(spec)
       if (world.failPaste) return Promise.reject(new Error('paste exploded'))
@@ -158,6 +163,14 @@ describe('TeamClipboard lifecycle', () => {
     })
     expect(world.removed).toHaveLength(0)
     expect(clip.status()?.count).toBe(2)
+  })
+
+  it('stopCut is told where the paste lands: it checks the agents can boot THERE before ending them', async () => {
+    const { clip, world } = fake()
+    clip.set(['t1'], true)
+    world.activeId = 'B'
+    await clip.paste()
+    expect(world.stopped).toEqual([{ nodeIds: ['t1'], fromWorkspaceId: 'A', intoWorkspaceId: 'B' }])
   })
 
   it('cut-paste removes sources AFTER the copy and clears the clipboard', async () => {

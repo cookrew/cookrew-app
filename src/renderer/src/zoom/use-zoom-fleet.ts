@@ -465,7 +465,7 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
 
 // ── the hook ────────────────────────────────────────────────────────────────
 
-const documentSight: Sight = {
+export const documentSight: Sight = {
   hidden: () => document.visibilityState === 'hidden',
   watch: (changed) => {
     document.addEventListener('visibilitychange', changed)

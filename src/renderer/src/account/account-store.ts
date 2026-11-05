@@ -342,6 +342,9 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       return ACCOUNT_COPY.REGISTRY_NO_V2
     case 'legacy':
       return legacyTakenSentence(username)
+    // A person changing their mind in a browser: nothing to say.
+    case 'cancelled':
+      return ''
     case 'session-expired':
     case 'bad_credentials':
       // THE SENTENCE AND THE FIELD TRAVEL TOGETHER. It is a constant so that

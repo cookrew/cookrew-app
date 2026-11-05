@@ -189,8 +189,20 @@ export function mergeActivity(
   known: TerminalActivity | undefined,
   incoming: TerminalActivity
 ): TerminalActivity {
-  if (incoming.mirrorless !== true || !known || known.mirrorless === true) return incoming
+  if (incoming.mirrorless !== true || !known) return incoming
+  // A bare phase over a pane read must not blank the lines the read gave.
+  if (known.mirrorless === true && incoming.paneRead !== true && known.paneRead !== true) return incoming
+  // A pane read IS the screen. A Shell has nothing else: what a mirror left it
+  // is the stale part, and an agent keeps its words and takes the lines.
+  if (incoming.paneRead === true && !incoming.agent) return incoming
   // Still marked: the words are a mirror's, but the PHASE is the
   // multiplexer's guess, and the marker is what says so.
-  return { ...known, mirrorless: true, phase: incoming.phase, waitChoice: incoming.waitChoice, updatedAt: incoming.updatedAt }
+  return {
+    ...known,
+    mirrorless: true,
+    phase: incoming.phase,
+    waitChoice: incoming.waitChoice,
+    updatedAt: incoming.updatedAt,
+    ...(incoming.paneRead === true ? { paneRead: true, lines: incoming.lines } : {})
+  }
 }

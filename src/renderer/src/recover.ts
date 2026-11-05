@@ -42,6 +42,9 @@ export function recoverToastFor(result: RecoverResult): RecoverToast {
       text: `Recovered ${result.name}'s position, but its exact session couldn't be located — not resumed`
     }
   }
+  if (result.blocked) {
+    return { tone: 'warn', text: `Recovered ${result.name}'s card, but it could not start: ${result.blocked}` }
+  }
   if (!result.spawned) {
     return {
       tone: 'defer',

@@ -5442,6 +5442,21 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 /* A field and its verdict on one line — the reason is always beside it. */
+.cr-acct-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cr-acct-provider {
+  width: 100%;
+}
+
+.cr-acct-handle .gs-input {
+  width: 100%;
+}
+
 .cr-acct-row {
   display: flex;
   align-items: center;

@@ -384,6 +384,8 @@ export const CLI_COPY = {
   'ask.choose-again': 'Pick a number from the list.',
   'ask.totp': 'Six digits from your authenticator: ',
   'ask.recovery': 'Recovery code: ',
+  'ask.handle': 'Choose your Cookrew name [{suggest}]: ',
+  'ask.handle-blank': 'Choose your Cookrew name: ',
 
   'rung.approve': 'Approve on another device',
   'rung.totp': 'Authenticator code',
@@ -400,6 +402,16 @@ export const CLI_COPY = {
   'approve.hint-alone': 'Ctrl-C stops.',
   'approve.offline': 'cookrew.dev stopped answering. Still waiting; the sign-in is open at the other end.',
 
+  'device.code': 'Open {url} and type this code: {code}',
+  'device.waiting': 'Waiting for GitHub. Ctrl-C stops.',
+
+  'said.new-identity':
+    'Nobody on Cookrew has this GitHub account yet. Already have an account? Press Ctrl-C, run cookrew login with your password, then link GitHub in Security.',
+  'said.passcode-next':
+    'No password was typed here, so Cookrew will not lock itself on this Mac until you choose a passcode in Security.',
+  'said.no-password': '@{handle} has no password. Run cookrew login --github, or sign in from the app.',
+  'said.logout-no-password':
+    '@{handle} has no password, so leaving needs a browser. Sign this Mac out from the app, or revoke it from another device.',
   'said.signed-in': 'Signed in as @{handle}. cookrew.dev shows this Mac as {device}.',
   'said.already': 'Already signed in as @{handle}. cookrew.dev shows this Mac as {device}.',
   'said.other-account': 'This Mac is @{handle}. Run cookrew logout first, then cookrew login {wanted}.',
@@ -410,6 +422,10 @@ export const CLI_COPY = {
   'said.start-again': 'Nothing was attached. Run cookrew login to start again.',
   'said.too-many-passwords': 'Three wrong passwords, so this stops here. Nothing changed on this Mac.',
 
+  'refused.cancelled': 'Stopped before GitHub finished. Nothing was attached.',
+  'refused.wrong_identity': 'That GitHub account is not the one on this Mac.',
+  'refused.locked': 'Cookrew is locked on this Mac. Unlock it, then run this again.',
+  'refused.handle-taken': '@{handle} is taken. Pick another name.',
   'refused.rate_limited': 'cookrew.dev is asking us to slow down. Try again in a minute.',
   'refused.offline': 'cookrew.dev did not answer. Nothing changed. Try again in a moment.',
   'refused.wrong-password': 'That is not the password for this account.',

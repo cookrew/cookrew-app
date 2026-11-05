@@ -191,7 +191,7 @@ describe('the window’s hold on the levels feed', () => {
 })
 
 describe('registerZoomFleetIpc', () => {
-  it('registers subscribe, unsubscribe and machines, and nothing named levels', async () => {
+  it('registers subscribe, unsubscribe, machines and gauges, and nothing named levels', async () => {
     const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
     const service = fakeService()
     registerZoomFleetIpc((channel, listener) => void handlers.set(channel, listener), {
@@ -199,7 +199,7 @@ describe('registerZoomFleetIpc', () => {
       authed: async () => ({ ok: true, value: [row(ME, 'Studio')] }),
       deviceId: () => ME
     })
-    expect([...handlers.keys()].sort()).toEqual(['zoom-fleet:machines', 'zoom-fleet:subscribe', 'zoom-fleet:unsubscribe'])
+    expect([...handlers.keys()].sort()).toEqual(['zoom-fleet:gauges', 'zoom-fleet:machines', 'zoom-fleet:subscribe', 'zoom-fleet:unsubscribe'])
     const sender = fakeSender()
     expect(handlers.get('zoom-fleet:subscribe')?.({ sender })).toBe(true)
     expect(handlers.get('zoom-fleet:unsubscribe')?.({ sender })).toBe(true)

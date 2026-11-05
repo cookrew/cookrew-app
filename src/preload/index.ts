@@ -226,6 +226,21 @@ const api = {
     ipcRenderer.invoke('account:grantSeat', input),
   accountEndSeat: (input: { slug: string; id: string }) =>
     ipcRenderer.invoke('account:endSeat', input),
+  // Third-party sign-in. The browser trip runs in main; nothing here carries a
+  // verifier, a handoff or a ticket.
+  accountOAuthProviders: () => ipcRenderer.invoke('account:oauthProviders'),
+  accountOAuthStart: (provider: string) => ipcRenderer.invoke('account:oauthStart', provider),
+  accountOAuthCancel: () => ipcRenderer.invoke('account:oauthCancel'),
+  accountOAuthClaim: (username: string) => ipcRenderer.invoke('account:oauthClaim', username),
+  accountOAuthLink: (input: { provider: string; current?: string; rescue?: string }) =>
+    ipcRenderer.invoke('account:oauthLink', input),
+  accountOAuthUnlink: (input: { provider: string; current?: string }) =>
+    ipcRenderer.invoke('account:oauthUnlink', input),
+  accountSetPasscode: (input: { next: string; current?: string }) =>
+    ipcRenderer.invoke('account:setPasscode', input),
+  accountSetTouchId: (on: boolean) => ipcRenderer.invoke('account:setTouchId', on),
+  accountUnlockTouchId: () => ipcRenderer.invoke('account:unlockTouchId'),
+  accountRescueUnlock: (code: string) => ipcRenderer.invoke('account:rescueUnlock', code),
   /** Who is at this desktop's served doors right now (D7's avatars). */
   onServingCallers: (cb: (rows: unknown) => void) => {
     const listener = (_e: unknown, rows: unknown): void => cb(rows)
@@ -551,6 +566,9 @@ const api = {
   queryEvents: (query: unknown) => ipcRenderer.invoke('events:query', query),
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
+  launchCheck: (id: string) => ipcRenderer.invoke('agents:launch-check', id),
+  listStrayPanes: () => ipcRenderer.invoke('strays:list'),
+  endStrayPane: (session: string) => ipcRenderer.invoke('strays:end', session),
   onAgentChanged: (cb: (entry: unknown) => void) => {
     const listener = (_e: unknown, entry: unknown): void => cb(entry)
     ipcRenderer.on('agents:changed', listener)
@@ -592,6 +610,7 @@ const api = {
     }
   },
   zoomFleetMachines: () => ipcRenderer.invoke('zoom-fleet:machines'),
+  machineGauges: () => ipcRenderer.invoke('zoom-fleet:gauges'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),

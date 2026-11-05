@@ -28,12 +28,16 @@ import './prompt-face.css'
  * words land in its draft on release, never sent (owner design, 2026-11-03).
  */
 
+import type { LaunchFailure } from '../../../shared/launch-failure'
+
 export interface FaceAgent {
   readonly id: string
   readonly name: string
   readonly preset: string
   readonly orch: boolean
   readonly status: InkStatus
+  /** Why it is not running, when that is more than resting (shared/launch-failure.ts). */
+  readonly failure?: LaunchFailure | null
 }
 
 export type FaceMode = 'folded' | 'empty' | 'ready'

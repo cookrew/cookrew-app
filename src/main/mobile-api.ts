@@ -8,6 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceStore } from "./store";
 import type { PtyManager } from "./pty";
+import type { CloseOutcome } from "./terminal-close";
+import type { StrayPane } from "../shared/stray-pane";
+import type { LaunchFailure } from "../shared/launch-failure";
 import type { TurnTracker } from "./turn-tracker";
 import type { DispatchService } from "./dispatch";
 import type { CableSignalBus } from "./cable-signal";
@@ -151,6 +154,11 @@ const SOUS_MAX_TEXT = 2000;
 export interface MobileOps {
   /** The window picker's routes (use-source-routes.ts); absent answers 503. */
   useSources?: UseSourceService;
+  /** Could this offline card start now? Null when nothing stands in its way. */
+  checkLaunch: (id: string) => LaunchFailure | null;
+  /** Live panes no card reaches (orphan-reap.ts). */
+  listStrayPanes: () => Promise<StrayPane[]>;
+  endStrayPane: (session: string) => Promise<CloseOutcome>;
   addNode: (node: CanvasNode) => CanvasNode;
   updateNode: (
     id: string,
@@ -161,7 +169,7 @@ export interface MobileOps {
    * same path as IPC node:rename and `cookrew rename`. Checks its arguments.
    */
   renameNode: (id: string, name: unknown) => RenameOutcome;
-  removeNode: (id: string) => void | Promise<void>;
+  removeNode: (id: string) => CloseOutcome | Promise<CloseOutcome>;
   createTerminal: (opts: {
     name: string;
     preset: string;
@@ -185,7 +193,7 @@ export interface MobileOps {
   /** Throws on an unknown workspace or a brief that fails shared/workspace-brief.ts. */
   setWorkspaceBrief: (id: string, brief: unknown) => WorkspaceList;
   /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
-  removeWorkspace: (id: string) => WorkspaceList;
+  removeWorkspace: (id: string) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   setPrimaryDir: (id: string, dir: string) => WorkspaceList;
@@ -1037,7 +1045,7 @@ export async function handleMobileApi(
   const wsMatch = p.match(/^\/api\/workspaces\/([^/]+)$/);
   if (wsMatch && method === "DELETE") {
     try {
-      respondJson(response, 200, ops.removeWorkspace(wsMatch[1]));
+      respondJson(response, 200, await ops.removeWorkspace(wsMatch[1]));
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
@@ -1157,8 +1165,8 @@ export async function handleMobileApi(
     return true;
   }
   if (nodeMatch && method === "DELETE") {
-    await ops.removeNode(nodeMatch[1]);
-    respondJson(response, 200, { ok: true });
+    // 200 either way: a survivor keeps its card, and the event stream says why.
+    respondJson(response, 200, await ops.removeNode(nodeMatch[1]));
     return true;
   }
 
@@ -2166,6 +2174,20 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/agents") {
     respondJson(response, 200, { agents: deps.agents.list() });
+    return true;
+  }
+  const launchMatch = p.match(/^\/api\/terminal\/([^/]+)\/launch-check$/);
+  if (launchMatch && method === "GET") {
+    respondJson(response, 200, { failure: deps.ops.checkLaunch(launchMatch[1]) });
+    return true;
+  }
+  if (method === "GET" && p === "/api/strays") {
+    respondJson(response, 200, { strays: await deps.ops.listStrayPanes() });
+    return true;
+  }
+  const strayMatch = p.match(/^\/api\/strays\/([^/]+)\/end$/);
+  if (strayMatch && method === "POST") {
+    respondJson(response, 200, await deps.ops.endStrayPane(strayMatch[1]));
     return true;
   }
   // ENDPOINT RESTORE: rewind an agent in place to any checkpoint (+ undo).
