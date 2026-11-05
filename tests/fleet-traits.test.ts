@@ -68,10 +68,15 @@ function handClock(): { now: () => number; advance: (ms: number) => void } {
 }
 
 /** Milliseconds `fn` takes. */
+/** The best of three: a busy machine only ever adds time, and a quadratic path is slow every run. */
 function timed(fn: () => unknown): number {
-  const start = performance.now()
-  fn()
-  return performance.now() - start
+  return Math.min(
+    ...[0, 1, 2].map(() => {
+      const start = performance.now()
+      fn()
+      return performance.now() - start
+    })
+  )
 }
 
 describe('tokensOf', () => {

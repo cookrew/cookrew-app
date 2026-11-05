@@ -1,3 +1,4 @@
+import { machineCopy } from '../src/shared/machine-words'
 import { describe, expect, it } from 'vitest'
 import {
   PAIR_FRAGMENT,
@@ -147,7 +148,7 @@ describe('what the desktop hands its two surfaces', () => {
     expect(handout).toEqual({
       url: 'https://mac.tail1234.ts.net:8643/?token=t',
       via: 'direct',
-      desktopName: 'This Mac'
+      desktopName: machineCopy('This Mac', process.platform)
     })
   })
 

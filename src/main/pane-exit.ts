@@ -11,6 +11,7 @@
 // herdr reports no exit status at all (no field, no event: checked on 0.9.0),
 // so there the mirror's own tail is all there is.
 
+import { constants } from 'node:os'
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { cleanTail } from './launch-check'
@@ -54,7 +55,7 @@ export function paneExitConf(runtimeDir: string): string[] {
 
 export interface PaneExit {
   exitCode: number | null
-  /** As tmux spells it: "kill", "segv". */
+  /** "kill", "segv". */
   signal: string | null
   tail: string[]
 }
@@ -62,6 +63,12 @@ export interface PaneExit {
 const number = (text: string | undefined): number | null => {
   const value = Number.parseInt(text ?? '', 10)
   return Number.isNaN(value) ? null : value
+}
+
+/** tmux spells a signal by name or by number, depending on its version: this is always the name. */
+export function signalName(raw: string): string {
+  const named = Object.entries(constants.signals).find(([, value]) => String(value) === raw)?.[0]
+  return named ? named.replace(/^SIG/, '').toLowerCase() : raw
 }
 
 /** A session's death record, read once: the next wake must not repeat it. */
@@ -72,7 +79,7 @@ export function takePaneExit(runtimeDir: string, session: string): PaneExit | nu
   try {
     const [status, signal, ...screen] = readFileSync(file, 'utf8').split('\n')
     rmSync(file, { force: true })
-    return { exitCode: number(status), signal: signal || null, tail: cleanTail(screen.join('\n')) }
+    return { exitCode: number(status), signal: signal ? signalName(signal) : null, tail: cleanTail(screen.join('\n')) }
   } catch (error) {
     console.error(`Reading the exit record of ${session} failed:`, error)
     return null
