@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
+import { cardCheckpoint, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
 import { WatchPairing } from '../src/main/watch-pairing'
 import { watchBases } from '../src/main/watch-bases'
 import { cardRows, itemsOfAgent, watchCards } from '../src/main/watch-cards'
@@ -171,6 +171,24 @@ describe('the card on the wrist says what the card on the Mac says', () => {
     const body = `${JSON.stringify({ cards, activeWorkspaceId: 'ws' }, null, 2)}\n`
     if (!existsSync(file) || process.env.UPDATE_WATCH_FIXTURE === '1') writeFileSync(file, body)
     expect(readFileSync(file, 'utf8')).toBe(body)
+  })
+})
+
+describe('the words a finished card says', () => {
+  const block = { id: 'b', prompt: 'do it', reply: 'Let me look at the code.\n\nDone: it is merged.', activity: [{ at: 24 }] }
+  const stream = {
+    sourceOf: (id: string) => (id === 'known' ? ({} as never) : null),
+    tailState: async () => ({ block }) as never,
+    marks: () => new Map([['b', { title: 'Merge it' }]]) as never
+  }
+  const latest = async () => ({ prompt: 'p', reply: 'from the old reader' })
+
+  it('are the turn’s closing message, not its opening narration', async () => {
+    expect(await cardCheckpoint('known', stream, latest)).toEqual({ prompt: 'do it', reply: 'Done: it is merged.', title: 'Merge it' })
+  })
+  it('come from the old reader for a card the stream does not know', async () => {
+    expect(await cardCheckpoint('unknown', stream, latest)).toEqual({ prompt: 'p', reply: 'from the old reader' })
+    expect(await cardCheckpoint('unknown', undefined, undefined)).toBeNull()
   })
 })
 

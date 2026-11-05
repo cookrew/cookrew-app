@@ -50,7 +50,7 @@ import type {
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
-import { handleWatchClaim, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted } from "./watch-routes";
+import { cardCheckpoint, handleWatchClaim, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted } from "./watch-routes";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
@@ -819,7 +819,7 @@ export async function handleMobileApi(
         return buildBoard(board, boardWindowMs(null));
       },
       activities: () => turns.list(),
-      checkpoint: async (terminalId) => (deps.latestCheckpoint ? deps.latestCheckpoint(terminalId) : null),
+      checkpoint: (terminalId) => cardCheckpoint(terminalId, deps.stream, deps.latestCheckpoint),
     }))
   ) {
     return true;

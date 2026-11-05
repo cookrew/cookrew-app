@@ -13,8 +13,10 @@
 import { createHash } from 'node:crypto'
 import type http from 'node:http'
 import { sanitizeInput, sanitizePaste } from '../shared/cast-input'
+import { closingMessage } from '../shared/trace-blocks'
 import type { BoardSnapshot } from './board-index'
 import type { BrowserInstance } from './browser-instance'
+import type { StreamService } from './stream-service'
 import { readJson, respondJson } from './mobile-http'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
@@ -111,6 +113,27 @@ export async function handleWatchClaim(
   }
   respondJson(response, 200, { ok: true, token: claim.token, desktop: host.desktopName(), bases: host.bases() })
   return true
+}
+
+/**
+ * An agent's last turn, as a card says it: the words the turn ENDED on. A block's
+ * `reply` joins every message of the turn, and its first line is the turn's
+ * opening narration (owner, 2026-11-04), so /latest will not do for a card.
+ * The old reader is the fallback for a card the stream does not know.
+ */
+export async function cardCheckpoint(
+  terminalId: string,
+  stream: Pick<StreamService, 'sourceOf' | 'tailState' | 'marks'> | undefined,
+  latest: ((terminalId: string) => Promise<LatestCheckpoint | null>) | undefined
+): Promise<LatestCheckpoint | null> {
+  if (stream?.sourceOf(terminalId)) {
+    const { block } = await stream.tailState(terminalId)
+    if (block) {
+      const title = stream.marks(terminalId).get(block.id)?.title
+      return { prompt: block.prompt, reply: closingMessage(block), ...(title !== undefined ? { title } : {}) }
+    }
+  }
+  return latest ? latest(terminalId) : null
 }
 
 /** One checkpoint per agent per turn: a poll must not read a transcript tail per card. */
