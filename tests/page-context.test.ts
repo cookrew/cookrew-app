@@ -6,6 +6,16 @@ describe('pageContextOf', () => {
   it('iOS says standalone through navigator.standalone', () => {
     expect(pageContextOf({ standalone: true })).toBe('standalone')
   })
+  it('an app installed full screen is a web app too, whichever display mode the manifest picked', () => {
+    const fullscreen = (q: string): { matches: boolean } => ({ matches: q === '(display-mode: fullscreen)' })
+    expect(pageContextOf({ matchMedia: fullscreen })).toBe('standalone')
+  })
+
+  it('a browser tab in the Fullscreen API matches that query and is still a browser', () => {
+    const fullscreen = (q: string): { matches: boolean } => ({ matches: q === '(display-mode: fullscreen)' })
+    expect(pageContextOf({ matchMedia: fullscreen, elementFullscreen: true })).toBe('browser')
+  })
+
   it('the standard says it through display-mode', () => {
     expect(pageContextOf({ matchMedia: () => ({ matches: true }) })).toBe('standalone')
   })

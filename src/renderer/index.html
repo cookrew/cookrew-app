@@ -19,7 +19,9 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- use-credentials: a manifest is fetched without cookies by default, and the relay
+         refuses every path under /relay/@user/desktop/<id>/ that has no session. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <meta name="theme-color" content="#f4efe4" />
     <!-- No third-party fonts: the five families are @font-face rules in
          styles.css over hashed woff2 assets on this origin (perf lane L7). -->
