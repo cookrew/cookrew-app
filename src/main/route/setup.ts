@@ -58,7 +58,7 @@ export interface HarnessFacts {
 }
 
 export const HARNESS_FACTS: readonly HarnessFacts[] = [
-  { id: 'claude', name: 'Claude Code', bin: 'claude', installLine: 'npm i -g @anthropic-ai/claude-code', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')], routable: ROUTABLE.claude },
+  { id: 'claude', name: 'Claude Code', bin: 'claude', installLine: 'curl -fsSL https://claude.ai/install.sh | bash', loginLine: 'claude', signInFiles: (home) => [path.join(home, '.claude', '.credentials.json')], routable: ROUTABLE.claude },
   { id: 'codex', name: 'Codex', bin: 'codex', installLine: 'npm i -g @openai/codex', loginLine: 'codex login', signInFiles: (home) => [path.join(home, '.codex', 'auth.json')], routable: ROUTABLE.codex },
   { id: 'opencode', name: 'OpenCode', bin: 'opencode', installLine: 'curl -fsSL https://opencode.ai/install | bash', loginLine: 'opencode auth login', signInFiles: (home) => [path.join(home, '.local', 'share', 'opencode', 'auth.json')], routable: ROUTABLE.opencode },
   { id: 'pi', name: 'Pi', bin: 'pi', installLine: 'npm i -g @earendil-works/pi-coding-agent', loginLine: null, signInFiles: null, routable: ROUTABLE.pi }
