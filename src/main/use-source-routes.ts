@@ -1,4 +1,4 @@
-import { UNLOCK_DIRECT_ONLY } from '../shared/remote-unlock'
+import { DOOR_MARKER, hostOutsideTheMac, UNLOCK_DIRECT_ONLY } from '../shared/remote-unlock'
 import { RELAY_MARKER } from './relay-base'
 import type http from 'node:http'
 import { USE_SOURCES_PATH } from '../shared/use-sources'
@@ -39,11 +39,12 @@ export const isUseSourceRoute = (path: string): boolean => path === USE_SOURCES_
  * browser will not let it change.
  */
 function fromTheMacsOwnPage(request: http.IncomingMessage): boolean {
-  if (request.headers[RELAY_MARKER] === '1') return false
-  const origin = request.headers.origin
+  if (request.headers[RELAY_MARKER] === '1' || request.headers[DOOR_MARKER] === '1') return false
+  const { host, origin } = request.headers
+  if (hostOutsideTheMac(host)) return false
   if (origin === undefined) return true
   try {
-    return new URL(origin).host === request.headers.host
+    return new URL(origin).host === host
   } catch {
     return false
   }

@@ -152,6 +152,7 @@ describe('a served session', () => {
 })
 
 describe('the unlock routes', () => {
+  const direct = { host: '192.168.1.5:8643' }
   const door = () => ({
     begin: vi.fn(async () => ({ ok: true as const, key: 'k', challenge: 'c' })),
     reopen: vi.fn(),
@@ -161,8 +162,8 @@ describe('the unlock routes', () => {
   it('a paired device gets the key and sends what it sealed', async () => {
     const unlock = door()
     const { deps } = bed({ unlock })
-    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {} })).body).toEqual({ ok: true, key: 'k', challenge: 'c' })
-    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' } })).body).toEqual({ ok: true, outcome: 'unlocked' })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: direct })).body).toEqual({ ok: true, key: 'k', challenge: 'c' })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers: direct })).body).toEqual({ ok: true, outcome: 'unlocked' })
     expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box')
   })
 
@@ -179,14 +180,14 @@ describe('the unlock routes', () => {
     const unlock = door()
     const { deps } = bed({ unlock })
     const served = { ...deps(), store: { focusedId: 'served' } } as MobileApiDeps
-    expect((await call(served, 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {} })).status).toBe(403)
+    expect((await call(served, 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: direct })).status).toBe(403)
     expect(unlock.begin).not.toHaveBeenCalled()
   })
 
   it('nothing that came through the relay or WebRTC reaches it: those pages are not the Mac’s own', async () => {
     const unlock = door()
     const { deps } = bed({ unlock })
-    const headers = { 'x-cookrew-relay': '1' }
+    const headers = { ...direct, 'x-cookrew-relay': '1' }
     expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
     expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers })).status).toBe(403)
     expect(unlock.begin).not.toHaveBeenCalled()
@@ -201,6 +202,23 @@ describe('the unlock routes', () => {
     expect(unlock.begin).not.toHaveBeenCalled()
   })
 
+  it('a name under d.cookrew.dev is no page of the Mac’s own: cookrew.dev runs that DNS and its certificates', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const name = '192-168-1-5.abc.d.cookrew.dev:8643'
+    const headers = { origin: `https://${name}`, host: name }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('what a door carried in reaches neither, Origin or none', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { ...direct, 'x-cookrew-door': '1' }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
   it('a page the Mac served itself gets through', async () => {
     const unlock = door()
     const { deps } = bed({ unlock })
@@ -211,8 +229,8 @@ describe('the unlock routes', () => {
   it('refuses anything that is not a sealed string', async () => {
     const unlock = door()
     const { deps } = bed({ unlock })
-    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 7 } })).status).toBe(400)
-    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'x'.repeat(5000) } })).status).toBe(400)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 7 }, headers: direct })).status).toBe(400)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'x'.repeat(5000) }, headers: direct })).status).toBe(400)
     expect(unlock.unlock).not.toHaveBeenCalled()
   })
 })

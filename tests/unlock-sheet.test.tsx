@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { UnlockSheetView, type UnlockSheetViewProps } from '../src/renderer/src/use/UnlockSheet'
+import { hostOutsideTheMac } from '../src/shared/remote-unlock'
 
 const noop = (): void => undefined
 const draw = (over: Partial<UnlockSheetViewProps>): string =>
@@ -38,3 +39,22 @@ describe('UnlockSheetView', () => {
     expect(html).not.toContain('type="password"')
   })
 })
+
+describe('hostOutsideTheMac', () => {
+  it('knows the names cookrew.dev answers for', () => {
+    expect(hostOutsideTheMac('cookrew.dev')).toBe(true)
+    expect(hostOutsideTheMac('192-168-2-40.abc.d.cookrew.dev:8643')).toBe(true)
+    expect(hostOutsideTheMac('192-168-2-40.ABC.D.COOKREW.DEV')).toBe(true)
+  })
+
+  it('leaves a bare address and a tailnet name alone', () => {
+    expect(hostOutsideTheMac('192.168.2.40:8643')).toBe(false)
+    expect(hostOutsideTheMac('[fd7a::1]:8643')).toBe(false)
+    expect(hostOutsideTheMac('mac.tail1234.ts.net:8643')).toBe(false)
+  })
+
+  it('an unknown host is not a page of the Mac’s own', () => {
+    expect(hostOutsideTheMac(undefined)).toBe(true)
+  })
+})
+

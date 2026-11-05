@@ -240,7 +240,7 @@ import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
 import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '../shared/remote-access'
 import { parseUseUrl } from '../shared/use-url'
-import { readMacListedApp, readMacSession } from './mac-bridge'
+import { macKeystrokes, readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
@@ -6518,6 +6518,7 @@ const unlockDoor = createUnlockDoor({
   wake: async () => {
     await commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']).catch(() => undefined)
   },
+  typable: (password) => macKeystrokes(password).every((key) => key.code >= 0),
   type: (password) => useInstances.typeAtLock(password),
   record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`)
 })

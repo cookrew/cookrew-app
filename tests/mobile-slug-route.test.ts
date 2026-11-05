@@ -365,3 +365,12 @@ describe('the no-drift claim, enforced rather than asserted', () => {
     expect(nodeShaped.length).toBe(NODE_ROUTES.length)
   })
 })
+
+describe('unlocking under a slug', () => {
+  it('a phone served under a slug reaches the unlock routes: the routes ask for the rest themselves', () => {
+    for (const path of ['/api/use/sources/unlock', '/api/use/sources/unlock/begin']) {
+      expect(SCOPE_AWARE.some((pattern) => pattern.test(path)), path).toBe(true)
+    }
+  })
+})
+

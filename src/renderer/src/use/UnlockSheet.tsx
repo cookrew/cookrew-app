@@ -3,7 +3,7 @@
 // The first time it shows the Mac's key in six words to compare with the ⋯ menu
 // there; after that the key is pinned, and a changed one stops with nothing sent.
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { UNLOCK_DIRECT_ONLY, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
+import { hostOutsideTheMac, UNLOCK_DIRECT_ONLY, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
 import { cookrew } from '../api'
 import { clientBase } from '../api-base'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
@@ -113,7 +113,7 @@ const flowDeps = (): UnlockFlowDeps | null => {
 const messageOf = (failure: unknown): string => (failure instanceof Error ? failure.message : String(failure))
 
 function UnlockSheetBody(): React.JSX.Element {
-  const relayed = clientBase() !== ''
+  const relayed = clientBase() !== '' || hostOutsideTheMac(window.location.host)
   const deps = useMemo(flowDeps, [])
   const [shown, setShown] = useState<{ key: string; trust: KeyTrust; saved: boolean; words: readonly string[] } | null>(null)
   const [busy, setBusy] = useState(false)

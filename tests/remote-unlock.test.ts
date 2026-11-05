@@ -200,6 +200,15 @@ describe('unlock', () => {
     expect(await t.send(phone, PASSWORD)).toEqual({ ok: true, outcome: 'unlocked' })
   })
 
+  it('a password no key can type says so, types nothing, and costs no attempt', async () => {
+    const t = bed({ typable: () => false })
+    const answer = await t.send(phone, PASSWORD)
+    expect(answer).toMatchObject({ ok: false, outcome: 'failed' })
+    expect(JSON.stringify(answer)).toContain('cannot be typed')
+    expect(JSON.stringify(answer)).not.toContain(PASSWORD)
+    expect(t.typed).toEqual([])
+  })
+
   it('the record says who and how it went, and never the password', async () => {
     const t = bed()
     await t.send(phone, 'hunter2-wrong')

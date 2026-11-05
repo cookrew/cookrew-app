@@ -32,6 +32,8 @@ export interface UnlockDoorDeps {
   /** A fresh read, never a cached one. */
   locked(): Promise<boolean>
   wake(): Promise<void>
+  /** Every character has a key. Absent: assumed. */
+  typable?(password: string): boolean
   /** Types at the lock screen and presses Return. */
   type(password: string): Promise<void>
   record(outcome: string, who: ViewerWho): void
@@ -49,6 +51,7 @@ export interface UnlockDoor {
 const NOT_LOCKED = 'This Mac is not locked.'
 const BUSY = 'An unlock is already under way.'
 const REFUSED = 'That request could not be read. Try again.'
+const UNTYPABLE = 'This password cannot be typed from here: it has a character no key makes. Unlock it at the Mac.'
 const CLOSED = 'Too many wrong passwords. Turn remote control off and on at the Mac to try again.'
 
 const readSealed = (opened: string | null): { challenge: string; password: string } | null => {
@@ -144,6 +147,7 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
         challenges.delete(who.key)
         return { ok: false, outcome: 'refused', error: REFUSED }
       }
+      if (deps.typable && !deps.typable(sealed.password)) return { ok: false, outcome: 'failed', error: UNTYPABLE }
       // Before the first await: two devices must not both get past this line.
       typing = true
       try {
