@@ -164,6 +164,18 @@ export class RegistryStore {
   }
 
   /**
+   * What the GATE enforces, which is not always what was stored. A price makes
+   * a preset identified whatever its visibility says: a public preset skips
+   * every step below the identity check, so a priced one would be served free,
+   * and publish defaults a missing visibility to public.
+   */
+  gateOf(id: string): 'public' | 'identified' | null {
+    const entry = this.entry(id)
+    if (entry === null) return null
+    return entry.manifest.pricing === undefined ? entry.visibility : 'identified'
+  }
+
+  /**
    * The identity that published this preset, or null.
    *
    * M2 needs it to answer "who gets paid": the payout address is keyed to the

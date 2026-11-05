@@ -51,6 +51,8 @@ export type Verdict =
   | { code: 402; terms: Terms; reason?: PaymentFailure; retryable?: boolean }
   | { code: 403; reason: string }
   | { code: 404 }
+  /** A price exists and this deployment cannot check a payment: no terms, ever. */
+  | { code: 503; reason: 'payment_unavailable' }
 
 export interface RegistryDeps {
   store: RegistryStore
@@ -156,6 +158,7 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
   return (id) => {
     const visibility = store.visibilityOf(id)
     if (visibility === null) return { code: 404 }
+    if (store.getManifest(id)?.pricing !== undefined) return { code: 503, reason: 'payment_unavailable' }
     if (visibility === 'public') return { code: 200 }
     // A1 has no identity to offer. 403 rather than 401: a 401 invites a
     // ceremony the server cannot yet complete, and a client that loops on it
@@ -188,6 +191,9 @@ export function createRegistry(deps: RegistryDeps): Server {
     // priced manifest into a registry that sells nothing is refused rather
     // than quietly stored as if it were free.
     payouts: deps.pricing?.payouts,
+    // A price needs something that can verify the payment, or it is a price
+    // nobody can honestly pay.
+    sells: (deps.pricing?.facilitator ?? null) !== null,
     verifyManifest: (manifest: PresetManifest): boolean => {
       try {
         return verifyManifest(manifest, publicKeyFromId(manifest.author.keyId))
@@ -589,7 +595,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         // mkt.pay.* strings interpolate from the terms rather than reading
         // anything we wrote here.
         const body =
-          verdict.code === 403
+          verdict.code === 403 || verdict.code === 503
             ? { reason: verdict.reason }
             : verdict.code === 402
               ? {
@@ -773,8 +779,8 @@ export function createRegistry(deps: RegistryDeps): Server {
         ],
         // M2-A1. Advertised so a harness knows the gate can answer 402 without
         // discovering it from a preset that happens to be priced.
-        payments: deps.pricing === undefined
-          ? { served: false, note: 'this deployment prices nothing; the gate answers 200/401/403 only' }
+        payments: (deps.pricing?.facilitator ?? null) === null || deps.pricing === undefined
+          ? { served: false, note: 'no facilitator is configured; a priced preset answers 503 payment_unavailable' }
           : {
               served: true,
               on: 'GET /v1/presets/:id/manifest',

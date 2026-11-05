@@ -52,9 +52,17 @@ export interface PricingDeps extends QuoteDeps {
    * M2-A2. Required alongside pricing, so "priced implies payable" holds by
    * construction: a deployment that could quote a price but never verify a
    * payment would sell things nobody could buy.
+   *
+   * NULL means no real facilitator is configured (facilitator-boot.ts). The
+   * price step then answers 503 and never quotes: the buyer pays the author
+   * directly, so terms from a registry that cannot verify the transfer would
+   * invite money nobody could ever credit.
    */
-  facilitator: Facilitator
+  facilitator: Facilitator | null
 }
+
+/** A price exists and nothing here can check a payment. Same word the door uses. */
+export const PAYMENT_UNAVAILABLE: Verdict = { code: 503, reason: 'payment_unavailable' }
 
 export function makeAuthorize(
   store: RegistryStore,
@@ -64,7 +72,7 @@ export function makeAuthorize(
   return (presetId, request) => {
     // exists? → public? → identity? → covers? → entitled?, once, shared.
     const verdict = decideGate<TokenClaims>({
-      visibility: store.visibilityOf(presetId),
+      visibility: store.gateOf(presetId),
       credential: bearer(request),
       issuer: identity,
       // D4 / R9: authenticated but the token does not cover this. 403, NEVER
@@ -118,7 +126,11 @@ export function makeAuthorize(
     // OPTIONS, POST and to a request whose method was unset: an exclusion list
     // makes every method somebody adds later a purchase by default. The
     // allow-list makes the next one safe without anybody remembering this.
-    if (pricing !== undefined && request.method === 'GET') {
+    const facilitator = pricing?.facilitator ?? null
+    if (request.method === 'GET' && facilitator === null && store.getManifest(presetId)?.pricing !== undefined) {
+      return PAYMENT_UNAVAILABLE
+    }
+    if (pricing !== undefined && facilitator !== null && request.method === 'GET') {
       const manifest = store.getManifest(presetId)
       // PRICE FACTS FIRST, and a nonce only when one is actually being offered.
       // Quoting unconditionally minted an offer nobody would use on every
@@ -143,7 +155,7 @@ export function makeAuthorize(
         const paid = verifyPayment(
           {
             nonces: pricing.nonces,
-            facilitator: pricing.facilitator,
+            facilitator,
             purchased: pricing.receipts,
             now: pricing.now
           },

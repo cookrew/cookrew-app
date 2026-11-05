@@ -56,7 +56,7 @@ import { makeAuthorize } from './authorize'
 import { PayoutStore } from './payouts'
 import { DEFAULT_TERMS_CONFIG } from './terms'
 import { FilePaymentNonces } from './payment-nonces'
-import { devFacilitator } from './facilitator-dev'
+import { facilitatorFor } from './facilitator-boot'
 import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
 import { StarStore } from './stars'
@@ -290,18 +290,22 @@ if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
   console.error(`refusing to start: --terms-ttl ${flag('terms-ttl', '')} is not a positive number of ms`)
   process.exit(1)
 }
-// The price step. Present here because the dev registry sells things; a
-// deployment that passes no pricing behaves exactly as M1 did.
+// Decided once, before anything is served. Outside --dev there is no accepting
+// facilitator, so a priced preset is refused and no payment can settle.
+const payments = facilitatorFor({ dev: DEV, origin: resolved.config.origin })
+if (!payments.ok) {
+  console.error(`refusing to start: ${payments.reason}`)
+  process.exit(1)
+}
+// The price step: quotes, nonces and receipts. It only ever sells when the
+// facilitator above is real; see PricingDeps.
 const pricing = {
   payouts: new PayoutStore(DATA),
   config: { chain: CHAIN, ttlMs: TERMS_TTL_MS },
   // FILE-backed: a quote must outlive the process that issued it, or a buyer
   // who paid mid-flight and met a restart is told their payment is invalid.
   nonces: new FilePaymentNonces(DATA),
-  // The DEV facilitator: reaches no chain, verifies no transfer, and exists so
-  // the handshake can be driven end to end against the real binary. See its
-  // file — it is not a payment system and must never be one.
-  facilitator: devFacilitator(),
+  facilitator: payments.facilitator,
   receipts: new ReceiptStore(DATA),
   now: () => Date.now()
 }
@@ -360,6 +364,7 @@ createRegistry({
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.
   console.log(`registry on ${resolved.config.origin}  data=${DATA}${DEV ? '  [DEV]' : ''}`)
+  if (payments.facilitator === null) console.log('payments off: no facilitator, priced presets are refused')
   if (names !== undefined && DNS_NS !== null) {
     // ONE LINE PER FEATURE, and nothing in either of them that is a secret:
     // the zone, the port and the glue are public by definition (they are typed

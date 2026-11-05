@@ -289,13 +289,18 @@ describe('nothing above the seam moved', () => {
     }
   })
 
-  it('a PUBLIC preset never sees the gate, priced or not', async () => {
+  it('a FREE public preset never sees the gate, and a price is never public', async () => {
     // Discovery and free download are not things identity should cost (A2), and
-    // that is unchanged: a public preset short-circuits above the price step.
-    const id = seed('Ship Crew', 1, ONE_TIME, 'public')
+    // that is unchanged. A price is different: a preset carrying one goes through
+    // identity and the price step whatever its stored visibility says, or it
+    // would be served free to anyone.
+    const free = seed('Deep Research', 1, undefined, 'public')
+    const priced = seed('Ship Crew', 1, ONE_TIME, 'public')
     const s = await listen()
     try {
-      expect((await gate(s.url, id)).status).toBe(200)
+      expect((await gate(s.url, free)).status).toBe(200)
+      expect((await gate(s.url, priced)).status).toBe(401)
+      expect((await gate(s.url, priced, await downloadToken(s.url))).status).toBe(402)
     } finally {
       s.close()
     }
@@ -327,12 +332,15 @@ describe('nothing above the seam moved', () => {
     }
   })
 
-  it('a deployment with no pricing behaves exactly as M1 did', async () => {
-    const id = seed('Pro Toolkit', 1, ONE_TIME)
+  it('a deployment with no pricing serves free presets as M1 did, and gives nothing priced away', async () => {
+    const free = seed('Deep Research', 1)
+    const priced = seed('Pro Toolkit', 1, ONE_TIME)
     const s = await listen(false)
     try {
-      // Priced in the manifest, but this registry sells nothing: it serves.
-      expect((await gate(s.url, id, await downloadToken(s.url))).status).toBe(200)
+      const token = await downloadToken(s.url)
+      expect((await gate(s.url, free, token)).status).toBe(200)
+      // Priced in the manifest, and this registry cannot sell: refused, not served.
+      expect((await gate(s.url, priced, token)).status).toBe(503)
     } finally {
       s.close()
     }
@@ -426,6 +434,7 @@ describe('a price needs a payee, and publish is where that is enforced', () => {
     store,
     log,
     payouts,
+    sells: true,
     verifyManifest: (m: PresetManifest) => verifyManifest(m, author.publicKey),
     verifyCountersign: () => true
   })

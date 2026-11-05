@@ -30,6 +30,12 @@ export type PublishFailure =
    * instead of on a buyer who cannot fix it and has done nothing wrong.
    */
   | 'payout_missing'
+  /**
+   * This registry has no facilitator, so a price here could never be paid.
+   * Refused before anything is stored or bound, for the same reason as above:
+   * the author can act on it now, and a buyer never could.
+   */
+  | 'payment_unavailable'
 
 export interface PublishInput {
   manifest: PresetManifest
@@ -112,6 +118,8 @@ export interface PublishDeps {
    * as if it were free.
    */
   payouts?: { addressOf: (identityId: string) => string | null; bind: (identityId: string, address: string) => boolean }
+  /** Can this deployment verify a payment? Absent is no: a price then stops here. */
+  sells?: boolean
 }
 
 export function publishPreset(deps: PublishDeps, input: PublishInput): PublishResult {
@@ -151,6 +159,9 @@ export function publishPreset(deps: PublishDeps, input: PublishInput): PublishRe
   // Bound BEFORE the store write, so a publish that stores bytes always has a
   // payee on record for them — the two must not be able to disagree after a
   // crash between them.
+  if (manifest.pricing !== undefined && deps.sells !== true) {
+    return { ok: false, reason: 'payment_unavailable' }
+  }
   if (manifest.pricing !== undefined) {
     const bound =
       input.payoutAddress !== undefined

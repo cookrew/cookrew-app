@@ -48,6 +48,8 @@ export interface WriteDeps {
   identity?: IdentityService
   /** M2-A1: where authors are paid. Absent → a priced publish is refused. */
   payouts?: PublishDeps['payouts']
+  /** Absent or false → a priced publish is refused. See PublishDeps. */
+  sells?: boolean
   now?: () => number
 }
 
@@ -156,6 +158,9 @@ const PUBLISH_STATUS: Record<PublishFailure, number> = {
   // M2-A1: priced, with nowhere to send the money. The author's to fix, and
   // 400 says the request was incomplete rather than that we refused them.
   payout_missing: 400,
+  // Nothing wrong with the request, and nothing the author can change: this
+  // deployment cannot take payment yet.
+  payment_unavailable: 503,
   unsigned: 400,
   signature_invalid: 400,
   hash_mismatch: 400,
