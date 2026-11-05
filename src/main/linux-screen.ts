@@ -30,7 +30,7 @@ export interface LinuxEnv {
 
 export const LINUX_WAYLAND =
   'This Linux session runs Wayland, and Cookrew can only read the screen on X11 — log in to an X11 session to share it'
-export const LINUX_NO_DISPLAY = 'There is no X display here (DISPLAY is not set), so there is no screen to show'
+export const LINUX_NO_DISPLAY = 'There is no X display here, so there is no screen to show'
 export const LINUX_NO_WINDOW = 'Picking one window works on macOS only for now — on Linux, share the entire screen'
 export const LINUX_NO_REGION = 'A region of the screen works on macOS only for now — on Linux, share the entire screen'
 export const LINUX_INPUT_OFF = 'Driving this machine is not available on Linux: the screen is view only'

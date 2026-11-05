@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { V3_COPY } from '../src/shared/account-copy'
 import { TRANSLATE_FAILURE_TEXT } from '../src/shared/translate'
 import { REFUSAL_FOR_A_PERSON } from '../src/main/host-claim'
+import { linuxScreenRefusal } from '../src/main/linux-screen'
 import { discover } from '../src/main/route/discovery'
 
 const ENV_NAME = /\b(COOKREW|MAGPIE|ALMA|VPHONE|XDG|CLAUDE_CODE)_[A-Z_]+/
@@ -43,6 +44,11 @@ describe('no sentence names an environment variable', () => {
   it('in the dialog of a refused launch', () => {
     expect(REFUSAL_FOR_A_PERSON).not.toMatch(ENV_NAME)
     expect(readFileSync('src/main/index.ts', 'utf8')).toContain("showErrorBox('Cookrew is already running', REFUSAL_FOR_A_PERSON)")
+  })
+
+  it('on the remote desktop card, where a bare name counts too', () => {
+    expect(linuxScreenRefusal({})).not.toMatch(/\bDISPLAY\b/)
+    expect(linuxScreenRefusal({ XDG_SESSION_TYPE: 'wayland' })).not.toMatch(ENV_NAME)
   })
 
   it('in a refused gateway', () => {
