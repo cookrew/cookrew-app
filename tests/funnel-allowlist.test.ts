@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   FUNNEL_EVENTS,
@@ -43,8 +45,13 @@ describe('what may exist', () => {
     expect(readFunnelPayload(widened)).toBeNull()
   })
 
-  it('is off until the owner rules otherwise', () => {
-    expect(TELEMETRY_DEFAULT_ON).toBe(false)
+  it('is on by the owner ruling of 2026-11-05', () => {
+    expect(TELEMETRY_DEFAULT_ON).toBe(true)
+  })
+
+  it('counts packaged builds only, so a source build is never an install', () => {
+    const main = readFileSync(join(__dirname, '../src/main/index.ts'), 'utf8')
+    expect(main).toContain('defaultOn: app.isPackaged && TELEMETRY_DEFAULT_ON')
   })
 })
 
