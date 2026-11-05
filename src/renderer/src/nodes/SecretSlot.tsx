@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { afterSeal, type SecretListing } from '../../../shared/secret-slot'
 
@@ -116,6 +116,37 @@ export function SecretSlot({ name, entry, onSealed, put = defaultPut }: SecretSl
           {SECRET_SLOT_COPY.served} — {served ? SECRET_SLOT_COPY.on : SECRET_SLOT_COPY.off}
         </span>
       </label>
+    </div>
+  )
+}
+
+/**
+ * THE OPEN NOTE'S SLOTS (owner, 2026-11-05): a block per name under the note,
+ * and the store's listing — names and dates, never values — read when the
+ * block appears and whenever `rereadOn` turns. The canvas card drew these; it
+ * is retired, and a slot nobody can fill is a name and nothing else.
+ */
+export function SecretSlots({ names, rereadOn }: { names: readonly string[]; rereadOn: unknown }): React.JSX.Element {
+  const [sealed, setSealed] = useState<ReadonlyMap<string, SecretListing>>(new Map())
+  useEffect(() => {
+    const api = cookrew()
+    if (!api.secretList) return
+    let live = true
+    void api
+      .secretList()
+      .then((rows) => {
+        if (live) setSealed(new Map(rows.map((row) => [row.name, row])))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [rereadOn])
+  return (
+    <div className="cr-secret-slots">
+      {names.map((name) => (
+        <SecretSlot key={name} name={name} entry={sealed.get(name) ?? null} onSealed={(entry) => setSealed((prev) => afterSeal(entry, prev).listing)} />
+      ))}
     </div>
   )
 }
