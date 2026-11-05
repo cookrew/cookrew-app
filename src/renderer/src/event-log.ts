@@ -154,6 +154,12 @@ const META: Record<string, EventMeta> = {
   'remote.ready': { label: 'Ready', verb: 'is ready for you', noun: 'machine', icon: 'browser', hatch: false, metric: null },
   'remote.restart-needed': { label: 'Restart needed', verb: 'needs a restart to finish', noun: 'machine', icon: 'browser', hatch: false, metric: null },
   'remote.woke': { label: 'Display woken', verb: 'had its display woken', noun: 'machine', icon: 'browser', hatch: false, metric: null, toast: false },
+  // A secret's activity (main/secret-activity.ts): who, in the name; which, in
+  // `details`, the one field the wall does not get.
+  'secret.read': { label: 'Secret', verb: 'read a secret', noun: 'secret', many: 'read', icon: 'lock', hatch: false, metric: null },
+  'secret.requested': { label: 'Secret', verb: 'asked for a secret', noun: 'secret', many: 'asked for', icon: 'lock', hatch: false, metric: null },
+  'secret.sealed': { label: 'Secret', verb: 'sealed a secret', noun: 'secret', many: 'sealed', icon: 'lock', hatch: false, metric: null },
+  'secret.removed': { label: 'Secret', verb: 'deleted a secret', noun: 'secret', many: 'deleted', icon: 'lock', hatch: false, metric: null },
   'remote.restart': { label: 'Restarting', verb: 'is restarting', noun: 'machine', icon: 'expand', hatch: false, metric: null }
 }
 
@@ -168,6 +174,14 @@ const FALLBACK_META: EventMeta = {
 
 export function eventMeta(type: string): EventMeta {
   return META[type] ?? FALLBACK_META
+}
+
+/**
+ * What a person reads of `details`. A secret's row carries ` note:<id>` for the
+ * inbox to land on (main/inbox.ts); the id is an address, not a word to show.
+ */
+export function eventDetail(event: { type: string; details?: string }): string | undefined {
+  return event.type.startsWith('secret.') ? event.details?.replace(/ note:\S+$/, '') : event.details
 }
 
 const plural = (noun: string): string => (/(s|x|z|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`)

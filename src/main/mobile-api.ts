@@ -2241,6 +2241,18 @@ export async function handleMobileApi(
     };
     // Observability stream: every store mutation, cross-workspace (toasts).
     const onOp = (event: CookrewEvent): void => send("event", event);
+    // A secret's activity is no store op, so it reaches the owner's phone by its
+    // own listener (main/secret-activity.ts). This stream also serves the wall
+    // and a subscriber with no token: a name is the owner's, so only a paired
+    // page hears it, and nobody else learns a secret was touched at all.
+    const onSecret = (event: CookrewEvent): void => {
+      if (event.type.startsWith("secret.")) send("event", event);
+    };
+    if (hasPairing || !deps.pairingToken) {
+      // Optional-called: a server embedding a bare log (tests) just has no frames.
+      deps.events?.on?.("event", onSecret);
+      onClose(() => deps.events?.removeListener?.("event", onSecret));
+    }
     // Activity Board stream. A SEPARATE listener on the same signals — the
     // 'activity' event above is left exactly as it was (canvas cards eat it).
     // Board recompute spans the whole fleet, so bursts coalesce instead of
