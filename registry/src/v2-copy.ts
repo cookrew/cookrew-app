@@ -35,6 +35,7 @@ export type V2Error =
   | 'not_this_device'
   /** A delete must name the account, so no client can do it by accident. */
   | 'confirm_mismatch'
+  | 'account_deleted'
   /**
    * REACH v2.1. The cert route is the desktop's OWN, not the account's: a
    * phone signed in on the same account asking for a Mac's certificate is a
@@ -78,6 +79,7 @@ const SENTENCES: Record<V2Error, string> = {
     'That address card is not this Mac’s. A desktop signs its own addresses, and they must be on your own network, your tailnet or a .local name.',
   not_this_device: 'Only that desktop can say what is on it.',
   confirm_mismatch: 'Type your username exactly as it is written to confirm.',
+  account_deleted: 'This account was deleted.',
   not_this_desktop: 'Only that Mac itself can ask for its own certificate.',
   bad_csr:
     'That certificate request is not this Mac’s. It must ask for this Mac’s name and no other, with an EC P-256 or 2048-bit RSA key.',

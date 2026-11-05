@@ -305,10 +305,12 @@ export class CertStore {
    */
   forget(deviceId: string): void {
     this.gone.add(deviceId)
-    const { [deviceId]: _dropped, ...kept } = this.devices
-    this.devices = kept
+    const { [deviceId]: held, ...kept } = this.devices
     this.inFlight.delete(deviceId)
     this.challenges.delete(deviceId)
+    // A delete walks every id the account ever revoked; most never had a record.
+    if (held === undefined) return
+    this.devices = kept
     this.save()
     this.touch()
   }

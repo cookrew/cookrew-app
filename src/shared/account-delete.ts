@@ -14,9 +14,9 @@ export const DELETE_ACCOUNT_TAKES: readonly string[] = [
 ]
 
 export const DELETE_ACCOUNT_KEEPS: readonly string[] = [
-  'Your username stays reserved so nobody can pose as you. It is kept only as a one-way digest, and it can never be claimed again.',
+  'Your username stays reserved so nobody can pose as you, and it can never be claimed again. The account file keeps only a one-way digest of it.',
   'Records of bought seats, with the buyer’s username, the payment reference and the time, and preset purchase receipts. Sellers and buyers need them for their accounts.',
-  'Presets you published and their log entries, which are permanent.',
+  'Presets you published and their log entries, which are permanent and keep your name as their author.',
   'Certificates already in public certificate logs, and server logs and daily counts, which age out on their own.'
 ]
 

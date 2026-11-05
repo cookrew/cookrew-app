@@ -41,8 +41,11 @@ const NAME =
 
 export interface RelayHttp {
   hub: RelayHub
-  /** The account was deleted: this door's line ends, for the door and every caller on it. */
-  hangUp(name: string): void
+  /**
+   * The account was deleted: every door under its handle ends, listed or not,
+   * for the door and each caller on it, and no ticket already minted can reopen one.
+   */
+  hangUpHandle(handle: string): void
   /** Answered it? Returns false when the path is not the relay's. */
   handle(request: IncomingMessage, response: ServerResponse, parts: string[], url: URL): boolean
   /** For the health page. */
@@ -466,7 +469,10 @@ export function createRelayHttp(deps: {
 
   return {
     hub,
-    hangUp: (name) => dropDoor(name, 'account deleted'),
+    hangUpHandle: (handle) => {
+      for (const [key, ticket] of tickets) if (ticket.handle === handle) tickets.delete(key)
+      for (const name of hub.namesUnder(`@${handle}/`)) dropDoor(name, 'account deleted')
+    },
     stats: () => ({ ...hub.stats(), tickets: tickets.size }),
     handle(request, response, parts, url) {
       if (parts[0] !== 'v1' || parts[1] !== 'relay') return false

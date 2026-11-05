@@ -434,10 +434,21 @@ export class V2Accounts {
       ...account.sessions.map((s) => s.jti),
       ...(account.revoked ?? []).map((r) => r.id)
     ]
-    this.trackDesktops(account, { ...account, desktops: [] })
-    this.accounts = this.accounts.filter((a) => a !== account)
-    this.retired = [...this.retired, { digest: retiredDigest(username), at: this.now(), revoked }]
-    this.save()
+    const { accounts, retired } = this
+    const emptied = { ...account, desktops: [] }
+    this.trackDesktops(account, emptied)
+    this.accounts = accounts.filter((a) => a !== account)
+    this.retired = [...retired, { digest: retiredDigest(username), at: this.now(), revoked }]
+    try {
+      this.save()
+    } catch (error) {
+      // Nothing stored changed, so nothing here may look as if it did: the owner
+      // has to be able to sign in and ask again.
+      this.accounts = accounts
+      this.retired = retired
+      this.trackDesktops(emptied, account)
+      throw error
+    }
     return true
   }
 

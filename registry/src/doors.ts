@@ -326,12 +326,12 @@ export class DoorStore {
     return true
   }
 
-  /** An account was deleted: every listing under its handle goes. Answers their names. */
-  withdrawAll(handle: string): string[] {
-    const held = [...this.doors.values()].filter((door) => door.handle === handle)
-    for (const door of held) this.doors.delete(doorPath(door.handle, door.name))
-    if (held.length > 0) this.flush()
-    return held.map((door) => door.name)
+  /** An account was deleted: every listing under its handle goes. Always writes, so a retry can finish. */
+  withdrawAll(handle: string): void {
+    for (const door of [...this.doors.values()]) {
+      if (door.handle === handle) this.doors.delete(doorPath(door.handle, door.name))
+    }
+    this.flush()
   }
 
   get(handle: string, name: string): DoorRecord | null {

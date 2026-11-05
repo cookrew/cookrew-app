@@ -75,8 +75,7 @@ export class PayoutStore {
 
   /** An account was deleted. Its presets stop being quotable, so they stop selling. */
   forget(identityId: string): void {
-    const { [identityId]: dropped, ...kept } = this.addresses
-    if (dropped === undefined) return
+    const { [identityId]: _dropped, ...kept } = this.addresses
     this.addresses = kept
     writeFileSync(this.file, JSON.stringify(this.addresses, null, 2))
   }

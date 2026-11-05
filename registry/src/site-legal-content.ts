@@ -348,7 +348,7 @@ export const PRIVACY: LegalDoc = {
             'Change it. You can change your display name, avatar, password and sign-in factors.',
             'Remove it. You can take a device off your account, sign out, remove a star and withdraw a team listing.',
             'Turn off the setup counts at any time from the row in the app’s ⋯ menu.',
-            `Delete your account. Choose Delete account on your profile in the app, or on your account page at /me. It needs your password, or your sign-in provider if the account has no password, and it happens at once. It takes: ${asOneRun(DELETE_ACCOUNT_TAKES)} What stays: ${asOneRun(DELETE_ACCOUNT_KEEPS)}`
+            `Delete your account. Choose Delete account on your profile in the app, or on your account page at /me if the account has a password. It needs that password, or in the app your sign-in provider if the account has none, and it happens at once. It takes: ${asOneRun(DELETE_ACCOUNT_TAKES)} What stays: ${asOneRun(DELETE_ACCOUNT_KEEPS)}`
           ]
         },
         {

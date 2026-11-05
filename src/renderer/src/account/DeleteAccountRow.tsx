@@ -116,7 +116,7 @@ export function DeleteAccountRow({
         <button className="gs-revoke" disabled={!ready} onClick={remove}>
           DELETE MY ACCOUNT
         </button>
-        <button className="gs-ghost" onClick={close}>
+        <button className="gs-ghost" disabled={acting} onClick={close}>
           CANCEL
         </button>
       </div>

@@ -44,17 +44,25 @@ export async function deleteAccount(ctx: V2Context, signed: Signed): Promise<voi
     refuse(response, 401, 'unauthenticated')
     return
   }
-  for (const device of account.devices) {
-    v2.requests.voidDevice(device.id)
-    ctx.names?.forget(device.id)
+  try {
+    // Every id this account ever held: a Mac signed out earlier keeps its
+    // certificate record until now, and `revoked` is the only list of those.
+    for (const id of [...account.devices.map((d) => d.id), ...(account.revoked ?? []).map((r) => r.id)]) {
+      v2.requests.voidDevice(id)
+      ctx.names?.forget(id)
+    }
+    v2.requests.emptyFor(username)
+    v2.joinCodes.voidFor(username)
+    v2.factors.pending.closeAllFor(username)
+    v2.factors.store.forget(username)
+    v2.seats.closeAccount(username)
+    v2.events.forget(username)
+    ctx.accountGone?.(account)
+    v2.accounts.close(username)
+  } catch (error) {
+    console.error(`account delete stopped partway: ${error instanceof Error ? error.message : String(error)}`)
+    refuse(response, 503, 'busy', undefined, { 'retry-after': '5' })
+    return
   }
-  v2.requests.emptyFor(username)
-  v2.joinCodes.voidFor(username)
-  v2.factors.pending.closeAllFor(username)
-  v2.factors.store.forget(username)
-  v2.seats.closeAccount(username)
-  v2.events.forget(username)
-  ctx.accountGone?.(account)
-  v2.accounts.close(username)
   noContent(response, { 'set-cookie': clearedCookie() })
 }

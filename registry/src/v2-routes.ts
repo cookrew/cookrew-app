@@ -212,7 +212,9 @@ function lookUpAccount(ctx: V2Context, username: string): void {
     return
   }
   if (profile === null) {
-    refuse(ctx.response, 404, 'not_found')
+    // A Mac that missed the delete asks here, so it can let the account go.
+    if (ctx.v2.accounts.isRetired(username)) refuse(ctx.response, 410, 'account_deleted')
+    else refuse(ctx.response, 404, 'not_found')
     return
   }
   v2Json(ctx.response, 200, profile)

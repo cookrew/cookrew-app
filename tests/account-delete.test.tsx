@@ -79,6 +79,21 @@ describe('Accounts.deleteAccount', () => {
   })
 })
 
+describe('a Mac that missed the delete', () => {
+  it('forgets the account once the registry says it is gone, and never on anything less', async () => {
+    const { base, accounts } = signedInMac()
+    answer = { status: 200, body: JSON.stringify({ username: 'drej' }) }
+    expect(await accounts.forgetIfDeleted()).toBe(false)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(true)
+    answer = { status: 503, body: '{}' }
+    expect(await accounts.forgetIfDeleted()).toBe(false)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(true)
+    answer = { status: 410, body: JSON.stringify({ error: 'account_deleted' }) }
+    expect(await accounts.forgetIfDeleted()).toBe(true)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(false)
+  })
+})
+
 describe('the row in the profile sheet', () => {
   const stub = (): void => {
     ;(globalThis as unknown as { window: Record<string, unknown> }).window = {

@@ -569,6 +569,7 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
  */
 async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
   if (deps.accounts.isPasswordless() && deps.lock.locked) return LOCKED
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
   const result =
     deps.accounts.isPasswordless()
       ? await deps.accounts.signOutWithProvider()
@@ -586,6 +587,7 @@ async function deleteAccount(deps: AccountIpcDeps, input: unknown): Promise<Acco
   const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
   const confirm = asString(record.confirm)
   const password = asString(record.password)
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
   const provider = await providerProof(deps, 'delete-account')
   if (provider !== null && !provider.ok) return provider
   if (provider === null) {

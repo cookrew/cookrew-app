@@ -328,17 +328,15 @@ export function createRegistry(deps: RegistryDeps): Server {
   const starsOf = (handle: string, name: string): number => deps.stars?.count(handle, name) ?? 0
 
   /**
-   * WHAT A DELETED ACCOUNT HOLDS OUTSIDE /v2 (v2-delete.ts). The doors it held
-   * are read from both ends: the directory and the desktops that claim them can
-   * disagree, and a live line must not outlast either. Its receipts stay, and
-   * the transparency log and its presets are permanent.
+   * WHAT A DELETED ACCOUNT HOLDS OUTSIDE /v2 (v2-delete.ts). Live lines go by
+   * handle, because the relay is the only place that knows a door nobody listed.
+   * Its receipts stay, and the transparency log and its presets are permanent.
    */
   const accountGone = (account: V2Account): void => {
     const { username } = account
-    const listed = deps.doors?.withdrawAll(username) ?? []
-    const claimed = account.desktops.flatMap((desktop) => (desktop.doors ?? []).map((door) => door.team))
-    for (const team of new Set([...listed, ...claimed])) relay?.hangUp(`@${username}/${team}`)
-    canvas?.hangUp(username, account.desktops.map((desktop) => desktop.deviceId))
+    deps.doors?.withdrawAll(username)
+    relay?.hangUpHandle(username)
+    canvas?.hangUp(username, account.devices.map((device) => device.id))
     deps.stars?.forgetAccount(username)
     deps.identity?.forget(username)
     deps.pricing?.payouts.forget(username)

@@ -1692,6 +1692,25 @@ export class Accounts {
   }
 
   /**
+   * THE ACCOUNT WAS DELETED ELSEWHERE. A Mac that was asleep for it, or lost the
+   * answer, holds a file that no password can ever use again and no sign-out can
+   * finish. Only a 410 counts: a refused password or a dead socket says nothing
+   * about the account, and forgetting on one of those would sign out a real one.
+   */
+  async forgetIfDeleted(): Promise<boolean> {
+    const account = this.cached
+    if (account === null) return false
+    try {
+      const asked = await this.http(`${this.origin}/v2/accounts/${encodeURIComponent(account.username)}`)
+      if (asked.status !== 410) return false
+    } catch {
+      return false
+    }
+    this.forget()
+    return true
+  }
+
+  /**
    * DELETE THE ACCOUNT, EVERYWHERE. The same order as signing out: cookrew.dev
    * answers 204, and only then does the file go here, so a refusal or a dead
    * socket leaves this Mac knowing an account that still exists.

@@ -789,7 +789,13 @@
         const confirmName = $('me-delete-name').value
         const current = $('me-delete-password').value
         void v2('DELETE', '/v2/me', { confirm: confirmName, current }).then((out) => {
-          if (out.status === 204) return location.assign('/')
+          if (out.status === 204) {
+            // This browser's key named a device that stays revoked for a month,
+            // so a new account here must not sign in with it.
+            const dropped = indexedDB.deleteDatabase('cookrew-device')
+            dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+            return
+          }
           toast(out.body?.message ?? 'Your account could not be deleted.', 6000)
         })
       } else if (el.dataset.revoke !== undefined) {

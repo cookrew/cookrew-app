@@ -232,7 +232,7 @@ describe('what a delete takes', () => {
 
   it('withdraws team listings, and takes the stars on them and by this account', async () => {
     const owner = await claim('drej')
-    const fan = await claim('fan')
+    await claim('fan')
     doors.register('drej', listing('drej', 'alpha'))
     doors.register('fan', listing('fan', 'beta'))
     expect(doors.get('drej', 'alpha')).not.toBeNull()
@@ -243,7 +243,6 @@ describe('what a delete takes', () => {
     expect(doors.get('fan', 'beta')).not.toBeNull()
     expect(stars.count('drej', 'alpha')).toBe(0)
     expect(stars.count('fan', 'beta')).toBe(0)
-    expect(fan.username).toBe('fan')
   })
 
   it('takes the older key record and the payout address, and that key cannot enrol again', async () => {
@@ -302,7 +301,6 @@ describe('what a delete leaves', () => {
     const again = await call('POST', '/v2/accounts', { username: 'drej', password: PASSWORD, device: device() })
     expect(again.status).toBe(409)
     expect((await call('HEAD', '/v2/accounts/drej')).status).toBe(200)
-    expect((await call('GET', '/v2/accounts/drej')).status).toBe(404)
     expect(new V2Accounts(dir).isRetired('drej')).toBe(true)
   })
 })
@@ -317,5 +315,94 @@ describe('forgetting a certificate', () => {
     expect(certs.state('mac-1')).toEqual({ status: 'none' })
     certs.fail('mac-1', 'late')
     expect(readFileSync(path.join(dir, 'certs.json'), 'utf8')).not.toContain('mac-1')
+  })
+})
+
+describe('a line nobody listed', () => {
+  const ticket = async (token: string, name: string): Promise<string> => {
+    const res = await call('POST', '/v1/relay/ticket', { name }, bearer(token))
+    expect(res.status).toBe(200)
+    return ((await res.json()) as { ticket: string }).ticket
+  }
+
+  it('ends with the account, and a ticket minted before the delete opens nothing', async () => {
+    const owner = await claim('drej')
+    const held = await ticket(owner.token, '@drej/ghost')
+    const spare = await ticket(owner.token, '@drej/spare')
+    const down = await fetch(`${origin}/v1/relay/door?ticket=${encodeURIComponent(held)}`)
+    expect(down.status).toBe(200)
+    const reader = (down.body as ReadableStream<Uint8Array>).getReader()
+    await reader.read()
+
+    expect((await remove(owner.token, { current: PASSWORD }, 'drej')).status).toBe(204)
+
+    for (;;) {
+      const { done } = await reader.read()
+      if (done) break
+    }
+    expect((await fetch(`${origin}/v1/relay/door?ticket=${encodeURIComponent(spare)}`)).status).toBe(401)
+  })
+})
+
+describe('what proves a delete', () => {
+  it('never offers the approve rung: another device sees a join prompt, not this', async () => {
+    const owner = await claim('drej')
+    await secondDevice(owner)
+    const codes = await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
+    expect(codes.status).toBe(201)
+    const res = await remove(owner.token, {}, 'drej')
+    expect(res.status).toBe(401)
+    const step = (await res.json()) as { next: string[]; match?: string }
+    expect(step.next).not.toContain('approve')
+    expect(step.match).toBeUndefined()
+  })
+
+  it('counts guesses at the password, so a stolen session cannot try forever', async () => {
+    const tight = createV2(mkdtempSync(path.join(tmpdir(), 'v2-delete-tight-')), { limits: { sessionsPerMinute: 2, accountsPerMinute: 100 } })
+    const local = createRegistry({ store: new RegistryStore(dir), log: new TransparencyLog(dir), identity, v2: tight })
+    await new Promise<void>((resolve) => local.listen(0, '127.0.0.1', resolve))
+    const at = loopbackOnly(`http://127.0.0.1:${(local.address() as AddressInfo).port}`)
+    try {
+      const one = device()
+      const made = await fetch(`${at}/v2/accounts`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'drej', password: PASSWORD, device: one })
+      })
+      const { session } = (await made.json()) as { session: { token: string } }
+      const guess = (): Promise<Response> =>
+        fetch(`${at}/v2/me`, {
+          method: 'DELETE', headers: { 'content-type': 'application/json', ...bearer(session.token) },
+          body: JSON.stringify({ confirm: 'drej', current: OTHER })
+        })
+      expect((await guess()).status).toBe(401)
+      expect((await guess()).status).toBe(401)
+      expect((await guess()).status).toBe(429)
+    } finally {
+      local.closeAllConnections()
+      local.close()
+    }
+  })
+})
+
+describe('when a write fails partway', () => {
+  it('leaves the account in place, so its owner can simply ask again', async () => {
+    await claim('drej')
+    const failing = new V2Accounts(dir)
+    expect(failing.get('drej')).not.toBeNull()
+    rmSync(dir, { recursive: true, force: true })
+    expect(() => failing.close('drej')).toThrow()
+    expect(failing.get('drej')).not.toBeNull()
+    expect(failing.isRetired('drej')).toBe(false)
+  })
+})
+
+describe('a Mac that missed the delete', () => {
+  it('can ask whether the name is gone, and a name nobody ever held is plain 404', async () => {
+    const owner = await claim('drej')
+    await remove(owner.token, { current: PASSWORD }, 'drej')
+    const asked = await call('GET', '/v2/accounts/drej')
+    expect(asked.status).toBe(410)
+    expect(await errorOf(asked)).toBe('account_deleted')
+    expect((await call('GET', '/v2/accounts/never-held')).status).toBe(404)
   })
 })
