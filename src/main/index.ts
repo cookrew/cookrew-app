@@ -274,7 +274,7 @@ import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
-import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
+import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
@@ -424,6 +424,13 @@ import { sweepStorageInWorker } from './storage-gc-worker'
 app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// A Dock launch misses herdr and tmux. process.env.PATH picks the terminal host,
+// so this is before PtyManager, and packaged only: a QA instance's narrow PATH is
+// what keeps it off the fleet's host.
+if (app.isPackaged) {
+  process.env.PATH = widenedPath(process.env, homedir())
+}
 
 // The durable lineage, installed BEFORE the store can patch a node: every
 // session id ever bound to a card gets a copy outside workspace.json, so the
