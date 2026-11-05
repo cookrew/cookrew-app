@@ -592,6 +592,13 @@ const api = {
   /** The usage-data switch; it lives on this machine, so the phone has no such call. */
   telemetryStatus: () => ipcRenderer.invoke('telemetry:status'),
   setTelemetry: (on: boolean) => ipcRenderer.invoke('telemetry:set', on),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
+  onUpdateStatus: (cb: (status: unknown) => void) => {
+    const listener = (_e: unknown, status: unknown): void => cb(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
   // THE ZOOM NAVIGATOR'S DEVICES: this desktop's levels feed, a snapshot
   // first, then every delta, pushed; the release closes this window's stream
   // when its last reader goes. A refused hold (the companion is not up yet)

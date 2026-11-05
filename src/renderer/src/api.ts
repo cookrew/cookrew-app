@@ -551,6 +551,9 @@ export interface CookrewApi {
   /** The usage-data switch (TelemetryRow.tsx). Optional: it belongs to this machine, so the phone has none. */
   telemetryStatus?: () => Promise<TelemetryStatus | null>;
   setTelemetry?: (on: boolean) => Promise<TelemetryStatus | null>;
+  updateStatus?: () => Promise<unknown>;
+  setUpdateCheck?: (on: boolean) => Promise<unknown>;
+  onUpdateStatus?: (cb: (status: unknown) => void) => () => void;
   /**
    * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
    * levels feed — every workspace with its agents and their wired notes and
