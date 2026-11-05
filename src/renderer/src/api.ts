@@ -4,6 +4,7 @@ import type { StrayPane } from '../../shared/stray-pane'
 import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
+import type { WatchCode } from './watch-code'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
@@ -766,6 +767,11 @@ export interface CookrewApi {
   interactiveBrowserEnabled: () => Promise<boolean>;
   /** Desktop-only token authorizing its cross-origin localhost WS connection. */
   browserStreamToken: () => Promise<string | null>;
+  /** Six digits for an Apple Watch, and where it can reach this Mac. Absent in the demo. */
+  watchCode?: () => Promise<WatchCode>;
+  /** Is a watch paired; and forget it, here and now. */
+  watchState?: () => Promise<{ paired: boolean }>;
+  watchForget?: () => Promise<unknown>;
   /**
    * The desktop's own line to a browser card's Chrome: a MessagePort from
    * main (browser-cast-ipc.ts). Absent on the phone and the demo, and on a

@@ -88,10 +88,12 @@ describe('the web build wears the ink COO', () => {
     const maskable = (manifest.icons as Array<{ src: string; sizes: string; purpose: string }>).find((i) => i.purpose === 'maskable')
     expect(maskable?.sizes).toBe('512x512')
     expect(existsSync(path.join(publicDir, maskable?.src ?? 'missing')), 'maskable file').toBe(true)
-    // Half the mark's box diagonal (62.4 x 46) has to fit the safe zone: 40% of the tile.
+    // Half the mark's box diagonal (62.4 x 46) has to fit what the launcher shows. An Android
+    // adaptive icon shows 72 of its 108 units: on a real phone a mark at 64% of the tile filled
+    // the icon edge to edge (11-05), though it sat inside the spec's 40% circle.
     const generator = readFileSync('scripts/brand-ink/app-icon.mjs', 'utf8')
     const share = Number(generator.match(/const MASKABLE_SHARE = ([\d.]+)/)?.[1])
-    expect((share / 62.4) * Math.hypot(62.4, 46) * 0.5).toBeLessThanOrEqual(0.4)
+    expect((share / 62.4) * Math.hypot(62.4, 46) * 0.5).toBeLessThanOrEqual(1 / 3)
   })
 
   it('the manifest stands alone as an app and points at icons that exist', () => {

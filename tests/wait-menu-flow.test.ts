@@ -387,6 +387,39 @@ describe('the phone answers a menu in a dispatched turn', () => {
     expect((await route('/api/terminal/t9/raw', batch, false)).status).toBe(200)
     expect((await route('/api/terminal/t9/raw', batch, true)).status).toBe(200)
   })
+  it("a long block for an agent reaches the pane as a paste; a shell's as typed", async () => {
+    const words = 'x'.repeat(1500)
+    const held: string[] = []
+    const post = async (command: string): Promise<void> => {
+      const deps = {
+        pairingToken: 'pairing-token-invented',
+        hasArmedDispatch: () => false,
+        ptys: { get: () => undefined },
+        holdInput: (_id: string, data: string) => {
+          held.push(data)
+          return true
+        },
+        store: { nodeAcrossWorkspaces: () => ({ node: { kind: 'terminal', command } }) }
+      } as unknown as MobileApiDeps
+      const server = http.createServer((request, response) => {
+        const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+        void handleMobileApi(request, response, url, deps).then((handled) => {
+          if (!handled) response.writeHead(404).end()
+        })
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const { port } = server.address() as AddressInfo
+      await fetch(`http://127.0.0.1:${port}/api/terminal/t1/raw`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer pairing-token-invented' },
+        body: JSON.stringify({ data: words })
+      })
+      server.close()
+    }
+    await post('claude')
+    await post('')
+    expect(held).toEqual([`\x1b[200~${words}\x1b[201~`, words])
+  })
   it('nothing else rides /raw past the dispatch', async () => {
     for (const data of ['hello', '\r', '\x1b[A', '\x1b\r', 'x\x1b', '']) {
       expect((await route('/api/terminal/t1/raw', { data })).status).toBe(409)

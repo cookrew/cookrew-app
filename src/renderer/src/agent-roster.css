@@ -2322,6 +2322,35 @@
   overflow: auto;
   padding: 10px 14px;
 }
+/* A secret note: its words and its vault scroll as one page (SecretVault.tsx). */
+.attach-note-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.attach-note-addwords {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 10px 14px 0;
+  border: 0;
+  background: transparent;
+  color: var(--note-text);
+  font: italic 12.5px var(--font-body);
+  text-align: left;
+  opacity: 0.6;
+  cursor: text;
+}
+.attach-note-addwords:hover,
+.attach-note-addwords:focus-visible {
+  opacity: 1;
+}
+.attach-note-words {
+  flex: none;
+  overflow: visible;
+  padding: 10px 14px 0;
+}
 .attach-note-editor {
   flex: 1;
   min-height: 0;

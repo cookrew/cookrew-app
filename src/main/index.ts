@@ -33,7 +33,7 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
-import { createPacedInput } from './enter-pacing'
+import { blockAsPaste, createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
 import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
 import { aboutOfScreen, wholeBrief } from '../shared/wait-about'
@@ -257,6 +257,9 @@ import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
+import { WatchPairing } from './watch-pairing'
+import { createWatchHost } from './watch-host'
+import { setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
@@ -6427,6 +6430,9 @@ const browserCastIpc = createBrowserCastIpc({
   enabled: interactiveBrowserEnabled
 })
 
+/** The wrist's credential (watch-pairing.ts): module scope, because rotating every session ends it too. */
+const watchPairing = new WatchPairing()
+
 const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
   enabled: interactiveBrowserEnabled,
@@ -7227,7 +7233,11 @@ app.whenReady().then(() => {
     mobileUrls,
     mobileEndpoints: mobileEndpointList,
     uncoveredCertHosts,
-    rotatePairingToken: rotateActivePairingToken,
+    // Ending every session ends the watch's too.
+    rotatePairingToken: () => {
+      watchPairing.unpair()
+      return rotateActivePairingToken()
+    },
     pairingHandout: currentPairingHandout,
     listWorkspaces,
     createWorkspace,
@@ -8614,11 +8624,47 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
   })
   setMenuAnswerer(answerMenu)
+  // The wrist's routes (watch-routes.ts): a token of its own, a short list of routes.
+  const watchHost = createWatchHost({
+      pairing: watchPairing,
+      deviceName: () => localDeviceName(),
+      endpoints: mobileEndpointList,
+      httpPort: MOBILE_PORT,
+      canvas: (workspaceId) => store.workspaceState(workspaceId),
+      node: (id) => store.nodeAcrossWorkspaces(id)?.node,
+      thumbViewed: noteBrowserViewed,
+      thumb: (id) => browserThumbs.frame(id),
+      browser: (id) => browserManager.get(id),
+      // The last agent's harness; a bare shell takes no first prompt, so it is no harness to start one on.
+      lastPreset: () =>
+        [...agents.list()].filter((entry) => entry.active && entry.command.trim().length > 0).sort((a, b) => b.spawnedAt - a.spawnedAt)[0]?.preset ?? 'Claude Code',
+      screen: (id) => ptys.get(id)?.viewportText() ?? null,
+      createTerminal,
+      stop: async (terminalId) => {
+        const session = ptys.get(terminalId)
+        if (!session) return false
+        return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
+      }
+    })
+  setWatchHost(watchHost)
+  ipcMain.handle(
+    'watch:code',
+    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases() }))
+  )
+  ipcMain.handle(
+    'watch:state',
+    ownerOnly(() => ({ paired: watchPairing.paired }))
+  )
+  ipcMain.handle(
+    'watch:forget',
+    ownerOnly(() => watchPairing.unpair())
+  )
   ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
     const request = parseMenuRequest(body)
     return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
   })
-  const typeInto = createPacedInput((terminalId, data) => {
+  const typeInto = createPacedInput((terminalId, typed) => {
+    const data = isAgentTerminal(terminalId) ? blockAsPaste(typed) : typed
     // Keys for an offline agent wake it; they wait for it, then go in in order.
     if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
