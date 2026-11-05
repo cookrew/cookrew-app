@@ -7,6 +7,14 @@ public enum WatchError: Error, Equatable, Sendable {
   case refused(String)
   /** No way to the Mac just now. */
   case unreachable
+  /** The relay will not have this session any more, and it could not be renewed. */
+  case signedOut
+}
+
+/** Which road the cards last came down. */
+public enum WatchLine: Equatable, Sendable {
+  case direct
+  case relay
 }
 
 public enum Fresh<Value: Sendable>: Sendable {
@@ -25,6 +33,13 @@ public protocol WatchAPI: Sendable {
   func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data>
   func input(_ input: BrowserInput, to id: String) async throws
   func note(_ id: String) async throws -> NoteBody
+  /** Tell the Mac to end this watch's token. */
+  func unpair() async throws
+  var line: WatchLine { get }
+}
+
+public extension WatchAPI {
+  var line: WatchLine { .direct }
 }
 
 /** The request cannot have reached the Mac: nothing was connected. */
@@ -63,13 +78,25 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private let bases: [URL]
   private let token: String
   private let session: URLSession
+  private let relay: RelayPass?
   private let lock = NSLock()
   private var sticky = 0
 
-  public init(bases: [URL], token: String, session: URLSession = .shared) {
+  public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil) {
     self.bases = bases
     self.token = token
     self.session = session
+    self.relay = relay
+  }
+
+  private func onRelay(_ url: URL) -> Bool {
+    relay != nil && url.host() == relay?.host
+  }
+
+  public var line: WatchLine {
+    lock.lock()
+    defer { lock.unlock() }
+    return bases.indices.contains(sticky) && onRelay(bases[sticky]) ? .relay : .direct
   }
 
   private func order() -> [Int] {
@@ -84,30 +111,59 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     lock.unlock()
   }
 
+  /** One road, one try. The relay wants the session as well as the Mac's token. */
+  private func request(_ url: URL, _ method: String, payload: Data?, tag: String?) async -> URLRequest {
+    let read = method == "GET"
+    // A write can wake an agent, and that takes a while. A read on the home
+    // network is quick or it is not there: away from home it must not hold up the relay.
+    let patience: TimeInterval = read ? (isPrivateHost(url.host() ?? "") ? 4 : 10) : 30
+    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: patience)
+    request.httpMethod = method
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+    if let tag { request.setValue(tag, forHTTPHeaderField: "if-none-match") }
+    if let payload {
+      request.setValue("application/json", forHTTPHeaderField: "content-type")
+      request.httpBody = payload
+    }
+    if onRelay(url), let relay {
+      request.httpShouldHandleCookies = false
+      request.setValue("\(sessionCookie)=\(await relay.token())", forHTTPHeaderField: "cookie")
+    }
+    return request
+  }
+
+  /** The relay's own refusal of the session, not the Mac's of this watch. */
+  private func sessionRefused(_ url: URL, _ data: Data, _ http: HTTPURLResponse) -> Bool {
+    onRelay(url) && http.statusCode == 401 && (try? JSONDecoder().decode(Refusal.self, from: data))?.error == "unauthenticated"
+  }
+
   /**
    * A read tries every way there. A write moves on only when it never left: a
    * timed-out POST may still be at work on the Mac, and sent again down the next
-   * road it would say the words twice, stop twice, or make two agents.
+   * road it would say the words twice, stop twice, or make two agents. A 503
+   * from the relay never reached the Mac, so even a write moves on from it.
    */
   private func call(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: Any]? = nil, tag: String? = nil) async throws -> (Data, HTTPURLResponse) {
     guard !bases.isEmpty else { throw WatchError.unreachable }
     let payload = try body.map { try JSONSerialization.data(withJSONObject: $0) }
     let read = method == "GET"
+    var signedOut = false
     for index in order() {
       var url = bases[index].appending(path: path)
       if !query.isEmpty { url.append(queryItems: query) }
-      // A write can wake an agent, and that takes a while.
-      var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: read ? 10 : 30)
-      request.httpMethod = method
-      request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
-      if let tag { request.setValue(tag, forHTTPHeaderField: "if-none-match") }
-      if let payload {
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = payload
-      }
       do {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { continue }
+        var (data, response) = try await session.data(for: await request(url, method, payload: payload, tag: tag))
+        guard var http = response as? HTTPURLResponse else { continue }
+        if sessionRefused(url, data, http) {
+          guard await relay?.renewNow() == true else {
+            signedOut = true
+            continue
+          }
+          (data, response) = try await session.data(for: await request(url, method, payload: payload, tag: tag))
+          guard let again = response as? HTTPURLResponse else { continue }
+          http = again
+        }
+        if onRelay(url) && http.statusCode == 503 { continue }
         stick(index)
         return (data, http)
       } catch {
@@ -115,7 +171,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
         throw WatchError.unreachable
       }
     }
-    throw WatchError.unreachable
+    throw signedOut ? WatchError.signedOut : WatchError.unreachable
   }
 
   private func checked(_ data: Data, _ http: HTTPURLResponse) throws {
@@ -176,6 +232,10 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
 
   public func input(_ input: BrowserInput, to id: String) async throws {
     try await post("api/watch/item/\(id)/input", input.json)
+  }
+
+  public func unpair() async throws {
+    try await post("api/watch/unpair")
   }
 
   public func note(_ id: String) async throws -> NoteBody {

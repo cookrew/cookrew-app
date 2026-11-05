@@ -51,6 +51,7 @@ targets:
         WKWatchOnly: true
         WKCompanionAppBundleIdentifier: dev.cookrew.watch
         CookrewBase: $(COOKREW_BASE)
+        CookrewRegistry: $(COOKREW_REGISTRY)
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Cookrew reaches your Mac on this network.

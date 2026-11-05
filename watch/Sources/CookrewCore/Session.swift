@@ -18,7 +18,7 @@ public struct WatchSession: Equatable, Sendable {
 
 /** An address that stays on the owner's own network or tailnet: the only place plain HTTP may go. */
 func isPrivateHost(_ host: String) -> Bool {
-  if host.hasSuffix(".local") { return true }
+  if host.hasSuffix(".local") || host == "localhost" || host.hasPrefix("127.") { return true }
   let parts = host.split(separator: ".").compactMap { Int($0) }
   guard parts.count == 4 else { return false }
   switch (parts[0], parts[1]) {
@@ -49,6 +49,18 @@ public func basesAfterClaim(typed: Base, named: [Base]) -> [Base] {
   }
 }
 
+/**
+ * Every way to a Mac found through the account. The relay goes last: away from
+ * home it is the only road that answers, and at home the cards need not cross
+ * cookrew.dev at all.
+ */
+public func basesAfterJoin(relay: URL, named: [Base]) -> [Base] {
+  let usable = named.filter { base in URL(string: base.url).map(mayCarryToken) ?? false }
+  let secure = usable.filter { $0.url.hasPrefix("https://") }
+  let others = usable.filter { !$0.url.hasPrefix("https://") }
+  return secure + others + [Base(kind: "relay", url: relay.absoluteString)]
+}
+
 /** What is typed into the address row, as a base URL; a bare IP is the companion's plain port. */
 public func baseURL(typed: String) -> URL? {
   let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -60,21 +72,61 @@ public func baseURL(typed: String) -> URL? {
 /** The token in the Keychain; the addresses, which are no secret, beside it. */
 public struct SessionVault: Sendable {
   private let service = "dev.cookrew.watch"
-  private let account = "token"
   private let meta = "dev.cookrew.watch.session"
 
   public init() {}
 
-  private var query: [String: Any] {
+  private func query(_ account: String) -> [String: Any] {
     [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
   }
 
-  public func load() -> WatchSession? {
+  private func read(_ account: String) -> Data? {
     var found: CFTypeRef?
-    var ask = query
+    var ask = query(account)
     ask[kSecReturnData as String] = true
-    guard SecItemCopyMatching(ask as CFDictionary, &found) == errSecSuccess,
-      let data = found as? Data,
+    guard SecItemCopyMatching(ask as CFDictionary, &found) == errSecSuccess else { return nil }
+    return found as? Data
+  }
+
+  private func write(_ data: Data, to account: String) {
+    // Update first: a failed write must not cost the secret already kept.
+    let value = [kSecValueData as String: data]
+    if SecItemUpdate(query(account) as CFDictionary, value as CFDictionary) == errSecItemNotFound {
+      var add = query(account)
+      add[kSecValueData as String] = data
+      add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      SecItemAdd(add as CFDictionary, nil)
+    }
+  }
+
+  /** This watch's account session, when it has joined one. */
+  public func loadAccount() -> WatchAccount? {
+    read("account").flatMap { try? JSONDecoder().decode(WatchAccount.self, from: $0) }
+  }
+
+  public func saveAccount(_ account: WatchAccount) {
+    if let data = try? JSONEncoder().encode(account) { write(data, to: "account") }
+  }
+
+  public func clearAccount() {
+    SecItemDelete(query("account") as CFDictionary)
+  }
+
+  /** Who this watch is, made once and kept through a Forget. */
+  public func device() -> WatchDevice {
+    if let kept = read("device").flatMap({ try? JSONDecoder().decode(WatchDevice.self, from: $0) }) { return kept }
+    return newDevice()
+  }
+
+  /** A new identity, for when the account has refused the old one. */
+  @discardableResult public func newDevice() -> WatchDevice {
+    let made = WatchDevice()
+    if let data = try? JSONEncoder().encode(made) { write(data, to: "device") }
+    return made
+  }
+
+  public func load() -> WatchSession? {
+    guard let data = read("token"),
       let token = String(data: data, encoding: .utf8),
       let stored = UserDefaults.standard.data(forKey: meta),
       let saved = try? JSONDecoder().decode(Saved.self, from: stored)
@@ -83,19 +135,12 @@ public struct SessionVault: Sendable {
   }
 
   public func save(_ session: WatchSession) {
-    // Update first: a failed write must not cost the token already kept.
-    let value = [kSecValueData as String: Data(session.token.utf8)]
-    if SecItemUpdate(query as CFDictionary, value as CFDictionary) == errSecItemNotFound {
-      var add = query
-      add[kSecValueData as String] = Data(session.token.utf8)
-      add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-      SecItemAdd(add as CFDictionary, nil)
-    }
+    write(Data(session.token.utf8), to: "token")
     UserDefaults.standard.set(try? JSONEncoder().encode(Saved(desktop: session.desktop, bases: session.bases)), forKey: meta)
   }
 
   public func clear() {
-    SecItemDelete(query as CFDictionary)
+    SecItemDelete(query("token") as CFDictionary)
     UserDefaults.standard.removeObject(forKey: meta)
   }
 

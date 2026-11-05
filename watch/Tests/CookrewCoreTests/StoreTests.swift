@@ -31,6 +31,7 @@ private final class FakeAPI: WatchAPI, @unchecked Sendable {
   func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> { .same }
   func input(_ input: BrowserInput, to id: String) async throws { try await act("input \(id): \(input)") }
   func note(_ id: String) async throws -> NoteBody { NoteBody(name: "n", content: "c") }
+  func unpair() async throws { try await act("unpair") }
 }
 
 private actor Waits {

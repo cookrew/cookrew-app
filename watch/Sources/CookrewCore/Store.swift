@@ -82,6 +82,8 @@ public final class WatchStore {
   /** A word on the card: why the last thing did not go. */
   public private(set) var notice: String?
   public private(set) var unpaired = false
+  /** The account's session ended and could not be renewed: the watch must sign in again. */
+  public private(set) var signedOut = false
 
   @ObservationIgnored private let api: WatchAPI
   @ObservationIgnored private let now: () -> Date
@@ -135,6 +137,8 @@ public final class WatchStore {
       }
     } catch WatchError.unpaired {
       unpaired = true
+    } catch WatchError.signedOut {
+      signedOut = true
     } catch {
       if link == .live { link = .lost }
     }
@@ -156,7 +160,7 @@ public final class WatchStore {
   public func run() async {
     while !Task.isCancelled {
       await refresh()
-      if unpaired { return }
+      if unpaired || signedOut { return }
       let seconds: Double = link == .live ? 3 : 8
       try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
