@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { observeOutput, runningView, startedLine } from '../src/renderer/src/routing/setup-line-state'
 import { createFirstRun } from '../src/renderer/src/first-run/first-run-state'
 import { createFirstFolder } from '../src/renderer/src/first-run/first-folder'
-import { workspaceNameAfter } from '../src/renderer/src/first-run/first-folder'
+import { doorFolder, workspaceNameAfter } from '../src/renderer/src/first-run/first-folder'
 import { agentAtWork, firstAgentHarness, firstHarness, otherAgentEnds, sentTurnDone, sentTurnFailed, stepTurns, stillFinished, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
 import { makeAgent } from '../src/renderer/src/zoom/make-card'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
@@ -116,10 +116,31 @@ describe('the folder the first agent works in', () => {
     expect(folder.get()).toBeNull()
   })
 
-  it('says so when the workspace refuses the folder', async () => {
-    const folder = createFirstFolder(deps({ use: vi.fn(async () => { throw new Error('no') }) }))
+  it('says so when the workspace refuses the folder, in the words it was refused in', async () => {
+    const folder = createFirstFolder(deps({ use: vi.fn(async () => { throw new Error('/x is a file, not a folder. Choose a folder.') }) }))
     expect(await folder.ready()).toBe('failed')
     expect(folder.get()).toBeNull()
+    expect(folder.problem()).toBe('/x is a file, not a folder. Choose a folder.')
+  })
+
+  it('forgets the refusal once a folder is taken', async () => {
+    const use = vi.fn<(dir: string) => Promise<void>>().mockRejectedValueOnce(new Error('no')).mockResolvedValue(undefined)
+    const folder = createFirstFolder(deps({ use }))
+    await folder.choose()
+    await folder.choose()
+    expect(folder.problem()).toBeNull()
+  })
+
+  // Workspace Door is the one check in front of a folder (main/workspace-door.ts).
+  it('asks the door about the folder, and works in the one it answers', async () => {
+    const check = vi.fn(async () => ({ ok: true, name: 'site', dir: '/Users/new/site', notes: [], suggestedDir: '~' }))
+    expect(await doorFolder(check, '/Users/new/site/')).toBe('/Users/new/site')
+    expect(check).toHaveBeenCalledWith('site', '/Users/new/site/')
+  })
+
+  it('stops on what the door refuses, in its sentence', async () => {
+    const check = vi.fn(async () => ({ ok: false, name: 'x', dir: '/x', reason: 'There is no folder at /x. Choose one that exists.', notes: [], suggestedDir: '~' }))
+    await expect(doorFolder(check, '/x')).rejects.toThrow('There is no folder at /x. Choose one that exists.')
   })
 
   it('never stands in the way where nothing can pick a folder', async () => {

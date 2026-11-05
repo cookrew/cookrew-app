@@ -1,4 +1,5 @@
 import { waitOfScreen, type FirstTask } from '../shared/first-run'
+import type { LaunchFailure } from '../shared/launch-failure'
 import type { FirstRunStore } from './first-run-store'
 
 /**
@@ -8,7 +9,9 @@ import type { FirstRunStore } from './first-run-store'
  * died took the words with it and the run went on as if it had worked. Now the
  * words are in first-run.json until a good turn has ended, so neither a dead agent
  * nor a restart loses them: a dead agent hands them back to the box with a reason,
- * and its card goes, as the first screen is about to make another.
+ * and its card goes, as the first screen is about to make another. The reason is
+ * the card's own (shared/launch-failure.ts): one wording of why an agent is not
+ * running, read before the card goes.
  *
  * DELIVERY MOVES NOTHING. A provider can refuse the turn after the words go in
  * (Part C: a 400 read as done), so a delivered task is `sent`, the screens step
@@ -46,16 +49,15 @@ export interface FirstTasksDeps<S extends HeldSession = HeldSession> {
   keep: (id: string) => () => void
   /** A close of this card is under way: its exit is that, and `cardGone` says how it ended. */
   closing: (id: string) => boolean
+  /** What the card has on file about why it is not running. */
+  failure: (id: string) => Pick<LaunchFailure, 'why' | 'fix' | 'lastLines'> | null
 }
 
-/** Why it stopped, in words a new person can use. */
-export function whyStopped(harness: string, screen: string): string {
-  return /not found|no such file|command not found/i.test(screen)
-    ? `${harness} could not start on this computer. Check that it is installed, then send your task again.`
-    : `${harness} stopped before it took your task. Your words are back in the box.`
-}
-
+/** For the agent that left no failure on file. */
+const whyStopped = (harness: string): string => `${harness} stopped before it took your task. Your words are back in the box.`
 const whyEnded = (harness: string): string => `${harness} stopped before it finished your task. Your words are back in the box.`
+
+type Told = Pick<Extract<FirstTask, { state: 'returned' }>, 'why' | 'fix' | 'lines'>
 
 export class FirstTasks<S extends HeldSession = HeldSession> {
   /** The hold under way: a late settle of an older one changes nothing. */
@@ -68,17 +70,15 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
   hold(id: string, words: string, harness: string): void {
     const ticket = ++this.ticket
     const session = this.deps.session(id)
-    if (session === null) return this.handBack(words, whyStopped(harness, ''), id)
+    if (session === null) return this.died(id, words, whyStopped(harness))
     this.keepUp(id)
     let gone = false
-    let screen = ''
     session.once('exit', () => {
       gone = true
       if (!session.wasDisposed && !this.deps.closing(id)) this.endedAfterSent(ticket, id)
     })
     this.show({ state: 'holding', id, words, harness, wait: 'starting' })
     const onWait = (now: string): void => {
-      screen = now
       const task = this.deps.store.task()
       const wait = waitOfScreen(now)
       if (ticket === this.ticket && task?.state === 'holding' && task.wait !== wait) this.show({ ...task, wait })
@@ -90,9 +90,8 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
       () => {
         if (ticket !== this.ticket || this.deps.closing(id)) return
         // Its session was replaced (a restart in place), not ended: the card is live.
-        if (session.wasDisposed) return this.handBack(words, null, id)
-        this.handBack(words, whyStopped(harness, screen), id)
-        this.deps.removeCard(id)
+        if (session.wasDisposed) return this.handBack(words, { why: null }, id)
+        this.died(id, words, whyStopped(harness))
       }
     )
   }
@@ -101,8 +100,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
   private endedAfterSent(ticket: number, id: string): void {
     const task = this.deps.store.task()
     if (ticket !== this.ticket || task?.state !== 'sent' || task.id !== id) return
-    this.handBack(task.words, whyEnded(task.harness), id)
-    this.deps.removeCard(id)
+    this.died(id, task.words, whyEnded(task.harness))
   }
 
   /**
@@ -113,7 +111,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     const task = this.deps.store.task()
     if (task?.state !== 'holding' && task?.state !== 'sent') return
     this.ticket += 1
-    this.handBack(task.words, null, task.id)
+    this.handBack(task.words, { why: null }, task.id)
     if (task.state === 'holding') this.deps.removeCard(task.id)
   }
 
@@ -126,7 +124,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     const task = this.deps.store.task()
     if ((task?.state !== 'holding' && task?.state !== 'sent') || task.id !== id) return
     this.ticket += 1
-    this.handBack(task.words, null, id)
+    this.handBack(task.words, { why: null }, id)
   }
 
   /** A good turn ended it from outside (the stage moved): nothing is open any more. */
@@ -149,7 +147,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     if (task?.state !== 'sent') return
     const ticket = ++this.ticket
     const session = this.deps.session(task.id)
-    if (session === null) return this.handBack(task.words, whyEnded(task.harness), task.id)
+    if (session === null) return this.handBack(task.words, this.told(task.id, whyEnded(task.harness)), task.id)
     this.keepUp(task.id)
     session.once('exit', () => {
       if (!session.wasDisposed && !this.deps.closing(task.id)) this.endedAfterSent(ticket, task.id)
@@ -166,9 +164,21 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     this.letGo = null
   }
 
-  private handBack(words: string, why: string | null, id: string): void {
+  /** What the card says of itself, or the sentence for one that says nothing. */
+  private told(id: string, fallback: string): Told {
+    const failure = this.deps.failure(id)
+    return failure ? { why: failure.why, fix: failure.fix, lines: failure.lastLines } : { why: fallback }
+  }
+
+  /** It is not coming back: the words go home with its reason, then its card goes. */
+  private died(id: string, words: string, fallback: string): void {
+    this.handBack(words, this.told(id, fallback), id)
+    this.deps.removeCard(id)
+  }
+
+  private handBack(words: string, told: Told, id: string): void {
     this.release()
-    this.show({ state: 'returned', words, why, id })
+    this.show({ state: 'returned', words, ...told, id })
   }
 
   private show(task: FirstTask): void {

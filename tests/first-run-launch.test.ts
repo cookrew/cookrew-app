@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { failureReason, failureHtml, bootStep } from '../src/main/boot-failure'
-import { lstatSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ownerOf, runtimeDirFor } from '../src/main/runtime-dir'
-import { agentToolReady } from '../src/main/preflight'
+import { launchBlock } from '../src/main/launch-check'
+import { addPaneDirs, panePath, resetPaneDirs } from '../src/main/pane-path'
 
 /**
  * A SECOND LINUX USER GOT A BLACK SCREEN (round 2, bug 13): /tmp/cookrew-runtime
@@ -66,16 +67,25 @@ describe('a launch that cannot go on', () => {
   })
 })
 
+// agentToolReady was a second copy of Agent Truth's check: launchBlock answers now,
+// over the PATH panes get.
 describe('a tool for an agent to run', () => {
-  it('looks for the harness’s binary where a pane would', () => {
-    const seen: string[] = []
-    const installed = (bin: string, pathEnv: string): boolean => (seen.push(`${bin}@${pathEnv}`), false)
-    expect(agentToolReady('claude --permission-mode bypassPermissions', '/p', installed)).toBe(false)
-    expect(seen).toEqual(['claude@/p'])
+  const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-tool-'))
+  const check = { cwd: dir, checkCommand: true, installLine: () => null }
+
+  afterEach(() => resetPaneDirs())
+
+  it('is refused where a pane would not find it, in the card’s own words', () => {
+    expect(launchBlock({ ...check, command: 'first-run-no-such-tool --flag', path: panePath('/nowhere') })).toMatchObject({ kind: 'command-missing', why: 'Command not found: first-run-no-such-tool.' })
   })
 
-  it('has nothing to look for in a shell or a command it does not know', () => {
-    expect(agentToolReady('', '/p', () => false)).toBe(true)
-    expect(agentToolReady('ssh box orch', '/p', () => false)).toBe(true)
+  it('is found in a dir the tool check learned', () => {
+    writeFileSync(path.join(dir, 'first-run-a-tool'), '#!/bin/sh\n', { mode: 0o755 })
+    addPaneDirs([dir])
+    expect(launchBlock({ ...check, command: 'first-run-a-tool --flag', path: panePath('/nowhere') })).toBeNull()
+  })
+
+  it('has nothing to look for in a shell', () => {
+    expect(launchBlock({ ...check, command: '', path: '/nowhere' })).toBeNull()
   })
 })

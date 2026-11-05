@@ -34,8 +34,9 @@ function rig(file = fileIn()) {
   const release = vi.fn()
   const keep = vi.fn(() => release)
   const closing = vi.fn((_id: string) => false)
-  const tasks = new FirstTasks({ store, inject, session: () => session as never, removeCard, emit, keep, closing })
-  return { store, session, inject, removeCard, emit, keep, release, closing, tasks, file, hooks: () => hooks as unknown as HoldHooks, settle: () => settle as unknown as { done: () => void; fail: (e: Error) => void } }
+  const failure = vi.fn((_id: string): { why: string; fix: string; lastLines: readonly string[] } | null => null)
+  const tasks = new FirstTasks({ store, inject, session: () => session as never, removeCard, emit, keep, closing, failure })
+  return { store, session, inject, removeCard, emit, keep, release, closing, failure, tasks, file, hooks: () => hooks as unknown as HoldHooks, settle: () => settle as unknown as { done: () => void; fail: (e: Error) => void } }
 }
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
@@ -86,22 +87,58 @@ describe('an agent that dies', () => {
     expect(r.removeCard).toHaveBeenCalledWith('a1')
   })
 
-  it('names a tool that was not there', async () => {
+  // Agent Truth owns why a card is not running (shared/launch-failure.ts): the first
+  // screen says the card's own words, not a second wording of them.
+  it('says what the card says: why, what to do, and the last lines', async () => {
     const r = rig()
+    r.failure.mockReturnValue({ why: 'codex stopped right after it started (exit 127).', fix: 'Its last lines are below. Send again to start it again.', lastLines: ['sh: codex: not found'] })
     r.tasks.hold('a1', 'x', 'Codex')
-    r.hooks().onWait('sh: exec: codex: not found')
     r.settle().fail(new Error('gone'))
     await tick()
-    expect((r.store.task() as { why: string }).why).toMatch(/Codex could not start/)
+    expect(r.store.task()).toEqual({ state: 'returned', words: 'x', id: 'a1', why: 'codex stopped right after it started (exit 127).', fix: 'Its last lines are below. Send again to start it again.', lines: ['sh: codex: not found'] })
+    expect(r.failure).toHaveBeenCalledWith('a1')
+  })
+
+  it('reads the failure before the card goes: removing it clears the record', async () => {
+    const r = rig()
+    const order: string[] = []
+    r.failure.mockImplementation(() => (order.push('read'), null))
+    r.removeCard.mockImplementation(() => void order.push('removed'))
+    r.tasks.hold('a1', 'x', 'Codex')
+    r.settle().fail(new Error('gone'))
+    await tick()
+    expect(order).toEqual(['read', 'removed'])
+  })
+
+  it('says the same when it dies after taking the task', async () => {
+    const r = rig()
+    r.tasks.hold('a1', 'x', 'Pi')
+    r.settle().done()
+    await tick()
+    r.failure.mockReturnValue({ why: 'pi stopped (exit 1).', fix: 'Its last lines are below. Send again to start it again.', lastLines: [] })
+    r.session.emit('exit', 1)
+    expect(r.store.task()).toMatchObject({ state: 'returned', why: 'pi stopped (exit 1).' })
+  })
+
+  it('has its own sentence only when the card has none', async () => {
+    const r = rig()
+    r.tasks.hold('a1', 'x', 'Codex')
+    r.settle().fail(new Error('gone'))
+    await tick()
+    expect((r.store.task() as { why: string }).why).toMatch(/Codex stopped before it took your task/)
   })
 
   it('gives the words back at once when there is no session at all', () => {
     const store = new FirstRunStore(fileIn(), nothing)
     store.read()
     store.advance('task')
-    const tasks = new FirstTasks({ store, inject: vi.fn(), session: () => null, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false })
+    const removeCard = vi.fn()
+    const failure = () => ({ why: 'Command not found: claude.', fix: 'Install it or add it to PATH, then send again.', lastLines: [] })
+    const tasks = new FirstTasks({ store, inject: vi.fn(), session: () => null, removeCard, emit: vi.fn(), keep: () => () => undefined, closing: () => false, failure })
     tasks.hold('a1', 'x', 'Claude Code')
-    expect(store.task()).toMatchObject({ state: 'returned', words: 'x' })
+    expect(store.task()).toMatchObject({ state: 'returned', words: 'x', why: 'Command not found: claude.', fix: 'Install it or add it to PATH, then send again.' })
+    // The launch check refused it: a card that cannot start is not left behind the next try.
+    expect(removeCard).toHaveBeenCalledWith('a1')
   })
 })
 
@@ -196,14 +233,14 @@ describe('an agent that took the task', () => {
     const session = new EventEmitter()
     const store = new FirstRunStore(file, nothing)
     const inject = vi.fn()
-    new FirstTasks({ store, inject, session: () => session as never, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false }).resume()
+    new FirstTasks({ store, inject, session: () => session as never, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false, failure: () => null }).resume()
     expect(inject).not.toHaveBeenCalled()
     expect(store.task()).toMatchObject({ state: 'sent' })
     session.emit('exit', 1)
     expect(store.task()).toMatchObject({ state: 'returned', words: 'x' })
     const gone = new FirstRunStore(file, nothing)
     gone.setTask({ state: 'sent', id: 'a1', words: 'y', harness: 'Pi' })
-    new FirstTasks({ store: gone, inject, session: () => null, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false }).resume()
+    new FirstTasks({ store: gone, inject, session: () => null, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false, failure: () => null }).resume()
     expect(gone.task()).toMatchObject({ state: 'returned', words: 'y' })
   })
 })
@@ -285,7 +322,7 @@ describe('a restart mid-wait', () => {
     first.tasks.hold('a1', 'write a readme', 'Claude Code')
     const store = new FirstRunStore(file, nothing)
     const inject = vi.fn(() => new Promise<void>(() => undefined))
-    const tasks = new FirstTasks({ store, inject, session: () => new EventEmitter() as never, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false })
+    const tasks = new FirstTasks({ store, inject, session: () => new EventEmitter() as never, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false, failure: () => null })
     tasks.resume()
     tasks.resume()
     expect(inject).toHaveBeenCalledTimes(1)
@@ -296,7 +333,7 @@ describe('a restart mid-wait', () => {
     const file = fileIn()
     rig(file).tasks.hold('a1', 'write a readme', 'Claude Code')
     const store = new FirstRunStore(file, nothing)
-    new FirstTasks({ store, inject: vi.fn(), session: () => null, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false }).resume()
+    new FirstTasks({ store, inject: vi.fn(), session: () => null, removeCard: vi.fn(), emit: vi.fn(), keep: () => () => undefined, closing: () => false, failure: () => null }).resume()
     expect(store.task()).toMatchObject({ state: 'returned', words: 'write a readme' })
   })
 

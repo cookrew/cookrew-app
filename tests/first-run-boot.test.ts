@@ -48,8 +48,20 @@ describe('a real launch', () => {
 
   it('never seeds a Conductor whose tool is not here', () => {
     const seed = body('seedConductorIfEmpty')
-    expect(seed).toMatch(/agentToolReady\(DEFAULT_ORCH_PRESET\.command, panePath\(\)\)/)
-    expect(seed.indexOf('agentToolReady')).toBeLessThan(seed.indexOf('store.addNode'))
+    expect(seed).toMatch(/toolBlockOf\(DEFAULT_ORCH_PRESET\.command, state\.dir\)/)
+    expect(seed.indexOf('toolBlockOf')).toBeLessThan(seed.indexOf('store.addNode'))
+  })
+
+  // Merged from Agent Truth with process.env.PATH, it would have refused on a source
+  // build the very agent the tool check calls Found: bug 3 over again.
+  it('has one PATH: the launch check looks where a pane will', () => {
+    expect(source).toMatch(/const paneSearchPath = \(\): string => `\$\{ptys\.runtimeDir\}:\$\{panePath\(\)\}`/)
+  })
+
+  it('asks the launch check whether a tool is here, on every backend', () => {
+    expect(body('toolBlockOf')).toMatch(/checkCommand: true/)
+    expect(source).toMatch(/const block = toolBlockOf\(found\.command, store\.focusedState\.dir\)/)
+    expect(source).toMatch(/failure: \(id\) => agents\.lookup\(id\)\?\.failure \?\? null/)
   })
 
   it('holds a first task instead of typing it, and only a first task', () => {

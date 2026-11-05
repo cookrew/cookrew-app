@@ -83,5 +83,6 @@ export function FirstRunScreens({ nodes, setup }: { nodes: readonly CanvasNode[]
       </button>
     )
   }
-  return <FirstScreen returned={task?.state === 'returned' ? task.why : null} onCheck={() => setChecking(true)} onLater={() => setAway(true)} />
+  const back = task?.state === 'returned' ? task : null
+  return <FirstScreen returned={back?.why ?? null} detail={back ?? undefined} onCheck={() => setChecking(true)} onLater={() => setAway(true)} />
 }

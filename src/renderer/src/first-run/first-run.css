@@ -290,6 +290,17 @@
   font-size: 11.5px;
 }
 
+.fr-lines {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  color: var(--zv-muted);
+  font: 11px/1.45 var(--zv-mono);
+}
+
 /* an agent getting ready: its real terminal, to answer what it asks */
 
 .fr-wait .fr-setup > :last-child {

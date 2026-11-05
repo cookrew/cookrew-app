@@ -61,12 +61,13 @@ export type FirstTaskWait = 'starting' | 'choice' | 'sign-in' | 'consent'
  * A FIRST TASK, UNTIL IT IS DONE. `holding`: the words are with main and the agent
  * is coming up. `sent`: the agent took them and the turn is running, or was
  * refused; only a good end moves the stage (FirstRunHints.tsx). `returned`: the
- * words go back to the box, with the reason (null when the person called it off).
+ * words go back to the box, with the reason (null when the person called it off):
+ * the card's own, why and fix and last lines (shared/launch-failure.ts), if it had one.
  */
 export type FirstTask =
   | { readonly state: 'holding'; readonly id: string; readonly words: string; readonly harness: string; readonly wait: FirstTaskWait }
   | { readonly state: 'sent'; readonly id: string; readonly words: string; readonly harness: string }
-  | { readonly state: 'returned'; readonly words: string; readonly why: string | null; readonly id?: string }
+  | { readonly state: 'returned'; readonly words: string; readonly why: string | null; readonly fix?: string; readonly lines?: readonly string[]; readonly id?: string }
 
 export function isFirstTask(value: unknown): value is FirstTask {
   const task = value as Partial<Record<string, unknown>> | null

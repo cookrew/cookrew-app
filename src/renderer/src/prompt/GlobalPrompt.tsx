@@ -459,7 +459,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       const folder = await firstFolder.ready()
       if (folder !== 'ready') {
         setBusy(false)
-        if (folder === 'failed') setError(FIRST_SCREEN_COPY.FOLDER_FAILED)
+        if (folder === 'failed') setError(firstFolder.problem() ?? FIRST_SCREEN_COPY.FOLDER_FAILED)
         return
       }
     }

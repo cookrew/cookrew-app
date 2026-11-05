@@ -3,8 +3,7 @@ import { existsSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { UNKNOWN_FACTS, type ToolFacts, type ToolState } from '../shared/preflight'
-import { harnessFor } from './harness'
-import { HARNESS_FACTS, HarnessScan, onPath } from './route/setup'
+import { HarnessScan, onPath } from './route/setup'
 
 /**
  * WHAT THIS MACHINE HAS (first run, the tool check).
@@ -152,15 +151,4 @@ export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host' 
     shellDirs: () => readLoginShellDirs(),
     ...deps
   }
-}
-
-/**
- * Can this command start in a pane? A command that is no known harness (a shell,
- * a remote line) has nothing to check. Asked before an agent is made for its
- * tool: a Conductor or a first agent with no binary is a card that dies.
- */
-export function agentToolReady(command: string, pathEnv: string, installed: (bin: string, pathEnv: string) => boolean = onPath): boolean {
-  const id = harnessFor(command)?.id
-  const bin = HARNESS_FACTS.find((facts) => facts.id === id)?.bin
-  return bin === undefined || installed(bin, pathEnv)
 }

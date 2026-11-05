@@ -130,6 +130,15 @@ describe('the first screen after a skip or a dead agent (bugs 3, 6)', () => {
     expect(screen('Claude Code stopped before it took your task.')).toContain('Claude Code stopped before it took your task.')
   })
 
+  it('shows what to do and the last lines, as the card would', () => {
+    const html = renderToStaticMarkup(
+      <FirstScreenView folder={null} problem="pi stopped (exit 1)." detail={{ fix: 'Its last lines are below. Send again to start it again.', lines: ['Error: no model', '<b>raw</b>'] }} onChoose={vi.fn()} onExample={vi.fn()} onCheck={vi.fn()} onLater={vi.fn()} />
+    )
+    expect(html).toContain('Its last lines are below.')
+    expect(html).toContain('Error: no model')
+    expect(html).not.toContain('<b>raw</b>')
+  })
+
   it('says what the workspace is called now that it has a folder', () => {
     const html = renderToStaticMarkup(<FirstScreenView folder="/Users/new/my-site" problem={null} onChoose={vi.fn()} onExample={vi.fn()} onCheck={vi.fn()} onLater={vi.fn()} />)
     expect(html).toContain(FIRST_SCREEN_COPY.named('my-site'))

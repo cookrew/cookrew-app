@@ -78,6 +78,9 @@ const SCREENS: Readonly<Record<string, string>> = {
 }
 const HOLD_MS = 500
 
+/** The word a preset runs, as a card's failure names it. */
+const commandOf = (preset: string): string => preset.split(' ')[0].toLowerCase()
+
 const STAND_IN_REPLY = 'Done. (A stand-in reply: the demo runs no real agent.)'
 const REFUSED_REPLY = 'API Error: 400 Unable to generate parser for this template'
 
@@ -155,7 +158,7 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     tell()
     setTimeout(() => {
       if (agent === 'dies') {
-        task = { state: 'returned', words, why: `${harness} stopped before it took your task. Your words are back in the box.`, id }
+        task = { state: 'returned', words, why: `${commandOf(harness)} stopped right after it started (exit 1).`, fix: 'Its last lines are below. Send again to start it again.', lines: ['Error: could not reach the model'], id }
         void api.removeNode(id)
       } else if (SCREENS[agent]) {
         task = { state: 'holding', id, words, harness, wait: waitOfScreen(SCREENS[agent]) }
@@ -198,7 +201,7 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     firstRunCanStart: (preset) => {
       const facts = freshFacts(mode)
       const state = preset === 'Codex' ? facts.codex : preset === 'Pi' ? facts.pi : preset === 'OpenCode' ? facts.opencode : facts.claude
-      return Promise.resolve(state === 'missing' ? `${preset} is not installed yet. Check this computer again to install it.` : null)
+      return Promise.resolve(state === 'missing' ? `Command not found: ${commandOf(preset)}. Install ${commandOf(preset)} or add it to PATH, then send again.` : null)
     },
     onFirstRun: (listener) => {
       viewListeners.add(listener)

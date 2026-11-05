@@ -15,9 +15,15 @@ import { firstFolder, useFirstFolder } from './first-folder'
  * where they will type from now on.
  */
 
+export interface ReturnedDetail {
+  fix?: string
+  lines?: readonly string[]
+}
+
 export function FirstScreenView({
   folder,
   problem,
+  detail,
   onChoose,
   onExample,
   onCheck,
@@ -25,6 +31,8 @@ export function FirstScreenView({
 }: {
   folder: string | null
   problem: string | null
+  /** What the agent's card had to say beyond why: what to do, and its last lines. */
+  detail?: ReturnedDetail
   onChoose: () => void
   onExample: (task: string) => void
   /** Back to the tool check. */
@@ -57,6 +65,8 @@ export function FirstScreenView({
             {problem}
           </p>
         )}
+        {problem && detail?.fix && <p className="fr-named">{detail.fix}</p>}
+        {problem && detail?.lines && detail.lines.length > 0 && <pre className="fr-lines">{detail.lines.join('\n')}</pre>}
         <p className="fr-try">{FIRST_SCREEN_COPY.TRY}</p>
         <ul className="fr-examples">
           {EXAMPLE_TASKS.map((task) => (
@@ -80,7 +90,7 @@ export function FirstScreenView({
   )
 }
 
-export function FirstScreen({ returned, onCheck, onLater }: { returned: string | null; onCheck: () => void; onLater: () => void }): React.JSX.Element {
+export function FirstScreen({ returned, detail, onCheck, onLater }: { returned: string | null; detail?: ReturnedDetail; onCheck: () => void; onLater: () => void }): React.JSX.Element {
   const folder = useFirstFolder()
   const [folderProblem, setProblem] = useState<string | null>(null)
   // Reached by Skip with no agent tool: say so before a send has to.
@@ -102,10 +112,11 @@ export function FirstScreen({ returned, onCheck, onLater }: { returned: string |
     <FirstScreenView
       folder={folder}
       problem={problem}
+      detail={folderProblem === null && returned !== null ? detail : undefined}
       onChoose={() => {
         setProblem(null)
         void firstFolder.choose().then((outcome) => {
-          if (outcome === 'failed') setProblem(FIRST_SCREEN_COPY.FOLDER_FAILED)
+          if (outcome === 'failed') setProblem(firstFolder.problem() ?? FIRST_SCREEN_COPY.FOLDER_FAILED)
           promptBox.focus()
         })
       }}

@@ -285,7 +285,7 @@ import { AccessStore, probeEndpoint } from './agent-access'
 import { FirstTasks } from './first-task'
 import { registerFirstRunIpc } from './first-run-ipc'
 import { FirstRunStore } from './first-run-store'
-import { agentToolReady, machineProbe, probeTools, readLoginShellDirs } from './preflight'
+import { machineProbe, probeTools, readLoginShellDirs } from './preflight'
 import { conductorWaits } from '../shared/first-run'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
@@ -1111,6 +1111,7 @@ const firstTasks = new FirstTasks<PtySession>({
     return () => lazyTerminals.release(id)
   },
   closing: (id) => closingTerminals.has(id),
+  failure: (id) => agents.lookup(id)?.failure ?? null,
   emit: () => {
     if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('first-run:changed', { stage: firstRunStore.read(), task: firstRunStore.task() })
   }
@@ -2843,7 +2844,7 @@ function registryInput(terminalId: string): AgentRegistryUpsert | null {
 }
 
 /** What the pane's boot script will export, so a check here is a check there. */
-const paneSearchPath = (): string => `${ptys.runtimeDir}:${process.env.PATH ?? ''}`
+const paneSearchPath = (): string => `${ptys.runtimeDir}:${panePath()}`
 
 /** The multiplexer's strict word on one pane: null when it could not say. */
 function panePresence(id: string): boolean | null {
@@ -2862,6 +2863,8 @@ async function liveNow(): Promise<ReadonlySet<string>> {
 
 type LaunchSubject = { id: string; command: string; cwd: string; claudeSessionId?: string | null }
 
+const harnessInstallLine = (word: string): string | null => HARNESS_FACTS.find((harness) => harness.bin === word)?.installLine ?? null
+
 /** What would stop this card booting, whatever runs now. Never a served one: its sandbox is its own. */
 function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
   const home = store.ownerOf(t.id)
@@ -2874,8 +2877,17 @@ function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
     path: paneSearchPath(),
     // The direct backend boots through a login shell, whose PATH this cannot see.
     checkCommand: multiplexer()?.capabilities.persistsAcrossRestart === true,
-    installLine: (word) => HARNESS_FACTS.find((harness) => harness.bin === word)?.installLine ?? null
+    installLine: harnessInstallLine
   })
+}
+
+/**
+ * Would this command start here, before any card exists? The same check, on every
+ * backend: a first agent or a Conductor is about to be made for this tool, and on
+ * the direct backend too a tool the check cannot find should not get a card.
+ */
+function toolBlockOf(command: string, cwd: string): LaunchFailure | null {
+  return launchBlock({ cwd, command, path: paneSearchPath(), checkCommand: true, installLine: harnessInstallLine })
 }
 
 /**
@@ -4345,7 +4357,7 @@ function seedConductorIfEmpty(workspaceId: string = store.focusedId): void {
   const state = store.workspaceState(workspaceId)
   if (state.nodes.some((node) => node.kind === 'terminal') || conductorWaits(firstRunStore.read())) return
   // A card whose tool is not here is a card that dies on its first key.
-  if (!agentToolReady(DEFAULT_ORCH_PRESET.command, panePath())) return
+  if (toolBlockOf(DEFAULT_ORCH_PRESET.command, state.dir)) return
   store.addNodeToWorkspace(workspaceId, {
     kind: 'terminal',
     id: randomUUID(),
@@ -8603,7 +8615,9 @@ function registerIpc(handlers: RestoreHandlers): void {
     tasks: firstTasks,
     blocked: (name) => {
       const found = PRESETS.find((p) => p.name === name)
-      return !found || agentToolReady(found.command, panePath()) ? null : `${found.name} is not installed yet. Check this computer again to install it.`
+      if (!found) return null
+      const block = toolBlockOf(found.command, store.focusedState.dir)
+      return block ? `${block.why} ${block.fix}` : null
     },
     probe: () =>
       probeTools(
