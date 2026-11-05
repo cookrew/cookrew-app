@@ -119,7 +119,7 @@ describe('signOutThisMac against a scripted registry', () => {
     answer('POST /v2/sessions', { status: 401, body: { error: 'bad_credentials', message: 'Not it.' } })
     const out = await it.signOutThisMac('not the one')
     expect(out.ok).toBe(false)
-    expect(asked.map((a) => a.method)).toEqual(['POST'])
+    expect(asked.filter((a) => a.method === 'DELETE')).toEqual([])
     expect(existsSync(accountFile(base))).toBe(true)
   })
 

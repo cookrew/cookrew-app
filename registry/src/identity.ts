@@ -204,6 +204,8 @@ export class IdentityService {
    */
   private readonly challenges = new Map<string, { exp: number; binding: string | null }>()
   private credentials: Credential[] = []
+  /** Deleted accounts, for this process: a token is short-lived, so this need not persist. */
+  private readonly forgotten = new Set<string>()
   private signingKey: { publicKey: KeyObject; privateKey: KeyObject } | null = null
 
   constructor(base: string, config: IdentityConfig = DEV_CONFIG, now: () => number = Date.now) {
@@ -262,6 +264,16 @@ export class IdentityService {
   /** Enrolled credential ids. For the dev harness only — see the dev routes. */
   enrolled(): string[] {
     return this.credentials.map((c) => c.credentialId)
+  }
+
+  /**
+   * An account was deleted: its older key record goes, and any token already
+   * minted for it stops here rather than running out its ten minutes.
+   */
+  forget(credentialId: string): void {
+    this.forgotten.add(credentialId)
+    this.credentials = this.credentials.filter((c) => c.credentialId !== credentialId)
+    writeFileSync(this.file, JSON.stringify(this.credentials, null, 2))
   }
 
   /**
@@ -459,6 +471,7 @@ export class IdentityService {
       }
       const claims = JSON.parse(fromB64url(body).toString('utf8')) as TokenClaims
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
+      if (this.forgotten.has(claims.sub)) return null
       if (claims.scope !== 'download' && claims.scope !== 'publish' && claims.scope !== 'call') return null
       if (claims.scope === 'call' && (typeof claims.aud !== 'string' || !AUDIENCE.test(claims.aud))) return null
       return claims

@@ -277,6 +277,20 @@ export class V2Seats {
   }
 
   /**
+   * AN ACCOUNT WAS DELETED. Every seat it held, and every seat at its teams,
+   * ends. A bought one stays as the record of a sale, which both sides may need
+   * for their accounts; a granted one was never money and goes.
+   */
+  closeAccount(username: string): void {
+    const at = this.now()
+    const touches = (seat: V2Seat): boolean => seat.account === username || seat.team.startsWith(`@${username}/`)
+    this.seats = this.seats
+      .filter((seat) => !touches(seat) || seat.source === 'bought')
+      .map((seat) => (touches(seat) && seat.endedAt === undefined ? { ...seat, endedAt: at } : seat))
+    this.save()
+  }
+
+  /**
    * END A SEAT. The record keeps it with its ending rather than dropping it:
    * an owner asking "who did I revoke" deserves an answer, and the holder's
    * call tokens stop being minted the moment this returns.

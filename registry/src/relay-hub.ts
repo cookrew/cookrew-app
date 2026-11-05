@@ -110,6 +110,11 @@ export class RelayHub {
     private readonly accepts: (name: string) => boolean = isDoorName
   ) {}
 
+  /** Every door held under this prefix, whether or not a directory lists it. */
+  namesUnder(prefix: string): string[] {
+    return [...this.doors.keys()].filter((name) => name.startsWith(prefix))
+  }
+
   /** The opaque tag the current holder of this name was opened with. */
   holderOf(name: string): string | null {
     return this.doors.get(name)?.holder ?? null

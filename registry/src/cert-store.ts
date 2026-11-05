@@ -106,6 +106,8 @@ export class CertStore {
   private readonly inFlight = new Map<string, { order: string; startedAt: number }>()
   /** Every order started this week, whoever started it. Persisted; see above. */
   private orders: number[] = []
+  /** Macs of deleted accounts, for as long as an order of theirs could still land. */
+  private readonly gone = new Set<string>()
   private changed: number
 
   constructor(
@@ -266,6 +268,7 @@ export class CertStore {
 
   /** The chain, checked against its own notAfter before it is believed. */
   settle(deviceId: string, chain: string): IssuedCert | null {
+    if (this.gone.has(deviceId)) return null
     const notAfter = notAfterOf(chain)
     if (notAfter === null) {
       this.fail(deviceId, 'the CA answered something that is not a certificate')
@@ -282,6 +285,7 @@ export class CertStore {
   }
 
   fail(deviceId: string, reason: string): void {
+    if (this.gone.has(deviceId)) return
     const held = this.record(deviceId)
     this.devices = {
       ...this.devices,
@@ -289,6 +293,24 @@ export class CertStore {
     }
     this.inFlight.delete(deviceId)
     this.challenges.delete(deviceId)
+    this.save()
+    this.touch()
+  }
+
+  /**
+   * THE ACCOUNT THAT OWNED THIS MAC WAS DELETED. Its chain, its failure and its
+   * challenges go. The weekly ledger stays: it counts orders against the CA,
+   * and a delete must not hand back allowance. `gone` is why an order already
+   * with the CA cannot write the record back when its answer lands.
+   */
+  forget(deviceId: string): void {
+    this.gone.add(deviceId)
+    const { [deviceId]: held, ...kept } = this.devices
+    this.inFlight.delete(deviceId)
+    this.challenges.delete(deviceId)
+    // A delete walks every id the account ever revoked; most never had a record.
+    if (held === undefined) return
+    this.devices = kept
     this.save()
     this.touch()
   }

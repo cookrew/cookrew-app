@@ -93,6 +93,11 @@ export class V2Events {
     this.now = now
   }
 
+  /** An account was deleted: its feed goes with it. */
+  forget(username: string): void {
+    this.log.delete(username)
+  }
+
   /**
    * Record what happened, and tell anyone listening live. The seq is global
    * and monotonic so a device that holds sessions on two accounts still never

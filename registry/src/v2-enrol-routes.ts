@@ -1,3 +1,4 @@
+import { mayGuessPassword } from './v2-step-up'
 import { readJsonBody } from './http'
 import { passwordGate } from './v2-hash-gate'
 import { json, noContent, refuse, refuseFactor, relyingParty, spendChallenge } from './v2-factor-http'
@@ -149,6 +150,8 @@ async function removeFactor(ctx: V2Context, signed: Signed, remove: () => boolea
     }
   } else if (typeof body.value.current !== 'string' || body.value.current === '') {
     refuseFactor(ctx.response, 403, 'password_required')
+    return
+  } else if (!mayGuessPassword(ctx, signed)) {
     return
   } else if (!(await ctx.v2.accounts.verifyPassword(username, body.value.current))) {
     refuse(ctx.response, 401, 'bad_credentials')

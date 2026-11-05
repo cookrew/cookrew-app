@@ -1,4 +1,5 @@
 import { FUNNEL_EVENTS, FUNNEL_PAYLOAD_KEYS, TELEMETRY_DEFAULT_ON } from '../../src/shared/funnel-events'
+import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES } from '../../src/shared/account-delete'
 import { GITHUB_REPO, FACTS } from './site-content'
 import { REACH_TTL_MS as DNS_CARD_TTL_MS } from './dns-zone'
 import { KEEP_DAYS as FUNNEL_KEEP_DAYS } from './funnel-counts'
@@ -24,12 +25,16 @@ import { SESSION_TTL_MS } from './v2-tokens'
  *
  * A retention figure with a constant in the registry is read from it, so
  * changing that limit changes the page. Everything else has to be re-read by
- * hand when its code moves: what the relay can read, that no delete route
- * exists, what a preset's limit or price gates, and the app's own 30-day sweep.
+ * hand when its code moves: what the relay can read, what a preset's limit or
+ * price gates, and the app's own 30-day sweep. What a delete takes is read from
+ * src/shared/account-delete.ts, the same list the app shows.
  *
  * The three placeholders are filled here, once. Until then the renderer marks
  * them on the page.
  */
+
+/** A list of sentences as one run of text inside a sentence of its own. */
+const asOneRun = (lines: readonly string[]): string => lines.join(' ')
 
 export const LEGAL_ENTITY = '[LEGAL ENTITY]'
 export const CONTACT_EMAIL = '[CONTACT EMAIL]'
@@ -318,11 +323,11 @@ export const PRIVACY: LegalDoc = {
               ['Team listings', 'Until the owner withdraws them. A listing does not expire on its own.'],
               ['Stars', 'Until you remove them.'],
               ['Private network addresses', `Until your Mac replaces its card or your account is deleted. Public DNS stops answering for a card more than ${hours(DNS_CARD_TTL_MS)} hours old.`],
-              ['Certificates', 'Kept for the Mac they belong to. There is no way yet to remove one from the registry, and public certificate logs keep theirs permanently.'],
+              ['Certificates', 'Kept for the Mac they belong to, until your account is deleted. Public certificate logs keep theirs permanently.'],
               ['Presets and the transparency log', 'Permanently. There is no unpublish, and the log is append-only by design.'],
               [
                 'Preset receipts, payout addresses and quotes',
-                `Receipts and payout addresses are kept, so that a purchase stays valid. A price quote stops counting ${hours(EXPIRED_RETENTION_MS)} hours after it expires, and leaves the file when the file is next cleaned up.`
+                `Receipts are kept, so that a purchase stays valid, including after an account is deleted. A payout address is kept until then. A price quote stops counting ${hours(EXPIRED_RETENTION_MS)} hours after it expires, and leaves the file when the file is next cleaned up.`
               ],
               ['Page and call counts', `${PULSE_KEEP_DAYS} days.`],
               ['Setup count daily totals', `${FUNNEL_KEEP_DAYS} days.`],
@@ -343,7 +348,7 @@ export const PRIVACY: LegalDoc = {
             'Change it. You can change your display name, avatar, password and sign-in factors.',
             'Remove it. You can take a device off your account, sign out, remove a star and withdraw a team listing.',
             'Turn off the setup counts at any time from the row in the app’s ⋯ menu.',
-            `Delete your account. There is no delete-account button yet, so write to ${CONTACT_EMAIL}. We hold no email address for you, so we will ask you to prove the account is yours, for example by signing in. We then delete your account, devices, desktops, sign-in factors, stars, team listings, payout address and older key record. Published presets and their log entries stay. Seat records and purchase receipts that others rely on may stay, certificates stay as described above, and counts, last-seen times and logs age out on their own schedule.`
+            `Delete your account. Choose Delete account on your profile in the app, or on your account page at /me if the account has a password. It needs that password, or in the app your sign-in provider if the account has none, and it happens at once. It takes: ${asOneRun(DELETE_ACCOUNT_TAKES)} What stays: ${asOneRun(DELETE_ACCOUNT_KEEPS)}`
           ]
         },
         {
@@ -541,7 +546,7 @@ export const TERMS: LegalDoc = {
       heading: 'Suspension and ending',
       blocks: [
         {
-          p: 'You can stop at any time: withdraw your listings, sign out your devices and ask us to delete your account. We may suspend an account, or remove a listing or preset from public view, if you break these terms, if the law requires it, or to protect people or the service. Where we reasonably can, we will tell you why.'
+          p: 'You can stop at any time: withdraw your listings, sign out your devices and delete your account. We may suspend an account, or remove a listing or preset from public view, if you break these terms, if the law requires it, or to protect people or the service. Where we reasonably can, we will tell you why.'
         }
       ]
     },
