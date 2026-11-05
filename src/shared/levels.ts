@@ -1,7 +1,7 @@
 /**
  * WHAT A DESKTOP SAYS ABOUT ITSELF, and what the registry says about a desktop.
  *
- *   desktop   MachineProfile, LevelsSnapshot, LevelsEvent, LevelsAgentDetail
+ *   desktop   MachineProfile, LevelsSnapshot, LevelsEvent
  *   registry  FleetMachine rows and FleetPresence for the signed-in account
  *
  * The zoom view reads every other device through this (zoom-fleet.ts).
