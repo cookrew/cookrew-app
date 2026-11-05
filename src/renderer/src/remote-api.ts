@@ -362,6 +362,27 @@ let events: ReconnectingStream | null = null
 /** Whether the shared stream has connected before. See `open` below. */
 let streamOpenedOnce = false
 
+/**
+ * WHO WANTS TO KNOW THE STREAM IS BACK. A frame sent into a gap is lost, and
+ * the stream reopens with the workspace but not with everything that only
+ * ever comes as changes. `live` is the one sign of a gap that always arrives:
+ * a browser redialling by itself never reports the stream down, so only the
+ * very first clean connect is passed over, and the page's own pull covers it.
+ */
+const streamBackListeners = new Set<() => void>()
+let streamConnectedOrFailed = false
+
+function noteStreamState(state: 'live' | 'reconnecting' | 'failed'): void {
+  const back = state === 'live' && streamConnectedOrFailed
+  streamConnectedOrFailed = true
+  if (back) for (const listener of streamBackListeners) listener()
+}
+
+function onStreamBack(listener: () => void): () => void {
+  streamBackListeners.add(listener)
+  return () => void streamBackListeners.delete(listener)
+}
+
 /** One per page load: what the companion spends to skip one snapshot. */
 function bootNonce(): string {
   const random = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
@@ -393,7 +414,10 @@ function sharedEvents(): ReconnectingStream {
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
       // than a fact the moment the channel dies.
-      onState: setPathLink,
+      onState: (state) => {
+        setPathLink(state)
+        noteStreamState(state)
+      },
       // A direct plane that cannot deliver this stream within SWITCH_PROVE_MS
       // carries nothing a session needs (live-stream.ts): the link is asked
       // whether it is there, and the plane given up when it is not, while
@@ -676,6 +700,14 @@ export function createRemoteApi(): CookrewApi {
       return result.agents
     },
     onAgentChanged: (cb) => subscribe('agent', cb),
+    // The changes above are all a page hears of the roster, so a stream that
+    // dropped may have missed one: an agent woken while the phone slept stayed
+    // OFFLINE over its own live spinner. A failed pull keeps the list it has;
+    // the next return asks again.
+    onAgentRegistry: (cb) =>
+      onStreamBack(() => {
+        void req<{ agents: unknown[] }>(apiPath('/api/agents')).then((result) => cb(result.agents), () => undefined)
+      }),
     listBoard: (window?: string) =>
       req<BoardSnapshotLike>(
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
