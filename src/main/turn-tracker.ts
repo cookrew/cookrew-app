@@ -485,6 +485,12 @@ interface TrackedTerminal {
    */
   sawInputThisTurn: boolean
   /**
+   * The read record this turn self-healed over, with nobody's input behind
+   * it: a repaint that showed a spinner, or the agent waking by itself. Null
+   * on any turn someone asked for. See healedOverRead.
+   */
+  healedOver: number | null
+  /**
    * The screen's last status line when this turn opened (lastStatusLine): the
    * PREVIOUS turn's finished line, which must not end this one.
    */
@@ -1247,7 +1253,8 @@ export class TurnTracker extends EventEmitter {
     ) {
       this.openTurnFacts.delete(terminalId)
     }
-    if (tail?.final === true && this.owedRest.delete(terminalId)) this.settleRest(terminalId, tail)
+    // A read tail is the one the rest was taken over: what is owed is still to come.
+    if (tail?.final === true && tail.seenAt === undefined && this.owedRest.delete(terminalId)) this.settleRest(terminalId, tail)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()
@@ -1462,8 +1469,13 @@ export class TurnTracker extends EventEmitter {
   seen(terminalId: string): void {
     const t = this.tracked.get(terminalId)
     // No mirror here (a card read on a watch, a phone): the ledger still says
-    // unread, and only this read can settle it.
-    if (!t) return this.markLastRecordSeen(terminalId)
+    // unread, and only this read can settle it. Every reader still holds the
+    // 'replied' it was told, so it is told again.
+    if (!t) {
+      this.markLastRecordSeen(terminalId)
+      this.announce({ ...this.paneActivity(terminalId), agent: true })
+      return
+    }
     if (t.phase !== 'replied') return
     t.phase = 'idle'
     this.markLastRecordSeen(terminalId)
@@ -1649,6 +1661,7 @@ export class TurnTracker extends EventEmitter {
     if (t !== undefined && ownsLiveTurn) {
       t.prompt = prompt
       t.sawInputThisTurn = true
+      t.healedOver = null
       this.openTurnFacts.set(terminalId, t.turnStartedAt)
       return
     }
@@ -2077,6 +2090,7 @@ export class TurnTracker extends EventEmitter {
       menuLeaving: null,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
+      healedOver: null,
       startStatus: null,
       lastHealScanAt: 0,
       // A mark that predates this attachment (set, then the view detached
@@ -2524,7 +2538,10 @@ export class TurnTracker extends EventEmitter {
     }
     if (!t.agent) return
     if (fed.submitted.length > 0) t.lastSubmitAt = Date.now()
-    if (fed.submitted.length > 0 || fed.buffer.trim().length > 0) t.sawInputThisTurn = true
+    if (fed.submitted.length > 0 || fed.buffer.trim().length > 0) {
+      t.sawInputThisTurn = true
+      t.healedOver = null
+    }
     // Words sent while a missing menu settles: nothing is left to answer, so
     // they are a prompt of their own, and go the way a prompt goes.
     if (t.menuLeaving !== null && fed.submitted.some((s) => s.length > 0)) this.leaveWait(t)
@@ -2936,6 +2953,7 @@ export class TurnTracker extends EventEmitter {
     t.phase = 'thinking'
     t.lastSubmitAt = 0
     t.sawInputThisTurn = true
+    t.healedOver = null
     t.prompt = prompt
     t.reply = null
     t.title = null
@@ -3268,6 +3286,9 @@ export class TurnTracker extends EventEmitter {
    * an unlabeled turn anchored at the current buffer state.
    */
   private resumeThinking(t: TrackedTerminal): void {
+    const tail = this.liveHistory(t.session.terminalId).at(-1)
+    const asked = this.hasPendingInput(t) || this.deliveredPrompt.has(t.session.terminalId)
+    t.healedOver = !asked && tail?.seenAt !== undefined ? tail.index : null
     if (t.turnStartedAt === 0) {
       t.snapshot = t.session.fullText()
     t.outputRev += 1
@@ -3316,6 +3337,20 @@ export class TurnTracker extends EventEmitter {
     t.title = last?.title ?? null
     t.phase = this.restOf(t.session.terminalId, last)
     this.push(t)
+  }
+
+  /**
+   * A self-heal that ended with nothing new on file (owner, 2026-11-06: First
+   * Run came back unread, its last record read and no record added). A spinner
+   * repainted over a read reply opens a turn nobody asked for, and its end is
+   * no reply: the file is what says one exists. An agent that really did wake
+   * by itself gets its record later, so the rest is owed (afterCommit).
+   */
+  private healedOverRead(t: TrackedTerminal): boolean {
+    const over = t.healedOver
+    t.healedOver = null
+    const tail = this.liveHistory(t.session.terminalId).at(-1)
+    return over !== null && tail?.index === over && tail.seenAt !== undefined
   }
 
   private poll(t: TrackedTerminal): void {
@@ -3413,6 +3448,11 @@ export class TurnTracker extends EventEmitter {
     // lastSubmitAt to 0, so a first ask that merged into a boot phantom would
     // otherwise finalize looking input-less and be discarded (the Codex
     // first-ask drop). sawInputThisTurn survives the resume.
+    if (this.writesFromFile(id) && this.healedOverRead(t)) {
+      this.owedRest.add(id)
+      this.rest(t)
+      return
+    }
     if (t.prompt === null && !t.sawInputThisTurn) {
       this.rest(t)
       return

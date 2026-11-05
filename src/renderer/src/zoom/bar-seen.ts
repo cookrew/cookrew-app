@@ -3,10 +3,11 @@ import { activeBrowserTab, type CanvasNode } from '../../../shared/model'
 
 /**
  * SINCE YOU LAST LOOKED (owner, 2026-11-04: the bar's groups are the
- * human-in-the-loop inbox, BarGroups.tsx). Per workspace, what each browser,
- * note or agent reply was when you last looked at it (its card or its full
- * view opened), and when a change to it was first noticed. Kept in
- * localStorage, so a reload or a restart does not hand everything back.
+ * human-in-the-loop inbox, BarGroups.tsx). Per workspace, what each browser or
+ * note was when you last looked at it (its card or its full view opened), and
+ * when a change to it was first noticed. Kept in localStorage, so a reload or
+ * a restart does not hand everything back. An agent's reply is not in here:
+ * whether it is read is the tracker's, the same on every device (bar-inbox.ts).
  *
  * The board keeps no change times, and a node is replaced, never edited, when
  * it changes (zoom-model.ts), so "what it is now" is its signature: a
@@ -45,9 +46,6 @@ export function itemSig(node: CanvasNode): string | null {
   return null
 }
 
-/** An agent's latest reply: its last output time, which only a new reply moves (agent-rows.ts · lastActivityAt). */
-export const replySig = (row: { readonly lastActivityAt: number }): string => `r${row.lastActivityAt}`
-
 export const pageOf = (book: SeenBook, workspace: string): SeenPage => book[workspace] ?? EMPTY_PAGE
 
 /** Not looked at as it is now. Before the baseline nothing is news. */
@@ -73,8 +71,7 @@ export function observe(book: SeenBook, workspace: string, items: readonly { rea
   const noticed = Object.fromEntries(
     [...Object.entries(page.noticed), ...fresh.map((i) => [i.id, [i.sig, now] as const] as const)].filter(([id]) => here.has(id))
   )
-  // An agent's reply (replySig, "r…") is not an item: pruning keeps it, or a read reply would come back.
-  const seen = big ? Object.fromEntries(Object.entries(page.seen).filter(([id, sig]) => here.has(id) || sig.startsWith('r'))) : page.seen
+  const seen = big ? Object.fromEntries(Object.entries(page.seen).filter(([id]) => here.has(id))) : page.seen
   return { ...book, [workspace]: { based: true, seen, noticed } }
 }
 

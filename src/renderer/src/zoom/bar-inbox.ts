@@ -1,6 +1,6 @@
 import type { AgentPhase } from '../agent-rows'
 import { inkStatusOfRow } from './ink-status'
-import { isUnseen, replySig, type SeenPage } from './bar-seen'
+import { isUnseen, type SeenPage } from './bar-seen'
 
 /**
  * WHAT A GROUP HOLDS IS WHAT NEEDS YOU (owner, 2026-11-04; cut
@@ -16,6 +16,11 @@ import { isUnseen, replySig, type SeenPage } from './bar-seen'
  * agent once it is answered (it stops waiting) — a glance at its card does not
  * unblock it, so it stays where you will find it. The stop itself still shows
  * everything.
+ *
+ * Whether a reply is read is the tracker's (`unread`, turnSeen), never this
+ * device's: a page refreshed or a phone beside the desktop must not disagree.
+ * Nothing on the client names a reply: `lastActivityAt` is reseeded from a time
+ * stamped per read, so a reply "seen" by it came back on every refresh.
  */
 
 export interface InboxRow {
@@ -28,18 +33,14 @@ export interface InboxRow {
 export interface AgentEntry {
   readonly id: string
   readonly why: 'waiting' | 'reply'
-  /** What looking at it marks seen (bar-seen.ts · replySig). */
-  readonly sig: string
 }
 
 const newestFirst = (a: InboxRow, b: InboxRow): number => b.lastActivityAt - a.lastActivityAt
 
-export function agentInbox(rows: readonly InboxRow[], page: SeenPage): AgentEntry[] {
+export function agentInbox(rows: readonly InboxRow[]): AgentEntry[] {
   const waiting = rows.filter((r) => r.phase === 'waiting').sort(newestFirst)
-  const replies = rows
-    .filter((r) => inkStatusOfRow(r.phase, r.unread === true) === 'done' && page.seen[r.id] !== replySig(r))
-    .sort(newestFirst)
-  return [...waiting.map((r) => ({ id: r.id, why: 'waiting' as const, sig: replySig(r) })), ...replies.map((r) => ({ id: r.id, why: 'reply' as const, sig: replySig(r) }))]
+  const replies = rows.filter((r) => inkStatusOfRow(r.phase, r.unread === true) === 'done').sort(newestFirst)
+  return [...waiting.map((r) => ({ id: r.id, why: 'waiting' as const })), ...replies.map((r) => ({ id: r.id, why: 'reply' as const }))]
 }
 
 export interface ItemEntry {
