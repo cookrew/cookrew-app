@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BOOT_DELAY_MS, CHECK_EVERY_MS, RETRY_MS, createUpdateCheck } from '../src/main/update-check'
+import { BOOT_DELAY_MS, CHECK_EVERY_MS, RETRY_MS, createUpdateCheck, type UpdateInstaller } from '../src/main/update-check'
 import { isNewer, readRelease, parseUpdateStatus } from '../src/shared/update-check'
 
 const page = (tag: string): string => `https://github.com/cookrew/cookrew-app/releases/tag/${tag}`
@@ -52,9 +52,10 @@ describe('readRelease', () => {
 
 describe('parseUpdateStatus', () => {
   it('keeps a status, and refuses a shape it cannot draw', () => {
-    const status = { on: true, available: { version: '0.5.0', url: page('v0.5.0') } }
+    const status = { on: true, auto: true, install: 'ready', available: { version: '0.5.0', url: page('v0.5.0') } }
     expect(parseUpdateStatus(status)).toEqual(status)
-    expect(parseUpdateStatus({ on: true, available: null })).toEqual({ on: true, available: null })
+    expect(parseUpdateStatus({ on: true, available: null })).toEqual({ on: true, auto: false, install: 'page', available: null })
+    expect(parseUpdateStatus({ ...status, install: 'teleport' })?.install).toBe('page')
     expect(parseUpdateStatus({ ok: false })).toBeNull()
     expect(parseUpdateStatus(null)).toBeNull()
   })
@@ -83,8 +84,14 @@ describe('createUpdateCheck', () => {
     await new Promise((resolve) => setImmediate(resolve))
   }
   const answer = (body: unknown, status = 200): typeof fetch => vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch
-  const make = (fetcher: typeof fetch, publish: (s: unknown) => void = () => undefined) =>
-    createUpdateCheck({ version: '0.4.0', file, fetch: fetcher, publish, now: () => now, schedule })
+  const make = (fetcher: typeof fetch, publish: (s: unknown) => void = () => undefined, installer?: UpdateInstaller) =>
+    createUpdateCheck({ version: '0.4.0', file, fetch: fetcher, publish, now: () => now, schedule, installer })
+  const installs = (over: Partial<UpdateInstaller> = {}): UpdateInstaller => ({
+    supported: vi.fn(async () => true),
+    fetch: vi.fn(async () => '0.5.0'),
+    install: vi.fn(),
+    ...over
+  })
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'update-check-'))
@@ -98,7 +105,7 @@ describe('createUpdateCheck', () => {
     const fetcher = answer(release('v0.5.0'))
     const check = make(fetcher)
     check.start()
-    expect(check.status()).toEqual({ on: true, available: null })
+    expect(check.status()).toMatchObject({ on: true, available: null })
     await pass(BOOT_DELAY_MS - 1)
     expect(fetcher).not.toHaveBeenCalled()
     await pass(1)
@@ -110,7 +117,7 @@ describe('createUpdateCheck', () => {
     const check = make(answer(release('v0.5.0')), publish)
     check.start()
     await pass(BOOT_DELAY_MS)
-    const status = { on: true, available: { version: '0.5.0', url: page('v0.5.0') } }
+    const status = { on: true, auto: false, install: 'page', available: { version: '0.5.0', url: page('v0.5.0') } }
     expect(check.status()).toEqual(status)
     expect(publish).toHaveBeenLastCalledWith(status)
   })
@@ -168,7 +175,7 @@ describe('createUpdateCheck', () => {
     const check = make(fetcher)
     check.start()
     await pass(BOOT_DELAY_MS)
-    expect(check.setOn(false)).toEqual({ on: false, available: null })
+    expect(check.setOn(false)).toMatchObject({ on: false, available: null })
     expect(timers).toEqual([])
     const again = make(fetcher)
     again.start()
@@ -210,7 +217,7 @@ describe('createUpdateCheck', () => {
 
   it('a broken file reads as a fresh start', () => {
     writeFileSync(file, 'not json')
-    expect(make(answer(release('v0.4.0'))).status()).toEqual({ on: true, available: null })
+    expect(make(answer(release('v0.4.0'))).status()).toMatchObject({ on: true, available: null })
   })
 
   it('sends no identity: no cookie, no token, only what GitHub requires', async () => {
@@ -221,5 +228,106 @@ describe('createUpdateCheck', () => {
     expect(url).toBe('https://api.github.com/repos/cookrew/cookrew-app/releases/latest')
     expect(Object.keys(init.headers as Record<string, string>).sort()).toEqual(['Accept', 'User-Agent'])
     expect(JSON.parse(readFileSync(file, 'utf8')).on).toBe(true)
+  })
+
+  describe('a build that can install itself', () => {
+    it('says so as soon as it knows, before anything is found', async () => {
+      const check = make(answer(release('v0.4.0')), undefined, installs())
+      expect(check.status().auto).toBe(false)
+      check.start()
+      await pass(0)
+      expect(check.status().auto).toBe(true)
+    })
+
+    it('downloads a newer release by itself, then offers the restart', async () => {
+      let land: (version: string) => void = () => undefined
+      const installer = installs({ fetch: vi.fn(() => new Promise<string>((resolve) => (land = resolve))) })
+      const publish = vi.fn()
+      const check = make(answer(release('v0.5.0')), publish, installer)
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      expect(check.status().install).toBe('downloading')
+      land('0.5.0')
+      await pass(0)
+      expect(check.status().install).toBe('ready')
+      expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ install: 'ready' }))
+    })
+
+    it('never restarts on its own: only the owner’s press installs', async () => {
+      const installer = installs()
+      const check = make(answer(release('v0.5.0')), undefined, installer)
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      await pass(CHECK_EVERY_MS)
+      expect(installer.install).not.toHaveBeenCalled()
+      expect(check.restart()).toBe(true)
+      expect(installer.install).toHaveBeenCalledOnce()
+    })
+
+    it('refuses a restart with nothing downloaded', async () => {
+      const installer = installs()
+      const check = make(answer(release('v0.4.0')), undefined, installer)
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      expect(check.restart()).toBe(false)
+      expect(installer.install).not.toHaveBeenCalled()
+    })
+
+    it('a failed download falls back to the release page, and the next check tries again', async () => {
+      const fetcher = vi.fn<UpdateInstaller['fetch']>().mockRejectedValueOnce(new Error('read-only volume')).mockResolvedValue('0.5.0')
+      const check = make(
+        vi.fn(async () => new Response(JSON.stringify(release('v0.5.0')))) as unknown as typeof fetch,
+        undefined,
+        installs({ fetch: fetcher })
+      )
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      expect(check.status()).toMatchObject({ install: 'page', available: { version: '0.5.0' } })
+      await pass(CHECK_EVERY_MS)
+      expect(check.status().install).toBe('ready')
+    })
+
+    it('a download of another version is not this update', async () => {
+      const check = make(answer(release('v0.5.0')), undefined, installs({ fetch: vi.fn(async () => '0.4.9') }))
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      expect(check.status().install).toBe('page')
+    })
+
+    it('does not download what it already holds', async () => {
+      const installer = installs()
+      const check = make(vi.fn(async () => new Response(JSON.stringify(release('v0.5.0')))) as unknown as typeof fetch, undefined, installer)
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      await pass(CHECK_EVERY_MS)
+      expect(installer.fetch).toHaveBeenCalledOnce()
+    })
+
+    it('a build that cannot install itself only ever offers the page', async () => {
+      const installer = installs({ supported: vi.fn(async () => false) })
+      const check = make(answer(release('v0.5.0')), undefined, installer)
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      expect(check.status()).toMatchObject({ auto: false, install: 'page', available: { version: '0.5.0' } })
+      expect(installer.fetch).not.toHaveBeenCalled()
+    })
+
+    it('off downloads nothing', async () => {
+      const installer = installs()
+      const check = make(answer(release('v0.5.0')), undefined, installer)
+      check.start()
+      check.setOn(false)
+      await pass(BOOT_DELAY_MS)
+      expect(installer.fetch).not.toHaveBeenCalled()
+    })
+
+    it('picks up a release it already knew about soon after launch, not six hours later', async () => {
+      writeFileSync(file, JSON.stringify({ on: true, checkedAt: now, latest: { version: '0.5.0', url: page('v0.5.0') } }))
+      const installer = installs()
+      const check = make(answer(release('v0.5.0')), undefined, installer)
+      check.start()
+      await pass(BOOT_DELAY_MS)
+      expect(check.status().install).toBe('ready')
+    })
   })
 })

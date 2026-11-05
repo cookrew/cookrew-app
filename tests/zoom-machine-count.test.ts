@@ -28,7 +28,7 @@ describe('the machine label', () => {
 
   it('is what the devices stop prints', () => {
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-    expect(view).toContain('{model.frame.workspaces.length} workspaces · {model.deviceAgents} agents')
+    expect(view).toContain("${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}")
     expect(view).not.toContain('{rows.length} agents')
   })
 })
