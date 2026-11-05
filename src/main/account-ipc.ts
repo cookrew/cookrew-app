@@ -755,6 +755,19 @@ async function providerProof(deps: AccountIpcDeps, act: StepUpAct): Promise<Acco
   return deps.lock.locked ? LOCKED : proved
 }
 
+/**
+ * ADDING A WAY BACK IN, on an account whose only proof is its provider: the
+ * trip comes first. On a password account `proof` is simply absent.
+ */
+async function withAddProof<T>(
+  deps: AccountIpcDeps,
+  act: (proof?: { stepUp: string }) => Promise<AccountResult<T>>,
+): Promise<AccountResult<T>> {
+  const proof = await providerProof(deps, 'add-factor')
+  if (proof === null) return act()
+  return proof.ok ? act({ stepUp: proof.value }) : proof
+}
+
 /** The proof a factor removal sends: what was typed, or a provider's. */
 async function removalProof(
   deps: AccountIpcDeps,
@@ -900,7 +913,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:signOut': (password: unknown): Promise<AccountResult<AccountStatus>> =>
       signOut(deps, asString(password)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
-      attempt('New recovery codes could not be made', () => deps.accounts.recoveryCodes()),
+      attempt('New recovery codes could not be made', () =>
+        withAddProof(deps, (proof) => deps.accounts.recoveryCodes(proof)),
+      ),
     /**
      * SAVE AS FILE. The codes are read from main's own memory, never from the
      * call — the renderer already has them on screen, and a channel that took
@@ -935,12 +950,15 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       ),
     // ZERO IS A SETTING, not a missing argument: it is the OFF choice in the
     // delay picker, and it has to survive the coercion that guards this bridge.
-    'account:setLock': (ms: unknown) =>
-      settled(deps, here('The lock setting could not be saved on this Mac'), () => {
+    'account:setLock': (ms: unknown) => {
+      // Turning the lock off opens it, so it cannot be turned off from behind it.
+      if (deps.lock.locked) return LOCKED
+      return settled(deps, here('The lock setting could not be saved on this Mac'), () => {
         const value = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0
         deps.accounts.setLockAfterMs(value)
         deps.lock.setLockAfterMs(value)
-      }),
+      })
+    },
     'account:setProfile': async (patch: unknown): Promise<AccountResult<AccountProfile>> => {
       const record = (typeof patch === 'object' && patch !== null ? patch : {}) as Record<
         string,
@@ -1015,7 +1033,8 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:factors': (): Promise<AccountResult<FactorsView>> => deps.factors.view(),
     // THE SECRET CROSSES THE BRIDGE ONCE, to be drawn. It is never logged on
     // either side, and the sheet holds it only while it is on screen.
-    'account:totpEnrol': (): Promise<AccountResult<TotpEnrolment>> => deps.factors.enrolTotp(),
+    'account:totpEnrol': (): Promise<AccountResult<TotpEnrolment>> =>
+      withAddProof(deps, (proof) => deps.factors.enrolTotp(proof)),
     'account:totpConfirm': (code: unknown): Promise<AccountResult<void>> =>
       deps.factors.confirmTotp(asString(code)),
     // BOTH REMOVALS CARRY THE PASSWORD. The registry gates them on it, and a
@@ -1028,7 +1047,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:passkeys': (): Promise<AccountResult<readonly PasskeySummary[]>> =>
       deps.factors.passkeys(),
     'account:passkeyOptions': (): Promise<AccountResult<Record<string, unknown>>> =>
-      deps.factors.passkeyOptions(),
+      withAddProof(deps, (proof) => deps.factors.passkeyOptions(proof)),
     'account:passkeyAdd': (input: unknown): Promise<AccountResult<PasskeySummary>> => {
       const record = asRecord(input)
       return deps.factors.addPasskey({

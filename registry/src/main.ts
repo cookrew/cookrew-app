@@ -214,6 +214,9 @@ const identity = new IdentityService(DATA, resolved.config)
 // desktops: one store of where a Mac is, answered on two protocols.
 const v2 = createV2(DATA, {
   origin: resolved.config.origin,
+  // Behind a proxy every caller is one address, and one stranger would spend
+  // the sign-in budget for everybody. The same peers the funnel names.
+  trustedProxies: flag('funnel-proxies', process.env.FUNNEL_PROXIES ?? '').split(',').filter(Boolean),
   // Third-party sign-in. Environment only, never a flag: a flag is readable in
   // `ps`. No pair means no button and nothing else changes.
   oauth: readOAuthEnv(process.env, (message) => console.error(message))

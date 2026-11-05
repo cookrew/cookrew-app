@@ -38,6 +38,7 @@ export type StepUpAct =
   | 'not-me'
   | 'link-provider'
   | 'unlink-provider'
+  | 'add-factor'
 
 /**
  * The list, in the order the architecture note states it. Exported as an array
@@ -53,7 +54,8 @@ export const STEP_UP_ACTS: readonly StepUpAct[] = [
   'end-seat',
   'not-me',
   'link-provider',
-  'unlink-provider'
+  'unlink-provider',
+  'add-factor'
 ]
 
 /**
@@ -90,11 +92,15 @@ export const isStepUpAct = (value: unknown): value is StepUpAct =>
  *                changing the password is the one act that CLEARS the alarm:
  *                behind the gate it would be a lock with its key inside.
  *   `none`     — no registry route exists for this act in this cut.
+ *   `passwordless` — the gate, on an account with no password and only there.
+ *                A password account's clients ask for nothing on these routes
+ *                and keep working unchanged; that leaves its bearer able to
+ *                reach them, which is the older gap and is named as one.
  *
  * The registry's own test suite drives every act in this table over HTTP, so a
  * route that loses its threshold cannot leave this file still claiming one.
  */
-export type StepUpEnforcement = 'gate' | 'password' | 'none'
+export type StepUpEnforcement = 'gate' | 'password' | 'none' | 'passwordless'
 
 export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   /** POST /v2/me/password — and the only way out of a raised alarm. */
@@ -119,7 +125,9 @@ export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   /** POST /v2/oauth/:provider/start with {intent:'link'}. */
   'link-provider': 'gate',
   /** DELETE /v2/me/links/:provider. */
-  'unlink-provider': 'gate'
+  'unlink-provider': 'gate',
+  /** POST /v2/me/recovery-codes · /v2/me/totp/enrol · /v2/me/passkeys/options. */
+  'add-factor': 'passwordless'
 }
 
 /**
@@ -139,5 +147,6 @@ export const STEP_UP_SENTENCE: Record<StepUpAct, string> = {
   'end-seat': 'Prove it is you before ending somebody else’s seat.',
   'not-me': 'Prove it is you before locking the account down.',
   'link-provider': 'Prove it is you before adding a way to sign in.',
-  'unlink-provider': 'Prove it is you before removing a way to sign in.'
+  'unlink-provider': 'Prove it is you before removing a way to sign in.',
+  'add-factor': 'Prove it is you before adding a way back into the account.'
 }

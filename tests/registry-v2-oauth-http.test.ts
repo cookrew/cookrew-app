@@ -387,7 +387,8 @@ describe('configured', () => {
 
   it('RECOVERY CODES STILL WORK when the provider account is lost', async () => {
     const { token } = await claimByProvider('github', 'octo')
-    const minted = await call('POST', '/v2/me/recovery-codes', {}, token)
+    const proved = await redeem(await trip('github', { intent: 'step-up', act: 'add-factor' }, token), undefined, token)
+    const minted = await call('POST', '/v2/me/recovery-codes', { stepUp: proved.body.stepUp }, token)
     const codes = minted.body.codes as string[]
     const stranger = device('After the loss')
     const rescued = await call('POST', '/v2/recovery', { username: 'octo', code: codes[0], device: stranger })
@@ -427,7 +428,8 @@ describe('configured', () => {
 
     it('a factor can be removed with a proof, since there is no password to send', async () => {
       const { token } = await claimByProvider('github', 'octo')
-      const begun = await call('POST', '/v2/me/totp/enrol', {}, token)
+      const added = await redeem(await trip('github', { intent: 'step-up', act: 'add-factor' }, token), undefined, token)
+      const begun = await call('POST', '/v2/me/totp/enrol', { stepUp: added.body.stepUp }, token)
       expect(begun.status).toBe(201)
       const bare = await call('DELETE', '/v2/me/totp', {}, token)
       expect(bare.status).toBe(403)
@@ -536,6 +538,73 @@ describe('configured', () => {
     })
   })
 
+  describe('review: one id, one key', () => {
+    const otherKey = { kty: 'OKP', crv: 'Ed25519', x: 'YmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm8' }
+
+    it('a known device id with a new key does not skip the ladder or replace the key', async () => {
+      const { dev } = await claimByProvider('github', 'octo')
+      const answered = await redeem(await trip('github'), { ...dev, jwk: otherKey })
+      expect(answered.status).toBe(400)
+      expect(answered.body.error).toBe('bad_device')
+      expect(v2.accounts.get('octo')?.devices[0].jwk.x).toBe(dev.jwk.x)
+    })
+
+    it('the password door refuses it the same way', async () => {
+      const { dev } = await claimByPassword('alice')
+      const answered = await call('POST', '/v2/sessions', { username: 'alice', password: PASSWORD, device: { ...dev, jwk: otherKey } })
+      expect(answered.status).toBe(400)
+      expect(v2.accounts.get('alice')?.devices[0].jwk.x).toBe(dev.jwk.x)
+    })
+
+    it('the same key on the same id still signs in', async () => {
+      const { dev } = await claimByProvider('github', 'octo')
+      expect((await redeem(await trip('github'), dev)).status).toBe(201)
+    })
+  })
+
+  describe('review: a stolen session on a passwordless account', () => {
+    it('cannot mint rescue codes or enrol a factor on the bearer alone', async () => {
+      const { token } = await claimByProvider('github', 'octo')
+      expect((await call('POST', '/v2/me/recovery-codes', {}, token)).status).toBe(403)
+      expect((await call('POST', '/v2/me/totp/enrol', {}, token)).status).toBe(403)
+      expect((await call('POST', '/v2/me/passkeys/options', {}, token)).status).toBe(403)
+      expect(v2.accounts.get('octo')?.recovery).toHaveLength(0)
+    })
+
+    it('a proof from the provider opens each one, once', async () => {
+      const { token } = await claimByProvider('github', 'octo')
+      const proved = await redeem(await trip('github', { intent: 'step-up', act: 'add-factor' }, token), undefined, token)
+      const minted = await call('POST', '/v2/me/recovery-codes', { stepUp: proved.body.stepUp }, token)
+      expect(minted.status).toBe(201)
+      expect((await call('POST', '/v2/me/recovery-codes', { stepUp: proved.body.stepUp }, token)).status).toBeGreaterThanOrEqual(400)
+    })
+
+    it('a password account mints as it always did', async () => {
+      const { token } = await claimByPassword('alice')
+      expect((await call('POST', '/v2/me/recovery-codes', {}, token)).status).toBe(201)
+    })
+
+    it('a proof earned by one session cannot be spent by another of the same account', async () => {
+      const { token, dev } = await claimByProvider('github', 'octo')
+      const other = await redeem(await trip('github'), dev)
+      const proved = await redeem(await trip('github', { intent: 'step-up', act: 'mint-join-code' }, token), undefined, token)
+      const spent = await call('POST', '/v2/me/join-codes', { stepUp: proved.body.stepUp }, String(other.body.token))
+      expect(spent.status).toBeGreaterThanOrEqual(400)
+      expect((await call('POST', '/v2/me/join-codes', { stepUp: proved.body.stepUp }, token)).status).toBe(201)
+    })
+  })
+
+  it('"not me" voids a join code in flight on a passwordless account', async () => {
+    const { token } = await claimByProvider('github', 'octo')
+    const proved = await redeem(await trip('github', { intent: 'step-up', act: 'mint-join-code' }, token), undefined, token)
+    const minted = await call('POST', '/v2/me/join-codes', { stepUp: proved.body.stepUp }, token)
+    const answered = await redeem(await trip('github'), device('Stranger'))
+    const asked = await call('POST', `/v2/sessions/${String(answered.body.pending)}/approve`, {})
+    const alarm = await redeem(await trip('github', { intent: 'step-up', act: 'not-me' }, token), undefined, token)
+    await call('POST', `/v2/me/approvals/${String(asked.body.approval)}`, { decision: 'not-me', stepUp: alarm.body.stepUp }, token)
+    expect((await call('POST', '/v2/join', { code: minted.body.code, device: device('Thief') })).status).toBe(401)
+  })
+
   it('a code-joined machine is told the account has no password', async () => {
     const { token } = await claimByProvider('github', 'octo')
     const proved = await redeem(await trip('github', { intent: 'step-up', act: 'mint-join-code' }, token), undefined, token)
@@ -572,6 +641,14 @@ describe('configured', () => {
       expect(done.status).toBe(200)
       expect(done.body.status).toBe('new')
       expect(fake.device.lastBody?.get('client_secret')).toBeNull()
+    })
+
+    it('hands a device flow no email: whoever holds the code may not be the person who approved', async () => {
+      const { flow, verifier } = await begin()
+      fake.device.answer = 'ok'
+      const done = await call('POST', `/v2/oauth/device/${flow}/poll`, { verifier, device: device() })
+      expect(done.body.status).toBe('new')
+      expect(JSON.stringify(done.body)).not.toContain('octo@example.com')
     })
 
     it('holds the poll to the provider interval, whoever is asking', async () => {

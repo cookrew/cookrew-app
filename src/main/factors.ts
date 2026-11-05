@@ -126,10 +126,10 @@ export class Factors {
    * NOT ACTIVE YET, and the sheet says so — the factor exists on the account
    * only once `confirmTotp` has sent a code the registry accepted.
    */
-  async enrolTotp(): Promise<AccountResult<TotpEnrolment>> {
+  async enrolTotp(proof?: { stepUp: string }): Promise<AccountResult<TotpEnrolment>> {
     const result = await this.accounts.call<{ secret?: string; otpauth?: string }>(
       '/v2/me/totp/enrol',
-      { method: 'POST' },
+      { method: 'POST', ...(proof === undefined ? {} : { body: JSON.stringify(proof) }) },
     )
     if (!result.ok) return result
     const { secret, otpauth } = result.value
@@ -171,9 +171,10 @@ export class Factors {
    * not a party to the WebAuthn ceremony, and re-shaping a challenge in the
    * middle of one is how a passkey ends up bound to the wrong thing.
    */
-  passkeyOptions(): Promise<AccountResult<Record<string, unknown>>> {
+  passkeyOptions(proof?: { stepUp: string }): Promise<AccountResult<Record<string, unknown>>> {
     return this.accounts.call<Record<string, unknown>>('/v2/me/passkeys/options', {
       method: 'POST',
+      ...(proof === undefined ? {} : { body: JSON.stringify(proof) }),
     })
   }
 

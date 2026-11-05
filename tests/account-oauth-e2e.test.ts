@@ -117,6 +117,13 @@ async function joinByGithub(m: Mac, username = 'octo'): Promise<void> {
   expect(made.ok).toBe(true)
 }
 
+/** Rescue codes on a passwordless account: minted under a provider proof. */
+async function codesFor(m: Mac): ReturnType<Accounts['recoveryCodes']> {
+  const proved = await m.app.providerProve('add-factor')
+  if (!proved.ok) throw new Error(`no proof: ${proved.reason}`)
+  return m.app.recoveryCodes({ stepUp: proved.value })
+}
+
 describe('with no provider configured', () => {
   beforeEach(() => boot(false))
 
@@ -341,7 +348,7 @@ describe('configured', () => {
       const m = mac()
       await joinByGithub(m)
       m.app.setPasscode(PASSCODE)
-      const codes = await m.app.recoveryCodes()
+      const codes = await codesFor(m)
       if (!codes.ok) throw new Error('no codes')
       expect(await m.app.rescuePasscode('NOT-A-CODE')).toMatchObject({ ok: false })
       expect(m.app.verifyUnlock(PASSCODE)).toBe(true)
@@ -866,7 +873,7 @@ describe('review: the provider is lost', () => {
   it('a rescue code links a new provider, and the new one then proves everything', async () => {
     const m = mac()
     await joinByGithub(m)
-    const codes = await m.app.recoveryCodes()
+    const codes = await codesFor(m)
     if (!codes.ok) throw new Error('no codes')
     const lock = new IdleLock({ lockAfterMs: 0, verify: () => false })
     const handlers = accountHandlers({
@@ -883,5 +890,50 @@ describe('review: the provider is lost', () => {
     // GitHub is gone for good: from here the newest link is what answers.
     fake.github = { id: 999, login: 'not-me-any-more', emails: [] }
     expect(await handlers['account:joinCode']('')).toMatchObject({ ok: true })
+  })
+})
+
+describe('review: channels that widen or open', () => {
+  beforeEach(() => boot(true))
+
+  const handlersFor = (m: Mac, lock: IdleLock): ReturnType<typeof accountHandlers> =>
+    accountHandlers({
+      accounts: m.app,
+      lock,
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    })
+
+  it('the lock setting cannot open the lock', async () => {
+    const m = mac()
+    await m.app.claim({ username: 'alice', password: PASSWORD })
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false })
+    const handlers = handlersFor(m, lock)
+    lock.lock()
+    expect(await handlers['account:setLock'](0)).toMatchObject({ ok: false, reason: 'locked' })
+    expect(lock.locked).toBe(true)
+    lock.proven()
+    expect(await handlers['account:setLock'](0)).toMatchObject({ ok: true })
+  })
+
+  it('a passwordless Mac proves at the provider for codes, an authenticator and a passkey', async () => {
+    const m = mac()
+    await joinByGithub(m)
+    const handlers = handlersFor(m, new IdleLock({ lockAfterMs: 0, verify: () => false }))
+    expect(await handlers['account:recoveryCodes']()).toMatchObject({ ok: true })
+    expect(await handlers['account:totpEnrol']()).toMatchObject({ ok: true })
+    expect(await handlers['account:passkeyOptions']()).toMatchObject({ ok: true })
+  })
+
+  it('a password Mac opens no browser for any of them', async () => {
+    const m = mac()
+    await m.app.claim({ username: 'alice', password: PASSWORD })
+    const handlers = handlersFor(m, new IdleLock({ lockAfterMs: 0, verify: () => false }))
+    expect(await handlers['account:recoveryCodes']()).toMatchObject({ ok: true })
+    expect(await handlers['account:totpEnrol']()).toMatchObject({ ok: true })
+    expect(m.opened).toEqual([])
   })
 })

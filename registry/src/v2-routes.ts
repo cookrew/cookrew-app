@@ -34,7 +34,7 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { readAndStepUp } from './v2-step-up'
+import { heldIfPasswordless, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 
@@ -646,6 +646,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'recovery-codes' && method === 'POST') {
+    if (!(await heldIfPasswordless(ctx, signed, 'add-factor'))) return
     const codes = v2.accounts.mintRecoveryCodes(account.username, claims.jti)
     // Shown ONCE. They are stored hashed, so this is the only moment they
     // exist in readable form anywhere.

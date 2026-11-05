@@ -6,7 +6,7 @@ import { parseRegistration } from './v2-passkeys'
 import { qrRows } from './v2-qr'
 import type { Decision } from './v2-pending'
 import { signedIn, type Signed, type V2Context } from './v2-routes'
-import { stepUpHeld } from './v2-step-up'
+import { heldIfPasswordless, stepUpHeld } from './v2-step-up'
 
 /**
  * IDENTITY v2, PHASE 4 — ADDING A FACTOR, AND ANSWERING FOR ONE.
@@ -65,7 +65,9 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     return true
   }
   if (rest.length === 2 && rest[0] === 'totp' && rest[1] === 'enrol' && method === 'POST') {
-    beginTotp(ctx, who)
+    void heldIfPasswordless(ctx, signed, 'add-factor').then((go) => {
+      if (go) beginTotp(ctx, who)
+    })
     return true
   }
   if (rest.length === 2 && rest[0] === 'totp' && rest[1] === 'confirm' && method === 'POST') {
@@ -73,14 +75,16 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     return true
   }
   if (rest.length === 1 && rest[0] === 'totp' && method === 'DELETE') {
-    void removeFactor(ctx, who, () => {
+    void removeFactor(ctx, signed, () => {
       ctx.v2.factors.store.clearTotp(who)
       return true
     })
     return true
   }
   if (rest.length === 2 && rest[0] === 'passkeys' && rest[1] === 'options' && method === 'POST') {
-    passkeyOptions(ctx, who, signed.account.displayName)
+    void heldIfPasswordless(ctx, signed, 'add-factor').then((go) => {
+      if (go) passkeyOptions(ctx, who, signed.account.displayName)
+    })
     return true
   }
   if (rest.length === 1 && rest[0] === 'passkeys' && method === 'POST') {
@@ -89,7 +93,7 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
   }
   if (rest.length === 2 && rest[0] === 'passkeys' && method === 'DELETE') {
     const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    void removeFactor(ctx, who, () => UUID.test(id) && ctx.v2.factors.store.removePasskey(who, id))
+    void removeFactor(ctx, signed, () => UUID.test(id) && ctx.v2.factors.store.removePasskey(who, id))
     return true
   }
   refuse(ctx.response, 404, 'not_found')
@@ -109,7 +113,8 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
  * unusual and it is deliberate: the alternative is a verb that says "remove"
  * and a route that means "remove, and also lower the account's floor".
  */
-async function removeFactor(ctx: V2Context, username: string, remove: () => boolean): Promise<void> {
+async function removeFactor(ctx: V2Context, signed: Signed, remove: () => boolean): Promise<void> {
+  const username = signed.account.username
   if (passwordGate.overloaded) {
     refuse(ctx.response, 503, 'busy', { 'retry-after': '5' })
     return
@@ -138,7 +143,7 @@ async function removeFactor(ctx: V2Context, username: string, remove: () => bool
   // provider round trip left instead, spent here like any other step-up.
   const passwordless = ctx.v2.accounts.get(username)?.passwordless === true
   if (passwordless) {
-    if (!ctx.v2.factors.pending.spendAuthorised(username, 'remove-factor', body.value.stepUp)) {
+    if (!ctx.v2.factors.pending.spendAuthorised(username, 'remove-factor', body.value.stepUp, signed.claims.jti)) {
       refuseFactor(ctx.response, 403, 'provider_required')
       return
     }
@@ -265,6 +270,9 @@ async function answerApproval(ctx: V2Context, signed: Signed, id: string): Promi
     // beside the one just slammed; this one is kept only so its own poll can
     // say "denied" rather than "expired".
     ctx.v2.factors.pending.closeAllFor(username, answered.approval.pending)
+    // A code the stranger may be holding goes too. A password account's redeem
+    // is shut by the password lock; a passwordless account has no such lock.
+    if (signed.account.passwordless === true) ctx.v2.joinCodes.voidFor(username)
     // §06: "not me" empties the queue — every seat and reach request the
     // account is party to goes with the alarm — and every device is told.
     ctx.v2.requests.emptyFor(username)

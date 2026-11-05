@@ -1342,7 +1342,7 @@ export class Accounts {
       this.signingIn = null
       // The registry attached one key; a file holding another is a Mac that can
       // never prove it is the device on the account.
-      if (typeof body.deviceId === 'string' && body.deviceId !== minted.deviceId) {
+      if (typed === null && typeof body.deviceId === 'string' && body.deviceId !== minted.deviceId) {
         return { ok: false, reason: 'wrong_identity' }
       }
       this.saveClaimed({
@@ -1358,12 +1358,15 @@ export class Accounts {
       return { ok: true, value: session }
     }
     if (session === null) return { ok: false, reason: 'unknown' }
-    // A SESSION FOR ANOTHER ACCOUNT IS NOT THIS FILE'S. A device revoked here can
-    // be attached elsewhere, and writing that token in would be one account's
-    // session under another's name.
-    const named = typeof body.username === 'string' && body.username !== account.username
-    if (named || (typeof body.deviceId === 'string' && body.deviceId !== account.deviceId)) {
-      return { ok: false, reason: 'wrong_identity' }
+    // A SESSION FOR ANOTHER ACCOUNT IS NOT THIS FILE'S. A password names this
+    // file's account; a provider names whoever is signed in at the browser, and
+    // a device revoked here can be attached elsewhere. Writing that token in
+    // would be one account's session under another's name.
+    if (typed === null) {
+      const named = typeof body.username === 'string' && body.username !== account.username
+      if (named || (typeof body.deviceId === 'string' && body.deviceId !== account.deviceId)) {
+        return { ok: false, reason: 'wrong_identity' }
+      }
     }
     // A PASSCODE IS NOT THE PASSWORD. It stays what the owner chose, whatever
     // proved this session; only a password Mac re-derives from a password.
@@ -1689,9 +1692,10 @@ export class Accounts {
    * the owner clicks. It reaches disk only through that save, and it dies with
    * the process.
    */
-  async recoveryCodes(): Promise<AccountResult<readonly string[]>> {
+  async recoveryCodes(proof?: { stepUp: string }): Promise<AccountResult<readonly string[]>> {
     const result = await this.authed<{ codes?: readonly string[] }>('/v2/me/recovery-codes', {
       method: 'POST',
+      ...(proof === undefined ? {} : { body: JSON.stringify(proof) }),
     })
     if (!result.ok) return result
     const codes = result.value.codes

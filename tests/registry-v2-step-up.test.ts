@@ -129,7 +129,7 @@ async function addTotp(token: string): Promise<string> {
 /* ── the list itself ───────────────────────────────────────────────────────── */
 
 describe('the step-up list', () => {
-  it('names the seven acts the architecture note names, in its order, then the two provider acts', () => {
+  it('names the seven acts the architecture note names, in its order, then the provider acts', () => {
     expect(STEP_UP_ACTS).toEqual([
       'change-password',
       'remove-factor',
@@ -139,7 +139,8 @@ describe('the step-up list', () => {
       'end-seat',
       'not-me',
       'link-provider',
-      'unlink-provider'
+      'unlink-provider',
+      'add-factor'
     ])
   })
 
@@ -726,7 +727,7 @@ describe('H4 · the enforcement map is not a claim, it is a test', () => {
     }
 
     for (const act of STEP_UP_ACTS) {
-      if (STEP_UP_ENFORCEMENT[act] === 'none') continue
+      if (STEP_UP_ENFORCEMENT[act] === 'none' || STEP_UP_ENFORCEMENT[act] === 'passwordless') continue
       const res = await bareCall[act]()
       // NEVER a success. Which refusal differs by act — a missing password is
       // 403, a seat at a team nobody serves is a 404 before the gate is even

@@ -154,7 +154,7 @@ export async function stepUpHeld(
   }
 
   // A rung already climbed for THIS act, spent here and never again.
-  if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp)) return true
+  if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp, signed.claims.jti)) return true
 
   /**
    * THE PASSWORD, WHEN ONE WAS BROUGHT. Judged on what the caller offered: a
@@ -235,6 +235,18 @@ export async function stepUpHeld(
     ...(next.includes('approve') ? { match: pending.match } : {})
   })
   return false
+}
+
+/**
+ * THE GATE, ON AN ACCOUNT WITH NO PASSWORD. Answers whether to carry on.
+ *
+ * A rescue code or a factor is a way past every other step-up, so on an account
+ * whose only proof is its provider, a bearer must not be able to mint one. A
+ * password account is left exactly as it was: its clients send nothing here.
+ */
+export async function heldIfPasswordless(ctx: V2Context, signed: Signed, act: StepUpAct): Promise<boolean> {
+  if (signed.account.passwordless !== true) return true
+  return (await readAndStepUp(ctx, signed, act)).ok
 }
 
 /** Read a body and step up in one go, for routes that need nothing else. */

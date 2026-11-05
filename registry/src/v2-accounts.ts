@@ -217,6 +217,14 @@ export type CreateRefusal = 'taken' | 'bad_username' | 'weak_password' | 'bad_de
 export type Refused<R extends string> = { ok: false; reason: R }
 export type Attached = { ok: true; account: V2Account; device: V2Device }
 
+/**
+ * ONE ID, ONE KEY. An id is public (it is in a certificate's name) and the key is
+ * the proof, so the same id arriving with another key is a stranger wearing the
+ * device's name: it would skip the ladder as "known" and then replace the key.
+ */
+const sameKey = (held: Record<string, string>, offered: Record<string, string>): boolean =>
+  held.kty === offered.kty && held.crv === offered.crv && held.x === offered.x && held.y === offered.y
+
 export class V2Accounts {
   private readonly file: string
   private readonly now: () => number
@@ -564,8 +572,9 @@ export class V2Accounts {
     if ((account.revoked ?? []).some((r) => r.id === device.id)) return { ok: false, reason: 'bad_device' }
 
     const known = account.devices.find((d) => d.id === device.id)
+    if (known && !sameKey(known.jwk, device.jwk)) return { ok: false, reason: 'bad_device' }
     const attached: V2Device = known
-      ? { ...known, kind: device.kind, name: device.name, jwk: device.jwk, lastSeenAt: this.now() }
+      ? { ...known, kind: device.kind, name: device.name, lastSeenAt: this.now() }
       : device
     const next: V2Account = {
       ...account,
@@ -594,6 +603,8 @@ export class V2Accounts {
     if (device === null) return false
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return false
+    const known = account.devices.find((d) => d.id === device.id)
+    if (known && !sameKey(known.jwk, device.jwk)) return false
     return !(account.revoked ?? []).some((r) => r.id === device.id)
   }
 

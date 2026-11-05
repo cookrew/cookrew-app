@@ -287,11 +287,14 @@ export class PendingSignIns {
    * code must not also, quietly, be permission to revoke somebody's device.
    * The act is compared rather than assumed for the same reason.
    */
-  spendAuthorised(username: string, act: StepUpAct, id: unknown): boolean {
+  spendAuthorised(username: string, act: StepUpAct, id: unknown, jti?: string): boolean {
     if (typeof id !== 'string' || id === '') return false
     const held = this.get(id)
     if (held === null) return false
     if (!held.authorised || held.act !== act || held.username !== username) return false
+    // The sitting that earned it, and no other: a proof must not be carried to
+    // a session that never made the trip.
+    if (jti !== undefined && held.opener !== undefined && held.opener.jti !== jti) return false
     this.pendings.delete(id)
     return true
   }

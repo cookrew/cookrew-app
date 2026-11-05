@@ -101,6 +101,13 @@ export class JoinCodes {
     return held.username
   }
 
+  /** "Not me": whatever this account had in flight is dead. */
+  voidFor(username: string): void {
+    for (const [key, held] of this.codes) {
+      if (held.username === username) this.codes.delete(key)
+    }
+  }
+
   /** The live code for this account, or null — for a sheet that reopened. */
   liveFor(username: string): JoinCode | null {
     this.sweep(this.now())

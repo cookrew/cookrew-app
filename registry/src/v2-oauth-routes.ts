@@ -233,12 +233,12 @@ function page(
  * rung behind this point refuses it anyway, so opening a pending here would
  * only produce a ladder nobody could climb.
  */
-function signInWith(ctx: V2Context, proof: ProviderProof, rawDevice: unknown): void {
+function signInWith(ctx: V2Context, proof: ProviderProof, rawDevice: unknown, via: 'browser' | 'device' = 'browser'): void {
   const { v2, response } = ctx
   const owner = v2.links.ownerOf(proof.provider, proof.subject)
   const account = owner === null ? null : v2.accounts.get(owner)
   if (account === null) {
-    askForHandle(ctx, proof)
+    askForHandle(ctx, proof, via)
     return
   }
   if (v2.links.linkOf(account.username, proof.provider, proof.subject)?.pausedAt !== undefined) {
@@ -253,7 +253,7 @@ function signInWith(ctx: V2Context, proof: ProviderProof, rawDevice: unknown): v
 }
 
 /** Nobody has this identity. Nothing is created until a person picks a name. */
-function askForHandle(ctx: V2Context, proof: ProviderProof): void {
+function askForHandle(ctx: V2Context, proof: ProviderProof, via: 'browser' | 'device'): void {
   const { v2 } = ctx
   const ticket = v2.oauth.flows.mintTicket(proof)
   const suggest = suggestHandle(proof.login, proof.email)
@@ -263,7 +263,9 @@ function askForHandle(ctx: V2Context, proof: ProviderProof): void {
     provider: proof.provider,
     suggest,
     free: suggest !== '' && !v2.accounts.has(suggest) && !legacyHolds(ctx, suggest),
-    email: proof.email,
+    // Whoever polls a device flow may not be whoever typed the code, so a
+    // person's address is not read back to them.
+    email: via === 'browser' ? proof.email : null,
     expiresAt: ticket.expiresAt
   })
 }
@@ -444,7 +446,7 @@ async function devicePoll(ctx: V2Context, id: string): Promise<void> {
     json(response, 410, { error: 'flow_over', message: SENTENCES.flow_over, why: polled.why })
     return
   }
-  signInWith(ctx, polled.proof, body.value.device)
+  signInWith(ctx, polled.proof, body.value.device, 'device')
 }
 
 /** DELETE /v2/me/links/:provider */
