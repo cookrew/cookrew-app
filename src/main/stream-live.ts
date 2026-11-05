@@ -141,7 +141,9 @@ function sameTail(a: TailFrame | null, b: TailFrame): boolean {
     a.block.prompt === b.block.prompt &&
     a.block.endedAt === b.block.endedAt &&
     a.block.activity.length === b.block.activity.length &&
-    (a.block.thoughts?.length ?? 0) === (b.block.thoughts?.length ?? 0)
+    (a.block.thoughts?.length ?? 0) === (b.block.thoughts?.length ?? 0) &&
+    (a.block.added?.length ?? 0) === (b.block.added?.length ?? 0) &&
+    JSON.stringify(a.block.queued) === JSON.stringify(b.block.queued)
   )
 }
 

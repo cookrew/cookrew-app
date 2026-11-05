@@ -275,6 +275,18 @@
   content: none;
 }
 
+/* Yours, sent and not read yet: the agent takes it at its next step. */
+.lod-overlay .look-chat .ctx-block-queued {
+  opacity: 0.62;
+}
+
+.lod-overlay .look-chat .ctx-queued-tag {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font: 11px/1.3 var(--font-mono);
+}
+
 /* Nobody's: a harness notice sits between the two sides, small and quiet. */
 .lod-overlay .look-chat .ctx-block-notice {
   align-self: center;
@@ -747,6 +759,16 @@
 .lod-overlay .look-log .ctx-process-toggle,
 .lod-overlay .look-log .ctx-block-thought {
   display: none;
+}
+
+/* The queue, as the terminal prints it: dim, and tagged. */
+.lod-overlay .look-log .ctx-block-queued {
+  opacity: 0.62;
+}
+
+.lod-overlay .look-log .ctx-queued-tag {
+  margin-left: 8px;
+  color: var(--muted);
 }
 
 .lod-overlay .look-log .ctx-block-said {
