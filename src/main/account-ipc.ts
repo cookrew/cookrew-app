@@ -182,6 +182,8 @@ export const ACCOUNT_CHANNELS = [
   // v3 (D12): this device leaves the account. Password first, at cookrew.dev;
   // the device removed there; the file removed here; the doors withdrawn.
   'account:signOut',
+  // Proof first, the account removed there, the file removed here, the doors withdrawn.
+  'account:delete',
   'account:recoveryCodes',
   'account:saveRecoveryCodes',
   'account:codesSaved',
@@ -457,8 +459,12 @@ async function resume(
   deps: AccountIpcDeps,
   password: string,
 ): Promise<SignInAnswer<AccountStatus>> {
+  const held = deps.accounts.account() !== null
   const result = await deps.accounts.resume(password)
-  return result.ok ? { ok: true, value: signedIn(deps) } : result
+  if (result.ok) return { ok: true, value: signedIn(deps) }
+  // The file went during that call: the account was deleted elsewhere, and this
+  // Mac winds down as it would for a sign-out, doors included.
+  return held && deps.accounts.account() === null ? leftTheAccount(deps) : result
 }
 
 /**
@@ -567,11 +573,38 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
  */
 async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
   if (deps.accounts.isPasswordless() && deps.lock.locked) return LOCKED
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
   const result =
     deps.accounts.isPasswordless()
       ? await deps.accounts.signOutWithProvider()
       : await deps.accounts.signOutThisMac(password)
   if (!result.ok) return result
+  return leftTheAccount(deps)
+}
+
+/**
+ * DELETE THE ACCOUNT. The password is proved the way a revoke proves it; on an
+ * account with no password the provider trip stands in. The act carries the same
+ * proof, because the registry is the judge of it.
+ */
+async function deleteAccount(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<AccountStatus>> {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+  const confirm = asString(record.confirm)
+  const password = asString(record.password)
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
+  const provider = await providerProof(deps, 'delete-account')
+  if (provider !== null && !provider.ok) return provider
+  if (provider === null) {
+    const proven = await deps.accounts.stepUp(password)
+    if (!proven.ok) return proven
+  }
+  const removed = await deps.accounts.deleteAccount(provider === null ? password : { stepUp: provider.value }, confirm)
+  if (!removed.ok) return removed
+  return leftTheAccount(deps)
+}
+
+/** The account is gone from this Mac, by a sign-out or a delete. */
+async function leftTheAccount(deps: AccountIpcDeps): Promise<{ ok: true; value: AccountStatus }> {
   // `cookrew logout` can leave from behind the lock, and with no account there is
   // nothing left that could open it.
   deps.lock.proven()
@@ -759,13 +792,39 @@ const LOCKED = { ok: false, reason: 'locked' } as const
  * THE PROOF A PASSWORDLESS ACCOUNT BRINGS, or null for an account with a
  * password, whose callers carry on with what was typed.
  */
-async function providerProof(deps: AccountIpcDeps, act: StepUpAct): Promise<AccountResult<string> | null> {
+async function providerProof(deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>, act: StepUpAct): Promise<AccountResult<string> | null> {
   if (!deps.accounts.isPasswordless()) return null
   if (deps.lock.locked) return LOCKED
   const proved = await deps.accounts.providerProve(act)
   // The Mac locked during the trip: a person may have walked away, and the act
   // must not finish behind a screen that says nothing is happening.
   return deps.lock.locked ? LOCKED : proved
+}
+
+/** A join code under step-up: the password typed, or a provider's trip when there is none. */
+async function mintUnderProof(
+  deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
+  current: string,
+): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
+  const proof = await providerProof(deps, 'mint-join-code')
+  if (proof === null) return deps.accounts.mintJoinCode(current)
+  return proof.ok ? deps.accounts.mintJoinCode({ stepUp: proof.value }) : proof
+}
+
+/**
+ * A join code for a watch. `here` is false when a phone asked: a provider's trip
+ * opens a browser on this Mac, which nobody holding that phone may be looking at.
+ */
+export async function mintWatchInvite(
+  deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
+  current: string,
+  here: boolean,
+): Promise<{ ok: true; code: string; expiresAt: number } | { ok: false; reason: string; message?: string }> {
+  if (deps.accounts.account() === null) return { ok: false, reason: 'no_account' }
+  if (!here && deps.accounts.isPasswordless()) return { ok: false, reason: 'provider_required' }
+  const minted = await mintUnderProof(deps, current)
+  if (!minted.ok) return { ok: false, reason: minted.reason, ...(minted.message ? { message: minted.message } : {}) }
+  return { ok: true, code: minted.value.code, expiresAt: minted.value.expiresAt }
 }
 
 /**
@@ -802,6 +861,9 @@ async function deviceSignIn(deps: AccountIpcDeps, onCode: (code: DeviceCode) => 
 async function oauthStart(deps: AccountIpcDeps, provider: unknown) {
   if (!isProviderId(provider)) return { ok: false as const, reason: 'not_offered' as const }
   if (deps.lock.locked) return LOCKED
+  // This button is how an account with no password resumes, so it is where a Mac
+  // that missed a delete finds out. Asked before any browser opens.
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
   const result = await deps.accounts.providerSignIn(provider)
   return result.ok ? { ok: true as const, value: landed(deps) } : result
 }
@@ -924,11 +986,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // The minting side (D12). The password rides the call because the
     // registry asks for it again on this route; it is spent at once and
     // nothing here keeps it.
-    'account:joinCode': async (current: unknown) => {
-      const proof = await providerProof(deps, 'mint-join-code')
-      if (proof === null) return deps.accounts.mintJoinCode(asString(current))
-      return proof.ok ? deps.accounts.mintJoinCode({ stepUp: proof.value }) : proof
-    },
+    'account:joinCode': (current: unknown) => mintUnderProof(deps, asString(current)),
     'account:resumeCode': (input: unknown) => resumeCode(deps, input),
     'account:resumeAsk': (pending: unknown): Promise<AccountResult<ApprovalAsked>> =>
       deps.accounts.resumeAsk(asString(pending)),
@@ -946,6 +1004,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:devices': (): Promise<AccountResult<readonly AccountDevice[]>> =>
       deps.accounts.devices(),
     'account:revoke': (input: unknown): Promise<AccountResult<void>> => revoke(deps, input),
+    'account:delete': (input: unknown): Promise<AccountResult<AccountStatus>> => deleteAccount(deps, input),
     'account:signOut': (password: unknown): Promise<AccountResult<AccountStatus>> =>
       signOut(deps, asString(password)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>

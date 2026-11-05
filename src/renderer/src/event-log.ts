@@ -120,7 +120,7 @@ const META: Record<string, EventMeta> = {
   'connection.made': { label: 'Wired', verb: 'connected', noun: 'connection', icon: 'connect', hatch: false, metric: null },
   'connection.removed': { label: 'Unwired', verb: 'disconnected', noun: 'connection', icon: 'close', hatch: false, metric: null },
   'workspace.created': { label: 'Workspace', verb: 'created', noun: 'workspace', icon: 'plus', hatch: false, metric: null },
-  'workspace.switched': { label: 'Switched', verb: 'switched to', noun: 'workspace', icon: 'next', hatch: false, metric: 'switches' },
+  'workspace.switched': { label: 'Workspace', verb: 'opened', noun: 'workspace', icon: 'next', hatch: false, metric: 'switches' },
   'workspace.renamed': { label: 'Renamed', verb: 'renamed', noun: 'workspace', icon: 'note', hatch: false, metric: null },
   'terminal.renamed': { label: 'Renamed', verb: 'renamed', noun: 'agent', icon: 'note', hatch: false, metric: null },
   'note.renamed': { label: 'Renamed', verb: 'renamed', noun: 'note', icon: 'note', hatch: false, metric: null },
@@ -139,7 +139,28 @@ const META: Record<string, EventMeta> = {
   'terminal.keys-lost': { label: 'Keys lost', verb: 'lost keys', noun: 'terminal', icon: 'close', hatch: false, metric: null, toast: false },
   'workspace.remove-failed': { label: 'Not removed', verb: 'was not removed', noun: 'workspace', icon: 'close', hatch: false, metric: null },
   'terminal.input-lost': { label: 'Not delivered', verb: 'was not sent to', noun: 'terminal', icon: 'close', hatch: false, metric: null },
-  'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null }
+  'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null },
+  // The remote desktop's record: every start, stop and grant is here, and the
+  // ones a person should hear about at once are toasts.
+  'remote.view-started': { label: 'Watching', verb: 'is being watched', noun: 'screen', icon: 'browser', hatch: false, metric: null },
+  'remote.view-ended': { label: 'Stopped watching', verb: 'is no longer watched', noun: 'screen', icon: 'browser', hatch: false, metric: null, toast: false },
+  'remote.control-on': { label: 'Control taken', verb: 'is being controlled', noun: 'screen', icon: 'select', hatch: false, metric: null },
+  'remote.control-off': { label: 'Control ended', verb: 'is no longer controlled', noun: 'screen', icon: 'select', hatch: false, metric: null },
+  'remote.agent-started': { label: 'Agent on screen', verb: 'is being used by an agent', noun: 'screen', icon: 'agent', hatch: false, metric: null, toast: false },
+  'remote.agent-ended': { label: 'Agent left', verb: 'is free of the agent', noun: 'screen', icon: 'agent', hatch: false, metric: null, toast: false },
+  'remote.switch-on': { label: 'Remote control on', verb: 'allows remote control', noun: 'machine', icon: 'select', hatch: false, metric: null },
+  'remote.switch-off': { label: 'Remote control off', verb: 'refuses remote control', noun: 'machine', icon: 'select', hatch: false, metric: null },
+  'remote.stopped': { label: 'Stopped at the Mac', verb: 'ended every session', noun: 'machine', icon: 'close', hatch: false, metric: null },
+  'remote.ready': { label: 'Ready', verb: 'is ready for you', noun: 'machine', icon: 'browser', hatch: false, metric: null },
+  'remote.restart-needed': { label: 'Restart needed', verb: 'needs a restart to finish', noun: 'machine', icon: 'browser', hatch: false, metric: null },
+  'remote.woke': { label: 'Display woken', verb: 'had its display woken', noun: 'machine', icon: 'browser', hatch: false, metric: null, toast: false },
+  // A secret's activity (main/secret-activity.ts): who, in the name; which, in
+  // `details`, the one field the wall does not get.
+  'secret.read': { label: 'Secret', verb: 'read a secret', noun: 'secret', many: 'read', icon: 'lock', hatch: false, metric: null },
+  'secret.requested': { label: 'Secret', verb: 'asked for a secret', noun: 'secret', many: 'asked for', icon: 'lock', hatch: false, metric: null },
+  'secret.sealed': { label: 'Secret', verb: 'sealed a secret', noun: 'secret', many: 'sealed', icon: 'lock', hatch: false, metric: null },
+  'secret.removed': { label: 'Secret', verb: 'deleted a secret', noun: 'secret', many: 'deleted', icon: 'lock', hatch: false, metric: null },
+  'remote.restart': { label: 'Restarting', verb: 'is restarting', noun: 'machine', icon: 'expand', hatch: false, metric: null }
 }
 
 const FALLBACK_META: EventMeta = {
@@ -153,6 +174,14 @@ const FALLBACK_META: EventMeta = {
 
 export function eventMeta(type: string): EventMeta {
   return META[type] ?? FALLBACK_META
+}
+
+/**
+ * What a person reads of `details`. A secret's row carries ` note:<id>` for the
+ * inbox to land on (main/inbox.ts); the id is an address, not a word to show.
+ */
+export function eventDetail(event: { type: string; details?: string }): string | undefined {
+  return event.type.startsWith('secret.') ? event.details?.replace(/ note:\S+$/, '') : event.details
 }
 
 const plural = (noun: string): string => (/(s|x|z|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`)

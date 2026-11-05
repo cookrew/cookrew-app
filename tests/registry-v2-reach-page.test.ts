@@ -108,7 +108,7 @@ function mount(scene: Scene): Mounted {
     return {
       ok: status >= 200 && status < 300,
       status,
-      // One batch answer for the whole list (strata): /v2/me/presence.
+      // One batch answer for the whole list: /v2/me/presence.
       json: async () => ({ desktops: [{ id: deviceId, online: scene.live === true, lastSeenAt: null }] })
     }
   }

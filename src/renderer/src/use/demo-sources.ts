@@ -1,3 +1,4 @@
+import type { RemoteAccess } from '../../../shared/remote-access'
 import { readySourceList, type UseSource, type UseSourceList } from '../../../shared/use-sources'
 
 /** The demo's windows: no machine stands behind it, so it draws its own. */
@@ -41,3 +42,9 @@ export const demoSources = (): UseSourceList =>
     ],
     screens: [display('main', 'Main display'), display('2', 'Display 2')]
   })
+
+/** No machine stands behind the demo: its screen is always ready, and nobody can take it. */
+export const demoRemoteAccess = (): RemoteAccess => ({
+  state: { id: 'ready', platform: 'darwin', build: { settingsName: 'Cookrew', sourceBuild: false, restart: 'self', agents: 'keep' }, then: null, detail: null, lastSeenAt: null, until: null, waiting: false },
+  control: { available: true, switchOn: false, accessibility: true }
+})

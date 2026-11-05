@@ -8,6 +8,8 @@ import { useSyncExternalStore } from 'react'
 
 export interface SourceAsk {
   readonly card: string | null
+  /** Asked for as the machine's remote desktop: it opens on the screens, under that name. */
+  readonly remoteDesktop: boolean
 }
 
 let ask: SourceAsk | null = null
@@ -18,7 +20,8 @@ const set = (next: SourceAsk | null): void => {
   for (const listener of listeners) listener()
 }
 
-export const openSourcePicker = (options: { card?: string } = {}): void => set({ card: options.card ?? null })
+export const openSourcePicker = (options: { card?: string; remoteDesktop?: boolean } = {}): void =>
+  set({ card: options.card ?? null, remoteDesktop: options.remoteDesktop === true })
 export const closeSourcePicker = (): void => set(null)
 export const currentSourceAsk = (): SourceAsk | null => ask
 

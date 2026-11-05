@@ -25,6 +25,7 @@
  */
 
 import { cleanTurnLines, stripTermNoise } from './turn'
+import { aboutOfScreen, clipped, joined, type WaitAbout } from './wait-about'
 
 /** What a row does beyond picking: a tick, words typed in it, the multi-select's Submit, leaving to chat. */
 export type WaitRole = 'toggle' | 'type' | 'submit' | 'chat'
@@ -61,6 +62,8 @@ export interface WaitChoice {
   readonly steps?: { readonly done: number; readonly total: number }
   /** What the Review tab says will be sent. */
   readonly review?: readonly WaitReview[]
+  /** What a permission asks to do, off the whole box (shared/wait-about.ts). Never part of the menu's identity. */
+  readonly about?: WaitAbout
 }
 
 const OPTION_RE = /^(\s*)([❯›>▶►]\s*)?(\d{1,2})[.)]\s+(\S.*)$/
@@ -160,12 +163,6 @@ function blocksOf(lines: readonly string[]): Array<{ rows: Row[]; end: number }>
     open = null
   })
   return blocks
-}
-
-const CJK_RE = /[\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\uff00-\uff60]/u
-/** Wrapped lines back into one: Chinese takes no space where the pane broke it. */
-function joined(parts: readonly string[]): string {
-  return parts.reduce((text, part) => (text === '' ? part : `${text}${CJK_RE.test(text.at(-1) ?? '') && CJK_RE.test(part[0] ?? '') ? '' : ' '}${part}`), '')
 }
 
 /** A row's label and the line under it, hints out. */
@@ -269,7 +266,7 @@ function subOver(lines: readonly string[], question: number, top: number, whole:
     const inner = end >= 0 ? body.slice(0, end) : body
     if (word === 'Bash') {
       const command = inner.find((l) => !isBlank(l))
-      return command ? `Bash · ${command.trim()}` : 'Bash'
+      return command ? `Bash · ${command.replace(QUOTE_RE, '').trim()}` : 'Bash'
     }
     const file = after.find((l) => !isBlank(l) && !RULE_RE.test(l))
     const plus = inner.filter((l) => /^\s*\d+\s+\+/.test(l)).length
@@ -365,20 +362,6 @@ export function parseWaitChoice(lines: readonly string[]): WaitChoice | null {
   return menuOf(lines) ?? confirmOf(lines)
 }
 
-const WIDE_RE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]|[\u{1f300}-\u{1faff}]/u
-
-/** A line cut at a column: a Chinese character takes two. */
-function clipped(line: string, width: number): string {
-  let at = 0
-  let col = 0
-  for (const ch of line) {
-    col += WIDE_RE.test(ch) ? 2 : 1
-    if (col > width) return line.slice(0, at)
-    at += ch.length
-  }
-  return line
-}
-
 /**
  * The TUI's own width: the rule nearest over the menu's last row. A pane once
  * wider keeps old text right of what the TUI redraws, and it would read as part
@@ -395,7 +378,18 @@ function frameWidth(lines: readonly string[]): number | null {
  * last lines, cut to the TUI's frame. Null when it shows none.
  */
 export function waitChoiceOfScreen(screen: string): WaitChoice | null {
-  return parseWaitChoice(screenLines(screen))
+  const choice = parseWaitChoice(screenLines(screen))
+  return choice && withAbout(choice, screen)
+}
+
+/** A question tool says what it asks in its question; a confirm has no box. */
+const hasBox = (choice: WaitChoice): boolean => choice.kind === 'menu' && !choice.steps && !choice.review && !choice.options.some((o) => o.role)
+
+/** The box over a permission's rows. An edit's title is its file, already in the sub. */
+function withAbout(choice: WaitChoice, screen: string): WaitChoice {
+  const about = hasBox(choice) ? aboutOfScreen(screen) : null
+  if (!about) return choice
+  return { ...choice, about: about.title && choice.sub?.includes(about.title) ? { ...about, title: null } : about }
 }
 
 function screenLines(screen: string): string[] {

@@ -34,9 +34,10 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { heldIfPasswordless, readAndStepUp } from './v2-step-up'
+import { heldIfPasswordless, mayGuessPassword, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
+import { deleteAccount } from './v2-delete'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -206,11 +207,14 @@ function lookUpAccount(ctx: V2Context, username: string): void {
   if (ctx.method === 'HEAD') {
     // Taken covers a name a v1 key holds with no account behind it yet: the
     // sheet must never call it free, whatever it goes on to say about it.
-    head(ctx.response, profile === null && !legacyHolds(ctx, username) ? 404 : 200)
+    const free = profile === null && !legacyHolds(ctx, username) && !ctx.v2.accounts.isRetired(username)
+    head(ctx.response, free ? 404 : 200)
     return
   }
   if (profile === null) {
-    refuse(ctx.response, 404, 'not_found')
+    // A Mac that missed the delete asks here, so it can let the account go.
+    if (ctx.v2.accounts.isRetired(username)) refuse(ctx.response, 410, 'account_deleted')
+    else refuse(ctx.response, 404, 'not_found')
     return
   }
   v2Json(ctx.response, 200, profile)
@@ -511,6 +515,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     v2Json(response, 200, meBody(fresh, claims.dev, v2.factors.store.summary(account.username), hasNames(ctx)))
     return
   }
+  if (rest.length === 0 && method === 'DELETE') {
+    await deleteAccount(ctx, signed)
+    return
+  }
   if (rest.length === 0 && method === 'PATCH') {
     const body = await readJsonBody(ctx.request, PROFILE_BODY)
     if (!body.ok) {
@@ -622,7 +630,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {
-    if (overloaded(response)) return
+    if (!mayGuessPassword(ctx, signed)) return
     const body = await readJsonBody(ctx.request, SMALL_BODY)
     if (!body.ok) {
       refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
@@ -657,7 +665,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // ONLY THIS ACCOUNT'S. Any device of it may read them — that is the whole
     // point of the picker — but the answer is built from the signed-in
     // account and never from anything the caller named.
-    // STRATA: each row is also a FleetMachine (src/shared/strata.ts) — online
+    // Each row is also a FleetMachine (src/shared/fleet.ts) — online
     // from the relay, the base the shell reaches it under, and its profile.
     // Additive: every member a client read before is still there.
     const presence = ctx.presence?.(account.username) ?? new Map()

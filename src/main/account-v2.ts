@@ -48,7 +48,7 @@ import { ProviderAccess, type DeviceCode, type MintedDevice, type TripProof } fr
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
-import type { MachineProfile } from '../shared/strata'
+import type { MachineProfile } from '../shared/fleet'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -363,7 +363,7 @@ export interface AccountsDeps {
    */
   onChange?: () => void
   /**
-   * STRATA: what kind of machine this is and which app it runs, filed with
+   * What kind of machine this is and which app it runs, filed with
    * the desktop record so cookrew.dev can draw it (machine-profile.ts). Never
    * a serial, a hardware UUID, a MAC address or a host name. Absent = the
    * record carries neither field, exactly as before.
@@ -1320,6 +1320,10 @@ export class Accounts {
         }
       }
       const refused = classify(response.status, body)
+      // No password can ever answer a deleted account, and this prompt is where a
+      // Mac that missed the delete is stuck. Asked only here, on a person's own
+      // try: a session that merely ended must not start a round of requests.
+      if (response.status === 401 && (await this.forgetIfDeleted())) return { ok: false, reason: 'no_account' }
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password on a resume is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
@@ -1686,6 +1690,42 @@ export class Accounts {
     // The same password goes with the act — signing this Mac out is a revoke,
     // and the registry asks for it now (V3-FIX-C1 · H4).
     const removed = await this.revokeDevice(account.deviceId, password)
+    if (!removed.ok) return removed
+    this.forget()
+    return { ok: true, value: undefined }
+  }
+
+  /**
+   * THE ACCOUNT WAS DELETED ELSEWHERE. A Mac that was asleep for it, or lost the
+   * answer, holds a file that no password can ever use again and no sign-out can
+   * finish. Only a 410 counts: a refused password or a dead socket says nothing
+   * about the account, and forgetting on one of those would sign out a real one.
+   */
+  async forgetIfDeleted(): Promise<boolean> {
+    const account = this.cached
+    // A 410 from another registry says nothing about the account in this file.
+    if (account === null || account.registry !== this.origin) return false
+    try {
+      const asked = await this.http(`${this.origin}/v2/accounts/${encodeURIComponent(account.username)}`)
+      if (asked.status !== 410) return false
+    } catch {
+      return false
+    }
+    this.forget()
+    return true
+  }
+
+  /**
+   * DELETE THE ACCOUNT, EVERYWHERE. The same order as signing out: cookrew.dev
+   * answers 204, and only then does the file go here, so a refusal or a dead
+   * socket leaves this Mac knowing an account that still exists.
+   */
+  async deleteAccount(proof: StepUpProof, confirm: string): Promise<AccountResult<void>> {
+    const removed = await this.authed<void>('/v2/me', {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm, ...proofBody(proof) }),
+      parse: false,
+    })
     if (!removed.ok) return removed
     this.forget()
     return { ok: true, value: undefined }

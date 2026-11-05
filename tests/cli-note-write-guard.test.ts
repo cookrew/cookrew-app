@@ -149,7 +149,7 @@ describe('cookrew note write — what still writes, and what the reply says', ()
     const { store, deps, note } = setup()
     cmdNote(request(['write', 'plan', '- item one\n- item two']), deps)
     expect(current(store, note.id).content).toBe('- item one\n- item two')
-    cmdNote(request(['write', 'item-one', '---']), deps)
+    cmdNote(request(['write', 'item one', '---']), deps)
     expect(current(store, note.id).content).toBe('---')
   })
 

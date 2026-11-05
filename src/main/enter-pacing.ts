@@ -13,6 +13,31 @@ import { submitDelayMs } from './ask'
  * the order itself, and keys that need no wait still go at once.
  */
 
+/**
+ * From this long, words written to an agent go as a bracketed paste. Raw blocks
+ * of about 1 KB and up lose words, the attach client drops with them, and nothing
+ * says so (measured on a real agent, read back from its transcript: 900 characters
+ * whole 4 of 4, 1000 1 of 4, 1500 2 of 4; bracketed 15 of 15, up to 6000).
+ */
+const PASTE_FROM = 512
+const PASTE_OPEN = '\x1b[200~'
+const PASTE_CLOSE = '\x1b[201~'
+/** Anything but words: an Enter or a sequence of its own is the writer's to mean. */
+const NOT_WORDS_RE = /[\x00-\x08\x0b-\x1f\x7f]/
+
+/**
+ * A long block of words as a paste, in bytes (the limit it stays under is a
+ * buffer's). The editing keys ahead of it stay keys, a phone's batch among them.
+ * Agents only: a plain program would show the markers.
+ */
+export function blockAsPaste(data: string): string {
+  const cut = Math.max(data.lastIndexOf('\x7f'), data.lastIndexOf('\x15'), data.lastIndexOf('\x05')) + 1
+  const keys = data.slice(0, cut)
+  const words = data.slice(cut)
+  if (Buffer.byteLength(words) < PASTE_FROM || NOT_WORDS_RE.test(words) || /[\r\x1b]/.test(keys)) return data
+  return `${keys}${PASTE_OPEN}${words}${PASTE_CLOSE}`
+}
+
 interface Burst {
   readonly length: number
   readonly at: number

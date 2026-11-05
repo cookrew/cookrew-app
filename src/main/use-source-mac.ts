@@ -1,8 +1,9 @@
 import { useUrl, windowAppName } from '../shared/use-url'
-import { emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
+import type { RemoteState } from '../shared/remote-access'
+import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
 import type { MacDisplay, MacScreens, MacWindow } from './mac-bridge'
 import { withDeadline } from './pixel-instance'
-import { SCREEN_RECORDING_OFF } from './screen-device'
+import type { SettingsPane } from './remote-desk'
 import type { UseSourceProvider } from './use-source-service'
 
 /**
@@ -14,9 +15,10 @@ import type { UseSourceProvider } from './use-source-service'
  * fail: a row with no picture is still a window, and the sheet draws it from
  * its name.
  *
- * Without Screen Recording neither is touched. The list would come back with
- * every title blank and the capturer with empty pictures, which is a sheet
- * that looks broken, so it answers the permission's name instead.
+ * While the screen cannot be read neither is touched: without Screen Recording
+ * the list comes back with every title blank and the capturer with empty
+ * pictures, which is a sheet that looks broken. It answers the desk's state
+ * instead, the same one the card shows.
  *
  * Cookrew's own windows are left out: a card showing Cookrew inside Cookrew
  * is a mirror facing a mirror.
@@ -34,11 +36,12 @@ export interface GrabbedSource {
 export type SourceGrab = (kinds: ReadonlyArray<'window' | 'screen'>, size: { width: number; height: number }) => Promise<readonly GrabbedSource[]>
 
 export interface MacSourceDeps {
-  access(): string
+  /** What stands in the way, from the desk (remote-desk.ts). */
+  blocked(): Promise<RemoteState | null>
   screens(): Promise<MacScreens>
   grab: SourceGrab
   selfPid: number
-  openSettings(): Promise<void>
+  openSettings(pane: SettingsPane): Promise<void>
 }
 
 /** Enough for a phone to pick from, and bounded: each row carries a picture. */
@@ -90,12 +93,11 @@ async function pictures(grab: SourceGrab): Promise<readonly GrabbedSource[]> {
 
 export function macSources(deps: MacSourceDeps): UseSourceProvider {
   return {
-    openSettings: () => deps.openSettings(),
+    openSettings: (pane) => deps.openSettings(pane),
     async list(): Promise<UseSourceList> {
-      if (deps.access() !== 'granted') {
-        return { ...emptySourceList('needs-permission', SCREEN_RECORDING_OFF), permission: 'Screen Recording' }
-      }
       try {
+        const blocked = await deps.blocked()
+        if (blocked) return blockedSourceList(blocked)
         const [screens, grabbed] = await Promise.all([deps.screens(), pictures(deps.grab)])
         const byWindow = new Map(grabbed.flatMap((g) => {
           const id = windowIdOf(g)

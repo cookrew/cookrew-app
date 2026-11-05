@@ -21,12 +21,11 @@ import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import type { V2Account } from './v2-accounts'
 import { sameOrigin } from './v2-http'
 import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
-import { serveShellAsset, shellPage, type ShellBundle } from './strata-shell'
-import { readSampleArt } from './site-art-manifest'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
 
@@ -51,6 +50,8 @@ export type Verdict =
   | { code: 402; terms: Terms; reason?: PaymentFailure; retryable?: boolean }
   | { code: 403; reason: string }
   | { code: 404 }
+  /** A price exists and this deployment cannot check a payment: no terms, ever. */
+  | { code: 503; reason: 'payment_unavailable' }
 
 export interface RegistryDeps {
   store: RegistryStore
@@ -131,19 +132,7 @@ export interface RegistryDeps {
    * is exactly as it was, which is what lets the feature ship dark.
    */
   names?: NamesFeature
-  /**
-   * STRATA: the shell's built files (strata-shell.ts), from the second
-   * ConfigMap. Absent → /me is the account page, exactly as before.
-   */
-  shell?: ShellBundle | null
-  /**
-   * STRATA: the shell takes /me, and a signed-in front page goes there, only
-   * when this is true. Without it a deployed shell only lends the front page
-   * its sample fleet and serves its own files: the state while no released
-   * app can be stepped into.
-   */
-  strataMe?: boolean
-  /** STRATA: where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
+  /** Where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
   lineSeenFile?: string
   /** The onboarding funnel's daily sums (funnel-routes.ts). Absent → /v1/funnel does not exist. */
   funnel?: FunnelMount
@@ -156,6 +145,7 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
   return (id) => {
     const visibility = store.visibilityOf(id)
     if (visibility === null) return { code: 404 }
+    if (store.getManifest(id)?.pricing !== undefined) return { code: 503, reason: 'payment_unavailable' }
     if (visibility === 'public') return { code: 200 }
     // A1 has no identity to offer. 403 rather than 401: a 401 invites a
     // ceremony the server cannot yet complete, and a client that loops on it
@@ -167,8 +157,6 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
 export function createRegistry(deps: RegistryDeps): Server {
   const { store, log } = deps
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
-  /** The front page's sample fleet, drawn at the shell's build; null without a shell (the page stays as it was). */
-  const sampleArt = readSampleArt(deps.shell)
   const funnel = deps.funnel ? createFunnelRoute(deps.funnel, deps.v2) : null
 
   /**
@@ -188,6 +176,9 @@ export function createRegistry(deps: RegistryDeps): Server {
     // priced manifest into a registry that sells nothing is refused rather
     // than quietly stored as if it were free.
     payouts: deps.pricing?.payouts,
+    // A price needs something that can verify the payment, or it is a price
+    // nobody can honestly pay.
+    sells: (deps.pricing?.facilitator ?? null) !== null,
     verifyManifest: (manifest: PresetManifest): boolean => {
       try {
         return verifyManifest(manifest, publicKeyFromId(manifest.author.keyId))
@@ -319,6 +310,21 @@ export function createRegistry(deps: RegistryDeps): Server {
     return claims.sub
   }
   const starsOf = (handle: string, name: string): number => deps.stars?.count(handle, name) ?? 0
+
+  /**
+   * WHAT A DELETED ACCOUNT HOLDS OUTSIDE /v2 (v2-delete.ts). Live lines go by
+   * handle, because the relay is the only place that knows a door nobody listed.
+   * Its receipts stay, and the transparency log and its presets are permanent.
+   */
+  const accountGone = (account: V2Account): void => {
+    const { username } = account
+    deps.doors?.withdrawAll(username)
+    relay?.hangUpHandle(username)
+    canvas?.hangUp(username, account.devices.map((device) => device.id))
+    deps.stars?.forgetAccount(username)
+    deps.identity?.forget(username)
+    deps.pricing?.payouts.forget(username)
+  }
   /** Headers for an answer that depends on who asked: never shared, never cached. */
   const PRIVATE: Record<string, string> = { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
 
@@ -329,6 +335,34 @@ export function createRegistry(deps: RegistryDeps): Server {
     } catch {
       return null
     }
+  }
+
+  /**
+   * A gate refusal, on either resource it guards. 402 carries its terms and 403
+   * and 503 a reason, all machine values: per R14 nothing in a response body is
+   * a sentence, and Velvet's mkt.pay.* strings interpolate from the terms rather
+   * than reading anything written here. The 401 carries its challenge in the
+   * header the spec names, so a client reads one place for what to do next.
+   */
+  function answerRefusal(response: ServerResponse, verdict: Exclude<Verdict, { code: 200 }>): void {
+    const headers: Record<string, string> =
+      verdict.code === 401
+        ? { 'www-authenticate': `WebAuthn realm="market", challenge=${verdict.challenge}` }
+        : {}
+    const body =
+      verdict.code === 403 || verdict.code === 503
+        ? { reason: verdict.reason }
+        : verdict.code === 402
+          ? {
+              terms: verdict.terms,
+              // Absent on the first ask — not having paid yet is not a failure —
+              // and present only when a proof was refused.
+              ...(verdict.reason !== undefined
+                ? { reason: verdict.reason, retryable: verdict.retryable === true }
+                : {})
+            }
+          : {}
+    json(response, verdict.code, body, headers)
   }
 
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
@@ -393,8 +427,9 @@ export function createRegistry(deps: RegistryDeps): Server {
         ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
         // The names half, for the cert route and the `names` bit on a card.
         ...(deps.names === undefined ? {} : { names: deps.names }),
-        // STRATA: which desktops hold their relay line, for the fleet rows.
-        ...(canvas === null ? {} : { presence: canvas.presence })
+        // Which desktops hold their relay line, for the fleet rows.
+        ...(canvas === null ? {} : { presence: canvas.presence }),
+        accountGone
       })
     )
       return
@@ -430,7 +465,7 @@ export function createRegistry(deps: RegistryDeps): Server {
               // newest version would be describing a different preset than the
               // one the link actually hands over.
               version: summary.version,
-              gated: summary.visibility === 'identified',
+              gated: store.gateOf(summary.id) === 'identified',
               origin: originOf(request.headers.host),
               id: summary.id
             })
@@ -578,30 +613,7 @@ export function createRegistry(deps: RegistryDeps): Server {
       }
       const verdict = authorize(id, request)
       if (verdict.code !== 200) {
-        // The 401 carries its challenge in the header the spec names, so a
-        // client reads one place for "what do I do next" (spec §2).
-        const headers: Record<string, string> =
-          verdict.code === 401
-            ? { 'www-authenticate': `WebAuthn realm="market", challenge=${verdict.challenge}` }
-            : {}
-        // 402 carries its terms, 403 its reason. Both are machine values: per
-        // R14 nothing in a response body is a sentence, and Velvet's
-        // mkt.pay.* strings interpolate from the terms rather than reading
-        // anything we wrote here.
-        const body =
-          verdict.code === 403
-            ? { reason: verdict.reason }
-            : verdict.code === 402
-              ? {
-                  terms: verdict.terms,
-                  // Absent on the first ask — not having paid yet is not a
-                  // failure — and present only when a proof was refused.
-                  ...(verdict.reason !== undefined
-                    ? { reason: verdict.reason, retryable: verdict.retryable === true }
-                    : {})
-                }
-              : {}
-        json(response, verdict.code, body, headers)
+        answerRefusal(response, verdict)
         return
       }
       const manifest = store.getManifest(id)
@@ -624,18 +636,35 @@ export function createRegistry(deps: RegistryDeps): Server {
 
     // GET /v1/blobs/:address
     if (method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'blobs') {
-      const bytes = store.getBlob(decodeURIComponent(parts[2]))
+      const address = decodeURIComponent(parts[2])
+      if (!isAddress(address)) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      // THE SAME GATE AS THE MANIFEST, on the same id: a preset's id is the
+      // address of its team.json, and publish stores no other file, so the blob
+      // at this address belongs to exactly the preset of this id. Asking by id
+      // rather than by what a manifest lists is the point: `blobs` is whatever
+      // its author wrote, so a free manifest naming someone's priced address
+      // must not open it. Bytes no manifest stands behind answer 404 here.
+      const verdict = authorize(address, request)
+      if (verdict.code !== 200 && verdict.code !== 404) {
+        answerRefusal(response, verdict)
+        return
+      }
+      const bytes = verdict.code === 404 ? null : store.getBlob(address)
       if (bytes === null) {
         json(response, 404, { error: 'not_found' })
         return
       }
-      // Immutable by construction: the address IS the content, so a cached copy
-      // can never be stale. Ungated on purpose — the bytes are inert without
-      // the manifest that names them, and the manifest is the gate.
+      // Immutable by construction, so a free file may be cached by anyone. A
+      // gated one must not be: a shared cache would hand it to the next caller
+      // without ever asking the gate.
+      const open = store.gateOf(address) === 'public'
       response.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'content-length': String(bytes.byteLength),
-        'cache-control': 'public, max-age=31536000, immutable'
+        ...(open ? { 'cache-control': 'public, max-age=31536000, immutable' } : PRIVATE)
       })
       response.end(bytes)
       return
@@ -694,6 +723,11 @@ export function createRegistry(deps: RegistryDeps): Server {
             parsed.publicKeyJwk === null
           ) {
             json(response, 400, { error: 'bad_request' })
+            return
+          }
+          // A deleted name stays deleted, on this older route as well.
+          if (deps.v2?.accounts.isRetired(parsed.credentialId) === true) {
+            json(response, 409, { error: 'credential_exists' })
             return
           }
           const out = identity.register(parsed.credentialId, parsed.publicKeyJwk)
@@ -773,11 +807,13 @@ export function createRegistry(deps: RegistryDeps): Server {
         ],
         // M2-A1. Advertised so a harness knows the gate can answer 402 without
         // discovering it from a preset that happens to be priced.
-        payments: deps.pricing === undefined
-          ? { served: false, note: 'this deployment prices nothing; the gate answers 200/401/403 only' }
+        payments: (deps.pricing?.facilitator ?? null) === null || deps.pricing === undefined
+          ? { served: false, note: 'no facilitator is configured; a priced preset answers 503 payment_unavailable' }
           : {
               served: true,
               on: 'GET /v1/presets/:id/manifest',
+              // The file behind a manifest answers to the same gate, 402 included.
+              sameGate: 'GET /v1/blobs/:address',
               asset: 'USDC',
               chain: deps.pricing.config.chain,
               termsTtlMs: deps.pricing.config.ttlMs,
@@ -848,24 +884,7 @@ export function createRegistry(deps: RegistryDeps): Server {
     )
       return
 
-    // GET /strata/<file> — the shell's built files, from its own bundle.
-    if (method === 'GET' && parts.length >= 2 && parts[0] === 'strata') {
-      if (!serveShellAsset(response, deps.shell ?? null, parts.slice(1).join('/'))) json(response, 404, { error: 'not_found' })
-      return
-    }
-
-    // GET /me and /me/<machine>[/<workspace>[/<agent>]] — STRATA level 0 and
-    // the levels under it, one page that routes itself (D2). Signed out, or
-    // with no shell deployed, it is the account page below.
-    const accountPath = parts.length === 2 && parts[0] === 'me' && parts[1] === 'account'
-    if (deps.v2 && deps.shell && deps.strataMe && method === 'GET' && parts[0] === 'me' && parts.length <= 4 && !accountPath) {
-      if (signedIn(request, deps.v2) !== null) {
-        respondPage(response, shellPage(deps.shell))
-        return
-      }
-    }
-
-    // GET /me/account (and /me with no shell) — the reader's own account:
+    // GET /me and /me/account — the reader's own account:
     // devices, security, desktops. A page rather than a JSON route because it
     // is where a person GOES; signed out it is a 401 that is still a page,
     // since somebody following a link deserves a sentence and a way in.
@@ -901,15 +920,6 @@ export function createRegistry(deps: RegistryDeps): Server {
       const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
 
       if (parts.length === 0) {
-        // Signed in, the front page IS the reader's fleet: level 0 of the
-        // strata shell, whose addresses all live under /me. Signed out (or
-        // with no shell deployed) it is the page below, whose stage shows the
-        // same three levels on a sample fleet.
-        if (deps.v2 && deps.shell && deps.strataMe && signedIn(request, deps.v2) !== null) {
-          response.writeHead(302, { location: '/me', 'cache-control': 'private, no-store', vary: 'cookie' })
-          response.end()
-          return
-        }
         deps.pulse?.page('/')
         // The front page is a document and can never ask who is reading; the
         // request already said. With an account the page is that person's and
@@ -932,8 +942,7 @@ export function createRegistry(deps: RegistryDeps): Server {
                 stars: starsOf,
                 pulse: pulseOf,
                 linesToday: deps.pulse?.linesToday() ?? 0,
-                account: reader,
-                art: sampleArt
+                account: reader
               })
             )
           })

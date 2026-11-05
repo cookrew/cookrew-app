@@ -172,6 +172,24 @@
   text-align: center;
 }
 
+.sp-remote {
+  margin: 44px auto;
+  --rp-ink: var(--sp-ink);
+  --rp-soft: var(--sp-soft);
+  --rp-seal: var(--sp-seal);
+}
+
+.sp-remote .rp-action:not(.rp-primary) {
+  border-color: var(--sp-hair);
+}
+
+/* Over the sheet: the restart question sits above everything it is asked from. */
+.sp-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+}
+
 .sp-panel {
   display: grid;
   justify-items: center;

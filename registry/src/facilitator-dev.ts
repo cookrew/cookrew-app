@@ -9,11 +9,9 @@ import type { Facilitator, SettlementRequest, SettlementResult } from './facilit
  * than only against an in-process double. A case that can only be produced by
  * mocking is a case nobody has actually seen the server answer.
  *
- * It lives in its own file, under its own name, and is wired only by
- * registry/src/main.ts — which hardcodes `dev: true` and is the development
- * entry point. Nothing here should ever be reachable from a deployment that
- * takes real money; if this ever needs a flag to keep it out of production,
- * that is the signal it has been wired somewhere it does not belong.
+ * It lives in its own file, under its own name, and only facilitator-boot.ts
+ * hands it out: to a --dev boot on a loopback origin, and to nobody else. Every
+ * other registry has no facilitator at all, and a priced preset is refused.
  */
 
 /**
@@ -34,6 +32,7 @@ export const DEV_UNREACHABLE_PREFIX = 'unreachable-'
 
 export function devFacilitator(): Facilitator {
   return {
+    standIn: true,
     settle(request: SettlementRequest): SettlementResult {
       if (request.tx.startsWith(DEV_REFUSE_PREFIX)) return { ok: false, reason: 'invalid' }
       if (request.tx.startsWith(DEV_UNREACHABLE_PREFIX)) {

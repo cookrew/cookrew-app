@@ -14,6 +14,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { createPortal } from 'react-dom'
 import { CrIcon } from './icons'
 import type { WorkspaceState } from '../../shared/model'
+import { boardActions, type BoardActionId } from './board-actions'
 
 const RosterPanel = lazy(() => import('./RosterPanel').then((m) => ({ default: m.RosterPanel })))
 
@@ -25,6 +26,8 @@ interface BoardSearchProps {
   activeWorkspaceId: string | null
   /** Agents waiting on you: a small count on the box while it is closed. */
   attentionCount: number
+  /** What the search box can do besides find agents (board-actions.ts). */
+  onAction?: (id: BoardActionId) => void
 }
 
 /** The panel hangs this far under the bar's bottom edge. */
@@ -37,7 +40,7 @@ export function isBoardKey(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' 
   return !el?.closest?.(TYPING)
 }
 
-export function BoardSearch({ workspace, activeWorkspaceId, attentionCount }: BoardSearchProps): React.JSX.Element {
+export function BoardSearch({ workspace, activeWorkspaceId, attentionCount, onAction }: BoardSearchProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const root = useRef<HTMLDivElement>(null)
@@ -63,6 +66,12 @@ export function BoardSearch({ workspace, activeWorkspaceId, attentionCount }: Bo
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  const actions = onAction ? boardActions(query) : []
+  const run = (id: BoardActionId): void => {
+    close()
+    onAction?.(id)
+  }
 
   useLayoutEffect(() => {
     if (!open) return
@@ -118,6 +127,9 @@ export function BoardSearch({ workspace, activeWorkspaceId, attentionCount }: Bo
             setQuery(e.target.value)
             setOpen(true)
           }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && actions[0]) run(actions[0].id)
+          }}
         />
         {!open && attentionCount > 0 && (
           <span className="cr-board-badge" title={`${attentionCount} waiting on you`}>
@@ -146,6 +158,17 @@ export function BoardSearch({ workspace, activeWorkspaceId, attentionCount }: Bo
         top !== null &&
         createPortal(
           <div className="cr-board-pop" id="cr-board-pop" ref={pop} style={{ top }}>
+            {actions.length > 0 && (
+              <div className="cr-board-actions">
+                {actions.map((action) => (
+                  <button type="button" key={action.id} className="cr-board-action" onClick={() => run(action.id)}>
+                    <CrIcon name="plus" />
+                    <b>{action.label}</b>
+                    <span>{action.hint}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <Suspense fallback={<div className="cr-board-loading">Loading the board…</div>}>
               <RosterPanel
                 workspace={workspace}

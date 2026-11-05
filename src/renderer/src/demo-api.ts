@@ -9,7 +9,7 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { cardNameOf } from '../../shared/use-sources'
-import { demoSources } from './use/demo-sources'
+import { demoRemoteAccess, demoSources } from './use/demo-sources'
 import { rankInbox } from '../../shared/inbox-rank'
 import { checkBrief } from '../../shared/workspace-brief'
 import { planRename } from '../../shared/rename-plan'
@@ -257,6 +257,36 @@ export function createDemoApi(): CookrewApi {
       wsBroadcast()
       return Promise.resolve({ workspaces: metas, activeId })
     },
+    setWorkspaceIcon: (id, icon) => {
+      const meta = metas.find((m) => m.id === id)
+      if (meta) meta.icon = icon
+      wsBroadcast()
+      return Promise.resolve({ workspaces: metas, activeId })
+    },
+    // The demo has no disk: every folder passes, the rest of the check is real.
+    checkWorkspace: (name, dir) => {
+      const wanted = name.trim() || 'Workspace'
+      const finalName = uniqueName(wanted, metas.map((m) => m.name))
+      const owner = metas.find((m) => m.dir === dir.trim())
+      const notes = [
+        ...(finalName !== wanted ? [`"${wanted}" is taken, so this one will be called "${finalName}".`] : []),
+        ...(owner ? [`"${owner.name}" already works in this folder, so their agents will share its files.`] : [])
+      ]
+      return Promise.resolve({ ok: true, name: finalName, dir: dir.trim() || '~', notes, suggestedDir: '~' })
+    },
+    workspaceRemovePlan: (id) => {
+      const meta = metas.find((m) => m.id === id)
+      const nodes = states.get(id)?.nodes ?? []
+      return Promise.resolve({
+        id,
+        name: meta?.name ?? id,
+        stops: nodes.filter((n) => n.kind === 'terminal').map((n) => n.name),
+        notes: nodes.filter((n) => n.kind === 'note').length,
+        browsers: nodes.filter((n) => n.kind === 'browser').length,
+        keeps: meta?.dirs ?? [],
+        forks: []
+      })
+    },
     // Workspace v2 stubs: the demo has one in-memory dir, no git, no picker.
     removeWorkspace: () => Promise.resolve({ workspaces: metas, activeId }),
     addWorkspaceDir: () => Promise.resolve({ workspaces: metas, activeId }),
@@ -297,6 +327,11 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve({ ok: true as const, card: { id, name, url: source.address } })
     },
     openScreenSettings: () => Promise.resolve({ ok: true as const }),
+    remoteAccess: () => Promise.resolve(demoRemoteAccess()),
+    remoteControl: () => Promise.resolve({ ok: true as const }),
+    remoteRestart: () => Promise.resolve({ ok: true as const }),
+    setRemoteSwitch: () => Promise.resolve({ ok: true as const }),
+    stopRemote: () => Promise.resolve({ ok: true as const }),
     addNode: (node) => {
       const typed = node as CanvasNode
       const named = {

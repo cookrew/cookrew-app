@@ -1,18 +1,18 @@
 // THE ZOOM NAVIGATOR'S DEVICES, renderer side: this desktop from its own
-// levels feed (or, without one, its workspace list by name), the account's
+// fleet feed (or, without one, its workspace list by name), the account's
 // other desktops from the registry, joined per machine. Every name invented.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LevelsAgent, LevelsEvent, LevelsSnapshot, LevelsWorkspace } from '../src/shared/strata'
+import type { FleetAgent, FleetEvent, FleetSnapshot, FleetWorkspace } from '../src/shared/fleet'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
 import type { WorkspaceList } from '../src/shared/model'
 import { composeFleet, createZoomFleetStore, LOCAL_MACHINE_ID, type FleetApi, type Sight } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { relayAccountMachines } from '../src/renderer/src/relay-machines'
-import { PROFILE } from './strata-levels-fixture'
+import { PROFILE } from './fleet-fixture'
 
 const ME = '0f8f1c2e-1111-4222-8333-944445555666'
 const OTHER = '1a2b3c4d-aaaa-4bbb-8ccc-ddddeeeeffff'
 
-const agent = (id: string, phase: LevelsAgent['phase'], extra: Partial<LevelsAgent> = {}): LevelsAgent => ({
+const agent = (id: string, phase: FleetAgent['phase'], extra: Partial<FleetAgent> = {}): FleetAgent => ({
   id,
   name: id,
   harness: 'claude',
@@ -28,7 +28,7 @@ const agent = (id: string, phase: LevelsAgent['phase'], extra: Partial<LevelsAge
   ...extra
 })
 
-const workspace = (id: string, agents: LevelsAgent[], state: LevelsWorkspace['state'] = 'background'): LevelsWorkspace => ({
+const workspace = (id: string, agents: FleetAgent[], state: FleetWorkspace['state'] = 'background'): FleetWorkspace => ({
   id,
   name: `ws ${id}`,
   icon: null,
@@ -39,7 +39,7 @@ const workspace = (id: string, agents: LevelsAgent[], state: LevelsWorkspace['st
   counts: { agents: agents.length, notes: 2, browsers: 1 }
 })
 
-const snapshot = (rev: number, workspaces: LevelsWorkspace[] = [workspace('w1', [agent('a1', 'waiting'), agent('a2', 'thinking')], 'focused'), workspace('w2', [agent('a3', 'idle')])]): LevelsSnapshot => ({
+const snapshot = (rev: number, workspaces: FleetWorkspace[] = [workspace('w1', [agent('a1', 'waiting'), agent('a2', 'thinking')], 'focused'), workspace('w2', [agent('a3', 'idle')])]): FleetSnapshot => ({
   v: 1,
   rev,
   at: 1_000,
@@ -62,7 +62,7 @@ const machine = (id: string, name: string, current: boolean, extra: Partial<Acco
 
 describe('composeFleet', () => {
   it('seats this desktop from its feed: workspaces, agents, attachments and counts', () => {
-    const [local] = composeFleet({ levels: snapshot(1), link: 'live', list: null, name: null, account: null })
+    const [local] = composeFleet({ snapshot: snapshot(1), link: 'live', list: null, name: null, account: null })
     expect(local).toMatchObject({ id: LOCAL_MACHINE_ID, name: 'Studio', local: true, online: true, detail: 'live', focusedWorkspaceId: 'w1', appVersion: '0.3.1', profile: PROFILE })
     expect(local.workspaces.map((w) => [w.id, w.focused, w.live, w.agents.length, w.loose.length])).toEqual([
       ['w1', true, true, 2, 1],
@@ -74,7 +74,7 @@ describe('composeFleet', () => {
 
   it('puts this desktop first under its registry id, and lists the others by name with counts unknown', () => {
     const account: AccountMachines = { ok: true, machines: [machine(OTHER, 'Laptop', false), machine(ME, 'Studio (registry)', true, { profile: PROFILE })] }
-    const machines = composeFleet({ levels: snapshot(1), link: 'live', list: null, name: null, account })
+    const machines = composeFleet({ snapshot: snapshot(1), link: 'live', list: null, name: null, account })
     expect(machines.map((m) => [m.id, m.local, m.detail])).toEqual([
       [ME, true, 'live'],
       [OTHER, false, 'listed']
@@ -87,18 +87,18 @@ describe('composeFleet', () => {
 
   it('names this desktop from its workspace list while the feed is out, or where there is none', () => {
     const list: WorkspaceList = { workspaces: [{ id: 'w1', name: 'cookrew' } as WorkspaceList['workspaces'][number], { id: 'w2', name: 'home' } as WorkspaceList['workspaces'][number]], activeId: 'w2' }
-    const [local] = composeFleet({ levels: null, link: 'none', list, name: 'Studio.local', account: null })
+    const [local] = composeFleet({ snapshot: null, link: 'none', list, name: 'Studio.local', account: null })
     expect(local).toMatchObject({ name: 'Studio.local', detail: 'listed', focusedWorkspaceId: 'w2', counts: null })
     expect(local.workspaces.map((w) => [w.name, w.focused, w.live, w.counts])).toEqual([
       ['cookrew', false, false, null],
       ['home', true, false, null]
     ])
-    expect(composeFleet({ levels: null, link: 'connecting', list, name: null, account: null })[0]).toMatchObject({ name: 'This desktop', detail: 'connecting' })
+    expect(composeFleet({ snapshot: null, link: 'connecting', list, name: null, account: null })[0]).toMatchObject({ name: 'This desktop', detail: 'connecting' })
   })
 
   it('falls back to the registry’s own names for this desktop when nothing local has answered', () => {
     const account: AccountMachines = { ok: true, machines: [machine(ME, 'Studio', true)] }
-    const [local] = composeFleet({ levels: null, link: 'connecting', list: null, name: null, account })
+    const [local] = composeFleet({ snapshot: null, link: 'connecting', list: null, name: null, account })
     expect(local).toMatchObject({ id: ME, name: 'Studio', workspaces: [{ id: 'r1', live: false }] })
   })
 })
@@ -106,7 +106,7 @@ describe('composeFleet', () => {
 /** A fake bridge: the feed's subscriber and refusal are kept so a test can drive them. */
 const fakeApi = (options: { feed?: boolean; machines?: () => Promise<AccountMachines>; list?: () => Promise<WorkspaceList> } = {}) => {
   const feed = {
-    cb: null as ((event: LevelsEvent) => void) | null,
+    cb: null as ((event: FleetEvent) => void) | null,
     refused: null as (() => void) | null,
     opens: 0,
     releases: 0
@@ -326,12 +326,12 @@ describe("a workspace's newest browser", () => {
   })
   it('is the one the feed names', async () => {
     const { composeFleet } = await import('../src/renderer/src/zoom/use-zoom-fleet')
-    const fleet = composeFleet({ levels: snapshot({ newest: attachment('fresh', 'browser'), loose: [attachment('old', 'browser')] }) } as never)
+    const fleet = composeFleet({ snapshot: snapshot({ newest: attachment('fresh', 'browser'), loose: [attachment('old', 'browser')] }) } as never)
     expect(fleet[0].workspaces[0].newest?.id).toBe('fresh')
   })
   it('is the last browser listed when the feed names none, and none for notes only', async () => {
     const { composeFleet } = await import('../src/renderer/src/zoom/use-zoom-fleet')
-    expect(composeFleet({ levels: snapshot({ loose: [attachment('a', 'browser'), attachment('b', 'browser'), attachment('n', 'note')] }) } as never)[0].workspaces[0].newest?.id).toBe('b')
-    expect(composeFleet({ levels: snapshot({ loose: [attachment('n', 'note')] }) } as never)[0].workspaces[0].newest).toBeNull()
+    expect(composeFleet({ snapshot: snapshot({ loose: [attachment('a', 'browser'), attachment('b', 'browser'), attachment('n', 'note')] }) } as never)[0].workspaces[0].newest?.id).toBe('b')
+    expect(composeFleet({ snapshot: snapshot({ loose: [attachment('n', 'note')] }) } as never)[0].workspaces[0].newest).toBeNull()
   })
 })

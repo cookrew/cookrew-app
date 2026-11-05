@@ -1,5 +1,6 @@
 import type { FieldReport } from './page-fields'
 import type { CdpInputCommand } from '../shared/cast-input'
+import type { ViewerWho } from '../shared/remote-access'
 import type { UseStatus } from '../shared/use-signal'
 import type { Gesture } from './vphone-input'
 import type { ViewportMetrics } from '../shared/cast-viewport'
@@ -43,7 +44,7 @@ export interface BrowserInstance {
   onViewportState(listener: (state: BrowserViewportState) => void): () => void
   beginAgentViewportActivity(): Promise<() => void>
   /** May resolve when the device took it (a Chrome does); a pinch step paces on that. */
-  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params']): Promise<void> | void
+  dispatchInput(method: CdpInputCommand['method'], params: CdpInputCommand['params'], who?: ViewerWho): Promise<void> | void
 
   readonly viewport: { width: number; height: number }
   readonly viewportState: BrowserViewportState
@@ -55,6 +56,16 @@ export interface BrowserInstance {
    */
   readonly status?: UseStatus
   readonly statusListeners?: Set<(status: UseStatus) => void>
+  /** This viewer's own reading of a status. Absent: every viewer reads the same. */
+  statusFor?(status: UseStatus, who: ViewerWho): UseStatus
+  /** The status a viewer who may not watch is left with; null when it may. */
+  refusalFor?(who: ViewerWho): UseStatus | null
+  /** A viewer arrived; the answer is its leaving. */
+  enterViewer?(viewerId: string, who: ViewerWho): (() => void) | null
+  /** This viewer holds control right now. Absent: the question does not arise. */
+  mayDrive?(who: ViewerWho): boolean
+  /** Input here needs a viewer with a name: a route with none is refused. */
+  readonly needsViewer?: boolean
   /**
    * Where the page's text fields are and whether one has focus (page-fields.ts),
    * while someone watches. The listener gets the last report at once. Absent

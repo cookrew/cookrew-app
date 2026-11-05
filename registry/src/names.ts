@@ -85,6 +85,8 @@ export interface NamesFeature {
   wildcardFor: (deviceId: string) => string
   /** Does that Mac have a live certificate — the `names` bit on a reach card. */
   hasNames: (deviceId: string) => boolean
+  /** The account that owned this Mac was deleted: drop its certificate record. */
+  forget: (deviceId: string) => void
   state: (deviceId: string) => CertState
   /** Start (or answer for) an order. Never throws; the CA work runs behind it. */
   request: (deviceId: string, csr: unknown) => CertRequest
@@ -228,6 +230,7 @@ export function createNames(options: NamesOptions): NamesFeature {
     lookup: (host) => lookupName(respond, host),
     wildcardFor,
     hasNames: (deviceId) => certs.hasNames(deviceId),
+    forget: (deviceId) => certs.forget(deviceId),
     state: (deviceId) => certs.state(deviceId),
     request: (deviceId, csr) => {
       const checked = check(deviceId, csr)

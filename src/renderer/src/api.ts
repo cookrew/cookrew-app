@@ -3,10 +3,12 @@ import type { FirstRunStage, FirstTask } from '../../shared/first-run'
 import type { AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
 import type { PreflightRow } from '../../shared/preflight'
 import type { UseSourceList, UseSourceOpened, UseSourcePick, UseSourceSettings } from '../../shared/use-sources'
+import type { RemoteAccess, RemoteAnswer, RemoteHostView } from '../../shared/remote-access'
 import type { StrayPane } from '../../shared/stray-pane'
 import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
+import type { WatchCode, WatchInvite, WatchState } from './watch-code'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
@@ -14,6 +16,7 @@ import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
+import type { WorkspaceCheck, WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -45,7 +48,8 @@ import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
-import type { LevelsEvent } from "../../shared/strata";
+import type { FleetEvent } from "../../shared/fleet";
+import type { UnlockAnswer as MacUnlockAnswer, UnlockBegin } from "../../shared/remote-unlock";
 import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
@@ -321,8 +325,14 @@ export interface CookrewApi {
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** The owner's one-line brief (shared/workspace-brief.ts); '' clears it. Rejects an invalid one. */
   setWorkspaceBrief: (id: string, brief: string) => Promise<WorkspaceList>;
+  /** The workspace's mark; rejects anything but one short mark. */
+  setWorkspaceIcon: (id: string, icon: string) => Promise<WorkspaceList>;
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => Promise<WorkspaceCheck>;
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (id: string) => Promise<WorkspaceRemovePlan>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
-  removeWorkspace: (id: string) => Promise<WorkspaceList>;
+  removeWorkspace: (id: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
   removeWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
   setPrimaryDir: (id: string, dir: string) => Promise<WorkspaceList>;
@@ -371,7 +381,20 @@ export interface CookrewApi {
    */
   useSources?: () => Promise<UseSourceList>;
   openUseSource?: (pick: UseSourcePick) => Promise<UseSourceOpened>;
-  openScreenSettings?: () => Promise<UseSourceSettings>;
+  /** The grant's page on the Mac. From a phone this opens it there, for later. */
+  openScreenSettings?: (pane?: 'screen' | 'accessibility') => Promise<UseSourceSettings>;
+  remoteAccess?: () => Promise<RemoteAccess | { ok: false; error: string }>;
+  remoteControl?: (ask: { card: string; on: boolean }) => Promise<RemoteAnswer>;
+  remoteRestart?: () => Promise<RemoteAnswer>;
+  remoteWake?: () => Promise<RemoteAnswer>;
+  /** A phone's way to a locked Mac (use/unlock-flow.ts). The desktop has neither. */
+  remoteUnlockBegin?: () => Promise<UnlockBegin>;
+  remoteUnlock?: (sealed: string) => Promise<MacUnlockAnswer>;
+  /** The machine switch. The Mac's own window only: there is no route, so a phone has no such method. */
+  setRemoteSwitch?: (on: boolean) => Promise<RemoteAnswer>;
+  stopRemote?: () => Promise<RemoteAnswer>;
+  remoteHost?: () => Promise<RemoteHostView>;
+  onRemoteHost?: (cb: (view: RemoteHostView) => void) => () => void;
   createTerminal: (opts: {
     name: string;
     preset: string;
@@ -401,7 +424,7 @@ export interface CookrewApi {
   pickFiles: () => Promise<string[]>;
   ptyInput: (terminalId: string, data: string) => void;
   /** An answer to a waiting agent's menu, checked against its screen (main/menu-answer.ts). */
-  answerMenu: (terminalId: string, answer: { menu: string; act: MenuAct }) => Promise<{ ok: true } | { ok: false; reason: 'moved' | 'refused' }>;
+  answerMenu: (terminalId: string, answer: { menu: string; brief?: string; act: MenuAct }) => Promise<{ ok: true } | { ok: false; reason: 'moved' | 'refused' }>;
   /**
    * THE DIALS (shared/agent-tuning): what the agent's last reply ran at, and
    * turning one.
@@ -537,16 +560,20 @@ export interface CookrewApi {
   /** The usage-data switch (TelemetryRow.tsx). Optional: it belongs to this machine, so the phone has none. */
   telemetryStatus?: () => Promise<TelemetryStatus | null>;
   setTelemetry?: (on: boolean) => Promise<TelemetryStatus | null>;
+  updateStatus?: () => Promise<unknown>;
+  setUpdateCheck?: (on: boolean) => Promise<unknown>;
+  restartToUpdate?: () => Promise<unknown>;
+  onUpdateStatus?: (cb: (status: unknown) => void) => () => void;
   /**
    * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
-   * levels feed — every workspace with its agents and their wired notes and
-   * browsers (shared/strata.ts LevelsEvent): a snapshot first, then deltas.
-   * `refused` says the desktop would not open it (its levels service is not
+   * fleet feed — every workspace with its agents and their wired notes and
+   * browsers (shared/fleet.ts FleetEvent): a snapshot first, then deltas.
+   * `refused` says the desktop would not open it (its fleet service is not
    * up yet, or this client may not read it); the caller asks again. Returns
    * the release. Optional — feature-detect; without it the navigator names
    * this desktop's workspaces from listWorkspaces.
    */
-  subscribeZoomFleet?: (cb: (event: LevelsEvent) => void, refused?: () => void) => () => void;
+  subscribeZoomFleet?: (cb: (event: FleetEvent) => void, refused?: () => void) => () => void;
   /**
    * The signed-in account's desktops as the registry lists them: names,
    * presence, kind, workspace names — never addresses (shared/zoom-fleet.ts).
@@ -764,6 +791,13 @@ export interface CookrewApi {
   interactiveBrowserEnabled: () => Promise<boolean>;
   /** Desktop-only token authorizing its cross-origin localhost WS connection. */
   browserStreamToken: () => Promise<string | null>;
+  /** Six digits for an Apple Watch, and where it can reach this Mac. Absent in the demo. */
+  watchCode?: () => Promise<WatchCode>;
+  /** Is a watch paired; and forget it, here and now. */
+  watchState?: () => Promise<WatchState>;
+  /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
+  watchInvite?: (current: string) => Promise<WatchInvite>;
+  watchForget?: () => Promise<unknown>;
   /**
    * The desktop's own line to a browser card's Chrome: a MessagePort from
    * main (browser-cast-ipc.ts). Absent on the phone and the demo, and on a
@@ -824,6 +858,8 @@ export interface CookrewApi {
    * Remote surfaces only — the desktop has the Mac's own ear above.
    */
   hearAvailable?: () => Promise<boolean>;
+  /** The language this Mac hears in; a browser's own ear hears in it too. Null from an older Mac. */
+  hearLocale?: () => Promise<string | null>;
   hearRecording?: (audio: Blob, signal?: AbortSignal) => Promise<{ text: string; alternates: Record<string, string> }>;
   /**
    * Spoken replies in the Mac's free local voice (prompt/reply-voice.ts,
@@ -911,6 +947,8 @@ export interface CookrewApi {
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   /** v3 (D12): REVOKE steps up for the password; the registry gets the DELETE only after it. */
   accountRevoke?: (input: { deviceId: string; password: string }) => Promise<AccountResult<void>>;
+  /** Deletes the account everywhere; the status handed back has no username. */
+  accountDelete?: (input: { confirm: string; password: string }) => Promise<AccountResult<AccountStatus>>;
   /**
    * v3 (D12): this Mac leaves the account. Answers the status an empty
    * avatar draws; refused with `last_device` on a one-device account.

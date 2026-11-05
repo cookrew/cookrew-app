@@ -121,12 +121,12 @@ describe('a keystroke request that never answers', () => {
     push('t1', 'b')
     push('t1', 'c')
     expect(sent).toEqual(['a'])
-    await new Promise((r) => setTimeout(r, 40))
+    // No answer is not "not typed": the same batch goes again, and the Mac
+    // types its id once (main/once-by-key.ts). Polled: the deadline and the
+    // resend are real timers, and a busy runner can take longer than either.
+    await expect.poll(() => sent, { timeout: 3000 }).toEqual(['a', 'a', 'bc'])
     expect(signals[0].aborted).toBe(true)
     expect((signals[0].reason as Error).name).toBe('TimeoutError')
-    // No answer is not "not typed": the same batch goes again, and the Mac
-    // types its id once (main/once-by-key.ts).
-    expect(sent).toEqual(['a', 'a', 'bc'])
   })
 
   it('leaves an answered request alone', async () => {

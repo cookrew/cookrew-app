@@ -152,6 +152,7 @@ const api = {
   accountRevoke: (input: { deviceId: string; password: string }) =>
     ipcRenderer.invoke('account:revoke', input),
   accountSignOut: (password: string) => ipcRenderer.invoke('account:signOut', password),
+  accountDelete: (input: { confirm: string; password: string }) => ipcRenderer.invoke('account:delete', input),
   accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
   /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
    *  renderer's copy, so this cannot be talked into writing chosen bytes. */
@@ -298,7 +299,18 @@ const api = {
   accessClear: () => ipcRenderer.invoke('access:clear'),
   useSources: () => ipcRenderer.invoke('use:sources'),
   openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
-  openScreenSettings: () => ipcRenderer.invoke('use:screen-settings'),
+  openScreenSettings: (pane?: string) => ipcRenderer.invoke('use:screen-settings', pane),
+  remoteAccess: () => ipcRenderer.invoke('use:remote-access'),
+  remoteControl: (ask: unknown) => ipcRenderer.invoke('use:remote-control', ask),
+  remoteRestart: () => ipcRenderer.invoke('use:remote-restart'),
+  setRemoteSwitch: (on: boolean) => ipcRenderer.invoke('use:remote-switch', on),
+  stopRemote: () => ipcRenderer.invoke('use:remote-stop'),
+  remoteHost: () => ipcRenderer.invoke('use:remote-host'),
+  onRemoteHost: (cb: (view: unknown) => void) => {
+    const listener = (_e: unknown, view: unknown): void => cb(view)
+    ipcRenderer.on('use:remote-host', listener)
+    return () => ipcRenderer.removeListener('use:remote-host', listener)
+  },
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
@@ -374,7 +386,11 @@ const api = {
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   setWorkspaceBrief: (id: string, brief: string) => ipcRenderer.invoke('workspace:brief', id, brief),
-  removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
+  setWorkspaceIcon: (id: string, icon: string) => ipcRenderer.invoke('workspace:icon', id, icon),
+  checkWorkspace: (name: string, dir: string) => ipcRenderer.invoke('workspace:check', name, dir),
+  workspaceRemovePlan: (id: string) => ipcRenderer.invoke('workspace:removePlan', id),
+  removeWorkspace: (id: string, options?: { worktree?: boolean }) =>
+    ipcRenderer.invoke('workspace:remove', id, options),
   addWorkspaceDir: (id: string, dir: string) => ipcRenderer.invoke('workspace:dir:add', id, dir),
   removeWorkspaceDir: (id: string, dir: string) =>
     ipcRenderer.invoke('workspace:dir:remove', id, dir),
@@ -591,7 +607,15 @@ const api = {
   /** The usage-data switch; it lives on this machine, so the phone has no such call. */
   telemetryStatus: () => ipcRenderer.invoke('telemetry:status'),
   setTelemetry: (on: boolean) => ipcRenderer.invoke('telemetry:set', on),
-  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's levels feed, a snapshot
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
+  restartToUpdate: () => ipcRenderer.invoke('update:restart'),
+  onUpdateStatus: (cb: (status: unknown) => void) => {
+    const listener = (_e: unknown, status: unknown): void => cb(status)
+    ipcRenderer.on('update:status', listener)
+    return () => ipcRenderer.removeListener('update:status', listener)
+  },
+  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's fleet feed, a snapshot
   // first, then every delta, pushed; the release closes this window's stream
   // when its last reader goes. A refused hold (the companion is not up yet)
   // is said, so the reader can ask again.
@@ -634,6 +658,10 @@ const api = {
     ipcRenderer.send('browser:thumb', browserId, dataUrl),
   interactiveBrowserEnabled: () => ipcRenderer.invoke('browser:interactive-enabled'),
   browserStreamToken: () => ipcRenderer.invoke('browser:stream-token'),
+  watchCode: () => ipcRenderer.invoke('watch:code'),
+  watchState: () => ipcRenderer.invoke('watch:state'),
+  watchInvite: (current: string) => ipcRenderer.invoke('watch:invite', current),
+  watchForget: () => ipcRenderer.invoke('watch:forget'),
   openBrowserStream,
   onCmdW: (cb: () => void) => {
     const listener = (): void => cb()

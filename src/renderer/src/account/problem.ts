@@ -31,6 +31,7 @@ export const DOING = machineTable({
   DEVICES: 'The devices on your account could not be read',
   REVOKE: 'That device could not be revoked',
   SIGN_OUT: 'This Mac could not sign out',
+  DELETE_ACCOUNT: 'Your account could not be deleted',
   FORGET: 'That phone could not be forgotten',
   DISPLAY_NAME: 'That name could not be saved',
   FACTORS: 'Your security settings could not be read',

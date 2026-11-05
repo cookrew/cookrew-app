@@ -978,3 +978,16 @@
     padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
   }
 }
+
+/* DELETE ACCOUNT, at the foot of the PROFILE tab. One quiet button until opened. */
+.cr-sheet .cr-acct-delete-open { margin-top: 28px; }
+.cr-sheet .cr-acct-delete {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cr-line, rgba(0, 0, 0, 0.14));
+  display: grid;
+  gap: 8px;
+}
+.cr-sheet .cr-acct-delete h3 { margin: 8px 0 0; font-size: 11px; letter-spacing: 0.08em; }
+.cr-sheet .cr-acct-delete ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.45; }
+.cr-sheet .cr-acct-delete li + li { margin-top: 4px; }

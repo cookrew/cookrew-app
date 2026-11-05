@@ -2049,3 +2049,38 @@
 .zv-root:not([data-full='true']) .zv-controls {
   bottom: var(--cr-float-h, calc(14px + env(safe-area-inset-bottom, 0px)));
 }
+
+/* The WORKSPACES stop's own way to make one, in words: it had no ＋, and the
+   only way in was four unlabelled clicks away. */
+.zv-new-workspace {
+  position: absolute;
+  z-index: 44;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 6px 18px var(--zv-shadow);
+  color: var(--zv-ink);
+  font: 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+.zv-new-workspace:hover { box-shadow: inset 0 0 0 1px var(--zv-ink-soft), 0 6px 18px var(--zv-shadow) }
+/* On a phone the top corner is the device's own title, so the door sits above
+   the bar, where a thumb already is. */
+@media (max-width: 700px) {
+  .zv-new-workspace {
+    top: auto;
+    left: 50%;
+    bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+}

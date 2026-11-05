@@ -13,7 +13,7 @@
 //   GET  /v1/presets?q=              browse / search
 //   GET  /v1/presets/:id/manifest    the gate
 //   HEAD /v1/presets/:id/manifest    update check, x-cookrew-preset-version (R3)
-//   GET  /v1/blobs/:address          immutable content
+//   GET  /v1/blobs/:address          a preset's file, behind the same gate as its manifest
 //   GET  /v1/log?from=&preset=       transparency log, replayable; preset narrows it (R20)
 //   POST /v1/identity/register       enrol a credential (TOFU)
 //   POST /v1/identity/assert         verify a ceremony, mint a short-lived token
@@ -42,7 +42,7 @@
 //                            renewal comes out of the same allowance.
 // Absent flags mean nothing listens and nothing changes.
 //
-// Flags: --port --data --seed --origin --chain --terms-ttl --shell-assets <file> --strata-me. The origin defaults to the port that is
+// Flags: --port --data --seed --origin --chain --terms-ttl. The origin defaults to the port that is
 // bound; pass it only to serve a ceremony on a host other than localhost, and a
 // value that contradicts --port refuses at boot.
 import { generateKeyPairSync } from 'node:crypto'
@@ -50,13 +50,12 @@ import path from 'node:path'
 import { RegistryStore } from './store'
 import { TransparencyLog } from './log'
 import { createRegistry } from './server'
-import { loadShellBundle } from './strata-shell'
 import { IdentityService, identityConfigFor } from './identity'
 import { makeAuthorize } from './authorize'
 import { PayoutStore } from './payouts'
 import { DEFAULT_TERMS_CONFIG } from './terms'
 import { FilePaymentNonces } from './payment-nonces'
-import { devFacilitator } from './facilitator-dev'
+import { facilitatorFor } from './facilitator-boot'
 import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
 import { StarStore } from './stars'
@@ -204,6 +203,12 @@ if (args.includes('--seed')) {
 // actually send, so both are derived from the address this process binds — and
 // a contradiction refuses at boot rather than turning every ceremony into a
 // blanket 401 that reads like a broken passkey (Tinker's LOW-1).
+// `--origin=x` would otherwise be skipped and boot as localhost, which is also
+// what lets --dev past the loopback check when a proxy stands in front.
+if (args.some((arg) => arg.startsWith('--origin='))) {
+  console.error('refusing to start: write it as --origin <value>')
+  process.exit(1)
+}
 const resolved = identityConfigFor({ port: PORT, origin: args.includes('--origin') ? flag('origin', '') : undefined })
 if (!resolved.ok) {
   console.error(`refusing to start: ${resolved.reason}`)
@@ -290,18 +295,22 @@ if (!Number.isInteger(TERMS_TTL_MS) || TERMS_TTL_MS < 1) {
   console.error(`refusing to start: --terms-ttl ${flag('terms-ttl', '')} is not a positive number of ms`)
   process.exit(1)
 }
-// The price step. Present here because the dev registry sells things; a
-// deployment that passes no pricing behaves exactly as M1 did.
+// Decided once, before anything is served. Outside --dev there is no accepting
+// facilitator, so a priced preset is refused and no payment can settle.
+const payments = facilitatorFor({ dev: DEV, origin: resolved.config.origin })
+if (!payments.ok) {
+  console.error(`refusing to start: ${payments.reason}`)
+  process.exit(1)
+}
+// The price step: quotes, nonces and receipts. It only ever sells when the
+// facilitator above is real; see PricingDeps.
 const pricing = {
   payouts: new PayoutStore(DATA),
   config: { chain: CHAIN, ttlMs: TERMS_TTL_MS },
   // FILE-backed: a quote must outlive the process that issued it, or a buyer
   // who paid mid-flight and met a restart is told their payment is invalid.
   nonces: new FilePaymentNonces(DATA),
-  // The DEV facilitator: reaches no chain, verifies no transfer, and exists so
-  // the handshake can be driven end to end against the real binary. See its
-  // file — it is not a payment system and must never be one.
-  facilitator: devFacilitator(),
+  facilitator: payments.facilitator,
   receipts: new ReceiptStore(DATA),
   now: () => Date.now()
 }
@@ -346,20 +355,17 @@ createRegistry({
   v2,
   note: (message) => console.error(message),
   ...(names === undefined ? {} : { names }),
-  // STRATA: a desktop's last-seen time survives a restart (v2-line-seen.ts).
+  // A desktop's last-seen time survives a restart (v2-line-seen.ts).
   lineSeenFile: path.join(DATA, 'canvas-line-seen.json'),
-  // STRATA: the shell's files, from the second ConfigMap (strata-shell.ts).
-  // No flag and no env → no shell: the front page keeps its promo.
-  shell: loadShellBundle(flag('shell-assets', process.env.STRATA_SHELL_ASSETS ?? ''), (message) => console.error(message)),
-  // With a shell, /me becomes it only under --strata-me; without the flag the
-  // shell only draws the front page's sample fleet and /me stays the account page.
-  strataMe: args.includes('--strata-me') || process.env.STRATA_ME === '1',
   authorize: makeAuthorize(store, identity, pricing)
-}).listen(PORT, () => {
+  // --dev answers on loopback alone: its stand-in settles anything and /v1/dev
+  // forgets every credential, and the origin check above only covers the name.
+}).listen(PORT, DEV ? '127.0.0.1' : undefined, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.
   console.log(`registry on ${resolved.config.origin}  data=${DATA}${DEV ? '  [DEV]' : ''}`)
+  if (payments.facilitator === null) console.log('payments off: no facilitator, priced presets are refused')
   if (names !== undefined && DNS_NS !== null) {
     // ONE LINE PER FEATURE, and nothing in either of them that is a secret:
     // the zone, the port and the glue are public by definition (they are typed

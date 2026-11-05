@@ -74,28 +74,28 @@ import { companionHostsOf, LOOPBACK_HOSTS } from './companion-hosts'
 import { refuseMisdirected, refuseMisdirectedUpgrade } from './host-gate'
 import { createNameSni } from './name-sni'
 import type { DesktopCert } from './desktop-cert'
-import { handleLevelsRoutes } from './levels/routes'
-import { levelsServiceFor, prewarmLevels, type LevelsMountOptions } from './levels/mount'
+import { handleFleetRoutes } from './fleet/routes'
+import { fleetServiceFor, prewarmFleet, type FleetMountOptions } from './fleet/mount'
 import { readMachineDisplay } from './machine-display'
-import type { LevelsService } from './levels/service'
+import type { FleetService } from './fleet/service'
 
-/** What the levels need from this server: its app version, and the token to scrub by value. */
-const levelsOptions = (deps: MobileServerDeps): LevelsMountOptions => ({
+/** What the fleet feed needs from this server: its app version, and the token to scrub by value. */
+const levelsOptions = (deps: MobileServerDeps): FleetMountOptions => ({
   appVersion: () => deps.appVersion?.() ?? null,
   tokens: () => [activePairingToken ?? deps.pairingToken],
   display: () => readMachineDisplay(() => screen)
 })
 
-/** The deps the companion server was started with: the window's zoom fleet feed shares its levels service. */
+/** The deps the companion server was started with: the window's zoom fleet feed shares its fleet service. */
 let levelsDeps: MobileServerDeps | null = null
 
 /**
- * This desktop's levels service — the one the companion's /api/levels routes
+ * This desktop's fleet service — the one the companion's /api/fleet routes
  * serve — for the window's zoom navigator (zoom-fleet.ts). Null before the
  * server starts, or when the board is not wired.
  */
-export function localLevelsService(): LevelsService | null {
-  return levelsDeps ? levelsServiceFor(levelsDeps, levelsOptions(levelsDeps)) : null
+export function localFleetService(): FleetService | null {
+  return levelsDeps ? fleetServiceFor(levelsDeps, levelsOptions(levelsDeps)) : null
 }
 
 // Re-exported so existing importers keep their import path; the constants
@@ -172,7 +172,7 @@ const powerBlockerId: { current: number | null } = { current: null }
 
 export interface MobileServerDeps {
   store: WorkspaceStore
-  /** The app's version for the levels snapshot; injected so this listener never imports electron's app. */
+  /** The app's version for the fleet snapshot; injected so this listener never imports electron's app. */
   appVersion?: () => string
   ptys: PtyManager
   /**
@@ -211,8 +211,6 @@ export interface MobileServerDeps {
   stream?: MobileApiDeps['stream']
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
-  /** STRATA: a cwd's git answer if already cached, never a query (levels detail's node.git). */
-  gitPeek?: (dir: string) => GitInfo | undefined
   /** Event-loop health (loop-health.ts); absent = /api/health answers 503. */
   health?: () => LoopHealthSnapshot
   /** Importing a served team from the phone (mobile-api ServeOps). */
@@ -375,9 +373,9 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (!powerBlockerId.current) {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
-  // STRATA: the first levels build at idle, not on the first shell's request.
+  // The first fleet build at idle, not on the first reader's request.
   levelsDeps = deps
-  prewarmLevels(deps, levelsOptions(deps))
+  prewarmFleet(deps, levelsOptions(deps))
 
   // C1: resolve the pairing token BEFORE any route can run — every mutating
   // route on this server requires it (see handleMobileApi's gate). The
@@ -1445,11 +1443,11 @@ export async function handle(
   recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
-  // STRATA: the levels (src/main/levels). Below the /api GET gate, and asking
+  // The fleet feed (src/main/fleet). Below the /api GET gate, and asking
   // for the PAIRING scope on top of it: the wall token reads no note bodies.
   if (
-    handleLevelsRoutes(request, response, url, {
-      service: () => levelsServiceFor(deps, levelsOptions(deps)),
+    handleFleetRoutes(request, response, url, {
+      service: () => fleetServiceFor(deps, levelsOptions(deps)),
       paired: (req, u) => !authed.pairingToken || authed.companionGate(presentedToken(req, u))
     })
   )

@@ -74,6 +74,21 @@ describe('the web build wears the ink COO', () => {
         .map(([x, y]) => Math.floor((((Math.atan2(y - 50, x - 50) * 180) / Math.PI + 360) % 360) / 10))
     )
 
+  // Scheme 7 of the logo sheet (owner 2026-11-05): every icon is the C round ONE lens.
+  it('is the Co: nothing is drawn where the second lens used to be', () => {
+    const all = [...strokePoints('s0'), ...strokePoints('s1')]
+    expect(all.filter(([x, y]) => Math.hypot(x - 76.5, y - 50) < 12)).toEqual([])
+  })
+
+  it('wears the Co on the watch too, square and opaque as the App Store wants it', () => {
+    const generator = readFileSync('scripts/brand-ink/app-icon.mjs', 'utf8')
+    expect(generator).toContain('AppIcon.appiconset')
+    const file = path.join(root, 'watch/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png')
+    expect(pngSize(file)).toEqual([1024, 1024])
+    // Colour type 2 is RGB with no alpha channel.
+    expect(readFileSync(file)[25]).toBe(2)
+  })
+
   it('closes the first O: the lens is a whole ring, not an arc', () => {
     expect(bearings(strokePoints('s1'), 8, 13).size).toBe(36)
   })
@@ -88,10 +103,13 @@ describe('the web build wears the ink COO', () => {
     const maskable = (manifest.icons as Array<{ src: string; sizes: string; purpose: string }>).find((i) => i.purpose === 'maskable')
     expect(maskable?.sizes).toBe('512x512')
     expect(existsSync(path.join(publicDir, maskable?.src ?? 'missing')), 'maskable file').toBe(true)
-    // Half the mark's box diagonal (62.4 x 46) has to fit the safe zone: 40% of the tile.
+    // Half the mark's box diagonal has to fit what the launcher shows. An Android
+    // adaptive icon shows 72 of its 108 units: on a real phone a mark at 64% of the tile filled
+    // the icon edge to edge (11-05), though it sat inside the spec's 40% circle.
     const generator = readFileSync('scripts/brand-ink/app-icon.mjs', 'utf8')
     const share = Number(generator.match(/const MASKABLE_SHARE = ([\d.]+)/)?.[1])
-    expect((share / 62.4) * Math.hypot(62.4, 46) * 0.5).toBeLessThanOrEqual(0.4)
+    const [, w, h] = generator.match(/const BOX = \{ x: [\d.]+, y: [\d.]+, w: ([\d.]+), h: ([\d.]+) \}/)?.map(Number) ?? []
+    expect((share / Math.max(w, h)) * Math.hypot(w, h) * 0.5).toBeLessThanOrEqual(1 / 3)
   })
 
   it('the manifest stands alone as an app and points at icons that exist', () => {

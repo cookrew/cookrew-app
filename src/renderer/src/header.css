@@ -152,6 +152,22 @@
   background: var(--amber-soft);
 }
 
+/* A found update, seen without opening the menu. */
+.cr-more-btn.update {
+  position: relative;
+}
+
+.cr-more-btn.update::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sumi-wait, var(--danger, #c0392b));
+}
+
 .cr-more-btn .cr-icon {
   width: 14px;
   height: 14px;

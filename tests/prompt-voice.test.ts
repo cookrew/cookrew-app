@@ -13,7 +13,8 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { pickEar, transcriptOf, webErrorText, webRecognizer, withHeard } from '../src/renderer/src/prompt/dictation'
+import { earSays, listensThroughPauses, pickEar, preferPhoneEar, transcriptOf, webEndError, webErrorText, webLang, webRecognizer, withHeard } from '../src/renderer/src/prompt/dictation'
+import { DEFAULT_VOICE_LOCALE } from '../src/main/sous-voice-config'
 import { addressedToSous } from '../src/shared/sous-intent'
 
 const src = (file: string): string => readFileSync(path.join(__dirname, '..', 'src/renderer/src', file), 'utf8')
@@ -112,6 +113,69 @@ describe('dictation, the pure parts', () => {
     expect(webErrorText('not-allowed')).toMatch(/not allowed/)
     expect(webErrorText('network')).toMatch(/not reachable/)
     expect(webErrorText('weird')).toMatch(/weird/)
+  })
+})
+
+// MEASURED ON THE OWNER'S ANDROID (2026-11-05, Chrome 156, phone in en-GB):
+// with no `lang` the recognizer follows the phone's language, so Chinese speech
+// ended in a bare `nomatch`, no error at all; with zh-CN the same speech came
+// back whole. The ear speaks the Mac's language, and a miss is said.
+describe("the browser's ear", () => {
+  it("hears in the Mac's language, never the browser's", () => {
+    expect(webLang('en-US')).toBe('en-US')
+    expect(webLang(' ja-JP ')).toBe('ja-JP')
+  })
+
+  it("an older Mac that does not say falls back to the Mac's own default", () => {
+    expect(webLang(null)).toBe(DEFAULT_VOICE_LOCALE)
+    expect(webLang(undefined)).toBe(DEFAULT_VOICE_LOCALE)
+    expect(webLang('  ')).toBe(DEFAULT_VOICE_LOCALE)
+  })
+
+  it('a miss with no words is said; words, or a worse error, win over it', () => {
+    expect(webEndError(null, true, '')).toMatch(/Nothing was recognized/)
+    expect(webEndError(null, true, 'hello')).toBeNull()
+    expect(webEndError('No microphone was found.', true, '')).toBe('No microphone was found.')
+    expect(webEndError(null, false, '')).toBeNull()
+  })
+})
+
+// THE OWNER, 2026-11-05: Android goes back to Web Speech. It only moves to the
+// Mac's ear once its own recognizer proved unreachable, like any browser.
+describe('Android hears through its own browser again', () => {
+  const chrome = (major: number): string => `Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/${major}.0.0.0 Mobile Safari/537.36`
+
+  it('the phone ear is preferred only where the browser ear broke, Android or not', () => {
+    expect(preferPhoneEar(null)).toBe(false)
+    expect(preferPhoneEar('1')).toBe(true)
+    expect(pickEar(false, true, true, preferPhoneEar(null))).toBe('web')
+    expect(pickEar(false, true, true, preferPhoneEar('1'))).toBe('phone')
+  })
+
+  // Chromium 156 turns every partial into a final in continuous mode, so the
+  // words pile up ("你好你好啊我你好啊我今天"); 157 has segmented sessions.
+  it('only Chrome 157 and later on Android listen through pauses', () => {
+    expect(listensThroughPauses(chrome(156))).toBe(false)
+    expect(listensThroughPauses(chrome(157))).toBe(true)
+    expect(listensThroughPauses(chrome(160))).toBe(true)
+    expect(listensThroughPauses('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/160.0.0.0 Safari/537.36')).toBe(false)
+    expect(listensThroughPauses('Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 Version/19.0 Mobile Safari/604.1')).toBe(false)
+    expect(listensThroughPauses(undefined)).toBe(false)
+  })
+
+  it('an ear that needs a tap to close says so, in the box; one that ends by itself does not', () => {
+    expect(earSays('web', 'hearing', '', true)).toBe('Listening… tap the mic to finish')
+    expect(earSays('web', 'hearing', '', false)).toBe('Listening…')
+    expect(earSays('mac', 'hearing', '', false)).toBe('Listening…')
+    expect(earSays('phone', 'hearing', '')).toBe('● Recording… tap the mic to finish')
+    expect(earSays('phone', 'closing', '')).toBe('The Mac is listening…')
+    expect(earSays('web', 'idle', '')).toBeNull()
+  })
+
+  it("the browser's last words wait in the box, not in a row that moves the buttons", () => {
+    expect(earSays('web', 'closing', '你好')).toBe('… 你好')
+    expect(earSays('web', 'closing', '  ')).toBeNull()
+    expect(earSays('mac', 'closing', 'hello')).toBeNull()
   })
 })
 

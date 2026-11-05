@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { installPaneExitHook, paneExitConf, takePaneExit } from '../src/main/pane-exit'
+import { installPaneExitHook, paneExitConf, takePaneExit, signalName } from '../src/main/pane-exit'
 
 // On a REAL, PRIVATE tmux server (never `-L cookrew`). tmux takes a pane with
 // the command that failed, and its exit status with it, so a dead card had
@@ -81,5 +81,17 @@ describe.skipIf(!hasTmux)('the pane-died hook (real tmux)', () => {
     const script = path.join(dir, 'pane-exit.sh')
     expect(existsSync(script)).toBe(true)
     expect(readFileSync(script, 'utf8')).toContain('capture-pane')
+  })
+})
+
+describe('signalName', () => {
+  it('reads the same whichever way this tmux spells it', () => {
+    expect(signalName('9')).toBe('kill')
+    expect(signalName('11')).toBe('segv')
+    expect(signalName('kill')).toBe('kill')
+  })
+
+  it('keeps what it cannot name', () => {
+    expect(signalName('999')).toBe('999')
   })
 })

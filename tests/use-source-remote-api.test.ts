@@ -40,7 +40,7 @@ afterEach(() => {
 
 describe('the phone reaches the picker', () => {
   it('lists with its credential', async () => {
-    const list = { state: 'ready', windows: [], screens: [], message: null, permission: null, windowsNote: null }
+    const list = { state: 'ready', windows: [], screens: [], message: null, remote: null, windowsNote: null }
     const fetcher = vi.fn(async () => answer(200, list))
     expect(await (await api(fetcher)).useSources?.()).toEqual(list)
     const [, init] = callTo(fetcher, '/api/use/sources') as [string, RequestInit]
@@ -61,10 +61,24 @@ describe('the phone reaches the picker', () => {
     expect(await (await api(fetcher)).openUseSource?.({ source: 'window:4' })).toEqual({ ok: false, error: 'A served session cannot use this Mac' })
   })
 
-  it('the settings button is a POST to the Mac', async () => {
+  it('the settings button is a POST to the Mac, naming the page', async () => {
     const fetcher = vi.fn(async () => answer(200, { ok: true }))
-    await (await api(fetcher)).openScreenSettings?.()
+    await (await api(fetcher)).openScreenSettings?.('accessibility')
     const [, init] = callTo(fetcher, '/api/use/sources/settings') as [string, RequestInit]
     expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({ pane: 'accessibility' })
+  })
+
+  it('a refused Take control is an answer the card can read out, with the state it names', async () => {
+    const state = { id: 'needs-accessibility', platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false, build: { settingsName: 'Cookrew', startedFrom: null, sourceBuild: false, restart: 'self', agents: 'keep' } }
+    const fetcher = vi.fn(async () => answer(409, { ok: false, error: 'Accessibility is off', state }))
+    expect(await (await api(fetcher)).remoteControl?.({ card: 'c', on: true })).toEqual({ ok: false, error: 'Accessibility is off', state })
+  })
+
+  it('a phone has no machine switch and no Stop: there is no route, and no method', async () => {
+    const remote = await api(vi.fn(async () => answer(200, {})))
+    expect(remote.setRemoteSwitch).toBeUndefined()
+    expect(remote.stopRemote).toBeUndefined()
+    expect(remote.onRemoteHost).toBeUndefined()
   })
 })

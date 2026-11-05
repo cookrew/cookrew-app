@@ -39,6 +39,7 @@ export type StepUpAct =
   | 'link-provider'
   | 'unlink-provider'
   | 'add-factor'
+  | 'delete-account'
 
 /**
  * The list, in the order the architecture note states it. Exported as an array
@@ -55,7 +56,8 @@ export const STEP_UP_ACTS: readonly StepUpAct[] = [
   'not-me',
   'link-provider',
   'unlink-provider',
-  'add-factor'
+  'add-factor',
+  'delete-account'
 ]
 
 /**
@@ -127,7 +129,9 @@ export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   /** DELETE /v2/me/links/:provider. */
   'unlink-provider': 'gate',
   /** POST /v2/me/recovery-codes · /v2/me/totp/enrol · /v2/me/passkeys/options. */
-  'add-factor': 'passwordless'
+  'add-factor': 'passwordless',
+  /** DELETE /v2/me. */
+  'delete-account': 'gate'
 }
 
 /**
@@ -148,5 +152,6 @@ export const STEP_UP_SENTENCE: Record<StepUpAct, string> = {
   'not-me': 'Prove it is you before locking the account down.',
   'link-provider': 'Prove it is you before adding a way to sign in.',
   'unlink-provider': 'Prove it is you before removing a way to sign in.',
-  'add-factor': 'Prove it is you before adding a way back into the account.'
+  'add-factor': 'Prove it is you before adding a way back into the account.',
+  'delete-account': 'Prove it is you before deleting this account.'
 }

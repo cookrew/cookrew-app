@@ -1,7 +1,8 @@
 import type { UseTarget } from '../shared/use-url'
 import { useUrl } from '../shared/use-url'
-import { emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
-import type { PixelDevice, PixelFrame } from './pixel-instance'
+import type { RemoteState } from '../shared/remote-access'
+import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
+import { DeviceBlockedError, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
 import { THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
 import type { ScreenPoints } from './vphone-input'
@@ -16,7 +17,9 @@ import type { ScreenPoints } from './vphone-input'
  * an agent is told why.
  *
  * Wayland is refused by name. XWayland sets DISPLAY too and then captures
- * black, so the session type is what is asked, not DISPLAY.
+ * black, so the session type is what is asked, not DISPLAY. The desk asks
+ * (remote-desk.ts), along with the lock and the display, and the card says what
+ * it answers: the same states as a Mac, with no System Settings in them.
  */
 
 export interface LinuxEnv {
@@ -52,23 +55,27 @@ export interface LinuxFrame {
 }
 
 export interface LinuxScreenDeps {
-  env(): LinuxEnv
+  remote: RemoteGate
   /** One picture of every display. */
   frames(): Promise<readonly LinuxFrame[]>
   primaryDisplayId(): string | null
 }
 
 export class LinuxScreenDevice implements PixelDevice {
+  readonly remote: RemoteGate
+
   constructor(
     readonly target: UseTarget,
     private readonly deps: LinuxScreenDeps
-  ) {}
+  ) {
+    this.remote = deps.remote
+  }
 
   private async frame(): Promise<LinuxFrame & { readonly jpeg: Buffer }> {
     if (this.target.kind === 'window') throw new Error(LINUX_NO_WINDOW)
     if (this.target.roi) throw new Error(LINUX_NO_REGION)
-    const refusal = linuxScreenRefusal(this.deps.env())
-    if (refusal) throw new Error(refusal)
+    const blocked = await this.remote.blocked()
+    if (blocked) throw new DeviceBlockedError(blocked)
     const frames = await this.deps.frames()
     const frame = pickDisplay(frames, this.target.name, this.deps.primaryDisplayId())
     if (!frame) throw new Error(`Display ${this.target.name} is not connected (this machine has ${frames.length})`)
@@ -96,7 +103,8 @@ export class LinuxScreenDevice implements PixelDevice {
 }
 
 export interface LinuxSourceDeps {
-  env(): LinuxEnv
+  /** What stands in the way, from the desk (remote-desk.ts). */
+  blocked(): Promise<RemoteState | null>
   grab: SourceGrab
   primaryDisplayId(): string | null
 }
@@ -116,11 +124,11 @@ const screenRow = (grabbed: GrabbedSource, name: string): UseSource => ({
 export function linuxSources(deps: LinuxSourceDeps): UseSourceProvider {
   return {
     // There is no grant to turn on here.
-    openSettings: async () => undefined,
+    openSettings: async (_pane) => undefined,
     async list(): Promise<UseSourceList> {
-      const refusal = linuxScreenRefusal(deps.env())
-      if (refusal) return emptySourceList('unavailable', refusal)
       try {
+        const blocked = await deps.blocked()
+        if (blocked) return blockedSourceList(blocked)
         const displays = (await deps.grab(['screen'], THUMB_SIZE)).filter((g) => g.id.startsWith('screen:'))
         const main = pickDisplay(displays, 'main', deps.primaryDisplayId())
         return readySourceList({

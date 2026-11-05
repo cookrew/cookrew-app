@@ -1,10 +1,9 @@
 // The Mac's ear for a recording made somewhere else — the phone.
 //
-// Chrome on Android hands Web Speech to Google's recognition service, which
-// is not reachable from every network (2026-11-03: the owner's Android mic
-// did nothing). The phone records instead and the Mac hears the recording
-// with the same on-device recognizers ⌘-hold uses: one `cr-listen --file`
-// child per locale, the first the primary, the rest its alternates.
+// The phone records and the Mac hears the recording with the same on-device
+// recognizers ⌘-hold uses: one `cr-listen --file` child per locale, the first
+// the primary, the rest its alternates. No browser recognizer is involved, and
+// the recording runs through pauses until the owner stops it.
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'

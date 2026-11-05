@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { passwordGate } from './v2-hash-gate'
+import { SESSION_TTL_MS } from './v2-tokens'
 import {
   hashPassword,
   hashRecoveryCode,
@@ -21,7 +22,7 @@ import {
   isTeamSlug,
   type DoorClaim
 } from '../../src/shared/door-ownership'
-import type { MachineProfile } from '../../src/shared/strata'
+import type { MachineProfile } from '../../src/shared/fleet'
 import { BAD, readAppVersion, readProfile } from './v2-fleet'
 import type { ProviderId, VerifiedEmail } from '../../src/shared/oauth'
 
@@ -122,7 +123,7 @@ export interface V2Desktop {
    */
   reach: V2Reach | null
   /**
-   * STRATA: what kind of machine this is, as the desktop probed it, and the
+   * What kind of machine this is, as the desktop probed it, and the
    * app it runs (v2-fleet.ts reads both). Optional because records are older
    * than the probe: a desktop that never sent one is drawn as `unknown`.
    */
@@ -185,9 +186,32 @@ export interface V2Account {
   revoked?: readonly { id: string; at: number }[]
 }
 
+/**
+ * WHAT A DELETED ACCOUNT LEAVES IN THIS FILE, and it holds no name.
+ *
+ * `digest` keeps the username from ever being claimed again: a new holder would
+ * inherit its links, its published presets and the trust of everyone who knew
+ * it. `revoked` keeps its tokens dead. A door verifies offline against /v2/keys,
+ * so if these ids left with the account a stolen session would start working
+ * there again until it expired.
+ */
+export interface V2Retired {
+  digest: string
+  at: number
+  revoked: readonly string[]
+}
+
+/** No token outlives this: a session lasts SESSION_TTL_MS and renewal needs the account. */
+const RETIRED_REVOKED_MS = SESSION_TTL_MS + 24 * 60 * 60 * 1000
+
+const retiredDigest = (username: string): string =>
+  createHash('sha256').update(`cookrew-retired:${username.trim().toLowerCase()}`).digest('hex')
+
 interface Persisted {
   version: 2
   accounts: V2Account[]
+  /** Optional because files are older than this code. */
+  retired?: V2Retired[]
 }
 
 /** A door that changed hands, and the machine it was taken from. */
@@ -229,6 +253,7 @@ export class V2Accounts {
   private readonly file: string
   private readonly now: () => number
   private accounts: readonly V2Account[] = []
+  private retired: readonly V2Retired[] = []
   /** Names being claimed right now — see `create`, which awaits a hash midway. */
   private readonly claiming = new Set<string>()
   /**
@@ -291,6 +316,7 @@ export class V2Accounts {
       }
     }
     this.accounts = held.accounts as V2Account[]
+    this.retired = Array.isArray(held.retired) ? held.retired : []
     this.reindex()
   }
 
@@ -307,7 +333,11 @@ export class V2Accounts {
 
   /** Temp file then rename: a reader never sees half a write, whatever happens. */
   private save(): void {
-    const body: Persisted = { version: 2, accounts: [...this.accounts] }
+    const body: Persisted = {
+      version: 2,
+      accounts: [...this.accounts],
+      ...(this.retired.length === 0 ? {} : { retired: [...this.retired] })
+    }
     const temp = `${this.file}.${process.pid}.tmp`
     try {
       writeFileSync(temp, JSON.stringify(body), { mode: 0o600 })
@@ -380,7 +410,46 @@ export class V2Accounts {
    * are both opaque to a door: it refuses a token naming either.
    */
   revokedIds(): string[] {
-    return this.accounts.flatMap((a) => (a.revoked ?? []).map((r) => r.id))
+    const held = this.accounts.flatMap((a) => (a.revoked ?? []).map((r) => r.id))
+    const cutoff = this.now() - RETIRED_REVOKED_MS
+    return [...held, ...this.retired.filter((r) => r.at >= cutoff).flatMap((r) => r.revoked)]
+  }
+
+  /** Was this name deleted? It stays taken for good, and no name is stored. */
+  isRetired(username: string): boolean {
+    const digest = retiredDigest(username)
+    return this.retired.some((r) => r.digest === digest)
+  }
+
+  /**
+   * THE ACCOUNT GOES. The caller has proved the owner and cleared every other
+   * store first (v2-delete.ts), so this is the last step of a delete: nothing
+   * authenticates after it, and the name zone stops answering for its desktops.
+   */
+  close(username: string): boolean {
+    const account = this.get(username)
+    if (account === null) return false
+    const revoked = [
+      ...account.devices.map((d) => d.id),
+      ...account.sessions.map((s) => s.jti),
+      ...(account.revoked ?? []).map((r) => r.id)
+    ]
+    const { accounts, retired } = this
+    const emptied = { ...account, desktops: [] }
+    this.trackDesktops(account, emptied)
+    this.accounts = accounts.filter((a) => a !== account)
+    this.retired = [...retired, { digest: retiredDigest(username), at: this.now(), revoked }]
+    try {
+      this.save()
+    } catch (error) {
+      // Nothing stored changed, so nothing here may look as if it did: the owner
+      // has to be able to sign in and ask again.
+      this.accounts = accounts
+      this.retired = retired
+      this.trackDesktops(emptied, account)
+      throw error
+    }
+    return true
   }
 
   /** The ids one account has taken back — for tests and for a person's own page. */
@@ -436,7 +505,7 @@ export class V2Accounts {
     if (!USERNAME.test(username) || username.startsWith(RESERVED_PREFIX)) {
       return { ok: false, reason: 'bad_username' }
     }
-    if (this.has(username)) return { ok: false, reason: 'taken' }
+    if (this.has(username) || this.isRetired(username)) return { ok: false, reason: 'taken' }
     if (!passwordIsAcceptable(input.password)) return { ok: false, reason: 'weak_password' }
     const device = this.readDevice(input.device)
     if (device === null) return { ok: false, reason: 'bad_device' }
@@ -497,7 +566,9 @@ export class V2Accounts {
     if (!USERNAME.test(username) || username.startsWith(RESERVED_PREFIX)) {
       return { ok: false, reason: 'bad_username' }
     }
-    if (this.has(username) || this.claiming.has(username)) return { ok: false, reason: 'taken' }
+    if (this.has(username) || this.claiming.has(username) || this.isRetired(username)) {
+      return { ok: false, reason: 'taken' }
+    }
     if (this.findByLink(input.link.provider, input.link.subject) !== null) return { ok: false, reason: 'link_taken' }
     const device = this.readDevice(input.device)
     if (device === null || this.ownerOfDevice(device.id) !== null) return { ok: false, reason: 'bad_device' }

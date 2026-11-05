@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createHash, randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
@@ -33,9 +33,10 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
-import { createPacedInput } from './enter-pacing'
+import { blockAsPaste, createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
-import { waitChoiceOfScreen } from '../shared/wait-choice'
+import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { aboutOfScreen, wholeBrief } from '../shared/wait-about'
 import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
@@ -92,7 +93,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
-  localLevelsService,
+  localFleetService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -107,6 +108,8 @@ import {
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
+import { electronSealer, excludeFromBackup } from './secrets-seal'
+import { noticeGate, secretNotice, withSecretActivity, type SecretActivityType, type SecretChange } from './secret-activity'
 import { createRtcHost } from './rtc-peer'
 import { createSocketBridge } from './socket-bridge'
 import { BUILD_CHECK_MS, readBuildId } from './build-id'
@@ -152,7 +155,7 @@ import { FIRST_TASK_WAIT_MS, claudeComposerDrawn, forkContextReady, forkTerminal
 import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
 import { HARNESS_FACTS } from './route/setup'
 import { AgentExportStore } from './agent-export'
-import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
 import { WorkspaceShots } from './workspace-shots'
@@ -169,7 +172,7 @@ import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
-import { registerAccountIpc } from './account-ipc'
+import { mintWatchInvite, registerAccountIpc } from './account-ipc'
 import type { AccountDoor, LoginAudit } from './login-cli'
 import { paneInputs } from './pane-input'
 import { injectWindowInput } from './ui-input'
@@ -235,6 +238,19 @@ import {
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
+import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '../shared/remote-access'
+import { parseUseUrl } from '../shared/use-url'
+import { macKeystrokes, readMacListedApp, readMacSession } from './mac-bridge'
+import { linuxScreenRefusal } from './linux-screen'
+import { createRemoteDesk, remoteGate } from './remote-desk'
+import { createUpdateCheck } from './update-check'
+import { createUnlockDoor, loadUnlockKey } from './remote-unlock'
+import type { SealKeyPair } from '../shared/relay-seal'
+import { fingerprintOfDigest } from '../shared/key-fingerprint'
+import { electronUpdateInstaller } from './update-install'
+import type { UpdateStatus } from '../shared/update-check'
+import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
+import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
@@ -256,6 +272,9 @@ import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
+import { WatchPairing } from './watch-pairing'
+import { createWatchHost } from './watch-host'
+import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
@@ -273,6 +292,8 @@ import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
+import { keepCachesOutOfIndex } from './cache-noindex'
+import { installTscGate } from './tsc-gate'
 import { pressureOf, readMachineMemory, sleepColdLookups, sleepWindowMs, type PressureLevel } from './machine-pressure'
 import { staleAgentIds } from './agent-reconcile'
 import { IdleSleep, idleSleepMsFrom, type SleepFacts } from './agent-sleep'
@@ -323,6 +344,9 @@ import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
+import { openWorkspace, workspaceCheck } from './workspace-door'
+import { inspectForks, planWorkspaceRemove, removeFork, type ForkScope } from './workspace-fork-check'
+import type { WorkspaceRemovePlan } from '../shared/workspace-door'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
@@ -652,12 +676,20 @@ const ownerGrant = new OwnerGrant({
 })
 const callConversations = new CallConversationStore()
 /**
- * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file per name. The
+ * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file of ciphertext per
+ * name, the key in the keychain under this app's ACL (secrets-seal.ts). The
  * value goes in from the note slot (IPC `secret:put`, or the phone's owner-
  * token PUT) and comes out through `cookrew secret read` in an owner pane,
  * and through nothing else — not an event, not workspace state, not a log.
  */
-const secrets = createSecretsStore()
+const secrets = createSecretsStore({
+  sealer: electronSealer(safeStorage),
+  // Elsewhere a machine with no keyring keeps the 0600 file: refusing there
+  // would take the slots away. A Mac always has a keychain to refuse from.
+  requireSealer: process.platform === 'darwin',
+  excludeFromBackup: (dir) => excludeFromBackup(dir, { warn: (message) => console.error(`[cookrew] ${message}`) }),
+  warn: (message) => console.error(`[cookrew] ${message}`)
+})
 /**
  * THE DIRECT LINK BY WEBRTC (rtc-peer.ts): a phone on the relay offers, this
  * Mac answers on exactly the addresses it publishes — the LAN first, then
@@ -716,6 +748,33 @@ const auditLogin = (event: LoginAudit): void => {
   })
 }
 
+/**
+ * A secret's activity, said aloud (secret-activity.ts). The toast is for the
+ * owner at the window, so this is for the one who is not; it costs the gate's
+ * quiet only when it actually speaks.
+ */
+const secretNoticeGate = noticeGate()
+const noticeSecret = (type: SecretActivityType, who: string, name: string): void => {
+  if (mainWindow?.isFocused()) return
+  if (secretNoticeGate(`${type}|${who}|${name}`)) showNotification(secretNotice(type, who, name))
+}
+
+/** A seal or a delete from a door the owner uses. The name stays in `details`, the one field the wall loses. */
+const recordSecretChange = (change: SecretChange): void => {
+  const workspaceId = store.focusedId
+  events.append({
+    type: change.type,
+    entityId: 'secrets',
+    entityName: change.source,
+    workspaceId,
+    workspaceName: store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'user',
+    timestamp: Date.now(),
+    details: scrub(change.name)
+  })
+  noticeSecret(change.type, change.source, change.name)
+}
+
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
@@ -760,6 +819,7 @@ const auditSecret = (event: SecretAudit): void => {
       )
     )
   })
+  noticeSecret(event.type, hit?.node.name ?? event.terminalId, event.name)
 }
 /**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
@@ -891,6 +951,7 @@ const serving: Serving = wireServing({
           // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
           bootTerminals: (id) => {
             servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            remoteDesk.workspaceServed(id)
             const booted = bootWorkspaceInPlace(
               {
                 nodesOf: (wid) => callNodesOf(wid),
@@ -977,7 +1038,7 @@ const accounts = new Accounts({
   // host, and a name already on the account gets a counter — decided here,
   // never at the registry, which files what it is sent.
   deviceName: localDeviceName(),
-  // STRATA: the record also says what kind of machine this is (machine-profile.ts).
+  // The record also says what kind of machine this is (machine-profile.ts).
   machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
   // A provider's login page opens in the system browser and never in a window
   // of ours: a person must not type a GitHub password into a page this app
@@ -1574,6 +1635,7 @@ const v2CallTokens = RELAY_ORIGIN
       // be a second answer, and the two would drift.
       onRevoked: (revoked) => {
         for (const device of admittedDevices.prune(revoked)) {
+          remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the
           // owner with no idea which phone in their hand just stopped working.
           console.error(
@@ -2511,6 +2573,36 @@ const paneRows = async (terminalId: string): Promise<string | null> => {
   return mux?.capture(name) ?? null
 }
 
+/** Rows a permission box may run to on a narrow pane: a long command, wrapped at a phone's 43 columns. */
+const BOX_HISTORY_ROWS = 600
+
+/** Further back than paneRows, where a box taller than the screen keeps its top. */
+const paneHistory = async (terminalId: string): Promise<string | null> => {
+  const mux = multiplexer()
+  return mux instanceof HerdrHostMultiplexer ? mux.captureRowsAsync(sessionNameFor(terminalId), BOX_HISTORY_ROWS) : null
+}
+turns.paneHistory = paneHistory
+
+/** A menu read off a pane, its box whole if the box outgrew those rows. */
+const withPaneBox = async (terminalId: string, choice: WaitChoice | null): Promise<WaitChoice | null> => {
+  if (!choice?.about?.partial) return choice
+  const history = await paneHistory(terminalId)
+  return history === null ? choice : wholeBrief(choice, aboutOfScreen(history))
+}
+
+/** The latest read of each pane's menu: the gate's reads overlap, and a slow one must not land over a newer. */
+const menuReads = new Map<string, number>()
+
+/** The menu a pane shows, for a card with no mirror to read it from. */
+const readPaneMenu = async (terminalId: string): Promise<void> => {
+  const mine = (menuReads.get(terminalId) ?? 0) + 1
+  menuReads.set(terminalId, mine)
+  const screen = await paneRows(terminalId)
+  if (screen === null) return
+  const choice = await withPaneBox(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
+  if (menuReads.get(terminalId) === mine) turns.observeBackendChoice(terminalId, choice)
+}
+
 // herdr's word reaches the tracker through the pane: a slash command's own
 // UI (the /model picker) is not a turn, whatever herdr's screen guess says.
 const herdrPhases = createBackendPhaseGate({
@@ -2525,10 +2617,8 @@ const herdrPhases = createBackendPhaseGate({
     return status ? backendPhaseOf(status) : null
   },
   apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent),
-  menu: async (terminalId) => {
-    const screen = await paneRows(terminalId)
-    if (screen !== null) turns.observeBackendChoice(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
-  }
+  menu: readPaneMenu,
+  turnOpen: (terminalId) => turns.turnOpen(terminalId)
 })
 
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
@@ -4251,17 +4341,18 @@ dispatchSweep.unref?.()
  * default orch preset — Claude with bypassed permissions — so the conductor
  * can act without stalling on approvals.
  */
-function seedConductorIfEmpty(): void {
-  if (store.terminals().length > 0 || conductorWaits(firstRunStore.read())) return
+function seedConductorIfEmpty(workspaceId: string = store.focusedId): void {
+  const state = store.workspaceState(workspaceId)
+  if (state.nodes.some((node) => node.kind === 'terminal') || conductorWaits(firstRunStore.read())) return
   // A card whose tool is not here is a card that dies on its first key.
   if (!agentToolReady(DEFAULT_ORCH_PRESET.command, panePath())) return
-  store.addNode({
+  store.addNodeToWorkspace(workspaceId, {
     kind: 'terminal',
     id: randomUUID(),
     name: 'Conductor',
     preset: DEFAULT_ORCH_PRESET.name,
     command: DEFAULT_ORCH_PRESET.command,
-    cwd: store.focusedState.dir,
+    cwd: state.dir,
     orch: true,
     role: null,
     position: { x: 240, y: 200 },
@@ -4277,11 +4368,8 @@ function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
   return store.list()
 }
 
-function createWorkspace(name: string, dir: string): WorkspaceMeta {
-  const meta = store.createWorkspace(name, dir || store.focusedState.dir)
-  store.switchWorkspace(meta.id) // fires 'switch' → PTY teardown/spawn
-  seedConductorIfEmpty()
-  return meta
+function createWorkspace(name: string, dir: string, options: { stay?: boolean } = {}): WorkspaceMeta {
+  return openWorkspace(store, { name, dir, stay: options.stay === true, seed: seedConductorIfEmpty })
 }
 
 function switchWorkspace(nameOrId: string): WorkspaceMeta {
@@ -4311,6 +4399,43 @@ function endServedSession(sessionId: string): { stopped: number } {
   if (record) doorCallers.forget(record.serviceId, record.accountId)
   publishServedCallers()
   return stopped
+}
+
+/** A fork's reach: where its worktrees live, and who else holds a folder. */
+function forkScope(workspaceId: string): ForkScope {
+  return {
+    worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees'),
+    otherDirs: store.list().workspaces.filter((w) => w.id !== workspaceId).flatMap((w) => w.dirs)
+  }
+}
+
+/** What removing this workspace would stop, delete and leave (the remove sheet). */
+async function workspaceRemovePlan(nameOrId: string): Promise<WorkspaceRemovePlan> {
+  const meta =
+    store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
+  if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  const state = store.workspaceState(meta.id)
+  const forks = await inspectForks(state.dirs, forkScope(meta.id))
+  return planWorkspaceRemove({ id: meta.id, name: meta.name, state, forks })
+}
+
+/**
+ * Remove a workspace and, when asked, the fork's worktree and branch. They go
+ * LAST: its agents are stopped first, and each fork is checked again in
+ * removeFork, so a change made since the offer keeps them. What could not go
+ * comes back as a sentence, because by then the workspace itself has gone.
+ */
+async function removeWorkspaceWith(
+  nameOrId: string,
+  options: { worktree?: boolean } = {}
+): Promise<ReturnType<WorkspaceStore['list']>> {
+  const plan = options.worktree ? await workspaceRemovePlan(nameOrId) : null
+  const scope = plan ? forkScope(plan.id) : null
+  const list = await removeWorkspace(nameOrId)
+  if (!plan || !scope) return list
+  const results = await Promise.all(plan.forks.filter((f) => f.removable).map((fork) => removeFork(fork, scope)))
+  const notice = results.flatMap((r) => (r.ok ? [] : [r.reason])).join(' ')
+  return notice ? { ...list, notice } : list
 }
 
 const removingWorkspaces = new Map<string, Promise<ReturnType<WorkspaceStore['list']>>>()
@@ -5425,8 +5550,8 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
 
 // ---- team fork / save + roles (spec: team-fork-roles v1, Forge lane) ----
 
-async function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  const meta = await teamForkInner(spec)
+async function teamFork(spec: TeamForkSpec, options: { stay?: boolean } = {}): Promise<WorkspaceMeta> {
+  const meta = await forkTeam(forkDepsFor(options), spec)
   store.recordEvent('team.forked', meta.id, meta.name)
   return meta
 }
@@ -5599,8 +5724,25 @@ async function teamPaste(): Promise<TeamCopyResult> {
   return result
 }
 
-function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  return forkTeam(teamForkDeps(), spec)
+/**
+ * A fork a phone asked for boots where it stands: the phone takes its own seat
+ * on the new workspace, and the desktop stays on what it was showing.
+ */
+function forkDepsFor(options: { stay?: boolean }): Parameters<typeof forkTeam>[0] {
+  if (!options.stay) return teamForkDeps()
+  return {
+    ...teamForkDeps(),
+    bootTerminals: (id) => {
+      bootWorkspaceInPlace(
+        {
+          nodesOf: (wid) => callNodesOf(wid),
+          boot: (node) => bootTerminal(node as TerminalNodeData),
+          onError: (node, error) => console.error(`boot failed for ${node.id}:`, error)
+        },
+        id
+      )
+    }
+  }
 }
 
 /**
@@ -5611,9 +5753,12 @@ function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
 async function createWorkspaceFromTeam(
   name: string,
   dir: string,
-  team: string
+  team: string,
+  options: { stay?: boolean } = {}
 ): Promise<WorkspaceMeta> {
-  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.focusedState.dir, team })
+  const verdict = workspaceCheck(store, name, dir)
+  if (!verdict.ok) throw new Error(verdict.reason)
+  return workspaceFromTemplate(forkDepsFor(options), { name, dir: verdict.dir, team })
 }
 
 /**
@@ -6244,7 +6389,7 @@ const browserThumbs = new BrowserThumbCache({
   // ordinary, not an error: the card keeps its last frame and the next poll
   // tries again.
   capture: async (browserId) =>
-    interactiveBrowserEnabled()
+    interactiveBrowserEnabled() && !showsThisMachine(browserId)
       ? ((await browserManager.peek(browserId)?.snapshot().catch(() => null)) ?? null)
       : null
 })
@@ -6370,13 +6515,113 @@ const browserCacheRoot = (): string =>
 // viewers and trusted agent commands both resolve through this manager.
 // THE USES (use-instances.ts): a Mac display or window, an adb phone, a
 // camera — each a browser card the cast streams and the agent drives.
-// Driving THIS Mac from a viewer or an agent is a decision, never a default.
+// Driving THIS Mac from a viewer or an agent is a decision, never a default:
+// the remote desk holds it, and everything below asks.
+const sessionReader = createSessionReader({
+  read: () => (process.platform === 'darwin' ? readMacSession() : linuxSession(process.env, commandRun))
+})
+// Fixed for the life of this process, and read once: it is a helper process.
+let listedApp: string | null = null
+if (process.platform === 'darwin') {
+  void readMacListedApp().then((bundle) => {
+    listedApp = bundle
+  })
+}
+let heldUnlockKey: SealKeyPair | null = null
+const unlockKey = (): SealKeyPair => (heldUnlockKey ??= loadUnlockKey(path.join(homedir(), '.cookrew', 'unlock-key.json')))
+function currentBuild(): RemoteBuild {
+  return remoteBuild({
+    execPath: process.execPath,
+    packaged: app.isPackaged,
+    persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
+    servedLive: servedSpawnContexts.size > 0,
+    listedApp
+  })
+}
+let keepAwakeId: number | null = null
+const remoteDesk = createRemoteDesk({
+  platform: process.platform,
+  build: currentBuild,
+  linuxRefusal: () => linuxScreenRefusal(process.env),
+  screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
+  accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
+  session: () => sessionReader.read(),
+  settings: remoteSettingsFile(path.join(homedir(), '.cookrew', 'remote-control.json')),
+  servedWorkspace,
+  workspaceOfCard: (card) => store.nodeAcrossWorkspaces(card)?.workspaceId ?? null,
+  cardName: (card) => store.nodeAcrossWorkspaces(card)?.node.name ?? card,
+  record: (type, card, name, details) => store.recordEvent(type, card, name, details),
+  keepAwake: {
+    start: () => {
+      keepAwakeId ??= powerSaveBlocker.start('prevent-display-sleep')
+    },
+    stop: () => {
+      if (keepAwakeId !== null) powerSaveBlocker.stop(keepAwakeId)
+      keepAwakeId = null
+    }
+  },
+  host: (view) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:remote-host', view)
+    remoteTray.show(view)
+  },
+  refreshCards: () => useInstances.refresh(),
+  dropViewers: (cards) => {
+    for (const card of cards) browserCast.drop(card)
+  },
+  openSettings: async (pane) => useInstances.sources()?.openSettings(pane),
+  relaunch: () => {
+    app.relaunch()
+    app.quit()
+  },
+  unlockWords: () => {
+    const key = unlockKey().publicKey
+    return fingerprintOfDigest(new Uint8Array(createHash('sha256').update(Buffer.from(key, 'base64url')).digest())).words
+  },
+  wakeDisplay: async () => {
+    await (process.platform === 'darwin' ? commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']) : commandRun('xset', ['dpms', 'force', 'on']))
+  }
+})
+const unlockDoor = createUnlockDoor({
+  keyPair: unlockKey,
+  refusal: (who) => remoteDesk.unlockRefusal(who),
+  locked: async () => {
+    sessionReader.invalidate()
+    return (await sessionReader.read()).locked
+  },
+  wake: async () => {
+    await commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']).catch(() => undefined)
+  },
+  typable: (password) => macKeystrokes(password).every((key) => key.code >= 0),
+  type: (password) => useInstances.typeAtLock(password),
+  record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`)
+})
+const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
+/** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
+function viewerWho(credential: string | null): ViewerWho {
+  const id = credential ? admittedDevices.deviceFor(credential) : null
+  if (id === null) return { key: 'root', name: 'A paired device', here: false }
+  return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
+}
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
-  computerInput: () => process.env.COOKREW_COMPUTER_INPUT === '1'
+  remote: (card) => remoteGate(remoteDesk, card),
+  blocked: () => remoteDesk.blocked(),
+  onBlocked: (card) => browserThumbs.forget(card)
 })
+/**
+ * A card showing this machine's own screen. Its picture is shown to a viewer
+ * the host can see and nobody else: a thumbnail has no name, no banner and no
+ * Stop, so neither the wall nor the phone's grid gets one, and a watch gets no frame.
+ */
+const showsThisMachine = (card: string): boolean => {
+  const node = store.nodeAcrossWorkspaces(card)?.node
+  return node?.kind === 'browser' && parseUseUrl(activeBrowserTab(node).url)?.use === 'computer'
+}
 const useSignals = new UseSignalBus()
-useSignals.on((signal) => mainWindow?.webContents.send('use:signal', signal))
+useSignals.on((signal) => {
+  mainWindow?.webContents.send('use:signal', signal)
+  if (signal.use === 'computer') remoteDesk.noteAgent(signal.card, store.nodeAcrossWorkspaces(signal.agent)?.node.name ?? 'An agent', signal.verb)
+})
 
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
@@ -6406,6 +6651,7 @@ const browserManager = new HeadlessBrowserManager({
   uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
   // Declared below; called only after boot, never during construction.
   onInstanceGone: (browserId) => {
+    remoteDesk.cardGone(browserId)
     browserCast.drop(browserId)
     browserCastIpc.drop(browserId)
   }
@@ -6420,6 +6666,9 @@ const browserCastIpc = createBrowserCastIpc({
   getInstance: (browserId) => browserManager.get(browserId),
   enabled: interactiveBrowserEnabled
 })
+
+/** The wrist's credential (watch-pairing.ts): module scope, because rotating every session ends it too. */
+const watchPairing = new WatchPairing()
 
 const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
@@ -6436,7 +6685,8 @@ const browserCast = createBrowserCast({
   // The TV wall's read-only token is deliberately NOT accepted: this socket
   // carries pointer and key INPUT, so admitting a read-only credential here
   // would hand it a write it does not have anywhere else.
-  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one))
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one)),
+  who: viewerWho
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
@@ -6463,6 +6713,11 @@ function servedWorkspace(workspaceId: string): boolean {
 const useSources = createUseSourceService({
   provider: () => useInstances.sources(),
   servedWorkspace,
+  desk: remoteDesk,
+  unlock: unlockDoor,
+  who: viewerWho,
+  cardAt: (workspaceId, url) =>
+    store.workspaceState(workspaceId).nodes.find((node): node is BrowserNodeData => node.kind === 'browser' && activeBrowserTab(node).url === url) ?? null,
   addCard: (workspaceId, card) => addNode(card, workspaceId) as BrowserNodeData,
   findCard: (id) => {
     const found = store.nodeAcrossWorkspaces(id)
@@ -6577,6 +6832,13 @@ function createWindow(): void {
   // the queue is re-read then rather than waiting out the poll (D6).
   mainWindow.on('focus', () => void requests.refresh())
 
+  // The window holds the owner's bridge: a page only ever leaves it for the
+  // browser. Followed in here it would inherit the preload (owner-grant.ts · isOwnerPage).
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isOwnerPage(url, ownerPageUrl())) return
+    event.preventDefault()
+    if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
+  })
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -6628,6 +6890,10 @@ if (!app.requestSingleInstanceLock()) {
   console.error('Another Cookrew instance is already running — exiting.')
   app.exit(1)
 } else {
+  // Holding the lock, before `ready`: nothing has these caches open yet, and no
+  // pane has been spawned that would name a gate not on disk.
+  keepCachesOutOfIndex(app.getPath('userData'))
+  if (!installTscGate()) console.error('[cookrew] could not write the tsc gate; panes run without it')
   // THE FIRST INSTANCE HEARS THE SECOND. On Windows and Linux a protocol link
   // launches a fresh process, which exits above — but not before the OS hands
   // its argv to the instance holding the lock, and that argv carries the link.
@@ -6667,6 +6933,14 @@ if (selfHosted) {
 let cliSocket: SocketServerHandle | null = null
 
 app.whenReady().then(() => {
+  // Before anything reads a secret: a value still in the clear goes under the key.
+  try {
+    const moved = secrets.migrate()
+    if (moved.sealed.length > 0) console.error(`[cookrew] secrets sealed: ${moved.sealed.join(', ')}`)
+    if (moved.failed.length > 0) console.error(`[cookrew] secrets left as they were: ${moved.failed.join(', ')}`)
+  } catch (error) {
+    console.error('[cookrew] secrets could not be moved', error)
+  }
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
@@ -6840,14 +7114,18 @@ app.whenReady().then(() => {
     roster: sousRoster,
     activeWorkspaceId: () => store.focusedId,
     switchWorkspace: (id) => void switchWorkspace(id),
-    createTerminal: ({ preset, name }) => {
-      // To the right of everything on the canvas, so a spoken "create" never
-      // lands under an existing card.
-      const nodes = store.focusedState.nodes
-      const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
-      const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
-      return { id: node.id, name: node.name }
+    createTerminal: ({ preset, name, workspaceId }) => {
+      const make = (): { id: string; name: string } => {
+        // To the right of everything on the canvas, so a spoken "create" never
+        // lands under an existing card.
+        const nodes = store.focusedState.nodes
+        const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
+        const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
+        return { id: node.id, name: node.name }
+      }
+      return workspaceId ? store.inSeat(workspaceId, make) : make()
     },
+    seats: () => store.isMultiInstance,
     createBrowser: async (anchorId, name) => {
       await browserCommand(['create', 'about:blank', name], anchorId)
     },
@@ -6878,7 +7156,9 @@ app.whenReady().then(() => {
     polish: (text) => polishTranscript(text),
     ui: (command, workspaceId) => {
       const event: UiCommandEvent = { workspaceId, command }
-      mainWindow?.webContents.send('ui:command', event)
+      // The desktop zooms for what it is showing: a phone on another workspace
+      // zooming its own card must not pull this window after it.
+      if (workspaceId === store.deskId) mainWindow?.webContents.send('ui:command', event)
       uiBus.emit('command', event)
     },
     note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice'),
@@ -7133,6 +7413,7 @@ app.whenReady().then(() => {
   // The same ears for a recording the phone made (hear-file.ts, POST /api/listen).
   const phoneEar = {
     available: () => hearAvailable(earOptions),
+    locale: () => earOptions.locales()[0] ?? null,
     recording: (bytes: Uint8Array) => hearRecording(earOptions, bytes)
   }
   ipcMain.handle('listen:available', () => listener.available())
@@ -7215,13 +7496,21 @@ app.whenReady().then(() => {
     mobileUrls,
     mobileEndpoints: mobileEndpointList,
     uncoveredCertHosts,
-    rotatePairingToken: rotateActivePairingToken,
+    // Ending every session ends the watch's too.
+    rotatePairingToken: () => {
+      watchPairing.unpair()
+      // Whoever came in on the old token: a socket outlives the token that opened it.
+      remoteDesk.forgetDevice('root')
+      return rotateActivePairingToken()
+    },
     pairingHandout: currentPairingHandout,
     listWorkspaces,
     createWorkspace,
+    checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),
+    workspaceRemovePlan,
     createWorkspaceFromTeam,
     switchWorkspace,
-    removeWorkspace,
+    removeWorkspace: removeWorkspaceWith,
     addWorkspaceDir,
     removeWorkspaceDir,
     setPrimaryDir,
@@ -7302,7 +7591,7 @@ app.whenReady().then(() => {
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
     // The sealed slots, for the phone's note editor: names out, values in.
-    secrets,
+    secrets: withSecretActivity(secrets, 'Phone', recordSecretChange),
     // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
     rtc: rtcHost,
     // The browser card's socket over plain HTTP, for a phone on the relay.
@@ -7385,8 +7674,6 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
-    // STRATA: the levels detail reuses a cached git answer, never causes one.
-    gitPeek: (dir) => gitCache.peek(dir),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
     // The route program's four endpoints, the stream's two frames, and the
@@ -7458,18 +7745,24 @@ app.whenReady().then(() => {
       createTerminal,
       forkTerminal,
       listWorkspaces,
-      createWorkspace: (name: string, dir: string, team?: string) =>
-        team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir),
+      createWorkspace: (name, dir, team, options) =>
+        team ? createWorkspaceFromTeam(name, dir, team, options) : createWorkspace(name, dir, options),
+      checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),
       switchWorkspace,
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
         return store.list()
       },
+      setWorkspaceIcon: (id, icon) => {
+        store.setWorkspaceIcon(id, icon)
+        return store.list()
+      },
+      workspaceRemovePlan,
       setWorkspaceBrief: (id, brief) => {
         store.setWorkspaceBrief(id, brief)
         return store.list()
       },
-      removeWorkspace,
+      removeWorkspace: removeWorkspaceWith,
       addWorkspaceDir,
       removeWorkspaceDir,
       setPrimaryDir,
@@ -7654,6 +7947,15 @@ app.whenReady().then(() => {
   networkWatch.start()
   powerMonitor.on('resume', () => void networkWatch.check('wake'))
   powerMonitor.on('unlock-screen', () => void networkWatch.check('unlock'))
+  // The lock is heard here first: the card should not wait out a cache or a backoff.
+  for (const event of ['lock-screen', 'unlock-screen', 'resume', 'suspend'] as const) {
+    powerMonitor.on(event as 'resume', () => {
+      sessionReader.invalidate()
+      remoteDesk.sessionChanged()
+      useInstances.wake()
+    })
+  }
+  remoteDesk.start()
 
   // The certificate, once the account and the addresses are known. Best
   // effort and never awaited: an order is seconds of polling at the registry
@@ -7749,6 +8051,20 @@ function broadcast(): void {
   }
 }
 
+/** The address the owner's page is served from, as the window was told to load it. */
+function ownerPageUrl(): string | null {
+  return process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(path.join(dirname, '../renderer/index.html')).href
+}
+
+/** The owner's window, its top frame, showing the owner's page. */
+function publishUpdateStatus(status: UpdateStatus): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:status', status)
+}
+
+function ownerFrame(event: { sender: unknown; senderFrame: { parent: unknown; url?: string } | null }): boolean {
+  return isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents) && isOwnerPage(event.senderFrame?.url, ownerPageUrl())
+}
+
 function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
@@ -7818,7 +8134,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   const ownerOnly =
     <A extends unknown[], R>(op: (...args: A) => R) =>
     (event: Electron.IpcMainInvokeEvent, ...args: A): R | { ok: false; reason: string } => {
-      if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) {
+      if (!ownerFrame(event)) {
         console.error('[cookrew] grant refused: sender is not the owner window top frame')
         return { ok: false, reason: 'not_owner' }
       }
@@ -7842,7 +8158,11 @@ function registerIpc(handlers: RestoreHandlers): void {
     pairingHandout: currentPairingHandout,
     admitted: {
       list: () => admittedDevices.list(),
-      forget: (deviceId) => admittedDevices.forget(deviceId)
+      forget: (deviceId) => {
+        const forgotten = admittedDevices.forget(deviceId)
+        remoteDesk.forgetDevice(`device:${deviceId}`)
+        return forgotten
+      }
     },
     publishReach: (reason) => {
       // The reachability toggle and a fresh claim both land here, and both
@@ -7982,6 +8302,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
   )
+  ipcMain.handle('workspace:check', (_e, name: string, dir: string) => workspaceCheck(store, name, dir))
   // Import a template as a session: one workspace, one orch terminal over HTTP.
   ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
     importTemplateAsSession(team, position)
@@ -8219,8 +8540,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     store.setWorkspaceBrief(id, brief)
     return store.list()
   })
+  ipcMain.handle('workspace:icon', (_e, id: string, icon: unknown) => {
+    store.setWorkspaceIcon(id, icon)
+    return store.list()
+  })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
-  ipcMain.handle('workspace:remove', (_e, id: string) => removeWorkspace(id))
+  ipcMain.handle('workspace:removePlan', (_e, id: string) => workspaceRemovePlan(id))
+  ipcMain.handle('workspace:remove', (_e, id: string, options?: { worktree?: boolean }) =>
+    removeWorkspaceWith(id, options)
+  )
   ipcMain.handle('workspace:dir:add', (_e, id: string, dir: string) => addWorkspaceDir(id, dir))
   ipcMain.handle('workspace:dir:remove', (_e, id: string, dir: string) =>
     removeWorkspaceDir(id, dir)
@@ -8257,11 +8585,12 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
   // The sealed slots (R4): the zoom editor's SEAL button and its listing.
   // The value crosses IPC once, into the store, and is never sent back.
+  const desktopSecrets = withSecretActivity(secrets, 'This Mac', recordSecretChange)
   ipcMain.handle('secret:put', (_e, name: string, value: string, served?: boolean) =>
-    secrets.put(name, value, { served: served === true })
+    desktopSecrets.put(name, value, { served: served === true })
   )
   ipcMain.handle('secret:list', () => secrets.list())
-  ipcMain.handle('secret:remove', (_e, name: string) => secrets.remove(name))
+  ipcMain.handle('secret:remove', (_e, name: string) => desktopSecrets.remove(name))
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
   ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
   ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
@@ -8471,11 +8800,38 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The ⋯ row's two questions (TelemetryRow.tsx).
   ipcMain.handle('telemetry:status', () => telemetryStatus())
   ipcMain.handle('telemetry:set', (_e, on: unknown) => (typeof on === 'boolean' ? setTelemetryOn(on) : telemetryStatus()))
-  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
+  // And the update check's (UpdateRow.tsx). Packaged only, so a source build answers null and shows no row.
+  const updateCheck = app.isPackaged
+    ? createUpdateCheck({
+        version: app.getVersion(),
+        file: path.join(homedir(), '.cookrew', 'update-check.json'),
+        // Electron's own stack, not Node's: it honours the system proxy.
+        fetch: (url, init) => net.fetch(url, init),
+        publish: publishUpdateStatus,
+        installer: electronUpdateInstaller()
+      })
+    : null
+  ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
+  ipcMain.handle('update:set', (event, on: unknown) => {
+    if (updateCheck === null) return null
+    if (typeof on !== 'boolean' || !ownerFrame(event)) return updateCheck.status()
+    const status = updateCheck.setOn(on)
+    publishUpdateStatus(status)
+    return status
+  })
+  // A restart ends the app, so the owner reads what it does to agents first.
+  ipcMain.handle('update:restart', async (event) => {
+    if (updateCheck === null || !ownerFrame(event) || !mainWindow) return false
+    const { title, sentence, yes } = restartConfirm(currentBuild(), 'here')
+    const { response } = await dialog.showMessageBox(mainWindow, { type: 'question', message: title, detail: sentence, buttons: [yes, 'Later'], defaultId: 0, cancelId: 1 })
+    return response === 0 && updateCheck.restart()
+  })
+  updateCheck?.start()
+  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's fleet feed,
   // pushed per window like the board, and the account's desktops from the
   // registry, cut to directory facts before they reach the renderer.
   registerZoomFleetIpc(ipcMain.handle.bind(ipcMain), {
-    service: localLevelsService,
+    service: localFleetService,
     authed: (pathname) => accounts.authed<unknown>(pathname),
     deviceId: () => accounts.account()?.deviceId ?? null
   })
@@ -8488,14 +8844,15 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   ipcMain.handle('workspace:get', () => store.focusedState)
   ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
-  ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
+  // ownerOnly: this token makes a socket the Mac's own viewer, unseen by the host and past Stop.
+  ipcMain.handle('browser:stream-token', ownerOnly(() => desktopBrowserStreamToken))
   // A card's live view, straight from main: the owner window's top frame
   // asks, main answers with one end of a fresh MessageChannel (the nonce
   // pairs the answer with the ask). Anything else asking gets nothing — a
   // browser card's page has no ipcRenderer, and a frame below the top is not
   // the owner (owner-grant.ts · isOwnerSender).
   ipcMain.on('browser-stream:open', (event, browserId: unknown, nonce: unknown) => {
-    if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) return
+    if (!ownerFrame(event)) return
     if (typeof browserId !== 'string' || browserId.length === 0 || browserId.length > 200) return
     if (typeof nonce !== 'string' || nonce.length === 0 || nonce.length > 100) return
     const { port1, port2 } = new MessageChannelMain()
@@ -8513,17 +8870,40 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
   // The window picker, for the window on this desktop: the workspace it shows.
   ipcMain.handle('use:sources', async () => {
-    const answer = await useSources.list(store.focusedId)
+    const answer = await useSources.list(store.focusedId, MAC_VIEWER)
     return answer.ok ? answer.value : emptySourceList('unavailable', answer.error)
   })
   ipcMain.handle('use:open-source', async (_e, pick: unknown) => {
-    const answer = await useSources.open(store.focusedId, pick)
+    const answer = await useSources.open(store.focusedId, pick, MAC_VIEWER)
     return answer.ok ? { ok: true, card: answer.value.card } : { ok: false, error: answer.error }
   })
-  ipcMain.handle('use:screen-settings', async () => {
-    const answer = await useSources.openSettings(store.focusedId)
+  ipcMain.handle('use:screen-settings', ownerOnly(async (pane: unknown) => {
+    const answer = await useSources.openSettings(store.focusedId, pane, 'here')
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
-  })
+  }))
+  // THE REMOTE DESK, from the Mac's own window. The switch and Stop exist only
+  // here: there is no route to either, so nothing away from the Mac can reach them.
+  // Straight to the desk: the Mac must reach its own switch from any workspace, a served one above all.
+  ipcMain.handle('use:remote-access', ownerOnly(() => remoteDesk.access('here')))
+  ipcMain.handle('use:remote-control', ownerOnly(async (ask: unknown) => {
+    const answer = await useSources.control(store.focusedId, ask, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error, ...(answer.state ? { state: answer.state } : {}) }
+  }))
+  ipcMain.handle('use:remote-restart', ownerOnly(async () => {
+    const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  }))
+  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => {
+    if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
+    // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
+    if (on) unlockDoor.reopen()
+    return remoteDesk.setSwitch(on)
+  }))
+  ipcMain.handle('use:remote-stop', ownerOnly(() => {
+    remoteDesk.stopAll()
+    return { ok: true }
+  }))
+  ipcMain.handle('use:remote-host', ownerOnly(() => remoteDesk.hostView()))
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
   // and mirrors a legitimate cross-workspace edge. store.connect writes an edge
@@ -8604,14 +8984,67 @@ function registerIpc(handlers: RestoreHandlers): void {
       // A card with no mirror wakes one, as for any key.
       if (waker.hold(terminalId, keys)) return true
       return session?.writeMenuKeys(keys, inMenu) === 'allow'
+    },
+    whole: withPaneBox,
+    moved: (terminalId) => {
+      turns.refreshBox(terminalId)
+      void readPaneMenu(terminalId).catch(() => undefined)
     }
   })
   setMenuAnswerer(answerMenu)
+  // The wrist's routes (watch-routes.ts): a token of its own, a short list of routes.
+  const watchHost = createWatchHost({
+      pairing: watchPairing,
+      deviceName: () => localDeviceName(),
+      endpoints: mobileEndpointList,
+      httpPort: MOBILE_PORT,
+      canvas: (workspaceId) => store.workspaceState(workspaceId),
+      node: (id) => store.nodeAcrossWorkspaces(id)?.node,
+      thumbViewed: noteBrowserViewed,
+      thumb: (id) => browserThumbs.frame(id),
+      browser: (id) => browserManager.get(id),
+      // The last agent's harness; a bare shell takes no first prompt, so it is no harness to start one on.
+      lastPreset: () =>
+        [...agents.list()].filter((entry) => entry.active && entry.command.trim().length > 0).sort((a, b) => b.spawnedAt - a.spawnedAt)[0]?.preset ?? 'Claude Code',
+      screen: (id) => ptys.get(id)?.viewportText() ?? null,
+      createTerminal,
+      stop: async (terminalId) => {
+        const session = ptys.get(terminalId)
+        if (!session) return false
+        return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
+      },
+      accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
+      invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
+    })
+  setWatchHost(watchHost)
+  ipcMain.handle(
+    'watch:code',
+    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases(), claims: watchPairing.claims }))
+  )
+  ipcMain.handle(
+    'watch:state',
+    ownerOnly(() => ({
+      paired: watchPairing.paired,
+      pending: watchPairing.pending(),
+      account: watchHost.accountKind(),
+      sealed: true,
+      claims: watchPairing.claims
+    }))
+  )
+  ipcMain.handle(
+    'watch:invite',
+    ownerOnly((current: unknown) => inviteWatch(watchHost, typeof current === 'string' ? current : '', true))
+  )
+  ipcMain.handle(
+    'watch:forget',
+    ownerOnly(() => watchPairing.unpair())
+  )
   ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
     const request = parseMenuRequest(body)
     return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
   })
-  const typeInto = createPacedInput((terminalId, data) => {
+  const typeInto = createPacedInput((terminalId, typed) => {
+    const data = isAgentTerminal(terminalId) ? blockAsPaste(typed) : typed
     // Keys for an offline agent wake it; they wait for it, then go in in order.
     if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
@@ -8776,8 +9209,14 @@ function registerIpc(handlers: RestoreHandlers): void {
    * forever. The DESKTOP loop's entry point only: a phone reaches the same
    * cache through /api/browser/:id/thumb, which no longer waits on this.
    */
-  ipcMain.handle('browser:snapshot', async (_e, browserId: unknown) => {
+  ipcMain.handle('browser:snapshot', async (event, browserId: unknown) => {
     if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
+    // The Mac looking at its own screen, in its own window: the one place that
+    // picture needs no banner. It skips the cache that serves everyone else.
+    if (showsThisMachine(browserId)) {
+      const jpeg = ownerFrame(event) ? await browserManager.peek(browserId)?.snapshot().catch(() => null) : null
+      return jpeg ? `data:image/jpeg;base64,${jpeg}` : null
+    }
     await browserThumbs.refresh(browserId)
     return browserThumbs.dataUrl(browserId)
   })

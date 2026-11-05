@@ -17,7 +17,8 @@ const image = (empty = false) => ({
 const electron = vi.hoisted(() => ({
   getSources: vi.fn(),
   access: vi.fn(() => 'granted'),
-  openExternal: vi.fn(async () => undefined)
+  openExternal: vi.fn(async () => undefined),
+  trusted: vi.fn(() => false)
 }))
 
 vi.mock('electron', () => ({
@@ -27,7 +28,8 @@ vi.mock('electron', () => ({
   desktopCapturer: { getSources: electron.getSources },
   screen: { getPrimaryDisplay: () => ({ id: 7 }) },
   shell: { openExternal: electron.openExternal },
-  systemPreferences: { getMediaAccessStatus: electron.access, isTrustedAccessibilityClient: () => false }
+  clipboard: { readText: () => '' },
+  systemPreferences: { getMediaAccessStatus: electron.access, isTrustedAccessibilityClient: electron.trusted }
 }))
 
 const { createUseInstances } = await import('../src/main/use-instances')
@@ -36,7 +38,12 @@ const { LINUX_WAYLAND } = await import('../src/main/linux-screen')
 const { ASK_DEADLINE_MS } = await import('../src/main/use-source-electron')
 
 const make = (platform: NodeJS.Platform, env: Record<string, string> = { DISPLAY: ':99', XDG_SESSION_TYPE: 'x11' }) =>
-  createUseInstances({ captureDir: path.join(mkdtempSync(path.join(tmpdir(), 'use-inst-')), 'c'), computerInput: () => true, platform, env })
+  createUseInstances({
+    captureDir: path.join(mkdtempSync(path.join(tmpdir(), 'use-inst-')), 'c'),
+    remote: () => ({ blocked: async () => null, inputRefusal: () => null, agentRefusal: () => null, mayDrive: () => false, cardControl: () => ({ switchOn: false, until: null, heldBy: null, awake: false, machine: 'darwin' }), admit: () => null, enter: () => () => undefined }),
+    blocked: async () => (env.XDG_SESSION_TYPE === 'wayland' ? ({ id: 'unsupported', platform: 'linux', detail: LINUX_WAYLAND, then: null, lastSeenAt: null, until: null, waiting: false, build: { settingsName: 'Cookrew', sourceBuild: false, restart: 'self', agents: 'keep' } } as const) : null),
+    platform
+  })
 
 beforeEach(() => {
   electron.getSources.mockReset()
@@ -69,14 +76,24 @@ describe('on Linux', () => {
 
 describe('on a Mac', () => {
   it('the settings button goes to Screen Recording itself, and a Mac that was never asked gets asked first', async () => {
-    electron.access.mockReturnValue('not-determined')
-    await make('darwin').sources()?.openSettings()
+    // `denied` IS never-asked: Electron does not answer `not-determined` for the screen.
+    electron.access.mockReturnValue('denied')
+    await make('darwin').sources()?.openSettings('screen')
     expect(electron.getSources).toHaveBeenCalledOnce()
     expect(electron.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
     electron.getSources.mockClear()
-    electron.access.mockReturnValue('denied')
-    await make('darwin').sources()?.openSettings()
+    electron.access.mockReturnValue('granted')
+    await make('darwin').sources()?.openSettings('screen')
     expect(electron.getSources).not.toHaveBeenCalled()
+  })
+})
+
+describe('the Accessibility jump', () => {
+  it('asks once, so a row exists to switch on, and lands on that page', async () => {
+    electron.trusted.mockClear()
+    await make('darwin').sources()?.openSettings('accessibility')
+    expect(electron.trusted).toHaveBeenCalledWith(true)
+    expect(electron.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')
   })
 })
 
@@ -85,7 +102,7 @@ describe('the settings button on a Mac that was never asked', () => {
     vi.useFakeTimers()
     electron.access.mockReturnValue('not-determined')
     electron.getSources.mockReturnValue(new Promise(() => undefined))
-    const opening = make('darwin').sources()?.openSettings()
+    const opening = make('darwin').sources()?.openSettings('screen')
     await vi.advanceTimersByTimeAsync(ASK_DEADLINE_MS + 1)
     await opening
     vi.useRealTimers()

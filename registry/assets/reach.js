@@ -50,7 +50,7 @@
 
   /**
    * WHICH OF THESE MACS IS cookrew.dev HOLDING A LINE FOR? One question for the
-   * whole list (strata) — it used to be one request per Mac.
+   * whole list — it used to be one request per Mac.
    *
    * Every kind of no is the same no from in here — a refusal, a network that
    * dropped, an answer that was not JSON. None of them mean a Mac is up, and

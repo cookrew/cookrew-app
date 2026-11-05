@@ -1,4 +1,4 @@
-import { desktopCapturer, screen, shell, type NativeImage } from 'electron'
+import { clipboard, desktopCapturer, screen, shell, systemPreferences, type NativeImage } from 'electron'
 import type { LinuxFrame } from './linux-screen'
 import { withDeadline } from './pixel-instance'
 import { type GrabbedSource, type SourceGrab } from './use-source-mac'
@@ -13,6 +13,7 @@ import { type GrabbedSource, type SourceGrab } from './use-source-mac'
  */
 
 const SCREEN_RECORDING_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+const ACCESSIBILITY_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
 /** How long the system's own question may hold the settings page back. */
 export const ASK_DEADLINE_MS = 5_000
 const ICON_PX = 32
@@ -48,13 +49,27 @@ export async function grabScreenFrames(maxSide: number): Promise<readonly LinuxF
 
 export const primaryDisplayId = (): string | null => String(screen.getPrimaryDisplay().id)
 
+export const readMachineClipboard = (): string => clipboard.readText()
+
+/**
+ * The Accessibility page. Like Screen Recording it lists an app only once the
+ * app has asked, and asking with a prompt is what makes the row. It grants
+ * nothing: the switch in that row is the owner's to turn.
+ */
+export async function openAccessibilitySettings(): Promise<void> {
+  systemPreferences.isTrustedAccessibilityClient(true)
+  await shell.openExternal(ACCESSIBILITY_PANE)
+}
+
 /**
  * The Screen Recording page. macOS lists an app there only once it has asked,
- * so a Mac that was never asked is asked first: one tiny capture raises the
- * system's own question, and from then on the page has a row to switch on.
+ * so anything short of a grant asks first: one tiny capture raises the system's
+ * own question, and from then on the page has a row to switch on. The status
+ * cannot tell who was asked: Electron answers `denied` for an app macOS has
+ * never heard of, and never `not-determined`. Asked once, this raises nothing.
  */
 export async function openScreenRecordingSettings(access: string): Promise<void> {
-  if (access === 'not-determined') {
+  if (access !== 'granted') {
     await withDeadline(desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }), ASK_DEADLINE_MS, 'the system').catch(() => undefined)
   }
   await shell.openExternal(SCREEN_RECORDING_PANE)

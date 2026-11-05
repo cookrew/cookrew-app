@@ -39,6 +39,9 @@ export const linkPath = (url: string, base: string = clientBase()): string | nul
   return url.replace(RELAY_PREFIX, '')
 }
 
+/** Is this page on cookrew.dev's relay right now? It is the one plane behind an ingress. */
+const onRelay = (): boolean => dataPlane().origin === '' && clientBase() !== ''
+
 /** The link to use for this URL right now, with its Mac path; null for the ordinary way. */
 export const viaLink = (url: string): { link: RtcLink; path: string } | null => {
   if (dataPlane().transport !== 'rtc') return null
@@ -72,20 +75,20 @@ export const linkHeaders = (headers: HeadersInit | undefined): Record<string, st
  */
 export const openWebSocket = (scopedUrl: string): WebSocket => {
   const routed = viaLink(scopedUrl)
-  if (routed) return routed.link.openSocket(routed.path) as unknown as WebSocket
+  if (routed) return routed.link.openSocket(tokenParam(routed.path)) as unknown as WebSocket
   // ON THE RELAY a WebSocket goes nowhere: the relay forwards requests and
   // streams, never an upgrade. The same socket is bridged over those two
-  // (path/bridge-socket.ts, main/socket-bridge.ts).
-  const relayed = dataPlane().origin === '' && clientBase() !== ''
-  const path = relayed ? linkPath(scopedUrl) : null
+  // (path/bridge-socket.ts, main/socket-bridge.ts). The Mac adds the token to
+  // the socket it dials, from the header the bridge arrived with.
+  const path = onRelay() ? linkPath(scopedUrl) : null
   if (path) return openBridgedSocket(path) as unknown as WebSocket
-  return new WebSocket(socketUrl(window.location.origin, scopedUrl))
+  return new WebSocket(socketUrl(window.location.origin, tokenParam(scopedUrl)))
 }
 
 /** The socket at a Mac path, as an event stream down and POSTs up. */
 export const openBridgedSocket = (path: string): BridgeWebSocket =>
   new BridgeWebSocket({
-    stream: () => openEventSource(tokenParam(apiPath(`/api/socket-bridge?path=${encodeURIComponent(path)}`))),
+    stream: () => openEventSource(apiPath(`/api/socket-bridge?path=${encodeURIComponent(path)}`)),
     post: async (id, messages) => {
       const response = await planeFetch(apiPath(`/api/socket-bridge/${id}`), {
         method: 'POST',
@@ -96,12 +99,32 @@ export const openBridgedSocket = (path: string): BridgeWebSocket =>
     }
   })
 
-/** `new EventSource(url)`, or the same stream over the direct link when the plane is the link. */
+/**
+ * The same stream, taken by fetch on the relay. `new EventSource` cannot set a
+ * header, and a URL through cookrew.dev reaches the ingress log, so here the
+ * pairing token goes as a header and the reader is the one the link already has.
+ */
+const headerStream = (url: string): Pick<RtcLink, 'request'> => ({
+  request: async ({ method, headers, signal }) => {
+    const response = await fetch(url, { method, signal, credentials: 'same-origin', headers: { ...headers, ...authHeaders() } })
+    // A page where a stream was due is a failed connect, as EventSource holds it.
+    const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
+    return stream || !response.ok ? response : new Response(null, { status: 502 })
+  }
+})
+
+/**
+ * An event stream at a scoped URL with no credential on it: this adds one in the
+ * way the plane allows. The direct link and the direct origins never meet the
+ * ingress, so they keep the query a native EventSource needs.
+ */
 export const openEventSource = (url: string): EventSource => {
   const routed = viaLink(url)
-  // Watched either way: a stream on a path that died without a reset looks
-  // open for ever (stream-watch.ts).
-  return routed
-    ? (watchStream(new RtcEventSource(routed.link, routed.path), { native: false }) as unknown as EventSource)
-    : watchStream(new EventSource(url), { native: true })
+  // Watched every way: a stream on a path that died without a reset looks open
+  // for ever (stream-watch.ts).
+  if (routed) {
+    return watchStream(new RtcEventSource(routed.link, tokenParam(routed.path)), { native: false }) as unknown as EventSource
+  }
+  if (onRelay()) return watchStream(new RtcEventSource(headerStream(url), url), { native: false }) as unknown as EventSource
+  return watchStream(new EventSource(tokenParam(url)), { native: true })
 }

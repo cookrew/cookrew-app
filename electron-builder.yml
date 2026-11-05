@@ -20,6 +20,8 @@
 
 appId: dev.cookrew.app
 productName: Cookrew
+# Before signing, so the signature covers them: only this app may open a secret.
+afterPack: scripts/after-pack-fuses.cjs
 copyright: Copyright © 2026 Cookrew
 
 directories:
@@ -38,6 +40,13 @@ asarUnpack:
 # cookrew://import/@handle/team and its kin — the link a team's page on
 # cookrew.dev hands to the app. Parsed in src/main/deep-link.ts; the OS
 # registration is claimed at launch (app.setAsDefaultProtocolClient).
+# Written into the app as app-update.yml: where a running build looks for the
+# next one. The feed is the published release's latest-mac.yml and latest.yml.
+publish:
+  provider: github
+  owner: cookrew
+  repo: cookrew-app
+
 protocols:
   name: Cookrew
   schemes:
@@ -47,7 +56,7 @@ protocols:
 # process.resourcesPath. tests/release-signing.test.ts holds this list to main's
 # reads: 0.4.0 shipped without four of them, and a downloaded app had no
 # `cookrew` in any pane because the copy of a missing file threw.
-# KEEP THE RunAsNode FUSE ON if fuses are ever configured here. The `cookrew`
+# The fuses are flipped in the hook below. KEEP RunAsNode ON there: the `cookrew`
 # shim runs on this app's binary with ELECTRON_RUN_AS_NODE (src/main/cli-shim.ts).
 # With the fuse off that command opens a second instance of the app instead.
 extraResources:

@@ -1,4 +1,5 @@
 import { cleanAgentName } from './agent-name'
+import { remoteView, type RemoteState } from './remote-access'
 
 /**
  * WHAT THE PICKER SHOWS, AND WHAT A TAP SENDS BACK.
@@ -28,13 +29,13 @@ export interface UseSource {
 }
 
 export interface UseSourceList {
-  /** `needs-permission` and `unavailable` carry a sentence instead of rows. */
-  readonly state: 'ready' | 'needs-permission' | 'unavailable'
+  /** `unavailable` carries a sentence instead of rows. */
+  readonly state: 'ready' | 'unavailable'
   readonly windows: readonly UseSource[]
   readonly screens: readonly UseSource[]
   readonly message: string | null
-  /** The grant that is missing, by the name System Settings gives it. */
-  readonly permission: 'Screen Recording' | null
+  /** What stands in the way, for the sheet to say in full, with its next action. */
+  readonly remote: RemoteState | null
   /** Why the Windows tab is empty on purpose (Linux). */
   readonly windowsNote: string | null
 }
@@ -58,13 +59,19 @@ export type UseSourceSettings = { readonly ok: true } | { readonly ok: false; re
 export const USE_SOURCES_PATH = '/api/use/sources'
 
 /** The sheet's own question to main on a machine that has nothing to list. */
-export const emptySourceList = (state: 'needs-permission' | 'unavailable', message: string): UseSourceList => ({
+export const emptySourceList = (state: 'unavailable', message: string): UseSourceList => ({
   state,
   windows: [],
   screens: [],
   message,
-  permission: null,
+  remote: null,
   windowsNote: null
+})
+
+/** A machine whose screen cannot be read right now: no rows, and the state to show instead. */
+export const blockedSourceList = (remote: RemoteState): UseSourceList => ({
+  ...emptySourceList('unavailable', remoteView(remote, 'here').sentence),
+  remote
 })
 
 /** A machine that can share: its rows, and why its Windows tab is empty if it is. */
@@ -73,7 +80,7 @@ export const readySourceList = (rows: Pick<UseSourceList, 'windows' | 'screens'>
   windows: rows.windows,
   screens: rows.screens,
   message: null,
-  permission: null,
+  remote: null,
   windowsNote: rows.windowsNote ?? null
 })
 

@@ -1,5 +1,5 @@
 // THE ZOOM VIEW RE-RENDERS WHEN WHAT IT DRAWS OF THE FLEET CHANGES (perf,
-// 2026-11-01): the fleet changes on every levels delta, a working agent's
+// 2026-11-01): the fleet changes on every fleet delta, a working agent's
 // reply and status line included, and the view drew none of that.
 import { describe, expect, it } from 'vitest'
 import { createFleetViewReader, type ZoomFleet } from '../src/renderer/src/zoom/use-zoom-fleet'

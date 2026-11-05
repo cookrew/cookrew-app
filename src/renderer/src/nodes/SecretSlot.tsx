@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { cookrew } from '../api'
-import { afterRemove, afterSeal, type SecretListing } from '../../../shared/secret-slot'
+import { afterSeal, type SecretListing } from '../../../shared/secret-slot'
 
 /**
  * THE SEALED SLOT — the only password field in Cookrew (R4).
@@ -20,9 +20,8 @@ import { afterRemove, afterSeal, type SecretListing } from '../../../shared/secr
  * `served` is a flag with no reader yet (secret-cli.ts refuses every served
  * pane this round); it is kept so the owner's choice survives.
  *
- * DELETE (owner, 2026-11-05) stands on a sealed slot only and asks once: it
- * makes the store forget the value through `secretRemove`, and the block goes
- * back to "not set". The note's line stays, so the slot can be sealed again.
+ * The retired canvas card draws this block; an open note draws the vault
+ * (SecretVault.tsx), which shares this copy and the put.
  */
 
 export interface SecretSlotProps {
@@ -31,12 +30,8 @@ export interface SecretSlotProps {
   readonly entry: SecretListing | null
   /** After a seal: the listing the store answered with. */
   readonly onSealed?: (entry: SecretListing) => void
-  /** After a delete: the name the store no longer holds. */
-  readonly onRemoved?: (name: string) => void
   /** Test seam: the put, so a render needs no bridge. */
   readonly put?: (name: string, value: string, served: boolean) => Promise<SecretListing>
-  /** Test seam: the delete. */
-  readonly remove?: (name: string) => Promise<boolean>
 }
 
 export const SECRET_SLOT_COPY = {
@@ -50,10 +45,6 @@ export const SECRET_SLOT_COPY = {
   sealing: 'SEALING…',
   empty: 'not set',
   set: 'set ✓',
-  remove: 'DELETE',
-  removing: 'DELETING…',
-  keep: 'KEEP',
-  removeAsk: 'Delete the sealed value? Agents can no longer read it; the note keeps its slot.',
   how: 'agents: cookrew secret exec <name> -- <command> — the value is in that command\'s environment and its children inherit it; read prints it into the pane · every read audited',
   where: 'stored on this machine; the phone sends it over TLS — to the desktop directly, or hop by hop through cookrew.dev; the note keeps only the name'
 } as const
@@ -66,77 +57,17 @@ export const sealedWhen = (updatedAt: number, now = Date.now()): string => {
   return sameDay ? `updated ${clock}` : `updated ${at.toISOString().slice(0, 10)} ${clock}`
 }
 
-const defaultPut = (name: string, value: string, served: boolean): Promise<SecretListing> => {
+export const defaultPut = (name: string, value: string, served: boolean): Promise<SecretListing> => {
   const api = cookrew()
   if (!api.secretPut) return Promise.reject(new Error('this bridge has no secrets store'))
   return api.secretPut(name, value, served)
 }
 
-const defaultRemove = (name: string): Promise<boolean> => {
-  const api = cookrew()
-  if (!api.secretRemove) return Promise.reject(new Error('this bridge has no secrets store'))
-  return api.secretRemove(name)
-}
-
-/** The delete row: one quiet button, then the question. It holds no state, so both faces are testable. */
-export function SecretRemove({
-  name,
-  asking,
-  busy,
-  onAsk,
-  onKeep,
-  onConfirm
-}: {
-  name: string
-  asking: boolean
-  busy: boolean
-  onAsk: () => void
-  onKeep: () => void
-  onConfirm: () => void
-}): React.JSX.Element {
-  if (!asking) {
-    return (
-      <span className="cr-secret-slot-remove">
-        <button type="button" className="cr-btn sm" aria-label={`${SECRET_SLOT_COPY.remove} ${name}`} disabled={busy} onClick={onAsk}>
-          {SECRET_SLOT_COPY.remove}
-        </button>
-      </span>
-    )
-  }
-  return (
-    <span className="cr-secret-slot-remove asking" role="group" aria-label={`${SECRET_SLOT_COPY.remove} ${name}`}>
-      <span>{SECRET_SLOT_COPY.removeAsk}</span>
-      <button type="button" className="cr-btn sm danger" disabled={busy} onClick={onConfirm}>
-        {busy ? SECRET_SLOT_COPY.removing : SECRET_SLOT_COPY.remove}
-      </button>
-      <button type="button" className="cr-btn sm" disabled={busy} onClick={onKeep}>
-        {SECRET_SLOT_COPY.keep}
-      </button>
-    </span>
-  )
-}
-
-export function SecretSlot({ name, entry, onSealed, onRemoved, put = defaultPut, remove = defaultRemove }: SecretSlotProps): React.JSX.Element {
+export function SecretSlot({ name, entry, onSealed, put = defaultPut }: SecretSlotProps): React.JSX.Element {
   const [value, setValue] = useState('')
   const [served, setServed] = useState(entry?.served === true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [asking, setAsking] = useState(false)
-
-  const forget = (): void => {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    remove(name)
-      .then(() => {
-        // False is "nothing by that name": what was asked for is true either way.
-        setAsking(false)
-        setServed(false)
-        onRemoved?.(name)
-      })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => setBusy(false))
-  }
 
   const seal = (): void => {
     if (busy || value.length === 0) return
@@ -188,44 +119,6 @@ export function SecretSlot({ name, entry, onSealed, onRemoved, put = defaultPut,
           {SECRET_SLOT_COPY.served} — {served ? SECRET_SLOT_COPY.on : SECRET_SLOT_COPY.off}
         </span>
       </label>
-      {entry !== null && <SecretRemove name={name} asking={asking} busy={busy} onAsk={() => setAsking(true)} onKeep={() => setAsking(false)} onConfirm={forget} />}
-    </div>
-  )
-}
-
-/**
- * THE OPEN NOTE'S SLOTS (owner, 2026-11-05): a block per name under the note,
- * and the store's listing — names and dates, never values — read when the
- * block appears and whenever `rereadOn` turns. The canvas card drew these; it
- * is retired, and a slot nobody can fill is a name and nothing else.
- */
-export function SecretSlots({ names, rereadOn }: { names: readonly string[]; rereadOn: unknown }): React.JSX.Element {
-  const [sealed, setSealed] = useState<ReadonlyMap<string, SecretListing>>(new Map())
-  useEffect(() => {
-    const api = cookrew()
-    if (!api.secretList) return
-    let live = true
-    void api
-      .secretList()
-      .then((rows) => {
-        if (live) setSealed(new Map(rows.map((row) => [row.name, row])))
-      })
-      .catch(() => undefined)
-    return () => {
-      live = false
-    }
-  }, [rereadOn])
-  return (
-    <div className="cr-secret-slots">
-      {names.map((name) => (
-        <SecretSlot
-          key={name}
-          name={name}
-          entry={sealed.get(name) ?? null}
-          onSealed={(entry) => setSealed((prev) => afterSeal(entry, prev).listing)}
-          onRemoved={(gone) => setSealed((prev) => afterRemove(gone, prev))}
-        />
-      ))}
     </div>
   )
 }

@@ -1,8 +1,6 @@
 // THE PHONE'S EAR (owner, 2026-11-03: "Android voice input does not work").
-// Chrome on Android hands Web Speech to Google's recognition service, which is
-// not reachable from every network. The phone records instead (16 kHz WAV)
-// and the Mac hears it with the same on-device ears ⌘-hold uses: POST
-// /api/listen → main/hear-file.ts.
+// The phone records (16 kHz WAV) and the Mac hears it with the same on-device
+// ears ⌘-hold uses: POST /api/listen → main/hear-file.ts.
 
 import http from 'node:http'
 import type net from 'node:net'
@@ -136,18 +134,19 @@ describe('/api/listen', () => {
   }
 
   it('says whether this Mac can hear, and nothing without a token', async () => {
-    const hear = { available: () => true, recording: async () => ({ text: '', alternates: {} }) }
+    const hear = { available: () => true, locale: () => 'zh-CN', recording: async () => ({ text: '', alternates: {} }) }
     const port = await startApi({ hear })
     expect((await call(port, {})).status).toBe(401)
-    expect(await call(port, { token: PAIRING })).toEqual({ status: 200, body: { available: true } })
+    expect(await call(port, { token: PAIRING })).toEqual({ status: 200, body: { available: true, locale: 'zh-CN' } })
     const bare = await startApi({})
-    expect(await call(bare, { token: PAIRING })).toEqual({ status: 200, body: { available: false } })
+    expect(await call(bare, { token: PAIRING })).toEqual({ status: 200, body: { available: false, locale: null } })
   })
 
   it('hears the raw body and answers the words', async () => {
     const got: Uint8Array[] = []
     const hear = {
       available: () => true,
+      locale: () => 'zh-CN',
       recording: async (bytes: Uint8Array) => {
         got.push(bytes)
         return { text: '让QQ给修一下字体大小', alternates: { 'en-US': 'ask Cookrew Dev to fix the font size' } }
@@ -162,7 +161,7 @@ describe('/api/listen', () => {
   })
 
   it("is a write: the read-only wall token may not make the Mac listen", async () => {
-    const hear = { available: () => true, recording: async () => ({ text: 'x', alternates: {} }) }
+    const hear = { available: () => true, locale: () => 'zh-CN', recording: async () => ({ text: 'x', alternates: {} }) }
     const port = await startApi({ hear })
     const answer = await call(port, { method: 'POST', token: WALL, body: new Uint8Array([1, 2, 3]) })
     expect(answer.status).toBe(401)
@@ -173,6 +172,7 @@ describe('/api/listen', () => {
     expect((await call(none, { method: 'POST', token: PAIRING, body: new Uint8Array([1]) })).status).toBe(503)
     const failing = {
       available: () => true,
+      locale: () => 'zh-CN',
       recording: async () => {
         throw new Error('recognition failed: Siri and Dictation are disabled')
       }

@@ -130,6 +130,10 @@ export function ownerSecretPaths(
     // …and the app's OWN origin state, entry by entry (the default session
     // writes it beside the settings, so the tree cannot be taken).
     ...defaultSessionStatePaths(home, appDir),
+    // What is on the owner's screen, as files: each frame passes through the
+    // first, and an agent's screenshots stay in the second.
+    at('Library', 'Application Support', appDir, 'use-capture'),
+    at('Library', 'Application Support', appDir, 'use-shots'),
     // The Sous ledger: every sentence the owner said to the crew, scrubbed but theirs (sous-ledger.ts).
     at(appDir === DEFAULT_APP_DIR ? '.cookrew' : appDir, 'sous-decisions.jsonl'),
     // The one the ruling names by hand.
@@ -164,6 +168,10 @@ export function ownerSecretPaths(
     // to read at boot, and where it points. A seat never runs on either.
     path.join(base, 'access-keys'),
     path.join(base, 'access.json'),
+    // Stop's hold and who is waiting to hear (remote-desk.ts).
+    path.join(base, 'remote-control.json'),
+    // What a phone's sealed Mac password opens under (remote-unlock.ts).
+    path.join(base, 'unlock-key.json'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
     // plugin-providers.json, logins.json, plugin auth — is every upstream key
     // the owner holds; the Sous ledger and its Magpie facts; the owner's

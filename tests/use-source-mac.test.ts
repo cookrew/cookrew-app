@@ -3,7 +3,7 @@
 // are joined on by id, and a missing grant names itself instead of listing.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MacScreens } from '../src/main/mac-bridge'
-import { SCREEN_RECORDING_OFF } from '../src/main/screen-device'
+import type { RemoteState, RemoteStateId } from '../src/shared/remote-access'
 import { GRAB_DEADLINE_MS, MAX_WINDOWS, macSources, type GrabbedSource, type MacSourceDeps } from '../src/main/use-source-mac'
 import { parseUseUrl } from '../src/shared/use-url'
 
@@ -28,7 +28,7 @@ const grabbed: GrabbedSource[] = [
 
 const bed = (over: Partial<MacSourceDeps> = {}) => {
   const deps: MacSourceDeps = {
-    access: () => 'granted',
+    blocked: async () => null,
     screens: vi.fn(async () => screens),
     grab: vi.fn(async () => grabbed),
     selfPid: SELF,
@@ -112,18 +112,24 @@ describe('macSources · list', () => {
   })
 })
 
+const stateOf = (id: RemoteStateId): RemoteState => ({
+  id, platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false,
+  build: { settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' }
+})
+
 describe('macSources · Screen Recording', () => {
-  it.each(['denied', 'not-determined', 'restricted', 'unknown'])('%s: names the permission, and neither lists nor captures', async (access) => {
-    const { deps, sources } = bed({ access: () => access })
+  it.each(['needs-screen-recording', 'needs-restart', 'locked', 'display-asleep'] as const)('%s: answers the desk\'s state, and neither lists nor captures', async (id) => {
+    const { deps, sources } = bed({ blocked: async () => stateOf(id) })
     const list = await sources.list()
-    expect(list).toMatchObject({ state: 'needs-permission', permission: 'Screen Recording', message: SCREEN_RECORDING_OFF, windows: [], screens: [] })
+    expect(list).toMatchObject({ state: 'unavailable', remote: { id }, windows: [], screens: [] })
+    expect(list.message).toBeTruthy()
     expect(deps.screens).not.toHaveBeenCalled()
     expect(deps.grab).not.toHaveBeenCalled()
   })
 
   it('opens the settings page on demand', async () => {
-    const { deps, sources } = bed({ access: () => 'denied' })
-    await sources.openSettings()
-    expect(deps.openSettings).toHaveBeenCalledOnce()
+    const { deps, sources } = bed({ blocked: async () => stateOf('needs-screen-recording') })
+    await sources.openSettings('accessibility')
+    expect(deps.openSettings).toHaveBeenCalledWith('accessibility')
   })
 })

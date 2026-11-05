@@ -1,4 +1,5 @@
 import { FUNNEL_EVENTS, FUNNEL_PAYLOAD_KEYS, TELEMETRY_DEFAULT_ON } from '../../src/shared/funnel-events'
+import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES } from '../../src/shared/account-delete'
 import { GITHUB_REPO, FACTS } from './site-content'
 import { REACH_TTL_MS as DNS_CARD_TTL_MS } from './dns-zone'
 import { KEEP_DAYS as FUNNEL_KEEP_DAYS } from './funnel-counts'
@@ -24,12 +25,16 @@ import { SESSION_TTL_MS } from './v2-tokens'
  *
  * A retention figure with a constant in the registry is read from it, so
  * changing that limit changes the page. Everything else has to be re-read by
- * hand when its code moves: what the relay can read, that no delete route
- * exists, that preset files are ungated, and the app's own 30-day sweep.
+ * hand when its code moves: what the relay can read, what a preset's limit or
+ * price gates, and the app's own 30-day sweep. What a delete takes is read from
+ * src/shared/account-delete.ts, the same list the app shows.
  *
  * The three placeholders are filled here, once. Until then the renderer marks
  * them on the page.
  */
+
+/** A list of sentences as one run of text inside a sentence of its own. */
+const asOneRun = (lines: readonly string[]): string => lines.join(' ')
 
 export const LEGAL_ENTITY = '[LEGAL ENTITY]'
 export const CONTACT_EMAIL = '[CONTACT EMAIL]'
@@ -83,7 +88,7 @@ export const PRIVACY: LegalDoc = {
             'There are no ads, no third-party analytics scripts and no tracking cookies here, and we do not sell personal data.',
             'Calls to a served team that travel over the relay are sealed end to end, so the relay cannot read them.',
             'One exception you should know about: reaching your own Mac through the relay is not end-to-end encrypted yet. See “What passes through the relay”.',
-            'Whatever you choose to publish, such as a team listing or a preset, is public.'
+            'Whatever you choose to publish, such as a team listing or a preset, is public, apart from the files of a preset you limit or price.'
           ]
         }
       ]
@@ -154,7 +159,7 @@ export const PRIVACY: LegalDoc = {
               [
                 'Published presets',
                 'The preset’s manifest and files: its card names, notes, roles, agent commands and prompts, and browser card URLs, with paths under your workdirs and home folder masked and a secret scan before publishing. Also an entry in a transparency log: the preset, its version, the author key, the publishing identity and the time.',
-                'Treat all of it as public. The log and the list of presets are public. An author can limit a preset to signed-in accounts or price it, but that gates only the manifest: anyone with a preset’s address can fetch its files, and the public list gives that address.'
+                'A free preset is public. The log and the list of presets are public for every preset, limited or priced included. An author can limit a preset to signed-in accounts or price it, and that gates both its manifest and its files. Anyone who gets a copy can pass it on, so a limit or a price does not keep anything secret.'
               ],
               [
                 'Preset sales',
@@ -231,7 +236,7 @@ export const PRIVACY: LegalDoc = {
           p: 'Reaching your own Mac through cookrew.dev is not end-to-end encrypted yet, wherever you are. OPEN on your account page always starts on this path, even at home. The app can move to a direct connection when it finds one, and shows which path it is on, but the app itself loads through the relay and traffic stays there until then. Even after the move, images and uploads keep using the relay, and everything returns to it if the direct link drops.'
         },
         {
-          p: 'On this path the connection is encrypted on each side of the relay, but the registry process handles the traffic in readable form while it forwards it: your canvas, terminal output, transcripts and pairing token. The registry does not log or store that content, but whoever operates the relay could technically read it, so do not treat this path as private from us. Some live streams also carry your pairing token in their address, and the web logs described under “Server logs” can record addresses. Only a connection that never goes through the relay avoids all of this, such as opening the app at your Mac’s own address on your Wi-Fi or tailnet.'
+          p: 'On this path the connection is encrypted on each side of the relay, but the registry process handles the traffic in readable form while it forwards it: your canvas, terminal output, transcripts and pairing token. The registry does not log or store that content, but whoever operates the relay could technically read it, so do not treat this path as private from us. Current versions of the app send your pairing token in a header on this path, not in an address, so the web logs described under “Server logs” do not record it. A Mac on an older version still puts it in the address of some live streams, and those logs can record that, so update the app and change your pairing token if that worries you. Only a connection that never goes through the relay avoids all of this, such as opening the app at your Mac’s own address on your Wi-Fi or tailnet.'
         },
         { p: 'Neither kind of traffic is written to the registry’s disk. It is held in memory only long enough to forward it.' }
       ]
@@ -257,7 +262,7 @@ export const PRIVACY: LegalDoc = {
             'The owner of a team you call. Your session runs on their machine, so they receive your username, your device ID and everything you send, and they can see what their agents do with it. Their agents send it on to whichever AI providers they use. By default the app clears a finished session’s workspace about 30 days after its last write, but it is their machine and we have no control over it. Do not send a team anything you would not give its owner.',
             'Stripe. Card checkout for a seat is hosted by Stripe on the team owner’s own Stripe account, so your card and billing details go to Stripe and the owner, and not to us. Stripe’s privacy policy applies.',
             'Public blockchains. A USDC payment over x402 is recorded on a public chain by its nature.',
-            'GitHub. Pictures and videos on these pages load from raw.githubusercontent.com, and app downloads come from GitHub, so GitHub sees your IP address and browser details when that happens. Fonts come from cookrew.dev itself.',
+            'GitHub. Pictures and videos on these pages load from raw.githubusercontent.com, and app downloads come from GitHub, so GitHub sees your IP address and browser details when that happens. The packaged app also asks GitHub for the latest version about every six hours and may download it from there, which shows GitHub your IP address and nothing about your work; turn off the update switch in the app’s ⋯ menu to stop it. Fonts come from cookrew.dev itself.',
             'Let’s Encrypt and public certificate logs. If your Mac asks for a certificate, its name under d.cookrew.dev, which contains its device ID, goes to Let’s Encrypt and appears in public certificate transparency logs. While your Mac publishes it, a name under d.cookrew.dev also resolves in public DNS to the private network address it spells out.',
             'Our infrastructure providers. The registry is hosted on Amazon Web Services. Cloudflare runs cookrew.dev’s DNS and does not sit in front of site traffic.',
             'Authorities, when the law requires us to disclose what we hold.'
@@ -318,11 +323,11 @@ export const PRIVACY: LegalDoc = {
               ['Team listings', 'Until the owner withdraws them. A listing does not expire on its own.'],
               ['Stars', 'Until you remove them.'],
               ['Private network addresses', `Until your Mac replaces its card or your account is deleted. Public DNS stops answering for a card more than ${hours(DNS_CARD_TTL_MS)} hours old.`],
-              ['Certificates', 'Kept for the Mac they belong to. There is no way yet to remove one from the registry, and public certificate logs keep theirs permanently.'],
+              ['Certificates', 'Kept for the Mac they belong to, until your account is deleted. Public certificate logs keep theirs permanently.'],
               ['Presets and the transparency log', 'Permanently. There is no unpublish, and the log is append-only by design.'],
               [
                 'Preset receipts, payout addresses and quotes',
-                `Receipts and payout addresses are kept, so that a purchase stays valid. A price quote stops counting ${hours(EXPIRED_RETENTION_MS)} hours after it expires, and leaves the file when the file is next cleaned up.`
+                `Receipts are kept, so that a purchase stays valid, including after an account is deleted. A payout address is kept until then. A price quote stops counting ${hours(EXPIRED_RETENTION_MS)} hours after it expires, and leaves the file when the file is next cleaned up.`
               ],
               ['Page and call counts', `${PULSE_KEEP_DAYS} days.`],
               ['Setup count daily totals', `${FUNNEL_KEEP_DAYS} days.`],
@@ -343,7 +348,7 @@ export const PRIVACY: LegalDoc = {
             'Change it. You can change your display name, avatar, password and sign-in factors.',
             'Remove it. You can take a device off your account, sign out, remove a star and withdraw a team listing.',
             'Turn off the setup counts at any time from the row in the app’s ⋯ menu.',
-            `Delete your account. There is no delete-account button yet, so write to ${CONTACT_EMAIL}. We hold no email address for you, so we will ask you to prove the account is yours, for example by signing in. We then delete your account, devices, desktops, sign-in factors, stars, team listings, payout address and older key record. Published presets and their log entries stay. Seat records and purchase receipts that others rely on may stay, certificates stay as described above, and counts, last-seen times and logs age out on their own schedule.`
+            `Delete your account. Choose Delete account on your profile in the app, or on your account page at /me if the account has a password. It needs that password, or in the app your sign-in provider if the account has none, and it happens at once. It takes: ${asOneRun(DELETE_ACCOUNT_TAKES)} What stays: ${asOneRun(DELETE_ACCOUNT_KEEPS)}`
           ]
         },
         {
@@ -506,7 +511,7 @@ export const TERMS: LegalDoc = {
           p: 'You keep ownership of what you publish: listings, presets and profile details. You give us a worldwide, royalty-free permission to store, copy, display and distribute it as needed to run the services, and to let others use a published preset.'
         },
         {
-          p: 'Published presets and the public log are permanent by design, and there is no unpublish. Treat everything in a preset as public, even one you limit or price: those settings gate its manifest and not its files. Check what you publish, and never publish secrets or anything you do not have the right to share. We may still take content out of public view where the law requires it or these terms are broken.'
+          p: 'Published presets and the public log are permanent by design, and there is no unpublish. A limit or a price decides who can download a preset, and anyone who downloads it can pass it on, so never rely on either to keep something secret. Check what you publish, and never publish secrets or anything you do not have the right to share. We may still take content out of public view where the law requires it or these terms are broken.'
         }
       ]
     },
@@ -541,7 +546,7 @@ export const TERMS: LegalDoc = {
       heading: 'Suspension and ending',
       blocks: [
         {
-          p: 'You can stop at any time: withdraw your listings, sign out your devices and ask us to delete your account. We may suspend an account, or remove a listing or preset from public view, if you break these terms, if the law requires it, or to protect people or the service. Where we reasonably can, we will tell you why.'
+          p: 'You can stop at any time: withdraw your listings, sign out your devices and delete your account. We may suspend an account, or remove a listing or preset from public view, if you break these terms, if the law requires it, or to protect people or the service. Where we reasonably can, we will tell you why.'
         }
       ]
     },

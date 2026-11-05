@@ -2322,6 +2322,35 @@
   overflow: auto;
   padding: 10px 14px;
 }
+/* A secret note: its words and its vault scroll as one page (SecretVault.tsx). */
+.attach-note-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.attach-note-addwords {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 10px 14px 0;
+  border: 0;
+  background: transparent;
+  color: var(--note-text);
+  font: italic 12.5px var(--font-body);
+  text-align: left;
+  opacity: 0.6;
+  cursor: text;
+}
+.attach-note-addwords:hover,
+.attach-note-addwords:focus-visible {
+  opacity: 1;
+}
+.attach-note-words {
+  flex: none;
+  overflow: visible;
+  padding: 10px 14px 0;
+}
 .attach-note-editor {
   flex: 1;
   min-height: 0;
@@ -2551,6 +2580,31 @@
     display: none;
   }
 }
+
+/* What the search box can do besides find agents (board-actions.ts). */
+.cr-board-actions { display: grid; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line-soft) }
+.cr-board-action {
+  display: grid;
+  grid-template-columns: 16px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.cr-board-action:hover { background: var(--cream) }
+.cr-board-action span { opacity: 0.65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+/* SAVE TEAM's field, under the selection bar. */
+.roster-team-save { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px }
+.roster-team-save .cr-ws-input { flex: 1 1 160px; min-width: 0 }
+.roster-team-save .cr-ws-say { flex-basis: 100% }
 
 /* RUNNING WITHOUT A CARD (StrayPanes.tsx): a process nothing else on screen reaches. */
 .stray-panes {
