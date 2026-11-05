@@ -22,7 +22,7 @@ import {
   isTeamSlug,
   type DoorClaim
 } from '../../src/shared/door-ownership'
-import type { MachineProfile } from '../../src/shared/levels'
+import type { MachineProfile } from '../../src/shared/fleet'
 import { BAD, readAppVersion, readProfile } from './v2-fleet'
 import type { ProviderId, VerifiedEmail } from '../../src/shared/oauth'
 

@@ -93,7 +93,7 @@ import { EventEmitter } from 'node:events'
 import {
   cachedTailnet,
   startMobileServer,
-  localLevelsService,
+  localFleetService,
   mobileUrls,
   mobileEndpointList,
   uncoveredCertHosts,
@@ -8649,11 +8649,11 @@ function registerIpc(handlers: RestoreHandlers): void {
     return status
   })
   updateCheck?.start()
-  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
+  // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's fleet feed,
   // pushed per window like the board, and the account's desktops from the
   // registry, cut to directory facts before they reach the renderer.
   registerZoomFleetIpc(ipcMain.handle.bind(ipcMain), {
-    service: localLevelsService,
+    service: localFleetService,
     authed: (pathname) => accounts.authed<unknown>(pathname),
     deviceId: () => accounts.account()?.deviceId ?? null
   })

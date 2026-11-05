@@ -3,7 +3,7 @@
  *
  * The registry's GET /v2/me/desktops row is a desktop's whole directory record:
  * its signed reach card (addresses), the doors it holds, the relay base, and
- * the FleetMachine facts (shared/levels.ts). The navigator draws a device from
+ * the FleetMachine facts (shared/fleet.ts). The navigator draws a device from
  * the facts and nothing else, so the record is cut down HERE, on the side that
  * asked (main for the desktop window, the phone's own fetch through the
  * relay), and an address never reaches a view.
@@ -11,7 +11,7 @@
  * Another desktop's workspaces come as names only: its agents live on that
  * Mac, behind that Mac's own pairing token, which this one does not hold.
  */
-import { LEVELS_LINE_MAX, type MachineKind, type MachineProfile } from './levels'
+import { FLEET_LINE_MAX, type MachineKind, type MachineProfile } from './fleet'
 
 /** One desktop of the signed-in account. */
 export interface AccountMachine {
@@ -50,7 +50,7 @@ const EVIDENCE_MAX = 16
 type Row = Record<string, unknown>
 
 const isRow = (value: unknown): value is Row => typeof value === 'object' && value !== null && !Array.isArray(value)
-const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() !== '' ? value.slice(0, LEVELS_LINE_MAX) : null)
+const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() !== '' ? value.slice(0, FLEET_LINE_MAX) : null)
 const count = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
 const oneOf = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(value as T) ? (value as T) : fallback

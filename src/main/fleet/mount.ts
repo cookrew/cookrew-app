@@ -1,20 +1,20 @@
-// One levels service per companion server, made on first use from the deps
+// One fleet service per companion server, made on first use from the deps
 // the server already holds. Kept here so mobile-server.ts mounts the routes in
 // a few lines and learns nothing about how the snapshot is made.
 
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { GitInfo } from '../../shared/model'
-import type { MachineDisplay, MachineProfile } from '../../shared/levels'
+import type { MachineDisplay, MachineProfile } from '../../shared/fleet'
 import type { BoardSources } from '../board-index'
 import { machineProfile, provisionalProfile } from '../machine-profile'
 import { createScrubber } from '../scrub'
 import type { WorkspaceStore } from '../store'
 import { runAtIdle } from './prewarm'
-import { createLevelsService, type LevelsService } from './service'
+import { createFleetService, type FleetService } from './service'
 import { levelsSourcesFrom } from './sources'
 
-export interface LevelsMountDeps {
+export interface FleetMountDeps {
   store: WorkspaceStore
   turns: EventEmitter
   board?: BoardSources
@@ -22,10 +22,10 @@ export interface LevelsMountDeps {
   tuningBus?: EventEmitter
   identity?: { account: () => { name: string } | null }
   /** A prebuilt service (tests); otherwise one is made from the fields above. */
-  levels?: LevelsService
+  fleet?: FleetService
 }
 
-const services = new WeakMap<object, LevelsService>()
+const services = new WeakMap<object, FleetService>()
 
 /** The profile as far as the probe has got: provisional until it answers, then fixed for the run. */
 let profile: MachineProfile = provisionalProfile()
@@ -41,7 +41,7 @@ function startProbe(): void {
   })
 }
 
-export interface LevelsMountOptions {
+export interface FleetMountOptions {
   appVersion: () => string | null
   /** Tokens this desktop holds (the pairing token): scrubbed by value from every line. */
   tokens: () => readonly (string | null | undefined)[]
@@ -49,13 +49,13 @@ export interface LevelsMountOptions {
   display?: () => MachineDisplay | null
 }
 
-export function levelsServiceFor(deps: LevelsMountDeps, options: LevelsMountOptions): LevelsService | null {
-  if (deps.levels) return deps.levels
+export function fleetServiceFor(deps: FleetMountDeps, options: FleetMountOptions): FleetService | null {
+  if (deps.fleet) return deps.fleet
   if (!deps.board) return null
   const known = services.get(deps)
   if (known) return known
   startProbe()
-  const service = createLevelsService(
+  const service = createFleetService(
     levelsSourcesFrom({
       store: deps.store,
       board: deps.board,
@@ -80,20 +80,20 @@ export function levelsServiceFor(deps: LevelsMountDeps, options: LevelsMountOpti
 }
 
 /** How long after the companion server starts the prewarm begins: boot has its own work first. */
-export const LEVELS_PREWARM_DELAY_MS = 15_000
+export const FLEET_PREWARM_DELAY_MS = 15_000
 
 /**
  * Pay the cold first build at idle, so the first shell to open a machine does
  * not. Once per server; nothing happens when the board is not wired.
  */
-export function prewarmLevels(deps: LevelsMountDeps, options: LevelsMountOptions, delayMs = LEVELS_PREWARM_DELAY_MS): void {
+export function prewarmFleet(deps: FleetMountDeps, options: FleetMountOptions, delayMs = FLEET_PREWARM_DELAY_MS): void {
   const timer = setTimeout(() => {
     try {
-      const service = levelsServiceFor(deps, options)
+      const service = fleetServiceFor(deps, options)
       if (service) void runAtIdle(service.prewarmSteps())
     } catch (error) {
       // A prewarm that cannot start is a first request that builds cold, nothing worse.
-      console.error('Levels prewarm could not start:', error)
+      console.error('Fleet prewarm could not start:', error)
     }
   }, delayMs)
   timer.unref?.()

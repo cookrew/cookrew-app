@@ -1,4 +1,4 @@
-// A fake desktop for the levels tests: a store-shaped EventEmitter over two
+// A fake desktop for the fleet tests: a store-shaped EventEmitter over two
 // invented workspaces, the board's three layers, and the dials. Every name and
 // prompt is invented.
 import { EventEmitter } from 'node:events'
@@ -6,10 +6,10 @@ import type { BoardPhase } from '../src/shared/board'
 import type { BoardSources } from '../src/main/board-index'
 import type { CanvasNode, Connection, WorkspaceMeta, WorkspaceState } from '../src/shared/model'
 import type { TerminalActivity, TurnRecord } from '../src/shared/turn'
-import type { MachineProfile } from '../src/shared/levels'
+import type { MachineProfile } from '../src/shared/fleet'
 import type { WorkspaceStore } from '../src/main/store'
-import { levelsSourcesFrom, type LevelsRuntime } from '../src/main/levels/sources'
-import { createLevelsService } from '../src/main/levels/service'
+import { levelsSourcesFrom, type FleetRuntime } from '../src/main/fleet/sources'
+import { createFleetService } from '../src/main/fleet/service'
 
 export const NOW = 1_800_000_000_000
 
@@ -78,7 +78,7 @@ export const activity = (terminalId: string, phase: TerminalActivity['phase'], e
   ...extra
 })
 
-export function fakeDesktop(options: { traits?: LevelsRuntime['traits'] } = {}) {
+export function fakeDesktop(options: { traits?: FleetRuntime['traits'] } = {}) {
   let metas: WorkspaceMeta[] = [
     { id: 'w1', name: 'Alpha Kitchen', dir: '/work/a', dirs: ['/work/a'], icon: '🍳', slug: 'alpha' },
     { id: 'w2', name: 'Beta Garden', dir: '/work/b', dirs: ['/work/b'], icon: '', slug: 'beta' }
@@ -181,7 +181,7 @@ export function fakeDesktop(options: { traits?: LevelsRuntime['traits'] } = {}) 
     // Only Alpha's cwd has a cached git answer; Beta's has none and must not get one.
     traits: options.traits
   })
-  const service = createLevelsService({ ...sources, now: () => clock.now }, 30)
+  const service = createFleetService({ ...sources, now: () => clock.now }, 30)
   return {
     service,
     store,

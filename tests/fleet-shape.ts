@@ -1,8 +1,8 @@
-// Runtime shape checks for what crosses the wire (src/shared/levels.ts):
+// Runtime shape checks for what crosses the wire (src/shared/fleet.ts):
 // EXACT keys — a field the contract does not name fails as surely as a
 // missing one — and the value types the contract gives each.
 import { expect } from 'vitest'
-import { LEVELS_LINE_MAX } from '../src/shared/levels'
+import { FLEET_LINE_MAX } from '../src/shared/fleet'
 
 type Check = (value: unknown, path: string) => void
 
@@ -18,7 +18,7 @@ const oneOf = (...allowed: unknown[]): Check => (v, p) => void (allowed.includes
 const array = (check: Check): Check => (v, p) => (Array.isArray(v) ? v.forEach((item, i) => check(item, `${p}[${i}]`)) : fail(p, 'array', v))
 const textLine: Check = (v, p) => {
   str(v, p)
-  if (Array.from(v as string).length > LEVELS_LINE_MAX) fail(p, `≤ ${LEVELS_LINE_MAX} code points`, v)
+  if (Array.from(v as string).length > FLEET_LINE_MAX) fail(p, `≤ ${FLEET_LINE_MAX} code points`, v)
 }
 
 /** Required keys, plus optional ones (`key?`), and nothing else. */

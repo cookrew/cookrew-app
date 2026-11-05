@@ -48,7 +48,7 @@ import { ProviderAccess, type DeviceCode, type MintedDevice, type TripProof } fr
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
-import type { MachineProfile } from '../shared/levels'
+import type { MachineProfile } from '../shared/fleet'
 
 export { DEFAULT_LOCK_AFTER_MS }
 

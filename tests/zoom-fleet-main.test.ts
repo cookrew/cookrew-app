@@ -1,17 +1,17 @@
 // THE ZOOM NAVIGATOR'S DEVICES, main side: the window's hold on this desktop's
-// levels service (pushed per sender, released by the sender going), and the
+// fleet service (pushed per sender, released by the sender going), and the
 // account's desktops as the registry lists them, trimmed to directory facts.
 import { describe, expect, it, vi } from 'vitest'
-import type { LevelsEvent, LevelsSnapshot } from '../src/shared/levels'
-import type { LevelsService } from '../src/main/levels/service'
+import type { FleetEvent, FleetSnapshot } from '../src/shared/fleet'
+import type { FleetService } from '../src/main/fleet/service'
 import { parseAccountMachines } from '../src/shared/zoom-fleet'
 import { accountMachines, createFleetHolds, registerZoomFleetIpc, ZOOM_FLEET_EVENT_CHANNEL, type FleetSender } from '../src/main/zoom-fleet'
-import { PROFILE } from './levels-fixture'
+import { PROFILE } from './fleet-fixture'
 
 const ME = '0f8f1c2e-1111-4222-8333-944445555666'
 const OTHER = '1a2b3c4d-aaaa-4bbb-8ccc-ddddeeeeffff'
 
-const snapshot = (rev: number): LevelsSnapshot => ({
+const snapshot = (rev: number): FleetSnapshot => ({
   v: 1,
   rev,
   at: 1,
@@ -20,14 +20,14 @@ const snapshot = (rev: number): LevelsSnapshot => ({
   workspaces: []
 })
 
-const fakeService = (): LevelsService & { opened: number; closed: number; push: (event: LevelsEvent) => void } => {
-  const streams = new Set<(event: LevelsEvent) => void>()
+const fakeService = (): FleetService & { opened: number; closed: number; push: (event: FleetEvent) => void } => {
+  const streams = new Set<(event: FleetEvent) => void>()
   const service = {
     opened: 0,
     closed: 0,
-    push: (event: LevelsEvent) => streams.forEach((send) => send(event)),
+    push: (event: FleetEvent) => streams.forEach((send) => send(event)),
     current: () => ({ snapshot: snapshot(1), body: Buffer.from(''), etag: '' }),
-    subscribe: (send: (event: LevelsEvent) => void) => {
+    subscribe: (send: (event: FleetEvent) => void) => {
       service.opened += 1
       send({ type: 'snapshot', snapshot: snapshot(1) })
       streams.add(send)
@@ -136,7 +136,7 @@ describe('accountMachines (main)', () => {
   })
 })
 
-describe('the window’s hold on the levels feed', () => {
+describe('the window’s hold on the fleet feed', () => {
   it('pushes a snapshot then every delta to the sender, on the fleet channel', () => {
     const service = fakeService()
     const holds = createFleetHolds(() => service)

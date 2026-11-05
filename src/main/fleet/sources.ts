@@ -1,16 +1,16 @@
-// The levels' sources, read off the main-process objects the companion server
+// The fleet feed's sources, read off the main-process objects the companion server
 // already holds — the store, the board's three layers, the dials — so the
-// levels and the board can never disagree about an agent.
+// feed and the board can never disagree about an agent.
 
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { GitInfo, TerminalNodeData } from '../../shared/model'
-import type { Harness, MachineDisplay, MachineProfile } from '../../shared/levels'
+import type { Harness, MachineDisplay, MachineProfile } from '../../shared/fleet'
 import type { BoardSources } from '../board-index'
 import { harnessFor } from '../harness'
 import type { Scrub } from '../scrub'
 import type { WorkspaceStore } from '../store'
-import type { LevelsSources } from './service'
+import type { FleetSources } from './service'
 import { createTraitLookup } from './traits'
 
 /** The harness a card runs: a known agent, a plain shell (no command), or something else. */
@@ -19,7 +19,7 @@ export function harnessOfNode(node: Pick<TerminalNodeData, 'command'>): Harness 
   return harnessFor(node.command)?.id ?? 'other'
 }
 
-export interface LevelsRuntime {
+export interface FleetRuntime {
   store: WorkspaceStore
   board: BoardSources
   turns: EventEmitter
@@ -39,7 +39,7 @@ export interface LevelsRuntime {
   observe?: (ms: number) => void
   now?: () => number
   /** Test seam; the real one reads the brief, else the primary dir's README and package.json. */
-  traits?: LevelsSources['traits']
+  traits?: FleetSources['traits']
 }
 
 const STORE_SIGNALS = ['change', 'workspace-change', 'workspaces', 'switch'] as const
@@ -53,7 +53,7 @@ const TURN_SIGNALS = ['activity', 'turn'] as const
  */
 export const TUNING_REFRESH_MS = 30_000
 
-export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
+export function levelsSourcesFrom(runtime: FleetRuntime): FleetSources {
   const { store, board } = runtime
   const clock = runtime.now ?? ((): number => Date.now())
   let dials: Readonly<Record<string, AgentTuning>> | null = null

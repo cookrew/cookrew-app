@@ -1,4 +1,4 @@
-// THE FIRST LEVELS BUILD, paid at idle rather than by the first request.
+// THE FIRST FLEET BUILD, paid at idle rather than by the first request.
 //
 // Cold, it parses every background workspace file and every turn ledger
 // (~165 ms measured on the owner's store) on Electron main. Done here it is
@@ -47,7 +47,7 @@ export async function runAtIdle(steps: ReadonlyArray<() => void>, clock: Prewarm
       step()
       ran += 1
     } catch (error) {
-      console.error('Levels prewarm step failed:', error)
+      console.error('Fleet prewarm step failed:', error)
     }
   }
   return ran

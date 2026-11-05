@@ -20,7 +20,7 @@ import type { Alternate } from '../../shared/sous-decide'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
-import type { LevelsEvent } from '../../shared/levels'
+import type { FleetEvent } from '../../shared/fleet'
 import { apiPath, clientBase } from './api-base'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
@@ -773,17 +773,17 @@ export function createRemoteApi(): CookrewApi {
       req<BoardSnapshotLike>(
         apiPath(`/api/board${window ? `?window=${encodeURIComponent(window)}` : ''}`)
       ),
-    // THE ZOOM NAVIGATOR'S DEVICES: the companion's levels stream (unnamed
+    // THE ZOOM NAVIGATOR'S DEVICES: the companion's fleet stream (unnamed
     // data frames, a snapshot first; EventSource reconnects onto a fresh
     // snapshot by itself, so only a stream it gave up on — a 401 — is a
     // refusal), and the account's desktops from cookrew.dev itself.
     subscribeZoomFleet: (cb, refused) => {
-      // AHEALING stream, like the canvas's and the terminal's: a levels feed
+      // AHEALING stream, like the canvas's and the terminal's: a fleet feed
       // that dies without a reset (iOS reaping it, the Mac restarting) is
       // otherwise never reopened, and the fleet's workspace list freezes for
       // the life of the page.
       const stream = new ReconnectingStream({
-        open: () => openEventSource(apiPath('/api/levels/stream')),
+        open: () => openEventSource(apiPath('/api/fleet/stream')),
         onState: (state) => {
           if (state === 'failed') refused?.()
         },
@@ -791,9 +791,9 @@ export function createRemoteApi(): CookrewApi {
       })
       stream.on('message', (message) => {
         try {
-          cb(JSON.parse(message.data) as LevelsEvent)
+          cb(JSON.parse(message.data) as FleetEvent)
         } catch (error) {
-          console.error('Levels stream sent a frame that is not JSON:', error)
+          console.error('Fleet stream sent a frame that is not JSON:', error)
         }
       })
       const onVisible = (): void => {
@@ -809,7 +809,7 @@ export function createRemoteApi(): CookrewApi {
     },
     zoomFleetMachines: () => relayAccountMachines(clientBase()),
     // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
-    machineGauges: () => fetchGauges(apiPath('/api/levels/gauges'), authStore().token(), planeFetch),
+    machineGauges: () => fetchGauges(apiPath('/api/fleet/gauges'), authStore().token(), planeFetch),
     machineGaugesOf: (machineId) => relayDesktopGauges(clientBase(), machineId, storedDesktopToken),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { PREWARM_BACKOFF_MS, PREWARM_GIVE_UP_MS, runAtIdle, type PrewarmClock } from '../src/main/levels/prewarm'
-import { fakeDesktop } from './levels-fixture'
+import { PREWARM_BACKOFF_MS, PREWARM_GIVE_UP_MS, runAtIdle, type PrewarmClock } from '../src/main/fleet/prewarm'
+import { fakeDesktop } from './fleet-fixture'
 
 /** A clock whose probe timer fires `lag` ms late while `busyUntil` is ahead. */
 function fakeClock(busyUntil: number, lag = 50): PrewarmClock & { slept: number[] } {
@@ -16,7 +16,7 @@ function fakeClock(busyUntil: number, lag = 50): PrewarmClock & { slept: number[
   }
 }
 
-describe('the levels prewarm', () => {
+describe('the fleet prewarm', () => {
   it('runs each step at a quiet moment, backing off while the loop is busy', async () => {
     const clock = fakeClock(5_000)
     const at: number[] = []

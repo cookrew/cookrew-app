@@ -421,7 +421,7 @@ describe('the child runner', () => {
 
 describe('the source', () => {
   it('holds no synchronous fork or read: main must never wait on the machine', () => {
-    for (const file of ['src/main/machine-gauges.ts', 'src/main/machine-gauges-parse.ts', 'src/main/levels/gauges-route.ts']) {
+    for (const file of ['src/main/machine-gauges.ts', 'src/main/machine-gauges-parse.ts', 'src/main/fleet/gauges-route.ts']) {
       const code = readFileSync(file, 'utf8')
       expect(code).not.toMatch(/\b(execSync|execFileSync|spawnSync|readFileSync|statfsSync|statSync)\b/)
     }

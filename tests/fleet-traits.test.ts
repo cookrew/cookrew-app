@@ -1,12 +1,12 @@
 // Workspace traits: the closed words the desktop distils from the owner's
 // brief, else from the project's package.json and README, and the only thing
-// about the project that reaches the levels snapshot. Every file below lives in
+// about the project that reaches the fleet snapshot. Every file below lives in
 // a fresh dir under the OS tmpdir; every word in it is invented.
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildLevels, type LevelsInput } from '../src/main/levels/build'
+import { buildFleet, type FleetInput } from '../src/main/fleet/build'
 import {
   createTraitLookup,
   nodeTraitIo,
@@ -18,10 +18,10 @@ import {
   TRAIT_RECHECK_MS,
   traitsOf,
   type TraitIo
-} from '../src/main/levels/traits'
+} from '../src/main/fleet/traits'
 import type { WorkspaceMeta, WorkspaceState } from '../src/shared/model'
-import { TRAITS_MAX, WORKSPACE_TRAITS, type WorkspaceTrait } from '../src/shared/levels'
-import { fakeDesktop } from './levels-fixture'
+import { TRAITS_MAX, WORKSPACE_TRAITS, type WorkspaceTrait } from '../src/shared/fleet'
+import { fakeDesktop } from './fleet-fixture'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -293,9 +293,9 @@ describe('createTraitLookup', () => {
   })
 })
 
-describe('buildLevels carries traits', () => {
+describe('buildFleet carries traits', () => {
   const state: WorkspaceState = { name: 'Invented', dir: '/work/x', dirs: ['/work/x'], nodes: [], connections: [] }
-  const input = (traits?: LevelsInput['traits']): LevelsInput => ({
+  const input = (traits?: FleetInput['traits']): FleetInput => ({
     workspaces: [
       { meta: { id: 'w1', name: 'One', dir: '/work/x', dirs: ['/work/x'], icon: '' }, state },
       { meta: { id: 'w2', name: 'Two', dir: '/work/y', dirs: ['/work/y'], icon: '' }, state }
@@ -312,28 +312,28 @@ describe('buildLevels carries traits', () => {
   })
 
   it('sets traits only when there are some', () => {
-    const built = buildLevels(input((m) => (m.id === 'w1' ? ['code', 'ai'] : [])))
+    const built = buildFleet(input((m) => (m.id === 'w1' ? ['code', 'ai'] : [])))
     expect(built.workspaces[0].traits).toEqual(['code', 'ai'])
     expect('traits' in built.workspaces[1]).toBe(false)
-    expect('traits' in buildLevels(input()).workspaces[0]).toBe(false)
+    expect('traits' in buildFleet(input()).workspaces[0]).toBe(false)
   })
 
   it('keeps only closed-list words, at most TRAITS_MAX, and survives a throwing lookup', () => {
     const wild = ['code', 'sk-proj-INVENTED', 'docs', 'home', 'media'] as unknown as WorkspaceTrait[]
-    expect(buildLevels(input(() => wild)).workspaces[0].traits).toEqual(['code', 'docs', 'home'])
+    expect(buildFleet(input(() => wild)).workspaces[0].traits).toEqual(['code', 'docs', 'home'])
     const throwing = (): WorkspaceTrait[] => {
       throw new Error('boom')
     }
-    expect('traits' in buildLevels(input(throwing)).workspaces[0]).toBe(false)
+    expect('traits' in buildFleet(input(throwing)).workspaces[0]).toBe(false)
   })
 
   it('places traits after the icon, so the row serialises the same way every build', () => {
-    const row = buildLevels(input(() => ['play'])).workspaces[0]
+    const row = buildFleet(input(() => ['play'])).workspaces[0]
     expect(Object.keys(row).slice(0, 4)).toEqual(['id', 'name', 'icon', 'traits'])
   })
 })
 
-describe('the levels service with traits', () => {
+describe('the fleet service with traits', () => {
   it('serves the lookup’s traits, and an unchanged lookup is no change', () => {
     let calls = 0
     const desk = fakeDesktop({
