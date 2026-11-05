@@ -49,14 +49,11 @@ export interface PricingDeps extends QuoteDeps {
   /** M2-A3: what this buyer already owns. Read ABOVE the price step. */
   receipts: ReceiptStore
   /**
-   * M2-A2. Required alongside pricing, so "priced implies payable" holds by
-   * construction: a deployment that could quote a price but never verify a
-   * payment would sell things nobody could buy.
-   *
-   * NULL means no real facilitator is configured (facilitator-boot.ts). The
-   * price step then answers 503 and never quotes: the buyer pays the author
-   * directly, so terms from a registry that cannot verify the transfer would
-   * invite money nobody could ever credit.
+   * M2-A2. Required alongside pricing, and null is a value it can hold: no
+   * real facilitator is configured (facilitator-boot.ts). The price step then
+   * answers 503 and never quotes. The buyer pays the author directly, so terms
+   * from a registry that cannot verify the transfer would invite money nobody
+   * could ever credit.
    */
   facilitator: Facilitator | null
 }

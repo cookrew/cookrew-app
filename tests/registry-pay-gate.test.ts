@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { networkInterfaces, tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -389,6 +389,15 @@ describe('the registry binary', () => {
     expect(paid.status).toBe(200)
     const owned = await gate(r.origin, r.id, { authorization: r.authorization })
     expect(owned.status).toBe(200)
+  }, 30_000)
+
+  it('under --dev answers on loopback only, so its stand-in is never on the network', async () => {
+    const lan = Object.values(networkInterfaces()).flat().find((nic) => nic?.family === 'IPv4' && !nic.internal)?.address
+    if (lan === undefined) return
+    const r = await pricedRegistry('dev-bind', ['--dev'])
+    expect((await fetch(`${r.origin}/v1/health`)).status).toBe(200)
+    const port = new URL(r.origin).port
+    await expect(fetch(`http://${lan}:${port}/v1/health`)).rejects.toThrow()
   }, 30_000)
 
   it('refuses --dev on a public origin at boot', async () => {

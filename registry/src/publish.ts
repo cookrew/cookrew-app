@@ -156,6 +156,12 @@ export function publishPreset(deps: PublishDeps, input: PublishInput): PublishRe
   const holder = deps.store.identityOf(manifest.id)
   if (holder !== null && holder !== input.identityId) return { ok: false, reason: 'id_taken' }
 
+  // A price nobody here can verify a payment against is refused before the
+  // payout below is bound, so a refused publish leaves nothing behind.
+  if (manifest.pricing !== undefined && deps.sells !== true) {
+    return { ok: false, reason: 'payment_unavailable' }
+  }
+
   // M2-A1: A PRICE NEEDS A PAYEE, and the check belongs here.
   //
   // The money path is buyer → author (Commander, 2026-08-22), so a priced
@@ -168,9 +174,6 @@ export function publishPreset(deps: PublishDeps, input: PublishInput): PublishRe
   // Bound BEFORE the store write, so a publish that stores bytes always has a
   // payee on record for them — the two must not be able to disagree after a
   // crash between them.
-  if (manifest.pricing !== undefined && deps.sells !== true) {
-    return { ok: false, reason: 'payment_unavailable' }
-  }
   if (manifest.pricing !== undefined) {
     const bound =
       input.payoutAddress !== undefined

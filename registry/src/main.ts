@@ -359,7 +359,9 @@ createRegistry({
   // shell only draws the front page's sample fleet and /me stays the account page.
   strataMe: args.includes('--strata-me') || process.env.STRATA_ME === '1',
   authorize: makeAuthorize(store, identity, pricing)
-}).listen(PORT, () => {
+  // --dev answers on loopback alone: its stand-in settles anything and /v1/dev
+  // forgets every credential, and the origin check above only covers the name.
+}).listen(PORT, DEV ? '127.0.0.1' : undefined, () => {
   // Print the ORIGIN, not a different spelling of the same port. The old banner
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.

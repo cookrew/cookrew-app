@@ -464,7 +464,7 @@ export function createRegistry(deps: RegistryDeps): Server {
               // newest version would be describing a different preset than the
               // one the link actually hands over.
               version: summary.version,
-              gated: summary.visibility === 'identified',
+              gated: store.gateOf(summary.id) === 'identified',
               origin: originOf(request.headers.host),
               id: summary.id
             })
