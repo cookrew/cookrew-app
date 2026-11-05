@@ -1,5 +1,6 @@
 import type { CanvasNode } from '../../shared/model'
 import { browserTabs } from '../../shared/model'
+import { secretSlotsOf } from '../../shared/secret-slot'
 import type { TurnPhase } from '../../shared/turn'
 
 /**
@@ -108,4 +109,55 @@ export function closePrompt(
     confirmLabel: 'Close agent',
     danger: working || waiting,
   }
+}
+
+/**
+ * WHAT A NOTE'S DELETE CAN TAKE WITH IT (owner, 2026-11-05). A sealed value
+ * lives in the store, not in the note, so removing the card leaves it readable
+ * unless the owner says otherwise. `remove` is what the dialog may offer: the
+ * note's slots that are sealed. `shared` is held back, because another note on
+ * this canvas still has a slot for it and would be left pointing at nothing.
+ */
+export interface NoteSecrets {
+  remove: string[]
+  shared: { name: string; by: string }[]
+}
+
+export function noteSecrets(node: CanvasNode, sealed: readonly string[], cards: readonly CanvasNode[]): NoteSecrets {
+  if (node.kind !== 'note') return { remove: [], shared: [] }
+  const others = cards.filter((card) => card.kind === 'note' && card.id !== node.id)
+  const holder = (name: string): CanvasNode | undefined =>
+    others.find((card) => card.kind === 'note' && secretSlotsOf(card.content).includes(name))
+  const names = secretSlotsOf(node.content).filter((name) => sealed.includes(name))
+  return {
+    remove: names.filter((name) => holder(name) === undefined),
+    shared: names.flatMap((name) => {
+      const by = holder(name)
+      return by ? [{ name, by: by.name }] : []
+    })
+  }
+}
+
+/** The confirm button, naming what it will do. */
+export function closeLabel(label: string, values: number): string {
+  return values === 0 ? label : `${label} and ${values} ${values === 1 ? 'value' : 'values'}`
+}
+
+/**
+ * The values, one at a time, stopping at the first that fails. They go before
+ * the card: a failure leaves the note, and with it the slot to try again from.
+ * A name already gone answers false, which is what was asked for.
+ */
+export async function removeSecrets(
+  names: readonly string[],
+  remove: (name: string) => Promise<boolean>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  for (const name of names) {
+    try {
+      await remove(name)
+    } catch (reason) {
+      return { ok: false, error: `${name} could not be deleted: ${reason instanceof Error ? reason.message : String(reason)}` }
+    }
+  }
+  return { ok: true }
 }
