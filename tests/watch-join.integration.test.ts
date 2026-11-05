@@ -74,6 +74,9 @@ const watch = (origin: string, code: string): Promise<string[]> =>
 run('a watch away from home, on one code', () => {
   let site: Up
   let mac: Up
+  /** Somebody else's machine on an address the watch remembers. */
+  let stranger: Up
+  const strangerHeard: { path: string; authorization?: string }[] = []
   let dir = ''
   let token = ''
   let phone = ''
@@ -93,7 +96,10 @@ run('a watch away from home, on one code', () => {
     ({
       pairing,
       desktopName: () => 'This Mac',
-      bases: () => [{ kind: 'lan', url: 'http://192.168.2.40:8639' }],
+      bases: () => [
+        { kind: 'lan', url: stranger.origin },
+        { kind: 'lan', url: mac.origin }
+      ],
       canvas: () => ({ nodes: [], connections: [] }),
       accountKind: () => 'password',
       invite: async (current: string) => {
@@ -131,6 +137,13 @@ run('a watch away from home, on one code', () => {
       board: { activeWorkspaceId: () => 'ws', live: () => [], ledger: () => new Map(), registry: () => [] },
       latestCheckpoint: async () => null
     } as unknown as MobileApiDeps
+    stranger = await listen(
+      createServer((request, response) => {
+        strangerHeard.push({ path: request.url ?? '', authorization: request.headers.authorization })
+        response.writeHead(401, { 'content-type': 'application/json' })
+        response.end('{"error":"Unauthorized"}')
+      })
+    )
     mac = await listen(
       createServer((request, response) => {
         const url = new URL(request.url ?? '/', 'http://localhost')
@@ -191,6 +204,7 @@ run('a watch away from home, on one code', () => {
     setWatchHost(null)
     await site.close()
     await mac.close()
+    await stranger.close()
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -207,20 +221,24 @@ run('a watch away from home, on one code', () => {
     const invited = await invite(PASSWORD)
     expect(invited.ok).toBe(true)
     const lines = await watch(site.origin, invited.code as string)
-    expect(lines.slice(0, 9)).toEqual([
+    expect(lines.slice(0, 10)).toEqual([
       'step joining',
       'step finding',
       'paired This Mac as owner',
-      'bases lan,relay',
+      'bases lan,lan,relay',
       'cards 0 line relay',
+      'cards-home 0 line direct',
       'renewed true true',
       'cards-after-renew 0',
       'unpaired',
       'stopped unpaired'
     ])
     // The Mac spent its copy on the first claim: the same code does not pair twice.
-    expect(lines[9]).toContain('ended')
-    expect(lines[10]).toBe('session-ended signedOut')
+    expect(lines[10]).toContain('ended')
+    expect(lines[11]).toBe('session-ended signedOut')
+    // The stranger was asked for proof, had none, and never saw the token.
+    expect(strangerHeard.length).toBeGreaterThan(0)
+    expect(strangerHeard.every((heard) => heard.path.startsWith('/api/watch/hello') && !heard.authorization)).toBe(true)
     expect(pairing.paired).toBe(false)
   }, 60_000)
 })

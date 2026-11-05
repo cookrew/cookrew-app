@@ -8655,7 +8655,13 @@ function registerIpc(handlers: RestoreHandlers): void {
   )
   ipcMain.handle(
     'watch:state',
-    ownerOnly(() => ({ paired: watchPairing.paired, pending: watchPairing.pending(), account: watchHost.accountKind() }))
+    ownerOnly(() => ({
+      paired: watchPairing.paired,
+      pending: watchPairing.pending(),
+      account: watchHost.accountKind(),
+      sealed: true,
+      claims: watchPairing.claims
+    }))
   )
   ipcMain.handle(
     'watch:invite',

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -18,15 +19,23 @@ public struct WatchSession: Equatable, Sendable {
 
 /** An address that stays on the owner's own network or tailnet: the only place plain HTTP may go. */
 func isPrivateHost(_ host: String) -> Bool {
-  if host.hasSuffix(".local") || host == "localhost" || host.hasPrefix("127.") { return true }
-  let parts = host.split(separator: ".").compactMap { Int($0) }
-  guard parts.count == 4 else { return false }
+  if host.hasSuffix(".local") || host == "localhost" { return true }
+  // Four numbers and nothing else: 10.1.2.3.evil.com is a public name.
+  let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+  let parts = labels.compactMap { Int($0) }
+  guard labels.count == 4, parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
   switch (parts[0], parts[1]) {
-  case (10, _), (192, 168): return true
+  case (10, _), (127, _), (192, 168): return true
   case (172, 16...31): return true
   case (100, 64...127): return true // Tailscale's range, which is encrypted under the HTTP.
   default: return false
   }
+}
+
+/** What a Mac signs to prove it holds this token (src/main/watch-pairing.ts · watchProof). */
+public func helloProof(token: String, nonce: String) -> String {
+  let code = HMAC<SHA256>.authenticationCode(for: Data("cookrew-watch-hello/1 \(nonce)".utf8), using: SymmetricKey(data: Data(token.utf8)))
+  return base64urlEncoded(Data(code))
 }
 
 /** The token never goes in the clear to an address on the open internet. */

@@ -12,6 +12,7 @@ private let studioId = "22222222-2222-4222-8222-222222222222"
 private final class FakeRegistry: RegistryAPI, @unchecked Sendable {
   var joinResult: Result<JoinReply, RegistryError> = .success(JoinReply(token: "session", exp: 5_000, deviceId: "dev", username: "drej"))
   var desktopsResult: Result<[WatchDesktop], RegistryError> = .success([WatchDesktop(deviceId: macId, name: "MacBook Pro")])
+  var desktopsByToken: [String: [WatchDesktop]] = [:]
   var claims: [String: Result<ClaimReply, RegistryError>] = [:]
   var log: [String] = []
 
@@ -22,6 +23,7 @@ private final class FakeRegistry: RegistryAPI, @unchecked Sendable {
 
   func desktops(token: String) async throws -> [WatchDesktop] {
     log.append("desktops \(token)")
+    if let held = desktopsByToken[token] { return held }
     return try desktopsResult.get()
   }
 
@@ -32,8 +34,12 @@ private final class FakeRegistry: RegistryAPI, @unchecked Sendable {
     return try result.get()
   }
 
+  var renewFails = false
+
   func renew(account: WatchAccount, device: WatchDevice) async throws -> Renewed {
     log.append("renew")
+    await Task.yield()
+    if renewFails { throw RegistryError.unreachable }
     return Renewed(token: "fresh", exp: 9_000)
   }
 
@@ -143,6 +149,31 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     #expect(outcome == .failed(.slow))
   }
 
+  @Test func testACodeFromAnotherAccountGetsInWhenEveryHeldMacRefuses() async {
+    let api = FakeRegistry()
+    let otherMac = "33333333-3333-4333-8333-333333333333"
+    api.joinResult = .success(JoinReply(token: "other", exp: 5_000, deviceId: "dev", username: "sam"))
+    api.desktopsByToken["other"] = [WatchDesktop(deviceId: otherMac, name: "Theirs")]
+    api.claims[macId] = .failure(.claim("no-code"))
+    api.claims[otherMac] = .success(reply)
+    guard case .paired(_, let account) = await pair(api, held: held) else { Issue.record("second try"); return }
+    #expect(account.username == "sam")
+  }
+
+  @Test func testASpentCodeUnderAHeldSessionKeepsTheMacsWords() async {
+    let api = FakeRegistry()
+    api.claims[macId] = .failure(.claim("no-code"))
+    api.joinResult = .failure(.wrongCode)
+    let outcome = await pair(api, held: held)
+    #expect(outcome == .failed(.ended))
+  }
+
+  @Test func testACodeLostWithItsReplyIsSaidToHaveEndedNotBeenMistyped() {
+    #expect(afterLostReply(.wrongCode, unanswered: true) == .ended)
+    #expect(afterLostReply(.wrongCode, unanswered: false) == .wrongCode)
+    #expect(afterLostReply(.macAway, unanswered: true) == .macAway)
+  }
+
   @Test func testNoMacOnTheAccountIsAMacAway() async {
     let api = FakeRegistry()
     api.desktopsResult = .success([])
@@ -196,6 +227,38 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     #expect(kept.accounts.map(\.token) == ["fresh"])
   }
 
+  @Test func testTwoPollsInTheLastWeekRenewOnce() async {
+    let api = FakeRegistry()
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { 1 }, keep: { _ in })
+    async let first = keeper.token()
+    async let second = keeper.token()
+    let tokens = await [first, second]
+    #expect(tokens == ["fresh", "fresh"])
+    #expect(api.log == ["renew"])
+  }
+
+  @Test func testAFailedRenewalRestsBeforeTryingAgain() async {
+    let api = FakeRegistry()
+    api.renewFails = true
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { 1 }, keep: { _ in })
+    _ = await keeper.token()
+    let token = await keeper.token()
+    #expect(token == "old")
+    #expect(api.log == ["renew"])
+  }
+
+  @Test func testATokenTheRelayRefusedIsReplacedOnlyByOneAlreadyRenewed() async {
+    let api = FakeRegistry()
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week * 3)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { 1 }, keep: { _ in })
+    #expect(await keeper.newer(than: "old") == nil)
+    #expect(api.log.isEmpty)
+    #expect(await keeper.renew())
+    #expect(await keeper.newer(than: "old") == "fresh")
+  }
+
   @Test func testLeavesAFreshSessionAlone() async {
     let api = FakeRegistry()
     let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week * 3)
@@ -203,6 +266,23 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     let token = await keeper.token()
     #expect(token == "old")
     #expect(api.log.isEmpty)
+  }
+}
+
+@Suite struct PrivateHostTests {
+  @Test func testOnlyARealPrivateAddressCounts() {
+    for host in ["192.168.2.40", "10.1.2.3", "172.16.0.1", "100.64.1.2", "127.0.0.1", "localhost", "mac.local"] {
+      #expect(isPrivateHost(host), "\(host)")
+    }
+    for host in ["127.evil.com", "10.1.2.3.evil.com", "192.168.1.1.nip.io", "10.1.2.999", "8.8.8.8", "172.32.0.1"] {
+      #expect(!isPrivateHost(host), "\(host)")
+    }
+  }
+}
+
+@Suite struct HelloTests {
+  @Test func testTheProofIsTheMacsByteForByte() {
+    #expect(helloProof(token: "mac-token", nonce: "nonce-0123456789abcdef") == "cBtQe4csbmPvxeVVg4OJ0NkU0FBGhTBQIZcCGH5GFX8")
   }
 }
 
@@ -223,12 +303,23 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
 private final class Scripted: URLProtocol, @unchecked Sendable {
   nonisolated(unsafe) static var answers: [(host: String, status: Int, body: String)] = []
   nonisolated(unsafe) static var seen: [URLRequest] = []
+  /** Hosts that answer a hello without holding the token. */
+  nonisolated(unsafe) static var strangers: Set<String> = []
 
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
     Self.seen.append(request)
     let host = request.url?.host() ?? ""
+    if request.url?.path().hasSuffix("api/watch/hello") == true {
+      let nonce = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value ?? ""
+      let proof = Self.strangers.contains(host) ? "nope" : helloProof(token: "mac-token", nonce: nonce)
+      let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: Data(#"{"proof":"\#(proof)"}"#.utf8))
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
     guard let index = Self.answers.firstIndex(where: { $0.host == host }) else {
       client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
       return
@@ -244,12 +335,13 @@ private final class Scripted: URLProtocol, @unchecked Sendable {
 
 private final class Pass: RelayPass, @unchecked Sendable {
   let host = "cookrew.dev"
-  var renews = true
-  var renewed = 0
-  func token() async -> String { renewed > 0 ? "fresh" : "stale" }
-  func renewNow() async -> Bool {
-    renewed += 1
-    return renews
+  let port: Int? = nil
+  var replacement: String? = "fresh"
+  var asked = 0
+  func token() async -> String { "stale" }
+  func newer(than token: String) async -> String? {
+    asked += 1
+    return replacement
   }
 }
 
@@ -270,24 +362,31 @@ private final class Pass: RelayPass, @unchecked Sendable {
   init() {
     Scripted.answers = []
     Scripted.seen = []
+    Scripted.strangers = []
+  }
+
+  private func relayed(_ request: (URLRequest) -> Bool = { _ in true }) -> [URLRequest] {
+    Scripted.seen.filter { $0.url?.path().hasSuffix("api/watch/hello") != true }.filter(request)
   }
 
   @Test func testTheAccountCookieGoesToTheRelayAndNowhereElse() async throws {
     Scripted.answers = [("192.168.2.40", 200, cardsBody)]
     _ = try await line(Pass()).cards(tag: nil)
-    #expect(Scripted.seen[0].value(forHTTPHeaderField: "cookie") == nil)
+    #expect(relayed()[0].value(forHTTPHeaderField: "cookie") == nil)
 
     Scripted.seen = []
+    Scripted.strangers = ["192.168.2.40"]
     Scripted.answers = [("cookrew.dev", 200, cardsBody)]
     let api = line(Pass())
     _ = try await api.cards(tag: nil)
-    let relayed = try #require(Scripted.seen.last)
-    #expect(relayed.value(forHTTPHeaderField: "cookie") == "__Host-cr_session=stale")
-    #expect(relayed.value(forHTTPHeaderField: "authorization") == "Bearer mac-token")
+    let carried = try #require(relayed().last)
+    #expect(carried.value(forHTTPHeaderField: "cookie") == "__Host-cr_session=stale")
+    #expect(carried.value(forHTTPHeaderField: "authorization") == "Bearer mac-token")
     #expect(api.line == .relay)
   }
 
   @Test func testAMacOffTheRelayIsUnreachableNotARefusal() async {
+    Scripted.strangers = ["192.168.2.40"]
     Scripted.answers = [("cookrew.dev", 503, #"{"error":"no_link"}"#)]
     do {
       _ = try await line(Pass()).cards(tag: nil)
@@ -297,18 +396,21 @@ private final class Pass: RelayPass, @unchecked Sendable {
     }
   }
 
-  @Test func testASessionTheRelayRefusesIsRenewedOnceAndAskedAgain() async throws {
+  @Test func testARefusedTokenIsAskedAgainWithTheOneThatReplacedIt() async throws {
+    Scripted.strangers = ["192.168.2.40"]
     Scripted.answers = [("cookrew.dev", 401, #"{"error":"unauthenticated"}"#), ("cookrew.dev", 200, cardsBody)]
     let pass = Pass()
     _ = try await line(pass).cards(tag: nil)
-    #expect(pass.renewed == 1)
-    #expect(Scripted.seen.last?.value(forHTTPHeaderField: "cookie") == "__Host-cr_session=fresh")
+    #expect(pass.asked == 1)
+    let last = relayed().last
+    #expect(last?.value(forHTTPHeaderField: "cookie") == "__Host-cr_session=fresh")
   }
 
-  @Test func testASessionThatCannotBeRenewedIsSignedOut() async {
+  @Test func testARefusedTokenWithNothingNewerIsSignedOut() async {
+    Scripted.strangers = ["192.168.2.40"]
     Scripted.answers = [("cookrew.dev", 401, #"{"error":"unauthenticated"}"#)]
     let pass = Pass()
-    pass.renews = false
+    pass.replacement = nil
     do {
       _ = try await line(pass).cards(tag: nil)
       Issue.record("answered")
@@ -317,7 +419,49 @@ private final class Pass: RelayPass, @unchecked Sendable {
     }
   }
 
+  @Test func testTheRetryBeingRefusedIsNotTheMacForgettingThisWatch() async {
+    Scripted.strangers = ["192.168.2.40"]
+    Scripted.answers = [("cookrew.dev", 401, #"{"error":"unauthenticated"}"#), ("cookrew.dev", 401, #"{"error":"unauthenticated"}"#)]
+    do {
+      _ = try await line(Pass()).cards(tag: nil)
+      Issue.record("answered")
+    } catch {
+      #expect(error as? WatchError == .signedOut)
+    }
+  }
+
+  @Test func testAStrangerAtTheOldAddressNeverSeesTheTokenAndCannotUnpair() async throws {
+    Scripted.strangers = ["192.168.2.40"]
+    Scripted.answers = [("192.168.2.40", 401, #"{"error":"Unauthorized"}"#), ("cookrew.dev", 200, cardsBody)]
+    let api = line(Pass())
+    _ = try await api.cards(tag: nil)
+    #expect(api.line == .relay)
+    let heard = Scripted.seen.filter { $0.url?.host() == "192.168.2.40" }
+    #expect(heard.count == 1)
+    #expect(heard.allSatisfy { $0.url?.path().hasSuffix("api/watch/hello") == true && $0.value(forHTTPHeaderField: "authorization") == nil })
+  }
+
+  @Test func testAWriteARelayGatewayDroppedIsNotSentDownTheNextRoad() async {
+    Scripted.answers = [("cookrew.dev", 504, "{}"), ("192.168.2.40", 200, "{}")]
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [Scripted.self]
+    let api = HTTPWatchAPI(
+      bases: [URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")!, URL(string: "http://192.168.2.40:8639")!],
+      token: "mac-token",
+      session: URLSession(configuration: config),
+      relay: Pass()
+    )
+    do {
+      try await api.stop("agent")
+      Issue.record("sent")
+    } catch {
+      #expect(error as? WatchError == .unreachable)
+    }
+    #expect(relayed().count == 1)
+  }
+
   @Test func testTheMacsOwn401StillMeansThisWatchWasForgotten() async {
+    Scripted.strangers = ["192.168.2.40"]
     Scripted.answers = [("cookrew.dev", 401, #"{"error":"Unauthorized"}"#)]
     do {
       _ = try await line(Pass()).cards(tag: nil)
@@ -336,6 +480,44 @@ private final class Pass: RelayPass, @unchecked Sendable {
       relay: Pass()
     )
     try await api.stop("agent")
-    #expect(Scripted.seen.count == 2)
+    #expect(relayed().count == 2)
+  }
+}
+
+// One suite with the tests above: Scripted is shared, and suites run side by side.
+extension RelayLineTests {
+  private var relay: URL { URL(string: "https://cookrew.dev/relay/@drej/desktop/\(macId)")! }
+
+  private func claim(_ status: Int, _ body: String) async -> RegistryError? {
+    Scripted.seen = []
+    Scripted.strangers = []
+    Scripted.answers = [("cookrew.dev", status, body)]
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [Scripted.self]
+    let api = HTTPRegistryAPI(origin: URL(string: registry)!, session: URLSession(configuration: config))
+    do {
+      _ = try await api.claim(relay: relay, code: "K7QM-2XPD", token: "session")
+      return nil
+    } catch {
+      return error as? RegistryError
+    }
+  }
+
+  @Test func testOnlyTheRelaysOwn401IsADeadSession() async {
+    #expect(await claim(401, #"{"error":"unauthenticated"}"#) == .signedOut)
+  }
+
+  @Test func testAMacThatKnowsNoWatchRouteIsJustAMacThatSaidNo() async {
+    #expect(await claim(401, #"{"error":"Unauthorized — open the pairing URL"}"#) == .claim("no-code"))
+  }
+
+  @Test func testAGatewayIsNotAVerdictOnTheCode() async {
+    #expect(await claim(502, "{}") == .unreachable)
+    #expect(await claim(503, "{}") == .unreachable)
+    #expect(await claim(504, "{}") == .unreachable)
+  }
+
+  @Test func testTheMacsReasonComesThrough() async {
+    #expect(await claim(403, #"{"ok":false,"reason":"wrong"}"#) == .claim("wrong"))
   }
 }

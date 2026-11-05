@@ -117,9 +117,11 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
     let reason = try? JSONDecoder().decode(Reason.self, from: data)
     switch status {
     case 200: return try JSONDecoder().decode(ClaimReply.self, from: data)
-    case 401: throw RegistryError.signedOut
+    // The relay's refusal of the session. A Mac too old to know this route says
+    // 401 as well, and that one is only a Mac saying no: the next may say yes.
+    case 401 where reason?.error == "unauthenticated": throw RegistryError.signedOut
     case 429: throw RegistryError.slow
-    case 503: throw RegistryError.unreachable
+    case 502, 503, 504: throw RegistryError.unreachable
     default: throw RegistryError.claim(reason?.reason ?? "no-code")
     }
   }

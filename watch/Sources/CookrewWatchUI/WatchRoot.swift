@@ -59,6 +59,10 @@ final class WatchApp {
   private(set) var digits = ""
   private(set) var busy = false
   private(set) var failure: PairFailure?
+  private var submitting = false
+  private var forgetting = false
+  /** A code whose join never got its reply: the registry may have spent it. */
+  private var unanswered: String?
 
   init(address: String, registry origin: String) {
     self.address = address
@@ -102,6 +106,9 @@ final class WatchApp {
   }
 
   func submit() async {
+    guard !submitting else { return }
+    submitting = true
+    defer { submitting = false }
     stage = .working(.joining)
     let vault = self.vault
     let outcome = await pairWatch(
@@ -122,7 +129,10 @@ final class WatchApp {
     )
     switch outcome {
     case .paired(let session, _): await finish(session)
-    case .failed(let why): stopped(why)
+    case .failed(let why):
+      let lost = unanswered == typed
+      unanswered = why == .noNetwork && vault.loadAccount() == nil ? typed : nil
+      stopped(afterLostReply(why, unanswered: lost))
     }
   }
 
@@ -213,12 +223,15 @@ final class WatchApp {
 
   /** The owner's own Forget, from the wrist: the Mac ends the token, the account the session. */
   func forget() async {
+    forgetting = true
+    defer { forgetting = false }
     try? await store?.client.unpair()
     leave(to: .welcome)
   }
 
-  /** The Mac forgot this watch, or the account's session ended. */
-  func lost(_ why: PairNotice) {
+  /** The Mac forgot this watch, or the account's session ended. Said by the store in use, not one already left. */
+  func lost(_ why: PairNotice, by reporter: WatchStore) {
+    guard store === reporter, !forgetting else { return }
     leave(to: .notice(why))
   }
 }
@@ -309,7 +322,7 @@ public struct WatchRoot: View {
           .task(id: phase) {
             guard phase == .active else { return }
             await store.run()
-            if store.unpaired { app.lost(.unpaired) } else if store.signedOut { app.lost(.signedOut) }
+            if store.unpaired { app.lost(.unpaired, by: store) } else if store.signedOut { app.lost(.signedOut, by: store) }
           }
       } else {
         PairingView(app: app).wholeGlass()
@@ -344,9 +357,9 @@ private struct PairingView: View {
     case .slow:
       NoticeView(title: "Too many tries", words: "Wait a minute, then try again.", action: "Back", onAction: app.enterCode)
     case .macAway:
-      NoticeView(title: "Can't reach your Mac", words: "You're in your account. Wake the Mac, then try again.", action: "Try again", onAction: { Task { await app.submit() } })
+      NoticeView(title: "Can't reach your Mac", words: "You're in your account. Wake the Mac, then try again.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: { app.show(.welcome) })
     case .noNetwork:
-      NoticeView(title: "No connection", words: "The watch can't reach cookrew.dev.", action: "Try again", onAction: { Task { await app.submit() } })
+      NoticeView(title: "No connection", words: "The watch can't reach cookrew.dev.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: { app.show(.welcome) })
     case .locked:
       NoticeView(title: "Account locked", words: "Change your password on your Mac, then get a new code.", action: "OK", onAction: { app.show(.welcome) })
     case .unpaired:

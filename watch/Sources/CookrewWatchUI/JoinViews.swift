@@ -91,9 +91,9 @@ public struct CodePad: View {
       .frame(width: 10.5)
   }
 
-  private func key(_ word: String, height: CGFloat, action: @escaping () -> Void) -> some View {
+  private func key<Face: View>(height: CGFloat, action: @escaping () -> Void, @ViewBuilder face: () -> Face) -> some View {
     Button(action: action) {
-      Text(word)
+      face()
         .font(.system(size: 15, weight: .medium, design: .monospaced))
         .foregroundStyle(ink.ink)
         .frame(maxWidth: .infinity)
@@ -105,7 +105,7 @@ public struct CodePad: View {
   }
 
   private func letter(_ index: Int, height: CGFloat) -> some View {
-    key(alphabet[index], height: height) { onKey(alphabet[index]) }
+    key(height: height, action: { onKey(alphabet[index]) }) { Text(alphabet[index]) }
   }
 
   public var body: some View {
@@ -132,7 +132,9 @@ public struct CodePad: View {
         HStack(spacing: 2) {
           letter(30, height: height)
           letter(31, height: height)
-          key("⌫", height: height, action: onDelete).frame(width: (space.size.width - 8 - 10) / 6 * 4 + 6)
+          key(height: height, action: onDelete) { Image(systemName: "delete.left") }
+            .frame(width: (space.size.width - 8 - 10) / 6 * 4 + 6)
+            .accessibilityLabel("Delete")
         }
       }
       .padding(.horizontal, 4)
@@ -185,14 +187,17 @@ public struct NoticeView: View {
   let action: String
   let status: CardStatus
   let onAction: () -> Void
+  /** A way out, for a notice whose one action may keep ending here. */
+  let onStartOver: (() -> Void)?
   @Environment(\.ink) private var ink
 
-  public init(title: String, words: String, action: String, status: CardStatus = .offline, onAction: @escaping () -> Void) {
+  public init(title: String, words: String, action: String, status: CardStatus = .offline, onAction: @escaping () -> Void, onStartOver: (() -> Void)? = nil) {
     self.title = title
     self.words = words
     self.action = action
     self.status = status
     self.onAction = onAction
+    self.onStartOver = onStartOver
   }
 
   public var body: some View {
@@ -201,7 +206,14 @@ public struct NoticeView: View {
       Text(title).font(InkType.name(16)).foregroundStyle(ink.ink).multilineTextAlignment(.center)
       Text(words).font(InkType.words(13)).foregroundStyle(ink.soft).multilineTextAlignment(.center).padding(.horizontal, 12)
       Spacer(minLength: 0)
-      InkButton(title: action, action: onAction).padding(.horizontal, 6).padding(.bottom, 6)
+      InkButton(title: action, action: onAction).padding(.horizontal, 6).padding(.bottom, onStartOver == nil ? 6 : 0)
+      if let onStartOver {
+        Button(action: onStartOver) {
+          Text("Start over").font(InkType.words(12)).foregroundStyle(ink.muted).frame(height: 20)
+        }
+        .buttonStyle(.plain)
+        .padding(.bottom, 3)
+      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(ink.paper)

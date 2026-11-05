@@ -172,6 +172,27 @@ export async function handleWatchClaim(
   return true
 }
 
+/** Long enough to be unguessable, short enough to sign without thinking. */
+const HELLO_NONCE = /^[A-Za-z0-9_-]{16,64}$/
+
+/**
+ * Open, like the claim: a watch asks this before its token goes anywhere near a
+ * plain-HTTP address. It answers only with a signature, so it gives away nothing
+ * but that a watch is paired here.
+ */
+export function handleWatchHello(response: http.ServerResponse, url: URL, method: string, path: string): boolean {
+  if (method !== 'GET' || path !== '/api/watch/hello' || !host) return false
+  const nonce = url.searchParams.get('n') ?? ''
+  if (!HELLO_NONCE.test(nonce)) {
+    respondJson(response, 400, { error: 'A hello needs a nonce.' })
+    return true
+  }
+  const proof = host.pairing.proof(nonce)
+  if (proof === null) respondJson(response, 404, { error: 'No watch is paired here.' })
+  else respondJson(response, 200, { proof })
+  return true
+}
+
 /**
  * An agent's last turn, as a card says it: the words the turn ENDED on. A block's
  * `reply` joins every message of the turn, and its first line is the turn's
@@ -322,7 +343,7 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (ctx.owner && method === 'GET' && path === '/api/watch/pairing') {
-    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind() })
+    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind(), sealed: ctx.sealed(), claims: current.pairing.claims })
     return true
   }
   if (ctx.owner && method === 'POST' && path === '/api/watch/invite') {

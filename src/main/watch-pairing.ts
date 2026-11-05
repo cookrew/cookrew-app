@@ -21,7 +21,7 @@
 //
 // One watch at a time: a new claim replaces the old token.
 
-import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -55,6 +55,15 @@ const same = (a: string, b: string): boolean => {
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
+/**
+ * What a Mac says to prove it holds a watch's token, without sending it. A watch
+ * that roams remembers a plain-HTTP address that may be somebody else's machine
+ * on the next network, so it asks this first and carries its token only to an
+ * address that answers right. Byte for byte with the watch (Session.swift).
+ */
+export const watchProof = (token: string, nonce: string): string =>
+  createHmac('sha256', token).update(`cookrew-watch-hello/1 ${nonce}`).digest('base64url')
+
 /** A code as a person types it, as a code is kept: one case, no separators. */
 const plainCode = (code: string): string => code.replace(/[\s-]/g, '').toUpperCase()
 
@@ -65,6 +74,7 @@ export class WatchPairing {
   private live: LiveCode | null = null
   private fails: readonly number[] = []
   private pausedUntil = 0
+  private claimed = 0
 
   constructor(options: WatchPairingOptions = {}) {
     this.file = options.file ?? path.join(homedir(), '.cookrew', 'watch-token')
@@ -95,6 +105,16 @@ export class WatchPairing {
 
   get paired(): boolean {
     return this.token !== null
+  }
+
+  /** Watches that have arrived since this app started: how a sheet tells one arrived from a code going away. */
+  get claims(): number {
+    return this.claimed
+  }
+
+  /** The proof for this nonce, or null with no watch paired. */
+  proof(nonce: string): string | null {
+    return this.token === null ? null : watchProof(this.token, nonce)
   }
 
   accepts(candidate: string | null | undefined): boolean {
@@ -150,6 +170,7 @@ export class WatchPairing {
     this.live = null
     const token = randomBytes(24).toString('base64url')
     this.token = token
+    this.claimed += 1
     this.write(token)
     return { ok: true, token }
   }

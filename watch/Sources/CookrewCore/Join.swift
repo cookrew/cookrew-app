@@ -113,15 +113,18 @@ public func pairWatch(
   }
   step(.finding)
   var found = await findMac(code: code, account: account, api: api)
-  // A session the registry ended on a watch that thought it held one: this code
-  // has not been spent, so it can still get the watch back in.
-  if case .failed(.signedOut) = found, standing != nil {
+  // Under a session the watch already held, a refusal may only mean the wrong
+  // door: the session ended, or this code is another account's. If the code has
+  // not been spent it still gets the watch in, so it has one go at that.
+  if case .failed(let why) = found, standing != nil, [.signedOut, .ended, .wrongCode].contains(why) {
     switch await enter() {
-    case .success(let joined): account = joined
-    case .failure(let why): return .failed(why)
+    case .success(let joined):
+      account = joined
+      step(.finding)
+      found = await findMac(code: code, account: account, api: api)
+    case .failure(let entry):
+      return .failed(why == .signedOut ? entry : why)
     }
-    step(.finding)
-    found = await findMac(code: code, account: account, api: api)
   }
   switch found {
   case .failed(let why):
@@ -132,21 +135,41 @@ public func pairWatch(
   }
 }
 
-/** What opens the relay, for HTTPWatchAPI: the session, and renewing it. */
-public protocol RelayPass: Sendable {
-  var host: String { get }
-  func token() async -> String
-  func renewNow() async -> Bool
+/**
+ * The registry spends a code before it answers, so a join whose reply was lost has
+ * used the code up. Tried again it reads as wrong, and it was not mistyped.
+ */
+public func afterLostReply(_ why: JoinFailure, unanswered: Bool) -> JoinFailure {
+  unanswered && why == .wrongCode ? .ended : why
 }
 
-/** Holds the session and renews it on the device key, a week out or when refused. */
+/** What opens the relay, for HTTPWatchAPI. */
+public protocol RelayPass: Sendable {
+  var host: String { get }
+  var port: Int? { get }
+  func token() async -> String
+  /** The token that has replaced this refused one, if there is one. */
+  func newer(than token: String) async -> String?
+}
+
+/** After a renewal fails, how long before asking again: the registry allows five a minute. */
+let renewRestMs: Double = 60 * 1000
+
+/**
+ * Holds the session and renews it on the device key, a week before it ends, as a
+ * Mac does. Never after: a session that has ended was ended by the clock or by
+ * "not me", and the key must not be able to bring it back.
+ */
 public actor AccountKeeper: RelayPass {
   public nonisolated let host: String
+  public nonisolated let port: Int?
   private var account: WatchAccount
   private let device: WatchDevice
   private let api: RegistryAPI
   private let now: @Sendable () -> Double
   private let keep: @Sendable (WatchAccount) -> Void
+  private var renewing: Task<Bool, Never>?
+  private var restUntil: Double = 0
 
   public init(
     account: WatchAccount,
@@ -156,6 +179,7 @@ public actor AccountKeeper: RelayPass {
     keep: @escaping @Sendable (WatchAccount) -> Void
   ) {
     self.host = URL(string: account.registry)?.host() ?? ""
+    self.port = URL(string: account.registry)?.port
     self.account = account
     self.device = device
     self.api = api
@@ -164,12 +188,30 @@ public actor AccountKeeper: RelayPass {
   }
 
   public func token() async -> String {
-    if renewDue(exp: account.exp, now: now()) { _ = await renewNow() }
+    if renewDue(exp: account.exp, now: now()), now() >= restUntil { await renew() }
     return account.token
   }
 
-  public func renewNow() async -> Bool {
-    guard let next = try? await api.renew(account: account, device: device) else { return false }
+  public func newer(than token: String) async -> String? {
+    if let renewing { _ = await renewing.value }
+    return account.token == token ? nil : account.token
+  }
+
+  /** One at a time: each renewal closes the session before it, and two would race to leave a dead token. */
+  @discardableResult public func renew() async -> Bool {
+    if let renewing { return await renewing.value }
+    let task = Task { await renewOnce() }
+    renewing = task
+    let done = await task.value
+    renewing = nil
+    return done
+  }
+
+  private func renewOnce() async -> Bool {
+    guard let next = try? await api.renew(account: account, device: device) else {
+      restUntil = now() + renewRestMs
+      return false
+    }
     account = account.renewed(next)
     keep(account)
     return true

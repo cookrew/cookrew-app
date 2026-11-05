@@ -326,7 +326,7 @@ describe('through the real gate', () => {
     expect((await post('/api/watch/code', token)).status).toBe(401)
     expect((await post('/api/watch/code', null)).status).toBe(401)
     expect((await call('/api/watch/pairing', token)).status).toBe(401)
-    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password' })
+    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password', sealed: true, claims: 1 })
   })
 
   it('a watch token reads the cards; none, a junk one or the wall’s does not', async () => {
@@ -445,6 +445,22 @@ describe('through the real gate', () => {
       if (!claim.ok) throw new Error('claim failed')
       expect((await invite({ authorization: `Bearer ${claim.token}` }, 'right')).status).toBe(401)
       expect((await invite({}, 'right')).status).toBe(401)
+    })
+
+    it('says whether this line may carry a password, before anyone types one', async () => {
+      const reply = await fetch(`${origin}/api/watch/pairing`, { headers: { authorization: `Bearer ${PAIRING}` } })
+      expect(await reply.json()).toMatchObject({ sealed: true })
+    })
+
+    it('answers a hello with no token at all, and only with proof', async () => {
+      const nonce = 'nonce-0123456789abcdef'
+      expect((await fetch(`${origin}/api/watch/hello?n=${nonce}`)).status).toBe(404)
+      const claim = pairing.claim(pairing.mintCode().code)
+      if (!claim.ok) throw new Error('claim failed')
+      const reply = await fetch(`${origin}/api/watch/hello?n=${nonce}`)
+      expect(await reply.json()).toEqual({ proof: pairing.proof(nonce) })
+      expect((await fetch(`${origin}/api/watch/hello?n=short`)).status).toBe(400)
+      expect((await fetch(`${origin}/api/watch/hello`)).status).toBe(400)
     })
 
     it('says what kind of account a sheet is asking for', async () => {

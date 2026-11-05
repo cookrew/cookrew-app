@@ -211,7 +211,7 @@
   /** Every pairing screen, one file each, for looking at one by one. */
   @MainActor private func pairingScreens(out: URL) {
     let pad = { (typed: String, error: String?) in AnyView(CodePad(typed: typed, error: error, onKey: { _ in }, onDelete: {})) }
-    let note = { (title: String, words: String, action: String) in AnyView(NoticeView(title: title, words: words, action: action, onAction: {})) }
+    let note = { (title: String, words: String, action: String) in AnyView(NoticeView(title: title, words: words, action: action, onAction: {}, onStartOver: {})) }
     let screens: [(String, AnyView)] = [
       ("welcome", AnyView(WelcomeView(onCode: {}, onDigits: {}))),
       ("pad-empty", pad("", nil)),
@@ -257,7 +257,9 @@
     let line = HTTPWatchAPI(bases: [relay], token: session.token, relay: keeper)
     do {
       if case .new(let reply, _) = try await line.cards(tag: nil) { print("cards \(reply.cards.count) line \(line.line)") }
-      print("renewed \(await keeper.renewNow()) \(held.account?.token != account.token)")
+      let home = HTTPWatchAPI(bases: session.urls, token: session.token, relay: keeper)
+      if case .new(let reply, _) = try await home.cards(tag: nil) { print("cards-home \(reply.cards.count) line \(home.line)") }
+      print("renewed \(await keeper.renew()) \(held.account?.token != account.token)")
       if case .new(let reply, _) = try await line.cards(tag: nil) { print("cards-after-renew \(reply.cards.count)") }
       try await line.unpair()
       print("unpaired")

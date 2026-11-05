@@ -10,6 +10,10 @@ export interface WatchState {
   paired: boolean
   pending: { expiresAt: number } | null
   account: 'none' | 'password' | 'passwordless'
+  /** False on a plain-HTTP page: no password may be typed here, let alone sent. */
+  sealed: boolean
+  /** Watches that have arrived; a sheet compares this with what it saw on opening. */
+  claims: number
 }
 
 /** The account's join code for a watch, or why not (main/watch-routes.ts). */
@@ -32,11 +36,12 @@ export const inviteRefusal = (reason: string, message?: string): string =>
   REFUSALS[reason] ?? message ?? "That didn't work. Try again."
 
 /**
- * Was the code taken? The Mac says only that nothing is on offer and a watch is
- * paired; past the code's end, nothing on offer means it simply ran out.
+ * Did the watch arrive? Counted, because a code also leaves the Mac by running out
+ * or being burned by wrong guesses, and with an older watch still paired that would
+ * look the same.
  */
-export const watchClaimed = (state: WatchState, expiresAt: number, now: number): boolean =>
-  state.paired && state.pending === null && now < expiresAt
+export const watchClaimed = (state: WatchState, seen: number, expiresAt: number, now: number): boolean =>
+  state.claims > seen && now < expiresAt
 
 /** "482 193": two halves are what the eye carries to a wrist. */
 export const spacedCode = (code: string): string => `${code.slice(0, 3)} ${code.slice(3)}`

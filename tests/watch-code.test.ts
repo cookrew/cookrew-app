@@ -26,12 +26,11 @@ describe('the sheet that hands a watch its code', () => {
     expect(inviteRefusal('something_new')).toBe("That didn't work. Try again.")
   })
 
-  it('knows the code was taken: paired, nothing on offer, and time still left', () => {
-    const at = 1000
-    const until = 5000
-    expect(watchClaimed({ paired: true, pending: null, account: 'password' }, until, at)).toBe(true)
-    expect(watchClaimed({ paired: true, pending: { expiresAt: until }, account: 'password' }, until, at)).toBe(false)
-    expect(watchClaimed({ paired: false, pending: null, account: 'password' }, until, at)).toBe(false)
-    expect(watchClaimed({ paired: true, pending: null, account: 'password' }, until, until)).toBe(false)
+  it('knows a watch arrived by the count of claims, not by the code going away', () => {
+    const state = { paired: true, pending: null, account: 'password', sealed: true, claims: 3 } as const
+    expect(watchClaimed(state, 2, 5000, 1000)).toBe(true)
+    expect(watchClaimed(state, 3, 5000, 1000)).toBe(false)
+    expect(watchClaimed({ ...state, claims: 2 }, 2, 5000, 1000)).toBe(false)
+    expect(watchClaimed(state, 2, 5000, 5000)).toBe(false)
   })
 })

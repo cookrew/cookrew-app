@@ -73,6 +73,11 @@ public func claimWatch(base: URL, code: String, session: URLSession = .shared) a
   return try JSONDecoder().decode(ClaimReply.self, from: data)
 }
 
+/** How long a road that proved itself is believed: a watch changes networks without a word. */
+private let helloSeconds: TimeInterval = 120
+/** A home network answers at once; away from home this is what the first read waits. */
+private let helloPatience: TimeInterval = 3
+
 /** The Mac over HTTP: the base that last answered, then the others in order. */
 public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private let bases: [URL]
@@ -81,6 +86,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private let relay: RelayPass?
   private let lock = NSLock()
   private var sticky = 0
+  private var proven: [URL: Date] = [:]
 
   public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil) {
     self.bases = bases
@@ -90,7 +96,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   private func onRelay(_ url: URL) -> Bool {
-    relay != nil && url.host() == relay?.host
+    relay != nil && url.host() == relay?.host && url.port == relay?.port
   }
 
   public var line: WatchLine {
@@ -112,7 +118,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   /** One road, one try. The relay wants the session as well as the Mac's token. */
-  private func request(_ url: URL, _ method: String, payload: Data?, tag: String?) async -> URLRequest {
+  private func request(_ url: URL, _ method: String, payload: Data?, tag: String?, cookie: String?) -> URLRequest {
     let read = method == "GET"
     // A write can wake an agent, and that takes a while. A read on the home
     // network is quick or it is not there: away from home it must not hold up the relay.
@@ -125,23 +131,71 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
       request.setValue("application/json", forHTTPHeaderField: "content-type")
       request.httpBody = payload
     }
-    if onRelay(url), let relay {
+    if let cookie {
       request.httpShouldHandleCookies = false
-      request.setValue("\(sessionCookie)=\(await relay.token())", forHTTPHeaderField: "cookie")
+      request.setValue("\(sessionCookie)=\(cookie)", forHTTPHeaderField: "cookie")
     }
     return request
   }
 
+  private func exchange(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)? {
+    let (data, response) = try await session.data(for: request)
+    return (response as? HTTPURLResponse).map { (data, $0) }
+  }
+
   /** The relay's own refusal of the session, not the Mac's of this watch. */
-  private func sessionRefused(_ url: URL, _ data: Data, _ http: HTTPURLResponse) -> Bool {
-    onRelay(url) && http.statusCode == 401 && (try? JSONDecoder().decode(Refusal.self, from: data))?.error == "unauthenticated"
+  private func sessionRefused(_ answer: (Data, HTTPURLResponse)) -> Bool {
+    answer.1.statusCode == 401 && (try? JSONDecoder().decode(Refusal.self, from: answer.0))?.error == "unauthenticated"
+  }
+
+  private func provenAt(_ base: URL) -> Date? {
+    lock.lock()
+    defer { lock.unlock() }
+    return proven[base]
+  }
+
+  private func setProven(_ base: URL, _ at: Date?) {
+    lock.lock()
+    proven[base] = at
+    lock.unlock()
+  }
+
+  /**
+   * May the token go to this road? A watch that roams keeps a plain-HTTP address
+   * from home, and on the next network that address may be anyone. So it asks for
+   * proof first, sending nothing, and only the Mac holding this token can give it.
+   * That also means anything such a road says afterwards is the Mac's own word, a
+   * 401 included. A watch paired by six digits has no other road to fall back on,
+   * so it stays as it was.
+   */
+  private func mayUse(_ base: URL) async -> Bool {
+    guard relay != nil, base.scheme == "http", !onRelay(base) else { return true }
+    if let at = provenAt(base), Date().timeIntervalSince(at) < helloSeconds { return true }
+    let nonce = base64urlEncoded(Data((0..<24).map { _ in UInt8.random(in: 0...255) }))
+    var url = base.appending(path: "api/watch/hello")
+    url.append(queryItems: [URLQueryItem(name: "n", value: nonce)])
+    let ask = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: helloPatience)
+    struct Hello: Decodable {
+      let proof: String
+    }
+    guard let (data, http) = try? await exchange(ask) ?? nil,
+      http.statusCode == 200,
+      let hello = try? JSONDecoder().decode(Hello.self, from: data),
+      hello.proof == helloProof(token: token, nonce: nonce)
+    else {
+      setProven(base, nil)
+      return false
+    }
+    setProven(base, Date())
+    return true
   }
 
   /**
    * A read tries every way there. A write moves on only when it never left: a
    * timed-out POST may still be at work on the Mac, and sent again down the next
    * road it would say the words twice, stop twice, or make two agents. A 503
-   * from the relay never reached the Mac, so even a write moves on from it.
+   * from the relay never reached the Mac, so even a write moves on from it; a
+   * 502 or 504 may have, so a write stops there.
    */
   private func call(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: Any]? = nil, tag: String? = nil) async throws -> (Data, HTTPURLResponse) {
     guard !bases.isEmpty else { throw WatchError.unreachable }
@@ -149,24 +203,38 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     let read = method == "GET"
     var signedOut = false
     for index in order() {
+      guard await mayUse(bases[index]) else { continue }
       var url = bases[index].appending(path: path)
       if !query.isEmpty { url.append(queryItems: query) }
+      let relayed = onRelay(url)
       do {
-        var (data, response) = try await session.data(for: await request(url, method, payload: payload, tag: tag))
-        guard var http = response as? HTTPURLResponse else { continue }
-        if sessionRefused(url, data, http) {
-          guard await relay?.renewNow() == true else {
+        let cookie = relayed ? await relay?.token() : nil
+        guard var answer = try await exchange(request(url, method, payload: payload, tag: tag, cookie: cookie)) else { continue }
+        if let cookie, sessionRefused(answer) {
+          // Nothing reached the Mac, so even a write may go again, on a token
+          // that has replaced this one. With none, the session is over.
+          guard let next = await relay?.newer(than: cookie),
+            let again = try await exchange(request(url, method, payload: payload, tag: tag, cookie: next)),
+            !sessionRefused(again)
+          else {
             signedOut = true
             continue
           }
-          (data, response) = try await session.data(for: await request(url, method, payload: payload, tag: tag))
-          guard let again = response as? HTTPURLResponse else { continue }
-          http = again
+          answer = again
         }
-        if onRelay(url) && http.statusCode == 503 { continue }
+        if relayed {
+          if answer.1.statusCode == 503 { continue }
+          if answer.1.statusCode == 502 || answer.1.statusCode == 504 {
+            if read { continue }
+            throw WatchError.unreachable
+          }
+        }
         stick(index)
-        return (data, http)
+        return answer
+      } catch let error as WatchError {
+        throw error
       } catch {
+        setProven(bases[index], nil)
         if read || neverLeft(error) { continue }
         throw WatchError.unreachable
       }

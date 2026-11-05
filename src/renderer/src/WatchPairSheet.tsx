@@ -28,28 +28,30 @@ function useTimeLeft(expiresAt: number | null): string | null {
 }
 
 /** Waits for the watch: the sheet says so the moment the Mac has been claimed. */
-function useClaimed(expiresAt: number | null, onClaimed: () => void): void {
+function useClaimed(expiresAt: number | null, seen: number, onClaimed: () => void): void {
   const api = cookrew()
   useEffect(() => {
     if (expiresAt === null) return undefined
     const timer = setInterval(() => {
       void api.watchState?.().then(
         (state) => {
-          if (watchClaimed(state, expiresAt, Date.now())) onClaimed()
+          if (watchClaimed(state, seen, expiresAt, Date.now())) onClaimed()
         },
         () => undefined
       )
     }, CLAIM_POLL_MS)
     return () => clearInterval(timer)
-  }, [api, expiresAt, onClaimed])
+  }, [api, expiresAt, seen, onClaimed])
 }
 
 function AskPane({
   account,
+  sealed,
   onCode,
   onDigits
 }: {
   account: WatchState['account'] | null
+  sealed: boolean
   onCode: (code: string, expiresAt: number) => void
   onDigits: (code: WatchCode) => void
 }): React.JSX.Element {
@@ -57,8 +59,11 @@ function AskPane({
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const needsPassword = account === 'password'
-  const ready = !busy && account !== null && account !== 'none' && (!needsPassword || password.length > 0)
+  // On a plain-HTTP page the password would cross the network before anyone
+  // could refuse it, so there is no field to type it in.
+  const canMint = sealed && account !== null && account !== 'none'
+  const needsPassword = canMint && account === 'password'
+  const ready = !busy && canMint && (!needsPassword || password.length > 0)
 
   const ask = (): void => {
     if (!ready) return
@@ -86,6 +91,8 @@ function AskPane({
     <>
       {account === 'none' ? (
         <p className="gs-consequence">A watch reaches this Mac from anywhere through your account. Without one, it only works on this network.</p>
+      ) : !sealed ? (
+        <p className="gs-consequence">{inviteRefusal('not_sealed')}</p>
       ) : (
         <p className="gs-consequence">It joins your account and can read and answer your agents from anywhere. It can't open a terminal.</p>
       )}
@@ -117,7 +124,7 @@ function AskPane({
         <button type="button" className="gs-ghost" onClick={digits} disabled={busy}>
           USE SIX DIGITS
         </button>
-        {account !== 'none' && (
+        {canMint && (
           <button type="button" className="gs-primary" onClick={ask} disabled={!ready}>
             {busy ? 'ASKING…' : 'GET A CODE'}
           </button>
@@ -130,16 +137,18 @@ function AskPane({
 function CodePane({
   code,
   expiresAt,
+  seen,
   onDone,
   onAgain
 }: {
   code: string
   expiresAt: number
+  seen: number
   onDone: () => void
   onAgain: () => void
 }): React.JSX.Element {
   const left = useTimeLeft(expiresAt)
-  useClaimed(left === null ? null : expiresAt, onDone)
+  useClaimed(left === null ? null : expiresAt, seen, onDone)
   if (left === null) {
     return (
       <>
@@ -161,9 +170,19 @@ function CodePane({
   )
 }
 
-function DigitsPane({ code, onDone, onAgain }: { code: WatchCode; onDone: () => void; onAgain: () => void }): React.JSX.Element {
+function DigitsPane({
+  code,
+  seen,
+  onDone,
+  onAgain
+}: {
+  code: WatchCode
+  seen: number
+  onDone: () => void
+  onAgain: () => void
+}): React.JSX.Element {
   const left = useTimeLeft(code.expiresAt)
-  useClaimed(left === null ? null : code.expiresAt, onDone)
+  useClaimed(left === null ? null : code.expiresAt, seen, onDone)
   if (left === null) {
     return (
       <div className="gs-sheet-foot">
@@ -193,14 +212,14 @@ function DigitsPane({ code, onDone, onAgain }: { code: WatchCode; onDone: () => 
 export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
   const api = cookrew()
   const [stage, setStage] = useState<Stage>({ name: 'ask' })
-  const [account, setAccount] = useState<WatchState['account'] | null>(null)
+  const [opened, setOpened] = useState<WatchState | null>(null)
   const [unread, setUnread] = useState(false)
 
   useEffect(() => {
     let live = true
     void api.watchState?.().then(
       (state) => {
-        if (live) setAccount(state.account)
+        if (live) setOpened(state)
       },
       () => {
         if (live) setUnread(true)
@@ -233,13 +252,14 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
         {unread && <p className="gs-paste-error">{inviteRefusal('unknown')}</p>}
         {stage.name === 'ask' && (
           <AskPane
-            account={account}
+            account={opened?.account ?? null}
+            sealed={opened?.sealed ?? false}
             onCode={(code, expiresAt) => setStage({ name: 'code', code, expiresAt })}
             onDigits={(code) => setStage({ name: 'digits', code })}
           />
         )}
-        {stage.name === 'code' && <CodePane code={stage.code} expiresAt={stage.expiresAt} onDone={done} onAgain={again} />}
-        {stage.name === 'digits' && <DigitsPane code={stage.code} onDone={done} onAgain={again} />}
+        {stage.name === 'code' && <CodePane code={stage.code} expiresAt={stage.expiresAt} seen={opened?.claims ?? 0} onDone={done} onAgain={again} />}
+        {stage.name === 'digits' && <DigitsPane code={stage.code} seen={opened?.claims ?? 0} onDone={done} onAgain={again} />}
         {stage.name === 'done' && (
           <>
             <p className="gs-consequence">You can forget it from ⋯ on this Mac or on the watch.</p>

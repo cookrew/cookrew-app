@@ -2,12 +2,14 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { createHmac } from 'node:crypto'
 import {
   WATCH_CODE_GUESSES,
   WATCH_CODE_TTL_MS,
   WATCH_FAILS_BEFORE_PAUSE,
   WATCH_PAUSE_MS,
-  WatchPairing
+  WatchPairing,
+  watchProof
 } from '../src/main/watch-pairing'
 
 const fresh = (start = 1000): { pairing: WatchPairing; file: string; clock: { now: number } } => {
@@ -122,5 +124,36 @@ describe('a join code doubles as the claim', () => {
     for (let i = 1; i < WATCH_CODE_GUESSES; i += 1) pairing.claim('AAAA-AAAA')
     expect(pairing.claim('AAAA-AAAA')).toEqual({ ok: false, reason: 'burned' })
     expect(pairing.claim('K7QM-2XPD')).toEqual({ ok: false, reason: 'no-code' })
+  })
+})
+
+describe('a Mac proves it holds the token without sending it', () => {
+  it('signs a nonce with the token, as the wrist checks it', () => {
+    const { pairing } = fresh()
+    const claim = pairing.claim(pairing.mintCode().code)
+    if (!claim.ok) throw new Error('claim failed')
+    const expected = createHmac('sha256', claim.token).update('cookrew-watch-hello/1 nonce-0123456789abcdef').digest('base64url')
+    expect(pairing.proof('nonce-0123456789abcdef')).toBe(expected)
+  })
+
+  it('matches the vector the Swift side is tested against', () => {
+    expect(watchProof('mac-token', 'nonce-0123456789abcdef')).toBe('cBtQe4csbmPvxeVVg4OJ0NkU0FBGhTBQIZcCGH5GFX8')
+  })
+
+  it('has nothing to prove with no watch paired', () => {
+    expect(fresh().pairing.proof('nonce-0123456789abcdef')).toBeNull()
+  })
+})
+
+describe('how the sheet knows a watch arrived', () => {
+  it('counts claims, so a code that merely went away is not an arrival', () => {
+    const { pairing } = fresh()
+    expect(pairing.claims).toBe(0)
+    const { code } = pairing.mintCode()
+    for (let i = 0; i < WATCH_CODE_GUESSES; i += 1) pairing.claim('000')
+    expect(pairing.claims).toBe(0)
+    expect(pairing.claim(pairing.mintCode().code).ok).toBe(true)
+    expect(pairing.claims).toBe(1)
+    expect(code).toMatch(/^\d{6}$/)
   })
 })
