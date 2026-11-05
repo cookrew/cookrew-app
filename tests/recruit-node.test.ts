@@ -66,8 +66,10 @@ describe('index.ts wiring — the recruit, the one injection path, and role boot
     // respawned pane is a plain spawnTracked(node), never an injection.
     expect(main).toMatch(/respawn: async \(id\) => respawnInPlace\(id\)/)
     const inPlace = main.slice(main.indexOf('async function respawnInPlace'))
-    // `main` has its whitespace collapsed: the body ends at its last `return true }`.
-    const body = inPlace.slice(0, inPlace.indexOf('return true }'))
+    // `main` has its whitespace collapsed: the body ends at its last line.
+    const end = 'return spawnTracked(node) }'
+    expect(inPlace).toContain(end)
+    const body = inPlace.slice(0, inPlace.indexOf(end) + end.length)
     expect(body).toMatch(/spawnTracked\(node\)/)
     expect(body).not.toMatch(/inject/)
   })

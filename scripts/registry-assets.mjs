@@ -10,10 +10,24 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parse } from 'acorn'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const assets = path.join(root, 'registry', 'assets')
 
+
+/**
+ * The site's own scripts lose their comments on the way in: half of each file
+ * is explanation, and the whole bundle has to fit one ConfigMap. Only comments
+ * are cut, found by a real parser, so every line of code ships byte for byte.
+ */
+function shipped(source, file) {
+  if (!file.endsWith('.js')) return source
+  const comments = []
+  parse(source, { ecmaVersion: 'latest', sourceType: 'script', allowReturnOutsideFunction: true, onComment: comments })
+  const { text, at } = comments.reduce((kept, { start, end }) => ({ text: kept.text + source.slice(kept.at, start), at: end }), { text: '', at: 0 })
+  return (text + source.slice(at)).replace(/^[ \t]+$/gm, '').replace(/\n{2,}/g, '\n').replace(/[ \t]+$/gm, '')
+}
 
 /** name on the wire → source file, content type. */
 const FILES = [
@@ -32,7 +46,7 @@ const FILES = [
 ]
 
 const entries = FILES.map(([name, file, type, encoding]) => {
-  const body = encoding === 'base64' ? readFileSync(path.join(assets, file)).toString('base64') : readFileSync(path.join(assets, file), 'utf8')
+  const body = encoding === 'base64' ? readFileSync(path.join(assets, file)).toString('base64') : shipped(readFileSync(path.join(assets, file), 'utf8'), file)
   return `  ${JSON.stringify(name)}: { type: ${JSON.stringify(type)}, body: ${JSON.stringify(body)}${encoding === 'base64' ? ", encoding: 'base64'" : ''} }`
 })
 

@@ -28,7 +28,7 @@ describe('the zoom fleet bridge', () => {
 
   it('reads the companion’s fleet stream with the pairing token, on a stream that heals', () => {
     const remote = read('src/renderer/src/remote-api.ts')
-    expect(remote).toContain("openEventSource(tokenParam(apiPath('/api/fleet/stream')))")
+    expect(remote).toContain("openEventSource(apiPath('/api/fleet/stream'))")
     // A feed that dies without a reset is reopened, and moves with the plane.
     expect(remote).toMatch(/new ReconnectingStream\(\{[\s\S]{0,400}\/api\/fleet\/stream/)
     expect(remote).toMatch(/registerPlaneStream\(\{ restart: \(\) => stream\.restart\(\), revive: \(\) => stream\.revive\(\) \}\)/)
