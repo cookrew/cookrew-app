@@ -14,7 +14,7 @@ import { PathBadge } from './PathBadge'
 import { RoutingEntry } from './routing/RoutingPanel'
 import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { setTheme, useTheme } from './color-scheme'
-import { canFullscreen, toggleFullscreen, useFullscreen } from './fullscreen'
+import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { isRemoteMode } from './api'
 import type { RouteStatus } from '../../shared/route'
@@ -49,7 +49,8 @@ export function HeaderMore({
   const theme = useTheme()
   const fullscreen = useFullscreen()
   // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
-  const offerFullscreen = isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document)
+  const offerFullscreen =
+    isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document) && !installedFullscreen(document, pageMedia)
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
