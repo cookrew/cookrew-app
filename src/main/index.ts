@@ -1269,8 +1269,9 @@ canvasLink.onDrop(canvasBridge.reset)
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
-  // No passcode chosen yet: nothing could open this lock, so it does not close.
-  armed: () => !accounts.passcodePending(),
+  // No account, or no passcode chosen yet: nothing could open this lock, so it
+  // does not close.
+  armed: () => accounts.lockable(),
   waiting: () => accounts.providerTripping(),
   onChange: (locked) => {
     // A provider trip in flight belongs to whoever just walked away.

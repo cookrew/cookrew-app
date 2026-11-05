@@ -919,6 +919,17 @@ describe('cookrew login --github, when the poll beats the second wait', () => {
   })
 })
 
+describe('a password resume on a Mac still waiting for a passcode', () => {
+  it('does not claim no password was typed', async () => {
+    const who = () => ({ username: 'drej', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: true })
+    const f = fixture({ who })
+    await f.open(['drej'])
+    const done = await f.send('answer', PASSWORD)
+    expect(done.exit).toBe(0)
+    expect(done.say.join(' ')).not.toContain('No password was typed')
+  })
+})
+
 describe('a passwordless account at the terminal', () => {
   const who = (sessionLive: boolean) => () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive, registry: null, mismatch: null, passwordless: true, passcodePending: false })
 

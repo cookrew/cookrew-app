@@ -85,18 +85,27 @@ export function passcodeView(next: string, confirm: string): { canGo: boolean; n
  * finishes into a surface that is gone and an act the person dismissed still
  * happens. `leave` is the only thing that cancels, and only a running trip.
  */
-export function tripGuard(cancel: () => void): { begin: () => void; end: () => void; leave: () => void } {
+export function tripGuard(cancel: () => void): {
+  begin: () => number
+  end: (from?: number) => void
+  leave: () => void
+} {
   let running = 0
+  // Which round of trips this is. A trip that ends after a `leave` belongs to the
+  // round before, and must not count against one that started since.
+  let round = 0
   return {
     begin: () => {
       running += 1
+      return round
     },
-    end: () => {
-      running = Math.max(0, running - 1)
+    end: (from = round) => {
+      if (from === round) running = Math.max(0, running - 1)
     },
     leave: () => {
       if (running === 0) return
       running = 0
+      round += 1
       cancel()
     },
   }

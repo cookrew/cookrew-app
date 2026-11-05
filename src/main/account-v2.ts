@@ -454,12 +454,11 @@ export class Accounts {
       hasAccount: () => this.cached !== null,
       rememberPending: (pending, minted) => {
         this.ladder.remember(pending, NO_PASSWORD)
-        if (minted !== null) this.signingIn = { ...minted, username: '', pending }
+        // A password ladder holds its own key. Whichever lands, the other is
+        // refused at `landSession`, so neither may be swapped from under it.
+        if (minted !== null && this.signingIn === null) this.signingIn = { ...minted, username: '', pending }
       },
-      land: (body, minted) => {
-        if (minted !== null) this.signingIn = { ...minted, username: '' }
-        return this.landSession(NO_PASSWORD, body)
-      },
+      land: (body, minted) => this.landSession(NO_PASSWORD, body, minted),
       authed: (pathname, body) => this.authedPost(pathname, body),
       firstLink: () => this.firstLink(),
     })
@@ -500,9 +499,14 @@ export class Accounts {
     return this.provider.tripping()
   }
 
-  /** A proven identity nobody will name now: its ticket goes. */
+  /** The terminal left a proven identity unnamed: its ticket goes, and nothing else. */
   providerForget(): void {
-    this.provider.reset()
+    this.provider.forgetDeviceClaim()
+  }
+
+  /** Did a provider open this ladder? Its landing proves nobody is at this keyboard. */
+  providerLadder(pending: string): boolean {
+    return this.ladder.for(pending) === NO_PASSWORD
   }
 
   /** The seam `cookrew login --github` calls. */
@@ -590,6 +594,11 @@ export class Accounts {
   /** What the lock checks. */
   unlockMethod(): 'password' | 'passcode' {
     return this.cached?.unlockBy === 'passcode' ? 'passcode' : 'password'
+  }
+
+  /** Is there anything that could open the lock? Only then may it close. */
+  lockable(): boolean {
+    return this.cached !== null && !this.passcodePending()
   }
 
   /** A passcode Mac with none chosen yet. The idle lock stays disarmed. */
@@ -1343,7 +1352,11 @@ export class Accounts {
    * no password that opens both. cookrew.dev has just proved this password IS
    * the account's, so it becomes what unlocks the app too.
    */
-  private landSession(password: string, body: Record<string, unknown>): SignInAnswer<AccountSession> {
+  private landSession(
+    password: string,
+    body: Record<string, unknown>,
+    provided: MintedDevice | null = null,
+  ): SignInAnswer<AccountSession> {
     const session = sessionFrom(body)
     const account = this.cached
     // A provider opened this: there is no password, and none may be derived.
@@ -1352,13 +1365,15 @@ export class Accounts {
       // No file yet: this rung ends a SIGN-IN (the second Mac), not a resume.
       // The key minted at the password step is filed now, through the same
       // writer a claim uses, so the account this Mac gets is the same account.
-      const minted = this.signingIn
+      // A provider's key comes with its answer, so a password ladder open beside
+      // it keeps its own.
+      const minted = provided === null ? this.signingIn : { ...provided, username: '' }
       if (!minted) return { ok: false, reason: 'no_account' }
       if (session === null) return { ok: false, reason: 'unknown' }
-      this.signingIn = null
+      if (provided === null) this.signingIn = null
       // The registry attached one key; a file holding another is a Mac that can
       // never prove it is the device on the account.
-      if (typed === null && typeof body.deviceId === 'string' && body.deviceId !== minted.deviceId) {
+      if (typeof body.deviceId === 'string' && body.deviceId !== minted.deviceId) {
         return { ok: false, reason: 'wrong_identity' }
       }
       this.saveClaimed({
@@ -1378,7 +1393,11 @@ export class Accounts {
     // file's account; a provider names whoever is signed in at the browser, and
     // a device revoked here can be attached elsewhere. Writing that token in
     // would be one account's session under another's name.
-    if (typed === null) {
+    //
+    // A sign-in still held here is the same case: it began before this file
+    // existed, so its session belongs to a key this file does not hold.
+    if (typed === null || this.signingIn !== null) {
+      this.signingIn = null
       const named = typeof body.username === 'string' && body.username !== account.username
       if (named || (typeof body.deviceId === 'string' && body.deviceId !== account.deviceId)) {
         return { ok: false, reason: 'wrong_identity' }

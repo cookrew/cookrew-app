@@ -504,12 +504,10 @@ async function resumeCode(
   const fields = asRecord(input)
   const factor = fields.factor
   if (!isTypedFactor(factor)) return { ok: false, reason: 'not_offered' }
-  const result = await deps.accounts.resumeWithCode(
-    asString(fields.pending),
-    factor,
-    asString(fields.code),
-  )
-  return result.ok ? { ok: true, value: signedIn(deps) } : result
+  const pending = asString(fields.pending)
+  const finish = finisherFor(deps, pending)
+  const result = await deps.accounts.resumeWithCode(pending, factor, asString(fields.code))
+  return result.ok ? { ok: true, value: finish(deps) } : result
 }
 
 /** The approve rung's other half: wait for the nod, then be signed in. */
@@ -518,8 +516,9 @@ async function resumeWait(
   pending: string,
   signal?: AbortSignal,
 ): Promise<SignInAnswer<AccountStatus>> {
+  const finish = finisherFor(deps, pending)
   const result = await deps.accounts.resumeWait(pending, signal ? { signal } : {})
-  return result.ok ? { ok: true, value: signedIn(deps) } : result
+  return result.ok ? { ok: true, value: finish(deps) } : result
 }
 
 /**
@@ -591,6 +590,16 @@ function signedIn(deps: AccountIpcDeps): AccountStatus {
   deps.lock.proven()
   return landed(deps)
 }
+
+/**
+ * HOW A RUNG ENDS, read before it is climbed, while the ladder is still held.
+ *
+ * A password ladder opens the lock, since someone typed the password here. A
+ * provider's does not: its first step answered from a browser, so its landing
+ * says nothing about who is at this keyboard.
+ */
+const finisherFor = (deps: AccountIpcDeps, pending: string): ((deps: AccountIpcDeps) => AccountStatus) =>
+  deps.accounts.providerLadder(pending) ? landed : signedIn
 
 /**
  * A SESSION LANDED, without opening the lock.

@@ -240,6 +240,17 @@ describe('review: every surface that can start a trip owns it', () => {
     expect(cancels).toHaveLength(1)
   })
 
+  it('a trip that ended late cannot disarm the one that replaced it', () => {
+    const cancels: number[] = []
+    const guard = tripGuard(() => cancels.push(1))
+    const stale = guard.begin()
+    guard.leave()
+    guard.begin()
+    guard.end(stale)
+    guard.leave()
+    expect(cancels).toHaveLength(2)
+  })
+
   it('the rescue row says the code is spent whatever happens next', () => {
     expect(PROVIDER_COPY.LOST_PROVIDER_WHY).toContain('even if you cancel')
   })

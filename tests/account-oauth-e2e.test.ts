@@ -1126,3 +1126,124 @@ describe('review: a cancel in the gaps around a trip', () => {
     expect(app.providerTripping()).toBe(false)
   })
 })
+
+describe('final review', () => {
+  beforeEach(() => boot(true))
+
+  const handlersWith = (m: Mac, lock: IdleLock): ReturnType<typeof accountHandlers> =>
+    accountHandlers({
+      accounts: m.app,
+      lock,
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    })
+
+  it('a Mac with no account has nothing to unlock with, so it never locks itself', async () => {
+    const m = mac()
+    let now = 0
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false, now: () => now, armed: () => m.app.lockable() })
+    now = 120_000
+    expect(lock.tick()).toBe(false)
+    lock.lock()
+    expect(lock.locked).toBe(false)
+    await m.app.claim({ username: 'alice', password: PASSWORD })
+    now = 240_000
+    expect(lock.tick()).toBe(true)
+  })
+
+  it('index.ts arms the lock on that rule', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    expect(source).toContain('armed: () => accounts.lockable()')
+  })
+
+  it('a rung on a ladder a provider opened leaves the lock shut; a password ladder still opens it', async () => {
+    const first = mac('First')
+    await joinByGithub(first)
+    const codes = await codesFor(first)
+    if (!codes.ok) throw new Error('no codes')
+    const second = mac('Second')
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false })
+    const handlers = handlersWith(second, lock)
+    const asked = await handlers['account:oauthStart']('github')
+    if (typeof asked !== 'object' || asked === null || !('step' in asked)) throw new Error('expected a ladder')
+    const { step } = asked as { step: { pending: string } }
+    lock.lock()
+    const landed = await handlers['account:resumeCode']({ pending: step.pending, factor: 'recovery', code: codes.value[0] })
+    expect(landed).toMatchObject({ ok: true })
+    expect(lock.locked).toBe(true)
+
+    const owner = mac('Owner')
+    await owner.app.claim({ username: 'alice', password: PASSWORD })
+    const rescue = await owner.app.recoveryCodes()
+    if (!rescue.ok) throw new Error('no codes')
+    const other = mac('Other')
+    const otherLock = new IdleLock({ lockAfterMs: 60_000, verify: () => false })
+    const otherHandlers = handlersWith(other, otherLock)
+    const typed = await other.app.signIn({ username: 'alice', password: PASSWORD })
+    if (typed.ok || typed.reason !== 'second_factor') throw new Error('expected a ladder')
+    otherLock.lock()
+    await otherHandlers['account:resumeCode']({ pending: typed.step.pending, factor: 'recovery', code: rescue.value[0] })
+    expect(otherLock.locked).toBe(false)
+  })
+
+  it('a password ladder cannot write its session into a file a provider landed meanwhile', async () => {
+    const owner = mac('Owner')
+    await owner.app.claim({ username: 'alice', password: PASSWORD })
+    const codes = await owner.app.recoveryCodes()
+    if (!codes.ok) throw new Error('no codes')
+    const m = mac('Race')
+    const typed = await m.app.signIn({ username: 'alice', password: PASSWORD })
+    if (typed.ok || typed.reason !== 'second_factor') throw new Error('expected a ladder')
+    expect(await m.app.providerSignIn('github')).toMatchObject({ reason: 'new_identity' })
+    expect((await m.app.providerClaim('octo')).ok).toBe(true)
+    const held = loadAccount(m.home)
+    expect(await m.app.resumeWithCode(typed.step.pending, 'recovery', codes.value[0])).toMatchObject({
+      ok: false,
+      reason: 'wrong_identity'
+    })
+    expect(loadAccount(m.home)).toEqual(held)
+  })
+
+  it('forgetting the terminal claim leaves a browser trip alone', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    homes.push(home)
+    const app = new Accounts({ base: home, origin, openBrowser: () => Promise.resolve() })
+    const trip = app.providerSignIn('github')
+    await vi.waitFor(() => expect(app.providerTripping()).toBe(true))
+    app.providerForget()
+    expect(app.providerTripping()).toBe(true)
+    app.providerCancel()
+    await trip
+  })
+
+  it('it does forget the claim the device flow left, and only that one', async () => {
+    const m = mac('Headless')
+    fake.device.answer = 'ok'
+    await m.app.providerDeviceSignIn('github', { onCode: () => undefined })
+    m.app.providerForget()
+    expect(await m.app.providerClaim('headless')).toMatchObject({ ok: false, reason: 'expired' })
+    const window = mac('Window')
+    await window.app.providerSignIn('github')
+    window.app.providerForget()
+    expect((await window.app.providerClaim('windowed')).ok).toBe(true)
+  })
+
+  it('one failed poll is not the end: the person keeps the code they typed', async () => {
+    let failures = 1
+    const m = mac('Flaky', {
+      fetch: (input, init) => {
+        if (String(input).endsWith('/poll') && failures > 0) {
+          failures -= 1
+          return Promise.reject(new Error('the wifi dropped'))
+        }
+        return fetch(input, init)
+      }
+    })
+    fake.device.answer = 'ok'
+    const asked = await m.app.providerDeviceSignIn('github', { onCode: () => undefined, everyMs: 1 })
+    expect(asked).toMatchObject({ ok: false, reason: 'new_identity' })
+  })
+})

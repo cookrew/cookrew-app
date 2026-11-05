@@ -649,7 +649,8 @@ class Conversation {
     const via = this.github ? ' with GitHub' : ''
     this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}${via}${late}` })
     const said = [this.say('said.signed-in', { handle, device })]
-    return this.finish(LOGIN_EXIT.ok, who.passcodePending ? [...said, this.say('said.passcode-next')] : said, null)
+    const unlocked = this.github && who.passcodePending
+    return this.finish(LOGIN_EXIT.ok, unlocked ? [...said, this.say('said.passcode-next')] : said, null)
   }
 
   private get closed(): boolean {

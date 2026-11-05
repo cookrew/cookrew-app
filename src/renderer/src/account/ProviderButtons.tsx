@@ -50,10 +50,10 @@ export function useWatchedTrip(on: boolean): {
   const [live, setLive] = useState(0)
   const watch = <T,>(work: Promise<T>): Promise<T> => {
     if (!on) return work
-    guard.begin()
+    const from = guard.begin()
     setLive((count) => count + 1)
     return work.finally(() => {
-      guard.end()
+      guard.end(from)
       setLive((count) => Math.max(0, count - 1))
     })
   }

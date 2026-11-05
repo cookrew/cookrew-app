@@ -135,7 +135,13 @@ export class ProviderAccess {
   private readonly port: ProviderPort
   private trip: Trip | null = null
   /** A proven identity waiting for a name. The ticket never crosses the bridge. */
-  private claimable: { ticket: string; device: AccountDeviceInput; minted: MintedDevice | null } | null = null
+  private claimable: {
+    ticket: string
+    device: AccountDeviceInput
+    minted: MintedDevice | null
+    /** The device flow left this one, so the terminal's leaving ends it. */
+    terminal: boolean
+  } | null = null
   /** Set while a device-flow poll is running, so it can be ended. */
   private deviceCancelled: (() => void) | null = null
   /** How many cancels there have been. An act remembers the one it began under. */
@@ -185,10 +191,19 @@ export class ProviderAccess {
     return this.trip !== null
   }
 
-  /** The account changed some other way: nothing in flight may land on it. */
+  /**
+   * The account changed some other way: nothing more starts or waits. A session
+   * already on the wire may still come back, and `landSession` is what refuses
+   * one that belongs to another key.
+   */
   reset(): void {
     this.cancel()
     this.claimable = null
+  }
+
+  /** The terminal left. A browser trip and its claim are not the terminal's. */
+  forgetDeviceClaim(): void {
+    if (this.claimable?.terminal === true) this.claimable = null
   }
 
   /** A `cookrew://oauth#…` link arrived. True when it belonged to this trip. */
@@ -304,6 +319,7 @@ export class ProviderAccess {
   private read(
     answer: { status: number; body: Record<string, unknown> },
     held: { device: AccountDeviceInput; minted: MintedDevice | null },
+    terminal = false,
   ): ProviderSignInAnswer<AccountSession> {
     const { status, body } = answer
     if (status === 201) return this.port.land(body, held.minted)
@@ -311,7 +327,7 @@ export class ProviderAccess {
       // This Mac already belongs to an account, and this identity is not on it.
       // Offering a claim here would make a second account on a Mac with one.
       if (this.port.hasAccount()) return { ok: false, reason: 'wrong_identity' }
-      this.claimable = { ticket: body.ticket, ...held }
+      this.claimable = { ticket: body.ticket, ...held, terminal }
       return {
         ok: false,
         reason: 'new_identity',
@@ -459,11 +475,18 @@ export class ProviderAccess {
         // session cannot be: the registry has minted it for this device, and a
         // Mac that threw it away would hold a key the account has moved past.
         if (cancelled && !(polled.ok && polled.value.status === 201)) return { ok: false, reason: 'cancelled' }
-        if (!polled.ok) return plainRefusal(polled)
-        const { status, body } = polled.value
-        if (status === 410) return { ok: false, reason: body.why === 'denied' ? 'cancelled' : 'expired' }
-        if (status !== 202) return this.read(polled.value, held)
-        const wait = options.everyMs ?? (typeof body.intervalMs === 'number' ? body.intervalMs : intervalMs)
+        // A dropped Wi-Fi or a registry restarting is no reason to make a person
+        // type the code again: the flow stands until `expiresAt`, checked above.
+        if (!polled.ok && polled.reason !== 'offline') return plainRefusal(polled)
+        const answered = polled.ok ? polled.value : null
+        if (answered?.status === 410) {
+          return { ok: false, reason: answered.body.why === 'denied' ? 'cancelled' : 'expired' }
+        }
+        if (answered !== null && answered.status !== 202 && answered.status < 500) {
+          return this.read(answered, held, true)
+        }
+        const paced = answered?.body.intervalMs
+        const wait = options.everyMs ?? (typeof paced === 'number' ? paced : intervalMs)
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, wait)
           wake = () => {
