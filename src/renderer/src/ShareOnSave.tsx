@@ -12,6 +12,7 @@ import {
   tagsLookGood
 } from '../../shared/served-face-shape'
 import { doorHeldSentence, type DoorHolder } from '../../shared/door-ownership'
+import { hostMachine } from './host-machine'
 
 /**
  * SHARE ON SAVE — the one publish entry (owner ruling, 2026-08-26).
@@ -333,7 +334,7 @@ export function ShareOnSave({
               ? `${held.name} stops serving it and is told. The link does not change.`
               : heldChoice === 'rename'
                 ? 'Give the team another name above, and both doors stay open.'
-                : `${held.name} goes on serving it. This save stays on this Mac.`}
+                : `${held.name} goes on serving it. This save stays on ${hostMachine()}.`}
           </span>
         </div>
       )}

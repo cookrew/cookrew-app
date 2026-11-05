@@ -6,6 +6,7 @@ import path from 'node:path'
 import { RelayCaller } from './relay-caller'
 import { reachOverHttp } from './relay-reach'
 import { cardBearerAnswer, isCardBearerRequest } from './card-bearer'
+import { thisMachine } from '../shared/machine-word'
 
 /**
  * THE CALLER'S END OF THE RELAY, as a door on loopback.
@@ -142,7 +143,7 @@ export function startRelayProxy(
         const answer = await cardBearerAnswer(
           {
             secret: () => (options.bearer ? secret : null),
-            bearer: options.bearer ?? (() => Promise.reject(new Error('this Mac is not serving cards'))),
+            bearer: options.bearer ?? (() => Promise.reject(new Error(`${thisMachine(process.platform)} is not serving cards`))),
             account: options.account ?? ((): string | null => null)
           },
           {

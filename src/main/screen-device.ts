@@ -8,6 +8,7 @@ import { windowAppName } from '../shared/use-url'
 import { macKeyCode, type MacInput, type MacOp, type MacScreens, type MacWindow } from './mac-bridge'
 import { DeviceGoneError, type PixelDevice, type PixelFrame } from './pixel-instance'
 import type { Gesture, ScreenPoints } from './vphone-input'
+import { thisMachine } from '../shared/machine-word'
 
 /**
  * A REGION OF THIS MAC'S SCREEN, AS A PIXEL DEVICE (computer use).
@@ -62,7 +63,7 @@ const RELIST_MS = 1000
 export const SCREEN_RECORDING_OFF =
   'Screen Recording is off for Cookrew — turn it on in System Settings › Privacy & Security › Screen & System Audio Recording, then restart Cookrew'
 export const COMPUTER_INPUT_OFF =
-  'Driving this Mac is off — start Cookrew with COOKREW_COMPUTER_INPUT=1 to let viewers and agents click and type here'
+  `Driving ${thisMachine(process.platform)} is off — start Cookrew with COOKREW_COMPUTER_INPUT=1 to let viewers and agents click and type here`
 export const ACCESSIBILITY_OFF =
   'Accessibility is off for Cookrew — turn it on in System Settings › Privacy & Security › Accessibility'
 
@@ -128,7 +129,7 @@ export class ScreenDevice implements PixelDevice {
     } else {
       const index = this.target.name === 'main' ? 1 : Number(this.target.name)
       const display = screens.displays.find((d) => d.index === index)
-      if (!display) throw new Error(`Display ${this.target.name} is not connected (this Mac has ${screens.displays.length})`)
+      if (!display) throw new Error(`Display ${this.target.name} is not connected (${thisMachine(process.platform)} has ${screens.displays.length})`)
       area = display
     }
     const roi = clipRoi(area, this.target.roi)
@@ -226,7 +227,7 @@ export class ScreenDevice implements PixelDevice {
         break
       case 'input.key': {
         const code = macKeyCode(String(p.name))
-        if (code === null) throw new Error(`no '${String(p.name)}' key on this Mac`)
+        if (code === null) throw new Error(`no '${String(p.name)}' key on ${thisMachine(process.platform)}`)
         op = { op: 'key', code }
         break
       }

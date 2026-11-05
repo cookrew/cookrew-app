@@ -9,6 +9,7 @@ import { bearerToken, readJson, respondJson } from './mobile-http'
 import type { RateCeiling } from '../shared/fixed-window-limiter'
 import { safeDeviceName, type RelayDevice } from './relay-device'
 import { publishedRequestOrigin } from '../shared/hello-proof'
+import { TheMachine, thisMachine } from '../shared/machine-word'
 
 /**
  * THE TWO ROUTES PAIRING ADDS, AND WHY THEY SIT HERE.
@@ -347,7 +348,7 @@ const admit = async (
   ) {
     deps.log?.('refused an admission: this Mac is holding as many devices as it will')
     respondJson(response, 403, {
-      error: `This Mac is open for ${ADMITTED_MAX} devices already. Forget one in Devices to make room.`
+      error: `${TheMachine(process.platform)} is open for ${ADMITTED_MAX} devices already. Forget one in Devices to make room.`
     })
     return true
   }
@@ -359,7 +360,7 @@ const admit = async (
     // A ledger that will not take the row is a phone that is NOT admitted:
     // unlike a sighting, here the write IS the credential.
     console.error('Could not admit a device:', error)
-    respondJson(response, 503, { error: 'this Mac could not record the admission' })
+    respondJson(response, 503, { error: `${thisMachine(process.platform)} could not record the admission` })
     return true
   }
   deps.log?.(`admitted ${minted.device.name ?? minted.device.deviceId} (${opened.kind} token)`)

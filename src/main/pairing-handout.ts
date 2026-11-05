@@ -1,5 +1,6 @@
 import type { PairingHandout } from '../shared/account-v2'
 import { pairingUrl } from '../shared/pairing-url'
+import { TheMachine } from '../shared/machine-word'
 
 /**
  * WHAT `cookrew mobile` AND THE POPOUT BOTH SHOW.
@@ -65,7 +66,7 @@ export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null 
   const token = deps.pairingToken()
   if (!token) return null
   const account = deps.account()
-  const desktopName = account?.name ?? 'This Mac'
+  const desktopName = account?.name ?? TheMachine(process.platform)
 
   if (account) {
     const url = pairingUrl({

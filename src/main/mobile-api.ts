@@ -49,6 +49,8 @@ import type {
   RestoreResult,
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
+import { TheMachine } from "../shared/machine-word";
+import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
@@ -175,17 +177,28 @@ export interface MobileOps {
   }) => CanvasNode;
   forkTerminal: (sourceId: string, turnIndex?: number) => TerminalNodeData;
   listWorkspaces: () => WorkspaceList;
+  /** `stay`: make it without moving the desktop (every phone route asks this). */
   createWorkspace: (
     name: string,
     dir: string,
-    team?: string,
+    team: string | undefined,
+    options: { stay: boolean },
   ) => WorkspaceMeta | Promise<WorkspaceMeta>;
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => WorkspaceCheck;
   switchWorkspace: (id: string) => WorkspaceMeta;
   renameWorkspace: (id: string, name: string) => WorkspaceList;
+  /** Throws on an unknown workspace or anything but one short mark. */
+  setWorkspaceIcon: (id: string, icon: unknown) => WorkspaceList;
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (id: string) => Promise<WorkspaceRemovePlan>;
   /** Throws on an unknown workspace or a brief that fails shared/workspace-brief.ts. */
   setWorkspaceBrief: (id: string, brief: unknown) => WorkspaceList;
   /** Workspace v2: remove workspace + multi-dir + per-terminal cwd + git. */
-  removeWorkspace: (id: string) => WorkspaceList;
+  removeWorkspace: (
+    id: string,
+    options?: { worktree?: boolean },
+  ) => WorkspaceList | Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList;
   setPrimaryDir: (id: string, dir: string) => WorkspaceList;
@@ -199,7 +212,8 @@ export interface MobileOps {
   laneClose: (nodeId: string, force: boolean) => Promise<CanvasNode>;
   laneAuto: (nodeId: string, on: boolean) => CanvasNode;
   /** Team fork/save + roles (spec note team-fork-roles-v1). */
-  teamFork: (spec: TeamForkSpec) => Promise<WorkspaceMeta>;
+  /** `stay`: boot the fork where it stands; the desktop does not move for it. */
+  teamFork: (spec: TeamForkSpec, options?: { stay: boolean }) => Promise<WorkspaceMeta>;
   teamSave: (name?: string, nodeIds?: string[]) => TeamMeta;
   teamClipSet: (nodeIds: string[], cut: boolean, worktree?: { name: string }) => TeamClipStatus;
   teamClipGet: () => TeamClipStatus | null;
@@ -597,9 +611,35 @@ const paceEnter = createEnterPacing();
 
 const DISPATCH_IN_FLIGHT = "agent has a dispatch in flight";
 
+/** Answer `work`'s result, or a 400 in the words it refused with. */
+async function respondRefusable(
+  response: http.ServerResponse,
+  work: () => unknown,
+): Promise<void> {
+  try {
+    respondJson(response, 200, await work());
+  } catch (error) {
+    respondJson(response, 400, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function dispatchInFlight(response: http.ServerResponse): true {
   respondJson(response, 409, { error: DISPATCH_IN_FLIGHT });
   return true;
+}
+
+/** A workspace a phone just made, with the seat that puts the phone on it. */
+function seatOn(store: MobileApiDeps["store"], meta: WorkspaceMeta): WorkspaceMeta & { seat?: string } {
+  return store.isMultiInstance ? { ...meta, seat: meta.id } : meta;
+}
+
+/** The workspace this request's device is on, when it says and it exists. */
+function deviceSeat(url: URL, store: MobileApiDeps["store"]): string | null {
+  const seat = url.searchParams.get("seat");
+  if (!seat || !store.isMultiInstance) return null;
+  return store.list().workspaces.some((w) => w.id === seat) ? seat : null;
 }
 
 export async function handleMobileApi(
@@ -611,8 +651,20 @@ export async function handleMobileApi(
   const { store, ptys, turns, ops, presets } = deps;
   const method = request.method ?? "GET";
   const p = url.pathname;
-  /** Null at the root; a workspace id under a slug. */
-  const scope = deps.scope ?? null;
+  /**
+   * THE DEVICE'S SEAT (ruling 11-04: switching is focus only). A phone names
+   * the workspace it is on with `?seat=`, so choosing one moves that phone and
+   * nothing else. Taken here, before the first await, so everything this
+   * request reaches — the ops in index.ts and the routes mobile-server keeps
+   * below this one — reads that workspace as focus. A seat that has gone is no
+   * seat: the phone is answered for the desktop's workspace and heals itself.
+   */
+  const seat = deps.scope == null ? deviceSeat(url, store) : null;
+  if (seat !== null) store.enterSeat(seat);
+  /** It named a workspace that has gone. A read heals; a write must not land elsewhere. */
+  const seatGone = deps.scope == null && seat === null && url.searchParams.has("seat") && store.isMultiInstance;
+  /** Null at the root; a workspace id under a slug or a device's seat. */
+  const scope = deps.scope ?? seat;
   /** The canvas this request answers for. */
   const scopedState = (): WorkspaceState =>
     scope === null ? store.focusedState : store.workspaceState(scope);
@@ -705,6 +757,12 @@ export async function handleMobileApi(
       error:
         "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
     });
+    return true;
+  }
+
+  // Choosing another workspace is how a phone gets out of a seat that has gone.
+  if (seatGone && method !== "GET" && p !== "/api/workspaces/switch") {
+    respondJson(response, 409, { error: SEAT_GONE });
     return true;
   }
 
@@ -992,29 +1050,56 @@ export async function handleMobileApi(
     const body = await readJson<{ name?: string; dir?: string; team?: string }>(
       request,
     );
+    // Refused in the check's own sentence (workspace-door.ts); the phone shows it.
+    await respondRefusable(response, async () =>
+      seatOn(
+        store,
+        await ops.createWorkspace(body.name ?? "workspace", body.dir ?? "", body.team, {
+          stay: store.isMultiInstance,
+        }),
+      ),
+    );
+    return true;
+  }
+  if (method === "POST" && p === "/api/workspaces/check") {
+    const body = await readJson<{ name?: string; dir?: string }>(request);
     respondJson(
       response,
       200,
-      await ops.createWorkspace(
-        body.name ?? "workspace",
-        body.dir ?? "",
-        body.team,
-      ),
+      ops.checkWorkspace(body.name ?? "", body.dir ?? ""),
     );
     return true;
   }
   if (method === "POST" && p === "/api/workspaces/switch") {
     const body = await readJson<{ id?: string }>(request);
-    ops.switchWorkspace(body.id ?? "");
-    respondJson(response, 200, ops.listWorkspaces());
+    const id = body.id ?? "";
+    // One workspace held at a time (the flag off): focus is all there is.
+    if (!store.isMultiInstance) {
+      ops.switchWorkspace(id);
+      respondJson(response, 200, ops.listWorkspaces());
+      return true;
+    }
+    const list = ops.listWorkspaces();
+    if (!list.workspaces.some((w) => w.id === id)) {
+      respondJson(response, 404, { error: `Workspace '${id}' not found` });
+      return true;
+    }
+    // Nothing moves here. The answer gives the phone its seat, and the phone
+    // carries it from now on: the desktop never hears about this.
+    respondJson(response, 200, { ...list, activeId: id, seat: id });
     return true;
   }
   if (method === "POST" && p === "/api/workspaces/rename") {
     const body = await readJson<{ id?: string; name?: string }>(request);
-    respondJson(
-      response,
-      200,
+    await respondRefusable(response, () =>
       ops.renameWorkspace(body.id ?? "", body.name ?? ""),
+    );
+    return true;
+  }
+  if (method === "POST" && p === "/api/workspaces/icon") {
+    const body = await readJson<{ id?: string; icon?: unknown }>(request);
+    await respondRefusable(response, () =>
+      ops.setWorkspaceIcon(body.id ?? "", body.icon),
     );
     return true;
   }
@@ -1036,13 +1121,17 @@ export async function handleMobileApi(
   // Workspace v2: remove + directory management + git (mobile = text input).
   const wsMatch = p.match(/^\/api\/workspaces\/([^/]+)$/);
   if (wsMatch && method === "DELETE") {
-    try {
-      respondJson(response, 200, ops.removeWorkspace(wsMatch[1]));
-    } catch (error) {
-      respondJson(response, 400, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    const worktree = url.searchParams.get("worktree") === "1";
+    await respondRefusable(response, () =>
+      ops.removeWorkspace(wsMatch[1], { worktree }),
+    );
+    return true;
+  }
+  const wsPlanMatch = p.match(/^\/api\/workspaces\/([^/]+)\/plan$/);
+  if (wsPlanMatch && method === "GET") {
+    await respondRefusable(response, () =>
+      ops.workspaceRemovePlan(wsPlanMatch[1]),
+    );
     return true;
   }
   const wsDirMatch = p.match(/^\/api\/workspaces\/([^/]+)\/dirs$/);
@@ -1203,7 +1292,7 @@ export async function handleMobileApi(
     const body = await readJson<{ spec?: TeamForkSpec }>(request);
     try {
       if (!body.spec) throw new Error("Missing spec");
-      respondJson(response, 200, await ops.teamFork(body.spec));
+      respondJson(response, 200, seatOn(store, await ops.teamFork(body.spec, { stay: store.isMultiInstance })));
     } catch (error) {
       respondJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),
@@ -1776,7 +1865,7 @@ export async function handleMobileApi(
   }
   if (p === "/api/listen" && method === "POST") {
     if (!deps.hear?.available()) {
-      respondJson(response, 503, { error: "This Mac has no ear to hear with" });
+      respondJson(response, 503, { error: `${TheMachine(process.platform)} has no ear to hear with` });
       return true;
     }
     try {
@@ -1797,7 +1886,7 @@ export async function handleMobileApi(
   }
   if (p === "/api/speak" && method === "POST") {
     if (!deps.speak) {
-      respondJson(response, 503, { error: "This Mac has no voice to speak with" });
+      respondJson(response, 503, { error: `${TheMachine(process.platform)} has no voice to speak with` });
       return true;
     }
     // The phone stopped reading (or left): stop the upstream request with it.
@@ -2079,8 +2168,15 @@ export async function handleMobileApi(
     }): void => {
       if (payload.workspaceId === scope) send("workspace", payload.state);
     };
+    // The store speaks for the desktop; a seated stream hears its own seat as
+    // active for as long as that workspace is there.
     const onWorkspaces = (list: WorkspaceList): void =>
-      send("workspaces", list);
+      send(
+        "workspaces",
+        seat !== null && list.workspaces.some((w) => w.id === seat)
+          ? { ...list, activeId: seat }
+          : list,
+      );
     const onActivity = (activity: unknown): void => {
       if (inScopedCanvas((activity as { terminalId: string }).terminalId)) {
         send("activity", activity);

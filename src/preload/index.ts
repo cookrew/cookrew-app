@@ -344,7 +344,11 @@ const api = {
   renameWorkspace: (id: string, name: string) =>
     ipcRenderer.invoke('workspace:rename', id, name),
   setWorkspaceBrief: (id: string, brief: string) => ipcRenderer.invoke('workspace:brief', id, brief),
-  removeWorkspace: (id: string) => ipcRenderer.invoke('workspace:remove', id),
+  setWorkspaceIcon: (id: string, icon: string) => ipcRenderer.invoke('workspace:icon', id, icon),
+  checkWorkspace: (name: string, dir: string) => ipcRenderer.invoke('workspace:check', name, dir),
+  workspaceRemovePlan: (id: string) => ipcRenderer.invoke('workspace:removePlan', id),
+  removeWorkspace: (id: string, options?: { worktree?: boolean }) =>
+    ipcRenderer.invoke('workspace:remove', id, options),
   addWorkspaceDir: (id: string, dir: string) => ipcRenderer.invoke('workspace:dir:add', id, dir),
   removeWorkspaceDir: (id: string, dir: string) =>
     ipcRenderer.invoke('workspace:dir:remove', id, dir),

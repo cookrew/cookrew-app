@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TeamMeta } from '../../shared/model'
+import type { WorkspaceCheck } from '../../shared/workspace-door'
 import { CrIcon } from './icons'
 import { TeamGraphThumb } from './TeamGraphThumb'
 import { nameAfterTemplate, templateLabel } from './workspace-wall-actions'
+import { useSheetEscape, wordsOf } from './workspace-sheet'
+
+/** How long typing rests before the folder is asked about. */
+const CHECK_REST_MS = 250
 
 /** What the sheet hands back: a name, where it lives, and what it starts as. */
 export interface CreateRequest {
@@ -13,14 +18,20 @@ export interface CreateRequest {
 }
 
 export interface WorkspaceCreateSheetProps {
-  /** The directory the form opens with — the live workspace's, usually. */
+  /** The directory the form opens with, until the check suggests one. */
   defaultDir: string
   teams: readonly TeamMeta[]
   /** A native folder picker exists (the desktop). Otherwise the path is typed. */
   canPickDir: boolean
   pickDir: () => Promise<string | null>
-  onCreate: (request: CreateRequest) => void
+  /** Resolves when made. A rejection stays on the sheet, in its own words. */
+  onCreate: (request: CreateRequest) => void | Promise<void>
   onCancel: () => void
+  /** Asks what a new workspace would be told; the sheet says it before creating. */
+  check?: (name: string, dir: string) => Promise<WorkspaceCheck>
+  /** Test seams: open with a name typed and a check already answered. */
+  initialName?: string
+  initialCheck?: WorkspaceCheck
 }
 
 /**
@@ -30,9 +41,13 @@ export interface WorkspaceCreateSheetProps {
  * this is what that screen opens. Nothing here decides anything: it collects
  * a name, a directory and (optionally) a saved team, and hands them back.
  *
- * A NATIVE PICKER WHERE THERE IS ONE. The desktop has a folder dialog; the
- * phone has not, and the path is typed — the same split DirectoryManager
- * makes, because a phone is telling the Mac about the Mac's own disk.
+ * THE PATH CAN ALWAYS BE TYPED, and the desktop's folder dialog sits beside it.
+ * A phone is telling the machine about the machine's own disk, and someone who
+ * knows the path should not have to walk to it.
+ *
+ * IT SAYS SO FIRST. The check (main/workspace-door.ts) answers as the fields
+ * change: a folder that cannot work is refused here, and a taken name or a folder
+ * another workspace owns is said before CREATE rather than found out after.
  */
 export function WorkspaceCreateSheet({
   defaultDir,
@@ -41,29 +56,69 @@ export function WorkspaceCreateSheet({
   pickDir,
   onCreate,
   onCancel,
+  check,
+  initialName = '',
+  initialCheck,
 }: WorkspaceCreateSheetProps): React.JSX.Element {
-  const [name, setName] = useState('')
+  const [name, setName] = useState(initialName)
   const [dir, setDir] = useState(defaultDir)
   const [template, setTemplate] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
+  const [verdict, setVerdict] = useState<WorkspaceCheck | null>(initialCheck ?? null)
+  const [refused, setRefused] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  /** The person chose a folder: the suggestion may no longer replace it. */
+  const chosen = useRef(false)
 
-  // Escape leaves the sheet, not the wall under it. Capture, and stopped, so
-  // the wall's own Escape (which closes everything) never sees it.
+  useSheetEscape(onCancel)
+
+  // Opens on the suggestion: beside the live folder, never a hidden worktree.
   useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      event.stopPropagation()
-      event.preventDefault()
-      onCancel()
+    let live = true
+    void check?.('', '')
+      .then((answer) => {
+        if (live && !chosen.current) setDir(answer.suggestedDir)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
     }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onCancel])
+    // Once, on opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!check) return
+    let live = true
+    const timer = window.setTimeout(() => {
+      void check(name, dir)
+        .then((answer) => {
+          if (live) setVerdict(answer)
+        })
+        .catch(() => undefined)
+    }, CHECK_REST_MS)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+  }, [check, name, dir])
+
+  const typeDir = (next: string): void => {
+    chosen.current = true
+    setRefused(null)
+    setDir(next)
+  }
+
+  const reason = verdict?.ok === false ? verdict.reason : undefined
+  const blocked = !name.trim() || reason !== undefined || creating
 
   const submit = (): void => {
-    const trimmed = name.trim()
-    if (!trimmed) return
-    onCreate({ name: trimmed, dir: dir.trim(), template })
+    if (blocked) return
+    setCreating(true)
+    setRefused(null)
+    Promise.resolve(onCreate({ name: name.trim(), dir: dir.trim(), template }))
+      .catch((error: unknown) => setRefused(wordsOf(error)))
+      .finally(() => setCreating(false))
   }
 
   const choose = (team: string | null): void => {
@@ -76,7 +131,7 @@ export function WorkspaceCreateSheet({
     setPicking(true)
     void pickDir()
       .then((picked) => {
-        if (picked) setDir(picked)
+        if (picked) typeDir(picked)
       })
       .catch((error: unknown) => console.error('Failed to select working directory:', error))
       .finally(() => setPicking(false))
@@ -97,27 +152,35 @@ export function WorkspaceCreateSheet({
         onChange={(e) => setName(e.target.value)}
         onKeyDown={onEnter}
       />
-      {canPickDir ? (
-        <button
-          type="button"
-          className="cr-ws-dir-picker"
-          title="Select the primary working directory"
-          disabled={picking}
-          onClick={pick}
-        >
-          <CrIcon name="terminal" />
-          <span>{dir || 'Select working directory'}</span>
-          <CrIcon name="caret-right" />
-        </button>
-      ) : (
+      <div className="cr-ws-dir-row">
         <input
           className="cr-ws-input"
-          placeholder="working directory"
+          aria-label="Folder path"
+          placeholder="/path/to/folder"
+          spellCheck={false}
+          autoCapitalize="none"
+          autoCorrect="off"
           value={dir}
-          onChange={(e) => setDir(e.target.value)}
+          onChange={(e) => typeDir(e.target.value)}
           onKeyDown={onEnter}
         />
-      )}
+        {canPickDir && (
+          <button
+            type="button"
+            className="cr-ws-dir-pick"
+            title="Choose a folder"
+            disabled={picking}
+            onClick={pick}
+          >
+            CHOOSE…
+          </button>
+        )}
+      </div>
+      {(refused ?? reason) && <p className="cr-ws-say refused" role="alert">{refused ?? reason}</p>}
+      {verdict?.notes.map((note) => (
+        <p className="cr-ws-say" key={note}>{note}</p>
+      ))}
+      {!name.trim() && <p className="cr-ws-say quiet">Give it a name to create it.</p>}
       {teams.length > 0 && (
         <div className="cr-ws-template">
           <div className="cr-ws-template-head">FROM TEMPLATE</div>
@@ -152,7 +215,7 @@ export function WorkspaceCreateSheet({
         <button type="button" className="cr-ws-cancel" onClick={onCancel}>
           CANCEL
         </button>
-        <button type="button" className="cr-ws-create" disabled={!name.trim()} onClick={submit}>
+        <button type="button" className="cr-ws-create" disabled={blocked} onClick={submit}>
           {template ? `CREATE FROM ${template.toUpperCase()}` : 'CREATE'}
         </button>
       </div>

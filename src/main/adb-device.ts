@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import type { UseTarget } from '../shared/use-url'
 import type { PixelDevice, PixelFrame } from './pixel-instance'
 import type { Gesture, ScreenPoints } from './vphone-input'
+import { thisMachine } from '../shared/machine-word'
 
 /**
  * AN ANDROID DEVICE OVER ADB, AS A PIXEL DEVICE (phone use).
@@ -80,7 +81,7 @@ export function pickDevice(devicesOutput: string): string {
   if (ready.length === 1) return ready[0]
   if (ready.length > 1) throw new Error(`${ready.length} Android devices are attached (${ready.join(', ')}); name one: adb://<serial>`)
   const unauthorized = rows.find((parts) => parts[1] === 'unauthorized')
-  if (unauthorized) throw new Error(`Android device ${unauthorized[0]} has not allowed this Mac — accept the USB debugging prompt on the phone`)
+  if (unauthorized) throw new Error(`Android device ${unauthorized[0]} has not allowed ${thisMachine(process.platform)} — accept the USB debugging prompt on the phone`)
   throw new Error('No Android device is attached — plug one in with USB debugging on, or start an emulator')
 }
 

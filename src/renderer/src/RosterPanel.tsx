@@ -40,6 +40,7 @@ import { useCanvasUi } from './canvas-ui'
 import { useActivitiesSnapshot, useThumbsSnapshot } from './activity-thumb-store'
 import { recoverEligible, recoverErrorToast, recoverToastFor, type RecoverToast } from './recover'
 import { dirLabel } from './workspace-v2'
+import { TeamSaveBar } from './TeamSaveBar'
 import type { BrowserNodeData, NoteNodeData, WorkspaceState } from '../../shared/model'
 import {
   PHONE_BOARD_PAGE_SIZE,
@@ -149,6 +150,7 @@ export function RosterPanel({
       })
     })
   const [forkOpen, setForkOpen] = useState(false)
+  const [savingTeam, setSavingTeam] = useState(false)
   // Opens on the loaded workspace, and follows a switch; clearing the chip is
   // the way to the whole crew (agent-facets.ts: defaultFilter).
   const [filter, setFilter] = useState<AgentFilter>(() => defaultFilter(activeWorkspaceId))
@@ -606,7 +608,7 @@ export function RosterPanel({
               type="button"
               className={`cr-btn sm${editing ? ' primary' : ''}`}
               aria-pressed={editing}
-              title={editing ? 'Done selecting' : 'Select agents to fork into a team'}
+              title={editing ? 'Done selecting' : 'Select agents to save or fork as a team'}
               onClick={() => setEditing(!editing)}
             >
               {editing ? 'DONE' : 'SELECT'}
@@ -752,6 +754,14 @@ export function RosterPanel({
             )}
             <button
               className="cr-btn sm"
+              disabled={picked.size === 0}
+              title="Save the selection as a team, to start a workspace from later"
+              onClick={() => setSavingTeam(true)}
+            >
+              SAVE TEAM
+            </button>
+            <button
+              className="cr-btn sm"
               disabled={picked.size === 0 || !workspace}
               title={
                 workspace
@@ -763,6 +773,17 @@ export function RosterPanel({
               FORK TEAM
             </button>
           </div>
+        )}
+
+        {editing && savingTeam && (
+          <TeamSaveBar
+            onCancel={() => setSavingTeam(false)}
+            onSave={async (name) => {
+              await cookrew().teamSave(name, [...picked])
+              setSavingTeam(false)
+              setToast({ tone: 'ok', text: `Saved team ${name}. New workspace now offers it under FROM TEMPLATE.` })
+            }}
+          />
         )}
 
         {/* Recover result toast (agent-recover): honest mapping of the API

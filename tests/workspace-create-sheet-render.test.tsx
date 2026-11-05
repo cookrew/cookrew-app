@@ -35,10 +35,10 @@ describe('the sheet', () => {
   })
 
   it('offers the native picker on the desktop and a typed path elsewhere', () => {
-    expect(sheet({ canPickDir: true })).toContain('cr-ws-dir-picker')
+    expect(sheet({ canPickDir: true })).toContain('CHOOSE…')
     const phone = sheet({ canPickDir: false })
-    expect(phone).not.toContain('cr-ws-dir-picker')
-    expect(phone).toContain('placeholder="working directory"')
+    expect(phone).not.toContain('CHOOSE…')
+    expect(phone).toContain('placeholder="/path/to/folder"')
   })
 
   it('lists every saved team as a template, after the empty option', () => {

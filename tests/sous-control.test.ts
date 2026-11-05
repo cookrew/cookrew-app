@@ -20,6 +20,7 @@ const roster: IntentRoster = {
 /** Every dep records its call; the tests read the trail. */
 function harness(options: { active?: string | null; failing?: string; polish?: (t: string) => string | null } = {}) {
   const calls: string[] = []
+  const made: unknown[] = []
   let active: string | null = options.active === undefined ? 'ws-dev' : options.active
   let clock = 1_000_000
   const deps: SousControlDeps = {
@@ -29,7 +30,8 @@ function harness(options: { active?: string | null; failing?: string; polish?: (
       calls.push(`switch ${id}`)
       active = id
     },
-    createTerminal: ({ preset, name }) => {
+    createTerminal: ({ preset, name, workspaceId }) => {
+      made.push({ preset, name, workspaceId })
       calls.push(`create ${preset} as ${name}`)
       if (options.failing === 'create') throw new Error('no room')
       return { id: 'a-new', name }
@@ -57,7 +59,7 @@ function harness(options: { active?: string | null; failing?: string; polish?: (
     note: (kind, id, detail) => calls.push(`note ${kind} ${id ?? '-'} ${detail}`),
     now: () => clock
   }
-  return { calls, deps, controller: new SousController(deps), tick: (ms: number) => (clock += ms) }
+  return { calls, made, deps, controller: new SousController(deps), tick: (ms: number) => (clock += ms) }
 }
 
 describe('switch', () => {
@@ -313,5 +315,50 @@ describe('refusals and failures never touch the canvas', () => {
     const en = harness({ failing: 'create' })
     const c = await en.controller.handle({ text: 'create codex', surface: 'canvas' })
     expect(c).toMatchObject({ intent: 'refused', spoken: 'That did not work: no room' })
+  })
+})
+
+describe('a phone moves itself, never the desktop (ruling 11-04)', () => {
+  const seated = () => {
+    const h = harness()
+    h.deps.seats = () => true
+    return h
+  }
+
+  it('a switch from the phone answers a seat and leaves the desktop', async () => {
+    const h = seated()
+    const r = await h.controller.handle({ text: 'switch to agentmall', surface: 'phone', callerId: 'p' })
+    expect(r).toMatchObject({ intent: 'switch', seat: 'ws-mall' })
+    expect(h.calls).toEqual(['note switch ws-mall agentmall'])
+  })
+
+  it('an ask from the phone reaches the agent, with no move and no zoom on the desktop', async () => {
+    const h = seated()
+    const r = await h.controller.handle({ text: 'ask Magpie', surface: 'phone', callerId: 'p' })
+    expect(r).toMatchObject({ needs: 'prompt', seat: 'ws-mall' })
+    await h.controller.handle({ text: 'check the build', surface: 'phone', callerId: 'p' })
+    expect(h.calls.some((c) => c.startsWith('switch') || c.startsWith('ui '))).toBe(false)
+    expect(h.calls.some((c) => c.includes('a-magpie'))).toBe(true)
+  })
+
+  it('a card made from the phone lands in the workspace it named', async () => {
+    const h = seated()
+    const r = await h.controller.handle({ text: 'create a Shell in agentmall', surface: 'phone', callerId: 'p' })
+    expect(r.seat).toBe('ws-mall')
+    expect(h.made).toEqual([{ preset: 'Shell', name: 'Shell', workspaceId: 'ws-mall' }])
+    expect(h.calls.some((c) => c.startsWith('switch'))).toBe(false)
+  })
+
+  it('the same sentence on the desktop still moves it', async () => {
+    const h = seated()
+    const r = await h.controller.handle({ text: 'switch to agentmall', surface: 'canvas' })
+    expect(r.seat).toBeUndefined()
+    expect(h.calls[0]).toBe('switch ws-mall')
+  })
+
+  it('a phone keeps moving the desktop where seats are off', async () => {
+    const h = harness()
+    await h.controller.handle({ text: 'switch to agentmall', surface: 'phone', callerId: 'p' })
+    expect(h.calls[0]).toBe('switch ws-mall')
   })
 })

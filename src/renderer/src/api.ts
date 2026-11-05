@@ -9,6 +9,7 @@ import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
+import type { WorkspaceCheck, WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -314,8 +315,14 @@ export interface CookrewApi {
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** The owner's one-line brief (shared/workspace-brief.ts); '' clears it. Rejects an invalid one. */
   setWorkspaceBrief: (id: string, brief: string) => Promise<WorkspaceList>;
+  /** The workspace's mark; rejects anything but one short mark. */
+  setWorkspaceIcon: (id: string, icon: string) => Promise<WorkspaceList>;
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => Promise<WorkspaceCheck>;
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (id: string) => Promise<WorkspaceRemovePlan>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
-  removeWorkspace: (id: string) => Promise<WorkspaceList>;
+  removeWorkspace: (id: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
   removeWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
   setPrimaryDir: (id: string, dir: string) => Promise<WorkspaceList>;
