@@ -1,11 +1,11 @@
-// THE KEYCHAIN OPT-IN: the value goes to `security`, the file keeps the
-// facts, and everything above the store is unchanged. A fake `security`
-// stands in for the real one and records exactly what it was asked.
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+// THE OLD KEYCHAIN OPT-IN, ON ITS WAY OUT: a file marked `keychain` still reads,
+// `migrate` seals it and takes the item, and nothing writes that way again. A
+// fake `security` stands in for the real one and records what it was asked.
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createSecretsStore, KEYCHAIN_ENV, keychainService } from '../src/main/secrets-store'
+import { createSecretsStore, keychainService, type SecretSealer } from '../src/main/secrets-store'
 import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from '../src/main/secret-cli'
 import type { CliRequest, TerminalNodeData } from '../src/shared/model'
 
@@ -53,66 +53,74 @@ process.exit(2)
   }
 }
 
-const fresh = (keychain: boolean | undefined, env?: NodeJS.ProcessEnv) => {
+const SEALER: SecretSealer = {
+  available: () => true,
+  seal: (value) => Buffer.from(`v10:${Buffer.from(value).toString('hex')}`),
+  open: (box) => Buffer.from(box.toString().replace(/^v10:/, ''), 'hex').toString()
+}
+
+const KEY = `cookrew|${keychainService('stripe-key')}`
+
+/** A secret as COOKREW_SECRETS_KEYCHAIN=1 left it: the facts in the file, the value in an item. */
+const legacy = (withItem = true) => {
   const base = mkdtempSync(path.join(tmpdir(), 'cookrew-secrets-kc-'))
   const security = fakeSecurity()
-  const store = createSecretsStore({ baseDir: base, keychain, security: security.bin, env: env ?? {} })
+  mkdirSync(path.join(base, 'secrets'), { recursive: true, mode: 0o700 })
+  writeFileSync(path.join(base, 'secrets', 'stripe-key'), JSON.stringify({ keychain: true, served: true, createdAt: 5, updatedAt: 9 }), { mode: 0o600 })
+  if (withItem) writeFileSync(path.join(security.bin, '..', 'keychain.json'), JSON.stringify({ [KEY]: VALUE }))
+  else writeFileSync(path.join(security.bin, '..', 'keychain.json'), '{}')
+  const store = createSecretsStore({ baseDir: base, sealer: SEALER, security: security.bin })
   return { base, security, store }
 }
 
-describe('the keychain backend', () => {
-  it('puts the value in the keychain and only the facts in the 0600 file', () => {
-    const { base, security, store } = fresh(true)
-    store.put('stripe-key', VALUE, { served: true })
-    expect(security.items()[`cookrew|${keychainService('stripe-key')}`]).toBe(VALUE)
-    expect(security.calls()[0].slice(0, 7)).toEqual(['add-generic-password', '-U', '-a', 'cookrew', '-s', 'cookrew-secret-stripe-key', '-w'])
-    const file = path.join(base, 'secrets', 'stripe-key')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
-    const text = readFileSync(file, 'utf8')
-    expect(text).not.toContain(VALUE)
-    expect(JSON.parse(text)).toMatchObject({ keychain: true, served: true })
+describe('a value in the old keychain item', () => {
+  it('still reads, and lists without asking the keychain', () => {
+    const { security, store } = legacy()
+    expect(store.read('stripe-key')).toMatchObject({ value: VALUE, served: true })
+    const before = security.calls().length
+    expect(store.list()).toEqual([{ name: 'stripe-key', served: true, updatedAt: 9 }])
+    expect(security.calls().length).toBe(before)
   })
 
-  it('reads it back through `security -w`, lists without asking the keychain, removes both', () => {
-    const { security, store } = fresh(true)
-    store.put('stripe-key', VALUE)
-    expect(store.read('stripe-key')).toMatchObject({ value: VALUE, served: false })
-    const before = security.calls().length
-    expect(store.list()).toEqual([{ name: 'stripe-key', served: false, updatedAt: expect.any(Number) }])
-    expect(security.calls().length).toBe(before)
+  it('is sealed by migrate, and the item goes', () => {
+    const { base, security, store } = legacy()
+    expect(store.migrate()).toEqual({ sealed: ['stripe-key'], failed: [] })
+    expect(security.items()).toEqual({})
+    const stored = JSON.parse(readFileSync(path.join(base, 'secrets', 'stripe-key'), 'utf8')) as Record<string, unknown>
+    expect(stored.keychain).toBeUndefined()
+    expect(typeof stored.sealed).toBe('string')
+    expect(store.read('stripe-key')).toEqual({ value: VALUE, served: true, createdAt: 5, updatedAt: 9 })
+  })
+
+  it('a mark with no item behind it stays as it was, and is named', () => {
+    const { base, store } = legacy(false)
+    const before = readFileSync(path.join(base, 'secrets', 'stripe-key'), 'utf8')
+    expect(store.read('stripe-key')).toBeNull()
+    expect(store.migrate()).toEqual({ sealed: [], failed: ['stripe-key'] })
+    expect(readFileSync(path.join(base, 'secrets', 'stripe-key'), 'utf8')).toBe(before)
+  })
+
+  it('a new seal replaces it and takes the item, and no value is ever passed to `security`', () => {
+    const { security, store } = legacy()
+    store.put('stripe-key', 'sk_new_value')
+    expect(security.items()).toEqual({})
+    expect(store.read('stripe-key')?.value).toBe('sk_new_value')
+    expect(security.calls().flat().join(' ')).not.toContain('sk_new_value')
+    expect(security.calls().some((argv) => argv[0] === 'add-generic-password')).toBe(false)
+  })
+
+  it('remove takes the file and the item', () => {
+    const { security, store } = legacy()
     expect(store.remove('stripe-key')).toBe(true)
     expect(security.items()).toEqual({})
-    expect(store.read('stripe-key')).toBeNull()
-    expect(readdirSync(path.join(store.dir))).toEqual([])
+    expect(readdirSync(store.dir)).toEqual([])
   })
+})
 
-  it('a file that says keychain with no item behind it is a secret that is gone', () => {
-    const { security, store } = fresh(true)
-    store.put('stripe-key', VALUE)
-    // Someone removed the item from Keychain Access.
-    writeFileSync(path.join(security.bin, '..', 'keychain.json'), '{}')
-    expect(store.read('stripe-key')).toBeNull()
-  })
-
-  it('is opted into by COOKREW_SECRETS_KEYCHAIN=1 and off by default', () => {
-    const off = fresh(undefined, {})
-    off.store.put('a-key', VALUE)
-    expect(readFileSync(path.join(off.base, 'secrets', 'a-key'), 'utf8')).toContain(VALUE)
-    const on = fresh(undefined, { [KEYCHAIN_ENV]: '1' })
-    on.store.put('a-key', VALUE)
-    expect(readFileSync(path.join(on.base, 'secrets', 'a-key'), 'utf8')).not.toContain(VALUE)
-    expect(on.security.items()).toHaveProperty(`cookrew|${keychainService('a-key')}`)
-  })
-
-  it('a keychain that refuses the write leaves no file behind', () => {
-    const { base, store } = createSecretsStoreWithBrokenSecurity()
-    expect(() => store.put('stripe-key', VALUE)).toThrow()
-    expect(readdirSync(path.join(base, 'secrets'))).toEqual([])
-  })
-
-  it('above the store nothing changes: the same audit line, the same served refusal', () => {
-    const { store } = fresh(true)
-    store.put('stripe-key', VALUE, { served: true })
+describe('above the store', () => {
+  it('nothing changes: the same audit line, the same served refusal', () => {
+    const { store } = legacy()
+    store.migrate()
     const audits: SecretAudit[] = []
     const owner = { kind: 'terminal', id: 't-owner', name: 'Tinker' } as TerminalNodeData
     const seat = { kind: 'terminal', id: 't-seat', name: 'Seat', servedSession: { door: 'x' } } as unknown as TerminalNodeData
@@ -130,11 +138,3 @@ describe('the keychain backend', () => {
     expect(audits).toHaveLength(1)
   })
 })
-
-const createSecretsStoreWithBrokenSecurity = () => {
-  const base = mkdtempSync(path.join(tmpdir(), 'cookrew-secrets-kc-broken-'))
-  const bin = path.join(base, 'security')
-  writeFileSync(bin, '#!/bin/sh\nexit 1\n')
-  chmodSync(bin, 0o755)
-  return { base, store: createSecretsStore({ baseDir: base, keychain: true, security: bin }) }
-}

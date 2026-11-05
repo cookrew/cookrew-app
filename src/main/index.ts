@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -108,6 +108,7 @@ import {
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
+import { electronSealer, excludeFromBackup } from './secrets-seal'
 import { createRtcHost } from './rtc-peer'
 import { createSocketBridge } from './socket-bridge'
 import { BUILD_CHECK_MS, readBuildId } from './build-id'
@@ -638,12 +639,20 @@ const ownerGrant = new OwnerGrant({
 })
 const callConversations = new CallConversationStore()
 /**
- * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file per name. The
+ * THE SEALED SLOTS (R4): ~/.cookrew/secrets/, one 0600 file of ciphertext per
+ * name, the key in the keychain under this app's ACL (secrets-seal.ts). The
  * value goes in from the note slot (IPC `secret:put`, or the phone's owner-
  * token PUT) and comes out through `cookrew secret read` in an owner pane,
  * and through nothing else — not an event, not workspace state, not a log.
  */
-const secrets = createSecretsStore()
+const secrets = createSecretsStore({
+  sealer: electronSealer(safeStorage),
+  // Elsewhere a machine with no keyring keeps the 0600 file: refusing there
+  // would take the slots away. A Mac always has a keychain to refuse from.
+  requireSealer: process.platform === 'darwin',
+  excludeFromBackup: (dir) => excludeFromBackup(dir, { warn: (message) => console.error(`[cookrew] ${message}`) }),
+  warn: (message) => console.error(`[cookrew] ${message}`)
+})
 /**
  * THE DIRECT LINK BY WEBRTC (rtc-peer.ts): a phone on the relay offers, this
  * Mac answers on exactly the addresses it publishes — the LAN first, then
@@ -6679,6 +6688,14 @@ if (selfHosted) {
 let cliSocket: SocketServerHandle | null = null
 
 app.whenReady().then(() => {
+  // Before anything reads a secret: a value still in the clear goes under the key.
+  try {
+    const moved = secrets.migrate()
+    if (moved.sealed.length > 0) console.error(`[cookrew] secrets sealed: ${moved.sealed.join(', ')}`)
+    if (moved.failed.length > 0) console.error(`[cookrew] secrets left as they were: ${moved.failed.join(', ')}`)
+  } catch (error) {
+    console.error('[cookrew] secrets could not be moved', error)
+  }
   // Dock icon must be set at runtime in dev; packaged builds also bundle
   // resources/icon.icns via the packager config when one is added.
   if (process.platform === 'darwin' && app.dock) {
