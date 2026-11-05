@@ -59,5 +59,11 @@ export type SettlementResult =
   | { ok: false; reason: PaymentFailure }
 
 export interface Facilitator {
+  /**
+   * This one really checks transfers. A real facilitator says so, and only its
+   * receipts count on a registry that has no stand-in. Left out by the dev
+   * stand-in and by test doubles, which settle without proving anything.
+   */
+  readonly verifies?: true
   settle(request: SettlementRequest): SettlementResult
 }

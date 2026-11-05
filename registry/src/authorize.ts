@@ -123,8 +123,10 @@ export function makeAuthorize(
     // OPTIONS, POST and to a request whose method was unset: an exclusion list
     // makes every method somebody adds later a purchase by default. The
     // allow-list makes the next one safe without anybody remembering this.
+    // HEAD is the one exception, stated positively for the same reason as the
+    // GET below: whatever method somebody adds next must be refused by default.
     const facilitator = pricing?.facilitator ?? null
-    if (request.method === 'GET' && facilitator === null && store.getManifest(presetId)?.pricing !== undefined) {
+    if (request.method !== 'HEAD' && facilitator === null && store.getManifest(presetId)?.pricing !== undefined) {
       return PAYMENT_UNAVAILABLE
     }
     if (pricing !== undefined && facilitator !== null && request.method === 'GET') {
@@ -190,7 +192,8 @@ export function makeAuthorize(
               tx: held.tx,
               amount: price.amount,
               asset: price.asset,
-              at: pricing.now()
+              at: pricing.now(),
+              ...(facilitator.verifies === true ? { verified: true as const } : {})
             })
           }
         }
@@ -241,7 +244,10 @@ function entitlementOf(
   if (manifest?.pricing === undefined) return null
   const lineage = store.lineageFor(presetId)
   if (lineage === null) return null
-  const held = pricing.receipts.forLineage(identityId, lineage)
+  // Only a stand-in registry honours a receipt nobody verified. Everywhere else
+  // one of those is a made-up tx the old wiring settled, not a purchase.
+  const standIn = pricing.facilitator !== null && pricing.facilitator.verifies !== true
+  const held = pricing.receipts.forLineage(identityId, lineage).filter((r) => standIn || r.verified === true)
   return entitledTo(held, { version: manifest.version, pricing: manifest.pricing })
 }
 

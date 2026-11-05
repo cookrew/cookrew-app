@@ -161,12 +161,27 @@ describe('a registry with no facilitator', () => {
     const id = seed('Pro Toolkit', true)
     receipts.record({
       identityId: IDENTITY, lineage: lineageOf(IDENTITY, 'Pro Toolkit'), version: 1, presetId: id,
-      nonce: 'held', tx: '0xheld', amount: '12.00', asset: 'USDC', at: 1
+      nonce: 'held', tx: '0xheld', amount: '12.00', asset: 'USDC', at: 1, verified: true
     })
     const s = await listen(productionPricing())
     try {
       const token = await downloadToken(s.url)
       expect((await gate(s.url, id, { authorization: `Bearer ${token}` })).status).toBe(200)
+    } finally {
+      s.close()
+    }
+  })
+
+  it('opens nothing for a receipt nobody verified, as the dev stand-in wrote them', async () => {
+    const id = seed('Pro Toolkit', true)
+    receipts.record({
+      identityId: IDENTITY, lineage: lineageOf(IDENTITY, 'Pro Toolkit'), version: 1, presetId: id,
+      nonce: 'forged', tx: '0xmadeup', amount: '12.00', asset: 'USDC', at: 1
+    })
+    const s = await listen(productionPricing())
+    try {
+      const token = await downloadToken(s.url)
+      expect((await gate(s.url, id, { authorization: `Bearer ${token}` })).status).toBe(503)
     } finally {
       s.close()
     }
@@ -201,6 +216,51 @@ describe('a registry with no facilitator', () => {
     try {
       const health = (await (await fetch(`${s.url}/v1/health`)).json()) as { payments: { served: boolean } }
       expect(health.payments.served).toBe(false)
+    } finally {
+      s.close()
+    }
+  })
+})
+
+describe('what a receipt is worth', () => {
+  const settle = (verifies: boolean): PricingDeps => ({
+    ...productionPricing(),
+    facilitator: { ...(verifies ? { verifies: true as const } : {}), settle: () => ({ ok: true as const }) }
+  })
+
+  it('a real facilitator marks what it settled, and refuses to honour what it did not', async () => {
+    const forged = seed('Pro Toolkit', true)
+    receipts.record({
+      identityId: IDENTITY, lineage: lineageOf(IDENTITY, 'Pro Toolkit'), version: 1, presetId: forged,
+      nonce: 'forged', tx: '0xmadeup', amount: '12.00', asset: 'USDC', at: 1
+    })
+    const bought = seed('Ship Crew', true)
+    const s = await listen(settle(true))
+    try {
+      const authorization = `Bearer ${await downloadToken(s.url)}`
+      expect((await gate(s.url, forged, { authorization })).status).toBe(402)
+      const asked = await gate(s.url, bought, { authorization })
+      const { terms } = (await asked.json()) as { terms: Terms }
+      const proof = encodePaymentProof({ nonce: terms.nonce, tx: '0xreal' })
+      expect((await gate(s.url, bought, { authorization, 'x-payment': proof })).status).toBe(200)
+      expect(receipts.forLineage(IDENTITY, lineageOf(IDENTITY, 'Ship Crew'))[0].verified).toBe(true)
+      expect((await gate(s.url, bought, { authorization })).status).toBe(200)
+    } finally {
+      s.close()
+    }
+  })
+
+  it('a stand-in registry still honours its own unmarked receipts, or --dev could never own anything', async () => {
+    const id = seed('Pro Toolkit', true)
+    const s = await listen(settle(false))
+    try {
+      const authorization = `Bearer ${await downloadToken(s.url)}`
+      const asked = await gate(s.url, id, { authorization })
+      const { terms } = (await asked.json()) as { terms: Terms }
+      const proof = encodePaymentProof({ nonce: terms.nonce, tx: 'dev' })
+      expect((await gate(s.url, id, { authorization, 'x-payment': proof })).status).toBe(200)
+      expect(receipts.forLineage(IDENTITY, lineageOf(IDENTITY, 'Pro Toolkit'))[0].verified).toBeUndefined()
+      expect((await gate(s.url, id, { authorization })).status).toBe(200)
     } finally {
       s.close()
     }
