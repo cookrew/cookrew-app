@@ -36,7 +36,10 @@ export interface SousControlDeps {
   activeWorkspaceId: () => string | null
   switchWorkspace: (workspaceId: string) => void | Promise<void>
   /** A new card in the ACTIVE workspace, booted. */
-  createTerminal: (input: { preset: string; name: string }) => { id: string; name: string }
+  /** `workspaceId`: make it there, whoever is looking; else where the caller stands. */
+  createTerminal: (input: { preset: string; name: string; workspaceId?: string }) => { id: string; name: string }
+  /** A phone holds its own workspace, so nothing it says moves the desktop (ruling 11-04). */
+  seats?: () => boolean
   /** A browser card anchored to and connected with that terminal. */
   createBrowser: (anchorTerminalId: string, name: string) => Promise<void>
   connect: (a: string, b: string) => void
@@ -183,6 +186,8 @@ export interface SousCommandResult {
   error?: 'bad-target' | 'expired' | 'not-yours' | 'in-flight' | 'needs-ack'
   /** The agent the sentence ended up about, when there is one. */
   agentId?: string
+  /** Where a phone should stand now: it went there itself, and the desktop did not move. */
+  seat?: string
   /** The text that went into the agent, after polish — so a surface can show it. */
   text?: string
   polished?: boolean
@@ -353,26 +358,28 @@ export class SousController {
         this.note('open', null, 'cookrew')
         return { intent: 'open', spoken }
       case 'switch': {
-        await this.moveTo(intent.workspaceId)
-        this.deps.ui({ kind: 'zoom-back' }, intent.workspaceId)
+        const seat = await this.moveTo(intent.workspaceId, surface)
+        if (seat === null) this.deps.ui({ kind: 'zoom-back' }, intent.workspaceId)
         this.focus.delete(key)
         this.note('switch', intent.workspaceId, workspaceName(roster, intent.workspaceId))
-        return { intent: 'switch', spoken }
+        return { intent: 'switch', spoken, ...seatOf(seat) }
       }
       case 'ask': {
         const agent = agentOf(roster, intent.agentId)
-        await this.moveTo(agent.workspaceId)
-        this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
-        this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
+        const seat = await this.moveTo(agent.workspaceId, surface)
+        if (seat === null) {
+          this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
+          this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
+        }
         this.focus.set(key, agent.id)
         if (intent.prompt === null) {
           this.pending.set(key, { kind: 'prompt', agentId: agent.id, until: this.now() + PENDING_PROMPT_MS })
           this.note('ask', agent.id, agent.name)
-          return { intent: 'ask', spoken, needs: 'prompt', agentId: agent.id }
+          return { intent: 'ask', spoken, needs: 'prompt', agentId: agent.id, ...seatOf(seat) }
         }
         this.pending.delete(key)
         const sent = await this.deliver(agent, intent.prompt, surface, lang, spoken)
-        return { intent: 'ask', ...sent }
+        return { intent: 'ask', ...sent, ...seatOf(seat) }
       }
       case 'prompt': {
         const agent = agentOf(roster, intent.agentId)
@@ -382,14 +389,14 @@ export class SousController {
       }
       case 'create': {
         const target = intent.workspaceId ?? active
-        if (target) await this.moveTo(target)
-        const node = this.deps.createTerminal({ preset: intent.preset, name: intent.preset })
+        const seat = target ? await this.moveTo(target, surface) : null
+        const node = this.deps.createTerminal({ preset: intent.preset, name: intent.preset, ...(seat ? { workspaceId: seat } : {}) })
         if (intent.browser) await this.deps.createBrowser(node.id, `${node.name} browser`)
         const workspaceId = this.deps.activeWorkspaceId() ?? target ?? ''
-        this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
+        if (seat === null) this.deps.ui({ kind: 'zoom', nodeId: node.id }, workspaceId)
         this.focus.set(key, node.id)
         this.note('create', node.id, `${node.name}${intent.browser ? ' + browser' : ''}`)
-        return { intent: 'create', spoken, agentId: node.id }
+        return { intent: 'create', spoken, agentId: node.id, ...seatOf(seat) }
       }
       case 'connect': {
         const a = agentOf(roster, intent.fromId)
@@ -518,9 +525,11 @@ export class SousController {
         const deps = this.deps.decide
         if (!deps) throw new Error('deciding is not wired on this desktop')
         const agent = agentOf(roster, path.agentId)
-        await this.moveTo(agent.workspaceId)
-        this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
-        this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
+        const seat = await this.moveTo(agent.workspaceId, caller?.surface ?? 'canvas')
+        if (seat === null) {
+          this.deps.ui({ kind: 'zoom', nodeId: agent.id }, agent.workspaceId)
+          this.deps.ui({ kind: 'focus-input', nodeId: agent.id }, agent.workspaceId)
+        }
         this.focus.set(key, agent.id)
         // Through the dispatch engine, as the owner: the ledger gets a record
         // and the sous row can RETRY from the text the owner saw.
@@ -528,7 +537,7 @@ export class SousController {
         const delivered = await deps.deliver({ nodeId: agent.id, sentence: brief, originId: null, token })
         ledger?.write({ token, dispatchId: delivered?.dispatchId ?? null, outcome: 'delivered' })
         this.note('prompt', agent.id, agent.name)
-        result = { intent: 'ask', spoken: SENT[lang](agent.name), agentId: agent.id, text: brief }
+        result = { intent: 'ask', spoken: SENT[lang](agent.name), agentId: agent.id, text: brief, ...seatOf(seat) }
       } else {
         const deps = this.deps.decide
         if (!deps) throw new Error('recruiting is not wired on this desktop')
@@ -626,10 +635,16 @@ export class SousController {
     }
   }
 
-  /** Switch only when not already there — a switch rebuilds PTY clients. */
-  private async moveTo(workspaceId: string): Promise<void> {
-    if (this.deps.activeWorkspaceId() === workspaceId) return
+  /**
+   * Switch only when not already there — a switch rebuilds PTY clients. A phone
+   * does not switch: the workspace comes back as its seat, to stand on itself,
+   * and the desktop hears nothing. Null when the caller is there now.
+   */
+  private async moveTo(workspaceId: string, surface: Surface): Promise<string | null> {
+    if (this.deps.activeWorkspaceId() === workspaceId) return null
+    if (surface === 'phone' && this.deps.seats?.()) return workspaceId
     await this.deps.switchWorkspace(workspaceId)
+    return null
   }
 
   private note(kind: string, subjectId: string | null, detail: string): void {
@@ -660,6 +675,9 @@ export function chosenPath(decision: Decision, target: string | undefined): Chos
   const harness = (target ? target.slice('harness:'.length) : decision.harness) as Harness
   return { kind: 'recruit', harness, name: decision.name, beside: decision.beside, cwd: decision.cwd ?? 'repo' }
 }
+
+/** The seat on a result, only when there is one. */
+const seatOf = (seat: string | null): { seat?: string } => (seat ? { seat } : {})
 
 function callerKey(surface: Surface, callerId: string | undefined): string {
   return `${surface}:${callerId ?? ''}`

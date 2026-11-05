@@ -48,6 +48,7 @@ import { createCurtain, domCurtainDeps, subRowShift } from './live-curtain'
 import { installLiveSheet, type LiveSheet } from './live-sheet'
 import { closeZoomMenu, useZoomSlots } from './zoom-bar'
 import { requestRename } from './zoom/rename-request'
+import { requestCardMenu } from './card-menu-request'
 import { CardTune } from './nodes/CardTune'
 import { isNight, themeNow, useNight, useTheme } from './color-scheme'
 import { PAPER_THEME, terminalTheme } from './terminal-theme'
@@ -1298,6 +1299,18 @@ function TerminalOverlay({
             >
               <CrIcon name="note" />
               <span className="cr-more-label">Rename</span>
+            </button>
+            {/* SAVE ROLE, FORK, LANE: right-click went with the canvas. */}
+            <button
+              type="button"
+              className="cr-more-item"
+              onClick={(event) => {
+                closeZoomMenu()
+                requestCardMenu(node.id, event.clientX, event.clientY)
+              }}
+            >
+              <CrIcon name="fork" />
+              <span className="cr-more-label">Role, fork, lane…</span>
             </button>
             {/* Translate keeps ⋯ open: its language list opens from this row. */}
             <div className="cr-more-row cr-zoom-translate" role="presentation">

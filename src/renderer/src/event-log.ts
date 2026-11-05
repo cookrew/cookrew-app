@@ -120,7 +120,7 @@ const META: Record<string, EventMeta> = {
   'connection.made': { label: 'Wired', verb: 'connected', noun: 'connection', icon: 'connect', hatch: false, metric: null },
   'connection.removed': { label: 'Unwired', verb: 'disconnected', noun: 'connection', icon: 'close', hatch: false, metric: null },
   'workspace.created': { label: 'Workspace', verb: 'created', noun: 'workspace', icon: 'plus', hatch: false, metric: null },
-  'workspace.switched': { label: 'Switched', verb: 'switched to', noun: 'workspace', icon: 'next', hatch: false, metric: 'switches' },
+  'workspace.switched': { label: 'Workspace', verb: 'opened', noun: 'workspace', icon: 'next', hatch: false, metric: 'switches' },
   'workspace.renamed': { label: 'Renamed', verb: 'renamed', noun: 'workspace', icon: 'note', hatch: false, metric: null },
   'terminal.renamed': { label: 'Renamed', verb: 'renamed', noun: 'agent', icon: 'note', hatch: false, metric: null },
   'note.renamed': { label: 'Renamed', verb: 'renamed', noun: 'note', icon: 'note', hatch: false, metric: null },

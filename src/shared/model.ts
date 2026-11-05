@@ -332,6 +332,10 @@ export function normalizeDirs(input: {
 export interface WorkspaceList {
   workspaces: WorkspaceMeta[]
   activeId: string
+  /** A phone's own workspace, when the answer gave it one (mobile-api, device seat). */
+  seat?: string
+  /** Something a remove could not do, as a sentence. */
+  notice?: string
 }
 
 export interface RoutineSpec {
@@ -624,10 +628,25 @@ export function activeBrowserTab(node: BrowserNodeData): BrowserTab {
   return tabs.find((t) => t.id === node.activeTabId) ?? tabs[0]
 }
 
-/** Derive a note name from its first content line. */
+/** A note's title: its first line, in the words and the case it was written. */
 export function noteNameFromContent(content: string): string {
   const firstLine = content.split('\n')[0] ?? ''
-  const slug = firstLine
+  const title = firstLine
+    .replace(/^[\s#>*-]+/, '')
+    .replace(/[^\p{L}\p{N}'’.-]+/gu, ' ')
+    .trim()
+    .slice(0, 28)
+    .trim()
+  return title.length > 0 ? title : 'untitled'
+}
+
+/**
+ * The name a note's first line used to give it, kept for one job: a note named
+ * by the old rule keeps that name until its first line really changes, so an
+ * agent that reads it by name is not cut off by an unrelated edit.
+ */
+export function legacyNoteName(content: string): string {
+  const slug = (content.split('\n')[0] ?? '')
     .toLowerCase()
     .replace(/[#*`>\-\[\]()!]/g, ' ')
     .trim()

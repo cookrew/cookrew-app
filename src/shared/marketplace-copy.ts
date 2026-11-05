@@ -1070,7 +1070,7 @@ export const MKT_GATE = {
   'mkt.gate.seat.done': 'You have a seat here.',
   'mkt.gate.seat.why': 'A seat is per account and follows you to any device.',
   /** Cleared identity, DIRECT door — this Mac's key, no account anywhere. */
-  'mkt.gate.identify.direct.done': "Connected with this Mac's key.",
+  'mkt.gate.identify.direct.done': "Connected with this computer's key.",
   'mkt.gate.identify.direct.why': 'No account was involved; nothing follows you elsewhere.',
   /** Served, install door — the copy is placed. */
   'mkt.gate.open.install.title': 'Yours. Placing it on your canvas…',
