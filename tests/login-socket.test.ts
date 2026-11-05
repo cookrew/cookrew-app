@@ -9,14 +9,12 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startSocketServer, type SocketServerDeps } from '../src/main/socket-server'
 import type { AccountDoor, LoginAudit } from '../src/main/login-cli'
-import type { CliRequest } from '../src/shared/model'
 
 const PASSWORD = 'SENTINEL-socket-password'
 
 let dir = ''
 let sock = ''
 let close: () => Promise<void> = async () => undefined
-let seen: CliRequest[] = []
 let audits: LoginAudit[] = []
 let sealed: string[] = []
 let released: string[] = []
@@ -70,7 +68,6 @@ const deps = (): SocketServerDeps =>
 beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'login-sock-'))
   sock = path.join(dir, 'app.sock')
-  seen = []
   audits = []
   sealed = []
   released = []
@@ -170,7 +167,6 @@ describe('the password on the socket', () => {
     await new Promise<void>((resolve) => server.server.close(() => resolve()))
     expect(line).not.toContain(PASSWORD)
     expect(JSON.stringify(adopted)).not.toContain(PASSWORD)
-    expect(seen).toEqual([])
   })
 })
 
@@ -199,6 +195,17 @@ describe('the owner rule, at the socket', () => {
     expect(answer).toMatchObject({ ok: false, exitCode: 3 })
     expect(answer.error).toContain('served session')
     expect(audits).toMatchObject([{ type: 'account.login-refused' }])
+  })
+
+  it('refuses a pane that holds a served session, as `cookrew secret` does', async () => {
+    const held = pane as unknown as { servedSession?: unknown }
+    held.servedSession = { id: 'seat' }
+    const { socket, send } = await connect()
+    const answer = await open(send)
+    socket.destroy()
+    delete held.servedSession
+    expect(answer).toMatchObject({ ok: false, exitCode: 3 })
+    expect(answer.error).toContain('served session')
   })
 
   it('refuses a pane whose agent is mid-turn', async () => {
