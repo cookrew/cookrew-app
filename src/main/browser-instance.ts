@@ -62,6 +62,8 @@ export interface BrowserInstance {
   refusalFor?(who: ViewerWho): UseStatus | null
   /** A viewer arrived; the answer is its leaving. */
   enterViewer?(viewerId: string, who: ViewerWho): (() => void) | null
+  /** This viewer holds control right now. Absent: the question does not arise. */
+  mayDrive?(who: ViewerWho): boolean
   /** Input here needs a viewer with a name: a route with none is refused. */
   readonly needsViewer?: boolean
   /**

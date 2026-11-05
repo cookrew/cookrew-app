@@ -364,7 +364,8 @@ export function MobileBrowserFrame({
       : stream.deviceStatus?.state === 'connecting' && !stream.live
         ? 'connecting to the device'
         : streamStatusText(surfaceState, stream)
-  const showControl = streaming && stream.controlAvailable
+  // Fitting the viewport means nothing on a machine's screen: nobody reshapes a Mac from here.
+  const showControl = streaming && stream.controlAvailable && !computerCard
   const controlDisabled = stream.agentHeld || stream.transitioning
   const controlLabel = stream.agentHeld
     ? 'Viewport fit is held while the agent is driving'
@@ -909,7 +910,7 @@ export function MobileBrowserFrame({
       {note !== null && !kbd.open && <span className="browser-frame-note" role="status">{note}</span>}
       {/* The live dot keeps the corner to itself now that the controls sit in
           the dock — nothing left up here to make room for. */}
-      {frameReady && <span className="browser-frame-live" aria-hidden="true" />}
+      {frameReady && !computerCard && <span className="browser-frame-live" aria-hidden="true" />}
       <UseOverlay
         card={browserId}
         box={fit.width > 0 ? fit : null}

@@ -211,12 +211,15 @@ const NEXT: Partial<Record<RemoteStateId, string>> = {
 
 function permissionView(state: RemoteState, where: RemoteWhere, title: string, jump: RemoteActionId, sentence: string): Omit<RemoteView, 'next'> {
   const away = where === 'away'
+  // A grant macOS has not applied yet looks the same as no grant to a process
+  // that started before it, so the reader is told before they go round in circles.
+  const already = jump === 'open-screen-settings' && !away ? `Already on there? macOS applies it when ${buildName(state.build)} next starts.` : null
   return {
     title,
     sentence: away ? `This needs you at the Mac: ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence,
     actions: [settingsJump(jump, where), CHECK],
     needsYouThere: away,
-    note: state.waiting ? 'System Settings is open on the Mac. Cookrew will tell you here when it is ready.' : null
+    note: state.waiting ? 'System Settings is open on the Mac. Cookrew will tell you here when it is ready.' : already
   }
 }
 

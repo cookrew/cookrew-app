@@ -26,9 +26,13 @@ interface Acts {
   answerConfirm(yes: boolean): void
 }
 
-/** `onCheck` reads the state again; `onOther` takes the actions only its place can do. */
-export function useRemoteActs(options: { state: RemoteState | null; onCheck: () => Promise<void> | void; onOther?: (action: RemoteAction) => void }): Acts {
-  const { state, onCheck, onOther } = options
+/**
+ * `onCheck` reads the state again; `onOpened` hears that a settings page opened,
+ * for a place that should show `waiting` now; `onOther` takes the actions only
+ * its place can do.
+ */
+export function useRemoteActs(options: { state: RemoteState | null; onCheck: () => Promise<void> | void; onOpened?: () => Promise<void> | void; onOther?: (action: RemoteAction) => void }): Acts {
+  const { state, onCheck, onOpened, onOther } = options
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [pending, setPending] = useState<RemoteAction | null>(null)
@@ -48,7 +52,7 @@ export function useRemoteActs(options: { state: RemoteState | null; onCheck: () 
           const name = state?.build.settingsName ?? 'Cookrew'
           const opened = isRemoteMode() ? 'System Settings is open on the Mac for when you are there.' : `Turn on ${name} there, then Check again.`
           setNote(answer?.ok === false ? answer.error : opened)
-          if (isRemoteMode()) await onCheck()
+          if (isRemoteMode()) await onOpened?.()
         } else {
           onOther?.(action)
         }
@@ -58,7 +62,7 @@ export function useRemoteActs(options: { state: RemoteState | null; onCheck: () 
         setBusy(false)
       }
     },
-    [onCheck, onOther, state]
+    [onCheck, onOpened, onOther, state]
   )
 
   return {

@@ -86,7 +86,7 @@ function OpenPicker({ card, remoteDesktop, onOpened }: { card: string | null; re
     }
   }
 
-  const acts = useRemoteActs({ state: load.status === 'ready' ? load.list.remote : null, onCheck: read })
+  const acts = useRemoteActs({ state: load.status === 'ready' ? load.list.remote : null, onCheck: read, onOpened: read })
 
   return (
     <>

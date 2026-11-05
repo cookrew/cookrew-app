@@ -102,7 +102,7 @@ export function UseOverlay({
       )}
       {gone && <GoneOffer card={card} />}
       {bar && <RemoteBar card={card} control={bar} connection={reconnecting ? 'reconnecting' : live ? 'live' : 'stalled'} zoomed={zoomed} onFit={onFit} onEnd={onEnd} />}
-      {cover && <RemoteCover state={cover} />}
+      {cover && <RemoteCover state={cover} onEnd={onEnd} />}
     </div>
   )
 }
@@ -119,7 +119,7 @@ function useLineLost(reconnecting: boolean): boolean {
   return lost
 }
 
-function RemoteCover({ state }: { state: RemoteState }): JSX.Element {
+function RemoteCover({ state, onEnd }: { state: RemoteState; onEnd?: () => void }): JSX.Element {
   // What Check again found, until the card's own status says otherwise.
   const [fresh, setFresh] = useState<RemoteState | null>(null)
   useEffect(() => setFresh(null), [state])
@@ -129,10 +129,13 @@ function RemoteCover({ state }: { state: RemoteState }): JSX.Element {
     setFresh({ ...access.state, lastSeenAt: state.lastSeenAt })
   }, [state.lastSeenAt])
   const shown = fresh ?? state
-  const acts = useRemoteActs({ state: shown, onCheck: check })
+  const acts = useRemoteActs({ state: shown, onCheck: check, onOpened: check })
   return (
     <div className="rp-cover">
-      <RemotePanel state={shown} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
+      <div className="rp-cover-body">
+        <RemotePanel state={shown} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
+        {onEnd && <button type="button" className="rp-leave" onPointerDown={(event) => event.stopPropagation()} onClick={onEnd}>End session</button>}
+      </div>
       {acts.confirm && <RemoteConfirmView confirm={acts.confirm} onYes={() => acts.answerConfirm(true)} onNo={() => acts.answerConfirm(false)} />}
     </div>
   )
@@ -172,17 +175,20 @@ function RemoteBar({ card, control, connection, zoomed, onFit, onEnd }: { card: 
   return (
     <>
       <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} />
-      {refusal && <RemoteRefusalCover state={refusal} onClose={() => setRefusal(null)} />}
+      {refusal && <RemoteRefusalCover state={refusal} onRetry={() => ask(true)} onEnd={end} />}
     </>
   )
 }
 
-/** Take control was refused for a reason with a next action: Accessibility, or a lock that just landed. */
-function RemoteRefusalCover({ state, onClose }: { state: RemoteState; onClose: () => void }): JSX.Element {
-  const acts = useRemoteActs({ state, onCheck: onClose })
+/** Take control was refused for a reason with a next action. Check again is the same ask again. */
+function RemoteRefusalCover({ state, onRetry, onEnd }: { state: RemoteState; onRetry: () => void; onEnd: () => void }): JSX.Element {
+  const acts = useRemoteActs({ state, onCheck: onRetry })
   return (
     <div className="rp-cover">
-      <RemotePanel state={state} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
+      <div className="rp-cover-body">
+        <RemotePanel state={state} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
+        <button type="button" className="rp-leave" onPointerDown={(event) => event.stopPropagation()} onClick={onEnd}>End session</button>
+      </div>
     </div>
   )
 }

@@ -124,6 +124,9 @@ export class CastViewer {
    * click, writes nobody's clipboard here.
    */
   private readonly copyListener = (text: string): void => {
+    // On a machine's screen this is the machine's clipboard, so only the viewer
+    // actually driving hears it: a watcher's refused taps also set lastInputAt.
+    if (this.instance?.mayDrive && !this.instance.mayDrive(this.who)) return
     if (copyArmed(this.lastInputAt, Date.now())) this.sink.sendControl({ t: 'copy', text })
   }
 

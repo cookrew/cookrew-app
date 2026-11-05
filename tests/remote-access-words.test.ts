@@ -29,6 +29,11 @@ describe('remoteView · at the Mac', () => {
     expect(view.needsYouThere).toBe(false)
   })
 
+  it('a grant macOS has not applied yet is named, so nobody goes round in circles', () => {
+    expect(remoteView(state('needs-screen-recording'), 'here').note).toContain('next starts')
+    expect(remoteView(state('needs-screen-recording'), 'away').note).toBeNull()
+  })
+
   it('a source build is told to look for Electron, because that is what the list says', () => {
     const view = remoteView(state('needs-screen-recording', { build: source }), 'here')
     expect(view.sentence).toContain('Electron')

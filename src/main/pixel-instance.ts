@@ -336,6 +336,10 @@ export class PixelInstance {
     return { ...status, input: status.input && remote.mayDrive(who), control: remote.cardControl(who) }
   }
 
+  mayDrive(who: ViewerWho): boolean {
+    return this.opts.device.remote?.mayDrive(who) ?? true
+  }
+
   /** The status a viewer who may not watch is left with; null when it may. */
   refusalFor(who: ViewerWho): UseStatus | null {
     const refusal = this.opts.device.remote?.admit(who) ?? null

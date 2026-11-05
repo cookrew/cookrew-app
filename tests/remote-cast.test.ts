@@ -1,6 +1,7 @@
 // ONE REAL VIEWER ON ONE REAL SCREEN, ON FAKE SOURCES: the cast, the pixel
 // instance and the desk together, so what is proved is the wiring.
 import { describe, expect, it, vi } from 'vitest'
+import { VIEWPORT_DEBOUNCE_MS } from '../src/main/browser-viewport'
 import { CastViewer, type ViewerSink } from '../src/main/cast-viewer'
 import { DeviceBlockedError, PixelInstance, type PixelDevice } from '../src/main/pixel-instance'
 import { createRemoteDesk, remoteGate, type RemoteDesk, type RemoteSession } from '../src/main/remote-desk'
@@ -78,18 +79,40 @@ function rig() {
 
 const lastStatus = (line: { sent: Array<Record<string, unknown>> }) => [...line.sent].reverse().find((m) => m.t === 'status') as (Record<string, unknown> & { remote?: RemoteState }) | undefined
 
+/** A frame reaches every viewer: input is only ever mapped against a frame the viewer was sent. */
+const frame = (instance: PixelInstance): void => {
+  const meta = { deviceWidth: 1000, deviceHeight: 800, pageScaleFactor: 1, mobile: false, revision: instance.viewportState.revision }
+  for (const listener of instance.frameListeners) listener(Buffer.from('frame').toString('base64'), meta)
+}
+
 const tapOn = (viewer: CastViewer, instance: PixelInstance): void => {
   const revision = instance.viewportState.revision
   for (const t of ['down', 'up']) viewer.handleMessage({ t, x: 10, y: 10, button: 'left', revision, frameSeq: 1 })
 }
 
 describe('a viewer of the Mac', () => {
+  it('holding control, its tap reaches the hand through the whole line', async () => {
+    const { desk, gestures, instance, watch } = rig()
+    desk.setSwitch(true)
+    await instance.start()
+    const { viewer } = watch(phone)
+    await desk.takeControl('card', phone)
+    // A new viewer's viewport settles first: a press inside that window is dropped, by design.
+    await new Promise((r) => setTimeout(r, VIEWPORT_DEBOUNCE_MS + 60))
+    frame(instance)
+    tapOn(viewer, instance)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(gestures.map((g) => g.method)).toEqual(['input.tap'])
+  })
+
   it('watches by default: the status says so, and a tap goes nowhere', async () => {
     const { desk, gestures, instance, watch } = rig()
     desk.setSwitch(true)
     await instance.start()
     const { line, viewer } = watch(phone)
     expect(lastStatus(line)).toMatchObject({ state: 'live', input: false, control: { switchOn: true, until: null } })
+    await new Promise((r) => setTimeout(r, VIEWPORT_DEBOUNCE_MS + 60))
+    frame(instance)
     tapOn(viewer, instance)
     await new Promise((r) => setTimeout(r, 0))
     expect(gestures).toEqual([])
@@ -115,6 +138,21 @@ describe('a viewer of the Mac', () => {
     await desk.takeControl('card', phone)
     desk.setSwitch(false)
     expect(lastStatus(line)).toMatchObject({ input: false, control: { switchOn: false, until: null } })
+  })
+
+  it('the Mac\'s clipboard reaches the viewer driving and nobody else, whatever the watcher pressed', async () => {
+    const { desk, instance, watch } = rig()
+    desk.setSwitch(true)
+    await instance.start()
+    const driver = watch(phone)
+    const watcher = watch(tablet)
+    await desk.takeControl('card', phone)
+    frame(instance)
+    tapOn(driver.viewer, instance)
+    tapOn(watcher.viewer, instance)
+    for (const listener of instance.copyListeners) listener('482913')
+    expect(driver.line.sent.filter((m) => m.t === 'copy')).toHaveLength(1)
+    expect(watcher.line.sent.filter((m) => m.t === 'copy')).toHaveLength(0)
   })
 
   it('leaving is a logged stop, whichever line it was on', async () => {

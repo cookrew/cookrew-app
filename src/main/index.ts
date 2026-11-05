@@ -6419,7 +6419,7 @@ const remoteDesk = createRemoteDesk({
     }
   },
   host: (view) => {
-    mainWindow?.webContents.send('use:remote-host', view)
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:remote-host', view)
     remoteTray.show(view)
   },
   refreshCards: () => useInstances.refresh(),

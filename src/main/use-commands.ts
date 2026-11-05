@@ -195,7 +195,7 @@ export const SERVED_USE_REFUSED =
  *
  * A served pane runs a CALLER's work under Seatbelt; the uses run in main,
  * outside it, with the owner's own grants — Screen Recording, the camera,
- * the attached phone, and with COOKREW_COMPUTER_INPUT the keyboard. So a
+ * the attached phone, and with the machine switch on, the keyboard. So a
  * served caller may not create or navigate a card to a use address, nor
  * touch a card any of whose tabs is one (a tab switch would make it one).
  * `cardUrls` answers a card's tab addresses by name, or [] for no card.

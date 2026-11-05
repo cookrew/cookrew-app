@@ -369,6 +369,17 @@ describe('through the real gate', () => {
     expect((await call('/api/watch/item/b9/frame', token)).status).toBe(404)
   })
 
+  it('a machine\'s screen is never driven from a wrist: refused out loud, and nothing reaches it', async () => {
+    const dispatchInput = vi.fn(async () => undefined)
+    const instance = { viewportState: { width: 800, height: 600, transitioning: false, agentHeld: false }, dispatchInput, needsViewer: true }
+    setWatchHost(host(pairing, { browser: async () => instance as never }))
+    const token = await paired()
+    for (const body of [{ t: 'tap', x: 0.5, y: 0.5 }, { t: 'text', text: 'hunter2' }, { t: 'enter' }]) {
+      expect((await post('/api/watch/item/b1/input', token, body)).status).toBe(409)
+    }
+    expect(dispatchInput).not.toHaveBeenCalled()
+  })
+
   it('browser input goes through the closed vocabulary, and waits for a driving agent', async () => {
     const dispatchInput = vi.fn(async () => undefined)
     const paste = vi.fn(async () => undefined)

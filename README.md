@@ -95,8 +95,14 @@ What agents produce and use, on the other side of the same zoom:
   (`screen://main`, `window://App`), an Android phone (`adb://SERIAL`), a virtual
   iPhone (`vphone://VM`) or a camera (`cam://0`). These cards need Chrome, Chromium or
   Edge installed, as above. An Android card needs `adb`, and a virtual iPhone needs a
-  running VM. The Mac cards need Screen Recording permission. Letting agents click and
-  type on the Mac also needs Accessibility and `COOKREW_COMPUTER_INPUT=1`.
+  running VM. The Mac cards need Screen Recording permission, and each card says what
+  it is waiting for and what to do next.
+- **Remote desktop**: the Remote desktop button on a machine opens its screen from the
+  desktop or a phone. Cards are view only. Turning on *Allow remote control of this Mac*
+  (in the ⋯ menu or on the device page, at the Mac only) lets a paired device take
+  control of a card for 15 minutes, and lets agents click and type; both also need
+  Accessibility. While anyone watches, the Mac shows who, with a Stop button, and stays
+  awake. A locked Mac needs someone there: nothing here types into the lock screen.
 
 ## Phone
 

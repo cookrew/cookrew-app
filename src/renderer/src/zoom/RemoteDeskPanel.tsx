@@ -32,7 +32,7 @@ function Panel(): React.JSX.Element | null {
     const timer = setInterval(() => void read(), 15_000)
     return () => clearInterval(timer)
   }, [read])
-  const acts = useRemoteActs({ state: access?.state ?? null, onCheck: read })
+  const acts = useRemoteActs({ state: access?.state ?? null, onCheck: read, onOpened: read })
   if (!access) return null
   const { state, control } = access
   const where = remoteWhere()
