@@ -952,6 +952,10 @@ export function createRemoteApi(): CookrewApi {
       req<{ available?: boolean }>(apiPath('/api/listen'))
         .then((out) => out.available === true)
         .catch(() => false),
+    hearLocale: () =>
+      req<{ locale?: string | null }>(apiPath('/api/listen'))
+        .then((out) => out.locale ?? null)
+        .catch(() => null),
     hearRecording,
     speakAvailable: () =>
       req<{ available?: boolean }>(apiPath('/api/speak'))

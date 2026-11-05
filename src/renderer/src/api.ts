@@ -848,6 +848,8 @@ export interface CookrewApi {
    * Remote surfaces only — the desktop has the Mac's own ear above.
    */
   hearAvailable?: () => Promise<boolean>;
+  /** The language this Mac hears in; a browser's own ear hears in it too. Null from an older Mac. */
+  hearLocale?: () => Promise<string | null>;
   hearRecording?: (audio: Blob, signal?: AbortSignal) => Promise<{ text: string; alternates: Record<string, string> }>;
   /**
    * Spoken replies in the Mac's free local voice (prompt/reply-voice.ts,

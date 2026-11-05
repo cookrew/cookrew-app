@@ -7270,6 +7270,7 @@ app.whenReady().then(() => {
   // The same ears for a recording the phone made (hear-file.ts, POST /api/listen).
   const phoneEar = {
     available: () => hearAvailable(earOptions),
+    locale: () => earOptions.locales()[0] ?? null,
     recording: (bytes: Uint8Array) => hearRecording(earOptions, bytes)
   }
   ipcMain.handle('listen:available', () => listener.available())
