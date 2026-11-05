@@ -1,0 +1,552 @@
+import { cliCopy, type CliCopyId } from '../shared/account-copy'
+import {
+  ladderIsOver,
+  normaliseUsername,
+  registryMismatchSentence,
+  type AccountDevice,
+  type AccountRefusal,
+  type AccountResult,
+  type ApprovalAsked,
+  type LadderFactor,
+  type SecondFactorStep,
+  type SignInAnswer
+} from '../shared/account-v2'
+import { machineCopy } from '../shared/machine-words'
+import type { CliRequest, TerminalNodeData } from '../shared/model'
+import type { TypedFactor } from './account-ladder'
+
+/**
+ * `cookrew login`, `logout` AND `whoami`: THE ACCOUNT, FROM A TERMINAL.
+ *
+ * WHY. A machine with no visible window (the Solis Linux box runs Electron on
+ * Xvfb) has no avatar to click, and the avatar was the only door. Signing in
+ * is what adds a device; there is no separate step. So this writes no second
+ * path: every act goes to the functions the sheet's channels call
+ * (account-ipc.ts · accountDoor), which end in the same `signedIn()` that files
+ * the desktop.
+ *
+ * THE WHOLE CONVERSATION LIVES HERE AND THE CLI IS A PRINTER AND A KEYBOARD. It
+ * prints `say`, reads what `ask` describes, and sends back the answer. That
+ * keeps every decision testable with no terminal, and it keeps the CLI script,
+ * which is copied alone next to the socket, free of account rules.
+ *
+ * WHAT IS TYPED IS NOT A REQUEST FIELD. Every answer rides beside the request
+ * in `secret`, which socket-server.ts · handleLine takes off the JSON first,
+ * so it is never in `args` or `flags` and nothing that reads a request can log
+ * it. In the pane the keys are sealed from the turn tracker (PtySession ·
+ * sealInput) from before the first prompt to the end. The pending id stays
+ * here too, and the password stays where it always did, in main, keyed by that
+ * id (account-ladder.ts).
+ *
+ * AN AGENT MUST NOT DO THIS SILENTLY, and here is what that comes to:
+ *
+ *   The caller is held to `ownerPaneOf`, the rule `cookrew secret` keeps.
+ *   That alone is not enough: an agent's own pane IS an owner pane.
+ *
+ *   So a person has to be there. The CLI reports whether it has a terminal
+ *   (an agent's tool call has none); a claude session in the caller's process
+ *   tree is refused; and a pane whose agent is mid-turn is refused, which is
+ *   what stops a faked tty (`script`), since an agent's tools only run in its
+ *   turn.
+ *
+ *   Those are the app's own checks on a socket any process of this user can
+ *   write to, so none of them is a wall. Every attempt, refused or not, goes
+ *   in the event log, so it cannot be silent; and what actually keeps the
+ *   account shut is unchanged: the password, then the second factor.
+ */
+
+export const LOGIN_EXIT = { ok: 0, failed: 1, refused: 3 } as const
+
+/** Three wrong passwords and the conversation ends. The registry counts its own. */
+const PASSWORD_TRIES = 3
+
+export class LoginRefused extends Error {
+  readonly exitCode: number
+  constructor(message: string, exitCode: number) {
+    super(message)
+    this.name = 'LoginRefused'
+    this.exitCode = exitCode
+  }
+}
+
+/** What the CLI does next. Exactly one of `ask`, `wait` and `exit`, or none after a stop. */
+export interface LoginTurn {
+  say: readonly string[]
+  ask?: {
+    kind: 'text' | 'hidden' | 'choice'
+    prompt: string
+    options?: readonly { key: string; label: string }[]
+  }
+  /** Call `wait` next. `other` is true when pressing c can reach another rung. */
+  wait?: { other: boolean }
+  exit?: number
+}
+
+export interface AccountWho {
+  username: string | null
+  deviceId: string
+  deviceName: string
+  sessionLive: boolean
+  registry: string | null
+  mismatch: { signedInAt: string; pointedAt: string } | null
+}
+
+/** The sheet's own account functions (account-ipc.ts · accountDoor). */
+export interface AccountDoor {
+  platform: string
+  who: () => AccountWho
+  signIn: (input: { username: string; password: string }) => Promise<SignInAnswer<unknown>>
+  resume: (password: string) => Promise<SignInAnswer<unknown>>
+  climbCode: (pending: string, factor: TypedFactor, code: string) => Promise<SignInAnswer<unknown>>
+  askApproval: (pending: string) => Promise<AccountResult<ApprovalAsked>>
+  waitApproval: (pending: string, signal: AbortSignal) => Promise<SignInAnswer<unknown>>
+  abandon: (pending: string) => void
+  signOut: (password: string) => Promise<AccountResult<unknown>>
+  devices: () => Promise<AccountResult<readonly AccountDevice[]>>
+}
+
+/** One line in the event log. A reason and a name; never anything typed. */
+export interface LoginAudit {
+  type: 'account.login' | 'account.logout' | 'account.login-refused'
+  terminalId: string
+  details: string
+}
+
+export interface LoginDoorDeps {
+  /** Null until main has wired the account, or in a test server that has none. */
+  account: () => AccountDoor | null
+  /** The caller, held to an owner pane (socket-server · ownerPaneOf). Throws. */
+  ownerPane: (request: CliRequest) => TerminalNodeData
+  /** Is the agent in this pane mid-turn? */
+  agentBusy: (terminalId: string) => boolean
+  /** Hold this pane's keys back from the tracker. Answers the release. */
+  seal: (terminalId: string) => () => void
+  audit: (event: LoginAudit) => void
+  sleep?: (ms: number) => Promise<void>
+}
+
+/** The piece of a socket this needs. */
+export interface LoginConnection {
+  once: (event: 'close', listener: () => void) => unknown
+}
+
+type Rung = Exclude<LadderFactor, 'passkey'>
+
+/** The order the terminal offers them: the one that needs no typing first. */
+const RUNG_ORDER: readonly Rung[] = ['approve', 'totp', 'recovery']
+
+type Stage =
+  | { at: 'username' }
+  | { at: 'password'; username: string; tries: number; renew: boolean }
+  | { at: 'logout'; username: string; tries: number }
+  | { at: 'rung'; step: SecondFactorStep; rungs: readonly Rung[] }
+  | { at: 'code'; step: SecondFactorStep; rungs: readonly Rung[]; factor: TypedFactor }
+  | { at: 'waiting'; step: SecondFactorStep; rungs: readonly Rung[] }
+  | { at: 'over' }
+
+const WAIT_RETRY_MS = 2_000
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+const isWrongPassword = (reason: AccountRefusal): boolean =>
+  reason === 'session-expired' || reason === 'bad_credentials'
+
+const SAID_REASONS: Partial<Record<AccountRefusal, CliCopyId>> = {
+  rate_limited: 'refused.rate_limited',
+  offline: 'refused.offline',
+  'session-expired': 'refused.wrong-password',
+  bad_credentials: 'refused.wrong-password',
+  bad_code: 'refused.bad_code',
+  bad_recovery: 'refused.bad_recovery',
+  expired: 'refused.expired',
+  not_offered: 'refused.expired',
+  too_many_attempts: 'refused.too_many_attempts',
+  denied: 'refused.denied',
+  bad_username: 'refused.bad_username',
+  password_change_required: 'refused.password_change_required'
+}
+
+/** One sign-in or sign-out, from the first prompt to its end. */
+class Conversation {
+  private stage: Stage = { at: 'over' }
+  private release: () => void = () => undefined
+  /** The ladder this conversation opened and has not landed. */
+  private pending: string | null = null
+  private stopWaiting: AbortController | null = null
+  private saidOffline = false
+  private readonly account: AccountDoor
+  private readonly deps: LoginDoorDeps
+  private readonly pane: TerminalNodeData
+  private readonly leaving: boolean
+  private readonly ended: () => void
+
+  constructor(input: {
+    account: AccountDoor
+    deps: LoginDoorDeps
+    pane: TerminalNodeData
+    leaving: boolean
+    ended: () => void
+  }) {
+    this.account = input.account
+    this.deps = input.deps
+    this.pane = input.pane
+    this.leaving = input.leaving
+    this.ended = input.ended
+  }
+
+  private say(id: CliCopyId, vars: Readonly<Record<string, string | number>> = {}): string {
+    return cliCopy(id, this.account.platform, vars)
+  }
+
+  private refusal(reason: AccountRefusal, message: string | undefined, handle = ''): string {
+    if (message) return message
+    if (reason === 'last_device') return this.say('refused.last_device', { handle })
+    return this.say(SAID_REASONS[reason] ?? 'refused.unknown')
+  }
+
+  /** The first turn. The caller seals the pane when this asks for anything. */
+  start(wanted: string): LoginTurn {
+    return this.leaving ? this.startLogout() : this.startLogin(normaliseUsername(wanted))
+  }
+
+  hold(release: () => void): void {
+    this.release = release
+  }
+
+  private startLogin(wanted: string): LoginTurn {
+    const who = this.account.who()
+    if (who.username === null) {
+      if (wanted === '') {
+        this.stage = { at: 'username' }
+        return { say: [], ask: { kind: 'text', prompt: this.say('ask.username') } }
+      }
+      return this.askPassword(wanted, 0, false, [])
+    }
+    if (wanted !== '' && wanted !== who.username) {
+      return this.finish(LOGIN_EXIT.failed, [this.say('said.other-account', { handle: who.username, wanted })], null)
+    }
+    if (who.sessionLive) {
+      return this.finish(
+        LOGIN_EXIT.ok,
+        [this.say('said.already', { handle: who.username, device: who.deviceName })],
+        null
+      )
+    }
+    if (who.mismatch !== null) {
+      const sentence = machineCopy(registryMismatchSentence(who.mismatch), this.account.platform)
+      return this.finish(LOGIN_EXIT.failed, [sentence], null)
+    }
+    return this.askPassword(who.username, 0, true, [])
+  }
+
+  private startLogout(): LoginTurn {
+    const who = this.account.who()
+    if (who.username === null) return this.finish(LOGIN_EXIT.ok, [this.say('said.not-signed-in')], null)
+    this.stage = { at: 'logout', username: who.username, tries: 0 }
+    return {
+      say: [],
+      ask: { kind: 'hidden', prompt: this.say('ask.password-logout', { handle: who.username }) }
+    }
+  }
+
+  private askPassword(username: string, tries: number, renew: boolean, say: readonly string[]): LoginTurn {
+    this.stage = { at: 'password', username, tries, renew }
+    return { say, ask: { kind: 'hidden', prompt: this.say('ask.password', { handle: username }) } }
+  }
+
+  /** Whatever was just asked has been answered. */
+  async answer(text: string): Promise<LoginTurn> {
+    const stage = this.stage
+    switch (stage.at) {
+      case 'username':
+        return this.askPassword(normaliseUsername(text), 0, false, [])
+      case 'password':
+        return this.tryPassword(stage, text)
+      case 'logout':
+        return this.tryLogout(stage, text)
+      case 'rung':
+        return this.pickRung(stage, text)
+      case 'code':
+        return this.tryCode(stage, text)
+      default:
+        return { say: [] }
+    }
+  }
+
+  private async tryPassword(stage: Extract<Stage, { at: 'password' }>, password: string): Promise<LoginTurn> {
+    const answer = stage.renew
+      ? await this.account.resume(password)
+      : await this.account.signIn({ username: stage.username, password })
+    if (answer.ok) return this.landed()
+    if (answer.reason === 'second_factor') return this.offerRungs(answer.step, answer.message)
+    const sentence = this.refusal(answer.reason, answer.message)
+    if (!isWrongPassword(answer.reason)) return this.finish(LOGIN_EXIT.failed, [sentence], answer.reason)
+    const tries = stage.tries + 1
+    if (tries >= PASSWORD_TRIES) {
+      return this.finish(LOGIN_EXIT.failed, [sentence, this.say('said.too-many-passwords')], 'three wrong passwords')
+    }
+    return this.askPassword(stage.username, tries, stage.renew, [sentence])
+  }
+
+  private async tryLogout(stage: Extract<Stage, { at: 'logout' }>, password: string): Promise<LoginTurn> {
+    const answer = await this.account.signOut(password)
+    if (answer.ok) {
+      this.deps.audit({ type: 'account.logout', terminalId: this.pane.id, details: `@${stage.username}` })
+      return this.finish(LOGIN_EXIT.ok, [this.say('said.signed-out', { handle: stage.username })], null)
+    }
+    const sentence = this.refusal(answer.reason, answer.message, stage.username)
+    const tries = stage.tries + 1
+    if (!isWrongPassword(answer.reason) || tries >= PASSWORD_TRIES) {
+      return this.finish(LOGIN_EXIT.failed, [sentence], answer.reason)
+    }
+    this.stage = { ...stage, tries }
+    return {
+      say: [sentence],
+      ask: { kind: 'hidden', prompt: this.say('ask.password-logout', { handle: stage.username }) }
+    }
+  }
+
+  /** The password was right and the account wants more. */
+  private async offerRungs(step: SecondFactorStep, message: string | undefined): Promise<LoginTurn> {
+    this.pending = step.pending
+    // The connection went while the password was in flight: nobody is here to
+    // climb, and main must not go on holding the password for them.
+    if (this.closed) {
+      this.account.abandon(step.pending)
+      return { say: [] }
+    }
+    const rungs = RUNG_ORDER.filter(
+      (rung) => step.next.includes(rung) && (rung !== 'approve' || step.match !== undefined)
+    )
+    const say = [
+      ...(message ? [message] : []),
+      ...(step.next.includes('approve') && step.match === undefined ? [this.say('rung.no-match')] : []),
+      ...(step.next.includes('passkey') && rungs.length > 0 ? [this.say('rung.no-passkey')] : [])
+    ]
+    if (rungs.length === 0) {
+      const last = step.next.includes('passkey') ? 'rung.passkey-only' : 'rung.none'
+      return this.finish(LOGIN_EXIT.failed, [...say, this.say(last)], 'no rung a terminal can climb')
+    }
+    const only = rungs.length === 1 ? rungs[0] : undefined
+    return only === undefined ? this.choice(step, rungs, say) : this.climb(step, rungs, only, say)
+  }
+
+  private choice(step: SecondFactorStep, rungs: readonly Rung[], say: readonly string[]): LoginTurn {
+    this.stage = { at: 'rung', step, rungs }
+    const options = rungs.map((rung, at) => ({ key: String(at + 1), label: this.say(`rung.${rung}`) }))
+    return { say, ask: { kind: 'choice', prompt: this.say('ask.choose'), options } }
+  }
+
+  private pickRung(stage: Extract<Stage, { at: 'rung' }>, text: string): Promise<LoginTurn> | LoginTurn {
+    const picked = text.trim() === '' ? 1 : Number(text.trim())
+    const rung = Number.isInteger(picked) ? stage.rungs[picked - 1] : undefined
+    if (rung === undefined) return this.choice(stage.step, stage.rungs, [this.say('ask.choose-again')])
+    return this.climb(stage.step, stage.rungs, rung, [])
+  }
+
+  private async climb(
+    step: SecondFactorStep,
+    rungs: readonly Rung[],
+    rung: Rung,
+    say: readonly string[]
+  ): Promise<LoginTurn> {
+    if (rung !== 'approve') return this.askCode(step, rungs, rung, say)
+    const asked = await this.account.askApproval(step.pending)
+    if (!asked.ok) return this.ladderRefused(step, rungs, asked.reason, asked.message)
+    this.stage = { at: 'waiting', step, rungs }
+    this.saidOffline = false
+    const other = rungs.length > 1
+    return {
+      say: [
+        ...say,
+        this.say('approve.match', { match: step.match ?? '' }),
+        this.say('approve.waiting'),
+        this.say(other ? 'approve.hint' : 'approve.hint-alone')
+      ],
+      wait: { other }
+    }
+  }
+
+  private askCode(
+    step: SecondFactorStep,
+    rungs: readonly Rung[],
+    factor: TypedFactor,
+    say: readonly string[]
+  ): LoginTurn {
+    this.stage = { at: 'code', step, rungs, factor }
+    return { say, ask: { kind: 'hidden', prompt: this.say(`ask.${factor}`) } }
+  }
+
+  private async tryCode(stage: Extract<Stage, { at: 'code' }>, code: string): Promise<LoginTurn> {
+    const answer = await this.account.climbCode(stage.step.pending, stage.factor, code)
+    if (answer.ok) return this.landed()
+    // Only a second_factor could be this, and a rung answers none.
+    if (answer.reason === 'second_factor') return this.finish(LOGIN_EXIT.failed, [this.say('refused.unknown')], 'unknown')
+    if (ladderIsOver(answer.reason)) return this.ladderRefused(stage.step, stage.rungs, answer.reason, answer.message)
+    return this.askCode(stage.step, stage.rungs, stage.factor, [this.refusal(answer.reason, answer.message)])
+  }
+
+  private ladderRefused(
+    step: SecondFactorStep,
+    rungs: readonly Rung[],
+    reason: AccountRefusal,
+    message: string | undefined
+  ): LoginTurn {
+    const sentence = this.refusal(reason, message)
+    if (ladderIsOver(reason)) {
+      return this.finish(LOGIN_EXIT.failed, [sentence, this.say('said.start-again')], reason)
+    }
+    return this.choice(step, rungs, [sentence])
+  }
+
+  /** The approve rung's long half. One call per wait; `stop` ends it early. */
+  async wait(): Promise<LoginTurn> {
+    const stage = this.stage
+    if (stage.at !== 'waiting') return { say: [] }
+    const stop = new AbortController()
+    this.stopWaiting = stop
+    const answer = await this.account.waitApproval(stage.step.pending, stop.signal)
+    this.stopWaiting = null
+    if (answer.ok) return this.landed()
+    if (this.closed) return { say: [] }
+    if (stop.signal.aborted) return this.choice(stage.step, stage.rungs, [])
+    if (answer.reason === 'offline' || answer.reason === 'rate_limited') {
+      // Not the end of the ladder: the pending is standing at the registry.
+      await (this.deps.sleep ?? defaultSleep)(WAIT_RETRY_MS)
+      const say = this.saidOffline ? [] : [this.say('approve.offline')]
+      this.saidOffline = true
+      return { say, wait: { other: stage.rungs.length > 1 } }
+    }
+    return this.ladderRefused(stage.step, stage.rungs, answer.reason, answer.message)
+  }
+
+  stop(): LoginTurn {
+    this.stopWaiting?.abort()
+    return { say: [] }
+  }
+
+  private async landed(): Promise<LoginTurn> {
+    this.pending = null
+    const who = this.account.who()
+    const listed = await this.account.devices()
+    // The name as cookrew.dev filed it, which is what its Devices list will
+    // show. The one this machine sent is the fallback, and they normally agree.
+    const filed = listed.ok ? listed.value.find((device) => device.id === who.deviceId)?.name : undefined
+    const device = filed ?? who.deviceName
+    const handle = who.username ?? ''
+    this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}` })
+    return this.finish(LOGIN_EXIT.ok, [this.say('said.signed-in', { handle, device })], null)
+  }
+
+  private get closed(): boolean {
+    return this.stage.at === 'over'
+  }
+
+  /** The end, however it came. `failure` goes in the event log; null writes nothing. */
+  private finish(exit: number, say: readonly string[], failure: string | null): LoginTurn {
+    this.stage = { at: 'over' }
+    if (this.pending !== null) this.account.abandon(this.pending)
+    this.pending = null
+    this.release()
+    this.ended()
+    if (failure !== null) {
+      this.deps.audit({ type: 'account.login-refused', terminalId: this.pane.id, details: failure })
+    }
+    return { say, exit }
+  }
+
+  /** The connection went. Nothing is left waiting and nothing is left held. */
+  close(): void {
+    if (this.closed) return
+    this.stopWaiting?.abort()
+    this.finish(LOGIN_EXIT.failed, [], 'left before it finished')
+  }
+}
+
+/**
+ * THE DOOR: who may start, and which connection a turn belongs to.
+ *
+ * ONE CONVERSATION AT A TIME, AND IT BELONGS TO ITS CONNECTION. Two ladders on
+ * one machine are two keys and only one could ever be the file. A turn from any
+ * other connection is refused, so what is held here cannot be finished by a
+ * process that did not start it, and the connection closing ends it: a Ctrl-C
+ * cannot leave a poll running that would sign this machine in later, unseen.
+ */
+export class LoginDoor {
+  private readonly deps: LoginDoorDeps
+  private held: { connection: LoginConnection; conversation: Conversation } | null = null
+
+  constructor(deps: LoginDoorDeps) {
+    this.deps = deps
+  }
+
+  async handle(request: CliRequest, secret: string | undefined, connection: LoginConnection): Promise<string> {
+    const [verb, wanted] = request.args
+    if (verb === 'open') return JSON.stringify(this.open(request, wanted ?? '', connection))
+    const conversation = this.held?.connection === connection ? this.held.conversation : null
+    if (conversation === null) throw new LoginRefused(this.line('gate.not-open'), LOGIN_EXIT.refused)
+    if (verb === 'answer') return JSON.stringify(await conversation.answer(secret ?? ''))
+    if (verb === 'wait') return JSON.stringify(await conversation.wait())
+    if (verb === 'stop') return JSON.stringify(conversation.stop())
+    throw new LoginRefused(this.line('gate.not-open'), LOGIN_EXIT.refused)
+  }
+
+  private line(id: CliCopyId): string {
+    return cliCopy(id, this.deps.account()?.platform ?? process.platform)
+  }
+
+  private refuse(request: CliRequest, terminalId: string, id: CliCopyId, why: string): never {
+    this.deps.audit({ type: 'account.login-refused', terminalId, details: `${request.cmd}: ${why}` })
+    throw new LoginRefused(this.line(id), LOGIN_EXIT.refused)
+  }
+
+  /** The pane, or the refusal. Every refusal is written down. */
+  private admit(request: CliRequest): TerminalNodeData {
+    let pane: TerminalNodeData
+    try {
+      pane = this.deps.ownerPane(request)
+    } catch (error) {
+      const why = error instanceof Error ? error.message : 'not an owner pane'
+      this.deps.audit({ type: 'account.login-refused', terminalId: request.terminalId, details: `${request.cmd}: ${why}` })
+      throw error
+    }
+    if (request.sessionId) this.refuse(request, pane.id, 'gate.agent-caller', 'run by an agent')
+    if (this.deps.agentBusy(pane.id)) this.refuse(request, pane.id, 'gate.agent-busy', 'the agent here is mid-turn')
+    if (request.flags.tty !== true) this.refuse(request, pane.id, 'gate.no-keyboard', 'no terminal')
+    if (this.held !== null) this.refuse(request, pane.id, 'gate.held', 'another sign-in is open')
+    return pane
+  }
+
+  private open(request: CliRequest, wanted: string, connection: LoginConnection): LoginTurn {
+    const pane = this.admit(request)
+    const account = this.deps.account()
+    if (account === null) this.refuse(request, pane.id, 'gate.no-door', 'no account wired')
+    const conversation = new Conversation({
+      account,
+      deps: this.deps,
+      pane,
+      leaving: request.cmd === 'logout',
+      ended: () => {
+        if (this.held?.conversation === conversation) this.held = null
+      }
+    })
+    this.held = { connection, conversation }
+    connection.once('close', () => conversation.close())
+    const first = conversation.start(wanted)
+    if (first.ask !== undefined) conversation.hold(this.deps.seal(pane.id))
+    return first
+  }
+
+  /** `cookrew whoami`: a read, so an agent may ask. The owner-pane rule still holds. */
+  whoami(request: CliRequest): string {
+    this.deps.ownerPane(request)
+    const account = this.deps.account()
+    const platform = account?.platform ?? process.platform
+    if (account === null) throw new LoginRefused(cliCopy('gate.no-door', platform), LOGIN_EXIT.refused)
+    const who = account.who()
+    if (who.username === null) throw new LoginRefused(cliCopy('said.not-signed-in', platform), LOGIN_EXIT.failed)
+    const vars = { handle: who.username, device: who.deviceName, registry: who.registry ?? 'cookrew.dev' }
+    if (!who.sessionLive) throw new LoginRefused(cliCopy('said.session-ended', platform, vars), LOGIN_EXIT.failed)
+    return cliCopy('said.whoami', platform, vars)
+  }
+}
