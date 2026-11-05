@@ -49,11 +49,6 @@ export async function grabScreenFrames(maxSide: number): Promise<readonly LinuxF
 
 export const primaryDisplayId = (): string | null => String(screen.getPrimaryDisplay().id)
 
-/**
- * The Screen Recording page. macOS lists an app there only once it has asked,
- * so a Mac that was never asked is asked first: one tiny capture raises the
- * system's own question, and from then on the page has a row to switch on.
- */
 export const readMachineClipboard = (): string => clipboard.readText()
 
 /**
@@ -66,8 +61,15 @@ export async function openAccessibilitySettings(): Promise<void> {
   await shell.openExternal(ACCESSIBILITY_PANE)
 }
 
+/**
+ * The Screen Recording page. macOS lists an app there only once it has asked,
+ * so anything short of a grant asks first: one tiny capture raises the system's
+ * own question, and from then on the page has a row to switch on. The status
+ * cannot tell who was asked: Electron answers `denied` for an app macOS has
+ * never heard of, and never `not-determined`. Asked once, this raises nothing.
+ */
 export async function openScreenRecordingSettings(access: string): Promise<void> {
-  if (access === 'not-determined') {
+  if (access !== 'granted') {
     await withDeadline(desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }), ASK_DEADLINE_MS, 'the system').catch(() => undefined)
   }
   await shell.openExternal(SCREEN_RECORDING_PANE)

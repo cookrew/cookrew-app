@@ -88,11 +88,11 @@ describe('remoteBuild', () => {
   const shipped = '/Applications/Cookrew.app/Contents/MacOS/Cookrew'
 
   it('a source build goes by the bundle it runs from, and cannot relaunch itself', () => {
-    expect(remoteBuild({ execPath: source, packaged: false, persists: true, servedLive: false })).toEqual({ settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' })
+    expect(remoteBuild({ execPath: source, packaged: false, persists: true, servedLive: false })).toEqual({ settingsName: 'Electron', startedFrom: null, sourceBuild: true, restart: 'by-hand', agents: 'keep' })
   })
 
   it('a shipped build is Cookrew, and can', () => {
-    expect(remoteBuild({ execPath: shipped, packaged: true, persists: true, servedLive: false })).toEqual({ settingsName: 'Cookrew', sourceBuild: false, restart: 'self', agents: 'keep' })
+    expect(remoteBuild({ execPath: shipped, packaged: true, persists: true, servedLive: false })).toEqual({ settingsName: 'Cookrew', startedFrom: null, sourceBuild: false, restart: 'self', agents: 'keep' })
   })
 
   it('says what a restart does to the agents on this host', () => {
@@ -136,5 +136,30 @@ describe('remoteSettingsFile', () => {
       expect(remoteSettingsFile(at).read()).toEqual({ waiting: null, holdUntil: 0 })
     }
     expect(readFileSync(at, 'utf8')).toContain('root')
+  })
+})
+
+describe('the name System Settings shows', () => {
+  const source = { execPath: '/w/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', packaged: false, persists: true, servedLive: false }
+  const packaged = { execPath: '/Applications/Cookrew.app/Contents/MacOS/Cookrew', packaged: true, persists: true, servedLive: false }
+
+  it('started from a terminal, the row is the terminal: macOS files the switch under whatever launched it', () => {
+    const build = remoteBuild({ ...source, listedApp: '/Applications/iTerm.app' })
+    expect(build.settingsName).toBe('iTerm')
+    expect(build.startedFrom).toBe('iTerm')
+  })
+
+  it('an app macOS answers for itself keeps its own name', () => {
+    expect(remoteBuild({ ...packaged, listedApp: '/Applications/Cookrew.app' })).toMatchObject({ settingsName: 'Cookrew', startedFrom: null })
+    expect(remoteBuild({ ...source, listedApp: '/w/node_modules/electron/dist/Electron.app' })).toMatchObject({ settingsName: 'Electron', startedFrom: null })
+  })
+
+  it('a packaged app run from a terminal is listed under that terminal too', () => {
+    expect(remoteBuild({ ...packaged, listedApp: '/Applications/iTerm.app' })).toMatchObject({ settingsName: 'iTerm', startedFrom: 'iTerm' })
+  })
+
+  it('no answer yet, or no app behind the launch, falls back on the bundle this binary sits in', () => {
+    expect(remoteBuild({ ...source, listedApp: null })).toMatchObject({ settingsName: 'Electron', startedFrom: null })
+    expect(remoteBuild({ ...source, listedApp: '/usr/sbin/sshd' })).toMatchObject({ settingsName: 'Electron', startedFrom: null })
   })
 })

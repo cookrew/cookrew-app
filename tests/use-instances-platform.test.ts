@@ -76,12 +76,13 @@ describe('on Linux', () => {
 
 describe('on a Mac', () => {
   it('the settings button goes to Screen Recording itself, and a Mac that was never asked gets asked first', async () => {
-    electron.access.mockReturnValue('not-determined')
+    // `denied` IS never-asked: Electron does not answer `not-determined` for the screen.
+    electron.access.mockReturnValue('denied')
     await make('darwin').sources()?.openSettings('screen')
     expect(electron.getSources).toHaveBeenCalledOnce()
     expect(electron.openExternal).toHaveBeenCalledWith('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
     electron.getSources.mockClear()
-    electron.access.mockReturnValue('denied')
+    electron.access.mockReturnValue('granted')
     await make('darwin').sources()?.openSettings('screen')
     expect(electron.getSources).not.toHaveBeenCalled()
   })

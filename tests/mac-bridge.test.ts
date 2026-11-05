@@ -9,7 +9,7 @@
 // must never do.
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { MAC_INPUT_SCRIPT, MacInput, macKeyCode } from '../src/main/mac-bridge'
+import { MAC_INPUT_SCRIPT, MacInput, macKeyCode, readMacListedApp } from '../src/main/mac-bridge'
 
 describe.skipIf(process.platform !== 'darwin' || process.env.COOKREW_MAC_INPUT_TEST !== '1')('MacInput (dry)', () => {
   it('answers each operation in order, and refuses a malformed one without losing step', async () => {
@@ -53,5 +53,14 @@ describe.skipIf(process.platform !== 'darwin' || process.env.COOKREW_MAC_LOCK_TE
     await expect(hand.send({ op: 'scroll', x: 1, y: 1, dx: 0, dy: 1 })).rejects.toThrow(/locked/)
     await expect(hand.send({ op: 'drag', x1: 1, y1: 1, x2: 2, y2: 2, ms: 60 })).rejects.toThrow(/locked/)
     hand.close()
+  })
+})
+
+// Runs the real script: it asks who answers for a process and touches no
+// permission, so unlike the hand above it can never raise a dialog.
+describe.skipIf(process.platform !== 'darwin')('readMacListedApp', () => {
+  it('answers with an app bundle, or with nothing when no app is behind the launch', async () => {
+    const answer = await readMacListedApp()
+    expect(answer === null || answer.endsWith('.app')).toBe(true)
   })
 })

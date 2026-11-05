@@ -70,7 +70,7 @@ describe('the phone reaches the picker', () => {
   })
 
   it('a refused Take control is an answer the card can read out, with the state it names', async () => {
-    const state = { id: 'needs-accessibility', platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false, build: { settingsName: 'Cookrew', sourceBuild: false, restart: 'self', agents: 'keep' } }
+    const state = { id: 'needs-accessibility', platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false, build: { settingsName: 'Cookrew', startedFrom: null, sourceBuild: false, restart: 'self', agents: 'keep' } }
     const fetcher = vi.fn(async () => answer(409, { ok: false, error: 'Accessibility is off', state }))
     expect(await (await api(fetcher)).remoteControl?.({ card: 'c', on: true })).toEqual({ ok: false, error: 'Accessibility is off', state })
   })
