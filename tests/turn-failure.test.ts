@@ -17,9 +17,12 @@ describe('what counts as a failed turn', () => {
     ['  API Error (500 Internal Server Error)'],
     ['stream error: unexpected status 400 Bad Request'],
     ['■ unexpected status 401 Unauthorized'],
-    ['Error: 429 rate limited']
+    ['Error: 429 rate limited'],
+    ['API Error: Connection error.'],
+    ['API Error: Request timed out.'],
+    ['⎿  API Error: 500 oops']
   ])('%s', (reply) => {
-    expect(turnFailure({ reply, lines: [] })).toContain(reply.trim().slice(0, 12))
+    expect(turnFailure({ reply, lines: [] })).toContain(reply.replace(/^[⎿■\s]+/, '').slice(0, 9))
   })
 
   it.each([['API error handling is fixed'], ['## Error 404 page added'], ['Error 500 pages now render'], ['Stream error handling works now'], ['API Errors are logged']])('a good reply is not one: %s', (reply) => {

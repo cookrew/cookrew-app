@@ -1045,6 +1045,11 @@ const firstTasks = new FirstTasks<PtySession>({
     return ptys.get(id) ?? null
   },
   removeCard: (id) => void removeNode(id).catch((error) => console.error('Clearing the first agent failed:', error)),
+  keep: (id) => {
+    lazyTerminals.acquire(id)
+    return () => lazyTerminals.release(id)
+  },
+  closing: (id) => closingTerminals.has(id),
   emit: () => {
     if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('first-run:changed', { stage: firstRunStore.read(), task: firstRunStore.task() })
   }
@@ -5297,6 +5302,7 @@ async function removeNode(id: string, opContext: { actor?: EventActor; via?: str
       ? browserManager.discard(id)
       : browserManager.remove(id)
     store.withOpContext(opContext, () => store.removeNodeAcross(id))
+    firstTasks.cardGone(id)
     agents.deactivate(id)
     await browserStopped
     return { ok: true }

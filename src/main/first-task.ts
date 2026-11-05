@@ -26,6 +26,8 @@ export interface HoldHooks {
 
 interface HeldSession {
   once: (event: 'exit', listener: () => void) => unknown
+  /** Cookrew let go of its mirror: the agent's process is not what ended. */
+  wasDisposed?: boolean
 }
 
 export interface FirstTasksDeps<S extends HeldSession = HeldSession> {
@@ -36,6 +38,14 @@ export interface FirstTasksDeps<S extends HeldSession = HeldSession> {
   session: (id: string) => S | null
   removeCard: (id: string) => void
   emit: () => void
+  /**
+   * Hold a viewer on the agent; the return lets go. An idle agent with no viewer
+   * has its local mirror dropped after 45 s (lazy-terminal.ts), which disposes
+   * the session mid-wait: a task open on it must keep it up.
+   */
+  keep: (id: string) => () => void
+  /** A close of this card is under way: its exit is that, and `cardGone` says how it ended. */
+  closing: (id: string) => boolean
 }
 
 /** Why it stopped, in words a new person can use. */
@@ -51,6 +61,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
   /** The hold under way: a late settle of an older one changes nothing. */
   private ticket = 0
   private resumed = false
+  private letGo: (() => void) | null = null
 
   constructor(private readonly deps: FirstTasksDeps<S>) {}
 
@@ -58,11 +69,12 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     const ticket = ++this.ticket
     const session = this.deps.session(id)
     if (session === null) return this.handBack(words, whyStopped(harness, ''), id)
+    this.keepUp(id)
     let gone = false
     let screen = ''
     session.once('exit', () => {
       gone = true
-      this.endedAfterSent(ticket, id)
+      if (!session.wasDisposed && !this.deps.closing(id)) this.endedAfterSent(ticket, id)
     })
     this.show({ state: 'holding', id, words, harness, wait: 'starting' })
     const onWait = (now: string): void => {
@@ -76,7 +88,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
         if (ticket === this.ticket) this.show({ state: 'sent', id, words, harness })
       },
       () => {
-        if (ticket !== this.ticket) return
+        if (ticket !== this.ticket || this.deps.closing(id)) return
         this.handBack(words, whyStopped(harness, screen), id)
         this.deps.removeCard(id)
       }
@@ -103,6 +115,24 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     if (task.state === 'holding') this.deps.removeCard(task.id)
   }
 
+  /**
+   * Its card has gone, by hand or otherwise. Said by the removal itself, once it
+   * has happened: a close can fail with the process alive, and the exit cannot
+   * tell a close from a death. A card this class removed has handed back already.
+   */
+  cardGone(id: string): void {
+    const task = this.deps.store.task()
+    if ((task?.state !== 'holding' && task?.state !== 'sent') || task.id !== id) return
+    this.ticket += 1
+    this.handBack(task.words, null, id)
+  }
+
+  /** A good turn ended it from outside (the stage moved): nothing is open any more. */
+  sync(): void {
+    const task = this.deps.store.task()
+    if (task?.state !== 'holding' && task?.state !== 'sent') this.release()
+  }
+
   /** The app is quitting: whatever settles now changes nothing, and the record waits for the next launch. */
   stop(): void {
     this.ticket += 1
@@ -117,11 +147,25 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     if (task?.state !== 'sent') return
     const ticket = ++this.ticket
     const session = this.deps.session(task.id)
-    if (session === null) this.handBack(task.words, whyEnded(task.harness), task.id)
-    else session.once('exit', () => this.endedAfterSent(ticket, task.id))
+    if (session === null) return this.handBack(task.words, whyEnded(task.harness), task.id)
+    this.keepUp(task.id)
+    session.once('exit', () => {
+      if (!session.wasDisposed && !this.deps.closing(task.id)) this.endedAfterSent(ticket, task.id)
+    })
+  }
+
+  private keepUp(id: string): void {
+    this.release()
+    this.letGo = this.deps.keep(id)
+  }
+
+  private release(): void {
+    this.letGo?.()
+    this.letGo = null
   }
 
   private handBack(words: string, why: string | null, id: string): void {
+    this.release()
     this.show({ state: 'returned', words, why, id })
   }
 

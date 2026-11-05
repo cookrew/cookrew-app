@@ -15,7 +15,7 @@ export const FIRST_RUN_CHANNELS = ['first-run:read', 'first-run:advance', 'first
 export interface FirstRunIpcDeps {
   store: FirstRunStore
   probe: () => Promise<ToolFacts>
-  tasks: Pick<FirstTasks, 'resume' | 'discard'>
+  tasks: Pick<FirstTasks, 'resume' | 'discard' | 'sync'>
   /** Why this preset cannot start an agent now, or null when it can. */
   blocked: (preset: string) => string | null
 }
@@ -31,7 +31,11 @@ export function firstRunHandlers({ store, probe, tasks, blocked }: FirstRunIpcDe
   return {
     read: () => store.read(),
     // It comes over the bridge: an unknown stage is no move, and answers where the run stands.
-    advance: (to) => (isFirstRunStage(to) ? store.advance(to) : store.read()),
+    advance: (to) => {
+      const stage = isFirstRunStage(to) ? store.advance(to) : store.read()
+      tasks.sync()
+      return stage
+    },
     preflight: async () => preflightRows(await probe()),
     // Asked once the window is up, so a restart's sessions are back by now.
     task: () => {

@@ -61,6 +61,11 @@ describe('a real launch', () => {
     expect(source).toMatch(/!served && route\?\.effective === 'direct' \? accessStore\.launchFor/)
   })
 
+  it('tells the first task a card went only once it has: a close can fail', () => {
+    const remove = body('removeNode')
+    expect(remove.indexOf('firstTasks.cardGone(id)')).toBeGreaterThan(remove.indexOf('store.removeNodeAcross(id)'))
+  })
+
   it('sets PATH before the terminal host is chosen', () => {
     expect(source.indexOf('widenedPath(process.env')).toBeLessThan(source.indexOf('new PtyManager('))
   })

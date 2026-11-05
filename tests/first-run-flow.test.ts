@@ -237,6 +237,13 @@ describe('reading the board', () => {
     expect(agentAtWork([node({ id: 'a' })], [works('a', 'idle')])).toBe(false)
   })
 
+  // Review: a refused card left on the board read as working, and moved the stage.
+  it('does not count a refused turn as work', () => {
+    const refused = { ...works('a', 'replied', 1), reply: 'API Error: 400 no' }
+    expect(agentAtWork([node({ id: 'a' })], [refused])).toBe(false)
+    expect(otherAgentEnds([node({ id: 'a' }), node({ id: 'b' })], [refused], { state: 'returned', words: 'x', why: null, id: 'b' })).toBe(false)
+  })
+
   it('does not count the Setup card or a Shell', () => {
     expect(agentAtWork([node({ id: 's', name: 'Setup', preset: 'Shell' })], [works('s', 'thinking')])).toBe(false)
     expect(agentAtWork([node({ id: 's', preset: 'Shell' })], [works('s', 'idle', 3)])).toBe(false)

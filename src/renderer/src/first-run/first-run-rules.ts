@@ -9,12 +9,12 @@ import { SHELL_PRESET } from '../prompt/harness-pref'
 
 /**
  * An agent of the person's own has really started: it works, or has finished a
- * turn. A card alone proves nothing: a dead agent has one, and the first run must
- * not move on it. A Shell is no agent, the Setup card least of all.
+ * turn. A card alone proves nothing: a dead agent has one, and a refused one reads
+ * as replied, and the first run must not move on either. A Shell is no agent, the Setup card least of all.
  */
 export function agentAtWork(nodes: readonly CanvasNode[], activities: readonly TerminalActivity[]): boolean {
   const agents = new Set(nodes.filter((n) => n.kind === 'terminal' && n.preset !== SHELL_PRESET).map((n) => n.id))
-  return activities.some((a) => agents.has(a.terminalId) && (a.phase !== 'idle' || a.turnCount > 0))
+  return activities.some((a) => agents.has(a.terminalId) && (a.phase !== 'idle' || a.turnCount > 0) && turnFailure(a) === null)
 }
 
 /**
