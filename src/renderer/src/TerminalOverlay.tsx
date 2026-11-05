@@ -22,7 +22,7 @@ import { doorStateSentence, type DoorTranscriptState } from '../../shared/door-t
 import { CheckpointTimeline } from './CheckpointTimeline'
 import { TranscriptView, type ActiveBlock, type TranscriptHandle } from './TranscriptView'
 import { tailClipRows } from './transcript'
-import { streamPagerOf } from './stream/stream-pager'
+import { recordedTail, streamPagerOf } from './stream/stream-pager'
 import { useStream } from './stream/use-stream'
 import { useTitleMode } from './checkpoint-sync'
 import { attachFilesToTerminal, pasteClipboardImages } from './AttachButton'
@@ -242,6 +242,8 @@ function TerminalOverlay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [stream.index, stream.total, stream.blocksAround, stream.blocksAfter]
   )
+
+  const liveTail = useMemo(() => recordedTail(stream.tail), [stream.tail])
 
   // WHY the rail is empty or stale, for a remote card — a named state from
   // the door, rendered as a sentence in the session strip (P10). Re-read
@@ -1476,6 +1478,7 @@ function TerminalOverlay({
           onPending={setPendingIndex}
           onTailLoaded={() => setTailReady(true)}
           refreshToken={0}
+          liveTail={liveTail}
 >
           {/* PTY-direct for every card (owner ruling 2026-08-30). */}
           <div ref={containerRef} className="popout-terminal" />

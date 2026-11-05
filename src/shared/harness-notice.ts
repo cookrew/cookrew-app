@@ -26,10 +26,16 @@
  */
 
 const NOTICE_OPEN = /^\s*<task-notification>/
+const PEER_OPEN = /^\s*<(?:cross-session-message|agent-message)\b/
 
 /** Whether a prompt is a harness notice rather than something the owner sent. */
 export function isHarnessNotice(prompt: string | null | undefined): boolean {
   return typeof prompt === 'string' && NOTICE_OPEN.test(prompt)
+}
+
+/** Whether a prompt is another session's message, carried in its envelope. */
+export function isPeerMessage(prompt: string): boolean {
+  return PEER_OPEN.test(prompt)
 }
 
 function tagText(text: string, name: string): string | null {

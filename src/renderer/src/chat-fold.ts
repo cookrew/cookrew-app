@@ -10,8 +10,12 @@
  * calls each thought came (two steps with no words between share a place).
  * A call without a mark (codex: its reply is only its last message) came
  * before all of it.
+ *
+ * WORDS YOU SENT MID-TURN SPLIT IT INTO LEGS (owner, 2026-11-05). They are your
+ * side of the chat, so they cannot sit in a fold: each leg folds on its own and
+ * your bubble stands between them, where the agent read it (TraceAddedPrompt).
  */
-import type { TraceBlock, TraceToolCall } from '../../shared/trace-blocks'
+import type { TraceAddedPrompt, TraceBlock, TraceToolCall } from '../../shared/trace-blocks'
 
 export type ChatStep =
   | { kind: 'thought'; text: string }
@@ -26,6 +30,15 @@ export interface ChatFold {
   thoughts: number
   tools: number
 }
+
+/** One stretch of a turn: the words you said to start it (null for the first, the prompt's own), and what the agent did. */
+export interface ChatLeg {
+  words: string | null
+  fold: ChatFold
+}
+
+type Foldable = Pick<TraceBlock, 'reply' | 'activity' | 'thoughts'>
+type Place = Pick<TraceAddedPrompt, 'at' | 'calls' | 'thoughts'>
 
 type Marked = { at: number; step: ChatStep }
 
@@ -45,12 +58,12 @@ function inOrder(block: Pick<TraceBlock, 'activity' | 'thoughts'>, clampAt: (at:
   return out
 }
 
-export function chatFoldOf(block: Pick<TraceBlock, 'reply' | 'activity' | 'thoughts'>): ChatFold {
+export function chatFoldOf(block: Foldable): ChatFold {
   const { reply, activity } = block
   const thoughts = block.thoughts ?? []
   const clampAt = (at: number | undefined): number => Math.max(0, Math.min(reply.length, at ?? 0))
   const marked = inOrder(block, clampAt)
-  if (marked.length === 0) return { steps: [], answer: reply, thoughts: 0, tools: 0 }
+  if (marked.length === 0) return { steps: [], answer: reply.trim(), thoughts: 0, tools: 0 }
   const steps: ChatStep[] = []
   let cursor = 0
   for (const m of marked) {
@@ -62,6 +75,31 @@ export function chatFoldOf(block: Pick<TraceBlock, 'reply' | 'activity' | 'thoug
     steps.push(m.step)
   }
   return { steps, answer: reply.slice(cursor).trim(), thoughts: thoughts.length, tools: activity.length }
+}
+
+/** What happened between two places in a turn, with its marks counted from the first. */
+function stretchOf(block: Foldable, from: Place, to: Place): Foldable {
+  return {
+    reply: block.reply.slice(from.at, to.at),
+    activity: block.activity
+      .slice(from.calls, to.calls)
+      .map((call) => (call.at === undefined ? call : { ...call, at: call.at - from.at })),
+    thoughts: (block.thoughts ?? [])
+      .slice(from.thoughts, to.thoughts)
+      .map((thought) => ({ ...thought, at: thought.at - from.at, calls: thought.calls - from.calls }))
+  }
+}
+
+/** The turn as the chat reads it, in order; a turn you did not speak into is one leg. */
+export function chatLegsOf(block: Foldable & Pick<TraceBlock, 'added'>): ChatLeg[] {
+  const added = block.added ?? []
+  if (added.length === 0) return [{ words: null, fold: chatFoldOf(block) }]
+  const end: Place = { at: block.reply.length, calls: block.activity.length, thoughts: block.thoughts?.length ?? 0 }
+  const starts: Place[] = [{ at: 0, calls: 0, thoughts: 0 }, ...added]
+  return starts.map((from, i) => ({
+    words: i === 0 ? null : added[i - 1].text,
+    fold: chatFoldOf(stretchOf(block, from, added[i] ?? end))
+  }))
 }
 
 /** The closed line: what the agent did before answering ("Thought · 12 tool calls"). */
