@@ -1,23 +1,32 @@
 /**
  * THE UPDATE CHECK'S WORDS AND RULES.
  *
- * It only ever tells. A found release is a row that opens the download page:
- * nothing is downloaded or installed, and a Mac would refuse to swap in an
- * unsigned build anyway. Main does the asking (main/update-check.ts).
+ * A build that can install itself downloads a found release in the background
+ * and offers a restart. One that cannot, an unsigned Mac build above all, gets a
+ * row that opens the release page. Nothing ever restarts on its own, and a
+ * failed download falls back to the page. Main does the work (main/update-check.ts).
  */
 
 export const RELEASES_API = 'https://api.github.com/repos/cookrew/cookrew-app/releases/latest'
 const RELEASE_PAGES = 'https://github.com/cookrew/cookrew-app/releases/'
 
-export const UPDATE_ROW_NOTE = 'Every 6 hours, asks GitHub for the latest version. GitHub sees your IP address, and nothing about your work is sent.'
+const WHAT_GITHUB_SEES = 'GitHub sees your IP address, and nothing about your work is sent.'
+export const UPDATE_ROW_NOTE = `Every 6 hours, asks GitHub for the latest version. ${WHAT_GITHUB_SEES}`
+export const UPDATE_AUTO_NOTE = `Every 6 hours, asks GitHub for the latest version and downloads it. ${WHAT_GITHUB_SEES}`
 
 export interface UpdateRelease {
   readonly version: string
   readonly url: string
 }
 
+/** How the found release reaches this machine. */
+export type UpdateInstall = 'page' | 'downloading' | 'ready'
+
 export interface UpdateStatus {
   readonly on: boolean
+  /** This build can install its own updates. */
+  readonly auto: boolean
+  readonly install: UpdateInstall
   /** A release newer than this build, while the check is on. */
   readonly available: UpdateRelease | null
 }
@@ -49,7 +58,8 @@ export function readRelease(raw: unknown): UpdateRelease | null {
 
 /** A status off the bridge: the menu draws from it, so it is read, never trusted as shaped. */
 export function parseUpdateStatus(raw: unknown): UpdateStatus | null {
-  const s = raw as { on?: unknown; available?: unknown } | null
+  const s = raw as { on?: unknown; auto?: unknown; install?: unknown; available?: unknown } | null
   if (typeof s?.on !== 'boolean') return null
-  return { on: s.on, available: parseUpdateRelease(s.available) }
+  const install = s.install === 'downloading' || s.install === 'ready' ? s.install : 'page'
+  return { on: s.on, auto: s.auto === true, install, available: parseUpdateRelease(s.available) }
 }

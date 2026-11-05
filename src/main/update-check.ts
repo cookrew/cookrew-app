@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { isNewer, parseUpdateRelease, readRelease, RELEASES_API, type UpdateRelease, type UpdateStatus } from '../shared/update-check'
+import { isNewer, parseUpdateRelease, readRelease, RELEASES_API, type UpdateInstall, type UpdateRelease, type UpdateStatus } from '../shared/update-check'
 import { writeFileAtomic } from './atomic-file'
 
 /**
@@ -10,6 +10,9 @@ import { writeFileAtomic } from './atomic-file'
  * nothing. A failure is never news: the row stays as it was and the next try
  * comes sooner. The last check is remembered so a day of restarts stays a few
  * reads, and Off is remembered so it holds across them.
+ *
+ * With an installer (update-install.ts) a found release is also downloaded, and
+ * the row turns into a restart. Only the owner's press ever installs one.
  */
 
 /** Long enough that the check is never part of the launch. */
@@ -39,8 +42,19 @@ function readSaved(file: string): Saved {
   }
 }
 
+/** The one seam onto electron-updater. */
+export interface UpdateInstaller {
+  /** This build can replace itself. */
+  supported(): Promise<boolean>
+  /** Downloads the feed's release; answers its version, or null when the feed has none. */
+  fetch(): Promise<string | null>
+  /** Quits and starts the downloaded build. */
+  install(): void
+}
+
 export interface UpdateCheckDeps {
   readonly version: string
+  readonly installer?: UpdateInstaller
   readonly file: string
   fetch(url: string, init: RequestInit): Promise<Response>
   /** The page should hear this status. */
@@ -54,6 +68,8 @@ export interface UpdateCheck {
   stop(): void
   status(): UpdateStatus
   setOn(on: boolean): UpdateStatus
+  /** Installs a downloaded update. False when none is ready. */
+  restart(): boolean
 }
 
 const timer = (fn: () => void, ms: number): (() => void) => {
@@ -80,6 +96,10 @@ export function createUpdateCheck(deps: UpdateCheckDeps): UpdateCheck {
   let cancel: (() => void) | null = null
   /** Which ask is current: an answer begun before Off is no answer after it. */
   let asking = 0
+  let auto = false
+  let install: UpdateInstall = 'page'
+  /** The version already downloaded. */
+  let held: string | null = null
 
   const remember = (next: Saved): void => {
     saved = next
@@ -91,10 +111,32 @@ export function createUpdateCheck(deps: UpdateCheckDeps): UpdateCheck {
     }
   }
 
-  const status = (): UpdateStatus => ({
-    on: saved.on,
-    available: saved.on && saved.latest !== null && isNewer(saved.latest.version, deps.version) ? saved.latest : null
-  })
+  const available = (): UpdateRelease | null =>
+    saved.on && saved.latest !== null && isNewer(saved.latest.version, deps.version) ? saved.latest : null
+
+  const status = (): UpdateStatus => {
+    const release = available()
+    return { on: saved.on, auto, install: release === null ? 'page' : install, available: release }
+  }
+
+  const download = async (installer: UpdateInstaller, release: UpdateRelease): Promise<void> => {
+    install = 'downloading'
+    deps.publish(status())
+    const got = await installer.fetch().catch((error: unknown) => {
+      console.error('[cookrew] could not download the update:', error)
+      return null
+    })
+    held = got === release.version ? got : null
+    install = held === null ? 'page' : 'ready'
+    deps.publish(status())
+  }
+
+  /** Downloads what the check found, unless it is held or on its way. */
+  const take = (): void => {
+    const release = available()
+    if (!auto || !deps.installer || release === null || install === 'downloading' || held === release.version) return
+    void download(deps.installer, release)
+  }
 
   const next = (ms: number): void => {
     cancel?.()
@@ -112,7 +154,19 @@ export function createUpdateCheck(deps: UpdateCheckDeps): UpdateCheck {
     if (answer === null) return next(RETRY_MS)
     remember({ ...saved, checkedAt: now(), latest: answer })
     deps.publish(status())
+    take()
     next(CHECK_EVERY_MS)
+  }
+
+  /** Finds out whether this build can install itself, once, off the launch path. */
+  const learnAuto = (installer: UpdateInstaller): void => {
+    void installer
+      .supported()
+      .catch(() => false)
+      .then((can) => {
+        auto = can
+        deps.publish(status())
+      })
   }
 
   const stop = (): void => {
@@ -122,7 +176,11 @@ export function createUpdateCheck(deps: UpdateCheckDeps): UpdateCheck {
 
   return {
     start() {
-      if (saved.on) next(Math.max(BOOT_DELAY_MS, saved.checkedAt + CHECK_EVERY_MS - now()))
+      if (deps.installer) learnAuto(deps.installer)
+      if (!saved.on) return
+      // A release found before the last quit is fetched soon, not at the next check.
+      const known = deps.installer && available() !== null
+      next(known ? BOOT_DELAY_MS : Math.max(BOOT_DELAY_MS, saved.checkedAt + CHECK_EVERY_MS - now()))
     },
     stop,
     status,
@@ -133,6 +191,11 @@ export function createUpdateCheck(deps: UpdateCheckDeps): UpdateCheck {
       if (on) next(0)
       else stop()
       return status()
+    },
+    restart() {
+      if (install !== 'ready' || !deps.installer) return false
+      deps.installer.install()
+      return true
     }
   }
 }

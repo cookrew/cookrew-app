@@ -287,7 +287,7 @@ describe('release.yml', () => {
 
   // On a tag electron-builder has already uploaded to the draft by now, so this
   // gates the workflow artifact and turns the run red. The draft is the gate on
-  // the release itself: a person publishes it.
+  // the release itself: the publish job runs only after this one is green.
   it('verifies a notarized build before the workflow artifact is uploaded', () => {
     const verify = steps.findIndex((step) => step.run?.includes('scripts/verify-mac-release.sh'))
     const upload = steps.findIndex((step) => step.uses?.startsWith('actions/upload-artifact'))

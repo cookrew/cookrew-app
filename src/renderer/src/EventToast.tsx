@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { cookrew } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
-import { coalesceIndex, eventMeta, groupedLine, kindFor, onEvent } from './event-log'
+import { coalesceIndex, eventDetail, eventMeta, groupedLine, kindFor, onEvent } from './event-log'
 import { heldForArrival, onAnnounce } from './workspace-arrival'
 import './agent-roster.css'
 
@@ -65,7 +65,7 @@ export function EventToastLayer(): React.JSX.Element {
           workspaceId: event.workspaceId,
           workspaceName: event.workspaceName,
           entityName: event.entityName,
-          details: event.details,
+          details: eventDetail(event),
           count: 1,
           lastAt: now,
           leaving: false

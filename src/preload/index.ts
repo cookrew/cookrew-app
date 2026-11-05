@@ -594,6 +594,7 @@ const api = {
   setTelemetry: (on: boolean) => ipcRenderer.invoke('telemetry:set', on),
   updateStatus: () => ipcRenderer.invoke('update:status'),
   setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
+  restartToUpdate: () => ipcRenderer.invoke('update:restart'),
   onUpdateStatus: (cb: (status: unknown) => void) => {
     const listener = (_e: unknown, status: unknown): void => cb(status)
     ipcRenderer.on('update:status', listener)
