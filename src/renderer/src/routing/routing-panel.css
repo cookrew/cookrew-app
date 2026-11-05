@@ -260,8 +260,8 @@
 /* The Setup card's screen, folded under everything. The PTY's geometry is
    the canvas card's (SetupScreen.tsx follows it, never pushes back), so the
    card's rows can be taller than this box: the box CLIPS, and the viewer
-   keeps the newest rows — the prompt — in view by scrolling to the bottom
-   after every render. Nothing of the terminal paints outside this frame. */
+   keeps the newest rows in view by scrolling to the bottom after every
+   render, or to the cursor at a password prompt. Nothing of the terminal paints outside this frame. */
 .cr-routing-setup { margin-top: 8px }
 .cr-routing-screen {
   height: 240px;

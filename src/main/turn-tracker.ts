@@ -3713,6 +3713,7 @@ export class TurnTracker extends EventEmitter {
       terminalId,
       agent: t.agent,
       phase: t.phase,
+      asked: t.sawInputThisTurn,
       prompt: t.prompt,
       pendingInput: pending.length > 0 ? pending : null,
       lines,

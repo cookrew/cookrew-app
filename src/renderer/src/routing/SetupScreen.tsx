@@ -4,7 +4,7 @@ import type { Terminal } from '@xterm/xterm'
 // input box and measuring strip draw into the pane.
 import '@xterm/xterm/css/xterm.css'
 import { cookrew } from '../api'
-import { shrunkFontSize } from './screen-fit'
+import { cursorScrollTop, shrunkFontSize } from './screen-fit'
 
 /**
  * THE SETUP CARD'S LIVE SCREEN inside the Routing panel — the same PTY the
@@ -38,18 +38,28 @@ const PHOSPHOR = {
 export function SetupScreen({
   terminalId,
   focusTick,
-  fit: fitMode
+  fit: fitMode,
+  prompting = false
 }: {
   terminalId: string
   focusTick: number
   /** Shrink the type to show the screen: `whole` for a question, `width` for a shell. Absent, the box clips. */
   fit?: 'whole' | 'width'
+  /**
+   * The pane stopped on a password prompt: keep the cursor's row in the box. Only then:
+   * a TUI hides its cursor and parks it anywhere, and on a tall grid a young shell's
+   * prompt is far above the bottom, with tmux's bar the last thing drawn.
+   */
+  prompting?: boolean
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   /** A focus asked for while xterm was still loading. */
   const pendingFocus = useRef(false)
   const seenTick = useRef(focusTick)
+  const promptingRef = useRef(prompting)
+  promptingRef.current = prompting
+  const repin = useRef<() => void>(() => undefined)
 
   useEffect(() => {
     const host = hostRef.current
@@ -77,17 +87,31 @@ export function SetupScreen({
       cleanups.push(() => cancelAnimationFrame(raf))
       // THE BOUNDARY. The PTY's rows are the canvas card's and can exceed
       // this box; the box clips (CSS), and after every render the newest
-      // rows — the prompt — are brought into view by scrolling the host to
-      // its bottom. Programmatic scroll works under overflow:hidden, so the
-      // user never sees a scrollbar and never sees text outside the frame.
+      // rows are brought into view by scrolling the host to its bottom, or to
+      // the cursor at a password prompt. Programmatic scroll works under
+      // overflow:hidden, so the user never sees a scrollbar and never sees
+      // text outside the frame.
       let pinned: number | null = null
       const pin = (): void => {
         if (pinned !== null) return
         pinned = requestAnimationFrame(() => {
           pinned = null
-          if (!disposed) host.scrollTop = host.scrollHeight
+          if (disposed) return
+          if (!promptingRef.current) {
+            host.scrollTop = host.scrollHeight
+            return
+          }
+          const drawn = host.querySelector('.xterm-screen')?.getBoundingClientRect()
+          host.scrollTop = cursorScrollTop({
+            cursorRow: term.buffer.active.cursorY,
+            rows: term.rows,
+            screenHeight: drawn?.height ?? 0,
+            boxHeight: host.clientHeight,
+            padding: parseFloat(getComputedStyle(host).paddingTop)
+          })
         })
       }
+      repin.current = pin
       // The screen's own size, once it is drawn, sets the type for the next draw.
       const fitType = (): void => {
         if (!fitMode || disposed) return
@@ -153,6 +177,8 @@ export function SetupScreen({
       termRef.current = null
     }
   }, [terminalId, fitMode])
+
+  useEffect(() => repin.current(), [prompting])
 
   // A key line was typed: the cursor goes to the pane so the paste lands
   // there. If the pane is not built yet, the wish waits for it.

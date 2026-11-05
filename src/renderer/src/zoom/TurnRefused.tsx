@@ -2,20 +2,20 @@ import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { REFUSED_COPY } from '../../../shared/first-run-copy'
 import { refusalKind } from '../../../shared/turn-failure'
+import { simpleFixes, useSimpleFix, type SimpleFixState } from './simple-fix'
 
 /**
  * THE MODEL SERVICE REFUSED THE TURN. What that means comes first, in a sentence;
  * what the service said stays one press away (box round 3, N3: the card read a
  * Jinja template error and nothing else). Where simple mode is the fix it is offered
  * here, and it needs no key: main has it. An agent reads its settings as it starts,
- * so the press also starts this card again.
+ * so the press also starts this card again, and how that went is kept in simple-fix.ts,
+ * because the restart takes this component with it.
  */
-
-export type SimpleFix = 'idle' | 'working' | 'done' | 'saved' | 'failed'
 
 const hold = (e: React.SyntheticEvent): void => e.stopPropagation()
 
-export function TurnRefusedView({ raw, offer, state, onFix }: { raw: string; offer: boolean; state: SimpleFix; onFix: () => void }): React.JSX.Element {
+export function TurnRefusedView({ raw, offer, state, onFix }: { raw: string; offer: boolean; state: SimpleFixState | 'idle'; onFix: () => void }): React.JSX.Element {
   const kind = refusalKind(raw)
   // A wrong key or a limit is not something sending less can answer.
   const fixable = offer && kind === 'request' && (state === 'idle' || state === 'working' || state === 'failed')
@@ -45,11 +45,9 @@ export function TurnRefusedView({ raw, offer, state, onFix }: { raw: string; off
 
 export function TurnRefused({ id, raw }: { id: string; raw: string }): React.JSX.Element {
   const [offer, setOffer] = useState(false)
-  const [state, setState] = useState<SimpleFix>('idle')
+  const fix = useSimpleFix(id)
   useEffect(() => {
     let live = true
-    // A new refusal is a new question: "send your task again" was about the last one.
-    setState('idle')
     void cookrew()
       .accessSimpleOffer?.(id)
       .then((yes) => live && setOffer(yes))
@@ -58,11 +56,8 @@ export function TurnRefused({ id, raw }: { id: string; raw: string }): React.JSX
       live = false
     }
   }, [id, raw])
-  const fix = (): void => {
-    setState('working')
-    void (cookrew().accessSimple?.({ terminalId: id }) ?? Promise.resolve({ ok: false as const }))
-      .then((answer) => setState(!answer.ok ? 'failed' : answer.restarted ? 'done' : 'saved'))
-      .catch(() => setState('failed'))
+  const press = (): void => {
+    void simpleFixes.press(id, raw, () => cookrew().accessSimple?.({ terminalId: id }) ?? Promise.resolve({ ok: false as const }))
   }
-  return <TurnRefusedView raw={raw} offer={offer || state !== 'idle'} state={state} onFix={fix} />
+  return <TurnRefusedView raw={fix?.raw ?? raw} offer={offer || fix !== null} state={fix?.state ?? 'idle'} onFix={press} />
 }
