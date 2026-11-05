@@ -273,13 +273,16 @@ export async function askForApproval(
 export async function waitForApproval(
   port: LadderPort,
   pending: string,
-  options: { everyMs?: number; forMs?: number } = {},
+  options: { everyMs?: number; forMs?: number; signal?: AbortSignal } = {},
 ): Promise<SignInAnswer<AccountSession>> {
   const password = port.passwords.for(pending)
   if (password === null) return { ok: false, reason: 'expired' }
   const everyMs = options.everyMs ?? APPROVAL_POLL_MS
   const until = port.now() + Math.min(options.forMs ?? LADDER_TTL_MS, LADDER_TTL_MS)
   for (;;) {
+    // Stopped, not over: the pending still stands and the password is kept, so
+    // another rung can finish this. Whoever stopped it knows what it means.
+    if (options.signal?.aborted) return { ok: false, reason: 'expired' }
     const answer = await climbOne(
       port,
       pending,
@@ -290,8 +293,23 @@ export async function waitForApproval(
     )
     if (answer !== 'waiting') return answer
     if (port.now() + everyMs >= until) return { ok: false, reason: 'expired' }
-    await new Promise((resolve) => setTimeout(resolve, everyMs))
+    await pause(everyMs, options.signal)
   }
+}
+
+/** The gap between two polls, cut short by a stop. */
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      { once: true },
+    )
+  })
 }
 
 /**

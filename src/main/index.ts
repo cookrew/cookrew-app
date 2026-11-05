@@ -167,6 +167,7 @@ import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
+import type { AccountDoor, LoginAudit } from './login-cli'
 import { localDeviceName } from './device-name'
 import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
@@ -655,6 +656,29 @@ const scrub = createScrubber({
   onChange: (listener) => void secrets.onChange(listener)
 })
 /** The audit line every read and every missing read leaves: name only. */
+/** The account for `cookrew login`, once its channels are registered. */
+let accountDoor: AccountDoor | null = null
+
+/**
+ * A SIGN-IN ATTEMPT FROM A TERMINAL, ON THE RECORD, whichever way it went: a
+ * refusal is the line an agent's try leaves. Nothing typed ever reaches this.
+ */
+const auditLogin = (event: LoginAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'agent',
+    timestamp: Date.now(),
+    details: scrub(event.details)
+  })
+}
+
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
@@ -6668,6 +6692,11 @@ app.whenReady().then(() => {
     // each read leaves in the event log.
     secrets,
     audit: auditSecret,
+    // `cookrew login`, `logout`, `whoami`: the account's own functions, and the
+    // line each attempt leaves. The door is registered further down, so this
+    // reads it when asked.
+    account: () => accountDoor,
+    auditLogin,
     // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
     // seat (pty.ts), or any pane on a workspace this app serves out
     // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
@@ -7296,7 +7325,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   //
   // Registered through the SAME ownerOnly wrapper, by construction: the module
   // hands over a table and this is the only place a guard could be forgotten.
-  registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+  accountDoor = registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
     requests,

@@ -380,6 +380,8 @@ export class Accounts {
    * only ever one — see `signIn`.
    */
   private signingIn: {
+    /** The ladder this key is waiting on, once the registry has opened one. */
+    pending?: string
     username: string
     deviceId: string
     name: string
@@ -680,7 +682,7 @@ export class Accounts {
           // the pending, and the minted key waits with it for the rung that
           // lands. Neither crosses the bridge again.
           this.ladder.remember(step.pending, input.password)
-          this.signingIn = minted
+          this.signingIn = { ...minted, pending: step.pending }
           return {
             ok: false,
             reason: 'second_factor',
@@ -1141,9 +1143,22 @@ export class Accounts {
   /** And wait for the nod, on the two-second interval the site polls on. */
   resumeWait(
     pending: string,
-    options: { everyMs?: number; forMs?: number } = {},
+    options: { everyMs?: number; forMs?: number; signal?: AbortSignal } = {},
   ): Promise<SignInAnswer<AccountSession>> {
     return waitForApproval(this.port(), pending, options)
+  }
+
+  /**
+   * NOBODY IS CLIMBING THIS LADDER ANY MORE: the terminal that opened it went.
+   *
+   * The password goes now rather than at its ten minutes, and so does the key
+   * minted for it. Only the key of THIS ladder: a sign-in begun since is not
+   * this one's to end. The pending stays at the registry until it expires, and
+   * it attaches nothing unless a poll collects it (v2-factor-routes).
+   */
+  abandonSignIn(pending: string): void {
+    this.ladder.forget(pending)
+    if (this.signingIn?.pending === pending) this.signingIn = null
   }
 
   /**
@@ -1321,14 +1336,23 @@ export class Accounts {
    * registry is the judge; a fresh session is the receipt, and it is exactly
    * the session the act that follows is made under.
    *
-   * A ladder is refused here rather than climbed. This device is attached,
-   * so cookrew.dev does not normally raise one; if it does, the right thing is
-   * the resume card and not a sign-out that starts with a six-digit code.
+   * A LADDER IS NOT CLIMBED HERE, AND IT IS NOT A REFUSAL EITHER. cookrew.dev
+   * opens one only after the password checks out, and it opens one for every
+   * sign-in on an account holding a factor, attached device or not. Answering
+   * "wrong password" to that left nobody with an authenticator able to sign a
+   * machine out or revoke a device. The act that follows carries the same
+   * password and the registry's step-up gate takes it as proof
+   * (v2-step-up.ts), so it stays the judge of that act; all this has to know
+   * is that a live session is here to make it under. With none there is
+   * nothing to act with, and the resume card is the way back.
    */
   async stepUp(password: string): Promise<AccountResult<void>> {
     const proven = await this.resume(password)
     if (proven.ok) return { ok: true, value: undefined }
     if (proven.reason === 'second_factor') {
+      // Nobody is climbing this one, so the password is not held for it.
+      this.ladder.forget(proven.step.pending)
+      if (this.sessionLive()) return { ok: true, value: undefined }
       return {
         ok: false,
         reason: 'bad_credentials',

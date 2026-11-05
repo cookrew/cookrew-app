@@ -43,7 +43,8 @@ import {
   replyText,
   terminalDeliveryDeps
 } from './ask-delivery'
-import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import { cmdSecret, isServedPane, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import { LOGIN_EXIT, LoginDoor, LoginRefused, type AccountDoor, type LoginAudit, type LoginConnection } from './login-cli'
 import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
@@ -107,6 +108,14 @@ export interface SocketServerDeps {
    */
   secrets?: SecretsStore
   audit?: (event: SecretAudit) => void
+  /**
+   * `cookrew login`, `logout`, `whoami` (login-cli.ts). A function because the
+   * account's channels are registered after this server starts. Null or absent:
+   * the verbs refuse.
+   */
+  account?: () => AccountDoor | null
+  /** The line each attempt leaves in the event log. Never anything typed. */
+  auditLogin?: (event: LoginAudit) => void
   /**
    * Was this terminal spawned for a served session? Read for the secret verbs
    * only, and REQUIRED: an optional predicate fails open when nobody wires it.
@@ -202,6 +211,7 @@ export interface SocketServerHandle {
  */
 export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
   const { ptys } = deps
+  const login = loginDoorFor(deps)
 
   const server = net.createServer((socket) => {
     let buffer = ''
@@ -211,7 +221,7 @@ export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
       while (newline !== -1) {
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
-        void handleLine(line, socket, deps)
+        void handleLine(line, socket, deps, login)
         newline = buffer.indexOf('\n')
       }
     })
@@ -236,20 +246,49 @@ export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
   return { server, claim }
 }
 
+/**
+ * THE ONE PLACE A TYPED ANSWER EXISTS AS A REQUEST FIELD.
+ *
+ * `cookrew login` sends what a person typed in `secret`, never in `args` or
+ * `flags`, and it comes off here, ahead of everything: from this line on
+ * `request` cannot carry a password into a dispatch, a log, an error or a
+ * retry, whatever is added to those later. Only the login door gets it.
+ */
+const takeSecret = (sent: CliRequest & { secret?: unknown }): { request: CliRequest; secret: string | undefined } => {
+  const { secret, ...request } = sent
+  return { request, secret: typeof secret === 'string' ? secret : undefined }
+}
+
+const LOGIN_VERBS: ReadonlySet<string> = new Set(['login', 'logout'])
+
+/** A verb that speaks for the account, not for a card. */
+const answerAccountVerb = (
+  request: CliRequest,
+  secret: string | undefined,
+  connection: LoginConnection,
+  login: LoginDoor
+): Promise<string> | null => {
+  if (LOGIN_VERBS.has(request.cmd)) return login.handle(request, secret, connection)
+  return request.cmd === 'whoami' ? Promise.resolve().then(() => login.whoami(request)) : null
+}
+
 async function handleLine(
   line: string,
   socket: net.Socket,
-  deps: SocketServerDeps
+  deps: SocketServerDeps,
+  login: LoginDoor
 ): Promise<void> {
-  let request: CliRequest
+  let sent: CliRequest
   try {
-    request = JSON.parse(line) as CliRequest
+    sent = JSON.parse(line) as CliRequest
   } catch {
     socket.write(JSON.stringify({ id: 'unknown', ok: false, error: 'Bad request JSON' }) + '\n')
     return
   }
+  const { request, secret } = takeSecret(sent)
   try {
-    const output = await retryTransient(() => dispatch(request, deps))
+    const output = await (answerAccountVerb(request, secret, socket, login) ??
+      retryTransient(() => dispatch(request, deps)))
     respond(socket, { id: request.id, ok: true, output })
   } catch (error) {
     respond(socket, {
@@ -1240,9 +1279,13 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
  * node's `servedSession`, which marks the owner's receipt of a session
  * served somewhere else.
  */
-export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
-  const refuse = (why: string): SecretCliError =>
-    new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused)
+export function ownerPaneOf(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  refuse: (why: string) => Error = (why) =>
+    new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused),
+  servedWhy = 'never readable from a served session'
+): TerminalNodeData {
   if (typeof request.flags.as === 'string') throw refuse('--as names another pane')
   if (!request.terminalId) throw refuse('this shell is not a Cookrew terminal')
   const identity = resolveCallerTerminalId({
@@ -1253,8 +1296,38 @@ export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): Termin
   const id = identity.terminalId
   const node = deps.store.node(id) ?? deps.store.nodeAcrossWorkspaces?.(id)?.node
   if (!node || node.kind !== 'terminal') throw refuse('no live pane of this app answers to this terminal')
-  if (deps.isServed(id)) throw refuse('never readable from a served session')
+  if (deps.isServed(id)) throw refuse(servedWhy)
   return node
+}
+
+/** The caller of `cookrew login`: the rule `cookrew secret` keeps, in its own words. */
+function loginPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  const refuse = (why: string): LoginRefused =>
+    new LoginRefused(`refused: signing in is the owner's — ${why}`, LOGIN_EXIT.refused)
+  const served = 'never from a served session'
+  const pane = ownerPaneOf(request, deps, refuse, served)
+  if (isServedPane(pane)) throw refuse(served)
+  return pane
+}
+
+/**
+ * An agent's tools only run in its turn, so a pane mid-turn is not a person at
+ * a shell. `waiting` is a turn too: the agent is held at its own menu.
+ */
+const agentMidTurn = (terminalId: string, deps: SocketServerDeps): boolean => {
+  const phase = deps.turns.phaseOf(terminalId)
+  return phase === 'thinking' || phase === 'waiting'
+}
+
+function loginDoorFor(deps: SocketServerDeps): LoginDoor {
+  return new LoginDoor({
+    account: () => deps.account?.() ?? null,
+    ownerPane: (request) => loginPaneOf(request, deps),
+    agentBusy: (terminalId) => agentMidTurn(terminalId, deps),
+    // No session in this process means the keys do not pass through it either.
+    seal: (terminalId) => deps.ptys.get(terminalId)?.sealInput() ?? (() => undefined),
+    audit: (event) => deps.auditLogin?.(event)
+  })
 }
 
 /** `cookrew secret …` (secret-cli.ts), with the caller held to ownerPaneOf. */
@@ -2004,6 +2077,9 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
                                                 (its children inherit it; nothing is printed — the better of the two paths)
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
+  cookrew login [username]                      Sign this machine in, in an owner pane: hidden password, then the second factor
+  cookrew logout                                Take this machine off the account, in an owner pane
+  cookrew whoami                                The account and device this machine is signed in as
                                                 (owner panes only; every read is logged)
   cookrew browser create URL ["Name"] [--workspace <name>] [--new]
                                                 Create a browser card in YOUR workspace
