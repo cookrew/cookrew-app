@@ -296,3 +296,40 @@ describe('release.yml', () => {
     expect(steps[verify].if).toContain("steps.signing.outputs.mode == 'notarized'")
   })
 })
+
+// THE FUSES (owner 2026-11-05: only Cookrew may read a sealed secret). The
+// keychain's ACL trusts the signed binary, so anything that can run JS as that
+// binary can open every value. These are the doors to that, and the one that
+// must stay open: the `cookrew` shim is ELECTRON_RUN_AS_NODE on this binary.
+describe('the fuses', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const hook = createRequire(import.meta.url)('../scripts/after-pack-fuses.cjs') as {
+    fuseConfig: (options: Record<string, number>) => Record<string | number, unknown>
+    default: (context: unknown) => Promise<void>
+  }
+  const O = { RunAsNode: 0, EnableNodeOptionsEnvironmentVariable: 2, EnableNodeCliInspectArguments: 3, EnableEmbeddedAsarIntegrityValidation: 4, OnlyLoadAppFromAsar: 5 }
+  const config = hook.fuseConfig(O)
+
+  it('run after the app is packed and before it is signed', () => {
+    expect((yaml.load(read('electron-builder.yml')) as { afterPack?: string }).afterPack).toBe('scripts/after-pack-fuses.cjs')
+  })
+
+  it('shut the two ways to run code inside the real app', () => {
+    expect(config[O.EnableNodeOptionsEnvironmentVariable]).toBe(false)
+    expect(config[O.EnableNodeCliInspectArguments]).toBe(false)
+  })
+
+  it('load only the asar that was signed', () => {
+    expect(config[O.OnlyLoadAppFromAsar]).toBe(true)
+    expect(config[O.EnableEmbeddedAsarIntegrityValidation]).toBe(true)
+  })
+
+  it('keep RunAsNode on, or `cookrew` opens a second app', () => {
+    expect(config[O.RunAsNode]).toBe(true)
+    expect(read('src/main/cli-shim.ts')).toContain('ELECTRON_RUN_AS_NODE=1')
+  })
+
+  it('touch only the Mac build', async () => {
+    await expect(hook.default({ electronPlatformName: 'win32' })).resolves.toBeUndefined()
+  })
+})

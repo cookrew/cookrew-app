@@ -1,8 +1,15 @@
 /**
  * WHERE A SEALED SECRET LIVES: ~/.cookrew/secrets/<name>, one file each.
  *
- * The same discipline as ~/.cookrew/stripe.env: a directory nobody else can
- * list (0700), a file nobody else can read (0600), written whole to a
+ * ENCRYPTED AT REST (owner 2026-11-05). The file holds ciphertext; the key
+ * sits in the keychain under the app's own ACL (a SecretSealer, in the app
+ * Electron's safeStorage: secrets-seal.ts). So a process reading the file gets
+ * nothing, and `security` stops at a password prompt: an agent has to go
+ * through `cookrew secret`, which is the audited way. File modes alone could
+ * not say that, because every agent runs as the owner.
+ *
+ * The same discipline as ~/.cookrew/stripe.env as well: a directory nobody
+ * else can list (0700), a file nobody else can read (0600), written whole to a
  * sibling and renamed into place so a crash leaves the old value or the new
  * one and never half of either. The value is returned by `read` and by
  * nothing else — `list` carries names and dates, the audit line carries the
@@ -31,16 +38,34 @@ export interface SecretRecord {
 }
 
 /**
- * THE KEYCHAIN OPT-IN. With `COOKREW_SECRETS_KEYCHAIN=1` the VALUE lives in
- * the macOS login keychain as a generic password (account `cookrew`,
- * service `cookrew-secret-<name>`), and the per-name file keeps only the
- * facts the listing shows: served, createdAt, updatedAt, and that the
- * value is in the keychain. Files stay the default. Everything above the
- * store — the audit line, the served refusal, the routes — is the same.
+ * THE OLD KEYCHAIN OPT-IN, READ ONLY. An environment switch used to put a
+ * value in the login keychain through the `security` tool, which showed it on
+ * a command line and left an item any process of the owner's could read back
+ * with that same tool. Nothing writes that way now: a file marked `keychain` is
+ * read once more, sealed by `migrate`, and its item goes.
  */
-export const KEYCHAIN_ENV = 'COOKREW_SECRETS_KEYCHAIN'
 export const KEYCHAIN_ACCOUNT = 'cookrew'
 export const keychainService = (name: string): string => `cookrew-secret-${name}`
+
+/**
+ * What is sealed: the name, then the value. safeStorage is AES-CBC with no
+ * authentication, so a wrong key can open to noise that merely looks valid;
+ * the name says it opened, and that this file is the one it was sealed into.
+ */
+const sealedText = (name: string, value: string): string => `cookrew-secret:${name}\n${value}`
+
+const valueIn = (name: string, text: string): string => {
+  const head = `cookrew-secret:${name}\n`
+  if (!text.startsWith(head)) throw new Error('not this secret')
+  return text.slice(head.length)
+}
+
+/** What encrypts a value. Sync, as the store is; a throw is a refusal. */
+export interface SecretSealer {
+  readonly available: () => boolean
+  readonly seal: (value: string) => Buffer
+  readonly open: (box: Buffer) => string
+}
 
 
 export interface SecretsStore {
@@ -48,6 +73,13 @@ export interface SecretsStore {
   readonly read: (name: string) => SecretRecord | null
   readonly list: () => SecretListing[]
   readonly remove: (name: string) => boolean
+  /**
+   * Seal every value still in the clear (or in the old keychain item), and
+   * tell the backups to leave the directory out. Each file is replaced only
+   * after its sealed copy has opened back to the same value; a file that
+   * fails stays exactly as it was and is named in `failed`.
+   */
+  readonly migrate: () => { sealed: string[]; failed: string[] }
   /** Fires after a put or a remove: the scrub drops its value table on it. */
   readonly onChange: (listener: () => void) => () => void
   readonly dir: string
@@ -56,11 +88,16 @@ export interface SecretsStore {
 export interface SecretsStoreOptions {
   readonly baseDir?: string
   readonly now?: () => number
-  /** Values in the keychain rather than the file; default from COOKREW_SECRETS_KEYCHAIN. */
-  readonly keychain?: boolean
-  /** The `security` binary (tests point this at a fake). */
+  /** Encrypts what is written. Absent, a value is written as it comes: tests, and platforms with no keychain. */
+  readonly sealer?: SecretSealer
+  /** Refuse a write the sealer cannot take, rather than leave it in the clear. */
+  readonly requireSealer?: boolean
+  /** Keep the directory out of backups; told once it exists. */
+  readonly excludeFromBackup?: (dir: string) => void
+  /** A line for the log: names only, never a value. */
+  readonly warn?: (message: string) => void
+  /** The `security` binary, for the old keychain items (tests point this at a fake). */
   readonly security?: string
-  readonly env?: NodeJS.ProcessEnv
 }
 
 export const SECRETS_DIR_NAME = 'secrets'
@@ -74,8 +111,8 @@ const assertName = (name: string): void => {
   }
 }
 
-/** What the file holds: the record, or the record without its value when the keychain has it. */
-type StoredRecord = Partial<SecretRecord> & { keychain?: boolean }
+/** What the file holds: `sealed` (base64 ciphertext), or from older versions the value, or a `keychain` mark. */
+type StoredRecord = Partial<SecretRecord> & { sealed?: string; keychain?: boolean }
 
 const parseStored = (raw: string): StoredRecord | null => {
   try {
@@ -104,18 +141,14 @@ const parseRecord = (raw: string): SecretRecord | null => {
 export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsStore => {
   const dir = path.join(options.baseDir ?? path.join(homedir(), '.cookrew'), SECRETS_DIR_NAME)
   const now = options.now ?? ((): number => Date.now())
-  const env = options.env ?? process.env
-  const keychain = options.keychain ?? env[KEYCHAIN_ENV] === '1'
+  const { sealer, requireSealer = false } = options
+  const warn = options.warn ?? ((): void => undefined)
   const security = options.security ?? 'security'
 
   /** `security …` with the value never on stdout of this process. */
   const securityRun = (args: string[]): string =>
     execFileSync(security, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
 
-  const keychainPut = (name: string, value: string): void => {
-    // -U updates in place; the item is this app's own account+service pair.
-    securityRun(['add-generic-password', '-U', '-a', KEYCHAIN_ACCOUNT, '-s', keychainService(name), '-w', value])
-  }
   const keychainRead = (name: string): string | null => {
     try {
       return securityRun(['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', keychainService(name), '-w']).replace(/\n$/, '')
@@ -131,10 +164,18 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
   }
 
+  let leftOutOfBackups = false
+  /** Said once a name: the scrub reads every value every few seconds. */
+  const unopened = new Set<string>()
+
   const ensureDir = (): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     // A directory that already existed keeps whatever mode it had: say 0700 again.
     if ((statSync(dir).mode & 0o777) !== 0o700) chmodSync(dir, 0o700)
+    if (!leftOutOfBackups) {
+      leftOutOfBackups = true
+      options.excludeFromBackup?.(dir)
+    }
   }
 
   const fileOf = (name: string): string => path.join(dir, name)
@@ -148,6 +189,25 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
       return null
     }
     const stored = parseStored(raw)
+    if (typeof stored?.sealed === 'string') {
+      // Sealed by another build holds another key, and a denied keychain holds
+      // none. The file stays: a seal replaces it, and the right build opens it.
+      try {
+        if (!sealer) throw new Error('no sealer')
+        return {
+          value: valueIn(name, sealer.open(Buffer.from(stored.sealed, 'base64'))),
+          served: stored.served === true,
+          createdAt: typeof stored.createdAt === 'number' ? stored.createdAt : 0,
+          updatedAt: typeof stored.updatedAt === 'number' ? stored.updatedAt : 0
+        }
+      } catch {
+        if (!unopened.has(name)) {
+          unopened.add(name)
+          warn(`secret ${name} could not be opened: sealed by another build, or the keychain refused`)
+        }
+        return null
+      }
+    }
     if (stored?.keychain === true) {
       // The file is the facts; the keychain is the value. A file with no
       // keychain item behind it is a secret that is gone, not an empty one.
@@ -192,25 +252,8 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     return () => void listeners.delete(listener)
   }
 
-  const put: SecretsStore['put'] = (name, value, putOptions = {}) => {
-    assertName(name)
-    if (typeof value !== 'string' || value.length === 0) throw new Error('a secret needs a value')
-    ensureDir()
-    const before = read(name)
-    const at = now()
-    const record: SecretRecord = {
-      value,
-      served: putOptions.served === true,
-      createdAt: before?.createdAt ?? at,
-      updatedAt: at
-    }
-    // Keychain: the value goes there FIRST, so a file that says "keychain"
-    // never points at an item that was not written; the file then holds no
-    // value at all.
-    if (keychain) keychainPut(name, value)
-    const stored: StoredRecord = keychain
-      ? { keychain: true, served: record.served, createdAt: record.createdAt, updatedAt: record.updatedAt }
-      : record
+  /** Whole, to a sibling, then renamed: a crash leaves the old file or the new one. */
+  const writeRecord = (name: string, stored: StoredRecord): void => {
     const file = fileOf(name)
     const tmp = `${file}.${process.pid}.tmp`
     try {
@@ -229,8 +272,76 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
       closeSync(fd)
     }
     renameSync(tmp, file)
+  }
+
+  /** The ciphertext for a value, or the reason in words that hold no value. */
+  const sealOf = (name: string, value: string): string => {
+    try {
+      return (sealer as SecretSealer).seal(sealedText(name, value)).toString('base64')
+    } catch {
+      throw new Error(`the keychain refused to seal ${name}: nothing was written`)
+    }
+  }
+
+  const put: SecretsStore['put'] = (name, value, putOptions = {}) => {
+    assertName(name)
+    if (typeof value !== 'string' || value.length === 0) throw new Error('a secret needs a value')
+    const sealing = sealer?.available() === true
+    if (!sealing && requireSealer) throw new Error(`the keychain is not available: ${name} was not sealed`)
+    ensureDir()
+    const before = read(name)
+    const at = now()
+    const record: SecretRecord = {
+      value,
+      served: putOptions.served === true,
+      createdAt: before?.createdAt ?? at,
+      updatedAt: at
+    }
+    const stored: StoredRecord = sealing
+      ? { sealed: sealOf(name, value), served: record.served, createdAt: record.createdAt, updatedAt: record.updatedAt }
+      : record
+    const hadKeychainItem = storedOf(name)?.keychain === true
+    writeRecord(name, stored)
+    if (hadKeychainItem) keychainRemove(name)
+    unopened.delete(name)
     changed()
     return { name, served: record.served, updatedAt: record.updatedAt }
+  }
+
+  const storedOf = (name: string): StoredRecord | null => {
+    try {
+      return parseStored(readFileSync(fileOf(name), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  const migrate: SecretsStore['migrate'] = () => {
+    const sealed: string[] = []
+    const failed: string[] = []
+    if (!sealer?.available()) return { sealed, failed }
+    ensureDir()
+    const names = readdirSync(dir)
+    // A write cut short by a crash may have left a value in a tmp file.
+    sweepStale(names)
+    for (const name of names.sort()) {
+      if (!isSecretName(name)) continue
+      const stored = storedOf(name)
+      if (stored === null || typeof stored.sealed === 'string') continue
+      try {
+        const record = read(name)
+        if (record === null) throw new Error('unreadable')
+        const box = sealer.seal(sealedText(name, record.value))
+        // The clear file goes only once these exact bytes have opened back.
+        if (valueIn(name, sealer.open(box)) !== record.value) throw new Error('did not open back')
+        writeRecord(name, { sealed: box.toString('base64'), served: record.served, createdAt: record.createdAt, updatedAt: record.updatedAt })
+        if (stored.keychain === true) keychainRemove(name)
+        sealed.push(name)
+      } catch {
+        failed.push(name)
+      }
+    }
+    return { sealed, failed }
   }
 
   const list = (): SecretListing[] => {
@@ -244,14 +355,14 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     const rows: SecretListing[] = []
     for (const name of names.sort()) {
       if (!isSecretName(name)) continue
-      // The listing never needs the value, so it never asks the keychain.
+      // The listing never needs the value, so it never opens one.
       let stored: StoredRecord | null
       try {
         stored = parseStored(readFileSync(fileOf(name), 'utf8'))
       } catch {
         continue
       }
-      if (!stored || (stored.keychain !== true && typeof stored.value !== 'string')) continue
+      if (!stored || (stored.keychain !== true && typeof stored.value !== 'string' && typeof stored.sealed !== 'string')) continue
       rows.push({
         name,
         served: stored.served === true,
@@ -284,5 +395,5 @@ export const createSecretsStore = (options: SecretsStoreOptions = {}): SecretsSt
     }
   }
 
-  return { put, read, list, remove, onChange, dir }
+  return { put, read, list, remove, migrate, onChange, dir }
 }
