@@ -255,6 +255,9 @@ import { carrySessionToCwd } from './session-move'
 import { moveTerminalCwd } from './terminal-cwd'
 import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
+import { WatchPairing } from './watch-pairing'
+import { createWatchHost } from './watch-host'
+import { setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
@@ -8064,6 +8067,32 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
   })
   setMenuAnswerer(answerMenu)
+  // The wrist's routes (watch-routes.ts): a token of its own, a short list of routes.
+  const watchPairing = new WatchPairing()
+  setWatchHost(
+    createWatchHost({
+      pairing: watchPairing,
+      deviceName: () => localDeviceName(),
+      endpoints: mobileEndpointList,
+      httpPort: MOBILE_PORT,
+      canvas: (workspaceId) => store.workspaceState(workspaceId),
+      node: (id) => store.nodeAcrossWorkspaces(id)?.node,
+      thumbViewed: noteBrowserViewed,
+      thumb: (id) => browserThumbs.frame(id),
+      browser: (id) => browserManager.get(id),
+      lastPreset: () => [...agents.list()].filter((entry) => entry.active).sort((a, b) => b.spawnedAt - a.spawnedAt)[0]?.preset ?? 'Claude Code',
+      createTerminal,
+      stop: async (terminalId) => {
+        const session = ptys.get(terminalId)
+        if (!session) return false
+        return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
+      }
+    })
+  )
+  ipcMain.handle(
+    'watch:code',
+    ownerOnly(() => ({ ...watchPairing.mintCode(), paired: watchPairing.paired }))
+  )
   ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
     const request = parseMenuRequest(body)
     return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
