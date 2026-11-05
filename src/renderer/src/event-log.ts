@@ -153,6 +153,7 @@ const META: Record<string, EventMeta> = {
   'remote.stopped': { label: 'Stopped at the Mac', verb: 'ended every session', noun: 'machine', icon: 'close', hatch: false, metric: null },
   'remote.ready': { label: 'Ready', verb: 'is ready for you', noun: 'machine', icon: 'browser', hatch: false, metric: null },
   'remote.restart-needed': { label: 'Restart needed', verb: 'needs a restart to finish', noun: 'machine', icon: 'browser', hatch: false, metric: null },
+  'remote.woke': { label: 'Display woken', verb: 'had its display woken', noun: 'machine', icon: 'browser', hatch: false, metric: null, toast: false },
   'remote.restart': { label: 'Restarting', verb: 'is restarting', noun: 'machine', icon: 'expand', hatch: false, metric: null }
 }
 

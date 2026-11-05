@@ -150,6 +150,8 @@ export interface PixelInstanceOptions {
   readonly onBlocked?: () => void
 }
 
+/** Who is asking when an agent reads a screen: never at the Mac, so Stop and a served workspace reach it. */
+const AGENT_VIEWER: ViewerWho = { key: 'agent', name: 'An agent', here: false }
 const COPY_DELAY_MS = 200
 /** The most a copy carries to a viewer: a clipboard can hold a whole file. */
 const MAX_COPY_CHARS = 64 * 1024
@@ -409,7 +411,8 @@ export class PixelInstance {
     if (refusal) throw new Error(refusal)
     if (!this.opts.device.perform) throw new Error(`a ${this.opts.device.target.use} camera is watched, not driven`)
     if (!this.opened) throw new Error(this.statusNow.message ?? 'the device is not connected yet')
-    await this.perform(gestures, true)
+    // Stop can land while these wait their turn behind each other.
+    await this.perform(gestures, true, () => (this.opts.device.remote?.agentRefusal() ?? null) === null)
   }
 
   private perform(gestures: readonly Gesture[], surface = false, stillAllowed?: () => boolean): Promise<void> {
@@ -444,7 +447,7 @@ export class PixelInstance {
   }
 
   async snapshot(): Promise<string | null> {
-    return this.latest
+    return this.opts.device.remote?.admit(AGENT_VIEWER) ? null : this.latest
   }
 
   async evaluate(_expression: string): Promise<unknown> {

@@ -100,6 +100,8 @@ export interface RemoteDeskDeps {
 export const STOP_HOLD_MS = 10 * 60_000
 /** A viewer whose line dropped may redial this long and still hold control. */
 export const CONTROL_GRACE_MS = 30_000
+/** Waking a display again sooner does nothing: repeated, it would hold off a timed lock. */
+export const WAKE_REST_MS = 60_000
 /** How often a wait looks: each look is a process, and the wait can last all day. */
 export const READY_WATCH_MS = 30_000
 /** An agent that has not acted for this long has left the screen. */
@@ -202,6 +204,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   let awake = false
   let cancelWatch: (() => void) | null = null
   let told: RemoteStateId | null = null
+  let wokeAt = Number.NEGATIVE_INFINITY
 
   function readSettings(): RemoteSettings {
     try {
@@ -210,6 +213,9 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       return { waiting: null, holdUntil: 0 }
     }
   }
+
+  // Nothing written to disk can hold the door longer than Stop would have.
+  settings = { ...settings, holdUntil: Math.min(settings.holdUntil, now() + STOP_HOLD_MS) }
 
   const held = (): boolean => settings.holdUntil > now()
   const stateOf = (id: RemoteStateId, more: Partial<RemoteState> = {}): RemoteState => ({
@@ -511,6 +517,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       if (held() && !who.here) return refuse(stopped())
       const read = await machineState()
       if (read.id !== 'display-asleep') return refuse(remoteView(read, who.here ? 'here' : 'away').sentence, read)
+      if (now() - wokeAt < WAKE_REST_MS) return { ok: true }
+      wokeAt = now()
       deps.record('remote.woke', MACHINE, word('this Mac'), who.name)
       await deps.wakeDisplay?.()
       return { ok: true }

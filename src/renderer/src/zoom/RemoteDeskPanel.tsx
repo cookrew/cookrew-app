@@ -58,7 +58,7 @@ function Panel(): React.JSX.Element | null {
       ) : <RemotePanel state={state} where={where} busy={acts.busy} note={acts.note} onAct={acts.act} />)}
       {open && control.available && settable && (
         <label className="zv-remote-switch" title={SWITCH_MEANS}>
-          <input type="checkbox" role="switch" checked={on} onChange={flip} />
+          <input type="checkbox" role="switch" checked={on} onChange={(event) => flip(event.target.checked)} />
           <span>{SWITCH_LABEL}</span>
         </label>
       )}

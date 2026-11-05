@@ -276,7 +276,8 @@ export function isOwnerPage(frameUrl: string | undefined, appUrl: string | null)
   try {
     const frame = new URL(frameUrl)
     const app = new URL(appUrl)
-    return frame.protocol === 'file:' ? app.protocol === 'file:' && frame.pathname === app.pathname : frame.origin === app.origin
+    if (frame.protocol !== app.protocol) return false
+    return frame.protocol === 'file:' ? frame.pathname === app.pathname : frame.origin === app.origin
   } catch {
     return false
   }

@@ -2,6 +2,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { RemoteBarView, RemoteConfirmView, RemoteHostBannerView, RemotePanel, coverState, frameIsStale } from '../src/renderer/src/use/RemotePanel'
+import { switchAnswer } from '../src/renderer/src/use/RemoteSwitch'
 import type { CardControl, RemoteBuild, RemoteState, RemoteStateId } from '../src/shared/remote-access'
 import type { UseStatus } from '../src/shared/use-signal'
 
@@ -149,6 +150,14 @@ describe('RemoteBarView', () => {
 
   it('says why a Take control was refused', () => {
     expect(bar(base, 'away', { error: 'iPad has control of this card.' })).toContain('iPad has control of this card.')
+  })
+})
+
+describe('the switch says what was pressed, not what it last heard', () => {
+  it('a press sends the box\'s own new value', async () => {
+    const set = vi.fn(async () => ({ ok: true as const }))
+    expect(switchAnswer(set, false)).toBeInstanceOf(Promise)
+    expect(set).toHaveBeenCalledWith(false)
   })
 })
 

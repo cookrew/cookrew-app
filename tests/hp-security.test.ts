@@ -20,7 +20,16 @@ describe('a served pane and the owner\'s screen', () => {
 
   it('the profile refuses the tools and the window server a capture needs', () => {
     const profile = seatbeltProfile({ sandbox: '/s/svc/a', siblingRoot: '/s/svc', sessionsRoot: '/s', secretPaths: [] })
-    for (const rule of ['(deny process-exec (literal "/usr/sbin/screencapture"))', '(deny process-exec (literal "/usr/bin/osascript"))', '(deny mach-lookup (global-name "com.apple.windowserver.active"))']) {
+    const rules = [
+      '(deny process-exec (literal "/usr/sbin/screencapture"))',
+      '(deny process-exec (literal "/usr/bin/osascript"))',
+      '(deny process-exec (literal "/usr/bin/open"))',
+      '(deny mach-lookup (global-name "com.apple.windowserver.active"))',
+      // A copied binary gets past a literal path. These are what stop it.
+      '(deny mach-lookup (global-name "com.apple.replayd"))',
+      '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd"))'
+    ]
+    for (const rule of rules) {
       expect(profile).toContain(rule)
       expect(profile.indexOf(rule)).toBeGreaterThan(profile.indexOf('(allow process-exec process-fork signal)'))
     }

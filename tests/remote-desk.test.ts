@@ -1,7 +1,7 @@
 // THE ONE PLACE THAT SAYS WHERE THIS MACHINE'S SCREEN STANDS, AND WHO MAY DRIVE IT.
 // Everything here runs on fake lock, permission and session readers.
 import { describe, expect, it, vi } from 'vitest'
-import { createRemoteDesk, remoteGate, CONTROL_GRACE_MS, READY_WATCH_MS, STOP_HOLD_MS, type RemoteDeskDeps, type RemoteSession } from '../src/main/remote-desk'
+import { createRemoteDesk, remoteGate, CONTROL_GRACE_MS, READY_WATCH_MS, STOP_HOLD_MS, WAKE_REST_MS, type RemoteDeskDeps, type RemoteSession } from '../src/main/remote-desk'
 import { CONTROL_MS, MAC_VIEWER, type RemoteBuild, type ViewerWho } from '../src/shared/remote-access'
 
 const phone: ViewerWho = { key: 'device:p1', name: 'Pixel 9', here: false }
@@ -563,6 +563,17 @@ describe('what ends a grant at once', () => {
     expect(r.drop).toHaveBeenCalledWith(['c1'])
   })
 
+  it('the pairing token rotated: everyone on the old one is out', async () => {
+    const root: ViewerWho = { key: 'root', name: 'A paired device', here: false }
+    const r = rig()
+    r.desk.setSwitch(true)
+    r.desk.enter('c1', 'v1', root)
+    await r.desk.takeControl('c1', root)
+    r.desk.forgetDevice('root')
+    expect(r.desk.mayDrive('c1', root)).toBe(false)
+    expect(r.drop).toHaveBeenCalledWith(['c1'])
+  })
+
   it('a workspace turning served: grants end and viewers are dropped, not only masked', async () => {
     const r = rig()
     r.desk.setSwitch(true)
@@ -576,6 +587,14 @@ describe('what ends a grant at once', () => {
   })
 })
 
+describe('a hold written by anyone else', () => {
+  it('can never be longer than Stop itself', () => {
+    const r = rig({ settings: { read: () => ({ waiting: null, holdUntil: 9_000_000_000_000 }), write: () => undefined } })
+    r.tick(STOP_HOLD_MS)
+    expect(r.desk.admit('c1', phone)).toBeNull()
+  })
+})
+
 describe('a sleeping display', () => {
   it('can be woken from away, and looks again', async () => {
     const wakeDisplay = vi.fn(async () => undefined)
@@ -583,6 +602,17 @@ describe('a sleeping display', () => {
     expect((await r.desk.wake(phone)).ok).toBe(true)
     expect(wakeDisplay).toHaveBeenCalled()
     expect(r.types()).toContain('remote.woke')
+  })
+
+  it('cannot be held awake from away by waking it over and over', async () => {
+    const wakeDisplay = vi.fn(async () => undefined)
+    const r = rig({ wakeDisplay }, { displayAsleep: true })
+    await r.desk.wake(phone)
+    await r.desk.wake(phone)
+    expect(wakeDisplay).toHaveBeenCalledTimes(1)
+    r.tick(WAKE_REST_MS)
+    await r.desk.wake(phone)
+    expect(wakeDisplay).toHaveBeenCalledTimes(2)
   })
 
   it('a locked Mac is not woken for nothing', async () => {

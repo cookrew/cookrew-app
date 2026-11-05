@@ -292,7 +292,16 @@ export function seatbeltProfile(input: ProfileInput): string {
     // read the screen, and osascript could drive it, past every gate in main.
     '(deny process-exec (literal "/usr/sbin/screencapture"))',
     '(deny process-exec (literal "/usr/bin/osascript"))',
+    '(deny process-exec (literal "/usr/bin/open"))',
+    // A copied binary walks past a literal path, so these are the wall: no window
+    // server, no ScreenCaptureKit, and no LaunchServices to start an app outside
+    // this sandbox. Run for real: from inside it the app list reads empty, and
+    // node, git and the shell go on working.
     '(deny mach-lookup (global-name "com.apple.windowserver.active"))',
+    '(deny mach-lookup (global-name "com.apple.replayd"))',
+    '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd"))',
+    '(deny mach-lookup (global-name "com.apple.lsd.mapdb"))',
+    '(deny mach-lookup (global-name "com.apple.lsd.modifydb"))',
     // The owner's gateway (route program): any port it listens on, any host.
     ...gatewayDenyClauses(input.gatewayPorts ?? []),
     // TRAVERSAL. Found by running it: denying the service root outright made a

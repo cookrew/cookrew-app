@@ -6679,7 +6679,7 @@ function createWindow(): void {
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (isOwnerPage(url, ownerPageUrl())) return
     event.preventDefault()
-    if (/^https?:/i.test(url)) void shell.openExternal(url)
+    if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
   })
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -7328,6 +7328,8 @@ app.whenReady().then(() => {
     // Ending every session ends the watch's too.
     rotatePairingToken: () => {
       watchPairing.unpair()
+      // Whoever came in on the old token: a socket outlives the token that opened it.
+      remoteDesk.forgetDevice('root')
       return rotateActivePairingToken()
     },
     pairingHandout: currentPairingHandout,
@@ -8963,8 +8965,14 @@ function registerIpc(handlers: RestoreHandlers): void {
    * forever. The DESKTOP loop's entry point only: a phone reaches the same
    * cache through /api/browser/:id/thumb, which no longer waits on this.
    */
-  ipcMain.handle('browser:snapshot', async (_e, browserId: unknown) => {
+  ipcMain.handle('browser:snapshot', async (event, browserId: unknown) => {
     if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
+    // The Mac looking at its own screen, in its own window: the one place that
+    // picture needs no banner. It skips the cache that serves everyone else.
+    if (showsThisMachine(browserId)) {
+      const jpeg = ownerFrame(event) ? await browserManager.peek(browserId)?.snapshot().catch(() => null) : null
+      return jpeg ? `data:image/jpeg;base64,${jpeg}` : null
+    }
     await browserThumbs.refresh(browserId)
     return browserThumbs.dataUrl(browserId)
   })

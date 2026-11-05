@@ -44,6 +44,9 @@ describe('isOwnerPage — the window can be navigated, and its preload goes with
     expect(isOwnerPage('not a url', 'http://localhost:5173')).toBe(false)
     expect(isOwnerPage('http://localhost:5173/', null)).toBe(false)
     expect(isOwnerPage(undefined, 'http://localhost:5173')).toBe(false)
+    // Both of these have the origin 'null', and so does file:.
+    expect(isOwnerPage('data:text/html,hi', 'file:///App/out/renderer/index.html')).toBe(false)
+    expect(isOwnerPage('about:blank', 'file:///App/out/renderer/index.html')).toBe(false)
   })
 })
 

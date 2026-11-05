@@ -444,6 +444,17 @@ describe('a screen behind the remote desk', () => {
     expect(instance.statusFor(instance.status, { key: 'other', name: 'x', here: false })).toMatchObject({ input: false, control: { until: null } })
   })
 
+  it('after Stop an agent gets no picture, and its queued gestures do not run', async () => {
+    let stopped = false
+    const { instance, gestures } = rig({ agentRefusal: () => (stopped ? 'Stopped at the Mac' : null), admit: () => (stopped ? { message: 'Stopped', state: state('stopped') } : null) })
+    await instance.start()
+    const acting = instance.act([{ method: 'input.tap', params: { x: 1, y: 1 } }, { method: 'input.tap', params: { x: 2, y: 2 } }])
+    stopped = true
+    await acting
+    expect(gestures).toEqual([])
+    expect(await instance.snapshot()).toBeNull()
+  })
+
   it('a card with no desk behind it is unchanged', async () => {
     const clock = manual()
     const gestures: Gesture[] = []
