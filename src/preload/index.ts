@@ -580,6 +580,7 @@ const api = {
     }
   },
   zoomFleetMachines: () => ipcRenderer.invoke('zoom-fleet:machines'),
+  machineGauges: () => ipcRenderer.invoke('zoom-fleet:gauges'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),
   restoreCheckpoint: (id: string, checkpointIndex: number, targetSessionId?: string) =>
     ipcRenderer.invoke('agent:restore-checkpoint', id, checkpointIndex, targetSessionId),

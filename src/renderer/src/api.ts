@@ -547,6 +547,18 @@ export interface CookrewApi {
    */
   zoomFleetMachines?: () => Promise<AccountMachines>;
   /**
+   * This desktop's machine gauges, read on demand (shared/machine-gauges.ts);
+   * null, or anything that is not a reading, is "no reading". The caller's
+   * asking IS what keeps the sampler running: stop asking and it stops.
+   * Optional — feature-detect.
+   */
+  machineGauges?: () => Promise<unknown>;
+  /**
+   * Another desktop of the account, asked through the relay; a surface that
+   * holds no credential for it has no such call. Optional — feature-detect.
+   */
+  machineGaugesOf?: (machineId: string) => Promise<unknown>;
+  /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
    */
