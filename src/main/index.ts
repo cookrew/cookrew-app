@@ -238,12 +238,13 @@ import {
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
-import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
+import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '../shared/remote-access'
 import { parseUseUrl } from '../shared/use-url'
 import { readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
+import { electronUpdateInstaller } from './update-install'
 import type { UpdateStatus } from '../shared/update-check'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
 import { createRemoteTray } from './remote-tray'
@@ -6441,17 +6442,19 @@ if (process.platform === 'darwin') {
     listedApp = bundle
   })
 }
+function currentBuild(): RemoteBuild {
+  return remoteBuild({
+    execPath: process.execPath,
+    packaged: app.isPackaged,
+    persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
+    servedLive: servedSpawnContexts.size > 0,
+    listedApp
+  })
+}
 let keepAwakeId: number | null = null
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
-  build: () =>
-    remoteBuild({
-      execPath: process.execPath,
-      packaged: app.isPackaged,
-      persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
-      servedLive: servedSpawnContexts.size > 0,
-      listedApp
-    }),
+  build: currentBuild,
   linuxRefusal: () => linuxScreenRefusal(process.env),
   screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
   accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
@@ -8668,7 +8671,8 @@ function registerIpc(handlers: RestoreHandlers): void {
         file: path.join(homedir(), '.cookrew', 'update-check.json'),
         // Electron's own stack, not Node's: it honours the system proxy.
         fetch: (url, init) => net.fetch(url, init),
-        publish: publishUpdateStatus
+        publish: publishUpdateStatus,
+        installer: electronUpdateInstaller()
       })
     : null
   ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
@@ -8678,6 +8682,13 @@ function registerIpc(handlers: RestoreHandlers): void {
     const status = updateCheck.setOn(on)
     publishUpdateStatus(status)
     return status
+  })
+  // A restart ends the app, so the owner reads what it does to agents first.
+  ipcMain.handle('update:restart', async (event) => {
+    if (updateCheck === null || !ownerFrame(event) || !mainWindow) return false
+    const { title, sentence, yes } = restartConfirm(currentBuild(), 'here')
+    const { response } = await dialog.showMessageBox(mainWindow, { type: 'question', message: title, detail: sentence, buttons: [yes, 'Later'], defaultId: 0, cancelId: 1 })
+    return response === 0 && updateCheck.restart()
   })
   updateCheck?.start()
   // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's fleet feed,
