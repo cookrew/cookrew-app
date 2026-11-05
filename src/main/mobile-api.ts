@@ -1964,7 +1964,8 @@ export async function handleMobileApi(
     // The inbox rides the same stream, under the board's read gate; the
     // opening frame is the list as it stands, so a phone never polls for it.
     // The roster rides it too, one changed entry per frame, as /api/agents
-    // serves it (agent-registry onChange): a page never refetches the list.
+    // serves it (agent-registry onChange). A page refetches the list only when
+    // this stream comes back (remote-api onStreamBack): frames sent into the gap are lost.
     // Optional-called: a server embedding a bare roster (tests, older hosts) just has no frames.
     const offAgent = deps.agents?.onChange?.((entry) => send("agent", entry));
     if (offAgent) onClose(offAgent);
