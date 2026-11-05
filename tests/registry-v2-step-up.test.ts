@@ -140,7 +140,8 @@ describe('the step-up list', () => {
       'not-me',
       'link-provider',
       'unlink-provider',
-      'add-factor'
+      'add-factor',
+      'delete-account'
     ])
   })
 
@@ -723,7 +724,8 @@ describe('H4 · the enforcement map is not a claim, it is a test', () => {
       // No provider is configured here, so this refuses before the gate. The
       // gate itself is driven in registry-v2-oauth-http.
       'link-provider': () => call('POST', '/v2/oauth/github/start', { intent: 'link' }, bearer(owner.token)),
-      'unlink-provider': () => call('DELETE', '/v2/me/links/github', {}, bearer(owner.token))
+      'unlink-provider': () => call('DELETE', '/v2/me/links/github', {}, bearer(owner.token)),
+      'delete-account': () => call('DELETE', '/v2/me', { confirm: owner.username }, bearer(owner.token))
     }
 
     for (const act of STEP_UP_ACTS) {

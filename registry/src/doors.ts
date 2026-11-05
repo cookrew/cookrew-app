@@ -326,6 +326,14 @@ export class DoorStore {
     return true
   }
 
+  /** An account was deleted: every listing under its handle goes. Always writes, so a retry can finish. */
+  withdrawAll(handle: string): void {
+    for (const door of [...this.doors.values()]) {
+      if (door.handle === handle) this.doors.delete(doorPath(door.handle, door.name))
+    }
+    this.flush()
+  }
+
   get(handle: string, name: string): DoorRecord | null {
     return this.doors.get(doorPath(handle, name)) ?? null
   }

@@ -19,6 +19,7 @@ import { QrCode } from './QrCode'
 import { qrMatrix } from '../../../shared/qr'
 import { RequestsTab } from './RequestsTab'
 import { DOING, problemSentence } from './problem'
+import { DeleteAccountRow } from './DeleteAccountRow'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
@@ -431,6 +432,7 @@ export function ProfileSheet({
                  won rather than promising that one day one will. */
               <p className="gs-foot-note">{envIgnoredSentence(status.envUsername, username)}</p>
             )}
+            <DeleteAccountRow username={username} passwordless={status.passwordless === true} onStatus={onStatus} />
           </section>
         )}
 

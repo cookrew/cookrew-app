@@ -14,7 +14,8 @@ import { CommitsCache } from '../registry/src/github-commits'
 import { KEEP_DAYS as PULSE_DAYS, Pulse } from '../registry/src/pulse'
 import { KEEP_DAYS as FUNNEL_DAYS } from '../registry/src/funnel-counts'
 import { SEEN_KEEP_MS } from '../registry/src/v2-line-seen'
-import { REVOKED_MAX, SESSIONS_MAX, V2Accounts } from '../registry/src/v2-accounts'
+import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES } from '../src/shared/account-delete'
+import { REVOKED_MAX, SESSIONS_MAX } from '../registry/src/v2-accounts'
 import { JOIN_CODE_TTL_MS } from '../registry/src/v2-join-codes'
 import { EXPIRED_RETENTION_MS } from '../registry/src/terms'
 import { REACH_TTL_MS as DNS_CARD_TTL_MS } from '../registry/src/dns-zone'
@@ -340,12 +341,15 @@ describe('the words match the code', () => {
     expect(privacy).toMatch(/never writes it down/)
   })
 
-  it('the deletion section stands: the account store has no way to delete one', () => {
-    const deleting = Object.getOwnPropertyNames(V2Accounts.prototype).filter((name) => /delete|erase|remove|purge/i.test(name))
-    expect(deleting).toEqual([])
+  it('the deletion section says what the route does, and no longer depends on an address', () => {
     const choices = wordsOf(PRIVACY.sections.find((s) => s.id === 'choices') as LegalSection)
-    expect(choices).toMatch(/no delete-account button/i)
-    expect(choices).toContain(CONTACT_EMAIL)
+    expect(choices).toMatch(/Choose Delete account on your profile in the app/)
+    expect(choices).not.toMatch(/no delete-account button/i)
+    const line = choices.split('Delete your account.')[1]?.split('Depending on where you live')[0] ?? ''
+    expect(line).not.toContain(CONTACT_EMAIL)
+    for (const taken of [...DELETE_ACCOUNT_TAKES, ...DELETE_ACCOUNT_KEEPS]) expect(choices).toContain(taken)
+    expect(allWords(TERMS.sections)).not.toMatch(/ask us to delete your account/)
+    expect(allWords(PRIVACY.sections)).not.toMatch(/no way yet to remove one/)
   })
 
   it('the FAQ no longer says a canvas never touches cookrew.dev', () => {

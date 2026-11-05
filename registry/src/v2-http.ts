@@ -221,6 +221,11 @@ export interface V2Context {
    */
   names?: NamesFeature
   /**
+   * An account is being deleted: take what it holds outside /v2 (listings, stars,
+   * live lines, the v1 key). Synchronous, and called before the account goes.
+   */
+  accountGone?: (account: V2Account) => void
+  /**
    * The v1 identity service, for the migration routes only (phase 6): a
    * handle it knows is RESERVED for the key that holds it. Absent on a
    * registry with no v1 credentials, where nothing has to be migrated.

@@ -388,6 +388,8 @@ export interface CanvasRelay {
    * last seen by this process (null: not since it started).
    */
   presence(username: string): ReadonlyMap<string, DesktopPresence>
+  /** The account was deleted: its desktops' lines end, and when they were seen is forgotten. */
+  hangUp(username: string, deviceIds: readonly string[]): void
   /** Answered it? False when the path belongs to somebody else. */
   handle(request: IncomingMessage, response: ServerResponse, parts: string[], url: URL): boolean
   stats(): CanvasRelayStats
@@ -971,6 +973,13 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   return {
     hub,
     live: (username, deviceId) => hub.has(canvasName(username, deviceId)),
+    hangUp: (username, deviceIds) => {
+      for (const deviceId of deviceIds) {
+        const name = canvasName(username, deviceId)
+        dropLink(name, 'account deleted')
+        seen.forget(name)
+      }
+    },
     presence,
     stats: () => ({ links: live.size, ...counts }),
     stop: () => {

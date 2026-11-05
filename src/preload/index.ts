@@ -152,6 +152,7 @@ const api = {
   accountRevoke: (input: { deviceId: string; password: string }) =>
     ipcRenderer.invoke('account:revoke', input),
   accountSignOut: (password: string) => ipcRenderer.invoke('account:signOut', password),
+  accountDelete: (input: { confirm: string; password: string }) => ipcRenderer.invoke('account:delete', input),
   accountRecoveryCodes: () => ipcRenderer.invoke('account:recoveryCodes'),
   /** SAVE AS FILE. Takes nothing: main writes the batch IT minted, never the
    *  renderer's copy, so this cannot be talked into writing chosen bytes. */

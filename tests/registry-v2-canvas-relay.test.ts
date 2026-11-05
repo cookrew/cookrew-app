@@ -175,6 +175,8 @@ const mobileServer = (): Server =>
 
 interface Linked {
   ready: Promise<string>
+  /** Has the relay ended the downlink? */
+  ended: () => boolean
   close: () => void
 }
 
@@ -218,8 +220,12 @@ function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobil
   }
 
   const opens = new Map<string, { method: string; path: string; headers: Record<string, string> }>()
+  let hungUp = false
   const down = httpRequest(address, { method: 'GET', headers }, (res) => {
     let buffer = ''
+    res.on('close', () => {
+      hungUp = true
+    })
     res.setEncoding('utf8')
     res.on('data', (text: string) => {
       buffer += text
@@ -255,6 +261,7 @@ function linkDesktop(relayOrigin: string, token: string, deviceId: string, mobil
   down.end()
   return {
     ready,
+    ended: () => hungUp,
     close: () => {
       up.destroy()
       down.destroy()
@@ -414,6 +421,30 @@ describe('the canvas link, and who may open one', () => {
       headers: { authorization: `Bearer ${desktopToken}` }
     })
     expect(res.status).toBe(403)
+  })
+
+  it('ends the line when the account is deleted, and it cannot be dialled again', async () => {
+    const mac = await claim('goes-away', 'desktop')
+    const filed = await fetch(`${site.origin}/v2/me/desktops/${mac.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${mac.token}` },
+      body: JSON.stringify({ name: 'Studio', workspaces: [] })
+    })
+    expect(filed.status).toBe(204)
+    const line = linkDesktop(site.origin, mac.token, mac.id, mobile.origin)
+    await line.ready
+    const status = (): Promise<Response> =>
+      fetch(`${site.origin}/v2/me/desktops/${mac.id}/relay-status`, { headers: { authorization: `Bearer ${mac.token}` } })
+    expect(await (await status()).json()).toEqual({ live: true })
+    const gone = await fetch(`${site.origin}/v2/me`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${mac.token}` },
+      body: JSON.stringify({ confirm: 'goes-away', current: PASSWORD })
+    })
+    expect(gone.status).toBe(204)
+    await until(() => line.ended(), 'the downlink to end')
+    expect((await status()).status).toBe(401)
+    line.close()
   })
 
   it('refuses an uplink for a name nobody is holding a downlink for', async () => {
