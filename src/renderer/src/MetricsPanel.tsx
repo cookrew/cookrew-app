@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { CrIcon, type CrIconName } from './icons'
 import {
   DEFAULT_QUERY_LIMIT,
+  eventDetail,
   eventMeta,
   formatDuration,
   hasEventLog,
@@ -275,6 +276,7 @@ function LatencyTableRow({ row }: { row: LatencyRow }): React.JSX.Element {
 
 function MetricsRow({ event, showDay }: { event: CookrewEvent; showDay: boolean }): React.JSX.Element {
   const meta = eventMeta(event.type)
+  const detail = eventDetail(event)
   return (
     <>
       {showDay && <div className="metrics-day">{dayLabel(event.timestamp)}</div>}
@@ -286,7 +288,7 @@ function MetricsRow({ event, showDay }: { event: CookrewEvent; showDay: boolean 
         <span className="metrics-text">
           <span className="metrics-name">{event.entityName}</span>
           <span className="metrics-verb"> {meta.verb}</span>
-          {event.details && <span className="metrics-detail"> · {event.details}</span>}
+          {detail && <span className="metrics-detail"> · {detail}</span>}
         </span>
         <span className="metrics-ws" title={event.workspaceName}>
           {event.workspaceName}
