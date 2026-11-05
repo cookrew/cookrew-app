@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { PTT_IDLE, pttStep, type PttState } from '../../../shared/ptt-machine'
 import type { ListenEvent } from '../../../main/listen'
 import { cookrew } from '../api'
-import { isAndroid, pickEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
+import { listensThroughPauses, pickEar, preferPhoneEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
 import { micErrorText, PHONE_MAX_SECONDS } from './phone-audio'
 import { canRecord, startPhoneRecording, type PhoneRecording } from './phone-recorder'
 
@@ -25,11 +25,18 @@ export interface Dictation {
   listening: boolean
   /** The words so far, while listening. */
   heard: string
+  /** The browser's ear runs until the mic is tapped, rather than ending at a pause. */
+  throughPauses: boolean
   toggle: () => void
   stop: () => void
 }
 
 type Source = 'button' | 'hold'
+
+/** How long a recognizer asked to stop gets to say it ended. */
+const WEB_STOP_GRACE_MS = 3000
+
+const MAC_TAKES_OVER = 'The mic now records for the Mac to hear: tap it again.'
 
 export function useDictation(options: {
   /** The ear opened: whatever the words are for is fixed now. */
@@ -40,6 +47,7 @@ export function useDictation(options: {
 }): Dictation {
   const [mac, setMac] = useState(false)
   const [Web] = useState(() => (typeof window === 'undefined' ? null : webRecognizer(window)))
+  const [throughPauses] = useState(() => typeof window !== 'undefined' && listensThroughPauses(window.navigator?.userAgent))
   /** The Mac can hear what this surface records (GET /api/listen). */
   const [phone, setPhone] = useState(false)
   const [preferPhone, setPreferPhone] = useState(preferPhoneHere)
@@ -57,6 +65,8 @@ export function useDictation(options: {
   /** Who opened the ear: a hold of ⌘ closes only what it opened. */
   const sourceRef = useRef<Source | null>(null)
   const recognizerRef = useRef<Recognizer | null>(null)
+  /** Asks the open browser ear to close, and gives up on it if it never answers. */
+  const webStopRef = useRef<() => void>(() => undefined)
   const recordingRef = useRef<{ recording: PhoneRecording; timer: number } | null>(null)
   /** The recording on its way to the Mac: a tap, or the deadline, gives up on it. */
   const uploadRef = useRef<AbortController | null>(null)
@@ -101,14 +111,49 @@ export function useDictation(options: {
     if (error) onErrorRef.current(error)
   }, [])
 
+  /**
+   * This surface records for the Mac from now on, if the Mac can. For this
+   * page only: a bad moment must not undo the owner's choice of ear for good.
+   */
+  const leaveWebEar = useCallback((): void => {
+    markWebEarBroken()
+    setPreferPhone(true)
+    // The first look at the Mac's ear may have failed: look again.
+    if (!phone && canRecord()) void (cookrew().hearAvailable?.() ?? Promise.resolve(false)).then(setPhone).catch(() => undefined)
+  }, [phone])
+
   const startWeb = useCallback((): void => {
     if (!Web) return
     const recognizer = new Web()
     let said = ''
     let failed: string | null = null
     let missed = false
+    let asked = false
+    let grace: number | undefined
     recognizer.lang = webLang(macLocale)
     recognizer.interimResults = true
+    recognizer.continuous = throughPauses
+    // A mic forgotten open stops itself, and its words still land. So does one
+    // whose recognizer went quiet: Chrome drops the Android errors it cannot
+    // map (a missing language pack) without ever ending the session.
+    const limit = window.setTimeout(() => stopRef.current(), PHONE_MAX_SECONDS * 1000)
+    /** The one way out; a late end of an ear already given up on changes nothing. */
+    const settle = (error: string | null): void => {
+      window.clearTimeout(limit)
+      window.clearTimeout(grace)
+      if (recognizerRef.current === recognizer) finish(said, [], error)
+    }
+    webStopRef.current = () => {
+      if (asked) return
+      asked = true
+      recognizer.stop()
+      grace = window.setTimeout(() => {
+        recognizer.abort()
+        const silent = !said.trim()
+        if (silent) leaveWebEar()
+        settle(failed ?? (silent ? 'Speech recognition did not answer: tap the mic to try again.' : null))
+      }, WEB_STOP_GRACE_MS)
+    }
     recognizer.onnomatch = () => {
       missed = true
     }
@@ -118,24 +163,32 @@ export function useDictation(options: {
     }
     recognizer.onerror = (event) => {
       failed = webErrorText(event.error)
-      // The browser's recognizer has no service here: from now on this
-      // surface records for the Mac to hear, if the Mac can.
-      if (webEarUnreachable(event.error)) {
-        markWebEarBroken()
-        setPreferPhone(true)
-        if (phone) failed = `${failed ?? 'Speech recognition is not reachable here.'} The mic now records for the Mac to hear: tap it again.`
-        // The first look at the Mac's ear may have failed: look again.
-        else if (canRecord()) void (cookrew().hearAvailable?.() ?? Promise.resolve(false)).then(setPhone).catch(() => undefined)
+      // Words already heard mean the recognizer works: a blip, not a missing service.
+      if (webEarUnreachable(event.error) && !said.trim()) {
+        leaveWebEar()
+        if (phone) failed = `${failed ?? 'Speech recognition is not reachable here.'} ${MAC_TAKES_OVER}`
+      }
+      // Android says not-allowed for the speech service's own refusal or a busy
+      // recognizer too; with the page's mic granted, recording still works.
+      if (event.error === 'not-allowed' && phone) {
+        void pageMicGranted().then((granted) => {
+          if (!granted) return
+          leaveWebEar()
+          onErrorRef.current(`The browser's recognizer refused. ${MAC_TAKES_OVER}`)
+        })
       }
     }
-    recognizer.onend = () => finish(said, [], webEndError(failed, missed, said))
+    recognizer.onend = () => {
+      const closed = throughPauses && !asked && !failed ? 'The mic closed by itself: tap it to go on.' : null
+      settle(webEndError(failed ?? closed, missed, said))
+    }
     recognizerRef.current = recognizer
     try {
       recognizer.start()
     } catch (e) {
-      finish('', [], `Dictation could not start: ${String(e)}`)
+      settle(`Dictation could not start: ${String(e)}`)
     }
-  }, [Web, finish, phone, macLocale])
+  }, [Web, finish, phone, macLocale, throughPauses, leaveWebEar])
 
   /** The phone records; the Mac hears it once the mic closes (stopPhone). */
   const startPhone = useCallback((): void => {
@@ -222,7 +275,7 @@ export function useDictation(options: {
     setPhase((now) => (now === 'hearing' ? 'closing' : now))
     const held = recordingRef.current
     if (held) stopPhone(held)
-    else if (recognizerRef.current) recognizerRef.current.stop()
+    else if (recognizerRef.current) webStopRef.current()
     else void cookrew().listenStop()
   }, [stopPhone, finish])
   stopRef.current = stop
@@ -283,10 +336,13 @@ export function useDictation(options: {
     () => () => {
       const held = recordingRef.current
       const upload = uploadRef.current
-      if (held || upload) {
+      const recognizer = recognizerRef.current
+      if (held || upload || recognizer) {
         sourceRef.current = null
         recordingRef.current = null
         uploadRef.current = null
+        recognizerRef.current = null
+        recognizer?.abort()
         if (held) {
           window.clearTimeout(held.timer)
           held.recording.cancel()
@@ -299,23 +355,30 @@ export function useDictation(options: {
     [stop]
   )
 
-  return { ear, phase, listening: phase !== 'idle', heard, toggle, stop }
+  return { ear, phase, listening: phase !== 'idle', heard, throughPauses, toggle, stop }
 }
 
-/** Android, or a browser whose own recognizer already failed for want of its service. */
+/** A browser whose own recognizer already failed for want of its service. */
 function preferPhoneHere(): boolean {
   if (typeof window === 'undefined') return false
-  if (isAndroid(window.navigator?.userAgent)) return true
   try {
-    return window.localStorage?.getItem(WEB_EAR_BROKEN_KEY) === '1'
+    return preferPhoneEar(window.sessionStorage?.getItem(WEB_EAR_BROKEN_KEY))
   } catch {
     return false
   }
 }
 
+/** Whether the page itself may use the mic; false where the browser will not say. */
+function pageMicGranted(): Promise<boolean> {
+  return (navigator.permissions?.query({ name: 'microphone' as PermissionName }) ?? Promise.resolve(null)).then(
+    (status) => status?.state === 'granted',
+    () => false
+  )
+}
+
 function markWebEarBroken(): void {
   try {
-    window.localStorage.setItem(WEB_EAR_BROKEN_KEY, '1')
+    window.sessionStorage.setItem(WEB_EAR_BROKEN_KEY, '1')
   } catch {
     // Private mode: it holds for this page only.
   }
