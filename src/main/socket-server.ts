@@ -1,5 +1,6 @@
 import type { CloseOutcome } from './terminal-close'
 import net from 'node:net'
+import { removeLines, type WorkspaceCheck, type WorkspaceRemovePlan } from '../shared/workspace-door'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
@@ -174,11 +175,15 @@ export interface SocketServerDeps {
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => WorkspaceCheck
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (nameOrId: string) => Promise<WorkspaceRemovePlan>
   /** FEATURE 1: workspace pre-populated from a saved team template. */
   createWorkspaceFromTeam: (name: string, dir: string, team: string) => Promise<WorkspaceMeta>
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
   /** Workspace v2: remove + multi-directory + per-terminal cwd + git. */
-  removeWorkspace: (nameOrId: string) => Promise<WorkspaceList>
+  removeWorkspace: (nameOrId: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
   setPrimaryDir: (id: string, dir: string) => WorkspaceList
@@ -1798,7 +1803,7 @@ export interface SousDoor {
   cancel?: (token: string, caller?: { surface: SousSurface; callerId?: string }) => boolean
 }
 
-async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+export async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   if (sub === 'list' || sub === undefined) {
     const { workspaces, activeId } = deps.listWorkspaces()
@@ -1818,12 +1823,16 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
         throw new Error('Usage: cookrew workspace create "Name" --dir PATH [--team "Template"]')
       }
       const dir = request.flags.dir ? String(request.flags.dir) : ''
+      // The same check as the sheet: refused here in its sentence, and what
+      // the sheet would have said first goes under the answer.
+      const check = deps.checkWorkspace(name, dir)
+      if (!check.ok) throw new Error(check.reason)
       if (request.flags.team) {
         const meta = await deps.createWorkspaceFromTeam(name, dir, String(request.flags.team))
-        return `Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`
+        return [`Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`, ...check.notes].join('\n')
       }
       const meta = deps.createWorkspace(name, dir)
-      return `Created and switched to workspace "${meta.name}" (${meta.dir})`
+      return [`Created and switched to workspace "${meta.name}" (${meta.dir})`, ...check.notes].join('\n')
     }
     case 'switch': {
       if (!name) throw new Error('Usage: cookrew workspace switch "Name"')
@@ -1831,9 +1840,11 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
       return `Switched to workspace "${meta.name}"`
     }
     case 'remove': {
-      if (!name) throw new Error('Usage: cookrew workspace remove "Name"')
-      await deps.removeWorkspace(name)
-      return `Removed workspace "${name}"`
+      if (!name) throw new Error('Usage: cookrew workspace remove "Name" [--remove-worktree]')
+      const worktree = request.flags['remove-worktree'] === true
+      const plan = await deps.workspaceRemovePlan(name)
+      const list = await deps.removeWorkspace(name, { worktree })
+      return [`Removed workspace "${plan.name}".`, ...removeLines(plan, true, worktree), ...(list.notice ? [list.notice] : [])].join('\n')
     }
     default:
       throw new Error('Usage: cookrew workspace list|create|switch|remove|dir ...')

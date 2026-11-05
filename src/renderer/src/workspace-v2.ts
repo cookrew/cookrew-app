@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import type { CanvasNode, WorkspaceMeta, WorkspaceState } from '../../shared/model'
+import type { CanvasNode, WorkspaceList, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import { normalizeDirs } from '../../shared/model'
 import { cookrew, isDemoMode, isRemoteMode } from './api'
 
@@ -33,7 +33,7 @@ export interface GitInfo {
 }
 
 interface WorkspaceV2Bridge {
-  removeWorkspace?: (id: string) => Promise<unknown>
+  removeWorkspace?: (id: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>
   addWorkspaceDir?: (id: string, path: string) => Promise<unknown>
   removeWorkspaceDir?: (id: string, path: string) => Promise<unknown>
   setPrimaryDir?: (id: string, path: string) => Promise<unknown>
@@ -141,15 +141,16 @@ export function useTerminalCwd(node: CanvasNode, dirs: string[]): string {
 
 // ---- mutations (real bridge → fall back to mock) ----
 
-export async function removeWorkspace(id: string): Promise<void> {
+export async function removeWorkspace(
+  id: string,
+  options?: { worktree?: boolean }
+): Promise<WorkspaceList | undefined> {
   const fn = bridge().removeWorkspace
-  if (fn) {
-    await fn(id)
-    return
-  }
+  if (fn) return fn(id, options)
   warnMock('removeWorkspace')
   mockDirs.delete(id)
   emit()
+  return undefined
 }
 
 export async function addWorkspaceDir(meta: WorkspaceMeta, path: string): Promise<void> {

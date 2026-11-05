@@ -35,7 +35,8 @@ import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
-import { waitChoiceOfScreen } from '../shared/wait-choice'
+import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { aboutOfScreen, wholeBrief } from '../shared/wait-about'
 import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
@@ -317,6 +318,9 @@ import { publishedLocalAddresses } from './local-interfaces'
 import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
+import { openWorkspace, workspaceCheck } from './workspace-door'
+import { inspectForks, planWorkspaceRemove, removeFork, type ForkScope } from './workspace-fork-check'
+import type { WorkspaceRemovePlan } from '../shared/workspace-door'
 import { servedConfinement } from './session-spawn'
 import { makeEntryTerminalLookup, rmSandbox } from './session-instantiator-mount'
 import { ACCOUNT_SUB_PREFIX, ServedCallers } from './served-callers'
@@ -2459,6 +2463,36 @@ const paneRows = async (terminalId: string): Promise<string | null> => {
   return mux?.capture(name) ?? null
 }
 
+/** Rows a permission box may run to on a narrow pane: a long command, wrapped at a phone's 43 columns. */
+const BOX_HISTORY_ROWS = 600
+
+/** Further back than paneRows, where a box taller than the screen keeps its top. */
+const paneHistory = async (terminalId: string): Promise<string | null> => {
+  const mux = multiplexer()
+  return mux instanceof HerdrHostMultiplexer ? mux.captureRowsAsync(sessionNameFor(terminalId), BOX_HISTORY_ROWS) : null
+}
+turns.paneHistory = paneHistory
+
+/** A menu read off a pane, its box whole if the box outgrew those rows. */
+const withPaneBox = async (terminalId: string, choice: WaitChoice | null): Promise<WaitChoice | null> => {
+  if (!choice?.about?.partial) return choice
+  const history = await paneHistory(terminalId)
+  return history === null ? choice : wholeBrief(choice, aboutOfScreen(history))
+}
+
+/** The latest read of each pane's menu: the gate's reads overlap, and a slow one must not land over a newer. */
+const menuReads = new Map<string, number>()
+
+/** The menu a pane shows, for a card with no mirror to read it from. */
+const readPaneMenu = async (terminalId: string): Promise<void> => {
+  const mine = (menuReads.get(terminalId) ?? 0) + 1
+  menuReads.set(terminalId, mine)
+  const screen = await paneRows(terminalId)
+  if (screen === null) return
+  const choice = await withPaneBox(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
+  if (menuReads.get(terminalId) === mine) turns.observeBackendChoice(terminalId, choice)
+}
+
 // herdr's word reaches the tracker through the pane: a slash command's own
 // UI (the /model picker) is not a turn, whatever herdr's screen guess says.
 const herdrPhases = createBackendPhaseGate({
@@ -2473,10 +2507,7 @@ const herdrPhases = createBackendPhaseGate({
     return status ? backendPhaseOf(status) : null
   },
   apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent),
-  menu: async (terminalId) => {
-    const screen = await paneRows(terminalId)
-    if (screen !== null) turns.observeBackendChoice(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
-  }
+  menu: readPaneMenu
 })
 
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
@@ -4196,15 +4227,16 @@ dispatchSweep.unref?.()
  * default orch preset — Claude with bypassed permissions — so the conductor
  * can act without stalling on approvals.
  */
-function seedConductorIfEmpty(): void {
-  if (store.terminals().length > 0) return
-  store.addNode({
+function seedConductorIfEmpty(workspaceId: string = store.focusedId): void {
+  const state = store.workspaceState(workspaceId)
+  if (state.nodes.some((node) => node.kind === 'terminal')) return
+  store.addNodeToWorkspace(workspaceId, {
     kind: 'terminal',
     id: randomUUID(),
     name: 'Conductor',
     preset: DEFAULT_ORCH_PRESET.name,
     command: DEFAULT_ORCH_PRESET.command,
-    cwd: store.focusedState.dir,
+    cwd: state.dir,
     orch: true,
     role: null,
     position: { x: 240, y: 200 },
@@ -4220,11 +4252,8 @@ function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
   return store.list()
 }
 
-function createWorkspace(name: string, dir: string): WorkspaceMeta {
-  const meta = store.createWorkspace(name, dir || store.focusedState.dir)
-  store.switchWorkspace(meta.id) // fires 'switch' → PTY teardown/spawn
-  seedConductorIfEmpty()
-  return meta
+function createWorkspace(name: string, dir: string, options: { stay?: boolean } = {}): WorkspaceMeta {
+  return openWorkspace(store, { name, dir, stay: options.stay === true, seed: seedConductorIfEmpty })
 }
 
 function switchWorkspace(nameOrId: string): WorkspaceMeta {
@@ -4254,6 +4283,43 @@ function endServedSession(sessionId: string): { stopped: number } {
   if (record) doorCallers.forget(record.serviceId, record.accountId)
   publishServedCallers()
   return stopped
+}
+
+/** A fork's reach: where its worktrees live, and who else holds a folder. */
+function forkScope(workspaceId: string): ForkScope {
+  return {
+    worktreeRoot: path.join(homedir(), '.cookrew', 'worktrees'),
+    otherDirs: store.list().workspaces.filter((w) => w.id !== workspaceId).flatMap((w) => w.dirs)
+  }
+}
+
+/** What removing this workspace would stop, delete and leave (the remove sheet). */
+async function workspaceRemovePlan(nameOrId: string): Promise<WorkspaceRemovePlan> {
+  const meta =
+    store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
+  if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
+  const state = store.workspaceState(meta.id)
+  const forks = await inspectForks(state.dirs, forkScope(meta.id))
+  return planWorkspaceRemove({ id: meta.id, name: meta.name, state, forks })
+}
+
+/**
+ * Remove a workspace and, when asked, the fork's worktree and branch. They go
+ * LAST: its agents are stopped first, and each fork is checked again in
+ * removeFork, so a change made since the offer keeps them. What could not go
+ * comes back as a sentence, because by then the workspace itself has gone.
+ */
+async function removeWorkspaceWith(
+  nameOrId: string,
+  options: { worktree?: boolean } = {}
+): Promise<ReturnType<WorkspaceStore['list']>> {
+  const plan = options.worktree ? await workspaceRemovePlan(nameOrId) : null
+  const scope = plan ? forkScope(plan.id) : null
+  const list = await removeWorkspace(nameOrId)
+  if (!plan || !scope) return list
+  const results = await Promise.all(plan.forks.filter((f) => f.removable).map((fork) => removeFork(fork, scope)))
+  const notice = results.flatMap((r) => (r.ok ? [] : [r.reason])).join(' ')
+  return notice ? { ...list, notice } : list
 }
 
 const removingWorkspaces = new Map<string, Promise<ReturnType<WorkspaceStore['list']>>>()
@@ -5348,8 +5414,8 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
 
 // ---- team fork / save + roles (spec: team-fork-roles v1, Forge lane) ----
 
-async function teamFork(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  const meta = await teamForkInner(spec)
+async function teamFork(spec: TeamForkSpec, options: { stay?: boolean } = {}): Promise<WorkspaceMeta> {
+  const meta = await forkTeam(forkDepsFor(options), spec)
   store.recordEvent('team.forked', meta.id, meta.name)
   return meta
 }
@@ -5522,8 +5588,25 @@ async function teamPaste(): Promise<TeamCopyResult> {
   return result
 }
 
-function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
-  return forkTeam(teamForkDeps(), spec)
+/**
+ * A fork a phone asked for boots where it stands: the phone takes its own seat
+ * on the new workspace, and the desktop stays on what it was showing.
+ */
+function forkDepsFor(options: { stay?: boolean }): Parameters<typeof forkTeam>[0] {
+  if (!options.stay) return teamForkDeps()
+  return {
+    ...teamForkDeps(),
+    bootTerminals: (id) => {
+      bootWorkspaceInPlace(
+        {
+          nodesOf: (wid) => callNodesOf(wid),
+          boot: (node) => bootTerminal(node as TerminalNodeData),
+          onError: (node, error) => console.error(`boot failed for ${node.id}:`, error)
+        },
+        id
+      )
+    }
+  }
 }
 
 /**
@@ -5534,9 +5617,12 @@ function teamForkInner(spec: TeamForkSpec): Promise<WorkspaceMeta> {
 async function createWorkspaceFromTeam(
   name: string,
   dir: string,
-  team: string
+  team: string,
+  options: { stay?: boolean } = {}
 ): Promise<WorkspaceMeta> {
-  return workspaceFromTemplate(teamForkDeps(), { name, dir: dir || store.focusedState.dir, team })
+  const verdict = workspaceCheck(store, name, dir)
+  if (!verdict.ok) throw new Error(verdict.reason)
+  return workspaceFromTemplate(forkDepsFor(options), { name, dir: verdict.dir, team })
 }
 
 /**
@@ -6766,14 +6852,18 @@ app.whenReady().then(() => {
     roster: sousRoster,
     activeWorkspaceId: () => store.focusedId,
     switchWorkspace: (id) => void switchWorkspace(id),
-    createTerminal: ({ preset, name }) => {
-      // To the right of everything on the canvas, so a spoken "create" never
-      // lands under an existing card.
-      const nodes = store.focusedState.nodes
-      const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
-      const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
-      return { id: node.id, name: node.name }
+    createTerminal: ({ preset, name, workspaceId }) => {
+      const make = (): { id: string; name: string } => {
+        // To the right of everything on the canvas, so a spoken "create" never
+        // lands under an existing card.
+        const nodes = store.focusedState.nodes
+        const right = nodes.reduce((max, n) => Math.max(max, n.position.x + n.size.width), 0)
+        const node = createTerminal({ name, preset, position: { x: right + 60, y: nodes[0]?.position.y ?? 120 } })
+        return { id: node.id, name: node.name }
+      }
+      return workspaceId ? store.inSeat(workspaceId, make) : make()
     },
+    seats: () => store.isMultiInstance,
     createBrowser: async (anchorId, name) => {
       await browserCommand(['create', 'about:blank', name], anchorId)
     },
@@ -6804,7 +6894,9 @@ app.whenReady().then(() => {
     polish: (text) => polishTranscript(text),
     ui: (command, workspaceId) => {
       const event: UiCommandEvent = { workspaceId, command }
-      mainWindow?.webContents.send('ui:command', event)
+      // The desktop zooms for what it is showing: a phone on another workspace
+      // zooming its own card must not pull this window after it.
+      if (workspaceId === store.deskId) mainWindow?.webContents.send('ui:command', event)
       uiBus.emit('command', event)
     },
     note: (kind, subjectId, detail) => store.recordEvent(`sous.${kind}`, subjectId ?? '', detail, 'voice'),
@@ -7149,9 +7241,11 @@ app.whenReady().then(() => {
     pairingHandout: currentPairingHandout,
     listWorkspaces,
     createWorkspace,
+    checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),
+    workspaceRemovePlan,
     createWorkspaceFromTeam,
     switchWorkspace,
-    removeWorkspace,
+    removeWorkspace: removeWorkspaceWith,
     addWorkspaceDir,
     removeWorkspaceDir,
     setPrimaryDir,
@@ -7388,18 +7482,24 @@ app.whenReady().then(() => {
       createTerminal,
       forkTerminal,
       listWorkspaces,
-      createWorkspace: (name: string, dir: string, team?: string) =>
-        team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir),
+      createWorkspace: (name, dir, team, options) =>
+        team ? createWorkspaceFromTeam(name, dir, team, options) : createWorkspace(name, dir, options),
+      checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),
       switchWorkspace,
       renameWorkspace: (id, name) => {
         store.renameWorkspace(id, name)
         return store.list()
       },
+      setWorkspaceIcon: (id, icon) => {
+        store.setWorkspaceIcon(id, icon)
+        return store.list()
+      },
+      workspaceRemovePlan,
       setWorkspaceBrief: (id, brief) => {
         store.setWorkspaceBrief(id, brief)
         return store.list()
       },
-      removeWorkspace,
+      removeWorkspace: removeWorkspaceWith,
       addWorkspaceDir,
       removeWorkspaceDir,
       setPrimaryDir,
@@ -7909,6 +8009,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('workspace:create', (_e, name: string, dir: string, team?: string) =>
     team ? createWorkspaceFromTeam(name, dir, team) : createWorkspace(name, dir)
   )
+  ipcMain.handle('workspace:check', (_e, name: string, dir: string) => workspaceCheck(store, name, dir))
   // Import a template as a session: one workspace, one orch terminal over HTTP.
   ipcMain.handle('template:import', (_e, team: string, position?: { x: number; y: number }) =>
     importTemplateAsSession(team, position)
@@ -8146,8 +8247,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     store.setWorkspaceBrief(id, brief)
     return store.list()
   })
+  ipcMain.handle('workspace:icon', (_e, id: string, icon: unknown) => {
+    store.setWorkspaceIcon(id, icon)
+    return store.list()
+  })
   // Workspace v2: remove + multi-directory + per-terminal cwd + git.
-  ipcMain.handle('workspace:remove', (_e, id: string) => removeWorkspace(id))
+  ipcMain.handle('workspace:removePlan', (_e, id: string) => workspaceRemovePlan(id))
+  ipcMain.handle('workspace:remove', (_e, id: string, options?: { worktree?: boolean }) =>
+    removeWorkspaceWith(id, options)
+  )
   ipcMain.handle('workspace:dir:add', (_e, id: string, dir: string) => addWorkspaceDir(id, dir))
   ipcMain.handle('workspace:dir:remove', (_e, id: string, dir: string) =>
     removeWorkspaceDir(id, dir)
@@ -8508,6 +8616,11 @@ function registerIpc(handlers: RestoreHandlers): void {
       // A card with no mirror wakes one, as for any key.
       if (waker.hold(terminalId, keys)) return true
       return session?.writeMenuKeys(keys, inMenu) === 'allow'
+    },
+    whole: withPaneBox,
+    moved: (terminalId) => {
+      turns.refreshBox(terminalId)
+      void readPaneMenu(terminalId).catch(() => undefined)
     }
   })
   setMenuAnswerer(answerMenu)

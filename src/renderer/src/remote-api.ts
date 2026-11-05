@@ -31,6 +31,10 @@ import { registerPlaneStream } from './plane-streams'
 import { openEventSource } from './rtc-plane'
 import { createRawInputQueue } from './raw-input-queue'
 import { relayAccountMachines } from './relay-machines'
+import { seated, settleSeat, takeSeat } from './device-seat'
+import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from '../../shared/workspace-door'
+import type { SousCommandResult } from '../../main/sous-control'
+import type { WorkspaceMeta } from '../../shared/model'
 import { fetchGauges, relayDesktopGauges, storedDesktopToken } from './relay-gauges'
 
 /**
@@ -86,6 +90,8 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
       if (!(options.passive && failure.scope === 'read-only')) authStore().report(failure)
       throw failure
     }
+    // The workspace this phone stood on is gone: back to following the desktop.
+    if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().restart()
     throw new HttpStatusError(message, response.status)
   }
   const text = await response.text()
@@ -133,7 +139,10 @@ function seedStreamId(terminalId: string, waitMs = 5000): Promise<string | null>
   })
 }
 
-async function req<T>(path: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
+async function req<T>(route: string, method = 'GET', body?: unknown, parseOptions: ParseOptions = {}): Promise<T> {
+  // Part of the key as well as the request: an answer for one workspace must
+  // never be shared with a read made after the phone moved to another.
+  const path = seated(route)
   if (method !== 'GET' || body !== undefined) {
     // A write may change what any GET in flight would answer; nobody asking
     // after it may be handed the answer from before it.
@@ -413,7 +422,7 @@ function sharedEvents(): ReconnectingStream {
         // gets the snapshot, which is how a dropped stream heals (L7).
         const first = !streamOpenedOnce
         streamOpenedOnce = true
-        return openEventSource(tokenParam(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
+        return openEventSource(tokenParam(seated(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events'))))
       },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
@@ -433,6 +442,10 @@ function sharedEvents(): ReconnectingStream {
     // push it. It is never torn down, so the unsubscribe is deliberately
     // dropped rather than stored.
     registerPlaneStream({ restart: () => stream.restart(), revive: () => stream.revive() })
+    // A workspace removed from under this phone: back to following the desktop.
+    stream.on('workspaces', (e) => {
+      if (settleSeat(parseOnce<WorkspaceList>(e))) stream.restart()
+    })
   }
   return events
 }
@@ -513,10 +526,22 @@ function checkAuthOnBoot(): void {
  * so a stalled Mac gets tapped again: six POSTs in six seconds on 2026-11-05,
  * each holding a relay exchange.
  */
-const switchTo = joinInFlight(
-  (id: string) => req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id }),
-  RELAY_ANSWER_MS
-)
+const switchTo = joinInFlight(async (id: string) => {
+  const list = await req<WorkspaceList>(apiPath('/api/workspaces/switch'), 'POST', { id })
+  // The Mac gave this phone a seat instead of moving its focus. The stream's
+  // scope is fixed when it opens, so it re-dials; its first frames are the new
+  // workspace, which is how the screen changes.
+  return sitAt(list)
+}, RELAY_ANSWER_MS)
+
+/** Stand where the Mac's answer says: a workspace made here, or one Sous went to. */
+function sitAt<T extends { seat?: string }>(answer: T): T {
+  if (answer.seat) {
+    takeSeat(answer.seat)
+    sharedEvents().restart()
+  }
+  return answer
+}
 
 export function createRemoteApi(): CookrewApi {
   checkAuthOnBoot()
@@ -524,13 +549,17 @@ export function createRemoteApi(): CookrewApi {
     getWorkspace: () => req<WorkspaceState>(apiPath('/api/workspace')),
     onWorkspaceState: (cb) => subscribe<WorkspaceState>('workspace', cb),
     listWorkspaces: () => req<WorkspaceList>(apiPath('/api/workspaces')),
-    createWorkspace: (name, dir, team) => req(apiPath('/api/workspaces'), 'POST', { name, dir, team }),
+    createWorkspace: (name, dir, team) => req<WorkspaceMeta & { seat?: string }>(apiPath('/api/workspaces'), 'POST', { name, dir, team }).then(sitAt),
+    checkWorkspace: (name, dir) => req<WorkspaceCheck>(apiPath('/api/workspaces/check'), 'POST', { name, dir }),
     templateImport: (team, position) =>
       req(apiPath('/api/templates/import'), 'POST', { team, position }),
     switchWorkspace: switchTo,
     renameWorkspace: (id, name) => req<WorkspaceList>(apiPath('/api/workspaces/rename'), 'POST', { id, name }),
     setWorkspaceBrief: (id, brief) => req<WorkspaceList>(apiPath('/api/workspaces/brief'), 'POST', { id, brief }),
-    removeWorkspace: (id) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}`), 'DELETE'),
+    setWorkspaceIcon: (id, icon) => req<WorkspaceList>(apiPath('/api/workspaces/icon'), 'POST', { id, icon }),
+    workspaceRemovePlan: (id) => req<WorkspaceRemovePlan>(apiPath(`/api/workspaces/${id}/plan`)),
+    removeWorkspace: (id, options) =>
+      req<WorkspaceList>(apiPath(`/api/workspaces/${id}${options?.worktree ? '?worktree=1' : ''}`), 'DELETE'),
     addWorkspaceDir: (id, dir) => req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'POST', { path: dir }),
     removeWorkspaceDir: (id, dir) =>
       req<WorkspaceList>(apiPath(`/api/workspaces/${id}/dirs`), 'DELETE', { path: dir }),
@@ -808,7 +837,7 @@ export function createRemoteApi(): CookrewApi {
     },
     forkTerminal: (sourceId, turnIndex) =>
       req(apiPath(`/api/terminal/${sourceId}/fork`), 'POST', { turnIndex }),
-    teamFork: (spec) => req(apiPath('/api/team/fork'), 'POST', { spec }),
+    teamFork: (spec) => req<WorkspaceMeta & { seat?: string }>(apiPath('/api/team/fork'), 'POST', { spec }).then(sitAt),
     teamSave: (name, nodeIds) => req(apiPath('/api/team/save'), 'POST', { name, nodeIds }),
     teamClipSet: (nodeIds, cut, worktree) =>
       req(apiPath('/api/team/clip'), 'POST', { nodeIds, cut, worktree }),
@@ -891,10 +920,10 @@ export function createRemoteApi(): CookrewApi {
     // focusedAgentId is deliberately not sent — a network door names agents
     // by name only (see SousCommandInput).
     sousCommand: (text, ctx) =>
-      req(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId(), ...(ctx.box ? { box: true } : {}) }),
+      req<SousCommandResult>(apiPath('/api/sous/command'), 'POST', { text, surface: ctx.surface, callerId: sousCallerId(), ...(ctx.box ? { box: true } : {}) }).then(sitAt),
     onUiCommand: (cb) => subscribe<UiCommandEvent>('ui', cb),
     sousCommit: (token, choice, surface) =>
-      req(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}), ...(choice?.ack ? { ack: choice.ack } : {}) }),
+      req<SousCommandResult>(apiPath('/api/sous/commit'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId(), ...(choice?.target ? { target: choice.target } : {}), ...(choice?.ack ? { ack: choice.ack } : {}) }).then(sitAt),
     onSousDecisionUpdated: (cb) => subscribe<{ token: string; alternates: Alternate[] }>('sous', cb),
     sousCancel: (token, surface) => req<{ cancelled: boolean }>(apiPath('/api/sous/cancel'), 'POST', { token, surface: surface ?? 'phone', callerId: sousCallerId() }).then((out) => out.cancelled),
     inbox: () => req<{ rows: InboxRow[] }>(apiPath('/api/inbox')).then((out) => out.rows),

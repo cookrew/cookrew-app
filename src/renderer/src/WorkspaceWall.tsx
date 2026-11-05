@@ -3,6 +3,10 @@ import type { TeamMeta } from '../../shared/model'
 import type { WorkspaceMap } from '../../shared/workspace-map'
 import { WorkspaceMapView } from './WorkspaceMapView'
 import { WorkspaceCreateSheet, type CreateRequest } from './WorkspaceCreateSheet'
+import { WorkspaceEditSheet } from './WorkspaceEditSheet'
+import { WorkspaceRemoveSheet } from './WorkspaceRemoveSheet'
+import { planFor } from './workspace-wall-actions'
+import type { WorkspaceCheck, WorkspaceRemovePlan } from '../../shared/workspace-door'
 import {
   NEW_WORKSPACE_ID,
   flipOnto,
@@ -59,7 +63,7 @@ const FADE_MS = 130
 /** A pointer that travels further than this is a swipe, not a tap. */
 const SWIPE_PX = 6
 
-export type WallSheet = 'create' | null
+export type WallSheet = 'create' | 'edit' | 'remove' | null
 
 export interface WorkspaceWallProps {
   open: boolean
@@ -80,9 +84,16 @@ export interface WorkspaceWallProps {
   onEnter: (id: string) => void
   onClose: () => void
   /** The dropdown's jobs. */
-  onCreate: (request: CreateRequest) => void
+  onCreate: (request: CreateRequest) => void | Promise<void>
   onDirectories: (id: string) => void
-  onRemove: (id: string) => void
+  /** Resolves when it has gone; a rejection stays on the sheet. */
+  onRemove: (id: string, options: { worktree: boolean }) => void | Promise<void>
+  /** What removing it stops and leaves, for the sheet that asks. */
+  removePlan?: (id: string) => Promise<WorkspaceRemovePlan>
+  /** Rejects with the sentence the rename sheet shows. */
+  onEdit?: (id: string, name: string, icon: string) => Promise<void>
+  /** What a new workspace would be told, for the create sheet. */
+  check?: (name: string, dir: string) => Promise<WorkspaceCheck>
   /** The activity history — a property of the live workspace, so one button. */
   onActivity?: () => void
   /** False with one workspace left: there must always be somewhere to stand. */
@@ -100,13 +111,15 @@ export interface WorkspaceWallProps {
   initialSheet?: WallSheet
 }
 
-/** A thumb, not a mouse — decided once, and never at module load (tests render without a window). */
+/**
+ * A thumb, not a mouse — decided once, and never at module load (tests render
+ * without a window). The phone client counts whatever its pointer reports: it
+ * was told ← → PICK on a phone whose browser said fine pointer.
+ */
 function coarsePointer(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(pointer: coarse)').matches
-  )
+  if (typeof window === 'undefined') return false
+  if (document.body.classList.contains('cookrew-mobile')) return true
+  return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
 }
 
 export function WorkspaceWall({
@@ -122,6 +135,9 @@ export function WorkspaceWall({
   onCreate,
   onDirectories,
   onRemove,
+  removePlan,
+  onEdit,
+  check,
   onActivity,
   canRemove = true,
   teams = [],
@@ -138,7 +154,14 @@ export function WorkspaceWall({
   const [pick, setPick] = useState(() => initialPick ?? openingPick(workspaces.length))
   const [leaving, setLeaving] = useState<string | null>(null)
   const [sheet, setSheet] = useState<WallSheet>(initialSheet)
-  const [confirming, setConfirming] = useState<string | null>(null)
+  const [plan, setPlan] = useState<WorkspaceRemovePlan | null>(null)
+  /**
+   * What a sheet is ABOUT, held from the moment it opens. The pick behind it can
+   * move while it is up: a workspace made elsewhere re-picks the wall, and a
+   * sheet that read the pick would delete a workspace it never showed.
+   */
+  const [subject, setSubject] = useState<Pick<WallScreen, 'id' | 'name' | 'icon'> | null>(null)
+  const asked = useRef<string | null>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; pick: number; moved: boolean } | null>(null)
   /** Set by a swipe's release, read by the click that follows it. */
@@ -172,14 +195,13 @@ export function WorkspaceWall({
     // Only when the wall opens: re-running this on every pick would pin it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, workspaces.length])
-  // The sheet and the REMOVE question reset on OPEN alone — not when the list
-  // changes under an open wall, or another device making a workspace would
-  // close the sheet somebody here is typing into.
+  // The sheet resets on OPEN alone — not when the list changes under an open
+  // wall, or another device making a workspace would close the sheet somebody
+  // here is typing into.
   useEffect(() => {
     if (!open) return
     setLeaving(null)
     setSheet(initialSheet)
-    setConfirming(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
@@ -251,10 +273,38 @@ export function WorkspaceWall({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [open, count, picked, enter, onClose, leaving, sheet])
 
-  // The pick moved: whatever REMOVE was asking about is no longer in front.
-  useEffect(() => {
-    setConfirming(null)
-  }, [pick])
+  const askEdit = (screen: WallScreen): void => {
+    setSubject({ id: screen.id, name: screen.name, icon: screen.icon })
+    setSheet('edit')
+  }
+
+  // Opened for this sheet alone (search's Rename): there is no wall to go back to.
+  const leaveEdit = (): void => {
+    setSubject(null)
+    setSheet(null)
+    if (initialSheet === 'edit') onClose()
+  }
+
+  const askRemove = (id: string): void => {
+    asked.current = id
+    setPlan(null)
+    setSheet('remove')
+    void removePlan?.(id)
+      .then((answer) => {
+        const usable = planFor(asked.current, answer)
+        if (usable) setPlan(usable)
+      })
+      .catch((error: unknown) => {
+        console.error('Could not read what removing this workspace would do:', error)
+        if (asked.current === id) setSheet(null)
+      })
+  }
+
+  const leaveRemove = (): void => {
+    asked.current = null
+    setPlan(null)
+    setSheet(null)
+  }
 
   /**
    * ONE SWIPE SURFACE, AND IT IS THE WHOLE WALL. The floor alone was not
@@ -301,6 +351,9 @@ export function WorkspaceWall({
   if (!open || workspaces.length === 0) return null
 
   const { tier } = view
+  // A wall opened straight on the rename sheet has pressed nothing yet: the
+  // screen in front is the subject until something else is chosen.
+  const editing = subject ?? (initialSheet === 'edit' ? picked : null)
   return (
     <div
       className={`cr-wsw${leaving ? ' cr-wsw-leaving' : ''}${thumb ? ' cr-wsw-touch' : ''}`}
@@ -393,14 +446,11 @@ export function WorkspaceWall({
         <WallActions
           screen={picked}
           canRemove={canRemove}
-          confirming={confirming === picked.id}
           onOpen={() => enter(picked.id)}
+          onNew={() => setSheet('create')}
+          onEdit={onEdit ? () => askEdit(picked) : undefined}
           onDirectories={() => onDirectories(picked.id)}
-          onAskRemove={() => setConfirming(picked.id)}
-          onRemove={() => {
-            setConfirming(null)
-            onRemove(picked.id)
-          }}
+          onAskRemove={() => askRemove(picked.id)}
           onActivity={onActivity}
         />
       )}
@@ -420,11 +470,38 @@ export function WorkspaceWall({
             teams={teams}
             canPickDir={canPickDir}
             pickDir={pickDir ?? (async () => null)}
-            onCreate={(request) => {
+            check={check}
+            onCreate={async (request) => {
+              await onCreate(request)
               setSheet(null)
-              onCreate(request)
             }}
             onCancel={() => setSheet(null)}
+          />
+        </div>
+      )}
+      {sheet === 'edit' && editing && onEdit && (
+        <div className="cr-wsw-sheet">
+          <WorkspaceEditSheet
+            name={editing.name}
+            icon={editing.icon}
+            onSave={async (name, icon) => {
+              await onEdit(editing.id, name, icon)
+              leaveEdit()
+            }}
+            onCancel={leaveEdit}
+          />
+        </div>
+      )}
+      {sheet === 'remove' && (
+        <div className="cr-wsw-sheet">
+          <WorkspaceRemoveSheet
+            plan={plan}
+            onConfirm={async (options) => {
+              if (!plan) return
+              await onRemove(plan.id, options)
+              leaveRemove()
+            }}
+            onCancel={leaveRemove}
           />
         </div>
       )}
@@ -433,34 +510,34 @@ export function WorkspaceWall({
 }
 
 /**
- * The strip under the picked screen: what can be done to THIS one. The
- * dropdown's per-row buttons, with the confirmation the dropdown had —
- * REMOVE asks once, in place, and the answer is a second press.
+ * The strip under the picked screen: what can be done to THIS one, and NEW from
+ * wherever you are. The empty screen at the end of the row was the only way in,
+ * one tap per workspace on a phone. REMOVE opens a sheet that says what it does.
  */
 function WallActions({
   screen,
   canRemove,
-  confirming,
   onOpen,
+  onNew,
+  onEdit,
   onDirectories,
   onAskRemove,
-  onRemove,
   onActivity,
 }: {
   screen: WallScreen
   canRemove: boolean
-  confirming: boolean
   onOpen: () => void
+  onNew: () => void
+  onEdit?: () => void
   onDirectories: () => void
   onAskRemove: () => void
-  onRemove: () => void
   onActivity?: () => void
 }): React.JSX.Element {
   if (screen.kind === 'new') {
     return (
       <div className="cr-wsw-actions">
         <button type="button" className="primary" onClick={onOpen}>
-          CREATE…
+          NEW WORKSPACE…
         </button>
       </div>
     )
@@ -470,22 +547,21 @@ function WallActions({
       <button type="button" className="primary" onClick={onOpen}>
         {screen.live ? 'BACK' : 'OPEN'}
       </button>
+      <button type="button" onClick={onNew}>
+        NEW WORKSPACE…
+      </button>
+      <button type="button" title="This workspace's name and icon" onClick={onEdit}>
+        RENAME…
+      </button>
       <button type="button" title="This workspace's directories and brief" onClick={onDirectories}>
         DIRECTORIES
       </button>
-      {confirming ? (
-        <button type="button" className="danger" title="Yes, remove it" onClick={onRemove}>
-          REMOVE? YES
+      {canRemove ? (
+        <button type="button" title="Remove this workspace" onClick={onAskRemove}>
+          REMOVE…
         </button>
       ) : (
-        <button
-          type="button"
-          disabled={!canRemove}
-          title={canRemove ? 'Remove this workspace' : 'Cannot remove the last workspace'}
-          onClick={onAskRemove}
-        >
-          REMOVE
-        </button>
+        <span className="cr-wsw-why">The last workspace stays.</span>
       )}
       {onActivity && (
         <button type="button" title="Activity and history" onClick={onActivity}>

@@ -53,6 +53,7 @@ import {
   tailLines
 } from '../shared/turn'
 import { menuAsksOnScreen, menuHeldOnScreen, waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { aboutOfScreen, wholeBrief, type WaitAbout } from '../shared/wait-about'
 
 /** Output silence that counts as "the agent finished its turn". */
 const QUIESCENCE_MS = 2500
@@ -96,6 +97,11 @@ const ANSWER_GRACE_MS = 1500
  * one menu to the next (Submit to Review) redraws through frames with neither.
  */
 export const MENU_GONE_SETTLE_MS = 300
+/** Reads of a pane's history one wait may make, and their pace: a box's countdown repaints every second. */
+const BOX_READS = 4
+const BOX_READ_GAP_MS = 1000
+/** How soon a box already whole is read again once its pane has printed: the next box can end like this one. */
+const BOX_RECHECK_MS = 5000
 /**
  * Paced Sous title-backfill: one record per tick so a burst never trips the
  * summarizer's breaker (which would null out a whole sequential pass).
@@ -454,6 +460,18 @@ interface TrackedTerminal {
   menuShown: boolean
   /** The rows last read, drawn while a missing menu settles. */
   lastChoice: WaitChoice | null
+  /** A box taller than the screen, as the pane's history has it, for this wait. */
+  boxRead: WaitAbout | null
+  /** That read: in hand, how many this wait, when the last began. */
+  boxReading: boolean
+  boxReads: number
+  boxReadAt: number
+  /** Moves on when what was read no longer counts: a read begun before it is dropped. */
+  boxGen: number
+  /** outputRev as the last read landed: anything past it was printed since. */
+  boxReadRev: number
+  /** The next try at a box nothing else will wake: a quiet one prints nothing more. */
+  boxRetry: ReturnType<typeof setTimeout> | null
   /** Running while a menu is missing from the screen: see menuMissing. */
   menuLeaving: ReturnType<typeof setTimeout> | null
   /** Epoch ms of the last Enter that did NOT start or answer a turn; 0 when consumed. */
@@ -650,6 +668,13 @@ export class TurnTracker extends EventEmitter {
    * stand as exchange identity.
    */
   onOwnerPreempt: ((terminalId: string) => boolean | void) | null = null
+
+  /**
+   * The pane's rows reaching further back than a mirror's viewport: where a
+   * permission box taller than the screen keeps its top (shared/wait-about.ts).
+   * Null: such a box shows what the screen has of it.
+   */
+  paneHistory: ((terminalId: string) => Promise<string | null>) | null = null
 
   /**
    * All injectable for tests; store null = in-memory only. The lease defaults
@@ -2038,6 +2063,13 @@ export class TurnTracker extends EventEmitter {
       answeredAt: 0,
       menuShown: false,
       lastChoice: null,
+      boxRead: null,
+      boxReading: false,
+      boxReads: 0,
+      boxReadAt: 0,
+      boxGen: 0,
+      boxReadRev: 0,
+      boxRetry: null,
       menuLeaving: null,
       lastSubmitAt: 0,
       sawInputThisTurn: false,
@@ -2513,7 +2545,9 @@ export class TurnTracker extends EventEmitter {
    */
   noteMenuAnswer(terminalId: string): void {
     const t = this.tracked.get(terminalId)
-    if (t) t.answeredAt = Date.now()
+    if (!t) return
+    t.answeredAt = Date.now()
+    this.forgetBox(t)
   }
 
   /** Can the held carry age out? Only a lone ESC over an empty box, no paste open. */
@@ -2975,9 +3009,11 @@ export class TurnTracker extends EventEmitter {
     if (shown) {
       t.menuShown = true
       this.stopMenuLeaving(t)
-    } else if (t.menuShown) {
-      this.menuMissing(t)
+      return
     }
+    // The box back on the screen may be another, however alike their ends.
+    this.doubtBox(t)
+    if (t.menuShown) this.menuMissing(t)
   }
 
   /**
@@ -3017,14 +3053,106 @@ export class TurnTracker extends EventEmitter {
   /** A wait raised, its mark read off the screen: a menu's going ends it, nothing else's does. */
   private raiseWait(t: TrackedTerminal): void {
     t.phase = 'waiting'
+    this.forgetBox(t)
     t.menuShown = menuHeldOnScreen(t.session.viewportText())
     this.push(t)
   }
 
   /** The rows a waiting screen shows; the last ones while a missing menu settles. */
   private shownChoice(t: TrackedTerminal): WaitChoice | null {
-    if (t.menuLeaving === null) t.lastChoice = waitChoiceOfScreen(t.session.viewportText())
+    if (t.menuLeaving === null) t.lastChoice = this.withWholeBox(t, waitChoiceOfScreen(t.session.viewportText()))
     return t.lastChoice
+  }
+
+  /** This wait's box is over: the next one's top is not its top, however alike their ends. */
+  private forgetBox(t: TrackedTerminal): void {
+    this.doubtBox(t)
+    t.boxReads = 0
+    t.boxReadAt = 0
+    if (t.boxRetry !== null) clearTimeout(t.boxRetry)
+    t.boxRetry = null
+  }
+
+  /** What was read may not be this box: the card goes back to what the screen shows until it is read again. */
+  private doubtBox(t: TrackedTerminal): void {
+    t.boxRead = null
+    t.boxGen += 1
+  }
+
+  /** A box taller than the screen, filled in from the pane once that has been read. */
+  private withWholeBox(t: TrackedTerminal, choice: WaitChoice | null): WaitChoice | null {
+    if (!choice?.about?.partial) return choice
+    const whole = wholeBrief(choice, t.boxRead)
+    if (whole.about?.partial) {
+      this.readBox(t)
+      return whole
+    }
+    t.boxReads = 0
+    if (t.outputRev !== t.boxReadRev) this.recheckBox(t)
+    return whole
+  }
+
+  /**
+   * The pane printed under a box already whole. It may only be a countdown, or
+   * it may be a new box with the same end, and the screen cannot tell them
+   * apart: only the history can. A quiet pane costs nothing.
+   */
+  private recheckBox(t: TrackedTerminal): void {
+    const early = t.boxReadAt + BOX_RECHECK_MS - Date.now()
+    if (early > 0) this.retryBox(t, early)
+    else this.readBox(t)
+  }
+
+  /** An answer found the card behind the screen: what it shows is read again. */
+  refreshBox(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    this.forgetBox(t)
+    t.outputRev += 1
+    this.schedulePush(terminalId)
+  }
+
+  /** Comes round again by itself, for a box that prints nothing more. */
+  private retryBox(t: TrackedTerminal, afterMs: number): void {
+    if (t.boxRetry !== null) return
+    const id = t.session.terminalId
+    t.boxRetry = setTimeout(() => {
+      t.boxRetry = null
+      if (this.tracked.get(id) !== t || t.phase !== 'waiting') return
+      t.outputRev += 1
+      this.schedulePush(id)
+    }, afterMs)
+    t.boxRetry.unref?.()
+  }
+
+  /** Off the push's path: the answer lands on a later one. A TUI's countdown repaints, so it is paced, and failures counted. */
+  private readBox(t: TrackedTerminal): void {
+    const read = this.paneHistory
+    if (!read || t.boxReading || t.boxReads >= BOX_READS) return
+    const now = Date.now()
+    const early = t.boxReadAt + BOX_READ_GAP_MS - now
+    if (early > 0) {
+      this.retryBox(t, early)
+      return
+    }
+    const id = t.session.terminalId
+    t.boxReading = true
+    t.boxReads += 1
+    t.boxReadAt = now
+    const gen = t.boxGen
+    void read(id)
+      .then((history) => {
+        // Forgotten or doubted meanwhile: this read may be the last box's.
+        if (t.boxGen === gen) t.boxRead = history === null ? null : aboutOfScreen(history)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        t.boxReading = false
+        if (this.tracked.get(id) !== t || t.phase !== 'waiting') return
+        t.outputRev += 1
+        t.boxReadRev = t.outputRev
+        this.schedulePush(id)
+      })
   }
 
   private handleData(terminalId: string, data: string): void {

@@ -82,6 +82,34 @@ export function WaitReviewList({ choice }: { choice: WaitChoice }): React.JSX.El
   )
 }
 
+/** What it asks to do: its words, why it asks, then the command, the diff or the plan, in a scroll of its own. */
+export function WaitBrief({ choice }: { choice: WaitChoice }): React.JSX.Element | null {
+  const about = choice.about
+  if (!about) return null
+  return (
+    <div className="wc-about">
+      {about.title && <p className="wc-about-title">{about.title}</p>}
+      {about.notes.map((note, i) => (
+        <p key={i} className="wc-about-note">
+          {note}
+        </p>
+      ))}
+      {about.partial && <span className="wc-about-cut">↑ top scrolled off</span>}
+      {about.body.length > 0 && (
+        <pre className="wc-about-body" tabIndex={0} aria-label="What the agent asks to do">
+          {about.body.join('\n')}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+/** The line under the question. A command stands whole in the brief, so its name is enough here. */
+export function subWords(choice: WaitChoice): string {
+  const shown = choice.about?.body.length ? choice.sub?.replace(/^Bash · .*$/, 'Bash').replace(/^\$ .*$/, '') : choice.sub
+  return shown ? `${shown} · the agent waits` : 'the agent waits'
+}
+
 export function WaitRows({ view, onAnswer, small = false }: {
   view: WaitView
   onAnswer: (index: number, byKey: boolean) => void
@@ -162,11 +190,12 @@ export function WaitChoices({ face, wait }: { face: WaitFace; wait: WaitAnswerin
           <p className="wc-q" id={qid}>
             {choice.question}
           </p>
-          <span className="wc-sub">{choice.sub ? `${choice.sub} · the agent waits` : 'the agent waits'}</span>
+          <span className="wc-sub">{subWords(choice)}</span>
         </div>
       </div>
       <WaitSteps choice={choice} onStep={wait.step} />
       <div className="wc-scroll">
+        <WaitBrief choice={choice} />
         <WaitReviewList choice={choice} />
         <WaitRows view={view} onAnswer={wait.answer} />
       </div>

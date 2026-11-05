@@ -258,13 +258,14 @@ describe('the dropdown’s jobs, on the wall', () => {
 
   it('will not offer to remove the last workspace', () => {
     const html = wall({ workspaces: [WS[0]], recent: ['w1'], canRemove: false })
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>[^<]*REMOVE/)
+    expect(html).not.toContain('REMOVE…')
+    expect(html).toContain('The last workspace stays.')
   })
 
-  it('offers CREATE, and nothing to remove, on the NEW screen', () => {
+  it('offers NEW WORKSPACE, and nothing to remove, on the NEW screen', () => {
     // A single workspace opens on itself; step once and NEW is the pick.
     const html = wall({ workspaces: [WS[0]], recent: ['w1'], initialPick: 1 })
-    expect(html).toContain('CREATE')
+    expect(html).toContain('NEW WORKSPACE…')
     expect(html).not.toContain('>REMOVE')
   })
 
