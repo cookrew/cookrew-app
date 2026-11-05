@@ -151,14 +151,16 @@ const manifest = {
   name: 'Cookrew',
   short_name: 'Cookrew',
   description: 'A spatial workspace for a team of AI coding agents.',
-  start_url: '/',
-  scope: '/',
-  display: 'standalone',
+  // Relative: a manifest resolves against its own address, and the phone's usual page is
+  // /relay/@user/desktop/<id>/ on cookrew.dev, where "/" is the site's home page.
+  start_url: '.',
+  scope: '.',
+  display: 'fullscreen',
   background_color: PAPER,
   theme_color: PAPER,
   icons: [
-    { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-    { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
+    { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
   ]
 }
 writeFileSync(join(webOut, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2) + '\n')

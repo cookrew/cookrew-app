@@ -28,7 +28,7 @@ describe('the web build wears the ink COO', () => {
   it('names the tab icon, the iOS icon and the manifest in index.html', () => {
     expect(index).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />')
     expect(index).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />')
-    expect(index).toContain('<link rel="manifest" href="/manifest.webmanifest" />')
+    expect(index).toContain('<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />')
     expect(index).toContain('<meta name="theme-color" content="#f4efe4" />')
   })
 
@@ -59,11 +59,36 @@ describe('the web build wears the ink COO', () => {
   it('the manifest stands alone as an app and points at icons that exist', () => {
     const manifest = JSON.parse(readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'))
     expect(manifest.name).toBe('Cookrew')
-    expect(manifest.display).toBe('standalone')
+    // Opened from the home screen with no bars at all: Chrome's and the phone's.
+    expect(manifest.display).toBe('fullscreen')
     expect(manifest.theme_color).toBe('#f4efe4')
     expect(manifest.background_color).toBe('#f4efe4')
     for (const icon of manifest.icons as Array<{ src: string }>) {
       expect(existsSync(path.join(publicDir, icon.src)), icon.src).toBe(true)
     }
+  })
+
+  // The phone's usual page is /relay/@user/desktop/<id>/ on cookrew.dev. A manifest resolves its
+  // URLs against its own address, so "/" would install cookrew.dev's home page, not the Mac.
+  it('keeps every address relative, so the app stays under the relay prefix it was installed from', () => {
+    const manifest = JSON.parse(readFileSync(path.join(publicDir, 'manifest.webmanifest'), 'utf8'))
+    const at = 'https://cookrew.dev/relay/@me/desktop/abc/manifest.webmanifest'
+    expect(new URL(manifest.start_url, at).href).toBe('https://cookrew.dev/relay/@me/desktop/abc/')
+    expect(new URL(manifest.scope, at).href).toBe('https://cookrew.dev/relay/@me/desktop/abc/')
+    for (const icon of manifest.icons as Array<{ src: string }>) {
+      expect(new URL(icon.src, at).href.startsWith('https://cookrew.dev/relay/@me/desktop/abc/'), icon.src).toBe(true)
+    }
+  })
+
+  it('asks for the manifest with the session cookie: the relay refuses anything without one', () => {
+    expect(index).toMatch(/<link rel="manifest" href="[^"]+" crossorigin="use-credentials" \/>/)
+  })
+
+  it('is written by the generator, which must not put the old addresses back', () => {
+    const generator = readFileSync('scripts/brand-ink/app-icon.mjs', 'utf8')
+    expect(generator).toContain("display: 'fullscreen'")
+    expect(generator).toContain("start_url: '.'")
+    expect(generator).toContain("scope: '.'")
+    expect(generator).not.toContain("src: '/icon-")
   })
 })

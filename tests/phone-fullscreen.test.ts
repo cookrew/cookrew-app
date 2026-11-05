@@ -10,6 +10,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   canFullscreen,
+  coverInstalledApp,
+  installedFullscreen,
   isFullscreen,
   subscribeFullscreen,
   toggleFullscreen,
@@ -143,6 +145,31 @@ describe('the full screen switch', () => {
   })
 })
 
+describe('the app installed on the home screen', () => {
+  const matching = (query: string): { matches: boolean } => ({ matches: query === '(display-mode: fullscreen)' })
+  const noMatch = (): { matches: boolean } => ({ matches: false })
+
+  it('is full screen from the manifest, with no element in the Fullscreen API', () => {
+    expect(installedFullscreen(fakeDoc(), matching)).toBe(true)
+    expect(installedFullscreen(fakeDoc(), noMatch)).toBe(false)
+  })
+
+  it('is not a browser tab that went full screen from the row: that matches the same query', async () => {
+    const doc = fakeDoc()
+    await toggleFullscreen(doc)
+    expect(installedFullscreen(doc, matching)).toBe(false)
+  })
+
+  it('lets the page into the camera cutout at boot, since nothing ever asks for full screen there', () => {
+    const doc = fakeDoc()
+    coverInstalledApp(doc, matching)
+    expect(doc.viewport).toContain('viewport-fit=cover')
+    const tab = fakeDoc()
+    coverInstalledApp(tab, noMatch)
+    expect(tab.viewport).not.toContain('viewport-fit')
+  })
+})
+
 describe('the row and the page', () => {
   const more = readFileSync('src/renderer/src/HeaderMore.tsx', 'utf8')
   const index = readFileSync('src/renderer/index.html', 'utf8')
@@ -150,6 +177,8 @@ describe('the row and the page', () => {
 
   it('sits in ⋯, on the phone only, and says which way it goes', () => {
     expect(more).toMatch(/isRemoteMode\(\)\s*&&[^\n]*canFullscreen\(document\)/)
+    // An installed app is already full screen: the row would offer what it has.
+    expect(more).toContain('!installedFullscreen(document')
     expect(more).toContain("'Exit full screen'")
     expect(more).toContain("'Full screen'")
     expect(more).toContain('aria-pressed={fullscreen}')

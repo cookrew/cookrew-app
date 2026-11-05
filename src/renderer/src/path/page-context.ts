@@ -16,12 +16,15 @@ export type PageContext = 'standalone' | 'browser'
 export interface PageContextDeps {
   readonly standalone?: boolean
   readonly matchMedia?: (query: string) => { matches: boolean }
+  /** A browser tab in the Fullscreen API also matches display-mode: fullscreen. */
+  readonly elementFullscreen?: boolean
 }
 
 export const pageContextOf = (deps: PageContextDeps): PageContext => {
   if (deps.standalone === true) return 'standalone'
   try {
     if (deps.matchMedia?.('(display-mode: standalone)').matches) return 'standalone'
+    if (deps.elementFullscreen !== true && deps.matchMedia?.('(display-mode: fullscreen)').matches) return 'standalone'
   } catch {
     // No media queries is a plain browser as far as this word goes.
   }
@@ -32,5 +35,6 @@ export const pageContextOf = (deps: PageContextDeps): PageContext => {
 export const pageContext = (): PageContext =>
   pageContextOf({
     standalone: (globalThis.navigator as { standalone?: boolean } | undefined)?.standalone,
-    matchMedia: typeof globalThis.matchMedia === 'function' ? (q) => globalThis.matchMedia(q) : undefined
+    matchMedia: typeof globalThis.matchMedia === 'function' ? (q) => globalThis.matchMedia(q) : undefined,
+    elementFullscreen: globalThis.document?.fullscreenElement != null
   })
