@@ -16,6 +16,7 @@ import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
+import { UpdateRows, useUpdateStatus } from './UpdateRow'
 import { WatchPairRow } from './WatchPairRow'
 import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
@@ -53,6 +54,7 @@ export function HeaderMore({
   const sounds = useSoundsOn()
   const theme = useTheme()
   const fullscreen = useFullscreen()
+  const update = useUpdateStatus()
   // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
   const offerFullscreen =
     isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document) && !installedFullscreen(document, pageMedia)
@@ -101,8 +103,8 @@ export function HeaderMore({
     <div className="cr-more" ref={root}>
       <button
         type="button"
-        className={`cr-more-btn${open ? ' on' : ''}${busyCount > 0 ? ' busy' : ''}`}
-        aria-label="More"
+        className={`cr-more-btn${open ? ' on' : ''}${busyCount > 0 ? ' busy' : ''}${update?.available ? ' update' : ''}`}
+        aria-label={update?.available ? `More, Cookrew ${update.available.version} is available` : 'More'}
         aria-expanded={open}
         aria-controls="cr-more-menu"
         title="More"
@@ -193,6 +195,7 @@ export function HeaderMore({
               <span className="cr-more-label">Test browser speech</span>
             </button>
           )}
+          {update && <UpdateRows status={update} />}
           <TelemetryRow />
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />

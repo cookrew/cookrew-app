@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -242,6 +242,8 @@ import { parseUseUrl } from '../shared/use-url'
 import { readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
 import { createRemoteDesk, remoteGate } from './remote-desk'
+import { createUpdateCheck } from './update-check'
+import type { UpdateStatus } from '../shared/update-check'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
 import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
@@ -7910,6 +7912,10 @@ function ownerPageUrl(): string | null {
 }
 
 /** The owner's window, its top frame, showing the owner's page. */
+function publishUpdateStatus(status: UpdateStatus): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:status', status)
+}
+
 function ownerFrame(event: { sender: unknown; senderFrame: { parent: unknown; url?: string } | null }): boolean {
   return isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents) && isOwnerPage(event.senderFrame?.url, ownerPageUrl())
 }
@@ -8625,6 +8631,25 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The ⋯ row's two questions (TelemetryRow.tsx).
   ipcMain.handle('telemetry:status', () => telemetryStatus())
   ipcMain.handle('telemetry:set', (_e, on: unknown) => (typeof on === 'boolean' ? setTelemetryOn(on) : telemetryStatus()))
+  // And the update check's (UpdateRow.tsx). Packaged only, so a source build answers null and shows no row.
+  const updateCheck = app.isPackaged
+    ? createUpdateCheck({
+        version: app.getVersion(),
+        file: path.join(homedir(), '.cookrew', 'update-check.json'),
+        // Electron's own stack, not Node's: it honours the system proxy.
+        fetch: (url, init) => net.fetch(url, init),
+        publish: publishUpdateStatus
+      })
+    : null
+  ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
+  ipcMain.handle('update:set', (event, on: unknown) => {
+    if (updateCheck === null) return null
+    if (typeof on !== 'boolean' || !ownerFrame(event)) return updateCheck.status()
+    const status = updateCheck.setOn(on)
+    publishUpdateStatus(status)
+    return status
+  })
+  updateCheck?.start()
   // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
   // pushed per window like the board, and the account's desktops from the
   // registry, cut to directory facts before they reach the renderer.
