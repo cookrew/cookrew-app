@@ -118,6 +118,8 @@ import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
 import { VphoneInstance } from './vphone-instance'
 import { createSocketGuest, vphoneSocketPath } from './vphone-socket'
 import { createUseInstances } from './use-instances'
+import { createUseSourceService } from './use-source-service'
+import { emptySourceList } from '../shared/use-sources'
 import { UseSignalBus } from './use-signal-bus'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
@@ -253,7 +255,7 @@ import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
-import { HeadlessBrowserCommandEngine } from './headless-browser-command'
+import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
@@ -5974,6 +5976,30 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   shotsDir: path.join(app.getPath('userData'), 'use-shots')
 })
 
+/** A caller's session runs here: the use surfaces are refused (use-source-service.ts). */
+function servedWorkspace(workspaceId: string): boolean {
+  if (servedSpawnContexts.has(workspaceId)) return true
+  return store.workspaceState(workspaceId).nodes.some((node) => node.kind === 'terminal' && ptys.isServed(node.id))
+}
+
+// THE WINDOW PICKER: the sheet's one service, over IPC here and HTTP for the phone.
+const useSources = createUseSourceService({
+  provider: () => useInstances.sources(),
+  servedWorkspace,
+  addCard: (workspaceId, card) => addNode(card, workspaceId) as BrowserNodeData,
+  findCard: (id) => {
+    const found = store.nodeAcrossWorkspaces(id)
+    return found?.node.kind === 'browser' ? { workspaceId: found.workspaceId, node: found.node } : null
+  },
+  readdress: async (node, url, name) => {
+    // updateNode syncs the card, and the manager swaps its device (backingOf).
+    updateNode(node.id, { url, tabs: withActiveUrl(node, url).tabs })
+    renameCardIn(renameDeps, node.id, name, 'suffix', false)
+    const updated = store.nodeAcrossWorkspaces(node.id)?.node
+    return updated?.kind === 'browser' ? updated : node
+  }
+})
+
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
   if (!mainWindow) return Promise.reject(new Error('No window'))
   const id = randomUUID()
@@ -6933,6 +6959,7 @@ app.whenReady().then(() => {
     // Each preset's `launch` offer is read per request (launch-offers.ts).
     presets: withLaunchOffers(PRESETS),
     ops: {
+      useSources,
       addNode,
       updateNode,
       renameNode: (id, name) => renameByHand(renameDeps, id, name),
@@ -7943,6 +7970,19 @@ function registerIpc(handlers: RestoreHandlers): void {
   // `cookrew rename`, so a clash is answered in the same words, and pinned.
   ipcMain.handle('node:rename', (_e, id: unknown, name: unknown) => renameByHand(renameDeps, id, name))
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
+  // The window picker, for the window on this desktop: the workspace it shows.
+  ipcMain.handle('use:sources', async () => {
+    const answer = await useSources.list(store.focusedId)
+    return answer.ok ? answer.value : emptySourceList('unavailable', answer.error)
+  })
+  ipcMain.handle('use:open-source', async (_e, pick: unknown) => {
+    const answer = await useSources.open(store.focusedId, pick)
+    return answer.ok ? { ok: true, card: answer.value.card } : { ok: false, error: answer.error }
+  })
+  ipcMain.handle('use:screen-settings', async () => {
+    const answer = await useSources.openSettings(store.focusedId)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  })
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
   // and mirrors a legitimate cross-workspace edge. store.connect writes an edge

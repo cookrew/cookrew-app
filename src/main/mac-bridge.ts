@@ -34,6 +34,8 @@ export interface MacDisplay {
 
 export interface MacWindow {
   readonly id: number
+  /** The process that owns it: the picker leaves out Cookrew's own. */
+  readonly pid?: number
   readonly app: string
   /** Empty without Screen Recording: macOS hides titles from apps that may not capture. */
   readonly title: string
@@ -57,10 +59,19 @@ const displays = $.NSScreen.screens.js.map((s, i) => {
 })
 const raw = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))) || []
 const windows = raw.filter((w) => w.kCGWindowLayer === 0 && w.kCGWindowBounds && w.kCGWindowBounds.Width > 40 && w.kCGWindowBounds.Height > 40).map((w) => ({
-  id: w.kCGWindowNumber, app: w.kCGWindowOwnerName || '', title: w.kCGWindowName || '',
+  id: w.kCGWindowNumber, pid: w.kCGWindowOwnerPID, app: w.kCGWindowOwnerName || '', title: w.kCGWindowName || '',
   x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y, width: w.kCGWindowBounds.Width, height: w.kCGWindowBounds.Height
 }))
 JSON.stringify({ displays, windows })
+`
+
+/** One window by id, on screen or not: null when the window server no longer knows it. */
+const WINDOW_SCRIPT = `
+ObjC.import('CoreGraphics')
+function run(argv) {
+  const raw = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionIncludingWindow, Number(argv[0])))) || []
+  return JSON.stringify(raw.length > 0 ? { app: raw[0].kCGWindowOwnerName || '' } : null)
+}
 `
 
 const INPUT_SCRIPT = `
@@ -120,6 +131,20 @@ export function listMacScreens(timeoutMs = 5000): Promise<MacScreens> {
         resolve(JSON.parse(String(stdout)) as MacScreens)
       } catch {
         reject(new Error("could not read this Mac's window list"))
+      }
+    })
+  })
+}
+
+/** The app holding this window id, wherever the window is; null when it has closed. A failed lookup rejects: it proves nothing. */
+export function macWindowAlive(id: number, timeoutMs = 5000): Promise<{ readonly app: string } | null> {
+  return new Promise((resolve, reject) => {
+    execFile(OSASCRIPT, ['-l', 'JavaScript', '-e', WINDOW_SCRIPT, String(id)], { timeout: timeoutMs }, (error, stdout) => {
+      if (error) return reject(new Error(`could not look up this window: ${error.message.split('\n')[0]}`))
+      try {
+        resolve(JSON.parse(String(stdout)) as { app: string } | null)
+      } catch {
+        reject(new Error('could not read the answer about this window'))
       }
     })
   })

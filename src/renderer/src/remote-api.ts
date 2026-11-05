@@ -20,6 +20,7 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { LevelsEvent } from '../../shared/strata'
 import { apiPath, clientBase } from './api-base'
+import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import { planeFetch } from './plane-fetch'
 import { RELAY_ANSWER_MS, joinInFlight } from './in-flight'
 import { RELAY_FULL_WORDS, isRelayFull, waitOutRelayFull } from './relay-full'
@@ -561,6 +562,16 @@ export function createRemoteApi(): CookrewApi {
     // apiPath, not a bare path: step 3 scopes the phone client's routes to the
     // workspace it is for, and a pin belongs to a transcript inside one.
     createTerminal: (opts) => req(apiPath('/api/terminals'), 'POST', opts),
+
+    // The window picker, over the routes in main/use-source-routes.ts. A
+    // refusal is the sheet's to read out, so a failed pick answers, not throws.
+    useSources: () => req<UseSourceList>(apiPath(USE_SOURCES_PATH)),
+    openUseSource: (pick) =>
+      req<UseSourceOpened>(apiPath(`${USE_SOURCES_PATH}/open`), 'POST', pick).catch((error: unknown) => ({
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error)
+      })),
+    openScreenSettings: () => req<UseSourceSettings>(apiPath(`${USE_SOURCES_PATH}/settings`), 'POST', {}),
 
     // Phones can't hand the desktop a local path — upload the bytes and let
     // the server persist them; the returned path is what gets pasted.

@@ -4,7 +4,8 @@ import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew, isDemoMode, isRemoteMode } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
-import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, type Bind, NewestThumb } from './ZoomParts'
+import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, MachineNode, type Bind, NewestThumb } from './ZoomParts'
+import { openSourcePicker } from '../use/source-picker-store'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { InkTie } from './InkAvatar'
@@ -634,10 +635,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           {model.machines.filter((m) => !m.local).map((m) => (
             <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(`${m.name} is listed, not readable from here: open it on that Mac.`)} />
           ))}
-          <button type="button" className="zv-machine" ref={bind('machine') as React.Ref<HTMLButtonElement>} onClick={() => motion.go(-1)} aria-label={`Open ${machine}`}>
-            <span className="zv-machine-deck" />
-            <span className="zv-machine-label"><b>{machine}</b><small>{model.frame.workspaces.length} workspaces · {model.deviceAgents} agents</small></span>
-          </button>
+          <LocalMachine name={machine} detail={`${model.frame.workspaces.length} workspaces · ${model.deviceAgents} agents`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker() : null} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
@@ -763,10 +761,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
 }
 
 /** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */
-function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords'> {
+function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords' | 'machineShare'> {
   return {
     deviceLabel: title,
     markLabels: marks.flatMap((m) => [...m.querySelectorAll<HTMLElement>('.zv-tw')]),
-    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')]
+    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')],
+    machineShare: devices.querySelector<HTMLElement>('.zv-machine-share')
   }
 }

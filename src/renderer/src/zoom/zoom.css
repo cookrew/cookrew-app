@@ -299,9 +299,48 @@
   color: var(--zv-ink-soft);
 }
 
-.zv-machine:focus-visible {
+/* The frame's own control: the whole bezel, drawn by .zv-machine under it. */
+.zv-machine-open {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  cursor: zoom-in;
+}
+
+.zv-machine-open:focus-visible {
   outline: 3px solid var(--zv-seal);
   outline-offset: 6px;
+}
+
+/* Scaled from its corner by the painter, so it reads and presses at this size on screen. */
+.zv-machine-share {
+  appearance: none;
+  justify-self: start;
+  transform-origin: left top;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--zv-ink-soft);
+  border-radius: 999px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 12px/1.2 var(--zv-mono);
+  cursor: pointer;
+}
+
+.zv-machine-share:hover {
+  border-color: var(--zv-seal);
+}
+
+.zv-machine-share:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
 }
 
 /* ── the device: its workspaces, a mark each ──
