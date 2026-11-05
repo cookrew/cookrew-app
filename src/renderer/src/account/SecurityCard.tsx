@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { LOCK_CHOICES } from '../../../shared/account-v2'
+import { LOCK_CHOICES, type AccountStatus } from '../../../shared/account-v2'
 import type { FactorsView } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
 import {
@@ -12,6 +12,9 @@ import {
   type FactorRow,
 } from './account-store'
 import { FactorRows, RemoveFactorRow, Row } from './FactorRows'
+import { LinkedAccountRows } from './LinkRows'
+import { TripWait, useWatchedTrip } from './ProviderButtons'
+import { PROVIDER_COPY } from './provider-store'
 import { DOING, problemSentence, refusedSentence } from './problem'
 import { NewPasswordCard } from './NewPasswordCard'
 import { TotpSheet } from './TotpSheet'
@@ -22,6 +25,7 @@ import {
   toCreationOptions,
 } from './webauthn'
 import '../grant-surface.css'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 
 /**
  * THE SECURITY CARD (D3) — shown once right after claiming, and again from
@@ -47,7 +51,7 @@ import '../grant-surface.css'
 /** Nobody dismisses the codes by reflex: the primary waits five seconds. */
 const CODES_SETTLE_MS = 5_000
 /** What a passkey made here is called, as the Devices tab lists it (D4). */
-const THIS_MAC_PASSKEY = 'Touch ID on this Mac'
+const THIS_MAC_PASSKEY = (hostPlatform() ?? 'darwin') === 'darwin' ? 'Touch ID on this Mac' : machineCopy('A passkey on this Mac', hostPlatform())
 
 export function SecurityCard({
   username,
@@ -59,6 +63,8 @@ export function SecurityCard({
   onLockAfterMs,
   onLockNow,
   onCodesSaved,
+  status = null,
+  onStatus = () => undefined,
 }: {
   username: string
   lockAfterMs: number
@@ -74,6 +80,9 @@ export function SecurityCard({
   onLockAfterMs: (ms: number) => void
   onLockNow: () => void
   onCodesSaved: () => void
+  /** The whole status, for the provider rows. Absent draws none of them. */
+  status?: AccountStatus | null
+  onStatus?: (next: AccountStatus) => void
 }): React.JSX.Element {
   const [codes, setCodes] = useState<readonly string[] | null>(null)
   const [factors, setFactors] = useState<FactorsView | null>(null)
@@ -86,6 +95,9 @@ export function SecurityCard({
   const [removing, setRemoving] = useState<FactorRow | null>(null)
   const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
+  const passwordless = status?.passwordless === true
+  /** On a passwordless account these acts wait on a browser; leaving ends them. */
+  const trip = useWatchedTrip(passwordless)
 
   const readFactors = useCallback(() => {
     const call = cookrew().accountFactors
@@ -123,7 +135,8 @@ export function SecurityCard({
     const call = cookrew().accountRecoveryCodes
     if (!call) return
     setError(null)
-    void call()
+    void trip
+      .watch(call())
       .then((result) => {
         if (result.ok) setCodes(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
@@ -164,7 +177,7 @@ export function SecurityCard({
     setBusy(true)
     setError(null)
     try {
-      const options = await api.accountPasskeyOptions()
+      const options = await trip.watch(api.accountPasskeyOptions())
       if (!options.ok) {
         setError(refusalSentence(options.reason, options.message, username))
         return
@@ -194,7 +207,7 @@ export function SecurityCard({
       if (!filed.ok) setError(refusalSentence(filed.reason, filed.message, username))
       else readFactors()
     } catch {
-      setError('This Mac could not make a passkey. Try it in a browser instead.')
+      setError(machineCopy('This Mac could not make a passkey. Try it in a browser instead.', hostPlatform()))
       setElsewhere(true)
     } finally {
       setBusy(false)
@@ -211,7 +224,7 @@ export function SecurityCard({
    */
   const removeFactor = (): void => {
     const row = removing
-    if (row === null || current.length === 0 || busy) return
+    if (row === null || (current.length === 0 && status?.passwordless !== true) || busy) return
     const api = cookrew()
     const promise =
       row.factor === 'totp'
@@ -220,7 +233,8 @@ export function SecurityCard({
     if (!promise) return
     setBusy(true)
     setError(null)
-    void promise
+    void trip
+      .watch(promise)
       .then((result) => {
         setBusy(false)
         if (!result.ok) {
@@ -301,6 +315,7 @@ export function SecurityCard({
             row={removing}
             current={current}
             busy={busy}
+            passwordless={status?.passwordless === true}
             onCurrent={setCurrent}
             onConfirm={removeFactor}
             onCancel={() => {
@@ -309,6 +324,7 @@ export function SecurityCard({
             }}
           />
         )}
+        {status !== null && <LinkedAccountRows status={status} onStatus={onStatus} />}
         <Row
           kind="RESCUE"
           label="Save your recovery codes"
@@ -338,26 +354,33 @@ export function SecurityCard({
             </select>
           }
         />
-        <Row
-          kind="LOCK"
-          label="Lock this Mac now"
-          action={
-            <button className="gs-ghost" onClick={onLockNow}>
-              LOCK NOW
-            </button>
-          }
-        />
+        {/* Nothing could open it yet, so a button here would do nothing. */}
+        {status?.passcodePending !== true && (
+          <Row
+            kind="LOCK"
+            label={machineCopy('Lock this Mac now', hostPlatform())}
+            action={
+              <button className="gs-ghost" onClick={onLockNow}>
+                LOCK NOW
+              </button>
+            }
+          />
+        )}
       </ul>
+      <TripWait shown={trip.waiting} onCancel={trip.cancel} />
       {(error ?? problem) && (
         <p className="gs-paste-error" role="alert">
           {error ?? problem}
         </p>
       )}
-      <p className="gs-foot-note">{ACCOUNT_COPY.LOCK_NOW_WHY}</p>
+      <p className="gs-foot-note">
+        {status?.unlockBy === 'passcode' ? PROVIDER_COPY.LOCK_NOW_WHY : ACCOUNT_COPY.LOCK_NOW_WHY}
+      </p>
       <p className="gs-foot-note">{ACCOUNT_COPY.SECURITY_WHY}</p>
       {totp && (
         <TotpSheet
           username={username}
+          passwordless={passwordless}
           onClose={() => setTotp(false)}
           onActive={() => {
             setTotp(false)

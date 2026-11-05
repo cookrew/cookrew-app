@@ -377,7 +377,7 @@ export class HeadlessBrowserCommandEngine {
 const TAB_COMMANDS = new Set(['tabs', 'tab-new', 'tab-select', 'tab-close'])
 
 /** The card with its active tab pointed at `url` — what it would be, re-addressed. */
-function withActiveUrl(node: BrowserNodeData, url: string): BrowserNodeData {
+export function withActiveUrl(node: BrowserNodeData, url: string): BrowserNodeData {
   const active = activeBrowserTab(node)
   return { ...node, url, tabs: browserTabs(node).map((tab) => (tab.id === active.id ? { ...tab, url, title: '' } : tab)) }
 }

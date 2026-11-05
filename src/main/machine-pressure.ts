@@ -16,6 +16,7 @@
 import { execFile } from 'node:child_process'
 import os from 'node:os'
 import { promisify } from 'node:util'
+import { CRITICAL_SWAP_SHARE, HIGH_SWAP_SHARE, KERNEL_CRITICAL, KERNEL_WARN } from '../shared/machine-gauges'
 
 const execFileAsync = promisify(execFile)
 
@@ -27,11 +28,6 @@ export interface MachineMemory {
   /** kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical. */
   kernelLevel: number
 }
-
-const KERNEL_WARN = 2
-const KERNEL_CRITICAL = 4
-const HIGH_SWAP_SHARE = 0.25
-const CRITICAL_SWAP_SHARE = 0.5
 
 /** Owner's ruling of 2026-11-01 was against ten minutes; both stay above it. */
 const HIGH_WINDOW_MS = 30 * 60_000

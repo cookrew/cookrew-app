@@ -212,7 +212,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
   // A click on the name opens, as the face does; a double-click renames it in place (NameEdit.tsx).
   const title = useNameEdit(agent.id, agent.name, { onPress: onOpen })
   return (
-    <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
+    <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`} data-card-id={agent.id}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>
@@ -247,6 +247,37 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
     </div>
   )
 }, sameProps)
+
+/**
+ * This machine on the devices stop: its frame opens it, and the words under it
+ * carry the way to share one of its windows. The frame's own button has no
+ * handler: its press bubbles to the card, which is also what a press on the
+ * words reaches, and the share button keeps its press to itself.
+ */
+export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: string; detail: string; bind: Bind; onOpen: () => void; onShare: (() => void) | null }): React.JSX.Element {
+  return (
+    <div className="zv-machine" ref={bind('machine')} onClick={onOpen}>
+      <button type="button" className="zv-machine-open" aria-label={`Open ${name}`} />
+      <span className="zv-machine-deck" />
+      <span className="zv-machine-label">
+        <b>{name}</b>
+        <small>{detail}</small>
+        {onShare && (
+          <button
+            type="button"
+            className="zv-machine-share"
+            onClick={(e) => {
+              e.stopPropagation()
+              onShare()
+            }}
+          >
+            Share a window
+          </button>
+        )}
+      </span>
+    </div>
+  )
+}
 
 /**
  * Another machine on the devices stop, from the real fleet: its frame, the

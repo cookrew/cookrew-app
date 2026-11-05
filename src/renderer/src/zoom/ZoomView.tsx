@@ -1,10 +1,12 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceList, WorkspaceState } from '../../../shared/model'
+import { countOf } from '../../../shared/workspace-door'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew, isDemoMode, isRemoteMode } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
-import { Counts, AgentNode, ItemNode, LinkNode, MachineNode, type Bind, NewestThumb } from './ZoomParts'
+import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, MachineNode, type Bind, NewestThumb } from './ZoomParts'
+import { openSourcePicker } from '../use/source-picker-store'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { InkTie } from './InkAvatar'
@@ -25,6 +27,7 @@ import { CrIcon } from '../icons'
 import { promptFold, takeBack } from '../prompt/prompt-fold'
 import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
+import { GaugePanel } from './MachineGauges'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
@@ -43,7 +46,9 @@ const failureWords = (e: unknown): string => (e instanceof Error ? e.message : S
  * frame engine owns their transforms. No second terminal/browser is made
  * for the animation: the full view behind the shell is the real one.
  */
-export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, children }: {
+export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, onNewWorkspace, children }: {
+  /** The create sheet: the WORKSPACES stop says so in words. */
+  onNewWorkspace?: () => void
   workspace: WorkspaceState | null
   workspaceId: string | null
   attachIndex: AttachmentIndex
@@ -575,6 +580,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
+      <GaugePanel localName={machine} />
       <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -634,15 +640,12 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           {model.machines.filter((m) => !m.local).map((m) => (
             <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(`${m.name} is listed, not readable from here: open it on that Mac.`)} />
           ))}
-          <button type="button" className="zv-machine" ref={bind('machine') as React.Ref<HTMLButtonElement>} onClick={() => motion.go(-1)} aria-label={`Open ${machine}`}>
-            <span className="zv-machine-deck" />
-            <span className="zv-machine-label"><b>{machine}</b><small>{model.frame.workspaces.length} workspaces · {model.deviceAgents} agents</small></span>
-          </button>
+          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker() : null} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
           <div className="zv-device-label" ref={bind('deviceLabel')} style={{ maxWidth: Math.round(words.titleMax) }}>
-            <b>{machine}</b><span>{model.frame.workspaces.length} workspaces</span>
+            <b>{machine}</b><span>{countOf(model.frame.workspaces.length, 'workspace')}</span>
           </div>
           {/* In the grid's order, so Tab walks it as the eye does. The open tile's faces are the scene's, over it. */}
           {model.frame.workspaces.map((id) => {
@@ -699,6 +702,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {/* Per row: at the crew and at the workspaces, each where its row is seen (owner, 2026-11-01). */}
       {zoom.dir === 'agents' && !zoom.full && Math.abs(zoom.v - 1) < 0.25 && model.agents.length > 0 && (
         <PerRowPill what="agents" narrow={narrow} cols={crewCols ?? defaultCrewCols(narrow)} onPick={setCrewCols} />
+      )}
+      {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && onNewWorkspace && (
+        <button type="button" className="zv-new-workspace" onClick={onNewWorkspace}>
+          <span aria-hidden="true">＋</span> New workspace
+        </button>
       )}
       {!zoom.full && Math.abs(zoom.v + 1) < 0.25 && model.frame.workspaces.length > 1 && (
         <PerRowPill what="workspaces" narrow={narrow} cols={deviceCols ?? defaultDeviceCols(narrow)} onPick={setDeviceCols} />
@@ -763,10 +771,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
 }
 
 /** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */
-function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords'> {
+function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices: HTMLElement): Pick<FrameEls, 'deviceLabel' | 'markLabels' | 'machineWords' | 'machineShare'> {
   return {
     deviceLabel: title,
     markLabels: marks.flatMap((m) => [...m.querySelectorAll<HTMLElement>('.zv-tw')]),
-    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')]
+    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')],
+    machineShare: devices.querySelector<HTMLElement>('.zv-machine-share')
   }
 }

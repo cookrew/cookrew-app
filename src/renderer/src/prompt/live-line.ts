@@ -85,6 +85,28 @@ export function lineTextFor(
   return expandRefs(body, artifactRefs(body, artifacts))
 }
 
+/** Cards that cannot start: the draft stays in the box and goes whole on a send. */
+let held: ReadonlySet<string> = new Set()
+
+/**
+ * The cards whose line has nothing behind it. A line newly held forgets what it
+ * typed: those keys reached no process, and counting them left a later send
+ * with only its Enter to send.
+ */
+export function holdLines(ids: readonly string[]): void {
+  const next = new Set(ids)
+  for (const id of next) {
+    if (!held.has(id)) withLine(id, { ...lineOf(id), typed: '', seen: '', editedAt: Date.now() })
+  }
+  held = next
+}
+
+/** Keys a failed wake lost (main's `terminal.keys-lost`): a send must carry those words itself. */
+export function forgetTyped(agentId: string): void {
+  const line = lineOf(agentId)
+  withLine(agentId, { ...line, typed: line.seen })
+}
+
 function lineOf(agentId: string): Line {
   const known = lines.get(agentId)
   if (known) return known
@@ -101,7 +123,7 @@ function lineOf(agentId: string): Line {
 export function typeLine(agentId: string, text: string, force = false): void {
   const line = lineOf(agentId)
   const now = Date.now()
-  if (!force && activityStore.get(agentId)?.phase === 'waiting') {
+  if (!force && (held.has(agentId) || activityStore.get(agentId)?.phase === 'waiting')) {
     withLine(agentId, { ...line, editedAt: now })
     return
   }

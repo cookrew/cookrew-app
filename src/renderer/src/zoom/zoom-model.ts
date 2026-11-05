@@ -12,6 +12,7 @@ import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
+import type { LaunchFailure } from '../../../shared/launch-failure'
 
 export interface AgentView {
   id: string
@@ -24,6 +25,8 @@ export interface AgentView {
   /** What its face draws (ink-status.ts · inkStatusOfRow); the word and its colour follow it. */
   status: InkStatus
   word: string
+  /** Why it is not running, when that is more than resting: the card says so in place of a latest. */
+  failure?: LaunchFailure | null
   line: string
   browsers: number
   notes: number
@@ -108,8 +111,9 @@ export const COINS_PER_AGENT = 4
 
 /** One line of what an agent last said or does now. */
 export function lineOf(row: AgentRow | undefined, brief: string | null | undefined): string {
+  if (row?.failure) return row.failure.why
   const t = row?.turn
-  return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || brief?.trim() || 'Nothing said yet.'
+  return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || t?.tail?.trim() || brief?.trim() || 'Nothing said yet.'
 }
 
 /**
@@ -207,6 +211,10 @@ export interface DeckSource {
 export const DECK_SHOWN = 3
 const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
 
+/** The word over a card that is not resting but stuck. */
+export const failureWord = (failure: LaunchFailure | null | undefined): string | null =>
+  failure ? (failure.blocked ? 'could not start' : 'stopped') : null
+
 /** One agent as every view draws it, from its row in the crew (agent-rows.ts · crewOf). */
 export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentView {
   const list = attachIndex.get(row.id) ?? []
@@ -220,8 +228,9 @@ export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentV
     phase,
     unread: row.unread === true,
     status,
-    word: statusWord(status),
+    word: failureWord(row.failure) ?? statusWord(status),
     line: lineOf(row, row.brief),
+    failure: row.failure ?? null,
     browsers: list.filter((a) => a.kind === 'browser').length,
     notes: list.filter((a) => a.kind === 'note').length,
     turn: row.turn ?? null

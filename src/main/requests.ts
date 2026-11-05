@@ -51,6 +51,10 @@ export const REQUESTS_POLL_MS = 20_000
 /** The account calls this needs, narrowed so a test needs no registry. */
 export interface RequestsCaller {
   call<T>(pathname: string, init?: RequestInit & { parse?: boolean }): Promise<AccountResult<T>>
+  /** Optional, so a test's narrow caller stays narrow. */
+  isPasswordless?(): boolean
+  /** The alarm's proof, for an account with no password to send. */
+  providerProve?(act: 'not-me'): Promise<AccountResult<string>>
   /**
    * The same call, answered as a Response.
    *
@@ -399,6 +403,14 @@ export class Requests {
     }
     const body: Record<string, unknown> = { decision: REGISTRY_DECISION[action] }
     if (action === 'approve') body.match = match ?? ''
+    // The alarm steps up, and an account with no password proves it at its
+    // provider. A person pressing NOT ME must not be told to type one.
+    const prove = this.deps.accounts.providerProve
+    if (action === 'not-me' && prove !== undefined && this.deps.accounts.isPasswordless?.() === true) {
+      const proved = await prove.call(this.deps.accounts, 'not-me')
+      if (!proved.ok) return { ok: false, reason: proved.reason }
+      body.stepUp = proved.value
+    }
     const sent = await this.deps.accounts.authedResponse(
       `/v2/me/approvals/${encodeURIComponent(row.id)}`,
       { method: 'POST', body: JSON.stringify(body) },

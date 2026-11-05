@@ -31,14 +31,17 @@ export interface SentWords {
 /** Longer than the refusal takes to come back over a slow link, shorter than the next thought. */
 export const REFUSED_WINDOW_MS = 15_000
 
+/** A wake that fails answers later than a refusal: a boot may take its full minute first. */
+export const WAKE_WINDOW_MS = 90_000
+
 /**
  * The words a refusal gives back. Only a refused Enter speaks for them: their
  * keystrokes may go on being refused while the words are still being typed, and
  * an arrow refused later says nothing of words that went.
  */
-export function wordsToRestore(sent: SentWords | null, terminalId: string, data: string, now: number): SentWords | null {
+export function wordsToRestore(sent: SentWords | null, terminalId: string, data: string, now: number, windowMs = REFUSED_WINDOW_MS): SentWords | null {
   const entered = /[\r\n]/.test(data)
-  return entered && sent !== null && sent.id === terminalId && now - sent.at <= REFUSED_WINDOW_MS ? sent : null
+  return entered && sent !== null && sent.id === terminalId && now - sent.at <= windowMs ? sent : null
 }
 
 let lastSent: SentWords | null = null
@@ -49,8 +52,8 @@ export function noteSent(sent: SentWords): void {
 }
 
 /** The words this refusal gives back, once. */
-export function takeRefused(terminalId: string, data: string, now: number): SentWords | null {
-  const back = wordsToRestore(lastSent, terminalId, data, now)
+export function takeRefused(terminalId: string, data: string, now: number, windowMs = REFUSED_WINDOW_MS): SentWords | null {
+  const back = wordsToRestore(lastSent, terminalId, data, now, windowMs)
   if (back) lastSent = null
   return back
 }

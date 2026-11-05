@@ -47,6 +47,8 @@ export interface UseStatus {
   readonly use: Exclude<Use, 'browser'>
   /** Whether this card takes input from a viewer at all. */
   readonly input: boolean
+  /** What this card was bound to has gone for good: it will not come back, so the viewer offers something else. */
+  readonly gone?: 'window'
 }
 
 const USES: readonly Use[] = ['browser', 'computer', 'phone', 'hardware']

@@ -131,6 +131,8 @@ export const NODE_ROUTES: RegExp[] = [
   // Submit paths (already scoped before this change).
   /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
   /^\/api\/terminal\/[^/]+\/output$/,
+  // Asked before words go to an offline card (prompt/launch-gate.ts).
+  /^\/api\/terminal\/[^/]+\/launch-check$/,
   // Reading and navigating the transcript.
   /^\/api\/terminal\/[^/]+\/jump$/,
   /^\/api\/terminal\/[^/]+\/seen$/,
@@ -161,6 +163,10 @@ export const NODE_ROUTES: RegExp[] = [
 ]
 
 export const SCOPE_AWARE: RegExp[] = [
+  // The owner's phone can be served under a slug. The machine's load is the same
+  // from any workspace, and the slug opens nothing: the route asks for the pairing
+  // token itself (levels/gauges-route.ts), so a served caller is refused there.
+  /^\/api\/levels\/gauges$/,
   // The renderer index, EARNED. It was refused while the bundled client
   // issued root-absolute /api/... requests, because serving it at /<slug>
   // rendered the FOCUSED canvas under a URL naming a different workspace. The
@@ -205,6 +211,10 @@ export const SCOPE_AWARE: RegExp[] = [
   // and the failure surfaced to the reader as "is Ollama running?".
   /^\/api\/translate$/,
   /^\/api\/translate\/host$/,
+  // The window picker: a card made here lands in the scoped workspace, and the
+  // service refuses a served one (use-source-service.ts). Machine-wide reads,
+  // answered behind the pairing credential like everything else on this list.
+  /^\/api\/use\/sources(?:\/(?:open|settings))?$/,
   // THE INTERNET GATE (§9, §11 · ④). An exported agent is addressable because
   // the workspace instance is addressable, so this is the one route family
   // that is MEANINGLESS unslugged — there is no focused-session reading of it,

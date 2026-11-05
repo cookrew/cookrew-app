@@ -66,7 +66,7 @@ function wired(store: WorkspaceStore, ws: string, a: string, b: string): boolean
 describe('cookrew note create — a note whose name exists is the same note', () => {
   it('wires the caller to the existing note instead of minting "(2)"', () => {
     const { store, deps, home, report } = setup()
-    expect(report.name).toBe('the-report')
+    expect(report.name).toBe('The report')
     const answer = cmdNote(request(['create', '# The report\nAtlas wrote this.'], 'atlas'), deps)
     expect(notesIn(store, home)).toHaveLength(1)
     expect(notesIn(store, home).some((n) => n.name.endsWith('(2)'))).toBe(false)
@@ -113,7 +113,7 @@ describe('cookrew note create — a note whose name exists is the same note', ()
   it('--new still creates a second card', () => {
     const { store, deps, home } = setup()
     const answer = cmdNote(request(['create', ORIGINAL], 'atlas', { new: true }), deps)
-    expect(answer).toBe('Created note "the-report (2)"')
+    expect(answer).toBe('Created note "The report (2)"')
     expect(notesIn(store, home)).toHaveLength(2)
   })
 
@@ -126,7 +126,7 @@ describe('cookrew note create — a note whose name exists is the same note', ()
 
   it('a name nobody holds is created as before', () => {
     const { store, deps, home } = setup()
-    expect(cmdNote(request(['create', '# Another thing'], 'atlas'), deps)).toBe('Created note "another-thing"')
+    expect(cmdNote(request(['create', '# Another thing'], 'atlas'), deps)).toBe('Created note "Another thing"')
     expect(notesIn(store, home)).toHaveLength(2)
   })
 
@@ -145,7 +145,7 @@ describe('cookrew note create — a note whose name exists is the same note', ()
     store.switchWorkspace(other)
     store.addNode(terminal('fresco', 'Fresco'), other)
     const answer = cmdNote(request(['create', '# The report'], 'fresco'), deps)
-    expect(answer).toBe('Created note "the-report"')
+    expect(answer).toBe('Created note "The report"')
     expect(notesIn(store, other)).toHaveLength(1)
     expect(notesIn(store, home)).toHaveLength(1)
   })

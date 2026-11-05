@@ -1,4 +1,4 @@
-import { noteNameFromContent } from '../shared/model'
+import { legacyNoteName, noteNameFromContent } from '../shared/model'
 import type { CanvasNode, NoteNodeData } from '../shared/model'
 
 /**
@@ -23,7 +23,7 @@ export function claimedNoteNames(content: string): string[] {
   const firstLine = content.split('\n')[0] ?? ''
   if (!NAME_BEARING.test(firstLine)) return []
   const title = firstLine.replace(LEADING_MARKDOWN, '').trim()
-  return [...new Set([noteNameFromContent(content), title].map((name) => name.toLowerCase()))]
+  return [...new Set([noteNameFromContent(content), legacyNoteName(content), title].map((name) => name.toLowerCase()))]
 }
 
 /** The note on this canvas whose name the content's first line claims, if any. */

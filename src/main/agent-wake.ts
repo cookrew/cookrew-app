@@ -112,6 +112,8 @@ export class AgentWaker<S extends { write: (data: string) => unknown }> {
       return undefined
     }
     if (cold && !(await this.deps.ready(session))) this.deps.warn?.(`Agent ${id} was still booting when it was woken`)
+    // A boot can start and die inside that wait: the keys belong to `lost`, not to a dead session.
+    if (this.deps.session(id) !== session) return undefined
     return session
   }
 

@@ -152,7 +152,15 @@ export function completeSignIn(ctx: V2Context, username: string, device: unknown
   json(
     response,
     201,
-    { token: minted.token, exp: minted.exp, deviceId: attached.device.id },
+    // The username because a provider sign-in never typed one: this answer is
+    // the first the app hears of which account it is on.
+    {
+      token: minted.token,
+      exp: minted.exp,
+      deviceId: attached.device.id,
+      username,
+      hasPassword: attached.account.passwordless !== true
+    },
     { 'set-cookie': sessionCookie(minted.token) }
   )
   return true

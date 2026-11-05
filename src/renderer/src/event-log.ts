@@ -107,6 +107,10 @@ const META: Record<string, EventMeta> = {
   'terminal.booted': { label: 'Booted', verb: 'booted', noun: 'terminal', icon: 'terminal', hatch: false, metric: null, toast: false },
   'terminal.dismissed': { label: 'Dismissed', verb: 'dismissed', noun: 'agent', icon: 'close', hatch: false, metric: 'removed' },
   'terminal.killed': { label: 'Killed', verb: 'killed', noun: 'agent', icon: 'close', hatch: false, metric: 'removed' },
+  'terminal.swept': { label: 'Swept', verb: 'was ended at launch', noun: 'agent', icon: 'close', hatch: false, metric: 'removed' },
+  'terminal.strays': { label: 'No card', verb: 'running with no card', noun: 'agent', icon: 'close', hatch: false, metric: null },
+  'terminal.launch-failed': { label: 'Could not start', verb: 'could not start', noun: 'agent', icon: 'close', hatch: false, metric: null },
+  'terminal.kill-failed': { label: 'Still running', verb: 'is still running', noun: 'agent', icon: 'close', hatch: false, metric: null },
   'note.created': { label: 'Note', verb: 'created', noun: 'note', icon: 'note', hatch: false, metric: 'cards' },
   'note.deleted': { label: 'Note', verb: 'deleted', noun: 'note', icon: 'close', hatch: false, metric: 'removed' },
   'browser.created': { label: 'Browser', verb: 'created', noun: 'browser', icon: 'browser', hatch: false, metric: 'cards' },
@@ -116,7 +120,7 @@ const META: Record<string, EventMeta> = {
   'connection.made': { label: 'Wired', verb: 'connected', noun: 'connection', icon: 'connect', hatch: false, metric: null },
   'connection.removed': { label: 'Unwired', verb: 'disconnected', noun: 'connection', icon: 'close', hatch: false, metric: null },
   'workspace.created': { label: 'Workspace', verb: 'created', noun: 'workspace', icon: 'plus', hatch: false, metric: null },
-  'workspace.switched': { label: 'Switched', verb: 'switched to', noun: 'workspace', icon: 'next', hatch: false, metric: 'switches' },
+  'workspace.switched': { label: 'Workspace', verb: 'opened', noun: 'workspace', icon: 'next', hatch: false, metric: 'switches' },
   'workspace.renamed': { label: 'Renamed', verb: 'renamed', noun: 'workspace', icon: 'note', hatch: false, metric: null },
   'terminal.renamed': { label: 'Renamed', verb: 'renamed', noun: 'agent', icon: 'note', hatch: false, metric: null },
   'note.renamed': { label: 'Renamed', verb: 'renamed', noun: 'note', icon: 'note', hatch: false, metric: null },
@@ -132,6 +136,9 @@ const META: Record<string, EventMeta> = {
   'dispatch.done': { label: 'Dispatch', verb: 'finished a dispatch', noun: 'dispatch', many: 'finished', icon: 'agent', hatch: false, metric: null },
   'dispatch.failed': { label: 'Dispatch', verb: 'failed a dispatch', noun: 'dispatch', many: 'failed', icon: 'close', hatch: false, metric: null },
   'dispatch.interrupted': { label: 'Dispatch', verb: 'had a dispatch interrupted', noun: 'dispatch', many: 'interrupted', icon: 'close', hatch: false, metric: null },
+  'terminal.keys-lost': { label: 'Keys lost', verb: 'lost keys', noun: 'terminal', icon: 'close', hatch: false, metric: null, toast: false },
+  'workspace.remove-failed': { label: 'Not removed', verb: 'was not removed', noun: 'workspace', icon: 'close', hatch: false, metric: null },
+  'terminal.input-lost': { label: 'Not delivered', verb: 'was not sent to', noun: 'terminal', icon: 'close', hatch: false, metric: null },
   'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null }
 }
 

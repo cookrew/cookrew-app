@@ -330,6 +330,8 @@ describe('boot command and env', () => {
     const boot = bootCommand(SPEC)
     expect(boot.startsWith("cd '/work/repo'")).toBe(true)
     expect(boot.indexOf("cd '/work/repo'")).toBeLessThan(boot.indexOf('exec '))
+    // A husk the launch check could not catch must not start an agent in the wrong folder.
+    expect(boot).toContain("cd '/work/repo' || exit 1;")
   })
 
   it('quotes the cwd so a path cannot break out of the cd', () => {
@@ -753,6 +755,13 @@ describe('husk recovery — a restored label is not a recovered agent', () => {
     expect(runner.calls.some((c) => c.args[1] === 'send-text' && c.args[2] === 'w1:p1')).toBe(true)
     expect(runner.calls.some((c) => c.args[1] === 'split')).toBe(false)
     expect(runner.calls.some((c) => c.args[0] === 'workspace')).toBe(false)
+  })
+
+  it('refuses before any boot is typed when its folder is gone: nothing may start wherever the pane was', () => {
+    const runner = husk(shellInfo, '-zsh')
+    const mux = new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10, folderGone: () => true })
+    expect(() => mux.ensureSession(SPEC)).toThrow(/folder/)
+    expect(runner.calls.some((c) => c.args[1] === 'send-text')).toBe(false)
   })
 
   it('re-REPORTS the agent after a husk reboot — registration died with the server', () => {

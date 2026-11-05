@@ -1,0 +1,153 @@
+/* ── the machines' gauges (MachineGauges.tsx), over the devices stop ──
+   Real pixels at any zoom, in the space the camera leaves above the machine.
+   It lies over the scene, so it takes no gesture from it: a pinch that starts
+   here still reaches the overview, unless the list has to scroll.
+   One grid for the whole panel, so a column of numbers stays a column from
+   machine to machine; a line's parts are `display: contents`.
+   Warm means memory first (shared/machine-gauges.ts): the tones colour the words
+   as well as the bar, because a thin bar alone is easy to read past. A bar is one
+   transformed leaf: a new sample repaints a few pixels and lays nothing out. */
+.zv-gauge-panel {
+  position: absolute;
+  z-index: 43;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  width: min(640px, calc(100% - 24px));
+  max-height: 36%;
+  overflow-y: auto;
+  pointer-events: none;
+  font: 12px/1.25 var(--zv-mono);
+  color: var(--zv-ink-soft);
+  animation: zv-gauges-in 0.25s ease 0.3s both;
+}
+
+.zv-gauge-panel[data-scrolls] {
+  pointer-events: auto;
+  touch-action: pan-y;
+}
+
+.zv-gauge-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 9em) 0.7fr 1.2fr 1fr 0.8fr;
+  align-items: start;
+  gap: 10px 16px;
+}
+
+@keyframes zv-gauges-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.zv-gauge-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 14px/1.25 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+/* A cut name keeps its tooltip where there is a pointer to hover with. */
+@media (hover: hover) {
+  .zv-gauge-name {
+    pointer-events: auto;
+  }
+}
+
+.zv-gauges {
+  display: contents;
+}
+
+.zv-gauges-none {
+  display: block;
+  grid-column: 2 / -1;
+  color: var(--zv-muted);
+}
+
+.zv-gauge {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.zv-gauge-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--zv-muted);
+}
+
+.zv-gauge-value,
+.zv-gauge-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.zv-gauge-value {
+  color: var(--zv-ink);
+}
+
+/* A narrow column cuts a number's words, not these two. */
+.zv-gauge[data-none] .zv-gauge-value {
+  white-space: normal;
+  color: var(--zv-muted);
+}
+
+.zv-gauge-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--zv-hair-2);
+  overflow: hidden;
+}
+
+.zv-gauge-fill {
+  display: block;
+  height: 100%;
+  background: var(--zv-ink-soft);
+  transform-origin: 0 50%;
+}
+
+.zv-gauge[data-tone='warn'] :is(.zv-gauge-value, .zv-gauge-sub) {
+  color: var(--zv-seal-text);
+}
+
+.zv-gauge[data-tone='warn'] .zv-gauge-fill {
+  background: var(--zv-seal);
+}
+
+.zv-gauge[data-tone='hot'] :is(.zv-gauge-value, .zv-gauge-sub) {
+  color: var(--zv-wait);
+  font-weight: 600;
+}
+
+.zv-gauge[data-tone='hot'] .zv-gauge-fill {
+  background: var(--zv-wait);
+}
+
+.zv-gauges[data-waiting] .zv-gauge-value {
+  color: var(--zv-dim);
+}
+
+/* A phone: the name takes its own line, the four gauges keep one row. */
+@media (max-width: 700px) {
+  .zv-gauge-grid {
+    grid-template-columns: 0.7fr 1.25fr 1.1fr 0.85fr;
+    gap: 4px 12px;
+  }
+
+  .zv-gauge-name {
+    grid-column: 1 / -1;
+    margin-top: 6px;
+  }
+
+  .zv-gauge-name:first-child {
+    margin-top: 0;
+  }
+
+  .zv-gauges-none {
+    grid-column: 1 / -1;
+  }
+}

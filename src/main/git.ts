@@ -29,12 +29,12 @@ interface CacheEntry {
 }
 
 /** Run `git <args>` in cwd with no shell; resolve stdout or reject on error. */
-export function git(cwd: string, args: string[]): Promise<string> {
+export function git(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
       args,
-      { cwd, timeout: GIT_TIMEOUT_MS, windowsHide: true },
+      { cwd, timeout, windowsHide: true },
       (error, stdout) => {
         if (error) reject(error)
         else resolve(stdout.toString().trim())

@@ -1,7 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { UseStatus } from '../../../shared/use-signal'
 import { useRoster } from '../agent-registry'
+import { cookrew } from '../api'
 import { useCardCursors, type CardCursor } from '../use-cursors'
+import { openSourcePicker } from './source-picker-store'
 import './use-overlay.css'
 
 /**
@@ -16,6 +18,9 @@ import './use-overlay.css'
  * words ("Screen Recording is off…", "No Android device is attached…"),
  * a screen nobody may drive says "view only", a dropped socket says it is
  * dialling again — over the last frame, never instead of it.
+ *
+ * A window that closed will not come back, so its card also offers the way
+ * on: the whole screen, or another window, on this same card.
  */
 
 export interface FrameBox {
@@ -63,8 +68,49 @@ export function UseOverlay({
           {line.text}
         </div>
       )}
+      {goneOffered(status) && <GoneOffer card={card} />}
     </div>
   )
+}
+
+/** The card's window has closed for good, and the card is still saying so. */
+export const goneOffered = (status: UseStatus | null): boolean => status?.state === 'offline' && status.gone === 'window'
+
+/** Points this card at the main display; answers the refusal in words, or null. */
+export async function showTheScreen(card: string): Promise<string | null> {
+  try {
+    const opened = await cookrew().openUseSource?.({ source: 'screen:main', card })
+    if (!opened) return 'This client cannot show the screen'
+    return opened.ok ? null : opened.error
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+export function GoneOfferView({ error, busy, onScreen, onAnother }: { error: string | null; busy: boolean; onScreen: () => void; onAnother: () => void }): JSX.Element {
+  // The frame under this takes pointers for itself: a press here stays here.
+  const stop = (event: React.PointerEvent): void => event.stopPropagation()
+  return (
+    <div className="use-offer" role="group" aria-label="This card's window has closed">
+      <button type="button" disabled={busy} onPointerDown={stop} onClick={onScreen}>Show the screen</button>
+      <button type="button" disabled={busy} onPointerDown={stop} onClick={onAnother}>Pick another window</button>
+      {error && <span className="use-offer-error" role="alert">{error}</span>}
+    </div>
+  )
+}
+
+function GoneOffer({ card }: { card: string }): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const onScreen = (): void => {
+    setBusy(true)
+    setError(null)
+    void showTheScreen(card).then((refusal) => {
+      setError(refusal)
+      setBusy(false)
+    })
+  }
+  return <GoneOfferView error={error} busy={busy} onScreen={onScreen} onAnother={() => openSourcePicker({ card })} />
 }
 
 function Cursor({ cursor, name }: { cursor: CardCursor; name: string }): JSX.Element {

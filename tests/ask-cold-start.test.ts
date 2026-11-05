@@ -41,6 +41,15 @@ describe('decodeRawEscapes — the remedy the product prints', () => {
 })
 
 describe('waitForReady — a pane that is still painting is not ready', () => {
+  it('stops waiting the moment the process is gone: words must not wait out a dead agent', async () => {
+    const started = Date.now()
+    let dead = false
+    setTimeout(() => (dead = true), 60)
+    const ready = await waitForReady({ fullText: () => 'x' }, { pollMs: 10, timeoutMs: 5000, drawn: () => false, gone: () => dead })
+    expect(ready).toBe(false)
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
   it('waits for the pane to go quiet and says when it did', async () => {
     const growing = fakeSession(['a', 'ab', 'abc', 'abc', 'abc', 'abc'])
     const ready = await waitForReady(growing, { quietMs: 60, pollMs: 20, minMs: 0, timeoutMs: 2000 })

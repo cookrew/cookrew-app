@@ -1,4 +1,7 @@
 import type { MenuAct } from '../../shared/wait-choice'
+import type { UseSourceList, UseSourceOpened, UseSourcePick, UseSourceSettings } from '../../shared/use-sources'
+import type { StrayPane } from '../../shared/stray-pane'
+import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
@@ -8,6 +11,7 @@ import type { CardRoute, CardRouteState, RouteState } from '../../shared/route';
 import type { AgentTuning, AgentTuningState, TuneKnob } from '../../shared/agent-tuning'
 import type { LaunchOffer, LaunchTune } from '../../shared/launch-tune'
 import type { TranslateResult } from '../../shared/translate'
+import type { WorkspaceCheck, WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { Surface as SousSurface } from '../../shared/sous-intent'
 import type { SousCommandResult } from '../../main/sous-control'
@@ -56,9 +60,11 @@ import type {
   AdmittedPhone,
   ApprovalAsked,
   PairingHandout,
+  ProviderSignInAnswer,
   SignInAnswer,
   UsernameCheck,
 } from "../../shared/account-v2";
+import type { ProviderId, ProviderOffer } from "../../shared/oauth";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -313,8 +319,14 @@ export interface CookrewApi {
   renameWorkspace: (id: string, name: string) => Promise<WorkspaceList>;
   /** The owner's one-line brief (shared/workspace-brief.ts); '' clears it. Rejects an invalid one. */
   setWorkspaceBrief: (id: string, brief: string) => Promise<WorkspaceList>;
+  /** The workspace's mark; rejects anything but one short mark. */
+  setWorkspaceIcon: (id: string, icon: string) => Promise<WorkspaceList>;
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => Promise<WorkspaceCheck>;
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (id: string) => Promise<WorkspaceRemovePlan>;
   /** Workspace v2: remove workspace, multi-directory, per-terminal cwd, git. */
-  removeWorkspace: (id: string) => Promise<WorkspaceList>;
+  removeWorkspace: (id: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>;
   addWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
   removeWorkspaceDir: (id: string, dir: string) => Promise<WorkspaceList>;
   setPrimaryDir: (id: string, dir: string) => Promise<WorkspaceList>;
@@ -356,6 +368,14 @@ export interface CookrewApi {
    * per terminal because a pin belongs to a transcript, not to a workspace.
    */
   listPins: (terminalId: string) => Promise<VersionPinRecord[]>;
+  /**
+   * The window picker (use/SourcePicker.tsx): this machine's windows and
+   * displays, a pick that makes or re-points a card, and the page of a missing
+   * grant. A phone reaches the same service over /api/use/sources.
+   */
+  useSources?: () => Promise<UseSourceList>;
+  openUseSource?: (pick: UseSourcePick) => Promise<UseSourceOpened>;
+  openScreenSettings?: () => Promise<UseSourceSettings>;
   createTerminal: (opts: {
     name: string;
     preset: string;
@@ -493,6 +513,11 @@ export interface CookrewApi {
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
+  /** Could this offline card start now? Null when nothing stands in its way. */
+  launchCheck?: (id: string) => Promise<LaunchFailure | null>;
+  /** Live panes no card reaches; absent on an older bridge. */
+  listStrayPanes?: () => Promise<StrayPane[]>;
+  endStrayPane?: (session: string) => Promise<{ ok: boolean; error?: string }>;
   /** One changed registry entry (spawn, respawn, exit) as it happens. Optional, feature-detected. */
   onAgentChanged?: (cb: (entry: unknown) => void) => () => void;
   /** The whole roster again, when the changes above may have been missed. Optional, feature-detected. */
@@ -530,6 +555,18 @@ export interface CookrewApi {
    * Optional — feature-detect.
    */
   zoomFleetMachines?: () => Promise<AccountMachines>;
+  /**
+   * This desktop's machine gauges, read on demand (shared/machine-gauges.ts);
+   * null, or anything that is not a reading, is "no reading". The caller's
+   * asking IS what keeps the sampler running: stop asking and it stops.
+   * Optional — feature-detect.
+   */
+  machineGauges?: () => Promise<unknown>;
+  /**
+   * Another desktop of the account, asked through the relay; a surface that
+   * holds no credential for it has no such call. Optional — feature-detect.
+   */
+  machineGaugesOf?: (machineId: string) => Promise<unknown>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
@@ -913,6 +950,21 @@ export interface CookrewApi {
     username: string;
   }) => Promise<AccountResult<SeatFace>>;
   accountEndSeat?: (input: { slug: string; id: string }) => Promise<AccountResult<void>>;
+  // ── third-party sign-in ──
+  //
+  // Optional like the rest. `accountOAuthProviders` answering nothing is the
+  // ordinary state on a registry with no client id and secret: no button.
+  accountOAuthProviders?: () => Promise<readonly ProviderOffer[]>;
+  accountOAuthStart?: (provider: ProviderId) => Promise<ProviderSignInAnswer<AccountStatus>>;
+  accountOAuthCancel?: () => Promise<boolean>;
+  accountOAuthClaim?: (username: string) => Promise<SignInAnswer<AccountStatus>>;
+  accountOAuthLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
+  accountOAuthUnlink?: (input: { provider: ProviderId; current?: string }) => Promise<AccountResult<void>>;
+  /** A passcode is this Mac's alone: it never goes to cookrew.dev. */
+  accountSetPasscode?: (input: { next: string; current?: string }) => Promise<AccountResult<AccountStatus>>;
+  accountSetTouchId?: (on: boolean) => Promise<AccountResult<AccountStatus>>;
+  accountUnlockTouchId?: () => Promise<{ ok: boolean }>;
+  accountRescueUnlock?: (code: string) => Promise<AccountResult<AccountStatus>>;
   /** The owner's canvas, told who is at its doors. */
   servingCallers?: () => Promise<readonly ServedCallersRow[]>;
   onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;

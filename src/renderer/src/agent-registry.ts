@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { TerminalNodeData } from '../../shared/model'
+import type { LaunchFailure } from '../../shared/launch-failure'
 import { cookrew } from './api'
 
 /**
@@ -30,6 +31,8 @@ export interface AgentRegistryEntry {
   spawnedAt: number
   orch: boolean
   active: boolean
+  /** Why it is not running, when that is more than resting (shared/launch-failure.ts). */
+  failure?: LaunchFailure | null
 }
 
 interface RegistryBridge {

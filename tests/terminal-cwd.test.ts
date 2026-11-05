@@ -59,7 +59,7 @@ function harness(
       log.push(`kill(${id})`)
       if (options.undead) throw new Error(`session '${id}' survived the kill deadline`)
     },
-    spawn: (node) => log.push(`spawn(${node.id}@${node.cwd})`),
+    spawn: (node) => void log.push(`spawn(${node.id}@${node.cwd})`),
     carry: (move) => {
       log.push(`carry(${move.fromCwd}->${move.toCwd})`)
       return options.carried === false
@@ -172,5 +172,21 @@ describe('moveTerminalCwd — the respawn keeps the conversation', () => {
     const same = await moveTerminalCwd(h.deps, 'term-1', '/repo/a')
     expect(same).toBe(h.node)
     expect(h.log).toEqual([])
+  })
+})
+
+describe('a move that could not start again', () => {
+  it('is refused before the kill: a running agent is not traded for a card that cannot boot', async () => {
+    const h = harness({ dirs: ['/repo/a', '/repo/b'] })
+    const deps: TerminalCwdDeps = { ...h.deps, cannotStart: (_node, dir) => `The folder ${dir} does not exist.` }
+    await expect(moveTerminalCwd(deps, NODE.id, '/repo/b')).rejects.toThrow(/does not exist/)
+    expect(h.log.filter((line) => line.startsWith('kill') || line.startsWith('release'))).toEqual([])
+    expect(h.node.cwd).toBe(NODE.cwd)
+  })
+
+  it('a spawn that declines after the kill is an error, never a move reported done', async () => {
+    const h = harness({ dirs: ['/repo/a', '/repo/b'] })
+    const deps: TerminalCwdDeps = { ...h.deps, spawn: () => false }
+    await expect(moveTerminalCwd(deps, NODE.id, '/repo/b')).rejects.toThrow(/could not be started/)
   })
 })

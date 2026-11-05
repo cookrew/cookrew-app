@@ -1,4 +1,6 @@
+import type { CloseOutcome } from './terminal-close'
 import net from 'node:net'
+import { removeLines, type WorkspaceCheck, type WorkspaceRemovePlan } from '../shared/workspace-door'
 import { randomUUID } from 'node:crypto'
 import {
   AgentRole,
@@ -43,7 +45,9 @@ import {
   replyText,
   terminalDeliveryDeps
 } from './ask-delivery'
-import { cmdSecret, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import { cmdSecret, isServedPane, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
+import { LOGIN_EXIT, LoginDoor, LoginRefused, type AccountDoor, type LoginAudit, type LoginConnection } from './login-cli'
+import { paneInputs } from './pane-input'
 import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
@@ -61,7 +65,9 @@ export interface SocketServerDeps {
   store: WorkspaceStore
   ptys: PtyManager
   /** Spawn a terminal's PTY with turn tracking (same path as IPC creation). */
-  spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
+  spawnTerminal: (t: { id: string; command: string; cwd: string }) => unknown
+  /** End a teammate and take its card, once the process is proved gone (index.ts · removeNode). */
+  dismissTerminal: (id: string) => Promise<CloseOutcome>
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
   /**
@@ -107,6 +113,14 @@ export interface SocketServerDeps {
    */
   secrets?: SecretsStore
   audit?: (event: SecretAudit) => void
+  /**
+   * `cookrew login`, `logout`, `whoami` (login-cli.ts). A function because the
+   * account's channels are registered after this server starts. Null or absent:
+   * the verbs refuse.
+   */
+  account?: () => AccountDoor | null
+  /** The line each attempt leaves in the event log. Never anything typed. */
+  auditLogin?: (event: LoginAudit) => void
   /**
    * Was this terminal spawned for a served session? Read for the secret verbs
    * only, and REQUIRED: an optional predicate fails open when nobody wires it.
@@ -161,11 +175,15 @@ export interface SocketServerDeps {
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
   createWorkspace: (name: string, dir: string) => WorkspaceMeta
+  /** What a new workspace would be told before it exists; makes nothing. */
+  checkWorkspace: (name: string, dir: string) => WorkspaceCheck
+  /** What removing it stops, deletes and leaves, said before it is done. */
+  workspaceRemovePlan: (nameOrId: string) => Promise<WorkspaceRemovePlan>
   /** FEATURE 1: workspace pre-populated from a saved team template. */
   createWorkspaceFromTeam: (name: string, dir: string, team: string) => Promise<WorkspaceMeta>
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
   /** Workspace v2: remove + multi-directory + per-terminal cwd + git. */
-  removeWorkspace: (nameOrId: string) => WorkspaceList
+  removeWorkspace: (nameOrId: string, options?: { worktree?: boolean }) => Promise<WorkspaceList>
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
   setPrimaryDir: (id: string, dir: string) => WorkspaceList
@@ -202,6 +220,7 @@ export interface SocketServerHandle {
  */
 export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
   const { ptys } = deps
+  const login = loginDoorFor(deps)
 
   const server = net.createServer((socket) => {
     let buffer = ''
@@ -211,7 +230,7 @@ export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
       while (newline !== -1) {
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
-        void handleLine(line, socket, deps)
+        void handleLine(line, socket, deps, login)
         newline = buffer.indexOf('\n')
       }
     })
@@ -236,20 +255,49 @@ export function startSocketServer(deps: SocketServerDeps): SocketServerHandle {
   return { server, claim }
 }
 
+/**
+ * THE ONE PLACE A TYPED ANSWER EXISTS AS A REQUEST FIELD.
+ *
+ * `cookrew login` sends what a person typed in `secret`, never in `args` or
+ * `flags`, and it comes off here, ahead of everything: from this line on
+ * `request` cannot carry a password into a dispatch, a log, an error or a
+ * retry, whatever is added to those later. Only the login door gets it.
+ */
+const takeSecret = (sent: CliRequest & { secret?: unknown }): { request: CliRequest; secret: string | undefined } => {
+  const { secret, ...request } = sent
+  return { request, secret: typeof secret === 'string' ? secret : undefined }
+}
+
+const LOGIN_VERBS: ReadonlySet<string> = new Set(['login', 'logout'])
+
+/** A verb that speaks for the account, not for a card. */
+const answerAccountVerb = (
+  request: CliRequest,
+  secret: string | undefined,
+  connection: LoginConnection,
+  login: LoginDoor
+): Promise<string> | null => {
+  if (LOGIN_VERBS.has(request.cmd)) return login.handle(request, secret, connection)
+  return request.cmd === 'whoami' ? Promise.resolve().then(() => login.whoami(request)) : null
+}
+
 async function handleLine(
   line: string,
   socket: net.Socket,
-  deps: SocketServerDeps
+  deps: SocketServerDeps,
+  login: LoginDoor
 ): Promise<void> {
-  let request: CliRequest
+  let sent: CliRequest
   try {
-    request = JSON.parse(line) as CliRequest
+    sent = JSON.parse(line) as CliRequest
   } catch {
     socket.write(JSON.stringify({ id: 'unknown', ok: false, error: 'Bad request JSON' }) + '\n')
     return
   }
+  const { request, secret } = takeSecret(sent)
   try {
-    const output = await retryTransient(() => dispatch(request, deps))
+    const output = await (answerAccountVerb(request, secret, socket, login) ??
+      retryTransient(() => dispatch(request, deps)))
     respond(socket, { id: request.id, ok: true, output })
   } catch (error) {
     respond(socket, {
@@ -1240,9 +1288,12 @@ function cmdCheck(request: CliRequest, deps: SocketServerDeps): string {
  * node's `servedSession`, which marks the owner's receipt of a session
  * served somewhere else.
  */
-export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
-  const refuse = (why: string): SecretCliError =>
+export function ownerPaneOf(
+  request: CliRequest,
+  deps: SocketServerDeps,
+  refuse: (why: string) => Error = (why) =>
     new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused)
+): TerminalNodeData {
   if (typeof request.flags.as === 'string') throw refuse('--as names another pane')
   if (!request.terminalId) throw refuse('this shell is not a Cookrew terminal')
   const identity = resolveCallerTerminalId({
@@ -1255,6 +1306,46 @@ export function ownerPaneOf(request: CliRequest, deps: SocketServerDeps): Termin
   if (!node || node.kind !== 'terminal') throw refuse('no live pane of this app answers to this terminal')
   if (deps.isServed(id)) throw refuse('never readable from a served session')
   return node
+}
+
+/** The caller of `cookrew login`: the rule `cookrew secret` keeps, in its own words. */
+function loginPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  // Nothing is read here, so the rule's own "never readable from" loses a word.
+  const refuse = (why: string): LoginRefused =>
+    new LoginRefused(`refused: signing in is the owner's — ${why.replace('readable ', '')}`, LOGIN_EXIT.refused)
+  // The refusal a person on a windowless machine meets first, over SSH, so it
+  // says where to go rather than only what this shell is not.
+  if (!request.terminalId && typeof request.flags.as !== 'string') {
+    throw refuse('this shell is not a Cookrew terminal. Run it in a Shell card (cookrew recruit --preset Shell)')
+  }
+  const pane = ownerPaneOf(request, deps, refuse)
+  if (isServedPane(pane)) throw refuse('never from a served session')
+  return pane
+}
+
+/**
+ * An agent's tools only run in its turn, so a pane mid-turn is not a person at
+ * a shell. `waiting` is a turn too: the agent is held at its own menu.
+ */
+const agentMidTurn = (terminalId: string, deps: SocketServerDeps): boolean => {
+  // A pane with no mirror here is tracked by nobody; herdr still knows.
+  const phase = deps.turns.phaseOf(terminalId) ?? deps.turns.backendPhaseFor(terminalId)
+  return phase === 'thinking' || phase === 'waiting'
+}
+
+function loginDoorFor(deps: SocketServerDeps): LoginDoor {
+  return new LoginDoor({
+    account: () => deps.account?.() ?? null,
+    ownerPane: (request) => loginPaneOf(request, deps),
+    agentBusy: (terminalId) => agentMidTurn(terminalId, deps),
+    driven: (terminalId) => paneInputs.driven(terminalId),
+    // By id, so it holds whether or not a session here is mirroring the pane.
+    seal: (terminalId) => {
+      deps.turns.dropDraft(terminalId)
+      return paneInputs.seal(terminalId)
+    },
+    audit: (event) => deps.auditLogin?.(event)
+  })
 }
 
 /** `cookrew secret …` (secret-cli.ts), with the caller held to ownerPaneOf. */
@@ -1463,6 +1554,8 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
     return node
   })
   deps.spawnTerminal(added)
+  // A command chosen by the caller runs with no keyboard anywhere near it.
+  if (request.flags.command) paneInputs.noteDriven(added.id)
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
 
@@ -1638,14 +1731,12 @@ export function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
     : `"${name}" is now the orch`
 }
 
-function cmdDismiss(request: CliRequest, deps: SocketServerDeps): string {
+async function cmdDismiss(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   requireOrch(request, deps)
   const target = findConnected(request, deps, request.args[0], 'terminal')
-  deps.ptys.kill(target.id)
-  deps.store.withOpContext({ actor: 'orch', via: 'dismiss' }, () =>
-    deps.store.removeNodeAcross(target.id)
-  )
-  deps.agents.deactivate(target.id)
+  const closed = await deps.dismissTerminal(target.id)
+  // The card stays, as the only handle on what is still running.
+  if (!closed.ok) throw new Error(`"${target.name}" did not stop: ${closed.error}`)
   return `Dismissed "${target.name}"`
 }
 
@@ -1712,7 +1803,7 @@ export interface SousDoor {
   cancel?: (token: string, caller?: { surface: SousSurface; callerId?: string }) => boolean
 }
 
-async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+export async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [sub, name] = request.args
   if (sub === 'list' || sub === undefined) {
     const { workspaces, activeId } = deps.listWorkspaces()
@@ -1732,12 +1823,16 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
         throw new Error('Usage: cookrew workspace create "Name" --dir PATH [--team "Template"]')
       }
       const dir = request.flags.dir ? String(request.flags.dir) : ''
+      // The same check as the sheet: refused here in its sentence, and what
+      // the sheet would have said first goes under the answer.
+      const check = deps.checkWorkspace(name, dir)
+      if (!check.ok) throw new Error(check.reason)
       if (request.flags.team) {
         const meta = await deps.createWorkspaceFromTeam(name, dir, String(request.flags.team))
-        return `Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`
+        return [`Created workspace "${meta.name}" from team template "${String(request.flags.team)}" (${meta.dir}) and switched to it`, ...check.notes].join('\n')
       }
       const meta = deps.createWorkspace(name, dir)
-      return `Created and switched to workspace "${meta.name}" (${meta.dir})`
+      return [`Created and switched to workspace "${meta.name}" (${meta.dir})`, ...check.notes].join('\n')
     }
     case 'switch': {
       if (!name) throw new Error('Usage: cookrew workspace switch "Name"')
@@ -1745,9 +1840,11 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
       return `Switched to workspace "${meta.name}"`
     }
     case 'remove': {
-      if (!name) throw new Error('Usage: cookrew workspace remove "Name"')
-      deps.removeWorkspace(name)
-      return `Removed workspace "${name}"`
+      if (!name) throw new Error('Usage: cookrew workspace remove "Name" [--remove-worktree]')
+      const worktree = request.flags['remove-worktree'] === true
+      const plan = await deps.workspaceRemovePlan(name)
+      const list = await deps.removeWorkspace(name, { worktree })
+      return [`Removed workspace "${plan.name}".`, ...removeLines(plan, true, worktree), ...(list.notice ? [list.notice] : [])].join('\n')
     }
     default:
       throw new Error('Usage: cookrew workspace list|create|switch|remove|dir ...')
@@ -2005,6 +2102,10 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
                                                 (owner panes only; every read is logged)
+  cookrew login [username]                      Sign this machine in, in an owner pane: hidden password, then the second factor
+  cookrew login --github                        The same with no password: GitHub's device flow, for a machine with no browser
+  cookrew logout                                Take this machine off the account, in an owner pane
+  cookrew whoami                                The account and device this machine is signed in as
   cookrew browser create URL ["Name"] [--workspace <name>] [--new]
                                                 Create a browser card in YOUR workspace
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...

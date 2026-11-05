@@ -368,6 +368,43 @@ body.cookrew-mobile .cr-logo-mark {
   color: var(--ink);
 }
 
+/* A note's sealed values: the choice to take them, and what stays for another note. */
+.confirm-close-secrets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.confirm-close-secret {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  cursor: pointer;
+}
+.confirm-close-secret input {
+  margin: 3px 0 0;
+}
+.confirm-close-secret b,
+.confirm-close-kept b {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.confirm-close-secret small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.confirm-close-kept {
+  color: var(--muted);
+}
+.confirm-close-error {
+  color: var(--rose);
+}
+
 .confirm-close-actions {
   display: flex;
   justify-content: flex-end;
@@ -2174,6 +2211,17 @@ a.card-close {
   grid-column: 1 / -1;
   font-size: 10.5px;
   opacity: 0.75;
+}
+.cr-secret-slot-remove {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.cr-secret-slot-remove.asking > span {
+  flex: 1 1 100%;
 }
 .cr-secret-slot-served {
   grid-column: 1 / -1;
@@ -5431,6 +5479,21 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
 }
 
 /* A field and its verdict on one line — the reason is always beside it. */
+.cr-acct-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cr-acct-provider {
+  width: 100%;
+}
+
+.cr-acct-handle .gs-input {
+  width: 100%;
+}
+
 .cr-acct-row {
   display: flex;
   align-items: center;

@@ -17,8 +17,15 @@ import { DirectMultiplexer } from './direct-multiplexer'
 import { planHost } from './host-claim'
 import { confirmHerdrClaim, herdrSessionDir, processClaimDeps, releaseHerdrClaim, type ClaimDeps, type ClaimVerdict } from './herdr-session-claim'
 import { reapOrphansOn } from './orphan-reap'
+import { endPane, type PaneEnd } from './pane-end'
+import { sharedListing, type Listing } from './pane-listing'
+import { processFact } from './process-facts'
+import { folderFailure } from './launch-check'
+import { installPaneExitHook, paneExitConf } from './pane-exit'
 import { harnessFor } from './harness'
 import { confinedSpawn } from './session-sandbox'
+import { cliWrapper, publishCliRuntime } from './cli-shim'
+import { paneInputs } from './pane-input'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
@@ -218,11 +225,6 @@ export function multiplexer(): Multiplexer | null {
   return activeMux
 }
 
-/** True while a session with this name still exists. */
-function tmuxSessionExists(name: string): boolean {
-  return activeMux?.sessionExists(name) ?? false
-}
-
 /** tmux session name for a terminal id (names can't contain '.' or ':'). */
 export function sessionNameFor(terminalId: string): string {
   return tmuxSessionNameFor(terminalId)
@@ -231,24 +233,39 @@ export function sessionNameFor(terminalId: string): string {
 /** Session names that belong to no terminal node — see orphan-reap.ts. */
 export { orphanSessionNames } from './orphan-reap'
 
-/**
- * Poll until a tmux session is gone; THROW when it survives the deadline
- * (H5). Extracted from PtyManager.killAndWait with an injectable liveness
- * check so the timeout path is unit-testable without a real tmux server.
- */
-export async function waitForTmuxDeath(
-  name: string,
-  timeoutMs: number,
-  exists: (name: string) => boolean = tmuxSessionExists
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (!exists(name)) return
-    await new Promise((r) => setTimeout(r, 100))
+/** How long one pane listing answers every close waiting on it. */
+const LISTING_FRESH_MS = 120
+
+const listings = new WeakMap<Multiplexer, Listing>()
+
+/** The session as endPane reads it: null when the backend could not say. */
+async function presenceOf(mux: Multiplexer, name: string): Promise<boolean | null> {
+  if (!mux.liveSessions) return mux.sessionExists(name)
+  const listing = listings.get(mux) ?? sharedListing(() => (mux.liveSessions as () => Promise<ReadonlySet<string>>)(), LISTING_FRESH_MS)
+  listings.set(mux, listing)
+  try {
+    return (await listing()).has(name)
+  } catch {
+    return null
   }
-  if (!exists(name)) return // one last look at the deadline boundary
-  throw new Error(`tmux session '${name}' survived the ${timeoutMs}ms kill deadline`)
 }
+
+/** Does this pid still answer? One we may not signal is one that exists. */
+function pidTaken(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * A process that outlived its pane and every signal, by terminal. The pane can no
+ * longer name it, so without this the next close would find nothing to end and
+ * say so. `started` keeps a later retry off whoever holds that pid by then.
+ */
+const survivors = new Map<string, { pid: number; started: string | null }>()
 
 /** Kill a cookrew tmux session by NAME (best effort) — no live PTY needed. */
 function killTmuxSessionByName(name: string): void {
@@ -694,6 +711,30 @@ export class PtySession extends EventEmitter {
     return true
   }
 
+  /**
+   * THE KEYS GO TO THE PANE AND TO NOBODY ELSE, until the answer is called.
+   *
+   * `cookrew login` reads its password with echo off, which keeps it off the
+   * screen, the scrollback and every transcript. It does nothing here: the
+   * keys still pass through write(), which announces them to the turn tracker,
+   * and in an agent's pane the password and Enter would open a turn with the
+   * password as its prompt: stored, summarised, drawn on the card and sent to
+   * the phone. So while this holds, nothing is announced and no input is
+   * marked: the bytes are going to a prompt, not into the pane's input box.
+   *
+   * The owner's guard still runs, because it refuses keys and keeps nothing.
+   * Whatever is not a keyboard is refused before it gets here (pane-input.ts),
+   * which is also where the seal is held: by terminal id, so a session made
+   * while one is on starts sealed.
+   */
+  sealInput(): () => void {
+    return paneInputs.seal(this.terminalId)
+  }
+
+  private get inputSealed(): boolean {
+    return paneInputs.sealed(this.terminalId)
+  }
+
   write(data: string): OwnerInputVerdict {
     // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
     // preemption after proc.write cannot stop a competing submission, only
@@ -712,6 +753,11 @@ export class PtySession extends EventEmitter {
     if (verdict !== 'allow') {
       this.lastRefusalInfo = { verdict, at: Date.now() }
       return verdict
+    }
+    if (this.inputSealed) {
+      this.lastRefusalInfo = null
+      this.proc.write(data)
+      return 'allow'
     }
     // WRITE-AHEAD provenance (Sol r10 P0-1), after the verdict — refused
     // bytes never cross, so they never dirty — and BEFORE proc.write: the
@@ -786,6 +832,10 @@ export class PtySession extends EventEmitter {
     // the box, not which producer's door they came through. A mark that
     // cannot commit refuses the write (Sol r11 P0-1) — false, no byte, no
     // input event — and ownerSubmit surfaces the refusal.
+    if (this.inputSealed) {
+      this.proc.write(data)
+      return true
+    }
     if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data)
@@ -809,6 +859,7 @@ export class PtySession extends EventEmitter {
     // write (Sol r11 P0-1): the caller's stillValid/landing checks read the
     // undelivered paste honestly, and its later bare CR submits an empty
     // box, which every hosted TUI treats as a no-op.
+    if (!paneInputs.drive(this.terminalId)) return false
     if (!defaultProducerLease().noteDispatchBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data, 'dispatch')
@@ -821,7 +872,7 @@ export class PtySession extends EventEmitter {
    * tracking hears about it is this. Same event, same payload shape.
    */
   noteExternalInput(data: string): void {
-    this.emit('input', data)
+    if (!this.inputSealed) this.emit('input', data)
   }
 
   /**
@@ -1033,6 +1084,19 @@ export class PtySession extends EventEmitter {
    */
   get wasDisposed(): boolean {
     return this.disposed
+  }
+
+  /** When this mirror began, for telling a failed start from a run that ended. */
+  readonly startedAt = Date.now()
+
+  /** Raw output tail: the screen may not have parsed the process's last words when it exited. */
+  get outputTail(): string {
+    return this.attachOutputTail
+  }
+
+  /** The attach child: the agent itself only when no backend stands between (usesTmux false). */
+  get pid(): number | null {
+    return this.proc?.pid ?? null
   }
 
   /** Terminate the tmux session for good (explicit close: ⌘W / dismiss). */
@@ -1354,7 +1418,8 @@ export class PtyManager {
     mkdirSync(this.runtimeDir, { recursive: true })
     this.socketPath = path.join(this.runtimeDir, 'cookrew.sock')
     this.tmuxConf = path.join(this.runtimeDir, 'cookrew.tmux.conf')
-    writeFileSync(this.tmuxConf, TMUX_CONF)
+    installPaneExitHook(this.runtimeDir)
+    writeFileSync(this.tmuxConf, [TMUX_CONF, ...paneExitConf(this.runtimeDir)].join('\n'))
     this.herdrConf = path.join(this.runtimeDir, 'cookrew.herdr.toml')
     writeFileSync(this.herdrConf, HERDR_CONF)
     // The backend is chosen here because this is where the config file it
@@ -1364,7 +1429,7 @@ export class PtyManager {
     // otherwise. On Windows tmux does not exist and herdr cannot host a
     // terminal, so `direct` is what the release actually runs on.
     const candidates = multiplexerOrder(multiplexerPreference(), [
-      new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf }),
+      new HerdrHostMultiplexer({ session: HERDR_SESSION, configPath: this.herdrConf, folderGone: (dir) => folderFailure(dir) !== null }),
       new TmuxMultiplexer({ configFile: this.tmuxConf }),
       new DirectMultiplexer()
     ])
@@ -1410,9 +1475,11 @@ export class PtyManager {
   /**
    * Install the CLI next to the socket so PATH injection finds `cookrew`.
    * The entry is a shell wrapper because a bare `cookrew` file with ESM
-   * `import`s would be parsed as CommonJS by node.
+   * `import`s would be parsed as CommonJS by node, and because it runs on this
+   * app's own binary rather than on a Node the machine may not have
+   * (cli-shim.ts).
    */
-  installCli(cliSource: string): void {
+  installCli(cliSource: string, runtime: string = process.execPath): void {
     // Publish the socket at a STABLE path so a `cookrew` on the system PATH can
     // find it without guessing.
     //
@@ -1424,6 +1491,7 @@ export class PtyManager {
     try {
       mkdirSync(COOKREW_HOME, { recursive: true })
       writeFileSync(path.join(COOKREW_HOME, 'socket'), this.socketPath)
+      publishCliRuntime(COOKREW_HOME, runtime)
     } catch (error) {
       // A missing pointer only costs the PATH-installed CLI its default; panes
       // still get COOKREW_SOCKET injected directly.
@@ -1435,7 +1503,7 @@ export class PtyManager {
     // Briefs and docs keep spelling `cookrew`, so one grep still finds them.
     for (const name of CLI_NAMES) {
       const wrapper = path.join(this.runtimeDir, name)
-      writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
+      writeFileSync(wrapper, cliWrapper(script, runtime))
       chmodSync(wrapper, 0o755)
     }
   }
@@ -1584,58 +1652,19 @@ export class PtyManager {
     return ids
   }
 
-  /** Close for good: end the tmux session, then drop the PTY. */
+  /**
+   * Close for good: end the pane, then drop the PTY. Reaches a pane with no
+   * mirror too: a relaunched app holds none for the panes it finds running, and
+   * a kill that looked only at its own map left them going (box test 2, bug 1).
+   *
+   * Fire and forget. Whoever TELLS anyone the agent is gone wants killAndWait.
+   */
   kill(terminalId: string): void {
-    const session = this.sessions.get(terminalId)
-    if (session) {
-      session.killSession()
-      session.dispose()
-      this.sessions.delete(terminalId)
-    }
+    this.closeNow(terminalId)
     this.ownership.release(terminalId)
   }
 
-  /**
-   * Kill a terminal for good even when it has NO live PTY — a detached,
-   * parked-workspace terminal whose tmux session is still running. Workspace
-   * DELETE uses this: `kill` alone would no-op for inactive terminals and
-   * strand their tmux sessions (claude CLIs) forever.
-   */
-  /**
-   * Kill a terminal and WAIT until its tmux session is actually gone.
-   *
-   * `kill()` returns before tmux has torn the session down, so an immediate
-   * respawn races it: `new-session -A` attaches to the dying session and the
-   * teardown lands last, leaving the agent dead. Endpoint restore rebinds a
-   * session and reboots in one motion, so it must await the death first.
-   *
-   * THROWS when the session survives the deadline (H5): resolving silently
-   * let restore rebind + respawn onto a session that was never killed —
-   * `new-session -A` reattached the survivor, ignored the boot command, and
-   * left the node pointing at a session id no process was running.
-   */
-  async killAndWait(terminalId: string, timeoutMs = 5000): Promise<void> {
-    // killDetached (not kill): restore/undo MUST end the tmux session even
-    // when the terminal has no tracked PTY — `kill` alone no-ops there and
-    // the respawn would reattach to the old session instead of rebooting.
-    this.killDetached(terminalId)
-    try {
-      await waitForTmuxDeath(sessionNameFor(terminalId), timeoutMs)
-    } catch (error) {
-      // The pane SURVIVED the kill deadline: its input box is still real, so
-      // the WAL fact protecting it must stand — and an unconfirmed dispatch
-      // delivery hardens to contamination, fail-closed (Sol r11 P1).
-      defaultProducerLease().noteKillFailed(terminalId)
-      throw error
-    }
-    // POSITIVELY proven pane death — the one event that may clear the box's
-    // durable provenance (Sol r11 P1): the input box the fact described no
-    // longer exists anywhere. Logical retirement (lease.retire) happened at
-    // the caller before the kill and deliberately kept the fact until now.
-    defaultProducerLease().clearProvenanceOnDeath(terminalId)
-  }
-
-  killDetached(terminalId: string): void {
+  private closeNow(terminalId: string): void {
     const session = this.sessions.get(terminalId)
     if (session) {
       session.killSession()
@@ -1647,15 +1676,113 @@ export class PtyManager {
   }
 
   /**
+   * Kill a terminal and WAIT until it is really gone: the pane and its root
+   * process, or THROW.
+   *
+   * `kill()` returns before the backend has torn the session down, so an
+   * immediate respawn races it: `new-session -A` attaches to the dying session
+   * and the teardown lands last, leaving the agent dead. Endpoint restore
+   * rebinds a session and reboots in one motion, so it must await the death
+   * first.
+   *
+   * THROWS when the pane or its process survives the deadline (H5): resolving
+   * silently let restore rebind + respawn onto a session that was never killed,
+   * and let a card say killed over a process still running. See pane-end.ts.
+   */
+  async killAndWait(terminalId: string, timeoutMs = 5000): Promise<void> {
+    const end = await this.endTerminal(terminalId, timeoutMs)
+    if (!end.ended) {
+      // The pane SURVIVED the kill deadline: its input box is still real, so
+      // the WAL fact protecting it must stand — and an unconfirmed dispatch
+      // delivery hardens to contamination, fail-closed (Sol r11 P1).
+      defaultProducerLease().noteKillFailed(terminalId)
+      throw new Error(`terminal '${sessionNameFor(terminalId)}' did not end: ${end.reason}`)
+    }
+    // POSITIVELY proven pane death — the one event that may clear the box's
+    // durable provenance (Sol r11 P1): the input box the fact described no
+    // longer exists anywhere. Logical retirement (lease.retire) happened at
+    // the caller before the kill and deliberately kept the fact until now.
+    defaultProducerLease().clearProvenanceOnDeath(terminalId)
+  }
+
+  /**
+   * End a terminal wherever it runs: the host backend, and any other backend
+   * still holding its session (a migration left two populations once). The
+   * mirror's own child is the process when the mirror IS the agent (direct).
+   */
+  private async endTerminal(terminalId: string, timeoutMs: number): Promise<PaneEnd> {
+    const name = sessionNameFor(terminalId)
+    const session = this.sessions.get(terminalId)
+    const others = allBackends.filter((mux) => mux !== activeMux && mux.available() && mux.sessionExists(name))
+    const held = [...(activeMux ? [activeMux] : []), ...others]
+    /** Which process this pid was at the start: a pid can come back as someone else's. */
+    let identity: string | null = null
+    /** A pid remembered with no start time could be anyone's by now: looked at, never signalled. */
+    let unsure = false
+    const panePid = (): number | null =>
+      session && !session.usesTmux ? session.pid : (activeMux?.panePid(name) ?? others[0]?.panePid(name) ?? null)
+    const end = await endPane(
+      {
+        pid: async () => {
+          const known = survivors.get(terminalId)
+          const fact = known ? await processFact(known.pid) : null
+          // Only proof it is over lets it go: a ps that timed out is not that.
+          const over = fact?.state === 'gone' || (fact?.state === 'running' && known?.started != null && fact.started !== known.started)
+          if (known && !over) {
+            identity = known.started
+            unsure = known.started === null
+            return known.pid
+          }
+          survivors.delete(terminalId)
+          const pid = panePid()
+          if (pid === null) return null
+          const now = await processFact(pid)
+          identity = now.state === 'running' ? now.started : null
+          return pid
+        },
+        close: () => {
+          this.closeNow(terminalId)
+          this.ownership.release(terminalId)
+          for (const mux of others) mux.killSession(name)
+        },
+        exists: async () => {
+          const answers = await Promise.all(held.map((mux) => presenceOf(mux, name)))
+          if (answers.includes(true)) return true
+          return answers.includes(null) ? null : false
+        },
+        alive: async (pid) => {
+          if (!pidTaken(pid)) return false
+          const now = await processFact(pid)
+          if (now.state === 'unknown') return true
+          return now.state === 'running' && (identity === null || now.started === identity)
+        },
+        signal: (pid, signal) => {
+          if (unsure) return
+          try {
+            process.kill(pid, signal)
+          } catch {
+            // Gone between the look and the signal: the next poll says so.
+          }
+        }
+      },
+      timeoutMs
+    )
+    if (end.ended) survivors.delete(terminalId)
+    else if (end.pid !== null) survivors.set(terminalId, { pid: end.pid, started: identity })
+    return end
+  }
+
+  /**
    * Startup reaper: close cookrew sessions owned by no terminal node (past
    * workspace-delete leaks, crash-stranded agents). Returns the reaped names.
-   * Guarded (orphan-reap.ts): only the herdr session's claimed owner reaps,
-   * only with a store that owns at least one live pane, and never more than
-   * a handful per boot. Foreign sessions are never touched (naming guard).
+   * Guarded (orphan-reap.ts): only panes proved this store's, only by the
+   * herdr session's claimed owner, only with a store that owns at least one
+   * live pane, and never more than a handful per boot. Foreign sessions are
+   * never touched (naming guard).
    */
-  reapOrphanSessions(ownedTerminalIds: Iterable<string>): string[] {
+  reapOrphanSessions(ownedTerminalIds: Iterable<string>, proved: ReadonlySet<string>): string[] {
     if (!activeMux) return []
-    return reapOrphansOn(activeMux, ownedTerminalIds, { claimHeld: this.holdsHostClaim() })
+    return reapOrphansOn(activeMux, ownedTerminalIds, { claimHeld: this.holdsHostClaim(), proved })
   }
 
   /**
@@ -1679,7 +1806,7 @@ export class PtyManager {
    * with the owner claim in hand; tmux and direct keep their old behaviour
    * (the planner's familiar-store and cap guards still apply).
    */
-  private holdsHostClaim(): boolean {
+  holdsHostClaim(): boolean {
     if (!(activeMux instanceof HerdrHostMultiplexer)) return true
     return this.hostClaim?.kind === 'owned'
   }

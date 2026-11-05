@@ -104,6 +104,48 @@
   background: rgb(120 53 15 / 0.86);
 }
 
+/* A closed window's way on (GoneOffer): the only part of the overlay that takes a press. */
+.use-offer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: min(420px, calc(100% - 24px));
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+
+.use-offer button {
+  appearance: none;
+  min-height: 36px;
+  padding: 7px 13px;
+  border: 1px solid rgb(255 255 255 / 0.32);
+  border-radius: 9px;
+  background: rgb(20 20 24 / 0.82);
+  color: #f4f4f5;
+  font: 600 13px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.use-offer button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.use-offer-error {
+  flex-basis: 100%;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgb(120 53 15 / 0.86);
+  color: #f4f4f5;
+  font: 500 11px/1.35 system-ui, sans-serif;
+  text-align: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .use-cursor,
   .use-cursor.returning {
