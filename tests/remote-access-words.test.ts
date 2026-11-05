@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   hostWords,
   lastSeenWords,
+  parseRemoteState,
   remoteView,
   restartConfirm,
   type RemoteBuild,
@@ -186,5 +187,31 @@ describe('hostWords: what the Mac itself says while someone is on it', () => {
 
   it('says machine on a machine', () => {
     expect(hostWords({ rows: [row('Pixel 9', 'watching')], awake: true }, 'linux')?.awake).toBe('Keeping this machine awake while it is watched')
+  })
+})
+
+describe('a build listed under what started it', () => {
+  const fromTerminal: RemoteBuild = { ...source, settingsName: 'iTerm', startedFrom: 'iTerm' }
+  const read = (id: 'needs-screen-recording' | 'needs-accessibility', build: RemoteBuild): string =>
+    remoteView({ id, platform: 'darwin', build, then: null, detail: null, lastSeenAt: null, until: null, waiting: false }, 'here').sentence
+
+  it('names the row that is really there, and says why it is not Cookrew', () => {
+    const sentence = read('needs-screen-recording', fromTerminal)
+    expect(sentence).toContain('Turn on iTerm in')
+    expect(sentence).toContain('this source build under iTerm')
+  })
+
+  it('says the switch is wider than Cookrew: everything started from there gets it', () => {
+    expect(read('needs-accessibility', fromTerminal)).toContain('everything started from iTerm')
+  })
+
+  it('an app listed under its own name is told no such story', () => {
+    expect(read('needs-screen-recording', packaged)).not.toContain('started')
+  })
+
+  it('survives the wire, and a bad value is dropped rather than drawn', () => {
+    const state = { id: 'needs-screen-recording', platform: 'darwin', build: fromTerminal, then: null, detail: null, lastSeenAt: null, until: null, waiting: false }
+    expect(parseRemoteState(state)?.build.startedFrom).toBe('iTerm')
+    expect(parseRemoteState({ ...state, build: { ...fromTerminal, startedFrom: 7 } })?.build.startedFrom).toBeNull()
   })
 })

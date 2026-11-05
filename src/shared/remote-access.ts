@@ -11,9 +11,10 @@ import { machineCopy } from './machine-words'
  * helps someone at the Mac, so away from it a jump says plainly that it needs
  * them there and is offered as what it really is: opening it for later.
  *
- * THE NAME IS THE ONE THE READER WILL SEE. A source build is listed in System
- * Settings as Electron, not Cookrew, so `settingsName` comes from the running
- * build and a sentence never promises a row that is not there.
+ * THE NAME IS THE ONE THE READER WILL SEE. macOS files a permission under the
+ * app responsible for a process, which follows the launch: `npm run dev` in
+ * iTerm is listed as iTerm, not Cookrew or Electron. So `settingsName` comes
+ * from that answer and a sentence never promises a row that is not there.
  */
 
 export type RemoteStateId =
@@ -33,6 +34,8 @@ export type RemoteWhere = 'here' | 'away'
 export interface RemoteBuild {
   /** What System Settings lists this build as. */
   readonly settingsName: string
+  /** The other app that row belongs to, when this build is listed under what started it. */
+  readonly startedFrom?: string | null
   readonly sourceBuild: boolean
   /** `self`: it can relaunch itself. `by-hand`: someone has to start it again. */
   readonly restart: 'self' | 'by-hand'
@@ -184,6 +187,10 @@ export function lastSeenWords(at: number | null, now: number): string {
 
 const buildName = (build: RemoteBuild): string => (build.sourceBuild ? 'this source build' : 'Cookrew')
 
+/** Why the row is not Cookrew, and that the switch reaches past it. */
+const listedWords = (build: RemoteBuild): string =>
+  build.startedFrom ? ` macOS lists ${buildName(build)} under ${build.startedFrom}, which started it, so the switch covers everything started from ${build.startedFrom}.` : ''
+
 const AGENTS_STAY = 'Agents keep running: their terminals live outside Cookrew and reconnect when it is back. Asks in flight are cut off and marked interrupted.'
 
 function agentsLine(build: RemoteBuild): string {
@@ -252,9 +259,9 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
     case 'locked':
       return plain('This Mac is locked', `It needs someone at the Mac to unlock it, and the picture comes back by itself${seen}.`, true)
     case 'needs-screen-recording':
-      return permissionView(state, where, 'Screen Recording is off', 'open-screen-settings', `Turn on ${name} in ${SCREEN_PANE}.`)
+      return permissionView(state, where, 'Screen Recording is off', 'open-screen-settings', `Turn on ${name} in ${SCREEN_PANE}.${listedWords(state.build)}`)
     case 'needs-accessibility':
-      return permissionView(state, where, 'Accessibility is off', 'open-accessibility-settings', `Turn on ${name} in ${ACCESSIBILITY_PANE} to control this Mac.`)
+      return permissionView(state, where, 'Accessibility is off', 'open-accessibility-settings', `Turn on ${name} in ${ACCESSIBILITY_PANE} to control this Mac.${listedWords(state.build)}`)
     case 'needs-restart':
       return restartView(state, where)
     case 'display-asleep':
@@ -307,7 +314,7 @@ export function parseRemoteState(raw: unknown): RemoteState | null {
   return {
     id: s.id as RemoteStateId,
     platform: s.platform,
-    build: { settingsName, sourceBuild: build.sourceBuild === true, restart: build.restart, agents: build.agents },
+    build: { settingsName, startedFrom: text(build.startedFrom, 64), sourceBuild: build.sourceBuild === true, restart: build.restart, agents: build.agents },
     then: IDS.includes(s.then as RemoteStateId) ? (s.then as RemoteStateId) : null,
     detail: text(s.detail, 400),
     lastSeenAt: time(s.lastSeenAt),

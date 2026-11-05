@@ -239,7 +239,7 @@ import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
 import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
 import { parseUseUrl } from '../shared/use-url'
-import { readMacSession } from './mac-bridge'
+import { readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
@@ -6402,6 +6402,13 @@ const browserCacheRoot = (): string =>
 const sessionReader = createSessionReader({
   read: () => (process.platform === 'darwin' ? readMacSession() : linuxSession(process.env, commandRun))
 })
+// Fixed for the life of this process, and read once: it is a helper process.
+let listedApp: string | null = null
+if (process.platform === 'darwin') {
+  void readMacListedApp().then((bundle) => {
+    listedApp = bundle
+  })
+}
 let keepAwakeId: number | null = null
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
@@ -6410,7 +6417,8 @@ const remoteDesk = createRemoteDesk({
       execPath: process.execPath,
       packaged: app.isPackaged,
       persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
-      servedLive: servedSpawnContexts.size > 0
+      servedLive: servedSpawnContexts.size > 0,
+      listedApp
     }),
   linuxRefusal: () => linuxScreenRefusal(process.env),
   screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),

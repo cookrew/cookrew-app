@@ -77,10 +77,13 @@ export async function linuxSession(env: { XDG_SESSION_ID?: string }, run: Comman
   return { locked: lock.trim() === 'yes', displayAsleep: /Monitor is (Off|Suspend|Standby)/.test(display), grant: null }
 }
 
-export function remoteBuild(input: { execPath: string; packaged: boolean; persists: boolean; servedLive: boolean }): RemoteBuild {
-  const bundle = /([^/]+)\.app\/Contents\/MacOS\//.exec(input.execPath)?.[1]
+export function remoteBuild(input: { execPath: string; packaged: boolean; persists: boolean; servedLive: boolean; listedApp?: string | null }): RemoteBuild {
+  const own = /([^/]+)\.app\/Contents\/MacOS\//.exec(input.execPath)?.[1] ?? (input.packaged ? 'Cookrew' : 'Electron')
+  // System Settings shows the bundle's file name, not its CFBundleName.
+  const listed = /([^/]+)\.app$/.exec(input.listedApp ?? '')?.[1] ?? own
   return {
-    settingsName: bundle ?? (input.packaged ? 'Cookrew' : 'Electron'),
+    settingsName: listed,
+    startedFrom: listed === own ? null : listed,
     sourceBuild: !input.packaged,
     // A source build is the child of a dev server: relaunched alone it has no renderer to load.
     restart: input.packaged ? 'self' : 'by-hand',

@@ -89,6 +89,20 @@ const session = ObjC.deepUnwrap($.CGSessionCopyCurrentDictionary()) || {}
 JSON.stringify({ locked: session.CGSSessionScreenIsLocked === true || session.kCGSSessionOnConsoleKey === false, displayAsleep: $.CGDisplayIsAsleep($.CGMainDisplayID()), grant: $.CGPreflightScreenCaptureAccess() })
 `
 
+/**
+ * Which app macOS holds responsible for this process. A permission belongs to
+ * that app, and it follows the launch: started from a terminal it is the
+ * terminal, whatever bundle the binary sits in. A child inherits it, so this
+ * helper reads the same answer main would.
+ */
+const LISTED_APP_SCRIPT = `
+ObjC.import('AppKit')
+ObjC.bindFunction('getpid', ['int', []])
+ObjC.bindFunction('responsibility_get_pid_responsible_for_pid', ['int', ['int']])
+const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier($.responsibility_get_pid_responsible_for_pid($.getpid()))
+app.isNil() || app.bundleURL.isNil() ? '' : app.bundleURL.path.js
+`
+
 export const MAC_INPUT_SCRIPT = `
 ObjC.import('Foundation'); ObjC.import('CoreGraphics'); ObjC.import('AppKit')
 ObjC.bindFunction('CGSessionCopyCurrentDictionary', ['id', []])
@@ -163,6 +177,15 @@ export function readMacSession(timeoutMs = 4000): Promise<MacSessionFacts> {
       } catch {
         reject(new Error("could not read the answer about this Mac's session"))
       }
+    })
+  })
+}
+
+/** The bundle System Settings files this process's permissions under. Null when nothing can say: the name falls back on the binary's own bundle. */
+export function readMacListedApp(timeoutMs = 4000): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(OSASCRIPT, ['-l', 'JavaScript', '-e', LISTED_APP_SCRIPT], { timeout: timeoutMs }, (error, stdout) => {
+      resolve(error ? null : String(stdout).trim() || null)
     })
   })
 }
