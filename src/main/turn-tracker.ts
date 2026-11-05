@@ -788,6 +788,8 @@ export class TurnTracker extends EventEmitter {
    * something to have proven the file path works for it.
    */
   private fileBacked = new Set<string>()
+  /** Terminals rested on a turn their file had not closed: the rest lands when it does (restOf). */
+  private owedRest = new Set<string>()
 
   /**
    * terminalId → the dispatch its NEXT completed turn answers (v4 §3). Set by
@@ -1245,6 +1247,7 @@ export class TurnTracker extends EventEmitter {
     ) {
       this.openTurnFacts.delete(terminalId)
     }
+    if (tail?.final === true && this.owedRest.delete(terminalId)) this.settleRest(terminalId, tail)
     const t = this.tracked.get(terminalId)
     if (t) this.push(t)
     this.ensureBackfillPump()
@@ -2018,6 +2021,7 @@ export class TurnTracker extends EventEmitter {
   /** Forget a removed terminal's turns (node deletion, not detach). */
   clearHistory(terminalId: string): void {
     this.histories.delete(terminalId)
+    this.owedRest.delete(terminalId)
     this.snapshots.delete(terminalId)
     this.store?.remove(terminalId)
     this.scrapeHistory?.forget(terminalId)
@@ -2115,8 +2119,9 @@ export class TurnTracker extends EventEmitter {
     // cards render ask+reply from tracker state, which would otherwise come
     // back blank-idle even though history survived on disk. An unread last
     // turn returns as 'replied' (TURN COMPLETE) — a restart must not count
-    // as acknowledgement. A mid-turn agent self-heals to 'thinking' from its
-    // live spinner output moments later.
+    // as acknowledgement; one its file has not closed rests instead (restOf).
+    // A mid-turn agent self-heals to 'thinking' from its live spinner output
+    // moments later.
     if (agent) {
       const history = this.liveHistory(session.terminalId)
       const last = history[history.length - 1]
@@ -2124,7 +2129,7 @@ export class TurnTracker extends EventEmitter {
         t.prompt = last.prompt
         t.reply = last.reply
         t.title = last.title ?? null
-        t.phase = last.seenAt === undefined ? 'replied' : 'idle'
+        t.phase = this.restOf(session.terminalId, last)
       }
     }
     session.on('input', t.onInput)
@@ -2331,8 +2336,53 @@ export class TurnTracker extends EventEmitter {
 
   /** What a mirrorless terminal rests at: unread reply, else idle. */
   private restingPhase(terminalId: string): TurnPhase {
-    const last = this.liveHistory(terminalId).at(-1)
-    return last && last.seenAt === undefined ? 'replied' : 'idle'
+    return this.restOf(terminalId, this.liveHistory(terminalId).at(-1))
+  }
+
+  /**
+   * The agent's own file has not closed its last turn. Only a file-backed
+   * record can say so: a scrape record is minted when its turn ended and
+   * carries no `final`. Reads the loaded history alone, because the gate asks
+   * this of every terminal on every sweep and liveHistory would hydrate a ledger
+   * for each. Open is not running: Claude marks no interrupted turn, which is
+   * why the pane decides that (backend-phase-gate.ts).
+   */
+  turnOpen(terminalId: string): boolean {
+    if (!this.fileBacked.has(terminalId)) return false
+    const last = this.histories.get(terminalId)?.at(-1)
+    return last !== undefined && last.final !== true
+  }
+
+  /**
+   * What a terminal rests at on this record. An unread turn is a reply only
+   * once it has ended (owner, 2026-11-05: after a restart a running agent read
+   * DONE, its open turn taken for an unread reply). An open turn rests, and the
+   * reply it may yet be is owed: herdr can fall quiet before the file is read,
+   * so afterCommit lands it with the finality.
+   */
+  private restOf(terminalId: string, last: TurnRecord | undefined): TurnPhase {
+    if (!last || last.seenAt !== undefined) return 'idle'
+    if (!this.turnOpen(terminalId)) return 'replied'
+    this.owedRest.add(terminalId)
+    return 'idle'
+  }
+
+  /** A turn rested as open has closed: the card takes the rest it was owed. */
+  private settleRest(terminalId: string, last: TurnRecord): void {
+    const t = this.tracked.get(terminalId)
+    if (t) {
+      // A running turn is its own truth, and afterCommit pushes what changes here.
+      if (t.phase !== 'idle') return
+      t.prompt = last.prompt
+      t.reply = last.reply
+      t.title = last.title ?? null
+      t.phase = this.restOf(terminalId, last)
+      return
+    }
+    // herdr still says working: its own retraction reads the closed turn.
+    if (this.backendPhase.has(terminalId)) return
+    // A session file means an agent, so nothing here asks.
+    this.announce(this.backendActivity(terminalId, this.restOf(terminalId, last), true))
   }
 
   /**
@@ -3264,7 +3314,7 @@ export class TurnTracker extends EventEmitter {
     t.prompt = last?.prompt ?? null
     t.reply = last?.reply ?? null
     t.title = last?.title ?? null
-    t.phase = last && last.seenAt === undefined ? 'replied' : 'idle'
+    t.phase = this.restOf(t.session.terminalId, last)
     this.push(t)
   }
 

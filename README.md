@@ -20,7 +20,7 @@ same crew, and every agent gets a `cookrew` CLI to talk to the others.
 There is no Intel Mac or Linux release. Windows is a preview: agents end when the app
 closes, and the `cookrew` CLI is not supported there.
 
-> **Not notarized yet.** Releases up to and including 0.4.0 are unsigned, so macOS
+> **Not notarized yet.** Releases up to and including 0.5.0 are unsigned, so macOS
 > stops them on first launch. Until a release says it is notarized, drag Cookrew to
 > Applications and clear the quarantine flag before opening it:
 >
@@ -28,8 +28,9 @@ closes, and the `cookrew` CLI is not supported there.
 > xattr -dr com.apple.quarantine /Applications/Cookrew.app
 > ```
 >
-> The 0.4.0 download also leaves `cookrew` out of its terminals. The next release
-> fixes that.
+> An unsigned Mac build cannot install its own updates: it tells you when a new
+> release is out, in the ⋯ menu, and opens the download page. The 0.4.0 download
+> also leaves `cookrew` out of its terminals; 0.5.0 fixes that.
 
 ## Requirements
 

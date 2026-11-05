@@ -2557,7 +2557,8 @@ const herdrPhases = createBackendPhaseGate({
     return status ? backendPhaseOf(status) : null
   },
   apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent),
-  menu: readPaneMenu
+  menu: readPaneMenu,
+  turnOpen: (terminalId) => turns.turnOpen(terminalId)
 })
 
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {

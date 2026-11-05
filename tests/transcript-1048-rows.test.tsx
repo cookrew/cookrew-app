@@ -112,11 +112,16 @@ async function renderRows(count: number): Promise<{ markup: string; ms: number }
 
 describe('the overlay with 1,048 rows', () => {
   it('costs LINEARLY in the rows, and never a freeze', async () => {
-    // Warm the module graph and the JIT, then measure both sizes back to back
-    // so machine load lands on each of them equally.
+    // Warm the module graph and the JIT, then keep each size's best of three,
+    // back to back: a busy machine only ever adds time, and at a few
+    // milliseconds one stall on a shared runner is the whole ratio.
     await renderRows(8)
-    const small = await renderRows(128)
-    const { markup, ms } = await renderRows(ROWS)
+    const best = async (count: number): Promise<{ markup: string; ms: number }> => {
+      const runs = [await renderRows(count), await renderRows(count), await renderRows(count)]
+      return runs.reduce((fastest, run) => (run.ms < fastest.ms ? run : fastest))
+    }
+    const small = await best(128)
+    const { markup, ms } = await best(ROWS)
     expect(markup.match(/data-checkpoint="/g) ?? []).toHaveLength(ROWS)
     expect(markup).toContain('data-checkpoint="1"')
     expect(markup).toContain(`data-checkpoint="${ROWS}"`)
