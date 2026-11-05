@@ -47,6 +47,9 @@ protocols:
 # process.resourcesPath. tests/release-signing.test.ts holds this list to main's
 # reads: 0.4.0 shipped without four of them, and a downloaded app had no
 # `cookrew` in any pane because the copy of a missing file threw.
+# KEEP THE RunAsNode FUSE ON if fuses are ever configured here. The `cookrew`
+# shim runs on this app's binary with ELECTRON_RUN_AS_NODE (src/main/cli-shim.ts).
+# With the fuse off that command opens a second instance of the app instead.
 extraResources:
   # The Mac's ear for Sous (resources/cr-listen, built at postinstall): a binary
   # main spawns.

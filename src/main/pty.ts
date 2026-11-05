@@ -19,6 +19,7 @@ import { confirmHerdrClaim, herdrSessionDir, processClaimDeps, releaseHerdrClaim
 import { reapOrphansOn } from './orphan-reap'
 import { harnessFor } from './harness'
 import { confinedSpawn } from './session-sandbox'
+import { cliWrapper, publishCliRuntime } from './cli-shim'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
@@ -1410,9 +1411,11 @@ export class PtyManager {
   /**
    * Install the CLI next to the socket so PATH injection finds `cookrew`.
    * The entry is a shell wrapper because a bare `cookrew` file with ESM
-   * `import`s would be parsed as CommonJS by node.
+   * `import`s would be parsed as CommonJS by node, and because it runs on this
+   * app's own binary rather than on a Node the machine may not have
+   * (cli-shim.ts).
    */
-  installCli(cliSource: string): void {
+  installCli(cliSource: string, runtime: string = process.execPath): void {
     // Publish the socket at a STABLE path so a `cookrew` on the system PATH can
     // find it without guessing.
     //
@@ -1424,6 +1427,7 @@ export class PtyManager {
     try {
       mkdirSync(COOKREW_HOME, { recursive: true })
       writeFileSync(path.join(COOKREW_HOME, 'socket'), this.socketPath)
+      publishCliRuntime(COOKREW_HOME, runtime)
     } catch (error) {
       // A missing pointer only costs the PATH-installed CLI its default; panes
       // still get COOKREW_SOCKET injected directly.
@@ -1435,7 +1439,7 @@ export class PtyManager {
     // Briefs and docs keep spelling `cookrew`, so one grep still finds them.
     for (const name of CLI_NAMES) {
       const wrapper = path.join(this.runtimeDir, name)
-      writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
+      writeFileSync(wrapper, cliWrapper(script, runtime))
       chmodSync(wrapper, 0o755)
     }
   }

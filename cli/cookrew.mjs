@@ -10,6 +10,11 @@ import { execFileSync, spawn } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import process from 'node:process'
 
+// The shim ran this on the app's own Electron (src/main/cli-shim.ts). That is
+// for this process alone: a command `secret exec` starts must not inherit it,
+// or any Electron app it opens comes up as a bare node.
+delete process.env.ELECTRON_RUN_AS_NODE
+
 function fail(message, exitCode = 1) {
   process.stderr.write(`cookrew: ${message}\n`)
   // Per-outcome exit codes for delivery failures (shared/ask-outcome.ts): a
