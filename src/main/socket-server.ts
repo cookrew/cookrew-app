@@ -1304,6 +1304,11 @@ function loginPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeD
   // Nothing is read here, so the rule's own "never readable from" loses a word.
   const refuse = (why: string): LoginRefused =>
     new LoginRefused(`refused: signing in is the owner's — ${why.replace('readable ', '')}`, LOGIN_EXIT.refused)
+  // The refusal a person on a windowless machine meets first, over SSH, so it
+  // says where to go rather than only what this shell is not.
+  if (!request.terminalId && typeof request.flags.as !== 'string') {
+    throw refuse('this shell is not a Cookrew terminal. Run it in a Shell card (cookrew recruit --preset Shell)')
+  }
   const pane = ownerPaneOf(request, deps, refuse)
   if (isServedPane(pane)) throw refuse('never from a served session')
   return pane

@@ -367,11 +367,11 @@ export type V3CopyId = keyof typeof V3_COPY
 export const CLI_COPY = {
   'gate.no-door': "refused: signing in is the owner's — this app has no account to sign in to",
   'gate.no-keyboard':
-    'refused: signing in needs a person at a terminal, typing at a hidden prompt, and this command has no keyboard. Run cookrew login yourself in a shell card.',
+    'refused: signing in needs a person at a terminal, typing at a hidden prompt, and this command has no keyboard. Run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
   'gate.agent-caller':
-    'refused: this was run by an agent. Signing in is for the owner: run cookrew login yourself in a shell card.',
+    'refused: this was run by an agent. Signing in is for the owner: run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
   'gate.agent-busy':
-    'refused: the agent in this pane is working, and signing in is for the owner. Run cookrew login yourself in a shell card.',
+    'refused: the agent in this pane is working, and signing in is for the owner. Run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
   'gate.held': 'refused: a sign-in is already open on this Mac. Finish it, or press Ctrl-C there.',
   'gate.not-open': 'refused: this connection has no sign-in open. Run cookrew login.',
 

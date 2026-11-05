@@ -131,7 +131,7 @@ Run `cookrew help` for the rest. Asking or checking an agent, reading or editing
 and driving a browser by name wires you to it. Verbs that restructure the crew, such as
 `connect`, `dismiss`, `team save` and `workspace switch`, are for the orch.
 
-`cookrew login` and `cookrew logout` are for you, not your agents: they run in a shell
+`cookrew login` and `cookrew logout` are for you, not your agents: they run in a Shell
 card, and the password is typed at a hidden prompt, never on the command line. Signing
 in adds the machine to your account, so it is also how a machine with no window joins.
 
