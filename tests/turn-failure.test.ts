@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { inkStatusOfRow, statusWord } from '../src/renderer/src/zoom/ink-status'
 import { cleanTurnLines } from '../src/shared/turn'
-import { turnFailure } from '../src/shared/turn-failure'
+import { refusalKind, turnFailure } from '../src/shared/turn-failure'
+import { REFUSED_COPY } from '../src/shared/first-run-copy'
 import { cleanModelName } from '../src/renderer/src/zoom-bar'
 
 /**
@@ -59,5 +60,27 @@ describe('a harness’s own timing line (C-8)', () => {
   it('is not the agent’s words', () => {
     expect(cleanTurnLines('Took 0.0s\nThe tests pass.')).toEqual(['The tests pass.'])
     expect(cleanTurnLines('Took a while to find it')).toEqual(['Took a while to find it'])
+  })
+})
+
+describe('what a refused turn says (N3)', () => {
+  it.each([
+    ['API Error: 400 Unable to generate parser for this template', 'request'],
+    ['stream error: unexpected status 400 Bad Request', 'request'],
+    ['API Error: 401 {"type":"error"}', 'key'],
+    ['■ unexpected status 403 Forbidden', 'key'],
+    ['Error: 429 rate limited', 'limit'],
+    ['  API Error (500 Internal Server Error)', 'service'],
+    ['API Error: Connection error.', 'reach'],
+    ['API Error: Request timed out.', 'reach'],
+    ['stream error: disconnected before completion', 'reach'],
+    ['stream error: something odd', 'service']
+  ] as const)('%s', (raw, kind) => {
+    expect(refusalKind(raw)).toBe(kind)
+    expect(REFUSED_COPY[kind]).toMatch(/^[A-Z].*\.$/)
+  })
+
+  it('has no provider’s words in the sentence: those go behind details', () => {
+    for (const kind of ['request', 'key', 'limit', 'service', 'reach'] as const) expect(REFUSED_COPY[kind]).not.toMatch(/API Error|status|template|[45]\d\d/)
   })
 })

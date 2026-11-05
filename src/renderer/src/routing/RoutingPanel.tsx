@@ -1,6 +1,7 @@
 import type { SetupRunning } from './setup-line-state'
 import { useEffect, useState } from 'react'
 import type { HarnessRow, RouteState } from '../../../shared/route'
+import { SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { ROUTING_COPY } from '../../../shared/route-view'
 import { Accounts, Harnesses, LiveRoutes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
@@ -34,6 +35,9 @@ export interface RoutingPanelProps {
   focusTick: number
   /** The Setup line still running, so its button says so and cannot be pressed twice. */
   running?: SetupRunning | null
+  /** A press found the Setup pane taken: `error` says so, and Stop clears it. */
+  stuck?: boolean
+  onStop?: () => void
   onSetDefault: (model: string | null) => void
   onSetSharedMcp?: (on: boolean) => void
   /** Why the last default pick or Setup line did nothing; one line under the status. */
@@ -47,7 +51,7 @@ export interface RoutingPanelProps {
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
-  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onSetSharedMcp, error, onAddToDock, names, onZoom, running = null } = props
+  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onSetSharedMcp, error, onAddToDock, names, onZoom, running = null, stuck = false, onStop } = props
   const [setupOpen, setSetupOpen] = useState(true)
   // A key line was typed: the fold opens so the paste has somewhere to land.
   useEffect(() => {
@@ -81,6 +85,15 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
           <>
             <StatusLine state={state} onRun={onRun} running={running} />
             <SignInLink running={running} />
+            {(running !== null || stuck) && onStop && (
+              <div className="cr-routing-stop" role="status">
+                {running?.asking === 'password' && <span>{SETUP_LINE_COPY.PASSWORD}</span>}
+                <span className="sp" />
+                <button type="button" className="cr-routing-btn" onClick={onStop}>
+                  {SETUP_LINE_COPY.STOP}
+                </button>
+              </div>
+            )}
             {error && (
               <div className="cr-routing-bad" role="alert">
                 {error}

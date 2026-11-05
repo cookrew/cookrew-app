@@ -15,3 +15,17 @@ export function turnFailure(turn: { readonly reply?: string | null; readonly lin
   const first = text.split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
   return FAILED_RE.test(first) ? first.slice(0, MAX) : null
 }
+
+const NOT_REACHED = /connect|timed? ?out|network|disconnect|fetch failed|ENOTFOUND|ECONN/i
+
+export type RefusalKind = 'request' | 'key' | 'limit' | 'service' | 'reach'
+
+/** Which sentence a refusal gets, read off the status in its words. */
+export function refusalKind(raw: string): RefusalKind {
+  const status = Number(raw.match(/\b[45]\d\d\b/)?.[0] ?? 0)
+  if (status === 401 || status === 403) return 'key'
+  if (status === 429) return 'limit'
+  if (status >= 500) return 'service'
+  if (status !== 0) return 'request'
+  return NOT_REACHED.test(raw) ? 'reach' : 'service'
+}

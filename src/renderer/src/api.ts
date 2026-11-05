@@ -1,7 +1,8 @@
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage, FirstTask } from '../../shared/first-run'
-import type { AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
+import type { AccessSimpleAnswer, AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
 import type { PreflightRow } from '../../shared/preflight'
+import type { SetupLineAsk, SetupLineNow, SetupLineRun, SetupStart } from '../../shared/setup-line'
 import type { UseSourceList, UseSourceOpened, UseSourcePick, UseSourceSettings } from '../../shared/use-sources'
 import type { RemoteAccess, RemoteAnswer, RemoteHostView } from '../../shared/remote-access'
 import type { StrayPane } from '../../shared/stray-pane'
@@ -985,10 +986,18 @@ export interface CookrewApi {
   /** Why this preset cannot start an agent now, or null when it can. */
   firstRunCanStart?: (preset: string) => Promise<string | null>;
   onFirstRun?: (cb: (view: { stage: FirstRunStage; task: FirstTask | null }) => void) => () => void;
+  /** Types a Setup line only at the pane's prompt (main/setup-line.ts). */
+  setupLineStart?: (ask: SetupLineAsk) => Promise<SetupStart>;
+  setupLineNow?: (terminalId: string, runId: string) => Promise<SetupLineNow>;
+  setupLineCurrent?: (terminalId: string) => Promise<SetupLineRun | null>;
   /** The person's own endpoint (shared/agent-access.ts). Never carries the key. */
   accessState?: () => Promise<AccessState>;
   accessSave?: (input: EndpointInput) => Promise<AccessSaveAnswer>;
   accessClear?: () => Promise<AccessState>;
+  /** Simple mode on, with no key typed, and this card started again. */
+  accessSimple?: (input: { terminalId: string }) => Promise<AccessSimpleAnswer>;
+  /** Is simple mode the fix for this card's refusals? */
+  accessSimpleOffer?: (terminalId: string) => Promise<boolean>;
   /** The one URL the popout draws as a QR, or null when there is none yet. */
   accountPairingUrl?: () => Promise<PairingHandout | null>;
   /** Phones this Mac has let in, listed beside the registry's devices. */
@@ -1080,7 +1089,7 @@ export interface CookrewApi {
   quitApp: () => void;
 }
 
-export type AccessSaveAnswer = { ok: true; state: AccessState } | { ok: false; field: EndpointField; why: string };
+export type AccessSaveAnswer = { ok: true; state: AccessState; moved?: boolean } | { ok: false; field: EndpointField; why: string };
 
 import { createDemoApi } from "./demo-api";
 import { createRemoteApi } from "./remote-api";

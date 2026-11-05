@@ -36,10 +36,29 @@ export const ACCESS_ROWS: readonly AccessRow[] = [
   { id: ENDPOINT_ID, title: 'Use your own endpoint', does: 'Any service that speaks the Anthropic or OpenAI API. You bring the address, key and model.', form: 'endpoint' }
 ]
 
+/** Where a pane's copy of the key is, which is what the form says about it. */
+export type AccessKeyStore = 'keychain' | 'file'
+
 /** What a screen may know: never the key. */
 export interface AccessState {
   readonly rows: readonly AccessRow[]
-  readonly active: { readonly id: string; readonly label: string; readonly protocol: AccessProtocol; readonly model: string; readonly host: string; readonly tools: readonly string[] } | null
+  readonly keyStore: AccessKeyStore
+  readonly active: AccessActive | null
+}
+
+/** Simple mode, turned on from a card. `restarted`: the card has started again on it. */
+export type AccessSimpleAnswer = { readonly ok: true; readonly restarted: boolean; readonly state: AccessState } | { readonly ok: false }
+
+export interface AccessActive {
+  readonly id: string
+  readonly label: string
+  readonly protocol: AccessProtocol
+  readonly model: string
+  readonly host: string
+  /** What the form opens on to edit it. */
+  readonly baseUrl: string
+  readonly simple: boolean
+  readonly tools: readonly string[]
 }
 
 export interface EndpointInput {
@@ -67,6 +86,11 @@ export function thirdPartyAnthropic(baseUrl: string): boolean {
   }
 }
 
+/** Claude Code on a third-party Anthropic-style address in full mode: the one refusal simple mode answers. */
+export function simpleModeHelps(preset: string, active: Pick<AccessActive, 'protocol' | 'baseUrl' | 'simple'> | null): boolean {
+  return preset === 'Claude Code' && active?.protocol === 'anthropic' && thirdPartyAnthropic(active.baseUrl) && !active.simple
+}
+
 /** The tools that can run on a source, as presets, the first agent's pick first. */
 export function accessTools(source: { readonly protocol: AccessProtocol; readonly baseUrl: string; readonly wire?: AccessWire; readonly simple?: boolean }): readonly string[] {
   if (source.protocol === 'anthropic') return thirdPartyAnthropic(source.baseUrl) && !source.simple ? ['Pi', 'Claude Code'] : ['Claude Code', 'Pi']
@@ -79,6 +103,8 @@ const KEY_RE = /^[\x21-\x7e]{1,4096}$/
 
 const refuse = (field: EndpointField, why: string): EndpointCheck => ({ ok: false, field, why })
 
+const blank = (value: unknown): boolean => value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
+
 /** What the harness will extend: Claude Code adds /v1/messages, Codex adds /responses to what it is given. */
 function normalised(url: URL, protocol: AccessProtocol): string {
   const trimmed = `${url.origin}${url.pathname}`.replace(/\/+$/, '')
@@ -90,6 +116,7 @@ export function checkEndpoint(input: unknown): EndpointCheck {
   const form = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
   const { protocol, baseUrl, key, model } = form
   if (protocol !== 'anthropic' && protocol !== 'openai') return refuse('protocol', 'Choose which API it speaks.')
+  if (blank(baseUrl)) return refuse('baseUrl', 'Address is empty. Type the service’s address.')
   let url: URL
   try {
     url = new URL(String(baseUrl ?? '').trim())
@@ -101,9 +128,13 @@ export function checkEndpoint(input: unknown): EndpointCheck {
   }
   if (url.username || url.password) return refuse('baseUrl', 'Put the key in its own field, not in the address.')
   if (url.search || url.hash) return refuse('baseUrl', 'The address cannot hold a ? or a #.')
+  if (blank(key)) return refuse('key', 'Key is empty. Paste the key from your service.')
+  if (blank(model)) return refuse('model', 'Model is empty. Type the model’s id, as the service names it.')
   const secret = typeof key === 'string' ? key.trim() : ''
   if (!KEY_RE.test(secret)) return refuse('key', 'Paste the key, with no spaces.')
   const name = typeof model === 'string' ? model.trim() : ''
   if (!MODEL_RE.test(name)) return refuse('model', 'Type the model’s id, as the service names it.')
-  return { ok: true, value: { protocol, baseUrl: normalised(url, protocol), key: secret, model: name, simple: form.simple === true } }
+  // The form shows the box only here, so a tick it hid must not stay behind.
+  const simple = form.simple === true && protocol === 'anthropic' && thirdPartyAnthropic(url.href)
+  return { ok: true, value: { protocol, baseUrl: normalised(url, protocol), key: secret, model: name, simple } }
 }

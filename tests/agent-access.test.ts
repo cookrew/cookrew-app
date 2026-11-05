@@ -1,18 +1,19 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { accessHandlers, ACCESS_CHANNELS, registerAccessIpc } from '../src/main/access-ipc'
-import { AccessStore, accessLaunch, probeEndpoint } from '../src/main/agent-access'
+import { AccessStore, accessLaunch, fileKey, paneKeyName, probeEndpoint } from '../src/main/agent-access'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
+import { macKeychain } from '../src/main/pane-keychain'
 import { createSecretsStore } from '../src/main/secrets-store'
 import { bootScript } from '../src/main/tmux-multiplexer'
 import { bootCommand, envArgs } from '../src/main/herdr-host-multiplexer'
 import { DirectMultiplexer } from '../src/main/direct-multiplexer'
-import { ACCESS_ROWS, accessTools, checkEndpoint, thirdPartyAnthropic, type AccessSource } from '../src/shared/agent-access'
+import { ACCESS_ROWS, accessTools, checkEndpoint, simpleModeHelps, thirdPartyAnthropic, type AccessSource, type EndpointInput } from '../src/shared/agent-access'
 
 /**
  * A PERSON WITH NO CLAUDE OR CODEX ACCOUNT HAS A ROAD: their own endpoint. The
@@ -108,7 +109,7 @@ describe('what a person types', () => {
 })
 
 describe('what an agent is launched with', () => {
-  const paths = { keyFile: '/keys/endpoint.key', piDir: '/keys/pi' }
+  const paths = { readKey: fileKey('/keys/endpoint.key'), piDir: '/keys/pi' }
 
   it('points Claude Code at the endpoint, its key behind a helper', () => {
     const launch = accessLaunch(source, 'claude', paths)
@@ -194,7 +195,7 @@ describe('the key is in no command line and in no process’s environment', () =
   })
 
   it('a folder with a space in it is quoted for the shell', () => {
-    const launch = accessLaunch(source, 'claude', { keyFile: "/Users/o'brien/a b/k", piDir: '/p' })
+    const launch = accessLaunch(source, 'claude', { readKey: fileKey("/Users/o'brien/a b/k"), piDir: '/p' })
     expect((JSON.parse(launch?.args[1] ?? '{}') as { apiKeyHelper: string }).apiKeyHelper).toBe(`/bin/cat '/Users/o'\\''brien/a b/k'`)
   })
 })
@@ -211,7 +212,7 @@ describe('where it is kept', () => {
   it('tells the screens everything but the key', () => {
     const store = storeIn()
     store.save(source, KEY)
-    expect(store.state().active).toEqual({ id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', tools: ['Pi', 'Claude Code'] })
+    expect(store.state().active).toEqual({ id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', baseUrl: 'https://api.example.com', simple: false, tools: ['Pi', 'Claude Code'] })
     expect(JSON.stringify(store.state())).not.toContain(KEY)
   })
 
@@ -221,11 +222,11 @@ describe('where it is kept', () => {
     store.save(source, KEY)
     store.launchFor('claude')
     store.launchFor('claude')
-    const file = path.join(root, 'keys', 'endpoint.key')
+    const file = path.join(root, 'keys', `${paneKeyName(source)}.key`)
     expect(readFileSync(file, 'utf8')).toBe(KEY)
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(statSync(path.dirname(file)).mode & 0o777).toBe(0o700)
-    expect(readdirSync(path.join(root, 'keys'))).toEqual(['endpoint.key'])
+    expect(readdirSync(path.join(root, 'keys'))).toEqual([`${paneKeyName(source)}.key`])
   })
 
   it('takes a new key at the next launch', () => {
@@ -234,7 +235,7 @@ describe('where it is kept', () => {
     store.save(source, KEY)
     store.save(source, 'another-fake-key')
     store.launchFor('claude')
-    expect(readFileSync(path.join(root, 'keys', 'endpoint.key'), 'utf8')).toBe('another-fake-key')
+    expect(readFileSync(path.join(root, 'keys', `${paneKeyName(source)}.key`), 'utf8')).toBe('another-fake-key')
   })
 
   it('is out of a served seat’s reach, like the sealed slots it copies', () => {
@@ -257,7 +258,7 @@ describe('where it is kept', () => {
     keeper.launchFor('claude')
     createSecretsStore({ baseDir: root }).remove('agent-access-endpoint')
     expect(keeper.launchFor('claude')).toBeNull()
-    expect(existsSync(path.join(root, 'keys', 'endpoint.key'))).toBe(false)
+    expect(existsSync(path.join(root, 'keys', `${paneKeyName(source)}.key`))).toBe(false)
   })
 
   it('drops the copy whichever harness comes next, once the secret is gone', () => {
@@ -267,7 +268,7 @@ describe('where it is kept', () => {
     keeper.launchFor('claude')
     createSecretsStore({ baseDir: root }).remove('agent-access-endpoint')
     expect(keeper.launchFor('codex')).toBeNull()
-    expect(existsSync(path.join(root, 'keys', 'endpoint.key'))).toBe(false)
+    expect(existsSync(path.join(root, 'keys', `${paneKeyName(source)}.key`))).toBe(false)
   })
 
   it('forgets all of it, launch files included', () => {
@@ -275,12 +276,157 @@ describe('where it is kept', () => {
     const store = storeIn(root)
     store.save(source, KEY)
     store.launchFor('claude')
-    const file = path.join(root, 'keys', 'endpoint.key')
+    const file = path.join(root, 'keys', `${paneKeyName(source)}.key`)
     expect(existsSync(file)).toBe(true)
     store.clear()
     expect(store.state().active).toBeNull()
     expect(existsSync(file)).toBe(false)
     expect(createSecretsStore({ baseDir: root }).read('agent-access-endpoint')).toBeNull()
+  })
+})
+
+describe('the keychain, where there is one (N4)', () => {
+  const fakeKeychain = (accepts = true) => {
+    const items = new Map<string, string>()
+    return {
+      items,
+      put: (name: string, value: string): boolean => (accepts ? (items.set(name, value), true) : false),
+      remove: (name: string): void => void items.delete(name),
+      reader: (name: string) => ({ command: '/usr/bin/security', args: ['find-generic-password', '-s', name, '-w'] })
+    }
+  }
+  const storeWith = (root: string, keychain: ReturnType<typeof fakeKeychain> | null): AccessStore =>
+    new AccessStore({ file: path.join(root, 'access.json'), keyDir: path.join(root, 'keys'), secrets: createSecretsStore({ baseDir: root }), keychain })
+  const NAME = paneKeyName(source)
+  const plainCopy = (root: string): string => path.join(root, 'keys', `${NAME}.key`)
+
+  it('leaves no plain copy: the pane reads the key from the keychain, by name', () => {
+    const root = dir()
+    const keychain = fakeKeychain()
+    const store = storeWith(root, keychain)
+    store.save(source, KEY)
+    const launch = store.launchFor('claude')
+    expect(existsSync(plainCopy(root))).toBe(false)
+    expect(keychain.items.get(NAME)).toBe(KEY)
+    expect((JSON.parse(launch?.args[1] ?? '{}') as { apiKeyHelper: string }).apiKeyHelper).toBe(`/usr/bin/security find-generic-password -s ${NAME} -w`)
+    expect(JSON.stringify(launch)).not.toContain(KEY)
+  })
+
+  it('says keychain, on a store that has one', () => {
+    const store = storeWith(dir(), fakeKeychain())
+    expect(store.state().keyStore).toBe('keychain')
+    store.save(source, KEY)
+    store.launchFor('pi')
+    expect(store.state().keyStore).toBe('keychain')
+  })
+
+  it('takes away the plain copy an earlier build left', () => {
+    const root = dir()
+    const old = storeWith(root, null)
+    old.save(source, KEY)
+    old.launchFor('claude')
+    expect(existsSync(plainCopy(root))).toBe(true)
+    storeWith(root, fakeKeychain()).launchFor('claude')
+    expect(existsSync(plainCopy(root))).toBe(false)
+  })
+
+  it('falls back to the private file when the keychain refuses, and then says file: no word promises more than happened', () => {
+    const root = dir()
+    const store = storeWith(root, fakeKeychain(false))
+    store.save(source, KEY)
+    const launch = store.launchFor('claude')
+    expect(readFileSync(plainCopy(root), 'utf8')).toBe(KEY)
+    expect((JSON.parse(launch?.args[1] ?? '{}') as { apiKeyHelper: string }).apiKeyHelper).toContain('/bin/cat')
+    expect(store.state().keyStore).toBe('file')
+  })
+
+  it('says file where there is no keychain to use', () => {
+    expect(storeWith(dir(), null).state().keyStore).toBe('file')
+  })
+
+  it('takes away the plain copy under the old one-name file too', () => {
+    const root = dir()
+    const store = storeWith(root, fakeKeychain())
+    store.save(source, KEY)
+    mkdirSync(path.join(root, 'keys'), { recursive: true })
+    writeFileSync(path.join(root, 'keys', 'endpoint.key'), KEY)
+    store.launchFor('claude')
+    expect(existsSync(path.join(root, 'keys', 'endpoint.key'))).toBe(false)
+  })
+
+  it('forgets the item with the rest', () => {
+    const keychain = fakeKeychain()
+    const store = storeWith(dir(), keychain)
+    store.save(source, KEY)
+    store.launchFor('claude')
+    store.clear()
+    expect(keychain.items.size).toBe(0)
+  })
+
+  it('drops the item once the secret is gone, as it does the file', () => {
+    const root = dir()
+    const keychain = fakeKeychain()
+    const store = storeWith(root, keychain)
+    store.save(source, KEY)
+    store.launchFor('claude')
+    createSecretsStore({ baseDir: root }).remove('agent-access-endpoint')
+    expect(store.launchFor('claude')).toBeNull()
+    expect(keychain.items.size).toBe(0)
+  })
+
+  it('keeps a harness with no launch from touching the keychain', () => {
+    const keychain = fakeKeychain()
+    const store = storeWith(dir(), keychain)
+    store.save(source, KEY)
+    expect(store.launchFor('opencode')).toBeNull()
+    expect(keychain.items.size).toBe(0)
+  })
+
+  it('is out of a served seat’s reach: on today’s rules a seat could read it, measured with a canary', () => {
+    expect(ownerSecretPaths('/Users/owner/.cookrew', '/Users/owner')).toContain('/Users/owner/Library/Keychains')
+  })
+})
+
+describe('the Mac’s keychain, as the security tool takes it', () => {
+  const rig = (reads = KEY) => {
+    const calls: { args: readonly string[]; input?: string }[] = []
+    const keychain = macKeychain((args, input) => {
+      calls.push({ args, input })
+      if (args.includes('find-generic-password')) return `${reads}\n`
+      return ''
+    })
+    return { keychain, calls }
+  }
+
+  it('hands the key over stdin as hex: never in an argument, where ps shows it', () => {
+    const { keychain, calls } = rig()
+    expect(keychain.put('agent-access-endpoint', KEY)).toBe(true)
+    const write = calls[0]
+    expect(write.args).toEqual(['-i'])
+    expect(JSON.stringify(calls.map((call) => call.args))).not.toContain(KEY)
+    expect(write.input).toContain(Buffer.from(KEY).toString('hex'))
+    expect(write.input).not.toContain(KEY)
+    expect(write.input).toContain('-T /usr/bin/security')
+  })
+
+  it('counts it as kept only once the pane’s own read gives it back', () => {
+    expect(rig('something else').keychain.put('agent-access-endpoint', KEY)).toBe(false)
+  })
+
+  it('reads a failed tool as not kept, and never throws', () => {
+    const keychain = macKeychain(() => {
+      throw new Error('keychain locked')
+    })
+    expect(keychain.put('agent-access-endpoint', KEY)).toBe(false)
+    expect(() => keychain.remove('agent-access-endpoint')).not.toThrow()
+  })
+
+  it('reads with an absolute path, so a pane’s PATH cannot change what runs', () => {
+    expect(rig().keychain.reader('agent-access-endpoint').command).toBe('/usr/bin/security')
+  })
+
+  it('is not the old secrets item: secrets-store migrates those away', () => {
+    expect(rig().keychain.reader('agent-access-endpoint').args.join(' ')).not.toContain('cookrew-secret-')
   })
 })
 
@@ -327,6 +473,158 @@ describe('asking the endpoint, against a fake on loopback', () => {
   })
 })
 
+describe('changing a saved endpoint (N3)', () => {
+  const FORM = { protocol: 'anthropic', baseUrl: 'https://a.example', key: KEY, model: 'm' }
+  const saved = async () => {
+    const store = storeIn()
+    const asked: EndpointInput[] = []
+    const respawned: string[] = []
+    const handlers = accessHandlers({
+      store,
+      probe: async (input) => ((asked.push(input)), { ok: true }),
+      respawn: async (id) => ((respawned.push(id)), true)
+    })
+    await handlers.save(FORM)
+    return { store, handlers, asked, respawned }
+  }
+
+  it('tells a screen what it needs to edit, and never the key', async () => {
+    const { store } = await saved()
+    expect(store.state().active).toMatchObject({ baseUrl: 'https://a.example', model: 'm', simple: false })
+    expect(JSON.stringify(store.state())).not.toContain(KEY)
+  })
+
+  it('keeps the saved key when the field is left empty, and asks the endpoint with it', async () => {
+    const { store, handlers, asked } = await saved()
+    expect(await handlers.save({ ...FORM, key: '', model: 'm-2', simple: true })).toMatchObject({ ok: true })
+    expect(asked.at(-1)).toMatchObject({ key: KEY, model: 'm-2' })
+    expect(store.active()).toMatchObject({ model: 'm-2', simple: true })
+    expect(store.savedKey()).toBe(KEY)
+  })
+
+  it('takes a new key when one is pasted', async () => {
+    const { store, handlers } = await saved()
+    await handlers.save({ ...FORM, key: 'another-key-456' })
+    expect(store.savedKey()).toBe('another-key-456')
+  })
+
+  it('never sends the saved key to a new address: it was given for the old one', async () => {
+    const { handlers, asked } = await saved()
+    const answer = await handlers.save({ ...FORM, baseUrl: 'https://elsewhere.example', key: '' })
+    expect(answer).toMatchObject({ ok: false, field: 'key' })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('names an empty Address on an edit, rather than asking for a key (N8)', async () => {
+    const { handlers } = await saved()
+    expect(await handlers.save({ ...FORM, baseUrl: '  ', key: '' })).toMatchObject({ ok: false, field: 'baseUrl' })
+  })
+
+  it('still asks for a key when nothing is saved', async () => {
+    const handlers = accessHandlers({ store: storeIn(), probe: async () => ({ ok: true }) })
+    expect(await handlers.save({ ...FORM, key: '' })).toMatchObject({ ok: false, field: 'key' })
+  })
+
+  it('turns simple mode on with no key typed and no probe, then restarts the card that needs it', async () => {
+    const { store, handlers, asked, respawned } = await saved()
+    const answer = await handlers.simple({ terminalId: 't1' })
+    expect(answer).toMatchObject({ ok: true, restarted: true })
+    expect(store.active()?.simple).toBe(true)
+    expect(store.savedKey()).toBe(KEY)
+    expect(asked).toHaveLength(1)
+    expect(respawned).toEqual(['t1'])
+  })
+
+  it('says so when the card could not be restarted, with simple mode still saved', async () => {
+    const store = storeIn()
+    const handlers = accessHandlers({ store, probe: async () => ({ ok: true }), respawn: async () => false })
+    await handlers.save(FORM)
+    expect(await handlers.simple({ terminalId: 't1' })).toMatchObject({ ok: true, restarted: false })
+    expect(store.active()?.simple).toBe(true)
+  })
+
+  it('has nothing to turn on with no endpoint, or a bad ask', async () => {
+    const handlers = accessHandlers({ store: storeIn(), probe: async () => ({ ok: true }), respawn: async () => true })
+    expect(await handlers.simple({ terminalId: 't1' })).toMatchObject({ ok: false })
+    const { handlers: live } = await saved()
+    expect(await live.simple({ terminalId: 7 })).toMatchObject({ ok: false })
+  })
+})
+
+describe('a key goes only to the address it was given for, a running pane included', () => {
+  // A pane's address is fixed when it starts, and it reads its key by name each time.
+  // One name for every address sent key B to host A from a card still running on A.
+  const fake = () => {
+    const items = new Map<string, string>()
+    return { items, put: (name: string, value: string): boolean => (items.set(name, value), true), remove: (name: string): void => void items.delete(name), reader: (name: string) => ({ command: '/usr/bin/security', args: ['-s', name] }) }
+  }
+  const moved = { ...source, baseUrl: 'https://elsewhere.example' }
+  const inStore = (root: string, keychain: ReturnType<typeof fake> | null): AccessStore =>
+    new AccessStore({ file: path.join(root, 'access.json'), keyDir: path.join(root, 'keys'), secrets: createSecretsStore({ baseDir: root }), keychain })
+
+  it('names the copy by its address', () => {
+    expect(paneKeyName(source)).not.toBe(paneKeyName(moved))
+    expect(paneKeyName(source)).toBe(paneKeyName({ ...source, baseUrl: 'https://api.example.com/v2' }))
+    expect(paneKeyName(source)).toMatch(/^[a-z0-9-]+$/)
+  })
+
+  it('in the keychain: the old pane finds nothing, and never the new key', () => {
+    const keychain = fake()
+    const store = inStore(dir(), keychain)
+    store.save(source, KEY)
+    store.launchFor('claude')
+    store.save(moved, 'key-for-elsewhere')
+    expect(keychain.items.has(paneKeyName(source))).toBe(false)
+    store.launchFor('claude')
+    expect(keychain.items.has(paneKeyName(source))).toBe(false)
+    expect(keychain.items.get(paneKeyName(moved))).toBe('key-for-elsewhere')
+  })
+
+  it('in a file: the same', () => {
+    const root = dir()
+    const store = inStore(root, null)
+    store.save(source, KEY)
+    store.launchFor('claude')
+    store.save(moved, 'key-for-elsewhere')
+    store.launchFor('claude')
+    expect(readdirSync(path.join(root, 'keys'))).toEqual([`${paneKeyName(moved)}.key`])
+  })
+
+  it('a new key for the same address takes the same place: it is the same host', () => {
+    const keychain = fake()
+    const store = inStore(dir(), keychain)
+    store.save(source, KEY)
+    store.launchFor('claude')
+    store.save(source, 'rotated-key')
+    store.launchFor('claude')
+    expect(keychain.items.get(paneKeyName(source))).toBe('rotated-key')
+  })
+
+  it('tells a screen when running agents were left behind', async () => {
+    const handlers = accessHandlers({ store: storeIn(), probe: async () => ({ ok: true }) })
+    const FORM = { protocol: 'anthropic', baseUrl: 'https://a.example', key: KEY, model: 'm' }
+    expect(await handlers.save(FORM)).toMatchObject({ ok: true, moved: false })
+    expect(await handlers.save({ ...FORM, model: 'm-2' })).toMatchObject({ ok: true, moved: false })
+    expect(await handlers.save({ ...FORM, baseUrl: 'https://b.example' })).toMatchObject({ ok: true, moved: true })
+  })
+})
+
+describe('whether simple mode is the fix for a card (N3)', () => {
+  const active = { id: 'endpoint', label: 'x', protocol: 'anthropic', model: 'm', host: 'a.example', baseUrl: 'https://a.example', simple: false, tools: ['Pi', 'Claude Code'] } as const
+
+  it('is for Claude Code on a third-party Anthropic-style endpoint without it', () => {
+    expect(simpleModeHelps('Claude Code', active)).toBe(true)
+  })
+
+  it('is not for another tool, simple mode already on, Anthropic itself, an OpenAI-style source, or no source', () => {
+    expect(simpleModeHelps('Pi', active)).toBe(false)
+    expect(simpleModeHelps('Claude Code', { ...active, simple: true })).toBe(false)
+    expect(simpleModeHelps('Claude Code', { ...active, baseUrl: 'https://api.anthropic.com' })).toBe(false)
+    expect(simpleModeHelps('Claude Code', { ...active, protocol: 'openai' })).toBe(false)
+    expect(simpleModeHelps('Claude Code', null)).toBe(false)
+  })
+})
+
 describe('the bridge', () => {
   it('registers exactly the channel table', () => {
     const registered: string[] = []
@@ -355,5 +653,40 @@ describe('the bridge', () => {
     await accessHandlers({ store, probe: async () => ({ ok: true }) }).save({ protocol: 'anthropic', baseUrl: 'https://a.example', key: KEY, model: 'm', simple: true })
     expect(store.active()?.simple).toBe(true)
     expect(handlers.clear().active).toBeNull()
+  })
+})
+
+describe('simple mode is only ever kept where the form shows it', () => {
+  const FORM = { protocol: 'anthropic', key: KEY, model: 'm', simple: true }
+
+  it('stays on a third-party address', () => {
+    expect(checkEndpoint({ ...FORM, baseUrl: 'https://a.example' })).toMatchObject({ value: { simple: true } })
+  })
+
+  it('goes on Anthropic’s own address, or an OpenAI-style one, where the box is hidden', () => {
+    expect(checkEndpoint({ ...FORM, baseUrl: 'https://api.anthropic.com' })).toMatchObject({ value: { simple: false } })
+    expect(checkEndpoint({ ...FORM, protocol: 'openai', baseUrl: 'https://a.example/v1' })).toMatchObject({ value: { simple: false } })
+  })
+})
+
+describe('an empty field is named (N8)', () => {
+  const FORM = { protocol: 'anthropic', baseUrl: 'https://a.example', key: KEY, model: 'm' }
+
+  it.each([
+    ['baseUrl', 'Address'],
+    ['key', 'Key'],
+    ['model', 'Model']
+  ] as const)('%s', (field, word) => {
+    const check = checkEndpoint({ ...FORM, [field]: '   ' })
+    expect(check).toMatchObject({ ok: false, field })
+    if (!check.ok) expect(check.why).toMatch(new RegExp(`^${word} is empty`))
+  })
+
+  it('names the first of several, top to bottom', () => {
+    expect(checkEndpoint({ ...FORM, baseUrl: '', model: '' })).toMatchObject({ field: 'baseUrl' })
+  })
+
+  it('reads a missing field as an empty one', () => {
+    expect(checkEndpoint({ protocol: 'anthropic' })).toMatchObject({ ok: false, field: 'baseUrl' })
   })
 })

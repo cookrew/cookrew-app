@@ -1,3 +1,4 @@
+import { TOOL_NOTES } from './first-run-copy'
 import type { CardRouteState, HarnessRow, RouteDecision, RouteModel, RouteQuota, RouteState } from './route'
 
 /**
@@ -58,7 +59,8 @@ export function statusLine(state: RouteState): StatusLine {
     // A why is a file the owner wrote (a refused gateway host): nothing to
     // install, something to fix — so the line says it and offers no button.
     if (state.why) return { status: 'absent', text: `not routing — ${state.why}`, action: null, source: null }
-    return { status: 'absent', text: ROUTING_COPY.absent, action: { label: ROUTING_COPY.install, line: state.setup.installLine }, source: null }
+    const text = state.setup.installAsksAdmin ? `${ROUTING_COPY.absent} · ${TOOL_NOTES.ADMIN}` : ROUTING_COPY.absent
+    return { status: 'absent', text, action: { label: ROUTING_COPY.install, line: state.setup.installLine }, source: null }
   }
   if (state.status === 'offline') {
     return { status: 'offline', text: ROUTING_COPY.offline, action: { label: ROUTING_COPY.start, line: state.setup.serveLine }, source: null }

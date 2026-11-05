@@ -1,28 +1,28 @@
+import type { SetupAsking } from '../../../shared/setup-line'
+
 /**
- * A TYPED SETUP LINE, WATCHED UNTIL THE PROMPT COMES BACK.
+ * WHAT A SCREEN SAYS OF A SETUP LINE WHILE IT RUNS.
  *
- * A button types one line into the Setup card and the card runs it. While
- * it runs, the button that typed it says so with the pane's last line — "Finish
- * signing in in your browser" — and refuses the same line a second time:
- * today the owner clicked ADD → Subscription twice while an OAuth waited in
- * the browser. Pure over the PTY's bytes; the hook attaches and feeds chunks.
+ * A button types one line into the Setup card and the card runs it. While it
+ * runs, the button that typed it says so and refuses the same line a second
+ * time: today the owner clicked ADD → Subscription twice while an OAuth waited
+ * in the browser.
  *
- * The watch waits for the shell to ECHO the line before it believes a
- * prompt: a fresh attach can replay an old prompt first.
+ * Main says when the line ended and what the pane shows (main/setup-line.ts);
+ * nothing here decides either. tmux's status bar arrives in the PTY's stream, so
+ * the stream can neither end a line nor word a button. It is read for one thing:
+ * the page a sign-in printed, because a phone has no other way to that page.
  */
 
 export interface LineWatch {
   line: string
-  /** The shell has echoed the line; prompts before that are old. */
-  echoed: boolean
   /** The pane's recent text, control sequences stripped. */
   tail: string
-  done: boolean
 }
 
 export interface SetupRunning {
   line: string
-  /** The pane's last non-empty line, for the button. */
+  /** The pane's last non-empty line, as main read it, for the button. */
   lastLine: string
   /** The pane asked for a browser sign-in. */
   oauth: boolean
@@ -32,12 +32,13 @@ export interface SetupRunning {
    * a phone the only way to the page is to be handed its address.
    */
   url: string | null
+  /** The pane stopped on a password prompt. */
+  asking?: SetupAsking
 }
 
 const TAIL_MAX = 4000
 // CSI, OSC and lone ESC sequences; carriage returns become newlines.
-const CONTROL = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|\r/g
-const PROMPT_END = /(?:^|\s)[$%❯›>#]\s*$/
+const CONTROL = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[@-Z\\-_]|\r/g
 /**
  * A SIGN-IN IS A SIGN-IN WORD AND A PAGE TO OPEN. Words alone were the old
  * test and they misfired on the owner's phone: START types `magpie autostart
@@ -52,20 +53,11 @@ const URL_RE = /https?:\/\/[^\s'"<>`]+/g
 const LOCAL = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i
 
 export function startedLine(line: string): LineWatch {
-  return { line, echoed: false, tail: '', done: false }
+  return { line, tail: '' }
 }
 
 export function cleanOutput(chunk: string): string {
   return chunk.replace(CONTROL, (m) => (m === '\r' ? '\n' : ''))
-}
-
-export function lastLine(tail: string): string {
-  const lines = tail.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
-  return lines.length === 0 ? '' : lines[lines.length - 1]
-}
-
-export function promptReturned(line: string): boolean {
-  return PROMPT_END.test(line)
 }
 
 /** The last page to open in what the pane printed, trailing punctuation dropped; null when none. */
@@ -78,37 +70,27 @@ export function oauthPending(text: string): boolean {
   return SIGN_IN.test(text) && signInUrl(text) !== null
 }
 
-/** What the pane said AFTER echoing the line: the typed line's own URL is not an answer. */
-function answerOf(watch: LineWatch): string {
-  const at = watch.tail.indexOf(watch.line)
-  return at < 0 ? (watch.echoed ? watch.tail : '') : watch.tail.slice(at + watch.line.length)
-}
-
 /**
- * tmux's status bar (pty.ts · TMUX_CONF) arrives in the pane's stream, last, with
- * only cursor moves between it and the prompt. Left in, the prompt was never the
- * last line, the button stuck on running, and every Install stayed disabled.
+ * What the pane said after the line itself: the line's own URL is not an answer.
+ * A long line comes back wrapped, so its text may not be found, and its URLs go by name.
  */
-const withoutStatusBar = (text: string): string => text.replace(/[ \t]*cookrew · .*$/gm, '')
-
-/** A line wider than the pane comes back wrapped: the shell breaks it where the row ends. */
-const unwrapped = (text: string): string => text.replace(/\s+/g, '')
+function answerOf(watch: LineWatch): string {
+  const at = watch.tail.lastIndexOf(watch.line)
+  const said = at < 0 ? watch.tail : watch.tail.slice(at + watch.line.length)
+  return said.replace(URL_RE, (url) => (watch.line.includes(url) ? '' : url))
+}
 
 export function observeOutput(watch: LineWatch, chunk: string): LineWatch {
-  if (watch.done) return watch
-  const tail = withoutStatusBar(watch.tail + cleanOutput(chunk)).slice(-TAIL_MAX)
-  const echoed = watch.echoed || unwrapped(tail).includes(unwrapped(watch.line))
-  const last = lastLine(tail)
-  // The echo line itself ends in the command, never in a prompt character.
-  const done = echoed && !last.endsWith(watch.line) && promptReturned(last)
-  return { ...watch, tail, echoed, done }
+  return { ...watch, tail: (watch.tail + cleanOutput(chunk)).slice(-TAIL_MAX) }
 }
 
-export function runningView(watch: LineWatch): SetupRunning {
-  const last = lastLine(watch.tail)
+/** What main read of the pane, before its first answer. */
+export const NOTHING_READ = { lastLine: '', asking: null } as const
+
+export function runningView(watch: LineWatch, pane: { lastLine: string; asking: SetupAsking } = NOTHING_READ): SetupRunning {
   const answer = answerOf(watch)
   const oauth = oauthPending(answer)
-  return { line: watch.line, lastLine: last.endsWith(watch.line) ? '' : last, oauth, url: oauth ? signInUrl(answer) : null }
+  return { line: watch.line, lastLine: pane.lastLine, oauth, url: oauth ? signInUrl(answer) : null, asking: pane.asking }
 }
 
 /** What a button reads while its line runs; null when it is not that line. */
@@ -119,4 +101,4 @@ export function runningLabel(running: SetupRunning | null, line: string): string
   return last ? `running… ${last}` : 'running…'
 }
 
-export const LINE_RUNNING = 'that line is still running — wait for the prompt'
+export const LINE_RUNNING = 'that line is still running — wait for it to end'

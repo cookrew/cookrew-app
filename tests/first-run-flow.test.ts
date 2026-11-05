@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { observeOutput, runningView, startedLine } from '../src/renderer/src/routing/setup-line-state'
 import { createFirstRun } from '../src/renderer/src/first-run/first-run-state'
 import { createFirstFolder } from '../src/renderer/src/first-run/first-folder'
 import { doorFolder, workspaceNameAfter } from '../src/renderer/src/first-run/first-folder'
-import { agentAtWork, firstAgentHarness, firstHarness, otherAgentEnds, sentTurnDone, sentTurnFailed, stepTurns, stillFinished, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
+import { agentAtWork, firstAgentHarness, firstHarness, otherAgentEnds, sentTurnDone, sentTurnFailed, stepTurns, stillFinished, stillMissing, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
 import { makeAgent } from '../src/renderer/src/zoom/make-card'
-import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
+import { FIX_LABELS } from '../src/shared/first-run-copy'
+import { preflightRows, UNKNOWN_FACTS, type PreflightRow, type ToolFacts } from '../src/shared/preflight'
 import type { FirstRunStage, FirstTask } from '../src/shared/first-run'
 import type { CanvasNode } from '../src/shared/model'
 import type { TerminalActivity } from '../src/shared/turn'
@@ -150,24 +150,6 @@ describe('the folder the first agent works in', () => {
   })
 })
 
-describe('a line under tmux (C-5): its status bar is the pane’s last line', () => {
-  const bar = '\x1b[29;1H\x1b[1m cookrew · cr-abc123 \x1b[22m 0:zsh*'
-
-  it('still sees the prompt come back, a failed line included', () => {
-    let watch = startedLine('npm i -g @earendil-works/pi-coding-agent')
-    watch = observeOutput(watch, `% npm i -g @earendil-works/pi-coding-agent\r\n${bar}`)
-    expect(watch.echoed).toBe(true)
-    expect(watch.done).toBe(false)
-    watch = observeOutput(watch, `zsh: command not found: npm\r\n% ${bar}`)
-    expect(watch.done).toBe(true)
-  })
-
-  it('does not take the bar for what the pane said', () => {
-    const watch = observeOutput(startedLine('brew install tmux'), `% brew install tmux\r\nPouring tmux\r\n${bar}`)
-    expect(runningView(watch).lastLine).toBe('Pouring tmux')
-  })
-})
-
 describe('naming the workspace after its folder', () => {
   it('takes the folder’s name while the workspace still has the seeded one', () => {
     expect(workspaceNameAfter('My Workspace', null, '/Users/new/my-site/')).toBe('my-site')
@@ -216,20 +198,6 @@ describe('the first agent', () => {
     const createTerminal = vi.fn(async () => ({ id: 'a2' }))
     await makeAgent({ createTerminal } as never, { name: 'Readme', preset: 'Claude Code', orch: false, prompt: 'do it' })
     expect(createTerminal.mock.calls[0]).toEqual([expect.not.objectContaining({ patient: expect.anything() })])
-  })
-})
-
-describe('a line long enough to wrap', () => {
-  const HOMEBREW = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-
-  it('is still seen as echoed, and its prompt coming back ends the watch', () => {
-    const cut = 60
-    let watch = startedLine(HOMEBREW)
-    watch = observeOutput(watch, `% ${HOMEBREW.slice(0, cut)} \r${HOMEBREW.slice(cut)}\r\n`)
-    expect(watch.echoed).toBe(true)
-    expect(watch.done).toBe(false)
-    watch = observeOutput(watch, '==> Installation successful!\r\n% ')
-    expect(watch.done).toBe(true)
   })
 })
 
@@ -388,5 +356,25 @@ describe('a finished turn', () => {
 
   it('fires once per turn', () => {
     expect(walk([[activity('a', 'thinking')], [activity('a', 'replied', 1)], [activity('a', 'replied', 1)], [activity('a', 'idle', 1)]])).toEqual([false, true, false, false])
+  })
+})
+
+describe('a line that ended well, with its tool still not found (N1)', () => {
+  const rows = (fix: { label: string; line: string } | null, state: 'found' | 'missing'): PreflightRow[] => [{ id: 'pi', name: 'Pi', does: '', state, optional: false, note: null, fix }]
+  const fix = { label: FIX_LABELS.INSTALL, line: 'brew install pi' }
+
+  it('names the tool', () => {
+    expect(stillMissing(rows(fix, 'missing'), { line: fix.line, ok: true })).toBe('Pi')
+  })
+
+  it('says nothing once it is found, or when the line failed and has its own sentence', () => {
+    expect(stillMissing(rows(null, 'found'), { line: fix.line, ok: true })).toBeNull()
+    expect(stillMissing(rows(fix, 'missing'), { line: fix.line, ok: false })).toBeNull()
+    expect(stillMissing(rows(fix, 'missing'), null)).toBeNull()
+  })
+
+  it('says nothing of a download page: opening it installs nothing yet', () => {
+    const page = { label: FIX_LABELS.GET, line: 'open https://ollama.com/download' }
+    expect(stillMissing(rows(page, 'missing'), { line: page.line, ok: true })).toBeNull()
   })
 })

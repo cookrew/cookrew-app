@@ -276,6 +276,15 @@
 .cr-routing-screen .xterm-viewport { overflow: hidden !important }
 .cr-routing-hint { font-family: var(--font-mono); font-size: 11px; color: var(--muted); padding: 4px 10px }
 
+.cr-routing-stop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.cr-routing-stop .sp { flex: 1 }
+
 /* One line for what did not happen: a refused line, a default that did not land. */
 .cr-routing-signin {
   display: flex;

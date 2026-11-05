@@ -21,6 +21,24 @@ export const PREFLIGHT_COPY = {
   RUNNING: 'Working…'
 } as const
 
+/** A Setup line, in the tool check and the Routing panel alike (main/setup-line.ts). */
+export const SETUP_LINE_COPY = {
+  BUSY: 'The Setup pane is busy, so nothing was typed. Finish what it is doing there, or press Stop.',
+  UNREADABLE: 'Cookrew could not tell if the Setup pane is free, so nothing was typed. Press Stop, then try again.',
+  UNEXPECTED: 'That line is not one Cookrew runs, so nothing was typed.',
+  OLD_DESKTOP: 'The Cookrew on this computer is too old to run this line. Update it first.',
+  NOT_SENT: 'That line could not be sent. Try again.',
+  UNWATCHED: 'It is running in the pane below. When it ends, press Check again.',
+  OUT_OF_TOUCH: 'Cookrew lost touch with that line, and it may still be running. Look at the pane below.',
+  FAILED: (code: number): string => `That did not work: it stopped with an error (exit ${code}). What it printed is in the pane below.`,
+  STOPPED: 'Stopped before it finished.',
+  LOST: 'That line ended without saying how it went. What it printed is in the pane below.',
+  STILL_MISSING: (tool: string): string => `That finished, but ${tool} is still not found. What it printed is in the pane below.`,
+  WAITING: 'Running below. The other buttons come back when it ends.',
+  PASSWORD: 'It is asking for this computer’s password. Type it in the pane below and press Enter. Nothing shows as you type. If you do not have it, press Stop.',
+  STOP: 'Stop'
+} as const
+
 export const TOOL_COPY = {
   claude: { name: 'Claude Code', does: 'Runs your agent. You need one of these four.' },
   codex: { name: 'Codex', does: 'Runs your agent. You need one of these four.' },
@@ -36,7 +54,8 @@ export const TOOL_NOTES = {
   NOT_KEPT: 'Without it, your agents stop when you close Cookrew.',
   RESTART: 'Installed. Restart Cookrew to turn it on.',
   NOT_SIGNED_IN: 'Not signed in yet.',
-  USES_ENDPOINT: 'Uses your own endpoint, so it needs no sign-in.'
+  USES_ENDPOINT: 'Uses your own endpoint, so it needs no sign-in.',
+  ADMIN: 'May need admin rights: it can ask for this computer’s password.'
 } as const
 
 export const FIX_LABELS = {
@@ -110,7 +129,11 @@ export const ENDPOINT_COPY = {
   URL: 'Address',
   URL_HINT: 'https://api.example.com',
   KEY: 'Key',
-  KEY_NOTE: 'Sealed on this computer. It is sent only to this address.',
+  /** Each says what the code does and no more (agent-access.ts · state). */
+  KEY_NOTE: {
+    keychain: 'Kept encrypted by this computer’s keychain. It is sent only to this address.',
+    file: 'Stored in a private file on this computer, not encrypted. It is sent only to this address.'
+  },
   MODEL: 'Model',
   MODEL_HINT: 'The model’s id, as the service names it',
   SAVE: 'Check and save',
@@ -119,7 +142,27 @@ export const ENDPOINT_COPY = {
   REMOVE: 'Remove',
   ON: 'Your agents use',
   SAVE_ROW: 'Set up',
+  EDIT: 'Edit',
+  KEY_KEEP: 'Leave it empty to keep the saved key.',
+  MOVED: 'Agents already running were on the old address, and can no longer read the key. Close them and start new ones.',
+  KEY_NEW_ADDRESS: (host: string): string => `A new address needs its key pasted again. The saved key is only sent to ${host}.`,
   FAILED: 'That could not be saved. Try again.'
+} as const
+
+/** A turn the model service refused. The sentence comes first; its own words stay behind details. */
+export const REFUSED_COPY = {
+  request: 'The model service refused this request.',
+  key: 'The model service refused the key.',
+  limit: 'The model service says it has had too many requests. Try again in a moment.',
+  service: 'The model service had a problem on its side. Try again in a moment.',
+  reach: 'The model service could not be reached.',
+  DETAILS: 'What it said',
+  SIMPLE_WHY: 'Simple mode may fix this, because more services accept it. For every Claude Code agent on this endpoint, it leaves out hooks, MCP servers and CLAUDE.md.',
+  SIMPLE_GO: 'Use simple mode',
+  SIMPLE_WORKING: 'Restarting…',
+  SIMPLE_DONE: 'Simple mode is on and this agent has restarted. Send your task again.',
+  SIMPLE_SAVED: 'Simple mode is on for every Claude Code agent on this endpoint. This one picks it up when it next starts.',
+  SIMPLE_FAILED: 'That could not be changed. Try again.'
 } as const
 
 export const HINT_COPY = {

@@ -1642,6 +1642,8 @@ function Canvas(): React.JSX.Element {
           setupTerminalId={setupTerminal.terminalId}
           focusTick={setupTerminal.focusTick}
           running={setupTerminal.running}
+          stuck={setupTerminal.stuck}
+          onStop={setupTerminal.stop}
           onSetDefault={routeState.setDefault}
           onSetSharedMcp={routeState.setSharedMcp}
           error={newestError(routeState.error, setupTerminal.error)}

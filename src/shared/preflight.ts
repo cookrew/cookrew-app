@@ -131,14 +131,25 @@ function eitherState(a: ToolState, b: ToolState): ToolState {
   return a === 'unknown' || b === 'unknown' ? 'unknown' : 'missing'
 }
 
+/**
+ * Said before the press, since a sudo prompt mid-install is a surprise otherwise.
+ * Homebrew always asks. Magpie's installer has sudo add WebKitGTK on a Linux desktop
+ * without it (Box round 3 stopped there); on a Mac it stays in the person's folders.
+ */
+function needsAdmin(fix: ToolFix | null, facts: ToolFacts): boolean {
+  return fix?.line === HOMEBREW_INSTALL || (fix?.line === MAGPIE_INSTALL && facts.platform === 'linux')
+}
+
 function row(id: ToolId, state: ToolState, facts: ToolFacts, extra: Partial<Pick<PreflightRow, 'note' | 'fix'>> = {}): PreflightRow {
+  const fix = extra.fix ?? (state === 'missing' ? installFix(id, facts) : null)
+  const notes = [extra.note, needsAdmin(fix, facts) ? TOOL_NOTES.ADMIN : null].filter((note) => note != null)
   return {
     id,
     ...TOOL_COPY[id],
     state,
     optional: id === 'magpie' || id === 'ollama',
-    note: extra.note ?? null,
-    fix: extra.fix ?? (state === 'missing' ? installFix(id, facts) : null)
+    note: notes.length > 0 ? notes.join(' ') : null,
+    fix
   }
 }
 

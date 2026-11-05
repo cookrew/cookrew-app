@@ -3,19 +3,21 @@ import { cookrew } from '../api'
 import { rememberHarness } from '../prompt/harness-pref'
 import { SetupScreen } from '../routing/SetupScreen'
 import { runningLabel, type SetupRunning } from '../routing/setup-line-state'
-import type { RunOptions, RunOutcome, SetupError } from '../routing/use-setup-terminal'
-import { PREFLIGHT_COPY } from '../../../shared/first-run-copy'
+import type { RunOptions, RunOutcome, SetupEnded, SetupError } from '../routing/use-setup-terminal'
+import { PREFLIGHT_COPY, SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { mayContinue, preflightRows, UNKNOWN_FACTS, type PreflightRow, type ToolState } from '../../../shared/preflight'
 import { AccessRows } from './AccessRows'
-import { firstAgentHarness } from './first-run-rules'
+import { firstAgentHarness, stillMissing } from './first-run-rules'
 import { firstRun } from './first-run-state'
 
 /**
  * THE TOOL CHECK: one calm row per tool, no account in sight. A missing tool
  * has one press, and the press is a line in the ordinary Setup terminal card
  * (use-setup-terminal.ts), drawn right here so its questions can be answered.
- * The check runs again when that line ends, and when the person comes back to
- * this window from a download page.
+ * The check runs again by itself when that line ends, which main reads from its
+ * exit status (main/setup-line.ts), and when the person comes back to this window
+ * from a download page. While a line runs the screen says so and offers Stop:
+ * nothing here waits on a press the person was not told about.
  */
 
 /** The bridge itself failed: every row is a check that failed, and the way on stays open. */
@@ -54,9 +56,10 @@ function Row({ row, running, held, onRun }: { row: PreflightRow; running: SetupR
 export function PreflightView({
   rows,
   running,
-  released = false,
+  stuck = false,
   error,
   onRun,
+  onStop,
   onCheck,
   onContinue,
   onSkip,
@@ -65,10 +68,11 @@ export function PreflightView({
   /** Null while the first check runs. */
   rows: readonly PreflightRow[] | null
   running: SetupRunning | null
-  /** The person checked again: the fixes are theirs, whatever the pane seems to be doing. */
-  released?: boolean
+  /** A press found the pane taken: the sentence is in `error`, and Stop clears it. */
+  stuck?: boolean
   error: string | null
   onRun: (line: string) => void
+  onStop?: () => void
   onCheck: () => void
   onContinue: () => void
   onSkip: () => void
@@ -86,13 +90,21 @@ export function PreflightView({
         ) : (
           <ul className="fr-rows">
             {rows.map((row) => (
-              <Row key={row.id} row={row} running={running} held={running !== null && !released} onRun={onRun} />
+              <Row key={row.id} row={row} running={running} held={running !== null} onRun={onRun} />
             ))}
           </ul>
         )}
         {error && (
           <p className="fr-error" role="alert">
             {error}
+          </p>
+        )}
+        {(running !== null || stuck) && (
+          <p className="fr-running" role="status">
+            {running !== null && <span>{running.asking === 'password' ? SETUP_LINE_COPY.PASSWORD : SETUP_LINE_COPY.WAITING}</span>}
+            <button type="button" className="fr-quiet" onClick={onStop}>
+              {SETUP_LINE_COPY.STOP}
+            </button>
           </p>
         )}
         {children}
@@ -123,25 +135,37 @@ export interface PreflightSetup {
   focusTick: number
   error: SetupError | null
   running: SetupRunning | null
+  ended: SetupEnded | null
+  stuck: boolean
+  stop: () => void
 }
 
 export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: () => void }): React.JSX.Element {
   const [rows, setRows] = useState<readonly PreflightRow[] | null>(null)
   /** Set by the first press: until then there is no terminal to look at. */
   const [pressed, setPressed] = useState(false)
-  /** The end of a line is read off the shell's prompt, and not every prompt can be read. */
-  const [released, setReleased] = useState(false)
+  /** A line ended well and its tool is still not found. */
+  const [notFound, setNotFound] = useState<string | null>(null)
   const live = useRef(true)
   /** A check reads the login shell: one at a time, however often the window takes focus. */
   const checking = useRef(false)
+  /** What the last line left to say once the check after it has answered; a line's end is never dropped. */
+  const afterLine = useRef<{ ended: SetupEnded | null } | null>(null)
   const check = useCallback(() => {
     if (checking.current) return
     checking.current = true
+    const after = afterLine.current
+    afterLine.current = null
     void (cookrew().firstRunPreflight?.() ?? Promise.resolve(UNKNOWN_ROWS))
-      .then((next) => live.current && setRows(next))
-      .catch(() => live.current && setRows(UNKNOWN_ROWS))
+      .catch(() => UNKNOWN_ROWS)
+      .then((next) => {
+        if (!live.current) return
+        setRows(next)
+        if (after !== null) setNotFound(stillMissing(next, after.ended))
+      })
       .finally(() => {
         checking.current = false
+        if (afterLine.current !== null) check()
       })
   }, [])
   useEffect(() => {
@@ -156,9 +180,12 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
   // A line ended: what it installed is the next answer.
   const wasRunning = useRef(false)
   useEffect(() => {
-    if (wasRunning.current && setup.running === null) check()
+    if (wasRunning.current && setup.running === null) {
+      afterLine.current = { ended: setup.ended }
+      check()
+    }
     wasRunning.current = setup.running !== null
-  }, [setup.running, check])
+  }, [setup.running, setup.ended, check])
   const onward = async (): Promise<void> => {
     const access = await cookrew()
       .accessState?.()
@@ -172,26 +199,24 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
     <PreflightView
       rows={rows}
       running={setup.running}
-      released={released}
-      error={setup.error?.text ?? null}
+      stuck={setup.stuck}
+      error={setup.error?.text ?? (notFound === null ? null : SETUP_LINE_COPY.STILL_MISSING(notFound))}
       onRun={(line) => {
         setPressed(true)
-        setReleased(false)
+        setNotFound(null)
         void setup.run(line)
       }}
-      onCheck={() => {
-        setReleased(true)
-        check()
-      }}
+      onStop={setup.stop}
+      onCheck={check}
       onContinue={() => void onward()}
       // On to the first screen, which keeps the way back here: skipping is not leaving.
       onSkip={() => void onward()}
     >
       <AccessRows onChange={check} />
-      {pressed && setup.terminalId && (
+      {(pressed || setup.running !== null || setup.stuck) && setup.terminalId && (
         <div className="fr-setup" ref={(el) => el?.scrollIntoView({ block: 'nearest' })}>
           <p className="fr-setup-title">{PREFLIGHT_COPY.SETUP_TITLE}</p>
-          <SetupScreen terminalId={setup.terminalId} focusTick={setup.focusTick} />
+          <SetupScreen terminalId={setup.terminalId} focusTick={setup.focusTick} fit="width" />
         </div>
       )}
     </PreflightView>
