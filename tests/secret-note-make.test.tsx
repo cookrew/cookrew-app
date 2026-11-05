@@ -1,17 +1,15 @@
 // A NOTE MADE AS A SECRET (owner 2026-11-05): beside NOTE+ stands 🔒+. It asks
 // for a name and makes a note whose whole body is the slot `🔒 <name>`, wired
 // to the agent; the value goes straight to the store from the slot's field and
-// never touches the note. The open note draws that field: the canvas card that
-// used to was retired, so a slot could be made but not filled.
+// never touches the note. The open note draws that field in its vault
+// (tests/secret-vault.test.tsx).
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { renderToStaticMarkup } from 'react-dom/server'
 import type { CanvasNode, NoteNodeData } from '../src/shared/model'
 import { secretNameFrom } from '../src/shared/secret-slot'
 import { makeSecretFor } from '../src/renderer/src/zoom/make-card'
-import { SecretSlots } from '../src/renderer/src/nodes/SecretSlot'
 
 const src = (file: string): string => readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', file), 'utf8')
 const agent = { id: 'a1', name: 'Forge' }
@@ -88,21 +86,6 @@ describe('making the note', () => {
     const made = await makeSecretFor(b.api, '\u5bc6\u94a5', agent, [])
     expect(made).toMatchObject({ ok: false, error: expect.stringMatching(/letters, digits/) })
     expect(b.added).toEqual([])
-  })
-})
-
-describe('the open note', () => {
-  it('draws a field per slot, and no value', () => {
-    const html = renderToStaticMarkup(<SecretSlots names={['dsv4', 'github']} rereadOn={false} />)
-    expect(html.match(/type="password"/g)).toHaveLength(2)
-    expect(html).toContain('data-secret-slot="dsv4"')
-    expect(html).toContain('data-secret-slot="github"')
-  })
-
-  it('stands in the note view and keeps an edit open on a move into a field', () => {
-    const panel = src('AttachPanel.tsx')
-    expect(panel).toContain('<SecretSlots')
-    expect(panel).toContain("closest('.cr-secret-slots')")
   })
 })
 

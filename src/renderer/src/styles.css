@@ -2168,6 +2168,151 @@ a.card-close {
   background: color-mix(in srgb, var(--note-text) 8%, transparent);
   color: var(--note-text);
 }
+/* THE VAULT in a secret note (nodes/SecretVault.tsx): hairlines on the note's
+   own paper, a value cell that only looks like a field when it is touched. */
+.cr-vault {
+  margin: 10px 14px 0;
+  color: var(--note-text);
+  font-size: 12.5px;
+}
+.cr-vault-head,
+.cr-vault-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  gap: 2px 12px;
+  align-items: center;
+}
+.cr-vault-head {
+  padding: 0 0 4px;
+  border-bottom: 1px solid var(--note-text);
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+}
+.cr-vault-row {
+  min-height: 36px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.cr-vault-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cr-vault-name .cr-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  opacity: 0.6;
+}
+.cr-vault-name b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 12.5px var(--font-mono);
+}
+.cr-vault-row.sealed .cr-vault-name .cr-icon {
+  opacity: 1;
+}
+.cr-vault-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.cr-vault input[type='password'],
+.cr-vault input[type='text'] {
+  flex: 1;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 4px;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: 12.5px var(--font-mono);
+}
+.cr-vault input[type='password']:hover,
+.cr-vault input[type='text']:hover {
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+.cr-vault input[type='password']:focus,
+.cr-vault input[type='text']:focus {
+  background: var(--cream-hi, #fffef5);
+  box-shadow: inset 0 0 0 1.5px var(--note-text);
+}
+.cr-vault-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  opacity: 0.75;
+}
+.cr-vault-state.error {
+  color: var(--rose);
+  opacity: 1;
+  white-space: normal;
+}
+.cr-vault-served {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 3px;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.cr-vault-add {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px dashed var(--line-soft);
+  background: transparent;
+  color: inherit;
+  font: 12px var(--font-mono);
+  text-align: left;
+  opacity: 0.7;
+  cursor: pointer;
+}
+.cr-vault-add:hover,
+.cr-vault-add:focus-visible {
+  opacity: 1;
+}
+.cr-vault-how {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  opacity: 0.65;
+}
+@media (max-width: 700px) {
+  /* Name and state on a line, the value under them at full width. */
+  .cr-vault-head {
+    display: none;
+  }
+  .cr-vault-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 6px 0;
+  }
+  .cr-vault-value {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .cr-vault-served {
+    grid-column: 1 / -1;
+  }
+  /* A phone zooms the page into a field under 16px. */
+  .cr-vault input[type='password'],
+  .cr-vault input[type='text'] {
+    font-size: 16px;
+  }
+}
+
 .cr-secret-slots {
   flex: 0 0 auto;
   border-top: 1.5px dashed var(--note-text);
@@ -2211,17 +2356,6 @@ a.card-close {
   grid-column: 1 / -1;
   font-size: 10.5px;
   opacity: 0.75;
-}
-.cr-secret-slot-remove {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-.cr-secret-slot-remove.asking > span {
-  flex: 1 1 100%;
 }
 .cr-secret-slot-served {
   grid-column: 1 / -1;
