@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { UseStatus } from '../src/shared/use-signal'
 import { parseUseUrl } from '../src/shared/use-url'
 import {
+  DeviceGoneError,
   PIXEL_FAST_POLL_MS,
+  PIXEL_GONE_POLL_MS,
   PIXEL_HEARTBEAT_MS,
   PIXEL_IDLE_POLL_MS,
   PIXEL_MAX_BACKOFF_MS,
@@ -255,5 +257,53 @@ describe('PixelInstance', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('PixelInstance · a device that is gone for good', () => {
+  const gone = () => {
+    const clock = manual()
+    let alive = false
+    const opened = { count: 0 }
+    const device: PixelDevice = {
+      target: parseUseUrl('window://Safari?id=4')!,
+      open: async () => {
+        opened.count += 1
+        if (!alive) throw new DeviceGoneError('window', "'Safari' closed")
+        return { width: 100, height: 100 }
+      },
+      capture: async () => ({ jpeg: 'AAA' })
+    }
+    const instance = new PixelInstance({ url: 'window://Safari?id=4', device, now: clock.now, schedule: clock.schedule })
+    return { clock, instance, opened, revive: () => (alive = true) }
+  }
+
+  it('tells its viewers it is gone, and stops spending a helper process every few seconds on it', async () => {
+    const { clock, instance } = gone()
+    await instance.start()
+    expect(instance.status).toMatchObject({ state: 'offline', message: "'Safari' closed", gone: 'window' })
+    expect(clock.due).toBe(PIXEL_GONE_POLL_MS)
+  })
+
+  it('is still a card: a viewer arriving looks again, and a device back is live with gone cleared', async () => {
+    const { clock, instance, opened, revive } = gone()
+    await instance.start()
+    instance.registerViewportViewer('v1')
+    expect(clock.due).toBe(PIXEL_FAST_POLL_MS)
+    await clock.run()
+    expect(opened.count).toBe(2)
+    revive()
+    await clock.run()
+    expect(instance.status.state).toBe('live')
+    expect(instance.status.gone).toBeUndefined()
+  })
+
+  it('an ordinary failure carries no gone', async () => {
+    const { state, device } = fakeDevice()
+    state.attached = false
+    const clock = manual()
+    const instance = new PixelInstance({ url: 'adb://default', device, now: clock.now, schedule: clock.schedule })
+    await instance.start()
+    expect(instance.status.gone).toBeUndefined()
   })
 })

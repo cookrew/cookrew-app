@@ -17,6 +17,7 @@ import { scheduleWebglWarmup } from './gpu-warmup'
 import { bootEmbedMode } from './embed/embed-mode'
 import { applyColorScheme, applyTheme, storedTheme } from './color-scheme'
 import { watchUserInput } from './user-input'
+import { startInstalledCover } from './fullscreen'
 
 // STRATA EMBED MODE (`?embed=agent`, framed by cookrew.dev's shell only): one
 // agent's full view, nothing else. Read before anything starts, because embed
@@ -28,6 +29,7 @@ const embed = bootEmbedMode()
 // Light or dark before the first paint: a browser follows the system, the
 // desktop app stays paper (color-scheme.ts).
 applyColorScheme(isRemoteMode())
+if (isRemoteMode()) startInstalledCover()
 // The theme too (ink or root), so a root page never paints one paper frame.
 applyTheme(storedTheme())
 // The ink theme before the first paint: a passive effect in App would flash the

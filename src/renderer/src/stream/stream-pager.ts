@@ -19,7 +19,7 @@
 // view model and the markup are identical. See stream-view.ts.
 
 import type { TraceBlock } from '../../../shared/trace-blocks'
-import type { StreamBlock, StreamRenderSource } from './stream-types'
+import type { StreamBlock, StreamRenderSource, StreamTail } from './stream-types'
 import type { StreamHandle } from './use-stream'
 
 /** A window as the drawer consumes it: blocks in STREAM coordinates. */
@@ -42,6 +42,16 @@ export interface StreamWindow {
  */
 export function streamCoords(block: StreamBlock): TraceBlock {
   return { ...block, index: block.ordinal }
+}
+
+/**
+ * The open turn as its record holds it, for the row already showing it. A door
+ * or scrape card's tail is made from a turn record (`file` empty): a reply with
+ * no steps, which would strip the row it replaced.
+ */
+export function recordedTail(tail: StreamTail | null): TraceBlock | null {
+  const block = tail?.block ?? null
+  return block !== null && block.file !== '' ? streamCoords(block) : null
 }
 
 export interface StreamPager {

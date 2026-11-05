@@ -8,6 +8,7 @@ import { FAVICON_SVG, robotsTxt, sitemapXml, webManifest } from './site-seo'
 import { FEATURES, llmsText } from './site-content'
 import { notFoundPage, respondPage } from './site-shell'
 import { joinPage } from './site-account'
+import { privacyPage, termsPage } from './site-legal'
 import type { ListedDoor } from './site'
 import type { Pulse } from './pulse'
 
@@ -71,6 +72,14 @@ export function handleSiteRoute(ctx: SiteRouteContext): boolean {
    */
   if (parts.length === 1 && parts[0] === 'join') {
     respondPage(response, joinPage())
+    return true
+  }
+  if (parts.length === 1 && parts[0] === 'privacy') {
+    respondPage(response, privacyPage())
+    return true
+  }
+  if (parts.length === 1 && parts[0] === 'terms') {
+    respondPage(response, termsPage())
     return true
   }
   if (parts.length === 2 && parts[0] === 'assets') {

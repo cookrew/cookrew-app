@@ -53,7 +53,7 @@ function main() {
 
   const target = path.join(dir, 'cookrew')
   const node = stableNodePath(process.execPath, existsSync)
-  writeFileSync(target, launcherScript(RUNTIME_CLI, REPO_CLI, node))
+  writeFileSync(target, launcherScript(RUNTIME_CLI, REPO_CLI, node, path.join(homedir(), '.cookrew', 'runtime')))
   chmodSync(target, 0o755)
 
   console.log(`installed: ${target}`)

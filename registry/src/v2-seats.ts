@@ -31,7 +31,7 @@ const TEAM = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}
 const USERNAME = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
 /** A door reports a checkout id, not a document: enough to look one up. */
 const RECEIPT_MAX = 512
-const SEATS_MAX = 20_000
+export const SEATS_MAX = 20_000
 
 export type SeatSource = 'bought' | 'granted'
 /** The two rails a door can settle a purchase on, and report back here. */

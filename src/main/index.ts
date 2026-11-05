@@ -118,6 +118,8 @@ import { scrubInboxRow, scrubSousResult } from './scrub-surfaces'
 import { VphoneInstance } from './vphone-instance'
 import { createSocketGuest, vphoneSocketPath } from './vphone-socket'
 import { createUseInstances } from './use-instances'
+import { createUseSourceService } from './use-source-service'
+import { emptySourceList } from '../shared/use-sources'
 import { UseSignalBus } from './use-signal-bus'
 import { DEFAULT_NAME_ZONE } from '../shared/reach-names'
 import { NameCertStore } from './name-cert-store'
@@ -167,6 +169,9 @@ import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
+import type { AccountDoor, LoginAudit } from './login-cli'
+import { paneInputs } from './pane-input'
+import { injectWindowInput } from './ui-input'
 import { localDeviceName } from './device-name'
 import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
@@ -181,6 +186,7 @@ import {
 import { Factors } from './factors'
 import { SeatSettleQueue } from './seat-settle'
 import { emit, isFreshInstall, resumeTelemetry, setTelemetryOn, startTelemetry, telemetryStatus } from './telemetry'
+import { TELEMETRY_DEFAULT_ON } from '../shared/funnel-events'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
 import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
@@ -262,7 +268,7 @@ import { FirstRunStore } from './first-run-store'
 import { agentToolReady, machineProbe, probeTools, readLoginShellDirs } from './preflight'
 import { conductorWaits } from '../shared/first-run'
 import { HeadlessBrowserManager } from './headless-browser-manager'
-import { HeadlessBrowserCommandEngine } from './headless-browser-command'
+import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
@@ -419,7 +425,7 @@ installLineageSpill(new LineageSpill())
 // Asked before the store writes its first file: after that, every home looks
 // like an upgrade, and `installed` must not fire for everyone already here.
 const freshInstall = isFreshInstall()
-startTelemetry({ appVersion: app.getVersion() })
+startTelemetry({ appVersion: app.getVersion(), defaultOn: app.isPackaged && TELEMETRY_DEFAULT_ON })
 
 const store = bootStep(() => new WorkspaceStore(), bootFailed)
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
@@ -676,6 +682,30 @@ const scrub = createScrubber({
   onChange: (listener) => void secrets.onChange(listener)
 })
 /** The audit line every read and every missing read leaves: name only. */
+/** The account for `cookrew login`, once its channels are registered. */
+let accountDoor: AccountDoor | null = null
+
+/**
+ * A SIGN-IN ATTEMPT FROM A TERMINAL, ON THE RECORD, whichever way it went: a
+ * refusal is the line an agent's try leaves. Nothing typed ever reaches this.
+ */
+const auditLogin = (event: LoginAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    // A sign-in that went through got past every check for a person.
+    actor: event.type === 'account.login-refused' ? 'agent' : 'user',
+    timestamp: Date.now(),
+    details: scrub(event.details)
+  })
+}
+
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
@@ -5755,42 +5785,7 @@ function roleSaveInner(input: RoleSaveInput): AgentRole {
  */
 async function injectInput(args: string[]): Promise<string> {
   if (!mainWindow) throw new Error('No window')
-  const wc = mainWindow.webContents
-  const [sub, ...rest] = args
-  if (sub === 'click') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-    return `Clicked ${x},${y}`
-  }
-  if (sub === 'dblclick') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    for (const clickCount of [1, 2]) {
-      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount })
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount })
-    }
-    return `Double-clicked ${x},${y}`
-  }
-  if (sub === 'type') {
-    for (const char of rest.join(' ')) {
-      wc.sendInputEvent({ type: 'char', keyCode: char })
-      await new Promise((resolve) => setTimeout(resolve, 15))
-    }
-    return `Typed ${rest.join(' ').length} chars`
-  }
-  if (sub === 'key') {
-    const keyCode = rest[0]
-    // Optional modifiers as a 2nd arg: "meta", "meta+shift", etc.
-    const modifiers = rest[1]
-      ? (rest[1].split(/[+,]/) as Array<'shift' | 'control' | 'meta' | 'alt'>)
-      : undefined
-    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
-    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
-    return `Pressed ${keyCode}${rest[1] ? ` +${rest[1]}` : ''}`
-  }
-  throw new Error('Usage: cookrew ui click X Y | dblclick X Y | type "text" | key Enter')
+  return injectWindowInput(mainWindow.webContents, args)
 }
 
 /**
@@ -6047,6 +6042,30 @@ const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
   homeOf: (terminalId) => store.ownerOf(terminalId),
   onUse: (signal) => void useSignals.emit(signal),
   shotsDir: path.join(app.getPath('userData'), 'use-shots')
+})
+
+/** A caller's session runs here: the use surfaces are refused (use-source-service.ts). */
+function servedWorkspace(workspaceId: string): boolean {
+  if (servedSpawnContexts.has(workspaceId)) return true
+  return store.workspaceState(workspaceId).nodes.some((node) => node.kind === 'terminal' && ptys.isServed(node.id))
+}
+
+// THE WINDOW PICKER: the sheet's one service, over IPC here and HTTP for the phone.
+const useSources = createUseSourceService({
+  provider: () => useInstances.sources(),
+  servedWorkspace,
+  addCard: (workspaceId, card) => addNode(card, workspaceId) as BrowserNodeData,
+  findCard: (id) => {
+    const found = store.nodeAcrossWorkspaces(id)
+    return found?.node.kind === 'browser' ? { workspaceId: found.workspaceId, node: found.node } : null
+  },
+  readdress: async (node, url, name) => {
+    // updateNode syncs the card, and the manager swaps its device (backingOf).
+    updateNode(node.id, { url, tabs: withActiveUrl(node, url).tabs })
+    renameCardIn(renameDeps, node.id, name, 'suffix', false)
+    const updated = store.nodeAcrossWorkspaces(node.id)?.node
+    return updated?.kind === 'browser' ? updated : node
+  }
 })
 
 function rendererBrowserCommand(args: string[], terminalId: string): Promise<string> {
@@ -6743,6 +6762,11 @@ app.whenReady().then(() => {
     // each read leaves in the event log.
     secrets,
     audit: auditSecret,
+    // `cookrew login`, `logout`, `whoami`: the account's own functions, and the
+    // line each attempt leaves. The door is registered further down, so this
+    // reads it when asked.
+    account: () => accountDoor,
+    auditLogin,
     // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
     // seat (pty.ts), or any pane on a workspace this app serves out
     // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
@@ -7008,6 +7032,7 @@ app.whenReady().then(() => {
     // Each preset's `launch` offer is read per request (launch-offers.ts).
     presets: withLaunchOffers(PRESETS),
     ops: {
+      useSources,
       addNode,
       updateNode,
       renameNode: (id, name) => renameByHand(renameDeps, id, name),
@@ -7374,7 +7399,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   //
   // Registered through the SAME ownerOnly wrapper, by construction: the module
   // hands over a table and this is the only place a guard could be forgotten.
-  registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+  accountDoor = registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
     requests,
@@ -8044,6 +8069,19 @@ function registerIpc(handlers: RestoreHandlers): void {
   // `cookrew rename`, so a clash is answered in the same words, and pinned.
   ipcMain.handle('node:rename', (_e, id: unknown, name: unknown) => renameByHand(renameDeps, id, name))
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
+  // The window picker, for the window on this desktop: the workspace it shows.
+  ipcMain.handle('use:sources', async () => {
+    const answer = await useSources.list(store.focusedId)
+    return answer.ok ? answer.value : emptySourceList('unavailable', answer.error)
+  })
+  ipcMain.handle('use:open-source', async (_e, pick: unknown) => {
+    const answer = await useSources.open(store.focusedId, pick)
+    return answer.ok ? { ok: true, card: answer.value.card } : { ok: false, error: answer.error }
+  })
+  ipcMain.handle('use:screen-settings', async () => {
+    const answer = await useSources.openSettings(store.focusedId)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  })
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
   // and mirrors a legitimate cross-workspace edge. store.connect writes an edge
@@ -8157,6 +8195,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
   })
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    paneInputs.noteWindowKey(terminalId, data)
     idleSleep.touch(terminalId, Date.now())
     typeInto(terminalId, data)
   })

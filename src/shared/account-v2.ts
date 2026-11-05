@@ -1,3 +1,5 @@
+import { hostPlatform, machineCopy } from './machine-words'
+
 /**
  * THE ACCOUNT, as both halves of the app describe it.
  *
@@ -417,4 +419,5 @@ export interface AdmittedPhone {
 export const registryMismatchSentence = (at: {
   signedInAt: string
   pointedAt: string
-}): string => `This Mac is signed in at ${at.signedInAt}; the app is pointed at ${at.pointedAt}.`
+}): string =>
+  machineCopy(`This Mac is signed in at ${at.signedInAt}; the app is pointed at ${at.pointedAt}.`, hostPlatform())

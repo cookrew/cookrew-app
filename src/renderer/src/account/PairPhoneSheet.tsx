@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import { qrMatrix, qrPath } from '../../../shared/qr'
 import { PAIRING_COPY, pairingPopoutView, type PairingPopoutView } from '../../../shared/pairing-qr'
 import type { PairingHandout } from '../../../shared/account-v2'
@@ -60,7 +61,7 @@ export function PairPhoneSheet({ onClose }: { onClose: () => void }): React.JSX.
           </button>
         </header>
         {!asked ? (
-          <p className="gs-sub">Reading this Mac&rsquo;s pairing URL&hellip;</p>
+          <p className="gs-sub">{machineCopy('Reading this Mac’s pairing URL…', hostPlatform())}</p>
         ) : (
           <PairBody
             view={pairingPopoutView(handout)}

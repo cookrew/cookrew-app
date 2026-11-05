@@ -198,9 +198,12 @@ export const SERVED_USE_REFUSED =
  * served caller may not create or navigate a card to a use address, nor
  * touch a card any of whose tabs is one (a tab switch would make it one).
  * `cardUrls` answers a card's tab addresses by name, or [] for no card.
+ * `sources` is the picker (use-source-service.ts): the list of what is on the
+ * owner's screen is refused outright, whatever it is asked with.
  */
 export function servedUseRefusal(args: readonly string[], cardUrls: (name: string) => readonly string[]): string | null {
   const [sub, first, second] = args
+  if (sub === 'sources') return SERVED_USE_REFUSED
   const addresses = sub === 'create' ? [first] : sub === 'navigate' || sub === 'tab-new' ? [second] : []
   const card = sub === 'create' ? second : first
   const all = [...addresses, ...(card ? cardUrls(card) : [])]

@@ -104,7 +104,9 @@ function cooMark() {
   const box = { x: 26.8, y: 27, w: 62.4, h: 46 }
   // The glasses' stroke opens on a short arm above the right lens; at header size it reads as
   // a whisker, so the mark starts at the lens.
-  const strokes = [brush(C, PEN, 1.2), brush(GLASSES.slice(3), GLASS_PEN, 1.2)]
+  // dry: 0 because only the bodies are drawn here: a dry pen leaves its tail to the bristles,
+  // and without them the first O stood open by a third of its ring.
+  const strokes = [brush(C, { ...PEN, dry: 0 }, 1.2), brush(GLASSES.slice(3), { ...GLASS_PEN, dry: 0 }, 1.2)]
   const body = strokes.map((stroke, i) => `<path id="ikm${i}" d="${stroke.body}"/>`).join('')
   return `<svg xmlns="http://www.w3.org/2000/svg" class="mark-coo" viewBox="${box.x} ${box.y} ${box.w} ${box.h}" width="42" height="31" role="img" aria-label="Cookrew" fill="currentColor">${body}</svg>`
 }

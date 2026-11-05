@@ -101,6 +101,7 @@ const MetricsPanel = lazy(() => import('./MetricsPanel').then((m) => ({ default:
 const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default: m.StageView })))
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
+import { SourcePicker } from './use/SourcePicker'
 import { useAccountSurface } from './account/AccountSurface'
 import { SelectionBar } from './SelectionBar'
 import { ConfirmClose } from './ConfirmClose'
@@ -1567,6 +1568,15 @@ function Canvas(): React.JSX.Element {
             <MetricsPanel onClose={() => setMetricsOpen(false)} />
           </Suspense>
         )}
+        {/* A new card goes on the stage at once; a re-pointed one is already there. */}
+        <SourcePicker
+          onOpened={(card, made) => {
+            if (!made) return
+            stageSelect.set({ kind: 'item', id: card.id })
+            zoomStore.jumpTo('item', card.id)
+            if (viewRef.current !== 'stage') setView('stage')
+          }}
+        />
         {importServedOpen && (
           <ImportServedSheet
             /* A second link while the sheet is open is a new question: remount

@@ -23,6 +23,8 @@ import type { DecideOutcome, Requests } from './requests'
 import type { AnsweredRow, QueueRow, RowAction } from '../shared/account-requests'
 import { seatsSurface, teamForSlug, type DoorSeats, type ServedTeamRef } from './door-seats'
 import type { Factors } from './factors'
+import type { AccountDoor } from './login-cli'
+import { machineCopy } from '../shared/machine-words'
 import type { IdleLock, UnlockOutcome } from './lock'
 
 /**
@@ -203,6 +205,9 @@ export const ACCOUNT_CHANNELS = [
 export type AccountChannel = (typeof ACCOUNT_CHANNELS)[number]
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/** A sentence of main's own, in this machine's word. */
+const here = (sentence: string): string => machineCopy(sentence, process.platform)
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
@@ -477,8 +482,9 @@ async function resumeCode(
 async function resumeWait(
   deps: AccountIpcDeps,
   pending: string,
+  signal?: AbortSignal,
 ): Promise<SignInAnswer<AccountStatus>> {
-  const result = await deps.accounts.resumeWait(pending)
+  const result = await deps.accounts.resumeWait(pending, signal ? { signal } : {})
   return result.ok ? { ok: true, value: signedIn(deps) } : result
 }
 
@@ -697,7 +703,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.checkUsername(asString(username)),
     'account:claim': (input: unknown) => claim(deps, input),
     'account:migrate': (input: unknown) => migrate(deps, input),
-    'account:lock': () => settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
+    'account:lock': () => settled(deps, here('This Mac could not be locked'), () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:resume': (password: unknown) => resume(deps, asString(password)),
     'account:signIn': (input: unknown) => signIn(deps, input),
@@ -756,13 +762,13 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     /** I SAVED THEM — recorded, so the RESCUE row stops saying NOT SAVED. */
     'account:codesSaved': () =>
-      settled(deps, 'That could not be recorded on this Mac', () =>
+      settled(deps, here('That could not be recorded on this Mac'), () =>
         deps.accounts.markRecoveryCodesSaved(),
       ),
     // ZERO IS A SETTING, not a missing argument: it is the OFF choice in the
     // delay picker, and it has to survive the coercion that guards this bridge.
     'account:setLock': (ms: unknown) =>
-      settled(deps, 'The lock setting could not be saved on this Mac', () => {
+      settled(deps, here('The lock setting could not be saved on this Mac'), () => {
         const value = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0
         deps.accounts.setLockAfterMs(value)
         deps.lock.setLockAfterMs(value)
@@ -894,17 +900,53 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
 }
 
 /**
+ * THE SAME ACCOUNT, FOR `cookrew login` (login-cli.ts).
+ *
+ * The functions the sheet's channels call, not a second copy of them: a
+ * terminal is one more surface on one sign-in path, so a machine signed in
+ * from a shell ends in the same `signedIn()` as one signed in from the avatar,
+ * and its desktop is filed the same way.
+ */
+export function accountDoor(deps: AccountIpcDeps, platform: string = process.platform): AccountDoor {
+  return {
+    platform,
+    who: () => {
+      const account = deps.accounts.account()
+      return {
+        username: account?.username ?? null,
+        deviceId: account?.deviceId ?? '',
+        deviceName: account?.name ?? '',
+        sessionLive: deps.accounts.sessionLive(),
+        registry: account?.registry ?? null,
+        mismatch: account === null ? null : deps.accounts.registryMismatch(),
+      }
+    },
+    signIn: (input) => signIn(deps, input),
+    resume: (password) => resume(deps, password),
+    climbCode: (pending, factor, code) => resumeCode(deps, { pending, factor, code }),
+    askApproval: (pending) => deps.accounts.resumeAsk(pending),
+    waitApproval: (pending, signal) => resumeWait(deps, pending, signal),
+    abandon: (pending) => deps.accounts.abandonSignIn(pending),
+    signOut: (password) => signOut(deps, password),
+    devices: () => deps.accounts.devices(),
+  }
+}
+
+/**
  * Register every channel through `register`.
  *
  * Main passes a `register` that wraps each handler in `ownerOnly`, so the
  * guard is applied by construction to every channel rather than remembered
  * once per channel. The seat channels grant and end other people's access to
  * this Mac's doors, so they need it at least as much as the rest.
+ *
+ * Answers the same account for the terminal, built on the same deps.
  */
 export function registerAccountIpc(
   register: (channel: AccountChannel, handler: AccountHandler) => void,
   deps: AccountIpcDeps,
-): void {
+): AccountDoor {
   const handlers = accountHandlers(deps)
   for (const channel of ACCOUNT_CHANNELS) register(channel, handlers[channel])
+  return accountDoor(deps)
 }

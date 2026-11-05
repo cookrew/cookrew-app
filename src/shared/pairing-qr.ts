@@ -1,4 +1,5 @@
 import type { PairingHandout } from './account-v2'
+import { hostPlatform, machineCopy } from './machine-words'
 
 /**
  * WHAT THE POPOUT PUTS ON THE SCREEN — ONE QR, AND NO SIX CHARACTERS.
@@ -56,7 +57,7 @@ export const pairingPopoutView = (handout: PairingHandout | null): PairingPopout
       qr: null,
       sentence: PAIRING_COPY.NONE,
       rotateNote: PAIRING_COPY.ROTATE,
-      desktopName: 'This Mac',
+      desktopName: machineCopy('This Mac', hostPlatform()),
       deviceIdPrefix: null
     }
   }

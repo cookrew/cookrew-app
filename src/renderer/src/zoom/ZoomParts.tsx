@@ -249,6 +249,37 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
 }, sameProps)
 
 /**
+ * This machine on the devices stop: its frame opens it, and the words under it
+ * carry the way to share one of its windows. The frame's own button has no
+ * handler: its press bubbles to the card, which is also what a press on the
+ * words reaches, and the share button keeps its press to itself.
+ */
+export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: string; detail: string; bind: Bind; onOpen: () => void; onShare: (() => void) | null }): React.JSX.Element {
+  return (
+    <div className="zv-machine" ref={bind('machine')} onClick={onOpen}>
+      <button type="button" className="zv-machine-open" aria-label={`Open ${name}`} />
+      <span className="zv-machine-deck" />
+      <span className="zv-machine-label">
+        <b>{name}</b>
+        <small>{detail}</small>
+        {onShare && (
+          <button
+            type="button"
+            className="zv-machine-share"
+            onClick={(e) => {
+              e.stopPropagation()
+              onShare()
+            }}
+          >
+            Share a window
+          </button>
+        )}
+      </span>
+    </div>
+  )
+}
+
+/**
  * Another machine on the devices stop, from the real fleet: its frame, the
  * workspaces its feed seats (a ring and a name each; a listed-only desktop
  * shows names alone), and its own line. A machine that cannot be read says

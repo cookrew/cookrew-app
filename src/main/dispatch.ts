@@ -23,6 +23,7 @@
 // double-submits into a live agent's input box, so every retry here is
 // preceded by reading the transcript. Never blind.
 
+import { paneInputs } from './pane-input'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   appendFileSync,
@@ -1684,6 +1685,15 @@ export class DispatchService {
         state: 'interrupted',
         error: 'interrupted: owner took the input box'
       })
+      return
+    }
+    // A HIDDEN PROMPT, the same way: the backend writes straight to the pane, so
+    // nothing below could refuse this, and a brief typed at a password prompt
+    // goes to cookrew.dev as a password attempt (pane-input.ts).
+    if (!paneInputs.drive(agentId)) {
+      this.lease.release(agentId, holder)
+      this.deps.retractDelivered?.(agentId, prompt, gen)
+      this.update(dispatchId, { state: 'interrupted', error: 'interrupted: the pane is at a hidden prompt' })
       return
     }
     let outcome: 'done' | 'submitted' | 'failed'

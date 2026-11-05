@@ -19,7 +19,7 @@
 // callback per identity (its D6 note explains why), and a memoised row must
 // receive that same callback or every render would still move every ref.
 
-import { forwardRef, memo, useContext, useMemo, useState } from 'react'
+import { Fragment, forwardRef, memo, useContext, useMemo, useState } from 'react'
 import { checkpointTitle, type TitleMode } from './checkpoint-sync'
 import { MarkdownText } from './MarkdownText'
 import type { CheckpointTranslation } from './TranscriptView'
@@ -27,7 +27,7 @@ import { isHarnessNotice, noticeLine } from '../../shared/harness-notice'
 import type { TraceBlock } from '../../shared/trace-blocks'
 import { TranscriptFaceContext } from './transcript-face'
 import { TranscriptLookContext } from './transcript-look'
-import { chatFoldLabel, chatFoldOf, latestStepLine, type ChatStep } from './chat-fold'
+import { chatFoldLabel, chatLegsOf, latestStepLine, type ChatFold, type ChatStep } from './chat-fold'
 import { PictureStrip, picturesOfTurn } from './pictures/PictureStrip'
 
 export interface TranscriptRowProps {
@@ -44,23 +44,19 @@ export interface TranscriptRowProps {
   translated: CheckpointTranslation | null
   /** The card the transcript is of: where its pasted pictures are read from. */
   terminalId?: string | null
+  /** The newest row: the only turn words can still be waiting on. A file a
+   *  compact rotated away keeps whatever was queued in it for ever. */
+  last?: boolean
 }
 
 export const TranscriptRow = memo(
   forwardRef<HTMLDivElement, TranscriptRowProps>(function TranscriptRow(
-    { id, block, active, placeholderHeight, titleMode, translated, terminalId = null },
+    { id, block, active, placeholderHeight, titleMode, translated, terminalId = null, last = false },
     ref
   ) {
-    const face = useContext(TranscriptFaceContext)
-    const look = useContext(TranscriptLookContext)
-    const [open, setOpen] = useState(false)
-    const fold = useMemo(() => (block ? chatFoldOf(block) : null), [block])
+    const legs = useMemo(() => (block ? chatLegsOf(block) : []), [block])
     // The prompt's screenshots, drawn under its words (CHAT and LOG; LIVE keeps "[Image #N]").
     const pictures = useMemo(() => (block ? picturesOfTurn(block, terminalId) : []), [block, terminalId])
-    // A translation covers the whole reply: it is the answer, the steps stay as they ran.
-    const answer = translated?.reply ?? fold?.answer ?? ''
-    // The log prints every step, as the terminal does; the chat folds them until asked.
-    const unfolded = look === 'log' || open
     return (
       <div
         className={
@@ -93,38 +89,26 @@ export const TranscriptRow = memo(
               </div>
             )}
             <PictureStrip pictures={pictures} className="ctx-prompt-pics" expandable />
-            {/* THE AGENT'S SIDE OF THE CHAT: its face, and one bubble with
-                what it ran and what it said (transcript-face.ts). */}
-            {(block.activity.length > 0 || (block.thoughts?.length ?? 0) > 0 || block.reply) && (
-              <div className="ctx-chat-agent">
-                <span className="ctx-chat-face" aria-hidden="true">
-                  {face}
-                </span>
-                <div className="ctx-chat-bubble">
-                  {fold && fold.steps.length > 0 && (
-                    <div className={`ctx-chat-process${unfolded ? ' open' : ''}`}>
-                      <button type="button" className="ctx-process-toggle" aria-expanded={unfolded} onClick={() => setOpen((o) => !o)}>
-                        <span className="ctx-process-label">{chatFoldLabel(fold)}</span>
-                        {!answer && <span className="ctx-process-now">{latestStepLine(fold.steps)}</span>}
-                      </button>
-                      {unfolded && (
-                        <div className="ctx-chat-tools">
-                          {fold.steps.map((step, i) => (
-                            <StepRow key={i} step={step} />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
-                  {answer && (
-                    <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
-                      <MarkdownText source={answer} />
-                    </div>
-                  )}
+            {/* What you said while it worked stands in the open, between the
+                stretches of work it fell between (chat-fold.ts). A translation
+                covers the whole reply: it is the closing answer, the rest stay
+                as they ran. */}
+            {legs.map((leg, i) => {
+              const closing = translated !== null && i === legs.length - 1
+              return (
+                <Fragment key={i}>
+                  {leg.words !== null && <div className="ctx-block-prompt">{leg.words}</div>}
+                  <AgentLeg fold={leg.fold} answer={(closing ? translated.reply : null) ?? leg.fold.answer} translated={closing} />
+                </Fragment>
+              )
+            })}
+            {last &&
+              block.queued?.map((words, i) => (
+                <div key={i} className="ctx-block-prompt ctx-block-queued">
+                  {words}
+                  <span className="ctx-queued-tag">queued</span>
                 </div>
-              </div>
-            )}
+              ))}
           </>
         ) : (
           <span className="ctx-placeholder-idx">T{id}</span>
@@ -133,6 +117,46 @@ export const TranscriptRow = memo(
     )
   })
 )
+
+/** THE AGENT'S SIDE OF THE CHAT: its face, and one bubble with what it ran and what it said (transcript-face.ts). */
+function AgentLeg({ fold, answer, translated }: { fold: ChatFold; answer: string; translated: boolean }): React.JSX.Element | null {
+  const face = useContext(TranscriptFaceContext)
+  const look = useContext(TranscriptLookContext)
+  const [open, setOpen] = useState(false)
+  // The log prints every step, as the terminal does; the chat folds them until asked.
+  const unfolded = look === 'log' || open
+  if (fold.steps.length === 0 && !answer) return null
+  return (
+    <div className="ctx-chat-agent">
+      <span className="ctx-chat-face" aria-hidden="true">
+        {face}
+      </span>
+      <div className="ctx-chat-bubble">
+        {fold.steps.length > 0 && (
+          <div className={`ctx-chat-process${unfolded ? ' open' : ''}`}>
+            <button type="button" className="ctx-process-toggle" aria-expanded={unfolded} onClick={() => setOpen((o) => !o)}>
+              <span className="ctx-process-label">{chatFoldLabel(fold)}</span>
+              {!answer && <span className="ctx-process-now">{latestStepLine(fold.steps)}</span>}
+            </button>
+            {unfolded && (
+              <div className="ctx-chat-tools">
+                {fold.steps.map((step, i) => (
+                  <StepRow key={i} step={step} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {/* Reply renders MARKDOWN as React elements; .md is Fresco's flag. */}
+        {answer && (
+          <div className="ctx-block-reply md" data-translated={translated ? '' : undefined}>
+            <MarkdownText source={answer} />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 /** One step inside the fold: a thought, the words between steps, or a tool call with its result. */
 function StepRow({ step }: { step: ChatStep }): React.JSX.Element {

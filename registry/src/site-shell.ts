@@ -306,7 +306,7 @@ function shell(options: ShellOptions, main: string): string {
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a></nav>
+<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
 <p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
 </div></footer>
 <div class="toast" id="toast" hidden></div>
@@ -691,6 +691,12 @@ section+section::before,.hero+.wrap::before{content:'';position:absolute;top:0;l
 @media (prefers-color-scheme:dark){section+section::before{filter:invert(1)}}
 footer nav a{border-radius:5px}
 .wrap.market{padding-top:30px;padding-bottom:44px}
+.legal{max-width:76ch}.legal section{padding:26px 0 0;scroll-margin-top:96px}.legal section::before{display:none}.legal h2{font-size:clamp(19px,2.2vw,24px)}
+.legal li{margin:0 0 8px}.legal-toc ol{margin:0;padding:12px 16px 12px 34px;border:1px solid var(--hair);background:var(--cream-hi);border-radius:12px;font-size:14px;columns:2;column-gap:28px}.legal-toc li{margin:0 0 3px;break-inside:avoid}
+.legal-table{margin:14px 0}.legal-table table.cmp{margin:0;box-shadow:none}.legal table.cmp td:last-child{background:none}
+@media (max-width:700px){.legal-table thead{display:none}.legal-toc ol{columns:1}.legal-table tr,.legal-table tbody th,.legal-table td{display:block}.legal-table table.cmp tbody th{padding-bottom:0;border-bottom:none}.legal-table table.cmp td{padding-top:6px;padding-bottom:6px;border-bottom:none}.legal-table tr{padding:6px 0;border-bottom:1px solid var(--line-soft)}.legal-table tbody tr:last-child{border-bottom:none}.legal-table td::before{content:attr(data-label);display:block;font:600 10px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}}
+.legal section.legal-planned{margin-top:26px;padding:18px 20px;border:1px dashed var(--seal);border-radius:12px;background:var(--wash)}.legal-chip{display:inline-block;margin-bottom:10px}
+mark.ph{background:var(--amber);color:#1d1a16;padding:0 4px;border-radius:3px;font:600 .9em var(--font-mono)}
 .term{background:var(--cream-hi)}.term .out{font:13px/1.5 var(--font-mono);color:var(--ink)}
 .term .out .d{color:var(--muted)}.term .out .g{color:var(--amber-deep)}.term .out .h{color:var(--hp)}.term .out .r{color:var(--rose)}
 .term .gate{background:color-mix(in srgb,var(--cream) 82%,transparent);backdrop-filter:blur(2px)}

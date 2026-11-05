@@ -113,7 +113,7 @@ function teamCard(d: ListedDoor, stars: number, today: DoorPulse): string {
 export function presetCard(p: PresetSummary): string {
   return `<article class="team">
 <div class="head"><span class="led off" style="background:var(--violet-hi)"></span><a class="ttl" href="/install/${esc(p.id)}">${esc(p.name)}</a><span class="chip">V${p.version}</span></div>
-<div class="screen crt"><div class="l">preset — a signed team file</div><div class="l d">by @${esc(p.author)} · ${p.visibility === 'identified' ? 'account needed' : 'public'}</div></div>
+<div class="screen crt"><div class="l">preset — a signed team file</div><div class="l d">by @${esc(p.author)} · ${p.visibility === 'identified' ? 'sign in to install' : 'public'}</div></div>
 <div class="body"><p class="dim">Reviewed in the app before anything is installed.</p></div>
 <div class="foot"><span class="price free">download · review first</span><span class="sp"></span><a class="btn sm primary" href="/install/${esc(p.id)}">Review in Cookrew</a></div>
 </article>`

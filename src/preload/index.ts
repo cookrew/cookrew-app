@@ -281,6 +281,9 @@ const api = {
   // The key crosses once, into the secrets store, and is never sent back.
   accessSave: (input: unknown) => ipcRenderer.invoke('access:save', input),
   accessClear: () => ipcRenderer.invoke('access:clear'),
+  useSources: () => ipcRenderer.invoke('use:sources'),
+  openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
+  openScreenSettings: () => ipcRenderer.invoke('use:screen-settings'),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */
@@ -695,5 +698,9 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('cookrew', api)
+// Read by shared/machine-words.ts as the copy tables load, so it has to be here
+// before any page script runs. The phone and the site never get it, and their
+// sentences stand as written.
+contextBridge.exposeInMainWorld('cookrewPlatform', process.platform)
 
 export type CookrewApi = typeof api

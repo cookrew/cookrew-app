@@ -103,6 +103,8 @@ export interface FrameEls {
   /** The tiles' words and the machines' names: drawn at one size on a phone (paintDeviceWords). */
   markLabels?: Put[]
   machineWords?: Put[]
+  /** The share button among those words: a control, so it keeps a thumb's size (paintDeviceWords). */
+  machineShare?: Put | null
   /** The empty seat at the end of the crew: the way a new agent is made. */
   next: Put | null
   /** An item's full-view head, crisp (ZoomView · zv-fv-ghost): the page's words arrive in it, never blown up. */
@@ -191,6 +193,8 @@ function paintDeviceWords(L: Layout, els: FrameEls, d: { live: boolean; zIn: num
   put(els.deviceLabel, `translate(${f1(L.device.left)}px, ${f1(titleY)}px) scale(${f4(d.dw.titleK * back)}) translateY(-100%)`, seen)
   // Past the tiles the layer is gone: nothing to write on a frame nobody sees.
   if (d.shown > 0) for (const word of els.markLabels ?? []) put(word, `scale(${f4(d.dw.markK * back)})`, seen)
+  // The words shrink with the machine they name; a thumb does not. Scaled back to 1:1 on screen.
+  put(els.machineShare, `scale(${f4(1 / (d.live ? d.camDD : d.vS))})`)
   if (!d.live) return
   for (const word of els.machineWords ?? []) put(word, `scale(${f4(d.camDD / d.vS)})`)
 }

@@ -25,6 +25,7 @@ import { SecurityCard } from './SecurityCard'
 import { SeatsTab } from './SeatsTab'
 import { securityActions } from './security-actions'
 import '../grant-surface.css'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 
 /**
  * THE PROFILE SHEET (D4) — five tabs, and Devices is the heart of it.
@@ -599,7 +600,7 @@ export function ProfileSheet({
                 called REVOKE. */}
             {admitted.length > 0 && (
               <>
-                <p className="cr-acct-devices-heading">Admitted on this Mac</p>
+                <p className="cr-acct-devices-heading">{machineCopy('Admitted on this Mac', hostPlatform())}</p>
                 <ul className="cr-acct-devices">
                   {admitted.map((phone) => (
                     <li key={phone.deviceId} className="cr-acct-device cr-acct-local">
@@ -655,7 +656,7 @@ export function ProfileSheet({
               {workspaces.map((workspace) => (
                 <li key={workspace.id}>{workspace.name}</li>
               ))}
-              {workspaces.length === 0 && <li className="gs-dim">No workspaces on this Mac.</li>}
+              {workspaces.length === 0 && <li className="gs-dim">{machineCopy('No workspaces on this Mac.', hostPlatform())}</li>}
             </ul>
             <label className="cr-acct-toggle">
               <input

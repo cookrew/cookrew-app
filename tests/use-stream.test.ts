@@ -13,6 +13,10 @@ describe('parseStreamMessage · status', () => {
       kind: 'status',
       status: { state: 'offline', message: 'No Android device is attached', use: 'phone', input: true }
     })
+    expect(parseStreamMessage(JSON.stringify({ t: 'status', state: 'offline', message: 'closed', use: 'computer', input: false, gone: 'window' }))).toMatchObject({
+      status: { gone: 'window' }
+    })
+    expect(parseStreamMessage(JSON.stringify({ t: 'status', state: 'offline', use: 'computer', gone: 'nonsense' }))).not.toHaveProperty('status.gone')
     expect(parseStreamMessage(JSON.stringify({ t: 'status', state: 'melting', use: 'phone' }))).toBeNull()
     expect(parseStreamMessage(JSON.stringify({ t: 'status', state: 'live', use: 'browser' }))).toBeNull()
   })

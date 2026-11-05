@@ -58,6 +58,8 @@ import { handleStreamAdapters } from "./stream-adapters";
 import type { LoopHealthSnapshot } from "./loop-health";
 import { ROUTE_ID_RE, type CardRouteState, type RouteState } from "../shared/route";
 import { ownerSubmit } from "./ask";
+import { handleUseSourceRoutes, isUseSourceRoute } from "./use-source-routes";
+import type { UseSourceService } from "./use-source-service";
 import { BATCH_ID, createOnceByKey } from "./once-by-key";
 import { MAX_ATTACHMENT_BYTES } from "./attachments";
 import type { PromptImageReader } from "./prompt-image";
@@ -147,6 +149,8 @@ const SOUS_MAX_TEXT = 2000;
  * phone edits behave exactly like desktop edits.
  */
 export interface MobileOps {
+  /** The window picker's routes (use-source-routes.ts); absent answers 503. */
+  useSources?: UseSourceService;
   addNode: (node: CanvasNode) => CanvasNode;
   updateNode: (
     id: string,
@@ -700,6 +704,16 @@ export async function handleMobileApi(
     respondJson(response, 401, {
       error:
         "Unauthorized — open the pairing URL shown on the desktop (it carries ?token=).",
+    });
+    return true;
+  }
+
+  // What is on the owner's screen: the pairing credential, reads included.
+  if (isUseSourceRoute(p)) {
+    await handleUseSourceRoutes(request, response, p, {
+      service: ops?.useSources,
+      workspaceId: scope ?? store.focusedId,
+      paired: hasPairing,
     });
     return true;
   }
@@ -1650,7 +1664,7 @@ export async function handleMobileApi(
           if (held()) return { ok: false, reason: DISPATCH_IN_FLIGHT };
           await paceEnter(terminalId, data);
           if (deps.holdInput?.(terminalId, data) === true) return { ok: true, submitted: false };
-          return session ? ownerSubmit(session, data) : null;
+          return session ? ownerSubmit(session, data, { keyboard: true }) : null;
         };
         const verdict =
           typeof body.id === "string" && BATCH_ID.test(body.id)

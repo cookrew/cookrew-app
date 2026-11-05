@@ -21,6 +21,7 @@
 // the whole reason `unsubmitted` and `dropped` are separate outcomes with
 // opposite remedies (see shared/ask-outcome.ts).
 
+import { paneInputs } from './pane-input'
 import { ASK_EXIT, ASK_REMEDY, classifyDelivery, type AskOutcome } from '../shared/ask-outcome'
 import { promptLanded } from './dispatch'
 import { multiplexer, sessionNameFor } from './pty'
@@ -61,7 +62,9 @@ export function terminalDeliveryDeps(
         return null
       }
     },
-    submit: () => write('\r'),
+    // A retry of an Enter sent earlier must not submit a password half typed
+    // at a prompt that has opened since.
+    submit: (terminalId) => (paneInputs.sealed(terminalId) ? undefined : write('\r')),
     settle: () => new Promise((resolve) => setTimeout(resolve, SUBMIT_SETTLE_MS))
   }
 }

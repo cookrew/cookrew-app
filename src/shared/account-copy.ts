@@ -1,3 +1,4 @@
+import { hostPlatform, machineCopy, machineTable } from './machine-words'
 
 /**
  * THE ACCOUNT'S SENTENCES — one source for desktop and web (V3-07).
@@ -32,7 +33,7 @@
  * sentence whose feature lands in cut 2 or 3 sits here, typed and tested, and
  * is drawn by nobody until its lane wires it.
  */
-export const V3_COPY = {
+export const V3_COPY = machineTable({
   /** D1 hover with no account. Replaces "Claim a username — …". */
   'avatar.no-account':
     'Sign in — or create an account. Serve teams and reach this Mac from anywhere. Everything here works without one.',
@@ -351,9 +352,90 @@ export const V3_COPY = {
   /** W6, the web team page after asking. The seat outlives the tab. */
   'w6.asked':
     "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."
-} as const
+} as const, hostPlatform())
 
 export type V3CopyId = keyof typeof V3_COPY
+
+/**
+ * THE SAME ACCOUNT, AT A TERMINAL (`cookrew login`, `logout`, `whoami`).
+ *
+ * Its own table because main speaks these, not a window: there is no preload
+ * to name the platform, so `cliCopy` is told it. The three rules above hold
+ * here too, and a sentence names a command wherever it can, because a terminal
+ * has no button to point at.
+ */
+export const CLI_COPY = {
+  'gate.no-door': "refused: signing in is the owner's — this app has no account to sign in to",
+  'gate.no-keyboard':
+    'refused: signing in needs a person at a terminal, typing at a hidden prompt, and this command has no keyboard. Run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
+  'gate.agent-caller':
+    'refused: this was run by an agent. Signing in is for the owner: run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
+  'gate.agent-busy':
+    'refused: the agent in this pane is working, and signing in is for the owner. Run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
+  'gate.driven':
+    'refused: the last keys in this pane came from an agent, not a keyboard. Type cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
+  'gate.held': 'refused: a sign-in is already open on this Mac. Finish it, or press Ctrl-C there.',
+  'gate.not-open': 'refused: this connection has no sign-in open. Run cookrew login.',
+
+  'ask.username': 'Username: ',
+  'ask.password': 'Password for @{handle}: ',
+  'ask.password-logout': 'Password for @{handle}, to sign this Mac out: ',
+  'ask.choose': 'Which one? [1]: ',
+  'ask.choose-again': 'Pick a number from the list.',
+  'ask.totp': 'Six digits from your authenticator: ',
+  'ask.recovery': 'Recovery code: ',
+
+  'rung.approve': 'Approve on another device',
+  'rung.totp': 'Authenticator code',
+  'rung.recovery': 'Recovery code',
+  'rung.no-passkey': 'A passkey needs a window, and this terminal has none. Use another way in:',
+  'rung.passkey-only':
+    'A passkey needs a window, and this terminal has none, and this account offers nothing else. Add an authenticator on a device you are signed in on, then run cookrew login again.',
+  'rung.no-match': 'cookrew.dev sent no number for this sign-in, so it cannot be approved from here.',
+  'rung.none': 'This account offers no way in that a terminal can use. Nothing was attached.',
+
+  'approve.match': 'On your phone or another signed-in device, type this number: {match}',
+  'approve.waiting': 'Waiting for your answer there. The sign-in stays open for ten minutes.',
+  'approve.hint': 'Press c to use another way in. Ctrl-C stops.',
+  'approve.hint-alone': 'Ctrl-C stops.',
+  'approve.offline': 'cookrew.dev stopped answering. Still waiting; the sign-in is open at the other end.',
+
+  'said.signed-in': 'Signed in as @{handle}. cookrew.dev shows this Mac as {device}.',
+  'said.already': 'Already signed in as @{handle}. cookrew.dev shows this Mac as {device}.',
+  'said.other-account': 'This Mac is @{handle}. Run cookrew logout first, then cookrew login {wanted}.',
+  'said.not-signed-in': 'Not signed in on this Mac. Run cookrew login.',
+  'said.session-ended': '@{handle} on {device}: the session ended. Run cookrew login to renew it.',
+  'said.whoami': '@{handle} on {device} ({registry})',
+  'said.signed-out': 'Signed out. This Mac left @{handle}. Everything on the canvas stays.',
+  'said.start-again': 'Nothing was attached. Run cookrew login to start again.',
+  'said.too-many-passwords': 'Three wrong passwords, so this stops here. Nothing changed on this Mac.',
+
+  'refused.rate_limited': 'cookrew.dev is asking us to slow down. Try again in a minute.',
+  'refused.offline': 'cookrew.dev did not answer. Nothing changed. Try again in a moment.',
+  'refused.wrong-password': 'That is not the password for this account.',
+  'refused.bad_code': 'That is not the code showing right now. Wait for the next one and type it as it appears.',
+  'refused.bad_recovery': 'That is not one of your recovery codes. Each one opens the account exactly once.',
+  'refused.expired': 'This sign-in went cold after ten minutes.',
+  'refused.too_many_attempts': 'Too many tries on this sign-in.',
+  'refused.denied': 'That sign-in was denied on your other device.',
+  'refused.bad_username': 'A username is lowercase letters, digits and dashes.',
+  'refused.password_change_required':
+    'Somebody said a sign-in was not them, so this password is locked out until you change it. Change it on a device you are still signed in on.',
+  'refused.last_device':
+    'This is the last device on @{handle}, and an account with no device cannot be proved. Add another device first, then run cookrew logout.',
+  'refused.unknown': 'cookrew.dev answered something this app could not read. Nothing was changed. Try again in a moment.'
+} as const
+
+export type CliCopyId = keyof typeof CLI_COPY
+
+/** A terminal sentence, in the word for the machine it is running on. */
+export function cliCopy(
+  id: CliCopyId,
+  platform: string,
+  vars: Readonly<Record<string, string | number>> = {}
+): string {
+  return fillCopy(machineCopy(CLI_COPY[id], platform), vars)
+}
 
 /**
  * Fill a sentence's {placeholders}. Throws on one nobody supplied, because a

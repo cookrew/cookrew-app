@@ -7,7 +7,6 @@ import { registryOrigin } from './registry-origin'
 import {
   FUNNEL_EVENTS,
   FUNNEL_ROUTE,
-  TELEMETRY_DEFAULT_ON,
   dayOf,
   isFunnelDay,
   isFunnelEvent,
@@ -184,7 +183,9 @@ export function createTelemetry(deps: TelemetryDeps): Telemetry {
   const origin = deps.origin ?? registryOrigin
   const sleep = deps.sleep ?? unrefSleep
   const mintId = deps.mintId ?? randomUUID
-  const defaultOn = deps.defaultOn ?? TELEMETRY_DEFAULT_ON
+  // Off unless the caller says so: only the packaged app's boot turns it on,
+  // so a test or a stubbed client can never reach the network by default.
+  const defaultOn = deps.defaultOn ?? false
   const sandboxed = env.COOKREW_SERVED === '1' || (env.COOKREW_SESSION ?? '') !== ''
   const locked = sandboxed || env.COOKREW_TELEMETRY === '0'
 
