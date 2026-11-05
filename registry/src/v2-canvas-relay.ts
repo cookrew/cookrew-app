@@ -335,6 +335,11 @@ export function rewriteCookiePath(cookie: string, path: string): string {
  *
  * A relative reference (`board`) resolves against the path this exchange was
  * for, which is what a browser would have done with the desktop's answer.
+ *
+ * A credential on the redirect moves to the fragment, where the app already
+ * looks for it. The browser would otherwise send it straight back through the
+ * ingress, and its access log. No build of the app issues one any more; a Mac
+ * that has not updated still can.
  */
 export function rewriteLocation(
   value: string,
@@ -343,7 +348,10 @@ export function rewriteLocation(
   try {
     const target = new URL(value, `https://desktop.invalid${at.path}`)
     if (target.host === at.host) return value
-    return `${at.prefix}${target.pathname}${target.search}${target.hash}`
+    const token = target.searchParams.get('token')
+    if (token === null) return `${at.prefix}${target.pathname}${target.search}${target.hash}`
+    target.searchParams.delete('token')
+    return `${at.prefix}${target.pathname}${target.search}#pair=${encodeURIComponent(token)}`
   } catch {
     // Not a location this can reason about. Left alone rather than guessed at.
     return value

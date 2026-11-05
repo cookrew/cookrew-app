@@ -167,28 +167,31 @@ describe('the streams are covered too', () => {
     for (const stream of streams) expect(stream).toContain('apiPath(')
   })
 
-  it('every EventSource in the renderer also carries a token', () => {
-    // Reads are gated now, and EventSource cannot set a header — so a stream
-    // built without tokenParam is a 401 the client retries forever. That
-    // failure is INVISIBLE in the same way the scope bug above was: the socket
-    // opens, retries on its own, and the canvas simply never fills.
-    //
-    // Swept across the whole renderer rather than remote-api alone, because
-    // the next stream will not necessarily be added there, and the cost of
-    // getting this wrong is either a dead companion or somebody "fixing" it by
-    // reopening the read gate.
-    const violations: string[] = []
-    for (const file of sourceFiles(RENDERER)) {
-      // The one opener: it is handed a URL its callers built, token and all.
-      if (path.relative(RENDERER, file) === 'rtc-plane.ts') continue
-      const code = stripComments(readFileSync(file, 'utf8'))
-      code.split('\n').forEach((line, index) => {
-        if (!/(?:new EventSource|openEventSource)\(/.test(line)) return
-        if (/tokenParam\(/.test(line)) return
-        violations.push(`${path.relative(RENDERER, file)}:${index + 1}: ${line.trim()}`)
-      })
+  it('every stream gets its credential from the opener, on every plane', () => {
+    // Reads are gated, so a stream with no token is a 401 the client retries for
+    // ever. The opener adds it because the plane decides how: a query where
+    // EventSource needs one, a header on the relay, whose URLs reach the ingress
+    // log. A token added at a call site would land on the relay too.
+    const opener = readFileSync(path.join(RENDERER, 'rtc-plane.ts'), 'utf8')
+    const start = opener.indexOf('export const openEventSource')
+    const body = opener.slice(start, opener.indexOf('\n}\n', start))
+    expect(body).toMatch(/new RtcEventSource\(routed\.link, tokenParam\(routed\.path\)\)/)
+    expect(body).toMatch(/new RtcEventSource\(headerStream\(url\), url\)/)
+    expect(body).toMatch(/new EventSource\(tokenParam\(url\)\)/)
+    expect(opener).toMatch(/headers: \{ \.\.\.headers, \.\.\.authHeaders\(\) \}/)
+
+    const carrying: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(file)
+        else if (/\.tsx?$/.test(entry.name) && !/rtc-plane\.ts$|auth-gate\.ts$/.test(file)) {
+          if (/tokenParam\(/.test(readFileSync(file, 'utf8'))) carrying.push(path.relative(RENDERER, file))
+        }
+      }
     }
-    expect(violations).toEqual([])
+    walk(RENDERER)
+    expect(carrying).toEqual([])
   })
 
   it('every stream opens through openEventSource, so it follows the direct link', () => {

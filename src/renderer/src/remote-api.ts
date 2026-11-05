@@ -3,7 +3,7 @@ import type { StrayPane } from '../../shared/stray-pane'
 import type { LaunchFailure } from '../../shared/launch-failure'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { CardRouteState, RouteState } from '../../shared/route'
-import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
+import { AuthError, authStore, type AuthScope } from './auth-gate'
 import { ReconnectingStream, attachTerminalStream } from './live-stream'
 import { recordLatency, setDesktopName, setPathLink, setRegistryOrigin } from './path-link'
 import type { CompanionAccount } from '../../main/companion-account'
@@ -403,14 +403,14 @@ function bootNonce(): string {
 }
 
 function sharedEvents(): ReconnectingStream {
-  // tokenParam, not a header: EventSource has none. Reads are gated now, so a
-  // tokenless stream is a 401 the client would retry forever.
+  // openEventSource adds the credential in whichever way this plane allows.
+  // Reads are gated now, so a tokenless stream is a 401 the client would retry
+  // forever.
   if (!events) {
     const stream = new ReconnectingStream({
       // The URL is composed at every (re)connect, never captured — so this
       // stream lands on whichever plane is carrying the session at the moment
-      // it reconnects. `?token=` still works cross-origin; EventSource needs
-      // no CORS flag, but it does need the credential in the URL.
+      // it reconnects.
       open: () => {
         // THE FIRST CONNECT SAYS IT IS BOOTING FROM THE PULL. The stream
         // used to open with a full workspace snapshot — the same document
@@ -422,7 +422,7 @@ function sharedEvents(): ReconnectingStream {
         // gets the snapshot, which is how a dropped stream heals (L7).
         const first = !streamOpenedOnce
         streamOpenedOnce = true
-        return openEventSource(tokenParam(seated(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events'))))
+        return openEventSource(seated(apiPath(first ? `/api/events?boot=${bootNonce()}` : '/api/events')))
       },
       // The one place the companion learns its link is down. Without this the
       // badge would report the address bar forever, which is a memory rather
@@ -650,7 +650,7 @@ export function createRemoteApi(): CookrewApi {
       // so a foreground return revives the link the way the canvas stream's
       // resync does.
       const stream = attachTerminalStream(
-        { open: () => openEventSource(tokenParam(apiPath(`/api/terminal/${terminalId}/stream`))) },
+        { open: () => openEventSource(apiPath(`/api/terminal/${terminalId}/stream`)) },
         onData,
         (hello) => {
           // The stream's name rides its hello: a seed is sent down it alone.
@@ -768,7 +768,7 @@ export function createRemoteApi(): CookrewApi {
       // otherwise never reopened, and the fleet's workspace list freezes for
       // the life of the page.
       const stream = new ReconnectingStream({
-        open: () => openEventSource(tokenParam(apiPath('/api/levels/stream'))),
+        open: () => openEventSource(apiPath('/api/levels/stream')),
         onState: (state) => {
           if (state === 'failed') refused?.()
         },

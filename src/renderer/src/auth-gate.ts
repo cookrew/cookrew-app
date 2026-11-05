@@ -290,10 +290,10 @@ export function authStore(): AuthStore {
 /**
  * The pairing token as a QUERY PARAM, for clients that cannot set a header.
  *
- * There are exactly two, and both are EventSource: the workspace stream and a
- * terminal's pane stream. EventSource has no headers by construction, which is
- * the honest half of the reason reads went ungated for so long — so this is
- * the seam that lets reads be gated without losing the streams.
+ * Only the openers in rtc-plane.ts use it, and only on a direct plane or the
+ * direct link: `EventSource` and `new WebSocket` have no headers by construction.
+ * On the relay they go by fetch instead, because a URL through cookrew.dev
+ * reaches the ingress log.
  *
  * PREFER A HEADER WHEREVER ONE IS POSSIBLE. A token in a URL travels into
  * places a header does not: server logs, `document.referrer`, a screenshot of

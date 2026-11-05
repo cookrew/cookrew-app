@@ -6,13 +6,13 @@
 // the rail, the drawer and the pager reach the stream directly instead of
 // through six differently-shaped API entries.
 //
-// AUTH IS THE SAME AUTH. The token rides as a bearer on fetches and as
-// `?token=` on the EventSource (which has no headers), exactly as every other
-// companion call does; a 401 is reported to the auth store so a stale
+// AUTH IS THE SAME AUTH. The token rides as a bearer on fetches, and the live
+// stream takes it from openEventSource, exactly as every other companion call
+// does; a 401 is reported to the auth store so a stale
 // credential raises the re-pair screen here too rather than looking like an
 // agent with no history.
 
-import { AuthError, authStore, tokenParam } from '../auth-gate'
+import { AuthError, authStore } from '../auth-gate'
 import { apiPath } from '../api-base'
 import { planeFetch } from '../plane-fetch'
 import { openEventSource } from '../rtc-plane'
@@ -121,11 +121,8 @@ const RECONNECT_MS = 3000
 /**
  * The live PATH, carrying the newest mark reading this client already holds.
  *
- * Deliberately WITHOUT the token: `tokenParam` is applied at the `new
- * EventSource(...)` call site so tests/api-base.test.ts's sweep can see it
- * there. A token added inside a helper is the exact blind spot that sweep
- * exists for — and a stream opened without one is a 401 the browser retries
- * forever while the rail simply never fills.
+ * Deliberately WITHOUT the token: `openEventSource` adds it, in the way the plane
+ * allows, and tests/api-base.test.ts's sweep holds every stream to that opener.
  */
 export function liveHref(terminalId: string, since: number | null): string {
   const path = base(terminalId, '/live')
@@ -171,7 +168,7 @@ function subscribe(terminalId: string, handlers: StreamLiveHandlers): () => void
   const connect = (): void => {
     if (stopped) return
     try {
-      source = openEventSource(tokenParam(liveHref(terminalId, since)))
+      source = openEventSource(liveHref(terminalId, since))
     } catch (error) {
       handlers.onState('off')
       handlers.onError(error instanceof Error ? error.message : String(error))

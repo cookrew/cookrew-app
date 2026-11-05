@@ -445,7 +445,7 @@ export class RtcEventSource extends EventTarget {
   onmessage: ((event: MessageEvent) => void) | null = null
   private readonly abort = new AbortController()
 
-  constructor(link: RtcLink, path: string) {
+  constructor(link: Pick<RtcLink, 'request'>, path: string) {
     super()
     void this.run(link, path)
   }
@@ -463,7 +463,7 @@ export class RtcEventSource extends EventTarget {
     this.emit('error', new Event('error'))
   }
 
-  private async run(link: RtcLink, path: string): Promise<void> {
+  private async run(link: Pick<RtcLink, 'request'>, path: string): Promise<void> {
     try {
       const response = await link.request({
         method: 'GET',

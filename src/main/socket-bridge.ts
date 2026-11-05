@@ -15,9 +15,11 @@
  *   the phone (renderer path/bridge-socket.ts).
  *
  * Only the browser card's stream may be bridged — the path is matched, not
- * trusted — and the socket authorises itself exactly as a direct one does,
- * by the pairing token in its own query. Both routes sit behind the pairing
- * gate like every /api route.
+ * trusted — and the socket authorises itself exactly as a direct one does, by
+ * the pairing token in its own query. That query now exists only on this
+ * machine: the phone sends the token as a header, because this route's URL goes
+ * through cookrew.dev, and it is added here to the loopback dial. Both routes
+ * sit behind the pairing gate like every /api route.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -58,8 +60,12 @@ export interface SocketBridgeDeps {
 }
 
 export interface SocketBridge {
-  /** Open a bridged socket on this response; false when the path is not bridgeable or the bridge is full. */
-  readonly open: (path: string, response: http.ServerResponse) => boolean
+  /**
+   * Open a bridged socket on this response; false when the path is not
+   * bridgeable or the bridge is full. `credential` is the token this request
+   * presented, for a path that does not carry its own.
+   */
+  readonly open: (path: string, response: http.ServerResponse, credential?: string | null) => boolean
   /** Messages from the phone; false for a session that is not open. */
   readonly post: (id: string, messages: readonly string[]) => boolean
   readonly size: () => number
@@ -67,11 +73,17 @@ export interface SocketBridge {
 
 export const bridgeablePath = (path: string): boolean => BRIDGEABLE.test(path)
 
+/** The socket's own query, for the dial on loopback. A path that brought a token keeps it. */
+const withCredential = (path: string, credential: string | null | undefined): string => {
+  if (!credential || /[?&]token=/.test(path)) return path
+  return `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(credential)}`
+}
+
 export const createSocketBridge = (deps: SocketBridgeDeps = {}): SocketBridge => {
   const sessions = new Map<string, LoopbackSocket>()
   const max = deps.max ?? SOCKET_BRIDGE_MAX
 
-  const open = (path: string, response: http.ServerResponse): boolean => {
+  const open = (path: string, response: http.ServerResponse, credential?: string | null): boolean => {
     if (!bridgeablePath(path) || sessions.size >= max) return false
     const send = startSse(response)
     const id = randomUUID()
@@ -102,7 +114,7 @@ export const createSocketBridge = (deps: SocketBridgeDeps = {}): SocketBridge =>
     }
     const upstream: LoopbackSocket = (deps.dial ?? dialLoopbackSocket)({
       port: deps.port ?? 8639,
-      path,
+      path: withCredential(path, credential),
       headers: { [RELAY_MARKER]: '1' },
       onOpen: () => send('id', { id }),
       onMessage: (text) => {
