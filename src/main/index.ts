@@ -8668,7 +8668,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   setWatchHost(watchHost)
   ipcMain.handle(
     'watch:code',
-    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases() }))
+    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases(), claims: watchPairing.claims }))
   )
   ipcMain.handle(
     'watch:state',

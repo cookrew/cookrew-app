@@ -77,7 +77,9 @@ final class WatchApp {
     let pass = held.map { AccountKeeper(account: $0, device: vault.device(), api: registry, keep: { vault.saveAccount($0) }) }
     desktop = session.desktop
     username = held?.username
-    store = WatchStore(api: HTTPWatchAPI(bases: session.urls, token: session.token, relay: pass), feel: feel)
+    // With no account the relay would only refuse, and read as the Mac forgetting this watch.
+    let urls = session.bases.filter { held != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
+    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass), feel: feel)
   }
 
   func show(_ next: PairStage) {
@@ -85,11 +87,23 @@ final class WatchApp {
     stage = next
   }
 
+  /** Back where the watch belongs: its cards if it still has a Mac, the start if not. */
+  func home() {
+    show(.welcome)
+    if let session = vault.load() { open(session) }
+  }
+
   // MARK: One code
 
   func enterCode() {
     typed = ""
     show(.pad)
+  }
+
+  /** From the cards: the Mac's token stays until a new code has replaced it. */
+  func signInAgain() {
+    store = nil
+    enterCode()
   }
 
   func key(_ letter: String) {
@@ -102,7 +116,7 @@ final class WatchApp {
   /** An empty pad has nothing to delete, so the key steps back out. */
   func deleteKey() {
     padError = nil
-    if typed.isEmpty { stage = .welcome } else { typed.removeLast() }
+    if typed.isEmpty { home() } else { typed.removeLast() }
   }
 
   func submit() async {
@@ -178,7 +192,7 @@ final class WatchApp {
 
   func delete() {
     failure = nil
-    if digits.isEmpty { stage = .welcome } else { digits.removeLast() }
+    if digits.isEmpty { home() } else { digits.removeLast() }
   }
 
   private func pair() async {
@@ -229,7 +243,7 @@ final class WatchApp {
     leave(to: .welcome)
   }
 
-  /** The Mac forgot this watch, or the account's session ended. Said by the store in use, not one already left. */
+  /** The Mac forgot this watch. Said by the store in use, not one already left. */
   func lost(_ why: PairNotice, by reporter: WatchStore) {
     guard store === reporter, !forgetting else { return }
     leave(to: .notice(why))
@@ -318,11 +332,11 @@ public struct WatchRoot: View {
     Group {
       if let store = app.store {
         CardPager(store: store, desktop: app.desktop, username: app.username, onForget: { Task { await app.forget() } })
-          .overlay(alignment: .bottom) { LinkChip(store: store) }
+          .overlay(alignment: .bottom) { LinkChip(store: store, onSignIn: app.signInAgain) }
           .task(id: phase) {
             guard phase == .active else { return }
             await store.run()
-            if store.unpaired { app.lost(.unpaired, by: store) } else if store.signedOut { app.lost(.signedOut, by: store) }
+            if store.unpaired { app.lost(.unpaired, by: store) }
           }
       } else {
         PairingView(app: app).wholeGlass()
@@ -357,9 +371,9 @@ private struct PairingView: View {
     case .slow:
       NoticeView(title: "Too many tries", words: "Wait a minute, then try again.", action: "Back", onAction: app.enterCode)
     case .macAway:
-      NoticeView(title: "Can't reach your Mac", words: "You're in your account. Wake the Mac, then try again.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: { app.show(.welcome) })
+      NoticeView(title: "Can't reach your Mac", words: "You're in your account. Wake the Mac, then try again.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
     case .noNetwork:
-      NoticeView(title: "No connection", words: "The watch can't reach cookrew.dev.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: { app.show(.welcome) })
+      NoticeView(title: "No connection", words: "The watch can't reach cookrew.dev.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
     case .locked:
       NoticeView(title: "Account locked", words: "Change your password on your Mac, then get a new code.", action: "OK", onAction: { app.show(.welcome) })
     case .unpaired:
@@ -373,10 +387,23 @@ private struct PairingView: View {
 /** The only thing the wrist says about the line: when it is down. */
 struct LinkChip: View {
   let store: WatchStore
+  let onSignIn: () -> Void
   @Environment(\.ink) private var ink
 
   var body: some View {
-    if store.link == .lost {
+    if store.signedOut {
+      Button(action: onSignIn) {
+        Text("SIGN IN AGAIN")
+          .font(InkType.word(9.5))
+          .tracking(1)
+          .foregroundStyle(ink.onSeal)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 6)
+          .background(Capsule().fill(ink.wait))
+      }
+      .buttonStyle(.plain)
+      .padding(.bottom, 48)
+    } else if store.link == .lost {
       Text("MAC OFFLINE")
         .font(InkType.word(9.5))
         .tracking(1)

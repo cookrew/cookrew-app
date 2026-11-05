@@ -11,7 +11,7 @@ const CLAIM_POLL_MS = 1500
 
 type Stage =
   | { name: 'ask' }
-  | { name: 'code'; code: string; expiresAt: number }
+  | { name: 'code'; code: string; expiresAt: number; seen: number }
   | { name: 'digits'; code: WatchCode }
   | { name: 'done' }
 
@@ -52,7 +52,7 @@ function AskPane({
 }: {
   account: WatchState['account'] | null
   sealed: boolean
-  onCode: (code: string, expiresAt: number) => void
+  onCode: (code: string, expiresAt: number, seen: number) => void
   onDigits: (code: WatchCode) => void
 }): React.JSX.Element {
   const api = cookrew()
@@ -73,7 +73,7 @@ function AskPane({
       (result) => {
         setBusy(false)
         setPassword('')
-        if (result.ok) onCode(result.code, result.expiresAt)
+        if (result.ok) onCode(result.code, result.expiresAt, result.claims)
         else setError(inviteRefusal(result.reason, result.message))
       },
       () => {
@@ -254,12 +254,12 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
           <AskPane
             account={opened?.account ?? null}
             sealed={opened?.sealed ?? false}
-            onCode={(code, expiresAt) => setStage({ name: 'code', code, expiresAt })}
+            onCode={(code, expiresAt, seen) => setStage({ name: 'code', code, expiresAt, seen })}
             onDigits={(code) => setStage({ name: 'digits', code })}
           />
         )}
-        {stage.name === 'code' && <CodePane code={stage.code} expiresAt={stage.expiresAt} seen={opened?.claims ?? 0} onDone={done} onAgain={again} />}
-        {stage.name === 'digits' && <DigitsPane code={stage.code} seen={opened?.claims ?? 0} onDone={done} onAgain={again} />}
+        {stage.name === 'code' && <CodePane code={stage.code} expiresAt={stage.expiresAt} seen={stage.seen} onDone={done} onAgain={again} />}
+        {stage.name === 'digits' && <DigitsPane code={stage.code} seen={stage.code.claims} onDone={done} onAgain={again} />}
         {stage.name === 'done' && (
           <>
             <p className="gs-consequence">You can forget it from ⋯ on this Mac or on the watch.</p>

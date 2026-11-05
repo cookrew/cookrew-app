@@ -97,6 +97,18 @@ struct StoreTests {
     #expect(events.items == [.needsYou("A"), .done("B")])
   }
 
+  @Test("a session gone from the relay costs nothing that works: the wrist keeps polling and says so")
+  func signedOutKeepsTheMac() async {
+    let (store, api, _, _) = await harness([[card("a", .idle)]])
+    api.failure = .signedOut
+    await store.refresh()
+    #expect(store.signedOut)
+    #expect(!store.unpaired)
+    api.failure = nil
+    await store.refresh()
+    #expect(!store.signedOut)
+  }
+
   @Test("the box says who it goes to")
   func words() {
     #expect(placeholder(for: nil) == "Describe a task for a new agent…")

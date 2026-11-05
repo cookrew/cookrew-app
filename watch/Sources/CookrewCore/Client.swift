@@ -74,9 +74,40 @@ public func claimWatch(base: URL, code: String, session: URLSession = .shared) a
 }
 
 /** How long a road that proved itself is believed: a watch changes networks without a word. */
-private let helloSeconds: TimeInterval = 120
+private let helloSeconds: TimeInterval = 15
 /** A home network answers at once; away from home this is what the first read waits. */
 private let helloPatience: TimeInterval = 3
+/** A proof is a few dozen bytes. */
+private let helloMaxBytes = 512
+
+/** The token goes to the road it was proved on or nowhere, so nothing here follows a redirect. */
+private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
+  }
+}
+
+private let noRedirects = NoRedirects()
+
+/** The work's answer, or nil at the deadline. A request's own timeout is only an idle timer. */
+func within<Value: Sendable>(_ seconds: TimeInterval, _ work: @escaping @Sendable () async -> Value?) async -> Value? {
+  await withTaskGroup(of: Value?.self) { group in
+    group.addTask { await work() }
+    group.addTask {
+      try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+      return nil
+    }
+    let first = await group.next() ?? nil
+    group.cancelAll()
+    return first
+  }
+}
 
 /** The Mac over HTTP: the base that last answered, then the others in order. */
 public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
@@ -139,8 +170,28 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   private func exchange(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)? {
-    let (data, response) = try await session.data(for: request)
+    let (data, response) = try await session.data(for: request, delegate: noRedirects)
     return (response as? HTTPURLResponse).map { (data, $0) }
+  }
+
+  /** The body of a hello, inside its deadline: a slow or endless answer is no answer. */
+  private func hello(_ ask: URLRequest) async -> Data? {
+    let session = self.session
+    return await within(helloPatience) {
+      guard let (bytes, response) = try? await session.bytes(for: ask, delegate: noRedirects),
+        (response as? HTTPURLResponse)?.statusCode == 200
+      else { return nil }
+      var body = Data()
+      do {
+        for try await byte in bytes {
+          body.append(byte)
+          if body.count > helloMaxBytes { return nil }
+        }
+      } catch {
+        return nil
+      }
+      return body
+    }
   }
 
   /** The relay's own refusal of the session, not the Mac's of this watch. */
@@ -178,10 +229,9 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     struct Hello: Decodable {
       let proof: String
     }
-    guard let (data, http) = try? await exchange(ask) ?? nil,
-      http.statusCode == 200,
-      let hello = try? JSONDecoder().decode(Hello.self, from: data),
-      hello.proof == helloProof(token: token, nonce: nonce)
+    guard let body = await hello(ask),
+      let answer = try? JSONDecoder().decode(Hello.self, from: body),
+      answer.proof == helloProof(token: token, nonce: nonce)
     else {
       setProven(base, nil)
       return false
@@ -202,6 +252,8 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     let payload = try body.map { try JSONSerialization.data(withJSONObject: $0) }
     let read = method == "GET"
     var signedOut = false
+    // Whichever road this takes: a watch that stays home must not outlive its session.
+    if let relay { Task { _ = await relay.token() } }
     for index in order() {
       guard await mayUse(bases[index]) else { continue }
       var url = bases[index].appending(path: path)
@@ -221,6 +273,13 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
             continue
           }
           answer = again
+        }
+        // A Mac that forgot this watch cannot prove itself on this road, and could
+        // not say so here. So a 401 is the road gone, whoever is on it now; if the
+        // watch really was forgotten the relay says that in the Mac's own words.
+        if relay != nil, !relayed, url.scheme == "http", answer.1.statusCode == 401 {
+          setProven(bases[index], nil)
+          continue
         }
         if relayed {
           if answer.1.statusCode == 503 { continue }

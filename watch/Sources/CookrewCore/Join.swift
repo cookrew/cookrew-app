@@ -123,7 +123,7 @@ public func pairWatch(
       step(.finding)
       found = await findMac(code: code, account: account, api: api)
     case .failure(let entry):
-      return .failed(why == .signedOut ? entry : why)
+      return .failed(why == .signedOut || entry == .newDevice ? entry : why)
     }
   }
   switch found {
@@ -148,7 +148,7 @@ public protocol RelayPass: Sendable {
   var host: String { get }
   var port: Int? { get }
   func token() async -> String
-  /** The token that has replaced this refused one, if there is one. */
+  /** What to try now that the relay refused this token; nil means the session is over. */
   func newer(than token: String) async -> String?
 }
 
@@ -158,7 +158,12 @@ let renewRestMs: Double = 60 * 1000
 /**
  * Holds the session and renews it on the device key, a week before it ends, as a
  * Mac does. Never after: a session that has ended was ended by the clock or by
- * "not me", and the key must not be able to bring it back.
+ * "not me", and the key must not bring it back. The registry would allow it; this
+ * is the watch's own rule, as it is the Mac's (src/shared/session-renew.ts).
+ *
+ * One exception, and it is not a revival: a renewal whose reply never came may have
+ * closed this token and made one the watch never saw. Then the relay's refusal says
+ * nothing about the owner's wishes, so that renewal gets one more try.
  */
 public actor AccountKeeper: RelayPass {
   public nonisolated let host: String
@@ -170,6 +175,10 @@ public actor AccountKeeper: RelayPass {
   private let keep: @Sendable (WatchAccount) -> Void
   private var renewing: Task<Bool, Never>?
   private var restUntil: Double = 0
+  /** A renewal went out and no answer came back. */
+  private var unanswered = false
+  /** The relay refused this session and nothing replaced it: only a new code will. */
+  private var refused = false
 
   public init(
     account: WatchAccount,
@@ -188,13 +197,20 @@ public actor AccountKeeper: RelayPass {
   }
 
   public func token() async -> String {
-    if renewDue(exp: account.exp, now: now()), now() >= restUntil { await renew() }
+    if !refused, renewDue(exp: account.exp, now: now()), now() >= restUntil { await renew() }
     return account.token
   }
 
   public func newer(than token: String) async -> String? {
     if let renewing { _ = await renewing.value }
-    return account.token == token ? nil : account.token
+    if account.token != token { return account.token }
+    if unanswered {
+      guard account.exp > now(), now() >= restUntil else { return nil }
+      if await renew() { return account.token }
+      if unanswered { return nil }
+    }
+    refused = true
+    return nil
   }
 
   /** One at a time: each renewal closes the session before it, and two would race to leave a dead token. */
@@ -208,12 +224,18 @@ public actor AccountKeeper: RelayPass {
   }
 
   private func renewOnce() async -> Bool {
-    guard let next = try? await api.renew(account: account, device: device) else {
+    do {
+      account = account.renewed(try await api.renew(account: account, device: device))
+      unanswered = false
+      keep(account)
+      return true
+    } catch RegistryError.signedOut {
+      unanswered = false
+      return false
+    } catch {
+      unanswered = true
       restUntil = now() + renewRestMs
       return false
     }
-    account = account.renewed(next)
-    keep(account)
-    return true
   }
 }

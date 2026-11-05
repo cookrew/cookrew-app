@@ -427,6 +427,17 @@ describe('through the real gate', () => {
       expect(pairing.paired).toBe(true)
     })
 
+    it('hands the sheet the count of arrivals with the code, so it needs no earlier read', async () => {
+      const digits = await fetch(`${origin}/api/watch/code`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${PAIRING}`, 'content-type': 'application/json' },
+        body: '{}'
+      })
+      expect(await digits.json()).toMatchObject({ claims: 0 })
+      const reply = await invite({ authorization: `Bearer ${PAIRING}` }, 'right')
+      expect(await reply.json()).toMatchObject({ ok: true, claims: 0 })
+    })
+
     it('a wrong password arms nothing', async () => {
       const reply = await invite({ authorization: `Bearer ${PAIRING}` }, 'wrong')
       expect(await reply.json()).toEqual({ ok: false, reason: 'bad_credentials' })

@@ -77,6 +77,8 @@ run('a watch away from home, on one code', () => {
   /** Somebody else's machine on an address the watch remembers. */
   let stranger: Up
   const strangerHeard: { path: string; authorization?: string }[] = []
+  /** Another, which answers a hello one byte at a time and never finishes. */
+  let trickler: Up
   let dir = ''
   let token = ''
   let phone = ''
@@ -98,6 +100,7 @@ run('a watch away from home, on one code', () => {
       desktopName: () => 'This Mac',
       bases: () => [
         { kind: 'lan', url: stranger.origin },
+        { kind: 'lan', url: trickler.origin },
         { kind: 'lan', url: mac.origin }
       ],
       canvas: () => ({ nodes: [], connections: [] }),
@@ -140,8 +143,21 @@ run('a watch away from home, on one code', () => {
     stranger = await listen(
       createServer((request, response) => {
         strangerHeard.push({ path: request.url ?? '', authorization: request.headers.authorization })
+        // Sent on to the real Mac, whose proof would pass if the watch followed.
+        if (request.url?.startsWith('/api/watch/hello')) {
+          response.writeHead(302, { location: `${mac.origin}${request.url}` })
+          response.end()
+          return
+        }
         response.writeHead(401, { 'content-type': 'application/json' })
         response.end('{"error":"Unauthorized"}')
+      })
+    )
+    trickler = await listen(
+      createServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        const drip = setInterval(() => response.write(' '), 200)
+        response.on('close', () => clearInterval(drip))
       })
     )
     mac = await listen(
@@ -205,6 +221,7 @@ run('a watch away from home, on one code', () => {
     await site.close()
     await mac.close()
     await stranger.close()
+    await trickler.close()
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -225,7 +242,7 @@ run('a watch away from home, on one code', () => {
       'step joining',
       'step finding',
       'paired This Mac as owner',
-      'bases lan,lan,relay',
+      'bases lan,lan,lan,relay',
       'cards 0 line relay',
       'cards-home 0 line direct',
       'renewed true true',

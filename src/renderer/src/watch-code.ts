@@ -3,6 +3,8 @@ export interface WatchCode {
   code: string
   expiresAt: number
   bases: { kind: string; url: string }[]
+  /** Arrivals so far: the sheet waits for one more than this. */
+  claims: number
 }
 
 /** What a sheet has to ask for, and whether a code on offer is still standing. */
@@ -18,7 +20,7 @@ export interface WatchState {
 
 /** The account's join code for a watch, or why not (main/watch-routes.ts). */
 export type WatchInvite =
-  | { ok: true; code: string; expiresAt: number }
+  | { ok: true; code: string; expiresAt: number; claims: number }
   | { ok: false; reason: string; message?: string }
 
 const REFUSALS: Readonly<Record<string, string>> = {

@@ -35,10 +35,12 @@ private final class FakeRegistry: RegistryAPI, @unchecked Sendable {
   }
 
   var renewFails = false
+  var renewRefused = false
 
   func renew(account: WatchAccount, device: WatchDevice) async throws -> Renewed {
     log.append("renew")
     await Task.yield()
+    if renewRefused { throw RegistryError.signedOut }
     if renewFails { throw RegistryError.unreachable }
     return Renewed(token: "fresh", exp: 9_000)
   }
@@ -168,6 +170,14 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     #expect(outcome == .failed(.ended))
   }
 
+  @Test func testAHeldDeviceTheNextAccountRefusesIsSaidSoTheNextCodeGoesInAsNew() async {
+    let api = FakeRegistry()
+    api.claims[macId] = .failure(.claim("no-code"))
+    api.joinResult = .failure(.badDevice)
+    let outcome = await pair(api, held: held)
+    #expect(outcome == .failed(.newDevice))
+  }
+
   @Test func testACodeLostWithItsReplyIsSaidToHaveEndedNotBeenMistyped() {
     #expect(afterLostReply(.wrongCode, unanswered: true) == .ended)
     #expect(afterLostReply(.wrongCode, unanswered: false) == .wrongCode)
@@ -212,6 +222,10 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     #expect(dashedCode("k7qm2xpd") == "K7QM-2XPD")
     #expect(dashedCode("K7QM-2XPD") == "K7QM-2XPD")
   }
+}
+
+private final class Ticks: @unchecked Sendable {
+  var now: Double = 1
 }
 
 @Suite struct KeeperTests {
@@ -259,6 +273,40 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     #expect(await keeper.newer(than: "old") == "fresh")
   }
 
+  @Test func testARenewalWhoseReplyWasLostIsTriedOnceMoreWhenTheRelayRefuses() async {
+    let api = FakeRegistry()
+    api.renewFails = true
+    let clock = Ticks()
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { clock.now }, keep: { _ in })
+    #expect(await keeper.renew() == false)
+    api.renewFails = false
+    clock.now += 61_000
+    #expect(await keeper.newer(than: "old") == "fresh")
+  }
+
+  @Test func testASessionTheRegistryRefusedIsNotBroughtBackOnTheKey() async {
+    let api = FakeRegistry()
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { 1 }, keep: { _ in })
+    #expect(await keeper.newer(than: "old") == nil)
+    let token = await keeper.token()
+    #expect(token == "old")
+    #expect(api.log.isEmpty)
+  }
+
+  @Test func testARenewalTheRegistryRefusedIsNotTriedAgain() async {
+    let api = FakeRegistry()
+    api.renewRefused = true
+    let clock = Ticks()
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { clock.now }, keep: { _ in })
+    #expect(await keeper.renew() == false)
+    clock.now += 61_000
+    #expect(await keeper.newer(than: "old") == nil)
+    #expect(api.log == ["renew"])
+  }
+
   @Test func testLeavesAFreshSessionAlone() async {
     let api = FakeRegistry()
     let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week * 3)
@@ -281,6 +329,21 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
 }
 
 @Suite struct HelloTests {
+  @Test func testAnAnswerThatNeverEndsIsCutOffAtTheDeadline() async {
+    let started = Date()
+    let answer: Int? = await within(0.05) {
+      try? await Task.sleep(nanoseconds: 5_000_000_000)
+      return 1
+    }
+    #expect(answer == nil)
+    #expect(Date().timeIntervalSince(started) < 1)
+  }
+
+  @Test func testAQuickAnswerGetsThrough() async {
+    let answer: Int? = await within(5) { 1 }
+    #expect(answer == 1)
+  }
+
   @Test func testTheProofIsTheMacsByteForByte() {
     #expect(helloProof(token: "mac-token", nonce: "nonce-0123456789abcdef") == "cBtQe4csbmPvxeVVg4OJ0NkU0FBGhTBQIZcCGH5GFX8")
   }
@@ -439,6 +502,37 @@ private final class Pass: RelayPass, @unchecked Sendable {
     let heard = Scripted.seen.filter { $0.url?.host() == "192.168.2.40" }
     #expect(heard.count == 1)
     #expect(heard.allSatisfy { $0.url?.path().hasSuffix("api/watch/hello") == true && $0.value(forHTTPHeaderField: "authorization") == nil })
+  }
+
+  @Test func testA401FromAPlainRoadIsThatRoadGoneNotTheWatchForgotten() async throws {
+    Scripted.answers = [("192.168.2.40", 200, cardsBody)]
+    let api = line(Pass())
+    _ = try await api.cards(tag: nil)
+    #expect(api.line == .direct)
+    // Same address, inside the time its proof is believed, and somebody else now.
+    Scripted.answers = [("192.168.2.40", 401, #"{"error":"Unauthorized"}"#), ("cookrew.dev", 200, cardsBody)]
+    _ = try await api.cards(tag: nil)
+    #expect(api.line == .relay)
+  }
+
+  @Test func testAWatchThatStaysHomeStillRenewsOnTime() async throws {
+    Scripted.answers = [("192.168.2.40", 200, cardsBody)]
+    let registryAPI = FakeRegistry()
+    let inTheLastWeek = nowMs() + 24 * 3600 * 1000
+    let keeper = AccountKeeper(
+      account: WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: inTheLastWeek),
+      device: WatchDevice(),
+      api: registryAPI,
+      keep: { _ in }
+    )
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [Scripted.self]
+    let api = HTTPWatchAPI(bases: [URL(string: "http://192.168.2.40:8639")!], token: "mac-token", session: URLSession(configuration: config), relay: keeper)
+    _ = try await api.cards(tag: nil)
+    for _ in 0..<100 where registryAPI.log.isEmpty {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    #expect(registryAPI.log == ["renew"])
   }
 
   @Test func testAWriteARelayGatewayDroppedIsNotSentDownTheNextRoad() async {

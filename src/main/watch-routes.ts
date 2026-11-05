@@ -61,6 +61,9 @@ export type WatchInvite =
   | { readonly ok: true; readonly code: string; readonly expiresAt: number }
   | { readonly ok: false; readonly reason: string; readonly message?: string }
 
+/** What a sheet is given: a code comes with the count of arrivals it is to be measured from. */
+export type WatchInviteReply = Exclude<WatchInvite, { ok: true }> | (Extract<WatchInvite, { ok: true }> & { readonly claims: number })
+
 /** What main lends these routes (index.ts); a module seam, as setMenuAnswerer is. */
 export interface WatchHost {
   readonly pairing: WatchPairing
@@ -96,11 +99,12 @@ export function setWatchHost(next: WatchHost | null): void {
  * one code carries the watch into the account and on to this Mac. The registry
  * spends it at the join, which is why this Mac must hold its own copy.
  */
-export async function inviteWatch(current: Pick<WatchHost, 'invite' | 'pairing'>, password: string, here: boolean): Promise<WatchInvite> {
+export async function inviteWatch(current: Pick<WatchHost, 'invite' | 'pairing'>, password: string, here: boolean): Promise<WatchInviteReply> {
   try {
     const invite = await current.invite(password, here)
-    if (invite.ok) current.pairing.arm(invite.code, invite.expiresAt)
-    return invite
+    if (!invite.ok) return invite
+    current.pairing.arm(invite.code, invite.expiresAt)
+    return { ...invite, claims: current.pairing.claims }
   } catch (error) {
     console.error('Minting a code for the watch failed:', error)
     return { ok: false, reason: 'unknown' }
@@ -339,7 +343,7 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
   }
 
   if (ctx.owner && method === 'POST' && path === '/api/watch/code') {
-    respondJson(response, 200, { ...current.pairing.mintCode(), bases: current.bases() })
+    respondJson(response, 200, { ...current.pairing.mintCode(), bases: current.bases(), claims: current.pairing.claims })
     return true
   }
   if (ctx.owner && method === 'GET' && path === '/api/watch/pairing') {
