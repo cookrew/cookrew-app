@@ -1,13 +1,14 @@
-// The COO in ink, stamped four ways: the app's own icon, and the icons the web build wears in
-// a browser tab, on a phone's home screen and in its manifest. Same geometry and brush as the
-// site's lockup (scripts/brand-ink/site-brand-ink.mjs, coo-stroke.html version B), so the Dock,
-// cookrew.dev and the companion page all carry one mark.
+// The Co in ink (scheme 7 of coo-logo-schemes.html, the owner's pick for every icon on
+// 2026-11-05: the C round ONE lens), stamped for the app, for the web build's tab, home screen
+// and manifest, and for the watch. Same C and lens as the site's lockup
+// (scripts/brand-ink/site-brand-ink.mjs), so the Dock, cookrew.dev and the companion page agree.
 //
 //   node scripts/brand-ink/app-icon.mjs
 //
 // App:   resources/icon.png (1024, rounded tile) + resources/icon.icns.
 //        The Dock icon is read at startup (src/main/index.ts · app.dock.setIcon), so the running
 //        app picks it up on the next launch; packaged builds bundle the .icns.
+// Watch: watch/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png, square and opaque.
 // Web:   src/renderer/public/{favicon.svg,apple-touch-icon.png,icon-192.png,icon-512.png,
 //        icon-maskable-512.png,manifest.webmanifest}. These are SQUARE and full-bleed on purpose: iOS and Android
 //        apply their own mask, so a corner radius baked in would be rounded twice. They sit at
@@ -32,23 +33,17 @@ const TILE = 1024
 const RADIUS = 229 // the macOS squircle's corner, as a fraction of the 1024 tile
 
 // The mark's own coordinates (240 × 110): the C from 12 o'clock counter-clockwise round the
-// left lens, then the glasses in one stroke. Mirrors site-brand-ink.mjs.
+// left lens, then that lens in one stroke. Mirrors site-brand-ink.mjs.
 const D = Math.PI / 180
 const L = { cx: 50, cy: 50, r: 11 }
-const R = { cx: 76.5, cy: 50, r: 11 }
 const lens = (c, start, turns, r1) => I.arc(c.cx, c.cy, c.r, start, start + Math.PI * 2 * turns, 1.15, 0.6, r1)
 const C = I.arc(L.cx, L.cy, 19.5, -90 * D, -300 * D, 1.1, 0.85, 19.5)
-const GLASSES = [
-  [101, 41.6, 0.35], [96, 40.8, 0.6], [91.2, 44, 0.85],
-  ...lens(R, -0.42, 1.55, 10.3),
-  [65.4, 47.6, 0.45], [63.25, 44.6, 0.35], [61.1, 47.6, 0.45],
-  ...lens(L, 0, -1.04, 10.4)
-]
+const FIRST_O = lens(L, 0, -1.04, 10.4)
 // dry: 0, unlike the site's pens. A dry pen ends its stroke in bristle hairlines, which this
 // script does not draw (see brush below), so a dry tail is simply missing: at 0.2 the first O
 // stood open by a third of its ring, and the C stopped short of 5 o'clock.
-const PEN = { width: 7, nib: 0.12, angle: 0, jitter: 0.05, dry: 0 }
-const GLASS_PEN = { width: 3.2, nib: 0.5, angle: -0.6, jitter: 0.1, dry: 0 }
+const PEN = { width: 9, nib: 0.12, angle: 0, jitter: 0.05, dry: 0 }
+const LENS_PEN = { width: 4.6, nib: 0.5, angle: -0.6, jitter: 0.1, dry: 0 }
 
 const tidy = (d) => d.replace(/(\d+\.\d)\d+/g, '$1').replace(/\.0(?=\D)/g, '')
 // The mark is drawn ~10× its own size, so the brush is sampled finer than the site's and the
@@ -56,27 +51,26 @@ const tidy = (d) => d.replace(/(\d+\.\d)\d+/g, '$1').replace(/\.0(?=\D)/g, '')
 // its tooth turn into a chewed edge on a 1024 px tile.
 const brush = (pts, pen) => tidy(I.brushFromLine(I.resample(I.spline(pts), 0.5), pen).body)
 
-/** The mark's box in its own coordinates, so the stamp can be centred without measuring:
- *  the C's outer edge (r 19.5 + a 7-wide brush) to the right lens's (r 11 + 3.2). */
-const BOX = { x: 26.8, y: 27, w: 62.4, h: 46 }
+/** The mark's box in its own coordinates, measured off the two brushed paths. */
+const BOX = { x: 25.9, y: 26.3, w: 37.3, h: 46.8 }
 
-/** 76% of the tile: an icon is read at 16 px, so the mark keeps a wide margin. */
+/** The share of the tile the mark's longer side takes: an icon is read at 16 px, so it keeps a margin. */
 const ICON_SHARE = 0.76
+/** The watch crops to a circle, which the box's corners have to clear. */
+const WATCH_SHARE = 0.62
 /**
  * An Android adaptive icon shows the middle 72 of its 108 units, so a launcher's circle has a
  * radius of a third of the tile, not the 40% the maskable spec names. The box's corners fit in it.
  */
-const MASKABLE_SHARE = 0.48
+const MASKABLE_SHARE = 0.5
 
 /**
  * The COO on a paper square. `rounded` bakes the macOS corner in (the .icns has to carry it);
  * the web icons leave the square square and let the platform mask it.
  */
 function stamp({ rounded, share = ICON_SHARE }) {
-  // `GLASSES` opens on a short arm above the right lens — it reads as a whisker at icon
-  // size, so the mark is just C and two eyes.
-  const strokes = [brush(C, PEN), brush(GLASSES.slice(3), GLASS_PEN)]
-  const s = (TILE * share) / BOX.w
+  const strokes = [brush(C, PEN), brush(FIRST_O, LENS_PEN)]
+  const s = (TILE * share) / Math.max(BOX.w, BOX.h)
   const tx = TILE / 2 - (BOX.x + BOX.w / 2) * s
   const ty = TILE / 2 - (BOX.y + BOX.h / 2) * s
   const body = strokes.map((d, i) => `<path id="s${i}" d="${d}"/>`).join('')
@@ -159,6 +153,13 @@ for (const [px, name] of [[512, 'icon-512.png'], [192, 'icon-192.png'], [180, 'a
 }
 const maskable = render(stamp({ rounded: false, share: MASKABLE_SHARE }), 'maskable')
 execFileSync('sips', ['-s', 'format', 'png', '-Z', '512', maskable, '--out', join(webOut, 'icon-maskable-512.png')], { stdio: 'ignore' })
+// The App Store refuses an icon with an alpha channel, and sips keeps one through a plain
+// conversion: a JPEG in between is what drops it. Flat ink on paper survives that unchanged.
+const watchOut = join(root, 'watch', 'App', 'Assets.xcassets', 'AppIcon.appiconset', 'icon-1024.png')
+const watchFlat = join(work, 'watch.jpg')
+execFileSync('sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', 'best', render(stamp({ rounded: false, share: WATCH_SHARE }), 'watch'), '--out', watchFlat], { stdio: 'ignore' })
+execFileSync('sips', ['-s', 'format', 'png', watchFlat, '--out', watchOut], { stdio: 'ignore' })
+
 const manifest = {
   name: 'Cookrew',
   short_name: 'Cookrew',
