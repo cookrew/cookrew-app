@@ -390,3 +390,71 @@
   .cr-wsw-plus b { font-size: 20px }
   .cr-wsw-actions { gap: 6px }
 }
+
+/* The sheets' shared parts: the folder row, what the check says, what a remove
+   does, the icon row. A sheet can stand alone over the app (.cr-wsw-solo). */
+.cr-wsw-solo { position: fixed; inset: 0; z-index: 900 }
+.cr-ws-dir-row { display: flex; gap: 6px; min-width: 0 }
+.cr-ws-dir-row .cr-ws-input { flex: 1; min-width: 0 }
+.cr-ws-dir-pick {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.cr-ws-dir-pick:hover { border-color: var(--amber-deep) }
+.cr-ws-say {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.cr-ws-say.refused { color: var(--danger, #b3261e) }
+.cr-ws-say.quiet { color: var(--ink-soft, var(--ink)); opacity: 0.7 }
+.cr-ws-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.cr-ws-check {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink);
+  cursor: pointer;
+}
+.cr-ws-check input { margin: 2px 0 0 }
+.cr-ws-create.danger { background: var(--danger, #b3261e); border-color: var(--danger, #b3261e); color: #fff }
+.cr-ws-icons { display: flex; flex-wrap: wrap; gap: 4px }
+.cr-ws-icon {
+  width: 32px;
+  height: 32px;
+  font-size: 16px;
+  line-height: 1;
+  background: var(--cream);
+  border: 1.5px solid var(--line-soft);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cr-ws-icon[aria-pressed='true'] { border-color: var(--amber-deep); background: var(--cream-hi) }
+.cr-wsw-why {
+  align-self: center;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+}
+/* A refused CREATE must not look pressable beside the sentence saying why. */
+.cr-ws-create:disabled { opacity: 0.4; cursor: not-allowed; filter: saturate(0.4) }

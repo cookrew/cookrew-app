@@ -212,7 +212,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
   // A click on the name opens, as the face does; a double-click renames it in place (NameEdit.tsx).
   const title = useNameEdit(agent.id, agent.name, { onPress: onOpen })
   return (
-    <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`}>
+    <div ref={bind(`agent:${agent.id}`)} className={`zv-m ${agent.phase}`} data-card-id={agent.id}>
       <div ref={bind(`agent-av:${agent.id}`)} className="zv-av" title={`${agent.name} · ${agent.word}`} {...press(onOpen, `${agent.name}, ${agent.word}`)}>
         <InkAvatar id={agent.id} preset={agent.preset} orch={agent.orch} status={agent.status} weight="large" />
       </div>

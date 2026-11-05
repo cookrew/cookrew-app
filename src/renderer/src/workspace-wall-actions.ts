@@ -1,4 +1,5 @@
 import type { TeamMeta, WorkspaceList } from '../../shared/model'
+import type { WorkspaceRemovePlan } from '../../shared/workspace-door'
 
 /**
  * WHAT THE WALL CAN DO TO A WORKSPACE, decided without a DOM.
@@ -25,6 +26,15 @@ export function planRemove(list: WorkspaceList, id: string): RemovePlan {
   if (id !== list.activeId) return { ok: true, switchTo: null }
   const other = list.workspaces.find((w) => w.id !== id)
   return { ok: true, switchTo: other?.id ?? null }
+}
+
+/**
+ * The plan a remove sheet may show: the answer to the question it asked. The
+ * sheet confirms against what it shows, so a late answer about another
+ * workspace must never reach it.
+ */
+export function planFor(asked: string | null, answer: WorkspaceRemovePlan): WorkspaceRemovePlan | null {
+  return answer.id === asked ? answer : null
 }
 
 /** "3 agents · Sep 20" — a template's size and age in one line. */

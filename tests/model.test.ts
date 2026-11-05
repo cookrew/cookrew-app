@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { activeBrowserTab, noteNameFromContent, browserTabs, normalizeDirs, uniqueName } from '../src/shared/model'
+import { activeBrowserTab, legacyNoteName, noteNameFromContent, browserTabs, normalizeDirs, uniqueName } from '../src/shared/model'
 
 describe('noteNameFromContent', () => {
-  it('slugifies the first line', () => {
+  it('keeps the first line in the words and case it was written', () => {
     expect(noteNameFromContent('Cookrew spec scratchpad — testing note API')).toBe(
-      'cookrew-spec-scratchpad-test'
+      'Cookrew spec scratchpad test'
     )
   })
 
-  it('strips markdown markers', () => {
-    expect(noteNameFromContent('# Hello World\nbody')).toBe('hello-world')
+  it('strips markdown markers, not capitals (box user test 2, bug 15)', () => {
+    expect(noteNameFromContent('# Hello World\nbody')).toBe('Hello World')
+    expect(noteNameFromContent('# Plan')).toBe('Plan')
+    expect(noteNameFromContent('- [ ] Ship it')).toBe('Ship it')
+  })
+
+  it('keeps a word that is not English', () => {
+    expect(noteNameFromContent('## Überblick')).toBe('Überblick')
   })
 
   it('falls back to untitled for empty content', () => {
@@ -20,7 +26,13 @@ describe('noteNameFromContent', () => {
   it('caps length at 28 chars without trailing dash', () => {
     const name = noteNameFromContent('a very long first line that keeps going and going forever')
     expect(name.length).toBeLessThanOrEqual(28)
-    expect(name.endsWith('-')).toBe(false)
+    expect(name.endsWith(' ')).toBe(false)
+  })
+})
+
+describe('legacyNoteName', () => {
+  it('is the name a first line used to give', () => {
+    expect(legacyNoteName('# Hello World\nbody')).toBe('hello-world')
   })
 })
 

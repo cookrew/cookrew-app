@@ -3,11 +3,16 @@ import { cookrew } from './api'
 import { CrIcon, type CrIconName } from './icons'
 import { RoleAvatar } from './nodes/RoleAvatar'
 import { coalesceIndex, eventMeta, groupedLine, kindFor, onEvent } from './event-log'
+import { heldForArrival, onAnnounce } from './workspace-arrival'
 import './agent-roster.css'
 
 /** How long a toast lingers after its last update before auto-dismissing. */
 const DISMISS_MS = 5000
 const EXIT_MS = 240
+/** A message that tells someone what to do next stays long enough to read twice. */
+const ANNOUNCE_MS = 12_000
+/** Not an event type: a sentence this device chose to say (workspace-arrival.ts). */
+const ANNOUNCED = 'announced'
 
 interface EventToast {
   key: number
@@ -45,6 +50,7 @@ export function EventToastLayer(): React.JSX.Element {
       // Timed observability events feed the LATENCY rollup, never the feed.
       if (eventMeta(event.type).toast === false) return
       const now = nowMs()
+      if (heldForArrival(event, now)) return
       setToasts((prev) => {
         // Coalesce onto a live toast of the same type+workspace in the window.
         const idx = coalesceIndex(prev, event, now)
@@ -68,6 +74,26 @@ export function EventToastLayer(): React.JSX.Element {
       })
     })
   }, [])
+
+  useEffect(
+    () =>
+      onAnnounce((said) => {
+        const toast: EventToast = {
+          key: ++seq.current,
+          type: ANNOUNCED,
+          workspaceId: '',
+          workspaceName: '',
+          entityName: said.title,
+          details: said.detail,
+          count: 1,
+          // Dated ahead, so the one ageing rule below keeps it for ANNOUNCE_MS.
+          lastAt: nowMs() + ANNOUNCE_MS - DISMISS_MS,
+          leaving: false
+        }
+        setToasts((prev) => [toast, ...prev].slice(0, 5))
+      }),
+    []
+  )
 
   // Age toasts out: mark leaving near the deadline, remove just after so the
   // slide-out animation plays.
@@ -93,7 +119,7 @@ export function EventToastLayer(): React.JSX.Element {
         <EventToastCard
           key={toast.key}
           toast={toast}
-          showWs={activeWs !== null && toast.workspaceName !== activeWs}
+          showWs={toast.type !== ANNOUNCED && activeWs !== null && toast.workspaceName !== activeWs}
           onDismiss={() => dismiss(toast.key)}
         />
       ))}
@@ -110,10 +136,12 @@ function EventToastCard({
   showWs: boolean
   onDismiss: () => void
 }): React.JSX.Element {
-  const meta = eventMeta(toast.type)
+  const said = toast.type === ANNOUNCED
+  const meta = eventMeta(said ? 'workspace.created' : toast.type)
   const hatch = meta.hatch && toast.count === 1
-  const primary =
-    toast.count === 1
+  const primary = said
+    ? toast.entityName
+    : toast.count === 1
       ? `${toast.entityName} ${meta.verb}`
       : groupedLine(toast.type, toast.count)
 

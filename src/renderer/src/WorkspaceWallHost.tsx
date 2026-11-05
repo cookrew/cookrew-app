@@ -3,7 +3,9 @@ import type { TeamMeta, WorkspaceList, WorkspaceMeta, WorkspaceState } from '../
 import { workspaceMap } from '../../shared/workspace-map'
 import { cookrew } from './api'
 import { DirectoryManager } from './DirectoryManager'
-import { WorkspaceWall } from './WorkspaceWall'
+import { WorkspaceCreateSheet, type CreateRequest } from './WorkspaceCreateSheet'
+import { WorkspaceWall, type WallSheet } from './WorkspaceWall'
+import { announce, beginArrival, endArrival } from './workspace-arrival'
 import { planRemove } from './workspace-wall-actions'
 import type { Snapshot } from './workspace-wall-store'
 import { hasNativeDirPicker, pickDirectory, removeWorkspace } from './workspace-v2'
@@ -34,14 +36,20 @@ export function useWorkspaceWall(opts: {
   workspace: WorkspaceState | null
   /** The activity / history panel — a property of the live workspace. */
   onActivity: () => void
-}): { open: () => void; element: React.JSX.Element } {
-  const { stageRef, workspace, onActivity } = opts
+  /** A workspace made here is where the person stands now: show its agents. */
+  onArrived?: () => void
+}): { open: () => void; openCreate: () => void; openRename: () => void; element: React.JSX.Element } {
+  const { stageRef, workspace, onActivity, onArrived } = opts
   const [open, setOpen] = useState(false)
   const [list, setList] = useState<WorkspaceList | null>(null)
   const [shots, setShots] = useState<Record<string, Snapshot>>({})
   const [teams, setTeams] = useState<TeamMeta[]>([])
   const [stage, setStage] = useState<DOMRect | null>(null)
   const [dirs, setDirs] = useState<WorkspaceMeta | null>(null)
+  /** The create sheet on its own: the labelled ways in need no wall behind it. */
+  const [creating, setCreating] = useState(false)
+  /** Which sheet the wall opens with, when it is opened for one. */
+  const [opening, setOpening] = useState<WallSheet>(null)
   const recentRef = useRef<string[]>([])
   const openRef = useRef(false)
   useEffect(() => {
@@ -105,7 +113,10 @@ export function useWorkspaceWall(opts: {
     setOpen(true)
   }, [stageRef])
 
-  const close = useCallback(() => setOpen(false), [])
+  const close = useCallback(() => {
+    setOpen(false)
+    setOpening(null)
+  }, [])
 
   const enter = useCallback(
     (id: string) => {
@@ -116,24 +127,67 @@ export function useWorkspaceWall(opts: {
 
   // From a template: the backend reuses the fork-from-saved machinery to boot
   // the new workspace pre-populated (nodes, roles, session snapshots). It
-  // switches to the new one itself, so the wall simply closes.
-  const create = useCallback((request: { name: string; dir: string; template: string | null }) => {
-    void cookrew().createWorkspace(request.name, request.dir, request.template ?? undefined)
-    setOpen(false)
-  }, [])
+  // arrives there itself, so the sheet and the wall simply close. A refusal
+  // rejects, and the sheet keeps it on screen with what was typed.
+  const create = useCallback(
+    async (request: CreateRequest) => {
+      beginArrival()
+      try {
+        const meta = await cookrew().createWorkspace(request.name, request.dir, request.template ?? undefined)
+        announce({ title: `${meta.name} is ready`, detail: 'Press ＋ and describe the first task. Agents work in its folder.' })
+        setOpen(false)
+        setCreating(false)
+        onArrived?.()
+      } catch (error) {
+        endArrival()
+        throw error
+      }
+    },
+    [onArrived]
+  )
 
   const remove = useCallback(
-    (id: string) => {
+    async (id: string, options: { worktree: boolean }) => {
       if (!list) return
       const plan = planRemove(list, id)
       if (!plan.ok) return
-      if (plan.switchTo) void cookrew().switchWorkspace(plan.switchTo)
-      void removeWorkspace(id)
-        .then(() => cookrew().listWorkspaces().then(setList))
-        .catch((error: unknown) => console.error('Remove workspace failed:', error))
+      if (plan.switchTo) await cookrew().switchWorkspace(plan.switchTo)
+      const after = await removeWorkspace(id, options)
+      if (after?.notice) announce({ title: 'Some of it stayed', detail: after.notice })
+      setList(await cookrew().listWorkspaces())
     },
     [list]
   )
+
+  const edit = useCallback(
+    async (id: string, name: string, icon: string) => {
+      const meta = list?.workspaces.find((w) => w.id === id)
+      if (!meta) return
+      if (name.trim() !== meta.name) await cookrew().renameWorkspace(id, name)
+      if (icon !== meta.icon) await cookrew().setWorkspaceIcon(id, icon)
+      setList(await cookrew().listWorkspaces())
+    },
+    [list]
+  )
+
+  const check = useCallback((name: string, dir: string) => cookrew().checkWorkspace(name, dir), [])
+
+  /** Straight to the sheet: the WORKSPACES stop's button, and search. */
+  const openCreate = useCallback(async () => {
+    const [nextList, nextTeams] = await Promise.all([
+      cookrew().listWorkspaces().catch(() => null),
+      cookrew().teamList().catch(() => [] as TeamMeta[])
+    ])
+    if (nextList) setList(nextList)
+    setTeams(nextTeams)
+    setCreating(true)
+  }, [])
+
+  /** The wall, opened on the live workspace's name and icon. */
+  const openRename = useCallback(() => {
+    setOpening('edit')
+    void openWall()
+  }, [openWall])
 
   // The directory manager is its own panel, and it sits BELOW the wall in the
   // stacking order — so the wall steps aside for it, as the dropdown did.
@@ -177,6 +231,11 @@ export function useWorkspaceWall(opts: {
         canRemove={(list?.workspaces.length ?? 0) > 1}
         canPickDir={hasNativeDirPicker()}
         pickDir={pickDirectory}
+        check={check}
+        removePlan={(id) => cookrew().workspaceRemovePlan(id)}
+        onEdit={edit}
+        initialSheet={opening}
+        initialPick={opening === 'edit' ? 0 : undefined}
         onEnter={enter}
         onClose={close}
         onCreate={create}
@@ -185,8 +244,31 @@ export function useWorkspaceWall(opts: {
         onActivity={activity}
       />
       {dirs && <DirectoryManager meta={dirs} onClose={() => setDirs(null)} />}
+      {creating && (
+        <div className="cr-wsw-solo">
+          <div className="cr-wsw-sheet">
+            <WorkspaceCreateSheet
+              defaultDir=""
+              teams={teams}
+              canPickDir={hasNativeDirPicker()}
+              pickDir={pickDirectory}
+              check={check}
+              onCreate={create}
+              onCancel={() => setCreating(false)}
+            />
+          </div>
+        </div>
+      )}
     </>
   )
 
-  return { open: () => void openWall(), element }
+  return {
+    open: () => {
+      setOpening(null)
+      void openWall()
+    },
+    openCreate: () => void openCreate(),
+    openRename,
+    element
+  }
 }
