@@ -14,6 +14,11 @@
 // use, burned after five wrong guesses, and every failed claim from anyone
 // counts toward a pause: a million-space code cannot be walked at these rates.
 //
+// A watch away from home has no address to type and no way in but the account.
+// So the join code that lets it into the account is also what claims it here:
+// the Mac arms the code it had minted (arm), and the watch brings the same eight
+// characters down the relay. Same rules, longer life: the registry's ten minutes.
+//
 // One watch at a time: a new claim replaces the old token.
 
 import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
@@ -49,6 +54,9 @@ const same = (a: string, b: string): boolean => {
   const right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
 }
+
+/** A code as a person types it, as a code is kept: one case, no separators. */
+const plainCode = (code: string): string => code.replace(/[\s-]/g, '').toUpperCase()
 
 export class WatchPairing {
   private readonly file: string
@@ -101,6 +109,11 @@ export class WatchPairing {
     return { code, expiresAt }
   }
 
+  /** A join code this Mac had minted, on offer as a claim until the registry's own end for it. */
+  arm(code: string, expiresAt: number): void {
+    this.live = { code: plainCode(code), expiresAt, guesses: 0 }
+  }
+
   /** The code on offer: when it ends, never what it is. */
   pending(): { expiresAt: number } | null {
     return this.live && this.live.expiresAt > this.now() ? { expiresAt: this.live.expiresAt } : null
@@ -125,7 +138,7 @@ export class WatchPairing {
       this.live = null
       return this.failed('expired')
     }
-    if (typeof code !== 'string' || !same(code, live.code)) {
+    if (typeof code !== 'string' || !same(plainCode(code), live.code)) {
       const guesses = live.guesses + 1
       if (guesses >= WATCH_CODE_GUESSES) {
         this.live = null

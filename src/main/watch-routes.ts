@@ -53,6 +53,14 @@ export interface WatchBase {
   readonly url: string
 }
 
+/** What a sheet must ask for before a join code can be minted. */
+export type WatchAccountKind = 'none' | 'password' | 'passwordless'
+
+/** A join code for a watch, or why not, in the registry's reason words. */
+export type WatchInvite =
+  | { readonly ok: true; readonly code: string; readonly expiresAt: number }
+  | { readonly ok: false; readonly reason: string; readonly message?: string }
+
 /** What main lends these routes (index.ts); a module seam, as setMenuAnswerer is. */
 export interface WatchHost {
   readonly pairing: WatchPairing
@@ -72,12 +80,31 @@ export interface WatchHost {
   speaksTo(terminalId: string): boolean
   /** A menu is on its screen, read or not: words and Enter would pick the cursor row. */
   menuOnScreen(terminalId: string): boolean
+  accountKind(): WatchAccountKind
+  /** Mint a join code under this password. `here`: asked on this Mac, where a provider trip can open. */
+  invite(current: string, here: boolean): Promise<WatchInvite>
 }
 
 let host: WatchHost | null = null
 
 export function setWatchHost(next: WatchHost | null): void {
   host = next
+}
+
+/**
+ * A code for a watch: the account's join code, armed here as the claim too, so
+ * one code carries the watch into the account and on to this Mac. The registry
+ * spends it at the join, which is why this Mac must hold its own copy.
+ */
+export async function inviteWatch(current: Pick<WatchHost, 'invite' | 'pairing'>, password: string, here: boolean): Promise<WatchInvite> {
+  try {
+    const invite = await current.invite(password, here)
+    if (invite.ok) current.pairing.arm(invite.code, invite.expiresAt)
+    return invite
+  } catch (error) {
+    console.error('Minting a code for the watch failed:', error)
+    return { ok: false, reason: 'unknown' }
+  }
 }
 
 export const watchTokenAccepted = (candidate: string | null): boolean => host?.pairing.accepts(candidate) ?? false
@@ -114,6 +141,8 @@ export interface WatchRequest {
   readonly owner: boolean
   /** A pairing or a watch token. The wall's read-only token is neither: it reads no card here. */
   readonly cleared: boolean
+  /** Encrypted on the way here (mobile-api.ts · sealedTransport): a password may arrive on it. */
+  readonly sealed: boolean
   board(): Promise<BoardSnapshot>
   activities(): readonly TerminalActivity[]
   checkpoint(terminalId: string): Promise<LatestCheckpoint | null>
@@ -293,7 +322,16 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (ctx.owner && method === 'GET' && path === '/api/watch/pairing') {
-    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending() })
+    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind() })
+    return true
+  }
+  if (ctx.owner && method === 'POST' && path === '/api/watch/invite') {
+    if (!ctx.sealed) {
+      respondJson(response, 200, { ok: false, reason: 'not_sealed' })
+      return true
+    }
+    const body = await readJson<{ current?: unknown }>(ctx.request)
+    respondJson(response, 200, await inviteWatch(current, typeof body.current === 'string' ? body.current : '', false))
     return true
   }
   if (method === 'POST' && path === '/api/watch/unpair') {
