@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { cardCheckpoint, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
+import { CHECKPOINT_MEMO_MS, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
 import { WatchPairing } from '../src/main/watch-pairing'
 import { watchBases } from '../src/main/watch-bases'
 import { cardRows, itemsOfAgent, watchCards } from '../src/main/watch-cards'
@@ -54,7 +54,7 @@ const MENU = {
 }
 
 const ROWS: BoardRow[] = [
-  row('resting', 'done', { lastActivityAt: NOW - 50 }),
+  row('resting', 'offline', { lastActivityAt: NOW - 50 }),
   row('working', 'working', { lastActivityAt: NOW - 40 }),
   row('asking', 'waiting', { lastActivityAt: NOW - 90, agent: { name: 'Fresco', preset: 'Codex', role: null, orch: true } }),
   row('replied', 'unread', { lastActivityAt: NOW - 30 }),
@@ -131,6 +131,7 @@ describe('the card on the wrist says what the card on the Mac says', () => {
     rows: ROWS,
     activities: new Map(ACTIVITIES.map((a) => [a.terminalId, a])),
     checkpoints: new Map([['resting', { prompt: 'p', reply: 'An earlier answer', title: 'A title' }]]),
+    active: (id) => id !== 'asleep',
     itemsOf: (id) => itemsOfAgent(id, { nodes: NODES, connections: CONNECTIONS })
   })
   const card = (id: string) => cards.find((c) => c.id === id)
@@ -145,6 +146,10 @@ describe('the card on the wrist says what the card on the Mac says', () => {
     expect(card('resting')?.status).toBe(inkStatusOfRow('done', false))
     expect(card('asleep')?.status).toBe(inkStatusOfRow('offline'))
     for (const c of cards) expect(c.word).toBe(statusWord(c.status))
+  })
+  it('asleep means closed; a resting agent with no pane attached here is resting', () => {
+    expect(card('resting')).toMatchObject({ status: 'idle', word: 'resting' })
+    expect(card('asleep')).toMatchObject({ status: 'offline', word: 'offline' })
   })
   it('its words are the card’s: a status while working, the reply when done, a checkpoint with no mirror', () => {
     expect(card('working')?.words).toEqual({ text: 'Reading files', tone: 'working' })
@@ -194,6 +199,29 @@ describe('the words a finished card says', () => {
   })
 })
 
+describe('how long a card’s last turn is believed', () => {
+  const rows = [{ terminalId: 'a' }]
+  it('a new reply shows within the memo, though the board’s row never moved', async () => {
+    const memo = new Map()
+    const read = vi.fn(async () => ({ prompt: 'p', reply: 'one' }))
+    await checkpointsOf(rows, new Map(), read, 1000, memo)
+    await checkpointsOf(rows, new Map(), read, 1000 + CHECKPOINT_MEMO_MS - 1, memo)
+    expect(read).toHaveBeenCalledTimes(1)
+    read.mockResolvedValue({ prompt: 'p', reply: 'two' })
+    const later = await checkpointsOf(rows, new Map(), read, 1000 + CHECKPOINT_MEMO_MS, memo)
+    expect(later.get('a')?.reply).toBe('two')
+  })
+  it('a live reply needs no read, and a failed read keeps what was known', async () => {
+    const memo = new Map()
+    const read = vi.fn(async () => ({ prompt: 'p', reply: 'one' }))
+    expect((await checkpointsOf(rows, new Map([['a', activity('a', { reply: 'live' })]]), read, 0, memo)).size).toBe(0)
+    expect(read).not.toHaveBeenCalled()
+    await checkpointsOf(rows, new Map(), read, 0, memo)
+    read.mockRejectedValue(new Error('gone'))
+    expect((await checkpointsOf(rows, new Map(), read, CHECKPOINT_MEMO_MS, memo)).get('a')?.reply).toBe('one')
+  })
+})
+
 describe('where a watch reaches this Mac', () => {
   it('a trusted name first, then the LAN, then the tailnet; never loopback, never a token', () => {
     const endpoint = (kind: string, host: string, trustedUrl?: string) => ({ url: `https://${host}:8643/?token=secret`, kind, host, label: '', ...(trustedUrl ? { trustedUrl } : {}) })
@@ -237,6 +265,7 @@ describe('through the real gate', () => {
     store: { focusedState: { nodes: [], connections: [] } },
     ptys: { get: () => undefined },
     turns: { list: () => ACTIVITIES, seen },
+    agents: { list: () => [{ id: 'asleep', active: false }] },
     ops: {},
     presets: [],
     board: { activeWorkspaceId: () => 'ws', live: () => ACTIVITIES, ledger: () => new Map(), registry: () => [] },
