@@ -20,7 +20,7 @@ import { usePresetOffers } from './use-preset-commands'
 import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
 import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
-import { withHeard } from './dictation'
+import { earSays, withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
 import { inputRefused, noteSent, takeRefused, WAKE_WINDOW_MS } from './input-refused'
 import { launchRefusal } from './launch-gate'
@@ -957,7 +957,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         type="text"
         value={hearing ? withHeard(shown, dictation.heard) : shown}
         readOnly={hearing}
-        placeholder={earSays(dictation) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu, answers: wait.wordsRow })}
+        placeholder={earSays(dictation.ear, dictation.phase, dictation.heard) ?? promptPlaceholder({ agent: to && face, stop, workspace: workspaceName, item: attachedItem, asks: waitingOnYou && !wait.menu, answers: wait.wordsRow })}
         aria-label={to ? `Prompt ${to.name}` : 'Prompt for a new agent'}
         title="Paste or drop a screenshot: it goes into the prompt"
         autoComplete="off"
@@ -1112,7 +1112,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           attaching…
         </span>
       )}
-      {dictation.phase === 'closing' && dictation.heard.trim() && (
+      {/* The Mac's final can take seconds; the browser's is a beat and waits in the placeholder (earSays). */}
+      {dictation.ear === 'mac' && dictation.phase === 'closing' && dictation.heard.trim() && (
         <span className="cr-prompt-note cr-prompt-sous" role="status" title={dictation.heard}>
           … {dictation.heard}
         </span>
@@ -1142,16 +1143,4 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     </form>
     </>
   )
-}
-
-/**
- * What the box's own placeholder says while an ear is open. The phone's ear
- * has no words until the Mac has heard them, so it says what it is doing —
- * IN the box: a note of its own took a row on a phone and moved every
- * button under the owner's thumb (owner, 2026-11-03).
- */
-function earSays(dictation: { ear: string | null; phase: 'idle' | 'hearing' | 'closing' }): string | null {
-  if (dictation.phase === 'idle') return null
-  if (dictation.ear === 'phone') return dictation.phase === 'hearing' ? '● Recording… tap the mic to finish' : 'The Mac is listening…'
-  return dictation.phase === 'hearing' ? 'Listening…' : null
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { PTT_IDLE, pttStep, type PttState } from '../../../shared/ptt-machine'
 import type { ListenEvent } from '../../../main/listen'
 import { cookrew } from '../api'
-import { isAndroid, pickEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
+import { isAndroid, pickEar, preferPhoneEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
 import { micErrorText, PHONE_MAX_SECONDS } from './phone-audio'
 import { canRecord, startPhoneRecording, type PhoneRecording } from './phone-recorder'
 
@@ -109,6 +109,10 @@ export function useDictation(options: {
     let missed = false
     recognizer.lang = webLang(macLocale)
     recognizer.interimResults = true
+    // Android listens through pauses until the mic is tapped; a mic forgotten
+    // open stops itself, and its words still land, as the phone's recording does.
+    recognizer.continuous = isAndroid(window.navigator?.userAgent)
+    const limit = recognizer.continuous ? window.setTimeout(() => stopRef.current(), PHONE_MAX_SECONDS * 1000) : undefined
     recognizer.onnomatch = () => {
       missed = true
     }
@@ -128,11 +132,15 @@ export function useDictation(options: {
         else if (canRecord()) void (cookrew().hearAvailable?.() ?? Promise.resolve(false)).then(setPhone).catch(() => undefined)
       }
     }
-    recognizer.onend = () => finish(said, [], webEndError(failed, missed, said))
+    recognizer.onend = () => {
+      window.clearTimeout(limit)
+      finish(said, [], webEndError(failed, missed, said))
+    }
     recognizerRef.current = recognizer
     try {
       recognizer.start()
     } catch (e) {
+      window.clearTimeout(limit)
       finish('', [], `Dictation could not start: ${String(e)}`)
     }
   }, [Web, finish, phone, macLocale])
@@ -302,12 +310,11 @@ export function useDictation(options: {
   return { ear, phase, listening: phase !== 'idle', heard, toggle, stop }
 }
 
-/** Android, or a browser whose own recognizer already failed for want of its service. */
+/** A browser whose own recognizer already failed for want of its service. */
 function preferPhoneHere(): boolean {
   if (typeof window === 'undefined') return false
-  if (isAndroid(window.navigator?.userAgent)) return true
   try {
-    return window.localStorage?.getItem(WEB_EAR_BROKEN_KEY) === '1'
+    return preferPhoneEar(window.localStorage?.getItem(WEB_EAR_BROKEN_KEY))
   } catch {
     return false
   }

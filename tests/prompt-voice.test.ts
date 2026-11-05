@@ -13,7 +13,7 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { pickEar, transcriptOf, webEndError, webErrorText, webLang, webRecognizer, withHeard } from '../src/renderer/src/prompt/dictation'
+import { earSays, pickEar, preferPhoneEar, transcriptOf, webEndError, webErrorText, webLang, webRecognizer, withHeard } from '../src/renderer/src/prompt/dictation'
 import { DEFAULT_VOICE_LOCALE } from '../src/main/sous-voice-config'
 import { addressedToSous } from '../src/shared/sous-intent'
 
@@ -137,6 +137,33 @@ describe("the browser's ear", () => {
     expect(webEndError(null, true, 'hello')).toBeNull()
     expect(webEndError('No microphone was found.', true, '')).toBe('No microphone was found.')
     expect(webEndError(null, false, '')).toBeNull()
+  })
+})
+
+// THE OWNER, 2026-11-05: Android goes back to Web Speech. It only moves to the
+// Mac's ear once its own recognizer proved unreachable, like any browser.
+describe('Android hears through its own browser again', () => {
+  const android = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/156.0.0.0 Mobile Safari/537.36'
+
+  it('the phone ear is preferred only where the browser ear broke, Android or not', () => {
+    expect(preferPhoneEar(null)).toBe(false)
+    expect(preferPhoneEar('1')).toBe(true)
+    expect(pickEar(false, true, true, preferPhoneEar(null))).toBe('web')
+    expect(pickEar(false, true, true, preferPhoneEar('1'))).toBe('phone')
+    expect(android).toMatch(/Android/)
+  })
+
+  it('every open ear says how to close it, in the box', () => {
+    expect(earSays('web', 'hearing', '')).toBe('Listening… tap the mic to finish')
+    expect(earSays('phone', 'hearing', '')).toBe('● Recording… tap the mic to finish')
+    expect(earSays('phone', 'closing', '')).toBe('The Mac is listening…')
+    expect(earSays('web', 'idle', '')).toBeNull()
+  })
+
+  it("the browser's last words wait in the box, not in a row that moves the buttons", () => {
+    expect(earSays('web', 'closing', '你好')).toBe('… 你好')
+    expect(earSays('web', 'closing', '  ')).toBeNull()
+    expect(earSays('mac', 'closing', 'hello')).toBeNull()
   })
 })
 
