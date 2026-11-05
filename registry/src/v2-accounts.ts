@@ -50,7 +50,7 @@ const DEVICE_NAME_MAX = 64
 const WORKSPACE_NAME_MAX = 64
 const WORKSPACES_MAX = 64
 /** Sessions per account. Fifty devices' worth of open tabs, then the oldest goes. */
-const SESSIONS_MAX = 50
+export const SESSIONS_MAX = 50
 /**
  * Revoked ids kept PER ACCOUNT.
  *
@@ -60,7 +60,7 @@ const SESSIONS_MAX = 50
  * hundred devices in April. A cap per account cannot be spent by anyone but
  * its owner.
  */
-const REVOKED_MAX = 200
+export const REVOKED_MAX = 200
 const RECOVERY_CODES = 8
 
 /**

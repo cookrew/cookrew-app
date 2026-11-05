@@ -107,6 +107,9 @@ footer { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--l
 a { color: inherit; }
 `.trim()
 
+/** This page keeps its own markup, so the site footer's two legal links are repeated here. */
+const LEGAL_LINKS = '<p class="note"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>'
+
 function page(title: string, body: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -132,7 +135,7 @@ function unknownPage(): string {
     `<h1>${escapeHtml(title)}</h1>
 <p class="lede">${escapeHtml(MKT_INSTALL['mkt.install.unknown.body'])}</p>
 <footer><p class="note">${escapeHtml(MKT_INSTALL['mkt.install.noapp'])}
-<a href="${COOKREW_HOME}">${escapeHtml(COOKREW_HOME)}</a></p></footer>`
+<a href="${COOKREW_HOME}">${escapeHtml(COOKREW_HOME)}</a></p>${LEGAL_LINKS}</footer>`
   )
 }
 
@@ -171,6 +174,6 @@ export function installPageHtml(view: InstallPageView): string {
 ${gated}${link}
 <p class="note">${escapeHtml(MKT_INSTALL['mkt.install.review.note'])}</p>
 <footer><p class="note">${escapeHtml(MKT_INSTALL['mkt.install.noapp'])}
-<a href="${COOKREW_HOME}">${escapeHtml(COOKREW_HOME)}</a></p></footer>`
+<a href="${COOKREW_HOME}">${escapeHtml(COOKREW_HOME)}</a></p>${LEGAL_LINKS}</footer>`
   )
 }

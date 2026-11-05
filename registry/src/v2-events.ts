@@ -56,7 +56,7 @@ export interface EventInput {
 export type EventListener = (username: string, event: AccountEvent) => void
 
 /** More than a device catches up on in one poll; older ones fall off the tail. */
-const PER_ACCOUNT = 100
+export const PER_ACCOUNT = 100
 
 /**
  * WHICH KINDS A FULL TAIL MAY DROP — one, and it is the only one a party
