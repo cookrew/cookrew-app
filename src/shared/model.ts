@@ -532,6 +532,8 @@ export interface RecoverResult {
   workspaceName: string
   /** True when the PTY (re)booted now; false when deferred to workspace activation. */
   spawned: boolean
+  /** It should have booted now and could not: why (shared/launch-failure.ts). */
+  blocked?: string
   /** Best-effort restore with no full snapshot (legacy pre-feature kill). */
   legacy: boolean
   /**

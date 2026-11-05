@@ -435,7 +435,7 @@ interface PlanDeps {
  * choice when it's a valid target, else the source cwd if still present,
  * else the primary.
  */
-function resolveTargetDir(
+export function resolveTargetDir(
   sourceCwd: string,
   choiceDir: string | undefined,
   dirs: string[]

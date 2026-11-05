@@ -1,4 +1,6 @@
 import { inputRefused } from './prompt/input-refused'
+import type { StrayPane } from '../../shared/stray-pane'
+import type { LaunchFailure } from '../../shared/launch-failure'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { CardRouteState, RouteState } from '../../shared/route'
 import { AuthError, authStore, tokenParam, type AuthScope } from './auth-gate'
@@ -710,6 +712,9 @@ export function createRemoteApi(): CookrewApi {
       const result = await req<{ agents: unknown[] }>(apiPath('/api/agents'))
       return result.agents
     },
+    launchCheck: async (id) => (await req<{ failure: LaunchFailure | null }>(apiPath(`/api/terminal/${id}/launch-check`))).failure,
+    listStrayPanes: async () => (await req<{ strays: StrayPane[] }>(apiPath('/api/strays'))).strays,
+    endStrayPane: (session) => req(apiPath(`/api/strays/${session}/end`), 'POST'),
     onAgentChanged: (cb) => subscribe('agent', cb),
     // The changes above are all a page hears of the roster, so a stream that
     // dropped may have missed one: an agent woken while the phone slept stayed

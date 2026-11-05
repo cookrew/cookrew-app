@@ -315,3 +315,34 @@ describe('main takes the one list (owner 2026-11-04)', () => {
     expect(tuningStateOf(deps({ effortChoices: ['low', 'high'] }).deps, 'term-1').choices?.effort).toEqual(['low', 'high'])
   })
 })
+
+describe('a restart that could not start again', () => {
+  const world = (live: boolean) => {
+    const saved: unknown[] = []
+    const respawned: string[] = []
+    const deps: RelaunchDeps = {
+      node: () => ({ id: 'term-1', command: 'claude' }) as never,
+      phaseOf: () => 'idle',
+      delivering: () => false,
+      save: (_id, patch) => void saved.push(patch),
+      live: () => live,
+      restorable: () => true,
+      respawn: (id) => void respawned.push(id),
+      cannotStart: () => 'Command not found: claude.'
+    }
+    return { deps, saved, respawned }
+  }
+
+  it('a running agent keeps running on what it has: nothing saved, nothing killed', () => {
+    const w = world(true)
+    expect(relaunchInPlace(w.deps, 'term-1', { command: 'claude --model opus' })).toBe('blocked')
+    expect(w.saved).toEqual([])
+    expect(w.respawned).toEqual([])
+  })
+
+  it('an asleep card still saves: nothing runs to lose', () => {
+    const w = world(false)
+    expect(relaunchInPlace(w.deps, 'term-1', { command: 'claude --model opus' })).toBe('asleep')
+    expect(w.saved).toHaveLength(1)
+  })
+})

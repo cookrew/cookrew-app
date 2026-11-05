@@ -28,7 +28,9 @@ export interface RestoreExecutorDeps {
   }
   spawnTracked: (
     node: Pick<TerminalNodeData, 'id' | 'command' | 'cwd' | 'claudeSessionId' | 'codexSessionRef' | 'opencodeSessionId'>
-  ) => void
+  ) => boolean | void
+  /** Why this card could not boot again, asked before a kill that would need it to. */
+  cannotStart?: (node: TerminalNodeData) => string | null
   /**
    * Live turn phase for a terminal ('idle' | 'thinking' | 'waiting' |
    * 'replied'), null when untracked. Restore/undo KILL the CLI — doing that
@@ -207,6 +209,9 @@ async function restoreCheckpoint(
   // torn while writing the session file undo depends on.
   const stillBusy = busyReason(deps, id)
   if (stillBusy) return fail(id, node.name, checkpointIndex, stillBusy)
+  // Before the kill: ending a running agent that cannot start again loses it.
+  const cannot = deps.cannotStart?.(node) ?? null
+  if (cannot) return fail(id, node.name, checkpointIndex, cannot)
 
   const destFile = claudeSessionFile(node.cwd, newSessionId, deps.projectsDir)
   const previousSessionId = node.claudeSessionId
@@ -239,7 +244,9 @@ async function restoreCheckpoint(
     return fail(id, node.name, checkpointIndex, 'Failed to rebind the agent to the restored session.')
   }
 
-  deps.spawnTracked(updated as TerminalNodeData)
+  if (deps.spawnTracked(updated as TerminalNodeData) === false) {
+    return fail(id, node.name, checkpointIndex, 'The agent was rebound, but it could not be started: see its card.')
+  }
 
   return {
     ok: true,
@@ -273,6 +280,8 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
 
   const busy = busyReason(deps, id)
   if (busy) return fail(id, node.name, restorePointIndex(point), busy)
+  const cannot = deps.cannotStart?.(node) ?? null
+  if (cannot) return fail(id, node.name, restorePointIndex(point), cannot)
 
   try {
     await deps.ptys.killAndWait(id)
@@ -292,7 +301,9 @@ async function undoRestore(deps: RestoreExecutorDeps, id: string): Promise<Resto
     return fail(id, node.name, restorePointIndex(point), 'Failed to rebind the agent during undo.')
   }
 
-  deps.spawnTracked(updated as TerminalNodeData)
+  if (deps.spawnTracked(updated as TerminalNodeData) === false) {
+    return fail(id, node.name, restorePointIndex(point), 'The agent was rebound, but it could not be started: see its card.')
+  }
 
   return {
     ok: true,

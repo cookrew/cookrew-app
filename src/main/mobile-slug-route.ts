@@ -131,6 +131,8 @@ export const NODE_ROUTES: RegExp[] = [
   // Submit paths (already scoped before this change).
   /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
   /^\/api\/terminal\/[^/]+\/output$/,
+  // Asked before words go to an offline card (prompt/launch-gate.ts).
+  /^\/api\/terminal\/[^/]+\/launch-check$/,
   // Reading and navigating the transcript.
   /^\/api\/terminal\/[^/]+\/jump$/,
   /^\/api\/terminal\/[^/]+\/seen$/,

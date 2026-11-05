@@ -2551,3 +2551,45 @@
     display: none;
   }
 }
+
+/* RUNNING WITHOUT A CARD (StrayPanes.tsx): a process nothing else on screen reaches. */
+.stray-panes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+}
+
+.stray-title {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.stray-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stray-who {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stray-name,
+.stray-where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stray-where {
+  font-size: 11px;
+  opacity: 0.7;
+}
