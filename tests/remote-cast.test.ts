@@ -40,7 +40,7 @@ function rig() {
     screenAccess: () => 'granted',
     accessibility: () => true,
     session: async () => session,
-    settings: { read: () => ({ on: false, waiting: null }), write: () => undefined },
+    settings: { read: () => ({ waiting: null, holdUntil: 0 }), write: () => undefined },
     servedWorkspace: () => false,
     workspaceOfCard: () => 'ws',
     cardName: () => 'Main display',

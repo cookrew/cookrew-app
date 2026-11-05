@@ -618,6 +618,7 @@ export function createRemoteApi(): CookrewApi {
     remoteAccess: () => req<RemoteAccess>(apiPath(`${USE_SOURCES_PATH}/access`)),
     remoteControl: (ask) => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/control`), 'POST', ask).catch(refusal),
     remoteRestart: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/restart`), 'POST', {}).catch(refusal),
+    remoteWake: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/wake`), 'POST', {}).catch(refusal),
 
     // Phones can't hand the desktop a local path — upload the bytes and let
     // the server persist them; the returned path is what gets pasted.

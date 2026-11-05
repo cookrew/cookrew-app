@@ -12,7 +12,8 @@ import { NO_SOURCE, type UseSourceService } from './use-source-service'
  *   POST /api/use/sources/settings   open a grant's page on the Mac: { pane? }
  *   GET  /api/use/sources/access     where the screen stands, and what can be done
  *   POST /api/use/sources/control    Take control of a card, or give it back: { card, on }
- *   POST /api/use/sources/restart    relaunch, on a build that can
+ *   POST /api/use/sources/restart    relaunch, on a build that can, to finish a grant
+ *   POST /api/use/sources/wake       wake a sleeping display
  *
  * Everything here is a device somewhere else, so `where` is always away. The
  * machine switch is not here and never will be: it is the Mac's alone to set.
@@ -43,14 +44,14 @@ export async function handleUseSourceRoutes(
 
   if (path === USE_SOURCES_PATH) {
     if (method !== 'GET') return wrongMethod()
-    const answer = await service.list(workspaceId)
+    const answer = await service.list(workspaceId, service.whoIs(credential))
     if (!answer.ok) return respondJson(response, answer.status, { ok: false, error: answer.error })
     return sendBody(response, 200, { 'content-type': 'application/json', 'cache-control': 'no-store' }, Buffer.from(JSON.stringify(answer.value)), request.headers['accept-encoding'])
   }
   if (path === `${USE_SOURCES_PATH}/open`) {
     if (method !== 'POST') return wrongMethod()
     const pick = await readJson<unknown>(request).catch(() => null)
-    const answer = await service.open(workspaceId, pick)
+    const answer = await service.open(workspaceId, pick, service.whoIs(credential))
     return answer.ok ? respondJson(response, 200, { ok: true, ...answer.value }) : respondJson(response, answer.status, { ok: false, error: answer.error })
   }
   if (path === `${USE_SOURCES_PATH}/settings`) {
@@ -74,6 +75,11 @@ export async function handleUseSourceRoutes(
   if (path === `${USE_SOURCES_PATH}/restart`) {
     if (method !== 'POST') return wrongMethod()
     const answer = await service.restart(workspaceId, service.whoIs(credential))
+    return answer.ok ? respondJson(response, 200, { ok: true }) : respondJson(response, answer.status, { ok: false, error: answer.error })
+  }
+  if (path === `${USE_SOURCES_PATH}/wake`) {
+    if (method !== 'POST') return wrongMethod()
+    const answer = await service.wake(workspaceId, service.whoIs(credential))
     return answer.ok ? respondJson(response, 200, { ok: true }) : respondJson(response, answer.status, { ok: false, error: answer.error })
   }
   respondJson(response, 404, { ok: false, error: 'Not found' })

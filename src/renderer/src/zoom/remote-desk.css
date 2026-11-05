@@ -10,7 +10,7 @@
   width: min(320px, calc(100% - 24px));
   max-height: calc(100% - 180px);
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: 4px 12px;
   border: 1px solid var(--zv-ink-soft);
   border-radius: 10px;
   background: var(--zv-paper);
@@ -19,6 +19,10 @@
   --rp-ink: var(--zv-ink);
   --rp-soft: var(--zv-ink-soft);
   --rp-seal: var(--zv-seal);
+}
+
+.zv-remote[data-open] {
+  padding-bottom: 12px;
 }
 
 .zv-remote p {
@@ -39,10 +43,34 @@
 }
 
 .zv-remote-head {
+  appearance: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.zv-remote-head span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--zv-ink-soft);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zv-remote-head i {
+  color: var(--zv-ink-soft);
+  font-style: normal;
 }
 
 .zv-remote-open {
@@ -81,7 +109,8 @@
     right: 12px;
     width: auto;
     top: auto;
-    bottom: calc(92px + env(safe-area-inset-bottom, 0px));
-    max-height: 46%;
+    /* Above the bar and the New workspace pill, which stand over this page. */
+    bottom: calc(132px + env(safe-area-inset-bottom, 0px));
+    max-height: 56%;
   }
 }

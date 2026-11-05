@@ -56,7 +56,7 @@ export interface RemoteState {
   readonly waiting: boolean
 }
 
-export type RemoteActionId = 'open-screen-settings' | 'open-accessibility-settings' | 'check-again' | 'restart' | 'show-the-screen' | 'pick-another'
+export type RemoteActionId = 'open-screen-settings' | 'open-accessibility-settings' | 'check-again' | 'restart' | 'wake-display' | 'show-the-screen' | 'pick-another'
 
 export interface RemoteConfirm {
   readonly title: string
@@ -193,7 +193,7 @@ function agentsLine(build: RemoteBuild): string {
 }
 
 export function restartConfirm(build: RemoteBuild, where: RemoteWhere): RemoteConfirm {
-  const away = where === 'away' ? ' You lose this view for about a minute.' : ''
+  const away = where === 'away' ? ' You lose this view for about a minute, and remote control goes off until someone at the Mac turns it on again.' : ''
   return { title: 'Restart Cookrew?', sentence: `${agentsLine(build)}${away}`, yes: 'Restart Cookrew' }
 }
 
@@ -258,7 +258,7 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
     case 'needs-restart':
       return restartView(state, where)
     case 'display-asleep':
-      return plain('The display is asleep', `Nothing can be seen until it wakes${seen}.`)
+      return plain('The display is asleep', `Nothing can be seen until it wakes${seen}.`, false, where === 'away' ? [{ id: 'wake-display', label: 'Wake the display' }, CHECK] : [CHECK])
     case 'unreachable':
       return plain('Cannot reach this Mac', `It may be asleep or off the network${seen}.`)
     case 'window-closed':

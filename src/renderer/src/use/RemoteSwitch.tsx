@@ -13,9 +13,9 @@ import { accessOf } from './remote-acts'
  */
 
 export const SWITCH_LABEL = 'Allow remote control of this Mac'
-export const SWITCH_MEANS = 'Your paired devices can take control of a card for 15 minutes, and agents can click and type on this Mac. Someone at the Mac can stop it at any time.'
+export const SWITCH_MEANS = 'Your paired devices can take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on until Cookrew restarts, and someone at the Mac can stop it at any time.'
 
-export function useRemoteSwitch(active: boolean): { facts: RemoteControlFacts | null; error: string | null; flip: () => void } {
+export function useRemoteSwitch(active: boolean, onFlipped?: () => void): { facts: RemoteControlFacts | null; error: string | null; flip: () => void } {
   const [facts, setFacts] = useState<RemoteControlFacts | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -29,7 +29,9 @@ export function useRemoteSwitch(active: boolean): { facts: RemoteControlFacts | 
       .setRemoteSwitch?.(on)
       .then((answer) => {
         setError(answer.ok ? null : answer.error)
-        if (answer.ok) setFacts({ ...facts, switchOn: on })
+        if (!answer.ok) return
+        setFacts({ ...facts, switchOn: on })
+        onFlipped?.()
       })
   }
   return { facts, error, flip }

@@ -37,7 +37,7 @@ function bed(over: Partial<RemoteDeskDeps> = {}) {
     screenAccess: () => 'granted',
     accessibility: () => true,
     session: async () => ({ locked: false, displayAsleep: false, grant: true }),
-    settings: { read: () => ({ on: false, waiting: null }), write: () => undefined },
+    settings: { read: () => ({ waiting: null, holdUntil: 0 }), write: () => undefined },
     servedWorkspace: (id) => id === 'served',
     workspaceOfCard: (id) => CARDS[id]?.workspaceId ?? null,
     cardName: (id) => id,
@@ -86,7 +86,8 @@ const ROUTES: Array<[string, string, unknown]> = [
   ['GET', '/api/use/sources/access', undefined],
   ['POST', '/api/use/sources/control', { card: 'screen', on: true }],
   ['POST', '/api/use/sources/settings', { pane: 'accessibility' }],
-  ['POST', '/api/use/sources/restart', undefined]
+  ['POST', '/api/use/sources/restart', undefined],
+  ['POST', '/api/use/sources/wake', undefined]
 ]
 
 describe('who may ask', () => {
@@ -196,15 +197,23 @@ describe('the rest', () => {
   })
 
   it('restarts a build that can, and only on a POST', async () => {
-    const { deps, relaunch } = bed()
+    const { deps, relaunch } = bed({ screenAccess: () => 'denied' })
     expect((await call(deps(), 'GET', '/api/use/sources/restart', { token: TOKEN })).status).toBe(405)
     expect(relaunch).not.toHaveBeenCalled()
     expect((await call(deps(), 'POST', '/api/use/sources/restart', { token: TOKEN })).status).toBe(200)
     expect(relaunch).toHaveBeenCalledOnce()
   })
 
+  it('after Stop at the Mac, the list of what is on the screen is shut to a device away', async () => {
+    const { deps, desk, provider } = bed()
+    desk.stopAll()
+    expect((await call(deps(), 'GET', '/api/use/sources', { token: TOKEN })).status).toBe(409)
+    expect((await call(deps(), 'POST', '/api/use/sources/open', { token: TOKEN, body: { source: 'screen:main' } })).status).toBe(409)
+    expect(provider.list).not.toHaveBeenCalled()
+  })
+
   it('a source build says it cannot, in words', async () => {
-    const { deps, relaunch } = bed({ build: () => ({ settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' }) })
+    const { deps, relaunch } = bed({ screenAccess: () => 'denied', build: () => ({ settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' }) })
     expect((await call(deps(), 'POST', '/api/use/sources/restart', { token: TOKEN })).status).toBe(409)
     expect(relaunch).not.toHaveBeenCalled()
   })

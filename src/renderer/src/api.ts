@@ -382,6 +382,7 @@ export interface CookrewApi {
   remoteAccess?: () => Promise<RemoteAccess | { ok: false; error: string }>;
   remoteControl?: (ask: { card: string; on: boolean }) => Promise<RemoteAnswer>;
   remoteRestart?: () => Promise<RemoteAnswer>;
+  remoteWake?: () => Promise<RemoteAnswer>;
   /** The machine switch. The Mac's own window only: there is no route, so a phone has no such method. */
   setRemoteSwitch?: (on: boolean) => Promise<RemoteAnswer>;
   stopRemote?: () => Promise<RemoteAnswer>;

@@ -264,6 +264,24 @@ export class OwnerGrant {
  * function cannot identify, because an unidentifiable sender on the surface
  * that decides who reaches the internet is not a tie to break generously.
  */
+/**
+ * THE WINDOW CAN BE NAVIGATED, AND ITS PRELOAD GOES WITH IT. isOwnerSender
+ * proves the sender is the owner's window, not that the owner's page is in it:
+ * a link followed in a note would load a stranger's page into that same top
+ * frame with the same bridge. So a surface that matters also asks what the
+ * frame shows. On a dev server the origin is the page; on disk, the file.
+ */
+export function isOwnerPage(frameUrl: string | undefined, appUrl: string | null): boolean {
+  if (typeof frameUrl !== 'string' || appUrl === null) return false
+  try {
+    const frame = new URL(frameUrl)
+    const app = new URL(appUrl)
+    return frame.protocol === 'file:' ? app.protocol === 'file:' && frame.pathname === app.pathname : frame.origin === app.origin
+  } catch {
+    return false
+  }
+}
+
 export function isOwnerSender(
   sender: unknown,
   senderFrame: { parent: unknown } | null | undefined,

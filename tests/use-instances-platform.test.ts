@@ -40,7 +40,7 @@ const { ASK_DEADLINE_MS } = await import('../src/main/use-source-electron')
 const make = (platform: NodeJS.Platform, env: Record<string, string> = { DISPLAY: ':99', XDG_SESSION_TYPE: 'x11' }) =>
   createUseInstances({
     captureDir: path.join(mkdtempSync(path.join(tmpdir(), 'use-inst-')), 'c'),
-    remote: () => ({ blocked: async () => null, inputRefusal: () => null, mayDrive: () => false, cardControl: () => ({ switchOn: false, until: null, heldBy: null, awake: false, machine: 'darwin' }), admit: () => null, enter: () => () => undefined }),
+    remote: () => ({ blocked: async () => null, inputRefusal: () => null, agentRefusal: () => null, mayDrive: () => false, cardControl: () => ({ switchOn: false, until: null, heldBy: null, awake: false, machine: 'darwin' }), admit: () => null, enter: () => () => undefined }),
     blocked: async () => (env.XDG_SESSION_TYPE === 'wayland' ? ({ id: 'unsupported', platform: 'linux', detail: LINUX_WAYLAND, then: null, lastSeenAt: null, until: null, waiting: false, build: { settingsName: 'Cookrew', sourceBuild: false, restart: 'self', agents: 'keep' } } as const) : null),
     platform
   })

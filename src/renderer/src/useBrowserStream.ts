@@ -489,7 +489,8 @@ export function useBrowserStream(
           clearTimeout(deadline)
           deadline = null
         }
-        attemptRef.current = 0
+        // A refusal comes with a shut door: the backoff has to keep growing through it.
+        if (!(msg.status.state === 'offline' && msg.status.remote)) attemptRef.current = 0
         setReconnecting(false)
         setDeviceStatus(msg.status)
         return

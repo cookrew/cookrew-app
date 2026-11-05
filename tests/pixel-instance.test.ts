@@ -328,6 +328,7 @@ describe('a screen behind the remote desk', () => {
     const remote: RemoteGate = {
       blocked: async () => blocked,
       inputRefusal: () => null,
+      agentRefusal: () => null,
       mayDrive: (who) => allow.has(who.key),
       cardControl: (who) => ({ switchOn: true, until: allow.has(who.key) ? 99 : null, heldBy: null, awake: false, machine: 'darwin' }),
       admit: () => null,
@@ -474,7 +475,7 @@ describe('a screen behind the remote desk', () => {
     const copied = vi.fn()
     const device: PixelDevice = {
       target: parseUseUrl('screen://main')!,
-      remote: { blocked: async () => null, inputRefusal: () => null, mayDrive: () => true, cardControl: () => ({ switchOn: true, until: 1, heldBy: null, awake: false, machine: 'darwin' }), admit: () => null, enter: () => () => undefined },
+      remote: { blocked: async () => null, inputRefusal: () => null, agentRefusal: () => null, mayDrive: () => true, cardControl: () => ({ switchOn: true, until: 1, heldBy: null, awake: false, machine: 'darwin' }), admit: () => null, enter: () => () => undefined },
       open: async () => ({ width: 100, height: 100 }),
       capture: async () => ({ jpeg: 'x' }),
       perform: async () => undefined,

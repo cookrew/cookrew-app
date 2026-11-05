@@ -214,7 +214,7 @@ export const SCOPE_AWARE: RegExp[] = [
   // The window picker: a card made here lands in the scoped workspace, and the
   // service refuses a served one (use-source-service.ts). Machine-wide reads,
   // answered behind the pairing credential like everything else on this list.
-  /^\/api\/use\/sources(?:\/(?:open|settings|access|control|restart))?$/,
+  /^\/api\/use\/sources(?:\/(?:open|settings|access|control|restart|wake))?$/,
   // THE INTERNET GATE (§9, §11 · ④). An exported agent is addressable because
   // the workspace instance is addressable, so this is the one route family
   // that is MEANINGLESS unslugged — there is no focused-session reading of it,

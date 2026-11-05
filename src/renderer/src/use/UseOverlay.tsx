@@ -175,20 +175,21 @@ function RemoteBar({ card, control, connection, zoomed, onFit, onEnd }: { card: 
   return (
     <>
       <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} />
-      {refusal && <RemoteRefusalCover state={refusal} onRetry={() => ask(true)} onEnd={end} />}
+      {refusal && <RemoteRefusalCover state={refusal} onRetry={() => ask(true)} onDismiss={() => setRefusal(null)} />}
     </>
   )
 }
 
 /** Take control was refused for a reason with a next action. Check again is the same ask again. */
-function RemoteRefusalCover({ state, onRetry, onEnd }: { state: RemoteState; onRetry: () => void; onEnd: () => void }): JSX.Element {
+function RemoteRefusalCover({ state, onRetry, onDismiss }: { state: RemoteState; onRetry: () => void; onDismiss: () => void }): JSX.Element {
   const acts = useRemoteActs({ state, onCheck: onRetry })
   return (
     <div className="rp-cover">
       <div className="rp-cover-body">
         <RemotePanel state={state} where={remoteWhere()} busy={acts.busy} note={acts.note} onAct={acts.act} />
-        <button type="button" className="rp-leave" onPointerDown={(event) => event.stopPropagation()} onClick={onEnd}>End session</button>
+        <button type="button" className="rp-leave" onPointerDown={(event) => event.stopPropagation()} onClick={onDismiss}>Keep watching</button>
       </div>
+      {acts.confirm && <RemoteConfirmView confirm={acts.confirm} onYes={() => acts.answerConfirm(true)} onNo={() => acts.answerConfirm(false)} />}
     </div>
   )
 }

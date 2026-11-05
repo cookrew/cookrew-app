@@ -20,6 +20,7 @@ const stateOf = (id: RemoteStateId, detail: string | null = null): RemoteState =
 const gate = (blocked: RemoteState | null = null): RemoteGate => ({
   blocked: async () => blocked,
   inputRefusal: () => null,
+  agentRefusal: () => null,
   mayDrive: () => false,
   cardControl: () => ({ switchOn: false, until: null, heldBy: null, awake: false, machine: 'darwin' }),
   admit: () => null,

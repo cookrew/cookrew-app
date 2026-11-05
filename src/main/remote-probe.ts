@@ -28,24 +28,32 @@ export function createSessionReader(deps: { read: () => Promise<RemoteSession>; 
   let held: { at: number; session: RemoteSession } | null = null
   let last: RemoteSession = UNKNOWN
   let inFlight: Promise<RemoteSession> | null = null
+  /** Which read is current: an answer begun before an event is no answer after it. */
+  let generation = 0
   return {
     read() {
       if (held && now() - held.at < SESSION_FRESH_MS) return Promise.resolve(held.session)
-      inFlight ??= deps
+      if (inFlight) return inFlight
+      const mine = generation
+      const reading = deps
         .read()
         .catch(() => last)
         .then((session) => {
+          if (mine !== generation) return session
           last = session
           held = { at: now(), session }
           return session
         })
         .finally(() => {
-          inFlight = null
+          if (inFlight === reading) inFlight = null
         })
-      return inFlight
+      inFlight = reading
+      return reading
     },
     invalidate() {
       held = null
+      inFlight = null
+      generation += 1
     }
   }
 }
@@ -83,20 +91,19 @@ export function remoteBuild(input: { execPath: string; packaged: boolean; persis
 const PANES: readonly SettingsPane[] = ['screen', 'accessibility']
 
 /**
- * THE SWITCH ON DISK. Written only through the owner's window, read once at
- * launch: an edit while the app runs changes nothing, and the sandbox denies
- * this file to served panes (owner-secrets.ts). Anything but a plain `true` is
- * off, because the default is the answer to every doubt.
+ * WHAT OUTLIVES A RESTART: Stop's hold, and who is waiting to hear. Never the
+ * machine switch, which this does not read even if a file says so: an agent
+ * running as this user could write it, and only the Mac may turn that on.
  */
 export function remoteSettingsFile(file: string): { read(): RemoteSettings; write(next: RemoteSettings): void } {
   return {
     read() {
       try {
-        const raw = JSON.parse(readFileSync(file, 'utf8')) as { on?: unknown; waiting?: unknown } | null
-        const waiting = PANES.find((pane) => pane === raw?.waiting) ?? null
-        return { on: raw?.on === true, waiting }
+        const raw = JSON.parse(readFileSync(file, 'utf8')) as { waiting?: unknown; holdUntil?: unknown } | null
+        const hold = raw?.holdUntil
+        return { waiting: PANES.find((pane) => pane === raw?.waiting) ?? null, holdUntil: typeof hold === 'number' && Number.isFinite(hold) ? hold : 0 }
       } catch {
-        return { on: false, waiting: null }
+        return { waiting: null, holdUntil: 0 }
       }
     },
     write(next) {

@@ -47,6 +47,9 @@ export function useRemoteActs(options: { state: RemoteState | null; onCheck: () 
         } else if (action.id === 'restart') {
           const answer = await cookrew().remoteRestart?.()
           setNote(answer?.ok === false ? answer.error : 'Restarting Cookrew…')
+        } else if (action.id === 'wake-display') {
+          const answer = await cookrew().remoteWake?.()
+          setNote(answer?.ok === false ? answer.error : 'Waking the display…')
         } else if (action.id === 'open-screen-settings' || action.id === 'open-accessibility-settings') {
           const answer = await cookrew().openScreenSettings?.(action.id === 'open-screen-settings' ? 'screen' : 'accessibility')
           const name = state?.build.settingsName ?? 'Cookrew'

@@ -190,6 +190,7 @@ export function MobileBrowserFrame({
     paintedSize.current = { w: 0, h: 0 }
     setStreamFrameLoaded(false)
     setHasPicture(false)
+    setFrameZoom(NO_ZOOM)
     if (!open) {
       setLoaded(false)
       setNatural({ w: 0, h: 0 })
@@ -312,7 +313,8 @@ export function MobileBrowserFrame({
   // A computer's screen zooms HERE, on the viewer: it is the only way to read a
   // Mac on a phone, and it moves the rect every mapping already reads.
   const computerCard = stream.deviceStatus?.use === 'computer'
-  const fit = computerCard ? zoomedFit(baseFit, frameZoom) : baseFit
+  // Held inside the view on every render: a phone turned sideways moves its edges.
+  const fit = computerCard ? zoomedFit(baseFit, panZoom(frameZoom, baseFit, view, 0, 0)) : baseFit
   const zoomRef = useRef({ fit: baseFit, view, control: false })
   zoomRef.current = { fit: baseFit, view, control: interactive }
   /** Leaving the card is what ends a viewer: the stream closes as it goes. */

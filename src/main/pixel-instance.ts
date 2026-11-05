@@ -91,8 +91,10 @@ export class DeviceBlockedError extends Error {
 export interface RemoteGate {
   /** What stands in the way of reading the screen; null when nothing does. */
   blocked(options?: { afterFailure?: boolean }): Promise<RemoteState | null>
-  /** Why nothing may drive this machine: what an agent's hand is refused with. */
+  /** Why nothing may drive this machine. */
   inputRefusal(): string | null
+  /** Why an agent's hand may not, which Stop also holds. */
+  agentRefusal(): string | null
   /** This viewer holds control of this card, right now. */
   mayDrive(who: ViewerWho): boolean
   cardControl(who: ViewerWho): CardControl
@@ -378,7 +380,8 @@ export class PixelInstance {
     if (remote && (who === undefined || !remote.mayDrive(who) || this.statusNow.state !== 'live')) return
     const gestures = this.mapper.map({ method, params } as CdpInputCommand)
     if (gestures.length === 0) return
-    this.perform(gestures)
+    // Asked again per gesture: a queue can outlast the grant that filled it.
+    this.perform(gestures, false, remote && who ? () => remote.mayDrive(who) : undefined)
     if (gestures.some(isCopyChord)) this.readCopyLater()
   }
 
@@ -402,14 +405,14 @@ export class PixelInstance {
    */
   async act(gestures: readonly Gesture[]): Promise<void> {
     if (this.closed) throw new Error('this card is closed')
-    const refusal = this.opts.device.inputRefusal?.() ?? null
+    const refusal = this.opts.device.inputRefusal?.() ?? this.opts.device.remote?.agentRefusal() ?? null
     if (refusal) throw new Error(refusal)
     if (!this.opts.device.perform) throw new Error(`a ${this.opts.device.target.use} camera is watched, not driven`)
     if (!this.opened) throw new Error(this.statusNow.message ?? 'the device is not connected yet')
     await this.perform(gestures, true)
   }
 
-  private perform(gestures: readonly Gesture[], surface = false): Promise<void> {
+  private perform(gestures: readonly Gesture[], surface = false, stillAllowed?: () => boolean): Promise<void> {
     const device = this.opts.device
     if (!device.perform) return Promise.resolve()
     this.lastInputAt = this.now()
@@ -417,7 +420,7 @@ export class PixelInstance {
     // Serialised: a tap must never overtake the swipe before it. Called ON
     // the device: a class's perform reads its own fields (adb's serial).
     for (const gesture of gestures) {
-      this.inputQueue = this.inputQueue.then(() => device.perform?.(gesture)).then(
+      this.inputQueue = this.inputQueue.then(() => (stillAllowed && !stillAllowed() ? undefined : device.perform?.(gesture))).then(
         () => undefined,
         (error: unknown) => {
           failure = failure ?? error

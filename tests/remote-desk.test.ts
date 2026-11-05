@@ -12,7 +12,7 @@ function rig(over: Partial<RemoteDeskDeps> = {}, facts: Partial<RemoteSession> =
   let now = 1_000_000
   const timers: Array<{ at: number; fn: () => void; cancelled: boolean }> = []
   const session: { -readonly [K in keyof RemoteSession]: RemoteSession[K] } = { locked: false, displayAsleep: false, grant: true, ...facts }
-  const access = { screen: 'granted', accessibility: true, on: false, waiting: null as string | null, served: new Set<string>() }
+  const access = { screen: 'granted', accessibility: true, waiting: null as string | null, holdUntil: 0, served: new Set<string>() }
   const records: Array<{ type: string; card: string; details: string | undefined }> = []
   const awake = { start: vi.fn(), stop: vi.fn() }
   const host = vi.fn()
@@ -28,10 +28,10 @@ function rig(over: Partial<RemoteDeskDeps> = {}, facts: Partial<RemoteSession> =
     accessibility: () => access.accessibility,
     session: async () => ({ ...session }),
     settings: {
-      read: () => ({ on: access.on, waiting: access.waiting as never }),
+      read: () => ({ waiting: access.waiting as never, holdUntil: access.holdUntil }),
       write: (next) => {
-        access.on = next.on
         access.waiting = next.waiting
+        access.holdUntil = next.holdUntil
       }
     },
     servedWorkspace: (id) => access.served.has(id),
@@ -192,6 +192,13 @@ describe('the machine switch', () => {
     expect(r.refresh).toHaveBeenCalled()
   })
 
+  it('turns off even if nothing could be written, because nothing is', () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    r.desk.setSwitch(false)
+    expect(r.desk.controlFacts().switchOn).toBe(false)
+  })
+
   it('agents keep the rule they had: the switch, with Accessibility on top', () => {
     const r = rig()
     r.access.accessibility = false
@@ -201,25 +208,30 @@ describe('the machine switch', () => {
     expect(r.desk.inputRefusal()).toContain('Electron')
   })
 
-  it('remembers across a restart, and a launch with it on leaves a line in the log', () => {
-    const r = rig({ settings: { read: () => ({ on: true, waiting: null }), write: () => undefined } })
-    expect(r.desk.controlFacts().switchOn).toBe(true)
-    r.desk.start()
-    expect(r.records.find((e) => e.type === 'remote.switch-on')?.details).toBe('found on at launch')
+  it('is off at every launch, whatever any file says: nothing on disk can turn it on', () => {
+    const r = rig({ settings: { read: () => ({ on: true, waiting: null, holdUntil: 0 }) as never, write: () => undefined } })
+    expect(r.desk.controlFacts().switchOn).toBe(false)
+    expect(r.desk.inputRefusal()).toMatch(/Remote control/)
+  })
+
+  it('never writes itself to disk', () => {
+    const write = vi.fn()
+    const r = rig({ settings: { read: () => ({ waiting: null, holdUntil: 0 }), write } })
+    r.desk.setSwitch(true)
+    expect(write).not.toHaveBeenCalled()
   })
 })
 
-describe('the switch when the disk says no', () => {
-  it('an unreadable file reads off', () => {
+describe('when the disk says no', () => {
+  it('an unreadable file is no wait and no hold', async () => {
     const r = rig({ settings: { read: () => { throw new Error('garbled') }, write: () => undefined } })
-    expect(r.desk.controlFacts().switchOn).toBe(false)
+    expect((await r.desk.state('away')).id).toBe('ready')
   })
 
-  it('a switch that could not be saved stays off, and says why', () => {
-    const r = rig({ settings: { read: () => ({ on: false, waiting: null }), write: () => { throw new Error('read-only disk') } } })
-    expect(r.desk.setSwitch(true)).toMatchObject({ ok: false, error: 'read-only disk' })
-    expect(r.desk.controlFacts().switchOn).toBe(false)
-    expect(r.types()).not.toContain('remote.switch-on')
+  it('Stop holds even when it cannot be written down', () => {
+    const r = rig({ settings: { read: () => ({ waiting: null, holdUntil: 0 }), write: () => { throw new Error('read-only disk') } } })
+    r.desk.stopAll()
+    expect(r.desk.admit('c1', phone)).toBeTruthy()
   })
 })
 
@@ -335,6 +347,7 @@ describe('served sessions and sandboxes', () => {
     const r = rig()
     r.access.served.add('ws')
     expect(r.desk.admit('c1', phone)?.message).toMatch(/served session/i)
+    expect(r.desk.admit('c1', phone)?.state.id).toBe('unsupported')
   })
 })
 
@@ -407,11 +420,43 @@ describe('the host: who is on this machine', () => {
     expect(r.desk.mayDrive('c1', phone)).toBe(false)
     expect(r.types()).toContain('remote.stopped')
     expect(r.desk.admit('c1', phone)).toBeTruthy()
-    expect(r.desk.inputRefusal()).toMatch(/Stopped at the Mac/)
+    expect(r.desk.agentRefusal()).toMatch(/Stopped at the Mac/)
     expect((await r.desk.takeControl('c1', phone)).ok).toBe(false)
     r.tick(STOP_HOLD_MS)
     expect(r.desk.admit('c1', phone)).toBeNull()
+    expect(r.desk.agentRefusal()).toBeNull()
+  })
+
+  it('Stop outlives a restart: the door stays held until its time', () => {
+    const r = rig()
+    r.desk.stopAll()
+    const holdUntil = r.access.holdUntil
+    expect(holdUntil).toBeGreaterThan(0)
+    const again = rig({ settings: { read: () => ({ waiting: null, holdUntil }), write: () => undefined } })
+    expect(again.desk.admit('c1', phone)).toBeTruthy()
+  })
+
+  it('a stopped device gets no pictures, no restart, no settings page and no wake', async () => {
+    const r = rig({ build: () => ({ ...build, restart: 'self' }) }, { grant: true })
+    r.access.screen = 'denied'
+    r.desk.stopAll()
+    expect(r.desk.picturesRefused(phone)).toMatch(/Stopped at the Mac/)
+    expect(r.desk.picturesRefused(MAC_VIEWER)).toBeNull()
+    expect((await r.desk.restart(phone)).ok).toBe(false)
+    expect(r.relaunch).not.toHaveBeenCalled()
+    expect((await r.desk.openSettings('screen', 'away')).ok).toBe(false)
+    expect(r.openSettings).not.toHaveBeenCalled()
+    expect((await r.desk.wake(phone)).ok).toBe(false)
+  })
+
+  it('Stop leaves the Mac able to use its own card', async () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    await r.desk.takeControl('c1', MAC_VIEWER)
+    r.desk.stopAll()
     expect(r.desk.inputRefusal()).toBeNull()
+    expect((await r.desk.takeControl('c1', MAC_VIEWER)).ok).toBe(true)
+    expect(r.desk.mayDrive('c1', MAC_VIEWER)).toBe(true)
   })
 
   it('Stop never locks the Mac out of its own card', () => {
@@ -434,7 +479,7 @@ describe('away from the Mac', () => {
   it('opening settings from away opens it on the Mac and remembers to say when it is ready', async () => {
     const r = rig({}, { grant: false })
     r.access.screen = 'denied'
-    await r.desk.openSettings('screen', 'away')
+    expect((await r.desk.openSettings('screen', 'away')).ok).toBe(true)
     expect(r.openSettings).toHaveBeenCalledWith('screen')
     expect((await r.desk.state('away')).waiting).toBe(true)
     r.session.grant = true
@@ -464,7 +509,7 @@ describe('away from the Mac', () => {
   })
 
   it('a wait survives the restart it was waiting for', async () => {
-    const r = rig({ settings: { read: () => ({ on: false, waiting: 'screen' }), write: () => undefined } }, { grant: true })
+    const r = rig({ settings: { read: () => ({ waiting: 'screen', holdUntil: 0 }), write: () => undefined } }, { grant: true })
     r.desk.start()
     r.tick(0)
     await r.flush()
@@ -473,17 +518,88 @@ describe('away from the Mac', () => {
 })
 
 describe('restart', () => {
-  it('relaunches a build that can, and logs it', () => {
-    const r = rig({ build: () => ({ ...build, restart: 'self' }) })
-    expect(r.desk.restart(phone).ok).toBe(true)
+  const able = (): RemoteBuild => ({ ...build, restart: 'self' })
+
+  it('relaunches a build that can, when a restart is what the Mac is waiting for, and logs it', async () => {
+    const r = rig({ build: able }, { grant: true })
+    r.access.screen = 'denied'
+    expect((await r.desk.restart(phone)).ok).toBe(true)
     expect(r.relaunch).toHaveBeenCalled()
     expect(r.records.find((e) => e.type === 'remote.restart')?.details).toContain('Pixel 9')
   })
 
-  it('refuses in words on a build that cannot', () => {
-    const r = rig()
-    const answer = r.desk.restart(MAC_VIEWER)
+  it('from away it is refused when nothing is waiting on it: this is not a remote kill switch', async () => {
+    const r = rig({ build: able })
+    expect((await r.desk.restart(phone)).ok).toBe(false)
+    expect(r.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('refuses in words on a build that cannot', async () => {
+    const r = rig({}, { grant: true })
+    r.access.screen = 'denied'
+    const answer = await r.desk.restart(MAC_VIEWER)
     expect(answer.ok).toBe(false)
     expect(r.relaunch).not.toHaveBeenCalled()
+  })
+})
+
+describe('what ends a grant at once', () => {
+  it('a card replaced or deleted: the next window is not what control was given over', async () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    await r.desk.takeControl('c1', phone)
+    r.desk.cardGone('c1')
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+    expect(r.types()).toContain('remote.control-off')
+  })
+
+  it('a device forgotten: its grant goes and its viewers are shut out', async () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    r.desk.enter('c1', 'v1', phone)
+    await r.desk.takeControl('c1', phone)
+    r.desk.forgetDevice(phone.key)
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+    expect(r.drop).toHaveBeenCalledWith(['c1'])
+  })
+
+  it('a workspace turning served: grants end and viewers are dropped, not only masked', async () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    r.desk.enter('c1', 'v1', phone)
+    await r.desk.takeControl('c1', phone)
+    r.desk.workspaceServed('ws')
+    expect(r.drop).toHaveBeenCalledWith(['c1'])
+    expect(r.types()).toContain('remote.control-off')
+    r.access.served.clear()
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+  })
+})
+
+describe('a sleeping display', () => {
+  it('can be woken from away, and looks again', async () => {
+    const wakeDisplay = vi.fn(async () => undefined)
+    const r = rig({ wakeDisplay }, { displayAsleep: true })
+    expect((await r.desk.wake(phone)).ok).toBe(true)
+    expect(wakeDisplay).toHaveBeenCalled()
+    expect(r.types()).toContain('remote.woke')
+  })
+
+  it('a locked Mac is not woken for nothing', async () => {
+    const wakeDisplay = vi.fn(async () => undefined)
+    const r = rig({ wakeDisplay }, { locked: true, displayAsleep: true })
+    expect((await r.desk.wake(phone)).ok).toBe(false)
+    expect(wakeDisplay).not.toHaveBeenCalled()
+  })
+})
+
+describe('a wait that was answered twice', () => {
+  it('says Ready once', async () => {
+    const r = rig({ settings: { read: () => ({ waiting: 'screen', holdUntil: 0 }), write: () => undefined } }, { grant: true })
+    r.desk.sessionChanged()
+    r.desk.sessionChanged()
+    r.tick(0)
+    await r.flush()
+    expect(r.types().filter((t) => t === 'remote.ready')).toHaveLength(1)
   })
 })

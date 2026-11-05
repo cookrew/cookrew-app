@@ -61,15 +61,17 @@ export interface UseSourceServiceDeps {
 export type UseSourceAnswer<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly status: number; readonly error: string; readonly state?: RemoteState }
 
 export interface UseSourceService {
-  list(workspaceId: string): Promise<UseSourceAnswer<UseSourceList>>
+  /** `who` asked: every thumbnail in a list is a picture of the screen. */
+  list(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<UseSourceList>>
   /** `pick` is whatever the client sent. */
-  open(workspaceId: string, pick: unknown): Promise<UseSourceAnswer<{ card: UseSourceCard }>>
+  open(workspaceId: string, pick: unknown, who: ViewerWho): Promise<UseSourceAnswer<{ card: UseSourceCard }>>
   /** `where` is which side of the glass asked: away, the jump is remembered and answered when it is done. */
   openSettings(workspaceId: string, pane: unknown, where: RemoteWhere): Promise<UseSourceAnswer<null>>
   access(workspaceId: string, where: RemoteWhere): Promise<UseSourceAnswer<RemoteAccess>>
   /** `ask` is whatever the client sent: `{ card, on }`. */
   control(workspaceId: string, ask: unknown, who: ViewerWho): Promise<UseSourceAnswer<null>>
   restart(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<null>>
+  wake(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<null>>
   whoIs(credential: string | null): ViewerWho
 }
 
@@ -164,17 +166,21 @@ export function createUseSourceService(deps: UseSourceServiceDeps): UseSourceSer
   }
 
   return {
-    list: (workspaceId) =>
+    list: (workspaceId, who) =>
       answering(async () => {
         const refusal = gate(workspaceId)
         if (refusal) return refused(403, refusal)
+        const held = deps.desk?.picturesRefused(who) ?? null
+        if (held) return refused(409, held)
         return { ok: true, value: await read(USE_SOURCES_FRESH_MS) }
       }),
 
-    open: (workspaceId, raw) =>
+    open: (workspaceId, raw, who) =>
       answering(async () => {
         const refusal = gate(workspaceId)
         if (refusal) return refused(403, refusal)
+        const held = deps.desk?.picturesRefused(who) ?? null
+        if (held) return refused(409, held)
         const pick = parsePick(raw)
         if (!pick) return refused(400, 'Pick a window or a screen from the list')
         const before = standing(workspaceId, pick.card)
@@ -200,9 +206,12 @@ export function createUseSourceService(deps: UseSourceServiceDeps): UseSourceSer
         if (refusal) return refused(403, refusal)
         const pane = parsePane(raw)
         if (!pane) return refused(400, 'There is no such settings page')
-        if (deps.desk) await deps.desk.openSettings(pane, where)
-        else await deps.provider()?.openSettings(pane)
-        return { ok: true, value: null }
+        if (!deps.desk) {
+          await deps.provider()?.openSettings(pane)
+          return { ok: true, value: null }
+        }
+        const answer = await deps.desk.openSettings(pane, where)
+        return answer.ok ? { ok: true, value: null } : refused(409, answer.error)
       }),
 
     access: (workspaceId, where) =>
@@ -236,7 +245,16 @@ export function createUseSourceService(deps: UseSourceServiceDeps): UseSourceSer
         const refusal = gate(workspaceId)
         if (refusal) return refused(403, refusal)
         if (!deps.desk) return refused(503, NO_DESK)
-        const answer = deps.desk.restart(who)
+        const answer = await deps.desk.restart(who)
+        return answer.ok ? { ok: true, value: null } : refused(409, answer.error)
+      }),
+
+    wake: (workspaceId, who) =>
+      answering(async () => {
+        const refusal = gate(workspaceId)
+        if (refusal) return refused(403, refusal)
+        if (!deps.desk) return refused(503, NO_DESK)
+        const answer = await deps.desk.wake(who)
         return answer.ok ? { ok: true, value: null } : refused(409, answer.error)
       }),
 

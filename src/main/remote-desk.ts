@@ -30,7 +30,10 @@ import { SERVED_USE_REFUSED } from './use-commands'
  *
  *   THE MACHINE SWITCH. "Allow remote control of this Mac", off by default,
  *   writable only from the Mac's own window (index.ts · ownerOnly): there is
- *   no route to it. Off means nobody drives, viewer or agent.
+ *   no route to it. Off means nobody drives, viewer or agent. It lives in this
+ *   process and nowhere else, so it is off at every launch: anything on disk
+ *   could be written by an agent running as the same user, and "changeable
+ *   only at the Mac" has to hold against that too.
  *
  *   THE CARD. View only by default. Take control from an owner device holds
  *   for CONTROL_MS and is then off again, by itself. It belongs to the one
@@ -57,11 +60,12 @@ export interface RemoteSession {
 
 export type SettingsPane = 'screen' | 'accessibility'
 
-/** What outlives a restart. */
+/** What outlives a restart. Never the machine switch. */
 export interface RemoteSettings {
-  readonly on: boolean
   /** Someone away from the Mac asked to hear when this pane's grant is done. */
   readonly waiting: SettingsPane | null
+  /** Stop holds the door until then: a restart must not be a way past it. */
+  readonly holdUntil: number
 }
 
 export interface RemoteDeskDeps {
@@ -87,6 +91,7 @@ export interface RemoteDeskDeps {
   dropViewers(cards: readonly string[]): void
   openSettings(pane: SettingsPane): Promise<void>
   relaunch(): void
+  wakeDisplay?(): Promise<void>
   now?: () => number
   schedule?: (fn: () => void, ms: number) => () => void
 }
@@ -133,13 +138,23 @@ export interface RemoteDesk {
   /** What a device asks before each frame: the state in the way, or null. */
   blocked(options?: { afterFailure?: boolean }): Promise<RemoteState | null>
   controlFacts(): RemoteControlFacts
-  /** Why nothing may drive this machine right now: what an agent's hand is refused with. */
+  /** Why nothing may drive this machine: the switch and the grant behind it. */
   inputRefusal(): string | null
+  /** The same for an agent's hand, which Stop also holds. */
+  agentRefusal(): string | null
+  /** Why this device may not read what is on the screen right now. */
+  picturesRefused(who: ViewerWho): string | null
   mayDrive(card: string, who: ViewerWho): boolean
   cardControl(card: string, who: ViewerWho): CardControl
   takeControl(card: string, who: ViewerWho): Promise<RemoteAnswer>
   endControl(card: string, who: ViewerWho): void
   setSwitch(on: boolean): RemoteAnswer
+  /** A card's instance went: replaced, re-addressed or deleted. */
+  cardGone(card: string): void
+  /** A paired device was forgotten or revoked. */
+  forgetDevice(key: string): void
+  /** A caller's session just started in this workspace. */
+  workspaceServed(workspaceId: string): void
   /** Why this viewer may not watch this card, and the state to leave it with; null when it may. */
   admit(card: string, who: ViewerWho): { readonly message: string; readonly state: RemoteState } | null
   /** A viewer arrived; the answer is its leaving. */
@@ -147,8 +162,9 @@ export interface RemoteDesk {
   noteAgent(card: string, agent: string, verb: string): void
   hostView(): RemoteHostView
   stopAll(): void
-  openSettings(pane: SettingsPane, where: RemoteWhere): Promise<void>
-  restart(who: ViewerWho): RemoteAnswer
+  openSettings(pane: SettingsPane, where: RemoteWhere): Promise<RemoteAnswer>
+  restart(who: ViewerWho): Promise<RemoteAnswer>
+  wake(who: ViewerWho): Promise<RemoteAnswer>
   /** The lock or the display just changed. */
   sessionChanged(): void
 }
@@ -158,6 +174,7 @@ export function remoteGate(desk: RemoteDesk, card: string): RemoteGate {
   return {
     blocked: (options) => desk.blocked(options),
     inputRefusal: () => desk.inputRefusal(),
+    agentRefusal: () => desk.agentRefusal(),
     mayDrive: (who) => desk.mayDrive(card, who),
     cardControl: (who) => desk.cardControl(card, who),
     admit: (who) => desk.admit(card, who),
@@ -181,7 +198,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   const viewers = new Map<string, Viewer>()
   const agents = new Map<string, AgentRow>()
   let settings = readSettings()
-  let holdUntil = 0
+  let switchOn = false
   let awake = false
   let cancelWatch: (() => void) | null = null
   let told: RemoteStateId | null = null
@@ -190,12 +207,11 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     try {
       return deps.settings.read()
     } catch {
-      // An unreadable file is the default, and the default is off.
-      return { on: false, waiting: null }
+      return { waiting: null, holdUntil: 0 }
     }
   }
 
-  const held = (): boolean => holdUntil > now()
+  const held = (): boolean => settings.holdUntil > now()
   const stateOf = (id: RemoteStateId, more: Partial<RemoteState> = {}): RemoteState => ({
     id,
     platform: mac ? 'darwin' : 'linux',
@@ -226,17 +242,16 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   }
 
   const state = async (where: RemoteWhere): Promise<RemoteState> =>
-    where === 'away' && held() ? stateOf('stopped', { until: holdUntil }) : machineState()
+    where === 'away' && held() ? stateOf('stopped', { until: settings.holdUntil }) : machineState()
 
-  const controlFacts = (): RemoteControlFacts => ({ available: mac, switchOn: mac && settings.on, accessibility: mac && deps.accessibility() })
+  const controlFacts = (): RemoteControlFacts => ({ available: mac, switchOn: mac && switchOn, accessibility: mac && deps.accessibility() })
 
   const switchOff = (): string => word('Remote control of this Mac is off. Someone at the Mac can turn it on in the ⋯ menu.')
   const stopped = (): string => word('Stopped at the Mac: someone there ended this session.')
   const accessibilityOff = (): string => `Accessibility is off for ${deps.build().settingsName}: turn it on in System Settings › Privacy & Security › Accessibility.`
 
   const inputRefusal = (): string | null => {
-    if (held()) return stopped()
-    if (!settings.on) return switchOff()
+    if (!switchOn) return switchOff()
     return deps.accessibility() ? null : accessibilityOff()
   }
 
@@ -292,6 +307,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     syncHost()
   }
 
+  const cardsWatchedBy = (matches: (viewer: Viewer) => boolean): string[] => [...new Set([...viewers.values()].filter(matches).map((viewer) => viewer.card))]
+
   const endAllGrants = (why: string): void => {
     for (const card of [...grants.keys()]) ended(card, why)
   }
@@ -301,7 +318,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   const standing = (card: string, who: ViewerWho): RemoteRefusal | null => {
     if (!mac) return refuse(word('Driving this Mac is not available here: the screen is view only.'))
     if (servedCard(card)) return refuse(SERVED_USE_REFUSED)
-    if (!settings.on) return refuse(switchOff())
+    if (!switchOn) return refuse(switchOff())
     if (held() && !who.here) return refuse(stopped())
     const holder = liveGrant(card)
     return holder && holder.who.key !== who.key ? refuse(`${holder.who.name} has control of this card.`) : null
@@ -319,17 +336,17 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
 
   // MARK: waiting for a grant
 
-  const writeWaiting = (waiting: SettingsPane | null): void => {
-    settings = { ...settings, waiting }
+  const remember = (next: Partial<RemoteSettings>): void => {
+    settings = { ...settings, ...next }
     try {
       deps.settings.write(settings)
     } catch {
-      // The wait stands for this run; only a restart would lose it.
+      // It stands for this run; only a restart would lose it.
     }
   }
 
   const finishWait = (pane: SettingsPane): void => {
-    writeWaiting(null)
+    remember({ waiting: null })
     told = null
     deps.record('remote.ready', MACHINE, word('this Mac'), pane === 'screen' ? 'Screen Recording is on and the screen can be seen' : 'Accessibility is on')
   }
@@ -338,6 +355,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     const pane = settings.waiting
     if (pane === null) return
     const read = await machineState().catch(() => null)
+    // Answered while this was reading, or a newer wait took its place.
+    if (settings.waiting !== pane) return
     if (read === null) return watch(READY_WATCH_MS)
     if (pane === 'accessibility' ? deps.accessibility() : read.id === 'ready') return finishWait(pane)
     if (read.id === 'needs-restart' && told !== 'needs-restart') {
@@ -357,8 +376,6 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
 
   return {
     start() {
-      // A file can be edited while the app is down, so a launch with the switch on leaves a line.
-      if (settings.on) deps.record('remote.switch-on', MACHINE, word('this Mac'), 'found on at launch')
       if (settings.waiting !== null) watch(0)
     },
     state,
@@ -369,15 +386,17 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     },
     controlFacts,
     inputRefusal,
+    agentRefusal: () => (held() ? stopped() : inputRefusal()),
+    picturesRefused: (who) => (held() && !who.here ? stopped() : null),
     mayDrive(card, who) {
-      if (!mac || !settings.on || servedCard(card)) return false
+      if (!mac || !switchOn || servedCard(card)) return false
       if (held() && !who.here) return false
       return liveGrant(card)?.who.key === who.key
     },
     cardControl(card, who) {
       const holder = liveGrant(card)
       const mine = holder?.who.key === who.key
-      return { switchOn: mac && settings.on, until: mine ? (holder?.until ?? null) : null, heldBy: holder && !mine ? holder.who.name : null, awake, machine: mac ? 'darwin' : 'linux' }
+      return { switchOn: mac && switchOn, until: mine ? (holder?.until ?? null) : null, heldBy: holder && !mine ? holder.who.name : null, awake, machine: mac ? 'darwin' : 'linux' }
     },
     async takeControl(card, who) {
       const before = standing(card, who)
@@ -396,22 +415,29 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       if (holder && (holder.who.key === who.key || who.here)) ended(card, `ended by ${who.name}`)
     },
     setSwitch(on) {
-      if (on === settings.on) return { ok: true }
-      try {
-        deps.settings.write({ ...settings, on })
-      } catch (error) {
-        return refuse(error instanceof Error ? error.message : String(error))
-      }
-      settings = { ...settings, on }
+      if (on === switchOn) return { ok: true }
+      switchOn = on
       if (!on) endAllGrants('remote control was turned off at the Mac')
       deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), 'at the Mac')
       deps.refreshCards()
       return { ok: true }
     },
+    cardGone(card) {
+      ended(card, 'the card changed')
+    },
+    forgetDevice(key) {
+      for (const [card, holder] of [...grants]) if (holder.who.key === key) ended(card, 'the device was forgotten')
+      deps.dropViewers(cardsWatchedBy((viewer) => viewer.who.key === key))
+    },
+    workspaceServed(workspaceId) {
+      const inside = (card: string): boolean => deps.workspaceOfCard(card) === workspaceId
+      for (const card of [...grants.keys()]) if (inside(card)) ended(card, 'a served session started here')
+      deps.dropViewers(cardsWatchedBy((viewer) => !viewer.who.here && inside(viewer.card)))
+    },
     admit(card, who) {
       if (who.here) return null
       if (servedCard(card)) return { message: SERVED_USE_REFUSED, state: stateOf('unsupported', { detail: SERVED_USE_REFUSED }) }
-      return held() ? { message: stopped(), state: stateOf('stopped', { until: holdUntil }) } : null
+      return held() ? { message: stopped(), state: stateOf('stopped', { until: settings.holdUntil }) } : null
     },
     enter(card, viewerId, who) {
       const since = now()
@@ -454,26 +480,39 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     },
     hostView,
     stopAll() {
-      holdUntil = now() + STOP_HOLD_MS
+      remember({ holdUntil: now() + STOP_HOLD_MS })
       schedule(() => deps.refreshCards(), STOP_HOLD_MS)
       endAllGrants('stopped at the Mac')
-      const watched = new Set([...viewers.values()].filter((viewer) => !viewer.who.here).map((viewer) => viewer.card))
-      deps.record('remote.stopped', MACHINE, word('this Mac'), `${watched.size} card${watched.size === 1 ? '' : 's'} · at the Mac`)
-      deps.dropViewers([...watched])
+      const watched = cardsWatchedBy((viewer) => !viewer.who.here)
+      deps.record('remote.stopped', MACHINE, word('this Mac'), `${watched.length} card${watched.length === 1 ? '' : 's'} · at the Mac`)
+      deps.dropViewers(watched)
       deps.refreshCards()
       syncHost()
     },
     async openSettings(pane, where) {
       if (where === 'away') {
-        writeWaiting(pane)
+        if (held()) return refuse(stopped())
+        remember({ waiting: pane })
         watch(READY_WATCH_MS)
       }
       await deps.openSettings(pane)
+      return { ok: true }
     },
-    restart(who) {
+    async restart(who) {
+      if (held() && !who.here) return refuse(stopped())
       if (deps.build().restart !== 'self') return refuse('This build cannot restart itself: start it again from its terminal.')
+      // From away this finishes a grant and nothing else: it is not a way to stop the app.
+      if (!who.here && (await machineState()).id !== 'needs-restart') return refuse('Nothing here is waiting on a restart.')
       deps.record('remote.restart', MACHINE, word('this Mac'), who.name)
       deps.relaunch()
+      return { ok: true }
+    },
+    async wake(who) {
+      if (held() && !who.here) return refuse(stopped())
+      const read = await machineState()
+      if (read.id !== 'display-asleep') return refuse(remoteView(read, who.here ? 'here' : 'away').sentence, read)
+      deps.record('remote.woke', MACHINE, word('this Mac'), who.name)
+      await deps.wakeDisplay?.()
       return { ok: true }
     },
     sessionChanged() {

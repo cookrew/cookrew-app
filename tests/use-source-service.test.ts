@@ -3,6 +3,7 @@
 // something else, and a served workspace is refused before anything is read.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SERVED_USE_REFUSED } from '../src/main/use-commands'
+import { MAC_VIEWER } from '../src/shared/remote-access'
 import { cleanAgentName } from '../src/shared/agent-name'
 import { createUseSourceService, USE_SOURCES_FRESH_MS, USE_SOURCES_LIST_MS, type UseSourceProvider, type UseSourceServiceDeps } from '../src/main/use-source-service'
 import type { BrowserNodeData } from '../src/shared/model'
@@ -41,19 +42,19 @@ function bed(over: Partial<UseSourceServiceDeps> = {}) {
 
 describe('list', () => {
   it('answers the provider', async () => {
-    expect(await bed().service.list('ws')).toEqual({ ok: true, value: list })
+    expect(await bed().service.list('ws', MAC_VIEWER)).toEqual({ ok: true, value: list })
   })
   it('asks once while a list is in flight or fresh, again when it is stale', async () => {
     const { service, provider, tick } = bed()
-    await Promise.all([service.list('ws'), service.list('ws')])
-    await service.list('ws')
+    await Promise.all([service.list('ws', MAC_VIEWER), service.list('ws', MAC_VIEWER)])
+    await service.list('ws', MAC_VIEWER)
     expect(provider.list).toHaveBeenCalledTimes(1)
     tick(USE_SOURCES_FRESH_MS + 1)
-    await service.list('ws')
+    await service.list('ws', MAC_VIEWER)
     expect(provider.list).toHaveBeenCalledTimes(2)
   })
   it('a platform with no source says so', async () => {
-    const answer = await bed({ provider: () => null }).service.list('ws')
+    const answer = await bed({ provider: () => null }).service.list('ws', MAC_VIEWER)
     expect(answer).toMatchObject({ ok: true, value: { state: 'unavailable', windows: [], screens: [] } })
   })
 })
@@ -65,13 +66,13 @@ describe('a source that fails', () => {
   }
   it('answers in words on every verb, and a failed list is not cached', async () => {
     const { service } = bed({ provider: () => broken })
-    expect(await service.list('ws')).toEqual({ ok: false, status: 500, error: 'capturer died' })
-    expect(await service.open('ws', { source: 'window:41' })).toEqual({ ok: false, status: 500, error: 'capturer died' })
+    expect(await service.list('ws', MAC_VIEWER)).toEqual({ ok: false, status: 500, error: 'capturer died' })
+    expect(await service.open('ws', { source: 'window:41' }, MAC_VIEWER)).toEqual({ ok: false, status: 500, error: 'capturer died' })
     expect(await service.openSettings('ws', undefined, 'here')).toEqual({ ok: false, status: 500, error: 'no such pane' })
   })
   it('a card that cannot be re-pointed says so', async () => {
     const { service } = bed({ readdress: async () => Promise.reject(new Error('Browser node disappeared')) })
-    expect(await service.open('ws', { source: 'screen:main', card: 'use' })).toEqual({ ok: false, status: 500, error: 'Browser node disappeared' })
+    expect(await service.open('ws', { source: 'screen:main', card: 'use' }, MAC_VIEWER)).toEqual({ ok: false, status: 500, error: 'Browser node disappeared' })
   })
 })
 
@@ -82,10 +83,10 @@ describe('a source that never answers', () => {
     vi.useFakeTimers()
     const hung: UseSourceProvider = { list: vi.fn(() => new Promise<UseSourceList>(() => undefined)), openSettings: async () => undefined }
     const { service } = bed({ provider: () => hung })
-    const first = service.list('ws')
+    const first = service.list('ws', MAC_VIEWER)
     await vi.advanceTimersByTimeAsync(USE_SOURCES_LIST_MS + 1)
     expect(await first).toMatchObject({ ok: false, status: 500 })
-    const second = service.list('ws')
+    const second = service.list('ws', MAC_VIEWER)
     await vi.advanceTimersByTimeAsync(USE_SOURCES_LIST_MS + 1)
     await second
     expect(hung.list).toHaveBeenCalledTimes(2)
@@ -105,7 +106,7 @@ describe('what changed while the list was being read', () => {
   it('a workspace that became served in the wait is refused, and no card is made', async () => {
     let served = false
     const { service, added } = bed({ provider: () => reading(() => (served = true)), servedWorkspace: () => served })
-    expect(await service.open('ws', { source: 'screen:main' })).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
+    expect(await service.open('ws', { source: 'screen:main' }, MAC_VIEWER)).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
     expect(added).toEqual([])
   })
 
@@ -115,7 +116,7 @@ describe('what changed while the list was being read', () => {
       provider: () => reading(() => (there = false)),
       findCard: () => (there ? { workspaceId: 'ws', node: useCard } : null)
     })
-    expect(await service.open('ws', { source: 'screen:main', card: 'use' })).toMatchObject({ ok: false, status: 404 })
+    expect(await service.open('ws', { source: 'screen:main', card: 'use' }, MAC_VIEWER)).toMatchObject({ ok: false, status: 404 })
     expect(deps.readdress).not.toHaveBeenCalled()
   })
 
@@ -123,7 +124,7 @@ describe('what changed while the list was being read', () => {
     let node = useCard
     const moved: BrowserNodeData = { ...useCard, activeTabId: 't2', tabs: [...(useCard.tabs ?? []), { id: 't2', url: 'cam://0', title: '' }] }
     const { service, deps } = bed({ provider: () => reading(() => (node = moved)), findCard: () => ({ workspaceId: 'ws', node }) })
-    await service.open('ws', { source: 'screen:main', card: 'use' })
+    await service.open('ws', { source: 'screen:main', card: 'use' }, MAC_VIEWER)
     expect(deps.readdress).toHaveBeenCalledWith(moved, 'screen://main', 'Main display')
   })
 })
@@ -131,7 +132,7 @@ describe('what changed while the list was being read', () => {
 describe('open', () => {
   it('makes one browser card in the workspace it was asked for, with the bound address and a name a card can wear', async () => {
     const { service, added } = bed()
-    const answer = await service.open('ws', { source: 'window:41' })
+    const answer = await service.open('ws', { source: 'window:41' }, MAC_VIEWER)
     expect(answer.ok).toBe(true)
     expect(added).toHaveLength(1)
     expect(added[0].workspaceId).toBe('ws')
@@ -148,21 +149,21 @@ describe('open', () => {
       openSettings: async () => undefined
     }
     const { service, added } = bed({ provider: () => rude })
-    await service.open('ws', { source: 'window:41' })
+    await service.open('ws', { source: 'window:41' }, MAC_VIEWER)
     expect(added[0].card.name).toBe(cleanAgentName(added[0].card.name))
     expect(added[0].card.name).not.toMatch(/[\u0000-\u001f]/)
   })
 
   it('a display is named for itself', async () => {
     const { service, added } = bed()
-    await service.open('ws', { source: 'screen:main' })
+    await service.open('ws', { source: 'screen:main' }, MAC_VIEWER)
     expect(added[0].card).toMatchObject({ name: 'Main display', url: 'screen://main' })
   })
 
   it('takes only source ids: an address, a path or a script is refused before anything is read', async () => {
     const { service, provider, added } = bed()
     for (const source of ['window://Safari', 'window:abc', 'screen:', 'file:///etc/passwd', '', 5, null]) {
-      expect(await service.open('ws', { source } as never), String(source)).toMatchObject({ ok: false, status: 400 })
+      expect(await service.open('ws', { source } as never, MAC_VIEWER), String(source)).toMatchObject({ ok: false, status: 400 })
     }
     expect(provider.list).not.toHaveBeenCalled()
     expect(added).toEqual([])
@@ -170,7 +171,7 @@ describe('open', () => {
 
   it('a window no longer listed is a 404 that says only that: it may be minimised, not closed', async () => {
     const { service, added } = bed()
-    const answer = await service.open('ws', { source: 'window:77' })
+    const answer = await service.open('ws', { source: 'window:77' }, MAC_VIEWER)
     expect(answer).toMatchObject({ ok: false, status: 404, error: 'That window is no longer in the list — pick another' })
     expect(added).toEqual([])
   })
@@ -180,27 +181,27 @@ describe('open', () => {
       list: async () => ({ ...list, state: 'unavailable', windows: [], screens: [], message: 'Screen Recording is off' }),
       openSettings: async () => undefined
     }
-    expect(await bed({ provider: () => provider }).service.open('ws', { source: 'window:41' })).toMatchObject({ ok: false, status: 409, error: 'Screen Recording is off' })
+    expect(await bed({ provider: () => provider }).service.open('ws', { source: 'window:41' }, MAC_VIEWER)).toMatchObject({ ok: false, status: 409, error: 'Screen Recording is off' })
   })
 })
 
 describe('open onto an existing card (the window closed)', () => {
   it('re-addresses the use card in place and makes no new one', async () => {
     const { service, deps, added } = bed()
-    const answer = await service.open('ws', { source: 'screen:main', card: 'use' })
+    const answer = await service.open('ws', { source: 'screen:main', card: 'use' }, MAC_VIEWER)
     expect(answer).toMatchObject({ ok: true, value: { card: { id: 'use', url: 'screen://main', name: 'Main display' } } })
     expect(deps.readdress).toHaveBeenCalledWith(useCard, 'screen://main', 'Main display')
     expect(added).toEqual([])
   })
   it('will not turn a web card into a screen', async () => {
     const { service, deps } = bed()
-    expect(await service.open('ws', { source: 'screen:main', card: 'web' })).toMatchObject({ ok: false, status: 400 })
+    expect(await service.open('ws', { source: 'screen:main', card: 'web' }, MAC_VIEWER)).toMatchObject({ ok: false, status: 400 })
     expect(deps.readdress).not.toHaveBeenCalled()
   })
   it('a card outside this workspace is not found, and neither is an unknown one', async () => {
     const { service } = bed()
-    expect(await service.open('other', { source: 'screen:main', card: 'use' })).toMatchObject({ ok: false, status: 404 })
-    expect(await service.open('ws', { source: 'screen:main', card: 'nope' })).toMatchObject({ ok: false, status: 404 })
+    expect(await service.open('other', { source: 'screen:main', card: 'use' }, MAC_VIEWER)).toMatchObject({ ok: false, status: 404 })
+    expect(await service.open('ws', { source: 'screen:main', card: 'nope' }, MAC_VIEWER)).toMatchObject({ ok: false, status: 404 })
   })
 })
 
@@ -209,20 +210,20 @@ describe('a served workspace', () => {
 
   it('cannot list: refused in the served words, and the provider is never asked', async () => {
     const { service, provider } = served()
-    expect(await service.list('served')).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
+    expect(await service.list('served', MAC_VIEWER)).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
     expect(provider.list).not.toHaveBeenCalled()
   })
   it('cannot open, or point a card at anything', async () => {
     const { service, provider, added, deps } = served()
-    expect(await service.open('served', { source: 'screen:main' })).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
-    expect(await service.open('served', { source: 'screen:main', card: 'use' })).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
+    expect(await service.open('served', { source: 'screen:main' }, MAC_VIEWER)).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
+    expect(await service.open('served', { source: 'screen:main', card: 'use' }, MAC_VIEWER)).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
     expect(provider.list).not.toHaveBeenCalled()
     expect(added).toEqual([])
     expect(deps.readdress).not.toHaveBeenCalled()
   })
   it('cannot reach a card in a served workspace from outside it either', async () => {
     const { service, deps } = bed({ servedWorkspace: (id) => id === 'ws' })
-    expect(await service.open('elsewhere', { source: 'screen:main', card: 'use' })).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
+    expect(await service.open('elsewhere', { source: 'screen:main', card: 'use' }, MAC_VIEWER)).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
     expect(deps.readdress).not.toHaveBeenCalled()
   })
   it('cannot pop the settings page on the owner\'s Mac', async () => {
@@ -232,7 +233,40 @@ describe('a served workspace', () => {
   })
   it('the cached list of an owner workspace is not an answer for a served one', async () => {
     const { service } = served()
-    await service.list('ws')
-    expect((await service.list('served')).ok).toBe(false)
+    await service.list('ws', MAC_VIEWER)
+    expect((await service.list('served', MAC_VIEWER)).ok).toBe(false)
+  })
+})
+
+describe('the remote desktop on the same service', () => {
+  it('one tap on a screen already open reopens that card, not another copy', async () => {
+    const open: BrowserNodeData = { ...useCard, id: 'screen-card', url: 'screen://main' }
+    const { service, added } = bed({ cardAt: (_ws, url) => (url === 'screen://main' ? open : null) })
+    expect(await service.open('ws', { source: 'screen:main' }, MAC_VIEWER)).toMatchObject({ ok: true, value: { card: { id: 'screen-card' } } })
+    expect(added).toEqual([])
+  })
+
+  it('a new address still makes its card', async () => {
+    const { service, added } = bed({ cardAt: () => null })
+    await service.open('ws', { source: 'screen:main' }, MAC_VIEWER)
+    expect(added).toHaveLength(1)
+  })
+
+  it('pointing a card at something else ends control of what it showed', async () => {
+    const endControl = vi.fn()
+    const { service } = bed({ desk: { endControl, picturesRefused: () => null } as never })
+    await service.open('ws', { source: 'screen:main', card: 'use' }, MAC_VIEWER)
+    expect(endControl).toHaveBeenCalledWith('use', expect.objectContaining({ here: true }))
+  })
+
+  it('with no desk on this machine, nothing is granted and the answer says so', async () => {
+    const { service } = bed()
+    expect(await service.control('ws', { card: 'use', on: true }, { key: 'k', name: 'n', here: false })).toMatchObject({ ok: false, status: 503 })
+    expect(await service.restart('ws', { key: 'k', name: 'n', here: false })).toMatchObject({ ok: false, status: 503 })
+    expect(await service.access('ws', 'away')).toMatchObject({ ok: false, status: 503 })
+  })
+
+  it('a credential nobody named is the shared pairing token, and says so', () => {
+    expect(bed().service.whoIs('anything')).toEqual({ key: 'root', name: 'A paired device', here: false })
   })
 })

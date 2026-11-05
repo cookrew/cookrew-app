@@ -33,6 +33,7 @@ function gate(over: Partial<RemoteGate> = {}): RemoteGate {
   return {
     blocked: async () => null,
     inputRefusal: () => null,
+    agentRefusal: () => null,
     mayDrive: () => true,
     cardControl: () => ({ switchOn: true, until: null, heldBy: null, awake: false, machine: 'darwin' }),
     admit: () => null,

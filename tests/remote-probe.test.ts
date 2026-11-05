@@ -39,6 +39,21 @@ describe('createSessionReader', () => {
     expect((await reader.read()).locked).toBe(true)
   })
 
+  it('a lock heard while a read is in flight is not cached over by that older answer', async () => {
+    let now = 0
+    let release: (facts: typeof facts0) => void = () => undefined
+    const facts0 = { locked: false, displayAsleep: false, grant: false }
+    const read = vi.fn(() => new Promise<typeof facts0>((resolve) => { release = resolve }))
+    const reader = createSessionReader({ read, now: () => now })
+    const first = reader.read()
+    reader.invalidate()
+    release(facts0)
+    await first
+    void reader.read()
+    expect(read).toHaveBeenCalledTimes(2)
+    now += 1
+  })
+
   it('with nothing known it claims nothing: no lock, and no grant', async () => {
     const reader = createSessionReader({ read: () => Promise.reject(new Error('no')), now: () => 0 })
     expect(await reader.read()).toEqual({ locked: false, displayAsleep: false, grant: null })
@@ -94,27 +109,31 @@ describe('remoteBuild', () => {
 describe('remoteSettingsFile', () => {
   const file = (): string => path.join(mkdtempSync(path.join(tmpdir(), 'remote-settings-')), 'remote-control.json')
 
-  it('is off when there is no file, and a good write reads back', () => {
+  it('is empty when there is no file, and a good write reads back', () => {
     const at = file()
     const settings = remoteSettingsFile(at)
-    expect(settings.read()).toEqual({ on: false, waiting: null })
-    settings.write({ on: true, waiting: 'screen' })
-    expect(settings.read()).toEqual({ on: true, waiting: 'screen' })
+    expect(settings.read()).toEqual({ waiting: null, holdUntil: 0 })
+    settings.write({ waiting: 'screen', holdUntil: 5 })
+    expect(settings.read()).toEqual({ waiting: 'screen', holdUntil: 5 })
+  })
+
+  it('the machine switch is not in it, whatever is written there', () => {
+    const at = file()
+    writeFileSync(at, '{"on":true,"switch":true}')
+    expect(remoteSettingsFile(at).read()).toEqual({ waiting: null, holdUntil: 0 })
   })
 
   it('only the owner can read or write it', () => {
     const at = file()
-    remoteSettingsFile(at).write({ on: true, waiting: null })
+    remoteSettingsFile(at).write({ waiting: null, holdUntil: 1 })
     expect(statSync(at).mode & 0o777).toBe(0o600)
   })
 
-  it('anything but a plain true is off', () => {
+  it('anything malformed is nothing', () => {
     const at = file()
-    for (const text of ['{"on":"yes"}', '{"on":1}', 'garbage', '[]', 'null', '{"on":true,"waiting":"root"}']) {
+    for (const text of ['garbage', '[]', 'null', '{"waiting":"root","holdUntil":"x"}']) {
       writeFileSync(at, text)
-      const read = remoteSettingsFile(at).read()
-      expect(read.waiting).toBeNull()
-      if (text !== '{"on":true,"waiting":"root"}') expect(read.on).toBe(false)
+      expect(remoteSettingsFile(at).read()).toEqual({ waiting: null, holdUntil: 0 })
     }
     expect(readFileSync(at, 'utf8')).toContain('root')
   })
