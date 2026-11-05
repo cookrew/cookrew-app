@@ -8,7 +8,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import type { Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -161,6 +161,7 @@ interface Box {
   socketPath: string
   home: string
   close: () => Promise<void>
+  hangUp: () => void
 }
 
 let dir = ''
@@ -255,12 +256,17 @@ const bootBox = async (home: string = scratchHome()): Promise<Box> => {
     auditLogin: (event: LoginAudit) => audits.push(event)
   } as unknown as SocketServerDeps)
   await handle.claim
+  const sockets = new Set<Socket>()
+  handle.server.on('connection', (socket) => sockets.add(socket))
   const box = {
     accounts,
     audits,
     socketPath,
     home,
-    close: () => new Promise<void>((resolve) => handle.server.close(() => resolve()))
+    close: () => new Promise<void>((resolve) => handle.server.close(() => resolve())),
+    hangUp: () => {
+      for (const socket of sockets) socket.end()
+    }
   }
   boxes.push(box)
   return box
@@ -432,6 +438,18 @@ describe.skipIf(!hasPython)('walking away', () => {
     term.type(`${freshCode(secret)}\r`)
     await term.sees(`Signed in as @${USERNAME}.`)
     expect(await term.exit()).toBe(0)
+  })
+})
+
+describe.skipIf(!hasPython)('the app going away mid-prompt', () => {
+  it('ends the CLI at once: nobody types a password into silence', async () => {
+    await ownerDevice()
+    const box = await bootBox()
+    const term = shellOn(box, ['login', USERNAME])
+    await term.sees(`Password for @${USERNAME}: `)
+    box.hangUp()
+    expect(await term.exit()).toBe(1)
+    expect(term.transcript).toContain('Run this again')
   })
 })
 

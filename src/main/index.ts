@@ -169,6 +169,7 @@ import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import type { AccountDoor, LoginAudit } from './login-cli'
 import { paneInputs } from './pane-input'
+import { injectWindowInput } from './ui-input'
 import { localDeviceName } from './device-name'
 import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
@@ -5706,42 +5707,7 @@ function roleSaveInner(input: RoleSaveInput): AgentRole {
  */
 async function injectInput(args: string[]): Promise<string> {
   if (!mainWindow) throw new Error('No window')
-  const wc = mainWindow.webContents
-  const [sub, ...rest] = args
-  if (sub === 'click') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-    return `Clicked ${x},${y}`
-  }
-  if (sub === 'dblclick') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    for (const clickCount of [1, 2]) {
-      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount })
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount })
-    }
-    return `Double-clicked ${x},${y}`
-  }
-  if (sub === 'type') {
-    for (const char of rest.join(' ')) {
-      wc.sendInputEvent({ type: 'char', keyCode: char })
-      await new Promise((resolve) => setTimeout(resolve, 15))
-    }
-    return `Typed ${rest.join(' ').length} chars`
-  }
-  if (sub === 'key') {
-    const keyCode = rest[0]
-    // Optional modifiers as a 2nd arg: "meta", "meta+shift", etc.
-    const modifiers = rest[1]
-      ? (rest[1].split(/[+,]/) as Array<'shift' | 'control' | 'meta' | 'alt'>)
-      : undefined
-    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
-    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
-    return `Pressed ${keyCode}${rest[1] ? ` +${rest[1]}` : ''}`
-  }
-  throw new Error('Usage: cookrew ui click X Y | dblclick X Y | type "text" | key Enter')
+  return injectWindowInput(mainWindow.webContents, args)
 }
 
 /**
@@ -8087,7 +8053,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
   })
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
-    paneInputs.noteWindowKey(terminalId)
+    paneInputs.noteWindowKey(terminalId, data)
     idleSleep.touch(terminalId, Date.now())
     typeInto(terminalId, data)
   })

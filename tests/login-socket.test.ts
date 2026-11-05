@@ -20,7 +20,6 @@ let audits: LoginAudit[] = []
 let served = false
 let phase: string | undefined = 'idle'
 let backendPhase: string | undefined
-let injected: string[][] = []
 let signIn: AccountDoor['signIn']
 
 const account = (): AccountDoor => ({
@@ -53,11 +52,7 @@ const deps = (): SocketServerDeps =>
     auditLogin: (event: LoginAudit) => {
       audits = [...audits, event]
     },
-    adoptPictures: async (text: string) => text,
-    injectInput: async (args: string[]) => {
-      injected = [...injected, args]
-      return ''
-    }
+    adoptPictures: async (text: string) => text
   }) as unknown as SocketServerDeps
 
 beforeEach(async () => {
@@ -67,7 +62,6 @@ beforeEach(async () => {
   served = false
   phase = 'idle'
   backendPhase = undefined
-  injected = []
   signIn = async () => ({ ok: false, reason: 'session-expired', message: 'That is not the password.' })
   const handle = startSocketServer(deps())
   await handle.claim
@@ -252,20 +246,6 @@ describe('the seal, at the socket', () => {
     expect(paneInputs.sealed('term-1')).toBe(true)
     socket.destroy()
     await vi.waitFor(() => expect(paneInputs.sealed('term-1')).toBe(false))
-  })
-})
-
-describe('`cookrew ui`, while a pane is sealed', () => {
-  it('will not type, and still clicks', async () => {
-    const release = paneInputs.seal('term-9')
-    const { socket, send } = await connect()
-    expect(await send({ cmd: 'ui', args: ['type', 'hunter2'] })).toMatchObject({ ok: false })
-    expect(await send({ cmd: 'ui', args: ['key', 'Enter'] })).toMatchObject({ ok: false })
-    expect(injected).toEqual([])
-    await send({ cmd: 'ui', args: ['click', '1', '2'] })
-    release()
-    socket.destroy()
-    expect(injected).toEqual([['click', '1', '2']])
   })
 })
 

@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaneInputs, paneInputs, SEALED_REFUSAL } from '../src/main/pane-input'
 import { askRaw, askTerminal, ownerSubmit } from '../src/main/ask'
+import { terminalDeliveryDeps } from '../src/main/ask-delivery'
 import type { PtySession } from '../src/main/pty'
 
 const fakeSession = (terminalId: string): { session: PtySession; written: string[] } => {
@@ -111,6 +112,21 @@ describe('`cookrew ui type`, which is not a keyboard and looks like one', () => 
   })
 })
 
+describe('what counts as a key', () => {
+  it('is not a terminal answering for itself: an escape sequence clears nothing', () => {
+    // xterm replies to `printf '\\033[c'` and reports the mouse through the same
+    // onData as a keystroke, so an agent could otherwise clear the mark unattended.
+    const inputs = new PaneInputs(() => 0)
+    inputs.drive('t')
+    inputs.noteWindowKey('t', '\x1b[?1;2c')
+    expect(inputs.driven('t')).toBe(true)
+    inputs.noteKeyboard('t', '\x1b[<0;10;10M')
+    expect(inputs.driven('t')).toBe(true)
+    inputs.noteWindowKey('t', 'c')
+    expect(inputs.driven('t')).toBe(false)
+  })
+})
+
 describe('the producers', () => {
   it('ownerSubmit defaults to not a keyboard: refused on a sealed pane, nothing written', async () => {
     const { session, written } = fakeSession('drive-1')
@@ -142,6 +158,17 @@ describe('the producers', () => {
     await expect(askRaw(session, 'hunter2\r')).rejects.toThrow(SEALED_REFUSAL)
     expect(written).toEqual([])
     release()
+  })
+
+  it('a delivery retry sends no Enter into a prompt that opened since', () => {
+    const written: string[] = []
+    const deps = terminalDeliveryDeps({ listVerified: () => [] }, (data) => written.push(data))
+    const release = paneInputs.seal('drive-6')
+    deps.submit('drive-6')
+    expect(written).toEqual([])
+    release()
+    deps.submit('drive-6')
+    expect(written).toEqual(['\r'])
   })
 
   it('`cookrew ask` cannot either, before it reaches any backend', async () => {

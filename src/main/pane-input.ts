@@ -23,8 +23,13 @@
  * `cookrew ui type` IS NOT A KEYBOARD EITHER, and looks exactly like one: it
  * injects real input events into the window, which reach a focused pane as
  * ordinary keys. It cannot say which pane, so keys that arrive within a moment
- * of an injection count as driven. A person typing in that same moment is
- * refused and has only to press a key again, which is the safe way round.
+ * of an injected event count as driven, and every event asks first
+ * (ui-input.ts). A person typing in that same moment is refused and has only to
+ * press a key again, which is the safe way round.
+ *
+ * A KEY IS NOT AN ESCAPE SEQUENCE. xterm answers a device query and reports the
+ * mouse through the same stream as a keystroke, so those are nobody pressing
+ * anything and clear nothing.
  *
  * Memory only, on purpose: a restart ends every conversation that a seal could
  * belong to, and it costs a driven pane nothing worse than one keystroke.
@@ -83,15 +88,15 @@ export class PaneInputs {
     return true
   }
 
-  /** A key came from the window: a person's, unless an injection just went in. */
-  noteWindowKey(terminalId: string): void {
+  /** Input came from the window: a person's, unless an injection just went in. */
+  noteWindowKey(terminalId: string, data = ''): void {
     if (this.now() - this.windowDrivenAt < WINDOW_KEYS_MS) this.noteDriven(terminalId)
-    else this.noteKeyboard(terminalId)
+    else this.noteKeyboard(terminalId, data)
   }
 
-  /** A person pressed a key. */
-  noteKeyboard(terminalId: string): void {
-    if (!this.drivenPanes.has(terminalId)) return
+  /** A person pressed a key, unless these bytes are the terminal talking. */
+  noteKeyboard(terminalId: string, data = ''): void {
+    if (data.startsWith('\x1b') || !this.drivenPanes.has(terminalId)) return
     this.drivenPanes = new Set([...this.drivenPanes].filter((id) => id !== terminalId))
   }
 

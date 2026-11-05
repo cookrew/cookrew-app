@@ -34,7 +34,7 @@ interface Fixture {
   audits: LoginAudit[]
   sealed: string[]
   released: string[]
-  connection: EventEmitter
+  connection: EventEmitter & { end: () => void }
   open: (args?: string[], flags?: CliRequest['flags']) => Promise<LoginTurn>
   send: (verb: string, secret?: string) => Promise<LoginTurn>
 }
@@ -50,7 +50,7 @@ const request = (cmd: string, args: string[], flags: CliRequest['flags'] = { tty
 function fixture(
   over: Partial<AccountDoor> = {},
   cmd = 'login',
-  extra: { busy?: boolean; sessionId?: string; driven?: boolean; idleMs?: number } = {}
+  extra: { busy?: boolean; sessionId?: string; driven?: boolean; idleMs?: number; hangUpMs?: number } = {}
 ): Fixture {
   const audits: LoginAudit[] = []
   const sealed: string[] = []
@@ -74,6 +74,7 @@ function fixture(
     agentBusy: () => extra.busy === true,
     driven: () => extra.driven === true,
     ...(extra.idleMs === undefined ? {} : { idleMs: extra.idleMs }),
+    ...(extra.hangUpMs === undefined ? {} : { hangUpMs: extra.hangUpMs }),
     seal: (id) => {
       sealed.push(id)
       return () => released.push(id)
@@ -81,7 +82,7 @@ function fixture(
     audit: (event) => audits.push(event),
     sleep: async () => undefined
   })
-  const connection = new EventEmitter()
+  const connection = newConnection()
   const ask = async (verb: string, args: string[], flags: CliRequest['flags'] | undefined, secret?: string): Promise<LoginTurn> => {
     const sent = { ...request(cmd, [verb, ...args], flags), ...(extra.sessionId ? { sessionId: extra.sessionId } : {}) }
     return JSON.parse(await door.handle(sent, secret, connection)) as LoginTurn
@@ -97,6 +98,13 @@ function fixture(
     send: (verb, secret) => ask(verb, [], undefined, secret)
   }
 }
+
+const newConnection = (): EventEmitter & { end: () => void } =>
+  Object.assign(new EventEmitter(), {
+    end(this: EventEmitter) {
+      this.emit('close')
+    }
+  })
 
 const refusal = async (run: () => Promise<unknown>): Promise<LoginRefused> => {
   const caught = await run().catch((error: unknown) => error)
@@ -117,7 +125,7 @@ describe('who may open it', () => {
       audit: () => undefined,
       sleep: async () => undefined
     })
-    const refused = await refusal(() => door.handle(request('login', ['open']), undefined, new EventEmitter()))
+    const refused = await refusal(() => door.handle(request('login', ['open']), undefined, newConnection()))
     expect(refused.exitCode).toBe(3)
     expect(refused.message).toContain('never from a served session')
   })
@@ -179,14 +187,14 @@ describe('who may open it', () => {
       audit: () => undefined,
       sleep: async () => undefined
     })
-    const refused = await refusal(() => door.handle(request('login', ['open']), undefined, new EventEmitter()))
+    const refused = await refusal(() => door.handle(request('login', ['open']), undefined, newConnection()))
     expect(refused.exitCode).toBe(3)
   })
 
   it('takes one conversation at a time: two ladders on one machine are two keys', async () => {
     const f = fixture()
     await f.open()
-    const other = new EventEmitter()
+    const other = newConnection()
     const refused = await refusal(() => f.door.handle(request('login', ['open', 'drej']), undefined, other))
     expect(refused.message).toContain('already')
   })
@@ -495,7 +503,7 @@ describe('the ladder', () => {
     expect(f.account.abandon).toHaveBeenCalledWith('pending-1')
     expect(f.released).toEqual(['term-owner'])
     // And the next person in is not told a sign-in is already open.
-    const next = new EventEmitter()
+    const next = newConnection()
     await expect(f.door.handle(request('login', ['open', 'drej']), undefined, next)).resolves.toBeTypeOf('string')
   })
 })
@@ -568,7 +576,28 @@ describe('nothing waits for ever', () => {
     const f = fixture({}, 'login', { idleMs: 10 })
     await f.open()
     await vi.waitFor(() => expect(f.released).toEqual(['term-owner']))
-    await expect(f.door.handle(request('login', ['open', 'drej']), undefined, new EventEmitter())).resolves.toBeTypeOf('string')
+    await expect(f.door.handle(request('login', ['open', 'drej']), undefined, newConnection())).resolves.toBeTypeOf('string')
+  })
+
+  it('hangs up on the CLI first: the seal must outlast the prompt on the screen', async () => {
+    const f = fixture({}, 'login', { idleMs: 10, hangUpMs: 60_000 })
+    let hungUp = 0
+    f.connection.end = () => {
+      hungUp += 1
+    }
+    await f.open()
+    await vi.waitFor(() => expect(hungUp).toBe(1))
+    // The CLI has not gone yet, so its hidden prompt may still be taking keys.
+    expect(f.released).toEqual([])
+    f.connection.emit('close')
+    expect(f.released).toEqual(['term-owner'])
+  })
+
+  it('does not wait for ever on a client that will not hang up', async () => {
+    const f = fixture({}, 'login', { idleMs: 10, hangUpMs: 10 })
+    f.connection.end = () => undefined
+    await f.open()
+    await vi.waitFor(() => expect(f.released).toEqual(['term-owner']))
   })
 
   it('a throw on the way in leaves the door open for the next one', async () => {
@@ -581,7 +610,7 @@ describe('nothing waits for ever', () => {
     })
     await expect(f.open()).rejects.toThrow('could not be read')
     broken = false
-    await expect(f.door.handle(request('login', ['open', 'drej']), undefined, new EventEmitter())).resolves.toBeTypeOf('string')
+    await expect(f.door.handle(request('login', ['open', 'drej']), undefined, newConnection())).resolves.toBeTypeOf('string')
   })
 
   it('reads a name that is not a string as no name', async () => {

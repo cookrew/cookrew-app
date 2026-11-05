@@ -619,7 +619,7 @@ export async function ownerSubmit(
 ): Promise<OwnerSubmitResult> {
   const lease = options.lease ?? defaultProducerLease()
   const terminalId = session.terminalId
-  if (options.keyboard === true) paneInputs.noteKeyboard(terminalId)
+  if (options.keyboard === true) paneInputs.noteKeyboard(terminalId, bytes)
   else if (!paneInputs.drive(terminalId)) return { ok: false, reason: SEALED_REFUSAL }
   const trace = session.hostBacked === false && process.env.COOKREW_TRACE_OWNER_SUBMIT === '1'
     ? (phase: string): void => console.error(`[owner-submit] terminal=${terminalId} phase=${phase}`)

@@ -314,7 +314,7 @@ function openConversation(session) {
   socket.on('error', (error) => fail(`Cannot reach the Cookrew app (${error.code ?? error.message}). Is it running?`))
   // Whatever was open: the conversation belongs to this connection, so nothing
   // typed after this could reach anyone.
-  socket.on('close', () => fail('The Cookrew app went away. Run this again.'))
+  socket.on('close', () => fail('This sign-in ended: the Cookrew app went away, or nobody answered for ten minutes. Nothing more was sent. Run this again.'))
   const send = (verb, extra = {}) =>
     new Promise((resolve) => {
       const id = randomUUID()

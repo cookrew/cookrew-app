@@ -45,7 +45,7 @@ import {
 } from './ask-delivery'
 import { cmdSecret, isServedPane, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
 import { LOGIN_EXIT, LoginDoor, LoginRefused, type AccountDoor, type LoginAudit, type LoginConnection } from './login-cli'
-import { paneInputs, SEALED_REFUSAL } from './pane-input'
+import { paneInputs } from './pane-input'
 import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
@@ -262,9 +262,6 @@ const takeSecret = (sent: CliRequest & { secret?: unknown }): { request: CliRequ
 
 const LOGIN_VERBS: ReadonlySet<string> = new Set(['login', 'logout'])
 
-/** The `cookrew ui` verbs that type: real input events, so they reach a pane as keys. */
-const WINDOW_KEY_VERBS: ReadonlySet<string> = new Set(['type', 'key'])
-
 /** A verb that speaks for the account, not for a card. */
 const answerAccountVerb = (
   request: CliRequest,
@@ -421,7 +418,6 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
     case 'app-shot':
       return deps.captureWindow()
     case 'ui':
-      if (WINDOW_KEY_VERBS.has(args[0] ?? '') && !paneInputs.driveWindow()) throw new Error(SEALED_REFUSAL)
       return deps.injectInput(args)
     case 'help':
       return HELP_TEXT
@@ -1337,9 +1333,8 @@ function loginDoorFor(deps: SocketServerDeps): LoginDoor {
     driven: (terminalId) => paneInputs.driven(terminalId),
     // By id, so it holds whether or not a session here is mirroring the pane.
     seal: (terminalId) => {
-      const release = paneInputs.seal(terminalId)
       deps.turns.dropDraft(terminalId)
-      return release
+      return paneInputs.seal(terminalId)
     },
     audit: (event) => deps.auditLogin?.(event)
   })

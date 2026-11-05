@@ -54,11 +54,12 @@ import { LADDER_TTL_MS, type TypedFactor } from './account-ladder'
  *   do not (pane-input.ts). A pane last written by anything but a keyboard is
  *   refused, and while a prompt is open nothing but a keyboard can answer it.
  *
- *   Those are the app's own checks, and any process of this user can reach the
- *   socket and the multiplexer without going through them, so none is a wall.
- *   Every attempt, refused or not, goes in the event log, so it cannot be
- *   silent; and what actually keeps the account shut is unchanged: the
- *   password, then the second factor.
+ *   Those are the app's own checks, so none is a wall. Any process of this user
+ *   can go round them: straight to the socket or the multiplexer, or to the
+ *   phone's raw key route with the token in ~/.cookrew/pairing-token, which
+ *   counts as a keyboard because for the phone it is one. Every attempt the app
+ *   sees, refused or not, goes in the event log; and what actually keeps the
+ *   account shut is unchanged: the password, then the second factor.
  */
 
 export const LOGIN_EXIT = { ok: 0, failed: 1, refused: 3 } as const
@@ -68,6 +69,9 @@ const PASSWORD_TRIES = 3
 
 /** A person who walked away from a prompt. The ladder itself lasts no longer. */
 const IDLE_MS = LADDER_TTL_MS
+
+/** How long a client gets to go after being hung up on. */
+const HANG_UP_MS = 5_000
 
 export class LoginRefused extends Error {
   readonly exitCode: number
@@ -136,11 +140,13 @@ export interface LoginDoorDeps {
   sleep?: (ms: number) => Promise<void>
   /** How long a conversation may sit with nothing happening. */
   idleMs?: number
+  hangUpMs?: number
 }
 
 /** The piece of a socket this needs. */
 export interface LoginConnection {
   once: (event: 'close', listener: () => void) => unknown
+  end: () => unknown
 }
 
 type Rung = Exclude<LadderFactor, 'passkey'>
@@ -197,6 +203,7 @@ class Conversation {
   private readonly pane: TerminalNodeData
   private readonly leaving: boolean
   private readonly ended: () => void
+  private readonly hangUp: () => unknown
 
   constructor(input: {
     account: AccountDoor
@@ -204,12 +211,14 @@ class Conversation {
     pane: TerminalNodeData
     leaving: boolean
     ended: () => void
+    hangUp: () => unknown
   }) {
     this.account = input.account
     this.deps = input.deps
     this.pane = input.pane
     this.leaving = input.leaving
     this.ended = input.ended
+    this.hangUp = input.hangUp
   }
 
   private say(id: CliCopyId, vars: Readonly<Record<string, string | number>> = {}): string {
@@ -236,8 +245,20 @@ class Conversation {
     if (this.idle !== null) clearTimeout(this.idle)
     this.idle = null
     if (this.closed || this.gone) return
-    this.idle = setTimeout(() => this.close(), this.deps.idleMs ?? IDLE_MS)
+    this.idle = setTimeout(() => this.timedOut(), this.deps.idleMs ?? IDLE_MS)
     this.idle.unref?.()
+  }
+
+  /**
+   * NOBODY CAME BACK. The CLI is sitting at a hidden prompt, and the seal is what
+   * makes it safe to type there, so the seal must not go first: somebody back
+   * from lunch would type a password into a pane that is announcing it. So the
+   * connection is ended, the CLI exits on that, and the seal goes when it has
+   * (`close`). A client that ignores the hang-up gets a few seconds.
+   */
+  private timedOut(): void {
+    this.hangUp()
+    setTimeout(() => this.close(), this.deps.hangUpMs ?? HANG_UP_MS).unref?.()
   }
 
   /**
@@ -608,7 +629,8 @@ export class LoginDoor {
       leaving: request.cmd === 'logout',
       ended: () => {
         if (this.held?.conversation === conversation) this.held = null
-      }
+      },
+      hangUp: () => connection.end()
     })
     this.held = { connection, conversation }
     connection.once('close', () => conversation.close())
