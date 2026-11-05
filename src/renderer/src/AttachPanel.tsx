@@ -6,11 +6,13 @@
 // and can go full window; a note reads as markdown and edits in place.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { activeBrowserTab } from '../../shared/model'
+import { secretSlotsOf } from '../../shared/secret-slot'
 import { noteIsWhole } from '../../shared/wire-canvas'
 import { cookrew } from './api'
 import { attachView, type AttachView } from './attach-view'
 import { CrIcon } from './icons'
 import { renderNoteMarkdown } from './note-markdown'
+import { SecretSlots } from './nodes/SecretSlot'
 import { FIND_FROM, filterAttachments, type TerminalAttachment } from './terminal-attachments'
 import type { ScreenRect } from './zoom-lod'
 
@@ -160,6 +162,7 @@ function NoteView({ item }: { item: Extract<TerminalAttachment, { kind: 'note' }
   useEffect(() => {
     if (!editing) setDraft(note.content)
   }, [note.content, editing])
+  const slots = secretSlotsOf(editing ? draft : note.content)
   const commit = (): void => {
     setEditing(false)
     // Never over a body we only half have (see NoteNode).
@@ -178,7 +181,10 @@ function NoteView({ item }: { item: Extract<TerminalAttachment, { kind: 'note' }
           value={draft}
           autoFocus
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
+          onBlur={(e) => {
+            // A move into a slot's field is not the end of the edit.
+            if (!(e.relatedTarget as HTMLElement | null)?.closest('.cr-secret-slots')) commit()
+          }}
           onKeyDown={(e) => {
             // Keys typed into the note are the note's, not the terminal's or the canvas's.
             e.stopPropagation()
@@ -194,6 +200,7 @@ function NoteView({ item }: { item: Extract<TerminalAttachment, { kind: 'note' }
           dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(note.content || '*Double-click to write…*') }}
         />
       )}
+      {slots.length > 0 && <SecretSlots names={slots} rereadOn={editing} />}
     </>
   )
 }

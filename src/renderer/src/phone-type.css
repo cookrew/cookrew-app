@@ -222,7 +222,7 @@
   :root:root .zv-fullview .lod-overlay .look-chat .ctx-chat-bubble .ctx-block-tool {
     font-size: var(--ph-control);
   }
-  :root:root .zv-fullview .lod-overlay :is(.ctx-block-head, .ctx-block-idx, .ctx-block-title) {
+  :root:root .zv-fullview .lod-overlay :is(.ctx-block-head, .ctx-block-idx, .ctx-block-title, .ctx-queued-tag) {
     font-size: var(--ph-caption);
   }
   /* Code in running text: a step down, to control. */

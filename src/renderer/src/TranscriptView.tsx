@@ -23,7 +23,8 @@ import {
   refineEstimate,
   type TraceAnchor,
   type TraceBlock,
-  wheelGoesToTranscript
+  wheelGoesToTranscript,
+  withLiveTail
 } from './transcript'
 import { mayFireSideEffects } from './stream/stream-view'
 import type { StreamPager, StreamWindow } from './stream/stream-pager'
@@ -129,6 +130,8 @@ export const TranscriptView = forwardRef<
     children: React.ReactNode
     /** Bump to refresh a growing block whose identity count has not changed. */
     refreshToken?: number
+    /** The open turn as the stream last pushed it; null when there is none to follow (stream-pager.ts · recordedTail). */
+    liveTail?: TraceBlock | null
     /** Optional live-seam modifier; transcript blocks and scroll model stay shared. */
     liveClassName?: string
   }
@@ -150,6 +153,7 @@ export const TranscriptView = forwardRef<
     translation,
     children,
     refreshToken = 0,
+    liveTail = null,
     liveClassName
   },
   ref
@@ -452,6 +456,12 @@ export const TranscriptView = forwardRef<
     tailFlight.request(tailSequenceRef.current)
   }, [terminalId, total, refreshToken, tailFlight])
 
+  // Not through ingest: this is no window. It moves neither the render source
+  // nor the reader's place, and a replay page stays where it was put.
+  useEffect(() => {
+    setBlocks((prev) => withLiveTail(prev, liveTail))
+  }, [liveTail])
+
   // One scroll pass per frame (coalesced): find the identity at the viewport top,
   // lazily fill it if it's a placeholder, and report the marker fraction linearly
   // in identity space. isAtBottom is now true ONLY at the real live seam.
@@ -717,6 +727,7 @@ export const TranscriptView = forwardRef<
             titleMode={titleMode}
             translated={translated}
             terminalId={terminalId}
+            last={id === spaceIds[spaceIds.length - 1]}
             ref={rowRef(id)}
           />
         )

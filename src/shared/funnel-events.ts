@@ -13,12 +13,13 @@
  */
 
 /**
- * THE DEFAULT, in one place. Off: nothing leaves an install unless its owner
- * pressed the row. Turning this on is the product owner's ruling, not a code
- * change anyone makes in passing, because it decides who is asked before data
- * leaves their machine in every market the product sells in.
+ * THE DEFAULT, in one place. On, by the product owner's ruling of 2026-11-05,
+ * for packaged builds only: a source build is a developer or a QA run and must
+ * not count as an install. The ⋯ row and COOKREW_TELEMETRY=0 still turn it off.
+ * Changing this decides who is asked before data leaves their machine in every
+ * market the product sells in, so it is a ruling, not a passing code change.
  */
-export const TELEMETRY_DEFAULT_ON = false
+export const TELEMETRY_DEFAULT_ON = true
 
 export const FUNNEL_EVENTS = ['installed', 'preflight_passed', 'first_turn_done', 'phone_paired', 'paid'] as const
 export type FunnelEvent = (typeof FUNNEL_EVENTS)[number]

@@ -183,6 +183,7 @@ import {
 import { Factors } from './factors'
 import { SeatSettleQueue } from './seat-settle'
 import { emit, isFreshInstall, resumeTelemetry, setTelemetryOn, startTelemetry, telemetryStatus } from './telemetry'
+import { TELEMETRY_DEFAULT_ON } from '../shared/funnel-events'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
 import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
@@ -400,7 +401,7 @@ installLineageSpill(new LineageSpill())
 // Asked before the store writes its first file: after that, every home looks
 // like an upgrade, and `installed` must not fire for everyone already here.
 const freshInstall = isFreshInstall()
-startTelemetry({ appVersion: app.getVersion() })
+startTelemetry({ appVersion: app.getVersion(), defaultOn: app.isPackaged && TELEMETRY_DEFAULT_ON })
 
 const store = new WorkspaceStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */

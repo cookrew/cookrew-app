@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { useCanvasUi } from './canvas-ui'
+import { focusSlot } from './nodes/secret-focus'
 import { createHold, enterAction, enterSubmits, modeBadge, needsSendAnyway, holdMode, type CommitAck, type Hold } from './decision-hold'
 import { appendAlternates, createInboxFeed, draftOnOpen, holdsInbox, inboxRowId, isDecisionUpdate, sousRowActions } from './command-box-feed'
 import { waitedFor, type InboxRow } from '../../shared/inbox-rank'
@@ -449,13 +450,3 @@ export function altLabel(alt: Alternate): string {
   return alt.kind === 'recruit' ? `+ new ${alt.harness ?? alt.name} card` : `→ ${alt.name} instead`
 }
 
-/** The sealed-note slot renders after the zoom; look a few times, then give up quietly. The timer is the box's to clear. */
-function focusSlot(name: string, tries: number, timer: { current: number | null }): void {
-  const el = document.querySelector<HTMLElement>(`[data-secret-slot="${CSS.escape(name)}"] input, [data-secret-slot="${CSS.escape(name)}"] textarea`)
-  timer.current = null
-  if (el) {
-    el.focus()
-    return
-  }
-  if (tries > 0) timer.current = window.setTimeout(() => focusSlot(name, tries - 1, timer), 300)
-}

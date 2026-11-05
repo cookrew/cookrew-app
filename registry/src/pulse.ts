@@ -18,7 +18,7 @@ import path from 'node:path'
  * Thirty days are kept; older days are dropped on write.
  */
 
-const KEEP_DAYS = 30
+export const KEEP_DAYS = 30
 /** Distinct keys a day may hold, per kind. A stranger cannot grow the file by inventing names. */
 const MAX_KEYS = 500
 const FLUSH_MS = 10_000
