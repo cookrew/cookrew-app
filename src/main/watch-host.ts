@@ -38,6 +38,9 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
     bases: () => watchBases(deps.endpoints(), deps.httpPort),
     canvas: deps.canvas,
     async frame(browserId, width) {
+      // A card nobody has opened has no Chrome yet: looking at it starts one,
+      // as a phone opening it does. The next poll has its picture.
+      await deps.browser(browserId).catch(() => null)
       await deps.thumbViewed(browserId)
       const thumb = deps.thumb(browserId)
       if (!thumb) return null

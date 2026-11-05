@@ -891,6 +891,13 @@ export async function handleMobileApi(
       },
       activities: () => turns.list(),
       checkpoint: (terminalId) => cardCheckpoint(terminalId, deps.stream, deps.latestCheckpoint),
+      active: (() => {
+        let closed: Set<string> | null = null;
+        return (agentId: string): boolean => {
+          closed ??= new Set(deps.agents.list().filter((entry) => !entry.active).map((entry) => entry.id));
+          return !closed.has(agentId);
+        };
+      })(),
     }))
   ) {
     return true;

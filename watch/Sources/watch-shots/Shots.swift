@@ -189,9 +189,16 @@
         Shot(name: card.name, view: AnyView(CardPage(store: store, card: card, onFace: {}, onItem: { _ in })))
       }
       list.append(Shot(name: "all agents", view: AnyView(CrewGrid(store: store, onPick: { _ in }))))
-      if let item = store.cards.flatMap(\.items).first(where: { $0.kind == .browser }), case .new(let data, _) = try await api.frame(item.id, width: 396, tag: nil) {
-        print("frame of \(item.host): \(data.count) bytes")
-        list.append(Shot(name: item.host, view: AnyView(BrowserPage(store: store, item: item, first: picture(of: data)))))
+      if let item = store.cards.flatMap(\.items).first(where: { $0.kind == .browser }) {
+        // Asking is what makes a picture exist: the app polls, so this does too.
+        for _ in 0..<12 {
+          if case .new(let data, _)? = try? await api.frame(item.id, width: 396, tag: nil) {
+            print("frame of \(item.host): \(data.count) bytes")
+            list.append(Shot(name: item.host, view: AnyView(BrowserPage(store: store, item: item, first: picture(of: data)))))
+            break
+          }
+          try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
       }
       sheet(Array(list), size: CGSize(width: 198, height: 242), palette: .day, title: "45 mm · live, from the real Mac", to: out.appending(path: "live-45.png"))
       print("drew \(list.count) live screens")

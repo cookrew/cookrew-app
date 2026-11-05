@@ -117,6 +117,8 @@ export interface WatchRequest {
   board(): Promise<BoardSnapshot>
   activities(): readonly TerminalActivity[]
   checkpoint(terminalId: string): Promise<LatestCheckpoint | null>
+  /** Still a member of the crew (the registry): a closed agent reads asleep. */
+  active(agentId: string): boolean
 }
 
 /**
@@ -162,27 +164,35 @@ export async function cardCheckpoint(
   return latest ? latest(terminalId) : null
 }
 
-/** One checkpoint per agent per turn: a poll must not read a transcript tail per card. */
-const checkpointMemo = new Map<string, { at: number; checkpoint: LatestCheckpoint | null }>()
+/**
+ * How long a card's last turn is believed. A poll must not read a transcript
+ * tail per card, and the board's time cannot key this: an agent with no mirror
+ * here has a new reply in its transcript long before its row moves.
+ */
+export const CHECKPOINT_MEMO_MS = 8000
 
-async function checkpointsOf(
-  rows: BoardSnapshot['rows'],
+const checkpointMemo = new Map<string, { readAt: number; checkpoint: LatestCheckpoint | null }>()
+
+export async function checkpointsOf(
+  rows: readonly { terminalId: string }[],
   live: ReadonlyMap<string, TerminalActivity>,
-  read: WatchRequest['checkpoint']
+  read: WatchRequest['checkpoint'],
+  now: number = Date.now(),
+  memo: Map<string, { readAt: number; checkpoint: LatestCheckpoint | null }> = checkpointMemo
 ): Promise<Map<string, LatestCheckpoint | null>> {
   const found = new Map<string, LatestCheckpoint | null>()
   await Promise.all(
     rows.map(async (row) => {
       if (live.get(row.terminalId)?.reply) return
-      const memo = checkpointMemo.get(row.terminalId)
-      if (memo?.at === row.lastActivityAt) return void found.set(row.terminalId, memo.checkpoint)
+      const known = memo.get(row.terminalId)
+      if (known && now - known.readAt < CHECKPOINT_MEMO_MS) return void found.set(row.terminalId, known.checkpoint)
       try {
         const checkpoint = await read(row.terminalId)
-        checkpointMemo.set(row.terminalId, { at: row.lastActivityAt, checkpoint })
+        memo.set(row.terminalId, { readAt: now, checkpoint })
         found.set(row.terminalId, checkpoint)
       } catch {
-        // Not remembered: the next poll reads again, or the card stays blank until its next turn.
-        found.set(row.terminalId, null)
+        // Not remembered: the next poll reads again.
+        found.set(row.terminalId, known?.checkpoint ?? null)
       }
     })
   )
@@ -220,6 +230,7 @@ async function cards(ctx: WatchRequest, current: WatchHost): Promise<{ cards: Wa
       rows: board.rows,
       activities,
       checkpoints,
+      active: ctx.active,
       itemsOf: (agentId, workspaceId) => itemsOfAgent(agentId, canvasOf(workspaceId))
     }),
     activeWorkspaceId: board.activeWorkspaceId

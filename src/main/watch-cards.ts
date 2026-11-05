@@ -28,12 +28,17 @@ export const MAX_WORDS = 4000
 
 export type WatchStatus = 'idle' | 'working' | 'waiting' | 'done' | 'offline'
 
+/**
+ * The face's state, by the card's own rule (agent-rows.ts · phaseOf): asleep
+ * means the agent was closed, not that no pane is attached here. The board's
+ * `offline` is the second: a resting agent nobody has a mirror of.
+ */
 const STATUS_OF: Record<BoardPhase, WatchStatus> = {
   working: 'working',
   waiting: 'waiting',
   unread: 'done',
   done: 'idle',
-  offline: 'offline'
+  offline: 'idle'
 }
 
 /** The word under a face (ink-status.ts · statusWord). */
@@ -80,6 +85,8 @@ export interface WatchCardsInput {
   readonly rows: readonly BoardRow[]
   readonly activities: ReadonlyMap<string, TerminalActivity>
   readonly checkpoints: ReadonlyMap<string, LatestCheckpoint | null>
+  /** Still a member of the crew: false once it was closed. */
+  readonly active: (agentId: string) => boolean
   readonly itemsOf: (agentId: string, workspaceId: string) => { items: readonly WatchItem[]; browsers: number; notes: number }
 }
 
@@ -94,18 +101,17 @@ function wordsOf(view: TurnViewModel | null, status: WatchStatus): WatchWords | 
 
 const aboutOf = (view: TurnViewModel | null, row: BoardRow): string | null => view?.title ?? view?.ask ?? row.task?.title ?? row.task?.summary ?? null
 
-const statusOf = (row: BoardRow): WatchStatus => STATUS_OF[row.phase]
-
 /** Which rows are cards, in the crown's order: a stable sort, newest first inside a state. */
-export function cardRows(rows: readonly BoardRow[]): readonly BoardRow[] {
+export function cardRows(rows: readonly BoardRow[], active: (agentId: string) => boolean = () => true): readonly BoardRow[] {
+  const statusOf = (row: BoardRow): WatchStatus => (active(row.terminalId) ? STATUS_OF[row.phase] : 'offline')
   return [...rows]
     .sort((a, b) => RANK[statusOf(a)] - RANK[statusOf(b)] || b.lastActivityAt - a.lastActivityAt || a.terminalId.localeCompare(b.terminalId))
     .slice(0, MAX_CARDS)
 }
 
 export function watchCards(input: WatchCardsInput): WatchCard[] {
-  return cardRows(input.rows).map((row) => {
-    const status = statusOf(row)
+  return cardRows(input.rows, input.active).map((row) => {
+    const status = input.active(row.terminalId) ? STATUS_OF[row.phase] : 'offline'
     const activity = input.activities.get(row.terminalId)
     const live = activity ? turnViewOf(activity) : null
     const view = live?.latest ? live : (checkpointViewModel(input.checkpoints.get(row.terminalId) ?? null) ?? live)
