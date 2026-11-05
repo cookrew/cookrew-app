@@ -41,6 +41,16 @@ describe('wordsOfKey', () => {
 })
 
 describe('the vault', () => {
+  it('re-pins exactly the key it was shown, and drops the saved password with the old one', async () => {
+    const vault = createUnlockVault(memory())
+    await vault.pin('m', 'key-a')
+    await vault.remember('m', 'x')
+    await vault.repin('m', 'key-b')
+    expect(await vault.trust('m', 'key-b')).toBe('same')
+    expect(await vault.trust('m', 'key-c')).toBe('changed')
+    expect(await vault.recall('m')).toBeNull()
+  })
+
   it('trusts a key the first time it is told to, and notices a new one', async () => {
     const vault = createUnlockVault(memory())
     expect(await vault.trust('m', 'key-a')).toBe('new')
@@ -66,17 +76,13 @@ describe('the vault', () => {
     expect(key.extractable).toBe(false)
   })
 
-  it('forgets a saved password, and a forgotten Mac starts over', async () => {
+  it('forgets a saved password and keeps the key', async () => {
     const vault = createUnlockVault(memory())
     await vault.pin('m', 'key-a')
     await vault.remember('m', 'x')
     await vault.forgetPassword('m')
     expect(await vault.recall('m')).toBeNull()
     expect(await vault.trust('m', 'key-a')).toBe('same')
-    await vault.remember('m', 'x')
-    await vault.forgetMac('m')
-    expect(await vault.recall('m')).toBeNull()
-    expect(await vault.trust('m', 'key-b')).toBe('new')
   })
 
   it('a saved password that will not open reads as none', async () => {

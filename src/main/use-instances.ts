@@ -10,7 +10,7 @@ import { CamDevice } from './cam-device'
 import { cameraAccess, ElectronCaptureHost } from './capture-host'
 import type { RemoteState } from '../shared/remote-access'
 import { LinuxScreenDevice, linuxSources } from './linux-screen'
-import { listMacScreens, MacInput, macWindowAlive, macKeystrokes } from './mac-bridge'
+import { listMacScreens, MacInput, macWindowAlive, macUnlockOp } from './mac-bridge'
 import { PixelInstance, type PixelDevice, type RemoteGate } from './pixel-instance'
 import type { SettingsPane } from './remote-desk'
 import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
@@ -151,7 +151,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
     wake() {
       for (const instance of live.values()) instance.wake()
     },
-    typeAtLock: (password) => handOf().send({ op: 'unlock', keys: macKeystrokes(password) }),
+    typeAtLock: (password) => handOf().send(macUnlockOp(password)),
     dispose() {
       hand?.close()
       hand = null

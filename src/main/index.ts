@@ -8793,7 +8793,12 @@ function registerIpc(handlers: RestoreHandlers): void {
     const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
   }))
-  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => (typeof on === 'boolean' ? remoteDesk.setSwitch(on) : { ok: false, error: 'On or off' })))
+  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => {
+    if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
+    // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
+    if (on) unlockDoor.reopen()
+    return remoteDesk.setSwitch(on)
+  }))
   ipcMain.handle('use:remote-stop', ownerOnly(() => {
     remoteDesk.stopAll()
     return { ok: true }

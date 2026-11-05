@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createUnlockDoor, loadUnlockKey, UNLOCK_ATTEMPTS, UNLOCK_CHALLENGE_MS, UNLOCK_REST_MS, type UnlockDoorDeps } from '../src/main/remote-unlock'
+import { createUnlockDoor, loadUnlockKey, UNLOCK_ATTEMPTS, UNLOCK_CHALLENGE_MS, UNLOCK_MISSES_MAX, UNLOCK_REST_MS, type UnlockDoorDeps } from '../src/main/remote-unlock'
 import { generateSealKeyPair, packBody } from '../src/shared/relay-seal'
 import { UNLOCK_INFO } from '../src/shared/remote-unlock'
 import type { ViewerWho } from '../src/shared/remote-access'
@@ -152,6 +152,52 @@ describe('unlock', () => {
     expect(b).toMatchObject({ ok: false, outcome: 'busy' })
     finish()
     await first
+  })
+
+  it('two devices cannot type at once, whatever the lock read takes', async () => {
+    let answer: (locked: boolean) => void = () => undefined
+    let reads = 0
+    const t = bed({ locked: () => (++reads <= 2 ? Promise.resolve(true) : new Promise<boolean>((resolve) => (answer = resolve))) })
+    const a = await t.door.begin(phone)
+    const b = await t.door.begin(other)
+    const first = t.door.unlock(phone, t.seal(a.ok ? a.challenge : '', PASSWORD))
+    expect(await t.door.unlock(other, t.seal(b.ok ? b.challenge : '', PASSWORD))).toMatchObject({ outcome: 'busy' })
+    answer(true)
+    await new Promise((resolve) => setImmediate(resolve))
+    answer(false)
+    await first
+  })
+
+  it('asks the desk again after waking: Stop can land in those seconds', async () => {
+    let refusal: string | null = null
+    const t = bed({ refusal: () => refusal, wake: async () => void (refusal = 'Stopped at the Mac') })
+    const opened = await t.door.begin(phone)
+    expect(await t.door.unlock(phone, t.seal(opened.ok ? opened.challenge : '', PASSWORD))).toEqual({ ok: false, error: 'Stopped at the Mac' })
+    expect(t.typed).toEqual([])
+  })
+
+  it('a Mac unlocked at its keyboard mid-way is no failure and no wrong password', async () => {
+    const t = bed({
+      type: async () => {
+        t.mac.locked = false
+        throw new Error('not locked')
+      }
+    })
+    expect(await t.send(phone, PASSWORD)).toMatchObject({ ok: false, outcome: 'not-locked' })
+  })
+
+  it('closes after too many wrong passwords, until someone at the Mac reopens it', async () => {
+    const t = bed()
+    for (let miss = 0; miss < UNLOCK_MISSES_MAX; miss += 1) {
+      await t.send(phone, 'nope')
+      t.clock.now += UNLOCK_REST_MS + 1
+    }
+    t.typed.length = 0
+    expect(await t.send(phone, PASSWORD)).toMatchObject({ ok: false, outcome: 'closed' })
+    expect(t.typed).toEqual([])
+    expect(JSON.stringify(t.record.mock.calls)).toContain('closed')
+    t.door.reopen()
+    expect(await t.send(phone, PASSWORD)).toEqual({ ok: true, outcome: 'unlocked' })
   })
 
   it('the record says who and how it went, and never the password', async () => {

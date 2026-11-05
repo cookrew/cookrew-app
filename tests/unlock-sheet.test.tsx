@@ -4,7 +4,7 @@ import { UnlockSheetView, type UnlockSheetViewProps } from '../src/renderer/src/
 
 const noop = (): void => undefined
 const draw = (over: Partial<UnlockSheetViewProps>): string =>
-  renderToStaticMarkup(<UnlockSheetView trust="same" words={['able', 'baby']} saved={false} busy={false} error={null} password="" remember={false} onPassword={noop} onRemember={noop} onUnlock={noop} onForget={noop} onTrustNew={noop} onClose={noop} {...over} />)
+  renderToStaticMarkup(<UnlockSheetView relayed={false} trust="same" words={['able', 'baby']} saved={false} busy={false} error={null} password="" remember={false} onPassword={noop} onRemember={noop} onUnlock={noop} onForget={noop} onTrustNew={noop} onClose={noop} {...over} />)
 
 describe('UnlockSheetView', () => {
   it('asks for the password as a password, and offers to remember it', () => {
@@ -22,6 +22,13 @@ describe('UnlockSheetView', () => {
     const html = draw({ saved: true })
     expect(html).not.toContain('type="password"')
     expect(html).toContain('Forget password')
+  })
+
+  it('a page the relay served never asks for the password', () => {
+    const html = draw({ relayed: true })
+    expect(html).not.toContain('type="password"')
+    expect(html).not.toContain('Remember on this device')
+    expect(html).toContain('Wi-Fi or Tailscale')
   })
 
   it('a changed key takes no password at all', () => {

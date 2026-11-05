@@ -2,7 +2,7 @@
 // refused there, and the password travels on stdin, never on a command line.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { MAC_INPUT_SCRIPT, macKeystrokes } from '../src/main/mac-bridge'
+import { MAC_INPUT_SCRIPT, macKeystrokes, macUnlockOp } from '../src/main/mac-bridge'
 
 describe('macKeystrokes', () => {
   it('uses physical keys: a secure field ignores a bare unicode event', () => {
@@ -18,7 +18,7 @@ describe('macKeystrokes', () => {
     }
   })
 
-  it('sends what it cannot place as the character alone', () => {
+  it('marks what no key makes', () => {
     expect(macKeystrokes('é')).toEqual([{ code: -1, shift: false, unit: 233 }])
   })
 })
@@ -37,15 +37,35 @@ describe('the script', () => {
     const unlock = MAC_INPUT_SCRIPT.indexOf("if (op.op === 'unlock')")
     expect(unlock).toBeGreaterThan(0)
     expect(unlock).toBeLessThan(lockCheck)
-    expect(MAC_INPUT_SCRIPT).toContain("if (!locked()) throw new Error('not locked')")
+  })
+
+  it('looks before every key and before Return: Touch ID can open the Mac mid-way', () => {
+    const body = MAC_INPUT_SCRIPT.slice(MAC_INPUT_SCRIPT.indexOf('const unlockScreen'), MAC_INPUT_SCRIPT.indexOf('function run(op)'))
+    expect(body).toMatch(/op\.keys\.forEach\(\(k\) => \{ stillAtLock\(\); press\(k\) \}\)/)
+    expect(body.indexOf('stillAtLock()\n  press({ code: 36')).toBeGreaterThan(0)
+  })
+
+  it('wants the owner’s lock screen, not another user on the console', () => {
+    expect(MAC_INPUT_SCRIPT).toContain('session.CGSSessionScreenIsLocked === true && session.kCGSSessionOnConsoleKey !== false')
+  })
+})
+
+describe('macUnlockOp', () => {
+  it('builds the keys', () => {
+    expect(macUnlockOp('a')).toEqual({ op: 'unlock', keys: [{ code: 0, shift: false, unit: 97 }] })
+  })
+
+  it('refuses a character no key makes rather than spend an attempt on it, and does not repeat it', () => {
+    expect(() => macUnlockOp('pässword')).toThrow('cannot be typed')
+    expect(() => macUnlockOp('pässword')).not.toThrow('pässword')
   })
 })
 
 describe('who can reach it', () => {
   it('no viewer or agent verb sends it: one call site, behind the unlock door', () => {
-    expect(readFileSync('src/main/use-instances.ts', 'utf8')).toContain("op: 'unlock'")
+    expect(readFileSync('src/main/use-instances.ts', 'utf8')).toContain('macUnlockOp(password)')
     for (const file of ['src/main/screen-device.ts', 'src/main/use-commands.ts', 'src/main/pixel-instance.ts']) {
-      expect(readFileSync(file, 'utf8'), file).not.toMatch(/op: 'unlock'|typeAtLock/)
+      expect(readFileSync(file, 'utf8'), file).not.toMatch(/op: 'unlock'|macUnlockOp|typeAtLock/)
     }
   })
 

@@ -24,7 +24,7 @@ export type UnlockPrepared =
   | { readonly kind: 'done' }
   | { readonly kind: 'error'; readonly message: string }
 
-export type UnlockResult = { readonly kind: 'done' } | { readonly kind: 'changed' } | { readonly kind: 'error'; readonly message: string }
+export type UnlockResult = { readonly kind: 'done' } | { readonly kind: 'changed'; readonly key: string } | { readonly kind: 'error'; readonly message: string }
 
 /** Who this Mac says it is, before a password is typed. */
 export async function prepareUnlock({ api, vault, machine }: UnlockFlowDeps): Promise<UnlockPrepared> {
@@ -40,12 +40,13 @@ export async function runUnlock(deps: UnlockFlowDeps, input: { readonly shownKey
   if (!opened.ok) return opened.outcome === 'not-locked' ? { kind: 'done' } : { kind: 'error', message: opened.error }
   // The key the reader saw, and the one pinned: a swap between the two sends nothing.
   const trust = await vault.trust(machine, opened.key)
-  if (trust === 'changed' || opened.key !== input.shownKey) return { kind: 'changed' }
+  if (trust === 'changed' || opened.key !== input.shownKey) return { kind: 'changed', key: opened.key }
   const saved = input.password === null
   const password = input.password ?? (await vault.recall(machine))
   if (password === null || password.length === 0) return { kind: 'error', message: 'Type this Mac’s password.' }
   if (password.length > UNLOCK_PASSWORD_MAX) return { kind: 'error', message: 'That password is too long to send.' }
-  const sealed = await sealForMac(opened.key, JSON.stringify({ c: opened.challenge, p: password }))
+  // Padded, so the sealed size says nothing about the password's length.
+  const sealed = await sealForMac(opened.key, JSON.stringify({ c: opened.challenge, p: password, z: '0'.repeat(UNLOCK_PASSWORD_MAX - password.length) }))
   if (trust === 'new') await vault.pin(machine, opened.key)
   const answer = await api.send(sealed)
   if (answer.ok) {

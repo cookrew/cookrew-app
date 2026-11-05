@@ -1,3 +1,5 @@
+import { UNLOCK_DIRECT_ONLY } from '../shared/remote-unlock'
+import { RELAY_MARKER } from './relay-base'
 import type http from 'node:http'
 import { USE_SOURCES_PATH } from '../shared/use-sources'
 import { sendBody } from './http-compress'
@@ -29,6 +31,23 @@ import { NO_SOURCE, type UseSourceService } from './use-source-service'
  */
 
 export const isUseSourceRoute = (path: string): boolean => path === USE_SOURCES_PATH || path.startsWith(`${USE_SOURCES_PATH}/`)
+
+/**
+ * A page the Mac served itself. The bridge writes the marker over whatever came
+ * in, on the relay and on WebRTC alike, so it cannot be left off; and a page from
+ * cookrew.dev whose traffic moved to the LAN still carries that Origin, which its
+ * browser will not let it change.
+ */
+function fromTheMacsOwnPage(request: http.IncomingMessage): boolean {
+  if (request.headers[RELAY_MARKER] === '1') return false
+  const origin = request.headers.origin
+  if (origin === undefined) return true
+  try {
+    return new URL(origin).host === request.headers.host
+  } catch {
+    return false
+  }
+}
 
 const NOT_PAIRED = 'Pair this device to see what is on the screen: a read-only token does not reach it'
 
@@ -84,6 +103,7 @@ export async function handleUseSourceRoutes(
     const answer = await service.wake(workspaceId, service.whoIs(credential))
     return answer.ok ? respondJson(response, 200, { ok: true }) : respondJson(response, answer.status, { ok: false, error: answer.error })
   }
+  if (path.startsWith(`${USE_SOURCES_PATH}/unlock`) && !fromTheMacsOwnPage(request)) return respondJson(response, 403, { ok: false, error: UNLOCK_DIRECT_ONLY })
   if (path === `${USE_SOURCES_PATH}/unlock/begin`) {
     if (method !== 'POST') return wrongMethod()
     const answer = await service.unlockBegin(workspaceId, service.whoIs(credential))

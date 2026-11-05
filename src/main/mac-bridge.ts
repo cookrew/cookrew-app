@@ -118,19 +118,23 @@ let dry = false
 const post = (ev) => { if (!dry) $.CGEventPost(0, ev) }
 const mouse = (type, x, y) => { const ev = $.CGEventCreateMouseEvent(null, type, { x, y }, 0); $.CGEventSetIntegerValueField(ev, 1, 1); post(ev) }
 const num = (v) => { if (typeof v !== 'number' || !isFinite(v)) throw new Error('bad number'); return v }
+const atLock = () => { const session = ObjC.deepUnwrap($.CGSessionCopyCurrentDictionary()) || {}; return session.CGSSessionScreenIsLocked === true && session.kCGSSessionOnConsoleKey !== false }
+const stillAtLock = () => { if (!atLock()) throw new Error('not locked') }
 const press = (k) => {
-  const code = k.code < 0 ? 0 : num(k.code)
+  const code = num(k.code)
   const unit = Ref('unsigned short'); unit[0] = num(k.unit)
   for (const down of [true, false]) { const ev = $.CGEventCreateKeyboardEvent(null, code, down); if (k.shift === true) $.CGEventSetFlags(ev, SHIFT); $.CGEventKeyboardSetUnicodeString(ev, 1, unit); post(ev) }
   delay(0.03)
 }
 const unlockScreen = (op) => {
-  if (!locked()) throw new Error('not locked')
+  stillAtLock()
   if (!Array.isArray(op.keys) || op.keys.length === 0 || op.keys.length > 128) throw new Error('bad keys')
   // Any key brings the password field up; shift types nothing into it.
   for (const down of [true, false]) post($.CGEventCreateKeyboardEvent(null, 56, down))
   delay(0.7)
-  op.keys.forEach(press)
+  // Touch ID can open the Mac mid-way: nothing after that may reach the front app.
+  op.keys.forEach((k) => { stillAtLock(); press(k) })
+  stillAtLock()
   press({ code: 36, unit: 13 })
 }
 function run(op) {
@@ -274,6 +278,13 @@ export function macKeystrokes(text: string): MacKeystroke[] {
     const code = MAC_KEYS[base] ?? SYMBOL_KEYS[base]
     return code === undefined ? { code: -1, shift: false, unit } : { code, shift: base !== char, unit }
   })
+}
+
+/** The lock screen's one operation. A character no key makes would only spend an attempt. */
+export function macUnlockOp(password: string): { op: 'unlock'; keys: readonly MacKeystroke[] } {
+  const keys = macKeystrokes(password)
+  if (keys.some((key) => key.code < 0)) throw new Error('This password cannot be typed from here: it has a character no key makes')
+  return { op: 'unlock', keys }
 }
 
 export type MacOp =

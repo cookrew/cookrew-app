@@ -21,8 +21,8 @@ export interface UnlockVault {
   remember(machine: string, password: string): Promise<void>
   recall(machine: string): Promise<string | null>
   forgetPassword(machine: string): Promise<void>
-  /** Starts over with this Mac: for a key its owner has checked and knows changed. */
-  forgetMac(machine: string): Promise<void>
+  /** Trusts exactly this key in place of the pinned one, and drops what the old one held. */
+  repin(machine: string, key: string): Promise<void>
 }
 
 const AES_KEY = 'key'
@@ -66,9 +66,9 @@ export function createUnlockVault(store: VaultStore): UnlockVault {
       }
     },
     forgetPassword: (machine) => store.del(secretOf(machine)),
-    async forgetMac(machine) {
+    async repin(machine, key) {
       await store.del(secretOf(machine))
-      await store.del(pinOf(machine))
+      await store.set(pinOf(machine), key)
     }
   }
 }

@@ -26,7 +26,14 @@ describe('runUnlock', () => {
     expect(await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: 'pw', remember: false })).toEqual({ kind: 'done' })
     const wire = t.send.mock.calls[0][0]
     expect(wire).not.toContain('pw"')
-    expect(JSON.parse(openBody(t.mac.privateKey, UNLOCK_INFO, wire) ?? '{}')).toEqual({ c: 'c1', p: 'pw' })
+    expect(JSON.parse(openBody(t.mac.privateKey, UNLOCK_INFO, wire) ?? '{}')).toMatchObject({ c: 'c1', p: 'pw' })
+  })
+
+  it('every password seals to the same size: its length is nobody’s business', async () => {
+    const t = bed()
+    await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: 'a', remember: false })
+    await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: 'a much longer password than that', remember: false })
+    expect(t.send.mock.calls[0][0].length).toBe(t.send.mock.calls[1][0].length)
   })
 
   it('pins the key the first time', async () => {
@@ -39,14 +46,14 @@ describe('runUnlock', () => {
     const t = bed()
     await t.vault.pin('m', 'the-old-key')
     await t.vault.remember('m', 'pw')
-    expect(await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: null, remember: false })).toEqual({ kind: 'changed' })
+    expect(await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: null, remember: false })).toEqual({ kind: 'changed', key: t.mac.publicKey })
     expect(t.send).not.toHaveBeenCalled()
   })
 
   it('a key swapped after the reader saw it sends nothing', async () => {
     const t = bed()
     t.offered.key = generateSealKeyPair().publicKey
-    expect(await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: 'pw', remember: false })).toEqual({ kind: 'changed' })
+    expect(await runUnlock(t.deps, { shownKey: t.mac.publicKey, password: 'pw', remember: false })).toEqual({ kind: 'changed', key: t.offered.key })
     expect(t.send).not.toHaveBeenCalled()
   })
 

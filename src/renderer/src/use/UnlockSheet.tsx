@@ -1,8 +1,9 @@
-// THE PHONE'S WAY TO A LOCKED MAC. The first time it shows the Mac's key in six
-// words to compare with the ⋯ menu there; after that the key is pinned, and a
-// changed one stops here with nothing sent.
+// THE PHONE'S WAY TO A LOCKED MAC, on a page the Mac served itself: a page from
+// cookrew.dev could be changed to capture what is typed, so it draws no field.
+// The first time it shows the Mac's key in six words to compare with the ⋯ menu
+// there; after that the key is pinned, and a changed one stops with nothing sent.
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
+import { UNLOCK_DIRECT_ONLY, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
 import { cookrew } from '../api'
 import { clientBase } from '../api-base'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
@@ -11,6 +12,8 @@ import { wordsOfKey } from './unlock-seal'
 import { browserVaultStore, createUnlockVault, type KeyTrust } from './unlock-vault'
 
 export interface UnlockSheetViewProps {
+  /** This page came through cookrew.dev. */
+  relayed: boolean
   trust: KeyTrust | null
   words: readonly string[] | null
   saved: boolean
@@ -73,11 +76,28 @@ function PasswordForm(props: UnlockSheetViewProps): React.JSX.Element {
   )
 }
 
+function DirectOnly({ onClose }: Pick<UnlockSheetViewProps, 'onClose'>): React.JSX.Element {
+  return (
+    <>
+      <h3>Unlock this Mac</h3>
+      <p>{UNLOCK_DIRECT_ONLY}</p>
+      <div className="rp-actions">
+        <button type="button" className="rp-action rp-primary" onClick={onClose}>OK</button>
+      </div>
+    </>
+  )
+}
+
+function SheetBody(props: UnlockSheetViewProps): React.JSX.Element {
+  if (props.relayed) return <DirectOnly onClose={props.onClose} />
+  return props.trust === 'changed' ? <ChangedKey words={props.words} onTrustNew={props.onTrustNew} onClose={props.onClose} /> : <PasswordForm {...props} />
+}
+
 export function UnlockSheetView(props: UnlockSheetViewProps): React.JSX.Element {
   return (
     <div className="rp-confirm-scrim" role="dialog" aria-modal="true" aria-label="Unlock this Mac" onPointerDown={hold}>
       <div className="rp-confirm">
-        {props.trust === 'changed' ? <ChangedKey words={props.words} onTrustNew={props.onTrustNew} onClose={props.onClose} /> : <PasswordForm {...props} />}
+        <SheetBody {...props} />
         {props.error && <p className="rp-unlock-error" role="alert">{props.error}</p>}
       </div>
     </div>
@@ -93,6 +113,7 @@ const flowDeps = (): UnlockFlowDeps | null => {
 const messageOf = (failure: unknown): string => (failure instanceof Error ? failure.message : String(failure))
 
 function UnlockSheetBody(): React.JSX.Element {
+  const relayed = clientBase() !== ''
   const deps = useMemo(flowDeps, [])
   const [shown, setShown] = useState<{ key: string; trust: KeyTrust; saved: boolean; words: readonly string[] } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -101,12 +122,13 @@ function UnlockSheetBody(): React.JSX.Element {
   const [remember, setRemember] = useState(false)
 
   const prepare = useCallback(async (): Promise<void> => {
+    if (relayed) return
     if (!deps) return setError('This device cannot unlock a Mac.')
     const prepared = await prepareUnlock(deps)
     if (prepared.kind === 'done') return closeUnlockSheet(true)
     if (prepared.kind === 'error') return setError(prepared.message)
     setShown({ key: prepared.key, trust: prepared.trust, saved: prepared.saved, words: await wordsOfKey(prepared.key) })
-  }, [deps])
+  }, [deps, relayed])
 
   useEffect(() => {
     prepare().catch((failure: unknown) => setError(messageOf(failure)))
@@ -119,7 +141,8 @@ function UnlockSheetBody(): React.JSX.Element {
     try {
       const result = await runUnlock(deps, { shownKey: shown.key, password: shown.saved ? null : password, remember })
       if (result.kind === 'done') return closeUnlockSheet(true)
-      if (result.kind === 'changed') return setShown({ ...shown, trust: 'changed' })
+      // The words of the key now on offer: the reader must judge that one, not the one they saw.
+      if (result.kind === 'changed') return setShown({ key: result.key, trust: 'changed', saved: false, words: await wordsOfKey(result.key) })
       setError(result.message)
       await prepare()
     } catch (failure) {
@@ -132,10 +155,11 @@ function UnlockSheetBody(): React.JSX.Element {
 
   return (
     <UnlockSheetView
+      relayed={relayed}
       trust={shown?.trust ?? null}
       words={shown?.words ?? null}
       saved={shown?.saved ?? false}
-      busy={busy || (shown === null && error === null)}
+      busy={busy || (!relayed && shown === null && error === null)}
       error={error}
       password={password}
       remember={remember}
@@ -146,7 +170,8 @@ function UnlockSheetBody(): React.JSX.Element {
         if (deps) void deps.vault.forgetPassword(deps.machine).then(prepare)
       }}
       onTrustNew={() => {
-        if (deps) void deps.vault.forgetMac(deps.machine).then(prepare)
+        // Exactly the key the reader judged, with no second fetch that could offer another.
+        if (deps && shown) void deps.vault.repin(deps.machine, shown.key).then(() => setShown({ ...shown, trust: 'same', saved: false }))
       }}
       onClose={() => closeUnlockSheet(false)}
     />
