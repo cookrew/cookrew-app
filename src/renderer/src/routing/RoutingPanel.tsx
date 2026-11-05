@@ -112,7 +112,7 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
             {setupTerminalId === null ? (
               <div className="cr-routing-hint">the Setup card appears on the canvas the first time a button needs it</div>
             ) : (
-              <SetupScreen terminalId={setupTerminalId} focusTick={focusTick} />
+              <SetupScreen terminalId={setupTerminalId} focusTick={focusTick} prompting={running?.asking === 'password'} />
             )}
           </div>
         </details>

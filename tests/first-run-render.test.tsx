@@ -95,6 +95,20 @@ describe('the tool check on screen', () => {
     expect(html).not.toContain(SETUP_LINE_COPY.WAITING)
   })
 
+  it('N2: the pane sits right under the sentence that points at it, ahead of everything else', () => {
+    const asked = { line: 'brew install tmux', lastLine: 'Password:', oauth: false, url: null, asking: 'password' } as const
+    const html = view(gaps, { running: asked, pane: <i>THE-PANE</i>, children: <i>THE-REST</i> })
+    expect(html.indexOf(SETUP_LINE_COPY.PASSWORD)).toBeLessThan(html.indexOf('THE-PANE'))
+    expect(html.indexOf('THE-PANE')).toBeLessThan(html.indexOf('THE-REST'))
+  })
+
+  it('N2: the box follows the cursor only at a password prompt: a TUI parks its cursor anywhere', () => {
+    for (const file of ['first-run/Preflight.tsx', 'routing/RoutingPanel.tsx']) {
+      expect(readFileSync(path.join(__dirname, '../src/renderer/src', file), 'utf8')).toMatch(/prompting=\{[^}]*asking === 'password'\}/)
+    }
+    expect(readFileSync(path.join(__dirname, '../src/renderer/src/first-run/FirstWait.tsx'), 'utf8')).not.toContain('prompting')
+  })
+
   it('N2: a refused press gets its sentence and the way to clear the pane, with the buttons left on', () => {
     const html = view(gaps, { error: SETUP_LINE_COPY.BUSY, stuck: true })
     expect(html).toContain(SETUP_LINE_COPY.BUSY)

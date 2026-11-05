@@ -28,6 +28,11 @@ export interface TerminalActivity {
   /** True when the terminal runs an agent preset (non-empty command). */
   agent: boolean
   /**
+   * Input is behind the turn in hand. A spinner in a booting pane reads as a turn
+   * too, and nobody asked for that one (the tracker calls it a phantom).
+   */
+  asked?: boolean
+  /**
    * PHASE ONLY, from the multiplexer — no local mirror stood behind this.
    *
    * A cold canvas has no PTY attached to anything, so the only thing known

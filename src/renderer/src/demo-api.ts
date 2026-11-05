@@ -453,6 +453,11 @@ export function createDemoApi(): CookrewApi {
       }
       lineBuffers.set(terminalId, buffer)
     },
+    // No main here to wait on a prompt: the line goes in, and nothing watches it.
+    setupLineStart: ({ terminalId, line, enter }) => {
+      api.ptyInput(terminalId, enter ? `${line}\r` : line)
+      return Promise.resolve({ ok: true, runId: null })
+    },
     ptyResize: () => undefined,
     ptyJump: () => undefined,
     turnSeen: () => undefined,

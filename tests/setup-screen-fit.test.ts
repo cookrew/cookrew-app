@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitFontSize, shrunkFontSize } from '../src/renderer/src/routing/screen-fit'
+import { cursorScrollTop, fitFontSize, shrunkFontSize } from '../src/renderer/src/routing/screen-fit'
 
 /**
  * Box round 3, N7: the wait pane clipped Claude's own screens, the bypass consent
@@ -59,5 +59,28 @@ describe('the size settles', () => {
         expect(moves).toBeLessThanOrEqual(12)
       }
     }
+  })
+})
+
+describe('the box follows the cursor, which is where a prompt is', () => {
+  // The grid is the card's and can be far taller than the box: pinned to the bottom,
+  // a sudo prompt near the top of a young pane was above the fold of its own box.
+  const at = (cursorRow: number) => cursorScrollTop({ cursorRow, rows: 40, screenHeight: 600, boxHeight: 200, padding: 6 })
+
+  it('stays at the top while the cursor is in the first box full', () => {
+    expect(at(0)).toBe(0)
+    expect(at(10)).toBe(0)
+  })
+
+  it('brings a cursor further down to the foot of the box', () => {
+    expect(at(30)).toBe(31 * 15 + 6 - 200)
+  })
+
+  it('reaches the last row', () => {
+    expect(at(39)).toBe(40 * 15 + 6 - 200)
+  })
+
+  it('stays put with nothing laid out', () => {
+    expect(cursorScrollTop({ cursorRow: 5, rows: 0, screenHeight: 0, boxHeight: 200, padding: 0 })).toBe(0)
   })
 })

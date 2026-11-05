@@ -63,6 +63,7 @@ export function PreflightView({
   onCheck,
   onContinue,
   onSkip,
+  pane,
   children
 }: {
   /** Null while the first check runs. */
@@ -76,10 +77,18 @@ export function PreflightView({
   onCheck: () => void
   onContinue: () => void
   onSkip: () => void
-  /** The Setup terminal, once a press made it. */
+  /** The Setup terminal, once a press made it: right under the sentence that points at it. */
+  pane?: React.ReactNode
+  /** The rest, under the terminal. */
   children?: React.ReactNode
 }): React.JSX.Element {
   const open = rows !== null && mayContinue(rows)
+  const live = useRef<HTMLDivElement>(null)
+  const hasPane = pane !== undefined && pane !== null && pane !== false
+  // What it asks and where to answer it arrive together, on screen, with no scroll.
+  useEffect(() => {
+    if (running !== null || stuck) live.current?.scrollIntoView({ block: 'nearest' })
+  }, [running?.line, running?.asking, stuck, hasPane, rows === null, error])
   return (
     <section className="fr-stage fr-preflight" aria-label={PREFLIGHT_COPY.TITLE}>
       <div className="fr-col">
@@ -99,14 +108,17 @@ export function PreflightView({
             {error}
           </p>
         )}
-        {(running !== null || stuck) && (
-          <p className="fr-running" role="status">
-            {running !== null && <span>{running.asking === 'password' ? SETUP_LINE_COPY.PASSWORD : SETUP_LINE_COPY.WAITING}</span>}
-            <button type="button" className="fr-quiet" onClick={onStop}>
-              {SETUP_LINE_COPY.STOP}
-            </button>
-          </p>
-        )}
+        <div ref={live}>
+          {(running !== null || stuck) && (
+            <p className="fr-running" role="status">
+              {running !== null && <span>{running.asking === 'password' ? SETUP_LINE_COPY.PASSWORD : SETUP_LINE_COPY.WAITING}</span>}
+              <button type="button" className="fr-quiet" onClick={onStop}>
+                {SETUP_LINE_COPY.STOP}
+              </button>
+            </p>
+          )}
+          {pane}
+        </div>
         {children}
         <div className="fr-foot">
           <button type="button" className="fr-go" disabled={!open} onClick={onContinue}>
@@ -211,14 +223,16 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
       onContinue={() => void onward()}
       // On to the first screen, which keeps the way back here: skipping is not leaving.
       onSkip={() => void onward()}
+      pane={
+        (pressed || setup.running !== null || setup.stuck) && setup.terminalId ? (
+          <div className="fr-setup">
+            <p className="fr-setup-title">{PREFLIGHT_COPY.SETUP_TITLE}</p>
+            <SetupScreen terminalId={setup.terminalId} focusTick={setup.focusTick} fit="width" prompting={setup.running?.asking === 'password'} />
+          </div>
+        ) : null
+      }
     >
       <AccessRows onChange={check} />
-      {(pressed || setup.running !== null || setup.stuck) && setup.terminalId && (
-        <div className="fr-setup" ref={(el) => el?.scrollIntoView({ block: 'nearest' })}>
-          <p className="fr-setup-title">{PREFLIGHT_COPY.SETUP_TITLE}</p>
-          <SetupScreen terminalId={setup.terminalId} focusTick={setup.focusTick} fit="width" />
-        </div>
-      )}
     </PreflightView>
   )
 }

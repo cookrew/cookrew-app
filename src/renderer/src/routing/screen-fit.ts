@@ -36,3 +36,25 @@ export function fitFontSize({ screen, box, current, base, whole }: FitInput): nu
 export function shrunkFontSize(input: FitInput): number {
   return Math.min(input.current, fitFontSize(input))
 }
+
+export interface CursorInput {
+  /** The cursor's row on the screen, from 0. */
+  cursorRow: number
+  rows: number
+  /** The drawn screen's height. */
+  screenHeight: number
+  boxHeight: number
+  /** Room above the screen inside the box. */
+  padding: number
+}
+
+/**
+ * Where to scroll a box shorter than its screen, at a password prompt. On a young pane
+ * the cursor is nowhere near the bottom of the card's tall grid, so a box pinned to the
+ * bottom showed empty rows and tmux's bar.
+ */
+export function cursorScrollTop({ cursorRow, rows, screenHeight, boxHeight, padding }: CursorInput): number {
+  if (rows <= 0 || screenHeight <= 0) return 0
+  const cursorFoot = ((cursorRow + 1) * screenHeight) / rows + padding
+  return Math.max(0, cursorFoot - boxHeight)
+}

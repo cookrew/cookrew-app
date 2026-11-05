@@ -81,6 +81,7 @@ const SCREENS: Readonly<Record<string, string>> = {
 }
 const HOLD_MS = 500
 const SETUP_LINE_MS = 1_200
+const RESTART_MS = 400
 const SUDO_PROMPT = '[sudo] password for you:'
 
 /** The word a preset runs, as a card's failure names it. */
@@ -95,6 +96,7 @@ function turnActivity(terminalId: string, phase: TerminalActivity['phase'], prom
     terminalId,
     agent: true,
     phase,
+    asked: true,
     prompt,
     pendingInput: null,
     lines: replied ? [reply] : [],
@@ -168,6 +170,20 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
       turns.set(id, before + 1)
       emit(turnActivity(id, 'replied', prompt, before + 1, agent === 'refused' ? REFUSED_REPLY : STAND_IN_REPLY))
     }, TURN_ENDS_MS)
+  }
+  /**
+   * A restart as the card really sees one (box round 3, N10): the old pane's last
+   * word, a new mirror with nothing on it yet, a spinner nobody asked for, then the same
+   * refusal read back with other words around it. The card must keep its place throughout.
+   */
+  const restartRefused = (id: string): Promise<void> => {
+    const prompt = 'Write a short README for this folder'
+    const count = turns.get(id) ?? 1
+    emit({ ...turnActivity(id, 'idle', prompt, count), lines: ['— process exited —'], reply: REFUSED_REPLY })
+    setTimeout(() => emit({ ...turnActivity(id, 'idle', prompt, count), prompt: null, lines: [] }), RESTART_MS / 2)
+    setTimeout(() => emit({ ...turnActivity(id, 'thinking', prompt, count), asked: false }), RESTART_MS * 1.5)
+    setTimeout(() => emit({ ...turnActivity(id, 'idle', prompt, count), lines: [`⎿  ${REFUSED_REPLY}`], reply: `${REFUSED_REPLY}\nRead back from the transcript.` }), RESTART_MS * 2)
+    return new Promise((resolve) => setTimeout(resolve, RESTART_MS))
   }
   /** As main/first-task.ts does it, played for the demo's agent. */
   const holdTask = (id: string, words: string, harness: string): void => {
@@ -255,10 +271,11 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
       access = { rows: ACCESS_ROWS, keyStore, active: { id: 'endpoint', label: 'Your endpoint', protocol, model, host: new URL(baseUrl).host, baseUrl, simple: simple === true, tools: accessTools({ protocol, baseUrl, simple }) } }
       return Promise.resolve({ ok: true as const, state: access })
     },
-    accessSimple: () => {
+    accessSimple: ({ terminalId }) => {
       if (access.active === null) return Promise.resolve({ ok: false as const })
       access = { ...access, active: { ...access.active, simple: true, tools: accessTools({ ...access.active, simple: true }) } }
-      return Promise.resolve({ ok: true as const, restarted: true, state: access })
+      const state = access
+      return restartRefused(terminalId).then(() => ({ ok: true as const, restarted: true, state }))
     },
     accessSimpleOffer: () => Promise.resolve(simpleModeHelps('Claude Code', access.active)),
     accessClear: () => {
@@ -289,6 +306,11 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     ptyAttach: (id, onData, onSize) => {
       const task0 = task
       const off = api.ptyAttach(id, onData, onSize)
+      // A young pane on a card's tall grid: the prompt is near the top of it.
+      if (setupPlay === 'sudo' && !turns.has(id)) {
+        setTimeout(() => onSize?.({ cols: 100, rows: 44 }), 150)
+        setTimeout(() => onData(`\r\n${SUDO_PROMPT} `), 300)
+      }
       if (task0?.state === 'holding' && task0.id === id && SCREENS[agent]) {
         // As wide and tall as a card's pane, which is what clipped them (box round 3, N7).
         setTimeout(() => onSize?.({ cols: 130, rows: 44 }), 150)
