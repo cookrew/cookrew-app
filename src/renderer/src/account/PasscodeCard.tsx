@@ -84,6 +84,7 @@ export function PasscodeCard({
             SET PASSCODE
           </button>
         </div>
+        <p className="gs-foot-note">{PROVIDER_COPY.PASSCODE_CODES}</p>
         <p className="gs-foot-note">{PROVIDER_COPY.PASSCODE_LATER}</p>
       </div>
     </div>

@@ -461,7 +461,7 @@ async function unlink(ctx: V2Context, name: string): Promise<void> {
   }
   if (!(await readAndStepUp(ctx, signed, 'unlink-provider')).ok) return
   const account = v2.accounts.get(signed.account.username) ?? signed.account
-  if (v2.links.isLastWayIn(account, name, v2.factors.store.hasPasskey(account.username))) {
+  if (v2.links.isLastWayIn(account, name)) {
     refuseOAuth(response, 409, 'last_sign_in')
     return
   }

@@ -1,3 +1,4 @@
+import { useTripGuard } from './ProviderButtons'
 import { useCallback, useEffect, useState } from 'react'
 import type { AccountRefusal } from '../../../shared/account-v2'
 import {
@@ -123,18 +124,23 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
       })
   }
 
+  // A passwordless owner's END waits on a browser, which the tab takes with it.
+  const trip = useTripGuard()
+
   const end = (slug: string, id: string): void => {
     const call = cookrew().accountEndSeat
     if (!call) return
+    trip.begin()
     void call({ slug, id })
       .then((result) => {
         if (!result.ok) {
-          setError(seatRefusal(result.reason, result.message, username))
+          if (result.reason !== 'cancelled') setError(seatRefusal(result.reason, result.message, username))
           return
         }
         refresh(slug)
       })
       .catch(() => undefined)
+      .finally(() => trip.end())
   }
 
   const serving = surface?.serving ?? []

@@ -78,15 +78,16 @@ export class V2Links {
   }
 
   /**
-   * Would this leave the account with no way to start a sign-in?
+   * Would this leave a passwordless account with no working provider?
    *
-   * A passkey counts, since it opens the account on its own. Rescue codes do
-   * not: they are a way back after losing everything, and an account running on
-   * them alone has a number of sign-ins left rather than a way in.
+   * A provider is what such an account proves itself with, so losing the last
+   * one is losing every act behind a step-up. A passkey does not stand in: it
+   * opens the account, and no client can yet climb a step-up with one. A paused
+   * link does not count either, because it opens nothing until it is relinked.
    */
-  isLastWayIn(account: V2Account, provider: ProviderId, hasPasskey: boolean): boolean {
-    if (account.passwordless !== true || hasPasskey) return false
-    return (account.links ?? []).every((l) => l.provider === provider)
+  isLastWayIn(account: V2Account, provider: ProviderId): boolean {
+    if (account.passwordless !== true) return false
+    return !(account.links ?? []).some((l) => l.provider !== provider && l.pausedAt === undefined)
   }
 
   /** "Not me" on a sign-in through this link: it opens nothing until relinked. */

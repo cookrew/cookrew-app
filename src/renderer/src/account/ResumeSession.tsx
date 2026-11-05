@@ -4,7 +4,7 @@ import { cookrew } from '../api'
 import { ACCOUNT_COPY } from './account-store'
 import { DOING, problemSentence, refusedSentence } from './problem'
 import { ResumeLadder } from './ResumeLadder'
-import { ProviderButtons, useProviders } from './ProviderButtons'
+import { ProviderButtons, useProviders, useTripGuard } from './ProviderButtons'
 import { PROVIDER_COPY, providerRefusal } from './provider-store'
 import type { ProviderId } from '../../../shared/oauth'
 import '../grant-surface.css'
@@ -43,6 +43,7 @@ export function ResumeSession({
   passwordless?: boolean
 }): React.JSX.Element {
   const offers = useProviders()
+  const trip = useTripGuard()
   const [waiting, setWaiting] = useState<ProviderId | null>(null)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -101,6 +102,7 @@ export function ResumeSession({
     if (!call || busy || waiting !== null) return
     setWaiting(provider)
     setError(null)
+    trip.begin()
     void call(provider)
       .then((result) => {
         if (result.ok) onResumed(result.value)
@@ -109,7 +111,10 @@ export function ResumeSession({
         } else if (result.reason !== 'new_identity') setError(providerRefusal(result.reason, result.message))
       })
       .catch((err: unknown) => setError(problemSentence(DOING.RESUME, err)))
-      .finally(() => setWaiting(null))
+      .finally(() => {
+        trip.end()
+        setWaiting(null)
+      })
   }
 
   return (

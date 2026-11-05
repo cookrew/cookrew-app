@@ -31,7 +31,7 @@ import {
   type UsernameCheck,
 } from '../shared/account-v2'
 import type { ProviderId, ProviderOffer } from '../shared/oauth'
-import type { StepUpAct } from '../shared/step-up'
+import { proofBody, type StepUpAct, type StepUpProof } from '../shared/step-up'
 import {
   LadderPasswords,
   NO_PASSWORD,
@@ -44,7 +44,7 @@ import {
 } from './account-ladder'
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { machineCopy } from '../shared/machine-words'
-import { ProviderAccess, type DeviceCode, type TripProof } from './account-oauth'
+import { ProviderAccess, type DeviceCode, type MintedDevice, type TripProof } from './account-oauth'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
@@ -452,8 +452,14 @@ export class Accounts {
       schemeHandled: deps.schemeHandled ?? (() => true),
       device: () => this.providerDevice(),
       hasAccount: () => this.cached !== null,
-      rememberPending: (pending) => this.ladder.remember(pending, NO_PASSWORD),
-      land: (body) => this.landSession(NO_PASSWORD, body),
+      rememberPending: (pending, minted) => {
+        this.ladder.remember(pending, NO_PASSWORD)
+        if (minted !== null) this.signingIn = { ...minted, username: '' }
+      },
+      land: (body, minted) => {
+        if (minted !== null) this.signingIn = { ...minted, username: '' }
+        return this.landSession(NO_PASSWORD, body)
+      },
       authed: (pathname, body) => this.authedPost(pathname, body),
       firstLink: () => this.firstLink(),
     })
@@ -506,18 +512,32 @@ export class Accounts {
     })
   }
 
-  /** The device a sign-in offers: this Mac's, or a key minted for the attempt. */
-  private providerDevice(): AccountDeviceInput {
+  /**
+   * The device a sign-in offers: this Mac's, or a key minted for the attempt.
+   *
+   * The key travels with the attempt rather than through `signingIn`: a trip
+   * lasts minutes, and anything that replaced shared state meanwhile would pair
+   * this device's id with another attempt's keys.
+   */
+  private providerDevice(): { device: AccountDeviceInput; minted: MintedDevice | null } {
     const held = this.cached
     if (held !== null) {
-      return { id: held.deviceId, kind: 'desktop', name: held.name, jwk: held.publicKeyJwk }
+      return {
+        device: { id: held.deviceId, kind: 'desktop', name: held.name, jwk: held.publicKeyJwk },
+        minted: null,
+      }
     }
     const keys = mintDeviceKey()
     const deviceId = deviceIdFor(keys.publicKeyJwk)
-    // The name is unknown until the registry answers: `landSession` reads it
-    // from the body. A sign-in that begins forgets the one before it.
-    this.signingIn = { username: '', deviceId, name: this.deviceName, keys }
-    return { id: deviceId, kind: 'desktop', name: this.deviceName, jwk: keys.publicKeyJwk }
+    return {
+      device: { id: deviceId, kind: 'desktop', name: this.deviceName, jwk: keys.publicKeyJwk },
+      minted: { deviceId, name: this.deviceName, keys },
+    }
+  }
+
+  /** A provider is lost: a rescue code proves linking a new one. */
+  providerRescueProof(id: ProviderId, code: string): Promise<AccountResult<string>> {
+    return this.provider.rescueProof(id, code)
   }
 
   private async authedPost(
@@ -533,11 +553,16 @@ export class Accounts {
     return { ok: true, value: { status: sent.response.status, body: read } }
   }
 
-  /** Which provider this account proves itself with. Paused still counts. */
+  /**
+   * Which provider this account proves itself with: the newest working link,
+   * since an older one may be the provider a rescue code was spent to replace.
+   * A paused link still answers, because the pause is about signing in.
+   */
   private async firstLink(): Promise<AccountResult<ProviderId>> {
     const profile = await this.profile()
     if (!profile.ok) return profile
-    const link = profile.value.links?.[0]
+    const links = [...(profile.value.links ?? [])].reverse()
+    const link = links.find((held) => !held.paused) ?? links[0]
     return link === undefined ? { ok: false, reason: 'provider_required' } : { ok: true, value: link.provider }
   }
 
@@ -616,6 +641,9 @@ export class Accounts {
   async signOutWithProvider(): Promise<AccountResult<void>> {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
+    // Before the browser: there is no point proving anything for a refusal.
+    const devices = await this.devices()
+    if (devices.ok && devices.value.length <= 1) return { ok: false, reason: 'last_device' }
     const proven = await this.provider.prove('revoke-device')
     if (!proven.ok) return proven
     const removed = await this.revokeDevice(account.deviceId, { stepUp: proven.value })
@@ -769,6 +797,7 @@ export class Accounts {
     if (problem === 'shape') return { ok: false, reason: 'bad_username' }
     if (input.password.length < MIN_PASSWORD) return { ok: false, reason: 'weak_password' }
 
+    this.provider.reset()
     const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
     const deviceId = deviceIdFor(publicKeyJwk)
     const name = input.name?.trim() || this.deviceName
@@ -862,6 +891,7 @@ export class Accounts {
     // A sign-in that begins forgets the one before it: two ladders on one
     // Mac would be two keys, and only one of them could ever be the file.
     this.signingIn = null
+    this.provider.reset()
     let response: Response
     try {
       response = await this.http(`${this.origin}/v2/sessions`, {
@@ -949,6 +979,7 @@ export class Accounts {
     const code = input.code.trim()
     if (code.length === 0) return { ok: false, reason: 'bad_credentials' }
 
+    this.provider.reset()
     const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
     const deviceId = deviceIdFor(publicKeyJwk)
     const name = input.name?.trim() || this.deviceName
@@ -996,11 +1027,11 @@ export class Accounts {
    * turns into `cookrew://join#<code>`.
    */
   async mintJoinCode(
-    proof: string | { stepUp: string },
+    proof: StepUpProof,
   ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
     const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
       method: 'POST',
-      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
+      body: JSON.stringify(proofBody(proof)),
     })
     if (!result.ok) return result
     const { code, expiresAt } = result.value
@@ -1081,6 +1112,7 @@ export class Accounts {
     if (legacy === null) return { ok: false, reason: 'no_account' }
     if (input.password.length < MIN_PASSWORD) return { ok: false, reason: 'weak_password' }
 
+    this.provider.reset()
     const { privateKeyJwk, publicKeyJwk } = mintDeviceKey()
     const deviceId = deviceIdFor(publicKeyJwk)
     const name = input.name?.trim() || this.deviceName
@@ -1308,6 +1340,11 @@ export class Accounts {
       if (!minted) return { ok: false, reason: 'no_account' }
       if (session === null) return { ok: false, reason: 'unknown' }
       this.signingIn = null
+      // The registry attached one key; a file holding another is a Mac that can
+      // never prove it is the device on the account.
+      if (typeof body.deviceId === 'string' && body.deviceId !== minted.deviceId) {
+        return { ok: false, reason: 'wrong_identity' }
+      }
       this.saveClaimed({
         username: typeof body.username === 'string' ? body.username : minted.username,
         deviceId: typeof body.deviceId === 'string' ? body.deviceId : minted.deviceId,
@@ -1321,6 +1358,13 @@ export class Accounts {
       return { ok: true, value: session }
     }
     if (session === null) return { ok: false, reason: 'unknown' }
+    // A SESSION FOR ANOTHER ACCOUNT IS NOT THIS FILE'S. A device revoked here can
+    // be attached elsewhere, and writing that token in would be one account's
+    // session under another's name.
+    const named = typeof body.username === 'string' && body.username !== account.username
+    if (named || (typeof body.deviceId === 'string' && body.deviceId !== account.deviceId)) {
+      return { ok: false, reason: 'wrong_identity' }
+    }
     // A PASSCODE IS NOT THE PASSWORD. It stays what the owner chose, whatever
     // proved this session; only a password Mac re-derives from a password.
     const keep = typed === null || account.unlockBy === 'passcode'
@@ -1538,10 +1582,10 @@ export class Accounts {
    * asks now (V3-FIX-C1 · H4), and it is the same password the sheet has
    * already collected, so nothing new is asked of the person.
    */
-  revokeDevice(id: string, proof: string | { stepUp: string }): Promise<AccountResult<void>> {
+  revokeDevice(id: string, proof: StepUpProof): Promise<AccountResult<void>> {
     return this.authed<void>(`/v2/me/devices/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
+      body: JSON.stringify(proofBody(proof)),
       parse: false,
     })
   }
@@ -1628,6 +1672,7 @@ export class Accounts {
     this.cached = null
     this.signingIn = null
     this.freshCodes = null
+    this.provider.reset()
     try {
       this.changed?.()
     } catch (error) {

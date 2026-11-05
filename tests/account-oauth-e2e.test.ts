@@ -17,6 +17,9 @@ import { IdleLock } from '../src/main/lock'
 import { Requests } from '../src/main/requests'
 import { Factors } from '../src/main/factors'
 import { parseOAuthReturn } from '../src/main/account-oauth'
+import { listenForReturn } from '../src/main/oauth-loopback'
+import type { DoorSeats, ServedTeamRef } from '../src/main/door-seats'
+import { connect } from 'node:net'
 import { fakeOAuth, loopbackOnly, walkBrowser, returnOf, type FakeOAuth } from './support/fake-oauth'
 
 /**
@@ -601,5 +604,284 @@ describe('the "not me" alarm from the desktop, on a passwordless account', () =>
     if (!profile.ok) throw new Error('no profile')
     expect(profile.value.links).toMatchObject([{ provider: 'github', paused: true }])
     expect(v2.factors.store.mustChangePassword('octo')).toBe(false)
+  })
+})
+
+describe('review: the trip', () => {
+  beforeEach(() => boot(true))
+
+  /** A Mac whose browser opens and then does nothing, like a person reading. */
+  function idle(over: { fetch?: FetchLike } = {}): { app: Accounts; opened: string[] } {
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    homes.push(home)
+    const opened: string[] = []
+    const app = new Accounts({
+      base: home,
+      origin,
+      ...(over.fetch ? { fetch: over.fetch } : {}),
+      openBrowser: (url) => {
+        opened.push(url)
+      }
+    })
+    return { app, opened }
+  }
+
+  it('a malformed loopback request is answered, and never throws in main', async () => {
+    const listener = await listenForReturn(() => true)
+    if (listener === null) throw new Error('no port')
+    const answer = await new Promise<string>((resolve, reject) => {
+      const socket = connect(listener.port, '127.0.0.1', () => {
+        socket.write(`GET // HTTP/1.1\r\nHost: 127.0.0.1:${listener.port}\r\nConnection: close\r\n\r\n`)
+      })
+      let read = ''
+      socket.on('data', (chunk) => {
+        read += chunk.toString()
+      })
+      socket.on('end', () => resolve(read))
+      socket.on('error', reject)
+    })
+    listener.close()
+    expect(answer).toContain('400')
+  })
+
+  it('cancelling before the browser opens means it never opens', async () => {
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { app, opened } = idle({
+      fetch: async (input, init) => {
+        if (String(input).endsWith('/start')) await held
+        return fetch(input, init)
+      }
+    })
+    const waiting = app.providerSignIn('github')
+    await vi.waitFor(() => expect(app.providerCancel()).toBe(true))
+    release()
+    expect(await waiting).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(opened).toEqual([])
+  })
+
+  it('a second trip ends the first, which answers instead of hanging', async () => {
+    const { app, opened } = idle()
+    const first = app.providerSignIn('github')
+    await vi.waitFor(() => expect(opened).toHaveLength(1))
+    const second = app.providerSignIn('google')
+    expect(await first).toMatchObject({ ok: false, reason: 'cancelled' })
+    await vi.waitFor(() => expect(opened).toHaveLength(2))
+    expect(app.providerCancel()).toBe(true)
+    expect(await second).toMatchObject({ ok: false, reason: 'cancelled' })
+  })
+
+  it('a password sign-in ends a trip, so two keys cannot race for one file', async () => {
+    const owner = mac('Owner')
+    await owner.app.claim({ username: 'alice', password: PASSWORD })
+    const { app, opened } = idle()
+    const trip = app.providerSignIn('github')
+    await vi.waitFor(() => expect(opened).toHaveLength(1))
+    await app.signIn({ username: 'alice', password: 'wrong wrong wrong' })
+    expect(await trip).toMatchObject({ ok: false, reason: 'cancelled' })
+  })
+
+  it('a name answered another way spends the waiting claim', async () => {
+    const m = mac()
+    expect(await m.app.providerSignIn('github')).toMatchObject({ reason: 'new_identity' })
+    expect((await m.app.claim({ username: 'alice', password: PASSWORD })).ok).toBe(true)
+    expect(await m.app.providerClaim('other')).toMatchObject({ ok: false, reason: 'expired' })
+    expect(loadAccount(m.home)?.username).toBe('alice')
+  })
+
+  it('a device-flow cancel during a poll lands nothing', async () => {
+    let cancel: () => void = () => undefined
+    const m = mac('Headless', {
+      fetch: async (input, init) => {
+        const answer = await fetch(input, init)
+        if (String(input).endsWith('/poll')) cancel()
+        return answer
+      }
+    })
+    cancel = () => m.app.providerCancel()
+    fake.device.answer = 'ok'
+    const asked = await m.app.providerDeviceSignIn('github', { onCode: () => undefined })
+    expect(asked).toMatchObject({ ok: false, reason: 'cancelled' })
+  })
+})
+
+describe('review: landing', () => {
+  beforeEach(() => boot(true))
+
+  it('a session for another account never lands in this account file', async () => {
+    const answer = (input: string, init?: RequestInit): Promise<Response> =>
+      input.endsWith('/v2/oauth/redeem')
+        ? Promise.resolve(Response.json({ token: 't', exp: Date.now() + 60_000, deviceId: 'x', username: 'someone-else' }, { status: 201 }))
+        : fetch(input, init)
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    const m = mac('First', { home })
+    await joinByGithub(m)
+    const before = loadAccount(home)
+    const hijacked = mac('First', { home, fetch: answer })
+    expect(await hijacked.app.providerSignIn('github')).toMatchObject({ ok: false, reason: 'wrong_identity' })
+    expect(loadAccount(home)).toEqual(before)
+  })
+
+  it('a landing whose device is not the key held here writes no file', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    const answer = (input: string, init?: RequestInit): Promise<Response> =>
+      input.endsWith('/v2/oauth/redeem')
+        ? Promise.resolve(Response.json({ token: 't', exp: Date.now() + 60_000, deviceId: 'not-this-key', username: 'octo' }, { status: 201 }))
+        : fetch(input, init)
+    const m = mac('Fresh', { home, fetch: answer })
+    expect(await m.app.providerSignIn('github')).toMatchObject({ ok: false, reason: 'wrong_identity' })
+    expect(existsSync(accountFilePath(home))).toBe(false)
+  })
+})
+
+describe('review: the lock during a trip', () => {
+  beforeEach(() => boot(true))
+
+  function lockedDeps(m: Mac, onLocked?: () => void): AccountIpcDeps {
+    return {
+      accounts: m.app,
+      lock: new IdleLock({
+        lockAfterMs: 60_000,
+        verify: (typed) => m.app.verifyUnlock(typed),
+        onChange: (locked) => {
+          if (locked) onLocked?.()
+        }
+      }),
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    }
+  }
+
+  /** A Mac whose browser locks the app before it answers. */
+  function lockingMac(lock: () => void): Mac {
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    homes.push(home)
+    const opened: string[] = []
+    const app: Accounts = new Accounts({
+      base: home,
+      origin,
+      deviceName: 'Locking',
+      openBrowser: async (url) => {
+        opened.push(url)
+        lock()
+        const back = returnOf((await walkBrowser(url)).page)
+        app.oauthReturn(`cookrew://oauth#handoff=${back.handoff ?? ''}&state=${back.state ?? ''}`)
+      }
+    })
+    return { app, home, opened }
+  }
+
+  it('an act whose proof finished behind the lock does not happen', async () => {
+    let armed = false
+    let deps: AccountIpcDeps | null = null
+    const m = lockingMac(() => {
+      if (armed) deps?.lock.lock()
+    })
+    await joinByGithub(m)
+    m.app.setPasscode(PASSCODE)
+    deps = lockedDeps(m)
+    armed = true
+    expect(await accountHandlers(deps)['account:joinCode']('')).toMatchObject({ ok: false, reason: 'locked' })
+  })
+
+  it('locking cancels a link in flight, as index.ts wires it', async () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/main/index.ts'), 'utf8')
+    expect(source).toMatch(/if \(locked\) accounts\.providerCancel\(\)/)
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    homes.push(home)
+    let deps: AccountIpcDeps | null = null
+    const m: Mac = { home, opened: [], app: new Accounts({ base: home, origin, openBrowser: () => deps?.lock.lock() }) }
+    await m.app.claim({ username: 'alice', password: PASSWORD })
+    deps = lockedDeps(m, () => m.app.providerCancel())
+    const answer = await accountHandlers(deps)['account:oauthLink']({ provider: 'github', current: PASSWORD })
+    expect(answer).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(v2.links.ownerOf('github', '583231')).toBeNull()
+  })
+
+  it('every provider act refuses behind the lock, the alarm and sign-out included', async () => {
+    const m = mac()
+    await joinByGithub(m)
+    m.app.setPasscode(PASSCODE)
+    const deps = lockedDeps(m)
+    deps.lock.lock()
+    const handlers = accountHandlers(deps)
+    expect(await handlers['account:signOut']('')).toMatchObject({ ok: false, reason: 'locked' })
+    expect(await handlers['account:decideRequest']({ id: 'x', action: 'not-me' })).toMatchObject({ ok: false, reason: 'locked' })
+    expect(m.opened).toHaveLength(1)
+  })
+
+  it('a paused try at the passcode says it is paused', async () => {
+    const m = mac()
+    await joinByGithub(m)
+    m.app.setPasscode(PASSCODE)
+    const handlers = accountHandlers(lockedDeps(m))
+    let last: unknown = null
+    for (let i = 0; i < 6; i += 1) last = await handlers['account:setPasscode']({ next: '111111', current: 'nope-nope' })
+    expect(last).toMatchObject({ ok: false, reason: 'rate_limited' })
+  })
+})
+
+describe('review: acts that were left out', () => {
+  beforeEach(() => boot(true))
+
+  it('ending a seat on a passwordless account carries a provider proof', async () => {
+    const m = mac()
+    await joinByGithub(m)
+    const ended: unknown[] = []
+    const door = { end: (_team: string, _id: string, proof?: unknown) => {
+      ended.push(proof)
+      return Promise.resolve({ ok: true, value: undefined })
+    } } as unknown as DoorSeats
+    const handlers = accountHandlers({
+      accounts: m.app,
+      lock: new IdleLock({ lockAfterMs: 0, verify: () => false }),
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false }),
+      seats: { door, origin, serving: () => [{ serviceId: 's', slug: 'alpha', team: '@octo/alpha', title: 'Alpha' } as ServedTeamRef] }
+    })
+    expect(await handlers['account:endSeat']({ slug: 'alpha', id: 'seat-1' })).toMatchObject({ ok: true })
+    expect(ended).toMatchObject([{ stepUp: expect.any(String) }])
+  })
+
+  it('a last device is told so before any browser opens', async () => {
+    const m = mac()
+    await joinByGithub(m)
+    const before = m.opened.length
+    expect(await m.app.signOutWithProvider()).toMatchObject({ ok: false, reason: 'last_device' })
+    expect(m.opened).toHaveLength(before)
+  })
+})
+
+describe('review: the provider is lost', () => {
+  beforeEach(() => boot(true))
+
+  it('a rescue code links a new provider, and the new one then proves everything', async () => {
+    const m = mac()
+    await joinByGithub(m)
+    const codes = await m.app.recoveryCodes()
+    if (!codes.ok) throw new Error('no codes')
+    const lock = new IdleLock({ lockAfterMs: 0, verify: () => false })
+    const handlers = accountHandlers({
+      accounts: m.app,
+      lock,
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    })
+    expect(await handlers['account:oauthLink']({ provider: 'google', rescue: 'NOT-A-CODE' })).toMatchObject({ ok: false, reason: 'bad_recovery' })
+    expect(await handlers['account:oauthLink']({ provider: 'google', rescue: codes.value[0] })).toMatchObject({ ok: true })
+    // GitHub is gone for good: from here the newest link is what answers.
+    fake.github = { id: 999, login: 'not-me-any-more', emails: [] }
+    expect(await handlers['account:joinCode']('')).toMatchObject({ ok: true })
   })
 })

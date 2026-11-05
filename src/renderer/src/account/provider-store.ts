@@ -21,6 +21,9 @@ export const PROVIDER_COPY = {
   PASSCODE_TITLE: 'Choose a passcode',
   PASSCODE_LOCAL: 'It unlocks Cookrew on this Mac and never leaves it. Your agents keep working while it is locked.',
   PASSCODE_LATER: 'Until you choose one, Cookrew will not lock itself on this Mac.',
+  PASSCODE_CODES: 'Save your recovery codes next. They are the way back if you forget this.',
+  LOST_PROVIDER: 'Lost access to your provider?',
+  LOST_PROVIDER_WHY: 'A recovery code stands in for it while you link a new one.',
   FORGOT_PASSCODE: 'Forgot your passcode?',
   RESCUE_WHY: 'A recovery code opens this Mac once. You will choose a new passcode straight after.',
   LOCK_NOW_WHY: 'Locking hides your canvas behind your passcode. Your agents keep working.',
@@ -73,6 +76,30 @@ export function passcodeView(next: string, confirm: string): { canGo: boolean; n
   if (next.length < MIN_PASSCODE) return { canGo: false, note: `Use ${MIN_PASSCODE} characters or more.` }
   if (next !== confirm) return { canGo: false, note: 'Type the same passcode twice.' }
   return { canGo: true, note: '' }
+}
+
+/**
+ * WHO OWNS A BROWSER TRIP: the surface that started it.
+ *
+ * A sheet that closes mid-trip must take the trip with it, or the browser
+ * finishes into a surface that is gone and an act the person dismissed still
+ * happens. `leave` is the only thing that cancels, and only a running trip.
+ */
+export function tripGuard(cancel: () => void): { begin: () => void; end: () => void; leave: () => void } {
+  let running = false
+  return {
+    begin: () => {
+      running = true
+    },
+    end: () => {
+      running = false
+    },
+    leave: () => {
+      if (!running) return
+      running = false
+      cancel()
+    },
+  }
 }
 
 /** Is it time to ask? `later` is this run's answer, and a relaunch asks again. */

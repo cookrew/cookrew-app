@@ -232,7 +232,7 @@ const api = {
   accountOAuthStart: (provider: string) => ipcRenderer.invoke('account:oauthStart', provider),
   accountOAuthCancel: () => ipcRenderer.invoke('account:oauthCancel'),
   accountOAuthClaim: (username: string) => ipcRenderer.invoke('account:oauthClaim', username),
-  accountOAuthLink: (input: { provider: string; current?: string }) =>
+  accountOAuthLink: (input: { provider: string; current?: string; rescue?: string }) =>
     ipcRenderer.invoke('account:oauthLink', input),
   accountOAuthUnlink: (input: { provider: string; current?: string }) =>
     ipcRenderer.invoke('account:oauthUnlink', input),

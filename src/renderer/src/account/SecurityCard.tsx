@@ -348,15 +348,18 @@ export function SecurityCard({
             </select>
           }
         />
-        <Row
-          kind="LOCK"
-          label={machineCopy('Lock this Mac now', hostPlatform())}
-          action={
-            <button className="gs-ghost" onClick={onLockNow}>
-              LOCK NOW
-            </button>
-          }
-        />
+        {/* Nothing could open it yet, so a button here would do nothing. */}
+        {status?.passcodePending !== true && (
+          <Row
+            kind="LOCK"
+            label={machineCopy('Lock this Mac now', hostPlatform())}
+            action={
+              <button className="gs-ghost" onClick={onLockNow}>
+                LOCK NOW
+              </button>
+            }
+          />
+        )}
       </ul>
       {(error ?? problem) && (
         <p className="gs-paste-error" role="alert">

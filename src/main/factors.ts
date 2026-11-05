@@ -1,3 +1,4 @@
+import { proofBody, type StepUpProof } from '../shared/step-up'
 import type { AccountResult } from '../shared/account-v2'
 import {
   APPROVAL_COPY,
@@ -154,11 +155,11 @@ export class Factors {
    * Take the authenticator off — with the password, which the registry gates
    * this on. A DELETE with a body is unusual and it is the contract.
    */
-  removeTotp(proof: string | { stepUp: string }): Promise<AccountResult<void>> {
+  removeTotp(proof: StepUpProof): Promise<AccountResult<void>> {
     if (proof === '') return Promise.resolve(needsPassword())
     return this.accounts.call<void>('/v2/me/totp', {
       method: 'DELETE',
-      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
+      body: JSON.stringify(proofBody(proof)),
       parse: false,
     })
   }
@@ -194,12 +195,12 @@ export class Factors {
     })
   }
 
-  removePasskey(id: string, proof: string | { stepUp: string }): Promise<AccountResult<void>> {
+  removePasskey(id: string, proof: StepUpProof): Promise<AccountResult<void>> {
     if (id.length === 0) return Promise.resolve({ ok: false, reason: 'unknown' })
     if (proof === '') return Promise.resolve(needsPassword())
     return this.accounts.call<void>(`/v2/me/passkeys/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
+      body: JSON.stringify(proofBody(proof)),
       parse: false,
     })
   }

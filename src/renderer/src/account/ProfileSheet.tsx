@@ -23,6 +23,7 @@ import { PairPhoneSheet } from './PairPhoneSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { PROVIDER_COPY } from './provider-store'
+import { useTripGuard } from './ProviderButtons'
 import { SeatsTab } from './SeatsTab'
 import { securityActions } from './security-actions'
 import '../grant-surface.css'
@@ -191,6 +192,11 @@ export function ProfileSheet({
 
   /** A passwordless account has no field to fill: the provider is asked in main. */
   const proofReady = status.passwordless || stepUp.length > 0
+  const trip = useTripGuard()
+  useEffect(() => {
+    if (acting && status.passwordless) trip.begin()
+    else trip.end()
+  }, [acting, status.passwordless, trip])
 
   /**
    * ADD A MAC / ADD A PHONE (D12) — the code is minted under step-up.
@@ -377,6 +383,16 @@ export function ProfileSheet({
           <p className="gs-paste-error" role="alert">
             {error}
           </p>
+        )}
+
+        {/* The act is waiting on a browser, so the way out belongs on screen. */}
+        {acting && status.passwordless && (
+          <div className="cr-acct-providers" role="status">
+            <p className="gs-hint">{PROVIDER_COPY.WAITING}</p>
+            <button className="gs-ghost" onClick={() => trip.leave()}>
+              CANCEL
+            </button>
+          </div>
         )}
 
         {tab === 'PROFILE' && (

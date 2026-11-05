@@ -20,7 +20,9 @@ import {
   passcodeView,
   providerRefusal,
   shouldAskPasscode,
+  tripGuard,
 } from '../src/renderer/src/account/provider-store'
+import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
 
 const GITHUB = { id: 'github', label: 'GitHub', device: true } as const
 const GOOGLE = { id: 'google', label: 'Google', device: false } as const
@@ -205,6 +207,58 @@ describe('the security rows', () => {
 
   it('a password Mac gets no passcode row', () => {
     expect(rows({ status: status({ locked: false, passwordless: false, unlockBy: 'password' }) })).not.toContain('passcode')
+  })
+})
+
+describe('review: a trip belongs to the surface that started it', () => {
+  it('leaving cancels a trip in flight, once, and an ended trip is left alone', () => {
+    const cancels: number[] = []
+    const guard = tripGuard(() => cancels.push(1))
+    guard.leave()
+    expect(cancels).toHaveLength(0)
+    guard.begin()
+    guard.end()
+    guard.leave()
+    expect(cancels).toHaveLength(0)
+    guard.begin()
+    guard.leave()
+    guard.leave()
+    expect(cancels).toHaveLength(1)
+  })
+})
+
+describe('review: a passcode put off', () => {
+  const pending = status({ locked: false, passcodePending: true })
+
+  it('can still be chosen from the security rows', () => {
+    const html = renderToStaticMarkup(
+      <ul>
+        <LinkRows offers={[]} links={[]} email={null} status={pending} onStatus={() => undefined} onChanged={() => undefined} />
+      </ul>,
+    )
+    expect(html).toContain('CHOOSE')
+  })
+
+  it('warns that the recovery codes are the way back from a forgotten one', () => {
+    const html = renderToStaticMarkup(<PasscodeCard status={pending} onDone={() => undefined} onLater={() => undefined} />)
+    expect(html).toContain(PROVIDER_COPY.PASSCODE_CODES)
+  })
+
+  it('LOCK NOW is not offered while there is nothing to unlock with', () => {
+    const card = (over: Partial<AccountStatus>): string =>
+      renderToStaticMarkup(
+        <SecurityCard
+          username="octo"
+          lockAfterMs={900_000}
+          recoveryCodesSavedAt={null}
+          status={status({ locked: false, ...over })}
+          onLockAfterMs={() => undefined}
+          onLockNow={() => undefined}
+          onCodesSaved={() => undefined}
+        />,
+      )
+    expect(card({ passcodePending: true })).not.toContain('LOCK NOW')
+    expect(card({ passcodePending: false })).toContain('LOCK NOW')
   })
 })
 

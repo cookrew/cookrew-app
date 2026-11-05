@@ -3,11 +3,14 @@ import type { AccountStatus } from '../../../shared/account-v2'
 import { PROVIDER_LABEL, type LinkedProvider, type ProviderId, type ProviderOffer, type VerifiedEmail } from '../../../shared/oauth'
 import { cookrew } from '../api'
 import { Row } from './FactorRows'
-import { useProviders } from './ProviderButtons'
-import { passcodeView, providerRefusal } from './provider-store'
+import { useProviders, useTripGuard } from './ProviderButtons'
+import { PROVIDER_COPY, passcodeView, providerRefusal } from './provider-store'
 
-/** A link or an unlink, waiting for the password an account with one must type. */
-type Asking = { provider: ProviderId; verb: 'link' | 'unlink' }
+/**
+ * A link or an unlink, waiting for what must be typed: the password, or a rescue
+ * code when a passwordless owner has lost the provider that would prove it.
+ */
+type Asking = { provider: ProviderId; verb: 'link' | 'unlink'; rescue?: boolean }
 
 /**
  * THE SECURITY CARD'S NEW ROWS: providers, the verified email, the passcode.
@@ -37,14 +40,20 @@ export function LinkRows({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [passcode, setPasscode] = useState<{ current: string; next: string; confirm: string } | null>(null)
+  /** A browser trip is in flight, so the way out has to be on screen. */
+  const [tripping, setTripping] = useState(false)
+  const trip = useTripGuard()
 
   const run = (target: Asking, typed: string): void => {
     const api = cookrew()
     const call = target.verb === 'link' ? api.accountOAuthLink : api.accountOAuthUnlink
     if (!call || busy) return
     setBusy(true)
+    setTripping(true)
     setError(null)
-    void call({ provider: target.provider, ...(typed === '' ? {} : { current: typed }) })
+    trip.begin()
+    const proof = typed === '' ? {} : target.rescue === true ? { rescue: typed } : { current: typed }
+    void call({ provider: target.provider, ...proof })
       .then((result) => {
         setCurrent('')
         if (result.ok) {
@@ -55,7 +64,11 @@ export function LinkRows({
         }
       })
       .catch(() => setError('That did not go through. Try again.'))
-      .finally(() => setBusy(false))
+      .finally(() => {
+        trip.end()
+        setTripping(false)
+        setBusy(false)
+      })
   }
 
   /** No password to ask for means straight to the provider. */
@@ -137,16 +150,33 @@ export function LinkRows({
           }
         />
       ))}
+      {status.passwordless && offered.length > 0 && asking === null && (
+        <Row
+          kind="RESCUE"
+          label={PROVIDER_COPY.LOST_PROVIDER}
+          action={
+            <button
+              className="gs-ghost"
+              disabled={busy}
+              onClick={() => setAsking({ provider: offered[0].id, verb: 'link', rescue: true })}
+            >
+              USE A CODE
+            </button>
+          }
+        />
+      )}
       {asking !== null && (
         <li className="cr-acct-secrow cr-acct-removefactor">
           <label className="gs-label" htmlFor="cr-acct-linkpass">
-            Type your password to {asking.verb} {PROVIDER_LABEL[asking.provider]}.
+            {asking.rescue === true
+              ? `${PROVIDER_COPY.LOST_PROVIDER_WHY} Linking ${PROVIDER_LABEL[asking.provider]}.`
+              : `Type your password to ${asking.verb} ${PROVIDER_LABEL[asking.provider]}.`}
           </label>
           <input
             id="cr-acct-linkpass"
-            type="password"
+            type={asking.rescue === true ? 'text' : 'password'}
             className="gs-input"
-            autoComplete="current-password"
+            autoComplete={asking.rescue === true ? 'off' : 'current-password'}
             value={current}
             onChange={(e) => setCurrent(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && current !== '' && run(asking, current)}
@@ -154,13 +184,38 @@ export function LinkRows({
           <button className="gs-primary" disabled={busy || current === ''} onClick={() => run(asking, current)}>
             CONTINUE
           </button>
-          <button className="gs-ghost" onClick={() => setAsking(null)}>
+          <button
+            className="gs-ghost"
+            onClick={() => {
+              trip.leave()
+              setAsking(null)
+            }}
+          >
+            CANCEL
+          </button>
+        </li>
+      )}
+      {tripping && asking === null && (
+        <li className="cr-acct-secrow" role="status">
+          <p className="gs-hint">{PROVIDER_COPY.WAITING}</p>
+          <button className="gs-ghost" onClick={() => trip.leave()}>
             CANCEL
           </button>
         </li>
       )}
       {email !== null && (
         <Row kind="EMAIL" label={email.address} state={`Verified by ${PROVIDER_LABEL[email.via]}`} saved action={null} />
+      )}
+      {status.passcodePending && passcode === null && (
+        <Row
+          kind="LOCK"
+          label="Choose a passcode for this Mac"
+          action={
+            <button className="gs-ghost" onClick={() => setPasscode({ current: '', next: '', confirm: '' })}>
+              CHOOSE
+            </button>
+          }
+        />
       )}
       {status.unlockBy === 'passcode' && !status.passcodePending && (
         <Row
@@ -175,7 +230,7 @@ export function LinkRows({
       )}
       {passcode !== null && (
         <li className="cr-acct-secrow cr-acct-removefactor">
-          {(['current', 'next', 'confirm'] as const).map((field) => (
+          {(status.passcodePending ? (['next', 'confirm'] as const) : (['current', 'next', 'confirm'] as const)).map((field) => (
             <input
               key={field}
               type="password"

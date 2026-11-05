@@ -16,6 +16,15 @@ import { OAUTH_LOOPBACK_PATH } from '../shared/oauth'
  * name it rebound to 127.0.0.1.
  */
 
+/** The request's path and query, or null: a stranger's bytes must not throw here. */
+function parsed(raw: string | undefined): URL | null {
+  try {
+    return new URL(raw ?? '/', 'http://127.0.0.1')
+  } catch {
+    return null
+  }
+}
+
 export interface LoopbackListener {
   port: number
   close: () => void
@@ -37,9 +46,14 @@ export function listenForReturn(onReturn: (query: URLSearchParams) => boolean): 
   return new Promise((resolve) => {
     const server: Server = createServer((request, response) => {
       const port = (server.address() as AddressInfo | null)?.port
-      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      // THIS HANDLER MUST NOT THROW. An uncaught exception ends the app, and
+      // with it every agent, so `GET //` from anything local would be a kill.
+      const url = parsed(request.url)
       const ours =
-        request.method === 'GET' && url.pathname === OAUTH_LOOPBACK_PATH && request.headers.host === `127.0.0.1:${port}`
+        url !== null &&
+        request.method === 'GET' &&
+        url.pathname === OAUTH_LOOPBACK_PATH &&
+        request.headers.host === `127.0.0.1:${port}`
       const accepted = ours && onReturn(url.searchParams)
       response.writeHead(accepted ? 200 : 400, {
         'content-type': 'text/html; charset=utf-8',

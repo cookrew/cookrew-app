@@ -951,7 +951,7 @@ export interface CookrewApi {
   accountOAuthStart?: (provider: ProviderId) => Promise<ProviderSignInAnswer<AccountStatus>>;
   accountOAuthCancel?: () => Promise<boolean>;
   accountOAuthClaim?: (username: string) => Promise<SignInAnswer<AccountStatus>>;
-  accountOAuthLink?: (input: { provider: ProviderId; current?: string }) => Promise<AccountResult<void>>;
+  accountOAuthLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
   accountOAuthUnlink?: (input: { provider: ProviderId; current?: string }) => Promise<AccountResult<void>>;
   /** A passcode is this Mac's alone: it never goes to cookrew.dev. */
   accountSetPasscode?: (input: { next: string; current?: string }) => Promise<AccountResult<AccountStatus>>;

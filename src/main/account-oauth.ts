@@ -27,9 +27,10 @@ import { listenForReturn, type LoopbackListener } from './oauth-loopback'
  * anything. It is worth nothing until it is sent with a verifier that never
  * crossed the browser.
  *
- * ONE TRIP AT A TIME. A second press cancels the first: two browsers finishing
- * in either order is a question with no good answer, and only the last press is
- * what the person means.
+ * ONE TRIP AT A TIME. A trip is registered before anything is awaited, so a
+ * second press or a cancel always finds it. A second press ends the first: two
+ * browsers finishing in either order is a question with no good answer, and only
+ * the last press is what the person means.
  *
  * Electron-free, like the rest of the account layer: the browser and the scheme
  * check arrive through the port, so a headless caller can use all of this.
@@ -47,18 +48,25 @@ export interface DeviceCode {
   expiresAt: number
 }
 
+/** The key a sign-in minted, carried with it so nothing else can swap it. */
+export interface MintedDevice {
+  deviceId: string
+  name: string
+  keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
+}
+
 export interface ProviderPort {
   http: (input: string, init?: RequestInit) => Promise<Response>
   origin: string
   now: () => number
   openBrowser: (url: string) => Promise<void> | void
   schemeHandled: () => boolean
-  /** This Mac's device, or a key minted and held for a sign-in. */
-  device: () => AccountDeviceInput
+  /** This Mac's device, or a key minted for this one sign-in. */
+  device: () => { device: AccountDeviceInput; minted: MintedDevice | null }
   hasAccount: () => boolean
-  /** A ladder opened with no password: the rungs must still find it. */
-  rememberPending: (pending: string) => void
-  land: (body: Record<string, unknown>) => SignInAnswer<AccountSession>
+  /** A ladder opened with no password: the rungs must still find it, and the key. */
+  rememberPending: (pending: string, minted: MintedDevice | null) => void
+  land: (body: Record<string, unknown>, minted: MintedDevice | null) => SignInAnswer<AccountSession>
   /** One signed-in POST, read whole. */
   authed: (path: string, body: unknown) => Promise<AccountResult<{ status: number; body: Record<string, unknown> }>>
   /** The provider this account would prove itself with. */
@@ -69,6 +77,7 @@ type Returned = { handoff: string } | { error: string } | { over: 'cancelled' | 
 
 interface Trip {
   state: string
+  settled: boolean
   settle: (returned: Returned) => void
 }
 
@@ -94,6 +103,13 @@ function readFields(fields: URLSearchParams): { handoff: string | null; error: s
   return { handoff, error, state }
 }
 
+/** How a trip ended, as a result. */
+function readReturned(returned: Returned, verifier: string): AccountResult<{ handoff: string; verifier: string }> {
+  if ('handoff' in returned) return { ok: true, value: { handoff: returned.handoff, verifier } }
+  if ('over' in returned) return { ok: false, reason: returned.over === 'timeout' ? 'expired' : 'cancelled' }
+  return { ok: false, reason: returned.error === 'denied' ? 'cancelled' : 'provider_down' }
+}
+
 const refusedOf = (status: number, body: Record<string, unknown>): { reason: AccountRefusal; message?: string } =>
   classify(status, body as { error?: string; message?: string })
 
@@ -113,7 +129,7 @@ export class ProviderAccess {
   private readonly port: ProviderPort
   private trip: Trip | null = null
   /** A proven identity waiting for a name. The ticket never crosses the bridge. */
-  private claimable: { ticket: string; device: AccountDeviceInput } | null = null
+  private claimable: { ticket: string; device: AccountDeviceInput; minted: MintedDevice | null } | null = null
   /** Set while a device-flow poll is running, so it can be ended. */
   private deviceCancelled: (() => void) | null = null
 
@@ -141,6 +157,12 @@ export class ProviderAccess {
     return running
   }
 
+  /** The account changed some other way: nothing in flight may land on it. */
+  reset(): void {
+    this.cancel()
+    this.claimable = null
+  }
+
   /** A `cookrew://oauth#…` link arrived. True when it belonged to this trip. */
   arrive(raw: string): boolean {
     const fields = parseOAuthReturn(raw)
@@ -163,15 +185,16 @@ export class ProviderAccess {
     extra: Record<string, unknown>,
     start: (path: string, body: unknown) => Promise<AccountResult<{ status: number; body: Record<string, unknown> }>>,
   ): Promise<AccountResult<{ handoff: string; verifier: string }>> {
-    this.trip?.settle({ over: 'cancelled' })
     const verifier = randomBytes(32).toString('base64url')
     const state = randomBytes(32).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
-    const listener: LoopbackListener | null = await listenForReturn((query) => {
-      const fields = readFields(query)
-      return fields !== null && this.accept(fields)
-    })
+    const { trip, returned } = this.begin(state)
+    let listener: LoopbackListener | null = null
     try {
+      listener = await listenForReturn((query) => {
+        const fields = readFields(query)
+        return fields !== null && this.accept(fields)
+      })
       const handled = this.port.schemeHandled()
       const started = await start(`/v2/oauth/${provider}/start`, {
         intent,
@@ -180,39 +203,47 @@ export class ProviderAccess {
         back: { scheme: handled || listener === null, ...(listener === null ? {} : { port: listener.port }) },
         ...extra,
       })
+      // Ended while the registry was being asked: the browser never opens.
+      if (trip.settled) return readReturned(await returned, verifier)
       if (!started.ok) return started
       if (started.value.status !== 201) {
         return { ok: false, ...refusedOf(started.value.status, started.value.body) }
       }
       const url = started.value.body.authorizeUrl
       if (!safeToOpen(url)) return { ok: false, reason: 'unknown' }
-      const returned = await this.waitForReturn(state, url)
-      if ('handoff' in returned) return { ok: true, value: { handoff: returned.handoff, verifier } }
-      if ('over' in returned) return { ok: false, reason: returned.over === 'timeout' ? 'expired' : 'cancelled' }
-      return { ok: false, reason: returned.error === 'denied' ? 'cancelled' : 'provider_down' }
+      Promise.resolve()
+        .then(() => this.port.openBrowser(url))
+        .catch(() => trip.settle({ error: 'provider' }))
+      return readReturned(await returned, verifier)
     } finally {
+      // Every way out ends the trip; settling twice is nothing.
+      trip.settle({ over: 'cancelled' })
       listener?.close()
     }
   }
 
-  private waitForReturn(state: string, url: string): Promise<Returned> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => this.trip?.settle({ over: 'timeout' }), TRIP_WAIT_MS)
-      timer.unref()
-      const trip: Trip = {
+  /** Registered at once, ending the one before. Its timer can only end itself. */
+  private begin(state: string): { trip: Trip; returned: Promise<Returned> } {
+    this.trip?.settle({ over: 'cancelled' })
+    let trip: Trip | null = null
+    const returned = new Promise<Returned>((resolve) => {
+      const held: Trip = {
         state,
-        settle: (returned) => {
+        settled: false,
+        settle: (answer) => {
+          if (held.settled) return
+          held.settled = true
           clearTimeout(timer)
-          if (this.trip === trip) this.trip = null
-          resolve(returned)
+          if (this.trip === held) this.trip = null
+          resolve(answer)
         },
       }
-      // Registered before the browser opens: the return can beat the await.
-      this.trip = trip
-      Promise.resolve()
-        .then(() => this.port.openBrowser(url))
-        .catch(() => trip.settle({ error: 'provider' }))
+      const timer = setTimeout(() => held.settle({ over: 'timeout' }), TRIP_WAIT_MS)
+      timer.unref()
+      trip = held
     })
+    this.trip = trip
+    return { trip: trip as unknown as Trip, returned }
   }
 
   private post = async (
@@ -233,25 +264,25 @@ export class ProviderAccess {
 
   /** The password step's replacement, for a Mac with or without an account. */
   async signIn(provider: ProviderId): Promise<ProviderSignInAnswer<AccountSession>> {
-    const device = this.port.device()
+    const held = this.port.device()
     const back = await this.travel(provider, 'sign-in', {}, this.post)
     if (!back.ok) return plainRefusal(back)
-    const redeemed = await this.post('/v2/oauth/redeem', { ...back.value, device })
-    return redeemed.ok ? this.read(redeemed.value, device) : plainRefusal(redeemed)
+    const redeemed = await this.post('/v2/oauth/redeem', { ...back.value, device: held.device })
+    return redeemed.ok ? this.read(redeemed.value, held) : plainRefusal(redeemed)
   }
 
   /** A sign-in's answer, however the proof was reached. */
   private read(
     answer: { status: number; body: Record<string, unknown> },
-    device: AccountDeviceInput,
+    held: { device: AccountDeviceInput; minted: MintedDevice | null },
   ): ProviderSignInAnswer<AccountSession> {
     const { status, body } = answer
-    if (status === 201) return this.port.land(body)
+    if (status === 201) return this.port.land(body, held.minted)
     if (status === 200 && body.status === 'new' && typeof body.ticket === 'string') {
       // This Mac already belongs to an account, and this identity is not on it.
       // Offering a claim here would make a second account on a Mac with one.
       if (this.port.hasAccount()) return { ok: false, reason: 'wrong_identity' }
-      this.claimable = { ticket: body.ticket, device }
+      this.claimable = { ticket: body.ticket, ...held }
       return {
         ok: false,
         reason: 'new_identity',
@@ -264,7 +295,7 @@ export class ProviderAccess {
     if (status === 401 && body.error === 'second_factor') {
       const step = stepFrom(body)
       if (step !== null) {
-        this.port.rememberPending(step.pending)
+        this.port.rememberPending(step.pending, held.minted)
         return {
           ok: false,
           reason: 'second_factor',
@@ -288,7 +319,7 @@ export class ProviderAccess {
     if (!made.ok) return plainRefusal(made)
     if (made.value.status === 201) {
       this.claimable = null
-      return this.port.land(made.value.body)
+      return this.port.land(made.value.body, held.minted)
     }
     if (made.value.status === 410) this.claimable = null
     return plainRefusal(refusedOf(made.value.status, made.value.body))
@@ -319,6 +350,35 @@ export class ProviderAccess {
   }
 
   /**
+   * THE PROVIDER IS LOST: A RESCUE CODE PROVES THE LINK OF A NEW ONE.
+   *
+   * With no password and no provider, nothing else can step up, and nothing
+   * behind a step-up (revoking a device, a join code) can ever happen again.
+   * The registry already offers the recovery rung on this gate: asked with no
+   * proof it opens a pending, and spending a code authorises that one act.
+   */
+  async rescueProof(provider: ProviderId, code: string): Promise<AccountResult<string>> {
+    const challenge = createHash('sha256').update(randomBytes(32)).digest('base64url')
+    const state = randomBytes(32).toString('base64url')
+    const asked = await this.port.authed(`/v2/oauth/${provider}/start`, {
+      intent: 'link',
+      state,
+      challenge,
+      back: { scheme: true },
+    })
+    if (!asked.ok) return asked
+    const { pending } = asked.value.body
+    if (asked.value.body.error !== 'step_up' || typeof pending !== 'string') {
+      return { ok: false, ...refusedOf(asked.value.status, asked.value.body) }
+    }
+    const spent = await this.port.authed(`/v2/sessions/${encodeURIComponent(pending)}/recovery`, { code })
+    if (!spent.ok) return spent
+    return spent.value.status === 204
+      ? { ok: true, value: pending }
+      : { ok: false, ...refusedOf(spent.value.status, spent.value.body) }
+  }
+
+  /**
    * THE DEVICE FLOW, for a machine with no browser.
    *
    * The seam `cookrew login --github` calls. The device code stays in the
@@ -341,7 +401,7 @@ export class ProviderAccess {
       expiresAt: number
     }
     options.onCode({ userCode, verificationUri, expiresAt })
-    const device = this.port.device()
+    const held = this.port.device()
     let cancelled = false
     let wake: (() => void) | null = null
     this.deviceCancelled = () => {
@@ -352,11 +412,16 @@ export class ProviderAccess {
       for (;;) {
         if (cancelled) return { ok: false, reason: 'cancelled' }
         if (this.port.now() >= expiresAt) return { ok: false, reason: 'expired' }
-        const polled = await this.post(`/v2/oauth/device/${encodeURIComponent(flow)}/poll`, { verifier, device })
+        const polled = await this.post(`/v2/oauth/device/${encodeURIComponent(flow)}/poll`, {
+          verifier,
+          device: held.device,
+        })
+        // Cancelled while the poll was out: its answer must not land.
+        if (cancelled) return { ok: false, reason: 'cancelled' }
         if (!polled.ok) return plainRefusal(polled)
         const { status, body } = polled.value
         if (status === 410) return { ok: false, reason: body.why === 'denied' ? 'cancelled' : 'expired' }
-        if (status !== 202) return this.read(polled.value, device)
+        if (status !== 202) return this.read(polled.value, held)
         const wait = options.everyMs ?? (typeof body.intervalMs === 'number' ? body.intervalMs : intervalMs)
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, wait)

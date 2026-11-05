@@ -56,6 +56,15 @@ export const STEP_UP_ACTS: readonly StepUpAct[] = [
   'unlink-provider'
 ]
 
+/**
+ * THE BODY A PROOF TRAVELS IN: a typed password, or the id a climbed rung or a
+ * provider round trip left. One spelling, so no route's caller can drift.
+ */
+export type StepUpProof = string | { stepUp: string }
+
+export const proofBody = (proof: StepUpProof): { current: string } | { stepUp: string } =>
+  typeof proof === 'string' ? { current: proof } : proof
+
 export const isStepUpAct = (value: unknown): value is StepUpAct =>
   typeof value === 'string' && (STEP_UP_ACTS as readonly string[]).includes(value)
 

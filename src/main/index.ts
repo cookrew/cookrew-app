@@ -1272,6 +1272,8 @@ const ownerLock = new IdleLock({
   // No passcode chosen yet: nothing could open this lock, so it does not close.
   armed: () => !accounts.passcodePending(),
   onChange: (locked) => {
+    // A provider trip in flight belongs to whoever just walked away.
+    if (locked) accounts.providerCancel()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:locked', locked)
     }

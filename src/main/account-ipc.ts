@@ -566,8 +566,9 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
  * come down, and the status handed back is the one an empty avatar draws.
  */
 async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
+  if (deps.accounts.isPasswordless() && deps.lock.locked) return LOCKED
   const result =
-    deps.accounts.account()?.passwordless === true
+    deps.accounts.isPasswordless()
       ? await deps.accounts.signOutWithProvider()
       : await deps.accounts.signOutThisMac(password)
   if (!result.ok) return result
@@ -734,17 +735,24 @@ async function endSeat(deps: AccountIpcDeps, input: unknown): Promise<AccountRes
   if (!team.ok) return team
   const id = asString(fields.id).trim()
   if (id.length === 0) return { ok: false, reason: 'not_found' }
-  return wired.door.end(team.team, id)
+  const proof = await providerProof(deps, 'end-seat')
+  if (proof === null) return wired.door.end(team.team, id)
+  return proof.ok ? wired.door.end(team.team, id, { stepUp: proof.value }) : proof
 }
+
+const LOCKED = { ok: false, reason: 'locked' } as const
 
 /**
  * THE PROOF A PASSWORDLESS ACCOUNT BRINGS, or null for an account with a
  * password, whose callers carry on with what was typed.
  */
 async function providerProof(deps: AccountIpcDeps, act: StepUpAct): Promise<AccountResult<string> | null> {
-  if (deps.accounts.account()?.passwordless !== true) return null
-  if (deps.lock.locked) return { ok: false, reason: 'locked' }
-  return deps.accounts.providerProve(act)
+  if (!deps.accounts.isPasswordless()) return null
+  if (deps.lock.locked) return LOCKED
+  const proved = await deps.accounts.providerProve(act)
+  // The Mac locked during the trip: a person may have walked away, and the act
+  // must not finish behind a screen that says nothing is happening.
+  return deps.lock.locked ? LOCKED : proved
 }
 
 /** The proof a factor removal sends: what was typed, or a provider's. */
@@ -756,8 +764,6 @@ async function removalProof(
   if (proof === null) return { ok: true, value: asString(current) }
   return proof.ok ? { ok: true, value: { stepUp: proof.value } } : proof
 }
-
-const LOCKED = { ok: false, reason: 'locked' } as const
 
 /** Sign in with a provider. See `landed` for why this does not unlock. */
 async function oauthStart(deps: AccountIpcDeps, provider: unknown) {
@@ -788,6 +794,11 @@ async function oauthLink(deps: AccountIpcDeps, input: unknown): Promise<AccountR
   const fields = asRecord(input)
   if (!isProviderId(fields.provider)) return { ok: false, reason: 'not_offered' }
   if (deps.lock.locked) return LOCKED
+  // The provider that would prove this is the one that was lost.
+  if (typeof fields.rescue === 'string' && fields.rescue !== '') {
+    const spent = await deps.accounts.providerRescueProof(fields.provider, fields.rescue)
+    return spent.ok ? deps.accounts.providerLink(fields.provider, { stepUp: spent.value }) : spent
+  }
   const proof = await linkProof(deps, 'link-provider', fields.current)
   return proof.ok ? deps.accounts.providerLink(fields.provider, proof.value) : proof
 }
@@ -809,7 +820,7 @@ function setPasscode(deps: AccountIpcDeps, input: unknown): AccountResult<Accoun
   if (deps.lock.locked) return LOCKED
   if (deps.accounts.unlockMethod() === 'passcode' && !deps.accounts.passcodePending()) {
     const checked = deps.lock.unlock(asString(fields.current))
-    if (!checked.ok) return { ok: false, reason: 'bad_credentials' }
+    if (!checked.ok) return { ok: false, reason: checked.reason === 'paused' ? 'rate_limited' : 'bad_credentials' }
   }
   const set = deps.accounts.setPasscode(asString(fields.next))
   return set.ok ? { ok: true, value: accountStatus(deps) } : set
@@ -984,6 +995,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       const record = asRecord(input)
       const action = record.action
       if (!isRowAction(action)) return { ok: false, reason: 'unknown' }
+      // The alarm's proof is a provider trip here, and a provider answers for
+      // whoever is at the browser. Behind the lock that is nobody we know.
+      if (action === 'not-me' && deps.accounts.isPasswordless() && deps.lock.locked) return LOCKED
       const match = typeof record.match === 'string' ? record.match : undefined
       const result = await deps.requests.decide(asString(record.id), action, match)
       if (!result.ok) return result

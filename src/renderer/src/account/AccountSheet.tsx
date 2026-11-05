@@ -22,7 +22,7 @@ import {
 import { LegacyPane, RegisterPane, SignInPane } from './SheetPanes'
 import { ResumeLadder } from './ResumeLadder'
 import { HandleCard, type HandleAsked } from './HandleCard'
-import { ProviderButtons, useProviders } from './ProviderButtons'
+import { ProviderButtons, useProviders, useTripGuard } from './ProviderButtons'
 import { PROVIDER_COPY, providerRefusal } from './provider-store'
 import type { ProviderId } from '../../../shared/oauth'
 import '../grant-surface.css'
@@ -95,6 +95,7 @@ export function AccountSheet({
   const [ladder, setLadder] = useState<{ step: SecondFactorStep; lede: string } | null>(null)
   const field = useRef<HTMLInputElement>(null)
   const offers = useProviders()
+  const trip = useTripGuard()
   /** The provider whose browser trip is in flight. */
   const [waiting, setWaiting] = useState<ProviderId | null>(null)
   /** The provider proved somebody new: the name is the question now. */
@@ -159,7 +160,7 @@ export function AccountSheet({
   const signIn = (): void => {
     const call = cookrew().accountSignIn
     const view = signInView(fields, crossing)
-    if (!call || busy || !view.canGo) return
+    if (!call || busy || waiting !== null || !view.canGo) return
     setBusy(true)
     setError(null)
     const password = fields.password
@@ -213,7 +214,7 @@ export function AccountSheet({
       land(crossingFor({ state: 'register', username: name, refusal: { reason: 'taken' } }))
       return
     }
-    if (busy || !view.canClaim) return
+    if (busy || waiting !== null || !view.canClaim) return
     const asked = cookrew().accountClaim?.({ username: name, password: fields.password })
     if (!asked) return
     setBusy(true)
@@ -254,6 +255,7 @@ export function AccountSheet({
     if (!call || busy || waiting !== null) return
     setWaiting(provider)
     setError(null)
+    trip.begin()
     void call(provider)
       .then((result) => {
         if (result.ok) {
@@ -272,7 +274,10 @@ export function AccountSheet({
         setError(providerRefusal(result.reason, result.message))
       })
       .catch((err: unknown) => setError(problemSentence(DOING.SIGN_IN, err)))
-      .finally(() => setWaiting(null))
+      .finally(() => {
+        trip.end()
+        setWaiting(null)
+      })
   }
 
   const pane = paneFor(state)
@@ -382,7 +387,7 @@ export function AccountSheet({
               </button>
               <button
                 className="gs-primary"
-                disabled={busy || !pane.canGo(fields, crossing, legacy)}
+                disabled={busy || waiting !== null || !pane.canGo(fields, crossing, legacy)}
                 onClick={state === 'signin' ? signIn : state === 'register' ? create : migrate}
               >
                 {pane.primary(fields, crossing, legacy)}

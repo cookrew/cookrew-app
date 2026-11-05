@@ -503,6 +503,39 @@ describe('configured', () => {
     })
   })
 
+  describe('review: the last way in', () => {
+    async function twoLinks(): Promise<string> {
+      const { token } = await claimByProvider('github', 'octo')
+      const proved = await redeem(await trip('github', { intent: 'step-up', act: 'link-provider' }, token), undefined, token)
+      const t = await trip('google', { intent: 'link', stepUp: proved.body.stepUp }, token)
+      expect((await redeem(t, undefined, token)).body.status).toBe('linked')
+      return token
+    }
+
+    it('a paused link is not a way in, so the working one stays', async () => {
+      const token = await twoLinks()
+      v2.links.pause('octo', 'github', '583231')
+      const proved = await redeem(await trip('google', { intent: 'step-up', act: 'unlink-provider' }, token), undefined, token)
+      const refused = await call('DELETE', '/v2/me/links/google', { stepUp: proved.body.stepUp }, token)
+      expect(refused.status).toBe(409)
+      expect(refused.body.error).toBe('last_sign_in')
+    })
+
+    it('a passkey does not stand in for the last link: the desktop could prove nothing after it', async () => {
+      const { token } = await claimByProvider('github', 'octo')
+      const account = v2.accounts.get('octo')
+      if (account === null) throw new Error('no account')
+      expect(v2.links.isLastWayIn(account, 'github')).toBe(true)
+      expect(token).not.toBe('')
+    })
+
+    it('with two working links either may go', async () => {
+      const token = await twoLinks()
+      const proved = await redeem(await trip('github', { intent: 'step-up', act: 'unlink-provider' }, token), undefined, token)
+      expect((await call('DELETE', '/v2/me/links/google', { stepUp: proved.body.stepUp }, token)).status).toBe(204)
+    })
+  })
+
   it('a code-joined machine is told the account has no password', async () => {
     const { token } = await claimByProvider('github', 'octo')
     const proved = await redeem(await trip('github', { intent: 'step-up', act: 'mint-join-code' }, token), undefined, token)

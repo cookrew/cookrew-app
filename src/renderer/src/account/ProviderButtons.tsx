@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ProviderId, ProviderOffer } from '../../../shared/oauth'
 import { cookrew } from '../api'
-import { PROVIDER_COPY, continueLabel, waitingLabel } from './provider-store'
+import { PROVIDER_COPY, continueLabel, tripGuard, waitingLabel } from './provider-store'
 
 /**
  * WHAT THE REGISTRY OFFERS, READ ONCE.
@@ -25,6 +25,13 @@ export function useProviders(): readonly ProviderOffer[] {
     }
   }, [])
   return offers
+}
+
+/** A guard that cancels this surface's trip when the surface goes. */
+export function useTripGuard(): ReturnType<typeof tripGuard> {
+  const guard = useRef(tripGuard(() => void cookrew().accountOAuthCancel?.())).current
+  useEffect(() => () => guard.leave(), [guard])
+  return guard
 }
 
 /** The buttons, or the wait they turn into. Nothing at all when none is offered. */
