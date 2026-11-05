@@ -16,6 +16,7 @@ import { setSoundsOn, useSoundsOn } from './chime-sound'
 import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
+import { WatchPairRow } from './WatchPairRow'
 import { isRemoteMode } from './api'
 import { startSpeechCheck } from './speech-check'
 import type { RouteStatus } from '../../shared/route'
@@ -162,6 +163,7 @@ export function HeaderMore({
             <CrIcon name="terminal" />
             <span className="cr-more-label">{theme === 'root' ? 'Theme: Root' : 'Theme: Ink'}</span>
           </button>
+          <WatchPairRow />
           {offerFullscreen && (
             <button
               type="button"

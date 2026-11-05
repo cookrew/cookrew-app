@@ -21,3 +21,8 @@ registry/assets/site/raw/
 
 # Perf gate measurements (tests/perf, COOKREW_PERF_REPORT) — CI uploads them as artifacts.
 perf-results/
+
+# The watch app: built, generated (xcodegen) and per-Mac
+watch/.build/
+watch/*.xcodeproj/
+watch/Local.xcconfig

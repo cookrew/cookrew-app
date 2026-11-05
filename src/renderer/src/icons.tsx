@@ -48,6 +48,8 @@ export type CrIconName =
   | 'device'
   /** The phone's Full screen row in ⋯: four corners of the screen. */
   | 'fullscreen'
+  /** ⋯ → Apple Watch: pair one. */
+  | 'watch'
 
 const STROKE = {
   fill: 'none',
@@ -253,6 +255,12 @@ const ICONS: Record<CrIconName, React.JSX.Element> = {
       strokeLinecap="square"
       d="M2.6 6 V2.6 H6 M10 2.6 H13.4 V6 M13.4 10 V13.4 H10 M6 13.4 H2.6 V10"
     />
+  ),
+  watch: (
+    <g {...STROKE}>
+      <rect x="4.2" y="4" width="7.6" height="8" rx="2" />
+      <path d="M5.8 4 L6.2 1.6 H9.8 L10.2 4 M5.8 12 L6.2 14.4 H9.8 L10.2 12" strokeLinejoin="round" />
+    </g>
   ),
   device: (
     <g {...STROKE}>

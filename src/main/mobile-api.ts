@@ -55,6 +55,7 @@ import { lightenCanvas } from "../shared/wire-canvas";
 import { machineCopy } from "../shared/machine-words";
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from "../shared/workspace-door";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
+import { cardCheckpoint, handleWatchClaim, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
@@ -690,18 +691,23 @@ export async function handleMobileApi(
   // "pairing" scope: an admitted phone is a paired phone, and the per-device
   // credential exists so forgetting one device ends that device's access
   // rather than nobody's.
-  const hasPairing =
+  const ownerPairing =
     !!deps.pairingToken &&
     (deps.companionGate
       ? deps.companionGate(presentedToken(request, url))
       : pairingAuthorized(request, url, deps.pairingToken, deps.companionToken));
+  // A watch's token clears this gate for its own short list of routes and no
+  // other (watch-routes.ts): past here it is what a pairing is for those routes.
+  const watchCleared =
+    !ownerPairing && watchRouteAllowed(method, p) && watchTokenAccepted(presentedToken(request, url));
+  const hasPairing = ownerPairing || watchCleared;
   const hasReadOnly =
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
   /** Cleared for a read: either scope. */
   const canRead = hasPairing || hasReadOnly;
   // The one place every pairing shows, whichever way it happened: the root
   // token on the LAN, a phone's own token, the relay. Free after the first.
-  if (hasPairing && fromAnotherDevice(request)) emit("phone_paired");
+  if (ownerPairing && fromAnotherDevice(request)) emit("phone_paired");
 
   // What the presented credential is worth. The phone asks BEFORE it acts, so
   // an unpaired device can say "you are unpaired" instead of letting every
@@ -716,6 +722,14 @@ export async function handleMobileApi(
       required: !!deps.pairingToken,
       canWrite: !deps.pairingToken || hasPairing,
     });
+    return true;
+  }
+
+  // Six digits for a watch's token: open, as this route must be, and bounded.
+  if (await handleWatchClaim(request, response, method, p)) return true;
+  const watchRefusal = watchCleared ? watchWriteRefusal(p) : null;
+  if (watchRefusal) {
+    respondJson(response, watchRefusal.status, { error: watchRefusal.error });
     return true;
   }
 
@@ -858,6 +872,27 @@ export async function handleMobileApi(
   }
   if (method === "GET" && p === "/api/activity") {
     respondJson(response, 200, turns.list());
+    return true;
+  }
+  if (
+    deps.board &&
+    (await handleWatchRoutes({
+      request,
+      response,
+      url,
+      method,
+      path: p,
+      owner: ownerPairing,
+      cleared: hasPairing,
+      board: async () => {
+        const board = deps.board as BoardSources;
+        await probeWarmed(board);
+        return buildBoard(board, boardWindowMs(null));
+      },
+      activities: () => turns.list(),
+      checkpoint: (terminalId) => cardCheckpoint(terminalId, deps.stream, deps.latestCheckpoint),
+    }))
+  ) {
     return true;
   }
   // THE DIALS. One fleet-wide read for every card's tag, one per-card read for
