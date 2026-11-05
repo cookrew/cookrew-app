@@ -1,5 +1,5 @@
 // WHEN EACH DESKTOP'S RELAY LINE WAS LAST SEEN, kept across a registry restart
-// (strata · FleetMachine.lastSeenAt).
+// (FleetMachine.lastSeenAt).
 //
 // The relay sees a line open, beat and close in memory; without this file a
 // restart forgot all of it until each desktop next filed its record. One small

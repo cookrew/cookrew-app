@@ -48,7 +48,7 @@ import { ProviderAccess, type DeviceCode, type MintedDevice, type TripProof } fr
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
-import type { MachineProfile } from '../shared/strata'
+import type { MachineProfile } from '../shared/levels'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -363,7 +363,7 @@ export interface AccountsDeps {
    */
   onChange?: () => void
   /**
-   * STRATA: what kind of machine this is and which app it runs, filed with
+   * What kind of machine this is and which app it runs, filed with
    * the desktop record so cookrew.dev can draw it (machine-profile.ts). Never
    * a serial, a hardware UUID, a MAC address or a host name. Absent = the
    * record carries neither field, exactly as before.

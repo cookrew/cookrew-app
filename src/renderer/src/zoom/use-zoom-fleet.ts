@@ -20,9 +20,9 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { WorkspaceList } from '../../../shared/model'
-import type { LevelsAgent, LevelsAttachment, LevelsEvent, LevelsSnapshot, LevelsWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/strata'
+import type { LevelsAgent, LevelsAttachment, LevelsEvent, LevelsSnapshot, LevelsWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/levels'
 import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
-import { foldLevels } from '../../../strata/fleet/levels-fold'
+import { foldLevels } from '../../../shared/levels-fold'
 import { DECK_SHOWN } from './zoom-model'
 import { cookrew, type CookrewApi } from '../api'
 

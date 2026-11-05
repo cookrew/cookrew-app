@@ -1,9 +1,8 @@
-// THE LEVELS ROUTES on the companion server (src/shared/strata.ts):
+// THE LEVELS ROUTES on the companion server (src/shared/levels.ts):
 //
 //   GET /api/levels               LevelsSnapshot, ETag'd by content hash
 //   GET /api/levels/stream        text/event-stream: a snapshot, then deltas;
 //                                 a ':' line every LEVELS_HEARTBEAT_MS
-//   GET /api/levels/agents/<id>   LevelsAgentDetail
 //   GET /api/levels/gauges        MachineGauges (gauges-route.ts)
 //
 // PAIRING scope only. The companion's /api GET gate already ran (mobile-api ·
@@ -15,7 +14,7 @@
 
 import type http from 'node:http'
 import { createGzip, constants as zlibConstants } from 'node:zlib'
-import type { LevelsEvent } from '../../shared/strata'
+import type { LevelsEvent } from '../../shared/levels'
 import { acceptsGzip, etagMatches, sendBody } from '../http-compress'
 import { respondJson } from '../mobile-http'
 import type { GaugeReader } from '../machine-gauges'
@@ -35,7 +34,7 @@ export interface LevelsRouteDeps {
   gauges?: GaugeReader
 }
 
-const LEVELS_PATH = /^\/api\/levels(?:\/(stream)|\/agents\/([^/]+))?\/?$/
+const LEVELS_PATH = /^\/api\/levels(?:\/(stream))?\/?$/
 
 /** True when the request was a levels route and has been answered. */
 export function handleLevelsRoutes(
@@ -63,22 +62,12 @@ export function handleLevelsRoutes(
   }
   try {
     if (match[1]) openStream(request, response, service, deps.heartbeatMs ?? LEVELS_HEARTBEAT_MS)
-    else if (match[2]) answerDetail(response, service, safeDecode(match[2]))
     else answerSnapshot(request, response, service)
   } catch (error) {
     console.error('Levels route failed:', error)
     if (!response.headersSent) respondJson(response, 500, { error: 'levels failed' })
   }
   return true
-}
-
-/** A malformed escape names no agent: answered 404, not thrown into a 500. */
-const safeDecode = (raw: string): string => {
-  try {
-    return decodeURIComponent(raw)
-  } catch {
-    return ''
-  }
 }
 
 function answerSnapshot(request: http.IncomingMessage, response: http.ServerResponse, service: LevelsService): void {
@@ -92,17 +81,6 @@ function answerSnapshot(request: http.IncomingMessage, response: http.ServerResp
   // Content-addressed: the compressed copy is kept under the hash, so a
   // dozen phones reloading one unchanged fleet compress it once.
   sendBody(response, 200, headers, body, request.headers['accept-encoding'], { cacheKey: `levels:${etag}` })
-}
-
-function answerDetail(response: http.ServerResponse, service: LevelsService, agentId: string): void {
-  const detail = service.detail(agentId)
-  if (!detail) {
-    respondJson(response, 404, { error: 'no such agent' })
-    return
-  }
-  // Note bodies and full addresses: never kept by a cache on the way.
-  response.setHeader('cache-control', 'no-store')
-  respondJson(response, 200, detail)
 }
 
 /** Unnamed `data:` frames (the default 'message' event), gzip when asked, a ':' line on a timer. */

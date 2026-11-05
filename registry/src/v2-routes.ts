@@ -665,7 +665,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // ONLY THIS ACCOUNT'S. Any device of it may read them — that is the whole
     // point of the picker — but the answer is built from the signed-in
     // account and never from anything the caller named.
-    // STRATA: each row is also a FleetMachine (src/shared/strata.ts) — online
+    // Each row is also a FleetMachine (src/shared/levels.ts) — online
     // from the relay, the base the shell reaches it under, and its profile.
     // Additive: every member a client read before is still there.
     const presence = ctx.presence?.(account.username) ?? new Map()

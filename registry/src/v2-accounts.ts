@@ -22,7 +22,7 @@ import {
   isTeamSlug,
   type DoorClaim
 } from '../../src/shared/door-ownership'
-import type { MachineProfile } from '../../src/shared/strata'
+import type { MachineProfile } from '../../src/shared/levels'
 import { BAD, readAppVersion, readProfile } from './v2-fleet'
 import type { ProviderId, VerifiedEmail } from '../../src/shared/oauth'
 
@@ -123,7 +123,7 @@ export interface V2Desktop {
    */
   reach: V2Reach | null
   /**
-   * STRATA: what kind of machine this is, as the desktop probed it, and the
+   * What kind of machine this is, as the desktop probed it, and the
    * app it runs (v2-fleet.ts reads both). Optional because records are older
    * than the probe: a desktop that never sent one is drawn as `unknown`.
    */

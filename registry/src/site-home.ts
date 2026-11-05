@@ -17,7 +17,6 @@ import {
 import { commitsSection, compareTable, featuresGrid } from './site-features'
 import { faqPage, organization, softwareApplication, teamList, webPage } from './site-seo'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML } from './site-brand'
-import type { SampleArt } from './site-art-manifest'
 import { MOTION, PROMO, type Motion } from './site-motion'
 
 /**
@@ -62,12 +61,6 @@ export interface HomeInput {
    * cannot learn this any other way — it runs no script, by design.
    */
   account?: string | null
-  /**
-   * The sample fleet's pictures, from the strata shell's bundle. With them the
-   * first screen is the sample at three levels and the promo moves down to
-   * the features; without (no shell deployed) the page is as it was.
-   */
-  art?: SampleArt | null
 }
 
 /** The definition's first sentence: enough to quote, short enough to read. */

@@ -19,7 +19,7 @@
  * again.
  */
 import type { AccountRefusal, AccountResult } from '../shared/account-v2'
-import type { LevelsEvent } from '../shared/strata'
+import type { LevelsEvent } from '../shared/levels'
 import { parseAccountMachines, type AccountMachines, type AccountMachinesRefusal } from '../shared/zoom-fleet'
 import { navigationEndsHold, type NavigationDetails } from './board-hold'
 import { sharedGaugeWatch } from './machine-gauges'

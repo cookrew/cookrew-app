@@ -232,7 +232,7 @@ export interface V2Context {
    */
   legacy?: LegacyIdentity
   /**
-   * STRATA: whether each of an account's desktops holds its relay line now,
+   * Whether each of an account's desktops holds its relay line now,
    * and when it last did (v2-canvas-relay.ts owns the lines). Absent → every
    * desktop reads offline, which is the truth for a registry with no relay.
    */

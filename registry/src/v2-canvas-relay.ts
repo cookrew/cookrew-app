@@ -392,7 +392,7 @@ export interface CanvasRelay {
   /** Is this account's desktop holding a line right now? */
   live(username: string, deviceId: string): boolean
   /**
-   * STRATA: every desktop of the account — online now, and when its line was
+   * Every desktop of the account — online now, and when its line was
    * last seen by this process (null: not since it started).
    */
   presence(username: string): ReadonlyMap<string, DesktopPresence>
@@ -416,7 +416,7 @@ export interface CanvasRelayDeps {
   headDeadlineMs?: number
   idleDeadlineMs?: number
   bodyBudget?: number
-  /** STRATA: where line sightings persist (v2-line-seen.ts); absent = memory only. */
+  /** Where line sightings persist (v2-line-seen.ts); absent = memory only. */
   seenFile?: string
 }
 
@@ -493,7 +493,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const holding = new Map<string, Set<string>>()
   /** Request bytes buffered right now, across every exchange. */
   let buffering = 0
-  /** STRATA: when each line was last opened, beaten or closed — presence's lastSeenAt, kept across a restart. */
+  /** When each line was last opened, beaten or closed — presence's lastSeenAt, kept across a restart. */
   const nowMs = deps.now ?? ((): number => Date.now())
   const seen = createLineSeen(deps.seenFile ?? null, nowMs)
   const sawLine = (name: string): void => seen.see(name)
@@ -674,7 +674,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     v2Json(response, 200, { live: hub.has(canvasName(signed.account.username, deviceId)) })
   }
 
-  /** STRATA: the account's desktops, each with its line's state — one read for the whole fleet. */
+  /** The account's desktops, each with its line's state — one read for the whole fleet. */
   const presence = (username: string): Map<string, DesktopPresence> => {
     const account = deps.v2.accounts.get(username)
     const out = new Map<string, DesktopPresence>()
@@ -686,7 +686,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   }
 
   /**
-   * ONE QUESTION FOR THE WHOLE FLEET (strata), where the account page used to
+   * ONE QUESTION FOR THE WHOLE FLEET, where the account page used to
    * ask relay-status once per desktop. The same gate and the same answer as
    * relay-status — only the reader's own desktops, never a stranger's — plus
    * the cap the relay holds them to, so a page can say "8 of 11 online".

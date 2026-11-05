@@ -1,8 +1,8 @@
 // THE DESKTOP HAS NO LEVELS (owner, 2026-10-31: "delete the levels code").
 // The Levels view, the stage's devices and workspaces levels, the levels path
-// in the header and the desktop's levels feed are gone. What stays is what
-// cookrew.dev uses: /api/levels (the /me page reads every desktop through it),
-// its service in src/main/levels, and src/strata.
+// in the header and the desktop's levels feed are gone, and so is the cookrew.dev
+// shell they fed (owner, 2026-11-05). What stays is /api/levels and its service
+// in src/main/levels: the zoom view reads every other device through them.
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
@@ -20,11 +20,19 @@ describe('the desktop app', () => {
   })
 })
 
-describe('what cookrew.dev still reads', () => {
-  it('keeps /api/levels on the companion server, for /me and the embed', () => {
+describe('the shell is gone', () => {
+  it('leaves no shell, embed or agent detail behind', () => {
+    expect(existsSync('src/strata')).toBe(false)
+    expect(existsSync('src/renderer/src/embed')).toBe(false)
+    expect(existsSync('registry/src/strata-shell.ts')).toBe(false)
+    expect(read('src/main/levels/routes.ts')).not.toContain('/api/levels/agents')
+  })
+})
+
+describe('what the zoom view still reads', () => {
+  it('keeps /api/levels on the companion server', () => {
     const server = read('src/main/mobile-server.ts')
     expect(server).toContain("import { handleLevelsRoutes } from './levels/routes'")
     expect(server).toMatch(/handleLevelsRoutes\(/)
-    expect(read('src/renderer/src/embed/embed-boot.ts')).toContain('/api/levels/agents/')
   })
 })

@@ -104,13 +104,6 @@ const CSP: Record<PageKind, string> = {
 }
 
 /**
- * THE STRATA SHELL (/me, level 0) is an app page that also frames: the dive
- * into an agent's terminal embeds the desktop's own companion, which this
- * origin serves through the relay prefix — so 'self' and nothing wider.
- */
-export const STRATA_SHELL_CSP = `${CSP.app}; frame-src 'self'`
-
-/**
  * A HANDFUL OF NAMED ORIGINS, and never a wildcard.
  *
  * An app page whose script has to reach somewhere that is not this origin says

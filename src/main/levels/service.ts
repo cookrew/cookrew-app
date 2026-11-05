@@ -11,14 +11,14 @@
 
 import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { STRATA_VERSION } from '../../shared/strata'
+import { LEVELS_VERSION } from '../../shared/levels'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { BoardPhase } from '../../shared/board'
 import type { GitInfo, TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
-import type { Harness, LevelsAgentDetail, LevelsEvent, LevelsSnapshot, WorkspaceTrait } from '../../shared/strata'
+import type { Harness, LevelsEvent, LevelsSnapshot, WorkspaceTrait } from '../../shared/levels'
 import { scrubShapes, type Scrub } from '../scrub'
-import { agentDetail, buildLevels, type PhaseMemory } from './build'
+import { buildLevels, type PhaseMemory } from './build'
 import { diffLevels, stampRevs } from './diff'
 
 /** Coalescing window for stream pushes. Well inside the 1 s promise, wide enough to batch a turn's chatter. */
@@ -50,8 +50,6 @@ export interface LevelsSources {
   now?: () => number
   /** Build-time observer (loop health), ms of main thread per build. */
   observe?: (ms: number) => void
-  /** A cwd's git answer if already cached, never a query (the detail's node.git). */
-  gitPeek?: (dir: string) => GitInfo | undefined
   /** A workspace's traits (traits.ts); cached by the lookup, so a build pays a stat or two. */
   traits?: (meta: WorkspaceMeta) => readonly WorkspaceTrait[]
 }
@@ -77,7 +75,6 @@ export interface LevelsService {
   current: () => LevelsCurrent
   /** Open a stream: the first event is a snapshot, then every delta. */
   subscribe: (send: (event: LevelsEvent) => void) => () => void
-  detail: (agentId: string) => LevelsAgentDetail | null
   /**
    * The cold first build cut into steps (prewarm.ts runs each at a quiet
    * moment): each workspace's state, the ledger, the dials, then the build.
@@ -144,7 +141,7 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
     const resync = before !== undefined && (deltas.length === 0 || deltas.length > LEVELS_MAX_DELTAS)
     const nextRev = before === undefined ? 1 : resync ? rev + 1 : rev + deltas.length
     const snapshot: LevelsSnapshot = {
-      v: STRATA_VERSION,
+      v: LEVELS_VERSION,
       rev: nextRev,
       at: now(),
       machine,
@@ -215,12 +212,6 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
           releaseProbe = null
         }
       }
-    },
-    detail: (agentId) => {
-      const { snapshot } = current()
-      const workspace = snapshot.workspaces.find((w) => w.agents.some((a) => a.id === agentId))
-      if (!workspace) return null
-      return agentDetail(workspace, sources.workspaceState(workspace.id), agentId, scrub, sources.gitPeek)
     },
     prewarmSteps: () => [
       ...sources.workspaces().map((meta) => () => void sources.workspaceState(meta.id)),

@@ -1,5 +1,5 @@
 // A WORKSPACE'S TRAITS: at most TRAITS_MAX words of the closed list in
-// shared/strata.ts, strongest first, that cookrew.dev themes its table from.
+// shared/levels.ts, strongest first, that cookrew.dev themes its table from.
 //
 // Read, in this order:
 //   - the owner's brief (WorkspaceMeta.brief), when it says anything;
@@ -14,7 +14,7 @@
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { WorkspaceMeta } from '../../shared/model'
-import { TRAITS_MAX, WORKSPACE_TRAITS, type WorkspaceTrait } from '../../shared/strata'
+import { TRAITS_MAX, WORKSPACE_TRAITS, type WorkspaceTrait } from '../../shared/levels'
 
 const KEYWORDS: Readonly<Record<WorkspaceTrait, readonly string[]>> = {
   code: [

@@ -10,7 +10,7 @@
 
 import { ledgerPhase, livePhase, type BoardPhase, type BoardRow, type BoardSource } from '../../shared/board'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
-import type { AgentPhase, PhaseSource } from '../../shared/strata'
+import type { AgentPhase, PhaseSource } from '../../shared/levels'
 
 const PHASE_OF_BOARD: Readonly<Record<BoardPhase, AgentPhase>> = {
   working: 'thinking',
