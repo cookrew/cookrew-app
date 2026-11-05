@@ -28,7 +28,8 @@ describe('the machine label', () => {
 
   it('is what the devices stop prints', () => {
     const view = readFileSync('src/renderer/src/zoom/ZoomView.tsx', 'utf8')
-    expect(view).toContain('{model.frame.workspaces.length} workspaces · {model.deviceAgents} agents')
+    // A template now: the words moved into LocalMachine's `detail` prop (window picker).
+    expect(view).toContain('${model.frame.workspaces.length} workspaces · ${model.deviceAgents} agents')
     expect(view).not.toContain('{rows.length} agents')
   })
 })
