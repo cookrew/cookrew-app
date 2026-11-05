@@ -29,7 +29,8 @@
  * not open today's traffic. It does let the thief impersonate either side.
  *
  * RECORDS are AES-256-GCM, one key per direction, the nonce being the record's
- * sequence number. On the wire: u32 length | u64 sequence | ciphertext and tag.
+ * sequence number. On the wire: u32 length | u64 sequence | ciphertext and tag
+ * (canvas-seal-wire.ts, with the inbox and the frames).
  *
  * WHAT THIS DOES NOT DO. It protects bytes in transit from whoever carries them.
  * It cannot protect a page from whoever served that page: see shared/remote-unlock.ts.
@@ -40,17 +41,13 @@ export const SEAL_LABEL = 'cookrew-canvas-seal/1'
 export const SEAL_CODE_BYTES = 32
 /** The most one record carries. */
 export const SEAL_RECORD_MAX = 256 * 1024
-/** How far ahead of the next expected record the inbox will hold. */
-export const SEAL_WINDOW = 1024
 
 const KEY_BYTES = 32
 const ID_BYTES = 16
-const SEQ_BYTES = 8
 const TAG_BYTES = 16
-const LENGTH_BYTES = 4
 const NONCE_BYTES = 12
 /** A session is replaced long before this. Past it a nonce could repeat. */
-const SEQ_LIMIT = 2 ** 48
+export const SEQ_LIMIT = 2 ** 48
 /** A bare X25519 private key as PKCS8: the prefix, then the 32 bytes. */
 const PKCS8_PREFIX = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x04, 0x22, 0x04, 0x20])
 
@@ -90,9 +87,8 @@ export interface SealOptions {
 }
 
 const encoder = new TextEncoder()
-const decoder = new TextDecoder()
 
-const concat = (...parts: readonly Uint8Array[]): Bytes => {
+export const concat = (...parts: readonly Uint8Array[]): Bytes => {
   const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
   parts.reduce((at, part) => {
     out.set(part, at)
@@ -106,7 +102,9 @@ const toBase64Url = (data: Uint8Array): string => btoa(String.fromCharCode(...da
 const fromBase64Url = (text: unknown): Bytes | null => {
   if (typeof text !== 'string' || !/^[A-Za-z0-9_-]+$/.test(text)) return null
   try {
-    return Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (char) => char.charCodeAt(0))
+    const bytes = Uint8Array.from(atob(text.replace(/-/g, '+').replace(/_/g, '/')), (char) => char.charCodeAt(0))
+    // One spelling per value: spare trailing bits would make two strings of one key.
+    return toBase64Url(bytes) === text ? bytes : null
   } catch {
     return null
   }
@@ -179,6 +177,7 @@ function createSession(id: string, sendKey: CryptoKey, openKey: CryptoKey): Seal
       return { seq, box: new Uint8Array(box) }
     },
     async open({ seq, box }) {
+      if (!Number.isSafeInteger(seq) || seq < 0 || seq >= SEQ_LIMIT) return null
       try {
         return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonceOf(seq), tagLength: TAG_BYTES * 8 }, openKey, box as BufferSource))
       } catch {
@@ -216,7 +215,11 @@ async function derive(code: Bytes, id: Bytes, initiator: Bytes, responder: Bytes
 
 export interface StartedHandshake {
   readonly hello: SealHello
-  /** Null when the answer does not prove the code: nothing may be sent then. */
+  /**
+   * Null when the answer does not prove the code: nothing may be sent then. Once
+   * one has, every call gives that same session: a second session on these keys
+   * would count from zero again and reuse every nonce.
+   */
   finish(accept: SealAccept): Promise<{ readonly session: SealSession; readonly finish: SealFinish } | null>
 }
 
@@ -225,18 +228,20 @@ export async function startHandshake(code: Uint8Array, options: SealOptions = {}
   const secretCode = checkedCode(code)
   const id = await idBytes(secretCode)
   const mine = await ephemeralKey(options.ephemeral)
+  let done: { readonly session: SealSession; readonly finish: SealFinish } | null = null
   return {
     hello: { v: 1, id: toBase64Url(id), e: toBase64Url(mine.raw) },
     async finish(accept) {
+      if (done !== null) return done
       const theirs = fromBase64Url(accept?.e)
       const secret = await sharedSecret(mine.key, theirs)
       if (theirs === null || secret === null) return null
       const derived = await derive(secretCode, id, mine.raw, theirs, secret)
       if (!(await derived.check('responder', accept.proof))) return null
-      return {
-        session: createSession(derived.sessionId, derived.toResponder, derived.toInitiator),
-        finish: { proof: await derived.prove('initiator') }
-      }
+      const proof = await derived.prove('initiator')
+      // No await from here: two calls racing must not both make a session.
+      done ??= { session: createSession(derived.sessionId, derived.toResponder, derived.toInitiator), finish: { proof } }
+      return done
     }
   }
 }
@@ -263,135 +268,4 @@ export async function acceptHandshake(code: Uint8Array, hello: SealHello, option
     session: createSession(derived.sessionId, derived.toInitiator, derived.toResponder),
     confirm: (finish) => derived.check('initiator', finish?.proof)
   }
-}
-
-/** One record as it goes on the wire. */
-export function encodeRecord(record: SealRecord): Bytes {
-  const head = new Uint8Array(LENGTH_BYTES + SEQ_BYTES)
-  const view = new DataView(head.buffer)
-  view.setUint32(0, SEQ_BYTES + record.box.length)
-  view.setUint32(LENGTH_BYTES, Math.floor(record.seq / 0x100000000))
-  view.setUint32(LENGTH_BYTES + 4, record.seq % 0x100000000)
-  return concat(head, record.box)
-}
-
-export interface RecordReader {
-  /** Whole records so far: HTTP keeps no chunk boundaries. Throws on a length no record has. */
-  push(chunk: Uint8Array): readonly SealRecord[]
-}
-
-export function createRecordReader(): RecordReader {
-  let held: Bytes = new Uint8Array(0)
-  const largest = SEQ_BYTES + SEAL_RECORD_MAX + TAG_BYTES
-  return {
-    push(chunk) {
-      held = concat(held, chunk)
-      const records: SealRecord[] = []
-      while (held.length >= LENGTH_BYTES) {
-        const view = new DataView(held.buffer, held.byteOffset, held.byteLength)
-        const length = view.getUint32(0)
-        if (length > largest || length < SEQ_BYTES + TAG_BYTES) throw new Error('This record is too large, or too small to be one')
-        if (held.length < LENGTH_BYTES + length) break
-        const seq = view.getUint32(LENGTH_BYTES) * 0x100000000 + view.getUint32(LENGTH_BYTES + 4)
-        records.push({ seq, box: held.slice(LENGTH_BYTES + SEQ_BYTES, LENGTH_BYTES + length) })
-        held = held.slice(LENGTH_BYTES + length)
-      }
-      return records
-    }
-  }
-}
-
-export interface Inbox {
-  /** False for a record that did not verify or is too far ahead. A duplicate is true: it arrived. */
-  accept(record: SealRecord): Promise<boolean>
-  /** The sequence number delivery is waiting for. */
-  next(): number
-}
-
-/**
- * Records in sequence, each once. Parallel requests land out of order and a
- * resend lands twice, and a keystroke must still be typed once. Only a record
- * that opened is held, so a relay cannot fill this with junk.
- */
-export function createInbox(session: SealSession, deliver: (plain: Uint8Array) => void): Inbox {
-  const held = new Map<number, Uint8Array>()
-  let next = 0
-  return {
-    async accept(record) {
-      if (record.seq < next || held.has(record.seq)) return true
-      if (record.seq >= next + SEAL_WINDOW) return false
-      const plain = await session.open(record)
-      if (plain === null) return false
-      if (record.seq >= next) held.set(record.seq, plain)
-      for (let ready = held.get(next); ready !== undefined; ready = held.get(next)) {
-        held.delete(next)
-        next += 1
-        deliver(ready)
-      }
-      return true
-    },
-    next: () => next
-  }
-}
-
-/** What travels inside a record: one HTTP exchange, as a stream of frames. */
-export type SealFrame =
-  | { readonly kind: 'open'; readonly stream: number; readonly method: string; readonly path: string; readonly headers: Readonly<Record<string, string>> }
-  | { readonly kind: 'head'; readonly stream: number; readonly status: number; readonly headers: Readonly<Record<string, string>> }
-  | { readonly kind: 'data'; readonly stream: number; readonly data: Uint8Array }
-  | { readonly kind: 'end'; readonly stream: number }
-  | { readonly kind: 'abort'; readonly stream: number; readonly reason: string }
-
-const KINDS = ['open', 'head', 'data', 'end', 'abort'] as const
-const FRAME_HEAD_BYTES = 5
-
-const payloadOf = (frame: SealFrame): Uint8Array => {
-  switch (frame.kind) {
-    case 'open':
-      return encoder.encode(JSON.stringify({ method: frame.method, path: frame.path, headers: frame.headers }))
-    case 'head':
-      return encoder.encode(JSON.stringify({ status: frame.status, headers: frame.headers }))
-    case 'data':
-      return frame.data
-    case 'end':
-      return new Uint8Array(0)
-    case 'abort':
-      return encoder.encode(frame.reason)
-  }
-}
-
-export function encodeFrame(frame: SealFrame): Bytes {
-  const head = new Uint8Array(FRAME_HEAD_BYTES)
-  head[0] = KINDS.indexOf(frame.kind) + 1
-  new DataView(head.buffer).setUint32(1, frame.stream)
-  return concat(head, payloadOf(frame))
-}
-
-const readJson = (payload: Uint8Array): Record<string, unknown> | null => {
-  try {
-    const value: unknown = JSON.parse(decoder.decode(payload))
-    return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
-  } catch {
-    return null
-  }
-}
-
-const readHeaders = (value: unknown): Readonly<Record<string, string>> | null =>
-  typeof value === 'object' && value !== null && Object.values(value).every((item) => typeof item === 'string') ? (value as Record<string, string>) : null
-
-/** Null for anything that is not a frame. Both ends are this code, so junk means something is wrong. */
-export function decodeFrame(raw: Uint8Array): SealFrame | null {
-  if (raw.length < FRAME_HEAD_BYTES) return null
-  const kind = KINDS[raw[0] - 1]
-  const stream = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(1)
-  const payload = raw.subarray(FRAME_HEAD_BYTES)
-  if (kind === 'data') return { kind, stream, data: payload.slice() }
-  if (kind === 'end') return payload.length === 0 ? { kind, stream } : null
-  if (kind === 'abort') return { kind, stream, reason: decoder.decode(payload) }
-  if (kind === undefined) return null
-  const json = readJson(payload)
-  const headers = readHeaders(json?.headers)
-  if (json === null || headers === null) return null
-  if (kind === 'head') return typeof json.status === 'number' ? { kind, stream, status: json.status, headers } : null
-  return typeof json.method === 'string' && typeof json.path === 'string' ? { kind, stream, method: json.method, path: json.path, headers } : null
 }

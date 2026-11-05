@@ -3,22 +3,8 @@
 // so these tests compare two implementations, and a native client can use them too.
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import {
-  acceptHandshake,
-  connectCodeId,
-  createInbox,
-  createRecordReader,
-  decodeFrame,
-  encodeFrame,
-  encodeRecord,
-  newConnectCode,
-  SEAL_RECORD_MAX,
-  SEAL_WINDOW,
-  startHandshake,
-  type SealFrame,
-  type SealHello,
-  type SealSession
-} from '../src/shared/canvas-seal'
+import { acceptHandshake, connectCodeId, newConnectCode, SEAL_RECORD_MAX, startHandshake, type SealHello, type SealSession } from '../src/shared/canvas-seal'
+import { createInbox, createRecordReader, decodeFrame, encodeFrame, encodeRecord, SEAL_DATA_MAX, SEAL_INBOX_BYTES, SEAL_WINDOW, type SealFrame } from '../src/shared/canvas-seal-wire'
 
 const vectors = JSON.parse(readFileSync('tests/fixtures/canvas-seal-vectors.json', 'utf8')) as Record<string, string> & { records: Array<{ seq: number; plain: string; toResponder: string; toInitiator: string }> }
 const bytes = (hex: string): Uint8Array<ArrayBuffer> => new Uint8Array(Buffer.from(hex, 'hex'))
@@ -132,6 +118,35 @@ describe('the handshake', () => {
     await expect(startHandshake(new Uint8Array(16))).rejects.toThrow('connect code')
   })
 
+  it('a replayed answer gives the same session, never a second one counting from zero', async () => {
+    const code = newConnectCode()
+    const started = await startHandshake(code)
+    const accepted = await acceptHandshake(code, started.hello)
+    const [first, second] = await Promise.all([started.finish(accepted!.accept), started.finish(accepted!.accept)])
+    expect(second!.session).toBe(first!.session)
+    const third = await started.finish(accepted!.accept)
+    expect(third!.session).toBe(first!.session)
+    await first!.session.seal(utf8('a'))
+    expect((await third!.session.seal(utf8('b'))).seq).toBe(1)
+  })
+
+  it('a forged answer does not spend the handshake: the real one still lands', async () => {
+    const code = newConnectCode()
+    const started = await startHandshake(code)
+    const accepted = await acceptHandshake(code, started.hello)
+    expect(await started.finish({ ...accepted!.accept, proof: Buffer.alloc(32).toString('base64url') })).toBeNull()
+    expect(await started.finish(accepted!.accept)).not.toBeNull()
+  })
+
+  it('reads one spelling of a value: altered trailing bits are refused', async () => {
+    const code = newConnectCode()
+    const { hello } = await startHandshake(code)
+    const last = hello.id.at(-1)!
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    const twin = hello.id.slice(0, -1) + alphabet[alphabet.indexOf(last) + 1]
+    expect(await acceptHandshake(code, { ...hello, id: twin })).toBeNull()
+  })
+
   it('a code is 32 random bytes, and its id does not give it away', async () => {
     const a = newConnectCode()
     expect(a).toHaveLength(32)
@@ -169,6 +184,14 @@ describe('records', () => {
     await expect(phone.seal(new Uint8Array(SEAL_RECORD_MAX + 1))).rejects.toThrow('too large')
   })
 
+  it('refuses a sequence no record has', async () => {
+    const { phone, mac } = await pair()
+    const record = await phone.seal(utf8('x'))
+    expect(await mac.open({ seq: 2 ** 64, box: record.box })).toBeNull()
+    expect(await mac.open({ seq: -1, box: record.box })).toBeNull()
+    expect(await mac.open({ seq: 1.5, box: record.box })).toBeNull()
+  })
+
   it('seals in the order asked, whatever the cipher’s timing', async () => {
     const { phone } = await pair()
     const records = await Promise.all([phone.seal(utf8('a')), phone.seal(utf8('b')), phone.seal(utf8('c'))])
@@ -193,6 +216,26 @@ describe('the wire', () => {
     head.writeUInt32BE(0xffffffff)
     expect(() => reader.push(head)).toThrow('too large')
   })
+
+  it('stays dead after that: nothing past a bad length can be trusted, or kept', () => {
+    const reader = createRecordReader()
+    const head = Buffer.alloc(4)
+    head.writeUInt32BE(0xffffffff)
+    expect(() => reader.push(head)).toThrow()
+    expect(() => reader.push(new Uint8Array(1))).toThrow()
+  })
+
+  it('takes time in the bytes, not their square', () => {
+    const one = encodeRecord({ seq: 1, box: new Uint8Array(16) })
+    const many = Buffer.concat(Array.from({ length: 150_000 }, () => one))
+    const started = performance.now()
+    expect(createRecordReader().push(many)).toHaveLength(150_000)
+    const big = encodeRecord({ seq: 2, box: new Uint8Array(SEAL_RECORD_MAX) })
+    const reader = createRecordReader()
+    const seen = [...big.keys()].flatMap((i) => reader.push(big.subarray(i, i + 1)))
+    expect(seen).toHaveLength(1)
+    expect(performance.now() - started).toBeLessThan(5000)
+  })
 })
 
 describe('the inbox', () => {
@@ -216,8 +259,8 @@ describe('the inbox', () => {
     const { phone, mac } = await pair()
     const record = await phone.seal(utf8('key'))
     const { seen, box } = inbox(mac)
-    expect(await box.accept(record)).toBe(true)
-    expect(await box.accept(record)).toBe(true)
+    expect(await box.accept(record)).toBe('taken')
+    expect(await box.accept(record)).toBe('duplicate')
     expect(seen).toEqual(['key'])
   })
 
@@ -232,10 +275,46 @@ describe('the inbox', () => {
   it('holds nothing it could not open, and nothing past its window', async () => {
     const { phone, mac } = await pair()
     const { seen, box } = inbox(mac)
-    expect(await box.accept({ seq: 0, box: new Uint8Array(32) })).toBe(false)
-    expect(await box.accept({ seq: SEAL_WINDOW, box: (await phone.seal(utf8('x'))).box })).toBe(false)
+    expect(await box.accept({ seq: 0, box: new Uint8Array(32) })).toBe('forged')
+    expect(await box.accept({ seq: SEAL_WINDOW, box: (await phone.seal(utf8('x'))).box })).toBe('ahead')
     expect(seen).toEqual([])
     expect(box.next()).toBe(0)
+  })
+
+  it('a session has one inbox: a second would deliver a replay again', async () => {
+    const { mac } = await pair()
+    createInbox(mac, () => undefined)
+    expect(() => createInbox(mac, () => undefined)).toThrow('one inbox')
+  })
+
+  it('withholding one record holds a budget, not a thousand records, and the missing one still lands', async () => {
+    const { phone, mac } = await pair()
+    const big = new Uint8Array(SEAL_RECORD_MAX)
+    const count = Math.ceil(SEAL_INBOX_BYTES / SEAL_RECORD_MAX) + 3
+    const records = []
+    for (let i = 0; i < count; i += 1) records.push(await phone.seal(big))
+    let delivered = 0
+    const box = createInbox(mac, () => void (delivered += 1))
+    const answers = []
+    for (const record of records.slice(1)) answers.push(await box.accept(record))
+    expect(answers).toContain('ahead')
+    expect(await box.accept(records[0])).toBe('taken')
+    expect(delivered).toBeGreaterThan(1)
+  })
+
+  it('a handler that throws loses its record, not the ones behind it', async () => {
+    const { phone, mac } = await pair()
+    const [a, b] = await Promise.all(['a', 'b'].map((word) => phone.seal(utf8(word))))
+    const seen: string[] = []
+    const failed: unknown[] = []
+    const box = createInbox(mac, (plain) => {
+      if (text(plain) === 'a') throw new Error('boom')
+      seen.push(text(plain))
+    }, (error) => failed.push(error))
+    await box.accept(b)
+    await box.accept(a)
+    expect(seen).toEqual(['b'])
+    expect(failed).toHaveLength(1)
   })
 })
 
@@ -245,11 +324,40 @@ describe('frames', () => {
     { kind: 'head', stream: 4294967295, status: 200, headers: { 'content-type': 'image/png' } },
     { kind: 'data', stream: 2, data: Uint8Array.from([0, 255, 10]) },
     { kind: 'end', stream: 2 },
-    { kind: 'abort', stream: 3, reason: 'gone' }
+    { kind: 'abort', stream: 3, reason: 'gone' },
+    { kind: 'ack', stream: 0, next: 4294967296 },
+    { kind: 'ping', stream: 0 }
   ]
 
   it.each(cases)('$kind survives the wire', (frame) => {
     expect(decodeFrame(encodeFrame(frame))).toEqual(frame)
+  })
+
+  it('a full data frame fits one record', async () => {
+    const { phone } = await pair()
+    const sealed = await phone.seal(encodeFrame({ kind: 'data', stream: 1, data: new Uint8Array(SEAL_DATA_MAX) }))
+    expect(sealed.seq).toBe(0)
+  })
+
+  it('a peer with the code still cannot smuggle a bad request or answer', () => {
+    const open = (value: unknown): SealFrame | null => decodeFrame(Uint8Array.from([1, 0, 0, 0, 1, ...new TextEncoder().encode(JSON.stringify(value))]))
+    const head = (value: unknown): SealFrame | null => decodeFrame(Uint8Array.from([2, 0, 0, 0, 1, ...new TextEncoder().encode(JSON.stringify(value))]))
+    const good = { method: 'GET', path: '/api/x', headers: {} }
+    expect(open(good)).not.toBeNull()
+    expect(open({ ...good, path: '//169.254.169.254/x' })).toBeNull()
+    expect(open({ ...good, path: 'http://evil/' })).toBeNull()
+    expect(open({ ...good, path: '/a\r\nb' })).toBeNull()
+    expect(open({ ...good, method: 'GET /x' })).toBeNull()
+    expect(open({ ...good, headers: { a: 'b\r\nc: d' } })).toBeNull()
+    expect(open({ ...good, headers: { a: 'b\nc: d' } })).toBeNull()
+    expect(open({ ...good, headers: { 'a b': 'c' } })).toBeNull()
+    expect(open({ ...good, headers: ['a'] })).toBeNull()
+    expect(head({ status: 200, headers: {} })).not.toBeNull()
+    expect(head({ status: 200, headers: { 'set-cookie': 'a=1\nb=2' } })).not.toBeNull()
+    expect(head({ status: 200, headers: { 'set-cookie': 'a=1\r\nb=2' } })).toBeNull()
+    expect(head({ status: 1e400, headers: {} })).toBeNull()
+    expect(head({ status: -1.5, headers: {} })).toBeNull()
+    expect(head({ status: 99, headers: {} })).toBeNull()
   })
 
   it('reads junk as nothing', () => {
