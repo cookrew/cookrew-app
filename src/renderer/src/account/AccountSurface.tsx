@@ -9,6 +9,8 @@ import { firstRunView, type FirstRunAction } from './account-store'
 import { JoinCard } from './JoinCard'
 import { dismissFirstRun, firstRunDismissed } from './first-run'
 import { LockScreen } from './LockScreen'
+import { PasscodeCard } from './PasscodeCard'
+import { shouldAskPasscode } from './provider-store'
 import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
@@ -74,6 +76,8 @@ export function useAccountSurface(): AccountSurface {
   const [focusRequest, setFocusRequest] = useState<string | null>(null)
   /** A failure from the D3 card's own actions, said on the card. */
   const [problem, setProblem] = useState<string | null>(null)
+  /** LATER, for this run: a relaunch asks again, until there is a passcode. */
+  const [passcodeLater, setPasscodeLater] = useState(false)
 
   /** The latest status, for listeners that must not be re-subscribed per change. */
   const statusRef = useRef(status)
@@ -252,7 +256,9 @@ export function useAccountSurface(): AccountSurface {
             {/* The card's own rows read /v2/me. If cookrew.dev has thrown this
                 session away, the way back is here, above them — never a
                 sentence with nowhere to answer it. */}
-            {status.sessionExpired && <ResumeSession onResumed={setStatus} />}
+            {status.sessionExpired && (
+              <ResumeSession passwordless={status.passwordless} onResumed={setStatus} />
+            )}
             <SecurityCard
               username={status.username}
               lockAfterMs={status.lockAfterMs}
@@ -260,6 +266,8 @@ export function useAccountSurface(): AccountSurface {
               recoveryCodesLeft={status.recoveryCodesLeft}
               sessionExpired={status.sessionExpired}
               problem={problem}
+              status={status}
+              onStatus={setStatus}
               {...securityActions(setStatus, () => setSheet('none'), setProblem)}
             />
             <div className="gs-sheet-foot">
@@ -281,6 +289,10 @@ export function useAccountSurface(): AccountSurface {
           }}
           onStatus={setStatus}
         />
+      )}
+      {/* Over the sheets, because until this is answered the lock has no key. */}
+      {status !== null && shouldAskPasscode(status, passcodeLater) && (
+        <PasscodeCard status={status} onDone={setStatus} onLater={() => setPasscodeLater(true)} />
       )}
       {/* LAST, and over everything: a lock drawn under a sheet is not a lock. */}
       {status?.locked && status.username && (

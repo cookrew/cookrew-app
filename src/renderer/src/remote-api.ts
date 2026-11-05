@@ -859,6 +859,11 @@ export function createRemoteApi(): CookrewApi {
         // has none to be missing, so there is nothing here that could be
         // pending.
         passwordPending: false,
+        // The same: how the Mac unlocks is the Mac's own, and a phone has no lock.
+        passwordless: false,
+        unlockBy: 'password',
+        passcodePending: false,
+        touchId: { available: false, on: false },
         // Which registry the DESKTOP is pointed at is the desktop's business
         // and the desktop's screen; a phone reading the companion cannot know
         // it and must not guess.

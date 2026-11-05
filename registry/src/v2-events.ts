@@ -33,6 +33,9 @@ export type EventKind =
   | 'door-moved'
   | 'not-me'
   | 'request'
+  /** A provider identity joined or left the account. `device` names which provider. */
+  | 'linked'
+  | 'unlinked'
 
 /** account:changed, as every surface reads it. `seq` is the poll cursor. */
 export interface AccountEvent {

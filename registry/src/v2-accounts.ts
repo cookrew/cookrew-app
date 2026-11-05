@@ -9,6 +9,7 @@ import {
   passwordIsAcceptable,
   recoveryCodeMatches,
   sanitiseJwk,
+  unusablePassword,
   verifyPassword,
   type Hashed
 } from './v2-secrets'
@@ -22,6 +23,7 @@ import {
 } from '../../src/shared/door-ownership'
 import type { MachineProfile } from '../../src/shared/strata'
 import { BAD, readAppVersion, readProfile } from './v2-fleet'
+import type { ProviderId, VerifiedEmail } from '../../src/shared/oauth'
 
 /**
  * IDENTITY v2 — THE ACCOUNT STORE.
@@ -135,9 +137,35 @@ export interface V2Session {
   issuedAt: number
 }
 
+/**
+ * ONE PROVIDER IDENTITY THAT OPENS THIS ACCOUNT.
+ *
+ * `subject` is the provider's immutable id and the only key: `login` is shown
+ * to the owner and never compared. `pausedAt` means "not me" was pressed on a
+ * sign-in through this link, so it opens nothing until the owner links it again.
+ */
+export interface V2Link {
+  provider: ProviderId
+  subject: string
+  login: string | null
+  linkedAt: number
+  pausedAt?: number
+}
+
 export interface V2Account {
   username: string
+  /** Unusable random bytes when `passwordless`; see `unusablePassword`. */
   password: Hashed
+  /**
+   * This account began at a provider and has no password.
+   *
+   * THE OPTIONAL FIELDS BELOW ARE OLDER FILES' SILENCE: an account written
+   * before them is a password account with no links and no email.
+   */
+  passwordless?: boolean
+  links?: readonly V2Link[]
+  /** Copied from a provider's verified claim. Owner-only, and never a key. */
+  email?: VerifiedEmail | null
   displayName: string
   avatar: string | null
   claimedAt: number
@@ -188,6 +216,14 @@ const move = (
 export type CreateRefusal = 'taken' | 'bad_username' | 'weak_password' | 'bad_device'
 export type Refused<R extends string> = { ok: false; reason: R }
 export type Attached = { ok: true; account: V2Account; device: V2Device }
+
+/**
+ * ONE ID, ONE KEY. An id is public (it is in a certificate's name) and the key is
+ * the proof, so the same id arriving with another key is a stranger wearing the
+ * device's name: it would skip the ladder as "known" and then replace the key.
+ */
+const sameKey = (held: Record<string, string>, offered: Record<string, string>): boolean =>
+  held.kty === offered.kty && held.crv === offered.crv && held.x === offered.x && held.y === offered.y
 
 export class V2Accounts {
   private readonly file: string
@@ -446,6 +482,60 @@ export class V2Accounts {
   }
 
   /**
+   * CLAIM A NAME WITH A PROVIDER'S PROOF INSTEAD OF A PASSWORD.
+   *
+   * The same rules `create` keeps for the name and the device, and no awaited
+   * hash, so nothing can land between the check and the write.
+   */
+  createWithProvider(input: {
+    username: unknown
+    device: unknown
+    link: V2Link
+    email: VerifiedEmail | null
+  }): Attached | Refused<Exclude<CreateRefusal, 'weak_password'> | 'link_taken'> {
+    const username = typeof input.username === 'string' ? input.username.trim() : ''
+    if (!USERNAME.test(username) || username.startsWith(RESERVED_PREFIX)) {
+      return { ok: false, reason: 'bad_username' }
+    }
+    if (this.has(username) || this.claiming.has(username)) return { ok: false, reason: 'taken' }
+    if (this.findByLink(input.link.provider, input.link.subject) !== null) return { ok: false, reason: 'link_taken' }
+    const device = this.readDevice(input.device)
+    if (device === null || this.ownerOfDevice(device.id) !== null) return { ok: false, reason: 'bad_device' }
+    const account: V2Account = {
+      username,
+      password: unusablePassword(),
+      passwordless: true,
+      links: [input.link],
+      email: input.email,
+      displayName: '',
+      avatar: null,
+      claimedAt: this.now(),
+      devices: [device],
+      desktops: [],
+      sessions: [],
+      recovery: [],
+      revoked: []
+    }
+    this.accounts = [...this.accounts, account]
+    this.trackDesktops(null, account)
+    this.save()
+    return { ok: true, account, device }
+  }
+
+  /** The account this provider identity opens, or null. Never by email. */
+  findByLink(provider: ProviderId, subject: string): V2Account | null {
+    return (
+      this.accounts.find((a) => a.links?.some((l) => l.provider === provider && l.subject === subject)) ?? null
+    )
+  }
+
+  /** One change to one account, for the stores that sit beside this one. */
+  amend(username: string, change: (account: V2Account) => V2Account): void {
+    const account = this.get(username)
+    if (account !== null) this.replace(change(account))
+  }
+
+  /**
    * The password path. Same refusal and same cost for a name nobody has taken
    * and a password that is wrong — see verifyPassword, which stretches against
    * a decoy rather than returning early.
@@ -482,8 +572,9 @@ export class V2Accounts {
     if ((account.revoked ?? []).some((r) => r.id === device.id)) return { ok: false, reason: 'bad_device' }
 
     const known = account.devices.find((d) => d.id === device.id)
+    if (known && !sameKey(known.jwk, device.jwk)) return { ok: false, reason: 'bad_device' }
     const attached: V2Device = known
-      ? { ...known, kind: device.kind, name: device.name, jwk: device.jwk, lastSeenAt: this.now() }
+      ? { ...known, kind: device.kind, name: device.name, lastSeenAt: this.now() }
       : device
     const next: V2Account = {
       ...account,
@@ -512,6 +603,8 @@ export class V2Accounts {
     if (device === null) return false
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return false
+    const known = account.devices.find((d) => d.id === device.id)
+    if (known && !sameKey(known.jwk, device.jwk)) return false
     return !(account.revoked ?? []).some((r) => r.id === device.id)
   }
 

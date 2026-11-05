@@ -59,9 +59,11 @@ import type {
   AdmittedPhone,
   ApprovalAsked,
   PairingHandout,
+  ProviderSignInAnswer,
   SignInAnswer,
   UsernameCheck,
 } from "../../shared/account-v2";
+import type { ProviderId, ProviderOffer } from "../../shared/oauth";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -941,6 +943,21 @@ export interface CookrewApi {
     username: string;
   }) => Promise<AccountResult<SeatFace>>;
   accountEndSeat?: (input: { slug: string; id: string }) => Promise<AccountResult<void>>;
+  // ── third-party sign-in ──
+  //
+  // Optional like the rest. `accountOAuthProviders` answering nothing is the
+  // ordinary state on a registry with no client id and secret: no button.
+  accountOAuthProviders?: () => Promise<readonly ProviderOffer[]>;
+  accountOAuthStart?: (provider: ProviderId) => Promise<ProviderSignInAnswer<AccountStatus>>;
+  accountOAuthCancel?: () => Promise<boolean>;
+  accountOAuthClaim?: (username: string) => Promise<SignInAnswer<AccountStatus>>;
+  accountOAuthLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
+  accountOAuthUnlink?: (input: { provider: ProviderId; current?: string }) => Promise<AccountResult<void>>;
+  /** A passcode is this Mac's alone: it never goes to cookrew.dev. */
+  accountSetPasscode?: (input: { next: string; current?: string }) => Promise<AccountResult<AccountStatus>>;
+  accountSetTouchId?: (on: boolean) => Promise<AccountResult<AccountStatus>>;
+  accountUnlockTouchId?: () => Promise<{ ok: boolean }>;
+  accountRescueUnlock?: (code: string) => Promise<AccountResult<AccountStatus>>;
   /** The owner's canvas, told who is at its doors. */
   servingCallers?: () => Promise<readonly ServedCallersRow[]>;
   onServingCallers?: (cb: (rows: readonly ServedCallersRow[]) => void) => () => void;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -958,6 +958,12 @@ const accounts = new Accounts({
   deviceName: localDeviceName(),
   // STRATA: the record also says what kind of machine this is (machine-profile.ts).
   machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
+  // A provider's login page opens in the system browser and never in a window
+  // of ours: a person must not type a GitHub password into a page this app
+  // controls. The scheme is asked rather than assumed, because a development
+  // copy shares its bundle id with every other Electron on the machine.
+  openBrowser: (url) => shell.openExternal(url),
+  schemeHandled: () => app.isPackaged || app.isDefaultProtocolClient(DEEP_LINK_SCHEME),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -1263,7 +1269,13 @@ canvasLink.onDrop(canvasBridge.reset)
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
+  // No account, or no passcode chosen yet: nothing could open this lock, so it
+  // does not close.
+  armed: () => accounts.lockable(),
+  waiting: () => accounts.providerTripping(),
   onChange: (locked) => {
+    // A provider trip in flight belongs to whoever just walked away.
+    if (locked) accounts.providerCancel()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:locked', locked)
     }
@@ -2540,6 +2552,9 @@ const deepLinks = createDeepLinkQueue((link) => {
 })
 
 function acceptDeepLink(raw: string): void {
+  // A PROVIDER'S WAY BACK STOPS HERE. It carries a handoff, so it never joins
+  // the queue to the renderer; `accounts` drops it unless it started this trip.
+  if (accounts.oauthReturn(raw)) return
   const link = parseDeepLink(raw)
   if (link === null) {
     // The link itself is not logged: it is whatever a stranger's page put in
@@ -6538,6 +6553,7 @@ if (!app.requestSingleInstanceLock()) {
   // its argv to the instance holding the lock, and that argv carries the link.
   app.on('second-instance', (_event, argv) => {
     focusMainWindow()
+    if (argv.some((arg) => accounts.oauthReturn(arg))) return
     const link = deepLinkInArgv(argv)
     if (link) deepLinks.push(link)
   })
@@ -7768,6 +7784,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     // free of Electron; the CODES come from main's own memory, never from the
     // call, so the renderer chooses the file and nothing else. 0600, because
     // eight of these open the account.
+    // The OS draws this prompt, and it is macOS only. Elsewhere there is none.
+    touchId: {
+      available: () => process.platform === 'darwin' && systemPreferences.canPromptTouchID(),
+      prompt: (reason) =>
+        systemPreferences.promptTouchID(reason).then(
+          () => true,
+          () => false
+        )
+    },
     saveCodes: async (codes) => {
       if (!mainWindow) return { ok: false, reason: 'no_window' }
       const picked = await dialog.showSaveDialog(mainWindow, {
