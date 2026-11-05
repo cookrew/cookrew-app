@@ -572,6 +572,9 @@ async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountR
       ? await deps.accounts.signOutWithProvider()
       : await deps.accounts.signOutThisMac(password)
   if (!result.ok) return result
+  // `cookrew logout` can leave from behind the lock, and with no account there is
+  // nothing left that could open it.
+  deps.lock.proven()
   deps.requests.stop()
   try {
     await deps.signedOut?.()

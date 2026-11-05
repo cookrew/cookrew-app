@@ -11,7 +11,7 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2, type V2Identity } from '../registry/src/v2-routes'
-import { Accounts, accountFilePath, loadAccount, type FetchLike } from '../src/main/account-v2'
+import { Accounts, accountFilePath, deviceIdFor, loadAccount, type FetchLike } from '../src/main/account-v2'
 import { accountHandlers, accountStatus, type AccountIpcDeps } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
 import { Requests } from '../src/main/requests'
@@ -1245,5 +1245,67 @@ describe('final review', () => {
     fake.device.answer = 'ok'
     const asked = await m.app.providerDeviceSignIn('github', { onCode: () => undefined, everyMs: 1 })
     expect(asked).toMatchObject({ ok: false, reason: 'new_identity' })
+  })
+})
+
+describe('final review, second look', () => {
+  beforeEach(() => boot(true))
+
+  it('a retry after a dropped ladder lands with its own key, and the file holds that key', async () => {
+    const first = mac('First')
+    await joinByGithub(first)
+    const codes = await codesFor(first)
+    if (!codes.ok) throw new Error('no codes')
+    const second = mac('Second')
+    const dropped = await second.app.providerSignIn('github')
+    const retried = await second.app.providerSignIn('github')
+    if (dropped.ok || dropped.reason !== 'second_factor') throw new Error('expected a ladder')
+    if (retried.ok || retried.reason !== 'second_factor') throw new Error('expected a ladder')
+    expect((await second.app.resumeWithCode(retried.step.pending, 'recovery', codes.value[0])).ok).toBe(true)
+    const held = loadAccount(second.home)
+    expect(held).toMatchObject({ username: 'octo' })
+    expect(held?.deviceId).toBe(deviceIdFor(held?.publicKeyJwk ?? {}))
+    expect(v2.accounts.get('octo')?.devices.map((d) => d.id)).toContain(held?.deviceId)
+  })
+
+  it('a password ladder left open does not spoil a provider landing either', async () => {
+    const owner = mac('Owner')
+    await owner.app.claim({ username: 'alice', password: PASSWORD })
+    expect((await owner.app.providerLink('github', { current: PASSWORD })).ok).toBe(true)
+    const codes = await owner.app.recoveryCodes()
+    if (!codes.ok) throw new Error('no codes')
+    const m = mac('Stale')
+    const typed = await m.app.signIn({ username: 'alice', password: PASSWORD })
+    if (typed.ok || typed.reason !== 'second_factor') throw new Error('expected a password ladder')
+    const asked = await m.app.providerSignIn('github')
+    if (asked.ok || asked.reason !== 'second_factor') throw new Error('expected a provider ladder')
+    expect((await m.app.resumeWithCode(asked.step.pending, 'recovery', codes.value[0])).ok).toBe(true)
+    const held = loadAccount(m.home)
+    expect(held?.deviceId).toBe(deviceIdFor(held?.publicKeyJwk ?? {}))
+    expect(v2.accounts.get('alice')?.devices.map((d) => d.id)).toContain(held?.deviceId)
+  })
+
+  it('signing out behind the lock releases it: there is no account left to unlock', async () => {
+    const owner = mac('Owner')
+    await owner.app.claim({ username: 'alice', password: PASSWORD })
+    const codes = await owner.app.recoveryCodes()
+    if (!codes.ok) throw new Error('no codes')
+    const m = mac('Leaving')
+    const typed = await m.app.signIn({ username: 'alice', password: PASSWORD })
+    if (typed.ok || typed.reason !== 'second_factor') throw new Error('expected a ladder')
+    expect((await m.app.resumeWithCode(typed.step.pending, 'recovery', codes.value[0])).ok).toBe(true)
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false })
+    const handlers = accountHandlers({
+      accounts: m.app,
+      lock,
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    })
+    lock.lock()
+    expect(await handlers['account:signOut'](PASSWORD)).toMatchObject({ ok: true })
+    expect(lock.locked).toBe(false)
   })
 })

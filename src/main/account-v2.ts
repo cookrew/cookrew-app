@@ -452,12 +452,7 @@ export class Accounts {
       schemeHandled: deps.schemeHandled ?? (() => true),
       device: () => this.providerDevice(),
       hasAccount: () => this.cached !== null,
-      rememberPending: (pending, minted) => {
-        this.ladder.remember(pending, NO_PASSWORD)
-        // A password ladder holds its own key. Whichever lands, the other is
-        // refused at `landSession`, so neither may be swapped from under it.
-        if (minted !== null && this.signingIn === null) this.signingIn = { ...minted, username: '', pending }
-      },
+      rememberPending: (pending, minted) => this.ladder.remember(pending, NO_PASSWORD, minted),
       land: (body, minted) => this.landSession(NO_PASSWORD, body, minted),
       authed: (pathname, body) => this.authedPost(pathname, body),
       firstLink: () => this.firstLink(),
@@ -1424,7 +1419,7 @@ export class Accounts {
       origin: this.origin,
       now: this.now,
       passwords: this.ladder,
-      land: (password, body) => this.landSession(password, body),
+      land: (password, body, key) => this.landSession(password, body, key),
     }
   }
 
