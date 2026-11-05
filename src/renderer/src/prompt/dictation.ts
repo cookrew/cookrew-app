@@ -14,14 +14,14 @@
  * What the owner's Android first met (2026-11-03, measured 2026-11-05) was no
  * missing service: with no `lang` the recognizer followed the phone's en-GB,
  * and Chinese speech ended in a bare `nomatch` with no error. So the browser's
- * ear hears in the Mac's language, and says when it caught nothing. Android
- * listens through pauses (`continuous`) until the mic is tapped; other browsers
- * keep ending at the pause, as they always have.
+ * ear hears in the Mac's language, and says when it caught nothing. Chrome 157
+ * and later on Android listen through pauses until the mic is tapped; everything
+ * else ends at the pause, as it always has (listensThroughPauses).
  */
 
 export type Ear = 'mac' | 'web' | 'phone'
 
-/** Set once a browser's own recognizer failed for want of its service. */
+/** Set in sessionStorage once a browser's own recognizer failed for want of its service. */
 export const WEB_EAR_BROKEN_KEY = 'cookrew.dictation.webBroken'
 
 /** main/sous-voice-config.ts · DEFAULT_VOICE_LOCALE, for a Mac too old to say its own. */
@@ -30,6 +30,7 @@ const DEFAULT_EAR_LANG = 'zh-CN'
 export type Recognizer = {
   lang: string
   continuous: boolean
+  abort: () => void
   interimResults: boolean
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
   onerror: ((event: { error?: string }) => void) | null
@@ -66,11 +67,22 @@ export function preferPhoneEar(stored: string | null | undefined): boolean {
  * IN the box: a note of its own took a row on a phone and moved every button
  * under the owner's thumb (owner, 2026-11-03).
  */
-export function earSays(ear: Ear | null, phase: 'idle' | 'hearing' | 'closing', heard: string): string | null {
+export function earSays(ear: Ear | null, phase: 'idle' | 'hearing' | 'closing', heard: string, throughPauses = false): string | null {
   if (phase === 'idle') return null
   if (ear === 'phone') return phase === 'hearing' ? '● Recording… tap the mic to finish' : 'The Mac is listening…'
-  if (phase === 'hearing') return 'Listening… tap the mic to finish'
+  if (phase === 'hearing') return ear === 'web' && throughPauses ? 'Listening… tap the mic to finish' : 'Listening…'
   return ear === 'web' && heard.trim() ? `… ${heard.trim()}` : null
+}
+
+/**
+ * Whether `continuous` is safe here. Chromium 156 and older treat every partial
+ * as a final in continuous mode, so the words repeat, and send no segmented
+ * session, so a pause may end it anyway. 157 rewrote that path (read in
+ * SpeechRecognitionImpl.java at both tags; not yet run on a phone).
+ */
+export function listensThroughPauses(userAgent: string | undefined): boolean {
+  const chrome = /\bChrome\/(\d+)/.exec(userAgent ?? '')
+  return isAndroid(userAgent) && chrome !== null && Number(chrome[1]) >= 157
 }
 
 export function isAndroid(userAgent: string | undefined): boolean {
