@@ -33,6 +33,7 @@ import {
 import { resolveRotationChain, rotationCommitVerdict } from './claude-rotation'
 import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
+import { createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
 import { waitChoiceOfScreen } from '../shared/wait-choice'
 import { createBackendPhaseGate } from './backend-phase-gate'
@@ -179,6 +180,7 @@ import {
 } from './door-seats'
 import { Factors } from './factors'
 import { SeatSettleQueue } from './seat-settle'
+import { emit, isFreshInstall, resumeTelemetry, setTelemetryOn, startTelemetry, telemetryStatus } from './telemetry'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from './v2-call-token'
 import type { ServedCallersRow } from '../shared/seats'
 import { buildGrantRoster } from './grant-roster'
@@ -206,6 +208,7 @@ import {
   claudeSessionFile,
   claudeSpawnCommand,
   claudeCwdRepair,
+  locateClaudeSessionFile,
   realCwd,
   resolveClaudeSessionId,
   resumeRoleSession,
@@ -257,11 +260,13 @@ import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
-import { reapOrphanChrome } from './orphan-chrome'
+import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
+import { pressureOf, readMachineMemory, sleepColdLookups, sleepWindowMs, type PressureLevel } from './machine-pressure'
 import { staleAgentIds } from './agent-reconcile'
-import { IdleSleep, idleSleepMsFrom } from './agent-sleep'
+import { IdleSleep, idleSleepMsFrom, type SleepFacts } from './agent-sleep'
+import { reasonAwake, sleepReport, writeSleepReport } from './sleep-report'
 import { AgentWaker } from './agent-wake'
-import { gatherSleepEvidence, paneHolder, quietSince, readProcTable } from './agent-sleep-evidence'
+import { cronArmedIn, gatherSleepEvidence, paneHolder, quietSince, readProcTable, sessionMoved } from './agent-sleep-evidence'
 import { purgeRegenerableProfileData, reapOrphanPartitions } from './browser-storage-gc'
 
 import { TraceReader, type SessionWatchSpec } from './trace'
@@ -403,6 +408,11 @@ if (app.isPackaged) {
 // cap dropped the oldest id) cannot cost a transcript again. Installed here
 // and nowhere else — a unit test that constructs a store gets the no-op sink.
 installLineageSpill(new LineageSpill())
+
+// Asked before the store writes its first file: after that, every home looks
+// like an upgrade, and `installed` must not fire for everyone already here.
+const freshInstall = isFreshInstall()
+startTelemetry({ appVersion: app.getVersion() })
 
 const store = new WorkspaceStore()
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
@@ -1868,6 +1878,8 @@ async function handleServedSlug(
       // The money moved. Report it to cookrew.dev as a bought seat, through
       // the queue that survives the registry being down (seat-settle.ts).
       onPaid: (payment) => {
+        // Before the early return below: a caller with no account still paid.
+        emit('paid')
         const template = serving.served.byService(payment.serviceId)
         const team = template ? (relayServing?.addressFor(template.slug)?.name ?? null) : null
         const username = payment.sub.startsWith(ACCOUNT_SUB_PREFIX)
@@ -3283,20 +3295,54 @@ setTimeout(reconcileAgentLiveness, 30_000).unref()
 const IDLE_SLEEP_MS = idleSleepMsFrom(process.env.COOKREW_IDLE_SLEEP_MS)
 const idleSleep = new IdleSleep(IDLE_SLEEP_MS)
 
+/** One sweep old: the read is async and the sweep it steers is on a minute clock. */
+let machinePressure: PressureLevel = 'normal'
+
+async function readMachinePressure(): Promise<void> {
+  const memory = await readMachineMemory()
+  if (!memory) return
+  const level = pressureOf(memory)
+  if (level === machinePressure) return
+  console.error(`[cookrew] machine pressure ${machinePressure} -> ${level}: swap ${Math.round(memory.swapUsedMb)} MB`)
+  machinePressure = level
+}
+
 /** Anything that means a person or a turn is using this agent right now. */
+function agentBusyWhy(id: string): string | null {
+  if (lazyTerminals.viewerCount(id) > 0) return 'viewer'
+  if (turns.inTurn(id)) return 'in a turn'
+  if (turns.ownerComposing(id)) return 'owner composing'
+  return agentStatus(sessionNameFor(id)) === 'working' ? 'herdr says working' : null
+}
+
 function agentBusy(id: string): boolean {
-  return (
-    lazyTerminals.viewerCount(id) > 0 ||
-    turns.inTurn(id) ||
-    turns.ownerComposing(id) ||
-    agentStatus(sessionNameFor(id)) === 'working'
-  )
+  return agentBusyWhy(id) !== null
+}
+
+/** What the evidence last said about a nominee it kept awake. */
+const sleepHolds = new Map<string, string>()
+const SLEEP_REPORT_FILE = path.join(homedir(), '.cookrew', 'sleep-sweep.json')
+
+function reportSleepSweep(
+  running: readonly TerminalNodeData[],
+  facts: readonly SleepFacts[],
+  nominated: ReadonlySet<string>,
+  windowMs: number
+): void {
+  const cards = running.map((node, index) => ({
+    id: node.id,
+    name: node.name,
+    why: reasonAwake(facts[index], agentBusyWhy(node.id), sleepHolds.get(node.id) ?? null, nominated.has(node.id))
+  }))
+  writeSleepReport(SLEEP_REPORT_FILE, sleepReport({ at: Date.now(), pressure: machinePressure, windowMs, cards }))
 }
 
 /** One multiplexer listing per sweep — the same price as the liveness sweep. */
 function sleepSweep(): void {
   if (IDLE_SLEEP_MS <= 0) return
+  void readMachinePressure()
   try {
+    const windowMs = sleepWindowMs(machinePressure, IDLE_SLEEP_MS)
     const mux = multiplexer()
     if (!mux?.available()) return
     const sessions = new Set(mux.listSessions())
@@ -3304,23 +3350,25 @@ function sleepSweep(): void {
     // phone) has a person at it that Cookrew's viewer count cannot see.
     const focused = new Set(mux.focusedSessions?.() ?? [])
     const running = store.terminalsAcross().filter((n) => sessions.has(sessionNameFor(n.id)))
-    const due = idleSleep.due(
-      running.map((n) => ({
-        id: n.id,
-        resumable: isClaudeCommand(n.command) && !!n.claudeSessionId && canRestoreExact(n),
-        served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
-        busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
-      })),
-      Date.now()
-    )
-    if (due.length > 0) void confirmSleep(due)
+    const facts = running.map((n) => ({
+      id: n.id,
+      // A session filed under another directory is resumable too: the spawn
+      // moves the card there first (claudeCwdRepair), so it is not a lost one.
+      resumable:
+        isClaudeCommand(n.command) &&
+        !!n.claudeSessionId &&
+        (canRestoreExact(n) || claudeCwdRepair({ cwd: n.cwd, sessionId: n.claudeSessionId }) !== null),
+      served: n.servedSession != null || ptys.isServed(n.id) || servedSpawnContexts.has(store.ownerOf(n.id) ?? ''),
+      busy: agentBusy(n.id) || focused.has(sessionNameFor(n.id))
+    }))
+    const due = idleSleep.due(facts, Date.now(), windowMs)
+    reportSleepSweep(running, facts, new Set(due), windowMs)
+    if (due.length > 0) void confirmSleep(due, windowMs)
   } catch (error) {
     console.error('Idle sleep sweep failed:', error)
   }
 }
 
-/** Cold pane-pid lookups are synchronous herdr calls: at most this many per pass. */
-const SLEEP_COLD_LOOKUPS = 2
 let confirmingSleep = false
 
 /**
@@ -3329,7 +3377,7 @@ let confirmingSleep = false
  * (status change, transcript or subagent write, a loop's next wakeup) must be
  * a whole window old. Otherwise the window restarts from that sign of life.
  */
-async function confirmSleep(due: readonly string[]): Promise<void> {
+async function confirmSleep(due: readonly string[], windowMs: number): Promise<void> {
   if (confirmingSleep) return
   confirmingSleep = true
   try {
@@ -3339,21 +3387,29 @@ async function confirmSleep(due: readonly string[]): Promise<void> {
       const node = store.nodeAcrossWorkspaces(id)?.node
       if (!node || node.kind !== 'terminal' || !node.claudeSessionId) continue
       // Left nominated: the next sweep warms it, a minute later.
-      if (!panePids.isWarm(id) && coldLookups++ >= SLEEP_COLD_LOOKUPS) continue
+      if (!panePids.isWarm(id) && coldLookups++ >= sleepColdLookups(machinePressure)) continue
       const holders = liveSessionHolders()
       const now = Date.now()
-      const evidence = await gatherSleepEvidence({
-        holder: paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd),
-        holders,
-        procs,
-        transcript: claudeSessionFile(node.cwd, node.claudeSessionId),
-        now
-      })
+      const holder = paneHolder(panePids.pidOf(id), holders, node.cwd, realCwd, node.claudeSessionId)
+      if (sessionMoved(holder, node.claudeSessionId)) {
+        sleepHolds.set(id, 'pane runs another session')
+        idleSleep.restart(id, now)
+        continue
+      }
+      const transcript = locateClaudeSessionFile(node.cwd, node.claudeSessionId)
+      const evidence = await gatherSleepEvidence({ holder, holders, procs, transcript, now })
       const quiet = quietSince(evidence, now)
-      if (now - quiet.at < IDLE_SLEEP_MS) {
+      if (now - quiet.at < windowMs) {
+        sleepHolds.set(id, quiet.why)
         idleSleep.restart(id, quiet.at)
         continue
       }
+      if (await cronArmedIn(transcript, now)) {
+        sleepHolds.set(id, 'a recurring cron is armed')
+        idleSleep.restart(id, now)
+        continue
+      }
+      sleepHolds.delete(id)
       putAgentToSleep(id, now - quiet.at)
     }
   } catch (error) {
@@ -3365,6 +3421,18 @@ async function confirmSleep(due: readonly string[]): Promise<void> {
 const sleepSweepTimer = setInterval(sleepSweep, 60_000)
 sleepSweepTimer.unref()
 
+/** Old enough to be a leak, and clientless for long enough to not be a pause. */
+const HEADLESS_LEAK_AGE_MS = 2 * 60 * 60_000
+const HEADLESS_LEAK_QUIET_MS = 60 * 60_000
+const headlessReaper = new HeadlessReaper(HEADLESS_LEAK_AGE_MS, HEADLESS_LEAK_QUIET_MS)
+
+async function headlessLeakSweep(): Promise<void> {
+  const killed = await headlessReaper.sweep(Date.now())
+  if (killed.length > 0) console.error(`[cookrew] stopped ${killed.length} headless browser(s) nobody was driving`)
+}
+const headlessLeakTimer = setInterval(() => void headlessLeakSweep(), 10 * 60_000)
+headlessLeakTimer.unref()
+
 /**
  * End an idle agent's process and nothing else: the node, its wires, its
  * session id and its turn history all stay, so the wake is a plain resume.
@@ -3374,6 +3442,8 @@ sleepSweepTimer.unref()
 function putAgentToSleep(id: string, quietMs: number): void {
   const node = store.nodeAcrossWorkspaces(id)?.node
   if (!node || node.kind !== 'terminal' || agentBusy(id)) return
+  // Nomination read focus up to a pass ago, and a pass can run long.
+  if (multiplexer()?.focusedSessions?.().includes(sessionNameFor(id))) return
   lazyTerminals.forget(id)
   herdrPhases.observe(id, null, true)
   sessionSync.unwatch(id)
@@ -3384,7 +3454,12 @@ function putAgentToSleep(id: string, quietMs: number): void {
   idleSleep.markAsleep(id)
   const minutes = Math.round(quietMs / 60_000)
   store.withOpContext({ actor: 'agent' }, () =>
-    store.recordEvent('terminal.asleep', id, node.name, `idle ${minutes} min; wakes on the next ask, reply or LIVE`)
+    store.recordEvent(
+      'terminal.asleep',
+      id,
+      node.name,
+      `idle ${minutes} min${machinePressure === 'normal' ? '' : ` (memory pressure ${machinePressure})`}; wakes on the next ask, reply or LIVE`
+    )
   )
 }
 
@@ -6128,6 +6203,7 @@ app.whenReady().then(() => {
       console.error('Dock icon failed to load:', error)
     }
   }
+  if (freshInstall) emit('installed')
   // The cards routed before this restart are still routed (their node data
   // says so); seed them, then one probe before the first card spawns.
   routeService.seedRouted()
@@ -6155,6 +6231,8 @@ app.whenReady().then(() => {
         if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
       })
       .catch(() => undefined)
+    // Whatever the last run left queued for the funnel; off, it stays home.
+    void resumeTelemetry()
   }, 5_000)
 
   // Reclaim what the stores leaked. Deferred rather than awaited: it walks
@@ -7863,6 +7941,9 @@ function registerIpc(handlers: RestoreHandlers): void {
   // The header's device step: this desktop by the name its account record
   // gives it (the name /me and the phone show), else the renderer's fallback.
   ipcMain.handle('machine:name', () => accounts.account()?.name ?? null)
+  // The ⋯ row's two questions (TelemetryRow.tsx).
+  ipcMain.handle('telemetry:status', () => telemetryStatus())
+  ipcMain.handle('telemetry:set', (_e, on: unknown) => (typeof on === 'boolean' ? setTelemetryOn(on) : telemetryStatus()))
   // THE ZOOM NAVIGATOR'S DEVICES (zoom-fleet.ts): this desktop's levels feed,
   // pushed per window like the board, and the account's desktops from the
   // registry, cut to directory facts before they reach the renderer.
@@ -7990,8 +8071,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     const request = parseMenuRequest(body)
     return request ? answerMenu(terminalId, request) : { ok: false, reason: 'refused' }
   })
-  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
-    idleSleep.touch(terminalId, Date.now())
+  const typeInto = createPacedInput((terminalId, data) => {
     // Keys for an offline agent wake it; they wait for it, then go in in order.
     if (waker.hold(terminalId, data)) return
     const verdict = ptys.get(terminalId)?.write(data)
@@ -8015,6 +8095,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         )
       }
     }
+  })
+  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    idleSleep.touch(terminalId, Date.now())
+    typeInto(terminalId, data)
   })
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)

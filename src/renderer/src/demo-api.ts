@@ -185,7 +185,13 @@ export function createDemoApi(): CookrewApi {
     for (const listener of wsListeners) listener(list)
   }
 
+  let telemetry = { on: false, locked: false }
   const api: CookrewApi = {
+    telemetryStatus: async () => telemetry,
+    setTelemetry: async (on) => {
+      telemetry = { ...telemetry, on }
+      return telemetry
+    },
     // The demo has no Ollama behind it. Say that, rather than hand back
     // untranslated text and let it read as a translation that did nothing.
     translateHost: () => Promise.resolve(null),

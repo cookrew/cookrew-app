@@ -225,6 +225,43 @@
   text-overflow: ellipsis;
 }
 
+/* A row with a note: the icon stays beside the label, not halfway down the note. */
+.cr-more-item.tall {
+  align-items: flex-start;
+}
+
+.cr-more-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* The one row that has to say something: what it sends, readable without hovering. */
+.cr-more-note {
+  max-width: 214px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  color: var(--muted);
+}
+
+.cr-more-item.on .cr-more-note {
+  color: var(--ink);
+}
+
+.cr-more-item:disabled {
+  cursor: default;
+}
+
+.cr-more-item:disabled:hover {
+  background: none;
+}
+
 .cr-more-item kbd {
   font-family: var(--font-mono);
   font-size: 10px;

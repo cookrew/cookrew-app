@@ -1,6 +1,7 @@
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage } from '../../shared/first-run'
 import type { PreflightRow } from '../../shared/preflight'
+import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
@@ -512,6 +513,9 @@ export interface CookrewApi {
   subscribeBoard?: (cb: (board: BoardSnapshotLike) => void) => () => void;
   /** This desktop's name for the header's device step; null when it has none. Optional — the phone names its desktop from the path. */
   machineName?: () => Promise<string | null>;
+  /** The usage-data switch (TelemetryRow.tsx). Optional: it belongs to this machine, so the phone has none. */
+  telemetryStatus?: () => Promise<TelemetryStatus | null>;
+  setTelemetry?: (on: boolean) => Promise<TelemetryStatus | null>;
   /**
    * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
    * levels feed — every workspace with its agents and their wired notes and

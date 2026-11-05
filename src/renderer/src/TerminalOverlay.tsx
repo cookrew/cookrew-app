@@ -62,7 +62,7 @@ import { createTurnRedraw } from './turn-redraw'
  * in the main process, so nothing is lost between mounts.
  */
 /** Menu name for a code, degrading to the code itself rather than to blank. */
-function languageName(code: string | null): string {
+export function languageName(code: string | null): string {
   if (code === null) return 'another language'
   return languageByCode(code)?.name ?? code
 }
@@ -126,7 +126,7 @@ function TerminalOverlayFor({ node, rect, primary }: { node: TerminalNodeData; r
  * "today 09:14" while it is today, then the date — a bare timestamp on a
  * three-day-old session reads as if it just happened.
  */
-function openedLabel(at: number): string {
+export function openedLabel(at: number): string {
   const when = new Date(at)
   const time = when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
   const today = new Date()

@@ -346,7 +346,14 @@ describe('boot command and env', () => {
     expect(args).toContain('COOKREW_TERMINAL_ID=abc-123')
     expect(args).toContain('COOKREW_SOCKET=/tmp/sock')
     expect(args).toContain('COOKREW_CLI=/tmp/cli/cookrew')
-    expect(args.filter((a) => a === '--env')).toHaveLength(5)
+    expect(args.filter((a) => a === '--env')).toHaveLength(9)
+  })
+
+  it('caps test workers on both roads into a pane: the --env pairs and the boot script', () => {
+    expect(envArgs(SPEC)).toContain('VITEST_MAX_FORKS=4')
+    expect(envArgs(SPEC)).toContain('VITEST_MIN_FORKS=1')
+    expect(bootCommand(SPEC)).toContain("export VITEST_MAX_FORKS='4'")
+    expect(bootCommand(SPEC)).toContain("export VITEST_MIN_THREADS='1'")
   })
 })
 

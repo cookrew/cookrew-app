@@ -73,4 +73,12 @@ describe('pane env — the CLI control plane', () => {
     expect(env.PATH).toBe('')
     expect(env.PATH).not.toContain('/usr/bin')
   })
+
+  it('caps every test run in a pane, min and max together: a max alone fails vitest', () => {
+    const env = paneEnv({ terminalId: 't-3', socketPath: '/s', cliDir: '/c', ownerEnv: { PATH: '/bin' } })
+    expect(env.VITEST_MAX_FORKS).toBe('4')
+    expect(env.VITEST_MIN_FORKS).toBe('1')
+    expect(env.VITEST_MAX_THREADS).toBe('4')
+    expect(env.VITEST_MIN_THREADS).toBe('1')
+  })
 })

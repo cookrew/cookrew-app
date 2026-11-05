@@ -72,6 +72,7 @@ import type { EventEmitter } from "node:events";
 import type { SecretsStore } from "./secrets-store";
 import { isSecretName } from "../shared/secret-slot";
 import { RELAY_MARKER, isLoopbackPeer } from "./relay-base";
+import { emit } from "./telemetry";
 
 /**
  * THE TRANSPORTS A SECRET VALUE MAY RIDE, each named for why:
@@ -98,6 +99,20 @@ export const sealedTransport = (request: {
   const loopback = isLoopbackPeer(request.socket.remoteAddress);
   if (request.headers?.[RELAY_MARKER] === "1") return loopback;
   return loopback;
+};
+
+/**
+ * A request from another device, not this Mac talking to itself. The relay's
+ * bridge arrives on loopback, so there the marker is what says a phone is on
+ * the far end; off the loopback the marker proves nothing and the peer does.
+ */
+export const fromAnotherDevice = (request: {
+  socket?: { remoteAddress?: string };
+  headers?: Record<string, string | string[] | undefined>;
+}): boolean => {
+  const peer = request.socket?.remoteAddress;
+  if (peer === undefined) return false;
+  return !isLoopbackPeer(peer) || request.headers?.[RELAY_MARKER] === "1";
 };
 
 /** A `secret.*` event with its details — the name — withheld. */
@@ -620,6 +635,9 @@ export async function handleMobileApi(
     !!deps.wallToken && pairingAuthorized(request, url, deps.wallToken);
   /** Cleared for a read: either scope. */
   const canRead = hasPairing || hasReadOnly;
+  // The one place every pairing shows, whichever way it happened: the root
+  // token on the LAN, a phone's own token, the relay. Free after the first.
+  if (hasPairing && fromAnotherDevice(request)) emit("phone_paired");
 
   // What the presented credential is worth. The phone asks BEFORE it acts, so
   // an unpaired device can say "you are unpaired" instead of letting every
