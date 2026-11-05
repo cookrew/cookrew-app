@@ -105,8 +105,12 @@ export const openBridgedSocket = (path: string): BridgeWebSocket =>
  * pairing token goes as a header and the reader is the one the link already has.
  */
 const headerStream = (url: string): Pick<RtcLink, 'request'> => ({
-  request: ({ method, headers, signal }) =>
-    fetch(url, { method, signal, credentials: 'same-origin', headers: { ...headers, ...authHeaders() } })
+  request: async ({ method, headers, signal }) => {
+    const response = await fetch(url, { method, signal, credentials: 'same-origin', headers: { ...headers, ...authHeaders() } })
+    // A page where a stream was due is a failed connect, as EventSource holds it.
+    const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
+    return stream || !response.ok ? response : new Response(null, { status: 502 })
+  }
 })
 
 /**

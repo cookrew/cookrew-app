@@ -55,7 +55,10 @@ const stubPhone = () => {
   let live: ReadableStreamDefaultController<Uint8Array> | null = null
   ;(globalThis as unknown as { fetch: unknown }).fetch = async (url: string): Promise<Response> => {
     if (String(url).includes('/api/events')) {
-      return new Response(new ReadableStream({ start: (controller) => void (live = controller) }), { status: 200 })
+      return new Response(new ReadableStream({ start: (controller) => void (live = controller) }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
     }
     fetched += 1
     throw new Error('unreachable')

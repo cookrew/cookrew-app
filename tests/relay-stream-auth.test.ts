@@ -93,6 +93,20 @@ describe('on the relay', () => {
   })
 })
 
+describe('an answer that is not a stream', () => {
+  it('is a failed connect, as a native EventSource would treat it, and never reads as live', async () => {
+    vi.mocked(fetch).mockImplementationOnce(
+      async () => new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } })
+    )
+    const source = plane.openEventSource(`${BASE}/api/events`)
+    let opened = false
+    source.addEventListener('open', () => void (opened = true))
+    await new Promise<void>((resolve) => source.addEventListener('error', () => resolve()))
+    expect(opened).toBe(false)
+    expect(source.readyState).toBe(2)
+  })
+})
+
 describe('on a direct plane, which never meets the ingress', () => {
   it('keeps the native stream with the token it needs', () => {
     data.setDataPlane({ origin: TAILNET, kind: 'tailnet' })

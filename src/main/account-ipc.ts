@@ -459,8 +459,12 @@ async function resume(
   deps: AccountIpcDeps,
   password: string,
 ): Promise<SignInAnswer<AccountStatus>> {
+  const held = deps.accounts.account() !== null
   const result = await deps.accounts.resume(password)
-  return result.ok ? { ok: true, value: signedIn(deps) } : result
+  if (result.ok) return { ok: true, value: signedIn(deps) }
+  // The file went during that call: the account was deleted elsewhere, and this
+  // Mac winds down as it would for a sign-out, doors included.
+  return held && deps.accounts.account() === null ? leftTheAccount(deps) : result
 }
 
 /**
@@ -600,7 +604,7 @@ async function deleteAccount(deps: AccountIpcDeps, input: unknown): Promise<Acco
 }
 
 /** The account is gone from this Mac, by a sign-out or a delete. */
-async function leftTheAccount(deps: AccountIpcDeps): Promise<AccountResult<AccountStatus>> {
+async function leftTheAccount(deps: AccountIpcDeps): Promise<{ ok: true; value: AccountStatus }> {
   // `cookrew logout` can leave from behind the lock, and with no account there is
   // nothing left that could open it.
   deps.lock.proven()
@@ -831,6 +835,9 @@ async function deviceSignIn(deps: AccountIpcDeps, onCode: (code: DeviceCode) => 
 async function oauthStart(deps: AccountIpcDeps, provider: unknown) {
   if (!isProviderId(provider)) return { ok: false as const, reason: 'not_offered' as const }
   if (deps.lock.locked) return LOCKED
+  // This button is how an account with no password resumes, so it is where a Mac
+  // that missed a delete finds out. Asked before any browser opens.
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
   const result = await deps.accounts.providerSignIn(provider)
   return result.ok ? { ok: true as const, value: landed(deps) } : result
 }

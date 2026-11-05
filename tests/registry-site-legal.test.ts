@@ -314,8 +314,9 @@ describe('the words match the code', () => {
 
   it('says the pairing token stays out of addresses on the relay, and still calls the path readable', () => {
     const relay = wordsOf(PRIVACY.sections.find((s) => s.id === 'relay') as LegalSection)
-    expect(relay).toMatch(/sends your pairing token in a header on this path/)
-    expect(relay).not.toMatch(/carry your pairing token in their address/)
+    expect(relay).toMatch(/Current versions of the app send your pairing token in a header on this path/)
+    // Each Mac serves its own page, so one that has not updated still does the old thing.
+    expect(relay).toMatch(/A Mac on an older version still puts it in the address/)
     expect(relay).toMatch(/could technically read it/)
     expect(relay).not.toMatch(/We do not log or store that content/)
   })
