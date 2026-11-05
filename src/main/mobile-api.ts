@@ -53,7 +53,7 @@ import type {
 } from "../shared/model";
 import { lightenCanvas } from "../shared/wire-canvas";
 import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presentedToken } from "./mobile-http";
-import { cardCheckpoint, handleWatchClaim, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted } from "./watch-routes";
+import { cardCheckpoint, handleWatchClaim, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
 import type { StreamService } from "./stream-service";
@@ -675,6 +675,11 @@ export async function handleMobileApi(
 
   // Six digits for a watch's token: open, as this route must be, and bounded.
   if (await handleWatchClaim(request, response, method, p)) return true;
+  const watchRefusal = watchCleared ? watchWriteRefusal(p) : null;
+  if (watchRefusal) {
+    respondJson(response, watchRefusal.status, { error: watchRefusal.error });
+    return true;
+  }
 
   if (method !== "GET" && deps.pairingToken && !hasPairing) {
     respondJson(response, 401, {

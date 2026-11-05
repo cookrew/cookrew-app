@@ -27,6 +27,12 @@ public protocol WatchAPI: Sendable {
   func note(_ id: String) async throws -> NoteBody
 }
 
+/** The request cannot have reached the Mac: nothing was connected. */
+func neverLeft(_ error: Error) -> Bool {
+  guard let code = (error as? URLError)?.code else { return false }
+  return [.cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .notConnectedToInternet, .appTransportSecurityRequiresSecureConnection, .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot].contains(code)
+}
+
 /** The refusal's words, when the Mac sent some. */
 private struct Refusal: Decodable {
   let error: String?
@@ -78,13 +84,20 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     lock.unlock()
   }
 
+  /**
+   * A read tries every way there. A write moves on only when it never left: a
+   * timed-out POST may still be at work on the Mac, and sent again down the next
+   * road it would say the words twice, stop twice, or make two agents.
+   */
   private func call(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: Any]? = nil, tag: String? = nil) async throws -> (Data, HTTPURLResponse) {
     guard !bases.isEmpty else { throw WatchError.unreachable }
     let payload = try body.map { try JSONSerialization.data(withJSONObject: $0) }
+    let read = method == "GET"
     for index in order() {
       var url = bases[index].appending(path: path)
       if !query.isEmpty { url.append(queryItems: query) }
-      var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+      // A write can wake an agent, and that takes a while.
+      var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: read ? 10 : 30)
       request.httpMethod = method
       request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
       if let tag { request.setValue(tag, forHTTPHeaderField: "if-none-match") }
@@ -98,7 +111,8 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
         stick(index)
         return (data, http)
       } catch {
-        continue // The next way there.
+        if read || neverLeft(error) { continue }
+        throw WatchError.unreachable
       }
     }
     throw WatchError.unreachable
@@ -117,10 +131,6 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     try checked(data, http)
   }
 
-  private static func segment(_ id: String) -> String {
-    id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id
-  }
-
   public func cards(tag: String?) async throws -> Fresh<CardsReply> {
     let (data, http) = try await call("GET", "api/watch/cards", tag: tag)
     if http.statusCode == 304 { return .same }
@@ -129,11 +139,11 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   public func send(_ text: String, to id: String) async throws {
-    try await post("api/terminal/\(Self.segment(id))/input", ["text": text])
+    try await post("api/terminal/\(id)/input", ["text": text])
   }
 
   public func answer(_ act: MenuAct, menu: String, to id: String) async throws {
-    let (data, http) = try await call("POST", "api/terminal/\(Self.segment(id))/menu", body: ["menu": menu, "act": act.json])
+    let (data, http) = try await call("POST", "api/terminal/\(id)/menu", body: ["menu": menu, "act": act.json])
     try checked(data, http)
     // The Mac checks the answer against the screen: 200 can still be a no.
     struct Result: Decodable {
@@ -146,11 +156,11 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   public func stop(_ id: String) async throws {
-    try await post("api/watch/card/\(Self.segment(id))/stop")
+    try await post("api/watch/card/\(id)/stop")
   }
 
   public func seen(_ id: String) async throws {
-    try await post("api/terminal/\(Self.segment(id))/seen")
+    try await post("api/terminal/\(id)/seen")
   }
 
   public func newAgent(_ text: String) async throws {
@@ -158,18 +168,18 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   public func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> {
-    let (data, http) = try await call("GET", "api/watch/item/\(Self.segment(id))/frame", query: [URLQueryItem(name: "w", value: String(width))], tag: tag)
+    let (data, http) = try await call("GET", "api/watch/item/\(id)/frame", query: [URLQueryItem(name: "w", value: String(width))], tag: tag)
     if http.statusCode == 304 { return .same }
     try checked(data, http)
     return .new(data, tag: http.value(forHTTPHeaderField: "etag"))
   }
 
   public func input(_ input: BrowserInput, to id: String) async throws {
-    try await post("api/watch/item/\(Self.segment(id))/input", input.json)
+    try await post("api/watch/item/\(id)/input", input.json)
   }
 
   public func note(_ id: String) async throws -> NoteBody {
-    let (data, http) = try await call("GET", "api/watch/item/\(Self.segment(id))")
+    let (data, http) = try await call("GET", "api/watch/item/\(id)")
     try checked(data, http)
     return try JSONDecoder().decode(NoteBody.self, from: data)
   }

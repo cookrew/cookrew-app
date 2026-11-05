@@ -87,16 +87,36 @@ public final class WatchStore {
   @ObservationIgnored private let now: () -> Date
   @ObservationIgnored private let feel: (WatchEvent) -> Void
   @ObservationIgnored private var tag: String?
+  @ObservationIgnored private let sleep: @Sendable (Double) async -> Void
+  /**
+   * What is on screen depends on the time as well as the data: a row's fill
+   * ending, a menu coming back, Stop disarming. Nothing else would redraw it (an
+   * unchanged crew is a 304), so each of those wakes this at its moment.
+   */
+  private var beat = 0
   private var drafts: [String: String] = [:]
   private var sentWords: [String: (text: String, at: Date)] = [:]
   private var answers: [String: Answer] = [:]
   private var stopArmedAt: [String: Date] = [:]
   private var readIds: Set<String> = []
 
-  public init(api: WatchAPI, now: @escaping () -> Date = Date.init, feel: @escaping (WatchEvent) -> Void = { _ in }) {
+  public init(
+    api: WatchAPI,
+    now: @escaping () -> Date = Date.init,
+    feel: @escaping (WatchEvent) -> Void = { _ in },
+    sleep: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
+  ) {
     self.api = api
     self.now = now
     self.feel = feel
+    self.sleep = sleep
+  }
+
+  private func wake(after seconds: Double) {
+    Task { [sleep] in
+      await sleep(seconds)
+      beat &+= 1
+    }
   }
 
   public var client: WatchAPI { api }
@@ -152,6 +172,7 @@ public final class WatchStore {
 
   /** The words just sent to this card, while they stand. */
   public func sent(_ id: String) -> String? {
+    _ = beat
     guard let sent = sentWords[id], now().timeIntervalSince(sent.at) < sentSeconds else { return nil }
     return sent.text
   }
@@ -159,10 +180,6 @@ public final class WatchStore {
   private func refused(_ error: Error) {
     feel(.refused)
     if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else { notice = "The Mac is not answering" }
-  }
-
-  public func clearNotice() {
-    notice = nil
   }
 
   /** The box's words, where boxTarget says they go. The draft comes back if the Mac will not take them. */
@@ -187,6 +204,7 @@ public final class WatchStore {
         return
       }
       sentWords[page] = (words, now())
+      wake(after: sentSeconds)
       feel(.sent)
       await refresh()
     } catch {
@@ -198,7 +216,8 @@ public final class WatchStore {
   // MARK: The menu
 
   public func waitView(_ card: Card) -> WaitView? {
-    answerView(live: card.choice, answer: answers[card.id], now: now())
+    _ = beat
+    return answerView(live: card.choice, answer: answers[card.id], now: now())
   }
 
   /** A row tapped: this menu, this row; the Mac checks it against the screen. */
@@ -207,6 +226,8 @@ public final class WatchStore {
     let option = view.choice.options[index]
     if !option.staysOpen {
       answers[card.id] = Answer(signature: view.choice.signature, index: index, choice: view.choice, at: now())
+      wake(after: answerFillSeconds)
+      wake(after: answerRetrySeconds)
     }
     await deliver(.row(index), menu: view.choice.id, to: card)
   }
@@ -240,6 +261,7 @@ public final class WatchStore {
   // MARK: Stop
 
   public func stopArmed(_ id: String) -> Bool {
+    _ = beat
     guard let at = stopArmedAt[id] else { return false }
     return now().timeIntervalSince(at) < stopArmSeconds
   }
@@ -248,6 +270,7 @@ public final class WatchStore {
   public func stop(_ card: Card) async {
     guard stopArmed(card.id) else {
       stopArmedAt[card.id] = now()
+      wake(after: stopArmSeconds)
       return
     }
     stopArmedAt[card.id] = nil

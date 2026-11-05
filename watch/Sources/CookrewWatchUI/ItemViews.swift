@@ -37,6 +37,7 @@ public struct BrowserPage: View {
 
   @Environment(\.ink) private var ink
   @Environment(\.inkStill) private var still
+  @Environment(\.scenePhase) private var phase
   @State private var image: CGImage?
   @State private var tag: String?
   @State private var view = PictureView()
@@ -155,7 +156,9 @@ public struct BrowserPage: View {
     .background(ink.paper)
     .modifier(CrownTurns(value: $crownValue))
     .onChange(of: crownValue) { _, next in crown.turned(to: next) }
-    .task(id: item.id) { await loop() }
+    .task(id: "\(item.id)|\(phase == .active)") {
+      if phase == .active { await loop() }
+    }
   }
 
   /** The box, speaking to the page. */
@@ -206,6 +209,7 @@ public struct BrowserPage: View {
             tag = next
             if let decoded = picture(data) { image = decoded }
           }
+          failed = nil
         } catch WatchError.refused(let why) {
           failed = why
         } catch {

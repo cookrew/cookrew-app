@@ -33,6 +33,11 @@ private final class FakeAPI: WatchAPI, @unchecked Sendable {
   func note(_ id: String) async throws -> NoteBody { NoteBody(name: "n", content: "c") }
 }
 
+private actor Waits {
+  var all: [Double] = []
+  func add(_ seconds: Double) { all.append(seconds) }
+}
+
 private let menu = WaitChoice(id: "m1", question: "Allow?", options: [WaitOption(key: "1", label: "Yes"), WaitOption(key: "2", label: "No")], cursor: 0, escIndex: 1)
 private let typing = WaitChoice(id: "m2", question: "Which?", options: [WaitOption(key: "1", label: "A"), WaitOption(key: "2", label: "Type something", role: .type)])
 
@@ -177,6 +182,19 @@ struct StoreTests {
     #expect(store.waitView(a)?.choice == menu)
   }
 
+  @Test("what the time changes is redrawn at its moment: the store wakes itself")
+  func wakes() async {
+    let api = FakeAPI()
+    api.replies = [[card("a", .waiting, choice: menu), card("b", .working)]]
+    let waits = Waits()
+    let store = WatchStore(api: api, sleep: { await waits.add($0) })
+    await store.refresh()
+    await store.answer(store.cards[0], row: 0)
+    await store.stop(store.cards[1])
+    for _ in 0..<20 { await Task.yield() }
+    #expect(await waits.all.sorted() == [answerFillSeconds, stopArmSeconds, answerRetrySeconds].sorted())
+  }
+
   @Test("a tick stays open; a menu that moved says so and shows again")
   func ticksAndMoved() async {
     let tick = WaitChoice(id: "m3", question: "Which?", options: [WaitOption(key: "1", label: "A", role: .toggle, checked: false)])
@@ -223,6 +241,62 @@ struct StoreTests {
     api.failure = .unpaired
     await store.refresh()
     #expect(store.unpaired)
+  }
+}
+
+/** Answers one road with `failure`, and records what reached each. */
+private final class Roads: URLProtocol, @unchecked Sendable {
+  nonisolated(unsafe) static var failure: URLError.Code = .timedOut
+  nonisolated(unsafe) static var hits: [String] = []
+
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func stopLoading() {}
+  override func startLoading() {
+    Self.hits.append(request.url?.host() ?? "")
+    if request.url?.host() == "10.0.0.1" {
+      client?.urlProtocol(self, didFailWithError: URLError(Self.failure))
+      return
+    }
+    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(#"{"cards":[],"activeWorkspaceId":"w"}"#.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+}
+
+@Suite("two roads to one Mac", .serialized)
+struct FailoverTests {
+  private func api() -> HTTPWatchAPI {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [Roads.self]
+    return HTTPWatchAPI(bases: [URL(string: "http://10.0.0.1:8639")!, URL(string: "http://10.0.0.2:8639")!], token: "t", session: URLSession(configuration: config))
+  }
+
+  @Test("a timed-out write is not sent again down the next road")
+  func writeTimedOut() async {
+    Roads.hits = []
+    Roads.failure = .timedOut
+    await #expect(throws: WatchError.unreachable) { try await api().send("go on", to: "a") }
+    #expect(Roads.hits == ["10.0.0.1"])
+  }
+
+  @Test("a write that never connected takes the next road")
+  func writeRefused() async throws {
+    Roads.hits = []
+    Roads.failure = .cannotConnectToHost
+    try await api().send("go on", to: "a")
+    #expect(Roads.hits == ["10.0.0.1", "10.0.0.2"])
+  }
+
+  @Test("a read takes the next road whatever happened, and the road that answered is tried first after")
+  func read() async throws {
+    Roads.hits = []
+    Roads.failure = .timedOut
+    let client = api()
+    _ = try await client.cards(tag: nil)
+    _ = try await client.cards(tag: nil)
+    #expect(Roads.hits == ["10.0.0.1", "10.0.0.2", "10.0.0.2"])
   }
 }
 
@@ -280,18 +354,36 @@ struct FrameTests {
 
 @Suite("the way to the Mac")
 struct SessionTests {
-  @Test("a bare address is the companion's plain port; a full one stands")
+  @Test("a bare address is the companion's plain port; a full one stands; the open internet takes no plain HTTP")
   func typed() {
     #expect(baseURL(typed: " 192.168.2.40 ")?.absoluteString == "http://192.168.2.40:8639")
     #expect(baseURL(typed: "100.64.1.2:9000")?.absoluteString == "http://100.64.1.2:9000")
     #expect(baseURL(typed: "https://a.d.cookrew.dev:8643")?.absoluteString == "https://a.d.cookrew.dev:8643")
     #expect(baseURL(typed: "  ") == nil)
+    #expect(baseURL(typed: "8.8.8.8") == nil)
+    #expect(baseURL(typed: "http://example.com") == nil)
+    #expect(baseURL(typed: "172.32.0.1") == nil)
+    #expect(baseURL(typed: "172.20.0.1") != nil)
   }
 
-  @Test("the address that worked is tried first, and nothing twice")
+  @Test("a name with a real certificate goes first, then what was typed; nothing twice, nothing public in the clear")
   func bases() {
     let typed = Base(kind: "typed", url: "http://192.168.2.40:8639")
-    let named = [Base(kind: "name", url: "https://x.d.cookrew.dev:8643"), Base(kind: "lan", url: "http://192.168.2.40:8639")]
-    #expect(basesAfterClaim(typed: typed, named: named).map(\.url) == ["http://192.168.2.40:8639", "https://x.d.cookrew.dev:8643"])
+    let named = [Base(kind: "lan", url: "http://192.168.2.40:8639"), Base(kind: "tailnet", url: "http://100.64.1.2:8639"), Base(kind: "name", url: "https://x.d.cookrew.dev:8643"), Base(kind: "lan", url: "http://8.8.8.8:8639")]
+    #expect(basesAfterClaim(typed: typed, named: named).map(\.url) == ["https://x.d.cookrew.dev:8643", "http://192.168.2.40:8639", "http://100.64.1.2:8639"])
+  }
+
+  @Test("an id goes into a path once-encoded")
+  func path() {
+    let base = URL(string: "http://192.168.2.40:8639")!
+    #expect(base.appending(path: "api/terminal/a b/input").absoluteString == "http://192.168.2.40:8639/api/terminal/a%20b/input")
+  }
+
+  @Test("only what never connected may go down another road")
+  func left() {
+    #expect(neverLeft(URLError(.cannotConnectToHost)))
+    #expect(neverLeft(URLError(.dnsLookupFailed)))
+    #expect(!neverLeft(URLError(.timedOut)))
+    #expect(!neverLeft(URLError(.networkConnectionLost)))
   }
 }

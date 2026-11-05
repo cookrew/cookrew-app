@@ -2,6 +2,7 @@
 
 import { nativeImage } from 'electron'
 import { nameFromPrompt } from '../shared/agent-name'
+import { menuHeldOnScreen } from '../shared/wait-choice'
 import type { CanvasNode, Connection } from '../shared/model'
 import type { BrowserInstance } from './browser-instance'
 import type { MobileEndpoint } from './mobile-endpoints'
@@ -24,6 +25,8 @@ export interface WatchHostDeps {
   readonly lastPreset: () => string
   readonly createTerminal: (opts: { name: string; preset: string; position: { x: number; y: number }; prompt: string; autoName: boolean }) => { id: string }
   readonly stop: (terminalId: string) => Promise<boolean>
+  /** What the terminal shows now; null when nothing is attached. */
+  readonly screen: (terminalId: string) => string | null
 }
 
 export function createWatchHost(deps: WatchHostDeps): WatchHost {
@@ -54,6 +57,14 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
       const made = deps.createTerminal({ name: nameFromPrompt(words), preset: deps.lastPreset(), position: { x: 0, y: 0 }, prompt: words, autoName: true })
       return made.id
     },
-    stop: deps.stop
+    stop: deps.stop,
+    speaksTo(terminalId) {
+      const node = deps.node(terminalId)
+      return node?.kind === 'terminal' && node.command.trim().length > 0
+    },
+    menuOnScreen(terminalId) {
+      const screen = deps.screen(terminalId)
+      return screen !== null && menuHeldOnScreen(screen)
+    }
   }
 }

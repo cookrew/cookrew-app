@@ -368,9 +368,9 @@ public struct CardPage: View {
       }
     }
     .background(ink.paper)
-    .task(id: "\(card.id)|\(card.status.rawValue)") {
+    .task(id: "\(card.id)|\(card.status.rawValue)|\(store.page == card.id)") {
       // Looked at for a moment, a reply is read; a crown passing over it is not.
-      guard card.status == .done else { return }
+      guard card.status == .done, store.page == card.id else { return }
       try? await Task.sleep(nanoseconds: UInt64(readSeconds * 1_000_000_000))
       guard !Task.isCancelled, store.page == card.id else { return }
       await store.read(card)

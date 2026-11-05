@@ -4,7 +4,10 @@
 // pairing token opens every terminal on this Mac. So a watch never holds it:
 // it holds a token of its own that opens only what the wrist needs
 // (watch-routes.ts · watchRouteAllowed), and forgetting the watch ends that
-// token and nothing else.
+// token and nothing else. What it does open is still real: it speaks to the
+// agents, and they act. It reaches no shell, no raw keys and no workspace, but
+// it is not a read-only token, and on a plain-HTTP address (the LAN, like a
+// phone there) it crosses that network in the clear.
 //
 // It is claimed with six digits, because six digits is what a wrist can type.
 // That is safe only because the code is short-lived (five minutes), single

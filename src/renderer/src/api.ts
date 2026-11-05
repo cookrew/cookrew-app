@@ -762,6 +762,9 @@ export interface CookrewApi {
   browserStreamToken: () => Promise<string | null>;
   /** Six digits for an Apple Watch, and where it can reach this Mac. Absent in the demo. */
   watchCode?: () => Promise<WatchCode>;
+  /** Is a watch paired; and forget it, here and now. */
+  watchState?: () => Promise<{ paired: boolean }>;
+  watchForget?: () => Promise<unknown>;
   /**
    * The desktop's own line to a browser card's Chrome: a MessagePort from
    * main (browser-cast-ipc.ts). Absent on the phone and the demo, and on a

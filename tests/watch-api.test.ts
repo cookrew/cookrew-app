@@ -87,6 +87,8 @@ function host(pairing: WatchPairing, over: Partial<WatchHost> = {}): WatchHost {
     note: (id) => (id === 'n1' ? { name: 'plan', content: 'first line\nsecond line' } : null),
     makeAgent: async () => 'new-agent',
     stop: async (id) => id === 'working',
+    speaksTo: (id) => id !== 'shell',
+    menuOnScreen: (id) => id === 'unparsed-menu',
     ...over
   }
 }
@@ -351,6 +353,17 @@ describe('through the real gate', () => {
     expect((await post('/api/watch/item/b1/input', token, { t: 'evaluate' })).status).toBe(400)
     instance.viewportState.agentHeld = true
     expect((await post('/api/watch/item/b1/input', token, { t: 'tap', x: 0.1, y: 0.1 })).status).toBe(409)
+  })
+
+  it('a watch reaches no shell, and no input line with a menu up; the phone’s own use is untouched', async () => {
+    const token = await paired()
+    const shell = await post('/api/terminal/shell/input', token, { text: 'rm -rf ~' })
+    expect(shell.status).toBe(403)
+    expect((await post('/api/terminal/shell/menu', token, { menu: 'm', act: { kind: 'esc' } })).status).toBe(403)
+    expect((await post('/api/watch/card/shell/stop', token)).status).toBe(403)
+    expect((await post('/api/terminal/unparsed-menu/input', token, { text: 'No' })).status).toBe(409)
+    // Not refused here (the fake has no /input below the gate): the owner passes straight through.
+    expect((await post('/api/terminal/shell/input', PAIRING, { text: 'ls' })).status).not.toBe(403)
   })
 
   it('forgetting the watch ends its token, and a watch can forget itself', async () => {

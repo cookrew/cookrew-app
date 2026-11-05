@@ -13,6 +13,22 @@ export function WatchPairRow(): React.JSX.Element | null {
   const [code, setCode] = useState<WatchCode | null>(null)
   const [failed, setFailed] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const [paired, setPaired] = useState(false)
+  /** Forgetting a watch takes a second tap: it means pairing again on the wrist. */
+  const [forgetting, setForgetting] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    void api.watchState?.().then(
+      (state) => {
+        if (live) setPaired(state.paired)
+      },
+      () => undefined
+    )
+    return () => {
+      live = false
+    }
+  }, [api])
 
   useEffect(() => {
     if (!code) return undefined
@@ -34,18 +50,35 @@ export function WatchPairRow(): React.JSX.Element | null {
       () => setFailed(true)
     )
   }
+  const forget = (event: React.MouseEvent): void => {
+    event.stopPropagation()
+    if (!forgetting) return setForgetting(true)
+    setForgetting(false)
+    api.watchForget?.().then(
+      () => setPaired(false),
+      () => setFailed(true)
+    )
+  }
   return (
-    <button type="button" className={`cr-more-item${showing ? ' tall' : ''}`} title="Pair an Apple Watch with this Mac" onClick={ask}>
-      <CrIcon name="watch" />
-      {showing ? (
-        <span className="cr-more-label">
-          <b>{spacedCode(code.code)}</b> · {left}
-          <br />
-          {typedAddress(code.bases) ?? 'no address'}
-        </span>
-      ) : (
-        <span className="cr-more-label">{failed ? 'Apple Watch · try again' : 'Apple Watch…'}</span>
+    <>
+      <button type="button" className={`cr-more-item${showing ? ' tall' : ''}`} title="Pair an Apple Watch with this Mac" onClick={ask}>
+        <CrIcon name="watch" />
+        {showing ? (
+          <span className="cr-more-label">
+            <b>{spacedCode(code.code)}</b> · {left}
+            <br />
+            {typedAddress(code.bases) ?? 'no address'}
+          </span>
+        ) : (
+          <span className="cr-more-label">{failed ? 'Apple Watch · try again' : 'Apple Watch…'}</span>
+        )}
+      </button>
+      {paired && (
+        <button type="button" className="cr-more-item" title="The paired watch stops working here and now" onClick={forget}>
+          <CrIcon name="close" />
+          <span className="cr-more-label">{forgetting ? 'Tap again to forget it' : 'Forget the watch'}</span>
+        </button>
       )}
-    </button>
+    </>
   )
 }

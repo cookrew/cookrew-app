@@ -68,6 +68,10 @@ export interface WatchHost {
   makeAgent(words: string): Promise<string>
   /** The Esc byte to a terminal; false when nothing is running there. */
   stop(terminalId: string): Promise<boolean>
+  /** An agent, not a bare shell: words typed into a shell are commands. */
+  speaksTo(terminalId: string): boolean
+  /** A menu is on its screen, read or not: words and Enter would pick the cursor row. */
+  menuOnScreen(terminalId: string): boolean
 }
 
 let host: WatchHost | null = null
@@ -77,6 +81,28 @@ export function setWatchHost(next: WatchHost | null): void {
 }
 
 export const watchTokenAccepted = (candidate: string | null): boolean => host?.pairing.accepts(candidate) ?? false
+
+const TERMINAL_WRITE = /^\/api\/terminal\/([^/]+)\/(input|menu)$|^\/api\/watch\/card\/([^/]+)\/stop$/
+
+/**
+ * What a watch may not do even on a route of its list, as a refusal; null when
+ * it may. Asked at the gate, only for a watch token, so the phone's own use of
+ * these routes is untouched.
+ *
+ *   A shell is out of reach: a watch's words go to agents. A token lifted off
+ *   a wrist must not be a command line on this Mac.
+ *   /input into a menu is held: the words and their Enter would pick the row
+ *   under the cursor, which on a question nobody parsed may be "Yes". /menu,
+ *   which names its row, is how a menu is answered.
+ */
+export function watchWriteRefusal(path: string): { status: number; error: string } | null {
+  const write = path.match(TERMINAL_WRITE)
+  if (!write || !host) return null
+  const id = decodeURIComponent(write[1] ?? write[3])
+  if (!host.speaksTo(id)) return { status: 403, error: 'A watch does not type into a shell.' }
+  if (write[2] === 'input' && host.menuOnScreen(id)) return { status: 409, error: 'A menu is up: answer it on the Mac.' }
+  return null
+}
 
 export interface WatchRequest {
   readonly request: http.IncomingMessage
@@ -150,9 +176,14 @@ async function checkpointsOf(
       if (live.get(row.terminalId)?.reply) return
       const memo = checkpointMemo.get(row.terminalId)
       if (memo?.at === row.lastActivityAt) return void found.set(row.terminalId, memo.checkpoint)
-      const checkpoint = await read(row.terminalId).catch(() => null)
-      checkpointMemo.set(row.terminalId, { at: row.lastActivityAt, checkpoint })
-      found.set(row.terminalId, checkpoint)
+      try {
+        const checkpoint = await read(row.terminalId)
+        checkpointMemo.set(row.terminalId, { at: row.lastActivityAt, checkpoint })
+        found.set(row.terminalId, checkpoint)
+      } catch {
+        // Not remembered: the next poll reads again, or the card stays blank until its next turn.
+        found.set(row.terminalId, null)
+      }
     })
   )
   return found
