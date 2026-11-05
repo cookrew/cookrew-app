@@ -1,6 +1,6 @@
 import type { CanvasNode } from '../../shared/model'
 import { browserTabs } from '../../shared/model'
-import { secretSlotsOf } from '../../shared/secret-slot'
+import { secretSlotsOf, withoutSlotLines } from '../../shared/secret-slot'
 import type { TurnPhase } from '../../shared/turn'
 
 /**
@@ -49,6 +49,16 @@ export function closePrompt(
   activity?: { phase: TurnPhase } | null
 ): ClosePrompt {
   if (node.kind === 'note') {
+    // A secret note is named by its name: its first line is only a slot.
+    if (secretSlotsOf(node.content).length > 0) {
+      return {
+        title: 'Delete this secret note?',
+        subject: node.name,
+        consequence: withoutSlotLines(node.content).length > 0 ? 'Its text and its slots are not kept anywhere else.' : 'Its slots go with it.',
+        confirmLabel: 'Delete note',
+        danger: true,
+      }
+    }
     const line = firstLine(node.content)
     return {
       title: 'Delete this note?',
