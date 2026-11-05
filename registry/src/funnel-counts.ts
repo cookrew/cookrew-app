@@ -25,7 +25,7 @@ import {
  * and a funnel is read across releases.
  */
 
-const KEEP_DAYS = 400
+export const KEEP_DAYS = 400
 /** Distinct cells a day may hold. A stranger cannot grow the file by inventing versions. */
 const MAX_CELLS = 500
 const FLUSH_MS = 10_000

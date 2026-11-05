@@ -71,7 +71,7 @@ export const FAQ: Faq[] = [
   },
   {
     q: 'Is my code sent to cookrew.dev?',
-    a: `No. A served session runs on the author’s machine inside a sandbox. Between a caller and a door, every byte is sealed in the caller’s browser or app (${FACTS.relayCipher}) to the door’s key; the relay moves ciphertext it cannot read. Your own local canvas never touches cookrew.dev unless you serve a team.`
+    a: `No. A served session runs on the author’s machine inside a sandbox. Between a caller and a door, every byte is sealed in the caller’s browser or app (${FACTS.relayCipher}) to the door’s key; the relay moves ciphertext it cannot read. Your own canvas stays on your machine unless you serve a team, or open your Mac from outside your network through the relay, a path that is not end-to-end sealed yet (see ${SITE_ORIGIN}/privacy).`
   },
   {
     q: 'Can I use a team from a browser or from my phone?',
