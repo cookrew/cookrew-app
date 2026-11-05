@@ -71,7 +71,7 @@ export function handleView(
   if (check === 'taken') return { canGo: false, note: `@${value} is taken. Pick another name.`, tone: 'bad' }
   if (check === 'retired') return { canGo: false, note: accountCopy('d9.crossing.retired', { handle: value }), tone: 'bad' }
   if (check === 'free') return { canGo: true, note: `@${value} is free.`, tone: 'good' }
-  if (check === 'unknown') return { canGo: true, note: 'cookrew.dev did not say. It will decide when you press.', tone: 'dim' }
+  if (check === 'unknown') return { canGo: true, note: machineCopy('cookrew.dev did not say. It will decide when you press.', hostPlatform()), tone: 'dim' }
   return { canGo: false, note: 'Checking…', tone: 'dim' }
 }
 

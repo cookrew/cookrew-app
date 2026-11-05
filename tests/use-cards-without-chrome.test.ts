@@ -6,8 +6,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { BrowserInstance } from '../src/main/browser-instance'
+import { createBrowserCast } from '../src/main/browser-cast'
 import { createBrowserCastIpc } from '../src/main/browser-cast-ipc'
 import { commandRunsInMain, mainDrawsCard } from '../src/main/browser-owner'
+import { HeadlessBrowserCommandEngine } from '../src/main/headless-browser-command'
 import { HeadlessBrowserManager } from '../src/main/headless-browser-manager'
 import { interactiveBrowserDefault } from '../src/main/launch-defaults'
 import { browserRenderMode } from '../src/renderer/src/browser-stream'
@@ -166,6 +168,46 @@ describe('the viewer’s door', () => {
     for (const gate of gates) expect(gate).toMatch(/enabled: streamsCard$/)
     const hook = readFileSync('src/renderer/src/BrowserLayer.tsx', 'utf8')
     expect(hook).not.toMatch(/!enabled \|\| !hasNativeWebview\(\)/)
+  })
+})
+
+describe('a stream nobody is allowed to open', () => {
+  it('costs no look at the cards: credentials are read first', () => {
+    const enabled = vi.fn(() => true)
+    const socket = { destroyed: false, destroy: vi.fn(), write: vi.fn(), on: vi.fn(), once: vi.fn() }
+    const cast = createBrowserCast({ enabled, desktopToken: () => 'd', paired: () => false, getInstance: vi.fn() })
+    cast.upgrade({ url: '/api/browser/junk/stream?w=1&h=1', headers: { 'sec-websocket-key': 'k', host: 'localhost' } } as never, socket as never)
+    expect(socket.destroy).toHaveBeenCalled()
+    expect(enabled).not.toHaveBeenCalled()
+  })
+
+  it('main reads no card at all where Chrome owns pages', () => {
+    expect(readFileSync('src/main/index.ts', 'utf8')).toContain('interactiveBrowserEnabled() || mainDrawsCard(activeBrowserNode(browserId), false)')
+  })
+})
+
+describe('a page card sent to a device, on a webview machine', () => {
+  it('runs in main, where a use address means something', () => {
+    const page = (name: string) => (name === 'Page' ? card('https://example.com/') : undefined)
+    expect(commandRunsInMain(['navigate', 'Page', 'screen://main'], false, page)).toBe(true)
+    expect(commandRunsInMain(['navigate', 'Page', 'https://example.org/'], false, page)).toBe(false)
+  })
+
+  it('is re-addressed with no Chrome to start first', async () => {
+    const node = card('https://example.com/')
+    const updated = { ...node, url: 'screen://main' }
+    const syncNode = vi.fn(async () => null)
+    const updateNode = vi.fn(() => updated)
+    const engine = new HeadlessBrowserCommandEngine({
+      store: { nodeByName: () => node } as never,
+      manager: { syncNode } as never,
+      addNode: vi.fn() as never,
+      updateNode: updateNode as never,
+      connectNodes: vi.fn()
+    })
+    expect(await engine.run(['navigate', 'Card', 'screen://main'], 'agent')).toBe('Re-addressed to screen://main')
+    expect(updateNode).toHaveBeenCalledTimes(1)
+    expect(syncNode).toHaveBeenCalledWith(updated)
   })
 })
 

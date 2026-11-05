@@ -634,8 +634,12 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     readFrameLines(request, (line) => {
       // The pong is for the relay, not for any reader.
       if (line.startsWith('{"t":"pong"')) {
-        live.beat(name)
-        sawLine(name)
+        // A pong already in flight when the line was dropped sees a line that
+        // is gone, and a sighting now would write a deleted name back.
+        if (live.socketOf(name) === socket) {
+          live.beat(name)
+          sawLine(name)
+        }
       }
       else hub.fromDoor(name, line)
     })

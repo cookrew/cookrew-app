@@ -593,7 +593,7 @@
       } catch {
         if (mine !== checking) return
         chip('acct-username-note', 'unknown')
-        note('cookrew.dev did not answer, so this name cannot be checked yet.')
+        note('This site did not answer, so this name cannot be checked yet.')
       }
     }
 
@@ -830,11 +830,14 @@
         const current = $('me-delete-password').value
         void v2('DELETE', '/v2/me', { confirm: confirmName, current }).then((out) => {
           if (out.status === 204) {
-            dropPairingKeys(pairingKeys())
-            // This browser's key named a device that stays revoked for a month,
-            // so a new account here must not sign in with it.
-            const dropped = indexedDB.deleteDatabase('cookrew-device')
-            dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+            // By the revoked list, not all of them: the keys name no account, and
+            // this browser may hold a pairing for somebody else's Mac.
+            void dropTakenBackTokens().finally(() => {
+              // This browser's key named a device that stays revoked for a month,
+              // so a new account here must not sign in with it.
+              const dropped = indexedDB.deleteDatabase('cookrew-device')
+              dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+            })
             return
           }
           toast(out.body?.message ?? 'Your account could not be deleted.', 6000)

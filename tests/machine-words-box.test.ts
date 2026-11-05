@@ -42,6 +42,11 @@ describe('the word for the registry', () => {
     expect(registryCopy('It goes only to cookrew.dev.', undefined)).toBe('It goes only to cookrew.dev.')
   })
 
+  it('never touches an origin: the mismatch warning exists to show two of them', () => {
+    const said = 'Signed in at https://cookrew.dev; the app is pointed at http://127.0.0.1:8799.'
+    expect(registryCopy(said, '127.0.0.1:8799')).toBe(said)
+  })
+
   it('crosses the preload as an argument and comes back', () => {
     expect(registryFromArgv(['electron', registryArgument('http://127.0.0.1:8799')])).toBe('http://127.0.0.1:8799')
     expect(registryFromArgv(['electron'])).toBe('')

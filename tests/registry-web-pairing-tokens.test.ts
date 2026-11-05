@@ -144,11 +144,11 @@ describe('a browser signed in', () => {
 })
 
 describe('deleting the account from this browser', () => {
-  it('takes every pairing token with it, and nothing else', async () => {
-    const { storage, click } = page({ me: 200, onMe: true, seed: { ...tokens, theme: 'ink' } })
+  it('takes this account’s tokens, and leaves another account’s pairing in the same browser', async () => {
+    const { storage, click } = page({ me: 200, onMe: true, revoked: [GONE], seed: { ...tokens, theme: 'ink' } })
     await settle()
     click({ dataset: { deleteAccount: '' } })
     await settle()
-    expect(storage.keys()).toEqual(['theme'])
+    expect(storage.keys().sort()).toEqual([`cr_token:${LIVE}`, 'theme'])
   })
 })

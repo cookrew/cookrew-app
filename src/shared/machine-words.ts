@@ -39,9 +39,12 @@ export function registryWord(origin: string | undefined): string | undefined {
   }
 }
 
-/** One sentence, in this registry's word. Undefined claims nothing. */
+/**
+ * One sentence, in this registry's word. Undefined claims nothing. The name in
+ * prose only: an origin is a fact, and the mismatch warning quotes two of them.
+ */
 export function registryCopy(sentence: string, word: string | undefined): string {
-  return word === undefined ? sentence : sentence.replace(/\bcookrew\.dev\b/g, word)
+  return word === undefined ? sentence : sentence.replace(/(?<![/\w.-])cookrew\.dev\b/g, word)
 }
 
 /** How main hands the origin to the preload: a window has no environment of its own. */

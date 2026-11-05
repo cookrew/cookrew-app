@@ -127,11 +127,30 @@ describe('removing a forked workspace', () => {
     expect(existsSync(second)).toBe(true)
   })
 
+  it('keeps an empty folder another workspace names as its own', async () => {
+    const worktree = fork('alpha-1234', 'proj-a')
+    const parent = path.join(worktreeRoot, 'alpha-1234')
+    expect(await removeFork({ worktree, branch: 'cookrew/alpha-1234-proj-a', removable: true }, { worktreeRoot, otherDirs: [parent] })).toEqual({ ok: true })
+    expect(existsSync(parent)).toBe(true)
+  })
+
   it('keeps a folder holding anything else at all', async () => {
     const worktree = fork('alpha-1234', 'proj-a')
     writeFileSync(path.join(worktreeRoot, 'alpha-1234', 'notes.txt'), 'mine')
     expect(await remove(worktree, 'cookrew/alpha-1234-proj-a')).toEqual({ ok: true })
     expect(existsSync(path.join(worktreeRoot, 'alpha-1234', 'notes.txt'))).toBe(true)
+  })
+})
+
+describe('a browser card that changes kind', () => {
+  it('remounts, so a page’s webview is registered and photographed like any other', () => {
+    expect(readFileSync('src/renderer/src/BrowserLayer.tsx', 'utf8')).toContain('key={`${tab.id}:${isUseUrl(tab.url)}`}')
+  })
+})
+
+describe('a late pong after a delete', () => {
+  it('writes no sighting for a line that is gone', () => {
+    expect(readFileSync('registry/src/v2-canvas-relay.ts', 'utf8')).toMatch(/if \(live\.socketOf\(name\) === socket\) \{\s+live\.beat\(name\)/)
   })
 })
 

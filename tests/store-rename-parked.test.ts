@@ -1,7 +1,7 @@
 // BOX ROUND 3, BUG 3. Renaming a workspace you are not in changed the registry
 // and left workspace.json, and so the crew header, on the old name through a
 // relaunch. The registry is the name; the file follows it.
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -98,5 +98,26 @@ describe('a workspace already renamed by the old build', () => {
   it('reads the registry’s name while parked too', () => {
     const { store, id } = staleFile()
     expect(store.workspaceState(id).name).toBe('Registry Name')
+  })
+})
+
+describe('a rename that must not write', () => {
+  it('leaves a torn workspace.json on disk: it can still be recovered, and blank cannot', () => {
+    const { store, id } = parkedWorkspace()
+    const torn = '{"name":"Phone One","nodes":[{"kind":"terminal","id":"x"'
+    writeFileSync(fileOf(store, id), torn, 'utf8')
+    store.renameWorkspace(id, 'Phone Renamed')
+    expect(readFileSync(fileOf(store, id), 'utf8')).toBe(torn)
+    expect(store.list().workspaces.find((w) => w.id === id)?.name).toBe('Phone Renamed')
+  })
+
+  it('refuses an id it does not know, and writes nothing', () => {
+    const store = fresh(false)
+    const before = readdirSync(path.join(store.baseDirForTests, 'workspaces')).sort()
+    for (const id of ['gone-id', '', '../../escaped']) {
+      expect(() => store.renameWorkspace(id, 'Anything')).toThrow(/not found/)
+    }
+    expect(readdirSync(path.join(store.baseDirForTests, 'workspaces')).sort()).toEqual(before)
+    expect(existsSync(path.join(store.baseDirForTests, '..', 'escaped'))).toBe(false)
   })
 })

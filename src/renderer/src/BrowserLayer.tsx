@@ -459,7 +459,9 @@ function BrowserHost({
         )}
         {tabs.map((tab) => (
           <BrowserTabView
-            key={tab.id}
+            // A use card sent to a page mounts its webview on a new address and
+            // the same tab id: the effects that register it key off a mount.
+            key={`${tab.id}:${isUseUrl(tab.url)}`}
             browserId={node.id}
             browserName={node.name}
             tab={tab}

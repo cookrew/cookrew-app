@@ -20,9 +20,9 @@ export function mainDrawsCard(node: BrowserNodeData | null | undefined, pagesHea
 }
 
 /**
- * An agent's `cookrew browser …` runs in main when main draws its card. `create`
- * names an address, every other subcommand a card. A renderer waiting for a
- * webview to mount would wait forever for a use card.
+ * An agent's `cookrew browser …` runs in main when main draws its card, or is
+ * about to: `create` and `navigate` can name a use address, and a renderer would
+ * wait forever for a webview to mount for one.
  */
 export function commandRunsInMain(
   args: readonly string[],
@@ -30,7 +30,9 @@ export function commandRunsInMain(
   find: (name: string) => BrowserNodeData | undefined
 ): boolean {
   if (pagesHeadless) return true
-  const [sub, subject] = args
+  const [sub, subject, address] = args
   if (subject === undefined) return false
-  return sub === 'create' ? isUseUrl(subject) : mainDrawsCard(find(subject), false)
+  if (sub === 'create') return isUseUrl(subject)
+  if (sub === 'navigate' && address !== undefined && isUseUrl(address)) return true
+  return mainDrawsCard(find(subject), false)
 }

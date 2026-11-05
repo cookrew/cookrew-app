@@ -6351,7 +6351,7 @@ const interactiveBrowserEnabled = (): boolean => {
   return interactiveBrowserDecision
 }
 /** Main draws this card: a use card always, a page when headless Chrome owns pages (browser-owner.ts). */
-const streamsCard = (browserId: string): boolean => mainDrawsCard(activeBrowserNode(browserId), interactiveBrowserEnabled())
+const streamsCard = (browserId: string): boolean => interactiveBrowserEnabled() || mainDrawsCard(activeBrowserNode(browserId), false)
 const desktopBrowserStreamToken = randomUUID()
 
 /**
