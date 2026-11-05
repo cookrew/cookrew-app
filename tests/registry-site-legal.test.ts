@@ -361,5 +361,23 @@ describe('the words match the code', () => {
     const machines = desktopsSection('mira', [])
     expect(machines).not.toContain('never holds what is on a canvas')
     expect(machines).toContain('href="/privacy#relay"')
+    expect(machines).not.toContain('opening one stays here')
+  })
+
+  it('the install page does not promise a gate the files do not have', () => {
+    const gated = installPageHtml({ kind: 'preset', name: 'Ship Crew', version: 4, author: 'mira', id: 'x', gated: true })
+    expect(gated).not.toMatch(/before it can be downloaded/)
+    expect(gated).toMatch(/sign in before installing/)
+  })
+
+  it('a move to a direct link is not described as leaving the relay altogether', () => {
+    const relay = wordsOf(PRIVACY.sections.find((s) => s.id === 'relay') as LegalSection)
+    expect(relay).toMatch(/images and uploads keep using the relay/)
+    expect(relay).toMatch(/returns to it if the direct link drops/)
+  })
+
+  it('the seal section points at the web logs instead of ruling them out', () => {
+    const relay = wordsOf(PRIVACY.sections.find((s) => s.id === 'relay') as LegalSection)
+    expect(relay).toMatch(/The registry stores none of that\. The web logs described under “Server logs” are separate\./)
   })
 })

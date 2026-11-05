@@ -153,7 +153,7 @@ export const PRIVACY: LegalDoc = {
               ['Stars', 'Your account, the team and when you starred it.', 'The count is public. Which teams you starred is not.'],
               [
                 'Published presets',
-                'The preset’s manifest and files: its card names, notes, roles, agent commands and prompts, and browser card URLs, with local paths masked and a secret scan before publishing. Also an entry in a transparency log: the preset, its version, the author key, the publishing identity and the time.',
+                'The preset’s manifest and files: its card names, notes, roles, agent commands and prompts, and browser card URLs, with paths under your workdirs and home folder masked and a secret scan before publishing. Also an entry in a transparency log: the preset, its version, the author key, the publishing identity and the time.',
                 'Treat all of it as public. The log and the list of presets are public. An author can limit a preset to signed-in accounts or price it, but that gates only the manifest: anyone with a preset’s address can fetch its files, and the public list gives that address.'
               ],
               [
@@ -222,13 +222,13 @@ export const PRIVACY: LegalDoc = {
           p: 'The relay exists because a machine at home usually cannot be dialled from outside. Your machine holds a line open to cookrew.dev and traffic travels down it. There are two kinds of traffic, and they are not equally private.'
         },
         {
-          p: `Calls carried by the relay are sealed. Your browser or app encrypts every request and reply to the team’s own key (${FACTS.relayCipher}), and only the team’s machine can open them, so the relay cannot read them. It can see the outside of each exchange: which team, the request method and path, how many bytes, the status of the answer, and when. While a call is open it can also see who is calling: your IP address, your session cookie if you are signed in, and the call token the registry issues you. The registry stores none of that.`
+          p: `Calls carried by the relay are sealed. Your browser or app encrypts every request and reply to the team’s own key (${FACTS.relayCipher}), and only the team’s machine can open them, so the relay cannot read them. It can see the outside of each exchange: which team, the request method and path, how many bytes, the status of the answer, and when. While a call is open it can also see who is calling: your IP address, your session cookie if you are signed in, and the call token the registry issues you. The registry stores none of that. The web logs described under “Server logs” are separate.`
         },
         {
-          p: 'In a browser, this rests on cookrew.dev serving the team’s real key and honest encryption code, because both come from this site. A team listed on a direct network address is called straight at that address, without the relay and without this seal, so its protection depends on how that address is served.'
+          p: 'In a browser, this rests on cookrew.dev serving the team’s real key and honest encryption code, because both come from this site. The app also takes a team’s key from the registry the first time it imports that team. A team listed on a direct network address is called straight at that address, without the relay and without this seal, so its protection depends on how that address is served.'
         },
         {
-          p: 'Reaching your own Mac through cookrew.dev is not end-to-end encrypted yet, wherever you are. OPEN on your account page always starts on this path, even at home. The app can move to a direct connection when it finds one, and shows which path it is on, but the app itself loads through the relay and traffic stays there until then.'
+          p: 'Reaching your own Mac through cookrew.dev is not end-to-end encrypted yet, wherever you are. OPEN on your account page always starts on this path, even at home. The app can move to a direct connection when it finds one, and shows which path it is on, but the app itself loads through the relay and traffic stays there until then. Even after the move, images and uploads keep using the relay, and everything returns to it if the direct link drops.'
         },
         {
           p: 'On this path the connection is encrypted on each side of the relay, but the registry process handles the traffic in readable form while it forwards it: your canvas, terminal output, transcripts and pairing token. The registry does not log or store that content, but whoever operates the relay could technically read it, so do not treat this path as private from us. Some live streams also carry your pairing token in their address, and the web logs described under “Server logs” can record addresses. Only a connection that never goes through the relay avoids all of this, such as opening the app at your Mac’s own address on your Wi-Fi or tailnet.'
@@ -343,7 +343,7 @@ export const PRIVACY: LegalDoc = {
             'Change it. You can change your display name, avatar, password and sign-in factors.',
             'Remove it. You can take a device off your account, sign out, remove a star and withdraw a team listing.',
             'Turn off the setup counts at any time from the row in the app’s ⋯ menu.',
-            `Delete your account. There is no delete-account button yet, so write to ${CONTACT_EMAIL}. We hold no email address for you, so we will ask you to prove the account is yours, for example by signing in. We then delete your account, devices, desktops, sign-in factors, stars, team listings, payout address and older key record. Published presets and their log entries stay. Seat records and purchase receipts that others rely on may stay, certificates stay as described above, and counts and logs age out on their own schedule.`
+            `Delete your account. There is no delete-account button yet, so write to ${CONTACT_EMAIL}. We hold no email address for you, so we will ask you to prove the account is yours, for example by signing in. We then delete your account, devices, desktops, sign-in factors, stars, team listings, payout address and older key record. Published presets and their log entries stay. Seat records and purchase receipts that others rely on may stay, certificates stay as described above, and counts, last-seen times and logs age out on their own schedule.`
           ]
         },
         {
