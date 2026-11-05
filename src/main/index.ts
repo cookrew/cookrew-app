@@ -145,7 +145,7 @@ import {
   TerminalNodeData,
   WorkspaceMeta
 } from '../shared/model'
-import { DEFAULT_ORCH_PRESET, PRESETS } from './presets'
+import { PRESETS } from './presets'
 import { launchCommand, withoutRoutedPick } from '../shared/launch-tune'
 import { launchOfferFor, withLaunchOffers } from './launch-offers'
 import { GatewayMonitor } from './route/gateway'
@@ -286,7 +286,6 @@ import { FirstTasks } from './first-task'
 import { registerFirstRunIpc } from './first-run-ipc'
 import { FirstRunStore } from './first-run-store'
 import { machineProbe, probeTools, readLoginShellDirs } from './preflight'
-import { conductorWaits } from '../shared/first-run'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-command'
 import { browserForCaller, keptBrowsers } from './browser-reach'
@@ -345,6 +344,7 @@ import { wireServing, type Serving } from './session-serving'
 import { servedTemplateFile } from './served-persist'
 import { bootWorkspaceInPlace } from './session-boot'
 import { openWorkspace, workspaceCheck } from './workspace-door'
+import { seedConductor } from './seed-conductor'
 import { inspectForks, planWorkspaceRemove, removeFork, type ForkScope } from './workspace-fork-check'
 import type { WorkspaceRemovePlan } from '../shared/workspace-door'
 import { servedConfinement } from './session-spawn'
@@ -443,7 +443,10 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 addPaneDirs(installerDirs(homedir()))
 if (app.isPackaged) {
   process.env.PATH = widenedPath(process.env, homedir())
-  void readLoginShellDirs().then(addPaneDirs)
+  void readLoginShellDirs().then((dirs) => {
+    addPaneDirs(dirs)
+    firstRunStore.rememberDirs(dirs)
+  })
 }
 
 /** A boot step failed: say why in a window, if the app can still draw one. */
@@ -4348,28 +4351,9 @@ const dispatchSweep = setInterval(() => {
 // Never hold the process open for a janitor.
 dispatchSweep.unref?.()
 
-/**
- * Give the active workspace an orch terminal when it has none. It opens the
- * default orch preset — Claude with bypassed permissions — so the conductor
- * can act without stalling on approvals.
- */
+/** Give a workspace, the focused one by default, its orch terminal (seed-conductor.ts). */
 function seedConductorIfEmpty(workspaceId: string = store.focusedId): void {
-  const state = store.workspaceState(workspaceId)
-  if (state.nodes.some((node) => node.kind === 'terminal') || conductorWaits(firstRunStore.read())) return
-  // A card whose tool is not here is a card that dies on its first key.
-  if (toolBlockOf(DEFAULT_ORCH_PRESET.command, state.dir)) return
-  store.addNodeToWorkspace(workspaceId, {
-    kind: 'terminal',
-    id: randomUUID(),
-    name: 'Conductor',
-    preset: DEFAULT_ORCH_PRESET.name,
-    command: DEFAULT_ORCH_PRESET.command,
-    cwd: state.dir,
-    orch: true,
-    role: null,
-    position: { x: 240, y: 200 },
-    size: DEFAULT_TERMINAL_SIZE
-  })
+  seedConductor({ store, stage: () => firstRunStore.read(), searchPath: paneSearchPath }, workspaceId)
 }
 
 // ---- workspace operations (shared by IPC and the cookrew CLI) ----

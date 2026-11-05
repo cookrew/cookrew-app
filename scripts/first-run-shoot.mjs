@@ -57,6 +57,10 @@ for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
   await open('fresh=gaps', w, h)
   await until(`document.querySelectorAll('.fr-row').length === 8`, 'the tool rows')
   await shot(`${label}-1-preflight-gaps`)
+  // Magpie absent: the Routing panel stays shut over the first run, at either width.
+  await value(`(() => { window.__routeStatus('absent'); window.__routePush(); return true })()`)
+  await sleep(600)
+  if (await value(`!!document.querySelector('.cr-routing')`)) throw new Error('the Routing panel opened by itself')
   if (await value(`!!document.querySelector('.cr-acct-firstrun')`)) throw new Error('the account card appeared at launch')
 
   // A fix runs in the Setup card; that card is not the first agent.

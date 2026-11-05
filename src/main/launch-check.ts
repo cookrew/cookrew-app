@@ -65,6 +65,20 @@ function resolves(word: string, cwd: string, searchPath: string): boolean {
     .some((dir) => dir.length > 0 && isExecutableFile(path.join(path.resolve(cwd, dir), word)) !== false)
 }
 
+/**
+ * Is the program SEEN here? The other way round from `resolves`, for a card nobody
+ * asked for: a dir this user may not read proves nothing, and neither does a
+ * command that takes a shell to say.
+ */
+export function toolSeen(command: string, cwd: string, searchPath: string): boolean {
+  const word = commandWord(command)
+  if (word === null) return false
+  if (word.includes('/')) return isExecutableFile(path.resolve(cwd, word)) === true
+  return searchPath
+    .split(':')
+    .some((dir) => dir.length > 0 && isExecutableFile(path.join(path.resolve(cwd, dir), word)) === true)
+}
+
 const failure = (over: Pick<LaunchFailure, 'kind' | 'why' | 'fix'> & Partial<LaunchFailure>): LaunchFailure => ({
   blocked: true,
   exitCode: null,

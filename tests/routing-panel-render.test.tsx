@@ -6,7 +6,7 @@
 // lines, the default picker with groups first, and the one thing the panel
 // never contains — a field for a key.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -239,6 +239,21 @@ describe('the setup card and the entry', () => {
     const opens = [...app.matchAll(/setRoutingOpen\(true\)/g)]
     expect(opens).toHaveLength(1)
     expect(app).toContain('onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}')
+  })
+
+  // Box QA saw it open by itself on the phone and the relayed page too (round 3).
+  // Those are this same bundle: the server only adds a boot script to its index.
+  it('has no other way to open by itself, on the phone or a relayed page', () => {
+    const src = path.join(__dirname, '../src')
+    const read = (file: string): string => readFileSync(path.join(src, file), 'utf8')
+    const files = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter((file) => /\.tsx?$/.test(file))
+    const naming = (word: RegExp): string[] => files.filter((file) => word.test(read(file)))
+    expect(naming(/shouldAutoOpen|cr-routing-seen/)).toEqual([])
+    expect(naming(/<RoutingPanel\b/)).toEqual(['renderer/src/App.tsx'])
+    expect(naming(/<App\b/)).toEqual(['renderer/src/main.tsx'])
+    expect(read('renderer/src/main.tsx').match(/createRoot\(/g)).toHaveLength(1)
+    expect(read('main/mobile-server.ts')).toContain("const index = path.join(deps.rendererDir, 'index.html')")
+    expect(readdirSync(path.join(src, 'renderer')).filter((file) => file.endsWith('.html'))).toEqual(['index.html'])
   })
 
   it('does not use red for an optional tool that is simply absent', () => {

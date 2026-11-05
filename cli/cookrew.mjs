@@ -4,7 +4,7 @@
 // connect, recruit, dismiss, preset, notify, login, logout, whoami, help.
 import net from 'node:net'
 import path from 'node:path'
-import { readFileSync } from 'node:fs'
+import { lstatSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
@@ -32,7 +32,8 @@ function fail(message, exitCode = 1) {
  * That pointer exists because the path is NOT safely derivable: the runtime dir
  * sits under the OS temp dir, and on macOS TMPDIR is per-user, so a shell
  * without TMPDIR computes '/tmp/...' and reaches a socket that is not there.
- * The tmpdir guess is kept as a last resort for an app too old to publish.
+ * The tmpdir guess is kept as a last resort for an app too old to publish, or a
+ * first launch that has not published yet.
  */
 function readSocketPointer() {
   try {
@@ -43,10 +44,30 @@ function readSocketPointer() {
   }
 }
 
+/**
+ * The app's dir for this user (src/main/runtime-dir.ts): the per-user name on Linux,
+ * the shared one where that is theirs. Never a dir somebody else holds: what this
+ * sends is for this user's app. With neither, the call fails as "not running".
+ */
+function guessedSocket() {
+  const shared = path.join(tmpdir(), 'cookrew-runtime')
+  const uid = process.getuid?.()
+  if (uid === undefined) return path.join(shared, 'cookrew.sock')
+  const own = `${shared}-${uid}`
+  const mine = (dir) => {
+    try {
+      return lstatSync(dir).uid === uid
+    } catch {
+      return false
+    }
+  }
+  return path.join(!mine(own) && mine(shared) ? shared : own, 'cookrew.sock')
+}
+
 const socketPath =
   process.env.COOKREW_SOCKET ??
   readSocketPointer() ??
-  path.join(tmpdir(), 'cookrew-runtime', 'cookrew.sock')
+  guessedSocket()
 
 // Everything after `--` is the exec command and never a flag or an arg.
 const argvAll = process.argv.slice(2)

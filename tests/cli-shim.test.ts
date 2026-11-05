@@ -2,15 +2,15 @@
 // "exec: node: not found". The app already ships a Node: its own Electron, in
 // node mode. These run the generated sh for real, with node off the PATH.
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { cliWrapper, publishCliRuntime } from '../src/main/cli-shim'
+import { OWNED_BINARY, cliWrapper, publishCliRuntime } from '../src/main/cli-shim'
 // @ts-expect-error the installer lib ships no types; the test exercises runtime behaviour.
-import { launcherScript } from '../scripts/install-cli-lib.mjs'
+import { OWNED_BINARY as OWNED_BINARY_LAUNCHER, launcherScript } from '../scripts/install-cli-lib.mjs'
 
 const dirs: string[] = []
 const scratch = (): string => {
@@ -65,6 +65,15 @@ describe('cliWrapper', () => {
     expect(out.trim()).toBe('system node /tmp/c.mjs list')
   })
 
+  it('does not run a binary at its old path that has become a stranger’s', () => {
+    const dir = scratch()
+    const planted = path.join(dir, 'planted')
+    symlinkSync('/bin/echo', planted)
+    executable(path.join(dir, 'node'), '#!/bin/sh\necho "system node $*"\n')
+    const wrapper = executable(path.join(dir, 'cookrew'), cliWrapper('/tmp/c.mjs', planted))
+    expect(execFileSync(wrapper, ['list'], { env: { PATH: `${dir}:${NO_NODE_PATH}` }, encoding: 'utf8' }).trim()).toBe('system node /tmp/c.mjs list')
+  })
+
   it.skipIf(!noNodeOnPath)('says what to do when there is neither, and does not say "exec: node"', () => {
     const dir = scratch()
     const wrapper = executable(path.join(dir, 'cookrew'), cliWrapper('/tmp/c.mjs', '/gone/Cookrew'))
@@ -84,6 +93,10 @@ describe('publishCliRuntime', () => {
 })
 
 describe('the PATH launcher', () => {
+  it('keeps the same rule for a binary as the shim', () => {
+    expect(OWNED_BINARY_LAUNCHER).toBe(OWNED_BINARY)
+  })
+
   it('prefers the binary the app published, and sets node mode', () => {
     const dir = scratch()
     const repo = executable(path.join(dir, 'cookrew.mjs'), '')
@@ -92,6 +105,28 @@ describe('the PATH launcher', () => {
     const launcher = executable(path.join(dir, 'cookrew'), launcherScript('/none', repo, '/gone/node', pointer))
     const out = execFileSync(launcher, ['whoami'], { env: { PATH: NO_NODE_PATH }, encoding: 'utf8' })
     expect(out.trim()).toBe(`mode=1 args=${repo} whoami`)
+  })
+
+  // After an AppImage quits, the pointer names a dead /tmp/.mount_* path anyone can recreate.
+  it('takes a published binary only from the caller or root', () => {
+    const dir = scratch()
+    const repo = executable(path.join(dir, 'cookrew.mjs'), '')
+    const pointer = path.join(dir, 'runtime')
+    const planted = path.join(dir, 'planted')
+    // A link in a dir of mine reads as neither: the nearest a test gets to a stranger's file.
+    symlinkSync('/bin/sh', planted)
+    writeFileSync(pointer, planted)
+    const launcher = executable(path.join(dir, 'cookrew'), launcherScript('/none', repo, fakeRuntime(dir), pointer))
+    expect(execFileSync(launcher, [], { env: { PATH: NO_NODE_PATH }, encoding: 'utf8' }).trim()).toBe(`mode=1 args=${repo}`)
+  })
+
+  it('takes a published binary root owns: an installed app, or an AppImage mount', () => {
+    const dir = scratch()
+    const repo = executable(path.join(dir, 'cookrew.mjs'), 'exit 0')
+    const pointer = path.join(dir, 'runtime')
+    writeFileSync(pointer, '/bin/echo')
+    const launcher = executable(path.join(dir, 'cookrew'), launcherScript('/none', repo, '/gone/node', pointer))
+    expect(execFileSync(launcher, ['hi'], { env: { PATH: NO_NODE_PATH }, encoding: 'utf8' }).trim()).toBe(`${repo} hi`)
   })
 
   it('sets node mode on the baked interpreter too: that may be Electron itself', () => {

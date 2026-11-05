@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { failureReason, failureHtml, bootStep } from '../src/main/boot-failure'
-import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ownerOf, runtimeDirFor } from '../src/main/runtime-dir'
@@ -34,6 +36,34 @@ describe('the runtime dir', () => {
 
   it('stays as it is on macOS, where tmp is the user’s own', () => {
     expect(on({ platform: 'darwin', tmp: '/var/folders/x/T' })).toBe('/var/folders/x/T/cookrew-runtime')
+  })
+})
+
+// A plain shell with no pointer file yet: the CLI's last guess must be the dir the
+// app made for this user, or the second person is sent to the first one's.
+describe('the CLI, guessing the socket', () => {
+  const uid = process.getuid?.() ?? 0
+  const guessFrom = async (dir: string): Promise<boolean> => {
+    // Short: a unix socket path has a low limit.
+    const tmp = mkdtempSync('/tmp/crs-')
+    mkdirSync(path.join(tmp, dir))
+    const server = net.createServer((socket) => socket.destroy())
+    let reached = false
+    server.on('connection', () => (reached = true))
+    await new Promise<void>((resolve) => server.listen(path.join(tmp, dir, 'cookrew.sock'), resolve))
+    const cli = spawn(process.execPath, [path.join(__dirname, '../cli/cookrew.mjs'), 'list', '--all'], { env: { PATH: '/usr/bin:/bin', HOME: tmp, TMPDIR: tmp }, stdio: 'ignore' })
+    await new Promise((resolve) => cli.on('close', resolve))
+    server.close()
+    rmSync(tmp, { recursive: true, force: true })
+    return reached
+  }
+
+  it('tries the per-user dir', async () => {
+    expect(await guessFrom(`cookrew-runtime-${uid}`)).toBe(true)
+  })
+
+  it('keeps the shared name where that is the dir there is', async () => {
+    expect(await guessFrom('cookrew-runtime')).toBe(true)
   })
 })
 

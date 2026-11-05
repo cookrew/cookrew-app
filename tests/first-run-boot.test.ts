@@ -17,9 +17,11 @@ const body = (name: string): string => {
 }
 
 describe('a real launch', () => {
-  it('asks the first run before seeding a Conductor, whichever path seeds one', () => {
-    expect(body('seedConductorIfEmpty')).toMatch(/conductorWaits\(firstRunStore\.read\(\)\)/)
-    expect(body('seedConductorIfEmpty').indexOf('conductorWaits')).toBeLessThan(body('seedConductorIfEmpty').indexOf('store.addNode'))
+  // What it decides is tested for real in first-run-seed.test.ts; this holds the wiring.
+  it('has one way to seed a Conductor, told the first run and the panes’ PATH', () => {
+    expect(body('seedConductorIfEmpty')).toMatch(/seedConductor\(\{ store, stage: \(\) => firstRunStore\.read\(\), searchPath: paneSearchPath \}, workspaceId\)/)
+    expect(source).toMatch(/openWorkspace\(store, \{ name, dir, stay: options\.stay === true, seed: seedConductorIfEmpty \}\)/)
+    expect(source).not.toMatch(/name: 'Conductor'/)
   })
 
   it('decides who is new from the install, not only from what is on the board', () => {
@@ -30,6 +32,12 @@ describe('a real launch', () => {
     const writes = [...source.matchAll(/process\.env\.PATH = /g)].map((m) => m.index)
     expect(writes.length).toBeGreaterThan(0)
     for (const at of writes) expect(source.slice(Math.max(0, at - 90), at)).toMatch(/if \(app\.isPackaged\)/)
+  })
+
+  // The read races the boot's seed, so what it learns has to outlast this launch:
+  // a tool only the login shell can see would otherwise never get its Conductor.
+  it('keeps what a packaged app reads from the login shell', () => {
+    expect(source).toMatch(/readLoginShellDirs\(\)\.then\(\(dirs\) => \{\n\s+addPaneDirs\(dirs\)\n\s+firstRunStore\.rememberDirs\(dirs\)/)
   })
 
   // A new Claude asks about a new folder in a dialog the prompt box cannot draw
@@ -44,12 +52,6 @@ describe('a real launch', () => {
     const at = source.indexOf('addPaneDirs(installerDirs(homedir()))')
     expect(at).toBeGreaterThan(-1)
     expect(at).toBeLessThan(source.indexOf('if (app.isPackaged) {'))
-  })
-
-  it('never seeds a Conductor whose tool is not here', () => {
-    const seed = body('seedConductorIfEmpty')
-    expect(seed).toMatch(/toolBlockOf\(DEFAULT_ORCH_PRESET\.command, state\.dir\)/)
-    expect(seed.indexOf('toolBlockOf')).toBeLessThan(seed.indexOf('store.addNode'))
   })
 
   // Merged from Agent Truth with process.env.PATH, it would have refused on a source
