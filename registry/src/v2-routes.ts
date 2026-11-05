@@ -37,6 +37,7 @@ import { handleRenewRoute } from './v2-renew'
 import { heldIfPasswordless, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
+import { deleteAccount } from './v2-delete'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -206,7 +207,8 @@ function lookUpAccount(ctx: V2Context, username: string): void {
   if (ctx.method === 'HEAD') {
     // Taken covers a name a v1 key holds with no account behind it yet: the
     // sheet must never call it free, whatever it goes on to say about it.
-    head(ctx.response, profile === null && !legacyHolds(ctx, username) ? 404 : 200)
+    const free = profile === null && !legacyHolds(ctx, username) && !ctx.v2.accounts.isRetired(username)
+    head(ctx.response, free ? 404 : 200)
     return
   }
   if (profile === null) {
@@ -509,6 +511,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     v2.accounts.touch(account.username, claims.dev)
     const fresh = v2.accounts.get(account.username) ?? account
     v2Json(response, 200, meBody(fresh, claims.dev, v2.factors.store.summary(account.username), hasNames(ctx)))
+    return
+  }
+  if (rest.length === 0 && method === 'DELETE') {
+    await deleteAccount(ctx, signed)
     return
   }
   if (rest.length === 0 && method === 'PATCH') {

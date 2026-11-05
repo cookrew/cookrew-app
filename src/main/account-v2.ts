@@ -1692,6 +1692,22 @@ export class Accounts {
   }
 
   /**
+   * DELETE THE ACCOUNT, EVERYWHERE. The same order as signing out: cookrew.dev
+   * answers 204, and only then does the file go here, so a refusal or a dead
+   * socket leaves this Mac knowing an account that still exists.
+   */
+  async deleteAccount(proof: StepUpProof, confirm: string): Promise<AccountResult<void>> {
+    const removed = await this.authed<void>('/v2/me', {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm, ...proofBody(proof) }),
+      parse: false,
+    })
+    if (!removed.ok) return removed
+    this.forget()
+    return { ok: true, value: undefined }
+  }
+
+  /**
    * The account is gone from this Mac. The file, the cache, and every
    * secret this class holds in memory — a half-climbed ladder, fresh codes —
    * go with it; a listener is told once, after the file is really gone.

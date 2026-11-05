@@ -913,6 +913,8 @@ export interface CookrewApi {
   accountDevices?: () => Promise<AccountResult<readonly AccountDevice[]>>;
   /** v3 (D12): REVOKE steps up for the password; the registry gets the DELETE only after it. */
   accountRevoke?: (input: { deviceId: string; password: string }) => Promise<AccountResult<void>>;
+  /** Deletes the account everywhere; the status handed back has no username. */
+  accountDelete?: (input: { confirm: string; password: string }) => Promise<AccountResult<AccountStatus>>;
   /**
    * v3 (D12): this Mac leaves the account. Answers the status an empty
    * avatar draws; refused with `last_device` on a one-device account.

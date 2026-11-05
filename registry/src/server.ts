@@ -21,6 +21,7 @@ import { respondPage } from './site-shell'
 import type { StarStore } from './stars'
 import type { Release, ReleaseCache } from './releases'
 import { handleV2Route, signedIn, v2AccountOf, type V2Identity } from './v2-routes'
+import type { V2Account } from './v2-accounts'
 import { sameOrigin } from './v2-http'
 import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
@@ -325,6 +326,23 @@ export function createRegistry(deps: RegistryDeps): Server {
     return claims.sub
   }
   const starsOf = (handle: string, name: string): number => deps.stars?.count(handle, name) ?? 0
+
+  /**
+   * WHAT A DELETED ACCOUNT HOLDS OUTSIDE /v2 (v2-delete.ts). The doors it held
+   * are read from both ends: the directory and the desktops that claim them can
+   * disagree, and a live line must not outlast either. Its receipts stay, and
+   * the transparency log and its presets are permanent.
+   */
+  const accountGone = (account: V2Account): void => {
+    const { username } = account
+    const listed = deps.doors?.withdrawAll(username) ?? []
+    const claimed = account.desktops.flatMap((desktop) => (desktop.doors ?? []).map((door) => door.team))
+    for (const team of new Set([...listed, ...claimed])) relay?.hangUp(`@${username}/${team}`)
+    canvas?.hangUp(username, account.desktops.map((desktop) => desktop.deviceId))
+    deps.stars?.forgetAccount(username)
+    deps.identity?.forget(username)
+    deps.pricing?.payouts.forget(username)
+  }
   /** Headers for an answer that depends on who asked: never shared, never cached. */
   const PRIVATE: Record<string, string> = { 'cache-control': 'private, no-store', vary: 'cookie, authorization' }
 
@@ -428,7 +446,8 @@ export function createRegistry(deps: RegistryDeps): Server {
         // The names half, for the cert route and the `names` bit on a card.
         ...(deps.names === undefined ? {} : { names: deps.names }),
         // STRATA: which desktops hold their relay line, for the fleet rows.
-        ...(canvas === null ? {} : { presence: canvas.presence })
+        ...(canvas === null ? {} : { presence: canvas.presence }),
+        accountGone
       })
     )
       return
@@ -722,6 +741,11 @@ export function createRegistry(deps: RegistryDeps): Server {
             parsed.publicKeyJwk === null
           ) {
             json(response, 400, { error: 'bad_request' })
+            return
+          }
+          // A deleted name stays deleted, on this older route as well.
+          if (deps.v2?.accounts.isRetired(parsed.credentialId) === true) {
+            json(response, 409, { error: 'credential_exists' })
             return
           }
           const out = identity.register(parsed.credentialId, parsed.publicKeyJwk)

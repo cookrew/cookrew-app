@@ -782,10 +782,17 @@
   if (me) {
     const refresh = () => location.reload()
     document.addEventListener('click', (event) => {
-      const el = event.target.closest('[data-revoke],[data-signout],[data-recovery],[data-edit-name]')
+      const el = event.target.closest('[data-revoke],[data-signout],[data-recovery],[data-edit-name],[data-delete-account]')
       if (!el) return
       event.preventDefault()
-      if (el.dataset.revoke !== undefined) {
+      if (el.dataset.deleteAccount !== undefined) {
+        const confirmName = $('me-delete-name').value
+        const current = $('me-delete-password').value
+        void v2('DELETE', '/v2/me', { confirm: confirmName, current }).then((out) => {
+          if (out.status === 204) return location.assign('/')
+          toast(out.body?.message ?? 'Your account could not be deleted.', 6000)
+        })
+      } else if (el.dataset.revoke !== undefined) {
         const own = el.dataset.current === '1'
         const question = own
           ? 'Sign this browser out and detach it from the account?'

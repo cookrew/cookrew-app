@@ -73,6 +73,14 @@ export class PayoutStore {
     return isPayoutAddress(address) ? address : null
   }
 
+  /** An account was deleted. Its presets stop being quotable, so they stop selling. */
+  forget(identityId: string): void {
+    const { [identityId]: dropped, ...kept } = this.addresses
+    if (dropped === undefined) return
+    this.addresses = kept
+    writeFileSync(this.file, JSON.stringify(this.addresses, null, 2))
+  }
+
   /**
    * Record where an identity is paid. Stored VERBATIM — never lower-cased,
    * because EIP-55 encodes a checksum in the case of the letters and

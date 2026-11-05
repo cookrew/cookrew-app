@@ -182,6 +182,8 @@ export const ACCOUNT_CHANNELS = [
   // v3 (D12): this device leaves the account. Password first, at cookrew.dev;
   // the device removed there; the file removed here; the doors withdrawn.
   'account:signOut',
+  // Proof first, the account removed there, the file removed here, the doors withdrawn.
+  'account:delete',
   'account:recoveryCodes',
   'account:saveRecoveryCodes',
   'account:codesSaved',
@@ -572,6 +574,31 @@ async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountR
       ? await deps.accounts.signOutWithProvider()
       : await deps.accounts.signOutThisMac(password)
   if (!result.ok) return result
+  return leftTheAccount(deps)
+}
+
+/**
+ * DELETE THE ACCOUNT. The password is proved the way a revoke proves it; on an
+ * account with no password the provider trip stands in. The act carries the same
+ * proof, because the registry is the judge of it.
+ */
+async function deleteAccount(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<AccountStatus>> {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
+  const confirm = asString(record.confirm)
+  const password = asString(record.password)
+  const provider = await providerProof(deps, 'delete-account')
+  if (provider !== null && !provider.ok) return provider
+  if (provider === null) {
+    const proven = await deps.accounts.stepUp(password)
+    if (!proven.ok) return proven
+  }
+  const removed = await deps.accounts.deleteAccount(provider === null ? password : { stepUp: provider.value }, confirm)
+  if (!removed.ok) return removed
+  return leftTheAccount(deps)
+}
+
+/** The account is gone from this Mac, by a sign-out or a delete. */
+async function leftTheAccount(deps: AccountIpcDeps): Promise<AccountResult<AccountStatus>> {
   // `cookrew logout` can leave from behind the lock, and with no account there is
   // nothing left that could open it.
   deps.lock.proven()
@@ -946,6 +973,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:devices': (): Promise<AccountResult<readonly AccountDevice[]>> =>
       deps.accounts.devices(),
     'account:revoke': (input: unknown): Promise<AccountResult<void>> => revoke(deps, input),
+    'account:delete': (input: unknown): Promise<AccountResult<AccountStatus>> => deleteAccount(deps, input),
     'account:signOut': (password: unknown): Promise<AccountResult<AccountStatus>> =>
       signOut(deps, asString(password)),
     'account:recoveryCodes': (): Promise<AccountResult<readonly string[]>> =>
