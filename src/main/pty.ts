@@ -423,6 +423,8 @@ const CLI_NAMES = ['cookrew', 'crew'] as const
  * quiescence for `cookrew ask` without involving the renderer.
  */
 export class PtySession extends EventEmitter {
+  /** Who is holding this pane's keys back from the tracker (sealInput). */
+  private inputSeals: ReadonlySet<symbol> = new Set()
   readonly terminalId: string
   /** Harness launch command; submission policy may key on the proven adapter. */
   readonly command: string
@@ -695,6 +697,32 @@ export class PtySession extends EventEmitter {
     return true
   }
 
+  /**
+   * THE KEYS GO TO THE PANE AND TO NOBODY ELSE, until the answer is called.
+   *
+   * `cookrew login` reads its password with echo off, which keeps it off the
+   * screen, the scrollback and every transcript. It does nothing here: the
+   * keys still pass through write(), which announces them to the turn tracker,
+   * and in an agent's pane the password and Enter would open a turn with the
+   * password as its prompt: stored, summarised, drawn on the card and sent to
+   * the phone. So while this holds, nothing is announced and no input is
+   * marked: the bytes are going to a prompt, not into the pane's input box.
+   *
+   * The owner's guard still runs, because it refuses keys and keeps nothing.
+   * A dispatch is refused: no other agent types into a hidden prompt.
+   */
+  sealInput(): () => void {
+    const seal = Symbol('sealed input')
+    this.inputSeals = new Set([...this.inputSeals, seal])
+    return () => {
+      this.inputSeals = new Set([...this.inputSeals].filter((held) => held !== seal))
+    }
+  }
+
+  private get inputSealed(): boolean {
+    return this.inputSeals.size > 0
+  }
+
   write(data: string): OwnerInputVerdict {
     // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
     // preemption after proc.write cannot stop a competing submission, only
@@ -713,6 +741,11 @@ export class PtySession extends EventEmitter {
     if (verdict !== 'allow') {
       this.lastRefusalInfo = { verdict, at: Date.now() }
       return verdict
+    }
+    if (this.inputSealed) {
+      this.lastRefusalInfo = null
+      this.proc.write(data)
+      return 'allow'
     }
     // WRITE-AHEAD provenance (Sol r10 P0-1), after the verdict — refused
     // bytes never cross, so they never dirty — and BEFORE proc.write: the
@@ -787,6 +820,10 @@ export class PtySession extends EventEmitter {
     // the box, not which producer's door they came through. A mark that
     // cannot commit refuses the write (Sol r11 P0-1) — false, no byte, no
     // input event — and ownerSubmit surfaces the refusal.
+    if (this.inputSealed) {
+      this.proc.write(data)
+      return true
+    }
     if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data)
@@ -810,6 +847,7 @@ export class PtySession extends EventEmitter {
     // write (Sol r11 P0-1): the caller's stillValid/landing checks read the
     // undelivered paste honestly, and its later bare CR submits an empty
     // box, which every hosted TUI treats as a no-op.
+    if (this.inputSealed) return false
     if (!defaultProducerLease().noteDispatchBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data, 'dispatch')
@@ -822,7 +860,7 @@ export class PtySession extends EventEmitter {
    * tracking hears about it is this. Same event, same payload shape.
    */
   noteExternalInput(data: string): void {
-    this.emit('input', data)
+    if (!this.inputSealed) this.emit('input', data)
   }
 
   /**
