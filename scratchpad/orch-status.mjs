@@ -53,7 +53,8 @@
 //   pi      working     "⠋ Working..."  (bottom region only — see trap 2)
 //           composer    lines between the last two ─── rules
 //
-// States reported: working | idle | input-pending | queued-message.
+// States reported: working | idle | blocked | input-pending | queued-message.
+//   blocked        = an approval or question prompt is up (permission box, AskUserQuestion menu)
 //   input-pending  = not working, but something is sitting unsent in the composer
 //                    (typed text, "[Pasted text #1 +40 lines]") or an approval
 //                    prompt is up. Either way: it is waiting on a human.
@@ -266,6 +267,8 @@ const BLOCKED_PATTERNS = [
   /waiting for permission/i,
   /\[y\/n\]/i,
   /run a dynamic workflow\?/i,
+  // Claude Code's AskUserQuestion menu: its footer is the only line it always draws
+  /enter to select\s*·\s*↑\/↓ to navigate/i,
 ]
 
 const UNSUBMITTED_ATTACHMENT = /\[(?:Pasted text|Image|Audio|\.\.\.Truncated text)\s*#\d+(?:\s*\+\d+\s*lines)?\.*\]/
@@ -343,7 +346,7 @@ function locate(lines, kind) {
   const closeRule = ruleIndexes[ruleIndexes.length - 1]
   const openRule = ruleIndexes[ruleIndexes.length - 2]
   if (closeRule - openRule < 1) return null
-  return { status: linesAbove(lines, openRule), composer: lines.slice(openRule + 1, closeRule) }
+  return { status: linesAbove(lines, openRule), composer: lines.slice(openRule + 1, closeRule), below: lines.slice(closeRule + 1) }
 }
 
 /** Composer content with dim placeholders, prompt glyphs and chrome removed. */
@@ -397,7 +400,8 @@ export function classify(lines, kind) {
   const ended = status.find(({ text }) => CLAUDE_TURN_ENDED.test(text))
 
   // An approval UI is drawn inside or just above the composer.
-  const blockedScope = [...status, ...chrome.composer]
+  // AskUserQuestion draws its footer under the last rule, so the lines below count too.
+  const blockedScope = [...status, ...chrome.composer, ...(chrome.below ?? [])]
   const blocked = blockedScope.find(({ text }) => BLOCKED_PATTERNS.some((pattern) => pattern.test(text)))
 
   if (spinner) {
@@ -412,7 +416,7 @@ export function classify(lines, kind) {
 
   if (blocked) {
     return {
-      state: 'input-pending',
+      state: 'blocked',
       detail: 'approval or question prompt is up; the turn cannot advance without a human',
       evidence: { prompt: blocked.text },
     }
@@ -436,7 +440,7 @@ export function classify(lines, kind) {
   }
 }
 
-const SETTLED = new Set(['idle', 'input-pending'])
+const SETTLED = new Set(['idle', 'blocked', 'input-pending'])
 
 // --- pane resolution -------------------------------------------------------
 
@@ -589,6 +593,7 @@ function parseArgs(argv) {
 const STATE_COLUMN = {
   working: 'WORKING',
   'queued-message': 'QUEUED',
+  blocked: 'BLOCKED',
   'input-pending': 'INPUT',
   idle: 'idle',
   unknown: '?',
