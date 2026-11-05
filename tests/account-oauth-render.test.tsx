@@ -4,6 +4,8 @@
 // no providers there is no button, a passwordless account is never offered a
 // password field, and a passcode Mac's lock asks for the right word.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AccountStatus } from '../src/shared/account-v2'
@@ -11,7 +13,7 @@ import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
 import { HandleCard } from '../src/renderer/src/account/HandleCard'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
 import { PasscodeCard } from '../src/renderer/src/account/PasscodeCard'
-import { ProviderButtons } from '../src/renderer/src/account/ProviderButtons'
+import { ProviderButtons, TripWait } from '../src/renderer/src/account/ProviderButtons'
 import { LinkRows } from '../src/renderer/src/account/LinkRows'
 import { ResumeSession } from '../src/renderer/src/account/ResumeSession'
 import {
@@ -224,6 +226,36 @@ describe('review: a trip belongs to the surface that started it', () => {
     guard.leave()
     guard.leave()
     expect(cancels).toHaveLength(1)
+  })
+})
+
+describe('review: every surface that can start a trip owns it', () => {
+  it('two trips at once: one ending does not disarm the other', () => {
+    const cancels: number[] = []
+    const guard = tripGuard(() => cancels.push(1))
+    guard.begin()
+    guard.begin()
+    guard.end()
+    guard.leave()
+    expect(cancels).toHaveLength(1)
+  })
+
+  it('the rescue row says the code is spent whatever happens next', () => {
+    expect(PROVIDER_COPY.LOST_PROVIDER_WHY).toContain('even if you cancel')
+  })
+
+  it('the cards a provider proof runs behind all hold a guard', () => {
+    for (const file of ['SecurityCard', 'TotpSheet', 'SeatsTab', 'LinkRows', 'ProfileSheet']) {
+      const source = readFileSync(path.join(process.cwd(), `src/renderer/src/account/${file}.tsx`), 'utf8')
+      expect(source, file).toMatch(/useTripGuard\(\)|useWatchedTrip\(/)
+    }
+  })
+
+  it('the wait names where the person went, with a way out', () => {
+    const html = renderToStaticMarkup(<TripWait shown onCancel={() => undefined} />)
+    expect(html).toContain(PROVIDER_COPY.WAITING)
+    expect(html).toContain('CANCEL')
+    expect(renderToStaticMarkup(<TripWait shown={false} onCancel={() => undefined} />)).toBe('')
   })
 })
 

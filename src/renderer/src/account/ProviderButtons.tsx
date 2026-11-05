@@ -34,6 +34,45 @@ export function useTripGuard(): ReturnType<typeof tripGuard> {
   return guard
 }
 
+/**
+ * THE SAME, FOR A SURFACE WHOSE ACT ONLY SOMETIMES GOES THROUGH A BROWSER.
+ *
+ * On a passwordless account a plain-looking button can open a provider's page,
+ * and a person who closes the sheet must not find the act finished anyway. With
+ * `on` false this watches nothing, so a password account sees no change.
+ */
+export function useWatchedTrip(on: boolean): {
+  waiting: boolean
+  watch: <T>(work: Promise<T>) => Promise<T>
+  cancel: () => void
+} {
+  const guard = useTripGuard()
+  const [live, setLive] = useState(0)
+  const watch = <T,>(work: Promise<T>): Promise<T> => {
+    if (!on) return work
+    guard.begin()
+    setLive((count) => count + 1)
+    return work.finally(() => {
+      guard.end()
+      setLive((count) => Math.max(0, count - 1))
+    })
+  }
+  return { waiting: live > 0, watch, cancel: () => guard.leave() }
+}
+
+/** Where the person went, and the way out. */
+export function TripWait({ shown, onCancel }: { shown: boolean; onCancel: () => void }): React.JSX.Element | null {
+  if (!shown) return null
+  return (
+    <div className="cr-acct-providers" role="status">
+      <p className="gs-hint">{PROVIDER_COPY.WAITING}</p>
+      <button className="gs-ghost" onClick={onCancel}>
+        CANCEL
+      </button>
+    </div>
+  )
+}
+
 /** The buttons, or the wait they turn into. Nothing at all when none is offered. */
 export function ProviderButtons({
   offers,

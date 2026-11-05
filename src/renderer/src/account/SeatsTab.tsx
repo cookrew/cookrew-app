@@ -1,4 +1,4 @@
-import { useTripGuard } from './ProviderButtons'
+import { TripWait, useWatchedTrip } from './ProviderButtons'
 import { useCallback, useEffect, useState } from 'react'
 import type { AccountRefusal } from '../../../shared/account-v2'
 import {
@@ -57,7 +57,14 @@ export function heldLine(row: HeldSeatRow): string {
 export const UNPUBLISHED =
   'This door is not on cookrew.dev yet, so it has no seats. Serve it on the relay first.'
 
-export function SeatsTab({ username }: { username: string }): React.JSX.Element {
+export function SeatsTab({
+  username,
+  passwordless = false,
+}: {
+  username: string
+  /** Ending a seat then waits on a browser trip. */
+  passwordless?: boolean
+}): React.JSX.Element {
   const [surface, setSurface] = useState<SeatsSurface | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [granting, setGranting] = useState<string | null>(null)
@@ -125,13 +132,13 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
   }
 
   // A passwordless owner's END waits on a browser, which the tab takes with it.
-  const trip = useTripGuard()
+  const trip = useWatchedTrip(passwordless)
 
   const end = (slug: string, id: string): void => {
     const call = cookrew().accountEndSeat
     if (!call) return
-    trip.begin()
-    void call({ slug, id })
+    void trip
+      .watch(call({ slug, id }))
       .then((result) => {
         if (!result.ok) {
           if (result.reason !== 'cancelled') setError(seatRefusal(result.reason, result.message, username))
@@ -140,7 +147,6 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
         refresh(slug)
       })
       .catch(() => undefined)
-      .finally(() => trip.end())
   }
 
   const serving = surface?.serving ?? []
@@ -157,6 +163,7 @@ export function SeatsTab({ username }: { username: string }): React.JSX.Element 
 
   return (
     <section className="cr-acct-pane" aria-label="Seats and teams">
+      <TripWait shown={trip.waiting} onCancel={trip.cancel} />
       {error && (
         <p className="gs-paste-error" role="alert">
           {error}

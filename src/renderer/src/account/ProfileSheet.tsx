@@ -699,7 +699,7 @@ export function ProfileSheet({
           </section>
         )}
 
-        {tab === 'SEATS & TEAMS' && <SeatsTab username={username} />}
+        {tab === 'SEATS & TEAMS' && <SeatsTab username={username} passwordless={status.passwordless} />}
       </div>
     </div>
   )

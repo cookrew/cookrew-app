@@ -1271,6 +1271,7 @@ const ownerLock = new IdleLock({
   verify: (password) => accounts.verifyUnlock(password),
   // No passcode chosen yet: nothing could open this lock, so it does not close.
   armed: () => !accounts.passcodePending(),
+  waiting: () => accounts.providerTripping(),
   onChange: (locked) => {
     // A provider trip in flight belongs to whoever just walked away.
     if (locked) accounts.providerCancel()

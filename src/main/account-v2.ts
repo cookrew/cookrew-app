@@ -491,6 +491,15 @@ export class Accounts {
     return this.provider.cancel()
   }
 
+  /** Run steps as one act, so a cancel between them ends all of it. */
+  providerAct<T>(run: () => Promise<T>): Promise<T> {
+    return this.provider.during(run)
+  }
+
+  providerTripping(): boolean {
+    return this.provider.tripping()
+  }
+
   /** The seam `cookrew login --github` calls. */
   providerDeviceSignIn(
     id: ProviderId,
@@ -638,18 +647,20 @@ export class Accounts {
   }
 
   /** SIGN OUT with a provider proof, for an account with no password to type. */
-  async signOutWithProvider(): Promise<AccountResult<void>> {
-    const account = this.cached
-    if (!account) return { ok: false, reason: 'no_account' }
-    // Before the browser: there is no point proving anything for a refusal.
-    const devices = await this.devices()
-    if (devices.ok && devices.value.length <= 1) return { ok: false, reason: 'last_device' }
-    const proven = await this.provider.prove('revoke-device')
-    if (!proven.ok) return proven
-    const removed = await this.revokeDevice(account.deviceId, { stepUp: proven.value })
-    if (!removed.ok) return removed
-    this.forget()
-    return { ok: true, value: undefined }
+  signOutWithProvider(): Promise<AccountResult<void>> {
+    return this.provider.during(async () => {
+      const account = this.cached
+      if (!account) return { ok: false, reason: 'no_account' }
+      // Before the browser: there is no point proving anything for a refusal.
+      const devices = await this.devices()
+      if (devices.ok && devices.value.length <= 1) return { ok: false, reason: 'last_device' }
+      const proven = await this.provider.prove('revoke-device')
+      if (!proven.ok) return proven
+      const removed = await this.revokeDevice(account.deviceId, { stepUp: proven.value })
+      if (!removed.ok) return removed
+      this.forget()
+      return { ok: true, value: undefined }
+    })
   }
 
   /**

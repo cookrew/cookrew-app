@@ -1,3 +1,4 @@
+import { TripWait, useWatchedTrip } from './ProviderButtons'
 import { useEffect, useState } from 'react'
 import { APPROVAL_COPY, type TotpEnrolment } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
@@ -27,10 +28,13 @@ const SIX = /^[0-9]{6}$/
 
 export function TotpSheet({
   username,
+  passwordless = false,
   onClose,
   onActive,
 }: {
   username: string
+  /** Enrolling starts with a browser trip, which closing this sheet ends. */
+  passwordless?: boolean
   onClose: () => void
   onActive: () => void
 }): React.JSX.Element {
@@ -38,11 +42,13 @@ export function TotpSheet({
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const trip = useWatchedTrip(passwordless)
 
   useEffect(() => {
     const call = cookrew().accountTotpEnrol
     if (!call) return
-    void call()
+    void trip
+      .watch(call())
       .then((result) => {
         if (result.ok) setEnrolment(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
@@ -86,6 +92,7 @@ export function TotpSheet({
             ✕
           </button>
         </header>
+        <TripWait shown={trip.waiting} onCancel={trip.cancel} />
 
         <p className="gs-sub">{APPROVAL_COPY.TOTP_HOW}</p>
         {enrolment && (

@@ -255,17 +255,18 @@ function signInWith(ctx: V2Context, proof: ProviderProof, rawDevice: unknown, vi
 /** Nobody has this identity. Nothing is created until a person picks a name. */
 function askForHandle(ctx: V2Context, proof: ProviderProof, via: 'browser' | 'device'): void {
   const { v2 } = ctx
-  const ticket = v2.oauth.flows.mintTicket(proof)
-  const suggest = suggestHandle(proof.login, proof.email)
+  // Whoever polls a device flow may not be whoever typed the code, so a person's
+  // address must reach neither this answer nor the account a claim would make.
+  const held = via === 'browser' ? proof : { ...proof, email: null }
+  const ticket = v2.oauth.flows.mintTicket(held)
+  const suggest = suggestHandle(held.login, held.email)
   json(ctx.response, 200, {
     status: 'new',
     ticket: ticket.id,
     provider: proof.provider,
     suggest,
     free: suggest !== '' && !v2.accounts.has(suggest) && !legacyHolds(ctx, suggest),
-    // Whoever polls a device flow may not be whoever typed the code, so a
-    // person's address is not read back to them.
-    email: via === 'browser' ? proof.email : null,
+    email: held.email,
     expiresAt: ticket.expiresAt
   })
 }

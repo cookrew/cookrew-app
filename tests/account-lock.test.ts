@@ -155,3 +155,24 @@ describe('unlock, offline', () => {
     expect(lock.locked).toBe(true)
   })
 })
+
+describe('a browser trip in flight', () => {
+  it('holds the idle clock, so a slow provider login is not ended by the one-minute lock', () => {
+    let now = 0
+    let waiting = true
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false, now: () => now, waiting: () => waiting })
+    now = 120_000
+    expect(lock.tick()).toBe(false)
+    waiting = false
+    now = 170_000
+    expect(lock.tick()).toBe(false)
+    now = 180_000
+    expect(lock.tick()).toBe(true)
+  })
+
+  it('never stops LOCK NOW', () => {
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false, waiting: () => true })
+    lock.lock()
+    expect(lock.locked).toBe(true)
+  })
+})

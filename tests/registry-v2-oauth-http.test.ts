@@ -651,6 +651,18 @@ describe('configured', () => {
       expect(JSON.stringify(done.body)).not.toContain('octo@example.com')
     })
 
+    it('keeps that email off the account too, so the claim cannot read it back', async () => {
+      const { flow, verifier } = await begin()
+      fake.device.answer = 'ok'
+      const dev = device('Headless box')
+      const done = await call('POST', `/v2/oauth/device/${flow}/poll`, { verifier, device: dev })
+      const made = await call('POST', '/v2/oauth/claim', { ticket: done.body.ticket, username: 'headless', device: dev })
+      expect(made.status).toBe(201)
+      const me = await call('GET', '/v2/me', undefined, String(made.body.token))
+      expect(me.body.email).toBeNull()
+      expect(JSON.stringify(v2.accounts.get('headless'))).not.toContain('octo@example.com')
+    })
+
     it('holds the poll to the provider interval, whoever is asking', async () => {
       const { flow, verifier } = await begin()
       await call('POST', `/v2/oauth/device/${flow}/poll`, { verifier, device: device() })

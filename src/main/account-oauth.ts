@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomBytes } from 'node:crypto'
 import type {
   AccountDeviceInput,
@@ -31,6 +32,11 @@ import { listenForReturn, type LoopbackListener } from './oauth-loopback'
  * second press or a cancel always finds it. A second press ends the first: two
  * browsers finishing in either order is a question with no good answer, and only
  * the last press is what the person means.
+ *
+ * AN ACT CAN BE LONGER THAN A TRIP. Linking on a passwordless account is a proof,
+ * a redeem and a second trip, with reads either side, and a cancel or a lock in
+ * those gaps has no trip to end. So `during` scopes an act to the cancel count it
+ * began under, and every step asks whether that count still stands.
  *
  * Electron-free, like the rest of the account layer: the browser and the scheme
  * check arrive through the port, so a headless caller can use all of this.
@@ -132,6 +138,9 @@ export class ProviderAccess {
   private claimable: { ticket: string; device: AccountDeviceInput; minted: MintedDevice | null } | null = null
   /** Set while a device-flow poll is running, so it can be ended. */
   private deviceCancelled: (() => void) | null = null
+  /** How many cancels there have been. An act remembers the one it began under. */
+  private cancels = 0
+  private readonly act = new AsyncLocalStorage<number>()
 
   constructor(port: ProviderPort) {
     this.port = port
@@ -152,9 +161,28 @@ export class ProviderAccess {
   /** A trip in flight ended by the person. True when there was one. */
   cancel(): boolean {
     const running = this.trip !== null || this.deviceCancelled !== null
+    this.cancels += 1
     this.trip?.settle({ over: 'cancelled' })
     this.deviceCancelled?.()
     return running
+  }
+
+  /** One act, however many trips it takes. A cancel anywhere in it ends it. */
+  during<T>(run: () => Promise<T>): Promise<T> {
+    if (this.act.getStore() !== undefined) return run()
+    this.cancel()
+    return this.act.run(this.cancels, run)
+  }
+
+  /** Has the act this code is running in been cancelled? */
+  private ended(): boolean {
+    const began = this.act.getStore()
+    return began !== undefined && began !== this.cancels
+  }
+
+  /** A browser is out. The idle clock waits for it. */
+  tripping(): boolean {
+    return this.trip !== null
   }
 
   /** The account changed some other way: nothing in flight may land on it. */
@@ -185,6 +213,7 @@ export class ProviderAccess {
     extra: Record<string, unknown>,
     start: (path: string, body: unknown) => Promise<AccountResult<{ status: number; body: Record<string, unknown> }>>,
   ): Promise<AccountResult<{ handoff: string; verifier: string }>> {
+    if (this.ended()) return { ok: false, reason: 'cancelled' }
     const verifier = randomBytes(32).toString('base64url')
     const state = randomBytes(32).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
@@ -336,12 +365,17 @@ export class ProviderAccess {
   }
 
   /** A provider round trip as a step-up proof, for one act. Answers the `stepUp` id. */
-  async prove(act: StepUpAct): Promise<AccountResult<string>> {
+  prove(act: StepUpAct): Promise<AccountResult<string>> {
+    return this.during(() => this.proveNow(act))
+  }
+
+  private async proveNow(act: StepUpAct): Promise<AccountResult<string>> {
     const provider = await this.port.firstLink()
     if (!provider.ok) return provider
     const back = await this.travel(provider.value, 'step-up', { act }, this.port.authed)
     if (!back.ok) return back
     const proved = await this.port.authed('/v2/oauth/redeem', back.value)
+    if (this.ended()) return { ok: false, reason: 'cancelled' }
     if (!proved.ok) return proved
     const { status, body } = proved.value
     return status === 200 && typeof body.stepUp === 'string'
@@ -366,6 +400,8 @@ export class ProviderAccess {
       challenge,
       back: { scheme: true },
     })
+    // Before the code is spent: it cannot be taken back afterwards.
+    if (this.ended()) return { ok: false, reason: 'cancelled' }
     if (!asked.ok) return asked
     const { pending } = asked.value.body
     if (asked.value.body.error !== 'step_up' || typeof pending !== 'string') {

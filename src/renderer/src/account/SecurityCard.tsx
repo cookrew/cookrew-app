@@ -13,6 +13,7 @@ import {
 } from './account-store'
 import { FactorRows, RemoveFactorRow, Row } from './FactorRows'
 import { LinkedAccountRows } from './LinkRows'
+import { TripWait, useWatchedTrip } from './ProviderButtons'
 import { PROVIDER_COPY } from './provider-store'
 import { DOING, problemSentence, refusedSentence } from './problem'
 import { NewPasswordCard } from './NewPasswordCard'
@@ -94,6 +95,9 @@ export function SecurityCard({
   const [removing, setRemoving] = useState<FactorRow | null>(null)
   const [current, setCurrent] = useState('')
   const [busy, setBusy] = useState(false)
+  const passwordless = status?.passwordless === true
+  /** On a passwordless account these acts wait on a browser; leaving ends them. */
+  const trip = useWatchedTrip(passwordless)
 
   const readFactors = useCallback(() => {
     const call = cookrew().accountFactors
@@ -131,7 +135,8 @@ export function SecurityCard({
     const call = cookrew().accountRecoveryCodes
     if (!call) return
     setError(null)
-    void call()
+    void trip
+      .watch(call())
       .then((result) => {
         if (result.ok) setCodes(result.value)
         else setError(refusalSentence(result.reason, result.message, username))
@@ -172,7 +177,7 @@ export function SecurityCard({
     setBusy(true)
     setError(null)
     try {
-      const options = await api.accountPasskeyOptions()
+      const options = await trip.watch(api.accountPasskeyOptions())
       if (!options.ok) {
         setError(refusalSentence(options.reason, options.message, username))
         return
@@ -228,7 +233,8 @@ export function SecurityCard({
     if (!promise) return
     setBusy(true)
     setError(null)
-    void promise
+    void trip
+      .watch(promise)
       .then((result) => {
         setBusy(false)
         if (!result.ok) {
@@ -361,6 +367,7 @@ export function SecurityCard({
           />
         )}
       </ul>
+      <TripWait shown={trip.waiting} onCancel={trip.cancel} />
       {(error ?? problem) && (
         <p className="gs-paste-error" role="alert">
           {error ?? problem}
@@ -373,6 +380,7 @@ export function SecurityCard({
       {totp && (
         <TotpSheet
           username={username}
+          passwordless={passwordless}
           onClose={() => setTotp(false)}
           onActive={() => {
             setTotp(false)

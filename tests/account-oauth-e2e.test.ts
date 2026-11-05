@@ -937,3 +937,146 @@ describe('review: channels that widen or open', () => {
     expect(m.opened).toEqual([])
   })
 })
+
+describe('review: a cancel in the gaps around a trip', () => {
+  beforeEach(() => boot(true))
+
+  /** A fetch that waits at one path until released, and says when it got there. */
+  function gate(tail: string): { fetch: FetchLike; reached: Promise<void>; release: () => void; armed: { on: boolean } } {
+    let release: () => void = () => undefined
+    let arrive: () => void = () => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const reached = new Promise<void>((resolve) => {
+      arrive = resolve
+    })
+    const armed = { on: false }
+    return {
+      armed,
+      reached,
+      release,
+      fetch: async (input, init) => {
+        if (armed.on && String(input).endsWith(tail)) {
+          armed.on = false
+          arrive()
+          await held
+        }
+        return fetch(input, init)
+      }
+    }
+  }
+
+  it('before a proof trip: the browser never opens', async () => {
+    const g = gate('/v2/me')
+    const m = mac('Gap', { fetch: g.fetch })
+    await joinByGithub(m)
+    const before = m.opened.length
+    g.armed.on = true
+    const proving = m.app.providerProve('mint-join-code')
+    await g.reached
+    m.app.providerCancel()
+    g.release()
+    expect(await proving).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(m.opened).toHaveLength(before)
+  })
+
+  it('during sign-out: nothing proves and the file stays', async () => {
+    const first = mac('First')
+    await joinByGithub(first)
+    const code = await first.app.providerProve('mint-join-code').then((p) => {
+      if (!p.ok) throw new Error('no proof')
+      return first.app.mintJoinCode({ stepUp: p.value })
+    })
+    if (!code.ok) throw new Error('no code')
+    const g = gate('/v2/me')
+    const second = mac('Second', { fetch: g.fetch })
+    await second.app.join({ code: code.value.code })
+    g.armed.on = true
+    const leaving = second.app.signOutWithProvider()
+    await g.reached
+    second.app.providerCancel()
+    g.release()
+    expect(await leaving).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(second.opened).toEqual([])
+    expect(existsSync(accountFilePath(second.home))).toBe(true)
+  })
+
+  it('between the proof and the link: the second trip never starts', async () => {
+    const g = gate('/v2/oauth/redeem')
+    const m = mac('Between', { fetch: g.fetch })
+    await joinByGithub(m)
+    const handlers = accountHandlers({
+      accounts: m.app,
+      lock: new IdleLock({ lockAfterMs: 0, verify: () => false }),
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    })
+    const before = m.opened.length
+    g.armed.on = true
+    const linking = handlers['account:oauthLink']({ provider: 'google' })
+    await g.reached
+    m.app.providerCancel()
+    g.release()
+    expect(await linking).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(m.opened).toHaveLength(before + 1)
+    expect(v2.accounts.get('octo')?.links).toHaveLength(1)
+  })
+
+  it('a rescue code is not spent when the cancel comes first', async () => {
+    const g = gate('/start')
+    const m = mac('Rescue', { fetch: g.fetch })
+    await joinByGithub(m)
+    const codes = await codesFor(m)
+    if (!codes.ok) throw new Error('no codes')
+    g.armed.on = true
+    const spending = m.app.providerAct(() => m.app.providerRescueProof('google', codes.value[0]))
+    await g.reached
+    m.app.providerCancel()
+    g.release()
+    expect(await spending).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(v2.accounts.recoveryCodesLeft('octo')).toBe(8)
+  })
+
+  it('the rescue branch stops if the Mac locked while the code was spent', async () => {
+    const g = gate('/recovery')
+    const m = mac('RescueLock', { fetch: g.fetch })
+    await joinByGithub(m)
+    m.app.setPasscode(PASSCODE)
+    const codes = await codesFor(m)
+    if (!codes.ok) throw new Error('no codes')
+    const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false })
+    const handlers = accountHandlers({
+      accounts: m.app,
+      lock,
+      requests: new Requests({ accounts: m.app, notify: () => undefined }),
+      factors: new Factors({ accounts: m.app, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false })
+    })
+    const before = m.opened.length
+    g.armed.on = true
+    const linking = handlers['account:oauthLink']({ provider: 'google', rescue: codes.value[0] })
+    await g.reached
+    lock.lock()
+    g.release()
+    expect(await linking).toMatchObject({ ok: false, reason: 'locked' })
+    expect(m.opened).toHaveLength(before)
+  })
+
+  it('says when a trip is in flight, for the idle clock', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+    homes.push(home)
+    const app = new Accounts({ base: home, origin, openBrowser: () => Promise.resolve() })
+    expect(app.providerTripping()).toBe(false)
+    const waiting = app.providerSignIn('github')
+    expect(app.providerTripping()).toBe(true)
+    app.providerCancel()
+    await waiting
+    expect(app.providerTripping()).toBe(false)
+  })
+})

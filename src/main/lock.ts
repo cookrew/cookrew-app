@@ -35,6 +35,12 @@ export interface LockDeps {
    * their own canvas, so it does not engage. Absent means yes.
    */
   armed?: () => boolean
+  /**
+   * IS THE OWNER AWAY IN A BROWSER WE SENT THEM TO? Their keystrokes there are
+   * not this window's, so a one-minute lock would end a sign-in mid-2FA. A trip
+   * has its own five-minute limit, which is what bounds this.
+   */
+  waiting?: () => boolean
 }
 
 export type UnlockOutcome =
@@ -48,6 +54,7 @@ export class IdleLock {
   private readonly now: () => number
   private readonly onChange: ((locked: boolean) => void) | undefined
   private readonly armed: () => boolean
+  private readonly waiting: () => boolean
   private lockAfter: number
   private lastActive: number
   private isLocked = false
@@ -59,6 +66,7 @@ export class IdleLock {
     this.now = deps.now ?? (() => Date.now())
     this.onChange = deps.onChange
     this.armed = deps.armed ?? (() => true)
+    this.waiting = deps.waiting ?? (() => false)
     this.lockAfter = deps.lockAfterMs
     this.lastActive = this.now()
   }
@@ -109,6 +117,10 @@ export class IdleLock {
   tick(at?: number): boolean {
     const now = at ?? this.now()
     if (this.isLocked || this.lockAfter <= 0) return this.isLocked
+    if (this.waiting()) {
+      this.lastActive = now
+      return false
+    }
     if (now - this.lastActive >= this.lockAfter) this.lock()
     return this.isLocked
   }

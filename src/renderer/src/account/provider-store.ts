@@ -23,7 +23,7 @@ export const PROVIDER_COPY = {
   PASSCODE_LATER: 'Until you choose one, Cookrew will not lock itself on this Mac.',
   PASSCODE_CODES: 'Save your recovery codes next. They are the way back if you forget this.',
   LOST_PROVIDER: 'Lost access to your provider?',
-  LOST_PROVIDER_WHY: 'A recovery code stands in for it while you link a new one.',
+  LOST_PROVIDER_WHY: 'A recovery code stands in for it while you link a new one. The code is spent even if you cancel.',
   FORGOT_PASSCODE: 'Forgot your passcode?',
   RESCUE_WHY: 'A recovery code opens this Mac once. You will choose a new passcode straight after.',
   LOCK_NOW_WHY: 'Locking hides your canvas behind your passcode. Your agents keep working.',
@@ -86,17 +86,17 @@ export function passcodeView(next: string, confirm: string): { canGo: boolean; n
  * happens. `leave` is the only thing that cancels, and only a running trip.
  */
 export function tripGuard(cancel: () => void): { begin: () => void; end: () => void; leave: () => void } {
-  let running = false
+  let running = 0
   return {
     begin: () => {
-      running = true
+      running += 1
     },
     end: () => {
-      running = false
+      running = Math.max(0, running - 1)
     },
     leave: () => {
-      if (!running) return
-      running = false
+      if (running === 0) return
+      running = 0
       cancel()
     },
   }

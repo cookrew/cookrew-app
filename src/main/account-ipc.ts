@@ -8,7 +8,7 @@ import type {
   UsernameCheck,
 } from '../shared/account-v2'
 import { isTypedFactor } from './account-ladder'
-import { isProviderId, type ProviderOffer } from '../shared/oauth'
+import { isProviderId, type ProviderId, type ProviderOffer } from '../shared/oauth'
 import type { StepUpAct } from '../shared/step-up'
 import type { PairingHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
@@ -807,21 +807,37 @@ async function oauthLink(deps: AccountIpcDeps, input: unknown): Promise<AccountR
   const fields = asRecord(input)
   if (!isProviderId(fields.provider)) return { ok: false, reason: 'not_offered' }
   if (deps.lock.locked) return LOCKED
-  // The provider that would prove this is the one that was lost.
-  if (typeof fields.rescue === 'string' && fields.rescue !== '') {
-    const spent = await deps.accounts.providerRescueProof(fields.provider, fields.rescue)
-    return spent.ok ? deps.accounts.providerLink(fields.provider, { stepUp: spent.value }) : spent
-  }
-  const proof = await linkProof(deps, 'link-provider', fields.current)
-  return proof.ok ? deps.accounts.providerLink(fields.provider, proof.value) : proof
+  const { provider, rescue, current } = fields
+  return deps.accounts.providerAct(async () => {
+    // The provider that would prove this is the one that was lost.
+    const proof =
+      typeof rescue === 'string' && rescue !== ''
+        ? await rescueProof(deps, provider, rescue)
+        : await linkProof(deps, 'link-provider', current)
+    return proof.ok ? deps.accounts.providerLink(provider, proof.value) : proof
+  })
+}
+
+/** A rescue code in place of the provider. The Mac may lock while it is spent. */
+async function rescueProof(
+  deps: AccountIpcDeps,
+  provider: ProviderId,
+  code: string,
+): Promise<AccountResult<{ stepUp: string }>> {
+  const spent = await deps.accounts.providerRescueProof(provider, code)
+  if (deps.lock.locked) return LOCKED
+  return spent.ok ? { ok: true, value: { stepUp: spent.value } } : spent
 }
 
 async function oauthUnlink(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
   const fields = asRecord(input)
   if (!isProviderId(fields.provider)) return { ok: false, reason: 'not_offered' }
   if (deps.lock.locked) return LOCKED
-  const proof = await linkProof(deps, 'unlink-provider', fields.current)
-  return proof.ok ? deps.accounts.providerUnlink(fields.provider, proof.value) : proof
+  const { provider, current } = fields
+  return deps.accounts.providerAct(async () => {
+    const proof = await linkProof(deps, 'unlink-provider', current)
+    return proof.ok ? deps.accounts.providerUnlink(provider, proof.value) : proof
+  })
 }
 
 /**
