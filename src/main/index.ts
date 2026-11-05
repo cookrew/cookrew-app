@@ -109,6 +109,7 @@ import {
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
 import { electronSealer, excludeFromBackup } from './secrets-seal'
+import { noticeGate, secretNotice, withSecretActivity, type SecretActivityType, type SecretChange } from './secret-activity'
 import { createRtcHost } from './rtc-peer'
 import { createSocketBridge } from './socket-bridge'
 import { BUILD_CHECK_MS, readBuildId } from './build-id'
@@ -720,6 +721,33 @@ const auditLogin = (event: LoginAudit): void => {
   })
 }
 
+/**
+ * A secret's activity, said aloud (secret-activity.ts). The toast is for the
+ * owner at the window, so this is for the one who is not; it costs the gate's
+ * quiet only when it actually speaks.
+ */
+const secretNoticeGate = noticeGate()
+const noticeSecret = (type: SecretActivityType, who: string, name: string): void => {
+  if (mainWindow?.isFocused()) return
+  if (secretNoticeGate(`${type}|${who}|${name}`)) showNotification(secretNotice(type, who, name))
+}
+
+/** A seal or a delete from a door the owner uses. The name stays in `details`, the one field the wall loses. */
+const recordSecretChange = (change: SecretChange): void => {
+  const workspaceId = store.focusedId
+  events.append({
+    type: change.type,
+    entityId: 'secrets',
+    entityName: change.source,
+    workspaceId,
+    workspaceName: store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    actor: 'user',
+    timestamp: Date.now(),
+    details: scrub(change.name)
+  })
+  noticeSecret(change.type, change.source, change.name)
+}
+
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
@@ -764,6 +792,7 @@ const auditSecret = (event: SecretAudit): void => {
       )
     )
   })
+  noticeSecret(event.type, hit?.node.name ?? event.terminalId, event.name)
 }
 /**
  * The pre-credential lookup, memoized for a beat (Tinker HIGH-2).
@@ -7448,7 +7477,7 @@ app.whenReady().then(() => {
     // not drift from what the canvas shows.
     listPins: (terminalId) => pinsFor(terminalId),
     // The sealed slots, for the phone's note editor: names out, values in.
-    secrets,
+    secrets: withSecretActivity(secrets, 'Phone', recordSecretChange),
     // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
     rtc: rtcHost,
     // The browser card's socket over plain HTTP, for a phone on the relay.
@@ -8439,11 +8468,12 @@ function registerIpc(handlers: RestoreHandlers): void {
   // Lanes: worktree per agent, landing as a product action (lanes.ts).
   // The sealed slots (R4): the zoom editor's SEAL button and its listing.
   // The value crosses IPC once, into the store, and is never sent back.
+  const desktopSecrets = withSecretActivity(secrets, 'This Mac', recordSecretChange)
   ipcMain.handle('secret:put', (_e, name: string, value: string, served?: boolean) =>
-    secrets.put(name, value, { served: served === true })
+    desktopSecrets.put(name, value, { served: served === true })
   )
   ipcMain.handle('secret:list', () => secrets.list())
-  ipcMain.handle('secret:remove', (_e, name: string) => secrets.remove(name))
+  ipcMain.handle('secret:remove', (_e, name: string) => desktopSecrets.remove(name))
   ipcMain.handle('lane:list', (_e, dir: string) => laneList(dir))
   ipcMain.handle('lane:open', (_e, nodeId: string, name: string) => laneOpen(nodeId, name))
   ipcMain.handle('lane:land', (_e, nodeId: string, opts?: { close?: boolean; gate?: string[] | null }) =>
