@@ -25,7 +25,10 @@ export const REPO = process.env.COOKREW_DAILY_REPO ?? path.join(homedir(), 'work
 export const STATE = path.join(homedir(), '.cookrew', 'copilot-daily')
 export const GITHUB_REPO = 'cookrew/cookrew-app'
 
-const WORKTREES = path.join(homedir(), 'workspace', 'cookrew-wt')
+// `.noindex`: every run clones a lane and copies all of node_modules into it, and
+// Spotlight read each file (2026-11-05: 44,277 .ts files indexed under the old
+// `cookrew-wt`, none under `.claude/worktrees`, which is hidden).
+const WORKTREES = path.join(homedir(), 'workspace', 'cookrew-wt.noindex')
 /** The account holding the Copilot plan and push rights; the active gh login has neither. */
 const ACCOUNT = 'favon24'
 /** Its own config dir: the owner's global hooks fail closed and deny every tool call here. */
@@ -91,6 +94,7 @@ function cloneDependencies(target) {
 
 /** A linked worktree the runner owns, with its own APFS clone of the dependencies. */
 export function createTree(name, branch, base) {
+  mkdirSync(WORKTREES, { recursive: true })
   const tree = path.join(WORKTREES, name)
   git(REPO, 'worktree', 'add', '-q', '-b', branch, tree, base)
   try {
@@ -117,6 +121,7 @@ export function reclaimTree(name, branch) {
 }
 
 function createLane(name) {
+  mkdirSync(WORKTREES, { recursive: true })
   const lane = path.join(WORKTREES, name)
   git(WORKTREES, 'clone', '-q', '--no-hardlinks', '--depth', CLONE_DEPTH, '--branch', 'dev', `file://${REPO}`, lane)
   git(lane, 'remote', 'remove', 'origin')
@@ -366,6 +371,7 @@ export async function waitForRoom() {
 /** A run killed outright leaves its directories. Kept lanes get a week to be looked at. */
 export function sweepStale() {
   const old = Date.now() - STALE_LANE_MS
+  mkdirSync(WORKTREES, { recursive: true })
   const stale = readdirSync(WORKTREES).filter((name) => /^daily-\d{4}-/.test(name))
     .map((name) => path.join(WORKTREES, name))
     .filter((dir) => statSync(dir).mtimeMs < old)

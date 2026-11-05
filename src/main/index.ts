@@ -280,6 +280,8 @@ import { HeadlessBrowserCommandEngine, withActiveUrl } from './headless-browser-
 import { browserForCaller, keptBrowsers } from './browser-reach'
 import { reapOrphanBrowserProfiles, removeBrowserProfile } from './browser-profile-store'
 import { HeadlessReaper, reapOrphanChrome } from './orphan-chrome'
+import { keepCachesOutOfIndex } from './cache-noindex'
+import { installTscGate } from './tsc-gate'
 import { pressureOf, readMachineMemory, sleepColdLookups, sleepWindowMs, type PressureLevel } from './machine-pressure'
 import { staleAgentIds } from './agent-reconcile'
 import { IdleSleep, idleSleepMsFrom, type SleepFacts } from './agent-sleep'
@@ -6784,6 +6786,10 @@ if (!app.requestSingleInstanceLock()) {
   console.error('Another Cookrew instance is already running — exiting.')
   app.exit(1)
 } else {
+  // Holding the lock, before `ready`: nothing has these caches open yet, and no
+  // pane has been spawned that would name a gate not on disk.
+  keepCachesOutOfIndex(app.getPath('userData'))
+  if (!installTscGate()) console.error('[cookrew] could not write the tsc gate; panes run without it')
   // THE FIRST INSTANCE HEARS THE SECOND. On Windows and Linux a protocol link
   // launches a fresh process, which exits above — but not before the OS hands
   // its argv to the instance holding the lock, and that argv carries the link.

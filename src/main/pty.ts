@@ -1,3 +1,4 @@
+import { tscGateEnv } from './tsc-gate'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { mkdirSync, copyFileSync, chmodSync, writeFileSync } from 'node:fs'
@@ -438,6 +439,19 @@ const CLI_NAMES = ['cookrew', 'crew'] as const
  * main process can answer `cookrew check` (current viewport text) and detect
  * quiescence for `cookrew ask` without involving the renderer.
  */
+/**
+ * What an owner pane carries beyond COOKREW_*: its route, and the tsc gate. A
+ * served pane gets neither; its sandbox may not be able to read the gate, and
+ * node treats a preload it cannot load as fatal.
+ */
+function ownerSpawnExtras(route: PtySessionOptions['route']): Pick<AttachSpec, 'env' | 'args'> {
+  const env = { ...route?.env, ...tscGateEnv(process.env.NODE_OPTIONS) }
+  return {
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...(route ? { args: route.args } : {})
+  }
+}
+
 export class PtySession extends EventEmitter {
   readonly terminalId: string
   /** Harness launch command; submission policy may key on the proven adapter. */
@@ -567,7 +581,7 @@ export class PtySession extends EventEmitter {
       path: `${options.cliDir}:${process.env.PATH ?? ''}`,
       cwd: options.cwd,
       card: options.card,
-      ...(options.route && !options.served ? { env: options.route.env, args: options.route.args } : {})
+      ...(options.served ? {} : ownerSpawnExtras(options.route))
     }
     // One live process per terminal across ALL backends: a copy of this
     // agent alive under a non-host multiplexer is killed there first and
