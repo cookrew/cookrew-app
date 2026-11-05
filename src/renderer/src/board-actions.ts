@@ -22,7 +22,7 @@ const ACTIONS: readonly (BoardAction & { words: readonly string[] })[] = [
     id: 'rename-workspace',
     label: 'Rename this workspace',
     hint: 'Change its name or icon',
-    words: ['rename', 'name', 'icon']
+    words: ['rename', 'name', 'icon', 'this', 'workspace']
   }
 ]
 
@@ -35,3 +35,6 @@ export function boardActions(raw: string): BoardAction[] {
   if (query.length === 0) return []
   return ACTIONS.filter((action) => asks(query, action.words)).map(({ id, label, hint }) => ({ id, label, hint }))
 }
+
+/** An action row above the list is a match: "Nothing matches" under it reads as a lie. */
+export const saysNothingMatches = ({ hits, actions }: { hits: number; actions: number }): boolean => hits === 0 && actions === 0

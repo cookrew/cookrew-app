@@ -519,10 +519,11 @@ export class Requests {
     const fresh = next.filter((row) => !this.announced.has(row.id))
     this.pending = next
     this.announced = new Set(next.map((row) => row.id))
+    // The badge first: a box that cannot show a notification still shows the count.
+    if (changed) this.deps.onChange?.(next)
     const username = this.deps.accounts.account()?.username ?? ''
     for (const row of fresh) {
       this.deps.notify({ title: 'Cookrew', body: rowNotice(row, username), requestId: row.id })
     }
-    if (changed) this.deps.onChange?.(next)
   }
 }

@@ -426,7 +426,7 @@ export function avatarView(status: AccountStatus | null): AvatarView {
     title:
       requests === null
         ? `@${status.username}`
-        : `@${status.username} — ${requests} device${requests === 1 ? '' : 's'} waiting`,
+        : `@${status.username} — ${requests} request${requests === 1 ? '' : 's'} waiting`,
     badge: requests,
     avatar: status.avatar,
   }
