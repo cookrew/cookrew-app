@@ -27,6 +27,60 @@ const answering = (view: WaitView | null): WaitAnswering => ({ view, menu: view 
 const FACE = { id: 't1', name: 'Bar fusion', preset: 'claude', orch: false }
 const draw = (view: WaitView | null): string => renderToStaticMarkup(<WaitChoices face={FACE} wait={answering(view)} />)
 
+const BRIEF: WaitChoice['about'] = {
+  title: 'Rebuild bundle and re-shoot pages',
+  notes: ['Dangerous rm operation on statically-unresolvable target: shots/*', '⚠ Claude Code will automatically block this request in 1:54'],
+  body: ['rm -rf shots/* <b>', 'ls shots | wc -l'],
+  partial: false
+}
+
+describe('what the agent asks to do', () => {
+  const bash: WaitChoice = { ...fixture('claude-bash'), sub: 'Bash · rm -rf shots/*', about: BRIEF }
+  const agent = { id: 't1', name: 'Site Legal', preset: 'claude', orch: false } as AgentView
+  const card = (choice: WaitChoice): string =>
+    renderToStaticMarkup(<BarWaitCard agent={agent} view={{ choice, sent: null }} wait={answering({ choice, sent: null })} onOpen={() => undefined} onReply={() => undefined} onClose={() => undefined} />)
+
+  it('stands in the box over the prompt: its words, why it asks, the command', () => {
+    const html = draw({ choice: bash, sent: null })
+    expect(html).toContain('Rebuild bundle and re-shoot pages')
+    expect(html).toContain('Dangerous rm operation on statically-unresolvable target: shots/*')
+    expect(html).toContain('rm -rf shots/* &lt;b&gt;\nls shots | wc -l')
+  })
+
+  it('stands on the bar group\'s card too', () => {
+    const html = card(bash)
+    expect(html).toContain('Rebuild bundle and re-shoot pages')
+    expect(html).toContain('Dangerous rm operation')
+    expect(html).toContain('ls shots | wc -l')
+  })
+
+  it('comes before the rows: what is approved is read first', () => {
+    const html = draw({ choice: bash, sent: null })
+    expect(html.indexOf('wc-about')).toBeGreaterThan(-1)
+    expect(html.indexOf('wc-about')).toBeLessThan(html.indexOf('wc-rows'))
+  })
+
+  it('does not say the command twice', () => {
+    const html = draw({ choice: bash, sent: null })
+    expect(html).toContain('Bash · the agent waits')
+    expect(html).not.toContain('Bash · rm -rf')
+  })
+
+  it('says so when the top of a long command could not be read', () => {
+    const html = draw({ choice: { ...bash, about: { ...BRIEF, partial: true } }, sent: null })
+    expect(html).toContain('top scrolled off')
+  })
+
+  it('adds nothing to a menu with nothing to add', () => {
+    expect(draw({ choice: fixture('claude-edit'), sent: null })).not.toContain('wc-about')
+  })
+
+  it('keeps a file edit\'s sub whole: it is not the diff', () => {
+    const choice: WaitChoice = { ...fixture('claude-edit'), about: { title: null, notes: [], body: ['1 -a', '1 +b'], partial: false } }
+    expect(draw({ choice, sent: null })).toContain('Edit · a.ts · +1 −1 · the agent waits')
+  })
+})
+
 describe('WaitChoices', () => {
   const edit = fixture('claude-edit')
 

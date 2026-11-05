@@ -1,0 +1,161 @@
+           Claude Code v2.1.316
+ ▐▛███▛█   Opus 5.5 with high effort
+▝▜██████▀  API Usage Billing
+ ▝▝   ▝▝   ~/.cache/wc-fix-legal
+
+
+❯ Do these two steps as TWO SEPARATE Bash
+  tool calls, one after the other, each
+  EXACTLY as written, with nothing between
+  them and no commentary. Give the first
+  the description "First box AAA", the
+  second the description "Second box BBB".
+
+  Call 1:
+  cd /Users/anon/.cache/wc-fix-legal
+  echo AAA-top-of-the-first-command
+  echo one-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo two-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo three-line-of-the-command-that-runs
+  -well-past-the-width-of-a-phone-pane-so-
+  it-wraps
+  echo four-line-of-the-command-that-runs-
+  well-past-the-width-of-a-phone-pane-so-i
+  t-wraps
+  echo five-line-of-the-command-that-runs-
+  well-past-the-width-of-a-phone-pane-so-i
+  t-wraps
+  echo six-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo seven-line-of-the-command-that-runs
+  -well-past-the-width-of-a-phone-pane-so-
+  it-wraps
+  echo eight-line-of-the-command-that-runs
+  -well-past-the-width-of-a-phone-pane-so-
+  it-wraps
+  echo nine-line-of-the-command-that-runs-
+  well-past-the-width-of-a-phone-pane-so-i
+  t-wraps
+  echo ten-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo eleven-line-of-the-command-that-run
+  s-well-past-the-width-of-a-phone-pane-so
+  -it-wraps
+  echo twelve-line-of-the-command-that-run
+  s-well-past-the-width-of-a-phone-pane-so
+  -it-wraps
+  rm -rf scratchpad/legal/shots/*
+  ls scratchpad/legal/shots | wc -l
+
+  Call 2:
+  cd /Users/anon/.cache/wc-fix-legal
+  echo BBB-top-of-the-second-command
+  echo one-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo two-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo three-line-of-the-command-that-runs
+  -well-past-the-width-of-a-phone-pane-so-
+  it-wraps
+  echo four-line-of-the-command-that-runs-
+  well-past-the-width-of-a-phone-pane-so-i
+  t-wraps
+  echo five-line-of-the-command-that-runs-
+  well-past-the-width-of-a-phone-pane-so-i
+  t-wraps
+  echo six-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo seven-line-of-the-command-that-runs
+  -well-past-the-width-of-a-phone-pane-so-
+  it-wraps
+  echo eight-line-of-the-command-that-runs
+  -well-past-the-width-of-a-phone-pane-so-
+  it-wraps
+  echo nine-line-of-the-command-that-runs-
+  well-past-the-width-of-a-phone-pane-so-i
+  t-wraps
+  echo ten-line-of-the-command-that-runs-w
+  ell-past-the-width-of-a-phone-pane-so-it
+  -wraps
+  echo eleven-line-of-the-command-that-run
+  s-well-past-the-width-of-a-phone-pane-so
+  -it-wraps
+  echo twelve-line-of-the-command-that-run
+  s-well-past-the-width-of-a-phone-pane-so
+  -it-wraps
+  rm -rf scratchpad/legal/shots/*
+  ls scratchpad/legal/shots | wc -l
+
+⏺ Bash(cd /Users/anon/.cache/wc-fix-legal
+      echo AAA-top-of-the-first-command…)
+  ⎿  Waiting…
+
+───────────────────────────────────────────
+ Bash command
+ First box AAA
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ cd /Users/anon/.cache/wc-fix-legal
+ │ echo AAA-top-of-the-first-command
+ │ echo one-line-of-the-command-that-runs-
+ │ well-past-the-width-of-a-phone-pane-so-
+ │ it-wraps
+ │ echo two-line-of-the-command-that-runs-
+ │ well-past-the-width-of-a-phone-pane-so-
+ │ it-wraps
+ │ echo three-line-of-the-command-that-run
+ │ s-well-past-the-width-of-a-phone-pane-s
+ │ o-it-wraps
+ │ echo four-line-of-the-command-that-runs
+ │ -well-past-the-width-of-a-phone-pane-so
+ │ -it-wraps
+ │ echo five-line-of-the-command-that-runs
+ │ -well-past-the-width-of-a-phone-pane-so
+ │ -it-wraps
+ │ echo six-line-of-the-command-that-runs-
+ │ well-past-the-width-of-a-phone-pane-so-
+ │ it-wraps
+ │ echo seven-line-of-the-command-that-run
+ │ s-well-past-the-width-of-a-phone-pane-s
+ │ o-it-wraps
+ │ echo eight-line-of-the-command-that-run
+ │ s-well-past-the-width-of-a-phone-pane-s
+ │ o-it-wraps
+ │ echo nine-line-of-the-command-that-runs
+ │ -well-past-the-width-of-a-phone-pane-so
+ │ -it-wraps
+ │ echo ten-line-of-the-command-that-runs-
+ │ well-past-the-width-of-a-phone-pane-so-
+ │ it-wraps
+ │ echo eleven-line-of-the-command-that-ru
+ │ ns-well-past-the-width-of-a-phone-pane-
+ │ so-it-wraps
+ │ echo twelve-line-of-the-command-that-ru
+ │ ns-well-past-the-width-of-a-phone-pane-
+ │ so-it-wraps
+ │ rm -rf scratchpad/legal/shots/*
+ │ ls scratchpad/legal/shots | wc -l
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ Dangerous rm operation on
+ │ statically-unresolvable target:
+ │ /Users/anon/.cache/wc-fix-legal/scratch
+ │ pad/legal/shots/*
+ ⚠ Claude Code will automatically block
+ this request in 1:57, to avoid holding up
+ an unattended session
+
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend
+

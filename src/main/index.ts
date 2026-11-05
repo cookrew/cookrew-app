@@ -35,7 +35,8 @@ import { BootLatency, shouldTimeBoot, type BootSample } from './boot-latency'
 import { TurnTracker, type CompletedTurn } from './turn-tracker'
 import { createPacedInput } from './enter-pacing'
 import { createMenuAnswerer, parseMenuRequest, setMenuAnswerer } from './menu-answer'
-import { waitChoiceOfScreen } from '../shared/wait-choice'
+import { waitChoiceOfScreen, type WaitChoice } from '../shared/wait-choice'
+import { aboutOfScreen, wholeBrief } from '../shared/wait-about'
 import { createBackendPhaseGate } from './backend-phase-gate'
 import { TurnStore } from './turn-store'
 import {
@@ -2405,6 +2406,36 @@ const paneRows = async (terminalId: string): Promise<string | null> => {
   return mux?.capture(name) ?? null
 }
 
+/** Rows a permission box may run to on a narrow pane: a long command, wrapped at a phone's 43 columns. */
+const BOX_HISTORY_ROWS = 600
+
+/** Further back than paneRows, where a box taller than the screen keeps its top. */
+const paneHistory = async (terminalId: string): Promise<string | null> => {
+  const mux = multiplexer()
+  return mux instanceof HerdrHostMultiplexer ? mux.captureRowsAsync(sessionNameFor(terminalId), BOX_HISTORY_ROWS) : null
+}
+turns.paneHistory = paneHistory
+
+/** A menu read off a pane, its box whole if the box outgrew those rows. */
+const withPaneBox = async (terminalId: string, choice: WaitChoice | null): Promise<WaitChoice | null> => {
+  if (!choice?.about?.partial) return choice
+  const history = await paneHistory(terminalId)
+  return history === null ? choice : wholeBrief(choice, aboutOfScreen(history))
+}
+
+/** The latest read of each pane's menu: the gate's reads overlap, and a slow one must not land over a newer. */
+const menuReads = new Map<string, number>()
+
+/** The menu a pane shows, for a card with no mirror to read it from. */
+const readPaneMenu = async (terminalId: string): Promise<void> => {
+  const mine = (menuReads.get(terminalId) ?? 0) + 1
+  menuReads.set(terminalId, mine)
+  const screen = await paneRows(terminalId)
+  if (screen === null) return
+  const choice = await withPaneBox(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
+  if (menuReads.get(terminalId) === mine) turns.observeBackendChoice(terminalId, choice)
+}
+
 // herdr's word reaches the tracker through the pane: a slash command's own
 // UI (the /model picker) is not a turn, whatever herdr's screen guess says.
 const herdrPhases = createBackendPhaseGate({
@@ -2419,10 +2450,7 @@ const herdrPhases = createBackendPhaseGate({
     return status ? backendPhaseOf(status) : null
   },
   apply: (terminalId, phase, agent) => turns.observeBackendPhase(terminalId, phase, agent),
-  menu: async (terminalId) => {
-    const screen = await paneRows(terminalId)
-    if (screen !== null) turns.observeBackendChoice(terminalId, uiCommandOpen(screen) ? null : waitChoiceOfScreen(screen))
-  }
+  menu: readPaneMenu
 })
 
 statusFeed()?.on('status', ({ sessionName, status }: StatusObservation) => {
@@ -8024,6 +8052,11 @@ function registerIpc(handlers: RestoreHandlers): void {
       // A card with no mirror wakes one, as for any key.
       if (waker.hold(terminalId, keys)) return true
       return session?.writeMenuKeys(keys, inMenu) === 'allow'
+    },
+    whole: withPaneBox,
+    moved: (terminalId) => {
+      turns.refreshBox(terminalId)
+      void readPaneMenu(terminalId).catch(() => undefined)
     }
   })
   setMenuAnswerer(answerMenu)
