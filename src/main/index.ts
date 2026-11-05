@@ -4,7 +4,7 @@ import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
 import { buildInbox, type InboxNode } from './inbox'
@@ -240,10 +240,13 @@ import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
 import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '../shared/remote-access'
 import { parseUseUrl } from '../shared/use-url'
-import { readMacListedApp, readMacSession } from './mac-bridge'
+import { macKeystrokes, readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
+import { createUnlockDoor, loadUnlockKey } from './remote-unlock'
+import type { SealKeyPair } from '../shared/relay-seal'
+import { fingerprintOfDigest } from '../shared/key-fingerprint'
 import { electronUpdateInstaller } from './update-install'
 import type { UpdateStatus } from '../shared/update-check'
 import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
@@ -6451,6 +6454,8 @@ if (process.platform === 'darwin') {
     listedApp = bundle
   })
 }
+let heldUnlockKey: SealKeyPair | null = null
+const unlockKey = (): SealKeyPair => (heldUnlockKey ??= loadUnlockKey(path.join(homedir(), '.cookrew', 'unlock-key.json')))
 function currentBuild(): RemoteBuild {
   return remoteBuild({
     execPath: process.execPath,
@@ -6495,9 +6500,27 @@ const remoteDesk = createRemoteDesk({
     app.relaunch()
     app.quit()
   },
+  unlockWords: () => {
+    const key = unlockKey().publicKey
+    return fingerprintOfDigest(new Uint8Array(createHash('sha256').update(Buffer.from(key, 'base64url')).digest())).words
+  },
   wakeDisplay: async () => {
     await (process.platform === 'darwin' ? commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']) : commandRun('xset', ['dpms', 'force', 'on']))
   }
+})
+const unlockDoor = createUnlockDoor({
+  keyPair: unlockKey,
+  refusal: (who) => remoteDesk.unlockRefusal(who),
+  locked: async () => {
+    sessionReader.invalidate()
+    return (await sessionReader.read()).locked
+  },
+  wake: async () => {
+    await commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']).catch(() => undefined)
+  },
+  typable: (password) => macKeystrokes(password).every((key) => key.code >= 0),
+  type: (password) => useInstances.typeAtLock(password),
+  record: (outcome, who) => store.recordEvent('remote.unlock', 'machine', 'this Mac', `${who.name}: ${outcome}`)
 })
 const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
 /** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
@@ -6618,6 +6641,7 @@ const useSources = createUseSourceService({
   provider: () => useInstances.sources(),
   servedWorkspace,
   desk: remoteDesk,
+  unlock: unlockDoor,
   who: viewerWho,
   cardAt: (workspaceId, url) =>
     store.workspaceState(workspaceId).nodes.find((node): node is BrowserNodeData => node.kind === 'browser' && activeBrowserTab(node).url === url) ?? null,
@@ -8770,7 +8794,12 @@ function registerIpc(handlers: RestoreHandlers): void {
     const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
   }))
-  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => (typeof on === 'boolean' ? remoteDesk.setSwitch(on) : { ok: false, error: 'On or off' })))
+  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => {
+    if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
+    // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
+    if (on) unlockDoor.reopen()
+    return remoteDesk.setSwitch(on)
+  }))
   ipcMain.handle('use:remote-stop', ownerOnly(() => {
     remoteDesk.stopAll()
     return { ok: true }

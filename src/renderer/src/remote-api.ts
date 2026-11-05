@@ -21,6 +21,7 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
+import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
 import { apiPath, clientBase } from './api-base'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
@@ -618,6 +619,8 @@ export function createRemoteApi(): CookrewApi {
     remoteAccess: () => req<RemoteAccess>(apiPath(`${USE_SOURCES_PATH}/access`)),
     remoteControl: (ask) => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/control`), 'POST', ask).catch(refusal),
     remoteRestart: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/restart`), 'POST', {}).catch(refusal),
+    remoteUnlockBegin: () => req<UnlockBegin>(apiPath(`${USE_SOURCES_PATH}/unlock/begin`), 'POST', {}),
+    remoteUnlock: (sealed) => req<UnlockAnswer>(apiPath(`${USE_SOURCES_PATH}/unlock`), 'POST', { sealed }),
     remoteWake: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/wake`), 'POST', {}).catch(refusal),
 
     // Phones can't hand the desktop a local path — upload the bytes and let

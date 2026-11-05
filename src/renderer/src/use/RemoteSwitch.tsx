@@ -13,7 +13,7 @@ import { accessOf } from './remote-acts'
  */
 
 export const SWITCH_LABEL = 'Allow remote control of this Mac'
-export const SWITCH_MEANS = 'Your paired devices can take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on until Cookrew restarts, and someone at the Mac can stop it at any time.'
+export const SWITCH_MEANS = 'Your paired devices can unlock this Mac with its password and take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on until Cookrew restarts, and someone at the Mac can stop it at any time.'
 
 /** What was pressed is what is sent: two surfaces show this switch, and either may be behind the other. */
 export const switchAnswer = (set: (on: boolean) => Promise<RemoteAnswer>, on: boolean): Promise<RemoteAnswer> => set(on)
@@ -43,10 +43,14 @@ export function RemoteSwitchRow(): React.JSX.Element | null {
   const settable = typeof cookrew().setRemoteSwitch === 'function'
   const { facts, flip } = useRemoteSwitch(settable)
   if (!settable || !facts?.available) return null
+  const words = facts.switchOn ? facts.unlockWords?.join(' ') : undefined
   return (
-    <button type="button" className={`cr-more-item${facts.switchOn ? ' on' : ''}`} role="switch" aria-checked={facts.switchOn} title={SWITCH_MEANS} onClick={() => flip(!facts.switchOn)}>
+    <button type="button" className={`cr-more-item${words ? ' tall' : ''}${facts.switchOn ? ' on' : ''}`} role="switch" aria-checked={facts.switchOn} title={SWITCH_MEANS} onClick={() => flip(!facts.switchOn)}>
       <CrIcon name="select" />
-      <span className="cr-more-label">{facts.switchOn ? 'Remote control: on' : SWITCH_LABEL}</span>
+      <span className="cr-more-text">
+        <span className="cr-more-label">{facts.switchOn ? 'Remote control: on' : SWITCH_LABEL}</span>
+        {words && <span className="cr-more-note">Unlock key: {words}</span>}
+      </span>
     </button>
   )
 }

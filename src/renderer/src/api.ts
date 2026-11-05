@@ -46,6 +46,7 @@ import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
 import type { FleetEvent } from "../../shared/fleet";
+import type { UnlockAnswer as MacUnlockAnswer, UnlockBegin } from "../../shared/remote-unlock";
 import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
@@ -383,6 +384,9 @@ export interface CookrewApi {
   remoteControl?: (ask: { card: string; on: boolean }) => Promise<RemoteAnswer>;
   remoteRestart?: () => Promise<RemoteAnswer>;
   remoteWake?: () => Promise<RemoteAnswer>;
+  /** A phone's way to a locked Mac (use/unlock-flow.ts). The desktop has neither. */
+  remoteUnlockBegin?: () => Promise<UnlockBegin>;
+  remoteUnlock?: (sealed: string) => Promise<MacUnlockAnswer>;
   /** The machine switch. The Mac's own window only: there is no route, so a phone has no such method. */
   setRemoteSwitch?: (on: boolean) => Promise<RemoteAnswer>;
   stopRemote?: () => Promise<RemoteAnswer>;
