@@ -1,7 +1,7 @@
 import type { CookrewApi } from './api'
 import type { AccountStatus } from '../../shared/account-v2'
 import type { AgentRegistryEntry } from './agent-registry'
-import { advancedStage, isFirstRunStage, waitOfScreen, type FirstRunStage, type FirstTask } from '../../shared/first-run'
+import { advancedStage, isFirstRunStage, pastTask, waitOfScreen, type FirstRunStage, type FirstTask } from '../../shared/first-run'
 import { ACCESS_ROWS, accessTools, checkEndpoint, type AccessState, type EndpointInput } from '../../shared/agent-access'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../../shared/preflight'
 import type { TerminalActivity } from '../../shared/turn'
@@ -160,8 +160,7 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
       } else if (SCREENS[agent]) {
         task = { state: 'holding', id, words, harness, wait: waitOfScreen(SCREENS[agent]) }
       } else {
-        task = null
-        stage = advancedStage(stage, 'phone')
+        task = { state: 'sent', id, words, harness }
         playTurn(id, words)
       }
       tell()
@@ -182,15 +181,16 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     firstRunRead: () => Promise.resolve(stage),
     firstRunAdvance: (to) => {
       stage = advancedStage(stage, to)
+      if (task?.state === 'sent' && pastTask(stage)) task = null
       return Promise.resolve(stage)
     },
     firstRunPreflight: () => Promise.resolve(preflightRows({ ...freshFacts(mode), endpointTools: access.active?.tools ?? [] })),
     firstRunTask: () => Promise.resolve(task),
     firstRunDiscard: () => {
-      if (task?.state === 'holding') {
-        const { id, words } = task
+      if (task?.state === 'holding' || task?.state === 'sent') {
+        const { id, words, state } = task
         task = { state: 'returned', words, why: null, id }
-        void api.removeNode(id)
+        if (state === 'holding') void api.removeNode(id)
         tell()
       }
       return Promise.resolve()
@@ -208,8 +208,8 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     accessSave: (input: EndpointInput) => {
       const checked = checkEndpoint(input)
       if (!checked.ok) return Promise.resolve(checked)
-      const { protocol, baseUrl, model } = checked.value
-      access = { rows: ACCESS_ROWS, active: { id: 'endpoint', label: 'Your endpoint', protocol, model, host: new URL(baseUrl).host, tools: accessTools({ protocol }) } }
+      const { protocol, baseUrl, model, simple } = checked.value
+      access = { rows: ACCESS_ROWS, active: { id: 'endpoint', label: 'Your endpoint', protocol, model, host: new URL(baseUrl).host, tools: accessTools({ protocol, baseUrl, simple }) } }
       return Promise.resolve({ ok: true as const, state: access })
     },
     accessClear: () => {

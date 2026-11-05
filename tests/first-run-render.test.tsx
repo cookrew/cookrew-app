@@ -174,7 +174,7 @@ describe('an agent that is waiting (bug 4)', () => {
 
 describe('the road with no account', () => {
   const none = { rows: ACCESS_ROWS, active: null }
-  const form = { protocol: 'anthropic' as const, baseUrl: '', key: '', model: '' }
+  const form = { protocol: 'anthropic' as const, baseUrl: '', key: '', model: '', simple: false }
   const fields = (over: Partial<Parameters<typeof EndpointFormView>[0]> = {}): string =>
     renderToStaticMarkup(<EndpointFormView form={form} busy={false} problem={null} onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} {...over} />)
 
@@ -197,6 +197,19 @@ describe('the road with no account', () => {
   it('says each protocol runs on which tool, and what Codex needs', () => {
     expect(fields()).toContain(ENDPOINT_COPY.ANTHROPIC)
     expect(fields()).toContain(ENDPOINT_COPY.OPENAI)
+  })
+
+  it('tells the truth about Claude Code on someone else’s Anthropic-style endpoint, and offers simple mode', () => {
+    const html = fields({ form: { ...form, baseUrl: 'https://llm.example.com' } })
+    expect(html).toContain(ENDPOINT_COPY.THIRD_PARTY)
+    expect(html).toContain(ENDPOINT_COPY.SIMPLE)
+    expect(html).toMatch(/type="checkbox"/)
+    expect(ENDPOINT_COPY.THIRD_PARTY).toMatch(/Pi/)
+  })
+
+  it('keeps that out of the way on Anthropic’s own API, and for an OpenAI-style one', () => {
+    expect(fields({ form: { ...form, baseUrl: 'https://api.anthropic.com' } })).not.toContain(ENDPOINT_COPY.THIRD_PARTY)
+    expect(fields({ form: { ...form, protocol: 'openai' } })).not.toContain(ENDPOINT_COPY.SIMPLE)
   })
 
   it('shows why it was refused, and waits while it asks', () => {

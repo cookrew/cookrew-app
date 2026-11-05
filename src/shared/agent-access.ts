@@ -16,6 +16,8 @@ export interface AccessSource {
   readonly model: string
   /** For an OpenAI-style source: what the address answered. Codex needs the Responses API. */
   readonly wire?: AccessWire
+  /** Claude Code in its simple mode, which more third-party services accept. */
+  readonly simple?: boolean
 }
 
 export type AccessWire = 'responses' | 'chat'
@@ -45,15 +47,29 @@ export interface EndpointInput {
   readonly baseUrl: string
   readonly key: string
   readonly model: string
+  readonly simple?: boolean
 }
 
 export type EndpointField = 'protocol' | 'baseUrl' | 'key' | 'model'
 
 export type EndpointCheck = { readonly ok: true; readonly value: EndpointInput } | { readonly ok: false; readonly field: EndpointField; readonly why: string }
 
+/**
+ * Anthropic-style, and not Anthropic. Claude Code is built for Anthropic's own API:
+ * in full mode a third-party endpoint refused it with a 400, where Pi and Claude
+ * Code's simple mode both finished the same task (box test, Part C).
+ */
+export function thirdPartyAnthropic(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname !== 'api.anthropic.com'
+  } catch {
+    return true
+  }
+}
+
 /** The tools that can run on a source, as presets, the first agent's pick first. */
-export function accessTools(source: { readonly protocol: AccessProtocol; readonly wire?: AccessWire }): readonly string[] {
-  if (source.protocol === 'anthropic') return ['Claude Code', 'Pi']
+export function accessTools(source: { readonly protocol: AccessProtocol; readonly baseUrl: string; readonly wire?: AccessWire; readonly simple?: boolean }): readonly string[] {
+  if (source.protocol === 'anthropic') return thirdPartyAnthropic(source.baseUrl) && !source.simple ? ['Pi', 'Claude Code'] : ['Claude Code', 'Pi']
   return source.wire === 'chat' ? ['Pi'] : ['Codex', 'Pi']
 }
 
@@ -89,5 +105,5 @@ export function checkEndpoint(input: unknown): EndpointCheck {
   if (!KEY_RE.test(secret)) return refuse('key', 'Paste the key, with no spaces.')
   const name = typeof model === 'string' ? model.trim() : ''
   if (!MODEL_RE.test(name)) return refuse('model', 'Type the model’s id, as the service names it.')
-  return { ok: true, value: { protocol, baseUrl: normalised(url, protocol), key: secret, model: name } }
+  return { ok: true, value: { protocol, baseUrl: normalised(url, protocol), key: secret, model: name, simple: form.simple === true } }
 }

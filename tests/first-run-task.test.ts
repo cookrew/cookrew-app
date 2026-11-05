@@ -44,13 +44,15 @@ describe('holding the words', () => {
     expect(r.store.read()).toBe('task')
   })
 
-  it('moves the stage only when the agent took them, and forgets them then', async () => {
+  // The turn can still be refused after the words went in (Part C, C-3), so
+  // delivery alone moves nothing: the screens step aside, the stage stays.
+  it('marks them sent when the agent took them, with the stage where it was', async () => {
     const r = rig()
     r.tasks.hold('a1', 'write a readme', 'Claude Code')
     r.settle().done()
     await tick()
-    expect(r.store.read()).toBe('phone')
-    expect(r.store.task()).toBeNull()
+    expect(r.store.read()).toBe('task')
+    expect(r.store.task()).toEqual({ state: 'sent', id: 'a1', words: 'write a readme', harness: 'Claude Code' })
     expect(r.removeCard).not.toHaveBeenCalled()
   })
 
@@ -97,6 +99,64 @@ describe('an agent that dies', () => {
     const tasks = new FirstTasks({ store, inject: vi.fn(), session: () => null, removeCard: vi.fn(), emit: vi.fn() })
     tasks.hold('a1', 'x', 'Claude Code')
     expect(store.task()).toMatchObject({ state: 'returned', words: 'x' })
+  })
+})
+
+describe('an agent that took the task', () => {
+  const sent = async () => {
+    const r = rig()
+    r.tasks.hold('a1', 'write a readme', 'Claude Code')
+    r.settle().done()
+    await tick()
+    return r
+  }
+
+  it('forgets the task once a good turn moves the stage on', async () => {
+    const r = await sent()
+    r.store.advance('second')
+    expect(r.store.task()).toBeNull()
+  })
+
+  it('gives the words back if it dies mid-turn, the stage where it was', async () => {
+    const r = await sent()
+    r.session.emit('exit', 1)
+    expect(r.store.read()).toBe('task')
+    expect(r.store.task()).toMatchObject({ state: 'returned', words: 'write a readme' })
+    expect(r.removeCard).toHaveBeenCalledWith('a1')
+  })
+
+  it('keeps the card when the person starts over from a refused turn: it may hold real work', async () => {
+    const r = await sent()
+    r.tasks.discard()
+    expect(r.store.task()).toEqual({ state: 'returned', words: 'write a readme', why: null, id: 'a1' })
+    expect(r.removeCard).not.toHaveBeenCalled()
+  })
+
+  it('does not read quitting as a death', async () => {
+    const r = await sent()
+    r.tasks.stop()
+    r.session.emit('exit', 0)
+    expect(r.store.task()).toMatchObject({ state: 'sent' })
+  })
+
+  it('picks the watch up again after a restart, or gives the words back', () => {
+    const file = fileIn()
+    const first = new FirstRunStore(file, nothing)
+    first.read()
+    first.advance('task')
+    first.setTask({ state: 'sent', id: 'a1', words: 'x', harness: 'Pi' })
+    const session = new EventEmitter()
+    const store = new FirstRunStore(file, nothing)
+    const inject = vi.fn()
+    new FirstTasks({ store, inject, session: () => session as never, removeCard: vi.fn(), emit: vi.fn() }).resume()
+    expect(inject).not.toHaveBeenCalled()
+    expect(store.task()).toMatchObject({ state: 'sent' })
+    session.emit('exit', 1)
+    expect(store.task()).toMatchObject({ state: 'returned', words: 'x' })
+    const gone = new FirstRunStore(file, nothing)
+    gone.setTask({ state: 'sent', id: 'a1', words: 'y', harness: 'Pi' })
+    new FirstTasks({ store: gone, inject, session: () => null, removeCard: vi.fn(), emit: vi.fn() }).resume()
+    expect(gone.task()).toMatchObject({ state: 'returned', words: 'y' })
   })
 })
 

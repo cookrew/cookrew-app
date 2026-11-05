@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { rememberHarness } from '../prompt/harness-pref'
 import { ENDPOINT_COPY } from '../../../shared/first-run-copy'
-import type { AccessProtocol, AccessRow, AccessState } from '../../../shared/agent-access'
+import { thirdPartyAnthropic, type AccessProtocol, type AccessRow, type AccessState } from '../../../shared/agent-access'
 import './first-run.css'
 
 /**
@@ -17,9 +17,10 @@ export interface EndpointForm {
   baseUrl: string
   key: string
   model: string
+  simple: boolean
 }
 
-const EMPTY: EndpointForm = { protocol: 'anthropic', baseUrl: '', key: '', model: '' }
+const EMPTY: EndpointForm = { protocol: 'anthropic', baseUrl: '', key: '', model: '', simple: false }
 
 export function EndpointFormView({
   form,
@@ -66,6 +67,18 @@ export function EndpointFormView({
         <small>{ENDPOINT_COPY.KEY_NOTE}</small>
       </label>
       {text('model', ENDPOINT_COPY.MODEL, ENDPOINT_COPY.MODEL_HINT)}
+      {form.protocol === 'anthropic' && thirdPartyAnthropic(form.baseUrl) && (
+        <div className="fr-third-party">
+          <p>{ENDPOINT_COPY.THIRD_PARTY}</p>
+          <label className="fr-check">
+            <input type="checkbox" checked={form.simple} onChange={(e) => onChange({ ...form, simple: e.target.checked })} />
+            <span>
+              {ENDPOINT_COPY.SIMPLE}
+              <small>{ENDPOINT_COPY.SIMPLE_NOTE}</small>
+            </span>
+          </label>
+        </div>
+      )}
       {problem && (
         <p className="fr-error" role="alert">
           {problem}

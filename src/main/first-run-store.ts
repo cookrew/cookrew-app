@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { writeFileAtomic } from './atomic-file'
-import { advancedStage, isFirstRunStage, isFirstTask, openingStage, type FirstRunStage, type FirstTask } from '../shared/first-run'
+import { advancedStage, isFirstRunStage, isFirstTask, openingStage, pastTask, type FirstRunStage, type FirstTask } from '../shared/first-run'
 
 /**
  * THE FIRST RUN'S ONE DURABLE FACT: how far it has got, in userData.
@@ -61,7 +61,9 @@ export class FirstRunStore {
   }
 
   advance(to: FirstRunStage): FirstRunStage {
-    return this.keep(advancedStage(this.read(), to))
+    const stage = this.keep(advancedStage(this.read(), to))
+    if (this.held?.state === 'sent' && pastTask(stage)) this.setTask(null)
+    return stage
   }
 
   /** The first task's words, kept here so a restart cannot lose them. */

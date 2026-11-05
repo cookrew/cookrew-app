@@ -23,7 +23,7 @@ export function agentAtWork(nodes: readonly CanvasNode[], activities: readonly T
  * back from: its card reads as working for a beat as it goes.
  */
 export function otherAgentEnds(nodes: readonly CanvasNode[], activities: readonly TerminalActivity[], task: FirstTask | null): boolean {
-  if (task?.state === 'holding') return false
+  if (task?.state === 'holding' || task?.state === 'sent') return false
   const gone = task?.id
   return agentAtWork(nodes.filter((n) => n.id !== gone), activities)
 }
@@ -72,4 +72,18 @@ export function stepTurns(memory: TurnMemory, activities: Iterable<TerminalActiv
 /** Looked at again a moment later: a quiet patch inside a turn starts working again. */
 export function stillFinished(activity: TerminalActivity | undefined): boolean {
   return activity !== undefined && !working(activity.phase) && turnFailure(activity) === null
+}
+
+/**
+ * The first task's turn ended well. Read at any sight, not on an edge: a restart
+ * mid-turn sees no edge, and a sent task must not wait for a turn that is over.
+ * The count says a turn exists: a sent task's agent can be idle before it starts.
+ */
+export function sentTurnDone(task: FirstTask | null, activity: TerminalActivity | undefined): boolean {
+  return task?.state === 'sent' && activity?.terminalId === task.id && activity.turnCount > 0 && stillFinished(activity)
+}
+
+/** It stopped on a refusal: nothing moves, and the person is offered the way back. */
+export function sentTurnFailed(task: FirstTask | null, activity: TerminalActivity | undefined): boolean {
+  return task?.state === 'sent' && activity?.terminalId === task.id && !working(activity.phase) && turnFailure(activity) !== null
 }

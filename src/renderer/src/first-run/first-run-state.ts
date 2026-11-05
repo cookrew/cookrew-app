@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { cookrew } from '../api'
-import { advancedStage, type FirstRunStage, type FirstTask } from '../../../shared/first-run'
+import { advancedStage, pastTask, type FirstRunStage, type FirstTask } from '../../../shared/first-run'
 
 /**
  * WHERE THE FIRST RUN STANDS, for the screens. Main owns the stage; this is
@@ -72,7 +72,9 @@ export function createFirstRun(api: () => FirstRunBridge): FirstRun {
     },
     async advance(to) {
       if (stage === null) return
-      show(advancedStage(stage, to))
+      const next = advancedStage(stage, to)
+      if (task?.state === 'sent' && pastTask(next)) task = null
+      show(next)
       try {
         await api().firstRunAdvance?.(to)
       } catch {

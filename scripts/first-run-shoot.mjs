@@ -136,6 +136,7 @@ for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
   await type(1, 'fake-demo-key')
   await type(2, 'example-model-1')
   await sleep(150)
+  if (!(await value(`document.body.textContent.includes('We recommend Pi here') && !!document.querySelector('.fr-check input')`))) throw new Error('no word about Claude Code on a third-party endpoint')
   await value(`document.querySelector('.fr-endpoint').requestSubmit()`)
   await until(`document.querySelector('.fr-endpoint .fr-error')`, 'the refusal of plain http')
   await value(`document.querySelector('.fr-endpoint').scrollIntoView({ block: 'center' })`)
@@ -175,7 +176,13 @@ for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
   await until(`/failed/i.test(document.body.textContent)`, 'the failed status')
   await sleep(3200)
   if (await value(`!!document.querySelector('.fr-hint')`)) throw new Error('a refused turn was called finished')
+  await until(`document.querySelector('.fr-back')`, 'the way back from a refused turn')
   await shot(`${label}-14-turn-refused`)
+  // The stage did not move: the way back is the first screen, the words in its box, a new agent next.
+  await press('.fr-back')
+  await until(`document.querySelector('.fr-task') && document.querySelector('.cr-prompt input')?.value.includes('README')`, 'the first screen, words back')
+  await until(`document.querySelector('.cr-prompt input')?.placeholder.includes('What should') || !!document.querySelector('.cr-prompt.to-new')`, 'the box on a new agent')
+  await shot(`${label}-14b-refused-back-to-first-screen`)
 
   await send('dies')
   await until(`document.querySelector('.fr-task .fr-error')`, 'the reason the agent stopped')

@@ -405,6 +405,32 @@
   font-size: 11px;
 }
 
+.fr-third-party {
+  margin-bottom: 12px;
+  font-size: 11.5px;
+}
+
+.fr-third-party p {
+  margin: 0 0 8px;
+}
+
+.fr-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.fr-check input {
+  margin: 2px 0 0;
+}
+
+.fr-check small {
+  display: block;
+  color: var(--zv-muted, #6f675b);
+  font-size: 11px;
+}
+
 /* the tool check has no prompt yet; the first screen's box shows its words and nothing else */
 
 body.cr-first-preflight .zv-controls,

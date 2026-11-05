@@ -6,10 +6,15 @@ import type { FirstRunStore } from './first-run-store'
  *
  * The first screen used to move on the moment a card existed, so an agent that
  * died took the words with it and the run went on as if it had worked. Now the
- * stage moves when the agent took the words and at no other time. Until then
- * they are in first-run.json, so neither a dead agent nor a restart loses them:
- * a dead agent hands them back to the box with a reason, and its card goes, as
- * the first screen is about to make another.
+ * words are in first-run.json until a good turn has ended, so neither a dead agent
+ * nor a restart loses them: a dead agent hands them back to the box with a reason,
+ * and its card goes, as the first screen is about to make another.
+ *
+ * DELIVERY MOVES NOTHING. A provider can refuse the turn after the words go in
+ * (Part C: a 400 read as done), so a delivered task is `sent`, the screens step
+ * aside, and only a turn that ended well moves the stage (FirstRunHints.tsx). A
+ * refused turn's agent is left alone: it may hold real work, and the person can
+ * reply to it or start over.
  */
 
 export interface HoldHooks {
@@ -40,6 +45,8 @@ export function whyStopped(harness: string, screen: string): string {
     : `${harness} stopped before it took your task. Your words are back in the box.`
 }
 
+const whyEnded = (harness: string): string => `${harness} stopped before it finished your task. Your words are back in the box.`
+
 export class FirstTasks<S extends HeldSession = HeldSession> {
   /** The hold under way: a late settle of an older one changes nothing. */
   private ticket = 0
@@ -55,6 +62,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     let screen = ''
     session.once('exit', () => {
       gone = true
+      this.endedAfterSent(ticket, id)
     })
     this.show({ state: 'holding', id, words, harness, wait: 'starting' })
     const onWait = (now: string): void => {
@@ -65,10 +73,7 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     }
     this.deps.inject(session, words, { gone: () => gone, onWait }).then(
       () => {
-        if (ticket !== this.ticket) return
-        this.deps.store.setTask(null)
-        this.deps.store.advance('phone')
-        this.deps.emit()
+        if (ticket === this.ticket) this.show({ state: 'sent', id, words, harness })
       },
       () => {
         if (ticket !== this.ticket) return
@@ -78,13 +83,24 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     )
   }
 
-  /** The person called it off from the waiting screen. */
+  /** The agent went after it had the words: only a turn's good end ends the watch. */
+  private endedAfterSent(ticket: number, id: string): void {
+    const task = this.deps.store.task()
+    if (ticket !== this.ticket || task?.state !== 'sent' || task.id !== id) return
+    this.handBack(task.words, whyEnded(task.harness), id)
+    this.deps.removeCard(id)
+  }
+
+  /**
+   * The person called it off: from the waiting screen, where the agent is doing
+   * nothing yet and goes; or from a refused turn, where it stays, work and all.
+   */
   discard(): void {
     const task = this.deps.store.task()
-    if (task?.state !== 'holding') return
+    if (task?.state !== 'holding' && task?.state !== 'sent') return
     this.ticket += 1
     this.handBack(task.words, null, task.id)
-    this.deps.removeCard(task.id)
+    if (task.state === 'holding') this.deps.removeCard(task.id)
   }
 
   /** The app is quitting: whatever settles now changes nothing, and the record waits for the next launch. */
@@ -98,6 +114,11 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
     this.resumed = true
     const task = this.deps.store.task()
     if (task?.state === 'holding') this.hold(task.id, task.words, task.harness)
+    if (task?.state !== 'sent') return
+    const ticket = ++this.ticket
+    const session = this.deps.session(task.id)
+    if (session === null) this.handBack(task.words, whyEnded(task.harness), task.id)
+    else session.once('exit', () => this.endedAfterSent(ticket, task.id))
   }
 
   private handBack(words: string, why: string | null, id: string): void {

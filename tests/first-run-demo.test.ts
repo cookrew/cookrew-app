@@ -59,14 +59,16 @@ describe('the first task, on an agent the demo plays', () => {
     }) as unknown as CookrewApi
   const send = (api: CookrewApi) => api.createTerminal({ name: 'x', preset: 'Claude Code', prompt: 'do it', patient: true } as never)
 
-  it('takes it and moves on, by default', async () => {
+  it('takes it, with the stage left to the turn’s outcome, by default', async () => {
     vi.useFakeTimers()
     const api = freshDemoApi(base(), 'green', '?fresh=green&stage=task')
     const views: unknown[] = []
     api.onFirstRun?.((view) => views.push(view))
     await send(api)
     await vi.runAllTimersAsync()
-    expect(views.at(-1)).toEqual({ stage: 'phone', task: null })
+    expect(views.at(-1)).toMatchObject({ stage: 'task', task: { state: 'sent' } })
+    expect(await api.firstRunAdvance?.('second')).toBe('second')
+    expect(await api.firstRunTask?.()).toBeNull()
     vi.useRealTimers()
   })
 

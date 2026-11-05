@@ -102,7 +102,10 @@ export const WAIT_COPY = {
 
 export const ENDPOINT_COPY = {
   HEAD: 'No Claude or Codex account?',
-  ANTHROPIC: 'Anthropic API, runs on Claude Code or Pi',
+  ANTHROPIC: 'Anthropic API, runs on Pi or Claude Code',
+  THIRD_PARTY: 'We recommend Pi here. Claude Code is built for Anthropic’s own API, and other services can refuse its requests.',
+  SIMPLE: 'Use Claude Code in simple mode',
+  SIMPLE_NOTE: 'More services accept it. It leaves out hooks, MCP servers and CLAUDE.md.',
   OPENAI: 'OpenAI API, runs on Codex or Pi',
   URL: 'Address',
   URL_HINT: 'https://api.example.com',

@@ -66,7 +66,8 @@ export function accessLaunch(source: AccessSource, harness: HarnessId | undefine
         ANTHROPIC_DEFAULT_SONNET_MODEL: model,
         ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
         // Without it claude waits for ever on a model outside its catalog (route-env.ts).
-        CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1'
+        CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1',
+        ...(source.simple ? { CLAUDE_CODE_SIMPLE: '1' } : {})
       },
       args: ['--settings', JSON.stringify({ apiKeyHelper: readKey })],
       files: []
@@ -100,9 +101,9 @@ export interface AccessStoreDeps {
 function readSource(file: string): AccessSource | null {
   try {
     const saved = JSON.parse(readFileSync(file, 'utf8')) as Partial<AccessSource>
-    const { id, label, protocol, baseUrl, model, wire } = saved
+    const { id, label, protocol, baseUrl, model, wire, simple } = saved
     if (typeof id !== 'string' || typeof label !== 'string' || typeof baseUrl !== 'string' || typeof model !== 'string') return null
-    return protocol === 'anthropic' || protocol === 'openai' ? { id, label, protocol, baseUrl, model, ...(wire === 'chat' || wire === 'responses' ? { wire } : {}) } : null
+    return protocol === 'anthropic' || protocol === 'openai' ? { id, label, protocol, baseUrl, model, ...(wire === 'chat' || wire === 'responses' ? { wire } : {}), ...(simple === true ? { simple } : {}) } : null
   } catch {
     return null
   }
@@ -170,7 +171,8 @@ export const endpointSource = (input: EndpointInput, wire?: AccessWire): AccessS
   protocol: input.protocol,
   baseUrl: input.baseUrl,
   model: input.model,
-  ...(wire ? { wire } : {})
+  ...(wire ? { wire } : {}),
+  ...(input.simple ? { simple: true } : {})
 })
 
 export type ProbeAnswer = { ok: true; wire?: AccessWire } | { ok: false; field: EndpointField; why: string }

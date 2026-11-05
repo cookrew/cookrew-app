@@ -12,7 +12,7 @@ import { createSecretsStore } from '../src/main/secrets-store'
 import { bootScript } from '../src/main/tmux-multiplexer'
 import { bootCommand, envArgs } from '../src/main/herdr-host-multiplexer'
 import { DirectMultiplexer } from '../src/main/direct-multiplexer'
-import { ACCESS_ROWS, accessTools, checkEndpoint, type AccessSource } from '../src/shared/agent-access'
+import { ACCESS_ROWS, accessTools, checkEndpoint, thirdPartyAnthropic, type AccessSource } from '../src/shared/agent-access'
 
 /**
  * A PERSON WITH NO CLAUDE OR CODEX ACCOUNT HAS A ROAD: their own endpoint. The
@@ -81,10 +81,29 @@ describe('what a person types', () => {
     expect(checkEndpoint(null)).toMatchObject({ ok: false })
   })
 
-  it('names the tools that speak each endpoint', () => {
-    expect(accessTools({ protocol: 'anthropic' })).toEqual(['Claude Code', 'Pi'])
-    expect(accessTools({ protocol: 'openai', wire: 'responses' })).toEqual(['Codex', 'Pi'])
-    expect(accessTools({ protocol: 'openai', wire: 'chat' })).toEqual(['Pi'])
+  it('names the tools that speak each endpoint, the better one first', () => {
+    expect(accessTools({ protocol: 'anthropic', baseUrl: 'https://api.anthropic.com' })).toEqual(['Claude Code', 'Pi'])
+    expect(accessTools({ protocol: 'openai', wire: 'responses', baseUrl: 'https://a.example/v1' })).toEqual(['Codex', 'Pi'])
+    expect(accessTools({ protocol: 'openai', wire: 'chat', baseUrl: 'https://a.example/v1' })).toEqual(['Pi'])
+  })
+
+  // Part C: Claude Code in full mode was refused by a third-party Anthropic-style
+  // endpoint; simple mode and Pi both finished the task.
+  it('puts Pi first on a third-party Anthropic-style endpoint', () => {
+    expect(accessTools({ protocol: 'anthropic', baseUrl: 'https://llm.example.com' })).toEqual(['Pi', 'Claude Code'])
+    expect(thirdPartyAnthropic('https://llm.example.com')).toBe(true)
+    expect(thirdPartyAnthropic('https://api.anthropic.com')).toBe(false)
+    expect(thirdPartyAnthropic('')).toBe(true)
+  })
+
+  it('puts Claude Code first when the person asked for its simple mode', () => {
+    expect(accessTools({ protocol: 'anthropic', baseUrl: 'https://llm.example.com', simple: true })).toEqual(['Claude Code', 'Pi'])
+  })
+
+  it('carries the simple-mode choice through the form, and only a real true', () => {
+    const good = { protocol: 'anthropic', baseUrl: 'https://llm.example.com', key: KEY, model: 'm' }
+    expect(checkEndpoint({ ...good, simple: true })).toMatchObject({ value: { simple: true } })
+    expect(checkEndpoint({ ...good, simple: 'yes' })).toMatchObject({ value: { simple: false } })
   })
 })
 
@@ -101,6 +120,18 @@ describe('what an agent is launched with', () => {
   it('points Codex at it through a provider of its own, on the Responses API it requires', () => {
     const launch = accessLaunch({ ...source, protocol: 'openai', baseUrl: 'https://api.example.com/v1', wire: 'responses' }, 'codex', paths)
     expect(launch?.args).toEqual(expect.arrayContaining(['model_provider=cookrew', 'model_providers.cookrew.base_url=https://api.example.com/v1', 'model_providers.cookrew.auth={command="/bin/cat",args=["/keys/endpoint.key"]}', 'model_providers.cookrew.wire_api=responses', 'model=m-1']))
+  })
+
+  it('turns on Claude Code’s simple mode only when asked, and for Claude Code only', () => {
+    expect(accessLaunch(source, 'claude', paths)?.env.CLAUDE_CODE_SIMPLE).toBeUndefined()
+    expect(accessLaunch({ ...source, simple: true }, 'claude', paths)?.env.CLAUDE_CODE_SIMPLE).toBe('1')
+    expect(accessLaunch({ ...source, simple: true }, 'pi', paths)?.env.CLAUDE_CODE_SIMPLE).toBeUndefined()
+  })
+
+  it('reaches the pane: a real boot script hands it to the process', () => {
+    const launch = accessLaunch({ ...source, simple: true }, 'claude', paths)
+    const spec = { sessionName: 's', command: 'printenv CLAUDE_CODE_SIMPLE', shell: '/bin/sh', terminalId: 't', socketPath: '/s', cliDir: '/cli', path: '/usr/bin:/bin', cwd: tmpdir(), env: launch?.env, args: [] } as never
+    expect(spawnSync('sh', ['-c', bootScript(spec)], { encoding: 'utf8' }).stdout.trim()).toBe('1')
   })
 
   it('leaves Codex out of an endpoint with no Responses API: it refuses chat', () => {
@@ -180,7 +211,7 @@ describe('where it is kept', () => {
   it('tells the screens everything but the key', () => {
     const store = storeIn()
     store.save(source, KEY)
-    expect(store.state().active).toEqual({ id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', tools: ['Claude Code', 'Pi'] })
+    expect(store.state().active).toEqual({ id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', tools: ['Pi', 'Claude Code'] })
     expect(JSON.stringify(store.state())).not.toContain(KEY)
   })
 
@@ -211,10 +242,11 @@ describe('where it is kept', () => {
     expect(denied).toEqual(expect.arrayContaining(['/Users/owner/.cookrew/secrets', '/Users/owner/.cookrew/access-keys', '/Users/owner/.cookrew/access.json']))
   })
 
-  it('survives a relaunch', () => {
+  it('survives a relaunch, the simple-mode choice with it', () => {
     const root = dir()
-    storeIn(root).save(source, KEY)
+    storeIn(root).save({ ...source, simple: true }, KEY)
     expect(storeIn(root).state().active?.model).toBe('m-1')
+    expect(storeIn(root).active()?.simple).toBe(true)
   })
 
   it('launches nothing with no source, or a source whose key has gone', () => {
@@ -319,6 +351,9 @@ describe('the bridge', () => {
   it('answers the new state, and clears', async () => {
     const handlers = accessHandlers({ store: storeIn(), probe: async () => ({ ok: true }) })
     expect(await handlers.save({ protocol: 'openai', baseUrl: 'https://a.example/v1', key: KEY, model: 'm' })).toMatchObject({ ok: true, state: { active: { protocol: 'openai' } } })
+    const store = storeIn()
+    await accessHandlers({ store, probe: async () => ({ ok: true }) }).save({ protocol: 'anthropic', baseUrl: 'https://a.example', key: KEY, model: 'm', simple: true })
+    expect(store.active()?.simple).toBe(true)
     expect(handlers.clear().active).toBeNull()
   })
 })

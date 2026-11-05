@@ -5,7 +5,7 @@ import { observeOutput, runningView, startedLine } from '../src/renderer/src/rou
 import { createFirstRun } from '../src/renderer/src/first-run/first-run-state'
 import { createFirstFolder } from '../src/renderer/src/first-run/first-folder'
 import { workspaceNameAfter } from '../src/renderer/src/first-run/first-folder'
-import { agentAtWork, firstAgentHarness, firstHarness, otherAgentEnds, stepTurns, stillFinished, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
+import { agentAtWork, firstAgentHarness, firstHarness, otherAgentEnds, sentTurnDone, sentTurnFailed, stepTurns, stillFinished, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
 import { makeAgent } from '../src/renderer/src/zoom/make-card'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
 import type { FirstRunStage, FirstTask } from '../src/shared/first-run'
@@ -255,6 +255,7 @@ describe('reading the board', () => {
     expect(otherAgentEnds([node({ id: 'a' })], [works('a', 'waiting')], back)).toBe(false)
     expect(otherAgentEnds([node({ id: 'a' }), node({ id: 'b' })], [works('b', 'thinking')], back)).toBe(true)
     expect(otherAgentEnds([node({ id: 'a' })], [works('a', 'waiting')], { state: 'holding', id: 'a', words: 'x', harness: 'Codex', wait: 'choice' })).toBe(false)
+    expect(otherAgentEnds([node({ id: 'a' })], [works('a', 'thinking')], { state: 'sent', id: 'a', words: 'x', harness: 'Codex' })).toBe(false)
   })
 
   it('lets a saved endpoint choose among the tools that speak it', () => {
@@ -328,6 +329,25 @@ describe('a finished turn', () => {
     expect(stillFinished(activity('a', 'thinking', 1))).toBe(false)
     expect(stillFinished(undefined)).toBe(false)
     expect(stillFinished({ ...activity('a', 'replied', 1), reply: 'API Error: 500 oops' })).toBe(false)
+  })
+
+  // The first task's outcome decides the stage (C-3): only a good end moves it.
+  it('counts a sent task’s turn as done at any sight, so a restart cannot strand it', () => {
+    const task = { state: 'sent' as const, id: 'a', words: 'x', harness: 'Pi' }
+    expect(sentTurnDone(task, activity('a', 'replied', 1))).toBe(true)
+    expect(sentTurnDone(task, activity('a', 'idle', 2))).toBe(true)
+    expect(sentTurnDone(task, activity('a', 'idle', 0))).toBe(false)
+    expect(sentTurnDone(task, activity('a', 'thinking', 1))).toBe(false)
+    expect(sentTurnDone(task, { ...activity('a', 'replied', 1), reply: 'API Error: 400 no' })).toBe(false)
+    expect(sentTurnDone(task, undefined)).toBe(false)
+    expect(sentTurnDone(null, activity('a', 'replied', 1))).toBe(false)
+  })
+
+  it('says why a sent task’s turn failed, and nothing while it works', () => {
+    const task = { state: 'sent' as const, id: 'a', words: 'x', harness: 'Pi' }
+    expect(sentTurnFailed(task, { ...activity('a', 'replied', 1), reply: 'API Error: 400 no' })).toBe(true)
+    expect(sentTurnFailed(task, { ...activity('a', 'thinking', 1), reply: 'API Error: 400 no' })).toBe(false)
+    expect(sentTurnFailed(task, activity('a', 'replied', 1))).toBe(false)
   })
 
   it('is nothing at first sight: an old reply on the screen is not news', () => {

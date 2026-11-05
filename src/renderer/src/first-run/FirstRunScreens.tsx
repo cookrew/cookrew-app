@@ -1,12 +1,14 @@
-import { useEffect, useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { activityStore } from '../activity-thumb-store'
+import { cookrew } from '../api'
+import { zoomStore } from '../zoom/zoom-store'
 import { draftKey, getDraft, setDraft } from '../prompt/prompt-draft'
 import type { CanvasNode } from '../../../shared/model'
 import { FIRST_SCREEN_COPY } from '../../../shared/first-run-copy'
 import { FirstScreen } from './FirstScreen'
 import { FirstWait } from './FirstWait'
 import { Preflight, type PreflightSetup } from './Preflight'
-import { otherAgentEnds } from './first-run-rules'
+import { otherAgentEnds, sentTurnFailed } from './first-run-rules'
 import { firstRun, useFirstRunStage, useFirstTask } from './first-run-state'
 import './first-run.css'
 
@@ -15,8 +17,9 @@ import './first-run.css'
  * stand over the stage, whatever stop the zoom is on, because the Setup card a
  * fix makes would otherwise appear behind them as the board's first agent.
  *
- * The first task moves on in main, when the agent took it (main/first-task.ts).
- * An agent made some other way (a phone, the CLI) ends these screens once it is
+ * A first task steps these screens aside once the agent has it, and a good end
+ * to its turn moves the stage (main/first-task.ts, FirstRunHints.tsx). An agent
+ * made some other way (a phone, the CLI) ends these screens once it is
  * seen working: a card alone proves nothing, as a dead one has a card too.
  *
  * NOTHING HERE IS A DEAD END. The tool check stays one press from the first
@@ -29,6 +32,8 @@ export function FirstRunScreens({ nodes, setup }: { nodes: readonly CanvasNode[]
   const [away, setAway] = useState(false)
   const showing = stage === 'preflight' || stage === 'task'
   const holding = task?.state === 'holding' ? task : null
+  const sent = task?.state === 'sent' ? task : null
+  const refused = useSyncExternalStore(activityStore.subscribeGlobal.bind(activityStore), () => sentTurnFailed(sent, sent ? activityStore.get(sent.id) : undefined), () => false)
   useEffect(() => {
     if (!showing || holding !== null) return
     const read = (): void => {
@@ -41,9 +46,9 @@ export function FirstRunScreens({ nodes, setup }: { nodes: readonly CanvasNode[]
   useEffect(() => {
     if (task?.state === 'returned' && showing && getDraft(draftKey(null)) === '') setDraft(draftKey(null), task.words)
   }, [task, showing])
-  const toolCheck = stage === 'preflight' || (stage === 'task' && checking)
+  const toolCheck = stage === 'preflight' || (stage === 'task' && checking && sent === null)
   const fullPage = showing && (toolCheck || holding !== null)
-  const firstScreen = stage === 'task' && !fullPage && !away
+  const firstScreen = stage === 'task' && !fullPage && !away && sent === null
   useLayoutEffect(() => {
     const body = document.body.classList
     body.toggle('cr-first-preflight', fullPage)
@@ -55,6 +60,21 @@ export function FirstRunScreens({ nodes, setup }: { nodes: readonly CanvasNode[]
   }, [fullPage, firstScreen])
   if (!showing) return null
   if (holding) return <FirstWait task={holding} onEndpoint={() => setChecking(true)} />
+  // Working: out of the way. Refused: its card says why, and this is the way back.
+  if (sent) {
+    return refused ? (
+      <button
+        type="button"
+        className="fr-back"
+        onClick={() => {
+          zoomStore.go(1, 'agents')
+          void cookrew().firstRunDiscard?.()
+        }}
+      >
+        {FIRST_SCREEN_COPY.BACK}
+      </button>
+    ) : null
+  }
   if (toolCheck) return <Preflight setup={setup} onDone={() => setChecking(false)} />
   if (away) {
     return (

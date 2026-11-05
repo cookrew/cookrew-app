@@ -59,7 +59,7 @@ import { WaitChoices } from './WaitChoices'
 import { useWaitAnswer, type WaitAnswering } from './wait-answer'
 import { promptBox } from './box-focus'
 import { firstFolder } from '../first-run/first-folder'
-import { useFirstRunStage } from '../first-run/first-run-state'
+import { useFirstRunStage, useFirstTask } from '../first-run/first-run-state'
 import { FIRST_SCREEN_COPY, exampleName } from '../../../shared/first-run-copy'
 import './global-prompt.css'
 
@@ -199,7 +199,10 @@ function useZoomMoveKey(): string {
 
 export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = false, artifacts = NO_ARTIFACTS, acts, workspaceName = null }: GlobalPromptProps): React.JSX.Element {
   const cardAgent = useCardAgent()
-  const firstTask = useFirstRunStage() === 'task'
+  const firstStage = useFirstRunStage()
+  const firstRecord = useFirstTask()
+  // The first screen's box: once the agent has the task this is the ordinary box.
+  const firstTask = firstStage === 'task' && firstRecord?.state !== 'sent'
   const crewRows = useCrewContext()?.crew ?? NO_ROWS
   const zoomFull = useZoomFull()
   const zoomItem = useZoomItem()

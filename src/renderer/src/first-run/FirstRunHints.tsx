@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react'
 import { activityStore } from '../activity-thumb-store'
 import { PairPhoneSheet } from '../account/PairPhoneSheet'
 import { HINT_COPY } from '../../../shared/first-run-copy'
-import { stepTurns, stillFinished, type TurnMemory } from './first-run-rules'
-import { firstRun, useFirstRunStage } from './first-run-state'
+import { sentTurnDone, stepTurns, stillFinished, type TurnMemory } from './first-run-rules'
+import { firstRun, useFirstRunStage, useFirstTask } from './first-run-state'
 import './first-run.css'
 
 /**
  * TWO SMALL CARDS, EACH SHOWN ONCE. The first finished turn offers the phone;
  * a later one teaches a second agent. The stage moves the moment a card shows,
- * not when it is closed: "once" must hold through a quit with the card open.
+ * not when it is closed: "once" must hold through a quit with the card open. It
+ * is also what moves the first task on, so a refused turn moves nothing.
  * Neither card stops anything, and the second waits for the first to go.
  */
 
@@ -40,24 +41,34 @@ export function HintCard({ kind, onGo, onClose }: { kind: HintKind; onGo: () => 
 
 export function FirstRunHints(): React.JSX.Element | null {
   const stage = useFirstRunStage()
+  const task = useFirstTask()
+  const sent = task?.state === 'sent' ? task : null
   const [shown, setShown] = useState<HintKind | null>(null)
   const [pairing, setPairing] = useState(false)
   useEffect(() => {
-    if ((stage !== 'phone' && stage !== 'second') || shown !== null) return
+    if ((stage !== 'phone' && stage !== 'second' && sent === null) || shown !== null) return
+    const kind: HintKind = sent !== null || stage === 'phone' ? 'phone' : 'second'
     let memory: TurnMemory = new Map()
     let settling: ReturnType<typeof setTimeout> | null = null
-    const read = (): void => {
-      const step = stepTurns(memory, Object.values(activityStore.getSnapshot()))
-      memory = step.memory
-      if (step.ended.length === 0 || settling !== null) return
-      const [id] = step.ended
-      // Replied can be a pause between steps: look again before saying "finished".
+    // Replied can be a pause between steps: look again before saying "finished".
+    const settle = (id: string): void => {
+      if (settling !== null) return
       settling = setTimeout(() => {
         settling = null
-        if (!stillFinished(activityStore.get(id))) return
-        setShown(stage)
-        void firstRun.advance(stage === 'phone' ? 'second' : 'closed')
+        const activity = activityStore.get(id)
+        if (!(sent ? sentTurnDone(sent, activity) : stillFinished(activity))) return
+        setShown(kind)
+        void firstRun.advance(kind === 'phone' ? 'second' : 'closed')
       }, SETTLE_MS)
+    }
+    const read = (): void => {
+      if (sent !== null) {
+        if (sentTurnDone(sent, activityStore.get(sent.id))) settle(sent.id)
+        return
+      }
+      const step = stepTurns(memory, Object.values(activityStore.getSnapshot()))
+      memory = step.memory
+      if (step.ended.length > 0) settle(step.ended[0])
     }
     read()
     const off = activityStore.subscribeGlobal(read)
@@ -65,7 +76,7 @@ export function FirstRunHints(): React.JSX.Element | null {
       off()
       if (settling !== null) clearTimeout(settling)
     }
-  }, [stage, shown])
+  }, [stage, shown, sent])
   return (
     <>
       {shown && (
