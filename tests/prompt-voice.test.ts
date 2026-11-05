@@ -13,7 +13,8 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { pickEar, transcriptOf, webErrorText, webRecognizer, withHeard } from '../src/renderer/src/prompt/dictation'
+import { pickEar, transcriptOf, webEndError, webErrorText, webLang, webRecognizer, withHeard } from '../src/renderer/src/prompt/dictation'
+import { DEFAULT_VOICE_LOCALE } from '../src/main/sous-voice-config'
 import { addressedToSous } from '../src/shared/sous-intent'
 
 const src = (file: string): string => readFileSync(path.join(__dirname, '..', 'src/renderer/src', file), 'utf8')
@@ -112,6 +113,30 @@ describe('dictation, the pure parts', () => {
     expect(webErrorText('not-allowed')).toMatch(/not allowed/)
     expect(webErrorText('network')).toMatch(/not reachable/)
     expect(webErrorText('weird')).toMatch(/weird/)
+  })
+})
+
+// MEASURED ON THE OWNER'S ANDROID (2026-11-05, Chrome 156, phone in en-GB):
+// with no `lang` the recognizer follows the phone's language, so Chinese speech
+// ended in a bare `nomatch`, no error at all; with zh-CN the same speech came
+// back whole. The ear speaks the Mac's language, and a miss is said.
+describe("the browser's ear", () => {
+  it("hears in the Mac's language, never the browser's", () => {
+    expect(webLang('en-US')).toBe('en-US')
+    expect(webLang(' ja-JP ')).toBe('ja-JP')
+  })
+
+  it("an older Mac that does not say falls back to the Mac's own default", () => {
+    expect(webLang(null)).toBe(DEFAULT_VOICE_LOCALE)
+    expect(webLang(undefined)).toBe(DEFAULT_VOICE_LOCALE)
+    expect(webLang('  ')).toBe(DEFAULT_VOICE_LOCALE)
+  })
+
+  it('a miss with no words is said; words, or a worse error, win over it', () => {
+    expect(webEndError(null, true, '')).toMatch(/Nothing was recognized/)
+    expect(webEndError(null, true, 'hello')).toBeNull()
+    expect(webEndError('No microphone was found.', true, '')).toBe('No microphone was found.')
+    expect(webEndError(null, false, '')).toBeNull()
   })
 })
 

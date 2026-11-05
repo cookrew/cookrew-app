@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { PTT_IDLE, pttStep, type PttState } from '../../../shared/ptt-machine'
 import type { ListenEvent } from '../../../main/listen'
 import { cookrew } from '../api'
-import { isAndroid, pickEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webErrorText, webRecognizer, type Ear, type Recognizer } from './dictation'
+import { isAndroid, pickEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
 import { micErrorText, PHONE_MAX_SECONDS } from './phone-audio'
 import { canRecord, startPhoneRecording, type PhoneRecording } from './phone-recorder'
 
@@ -43,6 +43,8 @@ export function useDictation(options: {
   /** The Mac can hear what this surface records (GET /api/listen). */
   const [phone, setPhone] = useState(false)
   const [preferPhone, setPreferPhone] = useState(preferPhoneHere)
+  /** The language the Mac hears in (GET /api/listen); the browser's ear uses it too. */
+  const [macLocale, setMacLocale] = useState<string | null>(null)
   const ear = pickEar(mac, Web !== null, phone, preferPhone)
   const [phase, setPhase] = useState<Dictation['phase']>('idle')
   const [heard, setHeard] = useState('')
@@ -68,6 +70,11 @@ export function useDictation(options: {
       .listenAvailable()
       .then((ok) => {
         if (alive) setMac(ok)
+      })
+      .catch(() => undefined)
+    void (cookrew().hearLocale?.() ?? Promise.resolve(null))
+      .then((locale) => {
+        if (alive) setMacLocale(locale)
       })
       .catch(() => undefined)
     if (canRecord()) {
@@ -99,7 +106,12 @@ export function useDictation(options: {
     const recognizer = new Web()
     let said = ''
     let failed: string | null = null
+    let missed = false
+    recognizer.lang = webLang(macLocale)
     recognizer.interimResults = true
+    recognizer.onnomatch = () => {
+      missed = true
+    }
     recognizer.onresult = (event) => {
       said = transcriptOf(event.results)
       setHeard(said)
@@ -116,14 +128,14 @@ export function useDictation(options: {
         else if (canRecord()) void (cookrew().hearAvailable?.() ?? Promise.resolve(false)).then(setPhone).catch(() => undefined)
       }
     }
-    recognizer.onend = () => finish(said, [], failed)
+    recognizer.onend = () => finish(said, [], webEndError(failed, missed, said))
     recognizerRef.current = recognizer
     try {
       recognizer.start()
     } catch (e) {
       finish('', [], `Dictation could not start: ${String(e)}`)
     }
-  }, [Web, finish, phone])
+  }, [Web, finish, phone, macLocale])
 
   /** The phone records; the Mac hears it once the mic closes (stopPhone). */
   const startPhone = useCallback((): void => {

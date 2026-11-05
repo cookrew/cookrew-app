@@ -314,9 +314,10 @@ export interface MobileApiDeps {
   uiBus?: EventEmitter;
   /**
    * The Mac's ear for a phone's recording (hear-file.ts): GET /api/listen says
-   * whether this Mac has one, POST /api/listen hears the raw audio body.
+   * whether this Mac has one and the language it hears in (a browser's own
+   * ear uses it too), POST /api/listen hears the raw audio body.
    */
-  hear?: { available: () => boolean; recording: (bytes: Uint8Array) => Promise<Heard> };
+  hear?: { available: () => boolean; locale: () => string | null; recording: (bytes: Uint8Array) => Promise<Heard> };
   /**
    * The Mac's voice for the phone's spoken replies (local-voice.ts): GET
    * /api/speak says whether the local voice is installed, POST /api/speak
@@ -1916,7 +1917,7 @@ export async function handleMobileApi(
   // The phone's mic, heard by the Mac (hear-file.ts). The body is the raw
   // recording; the answer is the words, never sent anywhere: the box lands them.
   if (p === "/api/listen" && method === "GET") {
-    respondJson(response, 200, { available: deps.hear?.available() ?? false });
+    respondJson(response, 200, { available: deps.hear?.available() ?? false, locale: deps.hear?.locale() ?? null });
     return true;
   }
   if (p === "/api/listen" && method === "POST") {
