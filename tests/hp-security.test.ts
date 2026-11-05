@@ -24,6 +24,7 @@ describe('a served pane and the owner\'s screen', () => {
       '(deny process-exec (literal "/usr/sbin/screencapture"))',
       '(deny process-exec (literal "/usr/bin/osascript"))',
       '(deny process-exec (literal "/usr/bin/open"))',
+      '(deny process-exec (literal "/bin/launchctl"))',
       '(deny mach-lookup (global-name "com.apple.windowserver.active"))',
       // A copied binary gets past a literal path. These are what stop it.
       '(deny mach-lookup (global-name "com.apple.replayd"))',

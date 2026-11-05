@@ -293,6 +293,7 @@ export function seatbeltProfile(input: ProfileInput): string {
     '(deny process-exec (literal "/usr/sbin/screencapture"))',
     '(deny process-exec (literal "/usr/bin/osascript"))',
     '(deny process-exec (literal "/usr/bin/open"))',
+    '(deny process-exec (literal "/bin/launchctl"))',
     // A copied binary walks past a literal path, so these are the wall: no window
     // server, no ScreenCaptureKit, and no LaunchServices to start an app outside
     // this sandbox. Run for real: from inside it the app list reads empty, and
