@@ -65,6 +65,7 @@ import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
 import { FunnelCounts } from './funnel-counts'
 import { createV2 } from './v2-routes'
+import { readOAuthEnv } from './v2-oauth-providers'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
 import { ORDERS_PER_WEEK } from './cert-store'
@@ -211,7 +212,12 @@ if (!resolved.ok) {
 const identity = new IdentityService(DATA, resolved.config)
 // The v2 half, built before the names half because the DNS zone reads its
 // desktops: one store of where a Mac is, answered on two protocols.
-const v2 = createV2(DATA, { origin: resolved.config.origin })
+const v2 = createV2(DATA, {
+  origin: resolved.config.origin,
+  // Third-party sign-in. Environment only, never a flag: a flag is readable in
+  // `ps`. No pair means no button and nothing else changes.
+  oauth: readOAuthEnv(process.env, (message) => console.error(message))
+})
 
 /**
  * REACH v2.1 — DNS AND ACME, ASSEMBLED ONLY IF ASKED FOR.

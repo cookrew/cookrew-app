@@ -35,6 +35,8 @@ import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
 import { readAndStepUp } from './v2-step-up'
+import { handleOAuthRoute } from './v2-oauth-routes'
+import { linkedView } from './v2-links'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -79,6 +81,9 @@ export function handleV2Route(ctx: V2Context): boolean {
   }
   const rest = parts.slice(1)
 
+  // Third-party sign-in, first because `/v2/me` below would swallow its
+  // `/v2/me/links/…`. It answers false for every path it does not own.
+  if (handleOAuthRoute(ctx, rest)) return true
   // PHASE 4, in one line and ahead of everything: the ladder's routes live
   // under /v2/sessions/… and /v2/me/… , and `/v2/me` below would swallow the
   // second half of them. It answers false for every path it does not own.
@@ -475,7 +480,11 @@ export function meBody(
     })),
     desktops: account.desktops.map((desktop) => desktopBody(desktop, names(desktop.deviceId))),
     recoveryCodesLeft: account.recovery.length,
-    factors
+    factors,
+    // Owner-only, like everything on this body. `publicProfile` carries none.
+    hasPassword: account.passwordless !== true,
+    email: account.email ?? null,
+    links: linkedView(account)
   }
 }
 

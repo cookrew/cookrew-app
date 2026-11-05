@@ -1,5 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import type { StepUpAct } from '../../src/shared/step-up'
+import type { ProviderId } from '../../src/shared/oauth'
 
 /**
  * IDENTITY v2 — A SIGN-IN THAT IS HALF DONE.
@@ -90,7 +91,15 @@ export interface Pending {
   deviceName: string
   kind: string
   address: string
-  passwordOk: true
+  /**
+   * THE FIRST FACTOR, WHEN IT WAS NOT THE PASSWORD.
+   *
+   * "Not me" has to know what it is disowning. On a password sign-in the
+   * password is what a stranger holds; on this one it is the provider identity,
+   * and locking a password that was never used would miss the stranger and, on
+   * a passwordless account, lock out the owner for good.
+   */
+  via?: { provider: ProviderId; subject: string }
   at: number
   expiresAt: number
   next: readonly Factor[]
@@ -154,6 +163,8 @@ export interface OpenInput {
   act?: StepUpAct
   /** Set for a step-up: the session and device asking. It may not answer. */
   opener?: { jti: string; device: string }
+  /** Set when a provider, not the password, opened this. */
+  via?: { provider: ProviderId; subject: string }
 }
 
 /**
@@ -190,7 +201,7 @@ export class PendingSignIns {
       deviceName: input.deviceName,
       kind: input.kind,
       address: input.address,
-      passwordOk: true,
+      ...(input.via === undefined ? {} : { via: input.via }),
       at,
       expiresAt: at + this.ttlMs,
       next: input.next,

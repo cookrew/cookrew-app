@@ -169,8 +169,21 @@ export async function stepUpHeld(
     return true
   }
 
+  /**
+   * NO PASSWORD TO ASK FOR, SO SAY WHAT WILL DO INSTEAD.
+   *
+   * A provider round trip from this session is the proof a passwordless account
+   * has: it arrives as `stepUp` like a climbed rung (v2-oauth-routes.ts). The
+   * holder of a stolen session cannot make one, for the same reason they cannot
+   * type a password.
+   */
+  const providers = (account.links ?? []).map((link) => link.provider)
   if (!hasStepUpFactor(ctx, username)) {
-    v2Json(ctx.response, 403, factorError('password_required'))
+    v2Json(
+      ctx.response,
+      403,
+      account.passwordless === true ? { ...factorError('provider_required'), providers } : factorError('password_required')
+    )
     return false
   }
 
@@ -211,6 +224,7 @@ export async function stepUpHeld(
     next,
     pending: pending.id,
     expiresAt: pending.expiresAt,
+    ...(account.passwordless === true ? { providers } : {}),
     /**
      * ONLY WITH THE RUNG IT BELONGS TO. The digits are the approve rung's
      * whole mechanism — read off this screen, typed on the other one — and

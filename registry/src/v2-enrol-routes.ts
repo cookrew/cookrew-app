@@ -134,11 +134,18 @@ async function removeFactor(ctx: V2Context, username: string, remove: () => bool
     refuseFactor(ctx.response, 403, 'password_change_required')
     return
   }
-  if (typeof body.value.current !== 'string' || body.value.current === '') {
+  // A PASSWORDLESS ACCOUNT HAS NO `current` TO SEND, so it brings the proof a
+  // provider round trip left instead, spent here like any other step-up.
+  const passwordless = ctx.v2.accounts.get(username)?.passwordless === true
+  if (passwordless) {
+    if (!ctx.v2.factors.pending.spendAuthorised(username, 'remove-factor', body.value.stepUp)) {
+      refuseFactor(ctx.response, 403, 'provider_required')
+      return
+    }
+  } else if (typeof body.value.current !== 'string' || body.value.current === '') {
     refuseFactor(ctx.response, 403, 'password_required')
     return
-  }
-  if (!(await ctx.v2.accounts.verifyPassword(username, body.value.current))) {
+  } else if (!(await ctx.v2.accounts.verifyPassword(username, body.value.current))) {
     refuse(ctx.response, 401, 'bad_credentials')
     return
   }
@@ -242,7 +249,17 @@ async function answerApproval(ctx: V2Context, signed: Signed, id: string): Promi
   }
   if (decision === 'not-me') {
     ctx.v2.accounts.endOtherSessions(username, by.jti)
-    ctx.v2.factors.store.setMustChangePassword(username, true)
+    /**
+     * WHAT IS DISOWNED IS WHAT OPENED THE REQUEST.
+     *
+     * A provider sign-in says nothing about the password, so its link is paused
+     * instead. And an account with no password is never put under the password
+     * lock: the only way out of it is a password change, which that account
+     * cannot make.
+     */
+    const via = ctx.v2.factors.pending.get(answered.approval.pending)?.via
+    if (via !== undefined) ctx.v2.links.pause(username, via.provider, via.subject)
+    else if (signed.account.passwordless !== true) ctx.v2.factors.store.setMustChangePassword(username, true)
     // Every OTHER sign-in in flight goes with it. A password-verified pending
     // that survives the alarm is the same stranger walking through the door
     // beside the one just slammed; this one is kept only so its own poll can

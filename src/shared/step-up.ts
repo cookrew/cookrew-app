@@ -36,6 +36,8 @@ export type StepUpAct =
   | 'take-over-door'
   | 'end-seat'
   | 'not-me'
+  | 'link-provider'
+  | 'unlink-provider'
 
 /**
  * The list, in the order the architecture note states it. Exported as an array
@@ -49,7 +51,9 @@ export const STEP_UP_ACTS: readonly StepUpAct[] = [
   'mint-join-code',
   'take-over-door',
   'end-seat',
-  'not-me'
+  'not-me',
+  'link-provider',
+  'unlink-provider'
 ]
 
 export const isStepUpAct = (value: unknown): value is StepUpAct =>
@@ -102,7 +106,11 @@ export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   /** DELETE /v2/teams/@owner/team/seats/:id. */
   'end-seat': 'gate',
   /** POST /v2/me/approvals/:id with {decision:'not-me'}. */
-  'not-me': 'gate'
+  'not-me': 'gate',
+  /** POST /v2/oauth/:provider/start with {intent:'link'}. */
+  'link-provider': 'gate',
+  /** DELETE /v2/me/links/:provider. */
+  'unlink-provider': 'gate'
 }
 
 /**
@@ -120,5 +128,7 @@ export const STEP_UP_SENTENCE: Record<StepUpAct, string> = {
   'mint-join-code': 'Prove it is you before adding a machine to the account.',
   'take-over-door': machineCopy('Prove it is you before taking a door over from another Mac.', hostPlatform()),
   'end-seat': 'Prove it is you before ending somebody else’s seat.',
-  'not-me': 'Prove it is you before locking the account down.'
+  'not-me': 'Prove it is you before locking the account down.',
+  'link-provider': 'Prove it is you before adding a way to sign in.',
+  'unlink-provider': 'Prove it is you before removing a way to sign in.'
 }

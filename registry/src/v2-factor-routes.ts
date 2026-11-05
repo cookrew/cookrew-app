@@ -16,6 +16,7 @@ import { factorSentence } from './v2-factor-copy'
 import { FACTOR_ORDER, type Factor, type Pending } from './v2-pending'
 import { verifyAssertion } from './v2-passkeys'
 import type { V2Context, V2Identity } from './v2-routes'
+import type { ProviderId } from '../../src/shared/oauth'
 
 /**
  * IDENTITY v2, PHASE 4 — THE SIGN-IN LADDER.
@@ -107,7 +108,25 @@ export async function signInWithLadder(ctx: V2Context, body: Record<string, unkn
     refuseFactor(response, 403, 'password_change_required')
     return
   }
-  const device = deviceShape(body.device)
+  afterFirstFactor(ctx, account, body.device)
+}
+
+/**
+ * THE FIRST FACTOR IS DONE: EVERYTHING FROM HERE IS THE SAME FOR ALL OF THEM.
+ *
+ * The password and a provider both end here, which is what "OAuth replaces only
+ * the password step" means in code. There is one copy of the ladder decision
+ * and one way a device reaches an account. `via` is set when a provider opened
+ * this, so that "not me" knows what it is disowning.
+ */
+export function afterFirstFactor(
+  ctx: V2Context,
+  account: V2Account,
+  rawDevice: unknown,
+  via?: { provider: ProviderId; subject: string }
+): void {
+  const { v2, response } = ctx
+  const device = deviceShape(rawDevice)
   /**
    * THE WHOLE DEVICE, CHECKED HERE. `deviceShape` reads only what the ladder
    * needs; the account store is the authority on the rest (a usable key, an
@@ -115,13 +134,13 @@ export async function signInWithLadder(ctx: V2Context, body: Record<string, unkn
    * now means a rung is never climbed — and a recovery code never burned —
    * for a device that could not have been attached at the end of it.
    */
-  if (device === null || !v2.accounts.mayAttach(account.username, body.device)) {
+  if (device === null || !v2.accounts.mayAttach(account.username, rawDevice)) {
     refuse(response, 400, 'bad_device')
     return
   }
   const next = factorsFor(v2, account)
   if (!ladderApplies(next, account, device.id)) {
-    completeSignIn(ctx, account.username, body.device)
+    completeSignIn(ctx, account.username, rawDevice)
     return
   }
   if (next.length === 0) {
@@ -133,11 +152,12 @@ export async function signInWithLadder(ctx: V2Context, body: Record<string, unkn
   }
   const pending = v2.factors.pending.open({
     username: account.username,
-    device: body.device,
+    device: rawDevice,
     deviceName: device.name,
     kind: device.kind,
     address: asking(ctx),
-    next
+    next,
+    ...(via === undefined ? {} : { via })
   })
   json(response, 401, {
     error: 'second_factor',
