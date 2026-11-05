@@ -8,12 +8,14 @@ import {
   type AccountResult,
   type ApprovalAsked,
   type LadderFactor,
+  type ProviderSignInAnswer,
   type SecondFactorStep,
   type SignInAnswer
 } from '../shared/account-v2'
 import { machineCopy } from '../shared/machine-words'
 import type { CliRequest, TerminalNodeData } from '../shared/model'
 import { LADDER_TTL_MS, type TypedFactor } from './account-ladder'
+import type { DeviceCode } from './account-oauth'
 
 /**
  * `cookrew login`, `logout` AND `whoami`: THE ACCOUNT, FROM A TERMINAL.
@@ -97,6 +99,10 @@ export interface LoginTurn {
 
 export interface AccountWho {
   username: string | null
+  /** No password exists, so nothing here may ask for one. */
+  passwordless: boolean
+  /** No password was typed here and no passcode is chosen, so no lock can engage. */
+  passcodePending: boolean
   deviceId: string
   deviceName: string
   sessionLive: boolean
@@ -116,6 +122,11 @@ export interface AccountDoor {
   abandon: (pending: string) => void
   signOut: (password: string) => Promise<AccountResult<unknown>>
   devices: () => Promise<AccountResult<readonly AccountDevice[]>>
+  /** GitHub's device flow. `onCode` fires once, with what the person must type. */
+  providerDevice: (onCode: (code: DeviceCode) => void, signal: AbortSignal) => Promise<ProviderSignInAnswer<unknown>>
+  /** The name, for the identity the device flow just proved. */
+  providerClaim: (username: string) => Promise<SignInAnswer<unknown>>
+  abandonClaim: () => void
 }
 
 /** One line in the event log. A reason and a name; never anything typed. */
@@ -161,6 +172,8 @@ type Stage =
   | { at: 'rung'; step: SecondFactorStep; rungs: readonly Rung[] }
   | { at: 'code'; step: SecondFactorStep; rungs: readonly Rung[]; factor: TypedFactor }
   | { at: 'waiting'; step: SecondFactorStep; rungs: readonly Rung[] }
+  | { at: 'device' }
+  | { at: 'handle'; suggest: string }
   | { at: 'over' }
 
 const WAIT_RETRY_MS = 2_000
@@ -182,7 +195,10 @@ const SAID_REASONS: Partial<Record<AccountRefusal, CliCopyId>> = {
   too_many_attempts: 'refused.too_many_attempts',
   denied: 'refused.denied',
   bad_username: 'refused.bad_username',
-  password_change_required: 'refused.password_change_required'
+  password_change_required: 'refused.password_change_required',
+  cancelled: 'refused.cancelled',
+  wrong_identity: 'refused.wrong_identity',
+  locked: 'refused.locked'
 }
 
 /** One sign-in or sign-out, from the first prompt to its end. */
@@ -197,11 +213,22 @@ class Conversation {
   private gone = false
   /** Acts on the wire right now. */
   private flights = 0
+  /** The device flow's ending, for the `wait` after the one that showed the code. */
+  private deviceTurn: Promise<LoginTurn> | null = null
+  /** A proven identity is waiting for a name. */
+  private naming = false
+  /**
+   * Over, with an ending the CLI has not collected. The poll can finish before
+   * the second `wait` arrives, and a door already handed back would answer it
+   * "no sign-in open" on a machine that has just signed in.
+   */
+  private uncollected = false
   private idle: ReturnType<typeof setTimeout> | null = null
   private readonly account: AccountDoor
   private readonly deps: LoginDoorDeps
   private readonly pane: TerminalNodeData
   private readonly leaving: boolean
+  private readonly github: boolean
   private readonly ended: () => void
   private readonly hangUp: () => unknown
 
@@ -210,6 +237,7 @@ class Conversation {
     deps: LoginDoorDeps
     pane: TerminalNodeData
     leaving: boolean
+    github: boolean
     ended: () => void
     hangUp: () => unknown
   }) {
@@ -217,6 +245,7 @@ class Conversation {
     this.deps = input.deps
     this.pane = input.pane
     this.leaving = input.leaving
+    this.github = input.github
     this.ended = input.ended
     this.hangUp = input.hangUp
   }
@@ -244,7 +273,8 @@ class Conversation {
   private armIdle(): void {
     if (this.idle !== null) clearTimeout(this.idle)
     this.idle = null
-    if (this.closed || this.gone) return
+    // Not while an act is out: a person at GitHub is not a person who walked away.
+    if (this.closed || this.gone || this.flights > 0) return
     this.idle = setTimeout(() => this.timedOut(), this.deps.idleMs ?? IDLE_MS)
     this.idle.unref?.()
   }
@@ -294,6 +324,7 @@ class Conversation {
   private startLogin(wanted: string): LoginTurn {
     const who = this.account.who()
     if (who.username === null) {
+      if (this.github) return this.askDevice()
       if (wanted === '') {
         this.stage = { at: 'username' }
         return { say: [], ask: { kind: 'text', prompt: this.say('ask.username') } }
@@ -314,7 +345,17 @@ class Conversation {
       const sentence = machineCopy(registryMismatchSentence(who.mismatch), this.account.platform)
       return this.finish(LOGIN_EXIT.failed, [sentence], null)
     }
+    if (this.github) return this.askDevice()
+    if (who.passwordless) {
+      return this.finish(LOGIN_EXIT.failed, [this.say('said.no-password', { handle: who.username })], null)
+    }
     return this.askPassword(who.username, 0, true, [])
+  }
+
+  /** The CLI calls `wait` next, and that call starts the flow. */
+  private askDevice(): LoginTurn {
+    this.stage = { at: 'device' }
+    return { say: [], wait: { other: false } }
   }
 
   private startLogout(): LoginTurn {
@@ -324,6 +365,10 @@ class Conversation {
     if (!who.sessionLive) {
       const sentence = this.say('said.session-ended', { handle: who.username, device: who.deviceName })
       return this.finish(LOGIN_EXIT.failed, [sentence], null)
+    }
+    // The proof would be a browser trip, and this machine may have no browser.
+    if (who.passwordless) {
+      return this.finish(LOGIN_EXIT.failed, [this.say('said.logout-no-password', { handle: who.username })], null)
     }
     this.stage = { at: 'logout', username: who.username, tries: 0 }
     return {
@@ -349,6 +394,8 @@ class Conversation {
         return this.askPassword(normaliseUsername(text), 0, false, [])
       case 'password':
         return this.tryPassword(stage, text)
+      case 'handle':
+        return this.tryHandle(stage, text)
       case 'logout':
         return this.tryLogout(stage, text)
       case 'rung':
@@ -485,7 +532,83 @@ class Conversation {
 
   /** The approve rung's long half. One call per wait; `stop` ends it early. */
   wait(): Promise<LoginTurn> {
-    return this.flying(() => this.awaitNod())
+    const running = this.deviceTurn
+    if (running !== null) {
+      this.collected()
+      return running
+    }
+    return this.flying(() => (this.stage.at === 'device' ? this.startDevice() : this.awaitNod()))
+  }
+
+  /**
+   * THE DEVICE FLOW, IN TWO WAITS, because the code has to reach the screen while
+   * the poll carries on. The first answers with the code; the second with the end.
+   *
+   * THE ENDING IS A FLIGHT OF ITS OWN, not the second wait's. A poll on the wire
+   * cannot be called back, so if the terminal goes between the two waits the
+   * ending still runs, and what came back is landed and written down.
+   */
+  private async startDevice(): Promise<LoginTurn> {
+    const stop = new AbortController()
+    this.stopWaiting = stop
+    let shown: (code: DeviceCode) => void = () => undefined
+    const coded = new Promise<DeviceCode>((resolve) => {
+      shown = resolve
+    })
+    const answer = this.account.providerDevice((code) => shown(code), stop.signal)
+    const ending = this.flying(async () => this.deviceEnded(await answer))
+    this.deviceTurn = ending
+    const code = await Promise.race([coded, ending.then(() => null)])
+    if (code === null) {
+      this.collected()
+      return ending
+    }
+    return {
+      say: [this.say('device.code', { url: code.verificationUri, code: code.userCode }), this.say('device.waiting')],
+      wait: { other: false }
+    }
+  }
+
+  /** The ending has somewhere to go, so the door can be handed back. */
+  private collected(): void {
+    this.deviceTurn = null
+    if (this.uncollected) this.ended()
+    this.uncollected = false
+  }
+
+  private deviceEnded(answer: ProviderSignInAnswer<unknown>): Promise<LoginTurn> | LoginTurn {
+    this.stopWaiting = null
+    if (answer.ok) return this.landed()
+    if (answer.reason === 'second_factor') return this.offerRungs(answer.step, answer.message)
+    if (this.gone) return { say: [] }
+    if (answer.reason === 'new_identity') {
+      this.naming = true
+      return this.askHandle(answer.suggest, [this.say('said.new-identity')])
+    }
+    return this.finish(LOGIN_EXIT.failed, [this.refusal(answer.reason, answer.message)], answer.reason)
+  }
+
+  private askHandle(suggest: string, say: readonly string[]): LoginTurn {
+    this.stage = { at: 'handle', suggest }
+    const prompt = suggest === '' ? this.say('ask.handle-blank') : this.say('ask.handle', { suggest })
+    return { say, ask: { kind: 'text', prompt } }
+  }
+
+  /** The handle is Cookrew's own: Enter takes the suggestion, a clash asks again. */
+  private async tryHandle(stage: Extract<Stage, { at: 'handle' }>, text: string): Promise<LoginTurn> {
+    const username = normaliseUsername(text) || stage.suggest
+    if (username === '') return this.askHandle(stage.suggest, [])
+    const answer = await this.account.providerClaim(username)
+    if (answer.ok) {
+      this.naming = false
+      return this.landed()
+    }
+    if (this.gone) return { say: [] }
+    if (answer.reason === 'taken') return this.askHandle(stage.suggest, [this.say('refused.handle-taken', { handle: username })])
+    if (answer.reason === 'bad_username' || answer.reason === 'legacy') {
+      return this.askHandle(stage.suggest, [this.refusal(answer.reason, answer.message)])
+    }
+    return this.finish(LOGIN_EXIT.failed, [this.refusal(answer.reason, answer.message)], answer.reason)
   }
 
   private async awaitNod(): Promise<LoginTurn> {
@@ -523,8 +646,10 @@ class Conversation {
     const device = filed ?? who.deviceName
     const handle = who.username ?? ''
     const late = this.gone ? ', after the terminal left' : ''
-    this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}${late}` })
-    return this.finish(LOGIN_EXIT.ok, [this.say('said.signed-in', { handle, device })], null)
+    const via = this.github ? ' with GitHub' : ''
+    this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}${via}${late}` })
+    const said = [this.say('said.signed-in', { handle, device })]
+    return this.finish(LOGIN_EXIT.ok, who.passcodePending ? [...said, this.say('said.passcode-next')] : said, null)
   }
 
   private get closed(): boolean {
@@ -538,8 +663,11 @@ class Conversation {
     this.idle = null
     if (this.pending !== null) this.account.abandon(this.pending)
     this.pending = null
+    if (this.naming) this.account.abandonClaim()
+    this.naming = false
     this.letGo()
-    this.ended()
+    if (this.deviceTurn !== null && !this.gone) this.uncollected = true
+    else this.ended()
     if (failure !== null) {
       this.deps.audit({ type: 'account.login-refused', terminalId: this.pane.id, details: failure })
     }
@@ -552,6 +680,7 @@ class Conversation {
    * nothing is in flight (`flying`).
    */
   close(): void {
+    this.collected()
     if (this.closed || this.gone) return
     this.gone = true
     this.stopWaiting?.abort()
@@ -627,6 +756,7 @@ export class LoginDoor {
       deps: this.deps,
       pane,
       leaving: request.cmd === 'logout',
+      github: request.flags.github === true,
       ended: () => {
         if (this.held?.conversation === conversation) this.held = null
       },
@@ -636,7 +766,8 @@ export class LoginDoor {
     connection.once('close', () => conversation.close())
     try {
       const first = conversation.start(wanted)
-      if (first.ask !== undefined) conversation.hold(this.deps.seal(pane.id))
+      // From before the first prompt, which on a device flow comes after a wait.
+      if (first.ask !== undefined || first.wait !== undefined) conversation.hold(this.deps.seal(pane.id))
       return first
     } catch (error) {
       // Nothing is open, so nothing must go on saying so.

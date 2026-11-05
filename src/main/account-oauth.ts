@@ -422,7 +422,7 @@ export class ProviderAccess {
    */
   async deviceSignIn(
     provider: ProviderId,
-    options: { onCode: (code: DeviceCode) => void; everyMs?: number },
+    options: { onCode: (code: DeviceCode) => void; everyMs?: number; signal?: AbortSignal },
   ): Promise<ProviderSignInAnswer<AccountSession>> {
     const verifier = randomBytes(32).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
@@ -440,10 +440,13 @@ export class ProviderAccess {
     const held = this.port.device()
     let cancelled = false
     let wake: (() => void) | null = null
-    this.deviceCancelled = () => {
+    const stop = (): void => {
       cancelled = true
       wake?.()
     }
+    this.deviceCancelled = stop
+    if (options.signal?.aborted === true) cancelled = true
+    options.signal?.addEventListener('abort', stop, { once: true })
     try {
       for (;;) {
         if (cancelled) return { ok: false, reason: 'cancelled' }
@@ -452,8 +455,10 @@ export class ProviderAccess {
           verifier,
           device: held.device,
         })
-        // Cancelled while the poll was out: its answer must not land.
-        if (cancelled) return { ok: false, reason: 'cancelled' }
+        // Cancelled while the poll was out. Anything but a session is dropped; a
+        // session cannot be: the registry has minted it for this device, and a
+        // Mac that threw it away would hold a key the account has moved past.
+        if (cancelled && !(polled.ok && polled.value.status === 201)) return { ok: false, reason: 'cancelled' }
         if (!polled.ok) return plainRefusal(polled)
         const { status, body } = polled.value
         if (status === 410) return { ok: false, reason: body.why === 'denied' ? 'cancelled' : 'expired' }
@@ -468,6 +473,7 @@ export class ProviderAccess {
         })
       }
     } finally {
+      options.signal?.removeEventListener('abort', stop)
       this.deviceCancelled = null
     }
   }

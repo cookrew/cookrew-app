@@ -454,7 +454,7 @@ export class Accounts {
       hasAccount: () => this.cached !== null,
       rememberPending: (pending, minted) => {
         this.ladder.remember(pending, NO_PASSWORD)
-        if (minted !== null) this.signingIn = { ...minted, username: '' }
+        if (minted !== null) this.signingIn = { ...minted, username: '', pending }
       },
       land: (body, minted) => {
         if (minted !== null) this.signingIn = { ...minted, username: '' }
@@ -500,10 +500,15 @@ export class Accounts {
     return this.provider.tripping()
   }
 
+  /** A proven identity nobody will name now: its ticket goes. */
+  providerForget(): void {
+    this.provider.reset()
+  }
+
   /** The seam `cookrew login --github` calls. */
   providerDeviceSignIn(
     id: ProviderId,
-    options: { onCode: (code: DeviceCode) => void; everyMs?: number },
+    options: { onCode: (code: DeviceCode) => void; everyMs?: number; signal?: AbortSignal },
   ): Promise<ProviderSignInAnswer<AccountSession>> {
     return this.provider.deviceSignIn(id, options)
   }

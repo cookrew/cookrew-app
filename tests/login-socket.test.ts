@@ -24,7 +24,7 @@ let signIn: AccountDoor['signIn']
 
 const account = (): AccountDoor => ({
   platform: 'linux',
-  who: () => ({ username: null, deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null }),
+  who: () => ({ username: null, deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false }),
   signIn: (input) => signIn(input),
   resume: async () => ({ ok: true, value: {} }),
   climbCode: async () => ({ ok: true, value: {} }),
@@ -32,7 +32,10 @@ const account = (): AccountDoor => ({
   waitApproval: async () => ({ ok: true, value: {} }),
   abandon: () => undefined,
   signOut: async () => ({ ok: true, value: {} }),
-  devices: async () => ({ ok: true, value: [] })
+  devices: async () => ({ ok: true, value: [] }),
+  providerDevice: async () => ({ ok: false, reason: 'offline' }),
+  providerClaim: async () => ({ ok: true, value: {} }),
+  abandonClaim: () => undefined
 })
 
 const pane = { id: 'term-1', kind: 'terminal', name: 'shell' }

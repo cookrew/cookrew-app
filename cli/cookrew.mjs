@@ -125,7 +125,7 @@ function parseArgv(argv) {
   // tests/cli-bool-flags.test.ts runs this client against every name there.
   // Declared inside the function: it runs before module-level consts below it
   // are initialised, and a test lifts this function out by its source.
-  const BOOLEAN_FLAGS = new Set(['all', 'canvas', 'disabled', 'help', 'new', 'no-wait', 'rotate'])
+  const BOOLEAN_FLAGS = new Set(['all', 'canvas', 'disabled', 'github', 'help', 'new', 'no-wait', 'rotate'])
   const args = []
   const flags = {}
   let cmd = null
@@ -359,12 +359,20 @@ async function converse() {
   if (passwordFlag || args.length > (cmd === 'login' ? 1 : 0)) {
     fail(`usage: cookrew ${cmd === 'login' ? 'login [username]' : 'logout'} (the password is typed at a hidden prompt, never on the command line)`)
   }
+  // GitHub says who this is, so a name beside the flag could only disagree.
+  if (flags.github !== undefined && (cmd !== 'login' || args.length > 0)) {
+    fail('usage: cookrew login --github (GitHub says who you are, so it takes no username)')
+  }
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true
   if (tty) startKeyboard()
   const line = openConversation(ancestorSessionId())
   let response = await line.send('open', {
     args,
-    flags: { tty, ...(typeof flags.as === 'string' ? { as: flags.as } : {}) }
+    flags: {
+      tty,
+      ...(typeof flags.as === 'string' ? { as: flags.as } : {}),
+      ...(flags.github === true ? { github: true } : {})
+    }
   })
   for (;;) {
     const turn = turnOf(response)

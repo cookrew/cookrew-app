@@ -714,6 +714,52 @@ describe('review: the trip', () => {
   })
 })
 
+describe('a device poll already on the wire', () => {
+  beforeEach(() => boot(true))
+
+  it('lands a session that came back after the cancel: the registry cannot be asked to forget it', async () => {
+    let cancel: () => void = () => undefined
+    let arm = false
+    const m = mac('Known', {
+      fetch: async (input, init) => {
+        const answer = await fetch(input, init)
+        if (arm && String(input).endsWith('/poll')) cancel()
+        return answer
+      }
+    })
+    await joinByGithub(m)
+    cancel = () => m.app.providerCancel()
+    await m.app.call('/v2/sessions/current', { method: 'POST', parse: false })
+    await m.app.call('/v2/me')
+    const before = m.app.account()?.session?.token
+    arm = true
+    fake.device.answer = 'ok'
+    const asked = await m.app.providerDeviceSignIn('github', { onCode: () => undefined })
+    expect(asked.ok).toBe(true)
+    expect(m.app.account()?.session?.token).not.toBe(before)
+  })
+
+  it('an abort signal ends the wait between polls', async () => {
+    const m = mac('Waiting')
+    const stop = new AbortController()
+    fake.device.answer = 'pending'
+    const waiting = m.app.providerDeviceSignIn('github', { onCode: () => undefined, signal: stop.signal, everyMs: 1_000 })
+    await vi.waitFor(() => expect(fake.device.polls).toBeGreaterThan(0))
+    stop.abort()
+    expect(await waiting).toMatchObject({ ok: false, reason: 'cancelled' })
+  })
+
+  it('a ladder a provider opened is forgotten by its pending, key and all', async () => {
+    const first = mac('First')
+    await joinByGithub(first)
+    const second = mac('Second')
+    const asked = await second.app.providerSignIn('github')
+    if (asked.ok || asked.reason !== 'second_factor') throw new Error('expected a ladder')
+    second.app.abandonSignIn(asked.step.pending)
+    expect(await second.app.resumeWithCode(asked.step.pending, 'recovery', 'X')).toMatchObject({ ok: false, reason: 'expired' })
+  })
+})
+
 describe('review: landing', () => {
   beforeEach(() => boot(true))
 

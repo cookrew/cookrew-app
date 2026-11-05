@@ -8,6 +8,7 @@ import type {
   UsernameCheck,
 } from '../shared/account-v2'
 import { isTypedFactor } from './account-ladder'
+import type { DeviceCode } from './account-oauth'
 import { isProviderId, type ProviderId, type ProviderOffer } from '../shared/oauth'
 import type { StepUpAct } from '../shared/step-up'
 import type { PairingHandout } from '../shared/account-v2'
@@ -778,6 +779,13 @@ async function removalProof(
   return proof.ok ? { ok: true, value: { stepUp: proof.value } } : proof
 }
 
+/** The terminal's way in. A landing does not unlock, as with the browser. */
+async function deviceSignIn(deps: AccountIpcDeps, onCode: (code: DeviceCode) => void, signal: AbortSignal) {
+  if (deps.lock.locked) return LOCKED
+  const result = await deps.accounts.providerDeviceSignIn('github', { onCode, signal })
+  return result.ok ? { ok: true as const, value: landed(deps) } : result
+}
+
 /** Sign in with a provider. See `landed` for why this does not unlock. */
 async function oauthStart(deps: AccountIpcDeps, provider: unknown) {
   if (!isProviderId(provider)) return { ok: false as const, reason: 'not_offered' as const }
@@ -1134,6 +1142,8 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
       const account = deps.accounts.account()
       return {
         username: account?.username ?? null,
+        passwordless: deps.accounts.isPasswordless(),
+        passcodePending: deps.accounts.passcodePending(),
         deviceId: account?.deviceId ?? '',
         deviceName: account?.name ?? '',
         sessionLive: deps.accounts.sessionLive(),
@@ -1149,6 +1159,9 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
     abandon: (pending) => deps.accounts.abandonSignIn(pending),
     signOut: (password) => signOut(deps, password),
     devices: () => deps.accounts.devices(),
+    providerDevice: (onCode, signal) => deviceSignIn(deps, onCode, signal),
+    providerClaim: (username) => oauthClaim(deps, username),
+    abandonClaim: () => deps.accounts.providerForget(),
   }
 }
 
