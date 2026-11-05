@@ -1458,7 +1458,10 @@ export class TurnTracker extends EventEmitter {
    */
   seen(terminalId: string): void {
     const t = this.tracked.get(terminalId)
-    if (!t || t.phase !== 'replied') return
+    // No mirror here (a card read on a watch, a phone): the ledger still says
+    // unread, and only this read can settle it.
+    if (!t) return this.markLastRecordSeen(terminalId)
+    if (t.phase !== 'replied') return
     t.phase = 'idle'
     this.markLastRecordSeen(terminalId)
     this.push(t)

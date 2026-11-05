@@ -623,6 +623,9 @@ const api = {
     ipcRenderer.send('browser:thumb', browserId, dataUrl),
   interactiveBrowserEnabled: () => ipcRenderer.invoke('browser:interactive-enabled'),
   browserStreamToken: () => ipcRenderer.invoke('browser:stream-token'),
+  watchCode: () => ipcRenderer.invoke('watch:code'),
+  watchState: () => ipcRenderer.invoke('watch:state'),
+  watchForget: () => ipcRenderer.invoke('watch:forget'),
   openBrowserStream,
   onCmdW: (cb: () => void) => {
     const listener = (): void => cb()
