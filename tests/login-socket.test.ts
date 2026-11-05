@@ -9,6 +9,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startSocketServer, type SocketServerDeps } from '../src/main/socket-server'
 import type { AccountDoor, LoginAudit } from '../src/main/login-cli'
+import { paneInputs } from '../src/main/pane-input'
 
 const PASSWORD = 'SENTINEL-socket-password'
 
@@ -16,10 +17,10 @@ let dir = ''
 let sock = ''
 let close: () => Promise<void> = async () => undefined
 let audits: LoginAudit[] = []
-let sealed: string[] = []
-let released: string[] = []
 let served = false
-let phase = 'idle'
+let phase: string | undefined = 'idle'
+let backendPhase: string | undefined
+let injected: string[][] = []
 let signIn: AccountDoor['signIn']
 
 const account = (): AccountDoor => ({
@@ -39,40 +40,34 @@ const pane = { id: 'term-1', kind: 'terminal', name: 'shell' }
 
 const deps = (): SocketServerDeps =>
   ({
-    ptys: {
-      socketPath: sock,
-      get: (id: string) => ({
-        sealInput: () => {
-          sealed = [...sealed, id]
-          return () => {
-            released = [...released, id]
-          }
-        }
-      })
-    },
+    ptys: { socketPath: sock, get: () => undefined },
     store: {
       node: (id: string) => (id === pane.id ? pane : null),
       terminalsAcross: () => [],
       nodeAcrossWorkspaces: () => null
     },
     agents: {},
-    turns: { phaseOf: () => phase },
+    turns: { phaseOf: () => phase, backendPhaseFor: () => backendPhase, dropDraft: () => undefined },
     isServed: () => served,
     account,
     auditLogin: (event: LoginAudit) => {
       audits = [...audits, event]
     },
-    adoptPictures: async (text: string) => text
+    adoptPictures: async (text: string) => text,
+    injectInput: async (args: string[]) => {
+      injected = [...injected, args]
+      return ''
+    }
   }) as unknown as SocketServerDeps
 
 beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'login-sock-'))
   sock = path.join(dir, 'app.sock')
   audits = []
-  sealed = []
-  released = []
   served = false
   phase = 'idle'
+  backendPhase = undefined
+  injected = []
   signIn = async () => ({ ok: false, reason: 'session-expired', message: 'That is not the password.' })
   const handle = startSocketServer(deps())
   await handle.claim
@@ -128,7 +123,7 @@ describe('the password on the socket', () => {
     const { socket, send } = await connect()
     const replies = [await open(send), await send({ cmd: 'login', args: ['answer'], secret: PASSWORD })]
     socket.destroy()
-    await vi.waitFor(() => expect(released).toEqual(['term-1']))
+    await vi.waitFor(() => expect(paneInputs.sealed('term-1')).toBe(false))
     for (const spy of spies) spy.mockRestore()
     expect(heard).toEqual([PASSWORD])
     expect(JSON.stringify({ replies, audits, logged })).not.toContain(PASSWORD)
@@ -217,6 +212,24 @@ describe('the owner rule, at the socket', () => {
     expect(answer.error).toContain('working')
   })
 
+  it('refuses a detached pane whose agent the backend says is working', async () => {
+    phase = undefined
+    backendPhase = 'thinking'
+    const { socket, send } = await connect()
+    expect(await open(send)).toMatchObject({ ok: false, exitCode: 3 })
+    socket.destroy()
+  })
+
+  it('refuses a pane the last keys of which came from an agent', async () => {
+    paneInputs.drive('term-1')
+    const { socket, send } = await connect()
+    const answer = await open(send)
+    paneInputs.noteKeyboard('term-1')
+    socket.destroy()
+    expect(answer).toMatchObject({ ok: false, exitCode: 3 })
+    expect(answer.error).toContain('not a keyboard')
+  })
+
   it('refuses a pane whose agent is held at a menu of its own', async () => {
     phase = 'waiting'
     const { socket, send } = await connect()
@@ -233,13 +246,26 @@ describe('the owner rule, at the socket', () => {
 })
 
 describe('the seal, at the socket', () => {
-  it('is held from the first prompt and let go when the CLI dies', async () => {
+  it('is held from the first prompt, with or without a session here, and let go when the CLI dies', async () => {
     const { socket, send } = await connect()
     await open(send)
-    expect(sealed).toEqual(['term-1'])
-    expect(released).toEqual([])
+    expect(paneInputs.sealed('term-1')).toBe(true)
     socket.destroy()
-    await vi.waitFor(() => expect(released).toEqual(['term-1']))
+    await vi.waitFor(() => expect(paneInputs.sealed('term-1')).toBe(false))
+  })
+})
+
+describe('`cookrew ui`, while a pane is sealed', () => {
+  it('will not type, and still clicks', async () => {
+    const release = paneInputs.seal('term-9')
+    const { socket, send } = await connect()
+    expect(await send({ cmd: 'ui', args: ['type', 'hunter2'] })).toMatchObject({ ok: false })
+    expect(await send({ cmd: 'ui', args: ['key', 'Enter'] })).toMatchObject({ ok: false })
+    expect(injected).toEqual([])
+    await send({ cmd: 'ui', args: ['click', '1', '2'] })
+    release()
+    socket.destroy()
+    expect(injected).toEqual([['click', '1', '2']])
   })
 })
 

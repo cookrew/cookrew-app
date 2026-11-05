@@ -312,9 +312,9 @@ function openConversation(session) {
     }
   })
   socket.on('error', (error) => fail(`Cannot reach the Cookrew app (${error.code ?? error.message}). Is it running?`))
-  socket.on('close', () => {
-    if (waiting.size > 0) fail('The Cookrew app went away before answering. Run this again.')
-  })
+  // Whatever was open: the conversation belongs to this connection, so nothing
+  // typed after this could reach anyone.
+  socket.on('close', () => fail('The Cookrew app went away. Run this again.'))
   const send = (verb, extra = {}) =>
     new Promise((resolve) => {
       const id = randomUUID()
@@ -370,6 +370,7 @@ async function converse() {
     const turn = turnOf(response)
     for (const sentence of turn.say) process.stdout.write(`${sentence}\n`)
     if (turn.exit !== undefined) process.exit(turn.exit)
+    if (!turn.wait && !turn.ask) fail('Bad response from app')
     response = turn.wait
       ? await waitOut(line, turn.wait)
       : await line.send('answer', { secret: await readAsked(turn.ask) })

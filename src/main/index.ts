@@ -168,6 +168,7 @@ import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
 import type { AccountDoor, LoginAudit } from './login-cli'
+import { paneInputs } from './pane-input'
 import { localDeviceName } from './device-name'
 import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
@@ -673,7 +674,8 @@ const auditLogin = (event: LoginAudit): void => {
     entityName: hit?.node.name ?? event.terminalId,
     workspaceId,
     workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
-    actor: 'agent',
+    // A sign-in that went through got past every check for a person.
+    actor: event.type === 'account.login-refused' ? 'agent' : 'user',
     timestamp: Date.now(),
     details: scrub(event.details)
   })
@@ -8085,6 +8087,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
   })
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    paneInputs.noteWindowKey(terminalId)
     idleSleep.touch(terminalId, Date.now())
     typeInto(terminalId, data)
   })

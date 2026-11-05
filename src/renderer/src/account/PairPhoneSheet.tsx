@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import { qrMatrix, qrPath } from '../../../shared/qr'
 import { pairingPopoutView, type PairingPopoutView } from '../../../shared/pairing-qr'
 import type { PairingHandout } from '../../../shared/account-v2'
-import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import '../grant-surface.css'
 
 /**

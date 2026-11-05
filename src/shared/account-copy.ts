@@ -372,6 +372,8 @@ export const CLI_COPY = {
     'refused: this was run by an agent. Signing in is for the owner: run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
   'gate.agent-busy':
     'refused: the agent in this pane is working, and signing in is for the owner. Run cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
+  'gate.driven':
+    'refused: the last keys in this pane came from an agent, not a keyboard. Type cookrew login yourself in a Shell card (cookrew recruit --preset Shell).',
   'gate.held': 'refused: a sign-in is already open on this Mac. Finish it, or press Ctrl-C there.',
   'gate.not-open': 'refused: this connection has no sign-in open. Run cookrew login.',
 

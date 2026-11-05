@@ -13,7 +13,7 @@ import {
 } from '../shared/account-v2'
 import { machineCopy } from '../shared/machine-words'
 import type { CliRequest, TerminalNodeData } from '../shared/model'
-import type { TypedFactor } from './account-ladder'
+import { LADDER_TTL_MS, type TypedFactor } from './account-ladder'
 
 /**
  * `cookrew login`, `logout` AND `whoami`: THE ACCOUNT, FROM A TERMINAL.
@@ -49,16 +49,25 @@ import type { TypedFactor } from './account-ladder'
  *   what stops a faked tty (`script`), since an agent's tools only run in its
  *   turn.
  *
- *   Those are the app's own checks on a socket any process of this user can
- *   write to, so none of them is a wall. Every attempt, refused or not, goes
- *   in the event log, so it cannot be silent; and what actually keeps the
- *   account shut is unchanged: the password, then the second factor.
+ *   None of that sees an agent typing into a Shell card with `cookrew ask
+ *   --raw`: the caller there has a real tty and looks like a person. The keys
+ *   do not (pane-input.ts). A pane last written by anything but a keyboard is
+ *   refused, and while a prompt is open nothing but a keyboard can answer it.
+ *
+ *   Those are the app's own checks, and any process of this user can reach the
+ *   socket and the multiplexer without going through them, so none is a wall.
+ *   Every attempt, refused or not, goes in the event log, so it cannot be
+ *   silent; and what actually keeps the account shut is unchanged: the
+ *   password, then the second factor.
  */
 
 export const LOGIN_EXIT = { ok: 0, failed: 1, refused: 3 } as const
 
 /** Three wrong passwords and the conversation ends. The registry counts its own. */
 const PASSWORD_TRIES = 3
+
+/** A person who walked away from a prompt. The ladder itself lasts no longer. */
+const IDLE_MS = LADDER_TTL_MS
 
 export class LoginRefused extends Error {
   readonly exitCode: number
@@ -119,10 +128,14 @@ export interface LoginDoorDeps {
   ownerPane: (request: CliRequest) => TerminalNodeData
   /** Is the agent in this pane mid-turn? */
   agentBusy: (terminalId: string) => boolean
+  /** Was the last thing to write in this pane something other than a keyboard? */
+  driven: (terminalId: string) => boolean
   /** Hold this pane's keys back from the tracker. Answers the release. */
   seal: (terminalId: string) => () => void
   audit: (event: LoginAudit) => void
   sleep?: (ms: number) => Promise<void>
+  /** How long a conversation may sit with nothing happening. */
+  idleMs?: number
 }
 
 /** The piece of a socket this needs. */
@@ -174,6 +187,11 @@ class Conversation {
   private pending: string | null = null
   private stopWaiting: AbortController | null = null
   private saidOffline = false
+  /** The terminal has gone. An act still on the wire finishes the conversation. */
+  private gone = false
+  /** Acts on the wire right now. */
+  private flights = 0
+  private idle: ReturnType<typeof setTimeout> | null = null
   private readonly account: AccountDoor
   private readonly deps: LoginDoorDeps
   private readonly pane: TerminalNodeData
@@ -211,6 +229,45 @@ class Conversation {
 
   hold(release: () => void): void {
     this.release = release
+    this.armIdle()
+  }
+
+  private armIdle(): void {
+    if (this.idle !== null) clearTimeout(this.idle)
+    this.idle = null
+    if (this.closed || this.gone) return
+    this.idle = setTimeout(() => this.close(), this.deps.idleMs ?? IDLE_MS)
+    this.idle.unref?.()
+  }
+
+  /**
+   * ONE ACT ON THE WIRE, and what the terminal going does to it.
+   *
+   * A code or a nod already sent cannot be called back: the registry may attach
+   * this device and answer 201 whatever happens here. If that answer found the
+   * minted key thrown away, the account would hold a device nothing can prove,
+   * so the ladder is left standing until the act comes back. If it landed, the
+   * machine IS signed in and the log says so; otherwise the ladder goes now.
+   */
+  private async flying(run: () => Promise<LoginTurn>): Promise<LoginTurn> {
+    if (this.idle !== null) clearTimeout(this.idle)
+    this.flights += 1
+    try {
+      return await run()
+    } finally {
+      this.flights -= 1
+      if (this.gone && this.flights === 0 && !this.closed) this.left()
+      else this.armIdle()
+    }
+  }
+
+  private letGo(): void {
+    this.release()
+    this.release = () => undefined
+  }
+
+  private left(): void {
+    this.finish(LOGIN_EXIT.failed, [], 'left before it finished')
   }
 
   private startLogin(wanted: string): LoginTurn {
@@ -242,6 +299,11 @@ class Conversation {
   private startLogout(): LoginTurn {
     const who = this.account.who()
     if (who.username === null) return this.finish(LOGIN_EXIT.ok, [this.say('said.not-signed-in')], null)
+    // Leaving needs a live session to act under, and no password is the fix.
+    if (!who.sessionLive) {
+      const sentence = this.say('said.session-ended', { handle: who.username, device: who.deviceName })
+      return this.finish(LOGIN_EXIT.failed, [sentence], null)
+    }
     this.stage = { at: 'logout', username: who.username, tries: 0 }
     return {
       say: [],
@@ -255,7 +317,11 @@ class Conversation {
   }
 
   /** Whatever was just asked has been answered. */
-  async answer(text: string): Promise<LoginTurn> {
+  answer(text: string): Promise<LoginTurn> {
+    return this.flying(async () => this.respond(text))
+  }
+
+  private respond(text: string): Promise<LoginTurn> | LoginTurn {
     const stage = this.stage
     switch (stage.at) {
       case 'username':
@@ -269,7 +335,7 @@ class Conversation {
       case 'code':
         return this.tryCode(stage, text)
       default:
-        return { say: [] }
+        return { say: [], exit: LOGIN_EXIT.failed }
     }
   }
 
@@ -309,12 +375,9 @@ class Conversation {
   /** The password was right and the account wants more. */
   private async offerRungs(step: SecondFactorStep, message: string | undefined): Promise<LoginTurn> {
     this.pending = step.pending
-    // The connection went while the password was in flight: nobody is here to
-    // climb, and main must not go on holding the password for them.
-    if (this.closed) {
-      this.account.abandon(step.pending)
-      return { say: [] }
-    }
+    // The terminal went while the password was in flight: nobody is here to
+    // climb, and `flying` ends this as soon as it returns.
+    if (this.gone) return { say: [] }
     const rungs = RUNG_ORDER.filter(
       (rung) => step.next.includes(rung) && (rung !== 'approve' || step.match !== undefined)
     )
@@ -400,15 +463,19 @@ class Conversation {
   }
 
   /** The approve rung's long half. One call per wait; `stop` ends it early. */
-  async wait(): Promise<LoginTurn> {
+  wait(): Promise<LoginTurn> {
+    return this.flying(() => this.awaitNod())
+  }
+
+  private async awaitNod(): Promise<LoginTurn> {
     const stage = this.stage
-    if (stage.at !== 'waiting') return { say: [] }
+    if (stage.at !== 'waiting') return { say: [], exit: LOGIN_EXIT.failed }
     const stop = new AbortController()
     this.stopWaiting = stop
     const answer = await this.account.waitApproval(stage.step.pending, stop.signal)
     this.stopWaiting = null
     if (answer.ok) return this.landed()
-    if (this.closed) return { say: [] }
+    if (this.gone) return { say: [] }
     if (stop.signal.aborted) return this.choice(stage.step, stage.rungs, [])
     if (answer.reason === 'offline' || answer.reason === 'rate_limited') {
       // Not the end of the ladder: the pending is standing at the registry.
@@ -434,7 +501,8 @@ class Conversation {
     const filed = listed.ok ? listed.value.find((device) => device.id === who.deviceId)?.name : undefined
     const device = filed ?? who.deviceName
     const handle = who.username ?? ''
-    this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}` })
+    const late = this.gone ? ', after the terminal left' : ''
+    this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}${late}` })
     return this.finish(LOGIN_EXIT.ok, [this.say('said.signed-in', { handle, device })], null)
   }
 
@@ -445,9 +513,11 @@ class Conversation {
   /** The end, however it came. `failure` goes in the event log; null writes nothing. */
   private finish(exit: number, say: readonly string[], failure: string | null): LoginTurn {
     this.stage = { at: 'over' }
+    if (this.idle !== null) clearTimeout(this.idle)
+    this.idle = null
     if (this.pending !== null) this.account.abandon(this.pending)
     this.pending = null
-    this.release()
+    this.letGo()
     this.ended()
     if (failure !== null) {
       this.deps.audit({ type: 'account.login-refused', terminalId: this.pane.id, details: failure })
@@ -455,11 +525,17 @@ class Conversation {
     return { say, exit }
   }
 
-  /** The connection went. Nothing is left waiting and nothing is left held. */
+  /**
+   * The connection went, or nobody came back to the prompt. Nothing is left
+   * waiting and the keys are free at once; the ladder follows the moment
+   * nothing is in flight (`flying`).
+   */
   close(): void {
-    if (this.closed) return
+    if (this.closed || this.gone) return
+    this.gone = true
     this.stopWaiting?.abort()
-    this.finish(LOGIN_EXIT.failed, [], 'left before it finished')
+    this.letGo()
+    if (this.flights === 0) this.left()
   }
 }
 
@@ -470,7 +546,8 @@ class Conversation {
  * one machine are two keys and only one could ever be the file. A turn from any
  * other connection is refused, so what is held here cannot be finished by a
  * process that did not start it, and the connection closing ends it: a Ctrl-C
- * cannot leave a poll running that would sign this machine in later, unseen.
+ * stops a wait, so no poll is left running to sign this machine in later,
+ * unseen. An act already on the wire finishes, and is written down as such.
  */
 export class LoginDoor {
   private readonly deps: LoginDoorDeps
@@ -482,7 +559,9 @@ export class LoginDoor {
 
   async handle(request: CliRequest, secret: string | undefined, connection: LoginConnection): Promise<string> {
     const [verb, wanted] = request.args
-    if (verb === 'open') return JSON.stringify(this.open(request, wanted ?? '', connection))
+    if (verb === 'open') {
+      return JSON.stringify(this.open(request, typeof wanted === 'string' ? wanted : '', connection))
+    }
     const conversation = this.held?.connection === connection ? this.held.conversation : null
     if (conversation === null) throw new LoginRefused(this.line('gate.not-open'), LOGIN_EXIT.refused)
     if (verb === 'answer') return JSON.stringify(await conversation.answer(secret ?? ''))
@@ -512,6 +591,7 @@ export class LoginDoor {
     }
     if (request.sessionId) this.refuse(request, pane.id, 'gate.agent-caller', 'run by an agent')
     if (this.deps.agentBusy(pane.id)) this.refuse(request, pane.id, 'gate.agent-busy', 'the agent here is mid-turn')
+    if (this.deps.driven(pane.id)) this.refuse(request, pane.id, 'gate.driven', 'typed here by something other than a keyboard')
     if (request.flags.tty !== true) this.refuse(request, pane.id, 'gate.no-keyboard', 'no terminal')
     if (this.held !== null) this.refuse(request, pane.id, 'gate.held', 'another sign-in is open')
     return pane
@@ -532,9 +612,15 @@ export class LoginDoor {
     })
     this.held = { connection, conversation }
     connection.once('close', () => conversation.close())
-    const first = conversation.start(wanted)
-    if (first.ask !== undefined) conversation.hold(this.deps.seal(pane.id))
-    return first
+    try {
+      const first = conversation.start(wanted)
+      if (first.ask !== undefined) conversation.hold(this.deps.seal(pane.id))
+      return first
+    } catch (error) {
+      // Nothing is open, so nothing must go on saying so.
+      this.held = null
+      throw error
+    }
   }
 
   /** `cookrew whoami`: a read, so an agent may ask. The owner-pane rule still holds. */

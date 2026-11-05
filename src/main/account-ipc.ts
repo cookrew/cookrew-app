@@ -24,6 +24,7 @@ import type { AnsweredRow, QueueRow, RowAction } from '../shared/account-request
 import { seatsSurface, teamForSlug, type DoorSeats, type ServedTeamRef } from './door-seats'
 import type { Factors } from './factors'
 import type { AccountDoor } from './login-cli'
+import { machineCopy } from '../shared/machine-words'
 import type { IdleLock, UnlockOutcome } from './lock'
 
 /**
@@ -204,6 +205,9 @@ export const ACCOUNT_CHANNELS = [
 export type AccountChannel = (typeof ACCOUNT_CHANNELS)[number]
 
 const asString = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/** A sentence of main's own, in this machine's word. */
+const here = (sentence: string): string => machineCopy(sentence, process.platform)
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
@@ -699,7 +703,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
       deps.accounts.checkUsername(asString(username)),
     'account:claim': (input: unknown) => claim(deps, input),
     'account:migrate': (input: unknown) => migrate(deps, input),
-    'account:lock': () => settled(deps, 'This Mac could not be locked', () => deps.lock.lock()),
+    'account:lock': () => settled(deps, here('This Mac could not be locked'), () => deps.lock.lock()),
     'account:unlock': (password: unknown) => unlock(deps, asString(password)),
     'account:resume': (password: unknown) => resume(deps, asString(password)),
     'account:signIn': (input: unknown) => signIn(deps, input),
@@ -758,13 +762,13 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     /** I SAVED THEM — recorded, so the RESCUE row stops saying NOT SAVED. */
     'account:codesSaved': () =>
-      settled(deps, 'That could not be recorded on this Mac', () =>
+      settled(deps, here('That could not be recorded on this Mac'), () =>
         deps.accounts.markRecoveryCodesSaved(),
       ),
     // ZERO IS A SETTING, not a missing argument: it is the OFF choice in the
     // delay picker, and it has to survive the coercion that guards this bridge.
     'account:setLock': (ms: unknown) =>
-      settled(deps, 'The lock setting could not be saved on this Mac', () => {
+      settled(deps, here('The lock setting could not be saved on this Mac'), () => {
         const value = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : 0
         deps.accounts.setLockAfterMs(value)
         deps.lock.setLockAfterMs(value)

@@ -47,7 +47,11 @@ const request = (cmd: string, args: string[], flags: CliRequest['flags'] = { tty
   flags
 })
 
-function fixture(over: Partial<AccountDoor> = {}, cmd = 'login', extra: { busy?: boolean; sessionId?: string } = {}): Fixture {
+function fixture(
+  over: Partial<AccountDoor> = {},
+  cmd = 'login',
+  extra: { busy?: boolean; sessionId?: string; driven?: boolean; idleMs?: number } = {}
+): Fixture {
   const audits: LoginAudit[] = []
   const sealed: string[] = []
   const released: string[] = []
@@ -68,6 +72,8 @@ function fixture(over: Partial<AccountDoor> = {}, cmd = 'login', extra: { busy?:
     account: () => account,
     ownerPane: () => pane,
     agentBusy: () => extra.busy === true,
+    driven: () => extra.driven === true,
+    ...(extra.idleMs === undefined ? {} : { idleMs: extra.idleMs }),
     seal: (id) => {
       sealed.push(id)
       return () => released.push(id)
@@ -106,6 +112,7 @@ describe('who may open it', () => {
         throw new LoginRefused("refused: signing in is the owner's — never from a served session", 3)
       },
       agentBusy: () => false,
+      driven: () => false,
       seal: () => () => undefined,
       audit: () => undefined,
       sleep: async () => undefined
@@ -141,6 +148,21 @@ describe('who may open it', () => {
     expect(f.sealed).toEqual([])
   })
 
+  it('refuses a pane an agent typed into: the keys, not the caller, give it away', async () => {
+    const f = fixture({}, 'login', { driven: true })
+    const refused = await refusal(() => f.open())
+    expect(refused.exitCode).toBe(3)
+    expect(refused.message).toContain('not a keyboard')
+    expect(f.sealed).toEqual([])
+    expect(f.audits).toMatchObject([{ type: 'account.login-refused' }])
+  })
+
+  it('holds logout to the driven rule too: `ask --raw "cookrew logout"`', async () => {
+    const f = fixture({}, 'logout', { driven: true })
+    await refusal(() => f.open([]))
+    expect(f.account.signOut).not.toHaveBeenCalled()
+  })
+
   it('holds logout to the same gate', async () => {
     const f = fixture({}, 'logout', { busy: true })
     await refusal(() => f.open([]))
@@ -152,6 +174,7 @@ describe('who may open it', () => {
       account: () => null,
       ownerPane: () => pane,
       agentBusy: () => false,
+      driven: () => false,
       seal: () => () => undefined,
       audit: () => undefined,
       sleep: async () => undefined
@@ -477,6 +500,99 @@ describe('the ladder', () => {
   })
 })
 
+describe('an act already on the wire when the terminal goes', () => {
+  const held = <T,>(): { promise: Promise<T>; settle: (value: T) => void } => {
+    let settle: (value: T) => void = () => undefined
+    const promise = new Promise<T>((resolve) => {
+      settle = resolve
+    })
+    return { promise, settle }
+  }
+
+  it('keeps the minted key until the rung answers: a device must not be orphaned', async () => {
+    const rung = held<SignInAnswer<unknown>>()
+    const f = fixture({
+      signIn: vi.fn(async () => ladder(['totp', 'recovery'])),
+      climbCode: vi.fn(() => rung.promise)
+    })
+    await f.open()
+    await f.send('answer', PASSWORD)
+    await f.send('answer', '1')
+    const flying = f.send('answer', CODE)
+    await vi.waitFor(() => expect(f.account.climbCode).toHaveBeenCalled())
+    f.connection.emit('close')
+    // The keys are free at once. The ladder is not touched while the rung flies.
+    expect(f.released).toEqual(['term-owner'])
+    expect(f.account.abandon).not.toHaveBeenCalled()
+    rung.settle(landed)
+    await flying
+    expect(f.account.abandon).not.toHaveBeenCalled()
+    expect(f.audits.map((audit) => audit.type)).toEqual(['account.login'])
+    expect(f.audits[0]?.details).toContain('after the terminal left')
+  })
+
+  it('abandons the ladder once the rung comes back refused', async () => {
+    const rung = held<SignInAnswer<unknown>>()
+    const f = fixture({
+      signIn: vi.fn(async () => ladder(['totp', 'recovery'])),
+      climbCode: vi.fn(() => rung.promise)
+    })
+    await f.open()
+    await f.send('answer', PASSWORD)
+    await f.send('answer', '1')
+    const flying = f.send('answer', CODE)
+    await vi.waitFor(() => expect(f.account.climbCode).toHaveBeenCalled())
+    f.connection.emit('close')
+    rung.settle({ ok: false, reason: 'bad_code' })
+    await flying
+    expect(f.account.abandon).toHaveBeenCalledWith('pending-1')
+    expect(f.audits.map((audit) => audit.type)).toEqual(['account.login-refused'])
+  })
+
+  it('forgets a ladder that only opened after the terminal left, and asks nobody', async () => {
+    const password = held<SignInAnswer<unknown>>()
+    const f = fixture({ signIn: vi.fn(() => password.promise) })
+    await f.open()
+    const flying = f.send('answer', PASSWORD)
+    await vi.waitFor(() => expect(f.account.signIn).toHaveBeenCalled())
+    f.connection.emit('close')
+    password.settle(ladder(['approve']))
+    await flying
+    expect(f.account.askApproval).not.toHaveBeenCalled()
+    expect(f.account.abandon).toHaveBeenCalledWith('pending-1')
+  })
+})
+
+describe('nothing waits for ever', () => {
+  it('ends a conversation left at a prompt: the seal and the door both come back', async () => {
+    const f = fixture({}, 'login', { idleMs: 10 })
+    await f.open()
+    await vi.waitFor(() => expect(f.released).toEqual(['term-owner']))
+    await expect(f.door.handle(request('login', ['open', 'drej']), undefined, new EventEmitter())).resolves.toBeTypeOf('string')
+  })
+
+  it('a throw on the way in leaves the door open for the next one', async () => {
+    let broken = true
+    const f = fixture({
+      who: () => {
+        if (broken) throw new Error('the file could not be read')
+        return { username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null }
+      }
+    })
+    await expect(f.open()).rejects.toThrow('could not be read')
+    broken = false
+    await expect(f.door.handle(request('login', ['open', 'drej']), undefined, new EventEmitter())).resolves.toBeTypeOf('string')
+  })
+
+  it('reads a name that is not a string as no name', async () => {
+    const f = fixture()
+    const turn = JSON.parse(
+      await f.door.handle(request('login', ['open', 7 as unknown as string]), undefined, f.connection)
+    ) as LoginTurn
+    expect(turn.ask).toMatchObject({ kind: 'text' })
+  })
+})
+
 describe('logout', () => {
   const signedIn = () => ({
     username: 'drej',
@@ -496,6 +612,14 @@ describe('logout', () => {
     expect(turn.exit).toBe(0)
     expect(turn.say.join(' ')).toContain('@drej')
     expect(f.audits).toMatchObject([{ type: 'account.logout' }])
+  })
+
+  it('says to sign in first when the session has ended, instead of doubting the password', async () => {
+    const f = fixture({ who: () => ({ ...signedIn(), sessionLive: false }) }, 'logout')
+    const turn = await f.open([])
+    expect(turn.exit).toBe(1)
+    expect(turn.say.join(' ')).toContain('cookrew login')
+    expect(f.account.signOut).not.toHaveBeenCalled()
   })
 
   it('says there is nothing to leave', async () => {

@@ -24,6 +24,7 @@ vi.mock('node-pty', () => ({
 import { PtySession, setBackends, setMultiplexer } from '../src/main/pty'
 import { TurnTracker } from '../src/main/turn-tracker'
 import { defaultProducerLease } from '../src/main/producer-lease'
+import { paneInputs } from '../src/main/pane-input'
 import type { Multiplexer } from '../src/main/multiplexer'
 
 const PASSWORD = 'SENTINEL-hunter2-do-not-keep'
@@ -137,6 +138,13 @@ describe('a sealed pane', () => {
     session.dispose()
   })
 
+  it('counts a dispatch as driving the pane', () => {
+    const session = makeSession('term-driven')
+    session.writeFromDispatch('a brief\r')
+    expect(paneInputs.driven('term-driven')).toBe(true)
+    session.dispose()
+  })
+
   it('refuses a dispatch: no other agent types into a hidden prompt', () => {
     const session = makeSession()
     const inputs = heard(session)
@@ -159,6 +167,21 @@ describe('a sealed pane', () => {
   })
 })
 
+describe('a session made while the seal is on', () => {
+  it('is sealed from its first key: a pane re-attached mid-login keeps the secret', () => {
+    const first = makeSession('term-reattach')
+    const release = first.sealInput()
+    first.dispose()
+    const second = makeSession('term-reattach')
+    const inputs = heard(second)
+    second.write(PASSWORD)
+    expect(procWrites).toEqual([PASSWORD])
+    expect(inputs).toEqual([])
+    release()
+    second.dispose()
+  })
+})
+
 describe('the turn tracker, and why this exists', () => {
   const tracked = (id: string): { tracker: TurnTracker; session: PtySession } => {
     const tracker = new TurnTracker(async () => null, null)
@@ -171,6 +194,16 @@ describe('the turn tracker, and why this exists', () => {
     const { tracker, session } = tracked('term-open')
     session.write(`${PASSWORD}\r`)
     expect(JSON.stringify(tracker.list())).toContain(PASSWORD)
+    tracker.disposeAll()
+    session.dispose()
+  })
+
+  it('forgets what was typed ahead of the seal, so no draft outlives the prompt', () => {
+    const { tracker, session } = tracked('term-ahead')
+    session.write('hunter')
+    expect(JSON.stringify(tracker.list())).toContain('hunter')
+    tracker.dropDraft('term-ahead')
+    expect(JSON.stringify(tracker.list())).not.toContain('hunter')
     tracker.disposeAll()
     session.dispose()
   })

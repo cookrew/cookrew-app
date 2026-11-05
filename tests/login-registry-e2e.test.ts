@@ -23,6 +23,7 @@ import { base32Decode, totpAt } from '../registry/src/v2-totp'
 import { Accounts, accountFilePath, loadAccount, writeAccount, type AccountFile, type FetchLike } from '../src/main/account-v2'
 import { accountDoor, type AccountIpcDeps } from '../src/main/account-ipc'
 import { cliWrapper } from '../src/main/cli-shim'
+import { paneInputs } from '../src/main/pane-input'
 import type { LoginAudit } from '../src/main/login-cli'
 import { startSocketServer, type SocketServerDeps } from '../src/main/socket-server'
 
@@ -157,8 +158,6 @@ class Terminal {
 interface Box {
   accounts: Accounts
   audits: LoginAudit[]
-  sealed: string[]
-  released: string[]
   socketPath: string
   home: string
   close: () => Promise<void>
@@ -235,8 +234,6 @@ const freshCode = (secret: Buffer): string => totpAt(secret, Date.now() + 30_000
 const bootBox = async (home: string = scratchHome()): Promise<Box> => {
   const accounts = new Accounts({ base: home, origin, deviceName: DEVICE, platform: 'linux', fetch: loopbackFetch })
   const audits: LoginAudit[] = []
-  const sealed: string[] = []
-  const released: string[] = []
   const ipc = {
     accounts,
     lock: { proven: () => undefined, locked: false, lockAfterMs: 0 },
@@ -249,18 +246,10 @@ const bootBox = async (home: string = scratchHome()): Promise<Box> => {
   const socketPath = path.join(home, `app-${boxes.length}.sock`)
   const pane = { id: 'term-box', kind: 'terminal', name: 'shell' }
   const handle = startSocketServer({
-    ptys: {
-      socketPath,
-      get: () => ({
-        sealInput: () => {
-          sealed.push('term-box')
-          return () => released.push('term-box')
-        }
-      })
-    },
+    ptys: { socketPath, get: () => undefined },
     store: { node: (id: string) => (id === pane.id ? pane : null), terminalsAcross: () => [], nodeAcrossWorkspaces: () => null },
     agents: {},
-    turns: { phaseOf: () => 'idle' },
+    turns: { phaseOf: () => 'idle', backendPhaseFor: () => undefined, dropDraft: () => undefined },
     isServed: () => false,
     account: () => door,
     auditLogin: (event: LoginAudit) => audits.push(event)
@@ -269,8 +258,6 @@ const bootBox = async (home: string = scratchHome()): Promise<Box> => {
   const box = {
     accounts,
     audits,
-    sealed,
-    released,
     socketPath,
     home,
     close: () => new Promise<void>((resolve) => handle.server.close(() => resolve()))
@@ -347,8 +334,7 @@ describe.skipIf(!hasPython)('a new machine signs in from a terminal', () => {
     expect(statSync(file).mode & 0o777).toBe(0o600)
     expect(readFileSync(file, 'utf8')).not.toContain(PASSWORD)
     expect(loadAccount(box.home)).toMatchObject({ username: USERNAME, name: DEVICE })
-    expect(box.sealed).toEqual(['term-box'])
-    expect(box.released).toEqual(['term-box'])
+    expect(paneInputs.sealed('term-box')).toBe(false)
     expect(box.audits).toMatchObject([{ type: 'account.login', terminalId: 'term-box' }])
     nothingTypedAnywhere(box, term)
   })
@@ -416,7 +402,7 @@ describe.skipIf(!hasPython)('walking away', () => {
     const match = /type this number: (\d\d)/.exec(term.transcript)?.[1]
     term.type('\x03')
     expect(await term.exit()).toBe(130)
-    await vi.waitFor(() => expect(box.released).toEqual(['term-box']))
+    await vi.waitFor(() => expect(paneInputs.sealed('term-box')).toBe(false))
 
     const listed = (await (await asOwner(owner.token, '/v2/me/approvals')).json()) as Array<{ id: string }>
     await asOwner(owner.token, `/v2/me/approvals/${listed[0]?.id}`, {
@@ -472,7 +458,7 @@ describe.skipIf(!hasPython)('an agent, or a script', () => {
     // caller's ancestry is refused first, which is the same door shut sooner.
     expect(result.err).toMatch(/a person at a terminal|run by an agent/)
     expect(result.out).toBe('')
-    expect(box.sealed).toEqual([])
+    expect(paneInputs.sealed('term-box')).toBe(false)
     expect(box.audits).toMatchObject([{ type: 'account.login-refused', terminalId: 'term-box' }])
     expect(existsSync(accountFilePath(box.home))).toBe(false)
   })

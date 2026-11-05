@@ -45,6 +45,7 @@ import {
 } from './ask-delivery'
 import { cmdSecret, isServedPane, SECRET_EXIT, SecretCliError, type SecretAudit } from './secret-cli'
 import { LOGIN_EXIT, LoginDoor, LoginRefused, type AccountDoor, type LoginAudit, type LoginConnection } from './login-cli'
+import { paneInputs, SEALED_REFUSAL } from './pane-input'
 import type { SecretsStore } from './secrets-store'
 import { PRESETS } from './presets'
 import { RoutineScheduler, parseInterval } from './routines'
@@ -261,6 +262,9 @@ const takeSecret = (sent: CliRequest & { secret?: unknown }): { request: CliRequ
 
 const LOGIN_VERBS: ReadonlySet<string> = new Set(['login', 'logout'])
 
+/** The `cookrew ui` verbs that type: real input events, so they reach a pane as keys. */
+const WINDOW_KEY_VERBS: ReadonlySet<string> = new Set(['type', 'key'])
+
 /** A verb that speaks for the account, not for a card. */
 const answerAccountVerb = (
   request: CliRequest,
@@ -417,6 +421,7 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
     case 'app-shot':
       return deps.captureWindow()
     case 'ui':
+      if (WINDOW_KEY_VERBS.has(args[0] ?? '') && !paneInputs.driveWindow()) throw new Error(SEALED_REFUSAL)
       return deps.injectInput(args)
     case 'help':
       return HELP_TEXT
@@ -1319,7 +1324,8 @@ function loginPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeD
  * a shell. `waiting` is a turn too: the agent is held at its own menu.
  */
 const agentMidTurn = (terminalId: string, deps: SocketServerDeps): boolean => {
-  const phase = deps.turns.phaseOf(terminalId)
+  // A pane with no mirror here is tracked by nobody; herdr still knows.
+  const phase = deps.turns.phaseOf(terminalId) ?? deps.turns.backendPhaseFor(terminalId)
   return phase === 'thinking' || phase === 'waiting'
 }
 
@@ -1328,8 +1334,13 @@ function loginDoorFor(deps: SocketServerDeps): LoginDoor {
     account: () => deps.account?.() ?? null,
     ownerPane: (request) => loginPaneOf(request, deps),
     agentBusy: (terminalId) => agentMidTurn(terminalId, deps),
-    // No session in this process means the keys do not pass through it either.
-    seal: (terminalId) => deps.ptys.get(terminalId)?.sealInput() ?? (() => undefined),
+    driven: (terminalId) => paneInputs.driven(terminalId),
+    // By id, so it holds whether or not a session here is mirroring the pane.
+    seal: (terminalId) => {
+      const release = paneInputs.seal(terminalId)
+      deps.turns.dropDraft(terminalId)
+      return release
+    },
     audit: (event) => deps.auditLogin?.(event)
   })
 }
@@ -1540,6 +1551,8 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
     return node
   })
   deps.spawnTerminal(added)
+  // A command chosen by the caller runs with no keyboard anywhere near it.
+  if (request.flags.command) paneInputs.noteDriven(added.id)
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
 
@@ -2081,10 +2094,10 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
                                                 (its children inherit it; nothing is printed — the better of the two paths)
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
+                                                (owner panes only; every read is logged)
   cookrew login [username]                      Sign this machine in, in an owner pane: hidden password, then the second factor
   cookrew logout                                Take this machine off the account, in an owner pane
   cookrew whoami                                The account and device this machine is signed in as
-                                                (owner panes only; every read is logged)
   cookrew browser create URL ["Name"] [--workspace <name>] [--new]
                                                 Create a browser card in YOUR workspace
   cookrew browser snapshot|click|fill|type|key|navigate|screenshot|evaluate|html|text|info "Browser" ...

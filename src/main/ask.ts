@@ -1,3 +1,4 @@
+import { paneInputs, SEALED_REFUSAL } from './pane-input'
 import { feedPromptBuffer } from '../shared/turn'
 import { multiplexer, type PtySession } from './pty'
 import type { Multiplexer } from './multiplexer'
@@ -168,6 +169,8 @@ export async function askTerminal(
   prompt: string,
   options: AskOptions = {}
 ): Promise<string> {
+  // Ahead of every backend: the native path below never reaches ownerSubmit.
+  if (!paneInputs.drive(session.terminalId)) throw new Error(SEALED_REFUSAL)
   const quiescenceMs = options.quiescenceMs ?? 2500
   const timeoutMs = options.timeoutMs ?? 10 * 60 * 1000
   const graceMs = options.graceMs ?? 1500
@@ -567,6 +570,12 @@ export interface OwnerSubmitOptions {
   /** Injectable for tests; production shares the process-wide default. */
   lease?: ProducerLease
   /**
+   * These bytes are a person's keys, on the phone's raw keyboard route. Absent
+   * means not a keyboard, so a new caller fails closed (pane-input.ts): it
+   * cannot answer a hidden prompt, and it marks the pane as driven.
+   */
+  keyboard?: boolean
+  /**
    * The owning ask's cancellation scope (Sol r11 P1): consulted before each
    * delivery write, so a shutdown/retirement abort inside the paste delay
    * stops the CR exactly as a lost lease does.
@@ -610,6 +619,8 @@ export async function ownerSubmit(
 ): Promise<OwnerSubmitResult> {
   const lease = options.lease ?? defaultProducerLease()
   const terminalId = session.terminalId
+  if (options.keyboard === true) paneInputs.noteKeyboard(terminalId)
+  else if (!paneInputs.drive(terminalId)) return { ok: false, reason: SEALED_REFUSAL }
   const trace = session.hostBacked === false && process.env.COOKREW_TRACE_OWNER_SUBMIT === '1'
     ? (phase: string): void => console.error(`[owner-submit] terminal=${terminalId} phase=${phase}`)
     : undefined

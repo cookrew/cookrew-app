@@ -99,6 +99,16 @@ describe('the account tables, on a machine that is not a Mac', () => {
     expect(JSON.stringify(store.ACCOUNT_COPY)).not.toMatch(/\bMac\b/)
   })
 
+  it('leaves no Mac in the failure sentences or the refusals', async () => {
+    ;(globalThis as { cookrewPlatform?: unknown }).cookrewPlatform = 'linux'
+    vi.resetModules()
+    const { DOING } = await import('../src/renderer/src/account/problem')
+    const { refusalSentence } = await import('../src/renderer/src/account/account-store')
+    expect(JSON.stringify(DOING)).not.toMatch(/\bMac\b/)
+    expect(refusalSentence('no_account')).toBe('There is no account on this machine yet.')
+    expect(refusalSentence('bad_device')).toContain('does not know this machine')
+  })
+
   it('keeps a device name whole when it is filled in on Linux', async () => {
     const { copy } = await load('linux')
     expect(copy.accountCopy('d14.moved', { door: 'alpha', device: 'Mac Studio' })).toBe(
