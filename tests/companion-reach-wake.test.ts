@@ -51,16 +51,25 @@ const stubPhone = () => {
     clearTimeout: () => undefined
   }
   Object.assign(globalThis, { EventSource: FakeEventSource })
-  ;(globalThis as unknown as { fetch: unknown }).fetch = async (): Promise<never> => {
+  // On the relay a stream goes by fetch, so its bearer can ride a header.
+  let live: ReadableStreamDefaultController<Uint8Array> | null = null
+  ;(globalThis as unknown as { fetch: unknown }).fetch = async (url: string): Promise<Response> => {
+    if (String(url).includes('/api/events')) {
+      return new Response(new ReadableStream({ start: (controller) => void (live = controller) }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      })
+    }
     fetched += 1
     throw new Error('unreachable')
   }
   return {
     fetched: () => fetched,
     push: (type: string, data: unknown) => {
+      live?.enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`))
       for (const stream of streams) for (const listener of stream.get(type) ?? []) listener({ data: JSON.stringify(data) })
     },
-    listening: (type: string) => streams.some((stream) => (stream.get(type)?.size ?? 0) > 0)
+    listening: () => live !== null
   }
 }
 
@@ -81,7 +90,7 @@ describe('a reach push from the Mac', () => {
     const companion = await import('../src/renderer/src/path/companion')
     const stop = companion.startCompanionPathSwitch()
     await settle()
-    expect(phone.listening('reach')).toBe(true)
+    expect(phone.listening()).toBe(true)
     const before = phone.fetched()
     expect(before).toBeGreaterThan(0)
 

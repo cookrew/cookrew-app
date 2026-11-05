@@ -938,7 +938,7 @@ export async function handleMobileApi(
   // event stream, up as POSTs — the two things the relay carries.
   if (deps.socketBridge && p === SOCKET_BRIDGE_PATH && method === "GET") {
     const target = url.searchParams.get("path") ?? "";
-    if (!deps.socketBridge.open(target, response))
+    if (!deps.socketBridge.open(target, response, presentedToken(request, url)))
       respondJson(response, bridgeablePath(target) ? 503 : 400, { error: "that socket cannot be bridged now" });
     return true;
   }

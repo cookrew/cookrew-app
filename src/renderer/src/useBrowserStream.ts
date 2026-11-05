@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cookrew, hasNativeWebview, isRemoteMode } from './api'
 import { apiPath } from './api-base'
-import { tokenParam } from './auth-gate'
 import { useDataPlaneRoute } from './use-data-plane'
 import { openWebSocket } from './rtc-plane'
 import type { UseStatus } from '../../shared/use-signal'
@@ -559,12 +558,11 @@ export function useBrowserStream(
           const socket =
             client === 'desktop'
               ? new WebSocket(streamUrl(DESKTOP_STREAM_ORIGIN, browserId, w, h, desktopToken))
-              : // THE TOKEN RIDES THE URL, because `new WebSocket(...)` cannot
-                // set a header — the same constraint EventSource has, answered
-                // the same way. Without it the socket is an unauthenticated
-                // stream, and the desktop now refuses those (browser-cast.ts).
-                // On the direct link it rides a data channel (rtc-plane.ts).
-                openWebSocket(tokenParam(apiPath(streamPath(browserId, w, h, null))))
+              : // The credential is the opener's to add, because the plane
+                // decides how: a direct socket's query, a data channel, or the
+                // relay's header. Without one the desktop refuses the stream
+                // (browser-cast.ts).
+                openWebSocket(apiPath(streamPath(browserId, w, h, null)))
           line = socketLine(socket, handlers)
         }
       } catch {

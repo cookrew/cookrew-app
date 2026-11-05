@@ -1,7 +1,8 @@
 // A WEBSOCKET ON THE DIRECT LINK (round P2): the browser card's live view,
 // which the relay cannot carry. Pieces that join back into whole messages,
 // a WebSocket-shaped stand-in on a data channel, and the opener that picks it.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { bareWindow } from './support/memory-storage'
 import {
   createJoiner,
   RTC_SOCKET_PIECE,
@@ -151,8 +152,12 @@ describe('the opener', () => {
     }
     rtc.setRtcLink(link)
     plane.setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
-    const ws = rtc.openWebSocket('/api/browser/b1/stream?w=390&h=700&token=t')
+    // The channel is the Mac's own line, so the opener adds the query it needs.
+    vi.stubGlobal('window', bareWindow())
+    ;(await import('../src/renderer/src/auth-gate')).authStore().save('t')
+    const ws = rtc.openWebSocket('/api/browser/b1/stream?w=390&h=700')
     expect(ws).toBeInstanceOf(RtcWebSocket)
     expect(asked).toEqual(['/api/browser/b1/stream?w=390&h=700&token=t'])
+    vi.unstubAllGlobals()
   })
 })

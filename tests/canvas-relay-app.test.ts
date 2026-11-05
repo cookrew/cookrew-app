@@ -245,7 +245,7 @@ describe('the app half, holding a real line', () => {
     // the root; forwarded as it stands that sent the phone to cookrew.dev's
     // home page with a credential in the address bar, and the canvas was never
     // reached (found on the live site, 2026-09-06).
-    expect(answer.headers.get('location')).toBe(`${prefix()}/?token=the-pairing-token`)
+    expect(answer.headers.get('location')).toBe(`${prefix()}/#pair=the-pairing-token`)
     // The desktop said Path=/ and no Domain; the registry re-pins it under the
     // relay prefix, so nothing it sets can ever reach cookrew.dev's own routes.
     const cookies = answer.headers.getSetCookie()

@@ -660,7 +660,7 @@ describe('a phone of the account, reaching its own canvas', () => {
       { headers: asPhone(), redirect: 'manual' }
     )
     expect(res.status).toBe(303)
-    expect(res.headers.get('location')).toBe(`${prefix()}/?token=abc`)
+    expect(res.headers.get('location')).toBe(`${prefix()}/#pair=abc`)
   })
 
   it('moves a redirect the Mac wrote to its OWN origin under the prefix too', async () => {
@@ -1102,7 +1102,10 @@ describe('the header and cookie rules, by themselves', () => {
 
   it('rewrites a Location by where it points, and only then', () => {
     const at = { prefix: '/relay/@u/desktop/d', path: '/?open=x', host: 'cookrew.dev' }
-    expect(rewriteLocation('/?token=abc', at)).toBe('/relay/@u/desktop/d/?token=abc')
+    // A redirect the browser would follow is a URL the ingress would log, so the
+    // credential moves to the fragment, which no request ever carries.
+    expect(rewriteLocation('/?token=abc', at)).toBe('/relay/@u/desktop/d/#pair=abc')
+    expect(rewriteLocation('/board?token=abc&x=1', at)).toBe('/relay/@u/desktop/d/board?x=1#pair=abc')
     expect(rewriteLocation('https://127.0.0.1:8639/board', at)).toBe('/relay/@u/desktop/d/board')
     expect(rewriteLocation('https://192.168.1.24:8643/x#y', at)).toBe('/relay/@u/desktop/d/x#y')
     // Ours: left exactly as written, whatever the scheme in front of it.

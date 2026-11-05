@@ -8,7 +8,11 @@ import type { AddressInfo } from 'node:net'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Accounts, writeAccount } from '../src/main/account-v2'
+import { Accounts, DEFAULT_LOCK_AFTER_MS, writeAccount } from '../src/main/account-v2'
+import { accountHandlers, type AccountIpcDeps } from '../src/main/account-ipc'
+import { Factors } from '../src/main/factors'
+import { Requests } from '../src/main/requests'
+import { IdleLock } from '../src/main/lock'
 import { DeleteAccountRow } from '../src/renderer/src/account/DeleteAccountRow'
 import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES } from '../src/shared/account-delete'
 import { fakeAccount, tempBase } from './support/idv2'
@@ -123,6 +127,47 @@ describe('the password prompt on a Mac that missed the delete', () => {
     answer = { status: 410, body: '{}' }
     expect(await accounts.forgetIfDeleted()).toBe(false)
     expect(existsSync(path.join(base, 'account.json'))).toBe(true)
+  })
+})
+
+describe('the handlers on a Mac that missed the delete', () => {
+  const gone = { status: 410, body: '{}' }
+  const refused = { status: 401, body: JSON.stringify({ error: 'bad_credentials' }) }
+
+  const wired = (accounts: Accounts): { handlers: ReturnType<typeof accountHandlers>; left: () => number } => {
+    let left = 0
+    const deps: AccountIpcDeps = {
+      accounts,
+      lock: new IdleLock({ lockAfterMs: DEFAULT_LOCK_AFTER_MS, verify: () => false }),
+      requests: new Requests({ accounts, notify: () => undefined }),
+      factors: new Factors({ accounts, registry: origin }),
+      envUsername: null,
+      workspaces: () => [],
+      saveCodes: () => Promise.resolve({ ok: false, reason: 'no_window' }),
+      signedOut: () => void (left += 1)
+    }
+    return { handlers: accountHandlers(deps), left: () => left }
+  }
+
+  it('a refused password winds the Mac down as a sign-out does, doors included', async () => {
+    const { base, accounts } = signedInMac()
+    routes = { 'POST /v2/sessions': refused, 'GET /v2/accounts/drej': gone }
+    const { handlers, left } = wired(accounts)
+    const answer = (await handlers['account:resume'](PASSWORD)) as { ok: boolean; value?: { username: unknown } }
+    expect(answer.ok).toBe(true)
+    expect(answer.value?.username ?? null).toBeNull()
+    expect(left()).toBe(1)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(false)
+  })
+
+  it('an account with no password learns it from the provider button, before any browser opens', async () => {
+    const { base, accounts } = signedInMac()
+    routes = { 'GET /v2/accounts/drej': gone }
+    const { handlers, left } = wired(accounts)
+    const answer = (await handlers['account:oauthStart']('github')) as { ok: boolean }
+    expect(answer.ok).toBe(true)
+    expect(left()).toBe(1)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(false)
   })
 })
 
