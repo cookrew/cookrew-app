@@ -4,7 +4,7 @@
 // them 0 in 5. An Enter inside the burst is taken for part of a paste.
 import { describe, expect, it } from 'vitest'
 import { submitDelayMs } from '../src/main/ask'
-import { createEnterPacing, createPacedInput } from '../src/main/enter-pacing'
+import { blockAsPaste, createEnterPacing, createPacedInput } from '../src/main/enter-pacing'
 
 const clock = (): { pace: ReturnType<typeof createEnterPacing>; waits: number[]; tick: (ms: number) => void } => {
   let now = 1000
@@ -167,5 +167,39 @@ describe('input with nothing to keep it in order', () => {
     expect(waits.length).toBe(2)
     await release()
     expect(wrote).toEqual(['t:one', 't:\r', 't:two', 't:\r'])
+  })
+})
+
+// Measured on a real agent, read back from its transcript (2026-11-05): raw
+// blocks of 900 characters arrived whole 4 of 4, of 1000 1 of 4, of 1500 2 of 4,
+// with the words cut and the attach dropped. Bracketed: 15 of 15, up to 6000.
+describe('a block of words for an agent', () => {
+  const OPEN = '\x1b[200~'
+  const CLOSE = '\x1b[201~'
+  it('goes as a paste once it is long', () => {
+    const words = 'x'.repeat(1500)
+    expect(blockAsPaste(words)).toBe(`${OPEN}${words}${CLOSE}`)
+  })
+  it('short words and a person\'s keys go as they are', () => {
+    for (const data of ['a', 'hello', 'x'.repeat(511), '\x7f', '\r', '\x1b[A']) expect(blockAsPaste(data)).toBe(data)
+  })
+  it('backspaces ahead of the words stay keys, and only the words are pasted', () => {
+    const words = 'x'.repeat(600)
+    expect(blockAsPaste(`\x7f\x7f${words}`)).toBe(`\x7f\x7f${OPEN}${words}${CLOSE}`)
+  })
+  it('lines and tabs are words too', () => {
+    const words = `one\ttwo\n${'x'.repeat(600)}`
+    expect(blockAsPaste(words)).toBe(`${OPEN}${words}${CLOSE}`)
+  })
+  it('counts bytes: 200 Chinese characters are 600 of them', () => {
+    const words = '中'.repeat(200)
+    expect(blockAsPaste(words)).toBe(`${OPEN}${words}${CLOSE}`)
+  })
+  it('a phone batch with a Backspace in it: the words after the last key are pasted', () => {
+    const words = 'x'.repeat(600)
+    expect(blockAsPaste(`ab\x7f${words}`)).toBe(`ab\x7f${OPEN}${words}${CLOSE}`)
+  })
+  it('never wraps what carries an Enter or a sequence of its own', () => {
+    for (const data of [`${'x'.repeat(600)}\r`, `\x1b[200~${'x'.repeat(600)}\x1b[201~`, `${'x'.repeat(600)}\x03`, `\r\x7f${'x'.repeat(600)}`]) expect(blockAsPaste(data)).toBe(data)
   })
 })
