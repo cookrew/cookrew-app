@@ -25,7 +25,7 @@ import { SESSION_TTL_MS } from './v2-tokens'
  * A retention figure with a constant in the registry is read from it, so
  * changing that limit changes the page. Everything else has to be re-read by
  * hand when its code moves: what the relay can read, that no delete route
- * exists, that preset files are ungated, and the app's own 30-day sweep.
+ * exists, what a preset's limit or price gates, and the app's own 30-day sweep.
  *
  * The three placeholders are filled here, once. Until then the renderer marks
  * them on the page.
@@ -83,7 +83,7 @@ export const PRIVACY: LegalDoc = {
             'There are no ads, no third-party analytics scripts and no tracking cookies here, and we do not sell personal data.',
             'Calls to a served team that travel over the relay are sealed end to end, so the relay cannot read them.',
             'One exception you should know about: reaching your own Mac through the relay is not end-to-end encrypted yet. See “What passes through the relay”.',
-            'Whatever you choose to publish, such as a team listing or a preset, is public.'
+            'Whatever you choose to publish, such as a team listing or a preset, is public, apart from the files of a preset you limit or price.'
           ]
         }
       ]
@@ -154,7 +154,7 @@ export const PRIVACY: LegalDoc = {
               [
                 'Published presets',
                 'The preset’s manifest and files: its card names, notes, roles, agent commands and prompts, and browser card URLs, with paths under your workdirs and home folder masked and a secret scan before publishing. Also an entry in a transparency log: the preset, its version, the author key, the publishing identity and the time.',
-                'Treat all of it as public. The log and the list of presets are public. An author can limit a preset to signed-in accounts or price it, but that gates only the manifest: anyone with a preset’s address can fetch its files, and the public list gives that address.'
+                'A free preset is public. The log and the list of presets are public for every preset, limited or priced included. An author can limit a preset to signed-in accounts or price it, and that gates both its manifest and its files. Anyone who gets a copy can pass it on, so a limit or a price does not keep anything secret.'
               ],
               [
                 'Preset sales',
@@ -506,7 +506,7 @@ export const TERMS: LegalDoc = {
           p: 'You keep ownership of what you publish: listings, presets and profile details. You give us a worldwide, royalty-free permission to store, copy, display and distribute it as needed to run the services, and to let others use a published preset.'
         },
         {
-          p: 'Published presets and the public log are permanent by design, and there is no unpublish. Treat everything in a preset as public, even one you limit or price: those settings gate its manifest and not its files. Check what you publish, and never publish secrets or anything you do not have the right to share. We may still take content out of public view where the law requires it or these terms are broken.'
+          p: 'Published presets and the public log are permanent by design, and there is no unpublish. A limit or a price decides who can download a preset, and anyone who downloads it can pass it on, so never rely on either to keep something secret. Check what you publish, and never publish secrets or anything you do not have the right to share. We may still take content out of public view where the law requires it or these terms are broken.'
         }
       ]
     },

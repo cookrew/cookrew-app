@@ -1,0 +1,159 @@
+{
+  "cards": [
+    {
+      "id": "asking",
+      "name": "Fresco",
+      "preset": "Codex",
+      "orch": true,
+      "workspace": {
+        "id": "ws",
+        "name": "Cookrew Dev",
+        "active": true
+      },
+      "status": "waiting",
+      "word": "needs you",
+      "words": {
+        "text": "Allow this edit?",
+        "tone": "waiting"
+      },
+      "about": "go",
+      "choice": {
+        "kind": "menu",
+        "question": "Allow this edit?",
+        "sub": "Edit · a.ts · +1 −1",
+        "options": [
+          {
+            "key": "1",
+            "label": "Yes",
+            "detail": null
+          },
+          {
+            "key": "2",
+            "label": "Yes, and allow all edits",
+            "detail": null
+          },
+          {
+            "key": "3",
+            "label": "No, tell Claude what to do differently",
+            "detail": null
+          }
+        ],
+        "cursor": 0,
+        "escIndex": 2,
+        "id": "menu\u0000Allow this edit?\u0000Edit · a.ts · +1 −1\u0000Yes\u0000Yes, and allow all edits\u0000No, tell Claude what to do differently"
+      },
+      "items": [],
+      "browsers": 0,
+      "notes": 0,
+      "at": 1799999999910
+    },
+    {
+      "id": "replied",
+      "name": "replied",
+      "preset": "Claude Code",
+      "orch": false,
+      "workspace": {
+        "id": "ws",
+        "name": "Cookrew Dev",
+        "active": true
+      },
+      "status": "done",
+      "word": "done",
+      "words": {
+        "text": "Merged.",
+        "tone": "done",
+        "full": "Merged.\n\nThe tests pass and the app restarted."
+      },
+      "about": "go",
+      "choice": null,
+      "items": [
+        {
+          "id": "b1",
+          "kind": "browser",
+          "title": "The report",
+          "host": "example.com/a",
+          "tint": "#6f8a5c",
+          "initial": "T"
+        },
+        {
+          "id": "n1",
+          "kind": "note",
+          "title": "plan",
+          "host": "note",
+          "tint": "#5d6b7a",
+          "initial": ""
+        }
+      ],
+      "browsers": 1,
+      "notes": 1,
+      "at": 1799999999970
+    },
+    {
+      "id": "working",
+      "name": "working",
+      "preset": "Claude Code",
+      "orch": false,
+      "workspace": {
+        "id": "ws",
+        "name": "Cookrew Dev",
+        "active": true
+      },
+      "status": "working",
+      "word": "working",
+      "words": {
+        "text": "Reading files",
+        "tone": "working"
+      },
+      "about": "go",
+      "choice": null,
+      "items": [],
+      "browsers": 0,
+      "notes": 0,
+      "at": 1799999999960
+    },
+    {
+      "id": "resting",
+      "name": "resting",
+      "preset": "Claude Code",
+      "orch": false,
+      "workspace": {
+        "id": "ws",
+        "name": "Cookrew Dev",
+        "active": true
+      },
+      "status": "idle",
+      "word": "resting",
+      "words": {
+        "text": "An earlier answer",
+        "tone": "done"
+      },
+      "about": "A title",
+      "choice": null,
+      "items": [],
+      "browsers": 0,
+      "notes": 0,
+      "at": 1799999999950
+    },
+    {
+      "id": "asleep",
+      "name": "asleep",
+      "preset": "Claude Code",
+      "orch": false,
+      "workspace": {
+        "id": "ws",
+        "name": "Cookrew Dev",
+        "active": true
+      },
+      "status": "offline",
+      "word": "offline",
+      "words": null,
+      "about": "about asleep",
+      "choice": null,
+      "items": [],
+      "browsers": 0,
+      "notes": 0,
+      "at": 1799999999990
+    }
+  ],
+  "activeWorkspaceId": "ws"
+}

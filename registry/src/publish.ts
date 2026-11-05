@@ -30,6 +30,18 @@ export type PublishFailure =
    * instead of on a buyer who cannot fix it and has done nothing wrong.
    */
   | 'payout_missing'
+  /**
+   * Another identity already published these exact bytes. A preset's id is the
+   * address of its team.json, so storing this would replace their listing, and
+   * anyone holding a bought copy could relist it as free.
+   */
+  | 'id_taken'
+  /**
+   * This registry has no facilitator, so a price here could never be paid.
+   * Refused before anything is stored or bound, for the same reason as above:
+   * the author can act on it now, and a buyer never could.
+   */
+  | 'payment_unavailable'
 
 export interface PublishInput {
   manifest: PresetManifest
@@ -112,6 +124,8 @@ export interface PublishDeps {
    * as if it were free.
    */
   payouts?: { addressOf: (identityId: string) => string | null; bind: (identityId: string, address: string) => boolean }
+  /** Can this deployment verify a payment? Absent is no: a price then stops here. */
+  sells?: boolean
 }
 
 export function publishPreset(deps: PublishDeps, input: PublishInput): PublishResult {
@@ -137,6 +151,15 @@ export function publishPreset(deps: PublishDeps, input: PublishInput): PublishRe
   const payload = countersignPayload('publish', manifest.author.keyId, manifest.id)
   if (!deps.verifyCountersign('publish', input.identityId, payload, input.countersig)) {
     return { ok: false, reason: 'countersign_missing' }
+  }
+
+  const holder = deps.store.identityOf(manifest.id)
+  if (holder !== null && holder !== input.identityId) return { ok: false, reason: 'id_taken' }
+
+  // A price nobody here can verify a payment against is refused before the
+  // payout below is bound, so a refused publish leaves nothing behind.
+  if (manifest.pricing !== undefined && deps.sells !== true) {
+    return { ok: false, reason: 'payment_unavailable' }
   }
 
   // M2-A1: A PRICE NEEDS A PAYEE, and the check belongs here.

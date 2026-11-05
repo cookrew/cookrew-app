@@ -8,7 +8,7 @@ import { priceFor, quoteFrom, type QuoteDeps } from './terms'
 import type { PayoutStore } from './payouts'
 import type { Facilitator } from './facilitator'
 import { needsFreshQuote, isRetryable, parsePaymentProof, verifyPayment } from './payment'
-import { balanceOf, entitledTo, type ReceiptStore } from './receipts'
+import { balanceOf, entitledTo, type Receipt, type ReceiptStore } from './receipts'
 
 /**
  * THE DOWNLOAD BINDING (P2-A2) — the registry's half of the one gate.
@@ -49,12 +49,17 @@ export interface PricingDeps extends QuoteDeps {
   /** M2-A3: what this buyer already owns. Read ABOVE the price step. */
   receipts: ReceiptStore
   /**
-   * M2-A2. Required alongside pricing, so "priced implies payable" holds by
-   * construction: a deployment that could quote a price but never verify a
-   * payment would sell things nobody could buy.
+   * M2-A2. Required alongside pricing, and null is a value it can hold: no
+   * real facilitator is configured (facilitator-boot.ts). The price step then
+   * answers 503 and never quotes. The buyer pays the author directly, so terms
+   * from a registry that cannot verify the transfer would invite money nobody
+   * could ever credit.
    */
-  facilitator: Facilitator
+  facilitator: Facilitator | null
 }
+
+/** A price exists and nothing here can check a payment. Same word the door uses. */
+export const PAYMENT_UNAVAILABLE: Verdict = { code: 503, reason: 'payment_unavailable' }
 
 export function makeAuthorize(
   store: RegistryStore,
@@ -64,7 +69,7 @@ export function makeAuthorize(
   return (presetId, request) => {
     // exists? → public? → identity? → covers? → entitled?, once, shared.
     const verdict = decideGate<TokenClaims>({
-      visibility: store.visibilityOf(presetId),
+      visibility: store.gateOf(presetId),
       credential: bearer(request),
       issuer: identity,
       // D4 / R9: authenticated but the token does not cover this. 403, NEVER
@@ -118,7 +123,13 @@ export function makeAuthorize(
     // OPTIONS, POST and to a request whose method was unset: an exclusion list
     // makes every method somebody adds later a purchase by default. The
     // allow-list makes the next one safe without anybody remembering this.
-    if (pricing !== undefined && request.method === 'GET') {
+    // HEAD is the one exception, stated positively for the same reason as the
+    // GET below: whatever method somebody adds next must be refused by default.
+    const facilitator = pricing?.facilitator ?? null
+    if (request.method !== 'HEAD' && facilitator === null && store.getManifest(presetId)?.pricing !== undefined) {
+      return PAYMENT_UNAVAILABLE
+    }
+    if (pricing !== undefined && facilitator !== null && request.method === 'GET') {
       const manifest = store.getManifest(presetId)
       // PRICE FACTS FIRST, and a nonce only when one is actually being offered.
       // Quoting unconditionally minted an offer nobody would use on every
@@ -143,7 +154,7 @@ export function makeAuthorize(
         const paid = verifyPayment(
           {
             nonces: pricing.nonces,
-            facilitator: pricing.facilitator,
+            facilitator,
             purchased: pricing.receipts,
             now: pricing.now
           },
@@ -181,7 +192,8 @@ export function makeAuthorize(
               tx: held.tx,
               amount: price.amount,
               asset: price.asset,
-              at: pricing.now()
+              at: pricing.now(),
+              ...(facilitator.standIn === true ? {} : { verified: true as const })
             })
           }
         }
@@ -232,8 +244,16 @@ function entitlementOf(
   if (manifest?.pricing === undefined) return null
   const lineage = store.lineageFor(presetId)
   if (lineage === null) return null
-  const held = pricing.receipts.forLineage(identityId, lineage)
-  return entitledTo(held, { version: manifest.version, pricing: manifest.pricing })
+  return entitledTo(honoured(pricing, identityId, lineage), { version: manifest.version, pricing: manifest.pricing })
+}
+
+/**
+ * The receipts that count. Only a stand-in registry honours one nobody verified;
+ * everywhere else that is a made-up tx the old wiring settled, not a purchase.
+ */
+function honoured(pricing: PricingDeps, identityId: string, lineage: string): Receipt[] {
+  const standIn = pricing.facilitator?.standIn === true
+  return pricing.receipts.forLineage(identityId, lineage).filter((r) => standIn || r.verified === true)
 }
 
 /**
@@ -254,7 +274,7 @@ export function balanceFor(
   const manifest = store.getManifest(presetId)
   const lineage = store.lineageFor(presetId)
   if (manifest?.pricing === undefined || lineage === null) return null
-  return balanceOf(pricing.receipts.forLineage(identityId, lineage), {
+  return balanceOf(honoured(pricing, identityId, lineage), {
     pricing: manifest.pricing,
     spentCents
   })

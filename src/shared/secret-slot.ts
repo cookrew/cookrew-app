@@ -75,9 +75,48 @@ export const afterSeal = (
   listing: new Map(listing).set(sealed.name, sealed)
 })
 
-/** The listing once the store has forgotten a name: a new map, this row gone. */
-export const afterRemove = (name: string, listing: ReadonlyMap<string, SecretListing>): ReadonlyMap<string, SecretListing> => {
-  const next = new Map(listing)
-  next.delete(name)
-  return next
+/** A body's words, the slot lines taken out: the vault table draws those (nodes/SecretVault.tsx). */
+export const withoutSlotLines = (content: string): string =>
+  content
+    .split('\n')
+    .filter((line) => secretSlotOf(line) === null)
+    .join('\n')
+    .trim()
+
+/**
+ * A secret note's body with new words: the words, then every slot it had. The
+ * editor holds only the words, so typing can never run into a slot line and
+ * turn it into text, which would lose the row and hide its value from the
+ * close dialog. A slot line typed among the words is taken as a slot.
+ */
+export const withWords = (content: string, words: string): string => {
+  const names = [...new Set([...secretSlotsOf(content), ...secretSlotsOf(words)])]
+  return `${[withoutSlotLines(words), names.map(secretSlotLine).join('\n')].filter((part) => part.length > 0).join('\n\n')}\n`
+}
+
+/** A body with one more slot, on a line of its own. */
+export const withSlotLine = (content: string, name: string): string =>
+  `${content.length === 0 || content.endsWith('\n') ? content : `${content}\n`}${secretSlotLine(name)}\n`
+
+/**
+ * WHAT THE VAULT'S NEW ROW WOULD DO. `sealed` is every name the store holds and
+ * `held` the slots of this note. A name already sealed may be used, never
+ * overwritten: replacing a value is that row's own act, where the owner can see
+ * it is sealed, and a typed name must not do it by accident.
+ */
+export const vaultAdd = (input: {
+  raw: string
+  value: string
+  sealed: readonly string[]
+  held: readonly string[]
+}): { readonly name: string | null; readonly ok: boolean; readonly hint: string } => {
+  const name = secretNameFrom(input.raw)
+  if (name === null) return { name: null, ok: false, hint: 'letters, digits and dashes' }
+  if (input.held.includes(name)) return { name, ok: false, hint: `${name} is already in this note` }
+  if (input.sealed.includes(name)) {
+    return input.value.length > 0
+      ? { name, ok: false, hint: `${name} is already sealed: leave the value empty to use it` }
+      : { name, ok: true, hint: `uses the sealed ${name}` }
+  }
+  return { name, ok: true, hint: input.value.length > 0 ? `agents read it as ${name}` : `agents read it as ${name} · fill it in later` }
 }

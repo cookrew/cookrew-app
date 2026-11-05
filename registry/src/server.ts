@@ -51,6 +51,8 @@ export type Verdict =
   | { code: 402; terms: Terms; reason?: PaymentFailure; retryable?: boolean }
   | { code: 403; reason: string }
   | { code: 404 }
+  /** A price exists and this deployment cannot check a payment: no terms, ever. */
+  | { code: 503; reason: 'payment_unavailable' }
 
 export interface RegistryDeps {
   store: RegistryStore
@@ -156,6 +158,7 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
   return (id) => {
     const visibility = store.visibilityOf(id)
     if (visibility === null) return { code: 404 }
+    if (store.getManifest(id)?.pricing !== undefined) return { code: 503, reason: 'payment_unavailable' }
     if (visibility === 'public') return { code: 200 }
     // A1 has no identity to offer. 403 rather than 401: a 401 invites a
     // ceremony the server cannot yet complete, and a client that loops on it
@@ -188,6 +191,9 @@ export function createRegistry(deps: RegistryDeps): Server {
     // priced manifest into a registry that sells nothing is refused rather
     // than quietly stored as if it were free.
     payouts: deps.pricing?.payouts,
+    // A price needs something that can verify the payment, or it is a price
+    // nobody can honestly pay.
+    sells: (deps.pricing?.facilitator ?? null) !== null,
     verifyManifest: (manifest: PresetManifest): boolean => {
       try {
         return verifyManifest(manifest, publicKeyFromId(manifest.author.keyId))
@@ -331,6 +337,34 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
   }
 
+  /**
+   * A gate refusal, on either resource it guards. 402 carries its terms and 403
+   * and 503 a reason, all machine values: per R14 nothing in a response body is
+   * a sentence, and Velvet's mkt.pay.* strings interpolate from the terms rather
+   * than reading anything written here. The 401 carries its challenge in the
+   * header the spec names, so a client reads one place for what to do next.
+   */
+  function answerRefusal(response: ServerResponse, verdict: Exclude<Verdict, { code: 200 }>): void {
+    const headers: Record<string, string> =
+      verdict.code === 401
+        ? { 'www-authenticate': `WebAuthn realm="market", challenge=${verdict.challenge}` }
+        : {}
+    const body =
+      verdict.code === 403 || verdict.code === 503
+        ? { reason: verdict.reason }
+        : verdict.code === 402
+          ? {
+              terms: verdict.terms,
+              // Absent on the first ask — not having paid yet is not a failure —
+              // and present only when a proof was refused.
+              ...(verdict.reason !== undefined
+                ? { reason: verdict.reason, retryable: verdict.retryable === true }
+                : {})
+            }
+          : {}
+    json(response, verdict.code, body, headers)
+  }
+
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
     try {
       route(request, response)
@@ -430,7 +464,7 @@ export function createRegistry(deps: RegistryDeps): Server {
               // newest version would be describing a different preset than the
               // one the link actually hands over.
               version: summary.version,
-              gated: summary.visibility === 'identified',
+              gated: store.gateOf(summary.id) === 'identified',
               origin: originOf(request.headers.host),
               id: summary.id
             })
@@ -578,30 +612,7 @@ export function createRegistry(deps: RegistryDeps): Server {
       }
       const verdict = authorize(id, request)
       if (verdict.code !== 200) {
-        // The 401 carries its challenge in the header the spec names, so a
-        // client reads one place for "what do I do next" (spec §2).
-        const headers: Record<string, string> =
-          verdict.code === 401
-            ? { 'www-authenticate': `WebAuthn realm="market", challenge=${verdict.challenge}` }
-            : {}
-        // 402 carries its terms, 403 its reason. Both are machine values: per
-        // R14 nothing in a response body is a sentence, and Velvet's
-        // mkt.pay.* strings interpolate from the terms rather than reading
-        // anything we wrote here.
-        const body =
-          verdict.code === 403
-            ? { reason: verdict.reason }
-            : verdict.code === 402
-              ? {
-                  terms: verdict.terms,
-                  // Absent on the first ask — not having paid yet is not a
-                  // failure — and present only when a proof was refused.
-                  ...(verdict.reason !== undefined
-                    ? { reason: verdict.reason, retryable: verdict.retryable === true }
-                    : {})
-                }
-              : {}
-        json(response, verdict.code, body, headers)
+        answerRefusal(response, verdict)
         return
       }
       const manifest = store.getManifest(id)
@@ -624,18 +635,35 @@ export function createRegistry(deps: RegistryDeps): Server {
 
     // GET /v1/blobs/:address
     if (method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'blobs') {
-      const bytes = store.getBlob(decodeURIComponent(parts[2]))
+      const address = decodeURIComponent(parts[2])
+      if (!isAddress(address)) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      // THE SAME GATE AS THE MANIFEST, on the same id: a preset's id is the
+      // address of its team.json, and publish stores no other file, so the blob
+      // at this address belongs to exactly the preset of this id. Asking by id
+      // rather than by what a manifest lists is the point: `blobs` is whatever
+      // its author wrote, so a free manifest naming someone's priced address
+      // must not open it. Bytes no manifest stands behind answer 404 here.
+      const verdict = authorize(address, request)
+      if (verdict.code !== 200 && verdict.code !== 404) {
+        answerRefusal(response, verdict)
+        return
+      }
+      const bytes = verdict.code === 404 ? null : store.getBlob(address)
       if (bytes === null) {
         json(response, 404, { error: 'not_found' })
         return
       }
-      // Immutable by construction: the address IS the content, so a cached copy
-      // can never be stale. Ungated on purpose — the bytes are inert without
-      // the manifest that names them, and the manifest is the gate.
+      // Immutable by construction, so a free file may be cached by anyone. A
+      // gated one must not be: a shared cache would hand it to the next caller
+      // without ever asking the gate.
+      const open = store.gateOf(address) === 'public'
       response.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'content-length': String(bytes.byteLength),
-        'cache-control': 'public, max-age=31536000, immutable'
+        ...(open ? { 'cache-control': 'public, max-age=31536000, immutable' } : PRIVATE)
       })
       response.end(bytes)
       return
@@ -773,11 +801,13 @@ export function createRegistry(deps: RegistryDeps): Server {
         ],
         // M2-A1. Advertised so a harness knows the gate can answer 402 without
         // discovering it from a preset that happens to be priced.
-        payments: deps.pricing === undefined
-          ? { served: false, note: 'this deployment prices nothing; the gate answers 200/401/403 only' }
+        payments: (deps.pricing?.facilitator ?? null) === null || deps.pricing === undefined
+          ? { served: false, note: 'no facilitator is configured; a priced preset answers 503 payment_unavailable' }
           : {
               served: true,
               on: 'GET /v1/presets/:id/manifest',
+              // The file behind a manifest answers to the same gate, 402 included.
+              sameGate: 'GET /v1/blobs/:address',
               asset: 'USDC',
               chain: deps.pricing.config.chain,
               termsTtlMs: deps.pricing.config.ttlMs,
