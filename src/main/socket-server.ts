@@ -1283,8 +1283,7 @@ export function ownerPaneOf(
   request: CliRequest,
   deps: SocketServerDeps,
   refuse: (why: string) => Error = (why) =>
-    new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused),
-  servedWhy = 'never readable from a served session'
+    new SecretCliError(`refused: secrets are the owner's — ${why}`, SECRET_EXIT.refused)
 ): TerminalNodeData {
   if (typeof request.flags.as === 'string') throw refuse('--as names another pane')
   if (!request.terminalId) throw refuse('this shell is not a Cookrew terminal')
@@ -1296,17 +1295,17 @@ export function ownerPaneOf(
   const id = identity.terminalId
   const node = deps.store.node(id) ?? deps.store.nodeAcrossWorkspaces?.(id)?.node
   if (!node || node.kind !== 'terminal') throw refuse('no live pane of this app answers to this terminal')
-  if (deps.isServed(id)) throw refuse(servedWhy)
+  if (deps.isServed(id)) throw refuse('never readable from a served session')
   return node
 }
 
 /** The caller of `cookrew login`: the rule `cookrew secret` keeps, in its own words. */
 function loginPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  // Nothing is read here, so the rule's own "never readable from" loses a word.
   const refuse = (why: string): LoginRefused =>
-    new LoginRefused(`refused: signing in is the owner's — ${why}`, LOGIN_EXIT.refused)
-  const served = 'never from a served session'
-  const pane = ownerPaneOf(request, deps, refuse, served)
-  if (isServedPane(pane)) throw refuse(served)
+    new LoginRefused(`refused: signing in is the owner's — ${why.replace('readable ', '')}`, LOGIN_EXIT.refused)
+  const pane = ownerPaneOf(request, deps, refuse)
+  if (isServedPane(pane)) throw refuse('never from a served session')
   return pane
 }
 
