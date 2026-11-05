@@ -583,6 +583,11 @@
       try {
         const res = await fetch(`/v2/accounts/${encodeURIComponent(name)}`, { method: 'HEAD' })
         if (mine !== checking) return
+        if (res.status === 410) {
+          chip('acct-username-note', 'unavailable', 'no')
+          note(`@${name} cannot be used. Choose another name.`)
+          return
+        }
         chip('acct-username-note', res.status === 200 ? 'taken' : 'free', res.status === 200 ? 'no' : 'ok')
         note(res.status === 200 ? `@${name} is someone else’s. Try another.` : 'Yours to take.')
       } catch {

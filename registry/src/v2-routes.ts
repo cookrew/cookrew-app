@@ -207,7 +207,13 @@ function lookUpAccount(ctx: V2Context, username: string): void {
   if (ctx.method === 'HEAD') {
     // Taken covers a name a v1 key holds with no account behind it yet: the
     // sheet must never call it free, whatever it goes on to say about it.
-    const free = profile === null && !legacyHolds(ctx, username) && !ctx.v2.accounts.isRetired(username)
+    // A deleted name is not taken: it is nobody's, for good, and no sign-in reaches
+    // it. The GET below says the same, so this tells a caller nothing new.
+    if (ctx.v2.accounts.isRetired(username)) {
+      head(ctx.response, 410)
+      return
+    }
+    const free = profile === null && !legacyHolds(ctx, username)
     head(ctx.response, free ? 404 : 200)
     return
   }

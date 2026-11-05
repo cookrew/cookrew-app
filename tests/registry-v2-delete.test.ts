@@ -300,7 +300,7 @@ describe('what a delete leaves', () => {
     await remove(owner.token, { current: PASSWORD }, 'drej')
     const again = await call('POST', '/v2/accounts', { username: 'drej', password: PASSWORD, device: device() })
     expect(again.status).toBe(409)
-    expect((await call('HEAD', '/v2/accounts/drej')).status).toBe(200)
+    expect((await call('HEAD', '/v2/accounts/drej')).status).toBe(410)
     expect(new V2Accounts(dir).isRetired('drej')).toBe(true)
   })
 })

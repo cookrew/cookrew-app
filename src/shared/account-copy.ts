@@ -50,6 +50,11 @@ export const V3_COPY = machineTable({
    */
   'd9.crossing.taken': '@{handle} already exists — sign in with your password.',
   /**
+   * D9, a deleted name on CREATE. Unlike a taken one there is nobody to sign in
+   * as, so it hands over no door: it only asks for another name.
+   */
+  'd9.crossing.retired': '@{handle} cannot be used. Choose another name.',
+  /**
    * D9, the label on the way out of a taken name (V3-UI1 · F2).
    *
    * A real-interface pass found CREATE showing "@magpie already exists — sign

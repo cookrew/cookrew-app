@@ -485,6 +485,8 @@ function usernameField(raw: string, check: ClaimFields['check']): FieldView {
       return { tone: 'good', tag: 'free ✓', note: ACCOUNT_COPY.USERNAME_FREE }
     case 'taken':
       return { tone: 'bad', tag: 'taken', note: takenSentence(username) }
+    case 'retired':
+      return { tone: 'bad', tag: 'unavailable', note: accountCopy('d9.crossing.retired', { handle: normaliseUsername(username) }) }
     case 'unknown':
       // NEVER OPTIMISTIC. The primary stays down, and the reason is the
       // registry's, not the person's.

@@ -1,4 +1,5 @@
 import { MIN_PASSCODE, usernameProblem, type AccountRefusal, type AccountStatus, type UsernameCheck } from '../../../shared/account-v2'
+import { accountCopy } from '../../../shared/account-copy'
 import { hostPlatform, machineCopy, machineTable } from '../../../shared/machine-words'
 import { PROVIDER_LABEL, type ProviderId, type ProviderOffer } from '../../../shared/oauth'
 import { accountProblemHint, type FieldTone } from './provider-words'
@@ -68,6 +69,7 @@ export function handleView(
     return { canGo: false, note: 'Lowercase letters, digits and dashes, up to 32 of them.', tone: 'bad' }
   }
   if (check === 'taken') return { canGo: false, note: `@${value} is taken. Pick another name.`, tone: 'bad' }
+  if (check === 'retired') return { canGo: false, note: accountCopy('d9.crossing.retired', { handle: value }), tone: 'bad' }
   if (check === 'free') return { canGo: true, note: `@${value} is free.`, tone: 'good' }
   if (check === 'unknown') return { canGo: true, note: 'cookrew.dev did not say. It will decide when you press.', tone: 'dim' }
   return { canGo: false, note: 'Checking…', tone: 'dim' }

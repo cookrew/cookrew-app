@@ -788,6 +788,7 @@ export class Accounts {
       )
       if (response.status === 200) return 'taken'
       if (response.status === 404) return 'free'
+      if (response.status === 410) return 'retired'
       return 'unknown'
     } catch {
       return 'unknown'
