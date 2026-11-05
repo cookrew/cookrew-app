@@ -226,6 +226,21 @@ const api = {
     ipcRenderer.invoke('account:grantSeat', input),
   accountEndSeat: (input: { slug: string; id: string }) =>
     ipcRenderer.invoke('account:endSeat', input),
+  // Third-party sign-in. The browser trip runs in main; nothing here carries a
+  // verifier, a handoff or a ticket.
+  accountOAuthProviders: () => ipcRenderer.invoke('account:oauthProviders'),
+  accountOAuthStart: (provider: string) => ipcRenderer.invoke('account:oauthStart', provider),
+  accountOAuthCancel: () => ipcRenderer.invoke('account:oauthCancel'),
+  accountOAuthClaim: (username: string) => ipcRenderer.invoke('account:oauthClaim', username),
+  accountOAuthLink: (input: { provider: string; current?: string }) =>
+    ipcRenderer.invoke('account:oauthLink', input),
+  accountOAuthUnlink: (input: { provider: string; current?: string }) =>
+    ipcRenderer.invoke('account:oauthUnlink', input),
+  accountSetPasscode: (input: { next: string; current?: string }) =>
+    ipcRenderer.invoke('account:setPasscode', input),
+  accountSetTouchId: (on: boolean) => ipcRenderer.invoke('account:setTouchId', on),
+  accountUnlockTouchId: () => ipcRenderer.invoke('account:unlockTouchId'),
+  accountRescueUnlock: (code: string) => ipcRenderer.invoke('account:rescueUnlock', code),
   /** Who is at this desktop's served doors right now (D7's avatars). */
   onServingCallers: (cb: (rows: unknown) => void) => {
     const listener = (_e: unknown, rows: unknown): void => cb(rows)

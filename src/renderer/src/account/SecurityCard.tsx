@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { LOCK_CHOICES } from '../../../shared/account-v2'
+import { LOCK_CHOICES, type AccountStatus } from '../../../shared/account-v2'
 import type { FactorsView } from '../../../shared/account-approvals'
 import { cookrew } from '../api'
 import {
@@ -12,6 +12,8 @@ import {
   type FactorRow,
 } from './account-store'
 import { FactorRows, RemoveFactorRow, Row } from './FactorRows'
+import { LinkedAccountRows } from './LinkRows'
+import { PROVIDER_COPY } from './provider-store'
 import { DOING, problemSentence, refusedSentence } from './problem'
 import { NewPasswordCard } from './NewPasswordCard'
 import { TotpSheet } from './TotpSheet'
@@ -60,6 +62,8 @@ export function SecurityCard({
   onLockAfterMs,
   onLockNow,
   onCodesSaved,
+  status = null,
+  onStatus = () => undefined,
 }: {
   username: string
   lockAfterMs: number
@@ -75,6 +79,9 @@ export function SecurityCard({
   onLockAfterMs: (ms: number) => void
   onLockNow: () => void
   onCodesSaved: () => void
+  /** The whole status, for the provider rows. Absent draws none of them. */
+  status?: AccountStatus | null
+  onStatus?: (next: AccountStatus) => void
 }): React.JSX.Element {
   const [codes, setCodes] = useState<readonly string[] | null>(null)
   const [factors, setFactors] = useState<FactorsView | null>(null)
@@ -212,7 +219,7 @@ export function SecurityCard({
    */
   const removeFactor = (): void => {
     const row = removing
-    if (row === null || current.length === 0 || busy) return
+    if (row === null || (current.length === 0 && status?.passwordless !== true) || busy) return
     const api = cookrew()
     const promise =
       row.factor === 'totp'
@@ -302,6 +309,7 @@ export function SecurityCard({
             row={removing}
             current={current}
             busy={busy}
+            passwordless={status?.passwordless === true}
             onCurrent={setCurrent}
             onConfirm={removeFactor}
             onCancel={() => {
@@ -310,6 +318,7 @@ export function SecurityCard({
             }}
           />
         )}
+        {status !== null && <LinkedAccountRows status={status} onStatus={onStatus} />}
         <Row
           kind="RESCUE"
           label="Save your recovery codes"
@@ -354,7 +363,9 @@ export function SecurityCard({
           {error ?? problem}
         </p>
       )}
-      <p className="gs-foot-note">{ACCOUNT_COPY.LOCK_NOW_WHY}</p>
+      <p className="gs-foot-note">
+        {status?.unlockBy === 'passcode' ? PROVIDER_COPY.LOCK_NOW_WHY : ACCOUNT_COPY.LOCK_NOW_WHY}
+      </p>
       <p className="gs-foot-note">{ACCOUNT_COPY.SECURITY_WHY}</p>
       {totp && (
         <TotpSheet

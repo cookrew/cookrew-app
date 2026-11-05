@@ -15,20 +15,26 @@ import path from 'node:path'
 import { registryOrigin } from './registry-origin'
 import {
   DEFAULT_LOCK_AFTER_MS,
+  MIN_PASSCODE,
   MIN_PASSWORD,
   RESERVED_PREFIXES,
   normaliseUsername,
   usernameProblem,
   type AccountDevice,
+  type AccountDeviceInput,
   type AccountProfile,
   type AccountRefusal,
   type AccountResult,
   type ApprovalAsked,
+  type ProviderSignInAnswer,
   type SignInAnswer,
   type UsernameCheck,
 } from '../shared/account-v2'
+import type { ProviderId, ProviderOffer } from '../shared/oauth'
+import type { StepUpAct } from '../shared/step-up'
 import {
   LadderPasswords,
+  NO_PASSWORD,
   askForApproval,
   climbTyped,
   stepFrom,
@@ -38,6 +44,7 @@ import {
 } from './account-ladder'
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { machineCopy } from '../shared/machine-words'
+import { ProviderAccess, type DeviceCode, type TripProof } from './account-oauth'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
@@ -131,6 +138,17 @@ export interface AccountFile {
    * lock has nothing to check against and says so (`passwordPending`).
    */
   unlock: UnlockVerifier | null
+  /**
+   * WHAT `unlock` IS A VERIFIER OF. Absent means the password, as every file
+   * written before this field means it. 'passcode' is a secret that exists on
+   * this Mac alone: it is never sent to cookrew.dev, and `unlock: null` here
+   * means "not chosen yet" rather than "ask the registry".
+   */
+  unlockBy?: 'passcode'
+  /** The account has no password at all: every step-up goes to the provider. */
+  passwordless?: boolean
+  /** Opted in on a passcode Mac. */
+  touchId?: boolean
   lockAfterMs: number
   claimedAt: number
   /** May cookrew.dev offer this Mac's workspaces to the account's phones? */
@@ -351,6 +369,13 @@ export interface AccountsDeps {
    * record carries neither field, exactly as before.
    */
   machine?: () => Promise<{ profile: MachineProfile; appVersion: string | null } | null>
+  /**
+   * The system browser, for a provider's login page. Injected because this
+   * layer holds no Electron; absent means a provider sign-in cannot start.
+   */
+  openBrowser?: (url: string) => Promise<void> | void
+  /** Will the OS bring `cookrew://` back to this process? Absent means yes. */
+  schemeHandled?: () => boolean
 }
 
 /** The session a 201 carries — `{token, exp}` at the top of the body — or null when it does not. */
@@ -405,6 +430,7 @@ export class Accounts {
    */
   private readonly ladder: LadderPasswords
   private readonly machine: AccountsDeps['machine']
+  private readonly provider: ProviderAccess
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -418,6 +444,184 @@ export class Accounts {
     this.changed = deps.onChange
     this.ladder = new LadderPasswords(this.now)
     this.machine = deps.machine
+    this.provider = new ProviderAccess({
+      http: this.http,
+      origin: this.origin,
+      now: this.now,
+      openBrowser: deps.openBrowser ?? (() => Promise.reject(new Error('no browser here'))),
+      schemeHandled: deps.schemeHandled ?? (() => true),
+      device: () => this.providerDevice(),
+      hasAccount: () => this.cached !== null,
+      rememberPending: (pending) => this.ladder.remember(pending, NO_PASSWORD),
+      land: (body) => this.landSession(NO_PASSWORD, body),
+      authed: (pathname, body) => this.authedPost(pathname, body),
+      firstLink: () => this.firstLink(),
+    })
+  }
+
+  // ── third-party sign-in (account-oauth.ts holds the flow) ─────────────────
+
+  providers(): Promise<readonly ProviderOffer[]> {
+    return this.provider.list()
+  }
+
+  providerSignIn(id: ProviderId): Promise<ProviderSignInAnswer<AccountSession>> {
+    return this.provider.signIn(id)
+  }
+
+  providerClaim(username: string): Promise<SignInAnswer<AccountSession>> {
+    return this.provider.claim(username)
+  }
+
+  providerLink(id: ProviderId, proof: TripProof): Promise<AccountResult<void>> {
+    return this.provider.link(id, proof)
+  }
+
+  providerProve(act: StepUpAct): Promise<AccountResult<string>> {
+    return this.provider.prove(act)
+  }
+
+  providerCancel(): boolean {
+    return this.provider.cancel()
+  }
+
+  /** The seam `cookrew login --github` calls. */
+  providerDeviceSignIn(
+    id: ProviderId,
+    options: { onCode: (code: DeviceCode) => void; everyMs?: number },
+  ): Promise<ProviderSignInAnswer<AccountSession>> {
+    return this.provider.deviceSignIn(id, options)
+  }
+
+  /** A `cookrew://oauth#…` link. True when it belonged to the trip in flight. */
+  oauthReturn(raw: string): boolean {
+    return this.provider.arrive(raw)
+  }
+
+  providerUnlink(id: ProviderId, proof: TripProof): Promise<AccountResult<void>> {
+    return this.authed<void>(`/v2/me/links/${id}`, {
+      method: 'DELETE',
+      body: JSON.stringify(proof),
+      parse: false,
+    })
+  }
+
+  /** The device a sign-in offers: this Mac's, or a key minted for the attempt. */
+  private providerDevice(): AccountDeviceInput {
+    const held = this.cached
+    if (held !== null) {
+      return { id: held.deviceId, kind: 'desktop', name: held.name, jwk: held.publicKeyJwk }
+    }
+    const keys = mintDeviceKey()
+    const deviceId = deviceIdFor(keys.publicKeyJwk)
+    // The name is unknown until the registry answers: `landSession` reads it
+    // from the body. A sign-in that begins forgets the one before it.
+    this.signingIn = { username: '', deviceId, name: this.deviceName, keys }
+    return { id: deviceId, kind: 'desktop', name: this.deviceName, jwk: keys.publicKeyJwk }
+  }
+
+  private async authedPost(
+    pathname: string,
+    body: unknown,
+  ): Promise<AccountResult<{ status: number; body: Record<string, unknown> }>> {
+    const sent = await this.authedResponse(pathname, { method: 'POST', body: JSON.stringify(body) })
+    if (!sent.ok) return sent
+    const read = await bodyOf(sent.response)
+    if (classify(sent.response.status, read).reason === 'session-expired' && !sent.response.ok) {
+      this.endSession(sent.token)
+    }
+    return { ok: true, value: { status: sent.response.status, body: read } }
+  }
+
+  /** Which provider this account proves itself with. Paused still counts. */
+  private async firstLink(): Promise<AccountResult<ProviderId>> {
+    const profile = await this.profile()
+    if (!profile.ok) return profile
+    const link = profile.value.links?.[0]
+    return link === undefined ? { ok: false, reason: 'provider_required' } : { ok: true, value: link.provider }
+  }
+
+  // ── the passcode: what unlocks a Mac where no password was typed ───────────
+
+  /** The account has no password, so a provider proves what a password would. */
+  isPasswordless(): boolean {
+    return this.cached?.passwordless === true
+  }
+
+  /** What the lock checks. */
+  unlockMethod(): 'password' | 'passcode' {
+    return this.cached?.unlockBy === 'passcode' ? 'passcode' : 'password'
+  }
+
+  /** A passcode Mac with none chosen yet. The idle lock stays disarmed. */
+  passcodePending(): boolean {
+    const account = this.cached
+    return account !== null && account.unlockBy === 'passcode' && account.unlock === null
+  }
+
+  /** The caller has already checked the current one (account-ipc.ts). */
+  setPasscode(next: string): AccountResult<void> {
+    const account = this.cached
+    if (account === null) return { ok: false, reason: 'no_account' }
+    if (account.unlockBy !== 'passcode') return { ok: false, reason: 'not_offered' }
+    if (next.length < MIN_PASSCODE) return { ok: false, reason: 'weak_passcode' }
+    this.save({ ...account, unlock: unlockVerifierFor(next) })
+    return { ok: true, value: undefined }
+  }
+
+  touchIdOn(): boolean {
+    return this.cached?.unlockBy === 'passcode' && this.cached.touchId === true
+  }
+
+  setTouchId(on: boolean): void {
+    const account = this.cached
+    if (account?.unlockBy === 'passcode') this.save({ ...account, touchId: on })
+  }
+
+  /**
+   * FORGOT THE PASSCODE: a rescue code, and not the provider.
+   *
+   * A browser already signed in to the provider answers without a person, so a
+   * provider proof would let anyone at an unattended Mac through the lock. A
+   * rescue code is something they do not have. It clears the passcode and the
+   * next one is chosen at once.
+   */
+  async rescuePasscode(code: string): Promise<AccountResult<void>> {
+    const account = this.cached
+    if (account === null) return { ok: false, reason: 'no_account' }
+    if (account.unlockBy !== 'passcode') return { ok: false, reason: 'not_offered' }
+    let response: Response
+    try {
+      response = await this.http(`${this.origin}/v2/recovery`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: account.username,
+          code,
+          device: { id: account.deviceId, kind: 'desktop', name: account.name, jwk: account.publicKeyJwk },
+        }),
+      })
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+    const body = await bodyOf(response)
+    if (response.status !== 201) return plainRefusal(classify(response.status, body))
+    const session = sessionFrom(body)
+    if (session === null) return { ok: false, reason: 'unknown' }
+    this.save({ ...account, session, unlock: null, touchId: false })
+    return { ok: true, value: undefined }
+  }
+
+  /** SIGN OUT with a provider proof, for an account with no password to type. */
+  async signOutWithProvider(): Promise<AccountResult<void>> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    const proven = await this.provider.prove('revoke-device')
+    if (!proven.ok) return proven
+    const removed = await this.revokeDevice(account.deviceId, { stepUp: proven.value })
+    if (!removed.ok) return removed
+    this.forget()
+    return { ok: true, value: undefined }
   }
 
   /**
@@ -775,6 +979,8 @@ export class Accounts {
         deviceId: typeof body.deviceId === 'string' ? body.deviceId : deviceId,
         name,
         password: null,
+        // A passwordless account has no password to ask for at the first lock.
+        ...(body.hasPassword === false ? { passwordless: true } : {}),
         keys: { privateKeyJwk, publicKeyJwk },
         session,
       }),
@@ -790,11 +996,11 @@ export class Accounts {
    * turns into `cookrew://join#<code>`.
    */
   async mintJoinCode(
-    current: string,
+    proof: string | { stepUp: string },
   ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
     const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
       method: 'POST',
-      body: JSON.stringify({ current }),
+      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
     })
     if (!result.ok) return result
     const { code, expiresAt } = result.value
@@ -823,9 +1029,14 @@ export class Accounts {
      * nothing can be derived, and the file says so rather than pretending.
      */
     password: string | null
+    /** The account has no password, so this Mac takes a passcode. */
+    passwordless?: boolean
+    /** A provider signed this Mac in: no password was typed here either. */
+    viaProvider?: boolean
     keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
     session: AccountSession | null
   }): AccountFile {
+    const passcode = input.viaProvider === true || input.passwordless === true
     return this.save({
       username: input.username,
       deviceId: input.deviceId,
@@ -836,6 +1047,8 @@ export class Accounts {
       registry: this.origin,
       session: input.session,
       unlock: input.password === null ? null : unlockVerifierFor(input.password),
+      ...(passcode ? { unlockBy: 'passcode' as const } : {}),
+      ...(input.passwordless === true ? { passwordless: true } : {}),
       lockAfterMs: DEFAULT_LOCK_AFTER_MS,
       claimedAt: this.now(),
       workspacesReachable: true,
@@ -908,7 +1121,7 @@ export class Accounts {
    */
   passwordPending(): boolean {
     const account = this.cached
-    return account !== null && account.unlock === null
+    return account !== null && account.unlock === null && account.unlockBy !== 'passcode'
   }
 
   /**
@@ -1085,6 +1298,8 @@ export class Accounts {
   private landSession(password: string, body: Record<string, unknown>): SignInAnswer<AccountSession> {
     const session = sessionFrom(body)
     const account = this.cached
+    // A provider opened this: there is no password, and none may be derived.
+    const typed = password === NO_PASSWORD ? null : password
     if (!account) {
       // No file yet: this rung ends a SIGN-IN (the second Mac), not a resume.
       // The key minted at the password step is filed now, through the same
@@ -1097,14 +1312,19 @@ export class Accounts {
         username: typeof body.username === 'string' ? body.username : minted.username,
         deviceId: typeof body.deviceId === 'string' ? body.deviceId : minted.deviceId,
         name: minted.name,
-        password,
+        password: typed,
+        ...(typed === null ? { viaProvider: true } : {}),
+        ...(body.hasPassword === false ? { passwordless: true } : {}),
         keys: minted.keys,
         session,
       })
       return { ok: true, value: session }
     }
     if (session === null) return { ok: false, reason: 'unknown' }
-    this.save({ ...account, session, unlock: unlockVerifierFor(password) })
+    // A PASSCODE IS NOT THE PASSWORD. It stays what the owner chose, whatever
+    // proved this session; only a password Mac re-derives from a password.
+    const keep = typed === null || account.unlockBy === 'passcode'
+    this.save({ ...account, session, unlock: keep ? account.unlock : unlockVerifierFor(typed) })
     return { ok: true, value: session }
   }
 
@@ -1318,10 +1538,10 @@ export class Accounts {
    * asks now (V3-FIX-C1 · H4), and it is the same password the sheet has
    * already collected, so nothing new is asked of the person.
    */
-  revokeDevice(id: string, password: string): Promise<AccountResult<void>> {
+  revokeDevice(id: string, proof: string | { stepUp: string }): Promise<AccountResult<void>> {
     return this.authed<void>(`/v2/me/devices/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      body: JSON.stringify({ current: password }),
+      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
       parse: false,
     })
   }
@@ -1472,7 +1692,10 @@ export class Accounts {
     })
     if (!result.ok) return result
     const account = this.cached
-    if (account) this.save({ ...account, unlock: unlockVerifierFor(input.next) })
+    // A passcode Mac keeps its passcode: this changed the account's password.
+    if (account && account.unlockBy !== 'passcode') {
+      this.save({ ...account, unlock: unlockVerifierFor(input.next) })
+    }
     return { ok: true, value: undefined }
   }
 

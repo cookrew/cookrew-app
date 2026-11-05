@@ -8,6 +8,8 @@ import type {
   UsernameCheck,
 } from '../shared/account-v2'
 import { isTypedFactor } from './account-ladder'
+import { isProviderId, type ProviderOffer } from '../shared/oauth'
+import type { StepUpAct } from '../shared/step-up'
 import type { PairingHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
 import type {
@@ -110,6 +112,12 @@ export interface AccountIpcDeps {
    */
   saveCodes: (codes: readonly string[]) => Promise<{ ok: boolean; reason?: string }>
   /**
+   * Touch ID, where the hardware has it. Injected for the same reason as
+   * `saveCodes`: this module must stay free of Electron. The OS draws the
+   * prompt, so a page in the renderer has nothing to fake.
+   */
+  touchId?: { available: () => boolean; prompt: (reason: string) => Promise<boolean> }
+  /**
    * SEATS (phase 5). Optional because a desktop that never claimed a name has
    * no seats to read and no team to grant one at — and because the four seat
    * channels must still EXIST and still refuse in that state, rather than
@@ -200,6 +208,21 @@ export const ACCOUNT_CHANNELS = [
   'account:teamSeats',
   'account:grantSeat',
   'account:endSeat',
+  // ── third-party sign-in (account-oauth.ts) ──
+  //
+  // The browser round trip runs in main, so nothing here carries a verifier, a
+  // handoff or a ticket: the renderer names a provider and reads a status.
+  'account:oauthProviders',
+  'account:oauthStart',
+  'account:oauthCancel',
+  'account:oauthClaim',
+  'account:oauthLink',
+  'account:oauthUnlink',
+  // ── the passcode, for a Mac where no password was typed ──
+  'account:setPasscode',
+  'account:setTouchId',
+  'account:unlockTouchId',
+  'account:rescueUnlock',
 ] as const
 
 export type AccountChannel = (typeof ACCOUNT_CHANNELS)[number]
@@ -302,6 +325,13 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // D8: this Mac joined by a code and has not met the password yet, so the
     // lock screen asks for it once and says why.
     passwordPending: deps.accounts.passwordPending(),
+    passwordless: account?.passwordless === true,
+    unlockBy: deps.accounts.unlockMethod(),
+    passcodePending: deps.accounts.passcodePending(),
+    touchId: {
+      available: deps.accounts.unlockMethod() === 'passcode' && (deps.touchId?.available() ?? false),
+      on: deps.accounts.touchIdOn(),
+    },
     // Non-null only when account.json names one registry and this process is
     // talking to another — the state in which a 401 means nothing at all.
     registryMismatch: account === null ? null : deps.accounts.registryMismatch(),
@@ -322,6 +352,9 @@ async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAns
   if (deps.accounts.passwordPending()) return firstUnlock(deps, password)
   const outcome = deps.lock.unlock(password)
   if (!outcome.ok) return outcome
+  // WHAT WAS TYPED IS A PASSCODE, and a passcode never leaves this Mac. Offered
+  // to cookrew.dev below it would be a local secret in a sign-in request.
+  if (deps.accounts.unlockMethod() === 'passcode') return outcome
   if (deps.accounts.account() === null || deps.accounts.sessionLive()) return outcome
   const renewed = await deps.accounts.resume(password)
   return { ...outcome, sessionRenewed: renewed.ok }
@@ -516,6 +549,8 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
   const deviceId = asString(record.deviceId)
   if (deviceId.length === 0) return { ok: false, reason: 'bad_device' }
   const password = asString(record.password)
+  const proof = await providerProof(deps, 'revoke-device')
+  if (proof !== null) return proof.ok ? deps.accounts.revokeDevice(deviceId, { stepUp: proof.value }) : proof
   const proven = await deps.accounts.stepUp(password)
   if (!proven.ok) return proven
   // The same password, carried to the registry with the act. The step-up above
@@ -531,7 +566,10 @@ async function revoke(deps: AccountIpcDeps, input: unknown): Promise<AccountResu
  * come down, and the status handed back is the one an empty avatar draws.
  */
 async function signOut(deps: AccountIpcDeps, password: string): Promise<AccountResult<AccountStatus>> {
-  const result = await deps.accounts.signOutThisMac(password)
+  const result =
+    deps.accounts.account()?.passwordless === true
+      ? await deps.accounts.signOutWithProvider()
+      : await deps.accounts.signOutThisMac(password)
   if (!result.ok) return result
   deps.requests.stop()
   try {
@@ -549,6 +587,17 @@ function signedIn(deps: AccountIpcDeps): AccountStatus {
   // cookrew.dev has just asked for the password and, where the account wants
   // one, a second factor. That is more than the idle lock asks for.
   deps.lock.proven()
+  return landed(deps)
+}
+
+/**
+ * A SESSION LANDED, without opening the lock.
+ *
+ * A provider's answer is not proof a person is at this keyboard: a browser
+ * already signed in answers by itself. So a provider landing does the work a
+ * session unblocks and leaves the lock exactly as it found it.
+ */
+function landed(deps: AccountIpcDeps): AccountStatus {
   deps.requests.start()
   // The reach publisher refreshes the canvas link and files the desktop with
   // its addresses; without one wired, the plain registration still happens so
@@ -688,6 +737,110 @@ async function endSeat(deps: AccountIpcDeps, input: unknown): Promise<AccountRes
   return wired.door.end(team.team, id)
 }
 
+/**
+ * THE PROOF A PASSWORDLESS ACCOUNT BRINGS, or null for an account with a
+ * password, whose callers carry on with what was typed.
+ */
+async function providerProof(deps: AccountIpcDeps, act: StepUpAct): Promise<AccountResult<string> | null> {
+  if (deps.accounts.account()?.passwordless !== true) return null
+  if (deps.lock.locked) return { ok: false, reason: 'locked' }
+  return deps.accounts.providerProve(act)
+}
+
+/** The proof a factor removal sends: what was typed, or a provider's. */
+async function removalProof(
+  deps: AccountIpcDeps,
+  current: unknown,
+): Promise<AccountResult<string | { stepUp: string }>> {
+  const proof = await providerProof(deps, 'remove-factor')
+  if (proof === null) return { ok: true, value: asString(current) }
+  return proof.ok ? { ok: true, value: { stepUp: proof.value } } : proof
+}
+
+const LOCKED = { ok: false, reason: 'locked' } as const
+
+/** Sign in with a provider. See `landed` for why this does not unlock. */
+async function oauthStart(deps: AccountIpcDeps, provider: unknown) {
+  if (!isProviderId(provider)) return { ok: false as const, reason: 'not_offered' as const }
+  if (deps.lock.locked) return LOCKED
+  const result = await deps.accounts.providerSignIn(provider)
+  return result.ok ? { ok: true as const, value: landed(deps) } : result
+}
+
+async function oauthClaim(deps: AccountIpcDeps, username: unknown) {
+  if (deps.lock.locked) return LOCKED
+  const result = await deps.accounts.providerClaim(asString(username))
+  return result.ok ? { ok: true as const, value: landed(deps) } : result
+}
+
+/** What proves a link or an unlink: the password typed, or a provider trip. */
+async function linkProof(
+  deps: AccountIpcDeps,
+  act: StepUpAct,
+  current: unknown,
+): Promise<AccountResult<{ current: string } | { stepUp: string }>> {
+  const proof = await providerProof(deps, act)
+  if (proof === null) return { ok: true, value: { current: asString(current) } }
+  return proof.ok ? { ok: true, value: { stepUp: proof.value } } : proof
+}
+
+async function oauthLink(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  const fields = asRecord(input)
+  if (!isProviderId(fields.provider)) return { ok: false, reason: 'not_offered' }
+  if (deps.lock.locked) return LOCKED
+  const proof = await linkProof(deps, 'link-provider', fields.current)
+  return proof.ok ? deps.accounts.providerLink(fields.provider, proof.value) : proof
+}
+
+async function oauthUnlink(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  const fields = asRecord(input)
+  if (!isProviderId(fields.provider)) return { ok: false, reason: 'not_offered' }
+  if (deps.lock.locked) return LOCKED
+  const proof = await linkProof(deps, 'unlink-provider', fields.current)
+  return proof.ok ? deps.accounts.providerUnlink(fields.provider, proof.value) : proof
+}
+
+/**
+ * CHOOSE OR CHANGE THE PASSCODE. Changing one goes through the lock's own
+ * check, so a wrong guess here spends the same five tries as the lock screen.
+ */
+function setPasscode(deps: AccountIpcDeps, input: unknown): AccountResult<AccountStatus> {
+  const fields = asRecord(input)
+  if (deps.lock.locked) return LOCKED
+  if (deps.accounts.unlockMethod() === 'passcode' && !deps.accounts.passcodePending()) {
+    const checked = deps.lock.unlock(asString(fields.current))
+    if (!checked.ok) return { ok: false, reason: 'bad_credentials' }
+  }
+  const set = deps.accounts.setPasscode(asString(fields.next))
+  return set.ok ? { ok: true, value: accountStatus(deps) } : set
+}
+
+/** Turning it on needs a passing touch: it proves a finger is enrolled here. */
+async function setTouchId(deps: AccountIpcDeps, on: unknown): Promise<AccountResult<AccountStatus>> {
+  if (deps.lock.locked) return LOCKED
+  if (accountStatus(deps).touchId.available !== true) return { ok: false, reason: 'not_offered' }
+  if (on === true && !(await deps.touchId?.prompt('turn on Touch ID for Cookrew'))) {
+    return { ok: false, reason: 'cancelled' }
+  }
+  deps.accounts.setTouchId(on === true)
+  return { ok: true, value: accountStatus(deps) }
+}
+
+async function unlockTouchId(deps: AccountIpcDeps): Promise<{ ok: boolean }> {
+  if (!deps.accounts.touchIdOn() || deps.touchId?.available() !== true) return { ok: false }
+  const passed = await deps.touchId.prompt('unlock Cookrew').catch(() => false)
+  if (passed) deps.lock.proven()
+  return { ok: passed }
+}
+
+/** Forgot the passcode. On success the lock opens and a new one is asked for. */
+async function rescueUnlock(deps: AccountIpcDeps, code: unknown): Promise<AccountResult<AccountStatus>> {
+  const rescued = await deps.accounts.rescuePasscode(asString(code))
+  if (!rescued.ok) return rescued
+  deps.lock.proven()
+  return { ok: true, value: landed(deps) }
+}
+
 /** The table. Pure in, promise or value out; no Electron types anywhere. */
 export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, AccountHandler> {
   return {
@@ -711,7 +864,11 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // The minting side (D12). The password rides the call because the
     // registry asks for it again on this route; it is spent at once and
     // nothing here keeps it.
-    'account:joinCode': (current: unknown) => deps.accounts.mintJoinCode(asString(current)),
+    'account:joinCode': async (current: unknown) => {
+      const proof = await providerProof(deps, 'mint-join-code')
+      if (proof === null) return deps.accounts.mintJoinCode(asString(current))
+      return proof.ok ? deps.accounts.mintJoinCode({ stepUp: proof.value }) : proof
+    },
     'account:resumeCode': (input: unknown) => resumeCode(deps, input),
     'account:resumeAsk': (pending: unknown): Promise<AccountResult<ApprovalAsked>> =>
       deps.accounts.resumeAsk(asString(pending)),
@@ -850,8 +1007,10 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     // BOTH REMOVALS CARRY THE PASSWORD. The registry gates them on it, and a
     // channel that could not pass one would be a REMOVE button that always
     // fails with a sentence about a field the card never showed.
-    'account:totpRemove': (current: unknown): Promise<AccountResult<void>> =>
-      deps.factors.removeTotp(asString(current)),
+    'account:totpRemove': async (current: unknown): Promise<AccountResult<void>> => {
+      const proof = await removalProof(deps, current)
+      return proof.ok ? deps.factors.removeTotp(proof.value) : proof
+    },
     'account:passkeys': (): Promise<AccountResult<readonly PasskeySummary[]>> =>
       deps.factors.passkeys(),
     'account:passkeyOptions': (): Promise<AccountResult<Record<string, unknown>>> =>
@@ -863,12 +1022,24 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
         credential: asRecord(record.credential),
       })
     },
-    'account:passkeyRemove': (id: unknown, current: unknown): Promise<AccountResult<void>> =>
-      deps.factors.removePasskey(asString(id), asString(current)),
+    'account:passkeyRemove': async (id: unknown, current: unknown): Promise<AccountResult<void>> => {
+      const proof = await removalProof(deps, current)
+      return proof.ok ? deps.factors.removePasskey(asString(id), proof.value) : proof
+    },
     'account:seats': () => seats(deps),
     'account:teamSeats': (slug: unknown) => teamSeats(deps, slug),
     'account:grantSeat': (input: unknown) => grantSeat(deps, input),
     'account:endSeat': (input: unknown) => endSeat(deps, input),
+    'account:oauthProviders': (): Promise<readonly ProviderOffer[]> => deps.accounts.providers(),
+    'account:oauthStart': (provider: unknown) => oauthStart(deps, provider),
+    'account:oauthCancel': (): boolean => deps.accounts.providerCancel(),
+    'account:oauthClaim': (username: unknown) => oauthClaim(deps, username),
+    'account:oauthLink': (input: unknown) => oauthLink(deps, input),
+    'account:oauthUnlink': (input: unknown) => oauthUnlink(deps, input),
+    'account:setPasscode': (input: unknown) => setPasscode(deps, input),
+    'account:setTouchId': (on: unknown) => setTouchId(deps, on),
+    'account:unlockTouchId': () => unlockTouchId(deps),
+    'account:rescueUnlock': (code: unknown) => rescueUnlock(deps, code),
     'account:workspacesReachable': (on: unknown) => {
       deps.accounts.setWorkspacesReachable(on === true)
       // Re-file the desktop so the change reaches cookrew.dev now rather than

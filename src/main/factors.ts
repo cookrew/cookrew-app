@@ -154,11 +154,11 @@ export class Factors {
    * Take the authenticator off — with the password, which the registry gates
    * this on. A DELETE with a body is unusual and it is the contract.
    */
-  removeTotp(current: string): Promise<AccountResult<void>> {
-    if (current.length === 0) return Promise.resolve(needsPassword())
+  removeTotp(proof: string | { stepUp: string }): Promise<AccountResult<void>> {
+    if (proof === '') return Promise.resolve(needsPassword())
     return this.accounts.call<void>('/v2/me/totp', {
       method: 'DELETE',
-      body: JSON.stringify({ current }),
+      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
       parse: false,
     })
   }
@@ -194,12 +194,12 @@ export class Factors {
     })
   }
 
-  removePasskey(id: string, current: string): Promise<AccountResult<void>> {
+  removePasskey(id: string, proof: string | { stepUp: string }): Promise<AccountResult<void>> {
     if (id.length === 0) return Promise.resolve({ ok: false, reason: 'unknown' })
-    if (current.length === 0) return Promise.resolve(needsPassword())
+    if (proof === '') return Promise.resolve(needsPassword())
     return this.accounts.call<void>(`/v2/me/passkeys/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      body: JSON.stringify({ current }),
+      body: JSON.stringify(typeof proof === 'string' ? { current: proof } : proof),
       parse: false,
     })
   }

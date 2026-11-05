@@ -114,6 +114,16 @@ export class LadderPasswords {
   }
 }
 
+/**
+ * A LADDER A PROVIDER OPENED HAS NO PASSWORD TO HOLD.
+ *
+ * The rungs read "nothing held" as "this ladder went cold", so a provider's
+ * ladder is remembered under this marker. The empty string cannot be a real
+ * entry: a password step never runs on an empty field. `landSession` reads it
+ * as "there is no password, so derive no verifier".
+ */
+export const NO_PASSWORD = ''
+
 const FACTORS: readonly LadderFactor[] = ['passkey', 'totp', 'approve', 'recovery']
 
 /**

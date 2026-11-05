@@ -4,6 +4,9 @@ import { cookrew } from '../api'
 import { ACCOUNT_COPY } from './account-store'
 import { DOING, problemSentence, refusedSentence } from './problem'
 import { ResumeLadder } from './ResumeLadder'
+import { ProviderButtons, useProviders } from './ProviderButtons'
+import { PROVIDER_COPY, providerRefusal } from './provider-store'
+import type { ProviderId } from '../../../shared/oauth'
 import '../grant-surface.css'
 
 /**
@@ -33,9 +36,14 @@ import '../grant-surface.css'
  */
 export function ResumeSession({
   onResumed,
+  passwordless = false,
 }: {
   onResumed: (status: AccountStatus) => void
+  /** No password exists, so the field is not drawn and the provider is the way back. */
+  passwordless?: boolean
 }): React.JSX.Element {
+  const offers = useProviders()
+  const [waiting, setWaiting] = useState<ProviderId | null>(null)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -84,14 +92,32 @@ export function ResumeSession({
   /** A ladder that went cold puts the password step back, with the reason. */
   const startOver = (sentence: string): void => {
     setStep(null)
-    setError(sentence)
+    setError(passwordless ? PROVIDER_COPY.LADDER_OVER : sentence)
+  }
+
+  /** The same device goes back through the provider, and the same ladder. */
+  const resumeWith = (provider: ProviderId): void => {
+    const call = cookrew().accountOAuthStart
+    if (!call || busy || waiting !== null) return
+    setWaiting(provider)
+    setError(null)
+    void call(provider)
+      .then((result) => {
+        if (result.ok) onResumed(result.value)
+        else if (result.reason === 'second_factor') {
+          setStep({ step: result.step, lede: result.message ?? ACCOUNT_COPY.SESSION_SECOND_FACTOR })
+        } else if (result.reason !== 'new_identity') setError(providerRefusal(result.reason, result.message))
+      })
+      .catch((err: unknown) => setError(problemSentence(DOING.RESUME, err)))
+      .finally(() => setWaiting(null))
   }
 
   return (
     <section className="cr-acct-resume" aria-label="Your session ended">
-      <p className="gs-consequence">{ACCOUNT_COPY.SESSION_ENDED}</p>
+      <p className="gs-consequence">{passwordless ? PROVIDER_COPY.SESSION_ENDED : ACCOUNT_COPY.SESSION_ENDED}</p>
       {step === null ? (
         <>
+          {!passwordless && (
           <div className="cr-acct-row">
             <input
               type="password"
@@ -107,6 +133,13 @@ export function ResumeSession({
               CARRY ON
             </button>
           </div>
+          )}
+          <ProviderButtons
+            offers={offers}
+            waiting={waiting}
+            onStart={resumeWith}
+            onCancel={() => void cookrew().accountOAuthCancel?.()}
+          />
           {error && (
             <p className="gs-paste-error" role="alert">
               {error}

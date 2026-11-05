@@ -21,6 +21,10 @@ import {
 } from './account-store'
 import { LegacyPane, RegisterPane, SignInPane } from './SheetPanes'
 import { ResumeLadder } from './ResumeLadder'
+import { HandleCard, type HandleAsked } from './HandleCard'
+import { ProviderButtons, useProviders } from './ProviderButtons'
+import { PROVIDER_COPY, providerRefusal } from './provider-store'
+import type { ProviderId } from '../../../shared/oauth'
 import '../grant-surface.css'
 
 /**
@@ -90,6 +94,13 @@ export function AccountSheet({
   /** The ladder cookrew.dev opened (D10), or null while the password is the question. */
   const [ladder, setLadder] = useState<{ step: SecondFactorStep; lede: string } | null>(null)
   const field = useRef<HTMLInputElement>(null)
+  const offers = useProviders()
+  /** The provider whose browser trip is in flight. */
+  const [waiting, setWaiting] = useState<ProviderId | null>(null)
+  /** The provider proved somebody new: the name is the question now. */
+  const [naming, setNaming] = useState<HandleAsked | null>(null)
+  /** A provider opened this ladder, so its way back is not the password. */
+  const [viaProvider, setViaProvider] = useState(false)
 
   // The first field, never the primary. Re-run on a crossing: the field the
   // person should be in changes with the state.
@@ -233,6 +244,37 @@ export function AccountSheet({
       .finally(() => setBusy(false))
   }
 
+  /**
+   * THE OTHER FIRST STEP. A provider stands where the password stood, so what
+   * can come back is what a password's answer can, plus a name to choose. The
+   * browser trip runs in main; this only hears how it ended.
+   */
+  const startProvider = (provider: ProviderId): void => {
+    const call = cookrew().accountOAuthStart
+    if (!call || busy || waiting !== null) return
+    setWaiting(provider)
+    setError(null)
+    void call(provider)
+      .then((result) => {
+        if (result.ok) {
+          onDone(result.value, 'signin')
+          return
+        }
+        if (result.reason === 'new_identity') {
+          setNaming(result)
+          return
+        }
+        if (result.reason === 'second_factor') {
+          setViaProvider(true)
+          setLadder({ step: result.step, lede: result.message ?? ACCOUNT_COPY.SESSION_SECOND_FACTOR })
+          return
+        }
+        setError(providerRefusal(result.reason, result.message))
+      })
+      .catch((err: unknown) => setError(problemSentence(DOING.SIGN_IN, err)))
+      .finally(() => setWaiting(null))
+  }
+
   const pane = paneFor(state)
   const title = state === 'legacy' ? 'Set a password' : 'Your Cookrew account'
 
@@ -251,7 +293,7 @@ export function AccountSheet({
           </button>
         </header>
 
-        {state !== 'legacy' && ladder === null && (
+        {state !== 'legacy' && ladder === null && naming === null && (
           <nav className="cr-acct-tabs" role="tablist" aria-label="Sign in or create">
             {TABS.map((tab) => (
               <button
@@ -270,7 +312,13 @@ export function AccountSheet({
           </nav>
         )}
 
-        {ladder !== null ? (
+        {naming !== null ? (
+          <HandleCard
+            asked={naming}
+            onDone={(status) => onDone(status, 'register')}
+            onBack={() => setNaming(null)}
+          />
+        ) : ladder !== null ? (
           <ResumeLadder
             step={ladder.step}
             lede={ladder.lede}
@@ -278,7 +326,8 @@ export function AccountSheet({
             onOver={(sentence) => {
               // A ladder that went cold puts the password step back, with the reason.
               setLadder(null)
-              setError(sentence)
+              setError(viaProvider ? PROVIDER_COPY.LADDER_OVER : sentence)
+              setViaProvider(false)
             }}
           />
         ) : (
@@ -309,6 +358,15 @@ export function AccountSheet({
                 field={field}
                 onChange={(next) => setFields((prior) => ({ ...prior, ...next }))}
                 onEnter={migrate}
+              />
+            )}
+
+            {state !== 'legacy' && (
+              <ProviderButtons
+                offers={offers}
+                waiting={waiting}
+                onStart={startProvider}
+                onCancel={() => void cookrew().accountOAuthCancel?.()}
               />
             )}
 
