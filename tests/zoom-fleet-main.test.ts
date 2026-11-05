@@ -2,11 +2,11 @@
 // levels service (pushed per sender, released by the sender going), and the
 // account's desktops as the registry lists them, trimmed to directory facts.
 import { describe, expect, it, vi } from 'vitest'
-import type { LevelsEvent, LevelsSnapshot } from '../src/shared/strata'
+import type { LevelsEvent, LevelsSnapshot } from '../src/shared/levels'
 import type { LevelsService } from '../src/main/levels/service'
 import { parseAccountMachines } from '../src/shared/zoom-fleet'
 import { accountMachines, createFleetHolds, registerZoomFleetIpc, ZOOM_FLEET_EVENT_CHANNEL, type FleetSender } from '../src/main/zoom-fleet'
-import { PROFILE } from './strata-levels-fixture'
+import { PROFILE } from './levels-fixture'
 
 const ME = '0f8f1c2e-1111-4222-8333-944445555666'
 const OTHER = '1a2b3c4d-aaaa-4bbb-8ccc-ddddeeeeffff'

@@ -16,13 +16,12 @@ import type {
   AgentPhase,
   Harness,
   LevelsAgent,
-  LevelsAgentDetail,
   LevelsAttachment,
   LevelsWorkspace,
   PhaseSource,
   WorkspaceTrait
-} from '../../shared/strata'
-import { TRAITS_MAX, isWorkspaceTrait } from '../../shared/strata'
+} from '../../shared/levels'
+import { TRAITS_MAX, isWorkspaceTrait } from '../../shared/levels'
 import { scrubShapes, type Scrub } from '../scrub'
 import { hostOf, line, noteTitle, replyLine, statusVerb, taskLine } from './lines'
 import { phaseSinceOf, phaseVerdict } from './phase'
@@ -227,50 +226,4 @@ export function buildLevels(input: LevelsInput): LevelsBuild {
   const memory = new Map<string, PhaseMemory>()
   const workspaces = input.workspaces.map(({ meta, state }) => workspaceRow(meta, state, input, scrub, memory))
   return { workspaces, memory }
-}
-
-/** A note body is the owner's own text, but not unbounded. */
-export const NOTE_CONTENT_MAX = 256 * 1024
-
-/**
- * One agent's dive bootstrap: its row plus the bodies and addresses the
- * snapshot withholds. Browsers are live only in the focused workspace — a
- * background workspace's browsers are not running.
- */
-export function agentDetail(
-  workspace: LevelsWorkspace,
-  state: WorkspaceState,
-  agentId: string,
-  scrub: Scrub = scrubShapes,
-  gitPeek: (dir: string) => GitInfo | undefined = () => undefined
-): LevelsAgentDetail | null {
-  const agent = workspace.agents.find((a) => a.id === agentId)
-  if (!agent) return null
-  const byId = new Map(state.nodes.map((node) => [node.id, node]))
-  const card = byId.get(agentId)
-  const notes: LevelsAgentDetail['notes'] = []
-  const browsers: LevelsAgentDetail['browsers'] = []
-  for (const row of agent.attachments) {
-    const node = byId.get(row.id)
-    if (node?.kind === 'note') {
-      const content = node.content.length > NOTE_CONTENT_MAX ? `${node.content.slice(0, NOTE_CONTENT_MAX)}\n…` : node.content
-      notes.push({ id: node.id, title: row.title, content: scrub(content), shared: row.shared })
-    } else if (node?.kind === 'browser') {
-      const tabs = browserTabs(node).map((tab) => ({ id: tab.id, url: tab.url }))
-      browsers.push({
-        id: node.id,
-        title: row.title,
-        url: activeBrowserTab(node).url || null,
-        tabs,
-        live: workspace.state === 'focused',
-        shared: row.shared
-      })
-    }
-  }
-  // The card as the desktop holds it, as /api/workspace sends it: the embed's
-  // overlay reads preset, brief, orch and servedSession off it. Git only when
-  // it is already cached for the cwd — a detail never causes a git fork.
-  const git = card?.kind === 'terminal' ? gitPeek(card.cwd) : undefined
-  const node = card?.kind === 'terminal' ? (git === undefined ? card : { ...card, git }) : undefined
-  return { agent, workspaceId: workspace.id, notes, browsers, ...(node ? { node } : {}) }
 }

@@ -26,8 +26,6 @@ import { sameOrigin } from './v2-http'
 import type { NamesFeature } from './names'
 import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
-import { serveShellAsset, shellPage, type ShellBundle } from './strata-shell'
-import { readSampleArt } from './site-art-manifest'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
 
@@ -134,19 +132,7 @@ export interface RegistryDeps {
    * is exactly as it was, which is what lets the feature ship dark.
    */
   names?: NamesFeature
-  /**
-   * STRATA: the shell's built files (strata-shell.ts), from the second
-   * ConfigMap. Absent → /me is the account page, exactly as before.
-   */
-  shell?: ShellBundle | null
-  /**
-   * STRATA: the shell takes /me, and a signed-in front page goes there, only
-   * when this is true. Without it a deployed shell only lends the front page
-   * its sample fleet and serves its own files: the state while no released
-   * app can be stepped into.
-   */
-  strataMe?: boolean
-  /** STRATA: where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
+  /** Where the canvas relay keeps when each desktop's line was last seen; absent = memory only. */
   lineSeenFile?: string
   /** The onboarding funnel's daily sums (funnel-routes.ts). Absent → /v1/funnel does not exist. */
   funnel?: FunnelMount
@@ -171,8 +157,6 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
 export function createRegistry(deps: RegistryDeps): Server {
   const { store, log } = deps
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
-  /** The front page's sample fleet, drawn at the shell's build; null without a shell (the page stays as it was). */
-  const sampleArt = readSampleArt(deps.shell)
   const funnel = deps.funnel ? createFunnelRoute(deps.funnel, deps.v2) : null
 
   /**
@@ -443,7 +427,7 @@ export function createRegistry(deps: RegistryDeps): Server {
         ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
         // The names half, for the cert route and the `names` bit on a card.
         ...(deps.names === undefined ? {} : { names: deps.names }),
-        // STRATA: which desktops hold their relay line, for the fleet rows.
+        // Which desktops hold their relay line, for the fleet rows.
         ...(canvas === null ? {} : { presence: canvas.presence }),
         accountGone
       })
@@ -900,24 +884,7 @@ export function createRegistry(deps: RegistryDeps): Server {
     )
       return
 
-    // GET /strata/<file> — the shell's built files, from its own bundle.
-    if (method === 'GET' && parts.length >= 2 && parts[0] === 'strata') {
-      if (!serveShellAsset(response, deps.shell ?? null, parts.slice(1).join('/'))) json(response, 404, { error: 'not_found' })
-      return
-    }
-
-    // GET /me and /me/<machine>[/<workspace>[/<agent>]] — STRATA level 0 and
-    // the levels under it, one page that routes itself (D2). Signed out, or
-    // with no shell deployed, it is the account page below.
-    const accountPath = parts.length === 2 && parts[0] === 'me' && parts[1] === 'account'
-    if (deps.v2 && deps.shell && deps.strataMe && method === 'GET' && parts[0] === 'me' && parts.length <= 4 && !accountPath) {
-      if (signedIn(request, deps.v2) !== null) {
-        respondPage(response, shellPage(deps.shell))
-        return
-      }
-    }
-
-    // GET /me/account (and /me with no shell) — the reader's own account:
+    // GET /me and /me/account — the reader's own account:
     // devices, security, desktops. A page rather than a JSON route because it
     // is where a person GOES; signed out it is a 401 that is still a page,
     // since somebody following a link deserves a sentence and a way in.
@@ -953,15 +920,6 @@ export function createRegistry(deps: RegistryDeps): Server {
       const bare = (value: string): string => (decode(value) ?? '').replace(/^@/, '')
 
       if (parts.length === 0) {
-        // Signed in, the front page IS the reader's fleet: level 0 of the
-        // strata shell, whose addresses all live under /me. Signed out (or
-        // with no shell deployed) it is the page below, whose stage shows the
-        // same three levels on a sample fleet.
-        if (deps.v2 && deps.shell && deps.strataMe && signedIn(request, deps.v2) !== null) {
-          response.writeHead(302, { location: '/me', 'cache-control': 'private, no-store', vary: 'cookie' })
-          response.end()
-          return
-        }
         deps.pulse?.page('/')
         // The front page is a document and can never ask who is reading; the
         // request already said. With an account the page is that person's and
@@ -984,8 +942,7 @@ export function createRegistry(deps: RegistryDeps): Server {
                 stars: starsOf,
                 pulse: pulseOf,
                 linesToday: deps.pulse?.linesToday() ?? 0,
-                account: reader,
-                art: sampleArt
+                account: reader
               })
             )
           })

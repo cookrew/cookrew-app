@@ -2,12 +2,12 @@
 // levels feed (or, without one, its workspace list by name), the account's
 // other desktops from the registry, joined per machine. Every name invented.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LevelsAgent, LevelsEvent, LevelsSnapshot, LevelsWorkspace } from '../src/shared/strata'
+import type { LevelsAgent, LevelsEvent, LevelsSnapshot, LevelsWorkspace } from '../src/shared/levels'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
 import type { WorkspaceList } from '../src/shared/model'
 import { composeFleet, createZoomFleetStore, LOCAL_MACHINE_ID, type FleetApi, type Sight } from '../src/renderer/src/zoom/use-zoom-fleet'
 import { relayAccountMachines } from '../src/renderer/src/relay-machines'
-import { PROFILE } from './strata-levels-fixture'
+import { PROFILE } from './levels-fixture'
 
 const ME = '0f8f1c2e-1111-4222-8333-944445555666'
 const OTHER = '1a2b3c4d-aaaa-4bbb-8ccc-ddddeeeeffff'

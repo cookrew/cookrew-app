@@ -11,7 +11,7 @@
 // partial event would leave them stale. Revs are not stamped here — the
 // service numbers what this returns, previous + 1 each.
 
-import type { LevelsAgent, LevelsEvent, LevelsWorkspace } from '../../shared/strata'
+import type { LevelsAgent, LevelsEvent, LevelsWorkspace } from '../../shared/levels'
 
 /** A delta before the service stamps its rev. */
 export type LevelsDelta = LevelsEvent extends infer E ? (E extends { rev: number } ? Omit<E, 'rev'> : never) : never

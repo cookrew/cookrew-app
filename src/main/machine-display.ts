@@ -1,9 +1,9 @@
 // THE DESKTOP'S DISPLAY, in points: the zoom draws this machine's screen at
-// its proportions (src/shared/strata.ts · MachineDisplay). A laptop's own panel
+// its proportions (src/shared/levels.ts · MachineDisplay). A laptop's own panel
 // when it has one, so a Mac at a monitor still draws as the Mac; else the
 // primary display.
 
-import type { MachineDisplay } from '../shared/strata'
+import type { MachineDisplay } from '../shared/levels'
 
 interface DisplayLike {
   internal?: boolean

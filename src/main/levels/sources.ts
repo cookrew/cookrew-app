@@ -5,7 +5,7 @@
 import type { EventEmitter } from 'node:events'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { GitInfo, TerminalNodeData } from '../../shared/model'
-import type { Harness, MachineDisplay, MachineProfile } from '../../shared/strata'
+import type { Harness, MachineDisplay, MachineProfile } from '../../shared/levels'
 import type { BoardSources } from '../board-index'
 import { harnessFor } from '../harness'
 import type { Scrub } from '../scrub'
@@ -38,7 +38,6 @@ export interface LevelsRuntime {
   scrub?: Scrub
   observe?: (ms: number) => void
   now?: () => number
-  gitPeek?: (dir: string) => GitInfo | undefined
   /** Test seam; the real one reads the brief, else the primary dir's README and package.json. */
   traits?: LevelsSources['traits']
 }
@@ -103,7 +102,6 @@ export function levelsSourcesFrom(runtime: LevelsRuntime): LevelsSources {
     holdProbe: board.probeSubscribe,
     scrub: runtime.scrub,
     observe: runtime.observe,
-    gitPeek: runtime.gitPeek,
     traits: runtime.traits ?? createTraitLookup()
   }
 }

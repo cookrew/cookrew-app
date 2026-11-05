@@ -982,7 +982,7 @@ const accounts = new Accounts({
   // host, and a name already on the account gets a counter — decided here,
   // never at the registry, which files what it is sent.
   deviceName: localDeviceName(),
-  // STRATA: the record also says what kind of machine this is (machine-profile.ts).
+  // The record also says what kind of machine this is (machine-profile.ts).
   machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
   // A provider's login page opens in the system browser and never in a window
   // of ours: a person must not type a GitHub password into a page this app
@@ -7531,8 +7531,6 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
-    // STRATA: the levels detail reuses a cached git answer, never causes one.
-    gitPeek: (dir) => gitCache.peek(dir),
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
     // The route program's four endpoints, the stream's two frames, and the

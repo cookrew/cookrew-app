@@ -106,16 +106,6 @@ export class GitInfoCache {
     return pending
   }
 
-  /**
-   * The settled answer for a directory if one is cached and fresh, else
-   * undefined — never a query. For a reader that may only reuse (strata's
-   * agent detail), not cause, a git fork.
-   */
-  peek(dir: string, now = Date.now()): GitInfo | undefined {
-    const hit = this.cache.get(dir)
-    return hit && now - hit.at < CACHE_TTL_MS ? hit.settled : undefined
-  }
-
   /** Drop a directory's cached result (e.g. after a worktree add). */
   invalidate(dir: string): void {
     this.cache.delete(dir)

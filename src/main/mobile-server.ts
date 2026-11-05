@@ -211,8 +211,6 @@ export interface MobileServerDeps {
   stream?: MobileApiDeps['stream']
   /** Activity Board data plane; absent = /api/board answers 503. */
   board?: BoardSources
-  /** STRATA: a cwd's git answer if already cached, never a query (levels detail's node.git). */
-  gitPeek?: (dir: string) => GitInfo | undefined
   /** Event-loop health (loop-health.ts); absent = /api/health answers 503. */
   health?: () => LoopHealthSnapshot
   /** Importing a served team from the phone (mobile-api ServeOps). */
@@ -375,7 +373,7 @@ export function startMobileServer(deps: MobileServerDeps): void {
   if (!powerBlockerId.current) {
     powerBlockerId.current = powerSaveBlocker.start('prevent-app-suspension')
   }
-  // STRATA: the first levels build at idle, not on the first shell's request.
+  // The first levels build at idle, not on the first reader's request.
   levelsDeps = deps
   prewarmLevels(deps, levelsOptions(deps))
 
@@ -1445,7 +1443,7 @@ export async function handle(
   recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return
 
-  // STRATA: the levels (src/main/levels). Below the /api GET gate, and asking
+  // The levels (src/main/levels). Below the /api GET gate, and asking
   // for the PAIRING scope on top of it: the wall token reads no note bodies.
   if (
     handleLevelsRoutes(request, response, url, {

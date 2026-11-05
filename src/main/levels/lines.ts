@@ -8,7 +8,7 @@
 // tags (board.ts · stripSystemWrappers), a continued-session summary, the
 // local-command caveat, a bare slash command, an interrupt marker.
 
-import { STRATA_LINE_MAX } from '../../shared/strata'
+import { LEVELS_LINE_MAX } from '../../shared/levels'
 import { stripSystemWrappers } from '../../shared/board'
 import { scrubShapes, type Scrub } from '../scrub'
 
@@ -35,7 +35,7 @@ const WORDLESS = /^[^\p{L}\p{N}]*$/u
 const MARKDOWN_LEAD = /^(?:#{1,6}\s+|>\s*|[-*+]\s+)+/
 
 /** Collapse whitespace, scrub, then cut to `max` code points with an ellipsis. */
-export function line(text: string | null | undefined, scrub: Scrub = scrubShapes, max = STRATA_LINE_MAX): string | null {
+export function line(text: string | null | undefined, scrub: Scrub = scrubShapes, max = LEVELS_LINE_MAX): string | null {
   if (typeof text !== 'string') return null
   const collapsed = scrub(text.replace(/\s+/g, ' ').trim())
   if (collapsed.length === 0) return null
@@ -121,7 +121,7 @@ export function hostOf(url: string | null | undefined): string | null {
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return parsed.protocol.replace(/:$/, '')
     const pathPart = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/$/, '')
-    return line(`${parsed.host}${pathPart}`, scrubShapes, STRATA_LINE_MAX)
+    return line(`${parsed.host}${pathPart}`, scrubShapes, LEVELS_LINE_MAX)
   } catch {
     return null
   }
