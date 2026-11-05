@@ -1,5 +1,7 @@
 import type { MenuAct } from '../../shared/wait-choice'
 import type { UseSourceList, UseSourceOpened, UseSourcePick, UseSourceSettings } from '../../shared/use-sources'
+import type { StrayPane } from '../../shared/stray-pane'
+import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
@@ -502,6 +504,11 @@ export interface CookrewApi {
   queryEvents?: (query?: unknown) => Promise<unknown[]>;
   countEvents?: (query?: unknown) => Promise<Record<string, number>>;
   listAgents?: () => Promise<unknown[]>;
+  /** Could this offline card start now? Null when nothing stands in its way. */
+  launchCheck?: (id: string) => Promise<LaunchFailure | null>;
+  /** Live panes no card reaches; absent on an older bridge. */
+  listStrayPanes?: () => Promise<StrayPane[]>;
+  endStrayPane?: (session: string) => Promise<{ ok: boolean; error?: string }>;
   /** One changed registry entry (spawn, respawn, exit) as it happens. Optional, feature-detected. */
   onAgentChanged?: (cb: (entry: unknown) => void) => () => void;
   /** The whole roster again, when the changes above may have been missed. Optional, feature-detected. */

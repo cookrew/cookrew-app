@@ -1,3 +1,4 @@
+import type { CloseOutcome } from './terminal-close'
 import net from 'node:net'
 import { randomUUID } from 'node:crypto'
 import {
@@ -63,7 +64,9 @@ export interface SocketServerDeps {
   store: WorkspaceStore
   ptys: PtyManager
   /** Spawn a terminal's PTY with turn tracking (same path as IPC creation). */
-  spawnTerminal: (t: { id: string; command: string; cwd: string }) => void
+  spawnTerminal: (t: { id: string; command: string; cwd: string }) => unknown
+  /** End a teammate and take its card, once the process is proved gone (index.ts · removeNode). */
+  dismissTerminal: (id: string) => Promise<CloseOutcome>
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
   /**
@@ -175,7 +178,7 @@ export interface SocketServerDeps {
   createWorkspaceFromTeam: (name: string, dir: string, team: string) => Promise<WorkspaceMeta>
   switchWorkspace: (nameOrId: string) => WorkspaceMeta
   /** Workspace v2: remove + multi-directory + per-terminal cwd + git. */
-  removeWorkspace: (nameOrId: string) => WorkspaceList
+  removeWorkspace: (nameOrId: string) => Promise<WorkspaceList>
   addWorkspaceDir: (id: string, dir: string) => WorkspaceList
   removeWorkspaceDir: (id: string, dir: string) => WorkspaceList
   setPrimaryDir: (id: string, dir: string) => WorkspaceList
@@ -1723,14 +1726,12 @@ export function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
     : `"${name}" is now the orch`
 }
 
-function cmdDismiss(request: CliRequest, deps: SocketServerDeps): string {
+async function cmdDismiss(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   requireOrch(request, deps)
   const target = findConnected(request, deps, request.args[0], 'terminal')
-  deps.ptys.kill(target.id)
-  deps.store.withOpContext({ actor: 'orch', via: 'dismiss' }, () =>
-    deps.store.removeNodeAcross(target.id)
-  )
-  deps.agents.deactivate(target.id)
+  const closed = await deps.dismissTerminal(target.id)
+  // The card stays, as the only handle on what is still running.
+  if (!closed.ok) throw new Error(`"${target.name}" did not stop: ${closed.error}`)
   return `Dismissed "${target.name}"`
 }
 
@@ -1831,7 +1832,7 @@ async function cmdWorkspace(request: CliRequest, deps: SocketServerDeps): Promis
     }
     case 'remove': {
       if (!name) throw new Error('Usage: cookrew workspace remove "Name"')
-      deps.removeWorkspace(name)
+      await deps.removeWorkspace(name)
       return `Removed workspace "${name}"`
     }
     default:

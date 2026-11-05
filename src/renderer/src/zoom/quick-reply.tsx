@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AgentLatest } from './AgentLatest'
-import { draftKey, useDraft } from '../prompt/prompt-draft'
+import { launchRefusal } from '../prompt/launch-gate'
+import { AgentFailure } from './AgentFailure'
+import { draftKey, getDraft, useDraft } from '../prompt/prompt-draft'
 import { noteSent } from '../prompt/input-refused'
 import { submitLine, typeLine, useLiveLine } from '../prompt/live-line'
 import { usePromptAttach } from '../prompt/use-prompt-attach'
@@ -29,7 +31,8 @@ export interface QuickReplyState {
   readonly setDraft: (text: string, composing?: boolean) => void
   /** The reply just sent, for a moment; null otherwise. */
   readonly sent: string | null
-  readonly send: () => void
+  /** Resolves with why the words stayed in the box, else null. */
+  readonly send: (offline: boolean) => Promise<string | null>
 }
 
 /**
@@ -41,6 +44,8 @@ export interface QuickReplyState {
 export function useQuickReply(agentId: string, onDraft?: (text: string) => void, watching = true): QuickReplyState {
   const [draft, setDraftState] = useDraft(draftKey(agentId))
   const [sent, setSent] = useState<string | null>(null)
+  /** One send at a time: a double tap over a slow link must not send twice. */
+  const sending = useRef(false)
   useLiveLine(watching ? agentId : null)
   const setDraft = useCallback(
     (text: string, composing = false) => {
@@ -55,13 +60,24 @@ export function useQuickReply(agentId: string, onDraft?: (text: string) => void,
     const timer = setTimeout(() => setSent(null), SENT_MS)
     return () => clearTimeout(timer)
   }, [sent])
-  const send = (): void => {
-    const text = draft.trim()
-    if (!text) return
-    noteSent({ id: agentId, box: draftKey(agentId), words: text, at: Date.now() })
-    submitLine(agentId, text)
-    onDraft?.('')
-    setSent(text)
+  /** The refusal when the words stayed in the box, else null. */
+  const send = async (offline: boolean): Promise<string | null> => {
+    if (sending.current || !draft.trim()) return null
+    sending.current = true
+    try {
+      const refusal = offline ? await launchRefusal(agentId) : null
+      if (refusal) return refusal
+      // Read now: the check can take a relay's round trip, and words go on being typed.
+      const text = getDraft(draftKey(agentId)).trim()
+      if (!text) return null
+      noteSent({ id: agentId, box: draftKey(agentId), words: text, at: Date.now() })
+      submitLine(agentId, text)
+      onDraft?.('')
+      setSent(text)
+      return null
+    } finally {
+      sending.current = false
+    }
   }
   return { draft, setDraft, sent, send }
 }
@@ -77,6 +93,7 @@ export function CardWords({ agent, sent }: { agent: AgentView; sent: string | nu
       </div>
     )
   }
+  if (agent.failure) return <AgentFailure failure={agent.failure} />
   return <AgentLatest turn={agent.turn} fallback={agent.line} />
 }
 
@@ -113,14 +130,16 @@ export function QuickReply({
       onDrop={attach.onDrop}
       onSubmit={(e) => {
         e.preventDefault()
-        reply.send()
+        void reply.send(agent.status === 'offline').then((refusal) => {
+          if (refusal) setNote(refusal)
+        })
       }}
     >
       <input
         ref={inputRef}
         type="text"
         value={reply.draft}
-        placeholder={`Reply to ${agent.name}…`}
+        placeholder={agent.failure?.blocked ? `${agent.name} could not start` : `Reply to ${agent.name}…`}
         aria-label={`Quick reply to ${agent.name}`}
         autoComplete="off"
         onChange={(e) => reply.setDraft(e.target.value, (e.nativeEvent as InputEvent).isComposing === true)}

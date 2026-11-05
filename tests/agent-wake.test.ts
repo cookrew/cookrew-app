@@ -182,4 +182,19 @@ describe('AgentWaker — wake', () => {
     expect(await w.waker.wake('forge')).toBe(live)
     expect(w.booted).toEqual([])
   })
+
+  it('an agent that died during its boot takes no keys: they are lost out loud, not typed at nothing', async () => {
+    const w = world({
+      ready: async () => {
+        w.sessions.delete('forge')
+        return false
+      }
+    })
+    const boot = w.booted
+    expect(w.waker.hold('forge', 'hello')).toBe(true)
+    await settle()
+    await settle()
+    expect(boot).toEqual(['forge'])
+    expect(w.lost).toEqual([{ id: 'forge', chunks: ['hello'] }])
+  })
 })

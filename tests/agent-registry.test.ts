@@ -86,4 +86,61 @@ describe('sessionRef enrichment (R2 legacy-recover fix)', () => {
     registry.setSessionRef('nope', 'x')
     expect(registry.lookup('nope')).toBeUndefined()
   })
+
+  describe('launch failures', () => {
+    const failure = { kind: 'command-missing', why: 'Command not found: claude.', fix: 'Install it.', blocked: true, exitCode: 127, lastLines: [], at: 1 } as const
+
+    it('a card that never started gets an entry: it has a roster row to say why on', () => {
+      const { registry } = makeRegistry()
+      const saved = registry.fail(entry(), failure)
+      expect(saved).toMatchObject({ active: false, failure })
+    })
+
+    it('marks a running entry inactive, keeps its first spawn, and tells listeners', () => {
+      const { registry } = makeRegistry()
+      const first = registry.upsert(entry())
+      const heard: unknown[] = []
+      registry.onChange((changed) => heard.push(changed.failure))
+      const saved = registry.fail(entry(), failure)
+      expect(saved).toMatchObject({ active: false, spawnedAt: first.spawnedAt })
+      expect(heard).toEqual([failure])
+    })
+
+    it('survives a relaunch', () => {
+      const { registry, file } = makeRegistry()
+      registry.fail(entry(), failure)
+      expect(new AgentRegistry(file).lookup('term-1')?.failure).toEqual(failure)
+    })
+
+    it('a real spawn clears it', () => {
+      const { registry } = makeRegistry()
+      registry.fail(entry(), failure)
+      expect(registry.upsert(entry()).failure).toBeNull()
+    })
+
+    it('a sessionRef known before the failure is kept', () => {
+      const { registry } = makeRegistry()
+      registry.upsert(entry({ sessionRef: 'sess-1' }))
+      expect(registry.fail(entry(), failure).sessionRef).toBe('sess-1')
+    })
+
+    it('clearFailure lifts it and leaves the agent inactive', () => {
+      const { registry } = makeRegistry()
+      registry.fail(entry(), failure)
+      const heard: unknown[] = []
+      registry.onChange((changed) => heard.push(changed.failure))
+      registry.clearFailure('term-1')
+      expect(registry.lookup('term-1')).toMatchObject({ active: false, failure: null })
+      expect(heard).toEqual([null])
+    })
+
+    it('clearFailure on a healthy entry says nothing', () => {
+      const { registry } = makeRegistry()
+      registry.upsert(entry())
+      const heard: unknown[] = []
+      registry.onChange((changed) => heard.push(changed))
+      registry.clearFailure('term-1')
+      expect(heard).toEqual([])
+    })
+  })
 })

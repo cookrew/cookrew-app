@@ -15,6 +15,8 @@ import { BAR_NAMES, BAR_STOPS, barStop, type ZoomDir } from '../zoom/zoom-path'
  *   an item nobody used  New agent with #<item>…     (the item rides as a #ref chip)
  */
 
+import type { LaunchFailure } from '../../../shared/launch-failure'
+
 export type WordsStop = 'devices' | 'workspaces' | 'crew' | 'artifacts' | 'item'
 
 /** The stop the box is read at: the bar's, or an item's full view. */
@@ -35,7 +37,7 @@ export function promptPlaceholder({
   asks = false,
   answers = false
 }: {
-  agent: { readonly name: string; readonly status: string } | null
+  agent: { readonly name: string; readonly status: string; readonly failure?: LaunchFailure | null } | null
   stop: WordsStop
   /** The active workspace's name: a new agent made at the outer stops goes there. */
   workspace: string | null
@@ -46,6 +48,11 @@ export function promptPlaceholder({
   /** Its menu has a row to type in: the words go there (wait-answer.ts · wordsRowOf). */
   answers?: boolean
 }): string {
+  if (agent?.failure) {
+    return agent.failure.blocked
+      ? `${agent.name} could not start · ${agent.failure.why}`
+      : `${agent.name} stopped · send to start it again`
+  }
   if (agent?.status === 'offline') return `${agent.name} is asleep · wakes on send`
   if (agent && answers) return 'Or type your own answer…'
   if (agent) return asks ? `Answer ${agent.name}…` : `Reply to ${agent.name}…`

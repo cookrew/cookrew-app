@@ -33,7 +33,10 @@ export interface TerminalCwdDeps {
   release: (terminalId: string) => void
   /** Kill the session and RESOLVE ONLY once it is really gone (throws if not). */
   kill: (terminalId: string) => Promise<void>
-  spawn: (node: TerminalNodeData) => void
+  /** False when no session came of it (index.ts · spawnTracked). */
+  spawn: (node: TerminalNodeData) => boolean | void
+  /** Why a running agent could not boot again in `dir`: asked before the kill that would need it to. */
+  cannotStart?: (node: TerminalNodeData, dir: string) => string | null
   carry: (move: SessionMoveOptions) => SessionMoveOutcome
   dirExists: (dir: string) => boolean
 }
@@ -58,6 +61,10 @@ export async function moveTerminalCwd(
   // working agent its turn for nothing.
   if (terminal.cwd === target) return terminal
 
+  // Before anything moves: a running agent is not traded for a card that cannot boot.
+  const cannot = deps.cannotStart?.(terminal, target) ?? null
+  if (cannot) throw new Error(cannot)
+
   if (!deps.store.dirs().includes(target)) {
     // Only the enrolment path checks the filesystem: an existing member may
     // be temporarily unmounted, and refusing to move BACK onto it would
@@ -80,6 +87,6 @@ export async function moveTerminalCwd(
     throw error
   }
   deps.carry({ node: terminal, fromCwd: terminal.cwd, toCwd: target })
-  deps.spawn(moved)
+  if (deps.spawn(moved) === false) throw new Error(`The card moved to '${target}', but it could not be started: see its card.`)
   return moved
 }

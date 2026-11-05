@@ -22,7 +22,8 @@ import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
-import { inputRefused, noteSent, takeRefused } from './input-refused'
+import { inputRefused, noteSent, takeRefused, WAKE_WINDOW_MS } from './input-refused'
+import { launchRefusal } from './launch-gate'
 import { boxPin, boxTargetId, heldAfter, mentionTarget, pickAfterMove, pickNow, promptTargetOf, releaseAfter, zoomMoveKey, type Pick, type Release } from './prompt-target'
 import { sendToAgent } from './send'
 import { useDictation } from './use-dictation'
@@ -178,7 +179,7 @@ const NO_IDS: readonly string[] = []
 function faceOf(id: string, name: string, rows: readonly AgentRow[], fallbackPreset: string): FaceAgent {
   const row = rows.find((r) => r.id === id)
   return row
-    ? { id, name: row.name, preset: row.preset, orch: row.orch, status: inkStatusOfRow(row.phase, row.unread) }
+    ? { id, name: row.name, preset: row.preset, orch: row.orch, status: inkStatusOfRow(row.phase, row.unread), failure: row.failure ?? null }
     : { id, name, preset: fallbackPreset, orch: false, status: 'idle' }
 }
 
@@ -445,6 +446,14 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       // make left the zoom (its card), so its next deliberate move ends it.
       setReleased(null)
       setStandIn({ id: made.id, at: zoomMoveKey(zoomStore.get()) })
+      // It could not start: the card says why, and the words wait in its box.
+      const refusal = await launchRefusal(made.id)
+      if (refusal) {
+        setText('')
+        setDraft(draftKey(made.id), raw)
+        setError(refusal)
+        return
+      }
     }
     toast.leave(`New ${harness} agent`, shownWords(raw))
     setText('')
@@ -470,8 +479,37 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       }),
     [agents]
   )
+  // Words main could not deliver after all (the agent died on waking): they come back.
+  useEffect(
+    () =>
+      cookrew().onEvent?.((raw) => {
+        const event = raw as { type?: string; entityId?: string; details?: string }
+        if (event.type !== 'terminal.input-lost' || !event.entityId) return
+        const back = takeRefused(event.entityId, '\r', Date.now(), WAKE_WINDOW_MS)
+        if (!back) return
+        if (back.words && getDraft(back.box) === '') setDraft(back.box, back.words)
+        setError(`Not sent: ${event.details ?? 'the agent would not start.'}`)
+      }),
+    []
+  )
+  const checkingLaunch = useRef(false)
+  /** An offline agent is asked first (launch-gate.ts): what cannot start must not take the words. */
   const submit = (): void => {
     setError(null)
+    const target = plan.kind === 'agent' || plan.kind === 'mention' ? plan.id : null
+    const offline = target !== null && crewRows.find((row) => row.id === target)?.phase === 'offline'
+    if (!offline) return deliver()
+    if (checkingLaunch.current) return
+    checkingLaunch.current = true
+    void launchRefusal(target)
+      // The latest render's: words typed during the check are part of the send.
+      .then((refusal) => (refusal ? setError(refusal) : deliverRef.current()))
+      .finally(() => {
+        checkingLaunch.current = false
+      })
+  }
+  const deliverRef = useRef<() => void>(() => undefined)
+  const deliver = (): void => {
     // The key dips only when its press sends something.
     if (plan.kind !== 'none' && !(plan.kind === 'new' && busy)) pressKey(sendRef.current)
     if (plan.kind === 'mention') {
@@ -509,6 +547,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     }
     if (plan.kind === 'new' && !busy) void makeNew(plan.words)
   }
+  deliverRef.current = deliver
 
   // "@…" and "#…" offer the names they could become, while the box has focus.
   const inputRef = useRef<HTMLInputElement>(null)
