@@ -62,8 +62,11 @@ const BOX = { x: 26.8, y: 27, w: 62.4, h: 46 }
 
 /** 76% of the tile: an icon is read at 16 px, so the mark keeps a wide margin. */
 const ICON_SHARE = 0.76
-/** Android's launchers keep only a centred circle of 40% radius, so the box's corners fit in it. */
-const MASKABLE_SHARE = 0.64
+/**
+ * An Android adaptive icon shows the middle 72 of its 108 units, so a launcher's circle has a
+ * radius of a third of the tile, not the 40% the maskable spec names. The box's corners fit in it.
+ */
+const MASKABLE_SHARE = 0.48
 
 /**
  * The COO on a paper square. `rounded` bakes the macOS corner in (the .icns has to carry it);
