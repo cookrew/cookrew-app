@@ -283,6 +283,21 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  firstRunRead: () => ipcRenderer.invoke('first-run:read'),
+  firstRunAdvance: (to: string) => ipcRenderer.invoke('first-run:advance', to),
+  firstRunPreflight: () => ipcRenderer.invoke('first-run:preflight'),
+  firstRunTask: () => ipcRenderer.invoke('first-run:task'),
+  firstRunDiscard: () => ipcRenderer.invoke('first-run:discard'),
+  firstRunCanStart: (preset: string) => ipcRenderer.invoke('first-run:can-start', preset),
+  onFirstRun: (cb: (view: unknown) => void) => {
+    const listener = (_e: unknown, view: unknown): void => cb(view)
+    ipcRenderer.on('first-run:changed', listener)
+    return () => ipcRenderer.removeListener('first-run:changed', listener)
+  },
+  accessState: () => ipcRenderer.invoke('access:state'),
+  // The key crosses once, into the secrets store, and is never sent back.
+  accessSave: (input: unknown) => ipcRenderer.invoke('access:save', input),
+  accessClear: () => ipcRenderer.invoke('access:clear'),
   useSources: () => ipcRenderer.invoke('use:sources'),
   openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
   openScreenSettings: (pane?: string) => ipcRenderer.invoke('use:screen-settings', pane),

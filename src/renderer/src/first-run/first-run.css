@@ -1,0 +1,515 @@
+/* THE FIRST RUN (first-run/): the paper and ink of the zoom it stands in,
+   both themes through the same tokens. Calm on purpose: rows, not cards. */
+
+.fr-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 46;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 7vh 24px 96px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 13px/1.45 var(--zv-mono);
+}
+
+.fr-col {
+  width: 100%;
+  max-width: 620px;
+  margin: auto 0;
+}
+
+.fr-title {
+  margin: 0;
+  font: 500 30px/1.2 var(--zv-serif);
+  letter-spacing: -0.01em;
+}
+
+.fr-lede {
+  margin: 8px 0 22px;
+  color: var(--zv-muted);
+}
+
+.fr-checking {
+  color: var(--zv-muted);
+}
+
+.fr-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--zv-hair-2);
+}
+
+.fr-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--zv-hair-2);
+}
+
+.fr-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--zv-muted);
+  opacity: 0.45;
+}
+
+.fr-row.found .fr-dot {
+  background: #3c8a5c;
+  opacity: 1;
+}
+
+.fr-row.missing .fr-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--zv-muted);
+  opacity: 1;
+}
+
+.fr-tool {
+  display: block;
+  min-width: 0;
+}
+
+.fr-tool b {
+  font-weight: 600;
+}
+
+.fr-tool small {
+  display: block;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-tool .fr-note {
+  color: var(--zv-ink);
+}
+
+.fr-optional {
+  margin-left: 8px;
+  color: var(--zv-muted);
+  font-size: 10.5px;
+}
+
+.fr-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fr-state {
+  color: var(--zv-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.fr-fix,
+.fr-go,
+.fr-quiet,
+.fr-folder,
+.fr-example {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.fr-fix {
+  max-width: 220px;
+  min-height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fr-fix:disabled {
+  color: var(--zv-muted);
+  cursor: default;
+}
+
+.fr-go {
+  min-height: 36px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-ink);
+  color: var(--zv-paper);
+  font-weight: 600;
+}
+
+.fr-go:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.fr-quiet {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--zv-muted);
+}
+
+.fr-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 20px;
+}
+
+.fr-why + .fr-quiet {
+  padding-left: 0;
+}
+
+.fr-why {
+  flex-basis: 100%;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-error {
+  margin: 12px 0 0;
+  color: #b3392f;
+  font-size: 12px;
+}
+
+.fr-setup {
+  margin-top: 16px;
+}
+
+.fr-setup-title {
+  margin: 0 0 6px;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-setup > :last-child {
+  height: 200px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+/* the first screen: stacked on the box that answers it, so the two read as one */
+
+.fr-task {
+  padding-bottom: 92px;
+}
+
+.fr-task .fr-col {
+  margin: auto 0 0;
+}
+
+.fr-folder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  text-align: left;
+}
+
+.fr-folder-word {
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-folder-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.fr-folder-name b {
+  font-weight: 600;
+}
+
+.fr-folder-name small {
+  display: block;
+  overflow: hidden;
+  color: var(--zv-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fr-folder-change {
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-try {
+  margin: 22px 0 8px;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-examples {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fr-example {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  text-align: left;
+}
+
+.fr-example:hover,
+.fr-folder:hover,
+.fr-fix:not(:disabled):hover {
+  background: var(--zv-hair-2);
+}
+
+.fr-named {
+  margin: 8px 0 0;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-lines {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  color: var(--zv-muted);
+  font: 11px/1.45 var(--zv-mono);
+}
+
+/* an agent getting ready: its real terminal, to answer what it asks */
+
+.fr-wait .fr-setup > :last-child {
+  height: 340px;
+}
+
+.fr-held {
+  margin: 16px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.fr-held span {
+  display: block;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-back {
+  position: absolute;
+  z-index: 46;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  color: var(--zv-ink);
+  font: 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+/* the road with no account; also inside the Routing panel, so every token has a fallback */
+
+.fr-access {
+  margin-top: 22px;
+}
+
+.fr-access-head {
+  margin: 0 0 6px;
+  font: 600 13px/1.4 var(--zv-mono, ui-monospace, Menlo, monospace);
+}
+
+.fr-access-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--zv-hair-2, rgba(0, 0, 0, 0.12));
+}
+
+.fr-endpoint {
+  margin-top: 8px;
+}
+
+.fr-protocols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.fr-protocol {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2, rgba(0, 0, 0, 0.12));
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.fr-protocol.on {
+  background: var(--zv-ink, #1d1a16);
+  color: var(--zv-paper, #f4efe4);
+}
+
+.fr-field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.fr-field span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--zv-muted, #6f675b);
+  font-size: 11.5px;
+}
+
+.fr-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--zv-card, #fbf7ee);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2, rgba(0, 0, 0, 0.12));
+  color: inherit;
+  font: inherit;
+}
+
+.fr-field small {
+  display: block;
+  margin-top: 4px;
+  color: var(--zv-muted, #6f675b);
+  font-size: 11px;
+}
+
+.fr-third-party {
+  margin-bottom: 12px;
+  font-size: 11.5px;
+}
+
+.fr-third-party p {
+  margin: 0 0 8px;
+}
+
+.fr-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.fr-check input {
+  margin: 2px 0 0;
+}
+
+.fr-check small {
+  display: block;
+  color: var(--zv-muted, #6f675b);
+  font-size: 11px;
+}
+
+/* the tool check has no prompt yet; the first screen's box shows its words and nothing else */
+
+body.cr-first-preflight .zv-controls,
+body.cr-first-preflight .cr-dock {
+  visibility: hidden;
+}
+
+body.cr-first-task .cr-prompt .cr-prompt-tray,
+body.cr-first-task .cr-prompt .cr-prompt-tools {
+  display: none;
+}
+
+/* the hints: over the work, never in its way */
+
+/* Low on the right: the top of a full view holds LIVE/CHAT and its ＋ buttons. */
+.fr-hint {
+  position: fixed;
+  z-index: 60;
+  bottom: 88px;
+  right: 16px;
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--zv-card, #fbf7ee);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2, rgba(0, 0, 0, 0.12)),
+    0 12px 32px var(--zv-shadow, rgba(0, 0, 0, 0.18));
+  color: var(--zv-ink, #1d1a16);
+  font: 12.5px/1.45 var(--zv-mono, ui-monospace, Menlo, monospace);
+}
+
+.fr-hint p {
+  margin: 6px 0 10px;
+  color: var(--zv-muted, #6f675b);
+}
+
+.fr-hint-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fr-hint .fr-go {
+  background: var(--zv-ink, #1d1a16);
+  color: var(--zv-paper, #f4efe4);
+}
+
+@media (max-width: 700px) {
+  .fr-stage {
+    padding: 28px 16px 96px;
+  }
+
+  .fr-col {
+    margin: 0;
+  }
+
+  .fr-title {
+    font-size: 25px;
+  }
+
+  /* A press takes its own line on a phone; a plain state stays at the row's end. */
+  .fr-row .fr-act:has(.fr-fix) {
+    grid-column: 2 / 4;
+    justify-self: start;
+  }
+
+  .fr-hint {
+    bottom: 84px;
+    right: 12px;
+  }
+}

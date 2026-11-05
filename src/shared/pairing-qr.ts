@@ -32,6 +32,8 @@ export const PAIRING_COPY = {
   DIRECT:
     'Claim a username to pair from anywhere; this QR pairs on this Wi-Fi only.',
   NONE: 'No address to show yet — the phone server is still starting.',
+  /** The way to the account card, from a QR that only works on this Wi-Fi. */
+  ANYWHERE: 'Use it away from this Wi-Fi',
   /** The same sentence `cookrew mobile` ends with, for the same reason. */
   ROTATE:
     'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.'

@@ -6,9 +6,11 @@
 // lines, the default picker with groups first, and the one thing the panel
 // never contains — a field for a key.
 
+import { readFileSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RoutingEntry, RoutingPanel, markRoutingSeen, shouldAutoOpen, ROUTING_SEEN_KEY } from '../src/renderer/src/routing/RoutingPanel'
+import { RoutingEntry, RoutingPanel } from '../src/renderer/src/routing/RoutingPanel'
 import { keyLineFor } from '../src/shared/route-lines'
 import { newestError } from '../src/renderer/src/routing/newest-error'
 import { WORKSPACE_CHANGED, workspaceKey } from '../src/renderer/src/routing/use-setup-terminal'
@@ -228,18 +230,36 @@ describe('the setup card and the entry', () => {
     expect(setupCardPosition(ws)).toEqual({ x: 1540, y: 0 })
   })
 
-  it('wears the gateway lamp in the header and opens by itself once, only while nothing is installed', () => {
+  // Round 2, bug 7: this panel used to open by itself while Magpie was absent, in
+  // red, over the first run. Magpie is optional: it never opens a modal, and being
+  // absent is not an error, so the auto-open is gone and that lamp is neutral.
+  it('wears the gateway lamp in the header, and never opens by itself', () => {
     expect(renderToStaticMarkup(<RoutingEntry status="online" onOpen={() => {}} />)).toContain('cr-routing-entry online')
-    const store = new Map<string, string>()
-    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) }
-    expect(shouldAutoOpen('online', storage)).toBe(false)
-    expect(shouldAutoOpen('absent', storage)).toBe(true)
-    // Deciding to open burns nothing — only a panel actually on screen does.
-    expect(store.has(ROUTING_SEEN_KEY)).toBe(false)
-    expect(shouldAutoOpen('absent', storage)).toBe(true)
-    markRoutingSeen(storage)
-    expect(store.has(ROUTING_SEEN_KEY)).toBe(true)
-    expect(shouldAutoOpen('absent', storage)).toBe(false)
+    const app = readFileSync(path.join(__dirname, '../src/renderer/src/App.tsx'), 'utf8')
+    const opens = [...app.matchAll(/setRoutingOpen\(true\)/g)]
+    expect(opens).toHaveLength(1)
+    expect(app).toContain('onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}')
+  })
+
+  // Box QA saw it open by itself on the phone and the relayed page too (round 3).
+  // Those are this same bundle: the server only adds a boot script to its index.
+  it('has no other way to open by itself, on the phone or a relayed page', () => {
+    const src = path.join(__dirname, '../src')
+    const read = (file: string): string => readFileSync(path.join(src, file), 'utf8')
+    const files = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter((file) => /\.tsx?$/.test(file))
+    const naming = (word: RegExp): string[] => files.filter((file) => word.test(read(file)))
+    expect(naming(/shouldAutoOpen|cr-routing-seen/)).toEqual([])
+    expect(naming(/<RoutingPanel\b/)).toEqual(['renderer/src/App.tsx'])
+    expect(naming(/<App\b/)).toEqual(['renderer/src/main.tsx'])
+    expect(read('renderer/src/main.tsx').match(/createRoot\(/g)).toHaveLength(1)
+    expect(read('main/mobile-server.ts')).toContain("const index = path.join(deps.rendererDir, 'index.html')")
+    expect(readdirSync(path.join(src, 'renderer')).filter((file) => file.endsWith('.html'))).toEqual(['index.html'])
+  })
+
+  it('does not use red for an optional tool that is simply absent', () => {
+    const css = readFileSync(path.join(__dirname, '../src/renderer/src/routing/routing-panel.css'), 'utf8')
+    for (const rule of css.split('}').filter((r) => r.includes('.absent'))) expect(rule).not.toMatch(/--rose|220, 38, 38/)
+    expect(css).toMatch(/\.cr-routing-entry\.offline \.cr-routing-lamp \{ background: var\(--rose\) \}/)
   })
 
   it('shows why a default pick or a Setup line did nothing, as one line under the status — the newest of them', () => {

@@ -15,6 +15,8 @@ import { TmuxMultiplexer, sessionNameFor as tmuxSessionNameFor, TMUX_LABEL as TM
 import { HerdrHostMultiplexer, HERDR_SESSION } from './herdr-host-multiplexer'
 import { HerdrStatusFeed, setStatusFeed, statusFeed } from './herdr-agent-status'
 import { DirectMultiplexer } from './direct-multiplexer'
+import { panePath } from './pane-path'
+import { ownerOf, runtimeDirFor } from './runtime-dir'
 import { planHost } from './host-claim'
 import { confirmHerdrClaim, herdrSessionDir, processClaimDeps, releaseHerdrClaim, type ClaimDeps, type ClaimVerdict } from './herdr-session-claim'
 import { reapOrphansOn } from './orphan-reap'
@@ -566,7 +568,7 @@ export class PtySession extends EventEmitter {
       socketPath: options.socketPath,
       cliDir: options.cliDir,
       ...(options.served ? { servedEnv: options.served.env } : {}),
-      ownerEnv: sanitizeAgentEnv(process.env)
+      ownerEnv: { ...sanitizeAgentEnv(process.env), PATH: panePath() }
     })
 
     // One path for every backend. The direct backend returns a plain login
@@ -578,7 +580,7 @@ export class PtySession extends EventEmitter {
       terminalId: options.terminalId,
       socketPath: options.socketPath,
       cliDir: options.cliDir,
-      path: `${options.cliDir}:${process.env.PATH ?? ''}`,
+      path: `${options.cliDir}:${options.served ? (process.env.PATH ?? '') : panePath()}`,
       cwd: options.cwd,
       card: options.card,
       ...(options.served ? {} : ownerSpawnExtras(options.route))
@@ -1428,8 +1430,8 @@ export class PtyManager {
     // Fixed (pid-independent) so a tmux session's baked-in COOKREW_SOCKET /
     // COOKREW_CLI paths stay valid across app restarts — the whole point of
     // persisting terminals in tmux.
-    this.runtimeDir = path.join(tmpdir(), 'cookrew-runtime')
-    mkdirSync(this.runtimeDir, { recursive: true })
+    this.runtimeDir = runtimeDirFor({ tmp: tmpdir(), platform: process.platform, uid: process.getuid?.() ?? null, ownerOf })
+    mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 })
     this.socketPath = path.join(this.runtimeDir, 'cookrew.sock')
     this.tmuxConf = path.join(this.runtimeDir, 'cookrew.tmux.conf')
     installPaneExitHook(this.runtimeDir)

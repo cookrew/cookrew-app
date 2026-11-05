@@ -16,11 +16,9 @@ import './routing-panel.css'
  * and the status line re-reads by itself when the line has run. There is no
  * connect button — the plugin writes the file, or the probe finds the port.
  *
- * Opens once by itself on first boot when nothing is installed; after that
- * it is a menu entry in the header.
+ * A menu entry in the header, and nothing more: Magpie is optional, so this
+ * never opens by itself (round 2: it covered the first run, in red).
  */
-
-export const ROUTING_SEEN_KEY = 'cr-routing-seen'
 
 export interface RoutingPanelProps {
   open: boolean
@@ -44,16 +42,13 @@ export interface RoutingPanelProps {
   /** Card names for the live rows. */
   names: ReadonlyMap<string, string>
   onZoom?: (terminalId: string) => void
+  /** The person's own endpoint: where it is changed once the first run is over. */
+  access?: React.ReactNode
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
   const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onSetSharedMcp, error, onAddToDock, names, onZoom, running = null } = props
   const [setupOpen, setSetupOpen] = useState(true)
-  // The first-boot flag burns when the panel is actually on screen, not when
-  // it was merely decided — a panel that never mounted must come back.
-  useEffect(() => {
-    if (open && typeof window !== 'undefined') markRoutingSeen(window.localStorage)
-  }, [open])
   // A key line was typed: the fold opens so the paste has somewhere to land.
   useEffect(() => {
     if (focusTick > 0) setSetupOpen(true)
@@ -97,6 +92,7 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
             <Rented state={state} />
           </>
         )}
+        {props.access}
         <details className="cr-routing-fold cr-routing-setup" open={setupOpen} onToggle={(e) => setSetupOpen((e.target as HTMLDetailsElement).open)}>
           <summary>▾ Setup terminal · every button above lands on one line here · the phone drives the same PTY</summary>
           <div>
@@ -122,23 +118,4 @@ export function RoutingEntry({ status, onOpen }: { status: RouteState['status'] 
       <span className="word">Routing</span>
     </button>
   )
-}
-
-/** Should the panel open by itself on this boot? Only while nothing is installed, and only until it has been shown once. */
-export function shouldAutoOpen(status: RouteState['status'] | null, storage: Pick<Storage, 'getItem'>): boolean {
-  if (status !== 'absent') return false
-  try {
-    return !storage.getItem(ROUTING_SEEN_KEY)
-  } catch {
-    return false
-  }
-}
-
-/** The panel is on screen: it will not open by itself again. */
-export function markRoutingSeen(storage: Pick<Storage, 'setItem'>): void {
-  try {
-    storage.setItem(ROUTING_SEEN_KEY, String(Date.now()))
-  } catch {
-    // storage refused; the panel may open again next boot, which is the safer failure
-  }
 }

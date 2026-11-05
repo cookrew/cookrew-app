@@ -21,6 +21,13 @@ export function lastHarness(offered: readonly string[]): string {
   return offered[0] ?? FALLBACK
 }
 
+const listeners = new Set<() => void>()
+
+export function onHarnessPref(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
 export function rememberHarness(name: string): void {
   // A shell opened from the menu leaves the harness the box was on.
   if (name === SHELL_PRESET) return
@@ -29,4 +36,5 @@ export function rememberHarness(name: string): void {
   } catch {
     // private mode: not remembered
   }
+  for (const listener of listeners) listener()
 }

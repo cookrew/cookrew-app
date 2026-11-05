@@ -89,7 +89,9 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
         }
       )
       const input = term.onData((data) => cookrew().ptyInput(terminalId, data))
-      cleanups.push(() => input.dispose(), detach, () => term.dispose())
+      // One tick later: xterm's viewport queues a timeout as it is made, and a
+      // screen gone within that tick (a first agent's wait, called off) threw there.
+      cleanups.push(() => input.dispose(), detach, () => void setTimeout(() => term.dispose(), 0))
       if (pendingFocus.current) {
         pendingFocus.current = false
         term.focus()

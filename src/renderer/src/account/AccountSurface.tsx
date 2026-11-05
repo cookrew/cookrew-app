@@ -5,9 +5,8 @@ import { AccountAvatar } from './Avatar'
 import { AccountToasts } from './AccountToasts'
 import { AccountSheet } from './AccountSheet'
 import { FirstRunCard } from './FirstRunCard'
-import { firstRunView, type FirstRunAction } from './account-store'
+import { accountAskView, type AccountAsk, type FirstRunAction } from './account-store'
 import { JoinCard } from './JoinCard'
-import { dismissFirstRun, firstRunDismissed } from './first-run'
 import { LockScreen } from './LockScreen'
 import { PasscodeCard } from './PasscodeCard'
 import { shouldAskPasscode } from './provider-store'
@@ -15,7 +14,7 @@ import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
 import { securityActions } from './security-actions'
-import { onAccountSheetRequest, onJoinRequest } from './open-request'
+import { onAccountAsk, onAccountSheetRequest, onJoinRequest } from './open-request'
 
 /**
  * THE ACCOUNT SURFACE, assembled — one hook, so App gains three lines.
@@ -59,14 +58,12 @@ export function useAccountSurface(): AccountSurface {
   /** Which tab the account sheet opens on: SIGN IN unless a button chose CREATE. */
   const [initialTab, setInitialTab] = useState<'signin' | 'register'>('signin')
   /**
-   * D8: how many workspaces this Mac has, or null until the list has been
-   * read. A fresh install has one (seeded); the card waits for the number
-   * rather than guessing, so it never flashes at an owner on launch.
+   * What the person just reached that needs an account, or null. An account
+   * is asked for here and nowhere at launch (account-store.ts · accountAskView).
    */
-  const [workspaceCount, setWorkspaceCount] = useState<number | null>(null)
-  const [dismissed, setDismissed] = useState(() => firstRunDismissed())
+  const [asked, setAsked] = useState<AccountAsk | null>(null)
   /**
-   * D8: the code a deep link brought, or one typed into the first-run card,
+   * D8: the code a deep link brought, or one typed into the account card,
    * waiting for the person to press JOIN. Null the rest of the time — nothing
    * is spent by a card appearing.
    */
@@ -105,17 +102,12 @@ export function useAccountSurface(): AccountSurface {
     }
   }, [supported, refresh])
 
-  // D8 needs one fact the account does not carry: whether this Mac has a
-  // workspace of the person's own. The list is the store's, pushed on change.
+  // Something a person reached needs an account. Having one already is the answer.
   useEffect(() => {
     if (!supported) return
-    const count = (list: { workspaces: readonly unknown[] }): void =>
-      setWorkspaceCount(list.workspaces.length)
-    void cookrew()
-      .listWorkspaces()
-      .then(count)
-      .catch(() => undefined)
-    return cookrew().onWorkspaceList(count)
+    return onAccountAsk((reason) => {
+      if (!statusRef.current?.username) setAsked(reason)
+    })
   }, [supported])
 
   // A DEVICE IS ASKING (D6). The queue changed, or the owner clicked the
@@ -194,17 +186,13 @@ export function useAccountSurface(): AccountSurface {
 
   if (!supported) return { avatar: null, overlays: null }
 
-  /** The first-run card's buttons: two open the sheet on a tab, one closes for good. */
-  const firstRun = (action: FirstRunAction): void => {
-    if (action === 'dismiss') {
-      dismissFirstRun()
-      setDismissed(true)
-      return
-    }
+  /** The account card's buttons: two open the sheet on a tab, one closes it. */
+  const askAction = (action: FirstRunAction): void => {
+    setAsked(null)
+    if (action === 'dismiss') return
     setInitialTab(action)
     setSheet('account')
   }
-  const firstRunCard = firstRunView({ status, workspaceCount, dismissed })
 
   const overlays = (
     <>
@@ -212,13 +200,13 @@ export function useAccountSurface(): AccountSurface {
           answers nothing and steals no click: the queue is where an account
           event is acted on. */}
       <AccountToasts />
-      {/* D8: one card, on a fresh Mac only. Drawn under the sheets, and it
-          takes nothing over — the avatar keeps the same door forever. */}
-      {firstRunCard && joining === null && (
-        <FirstRunCard view={firstRunCard} onAction={firstRun} onJoin={setJoining} />
+      {/* One card, when something needs an account. Drawn under the sheets,
+          and it takes nothing over — the avatar keeps the same door forever. */}
+      {asked !== null && joining === null && status?.username == null && (
+        <FirstRunCard view={accountAskView(asked)} onAction={askAction} onJoin={setJoining} />
       )}
       {/* D8: the one card that spends a code — typed here or deep-linked.
-          It replaces the first-run card rather than sitting over it: they
+          It replaces the account card rather than sitting over it: they
           are the same question, asked twice. */}
       {joining !== null && status?.username == null && (
         <JoinCard
@@ -227,10 +215,7 @@ export function useAccountSurface(): AccountSurface {
           onJoined={(next) => {
             setJoining(null)
             setStatus(next)
-            // The card is done with; a Mac that has joined is a Mac with an
-            // account, and the first-run card's own rule already hides it.
-            dismissFirstRun()
-            setDismissed(true)
+            setAsked(null)
           }}
         />
       )}
@@ -241,6 +226,10 @@ export function useAccountSurface(): AccountSurface {
           // a door, it is setting a password on the name it has.
           legacy={status?.legacy ?? null}
           onClose={() => setSheet('none')}
+          onHaveCode={() => {
+            setSheet('none')
+            setAsked('join')
+          }}
           onDone={(next, via) => {
             setStatus(next)
             // D3 is shown ONCE, right after a name is CREATED here. A sign-in

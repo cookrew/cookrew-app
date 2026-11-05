@@ -18,6 +18,8 @@
 // Mac only: the shim's keychain promise is a Mac one, and a fuse that stops an
 // unsigned Windows or Linux build from starting would buy nothing.
 
+const { wrapBinary } = require('./linux-launch.cjs')
+
 const fuseConfig = (options) => ({
   [options.RunAsNode]: true,
   [options.EnableNodeOptionsEnvironmentVariable]: false,
@@ -29,6 +31,8 @@ const fuseConfig = (options) => ({
 exports.fuseConfig = fuseConfig
 
 exports.default = async function afterPack(context) {
+  // The one Linux step here: the fuses stay Mac only.
+  if (context.electronPlatformName === 'linux') return wrapBinary(context.appOutDir, context.packager.executableName)
   if (context.electronPlatformName !== 'darwin') return
   const { flipFuses, FuseV1Options, FuseVersion } = await import('@electron/fuses')
   const app = `${context.appOutDir}/${context.packager.appInfo.productFilename}.app`

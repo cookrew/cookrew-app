@@ -1130,6 +1130,24 @@ describe('sanitizeAgentEnv — the launcher session must not leak into agents', 
   })
 })
 
+describe('sanitizeAgentEnv — what a person set on purpose reaches the agent (C-4)', () => {
+  it('passes CLAUDE_CODE_ settings when no Claude session launched this app: they can only be the person’s', () => {
+    const clean = sanitizeAgentEnv({ CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1', PATH: '/usr/bin' })
+    expect(clean.CLAUDE_CODE_SIMPLE).toBe('1')
+    expect(clean.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT).toBe('1')
+  })
+
+  it('still takes out a session’s own markers, wherever they came from', () => {
+    const clean = sanitizeAgentEnv({ CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SSE_PORT: '1234', CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_SIMPLE: '1' })
+    expect(Object.keys(clean)).toEqual(['CLAUDE_CODE_SIMPLE'])
+  })
+
+  it('strips them all when a Claude session did launch it: nothing tells its vars from a person’s', () => {
+    const clean = sanitizeAgentEnv({ CLAUDECODE: '1', CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_SOMETHING_NEW: '1', PATH: '/usr/bin' })
+    expect(Object.keys(clean)).toEqual(['PATH'])
+  })
+})
+
 describe('release without losing registration — detectorless kinds', () => {
   // "The registry survives release" is only true for kinds herdr's detector
   // re-registers (claude/codex/pi). A kind with NO detector — 'shell', any

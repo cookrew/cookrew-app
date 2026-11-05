@@ -26,7 +26,7 @@ import { isViewed, markViewed, pruneViewers, type ViewerClocks } from '../../sha
 import { TerminalNode } from './nodes/TerminalNode'
 import { NoteNode } from './nodes/NoteNode'
 import { useWorkspaceWall } from './WorkspaceWallHost'
-import { RoutingPanel, shouldAutoOpen } from './routing/RoutingPanel'
+import { RoutingPanel } from './routing/RoutingPanel'
 import { useRouteState } from './routing/use-route-state'
 import { useSetupTerminal } from './routing/use-setup-terminal'
 import { newestError } from './routing/newest-error'
@@ -126,6 +126,9 @@ import { CrewProvider, WithCrew } from './stage/crew-rows'
 import { ItemPets } from './pets/ItemPets'
 import { thumbWants } from './pets/thumb-wants'
 import { ZoomView } from './zoom/ZoomView'
+import { AccessRows } from './first-run/AccessRows'
+import { FirstRunHints } from './first-run/FirstRunHints'
+import { FirstRunScreens } from './first-run/FirstRunScreens'
 import { useZoomFull } from './zoom/zoom-store'
 import { zoomStore } from './zoom/zoom-store'
 import { importTeam, makeAgent, makeItem, type Made } from './zoom/make-card'
@@ -335,9 +338,6 @@ function Canvas(): React.JSX.Element {
   const routeState = useRouteState()
   const setupTerminal = useSetupTerminal(workspace)
   const [routingOpen, setRoutingOpen] = useState(false)
-  useEffect(() => {
-    if (routeState.state && shouldAutoOpen(routeState.state.status, window.localStorage)) setRoutingOpen(true)
-  }, [routeState.state])
   // The panel opening is the owner looking: ask main once, so a renderer that
   // fell behind the gateway shows the default the owner actually has.
   const rereadRoute = routeState.reread
@@ -1498,7 +1498,7 @@ function Canvas(): React.JSX.Element {
               <TerminalAttachmentsContext.Provider value={attachIndex}>
                 <WithCrew>
                   {(crew) => (
-                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose} onNewWorkspace={wall.openCreate}>
+                    <ZoomView workspace={workspace} workspaceId={activeWsId} attachIndex={attachIndex} crew={crew} onDelete={requestClose} onNewWorkspace={wall.openCreate} firstRun={<FirstRunScreens nodes={workspace?.nodes ?? NO_NODES} setup={setupTerminal} />}>
                       {zoomFull !== null && <StageView workspace={workspace} workspaceId={activeWsId} terminals={terminals} attachIndex={attachIndex} crew={crew} onShowing={setStageShowing} />}
                     </ZoomView>
                   )}
@@ -1633,6 +1633,7 @@ function Canvas(): React.JSX.Element {
             after the canvas and measures that stage rather than guessing. */}
         {wall.element}
         <RoutingPanel
+          access={typeof cookrew().accessState === 'function' ? <AccessRows whenActive /> : null}
           open={routingOpen}
           onClose={() => setRoutingOpen(false)}
           state={routeState.state}
@@ -1658,6 +1659,7 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        <FirstRunHints />
         <RemoteHostBanner />
         <UnlockSheet />
         {/* THE BROWSER HOST: every browser page lives in BrowserLayer and is

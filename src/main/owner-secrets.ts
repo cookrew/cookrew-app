@@ -164,6 +164,10 @@ export function ownerSecretPaths(
     // owner's companion to whoever holds it.
     path.join(base, 'secrets'),
     path.join(base, 'pairing-token'),
+    // A person's own endpoint (agent-access.ts): its key, copied out for panes
+    // to read at boot, and where it points. A seat never runs on either.
+    path.join(base, 'access-keys'),
+    path.join(base, 'access.json'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
     // What a phone's sealed Mac password opens under (remote-unlock.ts).

@@ -80,7 +80,7 @@ export { DEFAULT_LOCK_AFTER_MS }
  * second wording of the same rule.
  */
 export const RESERVED_SENTENCE = (username: string): string =>
-  `${RESERVED_PREFIXES.find((prefix) => username.startsWith(prefix)) ?? 'That prefix'} is reserved for the doors — pick another name.`
+  `${RESERVED_PREFIXES.find((prefix) => username.startsWith(prefix)) ?? 'That prefix'} is reserved — pick another name.`
 
 /** Where the account lives. `base` exists so tests never touch a real home. */
 export function accountFilePath(base?: string): string {

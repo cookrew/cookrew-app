@@ -22,6 +22,13 @@ import path from 'node:path'
  * written for has moved (an update, an AppImage that unmounted).
  */
 
+/**
+ * A binary is run only if it is the caller's or root's. Baked or published, its
+ * path can outlive it: an AppImage's mount under /tmp goes when the app quits, and
+ * anyone can make that path again. An AppImage reads as root's or the caller's.
+ */
+export const OWNED_BINARY = 'owned_binary() { [ -O "$1" ] && return 0; set -- $(ls -ln "$1" 2>/dev/null); [ "$3" = 0 ]; }'
+
 const quoted = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
 
 /** The wrapper a pane finds on PATH. */
@@ -32,7 +39,8 @@ export function cliWrapper(script: string, runtime: string): string {
     `RUNTIME=${quoted(runtime)}`,
     `SCRIPT=${quoted(script)}`,
     'export ELECTRON_RUN_AS_NODE=1',
-    'if [ -x "$RUNTIME" ]; then exec "$RUNTIME" "$SCRIPT" "$@"; fi',
+    OWNED_BINARY,
+    'if [ -x "$RUNTIME" ] && owned_binary "$RUNTIME"; then exec "$RUNTIME" "$SCRIPT" "$@"; fi',
     'if command -v node >/dev/null 2>&1; then exec node "$SCRIPT" "$@"; fi',
     'echo "cookrew: the app binary has moved and there is no node here. Open Cookrew once, then try again." >&2',
     'exit 127',

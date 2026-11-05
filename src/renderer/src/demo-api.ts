@@ -15,6 +15,7 @@ import { checkBrief } from '../../shared/workspace-brief'
 import { planRename } from '../../shared/rename-plan'
 import type { Alternate } from '../../shared/sous-decide'
 import type { CookrewApi } from './api'
+import { freshDemoApi, freshMode } from './demo-first-run'
 
 /**
  * Browser demo backend: when the renderer runs outside Electron (plain
@@ -106,10 +107,12 @@ const demoSecrets = new Map<string, { name: string; served: boolean; updatedAt: 
 
 export function createDemoApi(): CookrewApi {
   // In-memory workspace registry so the demo can switch canvases too.
+  const search = typeof location === 'undefined' ? '' : location.search
+  const fresh = freshMode(search)
   const metas: WorkspaceMeta[] = [
-    { id: 'demo-ws', name: 'Cookrew Demo', dir: '~', dirs: ['~'], icon: '🗂' }
+    { id: 'demo-ws', name: fresh ? 'My Workspace' : 'Cookrew Demo', dir: '~', dirs: ['~'], icon: '🗂' }
   ]
-  const states = new Map<string, WorkspaceState>([['demo-ws', demoWorkspace()]])
+  const states = new Map<string, WorkspaceState>([['demo-ws', fresh ? { ...demoWorkspace(), name: 'My Workspace', nodes: [], connections: [] } : demoWorkspace()]])
   let activeId = 'demo-ws'
   // A counter beside the clock: two workspaces made in the same millisecond
   // (a fixture seeding several at boot) must not share an id, or switching to
@@ -663,5 +666,5 @@ export function createDemoApi(): CookrewApi {
     workspaceShots: async () => ({}),
     quitApp: () => undefined
   }
-  return api
+  return fresh ? freshDemoApi(api, fresh, search) : api
 }

@@ -123,6 +123,8 @@ nsis:
   # Named so the tradeoff is visible before installation, not after.
   artifactName: ${productName}-${version}-windows-preview-${arch}.${ext}
 
+# A refused sandbox aborts before any JS: afterPack puts the binary behind a script
+# that can say so (scripts/linux-launch.cjs).
 linux:
   icon: resources/icon.png
   category: Development

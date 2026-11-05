@@ -6,6 +6,7 @@ import {
 } from './turn-view-model'
 import type { ActivityClock } from './activity-clock'
 import type { AgentRegistryEntry } from './agent-registry'
+import { turnFailure } from '../../shared/turn-failure'
 import type { TerminalActivity } from '../../shared/turn'
 import type { CanvasNode, TerminalNodeData } from '../../shared/model'
 import type { LaunchFailure } from '../../shared/launch-failure'
@@ -20,7 +21,7 @@ import type { LaunchFailure } from '../../shared/launch-failure'
  * everything"), which is what makes the join a lookup rather than a match.
  */
 
-export type AgentPhase = 'working' | 'waiting' | 'done' | 'offline' | 'quiet'
+export type AgentPhase = 'working' | 'waiting' | 'failed' | 'done' | 'offline' | 'quiet'
 
 export interface AgentRow {
   id: string
@@ -100,6 +101,8 @@ const FLOAT_RANK: Record<AgentPhase, number> = {
   done: 2,
   offline: 3,
   quiet: 4,
+  // A refused turn wants a person as much as a question does.
+  failed: 0,
 }
 
 /** A turn worth showing: something was asked, replied, or is on screen. */
@@ -150,6 +153,8 @@ function phaseOf(
   // the canvas card calls it too. Nothing at all is one of the 220 that have
   // never run here.
   if (!activity) return turn === null ? 'quiet' : 'done'
+  // Its last words say the provider refused it: quiet, and no more done than that.
+  if ((activity.phase === 'replied' || activity.phase === 'idle') && turnFailure(activity)) return 'failed'
   switch (activity.phase) {
     case 'thinking':
       return 'working'

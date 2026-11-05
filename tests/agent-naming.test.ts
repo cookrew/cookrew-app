@@ -2,7 +2,7 @@
 // once, Sous's name once it answers (the way /rename titles a chat), and a
 // rename that refuses a name another card of the workspace already wears.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildNamePrompt, buildNameSystem, cleanAgentName, sanitizeAgentName, AGENT_NAME_MAX } from '../src/shared/agent-name'
+import { buildNamePrompt, buildNameSystem, cleanAgentName, nameFromPrompt, sanitizeAgentName, AGENT_NAME_MAX } from '../src/shared/agent-name'
 import { planRename, stillStandIn } from '../src/main/agent-rename'
 import { nameAgent } from '../src/main/agent-namer'
 
@@ -137,5 +137,37 @@ describe('nameAgent — Sous on the local road', () => {
     const never = vi.fn() as unknown as typeof fetch
     expect(await nameAgent('   ', { fetchFn: never })).toBeNull()
     expect(never).not.toHaveBeenCalled()
+  })
+})
+
+describe('no Ollama on this Mac: the plain name stays, and nothing is said', () => {
+  const quiet = (): ReturnType<typeof vi.spyOn> => vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+  it('reads a refused connection as no name, with no error', async () => {
+    const error = quiet()
+    const refused = vi.fn(() => Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }))) as unknown as typeof fetch
+    expect(await nameAgent('fix the login bug', { fetchFn: refused })).toBeNull()
+    expect(error).not.toHaveBeenCalled()
+    error.mockRestore()
+  })
+
+  it('reads a model not pulled yet the same way', async () => {
+    const error = quiet()
+    const noModel = vi.fn(() => Promise.resolve(new Response('{"error":"model not found"}', { status: 404 }))) as unknown as typeof fetch
+    expect(await nameAgent('fix the login bug', { fetchFn: noModel })).toBeNull()
+    expect(error).not.toHaveBeenCalled()
+    error.mockRestore()
+  })
+
+  it('still says so when a running Ollama fails', async () => {
+    const error = quiet()
+    const broken = vi.fn(() => Promise.resolve(new Response('boom', { status: 500 }))) as unknown as typeof fetch
+    expect(await nameAgent('fix the login bug', { fetchFn: broken })).toBeNull()
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
+  })
+
+  it('falls back to a plain name a person can read, by rule alone', () => {
+    expect(nameFromPrompt('Write a short README for this folder')).toBe('Short Readme')
   })
 })

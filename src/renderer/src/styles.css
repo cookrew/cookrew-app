@@ -5691,10 +5691,14 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   position: absolute;
   top: 72px;
   left: 24px;
-  /* Above the terminal overlays a fresh canvas zooms into (the seeded
-     Conductor), below every sheet's scrim (60): a card nobody can press is
-     the first thing a new install would show. */
+  /* Above the board, below every sheet's scrim (60): a card nobody can press
+     is no answer to the thing the person just reached. */
   z-index: 55;
+  max-width: calc(100vw - 48px);
+}
+.cr-acct-firstrun .gs-input { min-width: 0; }
+@media (max-width: 700px) {
+  .cr-acct-firstrun { left: 12px; max-width: calc(100vw - 24px); }
 }
 .cr-acct-firstrun .gs-sheet-head h2.cr-acct-cardhead { margin: 0; font-size: 11px; }
 .cr-acct-firstrun-join { margin-top: 12px; }

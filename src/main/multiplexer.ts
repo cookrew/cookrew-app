@@ -31,12 +31,22 @@
  * The leak path is parenthood, not the boot script: panes are children of the
  * multiplexer server, and the server inherited the launcher's env. So this is
  * applied wherever Cookrew hands an env to a server or a pane process.
+ *
+ * THE RULE FOR CLAUDE_CODE_*: CLAUDECODE is what says a Claude session launched
+ * this app. If it did, every CLAUDE_CODE_ variable goes, since nothing tells that
+ * session's from a person's, and a new marker must not be able to freeze the
+ * transcripts. If it did not, they can only be the person's own settings
+ * (CLAUDE_CODE_SIMPLE, the unknown-model guard), so they pass, less the markers
+ * named below. Part C: stripping them all meant only a wrapper script could set one.
  */
+const SESSION_MARKER = /^CLAUDE_CODE_(?:CHILD_SESSION|ENTRYPOINT|SSE_PORT|SESSION|EXECPATH)/
+
 export function sanitizeAgentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const clean: NodeJS.ProcessEnv = {}
+  const insideClaude = env.CLAUDECODE !== undefined
   for (const [key, value] of Object.entries(env)) {
     if (key === 'CLAUDECODE' || key === 'CLAUDE_PID' || key === 'CLAUDE_EFFORT') continue
-    if (key.startsWith('CLAUDE_CODE_')) continue
+    if (key.startsWith('CLAUDE_CODE_') && (insideClaude || SESSION_MARKER.test(key))) continue
     clean[key] = value
   }
   return clean

@@ -8,7 +8,7 @@ import type { TurnPhase } from '../../../shared/turn'
  * shoulder while the reply is unread; offline fades the ink and writes a z.
  * Pure, so the mapping is tested without a DOM.
  */
-export type InkStatus = 'idle' | 'working' | 'waiting' | 'done' | 'offline'
+export type InkStatus = 'idle' | 'working' | 'waiting' | 'done' | 'failed' | 'offline'
 export type CornerMark = 'tick' | 'zee'
 
 const OF_TURN: Record<TurnPhase | 'off', InkStatus> = { idle: 'idle', thinking: 'working', waiting: 'waiting', replied: 'done', off: 'offline' }
@@ -28,7 +28,7 @@ export function inkStatusOfRow(phase: AgentPhase, unread = false): InkStatus {
  * A read reply rests, as a quiet agent does; "done", the amber word, is the
  * unread reply only.
  */
-const WORD_OF: Record<InkStatus, string> = { idle: 'resting', working: 'working', waiting: 'needs you', done: 'done', offline: 'offline' }
+const WORD_OF: Record<InkStatus, string> = { idle: 'resting', working: 'working', waiting: 'needs you', failed: 'failed', done: 'done', offline: 'offline' }
 
 export const statusWord = (status: InkStatus): string => WORD_OF[status]
 
