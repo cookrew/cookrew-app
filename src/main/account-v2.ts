@@ -946,10 +946,6 @@ export class Accounts {
         }
       }
       const refused = classify(response.status, body)
-      // No password can ever answer a deleted account, and this prompt is where a
-      // Mac that missed the delete is stuck. Asked only here, on a person's own
-      // try: a session that merely ended must not start a round of requests.
-      if (response.status === 401 && (await this.forgetIfDeleted())) return { ok: false, reason: 'no_account' }
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password here is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
@@ -1324,6 +1320,10 @@ export class Accounts {
         }
       }
       const refused = classify(response.status, body)
+      // No password can ever answer a deleted account, and this prompt is where a
+      // Mac that missed the delete is stuck. Asked only here, on a person's own
+      // try: a session that merely ended must not start a round of requests.
+      if (response.status === 401 && (await this.forgetIfDeleted())) return { ok: false, reason: 'no_account' }
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password on a resume is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
