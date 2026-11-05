@@ -1,4 +1,5 @@
 import type { MenuAct } from '../../shared/wait-choice'
+import type { UseSourceList, UseSourceOpened, UseSourcePick, UseSourceSettings } from '../../shared/use-sources'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
@@ -356,6 +357,14 @@ export interface CookrewApi {
    * per terminal because a pin belongs to a transcript, not to a workspace.
    */
   listPins: (terminalId: string) => Promise<VersionPinRecord[]>;
+  /**
+   * The window picker (use/SourcePicker.tsx): this machine's windows and
+   * displays, a pick that makes or re-points a card, and the page of a missing
+   * grant. A phone reaches the same service over /api/use/sources.
+   */
+  useSources?: () => Promise<UseSourceList>;
+  openUseSource?: (pick: UseSourcePick) => Promise<UseSourceOpened>;
+  openScreenSettings?: () => Promise<UseSourceSettings>;
   createTerminal: (opts: {
     name: string;
     preset: string;

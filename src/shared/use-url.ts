@@ -16,6 +16,7 @@ import { parseVphoneUrl } from './vphone-url'
  *   screen://2?roi=0,0,800,600    a display, cropped            computer
  *   window://Safari               the frontmost Safari window   computer
  *   window://Simulator/iPhone 17  a window whose title contains computer
+ *   window://Safari?id=48213      that one window, and no other computer
  *   adb://emulator-5554           an Android device over adb    phone
  *   adb://default                 the only attached device      phone
  *   vphone://myphone              a vphone-cli virtual iPhone   phone
@@ -26,6 +27,13 @@ import { parseVphoneUrl } from './vphone-url'
  *
  * Names are held to characters a shell and a URL carry safely; nothing here
  * ever reaches a shell unquoted, but the address is also the card's title.
+ *
+ * `id=` is what the window picker writes: the card is bound to that window,
+ * so another window of the app, or a new one with the same title, never takes
+ * its place. The app name stays beside it as a check on the id, and an app is
+ * called whatever it is called, so an id widens the name past the hand-typed
+ * set. The title is not in a bound address: it changes, and the card's name
+ * already carries it.
  */
 
 export type UseKind = 'screen' | 'window' | 'adb' | 'vphone' | 'cam'
@@ -46,6 +54,8 @@ export interface UseTarget {
   /** The window title fragment, or the vphone bundle id. */
   readonly detail: string | null
   readonly roi: Roi | null
+  /** The one window this card is bound to; absent for an address that finds a window by name. */
+  readonly windowId?: number
 }
 
 const USE_OF: Record<UseKind, UseTarget['use']> = {
@@ -58,6 +68,9 @@ const USE_OF: Record<UseKind, UseTarget['use']> = {
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9 ._:()-]{0,79}$/
 const DETAIL = /^[^\u0000-\u001f/\\]{1,120}$/
+/** A CGWindowID: a uint32, and never 0. */
+const WINDOW_ID = /^[1-9][0-9]{0,9}$/
+const WINDOW_ID_MAX = 0xffffffff
 /** The largest region anyone has a screen for; a bigger number is a typo. */
 const ROI_MAX = 16384
 
@@ -69,6 +82,18 @@ export const parseRoi = (raw: string | null): Roi | null | undefined => {
   if (width < 16 || height < 16) return undefined
   return { x, y, width, height }
 }
+
+/** The id an address binds to: null for none, undefined for one that is not a window id. */
+const parseWindowId = (raw: string | null): number | null | undefined => {
+  if (raw === null) return null
+  if (!WINDOW_ID.test(raw)) return undefined
+  const id = Number(raw)
+  return id <= WINDOW_ID_MAX ? id : undefined
+}
+
+/** Any app's name, made fit for a bound address; both sides of the check on the id go through this. */
+export const windowAppName = (app: string): string =>
+  app.replace(/[\u0000-\u001f/\\]+/g, ' ').trim().slice(0, 120).trim() || 'Window'
 
 const decode = (raw: string): string | null => {
   try {
@@ -90,19 +115,25 @@ export const parseUseUrl = (url: string): UseTarget | null => {
   const kind = match[1].toLowerCase() as Exclude<UseKind, 'vphone'>
   const name = decode(match[2])
   const detailRaw = match[3] === undefined || match[3] === '' ? null : decode(match[3])
-  if (name === null || !NAME.test(name)) return null
+  const query = new URLSearchParams(match[4] ?? '')
+  const windowId = parseWindowId(query.get('id'))
+  if (windowId === undefined || (windowId !== null && kind !== 'window')) return null
+  if (name === null || !(windowId !== null ? DETAIL : NAME).test(name)) return null
   if (detailRaw !== null && (kind !== 'window' || !DETAIL.test(detailRaw))) return null
-  const roi = parseRoi(new URLSearchParams(match[4] ?? '').get('roi'))
+  const roi = parseRoi(query.get('roi'))
   if (roi === undefined) return null
   if (roi !== null && kind !== 'screen' && kind !== 'window') return null
-  return { kind, use: USE_OF[kind], name, detail: detailRaw, roi }
+  return { kind, use: USE_OF[kind], name, detail: detailRaw, roi, ...(windowId !== null ? { windowId } : {}) }
 }
 
 export const isUseUrl = (url: string): boolean => parseUseUrl(url) !== null
 
 /** The address for a target — the inverse of parseUseUrl. */
-export const useUrl = (target: Pick<UseTarget, 'kind' | 'name' | 'detail' | 'roi'>): string => {
+export const useUrl = (target: Pick<UseTarget, 'kind' | 'name' | 'detail' | 'roi' | 'windowId'>): string => {
   const detail = target.detail ? `/${encodeURIComponent(target.detail)}` : ''
-  const roi = target.roi ? `?roi=${target.roi.x},${target.roi.y},${target.roi.width},${target.roi.height}` : ''
-  return `${target.kind}://${encodeURIComponent(target.name)}${detail}${roi}`
+  const query = [
+    ...(target.windowId ? [`id=${target.windowId}`] : []),
+    ...(target.roi ? [`roi=${target.roi.x},${target.roi.y},${target.roi.width},${target.roi.height}`] : [])
+  ]
+  return `${target.kind}://${encodeURIComponent(target.name)}${detail}${query.length > 0 ? `?${query.join('&')}` : ''}`
 }

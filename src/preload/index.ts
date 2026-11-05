@@ -266,6 +266,9 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  useSources: () => ipcRenderer.invoke('use:sources'),
+  openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
+  openScreenSettings: () => ipcRenderer.invoke('use:screen-settings'),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */

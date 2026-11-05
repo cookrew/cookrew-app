@@ -222,6 +222,30 @@ describe('GET /stream/live', () => {
     expect(third.data.total).toBe(2)
   })
 
+  it('pushes words sent mid-turn the moment they queue, and again when the agent reads them', async () => {
+    const { file, service } = bed([prompt('u1', 'first ask', T0), reply('working', T0 + 1, null)])
+    const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })
+    await live.until((f) => f.filter((frame) => frame.event === 'tail').length === 1)
+    const tails = (frames: Frame[]): Array<{ queued?: string[]; added?: Array<{ text: string }> }> =>
+      frames.filter((frame) => frame.event === 'tail').map((frame) => frame.data.block as { queued?: string[] })
+
+    appendFileSync(file, `${JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: iso(T0 + 2), content: 'also this' })}\n`)
+    const queued = await live.until((f) => tails(f).length === 2)
+    expect(tails(queued)[1].queued).toEqual(['also this'])
+
+    appendFileSync(
+      file,
+      [
+        JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: iso(T0 + 3), content: 'also this' }),
+        JSON.stringify({ type: 'attachment', timestamp: iso(T0 + 3), attachment: { type: 'queued_command', prompt: 'also this', commandMode: 'prompt', origin: { kind: 'human' } } }),
+        ''
+      ].join('\n')
+    )
+    const read = await live.until((f) => tails(f).length === 3)
+    expect(tails(read)[2].queued).toBeUndefined()
+    expect(tails(read)[2].added?.map((a) => a.text)).toEqual(['also this'])
+  })
+
   it('reports final when the harness ends the turn — the rule T1 left open', async () => {
     const { file, service } = bed([prompt('u1', 'ask', T0), reply('working', T0 + 1, null)])
     const live = await open(service, { pollMs: 20, heartbeatMs: 10_000 })

@@ -20,6 +20,11 @@ import { useSyncExternalStore } from 'react'
  *
  * iPhone (WebKit, Chrome there included) gives a page no fullscreenEnabled,
  * so the row is simply not offered. Nothing here may throw into the app.
+ *
+ * Installed on the home screen, the manifest's display: fullscreen does the
+ * hiding and nothing ever asks: the row is not offered, and the cutout flag is
+ * set at boot instead. A tab in the Fullscreen API matches the same media
+ * query, so "installed" also means no element is full screen.
  */
 
 /** The slice of Document this needs, so a test can hand in a fake one. */
@@ -53,6 +58,28 @@ function coverCutout(doc: FullscreenDoc): void {
   const content = meta.getAttribute('content') ?? ''
   const next = withCover(content)
   if (next !== content) meta.setAttribute('content', next)
+}
+
+/** Reads a media query; a parameter so a test needs no window. */
+export type MediaMatch = (query: string) => { matches: boolean }
+
+export const pageMedia: MediaMatch = (query) => window.matchMedia(query)
+
+export const installedFullscreen = (doc: FullscreenDoc, match: MediaMatch): boolean =>
+  !isFullscreen(doc) && match('(display-mode: fullscreen)').matches
+
+export function coverInstalledApp(doc: FullscreenDoc, match: MediaMatch): void {
+  if (installedFullscreen(doc, match)) coverCutout(doc)
+}
+
+/**
+ * At boot, and again at DOMContentLoaded: this module runs before that event,
+ * and the companion's boot script rewrites the viewport tag during it.
+ */
+export function startInstalledCover(): void {
+  const cover = (): void => coverInstalledApp(document, pageMedia)
+  cover()
+  document.addEventListener('DOMContentLoaded', cover, { once: true })
 }
 
 /** Into full screen or back out; resolves to whether the page is full screen after. */

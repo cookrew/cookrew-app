@@ -392,7 +392,13 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
     if (use !== 'computer' && use !== 'phone' && use !== 'hardware') return null
     return {
       kind: 'status',
-      status: { state, use, message: typeof obj.message === 'string' ? obj.message : null, input: obj.input === true }
+      status: {
+        state,
+        use,
+        message: typeof obj.message === 'string' ? obj.message : null,
+        input: obj.input === true,
+        ...(obj.gone === 'window' ? { gone: 'window' as const } : {})
+      }
     }
   }
   return null

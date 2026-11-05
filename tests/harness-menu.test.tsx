@@ -159,3 +159,22 @@ describe('the dock, with the TERMINAL button retired', () => {
     expect(await render({ orch: true })).not.toContain('ORCH')
   })
 })
+
+describe('the ＋ menu reaches the window picker', () => {
+  it('offers a window or screen under OPEN NOW, and the press closes the menu', () => {
+    const onSource = vi.fn()
+    const onDone = vi.fn()
+    const tree = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts: actsWith({ onSource }), onDone })
+    expect(renderToStaticMarkup(tree)).toContain('Window or screen')
+    press(tree, 'Window or screen')
+    expect(onSource).toHaveBeenCalledOnce()
+    expect(onDone).toHaveBeenCalledOnce()
+  })
+
+  it('stands alone when there is no shell and no role, and is absent where nothing can share', () => {
+    const alone = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts: actsWith({ shell: false, roles: [], onSource: () => undefined }), onDone: () => undefined })
+    expect(renderToStaticMarkup(alone)).toContain('OPEN NOW')
+    const none = HarnessMenu({ at: AT, harnesses: HARNESSES, harness: 'Codex', onPick: () => undefined, acts: actsWith(), onDone: () => undefined })
+    expect(renderToStaticMarkup(none)).not.toContain('Window or screen')
+  })
+})

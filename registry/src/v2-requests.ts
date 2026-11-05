@@ -35,8 +35,8 @@ import { newRequestId } from './v2-events'
  * same promise the door relay makes, kept the same way.
  */
 
-const SEAT_TTL_MS = 7 * 24 * 60 * 60 * 1000
-const REACH_TTL_MS = 10 * 60 * 1000
+export const SEAT_TTL_MS = 7 * 24 * 60 * 60 * 1000
+export const REACH_TTL_MS = 10 * 60 * 1000
 /** More than a busy owner answers at once; a flood cannot grow past it. */
 const PER_ACCOUNT = 50
 

@@ -23,7 +23,7 @@
  *                  app checks the signature and shows the contents first, and
  *                  the person decides. If a reader takes one thing from this
  *                  page, it should be that nothing happens without them.
- *   gated.note     this preset needs an account before it can be downloaded.
+ *   gated.note     Cookrew asks for a sign-in before installing this preset.
  *   unknown.title  the link names no preset we hold.
  *   unknown.body   why that might be, without blaming the reader.
  *
@@ -44,7 +44,7 @@ export const MKT_INSTALL = {
   'mkt.install.noapp': 'Cookrew is open source. You can get it here:',
   'mkt.install.review.note':
     'Opening a link installs nothing. Cookrew checks the preset itself and shows you what it contains, and you decide.',
-  'mkt.install.gated.note': 'This preset needs an account before it can be downloaded.',
+  'mkt.install.gated.note': 'Cookrew asks you to sign in before installing this preset.',
   'mkt.install.unknown.title': 'This link does not point at a preset.',
   'mkt.install.unknown.body': 'It may have been removed, or the link may be incomplete.'
 } as const
