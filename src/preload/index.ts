@@ -637,6 +637,7 @@ const api = {
   browserStreamToken: () => ipcRenderer.invoke('browser:stream-token'),
   watchCode: () => ipcRenderer.invoke('watch:code'),
   watchState: () => ipcRenderer.invoke('watch:state'),
+  watchInvite: (current: string) => ipcRenderer.invoke('watch:invite', current),
   watchForget: () => ipcRenderer.invoke('watch:forget'),
   openBrowserStream,
   onCmdW: (cb: () => void) => {

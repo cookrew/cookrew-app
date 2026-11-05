@@ -5,7 +5,7 @@ import type { StrayPane } from '../../shared/stray-pane'
 import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
-import type { WatchCode } from './watch-code'
+import type { WatchCode, WatchInvite, WatchState } from './watch-code'
 import type { ImageBytes, ImageRef } from '../../shared/prompt-images'
 import type { DeepLink } from '../../shared/deep-link'
 import type { AnsweredRow, QueueRow, RowAction } from '../../shared/account-requests'
@@ -781,7 +781,9 @@ export interface CookrewApi {
   /** Six digits for an Apple Watch, and where it can reach this Mac. Absent in the demo. */
   watchCode?: () => Promise<WatchCode>;
   /** Is a watch paired; and forget it, here and now. */
-  watchState?: () => Promise<{ paired: boolean }>;
+  watchState?: () => Promise<WatchState>;
+  /** One code for a watch anywhere: the account's join code, armed on this Mac as the claim too. */
+  watchInvite?: (current: string) => Promise<WatchInvite>;
   watchForget?: () => Promise<unknown>;
   /**
    * The desktop's own line to a browser card's Chrome: a MessagePort from

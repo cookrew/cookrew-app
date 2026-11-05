@@ -171,7 +171,7 @@ import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
-import { registerAccountIpc } from './account-ipc'
+import { mintWatchInvite, registerAccountIpc } from './account-ipc'
 import type { AccountDoor, LoginAudit } from './login-cli'
 import { paneInputs } from './pane-input'
 import { injectWindowInput } from './ui-input'
@@ -267,7 +267,7 @@ import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
-import { setWatchHost } from './watch-routes'
+import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin } from './launch-defaults'
@@ -8797,16 +8797,28 @@ function registerIpc(handlers: RestoreHandlers): void {
         const session = ptys.get(terminalId)
         if (!session) return false
         return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
-      }
+      },
+      accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
+      invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
     })
   setWatchHost(watchHost)
   ipcMain.handle(
     'watch:code',
-    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases() }))
+    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases(), claims: watchPairing.claims }))
   )
   ipcMain.handle(
     'watch:state',
-    ownerOnly(() => ({ paired: watchPairing.paired }))
+    ownerOnly(() => ({
+      paired: watchPairing.paired,
+      pending: watchPairing.pending(),
+      account: watchHost.accountKind(),
+      sealed: true,
+      claims: watchPairing.claims
+    }))
+  )
+  ipcMain.handle(
+    'watch:invite',
+    ownerOnly((current: unknown) => inviteWatch(watchHost, typeof current === 'string' ? current : '', true))
   )
   ipcMain.handle(
     'watch:forget',

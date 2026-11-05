@@ -89,6 +89,9 @@ function host(pairing: WatchPairing, over: Partial<WatchHost> = {}): WatchHost {
     stop: async (id) => id === 'working',
     speaksTo: (id) => id !== 'shell',
     menuOnScreen: (id) => id === 'unparsed-menu',
+    accountKind: () => 'password',
+    invite: async (current) =>
+      current === 'right' ? { ok: true, code: 'K7QM-2XPD', expiresAt: Date.now() + 600_000 } : { ok: false, reason: 'bad_credentials' },
     ...over
   }
 }
@@ -323,7 +326,7 @@ describe('through the real gate', () => {
     expect((await post('/api/watch/code', token)).status).toBe(401)
     expect((await post('/api/watch/code', null)).status).toBe(401)
     expect((await call('/api/watch/pairing', token)).status).toBe(401)
-    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null })
+    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password', sealed: true, claims: 1 })
   })
 
   it('a watch token reads the cards; none, a junk one or the wall’s does not', async () => {
@@ -410,5 +413,112 @@ describe('through the real gate', () => {
     const token = await paired()
     expect((await post('/api/watch/unpair', token)).status).toBe(200)
     expect((await call('/api/watch/cards', token)).status).toBe(401)
+  })
+
+  describe('a code for a watch that may be away from home', () => {
+    const invite = (headers: Record<string, string>, current: string): Promise<Response> =>
+      fetch(`${origin}/api/watch/invite`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ current })
+      })
+
+    it('mints under the password and the Mac takes the same code as a claim', async () => {
+      const reply = await invite({ authorization: `Bearer ${PAIRING}` }, 'right')
+      const body = (await reply.json()) as { ok: boolean; code: string }
+      expect(body.ok).toBe(true)
+      expect(body.code).toBe('K7QM-2XPD')
+      expect(pairing.pending()).not.toBeNull()
+      const claim = await fetch(`${origin}/api/watch/claim`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'K7QM-2XPD' })
+      })
+      expect(claim.status).toBe(200)
+      expect(pairing.paired).toBe(true)
+    })
+
+    it('hands the sheet the count of arrivals with the code, so it needs no earlier read', async () => {
+      const digits = await fetch(`${origin}/api/watch/code`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${PAIRING}`, 'content-type': 'application/json' },
+        body: '{}'
+      })
+      expect(await digits.json()).toMatchObject({ claims: 0 })
+      const reply = await invite({ authorization: `Bearer ${PAIRING}` }, 'right')
+      expect(await reply.json()).toMatchObject({ ok: true, claims: 0 })
+    })
+
+    it('a wrong password arms nothing', async () => {
+      const reply = await invite({ authorization: `Bearer ${PAIRING}` }, 'wrong')
+      expect(await reply.json()).toEqual({ ok: false, reason: 'bad_credentials' })
+      expect(pairing.pending()).toBeNull()
+    })
+
+    it('a registry that cannot be reached is a refusal, not a crash', async () => {
+      setWatchHost(host(pairing, { invite: async () => Promise.reject(new Error('down')) }))
+      const reply = await invite({ authorization: `Bearer ${PAIRING}` }, 'right')
+      expect(await reply.json()).toEqual({ ok: false, reason: 'unknown' })
+    })
+
+    it('a watch token cannot mint its own way in, and nobody else can either', async () => {
+      const code = pairing.mintCode().code
+      const claim = pairing.claim(code)
+      if (!claim.ok) throw new Error('claim failed')
+      expect((await invite({ authorization: `Bearer ${claim.token}` }, 'right')).status).toBe(401)
+      expect((await invite({}, 'right')).status).toBe(401)
+    })
+
+    it('says whether this line may carry a password, before anyone types one', async () => {
+      const reply = await fetch(`${origin}/api/watch/pairing`, { headers: { authorization: `Bearer ${PAIRING}` } })
+      expect(await reply.json()).toMatchObject({ sealed: true })
+    })
+
+    it('answers a hello with no token at all, and only with proof', async () => {
+      const nonce = 'nonce-0123456789abcdef'
+      expect((await fetch(`${origin}/api/watch/hello?n=${nonce}`)).status).toBe(404)
+      const claim = pairing.claim(pairing.mintCode().code)
+      if (!claim.ok) throw new Error('claim failed')
+      const reply = await fetch(`${origin}/api/watch/hello?n=${nonce}`)
+      expect(await reply.json()).toEqual({ proof: pairing.proof(nonce) })
+      expect((await fetch(`${origin}/api/watch/hello?n=short`)).status).toBe(400)
+      expect((await fetch(`${origin}/api/watch/hello`)).status).toBe(400)
+    })
+
+    it('says what kind of account a sheet is asking for', async () => {
+      const reply = await fetch(`${origin}/api/watch/pairing`, { headers: { authorization: `Bearer ${PAIRING}` } })
+      expect(await reply.json()).toMatchObject({ account: 'password', paired: false })
+    })
+  })
+
+  describe('where a password may arrive', () => {
+    it('never over a plain-HTTP LAN page', async () => {
+      const refused = vi.fn()
+      setWatchHost(host(pairing, { invite: async () => (refused(), { ok: false, reason: 'unknown' }) }))
+      const { handleWatchRoutes } = await import('../src/main/watch-routes')
+      const written: { status?: number; body?: string } = {}
+      const response = {
+        writeHead: (status: number) => {
+          written.status = status
+          return response
+        },
+        setHeader: () => undefined,
+        end: (body: string) => {
+          written.body = body
+        }
+      }
+      await handleWatchRoutes({
+        request: {},
+        response,
+        url: new URL('http://192.168.2.40:8639/api/watch/invite'),
+        method: 'POST',
+        path: '/api/watch/invite',
+        owner: true,
+        cleared: true,
+        sealed: () => false
+      } as unknown as Parameters<typeof handleWatchRoutes>[0])
+      expect(JSON.parse(written.body ?? '{}')).toEqual({ ok: false, reason: 'not_sealed' })
+      expect(refused).not.toHaveBeenCalled()
+    })
   })
 })
