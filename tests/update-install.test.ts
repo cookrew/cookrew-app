@@ -1,7 +1,7 @@
 // WHO MAY INSTALL ITS OWN UPDATE. A Mac only swaps in a build for a signed one,
 // so an unsigned build must say so and keep to the release page.
 import { describe, expect, it, vi } from 'vitest'
-import { canUpdateItself, type InstallFacts } from '../src/main/update-install'
+import { autoUpdaterOf, canUpdateItself, type InstallFacts } from '../src/main/update-install'
 
 const facts = (over: Partial<InstallFacts>): InstallFacts => ({
   platform: 'darwin',
@@ -39,5 +39,21 @@ describe('canUpdateItself', () => {
   it('Linux can only as an AppImage', async () => {
     expect(await canUpdateItself(facts({ platform: 'linux' }))).toBe(false)
     expect(await canUpdateItself(facts({ platform: 'linux', env: { APPIMAGE: '/opt/Cookrew.AppImage' } }))).toBe(true)
+  })
+})
+
+describe('autoUpdaterOf', () => {
+  const autoUpdater = {} as ReturnType<typeof autoUpdaterOf>
+
+  it('finds it on default, where the packaged main process has it', () => {
+    expect(autoUpdaterOf({ default: { autoUpdater } })).toBe(autoUpdater)
+  })
+
+  it('finds it by name too', () => {
+    expect(autoUpdaterOf({ autoUpdater })).toBe(autoUpdater)
+  })
+
+  it('says so rather than failing on a property of undefined', () => {
+    expect(() => autoUpdaterOf({})).toThrow('no autoUpdater')
   })
 })

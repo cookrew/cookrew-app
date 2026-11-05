@@ -37,9 +37,21 @@ export async function canUpdateItself(facts: InstallFacts): Promise<boolean> {
   return facts.env.APPIMAGE !== undefined
 }
 
+type Updater = typeof import('electron-updater').autoUpdater
+
+/**
+ * electron-updater is CommonJS with a getter for this export, which ESM cannot
+ * see as a named one: in the packaged main process it hangs off `default`.
+ */
+export const autoUpdaterOf = (module: { autoUpdater?: Updater; default?: { autoUpdater?: Updater } }): Updater => {
+  const found = module.autoUpdater ?? module.default?.autoUpdater
+  if (!found) throw new Error('electron-updater has no autoUpdater')
+  return found
+}
+
 /** Loaded only when asked: importing electron-updater reads the packaged app. */
-const updater = async (): Promise<typeof import('electron-updater').autoUpdater> => {
-  const { autoUpdater } = await import('electron-updater')
+const updater = async (): Promise<Updater> => {
+  const autoUpdater = autoUpdaterOf(await import('electron-updater'))
   autoUpdater.autoDownload = false
   // A quit the owner chose installs what is ready; it is never a surprise restart.
   autoUpdater.autoInstallOnAppQuit = true
