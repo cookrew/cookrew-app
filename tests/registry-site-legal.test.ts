@@ -317,13 +317,16 @@ describe('the words match the code', () => {
     expect(relay).not.toMatch(/We do not log or store that content/)
   })
 
-  it('a limited or priced preset is described as public, because its files are', async () => {
+  it('says a limit or a price gates a preset\'s files, because they do, and keeps nothing secret', async () => {
     const address = store.putBlob(Buffer.from('{"team":"gated"}'))
-    expect((await fetch(`${origin}/v1/blobs/${address}`)).status).toBe(200)
+    // Bytes the gate cannot place are refused: no open read is left to disclose.
+    expect((await fetch(`${origin}/v1/blobs/${address}`)).status).toBe(404)
     const row = wordsOf(PRIVACY.sections.find((s) => s.id === 'stored') as LegalSection)
-    expect(row).toMatch(/Treat all of it as public/)
-    expect(row).toMatch(/gates only the manifest/)
-    expect(allWords(TERMS.sections)).toMatch(/gate its manifest and not its files/)
+    expect(row).toMatch(/gates both its manifest and its files/)
+    expect(row).toMatch(/does not keep anything secret/)
+    expect(row).not.toMatch(/gates only the manifest/)
+    expect(allWords(TERMS.sections)).toMatch(/never rely on either to keep something secret/)
+    expect(allWords(TERMS.sections)).not.toMatch(/gate its manifest and not its files/)
     expect(allWords(TERMS.sections)).not.toMatch(/as its visibility allows/)
   })
 

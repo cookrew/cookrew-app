@@ -59,5 +59,11 @@ export type SettlementResult =
   | { ok: false; reason: PaymentFailure }
 
 export interface Facilitator {
+  /**
+   * This one proves nothing: the dev stand-in, and nothing else. A marked
+   * stand-in rather than a marked real one, so that a real facilitator which
+   * says nothing is held to the strict rule instead of the loose one.
+   */
+  readonly standIn?: true
   settle(request: SettlementRequest): SettlementResult
 }
