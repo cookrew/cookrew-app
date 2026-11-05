@@ -2,6 +2,7 @@
 // address names, what screencapture is asked for, how a roi is cut, how a
 // gesture lands in global points and never outside the region, and the two
 // grants that refuse in words.
+import { machineCopy } from '../src/shared/machine-words'
 import { describe, expect, it } from 'vitest'
 import type { MacOp, MacScreens } from '../src/main/mac-bridge'
 import { DeviceBlockedError, DeviceGoneError, type RemoteGate } from '../src/main/pixel-instance'
@@ -132,7 +133,7 @@ describe('ScreenDevice', () => {
 
   it('says what is missing: the window, Screen Recording, the input switch, Accessibility', async () => {
     await expect(bed('window://Xcode').device.open()).rejects.toThrow(/No 'Xcode' window is on screen/)
-    await expect(bed('screen://3').device.open()).rejects.toThrow(/Display 3 is not connected \(this Mac has 2\)/)
+    await expect(bed('screen://3').device.open()).rejects.toThrow(machineCopy('Display 3 is not connected (this Mac has 2)', process.platform))
     await expect(bed('screen://main', { remote: gate({ blocked: async () => blockedBy('needs-screen-recording') }) }).device.open()).rejects.toBeInstanceOf(DeviceBlockedError)
     const off = bed('screen://main', { remote: gate({ inputRefusal: () => INPUT_OFF }) })
     expect(off.device.inputRefusal()).toBe(INPUT_OFF)
