@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HARNESS_FACTS, INSTALL_LINE } from '../src/main/route/setup'
 import { setupLineAllowed } from '../src/shared/route-lines'
+import { TOOL_NOTES } from '../src/shared/first-run-copy'
 import { UNKNOWN_FACTS, mayContinue, preflightRows, type PreflightRow, type ToolFacts, type ToolState } from '../src/shared/preflight'
 
 /**
@@ -185,5 +186,28 @@ describe('whether the person may go on', () => {
   it('never blocks on a check that failed', () => {
     expect(mayContinue(preflightRows(UNKNOWN_FACTS))).toBe(true)
     expect(mayContinue(preflightRows({ ...bareMac, claude: 'unknown' }))).toBe(true)
+  })
+})
+
+describe('a fix that needs admin rights says so before it is pressed (N2)', () => {
+  const green = allFound
+  const missing = { ...green, magpie: 'missing' as const }
+  const note = (facts: ToolFacts, id: string): string | null | undefined => preflightRows(facts).find((r) => r.id === id)?.note
+
+  it('Magpie on Linux, whose installer can reach for sudo', () => {
+    expect(note({ ...missing, platform: 'linux' }, 'magpie')).toBe(TOOL_NOTES.ADMIN)
+  })
+
+  it('not Magpie on a Mac, whose installer never does', () => {
+    expect(note({ ...missing, platform: 'darwin' }, 'magpie')).toBeNull()
+  })
+
+  it('Homebrew, beside what its absence costs', () => {
+    const facts = { ...green, herdr: 'missing' as const, tmux: 'missing' as const, brew: 'missing' as const, platform: 'darwin' }
+    expect(note(facts, 'multiplexer')).toBe(`${TOOL_NOTES.NOT_KEPT} ${TOOL_NOTES.ADMIN}`)
+  })
+
+  it('nothing on a tool that is found', () => {
+    expect(note({ ...green, platform: 'linux' }, 'magpie')).toBeNull()
   })
 })

@@ -285,6 +285,9 @@ import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
 import { AccessStore, probeEndpoint } from './agent-access'
+import { macKeychain } from './pane-keychain'
+import { createSetupLines, registerSetupLineIpc, shellHoldsTerminal } from './setup-line'
+import { SETUP_CARD_NAME, SETUP_CARD_PRESET } from '../shared/setup-line'
 import { FirstTasks } from './first-task'
 import { registerFirstRunIpc } from './first-run-ipc'
 import { FirstRunStore } from './first-run-store'
@@ -1097,7 +1100,29 @@ addPaneDirs(firstRunStore.dirs())
 const accessStore = new AccessStore({
   file: path.join(homedir(), '.cookrew', 'access.json'),
   keyDir: path.join(homedir(), '.cookrew', 'access-keys'),
-  secrets
+  secrets,
+  keychain: process.platform === 'darwin' ? macKeychain() : null
+})
+/** Set where the keys path is built, which the companion's routes are not. */
+let setupLinesTyper: ((terminalId: string, data: string) => void) | null = null
+/** The Setup card's lines (setup-line.ts), for the desktop and the phone alike. */
+const setupLines = createSetupLines({
+  dir: path.join(homedir(), '.cookrew', 'setup-lines'),
+  isSetupCard: (id) => {
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    return node?.kind === 'terminal' && node.preset === SETUP_CARD_PRESET && node.name === SETUP_CARD_NAME
+  },
+  // A line is not a keyboard: it marks the pane driven, and a seal refuses it.
+  view: (id) => (paneInputs.drive(id) && lazyTerminals.acquire(id) ? () => lazyTerminals.release(id) : null),
+  shellPid: (id) => ptys.shellPid(id),
+  holds: shellHoldsTerminal,
+  type: (id, bytes) => setupLinesTyper?.(id, bytes),
+  screen: async (id) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(id)
+    return (mux?.captureAsync ? await mux.captureAsync(name) : mux?.capture(name)) ?? null
+  },
+  alive: (id) => ptys.get(id) !== undefined
 })
 /** The first task, held until an agent has it (first-task.ts). */
 const firstTasks = new FirstTasks<PtySession>({
@@ -7682,6 +7707,8 @@ app.whenReady().then(() => {
     // probe (L2) is absent until the tmux sampler lands; rows then degrade to
     // their last known task rather than claiming a phase nobody observed.
     board: boardSources(),
+    // Handed on to handleMobileApi with the rest of these, which reads them whole.
+    ...{ setupLines },
     // The main thread's pulse (loop-health.ts) for GET /api/health.
     health: () => loopHealth.snapshot(),
     // The route program's four endpoints, the stream's two frames, and the
@@ -8630,7 +8657,16 @@ function registerIpc(handlers: RestoreHandlers): void {
         })
       )
   })
-  registerAccessIpc(ipcMain, { store: accessStore, probe: (input) => probeEndpoint(input) })
+  registerAccessIpc(ipcMain, {
+    store: accessStore,
+    probe: (input) => probeEndpoint(input),
+    respawn: respawnInPlace,
+    cardOf: (id) => {
+      const node = store.nodeAcrossWorkspaces(id)?.node
+      return node?.kind === 'terminal' ? { preset: node.preset, direct: (node.routeEffective ?? 'direct') === 'direct' } : null
+    }
+  })
+  registerSetupLineIpc(ipcMain, setupLines)
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
@@ -9079,11 +9115,16 @@ function registerIpc(handlers: RestoreHandlers): void {
       }
     }
   })
-  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+  const ownerTypes = (terminalId: string, data: string): void => {
     paneInputs.noteWindowKey(terminalId, data)
     idleSleep.touch(terminalId, Date.now())
     typeInto(terminalId, data)
-  })
+  }
+  ipcMain.on('pty:input', (_e, terminalId: string, data: string) => ownerTypes(terminalId, data))
+  setupLinesTyper = (terminalId, data) => {
+    idleSleep.touch(terminalId, Date.now())
+    typeInto(terminalId, data)
+  }
   ipcMain.on('pty:resize', (_e, terminalId: string, cols: number, rows: number) => {
     ptys.get(terminalId)?.resize(cols, rows)
   })

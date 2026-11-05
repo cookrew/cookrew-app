@@ -1,11 +1,13 @@
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './atomic-file'
 import type { HarnessId } from './harness'
+import type { KeyReader, PaneKeychain } from './pane-keychain'
 import type { SecretsStore } from './secrets-store'
 import { shellQuote } from './shell-quote'
-import { ACCESS_ROWS, ENDPOINT_ID, accessTools, type AccessSource, type AccessState, type AccessWire, type EndpointField, type EndpointInput } from '../shared/agent-access'
+import { ACCESS_ROWS, ENDPOINT_ID, accessTools, type AccessKeyStore, type AccessSource, type AccessState, type AccessWire, type EndpointField, type EndpointInput } from '../shared/agent-access'
 
 /**
  * THE ROAD FOR A PERSON WITH NO CLAUDE OR CODEX ACCOUNT. Which source is on, the
@@ -15,12 +17,24 @@ import { ACCESS_ROWS, ENDPOINT_ID, accessTools, type AccessSource, type AccessSt
  * pane on tmux's argv and herdr's `--env`, which `ps` shows to every user of a
  * shared box. And environment is no hiding place: from inside a served seat's
  * Seatbelt profile, KERN_PROCARGS2 read another process's environment, and no
- * rule stopped it (measured 2026-11-05, Darwin 25.5, on a canary). So it is sealed
- * in the secrets store with a 0600 copy in a folder the seat is denied
- * (owner-secrets.ts), and each harness reads that file itself: Claude Code's
+ * rule stopped it (measured 2026-11-05, Darwin 25.5, on a canary). So it sits in
+ * the secrets store, and each harness reads it by a command: Claude Code's
  * `apiKeyHelper`, Codex's provider `auth` command, Pi's `!command` key. Only the
- * path ever appears. With COOKREW_SECRETS_KEYCHAIN=1 that copy is the one value
- * outside the keychain. The screens get `state()`, which has no key in it.
+ * command ever appears.
+ *
+ * WHAT THAT COMMAND READS is the Mac's keychain (pane-keychain.ts). Where there is
+ * none to use, or it refuses, it reads a 0600 file in a folder the seat is denied:
+ * plain bytes, which the form says in as many words. `state()` reports which one
+ * really happened, so no screen can promise more. A file on Linux stays one even
+ * with a keyring: the app can open its secrets there, but a pane has no command
+ * that does, and the app may be closed when the pane asks.
+ *
+ * ONE COPY PER ADDRESS. A pane's address is fixed when it starts and it reads its key
+ * by name every time, so a shared name would send a new address's key to the old
+ * host from a card still running there. The old copy goes when the address changes:
+ * those panes fail, closed, and the screen says to start them again.
+ *
+ * The screens get `state()`, which has no key in it.
  *
  * SHAPE, proved against a loopback fake on 2026-11-05 with claude 2.1.316, codex
  * 0.166 and pi 1.4: each sent Bearer <key> to the path probeEndpoint asks, claude
@@ -33,6 +47,10 @@ const PROBE_BUDGET_MS = 10_000
 
 export const secretNameOf = (sourceId: string): string => `agent-access-${sourceId}`
 
+/** A pane's copy of a key: this source, at this address and no other. */
+export const paneKeyName = ({ id, baseUrl }: Pick<AccessSource, 'id' | 'baseUrl'>): string =>
+  `${id}-${createHash('sha256').update(new URL(baseUrl).origin).digest('hex').slice(0, 12)}`
+
 export interface AccessLaunch {
   env: Record<string, string>
   args: string[]
@@ -41,14 +59,21 @@ export interface AccessLaunch {
 }
 
 export interface AccessPaths {
-  keyFile: string
+  /** How the harness reads its key. */
+  readKey: KeyReader
   piDir: string
 }
 
+/** A 0600 file, read by name. */
+export const fileKey = (keyFile: string): KeyReader => ({ command: '/bin/cat', args: [keyFile] })
+
+const commandLine = ({ command, args }: KeyReader): string => [command, ...args].map(shellQuote).join(' ')
+
 /** What a harness is started with for a source; null when it does not speak it. */
-export function accessLaunch(source: AccessSource, harness: HarnessId | undefined, { keyFile, piDir }: AccessPaths): AccessLaunch | null {
+export function accessLaunch(source: AccessSource, harness: HarnessId | undefined, paths: AccessPaths): AccessLaunch | null {
   const { baseUrl, model, protocol } = source
-  const readKey = `/bin/cat ${shellQuote(keyFile)}`
+  const { piDir } = paths
+  const readKey = commandLine(paths.readKey)
   if (harness === 'pi') {
     const provider = { baseUrl, api: protocol === 'anthropic' ? 'anthropic-messages' : 'openai-completions', apiKey: `!${readKey}`, models: [{ id: model }] }
     return {
@@ -80,7 +105,7 @@ export function accessLaunch(source: AccessSource, harness: HarnessId | undefine
         '-c', `model_provider=${PROVIDER}`,
         '-c', `model_providers.${PROVIDER}.name=${source.label}`,
         '-c', `model_providers.${PROVIDER}.base_url=${baseUrl}`,
-        '-c', `model_providers.${PROVIDER}.auth={command="/bin/cat",args=[${JSON.stringify(keyFile)}]}`,
+        '-c', `model_providers.${PROVIDER}.auth={command=${JSON.stringify(paths.readKey.command)},args=${JSON.stringify(paths.readKey.args)}}`,
         '-c', `model_providers.${PROVIDER}.wire_api=responses`,
         '-c', `model=${model}`
       ],
@@ -96,6 +121,8 @@ export interface AccessStoreDeps {
   /** Where a source's key waits for a pane. Denied to a served seat (owner-secrets.ts). */
   keyDir: string
   secrets: Pick<SecretsStore, 'put' | 'read' | 'remove'>
+  /** Where a pane reads the key instead of the file; null or absent where there is none. */
+  keychain?: PaneKeychain | null
 }
 
 function readSource(file: string): AccessSource | null {
@@ -124,22 +151,67 @@ export class AccessStore {
     const { source } = this
     return {
       rows: ACCESS_ROWS,
-      active: source && { id: source.id, label: source.label, protocol: source.protocol, model: source.model, host: new URL(source.baseUrl).host, tools: accessTools(source) }
+      keyStore: this.keyStore(),
+      active: source && { id: source.id, label: source.label, protocol: source.protocol, model: source.model, host: new URL(source.baseUrl).host, baseUrl: source.baseUrl, simple: source.simple === true, tools: accessTools(source) }
     }
   }
 
   save(source: AccessSource, key: string): void {
+    const before = this.source
     this.deps.secrets.put(secretNameOf(source.id), key)
     writeFileAtomic(this.deps.file, `${JSON.stringify(source)}\n`)
     this.source = source
+    if (before && paneKeyName(before) !== paneKeyName(source)) this.dropCopies(before)
   }
 
-  private keyFile(sourceId: string): string {
-    return path.join(this.deps.keyDir, `${sourceId}.key`)
+  /** The pane copies of a source: what a pane still reading them will now not find. */
+  private dropCopies(source: AccessSource): void {
+    rmSync(this.keyFile(source), { force: true })
+    this.deps.keychain?.remove(paneKeyName(source))
+  }
+
+  /** The source as it is, with a change that needs no new key. */
+  update(next: AccessSource): void {
+    writeFileAtomic(this.deps.file, `${JSON.stringify(next)}\n`)
+    this.source = next
+  }
+
+  /** The saved key, for main alone: to ask the endpoint again when the form leaves it empty. */
+  savedKey(): string | null {
+    return this.source ? (this.deps.secrets.read(secretNameOf(this.source.id))?.value ?? null) : null
+  }
+
+  private keyFile(source: AccessSource): string {
+    return path.join(this.deps.keyDir, `${paneKeyName(source)}.key`)
+  }
+
+  /** What is true now: a plain copy on disk is a file, whatever else there is. */
+  private keyStore(): AccessKeyStore {
+    if (!this.deps.keychain) return 'file'
+    return this.source && existsSync(this.keyFile(this.source)) ? 'file' : 'keychain'
+  }
+
+  /** Puts the key where a pane can read it, and says how. */
+  private placeKey(source: AccessSource, key: string): KeyReader {
+    const { keychain, keyDir } = this.deps
+    const keyFile = this.keyFile(source)
+    const name = paneKeyName(source)
+    // The one name every address once shared: no pane should be left reading it.
+    rmSync(path.join(keyDir, `${source.id}.key`), { force: true })
+    if (keychain?.put(name, key)) {
+      rmSync(keyFile, { force: true })
+      return keychain.reader(name)
+    }
+    mkdirSync(keyDir, { recursive: true, mode: 0o700 })
+    writeFileAtomic(keyFile, key)
+    return fileKey(keyFile)
   }
 
   clear(): void {
-    if (this.source) this.deps.secrets.remove(secretNameOf(this.source.id))
+    if (this.source) {
+      this.deps.secrets.remove(secretNameOf(this.source.id))
+      this.dropCopies(this.source)
+    }
     rmSync(this.deps.file, { force: true })
     rmSync(this.deps.keyDir, { recursive: true, force: true })
     this.source = null
@@ -149,17 +221,17 @@ export class AccessStore {
   launchFor(harness: HarnessId | undefined): AccessLaunch | null {
     const { source } = this
     if (source === null) return null
-    const keyFile = this.keyFile(source.id)
     const key = this.deps.secrets.read(secretNameOf(source.id))?.value
-    // The secret was removed by name, elsewhere: its copy goes with it, whoever asks.
+    // The secret was removed by name, elsewhere: its copies go with it, whoever asks.
     if (!key) {
-      rmSync(keyFile, { force: true })
+      this.dropCopies(source)
       return null
     }
-    const launch = accessLaunch(source, harness, { keyFile, piDir: path.join(this.deps.keyDir, 'pi') })
+    const piDir = path.join(this.deps.keyDir, 'pi')
+    if (accessLaunch(source, harness, { readKey: fileKey(this.keyFile(source)), piDir }) === null) return null
+    const launch = accessLaunch(source, harness, { readKey: this.placeKey(source, key), piDir })
     if (launch === null) return null
-    mkdirSync(this.deps.keyDir, { recursive: true, mode: 0o700 })
-    writeFileAtomic(keyFile, key)
+    if (launch.files.length > 0) mkdirSync(this.deps.keyDir, { recursive: true, mode: 0o700 })
     for (const file of launch.files) writeFileAtomic(file.path, file.content)
     return launch
   }

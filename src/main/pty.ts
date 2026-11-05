@@ -1600,6 +1600,12 @@ export class PtyManager {
     return activeMux?.panePid(sessionNameFor(terminalId)) ?? null
   }
 
+  /** The pane's own process on any backend: with none between, the mirror's child is it. */
+  shellPid(terminalId: string): number | null {
+    const session = this.sessions.get(terminalId)
+    return session && !session.usesTmux ? session.pid : this.panePid(terminalId)
+  }
+
   /**
    * How the LIVE pane was actually launched: the command tmux ran and when it
    * ran it. Both survive restarts, because `new-session -A` reattaches the

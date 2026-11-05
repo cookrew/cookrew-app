@@ -24,6 +24,7 @@ import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
 import { apiPath, clientBase } from './api-base'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
+import type { SetupLineNow, SetupLineRun, SetupStart } from '../../shared/setup-line'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
 import { planeFetch } from './plane-fetch'
 import { RELAY_ANSWER_MS, joinInFlight } from './in-flight'
@@ -707,6 +708,9 @@ export function createRemoteApi(): CookrewApi {
     listTuning: () => req<Record<string, AgentTuning>>(apiPath('/api/tuning')),
     // Magpie routing over the companion's API (LEDGER endpoints).
     routeState: () => req<RouteState>(apiPath('/api/route')),
+    setupLineStart: (ask) => req<SetupStart>(apiPath('/api/setup-line'), 'POST', ask),
+    setupLineNow: (terminalId, runId) => req<SetupLineNow>(apiPath(`/api/setup-line?terminal=${encodeURIComponent(terminalId)}&run=${encodeURIComponent(runId)}`)),
+    setupLineCurrent: (terminalId) => req<SetupLineRun | null>(apiPath(`/api/setup-line?terminal=${encodeURIComponent(terminalId)}`)),
     routeSetDefault: (model) => req<RouteState>(apiPath('/api/route/default'), 'PUT', { model }),
     routeSetSharedMcp: (on) => req<RouteState>(apiPath('/api/route/shared-mcp'), 'PUT', { on }),
     terminalRoute: (terminalId) => req<CardRouteState>(apiPath(`/api/terminal/${encodeURIComponent(terminalId)}/route`)),

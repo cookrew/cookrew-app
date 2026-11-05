@@ -44,6 +44,8 @@ export interface AgentRow {
   brief?: string | null
   /** Why it is not running, when that is more than resting. */
   failure?: LaunchFailure | null
+  /** The model service's words, when it refused the last turn. */
+  refused?: string | null
   /**
    * THE sort key, descending. Start time while a turn is in flight, last
    * output once it is done — never a value that moves on its own, or the list
@@ -179,6 +181,7 @@ function rowOf(
   // The live tracker wins the moment it has anything; the checkpoint is the
   // fallback, through the same view model the card binds (T1).
   const turn = hasTurn(activity) ? turnViewOf(activity) : checkpointViewModel(checkpoint ?? null)
+  const phase = phaseOf(activity, entry.active, turn)
   return {
     id: entry.id,
     name: entry.name,
@@ -190,12 +193,13 @@ function rowOf(
     workspaceName: entry.workspaceName,
     cwd: entry.cwd,
     spawnedAt: entry.spawnedAt,
-    phase: phaseOf(activity, entry.active, turn),
+    phase,
     unread: activity?.phase === 'replied',
     turn,
     turnCount: activity?.turnCount ?? 0,
     brief,
     failure: entry.failure ?? null,
+    refused: phase === 'failed' && activity ? turnFailure(activity) : null,
     lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
 }

@@ -66,7 +66,7 @@ export function FirstWait({ task, onEndpoint }: { task: Holding; onEndpoint: () 
         onEndpoint()
       }}
     >
-      <SetupScreen terminalId={task.id} focusTick={focusTick} />
+      <SetupScreen terminalId={task.id} focusTick={focusTick} fit="whole" />
     </FirstWaitView>
   )
 }

@@ -410,3 +410,29 @@
   white-space: pre-wrap;
   opacity: 0.8;
 }
+
+.ag-failure-go {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 3px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--zv-ink, currentColor);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ag-failure-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ag-failure-raw {
+  margin-top: 4px;
+}
+
+.ag-failure-raw summary {
+  cursor: pointer;
+  opacity: 0.8;
+}

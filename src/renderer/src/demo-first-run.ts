@@ -2,8 +2,10 @@ import type { CookrewApi } from './api'
 import type { AccountStatus } from '../../shared/account-v2'
 import type { AgentRegistryEntry } from './agent-registry'
 import { advancedStage, isFirstRunStage, pastTask, waitOfScreen, type FirstRunStage, type FirstTask } from '../../shared/first-run'
-import { ACCESS_ROWS, accessTools, checkEndpoint, type AccessState, type EndpointInput } from '../../shared/agent-access'
+import { ACCESS_ROWS, accessTools, checkEndpoint, simpleModeHelps, type AccessState, type EndpointInput } from '../../shared/agent-access'
+import { SETUP_LINE_COPY } from '../../shared/first-run-copy'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../../shared/preflight'
+import type { SetupLineAsk, SetupLineNow, SetupStart } from '../../shared/setup-line'
 import type { TerminalActivity } from '../../shared/turn'
 
 /**
@@ -13,7 +15,8 @@ import type { TerminalActivity } from '../../shared/turn'
  * screens with no Mac behind them, and an agent plays a short turn so the
  * phone offer and the second-agent hint can be seen. `&agent=asks|signin|consent`
  * holds the first task on that screen and `&agent=dies` hands it back, as main
- * does. It is a Mac with no account, so the avatar and the account card behave as
+ * does. `&setup=fail|sudo` plays a Setup line that fails, or stops on a password
+ * prompt until Stop. It is a Mac with no account, so the avatar and the account card behave as
  * they will for a new person. Nothing is kept: a reload starts over. Without the
  * parameter the demo is exactly what it was.
  */
@@ -74,9 +77,11 @@ export function freshFacts(mode: FreshMode): ToolFacts {
 const SCREENS: Readonly<Record<string, string>> = {
   asks: "Let's get started.\r\n\r\nChoose the text style that looks best with your terminal\r\n\r\n  Auto (match terminal)\r\n❯ ✔ Dark mode\r\n  Light mode\r\n",
   signin: 'Select login method:\r\n\r\n❯ Claude account with subscription\r\n  Anthropic Console account\r\n',
-  consent: 'WARNING: Claude Code running in Bypass Permissions mode\r\n\r\nBy proceeding, you accept all responsibility for actions taken.\r\n\r\n❯ No, exit\r\n  Yes, I accept\r\n\r\nEnter to confirm · Esc to cancel\r\n'
+  consent: 'WARNING: Claude Code running in Bypass Permissions mode\r\n\r\nIn Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.\r\nThis mode should only be used in a sandboxed container or VM that has restricted internet access and can easily be restored if damaged.\r\n\r\nBy proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.\r\n\r\n❯ No, exit\r\n  Yes, I accept\r\n\r\nEnter to confirm · Esc to cancel\r\n'
 }
 const HOLD_MS = 500
+const SETUP_LINE_MS = 1_200
+const SUDO_PROMPT = '[sudo] password for you:'
 
 /** The word a preset runs, as a card's failure names it. */
 const commandOf = (preset: string): string => preset.split(' ')[0].toLowerCase()
@@ -126,9 +131,21 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
   const query = new URLSearchParams(search)
   const asked = query.get('stage')
   const agent = query.get('agent') ?? 'ok'
+  const setupPlay = query.get('setup') ?? 'ok'
+  /** The tools a demo line has installed, and the line running now. */
+  let installed: readonly string[] = []
+  let setupRun: { readonly runId: string; readonly line: string; readonly at: number; stopped: boolean } | null = null
+  const factsNow = (): ToolFacts => {
+    const facts = freshFacts(mode)
+    return installed.reduce<ToolFacts>((next, tool) => ({ ...next, [tool]: 'found' }), facts)
+  }
   let stage: FirstRunStage = isFirstRunStage(asked) ? asked : 'preflight'
   let task: FirstTask | null = null
-  let access: AccessState = { rows: ACCESS_ROWS, active: null }
+  const keyStore = query.get('key') === 'file' ? ('file' as const) : ('keychain' as const)
+  // A refused turn is what a third-party endpoint in full mode gets, so that is what it plays on.
+  const baseUrl = 'https://api.example.com'
+  const refusedOn = { id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic' as const, model: 'm-1', host: 'api.example.com', baseUrl, simple: false, tools: accessTools({ protocol: 'anthropic', baseUrl }) }
+  let access: AccessState = { rows: ACCESS_ROWS, keyStore, active: agent === 'refused' ? refusedOn : null }
   const viewListeners = new Set<(view: { stage: FirstRunStage; task: FirstTask | null }) => void>()
   const tell = (): void => {
     for (const listener of viewListeners) listener({ stage, task })
@@ -187,7 +204,29 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
       if (task?.state === 'sent' && pastTask(stage)) task = null
       return Promise.resolve(stage)
     },
-    firstRunPreflight: () => Promise.resolve(preflightRows({ ...freshFacts(mode), endpointTools: access.active?.tools ?? [] })),
+    firstRunPreflight: () => Promise.resolve(preflightRows({ ...factsNow(), endpointTools: access.active?.tools ?? [] })),
+    setupLineStart: ({ terminalId, line, enter }: SetupLineAsk): Promise<SetupStart> => {
+      if (setupRun !== null) return Promise.resolve({ ok: false, reason: SETUP_LINE_COPY.BUSY, busy: true })
+      api.ptyInput(terminalId, enter ? `${line}\r` : line)
+      if (!enter) return Promise.resolve({ ok: true, runId: null })
+      setupRun = { runId: `demo-${Date.now()}`, line, at: Date.now(), stopped: false }
+      return Promise.resolve({ ok: true, runId: setupRun.runId })
+    },
+    setupLineNow: (_terminalId: string, runId: string): Promise<SetupLineNow> => {
+      const run = setupRun
+      if (run?.runId !== runId) return Promise.resolve({ state: 'none' })
+      const end = (code: number): Promise<SetupLineNow> => {
+        setupRun = null
+        return Promise.resolve({ state: 'ended', code })
+      }
+      if (run.stopped) return end(130)
+      if (setupPlay === 'sudo') return Promise.resolve({ state: 'running', lastLine: SUDO_PROMPT, asking: 'password' })
+      if (Date.now() - run.at < SETUP_LINE_MS) return Promise.resolve({ state: 'running', lastLine: 'Downloading…', asking: null })
+      if (setupPlay === 'fail') return end(1)
+      const tool = (run.line.match(/\b(tmux|pi|codex|magpie|ollama|chrome|opencode)\b/) ?? [])[1]
+      if (tool) installed = [...installed, tool]
+      return end(0)
+    },
     firstRunTask: () => Promise.resolve(task),
     firstRunDiscard: () => {
       if (task?.state === 'holding' || task?.state === 'sent') {
@@ -209,14 +248,21 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     },
     accessState: () => Promise.resolve(access),
     accessSave: (input: EndpointInput) => {
-      const checked = checkEndpoint(input)
+      // As main does on an edit: an empty key is the saved one.
+      const checked = checkEndpoint(access.active && input.key === '' ? { ...input, key: 'demo-saved-key' } : input)
       if (!checked.ok) return Promise.resolve(checked)
       const { protocol, baseUrl, model, simple } = checked.value
-      access = { rows: ACCESS_ROWS, active: { id: 'endpoint', label: 'Your endpoint', protocol, model, host: new URL(baseUrl).host, tools: accessTools({ protocol, baseUrl, simple }) } }
+      access = { rows: ACCESS_ROWS, keyStore, active: { id: 'endpoint', label: 'Your endpoint', protocol, model, host: new URL(baseUrl).host, baseUrl, simple: simple === true, tools: accessTools({ protocol, baseUrl, simple }) } }
       return Promise.resolve({ ok: true as const, state: access })
     },
+    accessSimple: () => {
+      if (access.active === null) return Promise.resolve({ ok: false as const })
+      access = { ...access, active: { ...access.active, simple: true, tools: accessTools({ ...access.active, simple: true }) } }
+      return Promise.resolve({ ok: true as const, restarted: true, state: access })
+    },
+    accessSimpleOffer: () => Promise.resolve(simpleModeHelps('Claude Code', access.active)),
     accessClear: () => {
-      access = { rows: ACCESS_ROWS, active: null }
+      access = { rows: ACCESS_ROWS, keyStore, active: null }
       return Promise.resolve(access)
     },
     pickDir: () => Promise.resolve('/Users/you/Projects/my-site'),
@@ -243,11 +289,16 @@ export function freshDemoApi(api: CookrewApi, mode: FreshMode, search: string): 
     ptyAttach: (id, onData, onSize) => {
       const task0 = task
       const off = api.ptyAttach(id, onData, onSize)
-      if (task0?.state === 'holding' && task0.id === id && SCREENS[agent]) setTimeout(() => onData(`\x1b[2J\x1b[H${SCREENS[agent]}`), 200)
+      if (task0?.state === 'holding' && task0.id === id && SCREENS[agent]) {
+        // As wide and tall as a card's pane, which is what clipped them (box round 3, N7).
+        setTimeout(() => onSize?.({ cols: 130, rows: 44 }), 150)
+        setTimeout(() => onData(`\x1b[2J\x1b[H${SCREENS[agent]}`), 200)
+      }
       return off
     },
     ptyInput: (id, data) => {
       api.ptyInput(id, data)
+      if (data === '\x03' && setupRun !== null) setupRun.stopped = true
       if (!turns.has(id)) return
       const words = `${typed.get(id) ?? ''}${data}`.replace(/\x7f/g, '')
       typed.set(id, data.includes('\r') ? '' : words)

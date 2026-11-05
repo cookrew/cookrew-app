@@ -1,12 +1,14 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PreflightView } from '../src/renderer/src/first-run/Preflight'
 import { FirstScreenView } from '../src/renderer/src/first-run/FirstScreen'
 import { HintCard } from '../src/renderer/src/first-run/FirstRunHints'
 import { FirstWaitView } from '../src/renderer/src/first-run/FirstWait'
-import { AccessRowsView, EndpointFormView } from '../src/renderer/src/first-run/AccessRows'
+import { AccessRowsView, EndpointFormView, editForm } from '../src/renderer/src/first-run/AccessRows'
 import { ACCESS_ROWS } from '../src/shared/agent-access'
-import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, HINT_COPY, PREFLIGHT_COPY, TOOL_NOTES, WAIT_COPY } from '../src/shared/first-run-copy'
+import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, HINT_COPY, PREFLIGHT_COPY, SETUP_LINE_COPY, TOOL_NOTES, WAIT_COPY } from '../src/shared/first-run-copy'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
 
 const green: ToolFacts = {
@@ -80,13 +82,107 @@ describe('the tool check on screen', () => {
     expect(html.match(/class="fr-fix"[^>]*disabled=""|disabled=""[^>]*class="fr-fix"/g)).toHaveLength(3)
   })
 
-  it('lets go of them when the person asks to check again: a prompt it cannot read must not lock the screen', () => {
-    const html = view(gaps, { running: { line: 'brew install tmux', lastLine: '', oauth: false, url: null }, released: true })
+  it('says a line is running, and offers the way to end it', () => {
+    const html = view(gaps, { running: { line: 'brew install tmux', lastLine: '', oauth: false, url: null } })
+    expect(html).toContain(SETUP_LINE_COPY.WAITING)
+    expect(html).toContain(`>${SETUP_LINE_COPY.STOP}<`)
+    expect(view(gaps)).not.toContain(`>${SETUP_LINE_COPY.STOP}<`)
+  })
+
+  it('N2: says out loud when the pane wants a password', () => {
+    const html = view(gaps, { running: { line: 'brew install tmux', lastLine: 'Password:', oauth: false, url: null, asking: 'password' } })
+    expect(html).toContain(SETUP_LINE_COPY.PASSWORD)
+    expect(html).not.toContain(SETUP_LINE_COPY.WAITING)
+  })
+
+  it('N2: a refused press gets its sentence and the way to clear the pane, with the buttons left on', () => {
+    const html = view(gaps, { error: SETUP_LINE_COPY.BUSY, stuck: true })
+    expect(html).toContain(SETUP_LINE_COPY.BUSY)
+    expect(html).toContain(`>${SETUP_LINE_COPY.STOP}<`)
     expect(html).not.toMatch(/class="fr-fix"[^>]*disabled=""|disabled=""[^>]*class="fr-fix"/)
   })
 
   it('says why a press did nothing', () => {
     expect(view(gaps, { error: 'the Setup card did not appear on the canvas' })).toContain('role="alert"')
+  })
+})
+
+describe('a form problem lands where it can be seen (N8)', () => {
+  // On the box the sentence was drawn, 250 px below the fold: "no message, no change".
+  const form = { protocol: 'anthropic', baseUrl: '', key: 'k', model: 'm', simple: false } as const
+  const html = (over: Partial<Parameters<typeof EndpointFormView>[0]>): string =>
+    renderToStaticMarkup(<EndpointFormView form={form} busy={false} problem="Address is empty." onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} {...over} />)
+
+  it('sits under the field it is about, marked for a screen reader', () => {
+    const page = html({ problemField: 'baseUrl' })
+    expect(page.indexOf('Address is empty.')).toBeLessThan(page.indexOf(ENDPOINT_COPY.KEY))
+    expect(page).toMatch(/aria-invalid="true"/)
+    expect(page.match(/role="alert"/g)).toHaveLength(1)
+  })
+
+  it('names each field so the one refused can take the focus', () => {
+    const page = html({})
+    for (const name of ['baseUrl', 'key', 'model']) expect(page).toContain(`name="${name}"`)
+  })
+
+  it('falls back to the foot of the form when it is about no field', () => {
+    const page = html({})
+    expect(page.indexOf('Address is empty.')).toBeGreaterThan(page.indexOf(ENDPOINT_COPY.MODEL))
+  })
+})
+
+describe('the wait pane shows the whole of what it asks (N7)', () => {
+  it('has room, and a box that scrolls past what type size cannot fit', () => {
+    const css = readFileSync(path.join(__dirname, '../src/renderer/src/first-run/first-run.css'), 'utf8')
+    const rule = css.slice(css.indexOf('.fr-wait .fr-setup > :last-child'))
+    expect(rule.slice(0, rule.indexOf('}'))).toMatch(/overflow: auto/)
+  })
+
+  it('asks the screen for the whole of it', () => {
+    const source = readFileSync(path.join(__dirname, '../src/renderer/src/first-run/FirstWait.tsx'), 'utf8')
+    expect(source).toMatch(/<SetupScreen[^>]*fit="whole"/)
+  })
+})
+
+describe('what the form says of the key is what the code does (N4)', () => {
+  const form = { protocol: 'anthropic', baseUrl: '', key: '', model: '', simple: false } as const
+  const note = (keyStore: 'keychain' | 'file'): string => renderToStaticMarkup(<EndpointFormView form={form} keyStore={keyStore} busy={false} problem={null} onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} />)
+
+  it('says a private file, plainly, where it is one', () => {
+    expect(note('file')).toContain('Stored in a private file on this computer')
+    expect(note('file')).toContain('not encrypted')
+    expect(note('file')).not.toMatch(/keychain|sealed/i)
+  })
+
+  it('names the keychain only where it holds the key', () => {
+    expect(note('keychain')).toContain('keychain')
+  })
+
+  it('has lost the word that overclaimed', () => {
+    expect(JSON.stringify(ENDPOINT_COPY)).not.toMatch(/seal/i)
+  })
+})
+
+describe('a saved endpoint can be changed (N3)', () => {
+  const active = { id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', baseUrl: 'https://api.example.com', simple: false, tools: ['Pi', 'Claude Code'] } as const
+  const row = (onEdit = vi.fn()): string => renderToStaticMarkup(<AccessRowsView state={{ rows: ACCESS_ROWS, keyStore: 'file', active }} onOpen={vi.fn()} onEdit={onEdit} onRemove={vi.fn()} />)
+
+  it('offers Edit beside Remove', () => {
+    expect(row()).toContain(`>${ENDPOINT_COPY.EDIT}<`)
+    expect(row()).toContain(`>${ENDPOINT_COPY.REMOVE}<`)
+  })
+
+  it('says what became of agents still on the old address', () => {
+    const html = renderToStaticMarkup(<AccessRowsView state={{ rows: ACCESS_ROWS, keyStore: 'file', active }} note={ENDPOINT_COPY.MOVED} onOpen={vi.fn()} onRemove={vi.fn()} />)
+    expect(html).toContain(ENDPOINT_COPY.MOVED)
+  })
+
+  it('opens the form on what is saved, with the key field empty and saying what empty means', () => {
+    const form = editForm(active)
+    expect(form).toEqual({ protocol: 'anthropic', baseUrl: 'https://api.example.com', key: '', model: 'm-1', simple: false })
+    const html = renderToStaticMarkup(<EndpointFormView form={form} editing busy={false} problem={null} onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} />)
+    expect(html).toContain('value="https://api.example.com"')
+    expect(html).toContain(ENDPOINT_COPY.KEY_KEEP)
   })
 })
 
@@ -182,14 +278,14 @@ describe('an agent that is waiting (bug 4)', () => {
 })
 
 describe('the road with no account', () => {
-  const none = { rows: ACCESS_ROWS, active: null }
+  const none = { rows: ACCESS_ROWS, keyStore: 'file' as const, active: null }
   const form = { protocol: 'anthropic' as const, baseUrl: '', key: '', model: '', simple: false }
   const fields = (over: Partial<Parameters<typeof EndpointFormView>[0]> = {}): string =>
     renderToStaticMarkup(<EndpointFormView form={form} busy={false} problem={null} onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} {...over} />)
 
   it('lists every row it is given: a credits row is one more entry', () => {
     const rows = [...ACCESS_ROWS, { id: 'credits', title: 'Use Cookrew credits', does: 'Pay as you go.', form: 'endpoint' as const }]
-    const html = renderToStaticMarkup(<AccessRowsView state={{ rows, active: null }} onOpen={vi.fn()} onRemove={vi.fn()} />)
+    const html = renderToStaticMarkup(<AccessRowsView state={{ rows, keyStore: 'file', active: null }} onOpen={vi.fn()} onRemove={vi.fn()} />)
     expect(html).toContain(ENDPOINT_COPY.HEAD)
     expect(html).toContain('Use your own endpoint')
     expect(html).toContain('Use Cookrew credits')
@@ -228,13 +324,13 @@ describe('the road with no account', () => {
 
   it('stays out of an existing person’s Routing panel until they have one', () => {
     expect(renderToStaticMarkup(<AccessRowsView state={none} whenActive onOpen={vi.fn()} onRemove={vi.fn()} />)).toBe('')
-    const active = { id: 'endpoint', label: 'Your endpoint', protocol: 'openai' as const, model: 'm', host: 'a.example', tools: ['Pi'] }
+    const active = { id: 'endpoint', label: 'Your endpoint', protocol: 'openai' as const, model: 'm', host: 'a.example', baseUrl: 'https://a.example', simple: false, tools: ['Pi'] }
     expect(renderToStaticMarkup(<AccessRowsView state={{ ...none, active }} whenActive onOpen={vi.fn()} onRemove={vi.fn()} />)).toContain('a.example')
   })
 
   it('shows what is on, without the key, and how to take it off', () => {
     const html = renderToStaticMarkup(
-      <AccessRowsView state={{ ...none, active: { id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', tools: ['Claude Code', 'Pi'] } }} onOpen={vi.fn()} onRemove={vi.fn()} />
+      <AccessRowsView state={{ ...none, active: { id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', baseUrl: 'https://api.example.com', simple: false, tools: ['Claude Code', 'Pi'] } }} onOpen={vi.fn()} onRemove={vi.fn()} />
     )
     expect(html).toContain('api.example.com')
     expect(html).toContain('m-1')

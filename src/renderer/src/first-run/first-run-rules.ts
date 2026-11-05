@@ -1,4 +1,5 @@
 import type { FirstTask } from '../../../shared/first-run'
+import { FIX_LABELS } from '../../../shared/first-run-copy'
 import { turnFailure } from '../../../shared/turn-failure'
 import type { CanvasNode } from '../../../shared/model'
 import { AGENT_TOOLS, type PreflightRow } from '../../../shared/preflight'
@@ -32,6 +33,12 @@ export function otherAgentEnds(nodes: readonly CanvasNode[], activities: readonl
 export function firstAgentHarness(rows: readonly PreflightRow[], endpointTools: readonly string[] | null): string | null {
   if (endpointTools === null || endpointTools.length === 0) return firstHarness(rows)
   return endpointTools.find((tool) => rows.some((r) => r.name === tool && r.state === 'found')) ?? endpointTools[0]
+}
+
+/** A line that ended well and left its row missing: the tool's name, to say so. A download page installs nothing yet. */
+export function stillMissing(rows: readonly PreflightRow[], ended: { readonly line: string; readonly ok: boolean } | null): string | null {
+  if (!ended?.ok) return null
+  return rows.find((r) => r.state === 'missing' && r.fix?.line === ended.line && r.fix.label !== FIX_LABELS.GET)?.name ?? null
 }
 
 /** The tool the first agent runs on: the first one found; the row's name is the preset's. */

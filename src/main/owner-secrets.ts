@@ -138,6 +138,13 @@ export function ownerSecretPaths(
     at(appDir === DEFAULT_APP_DIR ? '.cookrew' : appDir, 'sous-decisions.jsonl'),
     // The one the ruling names by hand.
     at('.claude', '.credentials.json'),
+    // The login keychain. `security` opens this file in its own process, so the
+    // read is a file read: with this denied a seat's lookup finds nothing, and
+    // without it the seat rules read a canary item out (2026-11-06). Any item that
+    // trusts `security` is in reach otherwise, a pane's key (pane-keychain.ts) and
+    // an owner's Claude sign-in among them. A seat runs on what it is lent, so
+    // nothing it is meant to have is here.
+    at('Library', 'Keychains'),
     at('.claude.json'),
     at('.ssh'),
     at('.aws'),

@@ -176,7 +176,11 @@ export interface RouteState {
   /** The servers in Magpie's library, the ones the hub shares (names only); null when the library could not be read. */
   mcpServers?: string[] | null
   /** addKeyLine is the BARE stem `magpie provider add ` ending in one space: the renderer appends the preset, the user pastes the key. */
-  setup: Omit<RouteSetupLines, 'addKeyLine'> & { addKeyLine: string }
+  setup: Omit<RouteSetupLines, 'addKeyLine'> & {
+    addKeyLine: string
+    /** Magpie's installer can reach for sudo here, which the panel says before the press. */
+    installAsksAdmin?: boolean
+  }
 }
 
 /** 'direct', or a Magpie model id ('deepseek/deepseek-chat') or group ('group/smart'). */

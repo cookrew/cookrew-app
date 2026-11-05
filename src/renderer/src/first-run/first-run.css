@@ -185,6 +185,20 @@
   font-size: 12px;
 }
 
+.fr-running {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 12px 0 0;
+  color: var(--zv-muted);
+  font-size: 12.5px;
+}
+
+.fr-running .fr-quiet {
+  margin-left: auto;
+}
+
 .fr-setup {
   margin-top: 16px;
 }
@@ -304,7 +318,9 @@
 /* an agent getting ready: its real terminal, to answer what it asks */
 
 .fr-wait .fr-setup > :last-child {
-  height: 340px;
+  height: clamp(340px, 56vh, 560px);
+  max-height: none;
+  overflow: auto;
 }
 
 .fr-held {
@@ -394,6 +410,12 @@
   margin-bottom: 4px;
   color: var(--zv-muted, #6f675b);
   font-size: 11.5px;
+}
+
+.fr-field span.fr-error {
+  margin: 4px 0 0;
+  color: #b3392f;
+  font-size: 12px;
 }
 
 .fr-field input {
