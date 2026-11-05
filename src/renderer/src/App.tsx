@@ -1613,6 +1613,7 @@ function Canvas(): React.JSX.Element {
           <ConfirmClose
             node={closingNode}
             activity={closingActivity ?? null}
+            nodes={workspace?.nodes ?? []}
             onCancel={() => setClosingId(null)}
             onConfirm={() => confirmClose(closingNode.id)}
           />
