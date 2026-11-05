@@ -1,3 +1,5 @@
+import { hostPlatform, machineCopy } from './machine-words'
+
 /**
  * THE ACTS THAT ASK AGAIN.
  *
@@ -116,7 +118,7 @@ export const STEP_UP_SENTENCE: Record<StepUpAct, string> = {
   'remove-factor': 'Prove it is you before taking a factor off the account.',
   'revoke-device': 'Prove it is you before taking another device off the account.',
   'mint-join-code': 'Prove it is you before adding a machine to the account.',
-  'take-over-door': 'Prove it is you before taking a door over from another Mac.',
+  'take-over-door': machineCopy('Prove it is you before taking a door over from another Mac.', hostPlatform()),
   'end-seat': 'Prove it is you before ending somebody else’s seat.',
   'not-me': 'Prove it is you before locking the account down.'
 }
