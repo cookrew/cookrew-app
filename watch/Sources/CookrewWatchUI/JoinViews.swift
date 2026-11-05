@@ -46,12 +46,14 @@ public struct WelcomeView: View {
 
   public var body: some View {
     VStack(spacing: 5) {
-      InkFace(id: "cookrew", preset: "Claude Code", orch: true, status: .idle, size: 46, weight: .large).padding(.top, 18)
-      Text("Cookrew").font(InkType.name(18)).foregroundStyle(ink.ink)
-      Text("On your phone or Mac, open ⋯ and pick Apple Watch")
+      InkFace(id: "cookrew", preset: "Claude Code", orch: true, status: .idle, size: 40, weight: .large).padding(.top, 16)
+      Text("Cookrew").font(InkType.name(17)).foregroundStyle(ink.ink)
+      // Never cut short: this is the only place that says where a code comes from.
+      Text("On your phone or Mac: ⋯ → Apple Watch")
         .font(InkType.words(13))
         .foregroundStyle(ink.soft)
         .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 12)
       Spacer(minLength: 0)
       InkButton(title: "Enter the code", action: onCode).padding(.horizontal, 6)

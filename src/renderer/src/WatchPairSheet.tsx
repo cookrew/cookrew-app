@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { cookrew } from './api'
 import { inviteRefusal, spacedCode, timeLeft, typedAddress, watchClaimed, type WatchCode, type WatchState } from './watch-code'
 import './grant-surface.css'
+// Where a .cr-sheet takes its colours: without it the code is dark on dark.
+import './team-fork.css'
 
 /** How often the sheet asks whether the watch has arrived. */
 const CLAIM_POLL_MS = 1500
