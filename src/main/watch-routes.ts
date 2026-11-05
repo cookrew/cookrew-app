@@ -142,7 +142,7 @@ export interface WatchRequest {
   /** A pairing or a watch token. The wall's read-only token is neither: it reads no card here. */
   readonly cleared: boolean
   /** Encrypted on the way here (mobile-api.ts · sealedTransport): a password may arrive on it. */
-  readonly sealed: boolean
+  sealed(): boolean
   board(): Promise<BoardSnapshot>
   activities(): readonly TerminalActivity[]
   checkpoint(terminalId: string): Promise<LatestCheckpoint | null>
@@ -326,7 +326,7 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (ctx.owner && method === 'POST' && path === '/api/watch/invite') {
-    if (!ctx.sealed) {
+    if (!ctx.sealed()) {
       respondJson(response, 200, { ok: false, reason: 'not_sealed' })
       return true
     }

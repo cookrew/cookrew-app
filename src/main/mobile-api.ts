@@ -884,7 +884,7 @@ export async function handleMobileApi(
       path: p,
       owner: ownerPairing,
       cleared: hasPairing,
-      sealed: sealedTransport(request),
+      sealed: () => sealedTransport(request),
       board: async () => {
         const board = deps.board as BoardSources;
         await probeWarmed(board);

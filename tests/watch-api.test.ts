@@ -477,7 +477,7 @@ describe('through the real gate', () => {
         path: '/api/watch/invite',
         owner: true,
         cleared: true,
-        sealed: false
+        sealed: () => false
       } as unknown as Parameters<typeof handleWatchRoutes>[0])
       expect(JSON.parse(written.body ?? '{}')).toEqual({ ok: false, reason: 'not_sealed' })
       expect(refused).not.toHaveBeenCalled()
