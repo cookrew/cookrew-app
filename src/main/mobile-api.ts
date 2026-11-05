@@ -1664,7 +1664,7 @@ export async function handleMobileApi(
           if (held()) return { ok: false, reason: DISPATCH_IN_FLIGHT };
           await paceEnter(terminalId, data);
           if (deps.holdInput?.(terminalId, data) === true) return { ok: true, submitted: false };
-          return session ? ownerSubmit(session, data) : null;
+          return session ? ownerSubmit(session, data, { keyboard: true }) : null;
         };
         const verdict =
           typeof body.id === "string" && BATCH_ID.test(body.id)

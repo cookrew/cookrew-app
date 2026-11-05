@@ -169,6 +169,9 @@ import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { IdleLock } from './lock'
 import { registerAccountIpc } from './account-ipc'
+import type { AccountDoor, LoginAudit } from './login-cli'
+import { paneInputs } from './pane-input'
+import { injectWindowInput } from './ui-input'
 import { localDeviceName } from './device-name'
 import { machineProfile } from './machine-profile'
 import { COMPANION_BOOTSTRAPS } from '../shared/lan-token-mode'
@@ -658,6 +661,30 @@ const scrub = createScrubber({
   onChange: (listener) => void secrets.onChange(listener)
 })
 /** The audit line every read and every missing read leaves: name only. */
+/** The account for `cookrew login`, once its channels are registered. */
+let accountDoor: AccountDoor | null = null
+
+/**
+ * A SIGN-IN ATTEMPT FROM A TERMINAL, ON THE RECORD, whichever way it went: a
+ * refusal is the line an agent's try leaves. Nothing typed ever reaches this.
+ */
+const auditLogin = (event: LoginAudit): void => {
+  const hit = store.nodeAcrossWorkspaces(event.terminalId)
+  const home = store.workspaceOfNode(event.terminalId)
+  const workspaceId = hit?.workspaceId ?? home?.id ?? store.focusedId
+  events.append({
+    type: event.type,
+    entityId: event.terminalId,
+    entityName: hit?.node.name ?? event.terminalId,
+    workspaceId,
+    workspaceName: home?.name ?? store.list().workspaces.find((w) => w.id === workspaceId)?.name ?? workspaceId,
+    // A sign-in that went through got past every check for a person.
+    actor: event.type === 'account.login-refused' ? 'agent' : 'user',
+    timestamp: Date.now(),
+    details: scrub(event.details)
+  })
+}
+
 const auditSecret = (event: SecretAudit): void => {
   const hit = store.nodeAcrossWorkspaces(event.terminalId)
   const home = store.workspaceOfNode(event.terminalId)
@@ -5683,42 +5710,7 @@ function roleSaveInner(input: RoleSaveInput): AgentRole {
  */
 async function injectInput(args: string[]): Promise<string> {
   if (!mainWindow) throw new Error('No window')
-  const wc = mainWindow.webContents
-  const [sub, ...rest] = args
-  if (sub === 'click') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-    return `Clicked ${x},${y}`
-  }
-  if (sub === 'dblclick') {
-    const x = parseInt(rest[0], 10)
-    const y = parseInt(rest[1], 10)
-    for (const clickCount of [1, 2]) {
-      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount })
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount })
-    }
-    return `Double-clicked ${x},${y}`
-  }
-  if (sub === 'type') {
-    for (const char of rest.join(' ')) {
-      wc.sendInputEvent({ type: 'char', keyCode: char })
-      await new Promise((resolve) => setTimeout(resolve, 15))
-    }
-    return `Typed ${rest.join(' ').length} chars`
-  }
-  if (sub === 'key') {
-    const keyCode = rest[0]
-    // Optional modifiers as a 2nd arg: "meta", "meta+shift", etc.
-    const modifiers = rest[1]
-      ? (rest[1].split(/[+,]/) as Array<'shift' | 'control' | 'meta' | 'alt'>)
-      : undefined
-    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
-    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
-    return `Pressed ${keyCode}${rest[1] ? ` +${rest[1]}` : ''}`
-  }
-  throw new Error('Usage: cookrew ui click X Y | dblclick X Y | type "text" | key Enter')
+  return injectWindowInput(mainWindow.webContents, args)
 }
 
 /**
@@ -6695,6 +6687,11 @@ app.whenReady().then(() => {
     // each read leaves in the event log.
     secrets,
     audit: auditSecret,
+    // `cookrew login`, `logout`, `whoami`: the account's own functions, and the
+    // line each attempt leaves. The door is registered further down, so this
+    // reads it when asked.
+    account: () => accountDoor,
+    auditLogin,
     // THE SERVED FACT for the secret verbs: a pane spawned for a stranger's
     // seat (pty.ts), or any pane on a workspace this app serves out
     // (servedSpawnContexts). `servedSession` on the node is the OTHER thing —
@@ -7324,7 +7321,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   //
   // Registered through the SAME ownerOnly wrapper, by construction: the module
   // hands over a table and this is the only place a guard could be forgotten.
-  registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
+  accountDoor = registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
     requests,
@@ -8097,6 +8094,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     }
   })
   ipcMain.on('pty:input', (_e, terminalId: string, data: string) => {
+    paneInputs.noteWindowKey(terminalId, data)
     idleSleep.touch(terminalId, Date.now())
     typeInto(terminalId, data)
   })

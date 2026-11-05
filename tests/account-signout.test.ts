@@ -70,10 +70,12 @@ describe('signOutThisMac against a scripted registry', () => {
   })
 
   /** A Mac that is @drej, with a live session, pointed at the scripted registry. */
-  const signedInMac = (): { base: string; it: Accounts; deviceId: string; changes: number[] } => {
+  const signedInMac = (
+    over: Parameters<typeof fakeAccount>[0] = {},
+  ): { base: string; it: Accounts; deviceId: string; changes: number[] } => {
     const { base, clean } = tempBase()
     cleanups.push(clean)
-    const file = fakeAccount({ registry: origin })
+    const file = fakeAccount({ registry: origin, ...over })
     writeAccount(file, base)
     const changes: number[] = []
     const it = new Accounts({ base, origin, onChange: () => changes.push(Date.now()) })
@@ -121,8 +123,25 @@ describe('signOutThisMac against a scripted registry', () => {
     expect(existsSync(accountFile(base))).toBe(true)
   })
 
-  it('a ladder is a refusal here, not a climb', async () => {
-    const { base, it } = signedInMac()
+  it('a ladder is not a climb, and not a refusal either: the password was right', async () => {
+    // cookrew.dev opens a ladder only AFTER the password checks out, and it
+    // opens one for every sign-in on an account holding a factor, attached
+    // device or not. Read as a refusal, nobody with an authenticator could ever
+    // sign a machine out. The act below carries the password to the registry,
+    // which stays the judge of it.
+    const { base, it, deviceId } = signedInMac()
+    answer('POST /v2/sessions', {
+      status: 401,
+      body: { error: 'second_factor', pending: '11111111-2222-4333-8444-555555555555', next: ['totp'], expiresAt: Date.now() + 600_000 },
+    })
+    answer(`DELETE /v2/me/devices/${encodeURIComponent(deviceId)}`, { status: 204 })
+    expect(await it.signOutThisMac(PASSWORD)).toEqual({ ok: true, value: undefined })
+    expect(asked.map((a) => a.method)).toEqual(['POST', 'DELETE'])
+    expect(existsSync(accountFile(base))).toBe(false)
+  })
+
+  it('a ladder on a session already dead proves nothing to act under', async () => {
+    const { base, it } = signedInMac({ session: { token: 'old', exp: 1 } })
     answer('POST /v2/sessions', {
       status: 401,
       body: { error: 'second_factor', pending: '11111111-2222-4333-8444-555555555555', next: ['totp'], expiresAt: Date.now() + 600_000 },

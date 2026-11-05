@@ -74,3 +74,10 @@ export const afterSeal = (
   field: { value: '', error: null },
   listing: new Map(listing).set(sealed.name, sealed)
 })
+
+/** The listing once the store has forgotten a name: a new map, this row gone. */
+export const afterRemove = (name: string, listing: ReadonlyMap<string, SecretListing>): ReadonlyMap<string, SecretListing> => {
+  const next = new Map(listing)
+  next.delete(name)
+  return next
+}

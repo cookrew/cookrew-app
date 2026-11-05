@@ -123,11 +123,17 @@ cookrew browser create https://example.com "Docs"
 cookrew browser snapshot "Docs"
 cookrew browser create screen://main "My screen"
 cookrew team save "Reviewers"              # snapshot the crew as a reusable team
+cookrew login                              # sign this machine in, no window needed
+cookrew whoami                             # the account and device it is signed in as
 ```
 
 Run `cookrew help` for the rest. Asking or checking an agent, reading or editing a note
 and driving a browser by name wires you to it. Verbs that restructure the crew, such as
 `connect`, `dismiss`, `team save` and `workspace switch`, are for the orch.
+
+`cookrew login` and `cookrew logout` are for you, not your agents: they run in a Shell
+card, and the password is typed at a hidden prompt, never on the command line. Signing
+in adds the machine to your account, so it is also how a machine with no window joins.
 
 ## License
 

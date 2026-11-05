@@ -34,21 +34,33 @@ const MODEL_LABELS: readonly (readonly [prefix: string, label: string])[] = [
   ['Mac', 'Mac']
 ]
 
+/**
+ * What to call a machine that named no model. `hw.model` is a Mac's fact, so
+ * on a Mac the honest fallback is still "Mac"; anywhere else the platform is
+ * the one thing known, and "Mac · solis-model-test" was simply false.
+ */
+function unmodelled(platform: string): string {
+  if (platform === 'darwin') return 'Mac'
+  if (platform === 'linux') return 'Linux'
+  return platform === 'win32' ? 'Windows PC' : 'Computer'
+}
+
 /** "MacBookPro18,3" → "MacBook Pro". An identifier we do not know is kept as typed. */
-export function modelLabel(hwModel: string): string {
+export function modelLabel(hwModel: string, platform = 'darwin'): string {
   const model = hwModel.trim()
-  if (model.length === 0) return 'Mac'
+  if (model.length === 0) return unmodelled(platform)
   const hit = MODEL_LABELS.find(([prefix]) => model.startsWith(prefix))
   return hit ? hit[1] : model
 }
 
 /**
  * The hostname as a person set it: "drej-mbp.local" → "drej-mbp". The
- * `.local` is mDNS plumbing, and an empty hostname is still a Mac.
+ * `.local` is mDNS plumbing, and an empty hostname is still a machine.
  */
-export function hostLabel(hostname: string): string {
+export function hostLabel(hostname: string, platform = 'darwin'): string {
   const host = hostname.trim().replace(/\.local$/i, '')
-  return host.length === 0 ? 'this-mac' : host
+  if (host.length > 0) return host
+  return platform === 'darwin' ? 'this-mac' : 'this-machine'
 }
 
 export interface DeviceNameInput {
@@ -58,6 +70,8 @@ export interface DeviceNameInput {
   host: string
   /** The names already on the account, as GET /v2/me lists them. */
   taken: readonly string[]
+  /** `process.platform`. Absent reads as a Mac, the machine this was written on. */
+  platform?: string
 }
 
 /**
@@ -68,7 +82,7 @@ export interface DeviceNameInput {
  * a name that is long.
  */
 export function deviceDisplayName(input: DeviceNameInput): string {
-  const base = `${modelLabel(input.model)} · ${hostLabel(input.host)}`
+  const base = `${modelLabel(input.model, input.platform)} · ${hostLabel(input.host, input.platform)}`
   const taken = new Set(input.taken.map((name) => name.trim()))
   if (!taken.has(base)) return base
   let n = 2

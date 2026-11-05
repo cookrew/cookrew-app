@@ -19,6 +19,8 @@ import { confirmHerdrClaim, herdrSessionDir, processClaimDeps, releaseHerdrClaim
 import { reapOrphansOn } from './orphan-reap'
 import { harnessFor } from './harness'
 import { confinedSpawn } from './session-sandbox'
+import { cliWrapper, publishCliRuntime } from './cli-shim'
+import { paneInputs } from './pane-input'
 import { defaultProducerLease } from './producer-lease'
 import { PtyOwnership } from './pty-scope'
 import { defaultInputProvenance } from './input-provenance'
@@ -694,6 +696,30 @@ export class PtySession extends EventEmitter {
     return true
   }
 
+  /**
+   * THE KEYS GO TO THE PANE AND TO NOBODY ELSE, until the answer is called.
+   *
+   * `cookrew login` reads its password with echo off, which keeps it off the
+   * screen, the scrollback and every transcript. It does nothing here: the
+   * keys still pass through write(), which announces them to the turn tracker,
+   * and in an agent's pane the password and Enter would open a turn with the
+   * password as its prompt: stored, summarised, drawn on the card and sent to
+   * the phone. So while this holds, nothing is announced and no input is
+   * marked: the bytes are going to a prompt, not into the pane's input box.
+   *
+   * The owner's guard still runs, because it refuses keys and keeps nothing.
+   * Whatever is not a keyboard is refused before it gets here (pane-input.ts),
+   * which is also where the seal is held: by terminal id, so a session made
+   * while one is on starts sealed.
+   */
+  sealInput(): () => void {
+    return paneInputs.seal(this.terminalId)
+  }
+
+  private get inputSealed(): boolean {
+    return paneInputs.sealed(this.terminalId)
+  }
+
   write(data: string): OwnerInputVerdict {
     // The producer guard runs BEFORE the bytes reach the child (Sol r4 P0-1a):
     // preemption after proc.write cannot stop a competing submission, only
@@ -712,6 +738,11 @@ export class PtySession extends EventEmitter {
     if (verdict !== 'allow') {
       this.lastRefusalInfo = { verdict, at: Date.now() }
       return verdict
+    }
+    if (this.inputSealed) {
+      this.lastRefusalInfo = null
+      this.proc.write(data)
+      return 'allow'
     }
     // WRITE-AHEAD provenance (Sol r10 P0-1), after the verdict — refused
     // bytes never cross, so they never dirty — and BEFORE proc.write: the
@@ -786,6 +817,10 @@ export class PtySession extends EventEmitter {
     // the box, not which producer's door they came through. A mark that
     // cannot commit refuses the write (Sol r11 P0-1) — false, no byte, no
     // input event — and ownerSubmit surfaces the refusal.
+    if (this.inputSealed) {
+      this.proc.write(data)
+      return true
+    }
     if (!defaultProducerLease().noteBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data)
@@ -809,6 +844,7 @@ export class PtySession extends EventEmitter {
     // write (Sol r11 P0-1): the caller's stillValid/landing checks read the
     // undelivered paste honestly, and its later bare CR submits an empty
     // box, which every hosted TUI treats as a no-op.
+    if (!paneInputs.drive(this.terminalId)) return false
     if (!defaultProducerLease().noteDispatchBytesEntering(this.terminalId, data)) return false
     this.proc.write(data)
     this.emit('input', data, 'dispatch')
@@ -821,7 +857,7 @@ export class PtySession extends EventEmitter {
    * tracking hears about it is this. Same event, same payload shape.
    */
   noteExternalInput(data: string): void {
-    this.emit('input', data)
+    if (!this.inputSealed) this.emit('input', data)
   }
 
   /**
@@ -1410,9 +1446,11 @@ export class PtyManager {
   /**
    * Install the CLI next to the socket so PATH injection finds `cookrew`.
    * The entry is a shell wrapper because a bare `cookrew` file with ESM
-   * `import`s would be parsed as CommonJS by node.
+   * `import`s would be parsed as CommonJS by node, and because it runs on this
+   * app's own binary rather than on a Node the machine may not have
+   * (cli-shim.ts).
    */
-  installCli(cliSource: string): void {
+  installCli(cliSource: string, runtime: string = process.execPath): void {
     // Publish the socket at a STABLE path so a `cookrew` on the system PATH can
     // find it without guessing.
     //
@@ -1424,6 +1462,7 @@ export class PtyManager {
     try {
       mkdirSync(COOKREW_HOME, { recursive: true })
       writeFileSync(path.join(COOKREW_HOME, 'socket'), this.socketPath)
+      publishCliRuntime(COOKREW_HOME, runtime)
     } catch (error) {
       // A missing pointer only costs the PATH-installed CLI its default; panes
       // still get COOKREW_SOCKET injected directly.
@@ -1435,7 +1474,7 @@ export class PtyManager {
     // Briefs and docs keep spelling `cookrew`, so one grep still finds them.
     for (const name of CLI_NAMES) {
       const wrapper = path.join(this.runtimeDir, name)
-      writeFileSync(wrapper, `#!/bin/sh\nexec node "${script}" "$@"\n`)
+      writeFileSync(wrapper, cliWrapper(script, runtime))
       chmodSync(wrapper, 0o755)
     }
   }

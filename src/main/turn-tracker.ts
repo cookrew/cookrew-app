@@ -2157,6 +2157,21 @@ export class TurnTracker extends EventEmitter {
    * through it: reading one scalar by constructing N full activities is how a
    * cheap question becomes O(terminals x scrollback).
    */
+  /**
+   * Forget what was typed in this pane and never submitted. A hidden prompt is
+   * opening: keys from here on are sealed, so no Enter would ever come to clear
+   * the buffer, and whatever was typed ahead of the seal would stay on the card.
+   */
+  dropDraft(terminalId: string): void {
+    const t = this.tracked.get(terminalId)
+    if (!t) return
+    t.promptBuffer = ''
+    t.inPaste = false
+    t.heldInput = ''
+    this.lease.clearOwnerEditing(terminalId)
+    this.schedulePush(terminalId)
+  }
+
   phaseOf(terminalId: string): TurnPhase | undefined {
     // TRACKED ONLY, deliberately. hasLiveWork reads this, and its working set
     // is exactly what the backend hint emits — answering from a guess pins

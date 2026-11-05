@@ -1,3 +1,4 @@
+import { machineCopy } from '../shared/machine-words'
 import type { PairingHandout } from '../shared/account-v2'
 import { pairingUrl } from '../shared/pairing-url'
 
@@ -65,7 +66,7 @@ export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null 
   const token = deps.pairingToken()
   if (!token) return null
   const account = deps.account()
-  const desktopName = account?.name ?? 'This Mac'
+  const desktopName = account?.name ?? machineCopy('This Mac', process.platform)
 
   if (account) {
     const url = pairingUrl({
