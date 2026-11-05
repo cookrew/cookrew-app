@@ -930,7 +930,7 @@ function lockLine(outcome: LockOutcome, passwordPending: boolean): string {
   // the registry's own reason, never "not it", which would send the owner to
   // change what they are typing.
   if (outcome.reason === 'unproven') return refusalSentence(outcome.refusal, outcome.message)
-  return 'There is no account on this Mac to unlock.'
+  return machineCopy('There is no account on this Mac to unlock.', hostPlatform())
 }
 
 

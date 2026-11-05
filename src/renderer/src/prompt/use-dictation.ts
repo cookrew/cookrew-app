@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PTT_IDLE, pttStep, type PttState } from '../../../shared/ptt-machine'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import type { ListenEvent } from '../../../main/listen'
 import { cookrew } from '../api'
 import { listensThroughPauses, pickEar, preferPhoneEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
@@ -220,7 +221,7 @@ export function useDictation(options: {
         .then((wav) => {
           if (!wav) return finish('')
           const hear = cookrew().hearRecording
-          if (!hear) return finish('', [], 'This Mac cannot hear the phone.')
+          if (!hear) return finish('', [], machineCopy('This Mac cannot hear the phone.', hostPlatform()))
           const upload = new AbortController()
           uploadRef.current = upload
           const deadline = window.setTimeout(() => upload.abort('deadline'), hearDeadlineMs(wav.length))

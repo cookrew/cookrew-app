@@ -1,3 +1,4 @@
+import { machineCopy } from '../src/shared/machine-words'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -157,8 +158,8 @@ describe('M5 · USE WI-FI — a tap on the Mac, never a scan', () => {
 
   it('carries M5’s sentences from the one table, and names the account-less door', async () => {
     const body = await (await get('/me', signedIn())).text()
-    expect(body).toContain(`data-asked="${esc(WEB_V3_COPY['m5.asked'])}"`)
-    expect(body).toContain(esc(WEB_V3_COPY['m5.no-account']))
+    expect(body).toContain(`data-asked="${esc(machineCopy(WEB_V3_COPY['m5.asked'], 'any'))}"`)
+    expect(body).toContain(esc(machineCopy(WEB_V3_COPY['m5.no-account'], 'any')))
     // The scripts cannot import the table, so the sentences come down as data.
     expect(ASSETS['reach.js'].body).toContain('dataset.asked')
     expect(ASSETS['reach.js'].body).not.toContain(WEB_V3_COPY['m5.asked'])
@@ -244,7 +245,7 @@ describe('M6 · the requests view — D11’s rows at phone width', () => {
     // ALLOW is not on this page and no sentence here describes it: a reach row
     // is only ever handed to the Mac it names, never to a browser.
     expect(body).not.toContain('ALLOW gives')
-    expect(body).toContain('Answer it on the Mac itself')
+    expect(body).toContain('Answer it on the machine itself')
   })
 
   it('stacks the row and grows the number field at phone width', async () => {

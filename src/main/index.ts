@@ -276,6 +276,7 @@ import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
+import { registryArgument } from '../shared/machine-words'
 import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
@@ -6735,7 +6736,8 @@ function createWindow(): void {
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(dirname, '../preload/index.cjs'),
-      webviewTag: true
+      webviewTag: true,
+      additionalArguments: [registryArgument(registryOrigin())]
     }
   })
 

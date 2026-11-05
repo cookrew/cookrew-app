@@ -1,4 +1,5 @@
 import { MIN_PASSCODE, usernameProblem, type AccountRefusal, type AccountStatus, type UsernameCheck } from '../../../shared/account-v2'
+import { hostPlatform, machineCopy, machineTable } from '../../../shared/machine-words'
 import { PROVIDER_LABEL, type ProviderId, type ProviderOffer } from '../../../shared/oauth'
 import { accountProblemHint, type FieldTone } from './provider-words'
 
@@ -10,7 +11,7 @@ import { accountProblemHint, type FieldTone } from './provider-words'
  * the components decide nothing, so every verdict can be tested without a DOM.
  */
 
-export const PROVIDER_COPY = {
+export const PROVIDER_COPY = machineTable({
   WAITING: 'Finish in your browser. This sheet will carry on by itself.',
   ALREADY_HAVE: 'Already have a Cookrew account? Sign in with your password, then link this from Security.',
   HANDLE_WHY: 'This is your name on Cookrew. It does not have to match, and it stays yours if you ever unlink.',
@@ -27,10 +28,10 @@ export const PROVIDER_COPY = {
   FORGOT_PASSCODE: 'Forgot your passcode?',
   RESCUE_WHY: 'A recovery code opens this Mac once. You will choose a new passcode straight after.',
   LOCK_NOW_WHY: 'Locking hides your canvas behind your passcode. Your agents keep working.',
-} as const
+} as const, hostPlatform())
 
 const REFUSALS: Partial<Record<AccountRefusal, string>> = {
-  wrong_identity: 'That account is not the one on this Mac. Use the one you signed in with here.',
+  wrong_identity: machineCopy('That account is not the one on this Mac. Use the one you signed in with here.', hostPlatform()),
   link_taken: 'That account is already linked to another Cookrew account.',
   link_exists: 'A different account from this provider is linked here. Remove it first.',
   link_paused: 'This sign-in was reported as “not me”, so it is paused. Link it again from a signed-in device.',

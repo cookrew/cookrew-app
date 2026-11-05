@@ -12,10 +12,11 @@ import {
   type SecondFactorStep,
   type SignInAnswer
 } from '../shared/account-v2'
-import { machineCopy } from '../shared/machine-words'
+import { machineCopy, registryWord } from '../shared/machine-words'
 import type { CliRequest, TerminalNodeData } from '../shared/model'
 import { LADDER_TTL_MS, type TypedFactor } from './account-ladder'
 import type { DeviceCode } from './account-oauth'
+import { registryOrigin } from './registry-origin'
 
 /**
  * `cookrew login`, `logout` AND `whoami`: THE ACCOUNT, FROM A TERMINAL.
@@ -65,6 +66,10 @@ import type { DeviceCode } from './account-oauth'
  */
 
 export const LOGIN_EXIT = { ok: 0, failed: 1, refused: 3 } as const
+
+/** A sentence for the terminal, naming the registry this app really talks to. */
+const said = (id: CliCopyId, platform: string, vars: Readonly<Record<string, string | number>> = {}): string =>
+  cliCopy(id, platform, vars, registryWord(registryOrigin()))
 
 /** Three wrong passwords and the conversation ends. The registry counts its own. */
 const PASSWORD_TRIES = 3
@@ -251,7 +256,7 @@ class Conversation {
   }
 
   private say(id: CliCopyId, vars: Readonly<Record<string, string | number>> = {}): string {
-    return cliCopy(id, this.account.platform, vars)
+    return said(id, this.account.platform, vars)
   }
 
   private refusal(reason: AccountRefusal, message: string | undefined, handle = ''): string {
@@ -722,7 +727,7 @@ export class LoginDoor {
   }
 
   private line(id: CliCopyId): string {
-    return cliCopy(id, this.deps.account()?.platform ?? process.platform)
+    return said(id, this.deps.account()?.platform ?? process.platform)
   }
 
   private refuse(request: CliRequest, terminalId: string, id: CliCopyId, why: string): never {
@@ -782,11 +787,11 @@ export class LoginDoor {
     this.deps.ownerPane(request)
     const account = this.deps.account()
     const platform = account?.platform ?? process.platform
-    if (account === null) throw new LoginRefused(cliCopy('gate.no-door', platform), LOGIN_EXIT.refused)
+    if (account === null) throw new LoginRefused(said('gate.no-door', platform), LOGIN_EXIT.refused)
     const who = account.who()
-    if (who.username === null) throw new LoginRefused(cliCopy('said.not-signed-in', platform), LOGIN_EXIT.failed)
+    if (who.username === null) throw new LoginRefused(said('said.not-signed-in', platform), LOGIN_EXIT.failed)
     const vars = { handle: who.username, device: who.deviceName, registry: who.registry ?? 'cookrew.dev' }
-    if (!who.sessionLive) throw new LoginRefused(cliCopy('said.session-ended', platform, vars), LOGIN_EXIT.failed)
-    return cliCopy('said.whoami', platform, vars)
+    if (!who.sessionLive) throw new LoginRefused(said('said.session-ended', platform, vars), LOGIN_EXIT.failed)
+    return said('said.whoami', platform, vars)
   }
 }

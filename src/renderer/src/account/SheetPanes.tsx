@@ -60,7 +60,7 @@ export function UsernameField({ value, view, onChange, field }: UsernameProps): 
         value={value}
         spellCheck={false}
         autoComplete="username"
-        placeholder="@drej"
+        placeholder="@yourname"
         onChange={(e) => onChange(e.target.value)}
       />
     </FieldRow>

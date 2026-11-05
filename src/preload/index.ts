@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { registryFromArgv } from '../shared/machine-words'
 
 let deepLinkSubscriber: ((link: unknown) => void) | null = null
 let heldDeepLinks: readonly unknown[] = []
@@ -734,5 +735,6 @@ contextBridge.exposeInMainWorld('cookrew', api)
 // before any page script runs. The phone and the site never get it, and their
 // sentences stand as written.
 contextBridge.exposeInMainWorld('cookrewPlatform', process.platform)
+contextBridge.exposeInMainWorld('cookrewRegistry', registryFromArgv(process.argv))
 
 export type CookrewApi = typeof api

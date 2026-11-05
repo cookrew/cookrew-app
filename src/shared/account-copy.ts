@@ -1,4 +1,4 @@
-import { hostPlatform, machineCopy, machineTable } from './machine-words'
+import { hostPlatform, machineCopy, machineTable, registryCopy } from './machine-words'
 
 /**
  * THE ACCOUNT'S SENTENCES — one source for desktop and web (V3-07).
@@ -448,9 +448,10 @@ export type CliCopyId = keyof typeof CLI_COPY
 export function cliCopy(
   id: CliCopyId,
   platform: string,
-  vars: Readonly<Record<string, string | number>> = {}
+  vars: Readonly<Record<string, string | number>> = {},
+  registry?: string
 ): string {
-  return fillCopy(machineCopy(CLI_COPY[id], platform), vars)
+  return fillCopy(registryCopy(machineCopy(CLI_COPY[id], platform), registry), vars)
 }
 
 /**

@@ -1223,7 +1223,7 @@ export class Accounts {
       }
       nonce = body.nonce
     } catch {
-      return this.renewFailed('cookrew.dev could not be reached')
+      return this.renewFailed('the registry could not be reached')
     }
 
     try {
@@ -1245,7 +1245,7 @@ export class Accounts {
       this.renewProblem = null
       return true
     } catch {
-      return this.renewFailed('cookrew.dev could not be reached')
+      return this.renewFailed('the registry could not be reached')
     }
   }
 
