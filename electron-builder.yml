@@ -40,6 +40,13 @@ asarUnpack:
 # cookrew://import/@handle/team and its kin — the link a team's page on
 # cookrew.dev hands to the app. Parsed in src/main/deep-link.ts; the OS
 # registration is claimed at launch (app.setAsDefaultProtocolClient).
+# Written into the app as app-update.yml: where a running build looks for the
+# next one. The feed is the published release's latest-mac.yml and latest.yml.
+publish:
+  provider: github
+  owner: cookrew
+  repo: cookrew-app
+
 protocols:
   name: Cookrew
   schemes:

@@ -553,6 +553,7 @@ export interface CookrewApi {
   setTelemetry?: (on: boolean) => Promise<TelemetryStatus | null>;
   updateStatus?: () => Promise<unknown>;
   setUpdateCheck?: (on: boolean) => Promise<unknown>;
+  restartToUpdate?: () => Promise<unknown>;
   onUpdateStatus?: (cb: (status: unknown) => void) => () => void;
   /**
    * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
