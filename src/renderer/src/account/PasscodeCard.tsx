@@ -49,6 +49,7 @@ export function PasscodeCard({
         </header>
         <p className="gs-hint">{PROVIDER_COPY.PASSCODE_LOCAL}</p>
         <p className="gs-hint">Signed in as @{status.username}.</p>
+        <div className="cr-acct-providers">
         <input
           type="password"
           className="gs-input"
@@ -68,6 +69,7 @@ export function PasscodeCard({
           onChange={(e) => setConfirm(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && save()}
         />
+        </div>
         {next.length > 0 && view.note !== '' && <p className="gs-hint">{view.note}</p>}
         {error && (
           <p className="gs-paste-error" role="alert">
