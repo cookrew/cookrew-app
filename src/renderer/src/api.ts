@@ -45,7 +45,7 @@ import type { TraceBoundaryMarker } from "../../shared/trace-blocks";
 import type { DoorTranscriptState } from "../../shared/door-transcript-state";
 import type { BoardRow, BoardSummary } from "../../shared/board";
 import type { VersionPinRecord } from "../../shared/version-pin";
-import type { LevelsEvent } from "../../shared/levels";
+import type { FleetEvent } from "../../shared/fleet";
 import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
@@ -556,14 +556,14 @@ export interface CookrewApi {
   onUpdateStatus?: (cb: (status: unknown) => void) => () => void;
   /**
    * THE ZOOM NAVIGATOR'S DEVICES (zoom/use-zoom-fleet.ts): this desktop's
-   * levels feed — every workspace with its agents and their wired notes and
-   * browsers (shared/levels.ts LevelsEvent): a snapshot first, then deltas.
-   * `refused` says the desktop would not open it (its levels service is not
+   * fleet feed — every workspace with its agents and their wired notes and
+   * browsers (shared/fleet.ts FleetEvent): a snapshot first, then deltas.
+   * `refused` says the desktop would not open it (its fleet service is not
    * up yet, or this client may not read it); the caller asks again. Returns
    * the release. Optional — feature-detect; without it the navigator names
    * this desktop's workspaces from listWorkspaces.
    */
-  subscribeZoomFleet?: (cb: (event: LevelsEvent) => void, refused?: () => void) => () => void;
+  subscribeZoomFleet?: (cb: (event: FleetEvent) => void, refused?: () => void) => () => void;
   /**
    * The signed-in account's desktops as the registry lists them: names,
    * presence, kind, workspace names — never addresses (shared/zoom-fleet.ts).

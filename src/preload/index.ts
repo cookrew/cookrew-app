@@ -599,7 +599,7 @@ const api = {
     ipcRenderer.on('update:status', listener)
     return () => ipcRenderer.removeListener('update:status', listener)
   },
-  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's levels feed, a snapshot
+  // THE ZOOM NAVIGATOR'S DEVICES: this desktop's fleet feed, a snapshot
   // first, then every delta, pushed; the release closes this window's stream
   // when its last reader goes. A refused hold (the companion is not up yet)
   // is said, so the reader can ask again.

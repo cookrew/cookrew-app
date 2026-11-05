@@ -1,4 +1,4 @@
-// PHASE HONESTY: the levels speak the board's verdict in the contract's words,
+// PHASE HONESTY: the feed speaks the board's verdict in the contract's words,
 // and never claim more than the board knows.
 //
 //   working → thinking   waiting → waiting   unread → replied
@@ -10,7 +10,7 @@
 
 import { ledgerPhase, livePhase, type BoardPhase, type BoardRow, type BoardSource } from '../../shared/board'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
-import type { AgentPhase, PhaseSource } from '../../shared/levels'
+import type { AgentPhase, PhaseSource } from '../../shared/fleet'
 
 const PHASE_OF_BOARD: Readonly<Record<BoardPhase, AgentPhase>> = {
   working: 'thinking',

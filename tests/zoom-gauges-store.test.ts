@@ -304,17 +304,17 @@ describe('the phone asking its Mac', () => {
   const answer = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status })
   const GOOD = reading(5)
   it('reads a reading', async () => {
-    expect(await fetchGauges('/api/levels/gauges', 'tok', async () => answer(200, GOOD))).toEqual(GOOD)
+    expect(await fetchGauges('/api/fleet/gauges', 'tok', async () => answer(200, GOOD))).toEqual(GOOD)
   })
   it('sends its token as a header, never in the URL', async () => {
     const fetcher = vi.fn(async () => answer(200, GOOD))
-    await fetchGauges('/api/levels/gauges', 'tok', fetcher)
+    await fetchGauges('/api/fleet/gauges', 'tok', fetcher)
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).not.toContain('tok')
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer tok')
   })
   it('a refusal is no reading and nothing more: a TV must not be sent to the re-pair screen by a gauge', async () => {
-    expect(await fetchGauges('/api/levels/gauges', 'wall', async () => answer(401, { error: 'no' }))).toBeNull()
+    expect(await fetchGauges('/api/fleet/gauges', 'wall', async () => answer(401, { error: 'no' }))).toBeNull()
   })
   it('a Mac too old for the route, a dead link, a page that is not JSON: no reading', async () => {
     expect(await fetchGauges('/x', 'tok', async () => answer(404, {}))).toBeNull()
@@ -362,7 +362,7 @@ describe('the phone asking another desktop, through the relay', () => {
     const tokens = vi.fn((key: string) => (key === `cr_token:${OTHER}` ? 'other-mac-token' : null))
     expect(await relayDesktopGauges(BASE, OTHER, tokens, fetcher as never)).toEqual(GOOD)
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe(`/relay/@drej/desktop/${OTHER}/api/levels/gauges`)
+    expect(url).toBe(`/relay/@drej/desktop/${OTHER}/api/fleet/gauges`)
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer other-mac-token')
   })
   it('never sends this Mac’s token to another Mac', async () => {

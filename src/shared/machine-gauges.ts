@@ -2,7 +2,7 @@
  * THE MACHINE'S GAUGES — what a desktop says about its own load, on the
  * devices stop (zoom/MachineGauges.tsx). Sampled in main only while somebody
  * is looking (main/machine-gauges.ts), carried over IPC to the window and
- * GET /api/levels/gauges to the phone.
+ * GET /api/fleet/gauges to the phone.
  *
  * Null is a word here, not a zero: a gauge that cannot be read says "no
  * reading". A GPU that shows 0% because nobody could ask it reads as an idle

@@ -8,7 +8,7 @@
  * exchange is abandoned too, since it holds one of the relay's slots.
  *
  * ANOTHER DESKTOP goes through the relay on demand, one question at a time, to
- * that Mac's own /api/levels/gauges: nothing is filed with the registry, which
+ * that Mac's own /api/fleet/gauges: nothing is filed with the registry, which
  * only carries the asking. That Mac admits by its OWN token, which the phone
  * holds as `cr_token:<id>` if the owner ever paired it there. Holding none,
  * nobody is asked. This Mac's token never goes to another Mac: a credential
@@ -18,7 +18,7 @@
 import { parseMachineGauges, type MachineGauges } from '../../shared/machine-gauges'
 import { desktopIdFromBase, tokenKeyForBase } from './pairing-scope'
 
-export const GAUGES_API_PATH = '/api/levels/gauges'
+export const GAUGES_API_PATH = '/api/fleet/gauges'
 /** Past this the exchange is given back: the next question is a few seconds away anyway. */
 export const GAUGE_FETCH_TIMEOUT_MS = 10_000
 

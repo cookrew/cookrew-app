@@ -28,7 +28,7 @@ const WALL = 'the-read-only-wall-token-abcdefg'
 const PHONE = 'a1b2c3d4-1111-8222-8333-444444444444'
 const PHONE_TOKEN = 'the-phones-own-per-device-token1'
 const DOOR_BEARER = 'a-served-callers-door-bearer-token'
-const PATH = '/api/levels/gauges'
+const PATH = '/api/fleet/gauges'
 
 let temp: { base: string; clean: () => void }
 beforeEach(() => {
@@ -209,14 +209,14 @@ describe('the desktop window', () => {
 })
 
 describe('the seam', () => {
-  it('the route rides the levels mount, so mobile-server.ts needs no new line', () => {
-    const levels = readFileSync('src/main/levels/routes.ts', 'utf8')
-    expect(levels).toMatch(/handleGaugeRoute\(/)
+  it('the route rides the fleet mount, so mobile-server.ts needs no new line', () => {
+    const routes = readFileSync('src/main/fleet/routes.ts', 'utf8')
+    expect(routes).toMatch(/handleGaugeRoute\(/)
     expect(readFileSync('src/main/mobile-server.ts', 'utf8')).not.toMatch(/gauge/i)
   })
   it('the preload and both API surfaces carry it', () => {
     expect(readFileSync('src/preload/index.ts', 'utf8')).toMatch(/machineGauges: \(\) => ipcRenderer\.invoke\('zoom-fleet:gauges'\)/)
     expect(readFileSync('src/renderer/src/api.ts', 'utf8')).toMatch(/machineGauges\?: \(\) => Promise<unknown>/)
-    expect(readFileSync('src/renderer/src/remote-api.ts', 'utf8')).toMatch(/apiPath\('\/api\/levels\/gauges'\)/)
+    expect(readFileSync('src/renderer/src/remote-api.ts', 'utf8')).toMatch(/apiPath\('\/api\/fleet\/gauges'\)/)
   })
 })

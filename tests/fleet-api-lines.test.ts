@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { LEVELS_LINE_MAX } from '../src/shared/levels'
-import { hostOf, line, noteTitle, promptLine, replyLine, statusVerb, taskLine } from '../src/main/levels/lines'
+import { FLEET_LINE_MAX } from '../src/shared/fleet'
+import { hostOf, line, noteTitle, promptLine, replyLine, statusVerb, taskLine } from '../src/main/fleet/lines'
 
 // Every prompt below is an invented lookalike of a shape seen on the board —
 // never a real one.
@@ -59,10 +59,10 @@ describe('the task line', () => {
     expect(taskLine({ title: null, brief: null, prompts: [...noise, 'Too far back'] })).toBeNull()
   })
 
-  it('caps at LEVELS_LINE_MAX code points with an ellipsis', () => {
+  it('caps at FLEET_LINE_MAX code points with an ellipsis', () => {
     const long = 'é🍳'.repeat(100)
     const out = taskLine({ title: null, brief: null, prompts: [long] })!
-    expect(Array.from(out)).toHaveLength(LEVELS_LINE_MAX)
+    expect(Array.from(out)).toHaveLength(FLEET_LINE_MAX)
     expect(out.endsWith('…')).toBe(true)
   })
 })
@@ -73,7 +73,7 @@ describe('scrubbing', () => {
     const prompt = `${'x'.repeat(130)} use ${key} for the call`
     const out = taskLine({ title: null, brief: null, prompts: [prompt] })!
     expect(out).not.toContain('sk-a1B2')
-    expect(out.length).toBeLessThanOrEqual(LEVELS_LINE_MAX)
+    expect(out.length).toBeLessThanOrEqual(FLEET_LINE_MAX)
   })
 
   it('scrubs titles, briefs, replies and bearer tokens', () => {

@@ -1,6 +1,6 @@
 // THE ZOOM NAVIGATOR'S DEVICES, wired end to end: the desktop window reads its
-// own levels service over zoom-fleet:* IPC (the old levels:* view stays gone,
-// see levels-removed.test.ts), the phone reads the companion's /api/levels
+// own fleet service over zoom-fleet:* IPC (the old levels:* view stays gone,
+// see levels-removed.test.ts), the phone reads the companion's /api/fleet
 // stream, and both list the account's desktops. Every member is optional on
 // CookrewApi: the demo has neither, and the hook falls back by feature.
 import { readFileSync } from 'node:fs'
@@ -22,15 +22,15 @@ describe('the zoom fleet bridge', () => {
     }
     const main = read('src/main/index.ts')
     expect(main).toMatch(/registerZoomFleetIpc\(ipcMain\.handle\.bind\(ipcMain\)/)
-    expect(main).toMatch(/service: localLevelsService/)
-    expect(read('src/main/mobile-server.ts')).toMatch(/export function localLevelsService\(\): LevelsService \| null/)
+    expect(main).toMatch(/service: localFleetService/)
+    expect(read('src/main/mobile-server.ts')).toMatch(/export function localFleetService\(\): FleetService \| null/)
   })
 
-  it('reads the companion’s levels stream with the pairing token, on a stream that heals', () => {
+  it('reads the companion’s fleet stream with the pairing token, on a stream that heals', () => {
     const remote = read('src/renderer/src/remote-api.ts')
-    expect(remote).toContain("openEventSource(tokenParam(apiPath('/api/levels/stream')))")
+    expect(remote).toContain("openEventSource(tokenParam(apiPath('/api/fleet/stream')))")
     // A feed that dies without a reset is reopened, and moves with the plane.
-    expect(remote).toMatch(/new ReconnectingStream\(\{[\s\S]{0,400}\/api\/levels\/stream/)
+    expect(remote).toMatch(/new ReconnectingStream\(\{[\s\S]{0,400}\/api\/fleet\/stream/)
     expect(remote).toMatch(/registerPlaneStream\(\{ restart: \(\) => stream\.restart\(\), revive: \(\) => stream\.revive\(\) \}\)/)
     expect(remote).toMatch(/zoomFleetMachines: \(\) => relayAccountMachines\(clientBase\(\)\)/)
   })

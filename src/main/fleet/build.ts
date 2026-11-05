@@ -1,4 +1,4 @@
-// THE LEVELS SNAPSHOT, built from already-read inputs. Pure: no fs, no store,
+// THE FLEET SNAPSHOT, built from already-read inputs. Pure: no fs, no store,
 // no clock of its own — the service (service.ts) reads the sources once per
 // change and hands them here, which keeps every rule below testable with
 // plain objects.
@@ -15,13 +15,13 @@ import type { TerminalActivity, TurnRecord } from '../../shared/turn'
 import type {
   AgentPhase,
   Harness,
-  LevelsAgent,
-  LevelsAttachment,
-  LevelsWorkspace,
+  FleetAgent,
+  FleetAttachment,
+  FleetWorkspace,
   PhaseSource,
   WorkspaceTrait
-} from '../../shared/levels'
-import { TRAITS_MAX, isWorkspaceTrait } from '../../shared/levels'
+} from '../../shared/fleet'
+import { TRAITS_MAX, isWorkspaceTrait } from '../../shared/fleet'
 import { scrubShapes, type Scrub } from '../scrub'
 import { hostOf, line, noteTitle, replyLine, statusVerb, taskLine } from './lines'
 import { phaseSinceOf, phaseVerdict } from './phase'
@@ -33,7 +33,7 @@ export interface PhaseMemory {
   since: number | null
 }
 
-export interface LevelsInput {
+export interface FleetInput {
   /** Registry order; the focused one among them. */
   workspaces: ReadonlyArray<{ meta: WorkspaceMeta; state: WorkspaceState }>
   focusedWorkspaceId: string | null
@@ -53,8 +53,8 @@ export interface LevelsInput {
   traits?: (meta: WorkspaceMeta) => readonly WorkspaceTrait[]
 }
 
-export interface LevelsBuild {
-  workspaces: LevelsWorkspace[]
+export interface FleetBuild {
+  workspaces: FleetWorkspace[]
   memory: Map<string, PhaseMemory>
 }
 
@@ -94,7 +94,7 @@ export function wiringOf(state: WorkspaceState): Wiring {
   return { terminalsOf, attachmentsOf }
 }
 
-function attachmentRow(node: NoteNodeData | BrowserNodeData, wired: readonly string[], scrub: Scrub): LevelsAttachment {
+function attachmentRow(node: NoteNodeData | BrowserNodeData, wired: readonly string[], scrub: Scrub): FleetAttachment {
   const shared = wired.length > 1
   if (node.kind === 'note') return { id: node.id, kind: 'note', title: noteTitle(node, scrub), shared }
   return {
@@ -115,11 +115,11 @@ function* promptsOf(inFlight: string | null, history: readonly TurnRecord[]): Ge
 
 function agentRow(
   node: TerminalNodeData,
-  attachments: LevelsAttachment[],
-  input: LevelsInput,
+  attachments: FleetAttachment[],
+  input: FleetInput,
   scrub: Scrub,
   memory: Map<string, PhaseMemory>
-): LevelsAgent {
+): FleetAgent {
   const activity = input.live.get(node.id)
   const history = input.ledger.get(node.id) ?? []
   const last = history.length > 0 ? history[history.length - 1] : undefined
@@ -163,7 +163,7 @@ function agentRow(
 }
 
 /** Closed-list words only, at most TRAITS_MAX; a lookup that throws is no traits, not a failed build. */
-function traitsFor(input: LevelsInput, meta: WorkspaceMeta): WorkspaceTrait[] {
+function traitsFor(input: FleetInput, meta: WorkspaceMeta): WorkspaceTrait[] {
   try {
     return (input.traits?.(meta) ?? []).filter(isWorkspaceTrait).slice(0, TRAITS_MAX)
   } catch {
@@ -174,14 +174,14 @@ function traitsFor(input: LevelsInput, meta: WorkspaceMeta): WorkspaceTrait[] {
 function workspaceRow(
   meta: WorkspaceMeta,
   state: WorkspaceState,
-  input: LevelsInput,
+  input: FleetInput,
   scrub: Scrub,
   memory: Map<string, PhaseMemory>
-): LevelsWorkspace {
+): FleetWorkspace {
   const wiring = wiringOf(state)
   const byId = new Map(state.nodes.map((node) => [node.id, node]))
-  const rowOf = new Map<string, LevelsAttachment>()
-  const attachment = (id: string): LevelsAttachment | null => {
+  const rowOf = new Map<string, FleetAttachment>()
+  const attachment = (id: string): FleetAttachment | null => {
     const node = byId.get(id)
     if (!isAttachment(node)) return null
     const cached = rowOf.get(id)
@@ -221,7 +221,7 @@ function workspaceRow(
   }
 }
 
-export function buildLevels(input: LevelsInput): LevelsBuild {
+export function buildFleet(input: FleetInput): FleetBuild {
   const scrub = input.scrub ?? scrubShapes
   const memory = new Map<string, PhaseMemory>()
   const workspaces = input.workspaces.map(({ meta, state }) => workspaceRow(meta, state, input, scrub, memory))

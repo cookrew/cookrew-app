@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyMachine, macModel, safeFact, type MachineFacts } from '../src/main/machine-profile'
-import type { MachineKind } from '../src/shared/levels'
-import { assertProfile } from './levels-shape'
+import type { MachineKind } from '../src/shared/fleet'
+import { assertProfile } from './fleet-shape'
 
 // Fixture facts per kind. Every value is invented or a public model string;
 // none is a serial, a UUID, a MAC address or a host name.

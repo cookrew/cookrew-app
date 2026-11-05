@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mergeBoard, type BoardPhase, type BoardSource } from '../src/shared/board'
 import type { TerminalActivity, TurnPhase, TurnRecord } from '../src/shared/turn'
-import { agentPhaseOf, phaseSourceOf, phaseVerdict, verdictOfRow } from '../src/main/levels/phase'
+import { agentPhaseOf, phaseSourceOf, phaseVerdict, verdictOfRow } from '../src/main/fleet/phase'
 
 const NOW = 1_800_000_000_000
 

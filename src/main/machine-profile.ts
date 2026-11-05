@@ -1,5 +1,5 @@
 // WHAT KIND OF MACHINE THIS IS — the fact a level-0 figure is drawn from
-// (src/shared/levels.ts · MachineProfile).
+// (src/shared/fleet.ts · MachineProfile).
 //
 // Two halves. `classifyMachine` is pure: probe facts in, profile out, with the
 // precedence the contract fixes:
@@ -23,7 +23,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
-import type { MachineKind, MachineProfile } from '../shared/levels'
+import type { MachineKind, MachineProfile } from '../shared/fleet'
 import { pcIdentity, type PcIdentity } from './machine-names'
 import { scrubShapes } from './scrub'
 

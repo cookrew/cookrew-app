@@ -1,5 +1,5 @@
 // THE OWNER'S BRIEF: one line about the project a workspace holds. It decides
-// the workspace's traits on cookrew.dev (main/levels/traits.ts), and is never
+// the workspace's traits on cookrew.dev (main/fleet/traits.ts), and is never
 // sent there itself. Checked here, once, for the desktop, the phone and the
 // store alike.
 

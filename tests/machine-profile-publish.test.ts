@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Accounts, type AccountsDeps } from '../src/main/account-v2'
-import type { MachineProfile } from '../src/shared/levels'
+import type { MachineProfile } from '../src/shared/fleet'
 
 // The desktop files its profile and app version with the record PUT it already
 // makes. Invented account, invented profile.

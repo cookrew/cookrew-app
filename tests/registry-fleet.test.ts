@@ -17,8 +17,8 @@ import { createLineSeen, SEEN_KEEP_MS } from '../registry/src/v2-line-seen'
 import type { V2Desktop } from '../registry/src/v2-accounts'
 import { createV2 } from '../registry/src/v2-routes'
 import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
-import type { FleetMachine, MachineProfile } from '../src/shared/levels'
-import { checkProfile } from './levels-shape'
+import type { FleetMachine, MachineProfile } from '../src/shared/fleet'
+import { checkProfile } from './fleet-shape'
 
 // The fleet on the registry: the desktop record's profile, the FleetMachine rows,
 // the batch presence answer and /me as level 0 — over real HTTP on loopback.

@@ -1,5 +1,5 @@
 // THE FLEET ON THE REGISTRY: what a desktop may say about its hardware, and the
-// level-0 rows the shell draws (src/shared/levels.ts · FleetMachine).
+// level-0 rows the shell draws (src/shared/fleet.ts · FleetMachine).
 //
 // The profile is the desktop's own claim and arrives on the record PUT only
 // that desktop may make; it is read here member by member, every string capped
@@ -8,7 +8,7 @@
 // refused outright: the desktop never sends one, so one arriving is a bug or a
 // forgery, and either way it is not filed.
 
-import type { FleetMachine, FleetPresence, MachineKind, MachineProfile } from '../../src/shared/levels'
+import type { FleetMachine, FleetPresence, MachineKind, MachineProfile } from '../../src/shared/fleet'
 import type { V2Desktop } from './v2-accounts'
 
 export const PROFILE_STRING_MAX = 64

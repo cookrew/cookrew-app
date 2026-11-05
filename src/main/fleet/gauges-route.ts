@@ -1,6 +1,6 @@
-// GET /api/levels/gauges: this desktop's machine gauges, for the phone
-// (shared/machine-gauges.ts). Called from handleLevelsRoutes, so it stands
-// below the companion's /api gate like the rest of the levels.
+// GET /api/fleet/gauges: this desktop's machine gauges, for the phone
+// (shared/machine-gauges.ts). Called from handleFleetRoutes, so it stands
+// below the companion's /api gate like the rest of the feed.
 //
 // THE OWNER'S, AND ONLY THE OWNER'S. How loaded this Mac is says what the owner
 // is doing, so the read-only wall token does not open it, and neither does
@@ -22,7 +22,7 @@ import type http from 'node:http'
 import { respondJson } from '../mobile-http'
 import { sharedGaugeWatch, type GaugeReader } from '../machine-gauges'
 
-const GAUGES_PATH = /^\/api\/levels\/gauges\/?$/
+const GAUGES_PATH = /^\/api\/fleet\/gauges\/?$/
 
 export interface GaugeRouteDeps {
   paired: (request: http.IncomingMessage, url: URL) => boolean

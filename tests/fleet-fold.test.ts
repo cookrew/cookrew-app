@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { LEVELS_VERSION, type LevelsAgent, type LevelsSnapshot, type LevelsWorkspace } from '../src/shared/levels'
-import { foldLevels } from '../src/shared/levels-fold'
-import { PROFILE } from './levels-fixture'
+import { FLEET_VERSION, type FleetAgent, type FleetSnapshot, type FleetWorkspace } from '../src/shared/fleet'
+import { foldFleet } from '../src/shared/fleet-fold'
+import { PROFILE } from './fleet-fixture'
 
-const agent = (id: string): LevelsAgent => ({
+const agent = (id: string): FleetAgent => ({
   id,
   name: id,
   harness: 'claude',
@@ -18,7 +18,7 @@ const agent = (id: string): LevelsAgent => ({
   attachments: []
 })
 
-const workspace = (id: string, state: LevelsWorkspace['state'], agents: LevelsAgent[]): LevelsWorkspace => ({
+const workspace = (id: string, state: FleetWorkspace['state'], agents: FleetAgent[]): FleetWorkspace => ({
   id,
   name: id,
   icon: null,
@@ -28,8 +28,8 @@ const workspace = (id: string, state: LevelsWorkspace['state'], agents: LevelsAg
   counts: { agents: agents.length, notes: 0, browsers: 0 }
 })
 
-const SNAP: LevelsSnapshot = {
-  v: LEVELS_VERSION,
+const SNAP: FleetSnapshot = {
+  v: FLEET_VERSION,
   rev: 7,
   at: 1_800_000_000_000,
   machine: { name: 'Studio', appVersion: null, profile: PROFILE },
@@ -38,13 +38,13 @@ const SNAP: LevelsSnapshot = {
 }
 const [focused, background] = SNAP.workspaces
 
-const fold = (levels: LevelsSnapshot, event: Parameters<typeof foldLevels>[1]) => {
-  const result = foldLevels(levels, event)
+const fold = (snapshot: FleetSnapshot, event: Parameters<typeof foldFleet>[1]) => {
+  const result = foldFleet(snapshot, event)
   if (!result.ok) throw new Error(result.reason)
-  return result.levels
+  return result.snapshot
 }
 
-describe('folding levels events', () => {
+describe('folding fleet events', () => {
   it('moves the focused state with focus', () => {
     const next = fold(SNAP, { type: 'focus', rev: SNAP.rev + 1, workspaceId: background.id })
     expect(next.focusedWorkspaceId).toBe(background.id)
@@ -62,7 +62,7 @@ describe('folding levels events', () => {
 
   it('replaces everything on a mid-stream snapshot at rev + 1: not a gap', () => {
     const fresh = { ...SNAP, rev: SNAP.rev + 1, workspaces: SNAP.workspaces.slice(1), focusedWorkspaceId: null }
-    expect(foldLevels(SNAP, { type: 'snapshot', snapshot: fresh })).toEqual({ ok: true, levels: fresh })
+    expect(foldFleet(SNAP, { type: 'snapshot', snapshot: fresh })).toEqual({ ok: true, snapshot: fresh })
   })
 
   it('replaces, appends and removes whole workspaces', () => {
@@ -75,8 +75,8 @@ describe('folding levels events', () => {
   })
 
   it('refuses a delta with no snapshot under it, or off by any amount', () => {
-    expect(foldLevels(null, { type: 'focus', rev: 2, workspaceId: null })).toEqual({ ok: false, reason: 'no-base' })
-    expect(foldLevels(SNAP, { type: 'focus', rev: SNAP.rev, workspaceId: null })).toEqual({ ok: false, reason: 'gap' })
-    expect(foldLevels(SNAP, { type: 'focus', rev: SNAP.rev + 2, workspaceId: null })).toEqual({ ok: false, reason: 'gap' })
+    expect(foldFleet(null, { type: 'focus', rev: 2, workspaceId: null })).toEqual({ ok: false, reason: 'no-base' })
+    expect(foldFleet(SNAP, { type: 'focus', rev: SNAP.rev, workspaceId: null })).toEqual({ ok: false, reason: 'gap' })
+    expect(foldFleet(SNAP, { type: 'focus', rev: SNAP.rev + 2, workspaceId: null })).toEqual({ ok: false, reason: 'gap' })
   })
 })

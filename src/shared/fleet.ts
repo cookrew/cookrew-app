@@ -1,16 +1,16 @@
 /**
  * WHAT A DESKTOP SAYS ABOUT ITSELF, and what the registry says about a desktop.
  *
- *   desktop   MachineProfile, LevelsSnapshot, LevelsEvent
+ *   desktop   MachineProfile, FleetSnapshot, FleetEvent
  *   registry  FleetMachine rows and FleetPresence for the signed-in account
  *
  * The zoom view reads every other device through this (zoom-fleet.ts).
  */
 
-export const LEVELS_VERSION = 1
+export const FLEET_VERSION = 1
 
 /** Every free-text line a level shows (task, reply, titles) is cut to this. */
-export const LEVELS_LINE_MAX = 140
+export const FLEET_LINE_MAX = 140
 
 // ── machines ────────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ export interface MachineProfile {
 
 /**
  * The desktop's display in points (a laptop's own panel, else the primary):
- * the zoom draws the machine's screen at its proportions. Sent in the levels
+ * the zoom draws the machine's screen at its proportions. Sent in the fleet
  * feed only, never to the registry.
  */
 export interface MachineDisplay {
@@ -95,10 +95,10 @@ export interface FleetPresence {
   desktops: Array<Pick<FleetMachine, 'id' | 'online' | 'lastSeenAt'>>
 }
 
-// ── levels: served by each desktop ──────────────────────────────────────────
+// ── the feed: served by each desktop ────────────────────────────────────────
 //
-// GET  <base>api/levels               → LevelsSnapshot     (pairing token)
-// GET  <base>api/levels/stream        → text/event-stream of LevelsEvent; the
+// GET  <base>api/fleet               → FleetSnapshot     (pairing token)
+// GET  <base>api/fleet/stream        → text/event-stream of FleetEvent; the
 //                                       first event is always a snapshot, then
 //                                       deltas; a `:` line every 15 s (the relay
 //                                       drops a stream silent for 120 s).
@@ -121,7 +121,7 @@ export type PhaseSource = 'live' | 'probe' | 'ledger'
 
 export type Harness = 'claude' | 'codex' | 'opencode' | 'pi' | 'shell' | 'other'
 
-export interface LevelsAttachment {
+export interface FleetAttachment {
   id: string
   kind: 'note' | 'browser'
   /** Note: its first line. Browser: the card's name. */
@@ -135,7 +135,7 @@ export interface LevelsAttachment {
   owner?: boolean
 }
 
-export interface LevelsAgent {
+export interface FleetAgent {
   id: string
   name: string
   harness: Harness
@@ -148,7 +148,7 @@ export interface LevelsAgent {
   /**
    * What it is on: the Sous title, else the card's brief, else the first REAL
    * line of the current/last prompt — skip harness noise ('<task-notification>',
-   * 'This session is being continued…'). Scrubbed, ≤ LEVELS_LINE_MAX.
+   * 'This session is being continued…'). Scrubbed, ≤ FLEET_LINE_MAX.
    */
   task: string | null
   /** First line of the latest reply, or the live glance message while thinking. Scrubbed. */
@@ -161,7 +161,7 @@ export interface LevelsAgent {
   status?: string | null
   turns: number
   /** Wired notes and browsers, in connection order. */
-  attachments: LevelsAttachment[]
+  attachments: FleetAttachment[]
 }
 
 /**
@@ -178,7 +178,7 @@ export const TRAITS_MAX = 3
 export const isWorkspaceTrait = (word: unknown): word is WorkspaceTrait =>
   typeof word === 'string' && (WORKSPACE_TRAITS as readonly string[]).includes(word)
 
-export interface LevelsWorkspace {
+export interface FleetWorkspace {
   id: string
   name: string
   icon: string | null
@@ -191,27 +191,27 @@ export interface LevelsWorkspace {
    */
   state: 'focused' | 'background'
   /** Creation order. Views never reorder by status: attention is a highlight, not a sort. */
-  agents: LevelsAgent[]
+  agents: FleetAgent[]
   /** Notes and browsers wired to no agent: the workspace's tray. */
-  loose: LevelsAttachment[]
+  loose: FleetAttachment[]
   /**
    * Its newest browser, by creation: the zoom's device stop draws it beside
    * the workspace's agents, as the way in by its browsers (draft
    * group-motion-pivot.html). Absent when it has none, and from a desktop
    * older than this field.
    */
-  newest?: LevelsAttachment
+  newest?: FleetAttachment
   counts: { agents: number; notes: number; browsers: number }
 }
 
-export interface LevelsSnapshot {
-  v: typeof LEVELS_VERSION
+export interface FleetSnapshot {
+  v: typeof FLEET_VERSION
   /** Monotonic per desktop process; each event carries the rev it produces. */
   rev: number
   at: number
   machine: { name: string; appVersion: string | null; profile: MachineProfile; display?: MachineDisplay | null }
   focusedWorkspaceId: string | null
-  workspaces: LevelsWorkspace[]
+  workspaces: FleetWorkspace[]
 }
 
 /**
@@ -221,9 +221,9 @@ export interface LevelsSnapshot {
  * mid-stream (a machine-only change, or more than 48 deltas at once) with
  * snapshot.rev = previous + 1: replace everything.
  */
-export type LevelsEvent =
-  | { type: 'snapshot'; snapshot: LevelsSnapshot }
-  | { type: 'agent'; rev: number; workspaceId: string; agent: LevelsAgent }
-  | { type: 'workspace'; rev: number; workspace: LevelsWorkspace }
+export type FleetEvent =
+  | { type: 'snapshot'; snapshot: FleetSnapshot }
+  | { type: 'agent'; rev: number; workspaceId: string; agent: FleetAgent }
+  | { type: 'workspace'; rev: number; workspace: FleetWorkspace }
   | { type: 'workspace-gone'; rev: number; workspaceId: string }
   | { type: 'focus'; rev: number; workspaceId: string | null }

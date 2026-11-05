@@ -1,9 +1,9 @@
-// THE LEVELS SERVICE: one snapshot per CHANGE, not per request.
+// THE FLEET SERVICE: one snapshot per CHANGE, not per request.
 //
 // Change signals (store, turns, probe, tuning) only mark the snapshot dirty —
 // a boolean, whatever their rate. The snapshot is rebuilt:
 //   - on a GET that finds it dirty (no stream open: nothing pays in between);
-//   - LEVELS_PUSH_MS after the first signal of a burst while a stream is open,
+//   - FLEET_PUSH_MS after the first signal of a burst while a stream is open,
 //     so a delta reaches the shell well inside a second.
 // A rebuild whose content is byte-identical to the last one is no change: no
 // rev, no event, the same body and ETag. One that differs is diffed into
@@ -11,23 +11,23 @@
 
 import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { LEVELS_VERSION } from '../../shared/levels'
+import { FLEET_VERSION } from '../../shared/fleet'
 import type { AgentTuning } from '../../shared/agent-tuning'
 import type { BoardPhase } from '../../shared/board'
 import type { GitInfo, TerminalNodeData, WorkspaceMeta, WorkspaceState } from '../../shared/model'
 import type { TerminalActivity, TurnRecord } from '../../shared/turn'
-import type { Harness, LevelsEvent, LevelsSnapshot, WorkspaceTrait } from '../../shared/levels'
+import type { Harness, FleetEvent, FleetSnapshot, WorkspaceTrait } from '../../shared/fleet'
 import { scrubShapes, type Scrub } from '../scrub'
-import { buildLevels, type PhaseMemory } from './build'
-import { diffLevels, stampRevs } from './diff'
+import { buildFleet, type PhaseMemory } from './build'
+import { diffFleet, stampRevs } from './diff'
 
 /** Coalescing window for stream pushes. Well inside the 1 s promise, wide enough to batch a turn's chatter. */
-export const LEVELS_PUSH_MS = 400
+export const FLEET_PUSH_MS = 400
 
 /** Past this many deltas in one rebuild, a fresh snapshot is cheaper to send and to apply. */
-export const LEVELS_MAX_DELTAS = 48
+export const FLEET_MAX_DELTAS = 48
 
-export interface LevelsSources {
+export interface FleetSources {
   workspaces: () => readonly WorkspaceMeta[]
   focusedId: () => string | null
   /** Any workspace: the focused one from memory, a background one from disk. */
@@ -41,7 +41,7 @@ export interface LevelsSources {
   /** Every card's dials, read once per build. */
   tuning: () => Readonly<Record<string, AgentTuning>>
   harnessOf: (node: TerminalNodeData) => Harness
-  machine: () => LevelsSnapshot['machine']
+  machine: () => FleetSnapshot['machine']
   /** Subscribe to every change signal; returns the unlisten. */
   onChange: (listener: () => void) => () => void
   /** Hold the probe sampler open while a stream is; returns the release. */
@@ -54,15 +54,15 @@ export interface LevelsSources {
   traits?: (meta: WorkspaceMeta) => readonly WorkspaceTrait[]
 }
 
-export interface LevelsCurrent {
-  snapshot: LevelsSnapshot
+export interface FleetCurrent {
+  snapshot: FleetSnapshot
   /** The serialized snapshot, built once per change. */
   body: Buffer
   /** Content hash of `body`. */
   etag: string
 }
 
-export interface LevelsStats {
+export interface FleetStats {
   builds: number
   changes: number
   lastBuildMs: number
@@ -71,25 +71,25 @@ export interface LevelsStats {
   rev: number
 }
 
-export interface LevelsService {
-  current: () => LevelsCurrent
+export interface FleetService {
+  current: () => FleetCurrent
   /** Open a stream: the first event is a snapshot, then every delta. */
-  subscribe: (send: (event: LevelsEvent) => void) => () => void
+  subscribe: (send: (event: FleetEvent) => void) => () => void
   /**
    * The cold first build cut into steps (prewarm.ts runs each at a quiet
    * moment): each workspace's state, the ledger, the dials, then the build.
    */
   prewarmSteps: () => Array<() => void>
-  stats: () => LevelsStats
+  stats: () => FleetStats
   close: () => void
 }
 
-export function createLevelsService(sources: LevelsSources, pushMs: number = LEVELS_PUSH_MS): LevelsService {
+export function createFleetService(sources: FleetSources, pushMs: number = FLEET_PUSH_MS): FleetService {
   const now = sources.now ?? (() => Date.now())
   const scrub = sources.scrub ?? scrubShapes
-  const streams = new Set<(event: LevelsEvent) => void>()
+  const streams = new Set<(event: FleetEvent) => void>()
   let memory = new Map<string, PhaseMemory>()
-  let latest: LevelsCurrent | null = null
+  let latest: FleetCurrent | null = null
   let content: string | null = null
   let dirty = true
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -97,23 +97,23 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
   let releaseProbe: (() => void) | null = null
   const stats = { builds: 0, changes: 0, lastBuildMs: 0, maxBuildMs: 0 }
 
-  const broadcast = (events: readonly LevelsEvent[]): void => {
+  const broadcast = (events: readonly FleetEvent[]): void => {
     for (const send of streams) {
       for (const event of events) {
         try {
           send(event)
         } catch (error) {
-          console.error('Levels stream send failed:', error)
+          console.error('Fleet stream send failed:', error)
         }
       }
     }
   }
 
-  const rebuild = (): LevelsCurrent => {
+  const rebuild = (): FleetCurrent => {
     const started = performance.now()
     const focusedWorkspaceId = sources.focusedId()
     const tuning = sources.tuning()
-    const built = buildLevels({
+    const built = buildFleet({
       workspaces: sources.workspaces().map((meta) => ({ meta, state: sources.workspaceState(meta.id) })),
       focusedWorkspaceId,
       live: new Map(sources.live().map((activity) => [activity.terminalId, activity])),
@@ -136,12 +136,12 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
       return latest
     }
     const before = latest?.snapshot
-    const deltas = before ? diffLevels(before, { focusedWorkspaceId, workspaces: built.workspaces }) : []
+    const deltas = before ? diffFleet(before, { focusedWorkspaceId, workspaces: built.workspaces }) : []
     const rev = before ? before.rev : 0
-    const resync = before !== undefined && (deltas.length === 0 || deltas.length > LEVELS_MAX_DELTAS)
+    const resync = before !== undefined && (deltas.length === 0 || deltas.length > FLEET_MAX_DELTAS)
     const nextRev = before === undefined ? 1 : resync ? rev + 1 : rev + deltas.length
-    const snapshot: LevelsSnapshot = {
-      v: LEVELS_VERSION,
+    const snapshot: FleetSnapshot = {
+      v: FLEET_VERSION,
       rev: nextRev,
       at: now(),
       machine,
@@ -179,7 +179,7 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
       try {
         rebuild()
       } catch (error) {
-        console.error('Levels rebuild failed:', error)
+        console.error('Fleet rebuild failed:', error)
       }
     }, pushMs)
     timer.unref?.()
@@ -190,7 +190,7 @@ export function createLevelsService(sources: LevelsSources, pushMs: number = LEV
     if (unlisten === null) unlisten = sources.onChange(onSignal)
   }
 
-  const current = (): LevelsCurrent => {
+  const current = (): FleetCurrent => {
     listen()
     return dirty || latest === null ? rebuild() : latest
   }

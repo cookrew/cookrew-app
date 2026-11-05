@@ -1,15 +1,15 @@
-// EACH WORKSPACE'S NEWEST BROWSER, ON THE LEVELS FEED (owner 2026-11-02: the
+// EACH WORKSPACE'S NEWEST BROWSER, ON THE FLEET FEED (owner 2026-11-02: the
 // zoom like group-motion-pivot.html). The draft's device stop draws a
 // workspace's newest browser beside its agents: the way in by its browsers.
 // The other workspaces reach the zoom only through this feed, and only the
 // desktop knows creation order, so the desktop names it.
 
 import { describe, expect, it } from 'vitest'
-import { buildLevels, type LevelsInput } from '../src/main/levels/build'
+import { buildFleet, type FleetInput } from '../src/main/fleet/build'
 import type { WorkspaceState } from '../src/shared/model'
-import { browser, note, terminal } from './levels-fixture'
+import { browser, note, terminal } from './fleet-fixture'
 
-const input = (state: WorkspaceState): LevelsInput => ({
+const input = (state: WorkspaceState): FleetInput => ({
   workspaces: [{ meta: { id: 'w1', name: 'One', dir: '/work/x', dirs: ['/work/x'], icon: '' }, state }],
   focusedWorkspaceId: 'w1',
   live: new Map(),
@@ -24,7 +24,7 @@ const state = (nodes: WorkspaceState['nodes']): WorkspaceState => ({ name: 'One'
 
 describe('the newest browser of a workspace', () => {
   it('is its last browser by creation, notes left out, its address without query or fragment', () => {
-    const row = buildLevels(
+    const row = buildFleet(
       input(state([terminal('a1', 'Ada', ''), browser('b1', 'Old', ['https://old.dev/']), browser('b2', 'PR', ['https://github.com/acme/app/pull/1?secret=1#frag']), note('n1', 'later note')]))
     ).workspaces[0]
     expect(row.newest).toMatchObject({ id: 'b2', kind: 'browser', title: 'PR' })
@@ -32,7 +32,7 @@ describe('the newest browser of a workspace', () => {
   })
 
   it('is absent where there is no browser, so a desktop without one sends what it always did', () => {
-    const row = buildLevels(input(state([terminal('a1', 'Ada', ''), note('n1', 'a note')]))).workspaces[0]
+    const row = buildFleet(input(state([terminal('a1', 'Ada', ''), note('n1', 'a note')]))).workspaces[0]
     expect('newest' in row).toBe(false)
   })
 })

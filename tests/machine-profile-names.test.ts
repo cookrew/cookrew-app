@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { classifyMachine, type MachineFacts } from '../src/main/machine-profile'
 import { cleanFact, pcIdentity, vendorName } from '../src/main/machine-names'
-import type { MachineKind } from '../src/shared/levels'
-import { assertProfile } from './levels-shape'
+import type { MachineKind } from '../src/shared/fleet'
+import { assertProfile } from './fleet-shape'
 
-// What a desktop figure's caption gets (Gouache's forms): the levels scene
+// What a desktop figure's caption gets (Gouache's forms): the scene
 // passes profile.label, else profile.model. Every fact here is a public model
 // string or invented; none is a serial, a UUID or a host name.
 

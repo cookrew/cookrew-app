@@ -1,5 +1,5 @@
 // A WORKSPACE'S TRAITS: at most TRAITS_MAX words of the closed list in
-// shared/levels.ts, strongest first, that cookrew.dev themes its table from.
+// shared/fleet.ts, strongest first, that cookrew.dev themes its table from.
 //
 // Read, in this order:
 //   - the owner's brief (WorkspaceMeta.brief), when it says anything;
@@ -14,7 +14,7 @@
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { WorkspaceMeta } from '../../shared/model'
-import { TRAITS_MAX, WORKSPACE_TRAITS, type WorkspaceTrait } from '../../shared/levels'
+import { TRAITS_MAX, WORKSPACE_TRAITS, type WorkspaceTrait } from '../../shared/fleet'
 
 const KEYWORDS: Readonly<Record<WorkspaceTrait, readonly string[]>> = {
   code: [
@@ -269,7 +269,7 @@ interface Cached {
 export type TraitLookup = (meta: Pick<WorkspaceMeta, 'brief' | 'dir' | 'dirs'>) => WorkspaceTrait[]
 
 /**
- * The lookup the levels build calls once per workspace per build. Each file is
+ * The lookup the fleet build calls once per workspace per build. Each file is
  * stat'ed at most once per TRAIT_RECHECK_MS, and read and scored once per
  * path + mtime + size; a build in between touches nothing.
  */
