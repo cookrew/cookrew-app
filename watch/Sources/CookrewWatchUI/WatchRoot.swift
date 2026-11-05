@@ -50,6 +50,7 @@ final class WatchApp {
   private let origin: String
   private let registry: RegistryAPI
   private(set) var store: WatchStore?
+  private var keeper: AccountKeeper?
   private(set) var desktop = ""
   private(set) var username: String?
   private(set) var stage: PairStage = .welcome
@@ -75,11 +76,14 @@ final class WatchApp {
     let held = vault.loadAccount()
     let vault = self.vault
     let pass = held.map { AccountKeeper(account: $0, device: vault.device(), api: registry, keep: { vault.saveAccount($0) }) }
+    keeper?.retire()
+    keeper = pass
     desktop = session.desktop
     username = held?.username
     // With no account the relay would only refuse, and read as the Mac forgetting this watch.
     let urls = session.bases.filter { held != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
-    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass), feel: feel)
+    let roams = session.bases.contains { $0.kind == "relay" }
+    store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams), feel: feel)
   }
 
   func show(_ next: PairStage) {
@@ -102,6 +106,7 @@ final class WatchApp {
 
   /** From the cards: the Mac's token stays until a new code has replaced it. */
   func signInAgain() {
+    keeper?.retire()
     store = nil
     enterCode()
   }
@@ -223,6 +228,7 @@ final class WatchApp {
 
   /** Everything but who this watch is: pairing again is the same row on the account. */
   private func leave(to next: PairStage) {
+    keeper?.retire()
     let held = vault.loadAccount()
     vault.clear()
     vault.clearAccount()
@@ -268,6 +274,7 @@ struct CardPager: View {
   @Bindable var store: WatchStore
   let desktop: String
   let username: String?
+  let onSignIn: () -> Void
   let onForget: () -> Void
   @State private var path: [Route] = []
   @State private var items: [CardItem.ID: CardItem] = [:]
@@ -284,7 +291,7 @@ struct CardPager: View {
             }
             .wholeGlass()
           case .thisWatch:
-            ThisWatchPage(desktop: desktop, account: username, line: store.client.line, onForget: onForget).wholeGlass()
+            ThisWatchPage(desktop: desktop, account: username, line: store.client.line, onCode: onSignIn, onForget: onForget).wholeGlass()
           case .item(let id):
             if let item = items[id] { itemPage(item) }
           }
@@ -309,7 +316,7 @@ struct CardPager: View {
         .wholeGlass()
         .tag(Optional(card.id))
       }
-      NewAgentPage(store: store).wholeGlass().tag(Optional(newAgentPage))
+      NewAgentPage(store: store, onThisWatch: { path = [.thisWatch] }).wholeGlass().tag(Optional(newAgentPage))
     }
     #if os(watchOS)
       .tabViewStyle(.verticalPage)
@@ -331,7 +338,7 @@ public struct WatchRoot: View {
   public var body: some View {
     Group {
       if let store = app.store {
-        CardPager(store: store, desktop: app.desktop, username: app.username, onForget: { Task { await app.forget() } })
+        CardPager(store: store, desktop: app.desktop, username: app.username, onSignIn: app.signInAgain, onForget: { Task { await app.forget() } })
           .overlay(alignment: .bottom) { LinkChip(store: store, onSignIn: app.signInAgain) }
           .task(id: phase) {
             guard phase == .active else { return }
@@ -375,7 +382,7 @@ private struct PairingView: View {
     case .noNetwork:
       NoticeView(title: "No connection", words: "The watch can't reach cookrew.dev.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
     case .locked:
-      NoticeView(title: "Account locked", words: "Change your password on your Mac, then get a new code.", action: "OK", onAction: { app.show(.welcome) })
+      NoticeView(title: "Account locked", words: "Change your password on your Mac, then get a new code.", action: "OK", onAction: app.home)
     case .unpaired:
       NoticeView(title: "Watch unpaired", words: "Pair it again from ⋯ → Apple Watch.", action: "Enter a code", onAction: app.enterCode)
     case .signedOut:

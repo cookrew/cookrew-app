@@ -152,6 +152,24 @@ public protocol RelayPass: Sendable {
   func newer(than token: String) async -> String?
 }
 
+/** Whether a keeper still speaks for this watch, asked and acted on under one lock. */
+private final class Standing: @unchecked Sendable {
+  private let lock = NSLock()
+  private var retired = false
+
+  func retire() {
+    lock.lock()
+    retired = true
+    lock.unlock()
+  }
+
+  func ifStanding(_ act: () -> Void) {
+    lock.lock()
+    defer { lock.unlock() }
+    if !retired { act() }
+  }
+}
+
 /** After a renewal fails, how long before asking again: the registry allows five a minute. */
 let renewRestMs: Double = 60 * 1000
 
@@ -179,6 +197,7 @@ public actor AccountKeeper: RelayPass {
   private var unanswered = false
   /** The relay refused this session and nothing replaced it: only a new code will. */
   private var refused = false
+  private nonisolated let standing = Standing()
 
   public init(
     account: WatchAccount,
@@ -194,6 +213,11 @@ public actor AccountKeeper: RelayPass {
     self.api = api
     self.now = now
     self.keep = keep
+  }
+
+  /** The watch has left this session: a renewal still in flight must not write it back. */
+  public nonisolated func retire() {
+    standing.retire()
   }
 
   public func token() async -> String {
@@ -227,10 +251,13 @@ public actor AccountKeeper: RelayPass {
     do {
       account = account.renewed(try await api.renew(account: account, device: device))
       unanswered = false
-      keep(account)
+      let renewed = account
+      standing.ifStanding { keep(renewed) }
       return true
     } catch RegistryError.signedOut {
+      // Not `refused`: a spent nonce answers the same 401, so this rests and asks again.
       unanswered = false
+      restUntil = now() + renewRestMs
       return false
     } catch {
       unanswered = true

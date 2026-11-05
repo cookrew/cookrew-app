@@ -115,11 +115,14 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   private let token: String
   private let session: URLSession
   private let relay: RelayPass?
+  /** A watch that roams: its plain roads may be anyone's, so they prove themselves first. */
+  private let guarded: Bool
   private let lock = NSLock()
   private var sticky = 0
   private var proven: [URL: Date] = [:]
 
-  public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil) {
+  public init(bases: [URL], token: String, session: URLSession = .shared, relay: RelayPass? = nil, guarded: Bool? = nil) {
+    self.guarded = guarded ?? (relay != nil)
     self.bases = bases
     self.token = token
     self.session = session
@@ -216,11 +219,12 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
    * from home, and on the next network that address may be anyone. So it asks for
    * proof first, sending nothing, and only the Mac holding this token can give it.
    * That also means anything such a road says afterwards is the Mac's own word, a
-   * 401 included. A watch paired by six digits has no other road to fall back on,
-   * so it stays as it was.
+   * 401 included. A watch paired by six digits has only ever been on this network
+   * and has no other road, so it stays as it was. One that has lost its account has
+   * still roamed, and goes on asking.
    */
   private func mayUse(_ base: URL) async -> Bool {
-    guard relay != nil, base.scheme == "http", !onRelay(base) else { return true }
+    guard guarded, base.scheme == "http", !onRelay(base) else { return true }
     if let at = provenAt(base), Date().timeIntervalSince(at) < helloSeconds { return true }
     let nonce = base64urlEncoded(Data((0..<24).map { _ in UInt8.random(in: 0...255) }))
     var url = base.appending(path: "api/watch/hello")
@@ -277,7 +281,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
         // A Mac that forgot this watch cannot prove itself on this road, and could
         // not say so here. So a 401 is the road gone, whoever is on it now; if the
         // watch really was forgotten the relay says that in the Mac's own words.
-        if relay != nil, !relayed, url.scheme == "http", answer.1.statusCode == 401 {
+        if guarded, !relayed, url.scheme == "http", answer.1.statusCode == 401 {
           setProven(bases[index], nil)
           continue
         }

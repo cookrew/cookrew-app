@@ -221,7 +221,9 @@
       ("finding", AnyView(JoinSteps(done: ["Joined your account"], now: "Finding your Mac…"))),
       ("paired", AnyView(JoinSteps(done: ["Joined your account", "Paired with MacBook Pro"], now: nil))),
       ("mac-away", note("Can't reach your Mac", "You're in your account. Wake the Mac, then try again.", "Try again")),
-      ("this-watch", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: "drej", line: .relay, onForget: {})))
+      ("this-watch", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: "drej", line: .relay, onForget: {}))),
+      ("this-watch-no-account", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: nil, line: .direct, onForget: {}))),
+      ("new-agent", AnyView(NewAgentPage(store: WatchStore(api: NoAPI()))))
     ]
     for (name, view) in screens {
       write(Glass(size: CGSize(width: 198, height: 242), palette: .day) { view }, scale: 2, to: out.appending(path: "pair-\(name).png"))

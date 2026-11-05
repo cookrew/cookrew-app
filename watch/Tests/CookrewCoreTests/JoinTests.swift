@@ -307,6 +307,26 @@ private final class Ticks: @unchecked Sendable {
     #expect(api.log == ["renew"])
   }
 
+  @Test func testARenewalTheRegistryRefusedRestsLikeAnyOther() async {
+    let api = FakeRegistry()
+    api.renewRefused = true
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { 1 }, keep: { _ in })
+    _ = await keeper.token()
+    _ = await keeper.token()
+    #expect(api.log == ["renew"])
+  }
+
+  @Test func testAKeeperTheWatchHasLeftWritesNothingBack() async {
+    let api = FakeRegistry()
+    let kept = Kept()
+    let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week)
+    let keeper = AccountKeeper(account: account, device: WatchDevice(), api: api, now: { 1 }, keep: { kept.accounts.append($0) })
+    keeper.retire()
+    await keeper.renew()
+    #expect(kept.accounts.isEmpty)
+  }
+
   @Test func testLeavesAFreshSessionAlone() async {
     let api = FakeRegistry()
     let account = WatchAccount(registry: registry, username: "drej", deviceId: "dev", token: "old", exp: week * 3)
@@ -513,6 +533,21 @@ private final class Pass: RelayPass, @unchecked Sendable {
     Scripted.answers = [("192.168.2.40", 401, #"{"error":"Unauthorized"}"#), ("cookrew.dev", 200, cardsBody)]
     _ = try await api.cards(tag: nil)
     #expect(api.line == .relay)
+  }
+
+  @Test func testAWatchThatLostItsAccountStillMakesAPlainRoadProveItself() async {
+    Scripted.strangers = ["192.168.2.40"]
+    Scripted.answers = [("192.168.2.40", 401, #"{"error":"Unauthorized"}"#)]
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [Scripted.self]
+    let api = HTTPWatchAPI(bases: [URL(string: "http://192.168.2.40:8639")!], token: "mac-token", session: URLSession(configuration: config), guarded: true)
+    do {
+      _ = try await api.cards(tag: nil)
+      Issue.record("answered")
+    } catch {
+      #expect(error as? WatchError == .unreachable)
+    }
+    #expect(relayed().isEmpty)
   }
 
   @Test func testAWatchThatStaysHomeStillRenewsOnTime() async throws {

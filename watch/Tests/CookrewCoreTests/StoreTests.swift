@@ -11,9 +11,11 @@ private final class FakeAPI: WatchAPI, @unchecked Sendable {
   let calls = Calls()
   var replies: [[Card]] = []
   var failure: WatchError?
+  var failsAtOnce: WatchError?
   var reads = 0
 
   func cards(tag: String?) async throws -> Fresh<CardsReply> {
+    if let failsAtOnce { throw failsAtOnce }
     if let failure, reads > 0 { throw failure }
     let index = min(reads, replies.count - 1)
     reads += 1
@@ -107,6 +109,21 @@ struct StoreTests {
     api.failure = nil
     await store.refresh()
     #expect(!store.signedOut)
+  }
+
+  @Test("a first read that fails says the Mac is offline, and the read that works buzzes nothing")
+  func firstReadFails() async {
+    let api = FakeAPI()
+    api.replies = [[card("a", .waiting, choice: menu)]]
+    api.failsAtOnce = .unreachable
+    let events = EventLog()
+    let store = WatchStore(api: api, feel: { events.items.append($0) })
+    await store.refresh()
+    #expect(store.link == .lost)
+    api.failsAtOnce = nil
+    await store.refresh()
+    #expect(store.link == .live)
+    #expect(events.items.isEmpty)
   }
 
   @Test("the box says who it goes to")

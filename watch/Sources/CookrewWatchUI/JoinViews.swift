@@ -225,14 +225,16 @@ public struct ThisWatchPage: View {
   let desktop: String
   let account: String?
   let line: WatchLine
+  let onCode: () -> Void
   let onForget: () -> Void
   @State private var armed = false
   @Environment(\.ink) private var ink
 
-  public init(desktop: String, account: String?, line: WatchLine, onForget: @escaping () -> Void) {
+  public init(desktop: String, account: String?, line: WatchLine, onCode: @escaping () -> Void = {}, onForget: @escaping () -> Void) {
     self.desktop = desktop
     self.account = account
     self.line = line
+    self.onCode = onCode
     self.onForget = onForget
   }
 
@@ -258,6 +260,8 @@ public struct ThisWatchPage: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(RoundedRectangle(cornerRadius: 12).fill(ink.card))
       Spacer(minLength: 0)
+      // Outside the account there is no road but this network: a code is the way back on to the rest.
+      if account == nil { InkButton(title: "Enter a code", action: onCode) }
       InkButton(title: armed ? "Tap again to forget" : "Forget this watch", quiet: !armed) {
         if armed { onForget() } else { armed = true }
       }

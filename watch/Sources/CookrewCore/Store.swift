@@ -140,14 +140,14 @@ public final class WatchStore {
       unpaired = true
     } catch WatchError.signedOut {
       signedOut = true
-      if link == .live { link = .lost }
+      link = .lost
     } catch {
-      if link == .live { link = .lost }
+      link = .lost
     }
   }
 
   func adopt(_ next: [Card]) {
-    let first = link == .connecting && cards.isEmpty
+    let first = link != .live && cards.isEmpty
     let events = first ? [] : eventsBetween(cards, next)
     cards = next
     link = .live
