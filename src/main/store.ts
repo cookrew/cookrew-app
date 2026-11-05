@@ -179,11 +179,20 @@ export class WorkspaceStore extends EventEmitter {
     const existing = this.hydrated.get(id)
     if (existing) return existing
     const session: HydratedSession = {
-      state: loadWorkspaceState(this.baseDir, id),
+      state: this.namedByRegistry(id, loadWorkspaceState(this.baseDir, id)),
       saveTimer: null
     }
     this.hydrated.set(id, session)
     return session
+  }
+
+  /**
+   * The registry holds the name. A file can lag it: an older build renamed a
+   * parked workspace without writing its file, and the header read the file.
+   */
+  private namedByRegistry(id: string, state: WorkspaceState): WorkspaceState {
+    const meta = this.registry.workspaces.find((w) => w.id === id)
+    return meta === undefined || meta.name === state.name ? state : { ...state, name: meta.name }
   }
 
   /** Workspace ids currently held in memory. */
@@ -459,12 +468,10 @@ export class WorkspaceStore extends EventEmitter {
       ...this.registry,
       workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, name } : w))
     }
-    // A rename lands on the canvas wherever it is held, focused or not.
-    const session = this.hydrated.get(id)
-    if (session) session.state = { ...session.state, name }
     saveRegistry(this.baseDir, this.registry)
+    // A rename lands on the canvas wherever it is: in memory, or in its file.
+    this.patchWorkspace(id, (state) => ({ ...state, name }))
     this.emit('workspaces', this.deskList())
-    if (id === this.focused) this.emit('change', this.hydrate(this.focused).state)
     this.emitOp('workspace.renamed', id, name, id)
   }
 
@@ -922,7 +929,7 @@ export class WorkspaceStore extends EventEmitter {
       const hit = this.parked.get(id)
       if (hit && hit.stamp === stamp) return hit.state
     }
-    const state = loadWorkspaceState(this.baseDir, id)
+    const state = this.namedByRegistry(id, loadWorkspaceState(this.baseDir, id))
     if (stamp !== null) {
       this.parked.delete(id) // re-insert last: Map order is the LRU order
       this.parked.set(id, { stamp, state })
