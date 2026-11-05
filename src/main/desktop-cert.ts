@@ -161,7 +161,7 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
   const take = (chain: unknown, name: string): CertOutcome => {
     const saved = deps.store.save(chain, name, now())
     if (saved === null) {
-      sayOnce('names: the certificate cookrew.dev answered with is not this Mac’s — ignored')
+      sayOnce('names: the certificate the registry answered with is not this Mac’s — ignored')
       quiet(QUIET_MS)
       return 'failed'
     }
@@ -193,7 +193,7 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
       if (body.status === 'failed') {
         // The ORDER failed, this request did not. The sentence is the only
         // thing that tells the owner whether to fix something or wait.
-        sayOnce(`names: cookrew.dev could not issue a certificate (${String(body.reason ?? 'no reason given')})`)
+        sayOnce(`names: the registry could not issue a certificate (${String(body.reason ?? 'no reason given')})`)
         quiet(QUIET_MS)
         return 'failed'
       }
@@ -216,13 +216,13 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
     if (!sent.ok) return 'offline'
     const response = sent.response
     if (response.status === 503) {
-      sayOnce('names: cookrew.dev is not issuing certificates — this Mac keeps its self-signed one')
+      sayOnce('names: the registry is not issuing certificates — this Mac keeps its self-signed one')
       quiet(retryAfterMs(response))
       return 'disabled'
     }
     if (response.status === 429) {
       quiet(retryAfterMs(response))
-      sayOnce('names: cookrew.dev asked this Mac to wait before ordering again')
+      sayOnce('names: the registry asked this Mac to wait before ordering again')
       return 'rate_limited'
     }
     if (response.status === 409) return poll(name)
@@ -236,10 +236,10 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
       // will never accept, a session that is not this desktop's), and asking
       // again inside the hour would only spend the ledger.
       if (response.status >= 500) {
-        sayOnce(`names: cookrew.dev could not answer the certificate request (${said})`)
+        sayOnce(`names: the registry could not answer the certificate request (${said})`)
         return 'failed'
       }
-      sayOnce(`names: cookrew.dev refused the certificate request (${said})`)
+      sayOnce(`names: the registry refused the certificate request (${said})`)
       quiet(QUIET_MS)
       return 'refused'
     }
@@ -263,7 +263,7 @@ export function createDesktopCert(deps: DesktopCertDeps): DesktopCert {
     if (current !== null && current.notAfter - now() > RENEW_BEFORE_MS) return 'held'
     running = true
     try {
-      note(`names: asking cookrew.dev for a certificate (${reason})`)
+      note(`names: asking the registry for a certificate (${reason})`)
       return await order(name, id)
     } catch (error) {
       // A throw from in here would be an unhandled rejection and a Mac with

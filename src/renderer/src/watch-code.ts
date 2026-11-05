@@ -1,3 +1,5 @@
+import { hostPlatform, machineTable } from '../../shared/machine-words'
+
 /** Six digits for a watch, as the Mac mints them (main/watch-pairing.ts). */
 export interface WatchCode {
   code: string
@@ -23,7 +25,7 @@ export type WatchInvite =
   | { ok: true; code: string; expiresAt: number; claims: number }
   | { ok: false; reason: string; message?: string }
 
-const REFUSALS: Readonly<Record<string, string>> = {
+const REFUSALS: Readonly<Record<string, string>> = machineTable({
   bad_credentials: "That password isn't right.",
   rate_limited: 'Too many tries. Wait a little, then try again.',
   provider_required: 'Your account has no password, so this has to be done on the Mac.',
@@ -31,7 +33,7 @@ const REFUSALS: Readonly<Record<string, string>> = {
   not_sealed: "This page isn't encrypted, so it can't take your password. Use the Mac, or open Cookrew over https.",
   no_account: 'Sign in on this Mac first.',
   locked: 'Unlock this Mac first.'
-}
+}, hostPlatform())
 
 /** A refusal in words a person can act on. */
 export const inviteRefusal = (reason: string, message?: string): string =>

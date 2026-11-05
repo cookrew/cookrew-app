@@ -1,3 +1,4 @@
+import { rmdir } from 'node:fs/promises'
 import path from 'node:path'
 import type { WorkspaceState } from '../shared/model'
 import type { WorkspaceFork, WorkspaceRemovePlan } from '../shared/workspace-door'
@@ -66,6 +67,22 @@ export async function inspectForks(dirs: readonly string[], scope: ForkScope): P
   return forks.filter((fork): fork is WorkspaceFork => fork !== null)
 }
 
+/**
+ * A fork's folder holds one worktree per repository, and `worktree remove` takes
+ * only that one. rmdir refuses a folder with anything left in it, so this can
+ * only ever remove what is empty, and it stops at the root.
+ */
+async function pruneEmptyParents(worktree: string, scope: ForkScope): Promise<void> {
+  for (let dir = path.dirname(worktree); isInside(dir, scope.worktreeRoot); dir = path.dirname(dir)) {
+    if (scope.otherDirs.includes(dir)) return
+    try {
+      await rmdir(dir)
+    } catch {
+      return
+    }
+  }
+}
+
 /** Remove a fork's worktree and branch, if that still loses nothing. */
 export async function removeFork(
   fork: WorkspaceFork,
@@ -80,6 +97,7 @@ export async function removeFork(
     // Neither call is forced: git keeps its own refusal as a last check.
     await git(repo, ['worktree', 'remove', fork.worktree], REMOVE_TIMEOUT_MS)
     await git(repo, ['branch', '-D', now.branch])
+    await pruneEmptyParents(fork.worktree, scope)
     return { ok: true }
   } catch (error) {
     const words = error instanceof Error ? error.message.split('\n')[0] : String(error)

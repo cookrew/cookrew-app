@@ -276,6 +276,9 @@ import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
+import { registryArgument } from '../shared/machine-words'
+import { commandRunsInMain, mainDrawsCard } from './browser-owner'
+import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
 import { HeadlessBrowserManager } from './headless-browser-manager'
@@ -478,7 +481,7 @@ if (ptys.hostRefusal) {
   console.error(ptys.hostRefusal)
   // A Dock launch has no console: without the box the app just never appears.
   // showErrorBox is allowed before 'ready' and blocks until dismissed.
-  dialog.showErrorBox('Cookrew is already running', ptys.hostRefusal)
+  dialog.showErrorBox('Cookrew is already running', REFUSAL_FOR_A_PERSON)
   app.exit(1)
 }
 // Liveness covers EXISTENCE, not attachment: every terminal node — including
@@ -6316,7 +6319,7 @@ const browserThumbs = new BrowserThumbCache({
   // ordinary, not an error: the card keeps its last frame and the next poll
   // tries again.
   capture: async (browserId) =>
-    interactiveBrowserEnabled() && !showsThisMachine(browserId)
+    streamsCard(browserId) && !showsThisMachine(browserId)
       ? ((await browserManager.peek(browserId)?.snapshot().catch(() => null)) ?? null)
       : null
 })
@@ -6329,7 +6332,7 @@ const browserThumbs = new BrowserThumbCache({
  * loop is paused whenever its window is hidden and skips the zoomed card.
  */
 async function noteBrowserViewed(browserId: string): Promise<void> {
-  if (interactiveBrowserEnabled()) {
+  if (streamsCard(browserId)) {
     await browserThumbs.refresh(browserId)
     return
   }
@@ -6347,6 +6350,8 @@ const interactiveBrowserEnabled = (): boolean => {
   interactiveBrowserDecision ??= interactiveBrowserDefault(process.env, () => findChrome() !== null)
   return interactiveBrowserDecision
 }
+/** Main draws this card: a use card always, a page when headless Chrome owns pages (browser-owner.ts). */
+const streamsCard = (browserId: string): boolean => interactiveBrowserEnabled() || mainDrawsCard(activeBrowserNode(browserId), false)
 const desktopBrowserStreamToken = randomUUID()
 
 /**
@@ -6591,7 +6596,7 @@ const browserManager = new HeadlessBrowserManager({
  */
 const browserCastIpc = createBrowserCastIpc({
   getInstance: (browserId) => browserManager.get(browserId),
-  enabled: interactiveBrowserEnabled
+  enabled: streamsCard
 })
 
 /** The wrist's credential (watch-pairing.ts): module scope, because rotating every session ends it too. */
@@ -6599,7 +6604,7 @@ const watchPairing = new WatchPairing()
 
 const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
-  enabled: interactiveBrowserEnabled,
+  enabled: streamsCard,
   desktopToken: () => desktopBrowserStreamToken,
   // REACH v2.1 — the companion at cookrew.dev keeps its address while its data
   // plane moves onto this Mac's own name, so its Origin is the registry's.
@@ -6710,8 +6715,14 @@ function createBrowserInWorkspace(card: { url: string; name: string; terminalId:
   return { name: added.name, adopted: false }
 }
 
+/** This command's card lives in main, wherever the caller stands (browser-owner.ts). */
+function browserCommandInMain(args: string[], terminalId: string): boolean {
+  const served = ptys.isServed(terminalId) || servedSpawnContexts.has(store.ownerOf(terminalId) ?? '')
+  return commandRunsInMain(args, interactiveBrowserEnabled(), (name) => browserForCaller(store, terminalId, name, served)?.node)
+}
+
 function browserCommand(args: string[], terminalId: string): Promise<string> {
-  return interactiveBrowserEnabled()
+  return browserCommandInMain(args, terminalId)
     ? headlessBrowserCommands.run(args, terminalId)
     : rendererBrowserCommand(args, terminalId)
 }
@@ -6725,7 +6736,8 @@ function createWindow(): void {
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(dirname, '../preload/index.cjs'),
-      webviewTag: true
+      webviewTag: true,
+      additionalArguments: [registryArgument(registryOrigin())]
     }
   })
 
@@ -7415,7 +7427,7 @@ app.whenReady().then(() => {
     routines,
     browserCommand,
     createBrowserInWorkspace,
-    browserAnyWorkspace: interactiveBrowserEnabled,
+    browserAnyWorkspace: browserCommandInMain,
     notify: showNotification,
     captureWindow,
     injectInput,
@@ -9111,7 +9123,7 @@ function registerIpc(handlers: RestoreHandlers): void {
    * cache through /api/browser/:id/thumb, which no longer waits on this.
    */
   ipcMain.handle('browser:snapshot', async (event, browserId: unknown) => {
-    if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
+    if (typeof browserId !== 'string' || !streamsCard(browserId)) return null
     // The Mac looking at its own screen, in its own window: the one place that
     // picture needs no banner. It skips the cache that serves everyone else.
     if (showsThisMachine(browserId)) {

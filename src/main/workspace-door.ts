@@ -62,13 +62,17 @@ export function suggestWorkspaceDir(liveDir: string, home: string): string {
 
 export function checkWorkspaceCreate(input: WorkspaceCheckInput): WorkspaceCheck {
   const home = input.home ?? homedir()
-  const suggestedDir = suggestWorkspaceDir(input.liveDir, home)
-  const dir = typedPath(input.dir, home) || suggestedDir
+  const owned = (dir: string) => input.workspaces.find((w) => (w.dirs.length > 0 ? w.dirs : [w.dir]).includes(dir))
+  const beside = suggestWorkspaceDir(input.liveDir, home)
+  // Opening on a folder somebody works in is a warning before anyone has done
+  // anything, so the sheet opens empty and the person chooses.
+  const suggestedDir = owned(beside) ? '' : beside
+  const dir = typedPath(input.dir, home) || beside
   const wanted = input.name.trim() || 'Workspace'
   const name = uniqueName(wanted, input.workspaces.map((w) => w.name))
   const reason = refusal(dir)
   if (reason !== null) return { ok: false, name, dir, reason, notes: [], suggestedDir }
-  const owner = input.workspaces.find((w) => (w.dirs.length > 0 ? w.dirs : [w.dir]).includes(dir))
+  const owner = owned(dir)
   const notes = [
     ...(input.dir.trim() === '' ? [`No folder given, so this one will work in ${dir}.`] : []),
     ...(name !== wanted ? [`"${wanted}" is taken, so this one will be called "${name}".`] : []),

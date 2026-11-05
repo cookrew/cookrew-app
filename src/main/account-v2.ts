@@ -788,6 +788,7 @@ export class Accounts {
       )
       if (response.status === 200) return 'taken'
       if (response.status === 404) return 'free'
+      if (response.status === 410) return 'retired'
       return 'unknown'
     } catch {
       return 'unknown'
@@ -1223,7 +1224,7 @@ export class Accounts {
       }
       nonce = body.nonce
     } catch {
-      return this.renewFailed('cookrew.dev could not be reached')
+      return this.renewFailed('the registry could not be reached')
     }
 
     try {
@@ -1245,7 +1246,7 @@ export class Accounts {
       this.renewProblem = null
       return true
     } catch {
-      return this.renewFailed('cookrew.dev could not be reached')
+      return this.renewFailed('the registry could not be reached')
     }
   }
 

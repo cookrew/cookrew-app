@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import { PROVIDER_LABEL, type LinkedProvider, type ProviderId, type ProviderOffer, type VerifiedEmail } from '../../../shared/oauth'
 import { cookrew } from '../api'
 import { Row } from './FactorRows'
@@ -95,7 +96,7 @@ export function LinkRows({
           setError(providerRefusal(result.reason, result.message))
         }
       })
-      .catch(() => setError('That could not be saved on this Mac. Try again.'))
+      .catch(() => setError(machineCopy('That could not be saved on this Mac. Try again.', hostPlatform())))
       .finally(() => setBusy(false))
   }
 
@@ -209,7 +210,7 @@ export function LinkRows({
       {status.passcodePending && passcode === null && (
         <Row
           kind="LOCK"
-          label="Choose a passcode for this Mac"
+          label={machineCopy('Choose a passcode for this Mac', hostPlatform())}
           action={
             <button className="gs-ghost" onClick={() => setPasscode({ current: '', next: '', confirm: '' })}>
               CHOOSE
@@ -220,7 +221,7 @@ export function LinkRows({
       {status.unlockBy === 'passcode' && !status.passcodePending && (
         <Row
           kind="LOCK"
-          label="This Mac unlocks with a passcode"
+          label={machineCopy('This Mac unlocks with a passcode', hostPlatform())}
           action={
             <button className="gs-ghost" onClick={() => setPasscode({ current: '', next: '', confirm: '' })}>
               CHANGE

@@ -25,7 +25,8 @@ export interface CastPort {
 
 export interface BrowserCastIpcDeps {
   getInstance: (browserId: string) => Promise<BrowserInstance | null>
-  enabled: () => boolean
+  /** Main draws this card (browser-owner.ts); a page in a webview has no stream. */
+  enabled: (browserId: string) => boolean
 }
 
 export interface BrowserCastIpc {
@@ -51,7 +52,7 @@ export function createBrowserCastIpc(deps: BrowserCastIpcDeps): BrowserCastIpc {
 
   return {
     open: (browserId, port) => {
-      if (!deps.enabled()) {
+      if (!deps.enabled(browserId)) {
         try {
           port.close()
         } catch {

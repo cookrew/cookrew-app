@@ -22,9 +22,13 @@ export function shouldPollThumbs({ remote, interactive }: ThumbSource): boolean 
   return remote && interactive !== null
 }
 
-/** Capture the local headless page over IPC — desktop only, flag on. */
+/**
+ * Ask main for card pictures over IPC, desktop only. With pages on webviews
+ * that still serves the use cards; main answers null for a page, whose picture
+ * comes from its own webview.
+ */
 export function shouldSnapshotLocally({ remote, interactive }: ThumbSource): boolean {
-  return !remote && interactive === true
+  return !remote && interactive !== null
 }
 
 /**

@@ -99,7 +99,8 @@ describe('1 · the loopback pin', () => {
     expect(found.defaultModel).toBeNull()
     const fromEnv = discover({ home: path.join(home, 'none'), env: { MAGPIE_ADDR: 'http://10.0.0.5:3425' } }, true)
     expect(fromEnv.known).toBe(false)
-    expect(fromEnv.why).toContain('MAGPIE_ADDR')
+    expect(fromEnv.why).toContain('10.0.0.5')
+    expect(fromEnv.why).not.toContain('MAGPIE_ADDR')
   })
 
   it('never spawns a card against a refused gateway: the state is absent, the env empty', async () => {

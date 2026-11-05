@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import { cookrew } from '../api'
 import { PROVIDER_COPY, passcodeView, providerRefusal } from './provider-store'
 import '../grant-surface.css'
@@ -37,7 +38,7 @@ export function PasscodeCard({
         if (result.ok) onDone(result.value)
         else setError(providerRefusal(result.reason, result.message))
       })
-      .catch(() => setError('That could not be saved on this Mac. Try again.'))
+      .catch(() => setError(machineCopy('That could not be saved on this Mac. Try again.', hostPlatform())))
       .finally(() => setBusy(false))
   }
 

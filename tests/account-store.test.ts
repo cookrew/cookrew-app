@@ -91,7 +91,7 @@ describe('the avatar, in three states (D1)', () => {
   it('shows the rose badge when a device is waiting (the D6 seam)', () => {
     const view = avatarView(status({ requests: 2 }))
     expect(view.badge).toBe(2)
-    expect(view.title).toContain('2 devices waiting')
+    expect(view.title).toContain('2 requests waiting')
     // Zero is not a badge — an empty rose dot would be a permanent alarm.
     expect(avatarView(status({ requests: 0 })).badge).toBeNull()
   })
@@ -413,11 +413,11 @@ describe('the rose badge now has a producer (D1)', () => {
   it('wears the count, and says how many are waiting on hover', () => {
     const view = avatarView(status({ requests: 2 }))
     expect(view.badge).toBe(2)
-    expect(view.title).toBe('@drej — 2 devices waiting')
+    expect(view.title).toBe('@drej — 2 requests waiting')
   })
 
   it('says it in the singular for one, and disappears at zero', () => {
-    expect(avatarView(status({ requests: 1 })).title).toBe('@drej — 1 device waiting')
+    expect(avatarView(status({ requests: 1 })).title).toBe('@drej — 1 request waiting')
     expect(avatarView(status({ requests: 0 })).badge).toBeNull()
   })
 })

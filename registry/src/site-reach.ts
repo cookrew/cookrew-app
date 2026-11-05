@@ -1,4 +1,5 @@
 import { esc } from './site-shell'
+import { machineCopy } from '../../src/shared/machine-words'
 import { webCopy } from './v3-copy'
 import type { V2Desktop } from './v2-accounts'
 
@@ -92,7 +93,7 @@ function desktopRow(username: string, desktop: V2Desktop): string {
    * press twice.
    */
   return `<li class="desktop" data-desktop="${id}" data-name="${esc(desktop.name)}">
-<span class="chip">Mac</span>
+<span class="chip">Machine</span>
 <span><b>${esc(desktop.name)}</b><br><span class="meta">${workspaces}</span></span>
 <span class="reach-actions">${badges()}
 <a class="btn sm primary" href="${esc(relayPrefix(username, desktop.deviceId))}">OPEN</a>
@@ -113,10 +114,10 @@ export function desktopsSection(username: string, desktops: readonly V2Desktop[]
       ? `<li><span class="meta">No desktop has registered its workspaces yet. Claim this username in the app and they appear here.</span></li>`
       : desktops.map((desktop) => desktopRow(username, desktop)).join('')
   return `<h2 id="desktops" style="margin-top:30px">Your machines</h2>
-<p class="meta">Names and workspaces only — cookrew.dev stores nothing that is on a canvas, though OPEN carries it through the relay, which is not end-to-end sealed yet (<a href="/privacy#relay">privacy</a>). ONLINE means that Mac is holding its line at cookrew.dev right now, so OPEN reaches it; its address stays here, on cookrew.dev. USE WI-FI asks that Mac once for its keyboard on this network; ${esc(webCopy('m5.no-account'))}</p>
+<p class="meta">Names and workspaces only — this site stores nothing that is on a canvas, though OPEN carries it through the relay, which is not end-to-end sealed yet (<a href="/privacy#relay">privacy</a>). ONLINE means that machine is holding its line here right now, so OPEN reaches it; its address stays here. USE WI-FI asks that machine once for its keyboard on this network; ${esc(machineCopy(webCopy('m5.no-account'), 'any'))}</p>
 <ul class="doors me-list" id="me-desktops"
-  data-asked="${esc(webCopy('m5.asked'))}"
-  data-allowed="${esc(webCopy('m5.allowed', { device: '{device}' }))}"
-  data-declined="${esc(webCopy('m5.declined', { device: '{device}' }))}"
-  data-no-seal="${esc(webCopy('m5.no-seal'))}">${rows}</ul>`
+  data-asked="${esc(machineCopy(webCopy('m5.asked'), 'any'))}"
+  data-allowed="${esc(machineCopy(webCopy('m5.allowed', { device: '{device}' }), 'any'))}"
+  data-declined="${esc(machineCopy(webCopy('m5.declined', { device: '{device}' }), 'any'))}"
+  data-no-seal="${esc(machineCopy(webCopy('m5.no-seal'), 'any'))}">${rows}</ul>`
 }

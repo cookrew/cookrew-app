@@ -1,4 +1,5 @@
 import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES, DELETE_ACCOUNT_WARNING } from '../../src/shared/account-delete'
+import { machineCopy } from '../../src/shared/machine-words'
 import { webCopy } from './v3-copy'
 import { day, esc, page, type Page } from './site-shell'
 import { desktopsSection } from './site-reach'
@@ -73,7 +74,7 @@ function authenticatorRow(active: boolean): string {
 
 function desktopRow(name: string, workspaces: readonly { id: string; name: string }[]): string {
   const list = workspaces.length === 0 ? 'No workspaces registered yet' : workspaces.map((w) => esc(w.name)).join(' · ')
-  return `<li><span class="chip">Mac</span><span><b>${esc(name)}</b><br><span class="meta">${list}</span></span>
+  return `<li><span class="chip">Machine</span><span><b>${esc(name)}</b><br><span class="meta">${list}</span></span>
 <span class="chip">Reachable</span></li>`
 }
 
@@ -89,6 +90,9 @@ export interface FactorSummary {
   passkeys: readonly { id: string; name: string; addedAt: number }[]
   totp: boolean
 }
+
+/** The site cannot know what a desktop runs, so /me says machine for all of them. */
+const meCopy = (...args: Parameters<typeof webCopy>): string => machineCopy(webCopy(...args), 'any')
 
 /** This page can check a password and cannot make a provider trip. */
 const DELETE_IN_THE_APP =
@@ -113,7 +117,7 @@ export function mePage(
         scripts: ['device-id.js', 'site.js']
       },
       `<div class="wrap" style="padding-top:44px"><h1>Your account</h1>
-<p class="lede">${esc(webCopy('avatar.no-account'))}</p>
+<p class="lede">${esc(meCopy('avatar.no-account'))}</p>
 <p class="row"><button class="btn primary lg" data-signin>Sign in or register</button><a class="btn lg" href="/market">Marketplace</a></p></div>`
     )
   }
@@ -154,10 +158,10 @@ export function mePage(
      a person with nothing waiting is not given a heading that says so. -->
 <section id="me-requests" hidden>
 <h2 style="margin-top:30px">Requests</h2>
-<p class="meta">${esc(webCopy('w5.requests-footer', { handle: account.username }))}</p>
-<ul class="doors me-list" id="me-approvals" data-join-row="${esc(webCopy('w5.join-row'))}"
- data-seat-row="${esc(webCopy('d11.seat-row', { handle: '{handle}', team: '{team}' }))}"
- data-wifi-row="${esc(webCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
+<p class="meta">${esc(meCopy('w5.requests-footer', { handle: account.username }))}</p>
+<ul class="doors me-list" id="me-approvals" data-join-row="${esc(meCopy('w5.join-row'))}"
+ data-seat-row="${esc(meCopy('d11.seat-row', { handle: '{handle}', team: '{team}' }))}"
+ data-wifi-row="${esc(meCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
 </section>
 
 <!-- THE MACHINES COME FIRST. Devices and security are things to look at
@@ -166,18 +170,18 @@ export function mePage(
 ${desktopsSection(account.username, account.desktops)}
 
 <h2 style="margin-top:30px">Devices</h2>
-<p class="meta">Every device attached to @${esc(account.username)}. ${esc(webCopy('d12.revoke', { device: 'device' }))} ${esc(webCopy('d12.last-device', { handle: account.username }))}</p>
+<p class="meta">Every device attached to @${esc(account.username)}. ${esc(meCopy('d12.revoke', { device: 'device' }))} ${esc(meCopy('d12.last-device', { handle: account.username }))}</p>
 <ul class="doors me-list" id="me-devices">${devices}</ul>
 <!-- W5 · the two ADD buttons. Both mint the same join code; the words differ
      because what a person is holding differs, and "add a phone" is the
      sentence somebody standing with a phone is looking for. -->
-<p class="row"><button class="btn" data-add-device="desktop">Add a Mac</button>
+<p class="row"><button class="btn" data-add-device="desktop">Add a machine</button>
 <button class="btn" data-add-device="phone">Add a phone</button></p>
-<div class="totp-panel" id="me-join-code" data-add-lede="${esc(webCopy('w5.add-lede'))}" hidden></div>
+<div class="totp-panel" id="me-join-code" data-add-lede="${esc(meCopy('w5.add-lede'))}" hidden></div>
 
 <h2 style="margin-top:30px">Security</h2>
 <ul class="doors me-list" id="me-security">
-<li id="me-password-row"><span class="chip">Password</span><span><b>Your password</b><br><span class="meta" id="me-password-note">At least 12 characters. It goes only to cookrew.dev.</span></span><button class="btn sm" data-password>Change</button></li>
+<li id="me-password-row"><span class="chip">Password</span><span><b>Your password</b><br><span class="meta" id="me-password-note">At least 12 characters. It goes only to this site.</span></span><button class="btn sm" data-password>Change</button></li>
 ${passkeyRows(factors.passkeys)}
 <li><span class="chip">Factor</span><span><b>Passkey (Touch ID / Face ID)</b><br><span class="meta" data-passkey-note>Recommended. It lives on this device and cannot be typed by anyone else.</span></span><button class="btn sm" data-add-passkey>Add</button></li>
 ${authenticatorRow(factors.totp)}
@@ -229,10 +233,10 @@ export function joinPage(): Page {
     },
     `<div class="wrap" style="padding-top:44px" id="join-card">
 <h1>Join on this device</h1>
-<p class="lede" id="join-lede">${esc(webCopy('m4.join-lede'))}</p>
+<p class="lede" id="join-lede">${esc(meCopy('m4.join-lede'))}</p>
 <p class="meta" id="join-message" role="status"></p>
 <p class="row"><button class="btn primary lg" id="join-go" hidden>Join</button>
-<button class="btn lg" data-signin>${esc(webCopy('m4.join-instead'))}</button></p>
-<p class="meta" id="join-none" hidden>${esc(webCopy('m4.no-code'))}</p></div>`
+<button class="btn lg" data-signin>${esc(meCopy('m4.join-instead'))}</button></p>
+<p class="meta" id="join-none" hidden>${esc(meCopy('m4.no-code'))}</p></div>`
   )
 }

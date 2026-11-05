@@ -462,7 +462,7 @@ export function ProfileSheet({
                     <span className="cr-acct-seclabel">{deviceName(device.name)}</span>
                     {device.current ? (
                       <>
-                        <span className="cr-acct-secstate cr-acct-thismac">THIS MAC</span>
+                        <span className="cr-acct-secstate cr-acct-thismac">{machineCopy('THIS MAC', hostPlatform())}</span>
                         <button
                           className="gs-revoke"
                           disabled={acting}
@@ -471,7 +471,7 @@ export function ProfileSheet({
                             setConfirming(open ? null : 'self')
                           }}
                         >
-                          SIGN OUT ON THIS MAC
+                          {machineCopy('SIGN OUT ON THIS MAC', hostPlatform())}
                         </button>
                       </>
                     ) : (
@@ -552,7 +552,7 @@ export function ProfileSheet({
                   setAdding(adding === 'mac' ? null : 'mac')
                 }}
               >
-                ADD A MAC
+                {machineCopy('ADD A MAC', hostPlatform())}
               </button>
               <button
                 className="gs-ghost"

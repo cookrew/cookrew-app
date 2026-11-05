@@ -127,6 +127,21 @@ export class HeadlessBrowserCommandEngine {
     const node = this.findBrowser(browserName, terminalId)
     if (sub === 'tabs') return this.runTabCommand(sub, node, rest.slice(1))
 
+    // ANOTHER DEVICE IS A NEW ADDRESS FOR THE CARD, not a page for the old device
+    // to open: the card's tab is re-addressed and the manager swaps the instance
+    // (its viewers redial onto the new one). Before any instance is asked for: a
+    // page card on a machine with no Chrome has none, and this needs none.
+    if (sub === 'navigate' && rest[1] !== undefined && parseUseUrl(rest[1]) !== null) {
+      const url = rest[1]
+      const readdressed = withActiveUrl(node, url)
+      if (backingOf(readdressed) !== backingOf(node)) {
+        this.deps.onUse?.({ agent: terminalId, card: node.id, use: 'browser', verb: 'navigate', point: null, viewport: null, at: (this.deps.now ?? Date.now)() })
+        const updated = this.patch(node.id, { url, tabs: readdressed.tabs })
+        await this.deps.manager.syncNode(updated)
+        return `Re-addressed to ${url}`
+      }
+    }
+
     const instance = await this.requireInstance(node)
     const releaseViewport = await instance.beginAgentViewportActivity()
     try {
@@ -155,18 +170,7 @@ export class HeadlessBrowserCommandEngine {
         case 'navigate': {
           const url = params[0]
           if (!url) throw new Error(`Usage: cookrew browser navigate "${browserName}" URL`)
-          // ANOTHER DEVICE IS A NEW ADDRESS FOR THE CARD, not a page for the
-          // old device to open: the card's tab is re-addressed and the
-          // manager swaps the instance (its viewers redial onto the new one).
           // A web address on a phone still opens in the phone's browser.
-          const readdressed = withActiveUrl(node, url)
-          if (target !== null || parseUseUrl(url) !== null) {
-            if (parseUseUrl(url) !== null && backingOf(readdressed) !== backingOf(node)) {
-              const updated = this.patch(node.id, { url, tabs: readdressed.tabs })
-              await this.deps.manager.syncNode(updated)
-              return `Re-addressed to ${url}`
-            }
-          }
           await instance.navigate(url)
           return `Navigated to ${url}`
         }

@@ -144,7 +144,7 @@ describe('the ⋯ row', () => {
   it('held off by the environment it cannot be pressed, and says why', () => {
     const html = paint({ on: false, locked: true })
     expect(html).toContain('disabled')
-    expect(html).toContain('COOKREW_TELEMETRY=0')
+    expect(html).toContain('Held off for this launch.')
   })
 
   it('sits in the menu, and only where main can hold the setting', () => {

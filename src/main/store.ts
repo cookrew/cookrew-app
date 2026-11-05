@@ -179,11 +179,20 @@ export class WorkspaceStore extends EventEmitter {
     const existing = this.hydrated.get(id)
     if (existing) return existing
     const session: HydratedSession = {
-      state: loadWorkspaceState(this.baseDir, id),
+      state: this.namedByRegistry(id, loadWorkspaceState(this.baseDir, id)),
       saveTimer: null
     }
     this.hydrated.set(id, session)
     return session
+  }
+
+  /**
+   * The registry holds the name. A file can lag it: an older build renamed a
+   * parked workspace without writing its file, and the header read the file.
+   */
+  private namedByRegistry(id: string, state: WorkspaceState): WorkspaceState {
+    const meta = this.registry.workspaces.find((w) => w.id === id)
+    return meta === undefined || meta.name === state.name ? state : { ...state, name: meta.name }
   }
 
   /** Workspace ids currently held in memory. */
@@ -453,19 +462,34 @@ export class WorkspaceStore extends EventEmitter {
   renameWorkspace(id: string, raw: string): void {
     const name = raw.trim()
     if (!name) throw new Error('Give the workspace a name.')
+    if (!this.registry.workspaces.some((w) => w.id === id)) throw new Error(`Workspace '${id}' not found`)
     const taken = this.registry.workspaces.find((w) => w.id !== id && w.name.toLowerCase() === name.toLowerCase())
     if (taken) throw new Error(`Another workspace is already called "${taken.name}".`)
     this.registry = {
       ...this.registry,
       workspaces: this.registry.workspaces.map((w) => (w.id === id ? { ...w, name } : w))
     }
-    // A rename lands on the canvas wherever it is held, focused or not.
-    const session = this.hydrated.get(id)
-    if (session) session.state = { ...session.state, name }
     saveRegistry(this.baseDir, this.registry)
+    // A rename lands on the canvas wherever it is: in memory, or in its file.
+    if (this.fileSafeToPatch(id)) this.patchWorkspace(id, (state) => ({ ...state, name }))
     this.emit('workspaces', this.deskList())
-    if (id === this.focused) this.emit('change', this.hydrate(this.focused).state)
     this.emitOp('workspace.renamed', id, name, id)
+  }
+
+  /**
+   * A parked file that cannot be read must not be written: a load falls back to
+   * an empty canvas, so a patch would replace a torn file, still recoverable,
+   * with nothing. The registry has the name, and namedByRegistry reads it there.
+   */
+  private fileSafeToPatch(id: string): boolean {
+    if (this.hydrated.has(id)) return true
+    try {
+      loadWorkspaceStateStrict(this.baseDir, id)
+      return true
+    } catch (error) {
+      console.error(`Workspace ${id} could not be read, so its file was left as it is:`, error)
+      return false
+    }
   }
 
   /** A workspace's mark. Throws on an unknown workspace or anything but one short mark. */
@@ -922,7 +946,7 @@ export class WorkspaceStore extends EventEmitter {
       const hit = this.parked.get(id)
       if (hit && hit.stamp === stamp) return hit.state
     }
-    const state = loadWorkspaceState(this.baseDir, id)
+    const state = this.namedByRegistry(id, loadWorkspaceState(this.baseDir, id))
     if (stamp !== null) {
       this.parked.delete(id) // re-insert last: Map order is the LRU order
       this.parked.set(id, { stamp, state })

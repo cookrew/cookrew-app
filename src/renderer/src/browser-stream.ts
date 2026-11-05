@@ -84,12 +84,14 @@ export function browserRenderMode(opts: {
   interactive: boolean | null
   client: StreamClient
   selfEmbedding: boolean
-  /** The tab is `vphone://…` — a virtual iPhone, which only the stream can show. */
+  /** The tab is a use address (a screen, a camera, a phone), which only the stream can show. */
   vphone?: boolean
 }): BrowserRenderMode {
   if (opts.interactive === null) return 'pending'
   if (opts.interactive) return 'headless-stream'
-  if (opts.vphone) return 'vphone-off'
+  // `interactive` is about PAGES. A use card streams with or without a Chrome;
+  // only the demo has no main process to stream from.
+  if (opts.vphone) return opts.client === 'demo' ? 'vphone-off' : 'headless-stream'
   if (opts.selfEmbedding) return 'legacy-blocked'
   if (opts.client === 'remote') return 'legacy-thumb'
   if (opts.client === 'demo') return 'legacy-iframe'

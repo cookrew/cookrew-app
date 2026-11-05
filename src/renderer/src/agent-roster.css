@@ -2582,7 +2582,7 @@
 }
 
 /* What the search box can do besides find agents (board-actions.ts). */
-.cr-board-actions { display: grid; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line-soft) }
+.cr-board-actions { display: grid; gap: 2px; padding: 6px; background: var(--cream-hi); border: 2px solid var(--line); border-bottom: 0 }
 .cr-board-action {
   display: grid;
   grid-template-columns: 16px auto minmax(0, 1fr);

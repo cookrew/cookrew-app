@@ -11,6 +11,7 @@ import { activeBrowserTab, browserTabs } from '../shared/model'
 import { HeadlessInstance, type HeadlessOptions, type HeadlessPageState } from './headless-chrome'
 import type { BrowserInstance } from './browser-instance'
 import { parseUseUrl, useUrl, type UseTarget } from '../shared/use-url'
+import { mainDrawsCard } from './browser-owner'
 
 const SIZE_MIN = 320
 const SIZE_MAX = 2048
@@ -22,6 +23,10 @@ function clampSize(value: number, fallback: number): number {
 }
 
 export interface HeadlessBrowserManagerDeps {
+  /**
+   * Does a headless Chrome own this machine's PAGES (browser-owner.ts)? A use
+   * card never asks: its device needs no Chrome.
+   */
   enabled: () => boolean
   chromePath: () => string | null
   profileRoot: () => string
@@ -97,7 +102,12 @@ export class HeadlessBrowserManager {
   }
 
   async syncNode(node: BrowserNodeData): Promise<BrowserInstance | null> {
-    if (!this.deps.enabled() || this.shuttingDown) return null
+    if (this.shuttingDown) return null
+    if (!this.backs(node)) {
+      // A use card sent to a page: the webview takes over, so the device goes.
+      if (this.instances.has(node.id) || this.starting.has(node.id)) await this.remove(node.id)
+      return null
+    }
     this.desired.set(node.id, node)
     this.touch(node.id)
     const live = this.instances.get(node.id)
@@ -133,6 +143,11 @@ export class HeadlessBrowserManager {
     return usedSince === undefined ? ids : ids.filter((id) => (this.lastUsed.get(id) ?? -Infinity) >= usedSince)
   }
 
+  /** Whether this card has anything to run here: always for a device, for a page only under headless Chrome. */
+  private backs(node: BrowserNodeData): boolean {
+    return mainDrawsCard(node, this.deps.enabled())
+  }
+
   private touch(browserId: string): void {
     this.lastUsed.set(browserId, (this.deps.now ?? Date.now)())
   }
@@ -149,9 +164,9 @@ export class HeadlessBrowserManager {
   }
 
   async get(browserId: string): Promise<BrowserInstance | null> {
-    if (!this.deps.enabled() || this.shuttingDown) return null
+    if (this.shuttingDown) return null
     const node = this.deps.resolveNode(browserId)
-    if (!node) return null
+    if (!node || !this.backs(node)) return null
     this.desired.set(browserId, node)
     this.touch(browserId)
     return this.ensure(browserId)

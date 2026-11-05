@@ -164,7 +164,7 @@ export interface AccountStatus {
  * dashes sentence tells a person their well-formed name is malformed — they
  * retype it in lowercase, are refused again, and have no way to learn why.
  */
-export type UsernameCheck = 'free' | 'taken' | 'invalid' | 'reserved' | 'unknown'
+export type UsernameCheck = 'free' | 'taken' | 'retired' | 'invalid' | 'reserved' | 'unknown'
 
 /** The password meter's three words. */
 export type PasswordStrength = 'weak' | 'ok' | 'strong'

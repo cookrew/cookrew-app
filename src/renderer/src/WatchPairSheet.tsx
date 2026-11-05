@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { hostPlatform, machineCopy } from '../../shared/machine-words'
 import { cookrew } from './api'
 import { inviteRefusal, spacedCode, timeLeft, typedAddress, watchClaimed, type WatchCode, type WatchState } from './watch-code'
 import './grant-surface.css'
@@ -90,7 +91,7 @@ function AskPane({
   return (
     <>
       {account === 'none' ? (
-        <p className="gs-consequence">A watch reaches this Mac from anywhere through your account. Without one, it only works on this network.</p>
+        <p className="gs-consequence">{machineCopy('A watch reaches this Mac from anywhere through your account.', hostPlatform())} Without one, it only works on this network.</p>
       ) : !sealed ? (
         <p className="gs-consequence">{inviteRefusal('not_sealed')}</p>
       ) : (
@@ -262,7 +263,7 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
         {stage.name === 'digits' && <DigitsPane code={stage.code} seen={stage.code.claims} onDone={done} onAgain={again} />}
         {stage.name === 'done' && (
           <>
-            <p className="gs-consequence">You can forget it from ⋯ on this Mac or on the watch.</p>
+            <p className="gs-consequence">{machineCopy('You can forget it from ⋯ on this Mac or on the watch.', hostPlatform())}</p>
             <div className="gs-sheet-foot">
               <button type="button" className="gs-primary" onClick={onClose}>
                 DONE

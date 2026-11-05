@@ -7,7 +7,7 @@
  * and the relay, and a renderer must not turn an arbitrary string it was
  * handed into shell. So the renderer refuses anything that is not one of
  * these shapes, whoever sent it — and the shapes admit no shell
- * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the two fixed
+ * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the fixed
  * install pipes, `&`, `<`, `>`, quote (but the plugin path's own single
  * quotes), `\`, newline. A key line ends in a space: the user pastes the
  * key and presses Enter themselves.
@@ -37,6 +37,7 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^npm i(nstall)? -g @[a-z0-9-]+\/[a-z0-9-]+$/,
   /^(claude|claude login|codex login|opencode auth login)$/,
   /^curl -fsSL https:\/\/opencode\.ai\/install \| bash$/,
+  /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/,
   // A formula starts with a letter or digit: `--cask` and `-f` are not formulae.
   /^brew install [A-Za-z0-9][A-Za-z0-9._/@-]*$/
 ]

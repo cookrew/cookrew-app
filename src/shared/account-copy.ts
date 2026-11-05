@@ -1,4 +1,4 @@
-import { hostPlatform, machineCopy, machineTable } from './machine-words'
+import { hostPlatform, machineCopy, machineTable, registryCopy } from './machine-words'
 
 /**
  * THE ACCOUNT'S SENTENCES — one source for desktop and web (V3-07).
@@ -50,6 +50,11 @@ export const V3_COPY = machineTable({
    */
   'd9.crossing.taken': '@{handle} already exists — sign in with your password.',
   /**
+   * D9, a deleted name on CREATE. Unlike a taken one there is nobody to sign in
+   * as, so it hands over no door: it only asks for another name.
+   */
+  'd9.crossing.retired': '@{handle} cannot be used. Choose another name.',
+  /**
    * D9, the label on the way out of a taken name (V3-UI1 · F2).
    *
    * A real-interface pass found CREATE showing "@magpie already exists — sign
@@ -77,7 +82,7 @@ export const V3_COPY = machineTable({
    * development override.
    */
   'd4.env-override':
-    'COOKREW_HANDLE names @{env}. Your account is @{handle}, and the account is the name — the environment is a development override.',
+    'This launch names @{env}. Your account is @{handle}, and the account is the name — the launch setting is a development override.',
   /** D9, typing a free name while on SIGN IN. The mirror of the above. */
   'd9.crossing.unknown': 'There is no @{handle} yet — take it now.',
 
@@ -448,9 +453,10 @@ export type CliCopyId = keyof typeof CLI_COPY
 export function cliCopy(
   id: CliCopyId,
   platform: string,
-  vars: Readonly<Record<string, string | number>> = {}
+  vars: Readonly<Record<string, string | number>> = {},
+  registry?: string
 ): string {
-  return fillCopy(machineCopy(CLI_COPY[id], platform), vars)
+  return fillCopy(registryCopy(machineCopy(CLI_COPY[id], platform), registry), vars)
 }
 
 /**

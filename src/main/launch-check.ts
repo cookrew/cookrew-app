@@ -102,6 +102,13 @@ export interface LaunchCheck {
   installLine: (word: string) => string | null
 }
 
+/** A fix nobody can type is no fix: `npm i -g …` on a box with no npm (box round 3). */
+function runnableLine(line: string | null, check: LaunchCheck): string | null {
+  // Its first word, not commandWord: a curl line is a pipe, and the pipe is ours.
+  const tool = line?.trim().split(/\s+/)[0]
+  return tool && resolves(tool, check.cwd, check.path) ? line : null
+}
+
 /** What stops this card starting, or null. Only what is certain. */
 export function launchBlock(check: LaunchCheck): LaunchFailure | null {
   const folder = folderFailure(check.cwd)
@@ -109,7 +116,7 @@ export function launchBlock(check: LaunchCheck): LaunchFailure | null {
   if (!check.checkCommand) return null
   const word = commandWord(check.command)
   if (word === null || resolves(word, check.cwd, check.path)) return null
-  const install = check.installLine(path.basename(word))
+  const install = runnableLine(check.installLine(path.basename(word)), check)
   return failure({
     kind: 'command-missing',
     exitCode: 127,

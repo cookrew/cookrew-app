@@ -934,6 +934,7 @@
   z-index: 58;
   width: min(560px, calc(100vw - 24px));
   display: flex;
+  flex-direction: column;
   animation: cr-board-drop 140ms ease-out;
 }
 

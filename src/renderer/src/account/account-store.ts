@@ -329,7 +329,7 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
     case 'weak_password':
       return ACCOUNT_COPY.PASSWORD_WEAK
     case 'rate_limited':
-      return 'cookrew.dev is asking us to slow down. Try again in a minute.'
+      return machineCopy('cookrew.dev is asking us to slow down. Try again in a minute.', hostPlatform())
     case 'offline':
       return ACCOUNT_COPY.REGISTRY_DOWN
     case 'no_passwords_yet':
@@ -383,7 +383,7 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       // NOT "something went wrong": that sentence was on screen for eleven
       // different failures and told a person nothing about any of them. This
       // one at least says who answered and what it cost them — nothing.
-      return 'cookrew.dev answered something this app could not read. Nothing was changed.'
+      return machineCopy('cookrew.dev answered something this app could not read. Nothing was changed.', hostPlatform())
   }
 }
 
@@ -426,7 +426,7 @@ export function avatarView(status: AccountStatus | null): AvatarView {
     title:
       requests === null
         ? `@${status.username}`
-        : `@${status.username} — ${requests} device${requests === 1 ? '' : 's'} waiting`,
+        : `@${status.username} — ${requests} request${requests === 1 ? '' : 's'} waiting`,
     badge: requests,
     avatar: status.avatar,
   }
@@ -485,6 +485,8 @@ function usernameField(raw: string, check: ClaimFields['check']): FieldView {
       return { tone: 'good', tag: 'free ✓', note: ACCOUNT_COPY.USERNAME_FREE }
     case 'taken':
       return { tone: 'bad', tag: 'taken', note: takenSentence(username) }
+    case 'retired':
+      return { tone: 'bad', tag: 'unavailable', note: accountCopy('d9.crossing.retired', { handle: normaliseUsername(username) }) }
     case 'unknown':
       // NEVER OPTIMISTIC. The primary stays down, and the reason is the
       // registry's, not the person's.
@@ -930,7 +932,7 @@ function lockLine(outcome: LockOutcome, passwordPending: boolean): string {
   // the registry's own reason, never "not it", which would send the owner to
   // change what they are typing.
   if (outcome.reason === 'unproven') return refusalSentence(outcome.refusal, outcome.message)
-  return 'There is no account on this Mac to unlock.'
+  return machineCopy('There is no account on this Mac to unlock.', hostPlatform())
 }
 
 
