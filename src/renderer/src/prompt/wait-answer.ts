@@ -3,6 +3,7 @@ import { useActivity } from '../activity-thumb-store'
 import { cookrew } from '../api'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
 import { choiceId, choiceKeys, choiceSig, ESC, hasWordsRow, keyChoice, staysOpen, type MenuAct, type WaitChoice } from '../../../shared/wait-choice'
+import { briefId } from '../../../shared/wait-about'
 
 
 /**
@@ -163,7 +164,7 @@ export function useWaitAnswer(agentId: string | null, onType?: () => void): Wait
       onRefused?.()
     }
     cookrew()
-      .answerMenu(agentId, { menu: choiceId(choice), act })
+      .answerMenu(agentId, { menu: choiceId(choice), brief: briefId(choice.about), act })
       .then((result) => {
         if (!result.ok) refused(result.reason)
       }, () => refused('refused'))

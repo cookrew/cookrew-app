@@ -1,6 +1,6 @@
 import { useId } from 'react'
 import { InkAvatar } from './InkAvatar'
-import { WaitReviewList, WaitRows, WaitSteps } from '../prompt/WaitChoices'
+import { WaitBrief, WaitReviewList, WaitRows, WaitSteps } from '../prompt/WaitChoices'
 import type { WaitAnswering, WaitView } from '../prompt/wait-answer'
 import type { AgentView } from './zoom-model'
 
@@ -50,6 +50,7 @@ export function BarWaitCard({ agent, view, wait, onOpen, onReply, onClose }: {
         </p>
         <WaitSteps choice={view.choice} onStep={wait.step} />
         <div className="wc-scroll">
+          <WaitBrief choice={view.choice} />
           <WaitReviewList choice={view.choice} />
           <WaitRows view={view} onAnswer={wait.answer} small />
         </div>

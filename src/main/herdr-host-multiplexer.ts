@@ -1859,13 +1859,13 @@ export class HerdrHostMultiplexer implements Multiplexer {
   /**
    * Rows as they stand on the pane, not unwrapped: `recent-unwrapped` joins a
    * row that fills the width to the next, and a menu's rows are read by column
-   * (shared/wait-choice.ts).
+   * (shared/wait-choice.ts). `lines` reaches further back than herdr's default.
    */
-  async captureRowsAsync(name: string): Promise<string | null> {
+  async captureRowsAsync(name: string, lines?: number): Promise<string | null> {
     const pane = this.paneFromInventory(name)
     if (!pane) return null
     try {
-      return await this.runAsync(['pane', 'read', pane.pane_id, '--source', 'recent'], 5000)
+      return await this.runAsync(['pane', 'read', pane.pane_id, '--source', 'recent', ...(lines ? ['--lines', String(lines)] : [])], 5000)
     } catch {
       return null
     }
