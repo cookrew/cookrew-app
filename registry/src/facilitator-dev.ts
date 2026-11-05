@@ -32,6 +32,7 @@ export const DEV_UNREACHABLE_PREFIX = 'unreachable-'
 
 export function devFacilitator(): Facilitator {
   return {
+    standIn: true,
     settle(request: SettlementRequest): SettlementResult {
       if (request.tx.startsWith(DEV_REFUSE_PREFIX)) return { ok: false, reason: 'invalid' }
       if (request.tx.startsWith(DEV_UNREACHABLE_PREFIX)) {

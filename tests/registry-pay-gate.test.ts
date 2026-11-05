@@ -223,9 +223,9 @@ describe('a registry with no facilitator', () => {
 })
 
 describe('what a receipt is worth', () => {
-  const settle = (verifies: boolean): PricingDeps => ({
+  const settle = (standIn: boolean): PricingDeps => ({
     ...productionPricing(),
-    facilitator: { ...(verifies ? { verifies: true as const } : {}), settle: () => ({ ok: true as const }) }
+    facilitator: { ...(standIn ? { standIn: true as const } : {}), settle: () => ({ ok: true as const }) }
   })
 
   it('a real facilitator marks what it settled, and refuses to honour what it did not', async () => {
@@ -235,7 +235,7 @@ describe('what a receipt is worth', () => {
       nonce: 'forged', tx: '0xmadeup', amount: '12.00', asset: 'USDC', at: 1
     })
     const bought = seed('Ship Crew', true)
-    const s = await listen(settle(true))
+    const s = await listen(settle(false))
     try {
       const authorization = `Bearer ${await downloadToken(s.url)}`
       expect((await gate(s.url, forged, { authorization })).status).toBe(402)
@@ -252,7 +252,7 @@ describe('what a receipt is worth', () => {
 
   it('a stand-in registry still honours its own unmarked receipts, or --dev could never own anything', async () => {
     const id = seed('Pro Toolkit', true)
-    const s = await listen(settle(false))
+    const s = await listen(settle(true))
     try {
       const authorization = `Bearer ${await downloadToken(s.url)}`
       const asked = await gate(s.url, id, { authorization })
@@ -458,6 +458,13 @@ describe('the registry binary', () => {
     expect((await fetch(`${r.origin}/v1/health`)).status).toBe(200)
     const port = new URL(r.origin).port
     await expect(fetch(`http://${lan}:${port}/v1/health`)).rejects.toThrow()
+  }, 30_000)
+
+  it('refuses an origin it would otherwise read as localhost', async () => {
+    const booted = launch(path.join(dir, 'spelled'), await freePort(), ['--dev', '--origin=https://cookrew.dev'])
+    booted.up.catch(() => undefined)
+    expect(await booted.exited).toBe(1)
+    expect(booted.stderr()).toContain('--origin')
   }, 30_000)
 
   it('refuses --dev on a public origin at boot', async () => {

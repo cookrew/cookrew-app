@@ -204,6 +204,12 @@ if (args.includes('--seed')) {
 // actually send, so both are derived from the address this process binds — and
 // a contradiction refuses at boot rather than turning every ceremony into a
 // blanket 401 that reads like a broken passkey (Tinker's LOW-1).
+// `--origin=x` would otherwise be skipped and boot as localhost, which is also
+// what lets --dev past the loopback check when a proxy stands in front.
+if (args.some((arg) => arg.startsWith('--origin='))) {
+  console.error('refusing to start: write it as --origin <value>')
+  process.exit(1)
+}
 const resolved = identityConfigFor({ port: PORT, origin: args.includes('--origin') ? flag('origin', '') : undefined })
 if (!resolved.ok) {
   console.error(`refusing to start: ${resolved.reason}`)

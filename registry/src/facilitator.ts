@@ -60,10 +60,10 @@ export type SettlementResult =
 
 export interface Facilitator {
   /**
-   * This one really checks transfers. A real facilitator says so, and only its
-   * receipts count on a registry that has no stand-in. Left out by the dev
-   * stand-in and by test doubles, which settle without proving anything.
+   * This one proves nothing: the dev stand-in, and nothing else. A marked
+   * stand-in rather than a marked real one, so that a real facilitator which
+   * says nothing is held to the strict rule instead of the loose one.
    */
-  readonly verifies?: true
+  readonly standIn?: true
   settle(request: SettlementRequest): SettlementResult
 }

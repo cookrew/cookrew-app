@@ -8,7 +8,7 @@ import { priceFor, quoteFrom, type QuoteDeps } from './terms'
 import type { PayoutStore } from './payouts'
 import type { Facilitator } from './facilitator'
 import { needsFreshQuote, isRetryable, parsePaymentProof, verifyPayment } from './payment'
-import { balanceOf, entitledTo, type ReceiptStore } from './receipts'
+import { balanceOf, entitledTo, type Receipt, type ReceiptStore } from './receipts'
 
 /**
  * THE DOWNLOAD BINDING (P2-A2) — the registry's half of the one gate.
@@ -193,7 +193,7 @@ export function makeAuthorize(
               amount: price.amount,
               asset: price.asset,
               at: pricing.now(),
-              ...(facilitator.verifies === true ? { verified: true as const } : {})
+              ...(facilitator.standIn === true ? {} : { verified: true as const })
             })
           }
         }
@@ -244,11 +244,16 @@ function entitlementOf(
   if (manifest?.pricing === undefined) return null
   const lineage = store.lineageFor(presetId)
   if (lineage === null) return null
-  // Only a stand-in registry honours a receipt nobody verified. Everywhere else
-  // one of those is a made-up tx the old wiring settled, not a purchase.
-  const standIn = pricing.facilitator !== null && pricing.facilitator.verifies !== true
-  const held = pricing.receipts.forLineage(identityId, lineage).filter((r) => standIn || r.verified === true)
-  return entitledTo(held, { version: manifest.version, pricing: manifest.pricing })
+  return entitledTo(honoured(pricing, identityId, lineage), { version: manifest.version, pricing: manifest.pricing })
+}
+
+/**
+ * The receipts that count. Only a stand-in registry honours one nobody verified;
+ * everywhere else that is a made-up tx the old wiring settled, not a purchase.
+ */
+function honoured(pricing: PricingDeps, identityId: string, lineage: string): Receipt[] {
+  const standIn = pricing.facilitator?.standIn === true
+  return pricing.receipts.forLineage(identityId, lineage).filter((r) => standIn || r.verified === true)
 }
 
 /**
@@ -269,7 +274,7 @@ export function balanceFor(
   const manifest = store.getManifest(presetId)
   const lineage = store.lineageFor(presetId)
   if (manifest?.pricing === undefined || lineage === null) return null
-  return balanceOf(pricing.receipts.forLineage(identityId, lineage), {
+  return balanceOf(honoured(pricing, identityId, lineage), {
     pricing: manifest.pricing,
     spentCents
   })

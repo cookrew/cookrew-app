@@ -647,11 +647,11 @@ export function createRegistry(deps: RegistryDeps): Server {
       // its author wrote, so a free manifest naming someone's priced address
       // must not open it. Bytes no manifest stands behind answer 404 here.
       const verdict = authorize(address, request)
-      if (verdict.code !== 200) {
+      if (verdict.code !== 200 && verdict.code !== 404) {
         answerRefusal(response, verdict)
         return
       }
-      const bytes = store.getBlob(address)
+      const bytes = verdict.code === 404 ? null : store.getBlob(address)
       if (bytes === null) {
         json(response, 404, { error: 'not_found' })
         return

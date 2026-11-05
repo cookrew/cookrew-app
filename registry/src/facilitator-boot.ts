@@ -15,7 +15,8 @@ import { devFacilitator } from './facilitator-dev'
  * mint entitlements for free, exactly the fault this file exists to end.
  */
 
-const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+/** IPv4 names only: --dev binds 127.0.0.1, so a `[::1]` origin would never answer. */
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1']
 
 export type FacilitatorBoot =
   | { ok: true; facilitator: Facilitator | null }
