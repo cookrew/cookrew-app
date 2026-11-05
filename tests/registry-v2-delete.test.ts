@@ -377,6 +377,18 @@ describe('what proves a delete', () => {
       expect((await guess()).status).toBe(401)
       expect((await guess()).status).toBe(401)
       expect((await guess()).status).toBe(429)
+      // Counted per sitting, so burning it leaves the owner's other session free.
+      const again = await fetch(`${at}/v2/sessions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'drej', password: PASSWORD, device: one })
+      })
+      expect(again.status).toBe(201)
+      const other = ((await again.json()) as { token: string }).token
+      const change = await fetch(`${at}/v2/me/password`, {
+        method: 'POST', headers: { 'content-type': 'application/json', ...bearer(other) },
+        body: JSON.stringify({ current: OTHER, next: 'a brand new long password' })
+      })
+      expect(change.status).toBe(401)
     } finally {
       local.closeAllConnections()
       local.close()

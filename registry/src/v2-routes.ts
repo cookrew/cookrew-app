@@ -34,7 +34,7 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { heldIfPasswordless, readAndStepUp } from './v2-step-up'
+import { heldIfPasswordless, mayGuessPassword, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
@@ -630,7 +630,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {
-    if (overloaded(response)) return
+    if (!mayGuessPassword(ctx, signed)) return
     const body = await readJsonBody(ctx.request, SMALL_BODY)
     if (!body.ok) {
       refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')

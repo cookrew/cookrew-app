@@ -946,6 +946,10 @@ export class Accounts {
         }
       }
       const refused = classify(response.status, body)
+      // No password can ever answer a deleted account, and this prompt is where a
+      // Mac that missed the delete is stuck. Asked only here, on a person's own
+      // try: a session that merely ended must not start a round of requests.
+      if (response.status === 401 && (await this.forgetIfDeleted())) return { ok: false, reason: 'no_account' }
       // The surface keeps its password prompt open on 'session-expired'; a
       // wrong password here is that same prompt again, with the sentence.
       return refused.reason === 'bad_credentials'
@@ -1699,7 +1703,8 @@ export class Accounts {
    */
   async forgetIfDeleted(): Promise<boolean> {
     const account = this.cached
-    if (account === null) return false
+    // A 410 from another registry says nothing about the account in this file.
+    if (account === null || account.registry !== this.origin) return false
     try {
       const asked = await this.http(`${this.origin}/v2/accounts/${encodeURIComponent(account.username)}`)
       if (asked.status !== 410) return false

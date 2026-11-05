@@ -19,18 +19,22 @@ let server: Server
 let origin = ''
 let asked: { method: string; url: string; body: string }[] = []
 let answer = { status: 204, body: '' }
+/** What one route answers, when it differs from `answer`. */
+let routes: Record<string, { status: number; body: string }> = {}
 const cleanups: (() => void)[] = []
 
 beforeEach(async () => {
   asked = []
   answer = { status: 204, body: '' }
+  routes = {}
   server = createServer((request, response) => {
     let body = ''
     request.on('data', (chunk) => (body += chunk))
     request.on('end', () => {
       asked.push({ method: request.method ?? '', url: request.url ?? '', body })
-      response.writeHead(answer.status, { 'content-type': 'application/json' })
-      response.end(answer.body)
+      const reply = routes[`${request.method} ${request.url}`] ?? answer
+      response.writeHead(reply.status, { 'content-type': 'application/json' })
+      response.end(reply.body)
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -91,6 +95,34 @@ describe('a Mac that missed the delete', () => {
     answer = { status: 410, body: JSON.stringify({ error: 'account_deleted' }) }
     expect(await accounts.forgetIfDeleted()).toBe(true)
     expect(existsSync(path.join(base, 'account.json'))).toBe(false)
+  })
+})
+
+describe('the password prompt on a Mac that missed the delete', () => {
+  const refused = { status: 401, body: JSON.stringify({ error: 'bad_credentials' }) }
+
+  it('lets the account go instead of refusing the password for ever', async () => {
+    const { base, accounts } = signedInMac()
+    routes = { 'POST /v2/sessions': refused, 'GET /v2/accounts/drej': { status: 410, body: '{}' } }
+    expect(await accounts.resume(PASSWORD)).toMatchObject({ ok: false, reason: 'no_account' })
+    expect(existsSync(path.join(base, 'account.json'))).toBe(false)
+  })
+
+  it('keeps a real account after a wrong password', async () => {
+    const { base, accounts } = signedInMac()
+    routes = { 'POST /v2/sessions': refused, 'GET /v2/accounts/drej': { status: 200, body: '{}' } }
+    expect((await accounts.resume('wrong')).ok).toBe(false)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(true)
+  })
+
+  it('ignores a 410 from a registry this account does not belong to', async () => {
+    const { base, clean } = tempBase()
+    cleanups.push(clean)
+    writeAccount(fakeAccount({ registry: 'https://elsewhere.example' }), base)
+    const accounts = new Accounts({ base, origin })
+    answer = { status: 410, body: '{}' }
+    expect(await accounts.forgetIfDeleted()).toBe(false)
+    expect(existsSync(path.join(base, 'account.json'))).toBe(true)
   })
 })
 
