@@ -23,11 +23,11 @@ function bridge(): { api: Parameters<typeof makeSecretFor>[0]; added: CanvasNode
     added,
     wires,
     api: {
-      addNode: async (node) => {
+      addNode: async (node: CanvasNode) => {
         added.push(node)
         return node
       },
-      connectNodes: async (a, b) => {
+      connectNodes: async (a: string, b: string) => {
         wires.push([a, b])
       }
     } as unknown as Parameters<typeof makeSecretFor>[0]
