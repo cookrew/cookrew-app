@@ -31,7 +31,18 @@ describe('the brand: COOkrew in ink, one brush C round the first lens', () => {
     expect(marketPage({ ...input, query: marketQuery(new URLSearchParams()), starredTeams: [] } as never).body).not.toContain('class="brand"')
   })
 
-  it('the header mark is the whole lockup, still, in the ink colour, on every page', () => {
+  // Scheme 7 of the logo sheet (owner 2026-11-05): the small marks are the C round one lens.
+  it('the small marks are the Co: two clean strokes, one lens, no noise filter', () => {
+    for (const mark of [BRAND_MARK_SVG, FAVICON_SVG]) {
+      expect(mark.match(/<path /g)?.length).toBe(2)
+      expect(mark).not.toContain('filter')
+      const numbers = (mark.match(/ d="([^"]+)"/g) ?? []).join(' ').match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
+      const pairs = numbers.flatMap((_, i) => (i % 2 === 0 ? [[numbers[i], numbers[i + 1]]] : []))
+      expect(pairs.filter(([x, y]) => Math.hypot(x - 76.5, y - 50) < 12)).toEqual([])
+    }
+  })
+
+  it('the header mark is still, in the ink colour, on every page', () => {
     const home = homePage(input).body
     expect(BRAND_MARK_SVG).toContain('class="mark-coo"')
     expect(BRAND_MARK_SVG).toContain('fill="currentColor"')
