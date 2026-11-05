@@ -17,6 +17,7 @@ import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { WatchPairRow } from './WatchPairRow'
+import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
 import { isRemoteMode } from './api'
 import { startSpeechCheck } from './speech-check'
@@ -172,6 +173,7 @@ export function HeaderMore({
               setPairingWatch(true)
             }}
           />
+          <RemoteSwitchRow />
           {offerFullscreen && (
             <button
               type="button"

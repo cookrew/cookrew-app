@@ -48,6 +48,13 @@ export class KeyedStore<T> {
     this.notify(id)
   }
 
+  /** Forget one key: a picture that may no longer stand for what it showed. */
+  delete(id: string): void {
+    if (!this.map.delete(id)) return
+    this.snapshotDirty = true
+    this.notify(id)
+  }
+
   /**
    * Merge many entries (an initial snapshot). With preferExisting, a key already
    * present is left untouched — a live event that landed before the snapshot

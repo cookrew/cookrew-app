@@ -6,7 +6,7 @@
 // checked, not assumed from the fact that IPC is not HTTP.
 
 import { describe, expect, it, vi } from 'vitest'
-import { OwnerGrant, isOwnerSender, GRANT_REASON } from '../src/main/owner-grant'
+import { OwnerGrant, isOwnerPage, isOwnerSender, GRANT_REASON } from '../src/main/owner-grant'
 import type { AgentExportStore } from '../src/main/agent-export'
 
 function fakeStore(over: Partial<AgentExportStore> = {}): AgentExportStore {
@@ -29,6 +29,26 @@ function fakeStore(over: Partial<AgentExportStore> = {}): AgentExportStore {
 
 const OWNER = { id: 'owner-webcontents' }
 const TOP = { parent: null }
+
+describe('isOwnerPage — the window can be navigated, and its preload goes with it', () => {
+  it('the app\'s own page, in a dev server or on disk', () => {
+    expect(isOwnerPage('http://localhost:5173/', 'http://localhost:5173')).toBe(true)
+    expect(isOwnerPage('http://localhost:5173/?a=1#x', 'http://localhost:5173')).toBe(true)
+    expect(isOwnerPage('file:///App/out/renderer/index.html#/x', 'file:///App/out/renderer/index.html')).toBe(true)
+  })
+
+  it('anything else is not, however it is dressed', () => {
+    expect(isOwnerPage('https://evil.test/', 'http://localhost:5173')).toBe(false)
+    expect(isOwnerPage('http://localhost:5174/', 'http://localhost:5173')).toBe(false)
+    expect(isOwnerPage('file:///tmp/evil.html', 'file:///App/out/renderer/index.html')).toBe(false)
+    expect(isOwnerPage('not a url', 'http://localhost:5173')).toBe(false)
+    expect(isOwnerPage('http://localhost:5173/', null)).toBe(false)
+    expect(isOwnerPage(undefined, 'http://localhost:5173')).toBe(false)
+    // Both of these have the origin 'null', and so does file:.
+    expect(isOwnerPage('data:text/html,hi', 'file:///App/out/renderer/index.html')).toBe(false)
+    expect(isOwnerPage('about:blank', 'file:///App/out/renderer/index.html')).toBe(false)
+  })
+})
 
 describe('isOwnerSender — a rendered page is not the owner', () => {
   it('accepts the owner window top frame', () => {

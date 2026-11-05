@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, safeStorage, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './store'
 import { PtyManager, multiplexer, paneSizes, sessionNameFor } from './pty'
@@ -154,7 +154,7 @@ import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, 
 import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
 import { HARNESS_FACTS } from './route/setup'
 import { AgentExportStore } from './agent-export'
-import { OwnerGrant, isOwnerSender } from './owner-grant'
+import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
 import { relayHandle } from './legacy-identity'
 import { WorkspaceShots } from './workspace-shots'
@@ -237,6 +237,13 @@ import {
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
+import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
+import { parseUseUrl } from '../shared/use-url'
+import { readMacSession } from './mac-bridge'
+import { linuxScreenRefusal } from './linux-screen'
+import { createRemoteDesk, remoteGate } from './remote-desk'
+import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
+import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
@@ -886,6 +893,7 @@ const serving: Serving = wireServing({
           // FIRST so each terminal's spawn (spawnTracked) confines and scrubs.
           bootTerminals: (id) => {
             servedSpawnContexts.set(id, { serviceId, sessionId, sandbox: dir })
+            remoteDesk.workspaceServed(id)
             const booted = bootWorkspaceInPlace(
               {
                 nodesOf: (wid) => callNodesOf(wid),
@@ -1535,6 +1543,7 @@ const v2CallTokens = RELAY_ORIGIN
       // be a second answer, and the two would drift.
       onRevoked: (revoked) => {
         for (const device of admittedDevices.prune(revoked)) {
+          remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the
           // owner with no idea which phone in their hand just stopped working.
           console.error(
@@ -6262,7 +6271,7 @@ const browserThumbs = new BrowserThumbCache({
   // ordinary, not an error: the card keeps its last frame and the next poll
   // tries again.
   capture: async (browserId) =>
-    interactiveBrowserEnabled()
+    interactiveBrowserEnabled() && !showsThisMachine(browserId)
       ? ((await browserManager.peek(browserId)?.snapshot().catch(() => null)) ?? null)
       : null
 })
@@ -6388,13 +6397,83 @@ const browserCacheRoot = (): string =>
 // viewers and trusted agent commands both resolve through this manager.
 // THE USES (use-instances.ts): a Mac display or window, an adb phone, a
 // camera — each a browser card the cast streams and the agent drives.
-// Driving THIS Mac from a viewer or an agent is a decision, never a default.
+// Driving THIS Mac from a viewer or an agent is a decision, never a default:
+// the remote desk holds it, and everything below asks.
+const sessionReader = createSessionReader({
+  read: () => (process.platform === 'darwin' ? readMacSession() : linuxSession(process.env, commandRun))
+})
+let keepAwakeId: number | null = null
+const remoteDesk = createRemoteDesk({
+  platform: process.platform,
+  build: () =>
+    remoteBuild({
+      execPath: process.execPath,
+      packaged: app.isPackaged,
+      persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
+      servedLive: servedSpawnContexts.size > 0
+    }),
+  linuxRefusal: () => linuxScreenRefusal(process.env),
+  screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
+  accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
+  session: () => sessionReader.read(),
+  settings: remoteSettingsFile(path.join(homedir(), '.cookrew', 'remote-control.json')),
+  servedWorkspace,
+  workspaceOfCard: (card) => store.nodeAcrossWorkspaces(card)?.workspaceId ?? null,
+  cardName: (card) => store.nodeAcrossWorkspaces(card)?.node.name ?? card,
+  record: (type, card, name, details) => store.recordEvent(type, card, name, details),
+  keepAwake: {
+    start: () => {
+      keepAwakeId ??= powerSaveBlocker.start('prevent-display-sleep')
+    },
+    stop: () => {
+      if (keepAwakeId !== null) powerSaveBlocker.stop(keepAwakeId)
+      keepAwakeId = null
+    }
+  },
+  host: (view) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:remote-host', view)
+    remoteTray.show(view)
+  },
+  refreshCards: () => useInstances.refresh(),
+  dropViewers: (cards) => {
+    for (const card of cards) browserCast.drop(card)
+  },
+  openSettings: async (pane) => useInstances.sources()?.openSettings(pane),
+  relaunch: () => {
+    app.relaunch()
+    app.quit()
+  },
+  wakeDisplay: async () => {
+    await (process.platform === 'darwin' ? commandRun('/usr/bin/caffeinate', ['-u', '-t', '2']) : commandRun('xset', ['dpms', 'force', 'on']))
+  }
+})
+const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
+/** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
+function viewerWho(credential: string | null): ViewerWho {
+  const id = credential ? admittedDevices.deviceFor(credential) : null
+  if (id === null) return { key: 'root', name: 'A paired device', here: false }
+  return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
+}
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
-  computerInput: () => process.env.COOKREW_COMPUTER_INPUT === '1'
+  remote: (card) => remoteGate(remoteDesk, card),
+  blocked: () => remoteDesk.blocked(),
+  onBlocked: (card) => browserThumbs.forget(card)
 })
+/**
+ * A card showing this machine's own screen. Its picture is shown to a viewer
+ * the host can see and nobody else: a thumbnail has no name, no banner and no
+ * Stop, so neither the wall nor the phone's grid gets one, and a watch gets no frame.
+ */
+const showsThisMachine = (card: string): boolean => {
+  const node = store.nodeAcrossWorkspaces(card)?.node
+  return node?.kind === 'browser' && parseUseUrl(activeBrowserTab(node).url)?.use === 'computer'
+}
 const useSignals = new UseSignalBus()
-useSignals.on((signal) => mainWindow?.webContents.send('use:signal', signal))
+useSignals.on((signal) => {
+  mainWindow?.webContents.send('use:signal', signal)
+  if (signal.use === 'computer') remoteDesk.noteAgent(signal.card, store.nodeAcrossWorkspaces(signal.agent)?.node.name ?? 'An agent', signal.verb)
+})
 
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
@@ -6424,6 +6503,7 @@ const browserManager = new HeadlessBrowserManager({
   uses: { makeInstance: (target, node) => useInstances.makeInstance(target, node) },
   // Declared below; called only after boot, never during construction.
   onInstanceGone: (browserId) => {
+    remoteDesk.cardGone(browserId)
     browserCast.drop(browserId)
     browserCastIpc.drop(browserId)
   }
@@ -6457,7 +6537,8 @@ const browserCast = createBrowserCast({
   // The TV wall's read-only token is deliberately NOT accepted: this socket
   // carries pointer and key INPUT, so admitting a read-only credential here
   // would hand it a write it does not have anywhere else.
-  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one))
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one)),
+  who: viewerWho
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
@@ -6484,6 +6565,10 @@ function servedWorkspace(workspaceId: string): boolean {
 const useSources = createUseSourceService({
   provider: () => useInstances.sources(),
   servedWorkspace,
+  desk: remoteDesk,
+  who: viewerWho,
+  cardAt: (workspaceId, url) =>
+    store.workspaceState(workspaceId).nodes.find((node): node is BrowserNodeData => node.kind === 'browser' && activeBrowserTab(node).url === url) ?? null,
   addCard: (workspaceId, card) => addNode(card, workspaceId) as BrowserNodeData,
   findCard: (id) => {
     const found = store.nodeAcrossWorkspaces(id)
@@ -6598,6 +6683,13 @@ function createWindow(): void {
   // the queue is re-read then rather than waiting out the poll (D6).
   mainWindow.on('focus', () => void requests.refresh())
 
+  // The window holds the owner's bridge: a page only ever leaves it for the
+  // browser. Followed in here it would inherit the preload (owner-grant.ts · isOwnerPage).
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isOwnerPage(url, ownerPageUrl())) return
+    event.preventDefault()
+    if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
+  })
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -7253,6 +7345,8 @@ app.whenReady().then(() => {
     // Ending every session ends the watch's too.
     rotatePairingToken: () => {
       watchPairing.unpair()
+      // Whoever came in on the old token: a socket outlives the token that opened it.
+      remoteDesk.forgetDevice('root')
       return rotateActivePairingToken()
     },
     pairingHandout: currentPairingHandout,
@@ -7700,6 +7794,15 @@ app.whenReady().then(() => {
   networkWatch.start()
   powerMonitor.on('resume', () => void networkWatch.check('wake'))
   powerMonitor.on('unlock-screen', () => void networkWatch.check('unlock'))
+  // The lock is heard here first: the card should not wait out a cache or a backoff.
+  for (const event of ['lock-screen', 'unlock-screen', 'resume', 'suspend'] as const) {
+    powerMonitor.on(event as 'resume', () => {
+      sessionReader.invalidate()
+      remoteDesk.sessionChanged()
+      useInstances.wake()
+    })
+  }
+  remoteDesk.start()
 
   // The certificate, once the account and the addresses are known. Best
   // effort and never awaited: an order is seconds of polling at the registry
@@ -7793,6 +7896,16 @@ function broadcast(): void {
   }
 }
 
+/** The address the owner's page is served from, as the window was told to load it. */
+function ownerPageUrl(): string | null {
+  return process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(path.join(dirname, '../renderer/index.html')).href
+}
+
+/** The owner's window, its top frame, showing the owner's page. */
+function ownerFrame(event: { sender: unknown; senderFrame: { parent: unknown; url?: string } | null }): boolean {
+  return isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents) && isOwnerPage(event.senderFrame?.url, ownerPageUrl())
+}
+
 function registerIpc(handlers: RestoreHandlers): void {
   store.on('change', broadcast)
 
@@ -7862,7 +7975,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   const ownerOnly =
     <A extends unknown[], R>(op: (...args: A) => R) =>
     (event: Electron.IpcMainInvokeEvent, ...args: A): R | { ok: false; reason: string } => {
-      if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) {
+      if (!ownerFrame(event)) {
         console.error('[cookrew] grant refused: sender is not the owner window top frame')
         return { ok: false, reason: 'not_owner' }
       }
@@ -7886,7 +7999,11 @@ function registerIpc(handlers: RestoreHandlers): void {
     pairingHandout: currentPairingHandout,
     admitted: {
       list: () => admittedDevices.list(),
-      forget: (deviceId) => admittedDevices.forget(deviceId)
+      forget: (deviceId) => {
+        const forgotten = admittedDevices.forget(deviceId)
+        remoteDesk.forgetDevice(`device:${deviceId}`)
+        return forgotten
+      }
     },
     publishReach: (reason) => {
       // The reachability toggle and a fresh claim both land here, and both
@@ -8517,14 +8634,15 @@ function registerIpc(handlers: RestoreHandlers): void {
 
   ipcMain.handle('workspace:get', () => store.focusedState)
   ipcMain.handle('browser:interactive-enabled', () => interactiveBrowserEnabled())
-  ipcMain.handle('browser:stream-token', () => desktopBrowserStreamToken)
+  // ownerOnly: this token makes a socket the Mac's own viewer, unseen by the host and past Stop.
+  ipcMain.handle('browser:stream-token', ownerOnly(() => desktopBrowserStreamToken))
   // A card's live view, straight from main: the owner window's top frame
   // asks, main answers with one end of a fresh MessageChannel (the nonce
   // pairs the answer with the ask). Anything else asking gets nothing — a
   // browser card's page has no ipcRenderer, and a frame below the top is not
   // the owner (owner-grant.ts · isOwnerSender).
   ipcMain.on('browser-stream:open', (event, browserId: unknown, nonce: unknown) => {
-    if (!isOwnerSender(event.sender, event.senderFrame, mainWindow?.webContents)) return
+    if (!ownerFrame(event)) return
     if (typeof browserId !== 'string' || browserId.length === 0 || browserId.length > 200) return
     if (typeof nonce !== 'string' || nonce.length === 0 || nonce.length > 100) return
     const { port1, port2 } = new MessageChannelMain()
@@ -8542,17 +8660,35 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('node:remove', (_e, id: string) => removeNode(id))
   // The window picker, for the window on this desktop: the workspace it shows.
   ipcMain.handle('use:sources', async () => {
-    const answer = await useSources.list(store.focusedId)
+    const answer = await useSources.list(store.focusedId, MAC_VIEWER)
     return answer.ok ? answer.value : emptySourceList('unavailable', answer.error)
   })
   ipcMain.handle('use:open-source', async (_e, pick: unknown) => {
-    const answer = await useSources.open(store.focusedId, pick)
+    const answer = await useSources.open(store.focusedId, pick, MAC_VIEWER)
     return answer.ok ? { ok: true, card: answer.value.card } : { ok: false, error: answer.error }
   })
-  ipcMain.handle('use:screen-settings', async () => {
-    const answer = await useSources.openSettings(store.focusedId)
+  ipcMain.handle('use:screen-settings', ownerOnly(async (pane: unknown) => {
+    const answer = await useSources.openSettings(store.focusedId, pane, 'here')
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
-  })
+  }))
+  // THE REMOTE DESK, from the Mac's own window. The switch and Stop exist only
+  // here: there is no route to either, so nothing away from the Mac can reach them.
+  // Straight to the desk: the Mac must reach its own switch from any workspace, a served one above all.
+  ipcMain.handle('use:remote-access', ownerOnly(() => remoteDesk.access('here')))
+  ipcMain.handle('use:remote-control', ownerOnly(async (ask: unknown) => {
+    const answer = await useSources.control(store.focusedId, ask, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error, ...(answer.state ? { state: answer.state } : {}) }
+  }))
+  ipcMain.handle('use:remote-restart', ownerOnly(async () => {
+    const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  }))
+  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => (typeof on === 'boolean' ? remoteDesk.setSwitch(on) : { ok: false, error: 'On or off' })))
+  ipcMain.handle('use:remote-stop', ownerOnly(() => {
+    remoteDesk.stopAll()
+    return { ok: true }
+  }))
+  ipcMain.handle('use:remote-host', ownerOnly(() => remoteDesk.hostView()))
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
   // and mirrors a legitimate cross-workspace edge. store.connect writes an edge
@@ -8858,8 +8994,14 @@ function registerIpc(handlers: RestoreHandlers): void {
    * forever. The DESKTOP loop's entry point only: a phone reaches the same
    * cache through /api/browser/:id/thumb, which no longer waits on this.
    */
-  ipcMain.handle('browser:snapshot', async (_e, browserId: unknown) => {
+  ipcMain.handle('browser:snapshot', async (event, browserId: unknown) => {
     if (typeof browserId !== 'string' || !interactiveBrowserEnabled()) return null
+    // The Mac looking at its own screen, in its own window: the one place that
+    // picture needs no banner. It skips the cache that serves everyone else.
+    if (showsThisMachine(browserId)) {
+      const jpeg = ownerFrame(event) ? await browserManager.peek(browserId)?.snapshot().catch(() => null) : null
+      return jpeg ? `data:image/jpeg;base64,${jpeg}` : null
+    }
     await browserThumbs.refresh(browserId)
     return browserThumbs.dataUrl(browserId)
   })

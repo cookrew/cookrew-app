@@ -23,6 +23,7 @@ import type { RenameOutcome } from '../../shared/rename-plan'
 import type { LevelsEvent } from '../../shared/strata'
 import { apiPath, clientBase } from './api-base'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
+import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
 import { planeFetch } from './plane-fetch'
 import { RELAY_ANSWER_MS, joinInFlight } from './in-flight'
 import { RELAY_FULL_WORDS, isRelayFull, waitOutRelayFull } from './relay-full'
@@ -71,7 +72,9 @@ interface ParseOptions {
 export class HttpStatusError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    /** The refusal's own body, for a route that says more than a sentence. */
+    readonly detail?: unknown
   ) {
     super(message)
     this.name = 'HttpStatusError'
@@ -92,7 +95,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
     }
     // The workspace this phone stood on is gone: back to following the desktop.
     if (response.status === 409 && message === SEAT_GONE && settleSeat({ workspaces: [] })) sharedEvents().restart()
-    throw new HttpStatusError(message, response.status)
+    throw new HttpStatusError(message, response.status, detail)
   }
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -196,6 +199,12 @@ async function reqAttempt<T>(path: string, method: string, body: unknown, parseO
   } finally {
     recordLatency(Date.now() - started)
   }
+}
+
+/** A refused ask is the card's to read out, with the state it names when it names one. */
+const refusal = (error: unknown): RemoteAnswer => {
+  const state = error instanceof HttpStatusError ? parseRemoteState((error.detail as { state?: unknown } | undefined)?.state) : null
+  return { ok: false, error: error instanceof Error ? error.message : String(error), ...(state ? { state } : {}) }
 }
 
 /**
@@ -603,7 +612,13 @@ export function createRemoteApi(): CookrewApi {
         ok: false as const,
         error: error instanceof Error ? error.message : String(error)
       })),
-    openScreenSettings: () => req<UseSourceSettings>(apiPath(`${USE_SOURCES_PATH}/settings`), 'POST', {}),
+    openScreenSettings: (pane) => req<UseSourceSettings>(apiPath(`${USE_SOURCES_PATH}/settings`), 'POST', pane ? { pane } : {}),
+    // The remote desk. The machine switch and Stop are not here: they have no
+    // route, because they are the Mac's alone.
+    remoteAccess: () => req<RemoteAccess>(apiPath(`${USE_SOURCES_PATH}/access`)),
+    remoteControl: (ask) => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/control`), 'POST', ask).catch(refusal),
+    remoteRestart: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/restart`), 'POST', {}).catch(refusal),
+    remoteWake: () => req<RemoteAnswer>(apiPath(`${USE_SOURCES_PATH}/wake`), 'POST', {}).catch(refusal),
 
     // Phones can't hand the desktop a local path — upload the bytes and let
     // the server persist them; the returned path is what gets pasted.

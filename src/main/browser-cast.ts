@@ -11,6 +11,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { DEFAULT_DRAIN_THRESHOLD } from './screencast-pace'
 import type { BrowserInstance } from './browser-instance'
+import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
 import { CastViewer, type OutboundFrame, type ViewerSink } from './cast-viewer'
 import {
   acceptKey,
@@ -43,6 +44,12 @@ export interface BrowserCastDeps {
    * deliberately constructing deps without one").
    */
   paired: (credential: string | null) => boolean
+  /**
+   * Who a credential is, for the host's banner and for a card's grant. Absent,
+   * every viewer goes unnamed: they can still be let in to watch, but an
+   * unnamed viewer can never hold control, so forgetting this closes, not opens.
+   */
+  who?: (credential: string | null) => ViewerWho
 }
 
 const STREAM_RE = /^\/api\/browser\/([^/]+)\/stream$/
@@ -148,7 +155,8 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     // Install close/error listeners BEFORE awaiting Chrome startup. Node streams
     // do not replay a close event to late listeners; this ordering closes C-1's
     // startup-disconnect leak.
-    const client = new ClientConn(socket, () => clients.delete(client), browserId)
+    const who = desktopAuthorized ? MAC_VIEWER : deps.who?.(url.searchParams.get('token'))
+    const client = new ClientConn(socket, () => clients.delete(client), browserId, who)
     clients.add(client)
     if (socket.destroyed) {
       client.close()
@@ -188,7 +196,8 @@ class ClientConn {
   constructor(
     private readonly socket: Duplex,
     onClosed: () => void,
-    readonly browserId: string
+    readonly browserId: string,
+    who?: ViewerWho
   ) {
     const sink: ViewerSink = {
       sendControl: (message) => this.wsSend(JSON.stringify(message)),
@@ -197,7 +206,7 @@ class ClientConn {
       onceReady: (callback) => void this.socket.once('drain', callback),
       close: () => this.socket.destroy()
     }
-    this.viewer = new CastViewer(sink, onClosed, browserId)
+    this.viewer = new CastViewer(sink, onClosed, browserId, who)
     socket.on('data', this.onData)
     socket.on('close', this.close)
     socket.on('error', this.close)

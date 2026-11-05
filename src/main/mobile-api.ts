@@ -795,6 +795,7 @@ export async function handleMobileApi(
       service: ops?.useSources,
       workspaceId: scope ?? store.focusedId,
       paired: hasPairing,
+      credential: presentedToken(request, url),
     });
     return true;
   }

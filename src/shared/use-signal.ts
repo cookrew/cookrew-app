@@ -1,3 +1,4 @@
+import type { CardControl, RemoteState } from './remote-access'
 import type { Use } from './use-url'
 
 /**
@@ -49,6 +50,10 @@ export interface UseStatus {
   readonly input: boolean
   /** What this card was bound to has gone for good: it will not come back, so the viewer offers something else. */
   readonly gone?: 'window'
+  /** A computer's screen: where it stands, for the card to say in full (shared/remote-access.ts). */
+  readonly remote?: RemoteState
+  /** What this viewer may do with this card. Its own: main fills it in per viewer. */
+  readonly control?: CardControl
 }
 
 const USES: readonly Use[] = ['browser', 'computer', 'phone', 'hardware']

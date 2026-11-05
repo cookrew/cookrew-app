@@ -11,6 +11,7 @@
 // same closed input vocabulary (sanitizeInput) as every phone.
 
 import type { BrowserInstance } from './browser-instance'
+import { MAC_VIEWER } from '../shared/remote-access'
 import { CastViewer, type OutboundFrame, type ViewerSink } from './cast-viewer'
 
 /** The slice of Electron's MessagePortMain this uses (and a test can fake). */
@@ -100,7 +101,8 @@ class PortViewer {
       },
       close: () => this.closePort()
     }
-    this.viewer = new CastViewer(sink, onClosed, browserId)
+    // The port is the owner window's own (index.ts · isOwnerSender): this is the Mac itself.
+    this.viewer = new CastViewer(sink, onClosed, browserId, MAC_VIEWER)
     port.on('message', (event) => this.onMessage(event.data))
     port.on('close', () => this.close())
     port.start()

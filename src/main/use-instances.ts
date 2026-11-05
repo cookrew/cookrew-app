@@ -8,11 +8,13 @@ import { AdbDevice, adbRunner } from './adb-device'
 import type { BrowserInstance } from './browser-instance'
 import { CamDevice } from './cam-device'
 import { cameraAccess, ElectronCaptureHost } from './capture-host'
-import { LinuxScreenDevice, linuxSources, type LinuxEnv } from './linux-screen'
+import type { RemoteState } from '../shared/remote-access'
+import { LinuxScreenDevice, linuxSources } from './linux-screen'
 import { listMacScreens, MacInput, macWindowAlive } from './mac-bridge'
-import { PixelInstance, type PixelDevice } from './pixel-instance'
+import { PixelInstance, type PixelDevice, type RemoteGate } from './pixel-instance'
+import type { SettingsPane } from './remote-desk'
 import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
-import { grabScreenFrames, grabSources, openScreenRecordingSettings, primaryDisplayId } from './use-source-electron'
+import { grabScreenFrames, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
 import { macSources } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
 
@@ -58,19 +60,27 @@ export interface UseInstances {
   makeInstance(target: UseTarget, node: { id: string }): BrowserInstance | null
   /** The window picker's source for this machine; null where there is none. */
   sources(): UseSourceProvider | null
+  /** Every live card hears its status again. */
+  refresh(): void
+  /** Every live card looks at its device now. */
+  wake(): void
   dispose(): void
 }
 
 export interface UseInstancesOptions {
   readonly captureDir: string
-  readonly computerInput: () => boolean
+  /** The remote desk, bound to this card: every computer screen goes through it. */
+  readonly remote: (card: string) => RemoteGate
+  /** What stands in the way of reading this machine's screen. */
+  readonly blocked: () => Promise<RemoteState | null>
+  /** A card went blind: its held picture must go too. */
+  readonly onBlocked?: (card: string) => void
   readonly platform?: NodeJS.Platform
-  readonly env?: LinuxEnv
 }
 
 export function createUseInstances(options: UseInstancesOptions): UseInstances {
   const platform = options.platform ?? process.platform
-  const env = (): LinuxEnv => options.env ?? process.env
+  const live = new Map<string, PixelInstance>()
   const screenAccess = (): string => systemPreferences.getMediaAccessStatus('screen')
   mkdirSync(options.captureDir, { recursive: true, mode: 0o700 })
   let hand: MacInput | null = null
@@ -78,7 +88,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
   const handOf = (): MacInput => (hand ??= new MacInput())
   const hostOf = (): ElectronCaptureHost => (host ??= new ElectronCaptureHost(path.join(options.captureDir, 'capture-host.html')))
 
-  const deviceFor = (target: UseTarget): PixelDevice | null => {
+  const deviceFor = (target: UseTarget, card: string): PixelDevice | null => {
     switch (target.kind) {
       case 'adb': {
         const adb = findAdb()
@@ -89,7 +99,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
       case 'screen':
       case 'window':
         if (platform === 'linux') {
-          return new LinuxScreenDevice(target, { env, frames: () => grabScreenFrames(SCREEN_FRAME_MAX_SIDE), primaryDisplayId })
+          return new LinuxScreenDevice(target, { remote: options.remote(card), frames: () => grabScreenFrames(SCREEN_FRAME_MAX_SIDE), primaryDisplayId })
         }
         if (platform !== 'darwin') return null
         return new ScreenDevice(target, {
@@ -99,10 +109,9 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
           read: screenFiles.read,
           remove: screenFiles.remove,
           encode: encodeJpeg,
-          screenAccess,
-          inputEnabled: options.computerInput,
-          accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
+          remote: options.remote(card),
           hand: handOf,
+          readClipboard: readMachineClipboard,
           tmp: options.captureDir
         })
       case 'cam':
@@ -113,20 +122,32 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
   }
 
   return {
-    makeInstance(target) {
-      const device = deviceFor(target)
-      return device ? new PixelInstance({ url: useUrl(target), device }) : null
+    makeInstance(target, node) {
+      const device = deviceFor(target, node.id)
+      if (!device) return null
+      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id) })
+      live.set(node.id, instance)
+      return instance
     },
     sources() {
-      if (platform === 'linux') return linuxSources({ env, grab: grabSources, primaryDisplayId })
+      if (platform === 'linux') return linuxSources({ blocked: options.blocked, grab: grabSources, primaryDisplayId })
       if (platform !== 'darwin') return null
       return macSources({
-        access: screenAccess,
+        blocked: options.blocked,
         screens: () => listMacScreens(),
         grab: grabSources,
         selfPid: process.pid,
-        openSettings: () => openScreenRecordingSettings(screenAccess())
+        openSettings: (pane: SettingsPane) => (pane === 'accessibility' ? openAccessibilitySettings() : openScreenRecordingSettings(screenAccess()))
       })
+    },
+    refresh() {
+      for (const [card, instance] of live) {
+        if (instance.stopped) live.delete(card)
+        else instance.refreshStatus()
+      }
+    },
+    wake() {
+      for (const instance of live.values()) instance.wake()
     },
     dispose() {
       hand?.close()

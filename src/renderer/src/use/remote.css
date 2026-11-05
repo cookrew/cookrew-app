@@ -1,0 +1,290 @@
+/* The remote desktop's states, bar, confirmation and host banner (RemotePanel.tsx). */
+.rp-panel {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: 46ch;
+  margin: 0 auto;
+  color: var(--rp-ink, #f4f4f5);
+  text-align: center;
+}
+
+.rp-panel h3 {
+  margin: 0;
+  font: 600 16px/1.3 system-ui, sans-serif;
+}
+
+.rp-panel p {
+  margin: 0;
+  font: 400 13.5px/1.5 system-ui, sans-serif;
+}
+
+.rp-sentence {
+  color: var(--rp-soft, #d4d4d8);
+}
+
+.rp-next,
+.rp-note {
+  color: var(--rp-soft, #d4d4d8);
+  opacity: 0.85;
+}
+
+.rp-said {
+  color: var(--rp-soft, #d4d4d8);
+  font-size: 12.5px;
+}
+
+.rp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.rp-action {
+  appearance: none;
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid rgb(255 255 255 / 0.32);
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: 600 13px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.rp-action.rp-primary {
+  border-color: transparent;
+  background: var(--rp-seal, #c8553d);
+  color: #fff;
+}
+
+.rp-action:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.rp-action:focus-visible,
+.rp-bar-btn:focus-visible,
+.rp-host-stop:focus-visible {
+  outline: 2px solid var(--rp-seal, #c8553d);
+  outline-offset: 2px;
+}
+
+/* Opaque on purpose: nothing held from before shows through as if it were now. */
+.rp-cover {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+  background: #16161a;
+  pointer-events: auto;
+}
+
+.rp-cover-body {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.rp-leave {
+  appearance: none;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  background: none;
+  color: #d4d4d8;
+  font: 500 13px/1.2 system-ui, sans-serif;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* The picture has stopped, and it should look it. */
+.rp-stale {
+  position: absolute;
+  inset: 0;
+  background: rgb(10 10 12 / 0.55);
+}
+
+.rp-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  z-index: 2;
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgb(20 20 24 / 0.82);
+  color: #f4f4f5;
+  font: 500 12px/1.35 system-ui, sans-serif;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+
+.rp-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.rp-bar p {
+  margin: 0;
+}
+
+.rp-bar-hint {
+  color: #d4d4d8;
+  font-size: 11.5px;
+}
+
+.rp-bar-error {
+  color: #ffb4a2;
+  font-size: 11.5px;
+}
+
+.rp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.rp-link::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+}
+
+.rp-link-stalled::before,
+.rp-link-reconnecting::before {
+  background: #fbbf24;
+}
+
+.rp-bar-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.rp-bar-btn {
+  appearance: none;
+  min-height: 32px;
+  padding: 5px 11px;
+  border: 1px solid rgb(255 255 255 / 0.32);
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: 600 12px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.rp-bar-btn.rp-take {
+  border-color: transparent;
+  background: var(--rp-seal, #c8553d);
+  color: #fff;
+}
+
+.rp-confirm-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(10 10 12 / 0.6);
+  pointer-events: auto;
+}
+
+.rp-confirm {
+  max-width: 46ch;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: #1f1f24;
+  color: #f4f4f5;
+  text-align: center;
+}
+
+.rp-confirm h3 {
+  margin: 0 0 6px;
+  font: 600 16px/1.3 system-ui, sans-serif;
+}
+
+.rp-confirm p {
+  margin: 0;
+  color: #d4d4d8;
+  font: 400 13.5px/1.5 system-ui, sans-serif;
+}
+
+/* At the top of the Mac's own window, over everything: someone is on this machine. */
+.rp-host {
+  position: fixed;
+  left: 50%;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 7px 8px 7px 12px;
+  border-radius: 12px;
+  background: #7a2e1d;
+  color: #fff;
+  font: 500 12.5px/1.3 system-ui, sans-serif;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.3);
+  transform: translateX(-50%);
+}
+
+.rp-host-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffd9cf;
+}
+
+.rp-host-words {
+  display: grid;
+  min-width: 0;
+}
+
+.rp-host-words b {
+  font-weight: 600;
+}
+
+.rp-host-words small {
+  opacity: 0.85;
+  font-size: 11px;
+}
+
+.rp-host-stop {
+  appearance: none;
+  flex: none;
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  color: #7a2e1d;
+  font: 700 12.5px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+@media (max-width: 700px) {
+  .rp-action {
+    min-height: 44px;
+  }
+
+  .rp-bar-btn {
+    min-height: 36px;
+  }
+}

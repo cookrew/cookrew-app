@@ -6,19 +6,21 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { SourceSheet, type SourceSheetProps } from '../src/renderer/src/use/SourceSheet'
-import { firstTab, settingsSaid, sheetBody, type SourceLoad } from '../src/renderer/src/use/source-sheet'
+import { firstTab, sheetBody, type SourceLoad } from '../src/renderer/src/use/source-sheet'
+import type { RemoteState } from '../src/shared/remote-access'
 import { closeSourcePicker, currentSourceAsk, openSourcePicker } from '../src/renderer/src/use/source-picker-store'
-import { emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../src/shared/use-sources'
+import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../src/shared/use-sources'
 
 const safari: UseSource = { id: 'window:41', kind: 'window', title: 'Docs', app: 'Safari', address: 'window://Safari?id=41', thumb: 'data:image/jpeg;base64,T', icon: 'data:image/png;base64,I', width: 800, height: 600 }
 const bare: UseSource = { ...safari, id: 'window:42', title: 'Mail', app: 'Mail', thumb: null, icon: null }
 const main: UseSource = { id: 'screen:main', kind: 'screen', title: 'Main display', app: null, address: 'screen://main', thumb: 'data:image/jpeg;base64,S', icon: null, width: 1728, height: 1117 }
 const list: UseSourceList = readySourceList({ windows: [safari, bare], screens: [main] })
 const ready: SourceLoad = { status: 'ready', list }
-const denied: SourceLoad = {
-  status: 'ready',
-  list: { ...emptySourceList('needs-permission', 'Screen Recording is off for Cookrew — turn it on'), permission: 'Screen Recording' }
+const offState: RemoteState = {
+  id: 'needs-screen-recording', platform: 'darwin', then: null, detail: null, lastSeenAt: null, until: null, waiting: false,
+  build: { settingsName: 'Electron', sourceBuild: true, restart: 'by-hand', agents: 'keep' }
 }
+const denied: SourceLoad = { status: 'ready', list: blockedSourceList(offState) }
 
 const props = (over: Partial<SourceSheetProps> = {}): SourceSheetProps => ({
   load: ready,
@@ -26,12 +28,14 @@ const props = (over: Partial<SourceSheetProps> = {}): SourceSheetProps => ({
   replacing: false,
   busy: false,
   error: null,
-  settingsNote: null,
-  canOpenSettings: true,
+  remoteDesktop: false,
+  where: 'here',
+  actNote: null,
+  actBusy: false,
   onTab: () => undefined,
   onPick: () => undefined,
   onRefresh: () => undefined,
-  onSettings: () => undefined,
+  onAct: () => undefined,
   onClose: () => undefined,
   ...over
 })
@@ -62,24 +66,15 @@ describe('sheetBody', () => {
     const linux: SourceLoad = { status: 'ready', list: { ...list, windows: [], windowsNote: 'macOS only for now' } }
     expect(sheetBody(linux, 'windows')).toEqual({ kind: 'note', text: 'macOS only for now' })
   })
-  it('names the permission on either tab', () => {
+  it('shows the desk\'s state on either tab, the same one the card shows', () => {
     for (const tab of ['windows', 'screens'] as const) {
-      expect(sheetBody(denied, tab)).toMatchObject({ kind: 'permission', name: 'Screen Recording' })
+      expect(sheetBody(denied, tab)).toMatchObject({ kind: 'remote', state: { id: 'needs-screen-recording' } })
     }
   })
   it('passes the machine\'s sentence and a failure through', () => {
     expect(sheetBody({ status: 'ready', list: emptySourceList('unavailable', 'This Linux session runs Wayland') }, 'screens')).toEqual({ kind: 'note', text: 'This Linux session runs Wayland' })
     expect(sheetBody({ status: 'failed', error: 'no route' }, 'windows')).toEqual({ kind: 'failed', text: 'no route' })
     expect(sheetBody({ status: 'loading' }, 'windows')).toEqual({ kind: 'loading' })
-  })
-})
-
-describe('settingsSaid', () => {
-  it('says what happened: a refusal is read out, never the instructions for a page that did not open', () => {
-    expect(settingsSaid({ ok: false, error: 'no such pane' }, false)).toBe('no such pane')
-    expect(settingsSaid({ ok: true }, false)).toMatch(/Turn Cookrew on/)
-    expect(settingsSaid(undefined, false)).toMatch(/Turn Cookrew on/)
-    expect(settingsSaid({ ok: true }, true)).toMatch(/on your Mac/)
   })
 })
 
@@ -123,25 +118,23 @@ describe('SourceSheet', () => {
     expect(buttonNamed(SourceSheet(props({ busy: true })), 'Docs').props.disabled).toBe(true)
   })
 
-  it('Screen Recording missing: names it, shows no grid, and the button goes to the settings page', () => {
-    const onSettings = vi.fn()
-    const tree = SourceSheet(props({ load: denied, onSettings }))
+  it('Screen Recording missing: the state and its next action, and no grid', () => {
     const html = renderToStaticMarkup(<SourceSheet {...props({ load: denied })} />)
-    expect(html).toContain('Cookrew needs Screen Recording')
+    expect(html).toContain('Screen Recording is off')
+    expect(html).toContain('Turn on Electron')
+    expect(html).toContain('Open System Settings')
     expect(html).not.toContain('sp-grid')
-    buttonNamed(tree, 'Open Screen Recording settings').props.onClick?.()
-    expect(onSettings).toHaveBeenCalledOnce()
   })
 
   it('says what the press did, for a phone that cannot see the Mac', () => {
-    const html = renderToStaticMarkup(<SourceSheet {...props({ load: denied, settingsNote: 'System Settings is open on your Mac.' })} />)
-    expect(html).toContain('System Settings is open on your Mac.')
+    const html = renderToStaticMarkup(<SourceSheet {...props({ load: denied, where: 'away', actNote: 'System Settings is open on the Mac for when you are there.' })} />)
+    expect(html).toContain('System Settings is open on the Mac for when you are there.')
+    expect(html).toContain('needs you at the Mac')
+    expect(html).toContain('Open it on the Mac for later')
   })
 
-  it('a client with no settings route still names the permission', () => {
-    const html = renderToStaticMarkup(<SourceSheet {...props({ load: denied, canOpenSettings: false })} />)
-    expect(html).toContain('Screen Recording')
-    expect(html).not.toContain('Open Screen Recording settings')
+  it('from the machine it goes by its name, Remote desktop', () => {
+    expect(renderToStaticMarkup(<SourceSheet {...props({ remoteDesktop: true })} />)).toContain('Remote desktop')
   })
 
   it('says it is pointing a card at something else when one closed', () => {
@@ -161,9 +154,9 @@ describe('the sheet\'s ask', () => {
     closeSourcePicker()
     expect(currentSourceAsk()).toBeNull()
     openSourcePicker()
-    expect(currentSourceAsk()).toEqual({ card: null })
+    expect(currentSourceAsk()).toMatchObject({ card: null })
     openSourcePicker({ card: 'c1' })
-    expect(currentSourceAsk()).toEqual({ card: 'c1' })
+    expect(currentSourceAsk()).toMatchObject({ card: 'c1' })
     closeSourcePicker()
     expect(currentSourceAsk()).toBeNull()
   })

@@ -136,3 +136,21 @@ describe('committed text and the other buttons (the desktop’s and the phone ke
     expect(m.map(mouse('mouseReleased', 10, 10, { button: 'left' }))).toEqual([{ method: 'input.tap', params: { x: 10, y: 10 } }])
   })
 })
+
+describe('chords, on a computer', () => {
+  const mapper = (chords: boolean) => new VphoneGestureMapper(() => 0, { width: 100, height: 100 }, { chords })
+  const key = (k: string, modifiers: number) => ({ method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', key: k, modifiers } }) as never
+
+  it('Ctrl from a phone and Command from a desktop are both Command on the Mac', () => {
+    expect(mapper(true).map(key('c', 2))).toEqual([{ method: 'input.key', params: { name: 'c', mods: 'cmd' } }])
+    expect(mapper(true).map(key('A', 4))).toEqual([{ method: 'input.key', params: { name: 'a', mods: 'cmd' } }])
+  })
+
+  it('a phone stays a phone: no chords unless asked', () => {
+    expect(mapper(false).map(key('c', 2))).toEqual([])
+  })
+
+  it('a named key with no modifier is still that key', () => {
+    expect(mapper(true).map(key('Enter', 0))).toEqual([{ method: 'input.key', params: { name: 'return' } }])
+  })
+})

@@ -20,6 +20,7 @@
  * headless mode fails closed on a neutral unavailable surface.
  */
 
+import { parseCardControl, parseRemoteState } from '../../shared/remote-access'
 import type { UseStatus } from '../../shared/use-signal'
 import type { FitRect } from './browser-frame'
 
@@ -390,6 +391,8 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
     const use = obj.use
     if (state !== 'connecting' && state !== 'live' && state !== 'offline') return null
     if (use !== 'computer' && use !== 'phone' && use !== 'hardware') return null
+    const remote = parseRemoteState(obj.remote)
+    const control = parseCardControl(obj.control)
     return {
       kind: 'status',
       status: {
@@ -397,7 +400,9 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
         use,
         message: typeof obj.message === 'string' ? obj.message : null,
         input: obj.input === true,
-        ...(obj.gone === 'window' ? { gone: 'window' as const } : {})
+        ...(obj.gone === 'window' ? { gone: 'window' as const } : {}),
+        ...(remote ? { remote } : {}),
+        ...(control ? { control } : {})
       }
     }
   }

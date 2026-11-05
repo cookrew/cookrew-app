@@ -139,7 +139,22 @@ const META: Record<string, EventMeta> = {
   'terminal.keys-lost': { label: 'Keys lost', verb: 'lost keys', noun: 'terminal', icon: 'close', hatch: false, metric: null, toast: false },
   'workspace.remove-failed': { label: 'Not removed', verb: 'was not removed', noun: 'workspace', icon: 'close', hatch: false, metric: null },
   'terminal.input-lost': { label: 'Not delivered', verb: 'was not sent to', noun: 'terminal', icon: 'close', hatch: false, metric: null },
-  'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null }
+  'terminal.input-refused': { label: 'Refused', verb: 'refused input', noun: 'terminal', icon: 'close', hatch: false, metric: null },
+  // The remote desktop's record: every start, stop and grant is here, and the
+  // ones a person should hear about at once are toasts.
+  'remote.view-started': { label: 'Watching', verb: 'is being watched', noun: 'screen', icon: 'browser', hatch: false, metric: null },
+  'remote.view-ended': { label: 'Stopped watching', verb: 'is no longer watched', noun: 'screen', icon: 'browser', hatch: false, metric: null, toast: false },
+  'remote.control-on': { label: 'Control taken', verb: 'is being controlled', noun: 'screen', icon: 'select', hatch: false, metric: null },
+  'remote.control-off': { label: 'Control ended', verb: 'is no longer controlled', noun: 'screen', icon: 'select', hatch: false, metric: null },
+  'remote.agent-started': { label: 'Agent on screen', verb: 'is being used by an agent', noun: 'screen', icon: 'agent', hatch: false, metric: null, toast: false },
+  'remote.agent-ended': { label: 'Agent left', verb: 'is free of the agent', noun: 'screen', icon: 'agent', hatch: false, metric: null, toast: false },
+  'remote.switch-on': { label: 'Remote control on', verb: 'allows remote control', noun: 'machine', icon: 'select', hatch: false, metric: null },
+  'remote.switch-off': { label: 'Remote control off', verb: 'refuses remote control', noun: 'machine', icon: 'select', hatch: false, metric: null },
+  'remote.stopped': { label: 'Stopped at the Mac', verb: 'ended every session', noun: 'machine', icon: 'close', hatch: false, metric: null },
+  'remote.ready': { label: 'Ready', verb: 'is ready for you', noun: 'machine', icon: 'browser', hatch: false, metric: null },
+  'remote.restart-needed': { label: 'Restart needed', verb: 'needs a restart to finish', noun: 'machine', icon: 'browser', hatch: false, metric: null },
+  'remote.woke': { label: 'Display woken', verb: 'had its display woken', noun: 'machine', icon: 'browser', hatch: false, metric: null, toast: false },
+  'remote.restart': { label: 'Restarting', verb: 'is restarting', noun: 'machine', icon: 'expand', hatch: false, metric: null }
 }
 
 const FALLBACK_META: EventMeta = {

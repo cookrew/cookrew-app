@@ -30,6 +30,8 @@ export type Gesture = VphoneCall
 export interface GestureMapperOptions {
   /** A wheel is a scroll on a desktop, not a swipe of its delta (a phone has no wheel). */
   readonly wheelAsScroll?: boolean
+  /** A computer has shortcuts: Ctrl or ⌘ with a key is a chord, not a typed letter. */
+  readonly chords?: boolean
 }
 
 export interface ScreenPoints {
@@ -59,6 +61,10 @@ const KEY_NAMES: Record<string, string> = {
 export const vphoneKeyName = (key: string): string | null => KEY_NAMES[key] ?? null
 
 const isAsciiPrintable = (text: string): boolean => /^[\x20-\x7e]+$/.test(text)
+
+/** CDP's modifier bits: the two a phone's bar and a desktop viewer mean a shortcut with. */
+const CHORD_MODIFIERS = 2 | 4
+const CHORD_KEY = /^[a-z0-9]$/i
 
 const num = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -191,6 +197,9 @@ export class VphoneGestureMapper {
     if (params.type !== 'keyDown') return []
     const text = typeof params.text === 'string' ? params.text : ''
     const key = typeof params.key === 'string' ? params.key : ''
+    if (this.options.chords && ((num(params.modifiers) ?? 0) & CHORD_MODIFIERS) !== 0 && CHORD_KEY.test(key)) {
+      return [{ method: 'input.key', params: { name: key.toLowerCase(), mods: 'cmd' } }]
+    }
     const named = vphoneKeyName(key)
     if (named) return [{ method: 'input.key', params: { name: named } }]
     if (text.length === 0) return []

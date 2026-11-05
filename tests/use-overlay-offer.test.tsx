@@ -67,6 +67,6 @@ describe('another window', () => {
   it('opens the sheet for this card', async () => {
     const { openSourcePicker } = await import('../src/renderer/src/use/source-picker-store')
     openSourcePicker({ card: 'c' })
-    expect(currentSourceAsk()).toEqual({ card: 'c' })
+    expect(currentSourceAsk()).toMatchObject({ card: 'c' })
   })
 })

@@ -1,4 +1,6 @@
+import type { RemoteAction, RemoteWhere } from '../../../shared/remote-access'
 import type { UseSource } from '../../../shared/use-sources'
+import { RemotePanel } from './RemotePanel'
 import { sheetBody, type SheetBody, type SourceLoad, type SourceTab } from './source-sheet'
 
 /**
@@ -6,8 +8,9 @@ import { sheetBody, type SheetBody, type SourceLoad, type SourceTab } from './so
  *
  * Two tabs, Windows and Entire screen; a tile is a picture, the app's icon and
  * a title, and one tap makes the card. A window with no picture is drawn from
- * its name. A missing grant is the grant, with the way to it, not an empty
- * grid: a sheet with nothing in it reads as nothing being open.
+ * its name. A screen that cannot be read is the state, with the way on (the
+ * same panel a card shows), not an empty grid: a sheet with nothing in it reads
+ * as nothing being open.
  */
 
 export interface SourceSheetProps {
@@ -18,13 +21,16 @@ export interface SourceSheetProps {
   /** A pick is on its way: the tiles hold still, so one press makes one card. */
   readonly busy: boolean
   readonly error: string | null
-  /** What the settings button did, said to someone who may be on a phone. */
-  readonly settingsNote: string | null
-  readonly canOpenSettings: boolean
+  /** Asked for from the machine as its remote desktop. */
+  readonly remoteDesktop: boolean
+  readonly where: RemoteWhere
+  /** What the state panel's last action did. */
+  readonly actNote: string | null
+  readonly actBusy: boolean
   readonly onTab: (tab: SourceTab) => void
   readonly onPick: (source: UseSource) => void
   readonly onRefresh: () => void
-  readonly onSettings: () => void
+  readonly onAct: (action: RemoteAction) => void
   readonly onClose: () => void
 }
 
@@ -61,15 +67,10 @@ function Body({ body, props }: { body: SheetBody; props: SourceSheetProps }): Re
           <button type="button" className="sp-action" onClick={props.onRefresh}>Try again</button>
         </div>
       )
-    case 'permission':
+    case 'remote':
       return (
-        <div className="sp-panel" role="alert">
-          <h3>Cookrew needs {body.name}</h3>
-          <p>{body.text}</p>
-          {props.canOpenSettings && (
-            <button type="button" className="sp-action" onClick={props.onSettings}>Open {body.name} settings</button>
-          )}
-          {props.settingsNote && <p className="sp-settings-note" role="status">{props.settingsNote}</p>}
+        <div className="sp-remote">
+          <RemotePanel state={body.state} where={props.where} busy={props.actBusy} note={props.actNote} onAct={props.onAct} />
         </div>
       )
     case 'note':
@@ -87,7 +88,7 @@ function Body({ body, props }: { body: SheetBody; props: SourceSheetProps }): Re
 
 export function SourceSheet(props: SourceSheetProps): React.JSX.Element {
   const { load, tab, replacing, error, onTab, onRefresh, onClose } = props
-  const heading = replacing ? 'Pick another window' : 'Share a window or screen'
+  const heading = replacing ? 'Pick another window' : props.remoteDesktop ? 'Remote desktop' : 'Share a window or screen'
   return (
     <div className="gs-scrim cr-sheet sp-scrim" role="dialog" aria-modal="true" aria-label={heading} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="gs-sheet cr-sheet sp-sheet" tabIndex={-1}>
