@@ -34,7 +34,10 @@ import {
   type StreamTouchPointer
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
+import { NO_ZOOM, panZoom, pinchZoom, zoomedFit, type FrameZoom } from './frame-zoom'
 import { thumbStore, useThumb } from './activity-thumb-store'
+import { stepOut } from './zoom/zoom-path'
+import { zoomStore } from './zoom/zoom-store'
 import { handOffBlob, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
 import { FramePainter } from './frame-painter'
@@ -88,6 +91,7 @@ export function MobileBrowserFrame({
   const [streamFrameLoaded, setStreamFrameLoaded] = useState(false)
   const [view, setView] = useState({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
+  const [frameZoom, setFrameZoom] = useState<FrameZoom>(NO_ZOOM)
   // Read at mount, not after: the first viewport offer must already say phone or desktop.
   const [coarsePointer, setCoarsePointer] = useState(
     () => typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
@@ -304,7 +308,25 @@ export function MobileBrowserFrame({
 
   // Both sources report their pixel size — the stream's on the canvas, the
   // thumb's via the <img> — used as the letterbox + input-coord basis.
-  const fit = fitContain(natural.w, natural.h, view.w, view.h)
+  const baseFit = fitContain(natural.w, natural.h, view.w, view.h)
+  // A computer's screen zooms HERE, on the viewer: it is the only way to read a
+  // Mac on a phone, and it moves the rect every mapping already reads.
+  const computerCard = stream.deviceStatus?.use === 'computer'
+  const fit = computerCard ? zoomedFit(baseFit, frameZoom) : baseFit
+  const zoomRef = useRef({ fit: baseFit, view, control: false })
+  zoomRef.current = { fit: baseFit, view, control: interactive }
+  /** Leaving the card is what ends a viewer: the stream closes as it goes. */
+  const endSession = (): void => {
+    const zoom = zoomStore.get()
+    zoomStore.go(stepOut(zoom.dir, zoom.v), zoom.dir)
+  }
+  // A screen that went blind leaves nothing behind to become the card's picture.
+  const blind = stream.deviceStatus?.remote !== undefined
+  useEffect(() => {
+    if (!blind) return
+    lastPaintedRef.current = null
+    thumbStore.delete(browserId)
+  }, [blind, browserId])
 
   // Headless: the live canvas, else the card's picture as the poster, else
   // nothing. The legacy flag-off phone keeps its own /thumb poll while open.
@@ -662,6 +684,14 @@ export function MobileBrowserFrame({
    */
   const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
   onWheelRef.current = (e: WheelEvent): void => {
+    if (computerCard && e.ctrlKey) {
+      // A trackpad pinch zooms the picture, not the Mac.
+      e.preventDefault()
+      const r = boxRef.current?.getBoundingClientRect()
+      const at = { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) }
+      setFrameZoom((zoom) => pinchZoom(zoom, baseFit, view, pinchScaleFromWheel(e.deltaY), at))
+      return
+    }
     if (!interactive) return
     const p = framePointAt(e.clientX, e.clientY)
     if (!p) return
@@ -673,6 +703,57 @@ export function MobileBrowserFrame({
     const { dx, dy } = wheelDeltaPx(e, view.h)
     pump.wheel(p, dx, dy, modsOf(e))
   }
+  // Two fingers zoom and move the picture, always; one finger moves it while it
+  // is only being watched. Native and not passive, so the page itself stays put.
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box || !computerCard) return
+    let pinch: { distance: number; x: number; y: number } | null = null
+    let drag: { x: number; y: number } | null = null
+    const onControl = (e: TouchEvent): boolean => e.target instanceof Element && e.target.closest('button, .rp-bar, .rp-cover, .remote-keybar') !== null
+    const pairOf = (e: TouchEvent): { distance: number; x: number; y: number } => {
+      const [a, b] = [e.touches[0], e.touches[1]]
+      const r = box.getBoundingClientRect()
+      return { distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), x: (a.clientX + b.clientX) / 2 - r.left, y: (a.clientY + b.clientY) / 2 - r.top }
+    }
+    const start = (e: TouchEvent): void => {
+      if (onControl(e)) return
+      if (e.touches.length === 2) {
+        pinch = pairOf(e)
+        drag = null
+      } else if (e.touches.length === 1 && !zoomRef.current.control) drag = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+    }
+    const move = (e: TouchEvent): void => {
+      const { fit: base, view: size } = zoomRef.current
+      if (pinch && e.touches.length === 2) {
+        e.preventDefault()
+        const now = pairOf(e)
+        const was = pinch
+        pinch = now
+        setFrameZoom((zoom) => panZoom(pinchZoom(zoom, base, size, was.distance > 0 ? now.distance / was.distance : 1, now), base, size, now.x - was.x, now.y - was.y))
+      } else if (drag && e.touches.length === 1) {
+        e.preventDefault()
+        const touch = e.touches[0]
+        const was = drag
+        drag = { x: touch.clientX, y: touch.clientY }
+        setFrameZoom((zoom) => panZoom(zoom, base, size, touch.clientX - was.x, touch.clientY - was.y))
+      }
+    }
+    const end = (e: TouchEvent): void => {
+      if (e.touches.length < 2) pinch = null
+      if (e.touches.length === 0) drag = null
+    }
+    box.addEventListener('touchstart', start, { passive: true })
+    box.addEventListener('touchmove', move, { passive: false })
+    box.addEventListener('touchend', end)
+    box.addEventListener('touchcancel', end)
+    return () => {
+      box.removeEventListener('touchstart', start)
+      box.removeEventListener('touchmove', move)
+      box.removeEventListener('touchend', end)
+      box.removeEventListener('touchcancel', end)
+    }
+  }, [computerCard])
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
@@ -834,6 +915,12 @@ export function MobileBrowserFrame({
         box={fit.width > 0 ? fit : null}
         status={stream.deviceStatus}
         reconnecting={stream.reconnecting}
+        live={stream.live}
+        hasPicture={hasPicture}
+        lastFrameAt={boxRef.current?.dataset.lastFrameAt ? Number(boxRef.current.dataset.lastFrameAt) : null}
+        zoomed={frameZoom.k > 1}
+        onFit={() => setFrameZoom(NO_ZOOM)}
+        onEnd={endSession}
       />
       {/* The live view: drawn by the painter, frame by frame, outside React. */}
       <canvas

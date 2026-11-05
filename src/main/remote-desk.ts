@@ -16,6 +16,7 @@ import {
   type RemoteWhere,
   type ViewerWho
 } from '../shared/remote-access'
+import type { RemoteGate } from './pixel-instance'
 import { SERVED_USE_REFUSED } from './use-commands'
 
 /**
@@ -139,8 +140,8 @@ export interface RemoteDesk {
   takeControl(card: string, who: ViewerWho): Promise<RemoteAnswer>
   endControl(card: string, who: ViewerWho): void
   setSwitch(on: boolean): RemoteAnswer
-  /** Why this viewer may not watch this card; null when it may. */
-  admit(card: string, who: ViewerWho): string | null
+  /** Why this viewer may not watch this card, and the state to leave it with; null when it may. */
+  admit(card: string, who: ViewerWho): { readonly message: string; readonly state: RemoteState } | null
   /** A viewer arrived; the answer is its leaving. */
   enter(card: string, viewerId: string, who: ViewerWho): () => void
   noteAgent(card: string, agent: string, verb: string): void
@@ -150,6 +151,18 @@ export interface RemoteDesk {
   restart(who: ViewerWho): RemoteAnswer
   /** The lock or the display just changed. */
   sessionChanged(): void
+}
+
+/** The desk bound to one card: what that card's device holds, and all it can reach. */
+export function remoteGate(desk: RemoteDesk, card: string): RemoteGate {
+  return {
+    blocked: (options) => desk.blocked(options),
+    inputRefusal: () => desk.inputRefusal(),
+    mayDrive: (who) => desk.mayDrive(card, who),
+    cardControl: (who) => desk.cardControl(card, who),
+    admit: (who) => desk.admit(card, who),
+    enter: (viewerId, who) => desk.enter(card, viewerId, who)
+  }
 }
 
 export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
@@ -344,6 +357,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
 
   return {
     start() {
+      // A file can be edited while the app is down, so a launch with the switch on leaves a line.
+      if (settings.on) deps.record('remote.switch-on', MACHINE, word('this Mac'), 'found on at launch')
       if (settings.waiting !== null) watch(0)
     },
     state,
@@ -362,7 +377,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     cardControl(card, who) {
       const holder = liveGrant(card)
       const mine = holder?.who.key === who.key
-      return { switchOn: mac && settings.on, until: mine ? (holder?.until ?? null) : null, heldBy: holder && !mine ? holder.who.name : null, awake }
+      return { switchOn: mac && settings.on, until: mine ? (holder?.until ?? null) : null, heldBy: holder && !mine ? holder.who.name : null, awake, machine: mac ? 'darwin' : 'linux' }
     },
     async takeControl(card, who) {
       const before = standing(card, who)
@@ -395,8 +410,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     },
     admit(card, who) {
       if (who.here) return null
-      if (servedCard(card)) return SERVED_USE_REFUSED
-      return held() ? stopped() : null
+      if (servedCard(card)) return { message: SERVED_USE_REFUSED, state: stateOf('unsupported', { detail: SERVED_USE_REFUSED }) }
+      return held() ? { message: stopped(), state: stateOf('stopped', { until: holdUntil }) } : null
     },
     enter(card, viewerId, who) {
       const since = now()

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, powerSaveBlocker, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -236,6 +236,12 @@ import {
 } from './agent-tuning'
 import type { AgentTuning, TuneKnob } from '../shared/agent-tuning'
 import { relaunchInPlace, type RelaunchDeps } from './agent-relaunch'
+import { MAC_VIEWER, type ViewerWho } from '../shared/remote-access'
+import { readMacSession } from './mac-bridge'
+import { linuxScreenRefusal } from './linux-screen'
+import { createRemoteDesk, remoteGate } from './remote-desk'
+import { commandRun, createSessionReader, linuxSession, remoteBuild, remoteSettingsFile } from './remote-probe'
+import { createRemoteTray } from './remote-tray'
 import { claudeSettingsGateway, launchPick, newAgentPlan, withGatewayModel } from './claude-model-route'
 import { harnessFor } from './harness'
 import { canRestoreExact as exactGate, isRefOwned } from './recover-gate'
@@ -6379,13 +6385,71 @@ const browserCacheRoot = (): string =>
 // viewers and trusted agent commands both resolve through this manager.
 // THE USES (use-instances.ts): a Mac display or window, an adb phone, a
 // camera — each a browser card the cast streams and the agent drives.
-// Driving THIS Mac from a viewer or an agent is a decision, never a default.
+// Driving THIS Mac from a viewer or an agent is a decision, never a default:
+// the remote desk holds it, and everything below asks.
+const sessionReader = createSessionReader({
+  read: () => (process.platform === 'darwin' ? readMacSession() : linuxSession(process.env, commandRun))
+})
+let keepAwakeId: number | null = null
+const remoteDesk = createRemoteDesk({
+  platform: process.platform,
+  build: () =>
+    remoteBuild({
+      execPath: process.execPath,
+      packaged: app.isPackaged,
+      persists: multiplexer()?.capabilities.persistsAcrossRestart === true,
+      servedLive: servedSpawnContexts.size > 0
+    }),
+  linuxRefusal: () => linuxScreenRefusal(process.env),
+  screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
+  accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
+  session: () => sessionReader.read(),
+  settings: remoteSettingsFile(path.join(homedir(), '.cookrew', 'remote-control.json')),
+  servedWorkspace,
+  workspaceOfCard: (card) => store.nodeAcrossWorkspaces(card)?.workspaceId ?? null,
+  cardName: (card) => store.nodeAcrossWorkspaces(card)?.node.name ?? card,
+  record: (type, card, name, details) => store.recordEvent(type, card, name, details),
+  keepAwake: {
+    start: () => {
+      keepAwakeId ??= powerSaveBlocker.start('prevent-display-sleep')
+    },
+    stop: () => {
+      if (keepAwakeId !== null) powerSaveBlocker.stop(keepAwakeId)
+      keepAwakeId = null
+    }
+  },
+  host: (view) => {
+    mainWindow?.webContents.send('use:remote-host', view)
+    remoteTray.show(view)
+  },
+  refreshCards: () => useInstances.refresh(),
+  dropViewers: (cards) => {
+    for (const card of cards) browserCast.drop(card)
+  },
+  openSettings: async (pane) => useInstances.sources()?.openSettings(pane),
+  relaunch: () => {
+    app.relaunch()
+    app.quit()
+  }
+})
+const remoteTray = createRemoteTray(() => remoteDesk.stopAll(), process.platform)
+/** Who a paired credential is: an admitted phone by its own name, the global token by what it can only be. */
+function viewerWho(credential: string | null): ViewerWho {
+  const id = credential ? admittedDevices.deviceFor(credential) : null
+  if (id === null) return { key: 'root', name: 'A paired device', here: false }
+  return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
+}
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
-  computerInput: () => process.env.COOKREW_COMPUTER_INPUT === '1'
+  remote: (card) => remoteGate(remoteDesk, card),
+  blocked: () => remoteDesk.blocked(),
+  onBlocked: (card) => browserThumbs.forget(card)
 })
 const useSignals = new UseSignalBus()
-useSignals.on((signal) => mainWindow?.webContents.send('use:signal', signal))
+useSignals.on((signal) => {
+  mainWindow?.webContents.send('use:signal', signal)
+  if (signal.use === 'computer') remoteDesk.noteAgent(signal.card, store.nodeAcrossWorkspaces(signal.agent)?.node.name ?? 'An agent', signal.verb)
+})
 
 const browserManager = new HeadlessBrowserManager({
   enabled: interactiveBrowserEnabled,
@@ -6448,7 +6512,8 @@ const browserCast = createBrowserCast({
   // The TV wall's read-only token is deliberately NOT accepted: this socket
   // carries pointer and key INPUT, so admitting a read-only credential here
   // would hand it a write it does not have anywhere else.
-  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one))
+  paired: (credential) => companionTokenAccepted(credential, (one) => admittedDevices.deviceFor(one)),
+  who: viewerWho
 })
 
 const headlessBrowserCommands = new HeadlessBrowserCommandEngine({
@@ -6475,6 +6540,10 @@ function servedWorkspace(workspaceId: string): boolean {
 const useSources = createUseSourceService({
   provider: () => useInstances.sources(),
   servedWorkspace,
+  desk: remoteDesk,
+  who: viewerWho,
+  cardAt: (workspaceId, url) =>
+    store.workspaceState(workspaceId).nodes.find((node): node is BrowserNodeData => node.kind === 'browser' && activeBrowserTab(node).url === url) ?? null,
   addCard: (workspaceId, card) => addNode(card, workspaceId) as BrowserNodeData,
   findCard: (id) => {
     const found = store.nodeAcrossWorkspaces(id)
@@ -7683,6 +7752,15 @@ app.whenReady().then(() => {
   networkWatch.start()
   powerMonitor.on('resume', () => void networkWatch.check('wake'))
   powerMonitor.on('unlock-screen', () => void networkWatch.check('unlock'))
+  // The lock is heard here first: the card should not wait out a cache or a backoff.
+  for (const event of ['lock-screen', 'unlock-screen', 'resume', 'suspend'] as const) {
+    powerMonitor.on(event as 'resume', () => {
+      sessionReader.invalidate()
+      remoteDesk.sessionChanged()
+      useInstances.wake()
+    })
+  }
+  remoteDesk.start()
 
   // The certificate, once the account and the addresses are known. Best
   // effort and never awaited: an order is seconds of polling at the registry
@@ -8532,10 +8610,30 @@ function registerIpc(handlers: RestoreHandlers): void {
     const answer = await useSources.open(store.focusedId, pick)
     return answer.ok ? { ok: true, card: answer.value.card } : { ok: false, error: answer.error }
   })
-  ipcMain.handle('use:screen-settings', async () => {
-    const answer = await useSources.openSettings(store.focusedId)
+  ipcMain.handle('use:screen-settings', ownerOnly(async (pane: unknown) => {
+    const answer = await useSources.openSettings(store.focusedId, pane, 'here')
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
-  })
+  }))
+  // THE REMOTE DESK, from the Mac's own window. The switch and Stop exist only
+  // here: there is no route to either, so nothing away from the Mac can reach them.
+  ipcMain.handle('use:remote-access', ownerOnly(async () => {
+    const answer = await useSources.access(store.focusedId, 'here')
+    return answer.ok ? answer.value : { ok: false, error: answer.error }
+  }))
+  ipcMain.handle('use:remote-control', ownerOnly(async (ask: unknown) => {
+    const answer = await useSources.control(store.focusedId, ask, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error, ...(answer.state ? { state: answer.state } : {}) }
+  }))
+  ipcMain.handle('use:remote-restart', ownerOnly(async () => {
+    const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
+    return answer.ok ? { ok: true } : { ok: false, error: answer.error }
+  }))
+  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => (typeof on === 'boolean' ? remoteDesk.setSwitch(on) : { ok: false, error: 'On or off' })))
+  ipcMain.handle('use:remote-stop', ownerOnly(() => {
+    remoteDesk.stopAll()
+    return { ok: true }
+  }))
+  ipcMain.handle('use:remote-host', ownerOnly(() => remoteDesk.hostView()))
 
   // connectAcross, not connect: it VALIDATES both ids exist (in any workspace)
   // and mirrors a legitimate cross-workspace edge. store.connect writes an edge

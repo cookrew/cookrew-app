@@ -103,6 +103,7 @@ const StageView = lazy(() => import('./stage/StageView').then((m) => ({ default:
 import { GateSheet } from './GateSheet'
 import { ImportServedSheet } from './ImportServedSheet'
 import { SourcePicker } from './use/SourcePicker'
+import { RemoteHostBanner } from './use/RemoteHostBanner'
 import { useAccountSurface } from './account/AccountSurface'
 import { ConfirmClose } from './ConfirmClose'
 import { apiPath } from './api-base'
@@ -1656,6 +1657,7 @@ function Canvas(): React.JSX.Element {
           }}
         />
         <EventToastLayer />
+        <RemoteHostBanner />
         {/* THE BROWSER HOST: every browser page lives in BrowserLayer and is
             drawn at the slot a stage pane or a terminal's lower half measures
             (attach-view.ts). It rode inside the canvas's LodOverlays, and

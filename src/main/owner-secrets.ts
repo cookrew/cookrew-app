@@ -160,6 +160,8 @@ export function ownerSecretPaths(
     // owner's companion to whoever holds it.
     path.join(base, 'secrets'),
     path.join(base, 'pairing-token'),
+    // The machine switch (remote-desk.ts): the Mac's alone to set.
+    path.join(base, 'remote-control.json'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
     // plugin-providers.json, logins.json, plugin auth — is every upstream key
     // the owner holds; the Sous ledger and its Magpie facts; the owner's

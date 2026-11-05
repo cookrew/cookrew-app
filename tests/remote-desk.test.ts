@@ -1,7 +1,7 @@
 // THE ONE PLACE THAT SAYS WHERE THIS MACHINE'S SCREEN STANDS, AND WHO MAY DRIVE IT.
 // Everything here runs on fake lock, permission and session readers.
 import { describe, expect, it, vi } from 'vitest'
-import { createRemoteDesk, CONTROL_GRACE_MS, READY_WATCH_MS, STOP_HOLD_MS, type RemoteDeskDeps, type RemoteSession } from '../src/main/remote-desk'
+import { createRemoteDesk, remoteGate, CONTROL_GRACE_MS, READY_WATCH_MS, STOP_HOLD_MS, type RemoteDeskDeps, type RemoteSession } from '../src/main/remote-desk'
 import { CONTROL_MS, MAC_VIEWER, type RemoteBuild, type ViewerWho } from '../src/shared/remote-access'
 
 const phone: ViewerWho = { key: 'device:p1', name: 'Pixel 9', here: false }
@@ -11,7 +11,7 @@ const build: RemoteBuild = { settingsName: 'Electron', sourceBuild: true, restar
 function rig(over: Partial<RemoteDeskDeps> = {}, facts: Partial<RemoteSession> = {}) {
   let now = 1_000_000
   const timers: Array<{ at: number; fn: () => void; cancelled: boolean }> = []
-  const session: RemoteSession = { locked: false, displayAsleep: false, grant: true, ...facts }
+  const session: { -readonly [K in keyof RemoteSession]: RemoteSession[K] } = { locked: false, displayAsleep: false, grant: true, ...facts }
   const access = { screen: 'granted', accessibility: true, on: false, waiting: null as string | null, served: new Set<string>() }
   const records: Array<{ type: string; card: string; details: string | undefined }> = []
   const awake = { start: vi.fn(), stop: vi.fn() }
@@ -133,6 +133,19 @@ describe('state', () => {
   })
 })
 
+describe('remoteGate: the desk as one card sees it', () => {
+  it('binds the card, so a card can only ever ask about itself', async () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    await r.desk.takeControl('c1', phone)
+    expect(remoteGate(r.desk, 'c1').mayDrive(phone)).toBe(true)
+    expect(remoteGate(r.desk, 'c2').mayDrive(phone)).toBe(false)
+    const leave = remoteGate(r.desk, 'c1').enter('v', phone)
+    expect(r.host).toHaveBeenLastCalledWith(expect.objectContaining({ rows: [expect.objectContaining({ card: 'c1' })] }))
+    leave()
+  })
+})
+
 describe('blocked: what a device asks before each frame', () => {
   it('answers nothing when the screen can be read', async () => {
     expect(await rig().desk.blocked()).toBeNull()
@@ -188,21 +201,13 @@ describe('the machine switch', () => {
     expect(r.desk.inputRefusal()).toContain('Electron')
   })
 
-  it('remembers across a restart, and reads off when the file says nothing good', () => {
-    const r = rig()
-    r.access.on = true
-    expect(createRemoteDesk({ ...rigDeps(r), settings: { read: () => ({ on: true, waiting: null }), write: () => undefined } }).controlFacts().switchOn).toBe(true)
+  it('remembers across a restart, and a launch with it on leaves a line in the log', () => {
+    const r = rig({ settings: { read: () => ({ on: true, waiting: null }), write: () => undefined } })
+    expect(r.desk.controlFacts().switchOn).toBe(true)
+    r.desk.start()
+    expect(r.records.find((e) => e.type === 'remote.switch-on')?.details).toBe('found on at launch')
   })
 })
-
-function rigDeps(r: ReturnType<typeof rig>): RemoteDeskDeps {
-  return {
-    platform: 'darwin', build: () => build, linuxRefusal: () => null, screenAccess: () => 'granted', accessibility: () => true,
-    session: async () => r.session, settings: { read: () => ({ on: false, waiting: null }), write: () => undefined },
-    servedWorkspace: () => false, workspaceOfCard: () => 'ws', cardName: () => 'c', record: () => undefined, keepAwake: r.awake,
-    host: r.host, refreshCards: r.refresh, dropViewers: r.drop, openSettings: r.openSettings, relaunch: r.relaunch
-  }
-}
 
 describe('the switch when the disk says no', () => {
   it('an unreadable file reads off', () => {
@@ -329,7 +334,7 @@ describe('served sessions and sandboxes', () => {
   it('cannot watch either', () => {
     const r = rig()
     r.access.served.add('ws')
-    expect(r.desk.admit('c1', phone)).toMatch(/served session/i)
+    expect(r.desk.admit('c1', phone)?.message).toMatch(/served session/i)
   })
 })
 

@@ -13,7 +13,7 @@ const list: UseSourceList = {
   windows: [{ id: 'window:41', kind: 'window', title: 'Docs — a very long title that goes on and on and on past what a card can wear in its name', app: 'Safari', address: 'window://Safari?id=41', thumb: null, icon: null, width: 800, height: 600 }],
   screens: [{ id: 'screen:main', kind: 'screen', title: 'Main display', app: null, address: 'screen://main', thumb: null, icon: null, width: 1728, height: 1117 }],
   message: null,
-  permission: null,
+  remote: null,
   windowsNote: null
 }
 const web: BrowserNodeData = { kind: 'browser', id: 'web', name: 'Web', url: 'https://a.test', position: { x: 0, y: 0 }, size: { width: 720, height: 560 } }
@@ -67,7 +67,7 @@ describe('a source that fails', () => {
     const { service } = bed({ provider: () => broken })
     expect(await service.list('ws')).toEqual({ ok: false, status: 500, error: 'capturer died' })
     expect(await service.open('ws', { source: 'window:41' })).toEqual({ ok: false, status: 500, error: 'capturer died' })
-    expect(await service.openSettings('ws')).toEqual({ ok: false, status: 500, error: 'no such pane' })
+    expect(await service.openSettings('ws', undefined, 'here')).toEqual({ ok: false, status: 500, error: 'no such pane' })
   })
   it('a card that cannot be re-pointed says so', async () => {
     const { service } = bed({ readdress: async () => Promise.reject(new Error('Browser node disappeared')) })
@@ -177,7 +177,7 @@ describe('open', () => {
 
   it('refuses when there is nothing to read: the grant is missing', async () => {
     const provider: UseSourceProvider = {
-      list: async () => ({ ...list, state: 'needs-permission', windows: [], screens: [], message: 'Screen Recording is off', permission: 'Screen Recording' }),
+      list: async () => ({ ...list, state: 'unavailable', windows: [], screens: [], message: 'Screen Recording is off' }),
       openSettings: async () => undefined
     }
     expect(await bed({ provider: () => provider }).service.open('ws', { source: 'window:41' })).toMatchObject({ ok: false, status: 409, error: 'Screen Recording is off' })
@@ -227,7 +227,7 @@ describe('a served workspace', () => {
   })
   it('cannot pop the settings page on the owner\'s Mac', async () => {
     const { service, provider } = served()
-    expect(await service.openSettings('served')).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
+    expect(await service.openSettings('served', undefined, 'here')).toEqual({ ok: false, status: 403, error: SERVED_USE_REFUSED })
     expect(provider.openSettings).not.toHaveBeenCalled()
   })
   it('the cached list of an owner workspace is not an answer for a served one', async () => {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UseSource, UseSourceCard } from '../../../shared/use-sources'
-import { cookrew, isRemoteMode } from '../api'
+import { cookrew } from '../api'
 import { closeSourcePicker, useSourceAsk } from './source-picker-store'
-import { firstTab, settingsSaid, type SourceLoad, type SourceTab } from './source-sheet'
+import { firstTab, type SourceLoad, type SourceTab } from './source-sheet'
+import { remoteWhere, useRemoteActs } from './remote-acts'
+import { RemoteConfirmView } from './RemotePanel'
 import { SourceSheet } from './SourceSheet'
 import './source-picker.css'
 
@@ -15,13 +17,12 @@ import './source-picker.css'
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
-function OpenPicker({ card, onOpened }: { card: string | null; onOpened: (card: UseSourceCard) => void }): React.JSX.Element {
+function OpenPicker({ card, remoteDesktop, onOpened }: { card: string | null; remoteDesktop: boolean; onOpened: (card: UseSourceCard) => void }): React.JSX.Element {
   const [load, setLoad] = useState<SourceLoad>({ status: 'loading' })
-  const [tab, setTab] = useState<SourceTab>('windows')
+  const [tab, setTab] = useState<SourceTab>(remoteDesktop ? 'screens' : 'windows')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [settingsNote, setSettingsNote] = useState<string | null>(null)
-  const tabChosen = useRef(false)
+  const tabChosen = useRef(remoteDesktop)
   const asked = useRef(0)
 
   const read = useCallback(async (): Promise<void> => {
@@ -85,37 +86,36 @@ function OpenPicker({ card, onOpened }: { card: string | null; onOpened: (card: 
     }
   }
 
-  const openSettings = async (): Promise<void> => {
-    try {
-      setSettingsNote(settingsSaid(await cookrew().openScreenSettings?.(), isRemoteMode()))
-    } catch (failure) {
-      setSettingsNote(messageOf(failure))
-    }
-  }
+  const acts = useRemoteActs({ state: load.status === 'ready' ? load.list.remote : null, onCheck: read })
 
   return (
+    <>
     <SourceSheet
       load={load}
       tab={tab}
       replacing={card !== null}
       busy={busy}
       error={error}
-      settingsNote={settingsNote}
-      canOpenSettings={typeof cookrew().openScreenSettings === 'function'}
+      remoteDesktop={remoteDesktop}
+      where={remoteWhere()}
+      actNote={acts.note}
+      actBusy={acts.busy}
       onTab={(next) => {
         tabChosen.current = true
         setTab(next)
       }}
       onPick={(source) => void pick(source)}
       onRefresh={() => void read()}
-      onSettings={() => void openSettings()}
+      onAct={acts.act}
       onClose={closeSourcePicker}
     />
+    {acts.confirm && <div className="sp-confirm"><RemoteConfirmView confirm={acts.confirm} onYes={() => acts.answerConfirm(true)} onNo={() => acts.answerConfirm(false)} /></div>}
+    </>
   )
 }
 
 export function SourcePicker({ onOpened }: { onOpened: (card: UseSourceCard, made: boolean) => void }): React.JSX.Element | null {
   const ask = useSourceAsk()
   if (!ask) return null
-  return <OpenPicker key={ask.card ?? ''} card={ask.card} onOpened={(card) => onOpened(card, ask.card === null)} />
+  return <OpenPicker key={ask.card ?? ''} card={ask.card} remoteDesktop={ask.remoteDesktop} onOpened={(card) => onOpened(card, ask.card === null)} />
 }

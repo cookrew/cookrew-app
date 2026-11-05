@@ -17,6 +17,7 @@ import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { WatchPairRow } from './WatchPairRow'
+import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { isRemoteMode } from './api'
 import { startSpeechCheck } from './speech-check'
 import type { RouteStatus } from '../../shared/route'
@@ -164,6 +165,7 @@ export function HeaderMore({
             <span className="cr-more-label">{theme === 'root' ? 'Theme: Root' : 'Theme: Ink'}</span>
           </button>
           <WatchPairRow />
+          <RemoteSwitchRow />
           {offerFullscreen && (
             <button
               type="button"

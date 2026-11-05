@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { sanitizeInput, sanitizePaste, type CdpInputCommand, type MapContext } from '../shared/cast-input'
 import { fieldsInFrame, type FieldReport } from './page-fields'
 import { sanitizeViewportMessage } from '../shared/cast-viewport'
+import type { ViewerWho } from '../shared/remote-access'
 import type { UseStatus } from '../shared/use-signal'
 import { jpegSize } from './jpeg-size'
 import { copyArmed } from './page-copy'
@@ -75,6 +76,9 @@ export const PASTE_TIMEOUT_MS = 1000
 /** Input held behind a paste: a burst of typing, never a backlog. */
 const MAX_HELD_INPUT = 256
 
+/** A viewer no credential named: it can watch what it was let in to, and it can never hold control. */
+export const UNNAMED_VIEWER: ViewerWho = { key: 'unnamed', name: 'A paired device', here: false }
+
 export class CastViewer {
   readonly id = randomUUID()
   private seq = 0
@@ -109,7 +113,9 @@ export class CastViewer {
   private readonly viewportListener = (state: BrowserViewportState): void => this.pushViewportState(state)
   /** A use's device state: a viewer shows "offline — <why>" over the last frame instead of a frozen screen. */
   private readonly statusListener = (status: UseStatus): void =>
-    this.sink.sendControl({ t: 'status', ...status })
+    this.sink.sendControl({ t: 'status', ...(this.instance?.statusFor?.(status, this.who) ?? status) })
+  /** Its leaving, as the desk asked to hear it. */
+  private leave: (() => void) | null = null
   /** When this viewer's own input last reached the page: a copy right after it is theirs (page-copy.ts). */
   private lastInputAt: number | null = null
   /**
@@ -124,7 +130,8 @@ export class CastViewer {
   constructor(
     private readonly sink: ViewerSink,
     private readonly onClosed: () => void,
-    readonly browserId: string
+    readonly browserId: string,
+    private readonly who: ViewerWho = UNNAMED_VIEWER
   ) {}
 
   get isClosed(): boolean {
@@ -133,7 +140,15 @@ export class CastViewer {
 
   attach(instance: BrowserInstance): void {
     if (this.closed) return
+    const refused = instance.refusalFor?.(this.who) ?? null
+    if (refused) {
+      // Said, then shut: a redial gets the same answer until the desk changes it.
+      this.sink.sendControl({ t: 'status', ...refused })
+      this.close()
+      return
+    }
     this.instance = instance
+    this.leave = instance.enterViewer?.(this.id, this.who) ?? null
     instance.registerViewportViewer(this.id)
     this.unsubscribeViewport = instance.onViewportState(this.viewportListener)
     const viewport = instance.viewportState
@@ -322,13 +337,18 @@ export class CastViewer {
     })
   }
 
+  /** A screen the desk guards is told who is asking; a web page has no such question. */
+  private drive(instance: BrowserInstance, command: CdpInputCommand): Promise<void> | void {
+    return instance.needsViewer ? instance.dispatchInput(command.method, command.params, this.who) : instance.dispatchInput(command.method, command.params)
+  }
+
   private dispatch(instance: BrowserInstance, command: CdpInputCommand): void {
     if (this.held) {
       if (this.held.length < MAX_HELD_INPUT) this.held.push(command)
       return
     }
     if (command.method !== PINCH) {
-      void instance.dispatchInput(command.method, command.params)
+      void this.drive(instance, command)
       return
     }
     if (this.pinchBusy) {
@@ -337,7 +357,7 @@ export class CastViewer {
     }
     this.pinchBusy = true
     let timer: ReturnType<typeof setTimeout> | null = null
-    const step = Promise.resolve(instance.dispatchInput(command.method, command.params)).catch(() => undefined)
+    const step = Promise.resolve(this.drive(instance, command)).catch(() => undefined)
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, PINCH_STEP_TIMEOUT_MS)
     })
@@ -386,6 +406,8 @@ export class CastViewer {
     this.unsubscribeViewport = null
     this.instance?.unregisterViewportViewer(this.id)
     this.instance = null
+    this.leave?.()
+    this.leave = null
     try {
       this.sink.close()
     } catch {

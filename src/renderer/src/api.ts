@@ -1,5 +1,6 @@
 import type { MenuAct } from '../../shared/wait-choice'
 import type { UseSourceList, UseSourceOpened, UseSourcePick, UseSourceSettings } from '../../shared/use-sources'
+import type { RemoteAccess, RemoteAnswer, RemoteHostView } from '../../shared/remote-access'
 import type { StrayPane } from '../../shared/stray-pane'
 import type { LaunchFailure } from '../../shared/launch-failure'
 import type { TelemetryStatus } from '../../shared/funnel-events'
@@ -376,7 +377,16 @@ export interface CookrewApi {
    */
   useSources?: () => Promise<UseSourceList>;
   openUseSource?: (pick: UseSourcePick) => Promise<UseSourceOpened>;
-  openScreenSettings?: () => Promise<UseSourceSettings>;
+  /** The grant's page on the Mac. From a phone this opens it there, for later. */
+  openScreenSettings?: (pane?: 'screen' | 'accessibility') => Promise<UseSourceSettings>;
+  remoteAccess?: () => Promise<RemoteAccess | { ok: false; error: string }>;
+  remoteControl?: (ask: { card: string; on: boolean }) => Promise<RemoteAnswer>;
+  remoteRestart?: () => Promise<RemoteAnswer>;
+  /** The machine switch. The Mac's own window only: there is no route, so a phone has no such method. */
+  setRemoteSwitch?: (on: boolean) => Promise<RemoteAnswer>;
+  stopRemote?: () => Promise<RemoteAnswer>;
+  remoteHost?: () => Promise<RemoteHostView>;
+  onRemoteHost?: (cb: (view: RemoteHostView) => void) => () => void;
   createTerminal: (opts: {
     name: string;
     preset: string;

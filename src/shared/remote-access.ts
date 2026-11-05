@@ -102,6 +102,8 @@ export interface CardControl {
   readonly heldBy: string | null
   /** The Mac is held awake because someone is watching. */
   readonly awake: boolean
+  /** So a viewer words this for the machine it is looking at. */
+  readonly machine: 'darwin' | 'linux'
 }
 
 export interface RemoteControlFacts {
@@ -132,6 +134,31 @@ export interface RemoteHostView {
 }
 
 export const NOBODY_ON_HOST: RemoteHostView = { rows: [], awake: false }
+
+export interface HostWords {
+  /** The banner's one line. */
+  readonly line: string
+  /** The menu bar's few letters. */
+  readonly short: string
+  readonly rows: readonly string[]
+  readonly awake: string | null
+}
+
+const rowLine = (row: RemoteSessionRow): string => `${row.who} is ${row.mode} ${row.cardName}`
+
+/** What the host says while someone is on it: control first, because that is what someone at the Mac needs to see. */
+export function hostWords(view: RemoteHostView, platform?: string): HostWords | null {
+  const rows = [...view.rows].sort((a, b) => Number(b.mode === 'controlling') - Number(a.mode === 'controlling'))
+  const [first] = rows
+  if (!first) return null
+  const more = rows.length - 1
+  return {
+    line: `${rowLine(first)}${more > 0 ? `, and ${more} more` : ''}`,
+    short: first.who,
+    rows: rows.map(rowLine),
+    awake: view.awake ? machineCopy('Keeping this Mac awake while it is watched', platform) : null
+  }
+}
 
 export type RemoteRefusal = { readonly ok: false; readonly error: string; readonly state?: RemoteState }
 export type RemoteAnswer = { readonly ok: true } | RemoteRefusal
@@ -207,7 +234,7 @@ function restartView(state: RemoteState, where: RemoteWhere): Omit<RemoteView, '
 }
 
 function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<RemoteView, 'next'> {
-  const seen = lastSeenWords(state.lastSeenAt, now)
+  const seen = state.lastSeenAt === null ? '' : ` (${lastSeenWords(state.lastSeenAt, now)})`
   const plain = (title: string, sentence: string, needsYouThere = false, actions: readonly RemoteAction[] = [CHECK]): Omit<RemoteView, 'next'> => ({
     title,
     sentence,
@@ -220,7 +247,7 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
     case 'ready':
       return plain('Ready', 'The screen of this Mac can be shared.', false, [])
     case 'locked':
-      return plain('This Mac is locked', `It needs someone at the Mac to unlock it, and the picture comes back by itself (${seen}).`, true)
+      return plain('This Mac is locked', `It needs someone at the Mac to unlock it, and the picture comes back by itself${seen}.`, true)
     case 'needs-screen-recording':
       return permissionView(state, where, 'Screen Recording is off', 'open-screen-settings', `Turn on ${name} in ${SCREEN_PANE}.`)
     case 'needs-accessibility':
@@ -228,9 +255,9 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
     case 'needs-restart':
       return restartView(state, where)
     case 'display-asleep':
-      return plain('The display is asleep', `Nothing can be seen until it wakes (${seen}).`)
+      return plain('The display is asleep', `Nothing can be seen until it wakes${seen}.`)
     case 'unreachable':
-      return plain('Cannot reach this Mac', `It may be asleep or off the network (${seen}).`)
+      return plain('Cannot reach this Mac', `It may be asleep or off the network${seen}.`)
     case 'window-closed':
       return plain('The window closed', state.detail ?? 'The window this card showed has closed.', false, [
         { id: 'show-the-screen', label: 'Show the screen' },
@@ -289,5 +316,5 @@ export function parseRemoteState(raw: unknown): RemoteState | null {
 export function parseCardControl(raw: unknown): CardControl | null {
   if (typeof raw !== 'object' || raw === null) return null
   const c = raw as Record<string, unknown>
-  return { switchOn: c.switchOn === true, until: time(c.until), heldBy: text(c.heldBy, 120), awake: c.awake === true }
+  return { switchOn: c.switchOn === true, until: time(c.until), heldBy: text(c.heldBy, 120), awake: c.awake === true, machine: c.machine === 'linux' ? 'linux' : 'darwin' }
 }

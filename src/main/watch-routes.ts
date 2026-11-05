@@ -258,6 +258,8 @@ export function browserInputOf(body: Record<string, unknown>, viewport: { width:
 async function itemInput(ctx: WatchRequest, current: WatchHost, id: string): Promise<void> {
   const instance = await current.browser(id)
   if (!instance) return respondJson(ctx.response, 404, { error: 'That browser is not open.' })
+  // A computer's screen is taken from a device that watches it, never from a wrist.
+  if (instance.needsViewer) return respondJson(ctx.response, 409, { error: 'That screen is view only here.' })
   const state = instance.viewportState
   if (state.transitioning || state.agentHeld) return respondJson(ctx.response, 409, { error: 'An agent is driving that browser.' })
   const body = await readJson<Record<string, unknown>>(ctx.request)

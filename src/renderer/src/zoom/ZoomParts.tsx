@@ -250,7 +250,7 @@ export const AgentNode = memo(function AgentNode({ agent, card = true, bind, onO
 
 /**
  * This machine on the devices stop: its frame opens it, and the words under it
- * carry the way to share one of its windows. The frame's own button has no
+ * carry the way to its screen, one tap to the picker. The frame's own button has no
  * handler: its press bubbles to the card, which is also what a press on the
  * words reaches, and the share button keeps its press to itself.
  */
@@ -271,7 +271,7 @@ export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: st
               onShare()
             }}
           >
-            Share a window
+            Remote desktop
           </button>
         )}
       </span>

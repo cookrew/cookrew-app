@@ -20,7 +20,7 @@ const list: UseSourceList = {
   windows: [{ id: 'window:41', kind: 'window', title: 'Docs', app: 'Safari', address: 'window://Safari?id=41', thumb: 'data:image/jpeg;base64,AA', icon: null, width: 800, height: 600 }],
   screens: [],
   message: null,
-  permission: null,
+  remote: null,
   windowsNote: null
 }
 
@@ -82,7 +82,7 @@ describe('with the pairing token', () => {
     const { deps, added } = bed()
     await call(deps('scoped'), 'POST', '/api/use/sources/open', { token: TOKEN, body: { source: 'window:41' } })
     expect(added[0].workspaceId).toBe('scoped')
-    for (const path of ['/api/use/sources', '/api/use/sources/open', '/api/use/sources/settings']) expect(scopedRouteSupported(path), path).toBe(true)
+    for (const path of ['/api/use/sources', '/api/use/sources/open', '/api/use/sources/settings', '/api/use/sources/access', '/api/use/sources/control', '/api/use/sources/restart']) expect(scopedRouteSupported(path), path).toBe(true)
   })
   it('opens the settings page', async () => {
     const { deps, provider } = bed()

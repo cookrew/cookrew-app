@@ -2,6 +2,7 @@
 // WHERE THE READER IS AND WHAT THEY WILL SEE IN SYSTEM SETTINGS.
 import { describe, expect, it } from 'vitest'
 import {
+  hostWords,
   lastSeenWords,
   remoteView,
   restartConfirm,
@@ -155,5 +156,30 @@ describe('lastSeenWords', () => {
   })
   it('does not invent a time it does not have', () => {
     expect(lastSeenWords(null, now)).toBe('not seen yet from here')
+  })
+})
+
+describe('hostWords: what the Mac itself says while someone is on it', () => {
+  const row = (who: string, mode: 'watching' | 'controlling', cardName = 'Main display') => ({ key: who, who, card: 'c', cardName, mode, since: 0 })
+
+  it('nobody on it says nothing', () => {
+    expect(hostWords({ rows: [], awake: false })).toBeNull()
+  })
+
+  it('names who and what, and says when the Mac is being held awake', () => {
+    const words = hostWords({ rows: [row('Pixel 9', 'watching')], awake: true })
+    expect(words?.line).toBe('Pixel 9 is watching Main display')
+    expect(words?.awake).toBe('Keeping this Mac awake while it is watched')
+    expect(words?.short).toBe('Pixel 9')
+  })
+
+  it('control outranks watching in the line, and the rest are counted', () => {
+    const words = hostWords({ rows: [row('iPad', 'watching'), row('Pixel 9', 'controlling'), row('Velvet', 'controlling', 'Safari')], awake: true })
+    expect(words?.line).toBe('Pixel 9 is controlling Main display, and 2 more')
+    expect(words?.rows).toEqual(['Pixel 9 is controlling Main display', 'Velvet is controlling Safari', 'iPad is watching Main display'])
+  })
+
+  it('says machine on a machine', () => {
+    expect(hostWords({ rows: [row('Pixel 9', 'watching')], awake: true }, 'linux')?.awake).toBe('Keeping this machine awake while it is watched')
   })
 })

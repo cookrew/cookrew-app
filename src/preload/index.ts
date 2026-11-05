@@ -284,7 +284,18 @@ const api = {
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
   useSources: () => ipcRenderer.invoke('use:sources'),
   openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
-  openScreenSettings: () => ipcRenderer.invoke('use:screen-settings'),
+  openScreenSettings: (pane?: string) => ipcRenderer.invoke('use:screen-settings', pane),
+  remoteAccess: () => ipcRenderer.invoke('use:remote-access'),
+  remoteControl: (ask: unknown) => ipcRenderer.invoke('use:remote-control', ask),
+  remoteRestart: () => ipcRenderer.invoke('use:remote-restart'),
+  setRemoteSwitch: (on: boolean) => ipcRenderer.invoke('use:remote-switch', on),
+  stopRemote: () => ipcRenderer.invoke('use:remote-stop'),
+  remoteHost: () => ipcRenderer.invoke('use:remote-host'),
+  onRemoteHost: (cb: (view: unknown) => void) => {
+    const listener = (_e: unknown, view: unknown): void => cb(view)
+    ipcRenderer.on('use:remote-host', listener)
+    return () => ipcRenderer.removeListener('use:remote-host', listener)
+  },
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */

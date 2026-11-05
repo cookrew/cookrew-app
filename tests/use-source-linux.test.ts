@@ -4,6 +4,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { LINUX_INPUT_OFF, LINUX_NO_DISPLAY, LINUX_NO_REGION, LINUX_NO_WINDOW, LINUX_WAYLAND, LinuxScreenDevice, linuxScreenRefusal, linuxSources, type LinuxFrame, type LinuxScreenDeps } from '../src/main/linux-screen'
 import { PixelInstance } from '../src/main/pixel-instance'
+import type { RemoteGate } from '../src/main/pixel-instance'
+import type { RemoteState, RemoteStateId } from '../src/shared/remote-access'
 import { parseUseUrl } from '../src/shared/use-url'
 
 const X11 = { DISPLAY: ':99', XDG_SESSION_TYPE: 'x11' }
@@ -11,8 +13,20 @@ const frames: LinuxFrame[] = [
   { displayId: '2', jpeg: Buffer.from('second'), width: 1024, height: 768 },
   { displayId: '1', jpeg: Buffer.from('primary'), width: 1920, height: 1080 }
 ]
+const stateOf = (id: RemoteStateId, detail: string | null = null): RemoteState => ({
+  id, platform: 'linux', then: null, detail, lastSeenAt: null, until: null, waiting: false,
+  build: { settingsName: 'Cookrew', sourceBuild: false, restart: 'self', agents: 'keep' }
+})
+const gate = (blocked: RemoteState | null = null): RemoteGate => ({
+  blocked: async () => blocked,
+  inputRefusal: () => null,
+  mayDrive: () => false,
+  cardControl: () => ({ switchOn: false, until: null, heldBy: null, awake: false, machine: 'darwin' }),
+  admit: () => null,
+  enter: () => () => undefined
+})
 const deps = (over: Partial<LinuxScreenDeps> = {}): LinuxScreenDeps => ({
-  env: () => X11,
+  remote: gate(),
   frames: vi.fn(async () => frames),
   primaryDisplayId: () => '1',
   ...over
@@ -63,7 +77,7 @@ describe('LinuxScreenDevice', () => {
   })
 
   it('refuses in words what it cannot show: Wayland, a window, a region', async () => {
-    await expect(device('screen://main', { env: () => ({ XDG_SESSION_TYPE: 'wayland' }) }).open()).rejects.toThrow(LINUX_WAYLAND)
+    await expect(device('screen://main', { remote: gate(stateOf('unsupported', LINUX_WAYLAND)) }).open()).rejects.toThrow(LINUX_WAYLAND)
     await expect(device('window://Firefox').open()).rejects.toThrow(LINUX_NO_WINDOW)
     await expect(device('screen://main?roi=0,0,100,100').open()).rejects.toThrow(LINUX_NO_REGION)
   })
@@ -81,12 +95,24 @@ describe('LinuxScreenDevice', () => {
   })
 })
 
+describe('the same states as a Mac', () => {
+  it('a locked or sleeping machine gives no frame, and says so on the card', async () => {
+    const frames2 = vi.fn(async () => frames)
+    const instance = new PixelInstance({ url: 'screen://main', device: device('screen://main', { remote: gate(stateOf('locked')), frames: frames2 }), schedule: () => () => undefined })
+    await instance.start()
+    expect(instance.status).toMatchObject({ state: 'offline', input: false, remote: { id: 'locked', platform: 'linux' } })
+    expect(instance.status.message).not.toMatch(/System Settings|\bMac\b/)
+    expect(frames2).not.toHaveBeenCalled()
+    await instance.stop()
+  })
+})
+
 describe('linuxSources', () => {
   const grab = async () => [
     { id: 'screen:0:0', name: 'Screen 1', displayId: '1', thumb: 'data:image/jpeg;base64,A', icon: null },
     { id: 'screen:1:0', name: 'Screen 2', displayId: '2', thumb: 'data:image/jpeg;base64,B', icon: null }
   ]
-  const sourceDeps = { env: () => X11, grab, primaryDisplayId: () => '2' }
+  const sourceDeps = { blocked: async () => null, grab, primaryDisplayId: () => '2' }
 
   it('lists the displays, primary first, and says windows are Mac only', async () => {
     const list = await linuxSources(sourceDeps).list()
@@ -102,8 +128,8 @@ describe('linuxSources', () => {
 
   it('on Wayland: a plain sentence and no capture', async () => {
     const spy = vi.fn(grab)
-    const list = await linuxSources({ ...sourceDeps, env: () => ({ XDG_SESSION_TYPE: 'wayland' }), grab: spy }).list()
-    expect(list).toMatchObject({ state: 'unavailable', message: LINUX_WAYLAND, permission: null, screens: [] })
+    const list = await linuxSources({ ...sourceDeps, blocked: async () => stateOf('unsupported', LINUX_WAYLAND), grab: spy }).list()
+    expect(list).toMatchObject({ state: 'unavailable', message: LINUX_WAYLAND, remote: { id: 'unsupported' }, screens: [] })
     expect(spy).not.toHaveBeenCalled()
   })
 })

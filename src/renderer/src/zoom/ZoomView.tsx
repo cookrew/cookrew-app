@@ -28,6 +28,7 @@ import { promptFold, takeBack } from '../prompt/prompt-fold'
 import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { GaugePanel } from './MachineGauges'
+import { RemoteDeskPanel } from './RemoteDeskPanel'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
@@ -581,6 +582,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
       <GaugePanel localName={machine} />
+      <RemoteDeskPanel />
       <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -640,7 +642,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           {model.machines.filter((m) => !m.local).map((m) => (
             <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(`${m.name} is listed, not readable from here: open it on that Mac.`)} />
           ))}
-          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker() : null} />
+          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}

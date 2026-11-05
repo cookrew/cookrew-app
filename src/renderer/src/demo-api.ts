@@ -9,7 +9,7 @@ import type {
 } from '../../shared/model'
 import { noteNameFromContent, uniqueName } from '../../shared/model'
 import { cardNameOf } from '../../shared/use-sources'
-import { demoSources } from './use/demo-sources'
+import { demoRemoteAccess, demoSources } from './use/demo-sources'
 import { rankInbox } from '../../shared/inbox-rank'
 import { checkBrief } from '../../shared/workspace-brief'
 import { planRename } from '../../shared/rename-plan'
@@ -324,6 +324,11 @@ export function createDemoApi(): CookrewApi {
       return Promise.resolve({ ok: true as const, card: { id, name, url: source.address } })
     },
     openScreenSettings: () => Promise.resolve({ ok: true as const }),
+    remoteAccess: () => Promise.resolve(demoRemoteAccess()),
+    remoteControl: () => Promise.resolve({ ok: true as const }),
+    remoteRestart: () => Promise.resolve({ ok: true as const }),
+    setRemoteSwitch: () => Promise.resolve({ ok: true as const }),
+    stopRemote: () => Promise.resolve({ ok: true as const }),
     addNode: (node) => {
       const typed = node as CanvasNode
       const named = {
