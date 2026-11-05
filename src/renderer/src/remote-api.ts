@@ -819,6 +819,7 @@ export function createRemoteApi(): CookrewApi {
       return result.interactive
     },
     browserStreamToken: () => Promise.resolve(null),
+    watchCode: () => req(apiPath('/api/watch/code'), 'POST', {}),
     /**
      * THE OWNER'S ACCOUNT, READ-ONLY, OVER HTTP.
      *

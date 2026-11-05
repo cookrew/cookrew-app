@@ -8069,8 +8069,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   setMenuAnswerer(answerMenu)
   // The wrist's routes (watch-routes.ts): a token of its own, a short list of routes.
   const watchPairing = new WatchPairing()
-  setWatchHost(
-    createWatchHost({
+  const watchHost = createWatchHost({
       pairing: watchPairing,
       deviceName: () => localDeviceName(),
       endpoints: mobileEndpointList,
@@ -8088,10 +8087,10 @@ function registerIpc(handlers: RestoreHandlers): void {
         return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
       }
     })
-  )
+  setWatchHost(watchHost)
   ipcMain.handle(
     'watch:code',
-    ownerOnly(() => ({ ...watchPairing.mintCode(), paired: watchPairing.paired }))
+    ownerOnly(() => ({ ...watchPairing.mintCode(), bases: watchHost.bases() }))
   )
   ipcMain.handle('menu:answer', (_e, terminalId: string, body: unknown) => {
     const request = parseMenuRequest(body)
