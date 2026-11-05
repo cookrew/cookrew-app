@@ -148,7 +148,7 @@ export interface SocketServerDeps {
    * (cli-browser.ts). Absent/false: the renderer's webviews, which exist only
    * for the canvas on screen.
    */
-  browserAnyWorkspace?: () => boolean
+  browserAnyWorkspace?: (args: string[], terminalId: string) => boolean
   notify: (message: string) => void
   /** Debug helper: capture the app window to a PNG, returns the file path. */
   captureWindow: () => Promise<string>
@@ -786,7 +786,7 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
   const me = self(request, deps)
   // Owner ruling 2026-11-04: every workspace works on its own. With the
   // headless engine nothing about a browser depends on the canvas on screen.
-  if (deps.browserAnyWorkspace?.()) {
+  if (deps.browserAnyWorkspace?.(request.args, me.id)) {
     return cmdBrowserScoped({
       me,
       args: request.args,

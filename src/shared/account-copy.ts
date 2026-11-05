@@ -77,7 +77,7 @@ export const V3_COPY = machineTable({
    * development override.
    */
   'd4.env-override':
-    'COOKREW_HANDLE names @{env}. Your account is @{handle}, and the account is the name — the environment is a development override.',
+    'This launch names @{env}. Your account is @{handle}, and the account is the name — the launch setting is a development override.',
   /** D9, typing a free name while on SIGN IN. The mirror of the above. */
   'd9.crossing.unknown': 'There is no @{handle} yet — take it now.',
 

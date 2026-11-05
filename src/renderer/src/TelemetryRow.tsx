@@ -25,7 +25,7 @@ export function TelemetryRowView({ status, onToggle }: TelemetryRowViewProps): R
       <span className="cr-more-text">
         <span className="cr-more-label">{status.on ? 'Usage data on' : 'Usage data off'}</span>
         <span className="cr-more-note">
-          {status.locked ? 'Held off by COOKREW_TELEMETRY=0. ' : ''}
+          {status.locked ? 'Held off for this launch. ' : ''}
           {TELEMETRY_ROW_NOTE}
         </span>
       </span>

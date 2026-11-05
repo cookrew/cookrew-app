@@ -143,7 +143,8 @@ export function useInteractiveBrowserCapability(): InteractiveBrowserCapability 
           // No answer is not an answer (a captive portal's 200, a stranger
           // on the port): keep what we know rather than adopting undefined.
           if (typeof enabled !== 'boolean') return
-          if (!enabled || !hasNativeWebview()) {
+          // Asked whoever owns pages: a use card streams either way.
+          if (!hasNativeWebview()) {
             adopt(enabled, null)
             return
           }
@@ -661,15 +662,14 @@ function BrowserTabView({
         />
       ) : null
     case 'vphone-off': {
-      // A use card has no page to put in a web surface; only the headless
-      // stream can draw it (main/pixel-instance.ts, main/vphone-instance.ts).
+      // The demo alone: it has no main process, so no stream to draw a use card
+      // (main/pixel-instance.ts, main/vphone-instance.ts).
       const use = parseUseUrl(tab.url)?.use ?? 'phone'
       const what = use === 'computer' ? `a screen on ${machineCopy('this Mac', hostPlatform())}` : use === 'hardware' ? 'a camera' : 'a phone'
       return visible ? (
         <div className="browser-body browser-blocked">
           <span>
-            {shortUrl(tab.url)} is {what}. It needs the interactive browser stream
-            (COOKREW_INTERACTIVE_BROWSER=1) to be shown here.
+            {shortUrl(tab.url)} is {what}. It shows here in the Cookrew app.
           </span>
         </div>
       ) : null
