@@ -22,6 +22,10 @@ describe('what counts as a failed turn', () => {
     expect(turnFailure({ reply, lines: [] })).toContain(reply.trim().slice(0, 12))
   })
 
+  it.each([['API error handling is fixed'], ['## Error 404 page added'], ['Error 500 pages now render'], ['Stream error handling works now'], ['API Errors are logged']])('a good reply is not one: %s', (reply) => {
+    expect(turnFailure({ reply, lines: [] })).toBeNull()
+  })
+
   it('reads the last words on screen when no reply was parsed', () => {
     expect(turnFailure({ reply: null, lines: ['something', 'API Error: 400 nope'] })).toContain('API Error: 400')
   })

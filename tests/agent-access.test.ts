@@ -228,6 +228,16 @@ describe('where it is kept', () => {
     expect(existsSync(path.join(root, 'keys', 'endpoint.key'))).toBe(false)
   })
 
+  it('drops the copy whichever harness comes next, once the secret is gone', () => {
+    const root = dir()
+    const keeper = storeIn(root)
+    keeper.save(source, KEY)
+    keeper.launchFor('claude')
+    createSecretsStore({ baseDir: root }).remove('agent-access-endpoint')
+    expect(keeper.launchFor('codex')).toBeNull()
+    expect(existsSync(path.join(root, 'keys', 'endpoint.key'))).toBe(false)
+  })
+
   it('forgets all of it, launch files included', () => {
     const root = dir()
     const store = storeIn(root)

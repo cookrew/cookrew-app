@@ -149,14 +149,14 @@ export class AccessStore {
     const { source } = this
     if (source === null) return null
     const keyFile = this.keyFile(source.id)
-    const launch = accessLaunch(source, harness, { keyFile, piDir: path.join(this.deps.keyDir, 'pi') })
-    if (launch === null) return null
     const key = this.deps.secrets.read(secretNameOf(source.id))?.value
-    // The secret was removed by name, elsewhere: its copy goes with it.
+    // The secret was removed by name, elsewhere: its copy goes with it, whoever asks.
     if (!key) {
       rmSync(keyFile, { force: true })
       return null
     }
+    const launch = accessLaunch(source, harness, { keyFile, piDir: path.join(this.deps.keyDir, 'pi') })
+    if (launch === null) return null
     mkdirSync(this.deps.keyDir, { recursive: true, mode: 0o700 })
     writeFileAtomic(keyFile, key)
     for (const file of launch.files) writeFileAtomic(file.path, file.content)
