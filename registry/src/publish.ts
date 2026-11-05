@@ -31,6 +31,12 @@ export type PublishFailure =
    */
   | 'payout_missing'
   /**
+   * Another identity already published these exact bytes. A preset's id is the
+   * address of its team.json, so storing this would replace their listing, and
+   * anyone holding a bought copy could relist it as free.
+   */
+  | 'id_taken'
+  /**
    * This registry has no facilitator, so a price here could never be paid.
    * Refused before anything is stored or bound, for the same reason as above:
    * the author can act on it now, and a buyer never could.
@@ -146,6 +152,9 @@ export function publishPreset(deps: PublishDeps, input: PublishInput): PublishRe
   if (!deps.verifyCountersign('publish', input.identityId, payload, input.countersig)) {
     return { ok: false, reason: 'countersign_missing' }
   }
+
+  const holder = deps.store.identityOf(manifest.id)
+  if (holder !== null && holder !== input.identityId) return { ok: false, reason: 'id_taken' }
 
   // M2-A1: A PRICE NEEDS A PAYEE, and the check belongs here.
   //

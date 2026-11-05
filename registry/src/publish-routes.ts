@@ -170,6 +170,7 @@ const PUBLISH_STATUS: Record<PublishFailure, number> = {
   // repeating themselves.
   author_key_changed: 409,
   version_not_newer: 409,
+  id_taken: 409,
   scope: 403
 }
 
