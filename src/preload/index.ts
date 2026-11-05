@@ -680,5 +680,9 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('cookrew', api)
+// Read by shared/machine-words.ts as the copy tables load, so it has to be here
+// before any page script runs. The phone and the site never get it, and their
+// sentences stand as written.
+contextBridge.exposeInMainWorld('cookrewPlatform', process.platform)
 
 export type CookrewApi = typeof api

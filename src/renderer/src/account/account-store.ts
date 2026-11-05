@@ -1,4 +1,5 @@
 import { V3_COPY, accountCopy } from '../../../shared/account-copy'
+import { hostPlatform, machineTable } from '../../../shared/machine-words'
 import { lanRevokeEnds } from '../../../shared/lan-token-mode'
 import {
   LOCK_CHOICES,
@@ -42,7 +43,7 @@ import {
  * the table does not carry are taken from the mock they appear in, named after
  * the screen.
  */
-export const ACCOUNT_COPY = {
+export const ACCOUNT_COPY = machineTable({
   /**
    * D1 hover, no account — now from the one source (V3-07).
    *
@@ -222,7 +223,7 @@ export const ACCOUNT_COPY = {
   /** D2, phase 6: the name is already this person's, on another device's key. */
   LEGACY_ELSEWHERE:
     'This name belongs to a key on another device — set the password there, or use that device to link this one.',
-} as const
+} as const, hostPlatform())
 
 /**
  * "You are @drej here already — set a password to keep it." (phase 6)

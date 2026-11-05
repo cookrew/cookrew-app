@@ -37,6 +37,7 @@ import {
   type TypedFactor,
 } from './account-ladder'
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
+import { machineCopy } from '../shared/machine-words'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
@@ -324,6 +325,8 @@ export interface AccountsDeps {
   origin?: string
   /** This Mac's name, for the Devices tab. */
   deviceName?: string
+  /** `process.platform`, for the sentences that name this machine. */
+  platform?: string
   /**
    * The key this Mac held at that registry before passwords (phase 6).
    *
@@ -369,6 +372,7 @@ export class Accounts {
   private readonly now: () => number
   private readonly origin: string
   private readonly deviceName: string
+  private readonly platform: string
   private cached: AccountFile | null
   /**
    * A sign-in that stopped at the ladder: the name and the key minted for
@@ -405,7 +409,8 @@ export class Accounts {
     this.http = deps.fetch ?? ((input, init) => fetch(input, init))
     this.now = deps.now ?? (() => Date.now())
     this.origin = deps.origin ?? registryOrigin()
-    this.deviceName = deps.deviceName ?? 'This Mac'
+    this.platform = deps.platform ?? process.platform
+    this.deviceName = deps.deviceName ?? machineCopy('This Mac', this.platform)
     this.cached = loadAccount(deps.base)
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
@@ -637,7 +642,7 @@ export class Accounts {
   }): Promise<SignInAnswer<AccountFile>> {
     const held = this.cached
     if (held !== null) {
-      return { ok: false, reason: 'taken', message: `This Mac is already @${held.username}.` }
+      return { ok: false, reason: 'taken', message: machineCopy(`This Mac is already @${held.username}.`, this.platform) }
     }
     const username = normaliseUsername(input.username)
     if (username === '' || usernameProblem(username) !== 'ok') {
@@ -733,7 +738,7 @@ export class Accounts {
   async join(input: { code: string; name?: string }): Promise<AccountResult<AccountFile>> {
     const held = this.cached
     if (held !== null) {
-      return { ok: false, reason: 'taken', message: `This Mac is already @${held.username}.` }
+      return { ok: false, reason: 'taken', message: machineCopy(`This Mac is already @${held.username}.`, this.platform) }
     }
     const code = input.code.trim()
     if (code.length === 0) return { ok: false, reason: 'bad_credentials' }
@@ -854,7 +859,7 @@ export class Accounts {
       return {
         ok: false,
         reason: 'taken',
-        message: `This Mac is already @${held.username}.`,
+        message: machineCopy(`This Mac is already @${held.username}.`, this.platform),
       }
     }
     const legacy = this.legacy()

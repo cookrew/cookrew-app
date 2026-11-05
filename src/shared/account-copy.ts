@@ -1,3 +1,4 @@
+import { hostPlatform, machineTable } from './machine-words'
 
 /**
  * THE ACCOUNT'S SENTENCES — one source for desktop and web (V3-07).
@@ -32,7 +33,7 @@
  * sentence whose feature lands in cut 2 or 3 sits here, typed and tested, and
  * is drawn by nobody until its lane wires it.
  */
-export const V3_COPY = {
+export const V3_COPY = machineTable({
   /** D1 hover with no account. Replaces "Claim a username — …". */
   'avatar.no-account':
     'Sign in — or create an account. Serve teams and reach this Mac from anywhere. Everything here works without one.',
@@ -351,7 +352,7 @@ export const V3_COPY = {
   /** W6, the web team page after asking. The seat outlives the tab. */
   'w6.asked':
     "This page seats you the moment they say yes. You can close it; the seat is yours, not this tab's."
-} as const
+} as const, hostPlatform())
 
 export type V3CopyId = keyof typeof V3_COPY
 

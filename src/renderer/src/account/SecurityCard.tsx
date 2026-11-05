@@ -22,6 +22,7 @@ import {
   toCreationOptions,
 } from './webauthn'
 import '../grant-surface.css'
+import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 
 /**
  * THE SECURITY CARD (D3) — shown once right after claiming, and again from
@@ -47,7 +48,7 @@ import '../grant-surface.css'
 /** Nobody dismisses the codes by reflex: the primary waits five seconds. */
 const CODES_SETTLE_MS = 5_000
 /** What a passkey made here is called, as the Devices tab lists it (D4). */
-const THIS_MAC_PASSKEY = 'Touch ID on this Mac'
+const THIS_MAC_PASSKEY = (hostPlatform() ?? 'darwin') === 'darwin' ? 'Touch ID on this Mac' : machineCopy('A passkey on this Mac', hostPlatform())
 
 export function SecurityCard({
   username,
@@ -194,7 +195,7 @@ export function SecurityCard({
       if (!filed.ok) setError(refusalSentence(filed.reason, filed.message, username))
       else readFactors()
     } catch {
-      setError('This Mac could not make a passkey. Try it in a browser instead.')
+      setError(machineCopy('This Mac could not make a passkey. Try it in a browser instead.', hostPlatform()))
       setElsewhere(true)
     } finally {
       setBusy(false)
@@ -340,7 +341,7 @@ export function SecurityCard({
         />
         <Row
           kind="LOCK"
-          label="Lock this Mac now"
+          label={machineCopy('Lock this Mac now', hostPlatform())}
           action={
             <button className="gs-ghost" onClick={onLockNow}>
               LOCK NOW
