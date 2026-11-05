@@ -14,8 +14,12 @@ describe('a note in a background workspace', () => {
   })
   const start = (): { store: WorkspaceStore; noteId: string; dir: string; home: string; other: string } => {
     const dir = mkdtempSync(path.join(tmpdir(), 'cookrew-note-bg-'))
-    cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
     const store = new WorkspaceStore(dir)
+    // The store writes behind the test: flushed first, or a late file makes the delete ENOTEMPTY.
+    cleanup.push(() => {
+      store.flush()
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    })
     const home = store.list().activeId
     const note = store.createNote({ content: 'first words', x: 0, y: 0, width: 200, height: 200 } as never, home)
     const other = store.createWorkspace('Elsewhere', dir)
