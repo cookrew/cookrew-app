@@ -53,8 +53,25 @@ export const PIXEL_MAX_BACKOFF_MS = 5000
  */
 export const PIXEL_OPEN_TIMEOUT_MS = 15_000
 export const PIXEL_CAPTURE_TIMEOUT_MS = 10_000
+/**
+ * A device gone for good is looked at about once a minute, not at the offline
+ * backoff: each look is a helper process, and a closed window's card can sit
+ * in a workspace for days. A viewer arriving looks at once.
+ */
+export const PIXEL_GONE_POLL_MS = 60_000
 
-function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+/** What a card was bound to no longer exists, as opposed to not answering right now. */
+export class DeviceGoneError extends Error {
+  constructor(
+    readonly gone: NonNullable<UseStatus['gone']>,
+    message: string
+  ) {
+    super(message)
+    this.name = 'DeviceGoneError'
+  }
+}
+
+export function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`${what} did not answer in ${Math.round(ms / 1000)} s`)), ms)
@@ -170,6 +187,7 @@ export class PixelInstance {
   }
 
   private cadence(): number {
+    if (this.statusNow.gone) return PIXEL_GONE_POLL_MS
     if (this.failures > 0) {
       return Math.min(PIXEL_MAX_BACKOFF_MS, PIXEL_IDLE_POLL_MS * 2 ** Math.min(this.failures - 1, 6))
     }
@@ -202,7 +220,7 @@ export class PixelInstance {
       // A device that failed after opening may come back a different size
       // (another phone on the cable, the window reopened): open it again.
       this.opened = false
-      this.setStatus('offline', error instanceof Error ? error.message : String(error))
+      this.setStatus('offline', error instanceof Error ? error.message : String(error), error instanceof DeviceGoneError ? error.gone : undefined)
     } finally {
       this.polling = false
     }
@@ -219,11 +237,11 @@ export class PixelInstance {
     this.viewportCoordinator.setDefault({ ...this.points, mobile: this.mobile })
   }
 
-  private setStatus(state: UseStatus['state'], message: string | null): void {
+  private setStatus(state: UseStatus['state'], message: string | null, gone?: UseStatus['gone']): void {
     const input = this.inputAllowed()
     const prev = this.statusNow
-    if (prev.state === state && prev.message === message && prev.input === input) return
-    this.statusNow = { state, message, use: this.opts.device.target.use, input }
+    if (prev.state === state && prev.message === message && prev.input === input && prev.gone === gone) return
+    this.statusNow = { state, message, use: this.opts.device.target.use, input, ...(gone ? { gone } : {}) }
     for (const listener of this.statusListeners) {
       try {
         listener(this.statusNow)

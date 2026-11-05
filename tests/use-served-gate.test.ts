@@ -11,7 +11,7 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { cmdBrowser, type SocketServerDeps } from '../src/main/socket-server'
 import { WorkspaceStore } from '../src/main/store'
-import { SERVED_USE_REFUSED } from '../src/main/use-commands'
+import { SERVED_USE_REFUSED, servedUseRefusal } from '../src/main/use-commands'
 import type { BrowserNodeData, CliRequest, TerminalNodeData } from '../src/shared/model'
 
 const terminal = (id: string): TerminalNodeData => ({
@@ -43,12 +43,21 @@ describe('cmdBrowser · served callers and uses', () => {
       ['create', 'cam://0'],
       ['navigate', 'Web', 'window://1Password'],
       ['tab-new', 'Web', 'adb://default'],
+      ['create', 'window://Safari?id=41'],
+      ['create', 'window://%E5%BE%AE%E4%BF%A1?id=41', 'Chat'],
+      ['navigate', 'Web', 'window://Safari?id=41'],
+      ['tab-new', 'Web', 'screen://2'],
       ['screenshot', 'Phone'],
       ['tap', 'Phone', '10', '10']
     ]) {
       await expect(cmdBrowser(request(args, 'caller'), deps), args.join(' ')).rejects.toThrow(SERVED_USE_REFUSED)
     }
     expect(browserCommand).not.toHaveBeenCalled()
+  })
+
+  it('the listing is refused by the same gate, whatever it is asked with', () => {
+    expect(servedUseRefusal(['sources'], () => [])).toBe(SERVED_USE_REFUSED)
+    expect(servedUseRefusal(['sources', 'anything'], () => [])).toBe(SERVED_USE_REFUSED)
   })
 
   it('lets the owner use them, and lets a served caller browse the web', async () => {

@@ -4,6 +4,8 @@ import { GlobalPrompt, type PromptAgent } from './prompt/GlobalPrompt'
 import { SHELL_PRESET } from './prompt/harness-pref'
 import type { PromptArtifact } from './prompt/artifact-refs'
 import { useKeyboardInset } from './keyboard-inset'
+import { cookrew } from './api'
+import { openSourcePicker } from './use/source-picker-store'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
@@ -164,6 +166,7 @@ export function Dock({
     roles: roles.map((r) => r.name),
     onPreset,
     onRole,
+    ...(cookrew().useSources ? { onSource: () => openSourcePicker() } : {}),
     making
   }
   const tools = dockTools()

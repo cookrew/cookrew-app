@@ -8,9 +8,13 @@ import { AdbDevice, adbRunner } from './adb-device'
 import type { BrowserInstance } from './browser-instance'
 import { CamDevice } from './cam-device'
 import { cameraAccess, ElectronCaptureHost } from './capture-host'
-import { listMacScreens, MacInput } from './mac-bridge'
+import { LinuxScreenDevice, linuxSources, type LinuxEnv } from './linux-screen'
+import { listMacScreens, MacInput, macWindowAlive } from './mac-bridge'
 import { PixelInstance, type PixelDevice } from './pixel-instance'
-import { ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
+import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
+import { grabScreenFrames, grabSources, openScreenRecordingSettings, primaryDisplayId } from './use-source-electron'
+import { macSources } from './use-source-mac'
+import type { UseSourceProvider } from './use-source-service'
 
 /**
  * THE USES, BUILT FOR THIS MAC (computer, phone and hardware use).
@@ -52,10 +56,22 @@ export function encodeJpeg(input: Buffer, crop: Roi | null, maxSide: number): Bu
 
 export interface UseInstances {
   makeInstance(target: UseTarget, node: { id: string }): BrowserInstance | null
+  /** The window picker's source for this machine; null where there is none. */
+  sources(): UseSourceProvider | null
   dispose(): void
 }
 
-export function createUseInstances(options: { captureDir: string; computerInput: () => boolean }): UseInstances {
+export interface UseInstancesOptions {
+  readonly captureDir: string
+  readonly computerInput: () => boolean
+  readonly platform?: NodeJS.Platform
+  readonly env?: LinuxEnv
+}
+
+export function createUseInstances(options: UseInstancesOptions): UseInstances {
+  const platform = options.platform ?? process.platform
+  const env = (): LinuxEnv => options.env ?? process.env
+  const screenAccess = (): string => systemPreferences.getMediaAccessStatus('screen')
   mkdirSync(options.captureDir, { recursive: true, mode: 0o700 })
   let hand: MacInput | null = null
   let host: ElectronCaptureHost | null = null
@@ -72,14 +88,18 @@ export function createUseInstances(options: { captureDir: string; computerInput:
       }
       case 'screen':
       case 'window':
-        if (process.platform !== 'darwin') return null
+        if (platform === 'linux') {
+          return new LinuxScreenDevice(target, { env, frames: () => grabScreenFrames(SCREEN_FRAME_MAX_SIDE), primaryDisplayId })
+        }
+        if (platform !== 'darwin') return null
         return new ScreenDevice(target, {
           list: () => listMacScreens(),
+          windowAlive: (id) => macWindowAlive(id),
           capture: screenCaptureRunner,
           read: screenFiles.read,
           remove: screenFiles.remove,
           encode: encodeJpeg,
-          screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
+          screenAccess,
           inputEnabled: options.computerInput,
           accessibility: () => systemPreferences.isTrustedAccessibilityClient(false),
           hand: handOf,
@@ -96,6 +116,17 @@ export function createUseInstances(options: { captureDir: string; computerInput:
     makeInstance(target) {
       const device = deviceFor(target)
       return device ? new PixelInstance({ url: useUrl(target), device }) : null
+    },
+    sources() {
+      if (platform === 'linux') return linuxSources({ env, grab: grabSources, primaryDisplayId })
+      if (platform !== 'darwin') return null
+      return macSources({
+        access: screenAccess,
+        screens: () => listMacScreens(),
+        grab: grabSources,
+        selfPid: process.pid,
+        openSettings: () => openScreenRecordingSettings(screenAccess())
+      })
     },
     dispose() {
       hand?.close()
