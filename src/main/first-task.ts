@@ -89,6 +89,8 @@ export class FirstTasks<S extends HeldSession = HeldSession> {
       },
       () => {
         if (ticket !== this.ticket || this.deps.closing(id)) return
+        // Its session was replaced (a restart in place), not ended: the card is live.
+        if (session.wasDisposed) return this.handBack(words, null, id)
         this.handBack(words, whyStopped(harness, screen), id)
         this.deps.removeCard(id)
       }

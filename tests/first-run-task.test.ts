@@ -220,6 +220,18 @@ describe('a card closed while the agent comes up', () => {
   })
 })
 
+describe('a session replaced while the agent comes up', () => {
+  it('gives the words back and leaves the card: a restart is no death', async () => {
+    const r = rig()
+    r.tasks.hold('a1', 'x', 'Claude Code')
+    Object.assign(r.session, { wasDisposed: true })
+    r.settle().fail(new Error('gone'))
+    await tick()
+    expect(r.store.task()).toEqual({ state: 'returned', words: 'x', why: null, id: 'a1' })
+    expect(r.removeCard).not.toHaveBeenCalled()
+  })
+})
+
 describe('a close under way while the agent comes up', () => {
   it('leaves the outcome to the card’s removal', async () => {
     const r = rig()
