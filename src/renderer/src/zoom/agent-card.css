@@ -391,3 +391,22 @@
   opacity: 1;
   pointer-events: auto;
 }
+
+/* WHY IT IS NOT RUNNING (AgentFailure.tsx): read whole, so nothing here is clipped to a line. */
+.ag-failure > * {
+  white-space: normal;
+}
+
+.ag-failure-why {
+  font-weight: 600;
+  color: var(--zv-ink, currentColor);
+}
+
+.ag-failure-tail {
+  margin: 4px 0 0;
+  max-height: 96px;
+  overflow: auto;
+  font: inherit;
+  white-space: pre-wrap;
+  opacity: 0.8;
+}

@@ -136,6 +136,28 @@ export class TmuxMultiplexer implements Multiplexer {
     return this.runner.probe('tmux', ['-L', TMUX_LABEL, 'has-session', '-t', name])
   }
 
+  /** tmux exits 1 for "no such session" and "no server": both real answers. Anything else is no answer. */
+  sessionPresence(name: string): boolean | null {
+    if (!this.available()) return false
+    try {
+      this.tmux(['has-session', '-t', name])
+      return true
+    } catch (error) {
+      return (error as { status?: number | null }).status === 1 ? false : null
+    }
+  }
+
+  async liveSessions(): Promise<ReadonlySet<string>> {
+    if (!this.available()) return new Set()
+    try {
+      const listed = this.tmux(['list-sessions', '-F', '#{session_name}']).split('\n').map((line) => line.trim())
+      return new Set(listed.filter((line) => COOKREW_SESSION_RE.test(line)))
+    } catch (error) {
+      if ((error as { status?: number | null }).status === 1) return new Set()
+      throw error
+    }
+  }
+
   listSessions(): string[] {
     if (!this.available()) return []
     try {

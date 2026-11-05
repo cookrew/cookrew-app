@@ -4,6 +4,7 @@
 //   GET /api/levels/stream        text/event-stream: a snapshot, then deltas;
 //                                 a ':' line every LEVELS_HEARTBEAT_MS
 //   GET /api/levels/agents/<id>   LevelsAgentDetail
+//   GET /api/levels/gauges        MachineGauges (gauges-route.ts)
 //
 // PAIRING scope only. The companion's /api GET gate already ran (mobile-api ·
 // C1) and lets the read-only wall token through; that token must not read
@@ -17,6 +18,8 @@ import { createGzip, constants as zlibConstants } from 'node:zlib'
 import type { LevelsEvent } from '../../shared/strata'
 import { acceptsGzip, etagMatches, sendBody } from '../http-compress'
 import { respondJson } from '../mobile-http'
+import type { GaugeReader } from '../machine-gauges'
+import { handleGaugeRoute } from './gauges-route'
 import type { LevelsService } from './service'
 
 /** The relay drops a stream silent for 120 s; the contract promises a ':' line every 15 s. */
@@ -28,6 +31,8 @@ export interface LevelsRouteDeps {
   /** Does this request carry the pairing scope? */
   paired: (request: http.IncomingMessage, url: URL) => boolean
   heartbeatMs?: number
+  /** The machine's gauges; the process's shared watch when absent. */
+  gauges?: GaugeReader
 }
 
 const LEVELS_PATH = /^\/api\/levels(?:\/(stream)|\/agents\/([^/]+))?\/?$/
@@ -39,6 +44,8 @@ export function handleLevelsRoutes(
   url: URL,
   deps: LevelsRouteDeps
 ): boolean {
+  // Before the service check: a machine's load needs no board.
+  if (handleGaugeRoute(request, response, url, deps)) return true
   const match = LEVELS_PATH.exec(url.pathname)
   if (!match) return false
   if (request.method !== 'GET') {

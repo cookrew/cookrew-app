@@ -131,6 +131,8 @@ export const NODE_ROUTES: RegExp[] = [
   // Submit paths (already scoped before this change).
   /^\/api\/terminal\/[^/]+\/(?:input|ask)$/,
   /^\/api\/terminal\/[^/]+\/output$/,
+  // Asked before words go to an offline card (prompt/launch-gate.ts).
+  /^\/api\/terminal\/[^/]+\/launch-check$/,
   // Reading and navigating the transcript.
   /^\/api\/terminal\/[^/]+\/jump$/,
   /^\/api\/terminal\/[^/]+\/seen$/,
@@ -161,6 +163,10 @@ export const NODE_ROUTES: RegExp[] = [
 ]
 
 export const SCOPE_AWARE: RegExp[] = [
+  // The owner's phone can be served under a slug. The machine's load is the same
+  // from any workspace, and the slug opens nothing: the route asks for the pairing
+  // token itself (levels/gauges-route.ts), so a served caller is refused there.
+  /^\/api\/levels\/gauges$/,
   // The renderer index, EARNED. It was refused while the bundled client
   // issued root-absolute /api/... requests, because serving it at /<slug>
   // rendered the FOCUSED canvas under a URL naming a different workspace. The

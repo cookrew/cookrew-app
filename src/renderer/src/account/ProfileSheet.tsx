@@ -22,6 +22,8 @@ import { DOING, problemSentence } from './problem'
 import { PairPhoneSheet } from './PairPhoneSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
+import { PROVIDER_COPY } from './provider-store'
+import { useTripGuard } from './ProviderButtons'
 import { SeatsTab } from './SeatsTab'
 import { securityActions } from './security-actions'
 import '../grant-surface.css'
@@ -188,6 +190,14 @@ export function ProfileSheet({
       .catch((err: unknown) => setError(problemSentence(DOING.FORGET, err)))
   }
 
+  /** A passwordless account has no field to fill: the provider is asked in main. */
+  const proofReady = status.passwordless || stepUp.length > 0
+  const trip = useTripGuard()
+  useEffect(() => {
+    if (acting && status.passwordless) trip.begin()
+    else trip.end()
+  }, [acting, status.passwordless, trip])
+
   /**
    * ADD A MAC / ADD A PHONE (D12) — the code is minted under step-up.
    *
@@ -199,7 +209,7 @@ export function ProfileSheet({
    */
   const mintCode = (): void => {
     const call = cookrew().accountJoinCode
-    if (!call || acting || stepUp.length === 0 || adding === null) return
+    if (!call || acting || !proofReady || adding === null) return
     setActing(true)
     setError(null)
     void call(stepUp)
@@ -240,7 +250,7 @@ export function ProfileSheet({
    */
   const revoke = (id: string): void => {
     const call = cookrew().accountRevoke
-    if (!call || acting || stepUp.length === 0) return
+    if (!call || acting || !proofReady) return
     setActing(true)
     setError(null)
     void call({ deviceId: id, password: stepUp })
@@ -269,7 +279,7 @@ export function ProfileSheet({
    */
   const signOut = (): void => {
     const call = cookrew().accountSignOut
-    if (!call || acting || stepUp.length === 0) return
+    if (!call || acting || !proofReady) return
     setActing(true)
     setError(null)
     void call(stepUp)
@@ -367,12 +377,22 @@ export function ProfileSheet({
         {/* THE SESSION ENDED — the sentence comes WITH the field, in the
             header, so it is on screen whichever tab is open. Every tab's own
             reads are refused underneath it until this is answered. */}
-        {status.sessionExpired && <ResumeSession onResumed={onStatus} />}
+        {status.sessionExpired && <ResumeSession passwordless={status.passwordless} onResumed={onStatus} />}
 
         {error && !status.sessionExpired && (
           <p className="gs-paste-error" role="alert">
             {error}
           </p>
+        )}
+
+        {/* The act is waiting on a browser, so the way out belongs on screen. */}
+        {acting && status.passwordless && (
+          <div className="cr-acct-providers" role="status">
+            <p className="gs-hint">{PROVIDER_COPY.WAITING}</p>
+            <button className="gs-ghost" onClick={() => trip.leave()}>
+              CANCEL
+            </button>
+          </div>
         )}
 
         {tab === 'PROFILE' && (
@@ -479,7 +499,9 @@ export function ProfileSheet({
                         {/* THE PASSWORD, HERE. Both verbs step up (D12): a
                             sheet left open on an unlocked Mac is not enough
                             to sign it out or to take another device's key. */}
+                        {status.passwordless && <p className="gs-hint">{PROVIDER_COPY.STEP_UP}</p>}
                         <div className="cr-acct-row">
+                          {!status.passwordless && (
                           <input
                             type="password"
                             className="gs-input"
@@ -493,9 +515,10 @@ export function ProfileSheet({
                               if (e.key === 'Escape') settled()
                             }}
                           />
+                          )}
                           <button
                             className="gs-revoke"
-                            disabled={acting || stepUp.length === 0}
+                            disabled={acting || !proofReady}
                             onClick={() => (device.current ? signOut() : revoke(device.id))}
                           >
                             {device.current ? 'SIGN OUT' : 'REVOKE'}
@@ -544,8 +567,11 @@ export function ProfileSheet({
               <div className="cr-acct-addmac">
                 {minted === null ? (
                   <>
-                    <p className="gs-consequence">{ACCOUNT_COPY.ADD_STEP_UP}</p>
+                    <p className="gs-consequence">
+                      {status.passwordless ? PROVIDER_COPY.STEP_UP : ACCOUNT_COPY.ADD_STEP_UP}
+                    </p>
                     <div className="cr-acct-row">
+                      {!status.passwordless && (
                       <input
                         type="password"
                         className="gs-input"
@@ -559,9 +585,10 @@ export function ProfileSheet({
                           if (e.key === 'Escape') closeAdd()
                         }}
                       />
+                      )}
                       <button
                         className="gs-primary"
-                        disabled={acting || stepUp.length === 0}
+                        disabled={acting || !proofReady}
                         onClick={mintCode}
                       >
                         MAKE A CODE
@@ -646,6 +673,8 @@ export function ProfileSheet({
             recoveryCodesLeft={profile?.recoveryCodesLeft ?? status.recoveryCodesLeft}
             sessionExpired={status.sessionExpired}
             problem={problem}
+            status={status}
+            onStatus={onStatus}
             {...securityActions(onStatus, onClose, setProblem)}
           />
         )}
@@ -670,7 +699,7 @@ export function ProfileSheet({
           </section>
         )}
 
-        {tab === 'SEATS & TEAMS' && <SeatsTab username={username} />}
+        {tab === 'SEATS & TEAMS' && <SeatsTab username={username} passwordless={status.passwordless} />}
       </div>
     </div>
   )

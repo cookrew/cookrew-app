@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -149,7 +149,8 @@ import { GatewayMonitor } from './route/gateway'
 import { RouteService } from './route/service'
 import { magpieInstalled } from './route/discovery'
 import { claudeComposerDrawn, forkContextReady, forkTerminal as forkTerminalOp, harnessReadyForInput, injectWhenReady } from './fork'
-import { AgentRegistry } from './agent-registry'
+import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
+import { HARNESS_FACTS } from './route/setup'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
@@ -293,6 +294,7 @@ import {
   TeamStore,
   copyTeam,
   forkTeam,
+  resolveTargetDir,
   workspaceFromTemplate,
   entryAgentOf,
   orchAgentOf,
@@ -374,6 +376,14 @@ import { PinStore } from './pin-store'
 import { rekeyPinsByUuid } from './pin-rekey'
 import { cutVersionPin, type VersionPinRecord } from '../shared/version-pin'
 import { TeamClipboard } from './team-clip'
+import { TerminalCloser, type CloseOutcome, type Survivor } from './terminal-close'
+import { blockStands, cleanTail, commandWord, exitFailure, launchBlock } from './launch-check'
+import { takePaneExit } from './pane-exit'
+import { PaneFollower } from './pane-follow'
+import type { LaunchFailure } from '../shared/launch-failure'
+import type { EventActor } from './event-log'
+import { provedSessions, strayPanes } from './orphan-reap'
+import type { StrayPane } from '../shared/stray-pane'
 import { UNCOPYABLE_PHASES, type TurnPhase } from '../shared/turn'
 import { GitInfoCache, addWorktree } from './git'
 import { buildRoleBootMessage } from '../shared/fork'
@@ -951,6 +961,12 @@ const accounts = new Accounts({
   deviceName: localDeviceName(),
   // STRATA: the record also says what kind of machine this is (machine-profile.ts).
   machine: async () => ({ profile: await machineProfile(), appVersion: app.getVersion() }),
+  // A provider's login page opens in the system browser and never in a window
+  // of ours: a person must not type a GitHub password into a page this app
+  // controls. The scheme is asked rather than assumed, because a development
+  // copy shares its bundle id with every other Electron on the machine.
+  openBrowser: (url) => shell.openExternal(url),
+  schemeHandled: () => app.isPackaged || app.isDefaultProtocolClient(DEEP_LINK_SCHEME),
   // THE ACCOUNT CHANGED WITHOUT A CLICK ON THIS MAC. A password changed on the
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
@@ -1256,7 +1272,13 @@ canvasLink.onDrop(canvasBridge.reset)
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
+  // No account, or no passcode chosen yet: nothing could open this lock, so it
+  // does not close.
+  armed: () => accounts.lockable(),
+  waiting: () => accounts.providerTripping(),
   onChange: (locked) => {
+    // A provider trip in flight belongs to whoever just walked away.
+    if (locked) accounts.providerCancel()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:locked', locked)
     }
@@ -2533,6 +2555,9 @@ const deepLinks = createDeepLinkQueue((link) => {
 })
 
 function acceptDeepLink(raw: string): void {
+  // A PROVIDER'S WAY BACK STOPS HERE. It carries a handoff, so it never joins
+  // the queue to the renderer; `accounts` drops it unless it started this trip.
+  if (accounts.oauthReturn(raw)) return
   const link = parseDeepLink(raw)
   if (link === null) {
     // The link itself is not logged: it is whatever a stranger's page put in
@@ -2653,11 +2678,15 @@ function beginBootTiming(terminalId: string): boolean {
   return true
 }
 
-function recordSpawn(terminalId: string, session: PtySession): void {
+/** Terminals whose close is under way, for the whole removal: see spawnTracked. */
+const closingTerminals = new Set<string>()
+
+/** A card as the registry records it. */
+function registryInput(terminalId: string): AgentRegistryUpsert | null {
   const hit = store.nodeAcrossWorkspaces(terminalId)
-  if (!hit || hit.node.kind !== 'terminal') return
+  if (!hit || hit.node.kind !== 'terminal') return null
   const meta = store.list().workspaces.find((w) => w.id === hit.workspaceId)
-  agents.upsert({
+  return {
     id: hit.node.id,
     name: hit.node.name,
     preset: hit.node.preset,
@@ -2668,9 +2697,131 @@ function recordSpawn(terminalId: string, session: PtySession): void {
     workspaceName: meta?.name ?? hit.workspaceId,
     orch: hit.node.orch,
     sessionRef: nodeSessionRef(hit.node as TerminalNodeData)
+  }
+}
+
+/** What the pane's boot script will export, so a check here is a check there. */
+const paneSearchPath = (): string => `${ptys.runtimeDir}:${process.env.PATH ?? ''}`
+
+/** The multiplexer's strict word on one pane: null when it could not say. */
+function panePresence(id: string): boolean | null {
+  const mux = multiplexer()
+  const name = sessionNameFor(id)
+  if (!mux) return false
+  return mux.sessionPresence ? mux.sessionPresence(name) : mux.sessionExists(name)
+}
+
+/** Every live session now, or a rejection when the backend cannot be read. */
+async function liveNow(): Promise<ReadonlySet<string>> {
+  const mux = multiplexer()
+  if (!mux) return new Set()
+  return mux.liveSessions ? mux.liveSessions() : new Set(mux.listSessions())
+}
+
+type LaunchSubject = { id: string; command: string; cwd: string; claudeSessionId?: string | null }
+
+/** What would stop this card booting, whatever runs now. Never a served one: its sandbox is its own. */
+function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
+  const home = store.ownerOf(t.id)
+  if (home !== undefined && servedSpawnContexts.has(home)) return null
+  // spawnTracked moves a card to where its claude session lives first, so the check looks there too.
+  const repaired = isClaudeCommand(t.command) && t.claudeSessionId ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId }) : null
+  return launchBlock({
+    cwd: repaired ?? t.cwd,
+    command: t.command,
+    path: paneSearchPath(),
+    // The direct backend boots through a login shell, whose PATH this cannot see.
+    checkCommand: multiplexer()?.capabilities.persistsAcrossRestart === true,
+    installLine: (word) => HARNESS_FACTS.find((harness) => harness.bin === word)?.installLine ?? null
   })
-  session.once('exit', () => {
-    if (!session.wasDisposed) agents.deactivate(terminalId)
+}
+
+/**
+ * What stops this card starting now. A running agent whose folder went away is
+ * still running, so a pane that is there, or may be, blocks nothing. Asked last:
+ * it costs a fork, and only a card with a cause pays it. `live` saves a sweep that
+ * fork per card. A strict read, never the admission cache: a cold cache says no pane.
+ */
+function launchBlockOf(t: LaunchSubject, live?: ReadonlySet<string>): LaunchFailure | null {
+  const block = bootBlockOf(t)
+  if (!block) return null
+  const open = live ? live.has(sessionNameFor(t.id)) : panePresence(t.id) !== false
+  return open ? null : block
+}
+
+/** Put the failure on the card. `announce` when someone just tried, not when a sweep looked. */
+function noteLaunchFailure(terminalId: string, failure: LaunchFailure, announce: boolean): void {
+  const input = registryInput(terminalId)
+  if (!input) return
+  const known = agents.lookup(terminalId)?.failure
+  if (known?.kind === failure.kind && known.why === failure.why) return
+  agents.fail(input, failure)
+  if (announce) store.recordEventIn(input.workspaceId, 'terminal.launch-failed', terminalId, input.name, failure.why)
+}
+
+/**
+ * Could this offline card start now? Asked before words are sent to it (the box
+ * keeps them when the answer is no) and by the sweep. A cause that has gone
+ * lifts its failure, so a folder put back is not a card still saying it is lost.
+ */
+function checkLaunch(terminalId: string, announce = true, live?: ReadonlySet<string>): LaunchFailure | null {
+  const hit = store.nodeAcrossWorkspaces(terminalId)
+  if (!hit || hit.node.kind !== 'terminal' || ptys.get(terminalId)) return null
+  const block = launchBlockOf(hit.node as TerminalNodeData, live)
+  if (block) {
+    noteLaunchFailure(terminalId, block, announce)
+    return agents.lookup(terminalId)?.failure ?? block
+  }
+  const known = agents.lookup(terminalId)?.failure
+  if (!known?.blocked) return null
+  if (blockStands(known, bootBlockOf(hit.node as TerminalNodeData))) return known
+  agents.clearFailure(terminalId)
+  return null
+}
+
+/** The cards on one workspace's screen: a stat each and one listing, never the whole machine. */
+async function refreshLaunchBlocks(workspaceId: string): Promise<void> {
+  try {
+    const live = await liveNow()
+    for (const id of store.terminalIdsOf(workspaceId)) checkLaunch(id, false, live)
+  } catch (error) {
+    console.error('Checking which cards can start failed:', error)
+  }
+}
+
+/** What a mirror's process ending says about it, when the process did end. */
+function failureOfExit(terminalId: string, session: PtySession, exitCode: number): LaunchFailure | null {
+  const name = sessionNameFor(terminalId)
+  // An attach client can go while its pane runs on: that is no death to report.
+  if (multiplexer()?.sessionExists(name) === true) return null
+  const record = takePaneExit(ptys.runtimeDir, name)
+  const command = session.command ?? ''
+  return exitFailure({
+    name: commandWord(command) ?? store.nodeAcrossWorkspaces(terminalId)?.node.name ?? 'It',
+    agent: command.trim().length > 0,
+    // An attach client's own code says nothing of the pane; with no backend between, it IS the agent's.
+    exitCode: record?.exitCode ?? (session.usesTmux ? null : exitCode),
+    signal: record?.signal ?? null,
+    tail: record && record.tail.length > 0 ? record.tail : cleanTail(session.outputTail),
+    ranMs: Date.now() - session.startedAt,
+    reattached: session.reattached
+  })
+}
+
+/** recordSpawn runs again for a REUSED session; the death is to be read once. */
+const exitWatched = new WeakSet<PtySession>()
+
+function recordSpawn(terminalId: string, session: PtySession): void {
+  const input = registryInput(terminalId)
+  if (!input) return
+  agents.upsert(input)
+  if (exitWatched.has(session)) return
+  exitWatched.add(session)
+  session.once('exit', (exitCode: number) => {
+    if (session.wasDisposed) return
+    const failure = failureOfExit(terminalId, session, exitCode)
+    if (failure) noteLaunchFailure(terminalId, failure, true)
+    else agents.deactivate(terminalId)
   })
 }
 
@@ -2833,7 +2984,10 @@ function adoptablePiSession(terminalId: string, cwd: string): string | null {
   )
 }
 
-/** Spawn (or reuse) a PTY for a terminal node and register turn tracking. */
+/**
+ * Spawn (or reuse) a PTY for a terminal node and register turn tracking. False
+ * when no session came of it: the card says why, and the caller must not say it started.
+ */
 function spawnTracked(t: {
   id: string
   command: string
@@ -2843,7 +2997,10 @@ function spawnTracked(t: {
   opencodeSessionId?: string | null
   piSessionId?: string | null
   sessionLineage?: string[]
-}): void {
+}): boolean {
+  // A card being closed takes no new pane: it would outlive the card, or be
+  // what the close's own retry ends.
+  if (closingTerminals.has(t.id)) return false
   // A card whose Claude session lives under ANOTHER directory than its cwd
   // (launched in an adopted pane that kept its old directory) moves to where
   // the session is BEFORE anything below derives a path from the cwd: the
@@ -2865,8 +3022,14 @@ function spawnTracked(t: {
     const workspace = home === undefined ? undefined : store.list().workspaces.find((w) => w.id === home)
     if (workspace && !workspace.dirs.includes(repairedCwd)) store.addWorkspaceDir(workspace.id, repairedCwd)
     store.updateNodeUnsafe(t.id, { cwd: repairedCwd })
-    spawnTracked({ ...t, cwd: repairedCwd })
-    return
+    return spawnTracked({ ...t, cwd: repairedCwd })
+  }
+  // Before any pane exists: a pane that cannot start only hides why. Under herdr
+  // a bad folder would not even fail, the agent starts wherever the pane was.
+  const blocked = ptys.get(t.id) ? null : launchBlockOf(t)
+  if (blocked) {
+    noteLaunchFailure(t.id, blocked, true)
+    return false
   }
   const owner = store.ownerOf(t.id) ?? store.focusedId
   const servedCtx = servedSpawnContexts.get(owner)
@@ -3017,17 +3180,28 @@ function spawnTracked(t: {
   // A direct claude card's alias is spelled for the gateway its own settings name (claude-model-route.ts).
   const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
   const fresh = !ptys.get(t.id)
-  const session = ptys.spawn(
-    {
-      terminalId: t.id,
-      command: launched,
-      cwd: t.cwd,
-      card,
-      served,
-      ...(spawnRoute ? { route: spawnRoute } : {})
-    },
-    owner
-  )
+  let session: PtySession
+  try {
+    session = ptys.spawn(
+      {
+        terminalId: t.id,
+        command: launched,
+        cwd: t.cwd,
+        card,
+        served,
+        ...(spawnRoute ? { route: spawnRoute } : {})
+      },
+      owner
+    )
+  } catch (error) {
+    // A husk the check let by (it has a pane) refuses here: the card says why.
+    const block = bootBlockOf(t)
+    if (!block) throw error
+    noteLaunchFailure(t.id, block, true)
+    return false
+  }
+  // A new process owes nothing to an old death still on file.
+  if (fresh && !session.reattached) takePaneExit(ptys.runtimeDir, sessionNameFor(t.id))
   // The route is RECORDED only when a process was created: a tmux reattach
   // rode a surviving session and ignored the boot command, so what this
   // spawn computed never reached it; the card then reads "applies on restart".
@@ -3185,6 +3359,7 @@ function spawnTracked(t: {
   // is harness-generic (harness-integration-contract): any 'file'-capable
   // harness with a bound session ref gets durable history, not just Claude.
   watchSessionTurns(t.id)
+  return ptys.get(t.id) !== undefined
 }
 
 /** Claude sessions owned by OTHER terminals — current bindings AND lineage.
@@ -3256,6 +3431,26 @@ function dampedSpawnSession(
  * tiny reads per sweep, and a card whose process has moved house is rebound
  * within ORACLE_SWEEP_MS instead of the 33 hours measured on 2026-09-05.
  */
+/** A pane that went with nobody attached: tmux may have kept what happened (pane-exit.ts). */
+function noteDetachedDeath(id: string): void {
+  const record = takePaneExit(ptys.runtimeDir, sessionNameFor(id))
+  const entry = agents.lookup(id)
+  const failure =
+    record && entry
+      ? exitFailure({
+          name: commandWord(entry.command) ?? entry.name,
+          agent: entry.command.trim().length > 0,
+          exitCode: record.exitCode,
+          signal: record.signal,
+          tail: record.tail,
+          ranMs: Number.POSITIVE_INFINITY,
+          reattached: true
+        })
+      : null
+  if (failure) noteLaunchFailure(id, failure, false)
+  else agents.deactivate(id)
+}
+
 /**
  * THE REGISTRY OUTLIVES NOTHING IT DESCRIBES (agent-reconcile.ts).
  *
@@ -3268,6 +3463,7 @@ function dampedSpawnSession(
  * is marked when the multiplexer cannot be seen: blindness is not absence.
  */
 function reconcileAgentLiveness(): void {
+  void refreshLaunchBlocks(store.focusedId)
   try {
     const mux = multiplexer()
     if (!mux?.available()) return
@@ -3280,7 +3476,7 @@ function reconcileAgentLiveness(): void {
     )
     const exempt = new Set(entries.filter((e) => servedSpawnContexts.has(e.workspaceId)).map((e) => e.id))
     const stale = staleAgentIds({ entries, observable: true, live, exempt })
-    for (const id of stale) agents.deactivate(id)
+    for (const id of stale) noteDetachedDeath(id)
     if (stale.length > 0) {
       console.error(`Reconciled ${stale.length} stale agent entr${stale.length === 1 ? 'y' : 'ies'}`)
     }
@@ -3462,8 +3658,7 @@ function putAgentToSleep(id: string, quietMs: number): void {
   herdrPhases.observe(id, null, true)
   sessionSync.unwatch(id)
   turns.untrack(id)
-  if (ptys.get(id)) ptys.kill(id)
-  else ptys.killDetached(id)
+  ptys.kill(id)
   agents.deactivate(id)
   idleSleep.markAsleep(id)
   const minutes = Math.round(quietMs / 60_000)
@@ -3491,6 +3686,21 @@ function paneAlive(id: string): boolean {
   return mux?.sessionExists(name) === true
 }
 
+/** Words that reached no process: the box takes them back, and everyone else hears why. */
+function noteInputLost(id: string): void {
+  const hit = store.nodeAcrossWorkspaces(id)
+  const failure = agents.lookup(id)?.failure
+  store.withOpContext({ actor: 'agent' }, () =>
+    store.recordEventIn(
+      hit?.workspaceId ?? store.focusedId,
+      'terminal.input-lost',
+      id,
+      hit?.node.name ?? id,
+      failure ? `${failure.why} ${failure.fix}` : 'it is offline and would not start — the prompt was not delivered'
+    )
+  )
+}
+
 const waker = new AgentWaker<PtySession>({
   session: (id) => ptys.get(id),
   isTerminal: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'terminal',
@@ -3501,16 +3711,18 @@ const waker = new AgentWaker<PtySession>({
   // anything, so a Claude session waits for its input box as well.
   ready: (session) =>
     waitForReady(session, {
-      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined
+      drawn: isClaudeCommand(session.command ?? '') ? () => claudeComposerDrawn(session.viewportText()) : undefined,
+      gone: () => ptys.get(session.terminalId) !== session
     }),
   sleep: { take: (id) => idleSleep.takeAsleep(id), mark: (id) => idleSleep.markAsleep(id) },
   // Never a silent drop (Sol r8): the words went nowhere, so say so.
   lost: (id, chunks) => {
     if (chunks.length === 0) return
-    const node = store.nodeAcrossWorkspaces(id)?.node
-    store.withOpContext({ actor: 'agent' }, () =>
-      store.recordEvent('terminal.input-refused', id, node?.name ?? id, 'it is offline and would not start — the prompt was not delivered')
-    )
+    if (chunks.some((chunk) => /[\r\n]/.test(chunk))) return noteInputLost(id)
+    // Keys with no Enter are a draft on its way, and the box still has it. Only
+    // its line has to hear (live-line.ts): it would count them as typed.
+    const hit = store.nodeAcrossWorkspaces(id)
+    if (hit) store.recordEventIn(hit.workspaceId, 'terminal.keys-lost', id, hit.node.name)
   },
   warn: (message) => console.warn(message)
 })
@@ -4033,11 +4245,9 @@ function endServedSession(sessionId: string): { stopped: number } {
   const record = serving.instantiator.sessions().find((s) => s.identity.sessionId === sessionId)
   const stopped = serving.instantiator.end(sessionId)
   if (record && store.list().workspaces.some((w) => w.id === record.workspaceId)) {
-    try {
-      removeWorkspace(record.workspaceId)
-    } catch (error) {
+    removeWorkspace(record.workspaceId).catch((error) =>
       console.error(`ending ${sessionId}: its workspace could not be removed: ${String(error)}`)
-    }
+    )
   }
   // The face goes with the session. What we remember of a caller is about a
   // LIVE session, so a record that outlived one would draw somebody who left.
@@ -4046,42 +4256,81 @@ function endServedSession(sessionId: string): { stopped: number } {
   return stopped
 }
 
-function removeWorkspace(nameOrId: string): ReturnType<WorkspaceStore['list']> {
+const removingWorkspaces = new Map<string, Promise<ReturnType<WorkspaceStore['list']>>>()
+
+/**
+ * Delete a workspace, and every process it holds. Its terminals end FIRST, and
+ * a survivor stops the delete: the workspace and its cards are the only way
+ * anyone reaches that process again. One delete at a time per workspace, and the
+ * last one left is counted with the ones already going.
+ */
+async function removeWorkspace(nameOrId: string): Promise<ReturnType<WorkspaceStore['list']>> {
   const meta =
     store.list().workspaces.find((w) => w.id === nameOrId) ?? store.metaByName(nameOrId)
   if (!meta) throw new Error(`Workspace '${nameOrId}' not found`)
-  const browserIds = store.browserIdsOf(meta.id)
-  // A workspace that is gone should not keep a picture of itself (the screen
-  // wall). Dropped here, where the removal is known, rather than left for the
-  // sweep that runs when the wall next opens.
-  workspaceShots.forget(meta.id)
-  // A served session's workspace: the session ends WITH it. Otherwise the
-  // record lingers open with no conductor and every caller read is a 503.
-  const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
-  if (servedHere) serving.instantiator.end(servedHere.identity.sessionId)
-  // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
-  // only switches away (detach) and rm's the state dir, so without this each
-  // terminal's tmux session (a claude CLI, bypassPermissions) would leak
-  // forever with no node left to reach it. Done before the switch-away so the
-  // active workspace's terminals are killed, not merely detached. Kills are
-  // by tmux session name, so parked (detached) terminals are reached too.
-  for (const id of store.terminalIdsOf(meta.id)) {
-    store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
-    // An open dispatch dies WITH its workspace — interrupted (infrastructure),
-    // never left submitted/busy until the sweep (Sol r1 P1).
-    retireTerminal(id, 'workspace removed')
-    defaultProducerLease().forgetTerminal(id)
-    defaultProducerLease().clearProvenanceOnDeath(id)
-    ptys.killDetached(id)
-    turns.untrack(id)
-    // Keep turn history as the recovery signal (see removeNode, R2 fix).
-    agents.deactivate(id)
+  const underway = removingWorkspaces.get(meta.id)
+  if (underway) return underway
+  if (store.list().workspaces.length - removingWorkspaces.size <= 1) throw new Error('Cannot remove the last workspace')
+  const run = endWorkspace(meta).finally(() => removingWorkspaces.delete(meta.id))
+  removingWorkspaces.set(meta.id, run)
+  return run
+}
+
+/** Passes over a workspace's terminals: one, and a card recruited during the wait gets the next. */
+const WORKSPACE_END_PASSES = 3
+
+async function endWorkspace(meta: WorkspaceMeta): Promise<ReturnType<WorkspaceStore['list']>> {
+  const ended = new Set<string>()
+  try {
+    // Kill this workspace's terminals BEFORE deleting it — store.removeWorkspace
+    // only switches away (detach) and rm's the state dir, so without this each
+    // terminal's tmux session (a claude CLI, bypassPermissions) would leak
+    // forever with no node left to reach it. Done before the switch-away so the
+    // active workspace's terminals are killed, not merely detached. Kills are
+    // by session name, so parked (detached) terminals are reached too.
+    for (let pass = 0; ; pass += 1) {
+      const ids = store.terminalIdsOf(meta.id).filter((id) => !ended.has(id))
+      if (ids.length === 0) break
+      if (pass === WORKSPACE_END_PASSES) throw new Error(`"${meta.name}" was not removed: cards kept arriving while it closed`)
+      for (const id of ids) store.snapshotTerminal(id) // HIGH-1: capture recovery snapshot before the kill
+      // An open dispatch dies WITH its workspace — interrupted (infrastructure),
+      // never left submitted/busy until the sweep (Sol r1 P1).
+      const survivors = await endTerminals(ids, 'workspace removed')
+      const gone = new Set(survivors.map(({ id }) => id))
+      for (const id of ids.filter((candidate) => !gone.has(candidate))) {
+        ended.add(id)
+        defaultProducerLease().forgetTerminal(id)
+        turns.untrack(id)
+        // Keep turn history as the recovery signal (see removeNode, R2 fix).
+        agents.deactivate(id)
+      }
+      if (survivors.length > 0) {
+        const names = survivors.map(({ id }) => store.nodeAcrossWorkspaces(id)?.node.name ?? id).join(', ')
+        const stopped = ended.size > 0 ? ` ${ended.size} other agent(s) did stop.` : ''
+        const why = `${names} did not stop (${survivors[0].error}).${stopped}`
+        // The wall logs a rejection and no more, and some agents did end: this is what says so.
+        store.recordEventIn(meta.id, 'workspace.remove-failed', meta.id, meta.name, why)
+        throw new Error(`"${meta.name}" was not removed: ${why}`)
+      }
+    }
+    // No await from the last look to the delete: nothing can arrive between them.
+    const browserIds = store.browserIdsOf(meta.id)
+    // A workspace that is gone should not keep a picture of itself (the screen
+    // wall). Dropped here, where the removal is known, rather than left for the
+    // sweep that runs when the wall next opens.
+    workspaceShots.forget(meta.id)
+    // A served session's workspace: the session ends WITH it. Otherwise the
+    // record lingers open with no conductor and every caller read is a 503.
+    const servedHere = serving.instantiator.sessionForWorkspace(meta.id)
+    if (servedHere) serving.instantiator.end(servedHere.identity.sessionId)
+    store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
+    void Promise.all(browserIds.map((id) => browserManager.discard(id))).catch((error) =>
+      console.error('Failed to discard removed workspace browser profiles:', error)
+    )
+    return store.list()
+  } finally {
+    for (const id of ended) closingTerminals.delete(id)
   }
-  store.removeWorkspace(meta.id) // switches away first if active (fires 'switch')
-  void Promise.all(browserIds.map((id) => browserManager.discard(id))).catch((error) =>
-    console.error('Failed to discard removed workspace browser profiles:', error)
-  )
-  return store.list()
 }
 
 // ---- workspace directories + per-terminal cwd (workspace v2) ----
@@ -4233,6 +4482,12 @@ async function setTerminalCwd(nodeId: string, dir: string): Promise<CanvasNode> 
       },
       kill: (id) => ptys.killAndWait(id),
       spawn: (node) => spawnTracked(node),
+      // Only a process is at stake: a card with none may move onto an unmounted folder.
+      cannotStart: (node, target) => {
+        if (!ptys.get(node.id) && panePresence(node.id) === false) return null
+        const block = bootBlockOf({ id: node.id, command: node.command, cwd: target })
+        return block ? `${block.why} ${block.fix} ${node.name} was left running.` : null
+      },
       carry: (move) => carrySessionToCwd({ ...move, turns: turns.history(move.node.id) }),
       dirExists: (target) => {
         try {
@@ -4535,12 +4790,12 @@ function recoverAgent(id: string): RecoverResult {
     // Only report spawned when we actually (re)booted — an already-live
     // process is a no-op double-recover (LOW).
     const exact = canRestoreExact(hit.node as TerminalNodeData)
-    const didSpawn = bootsTerminalsFor(hit.workspaceId) && !ptys.get(id) && exact
-    const forked = didSpawn && heldSession(hit.node as TerminalNodeData)
-    if (didSpawn) spawnTracked(hit.node)
+    const wanted = bootsTerminalsFor(hit.workspaceId) && !ptys.get(id) && exact
+    const forked = wanted && heldSession(hit.node as TerminalNodeData)
+    const didSpawn = wanted && spawnTracked(hit.node)
     return {
       ok: true, id, name: hit.node.name, workspaceId: hit.workspaceId,
-      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact, forked
+      workspaceName: workspaceName(hit.workspaceId), spawned: didSpawn, legacy: false, exact, forked, ...notStarted(id, wanted, didSpawn)
     }
   }
 
@@ -4563,13 +4818,13 @@ function recoverAgent(id: string): RecoverResult {
     // EXACT-CONTEXT gate: boot only when the exact session is restorable —
     // never a fresh/stray session masquerading as recovery.
     const exact = canRestoreExact(added)
-    const didSpawn = plan.spawn && exact
-    const forked = didSpawn && heldSession(added)
-    if (didSpawn) spawnTracked(added)
+    const wanted = plan.spawn && exact
+    const forked = wanted && heldSession(added)
+    const didSpawn = wanted && spawnTracked(added)
     recoverable.remove(id)
     return {
       ok: true, id, name: added.name, workspaceId: plan.targetWorkspaceId,
-      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact, forked
+      workspaceName: workspaceName(plan.targetWorkspaceId), spawned: didSpawn, legacy: false, exact, forked, ...notStarted(id, wanted, didSpawn)
     }
   }
 
@@ -4591,13 +4846,19 @@ function recoverAgent(id: string): RecoverResult {
   const orch = activeOrch()
   if (orch && orch.id !== added.id) store.connectAcross(added.id, orch.id)
   const exact = canRestoreExact(added)
-  const didSpawn = bootsTerminalsFor(targetWs) && exact
-  const forked = didSpawn && heldSession(added)
-  if (didSpawn) spawnTracked(added)
+  const wanted = bootsTerminalsFor(targetWs) && exact
+  const forked = wanted && heldSession(added)
+  const didSpawn = wanted && spawnTracked(added)
   return {
     ok: true, id, name: added.name, workspaceId: targetWs,
-    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact, forked
+    workspaceName: workspaceName(targetWs), spawned: didSpawn, legacy: true, exact, forked, ...notStarted(id, wanted, didSpawn)
   }
+}
+
+/** A recover that meant to boot and could not: the toast says why, not "resumes later". */
+function notStarted(id: string, wanted: boolean, didSpawn: boolean): { blocked?: string } {
+  if (!wanted || didSpawn) return {}
+  return { blocked: agents.lookup(id)?.failure?.why ?? 'it would not start' }
 }
 
 /**
@@ -4612,6 +4873,8 @@ function recoverAgent(id: string): RecoverResult {
 function retireTerminal(id: string, why: string): void {
   dispatchService.interruptAgent(id, why)
   turns.clearOpenTurnFact(id)
+  turns.forgetPane(id)
+  paneFollower.forget(id)
   // A dead generation's lease holder becomes invisible and its late release
   // a no-op — a reborn id must never inherit a stranded submission window.
   defaultProducerLease().retire(id)
@@ -4628,6 +4891,116 @@ function retireTerminal(id: string, why: string): void {
   tuneAsks.forget(id)
   tuningCache.forget(id)
   tuningAnnounced.delete(id)
+}
+
+/** How long a pane the boot sweep closed gets before it is looked at again. */
+const SWEEP_CONFIRM_MS = 4000
+
+/** The boot sweep closed these. Said once they are seen gone: one still there stays on the board. */
+function noteSwept(sessions: readonly string[]): void {
+  if (sessions.length === 0) return
+  const confirm = async (): Promise<void> => {
+    const live = await liveNow()
+    for (const session of sessions.filter((name) => !live.has(name))) {
+      const entry = agents.list().find((candidate) => sessionNameFor(candidate.id) === session)
+      if (entry) agents.deactivate(entry.id)
+      store.recordEvent('terminal.swept', entry?.id ?? session, entry?.name ?? session, 'it had no card, so it was closed at launch')
+    }
+  }
+  setTimeout(() => void confirm().catch((error) => console.error('Confirming the boot sweep failed:', error)), SWEEP_CONFIRM_MS).unref()
+}
+
+/** Live panes no card reaches, for the board. Empty when the store cannot be read whole. */
+async function listStrayPanes(): Promise<StrayPane[]> {
+  const mux = multiplexer()
+  if (!mux) return []
+  try {
+    return strayPanes([...(await liveNow())], store.allTerminalIdsStrict(), agents.list())
+  } catch (error) {
+    console.error('Listing panes with no card failed:', error)
+    return []
+  }
+}
+
+/** End a stray by hand: the same proof the sweep needs, asked again at the moment of the act. */
+async function endStrayPane(session: string): Promise<CloseOutcome> {
+  const stray = (await listStrayPanes()).find((pane) => pane.session === session)
+  if (!stray) return { ok: false, error: 'That pane is not running without a card any more.' }
+  if (!ptys.holdsHostClaim()) return { ok: false, error: 'This app does not own the terminal server, so it ends nothing.' }
+  if (!stray.proved || stray.terminalId === null) {
+    return { ok: false, error: 'Nothing proves this app started that pane, so it was left running.' }
+  }
+  const closed = await terminalCloser.close(stray.terminalId)
+  if (!closed.ok) return closed
+  agents.deactivate(stray.terminalId)
+  store.recordEvent('terminal.killed', stray.terminalId, stray.name ?? session, 'a pane with no card')
+  return closed
+}
+
+/** How often a card with no mirror re-reads its pane. */
+const PANE_FOLLOW_MS = 2000
+
+/** A terminal whose card has only its pane to go on: no session file behind it. */
+const hasNoRecord = (command: string): boolean => harnessFor(command)?.turns !== 'file'
+
+const paneFollower = new PaneFollower({
+  candidates: () =>
+    store.focusedState.nodes
+      .filter((node) => node.kind === 'terminal' && !ptys.get(node.id) && !closingTerminals.has(node.id) && hasNoRecord(node.command) && !node.servedSession)
+      .map((node) => node.id),
+  live: async (ids) => {
+    const sessions = await liveNow()
+    return new Set(ids.filter((id) => sessions.has(sessionNameFor(id))))
+  },
+  capture: async (id) => {
+    const mux = multiplexer()
+    const name = sessionNameFor(id)
+    return (mux?.captureAsync ? await mux.captureAsync(name) : mux?.capture(name)) ?? null
+  },
+  // Asked again: a capture takes a while, and the card may have gone or got a mirror.
+  publish: (id, text) => {
+    if (store.nodeAcrossWorkspaces(id) && !ptys.get(id) && !closingTerminals.has(id)) turns.observePane(id, text, isAgentTerminal(id))
+  },
+  gone: (id) => {
+    turns.forgetPane(id)
+    noteDetachedDeath(id)
+  }
+})
+const paneFollowTimer = setInterval(() => void paneFollower.tick(), PANE_FOLLOW_MS)
+paneFollowTimer.unref()
+
+const terminalCloser = new TerminalCloser({
+  kill: (id) => ptys.killAndWait(id),
+  survived: (id, why) => {
+    const hit = store.nodeAcrossWorkspaces(id)
+    console.error(`Terminal ${id} survived its close: ${why}`)
+    store.recordEventIn(hit?.workspaceId ?? store.focusedId, 'terminal.kill-failed', id, hit?.node.name ?? id, why)
+  }
+})
+
+/**
+ * Retire these terminals and end them, returning the ones that would not go.
+ * The ended stay in closingTerminals until the caller's removal is done, or a
+ * mirror or a wake could boot a pane under a card about to be deleted. A survivor
+ * is taken back: its card is the only handle on it, so it must see and reach it.
+ */
+async function endTerminals(ids: readonly string[], why: string): Promise<Survivor[]> {
+  for (const id of ids) {
+    closingTerminals.add(id)
+    retireTerminal(id, why)
+  }
+  const survivors = await terminalCloser.closeAll(ids)
+  for (const { id } of survivors) {
+    closingTerminals.delete(id)
+    const hit = store.nodeAcrossWorkspaces(id)
+    if (hit?.node.kind !== 'terminal' || panePresence(id) !== true) continue
+    try {
+      spawnTracked(hit.node as TerminalNodeData)
+    } catch (error) {
+      console.error(`Taking back terminal ${id} failed:`, error)
+    }
+  }
+  return survivors
 }
 
 /**
@@ -4649,7 +5022,14 @@ function retireTerminal(id: string, why: string): void {
  * The node is read AFTER the wait, so the spawn takes the command as saved.
  */
 async function respawnInPlace(id: string): Promise<boolean> {
-  if (store.nodeAcrossWorkspaces(id)?.node.kind !== 'terminal') return false
+  const current = store.nodeAcrossWorkspaces(id)?.node
+  if (current?.kind !== 'terminal') return false
+  // Before the kill: ending a running agent that cannot start again loses it.
+  const cannot = bootBlockOf(current as TerminalNodeData)
+  if (cannot) {
+    console.error(`respawn ${id}: ${cannot.why} It was left running.`)
+    return false
+  }
   try {
     await ptys.killAndWait(id)
   } catch (error) {
@@ -4658,8 +5038,7 @@ async function respawnInPlace(id: string): Promise<boolean> {
   }
   const node = store.nodeAcrossWorkspaces(id)?.node
   if (!node || node.kind !== 'terminal') return false
-  spawnTracked(node)
-  return true
+  return spawnTracked(node)
 }
 
 /**
@@ -4751,6 +5130,7 @@ function relaunchDeps(): RelaunchDeps {
     },
     live: (id) => ptys.get(id) !== undefined || paneAlive(id),
     restorable: (node) => routeService.restorable(node),
+    cannotStart: (node) => bootBlockOf(node)?.why ?? null,
     respawn: (id) => void respawnInPlace(id)
   }
 }
@@ -4829,35 +5209,48 @@ function announceTuning(terminalId: string): void {
   tuningBus.emit('tuning', row)
 }
 
-async function removeNode(id: string): Promise<void> {
-  // A removed remote card forgets its door; a re-import signs in afresh.
-  doorTranscripts.delete(id)
-  doorWatch.forget(id)
-  const node = store.node(id)
-  // "END THIS SESSION" means at the door, too. The card is the caller's only
-  // handle on a session running at someone else's app; closing it without
-  // telling the door left that session — its workspace, its agents — running
-  // there for nobody. Best effort and off the critical path: the card goes
-  // whatever the door says, and a door that cannot be reached is logged.
-  if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
-  retireTerminal(id, 'terminal removed')
-  defaultProducerLease().forgetTerminal(id)
-  routeService.forget(id)
-  // A permanently removed uuid never returns: its input-provenance fact
-  // protects nothing and would otherwise sit in the WAL forever.
-  defaultProducerLease().clearProvenanceOnDeath(id)
+/**
+ * Close a card. A terminal's card goes only once its process has: see
+ * terminal-close.ts. Its own workspace, not the one on screen: a phone can close
+ * a card while the desktop looks elsewhere (focus is only focus, ruling 11-04).
+ */
+async function removeNode(id: string, opContext: { actor?: EventActor; via?: string | null } = {}): Promise<CloseOutcome> {
+  const node = store.nodeAcrossWorkspaces(id)?.node
   // NOTE: turn history is deliberately NOT cleared on kill — it is the third
   // recovery net (resolveClaudeSessionId matches it to the real session when
   // no snapshot/registry ref exists). Disk-capped at 100/agent, negligible;
   // clearing it destroyed a recovery signal for nothing (R2 fix).
-  ptys.kill(id)
-  browserThumbs.forget(id)
-  const browserStopped = node?.kind === 'browser'
-    ? browserManager.discard(id)
-    : browserManager.remove(id)
-  store.removeNode(id)
-  agents.deactivate(id)
-  await browserStopped
+  // killAndWait clears the input-provenance fact, and only on a proven death:
+  // a surviving pane's box is still real.
+  if (node?.kind === 'terminal') {
+    const [survivor] = await endTerminals([id], 'terminal removed')
+    if (survivor) return { ok: false, error: survivor.error }
+  }
+  try {
+    // Everything below only once the process is gone: a card that keeps a
+    // survivor keeps its door, its route and its lease.
+    // A removed remote card forgets its door; a re-import signs in afresh.
+    doorTranscripts.delete(id)
+    doorWatch.forget(id)
+    // "END THIS SESSION" means at the door, too. The card is the caller's only
+    // handle on a session running at someone else's app; closing it without
+    // telling the door left that session — its workspace, its agents — running
+    // there for nobody. Best effort and off the critical path: the card goes
+    // whatever the door says, and a door that cannot be reached is logged.
+    if (node?.kind === 'terminal' && node.servedSession) void endSessionAtDoor(node)
+    defaultProducerLease().forgetTerminal(id)
+    routeService.forget(id)
+    browserThumbs.forget(id)
+    const browserStopped = node?.kind === 'browser'
+      ? browserManager.discard(id)
+      : browserManager.remove(id)
+    store.withOpContext(opContext, () => store.removeNodeAcross(id))
+    agents.deactivate(id)
+    await browserStopped
+    return { ok: true }
+  } finally {
+    closingTerminals.delete(id)
+  }
 }
 
 /** Fork an agent from one of its turns — shared by IPC, CLI and mobile. */
@@ -4943,6 +5336,8 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
     const session = ptys.get(added.id)
     if (session) {
       injectWhenReady(session, boot).catch((error) => console.error('Boot prompt injection failed:', error))
+    } else if (first) {
+      noteInputLost(added.id)
     }
   }
   if (opts.autoName && first) {
@@ -5059,14 +5454,24 @@ const teamClipboard = new TeamClipboard({
   // lookup could remove the freshly pasted card instead of the source.
   // The source is inactive by construction (same-workspace cut refused),
   // but its cut agents' detached sessions are still ALIVE — end them now
-  // (killDetached reaches sessions with no live PTY), not at the next
+  // (kill reaches sessions with no live PTY), not at the next
   // startup reap. Moved notes/browsers have nothing to tear down.
   // A cut MOVES the session, so the copy will resume the very file the source
   // is still appending to. An inactive workspace's agents are detached, not
   // dead, so they are ended here — before the paste, not after it. killAndWait
   // throws on a survivor rather than letting `new-session -A` reattach it.
-  stopCut: async (nodeIds, fromWorkspaceId) => {
+  stopCut: async (nodeIds, fromWorkspaceId, intoWorkspaceId) => {
     const state = store.workspaceState(fromWorkspaceId)
+    const targetDirs = store.list().workspaces.find((w) => w.id === intoWorkspaceId)?.dirs ?? []
+    // All of them before any kill, and where the paste will boot them, which is
+    // the target's folder unless it also lists theirs. A card with no process
+    // has nothing to lose, so it goes and its new card says what it needs.
+    for (const node of state.nodes) {
+      if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
+      if (!ptys.get(node.id) && panePresence(node.id) === false) continue
+      const block = bootBlockOf({ id: node.id, command: node.command, cwd: resolveTargetDir(node.cwd, undefined, targetDirs) })
+      if (block) throw new Error(`"${node.name}" was not moved: ${block.why} It was left running.`)
+    }
     for (const node of state.nodes) {
       if (node.kind !== 'terminal' || !nodeIds.includes(node.id)) continue
       retireTerminal(node.id, 'terminal cut')
@@ -5083,7 +5488,6 @@ const teamClipboard = new TeamClipboard({
       defaultProducerLease().forgetTerminal(node.id)
       defaultProducerLease().clearProvenanceOnDeath(node.id)
       ptys.kill(node.id)
-      ptys.killDetached(node.id)
       agents.deactivate(node.id)
     }
     store.removeNodesFromWorkspace(fromWorkspaceId, nodeIds)
@@ -6152,6 +6556,7 @@ if (!app.requestSingleInstanceLock()) {
   // its argv to the instance holding the lock, and that argv carries the link.
   app.on('second-instance', (_event, argv) => {
     focusMainWindow()
+    if (argv.some((arg) => accounts.oauthReturn(arg))) return
     const link = deepLinkInArgv(argv)
     if (link) deepLinks.push(link)
   })
@@ -6311,6 +6716,10 @@ app.whenReady().then(() => {
     ptys,
     traces,
     spawnTracked,
+    cannotStart: (node) => {
+      const block = bootBlockOf(node)
+      return block ? `${block.why} ${block.fix} The agent was left running.` : null
+    },
     // Restore/undo kill the CLI; refuse while a turn is in flight so the
     // session file is never truncated out from under a writing process.
     phaseOf: (id) => turns.listVerified().find((a) => a.terminalId === id)?.phase ?? null,
@@ -6683,6 +7092,7 @@ app.whenReady().then(() => {
     store,
     ptys,
     spawnTerminal: spawnTracked,
+    dismissTerminal: (id) => removeNode(id, { actor: 'orch', via: 'dismiss' }),
     agents,
     turns,
     sous: sousDoor,
@@ -6961,6 +7371,9 @@ app.whenReady().then(() => {
     presets: withLaunchOffers(PRESETS),
     ops: {
       useSources,
+      checkLaunch,
+      listStrayPanes,
+      endStrayPane,
       addNode,
       updateNode,
       renameNode: (id, name) => renameByHand(renameDeps, id, name),
@@ -7073,11 +7486,18 @@ app.whenReady().then(() => {
   // userData can only be a predecessor still exiting: take it over.
   ptys.confirmHostClaim()
   try {
-    const reaped = ptys.reapOrphanSessions(store.allTerminalIdsStrict())
+    const reaped = ptys.reapOrphanSessions(store.allTerminalIdsStrict(), provedSessions(agents.list()))
     if (reaped.length > 0) console.error(`Reaped ${reaped.length} orphaned agent session(s)`)
+    noteSwept(reaped)
   } catch (error) {
     console.error('Skipping orphan reap: could not enumerate all workspace terminals', error)
   }
+  void refreshLaunchBlocks(store.focusedId)
+  void listStrayPanes().then((strays) => {
+    if (strays.length === 0) return
+    const line = strays.length === 1 ? '1 pane' : `${strays.length} panes`
+    store.recordEvent('terminal.strays', 'strays', line, 'running with no card; see the search board')
+  })
 
   // Terminals stay detached on cold start. Herdr keeps their processes alive;
   // a settled semantic zoom acquires the local PTY mirror on demand. Working
@@ -7261,6 +7681,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   // work you looked away from was never interrupted. Only what is not resident
   // is torn down, which flag-off makes the outgoing workspace — today's
   // behaviour exactly.
+  store.on('switch', () => {
+    void refreshLaunchBlocks(store.focusedId)
+    // The cards just came on screen: they should not wait out the interval.
+    void paneFollower.tick()
+  })
   store.on('switch', ({ previousTerminalIds }: { previousTerminalIds: string[] }) => {
     // The DECISION lives in workspace-switch.ts and the EXECUTION in
     // switch-runner.ts; this handler only connects them. Both were once one
@@ -7362,6 +7787,15 @@ function registerIpc(handlers: RestoreHandlers): void {
     // free of Electron; the CODES come from main's own memory, never from the
     // call, so the renderer chooses the file and nothing else. 0600, because
     // eight of these open the account.
+    // The OS draws this prompt, and it is macOS only. Elsewhere there is none.
+    touchId: {
+      available: () => process.platform === 'darwin' && systemPreferences.canPromptTouchID(),
+      prompt: (reason) =>
+        systemPreferences.promptTouchID(reason).then(
+          () => true,
+          () => false
+        )
+    },
     saveCodes: async (codes) => {
       if (!mainWindow) return { ok: false, reason: 'no_window' }
       const picked = await dialog.showSaveDialog(mainWindow, {
@@ -7911,6 +8345,9 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('events:query', (_e, query) => events.query(query ?? {}))
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
+  ipcMain.handle('agents:launch-check', (_e, id: string) => checkLaunch(id))
+  ipcMain.handle('strays:list', () => listStrayPanes())
+  ipcMain.handle('strays:end', (_e, session: string) => endStrayPane(session))
   // Activity Board snapshot for the desktop panel — same builder the HTTP
   // route and the SSE push use, so the three can never drift apart.
   ipcMain.handle('board:list', (_e, window?: unknown) =>

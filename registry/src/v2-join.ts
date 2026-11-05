@@ -121,7 +121,15 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
   v2Json(
     response,
     201,
-    { token: minted.token, exp: minted.exp, deviceId: attached.device.id, username },
+    {
+      token: minted.token,
+      exp: minted.exp,
+      deviceId: attached.device.id,
+      username,
+      // A code-joined Mac asks for the password at its first lock. When there
+      // is none to ask for, it has to know now and choose a passcode instead.
+      hasPassword: attached.account.passwordless !== true
+    },
     { 'set-cookie': cookie(minted.token) }
   )
 }

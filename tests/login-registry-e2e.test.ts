@@ -26,6 +26,7 @@ import { cliWrapper } from '../src/main/cli-shim'
 import { paneInputs } from '../src/main/pane-input'
 import type { LoginAudit } from '../src/main/login-cli'
 import { startSocketServer, type SocketServerDeps } from '../src/main/socket-server'
+import { fakeOAuth, type FakeOAuth } from './support/fake-oauth'
 
 const USERNAME = 'solis-test'
 const PASSWORD = 'SENTINEL correct horse battery staple'
@@ -169,8 +170,11 @@ let homes: string[] = []
 let origin = ''
 let server: Server
 let boxes: Box[] = []
+let github: FakeOAuth
 
 beforeEach(async () => {
+  github = await fakeOAuth()
+  github.device.answer = 'ok'
   dir = mkdtempSync(path.join(tmpdir(), 'login-e2e-registry-'))
   homes = []
   boxes = []
@@ -180,7 +184,7 @@ beforeEach(async () => {
     identity: new IdentityService(dir),
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
-    v2: createV2(dir)
+    v2: createV2(dir, { oauth: github.config() })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = assertLoopback(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
@@ -193,6 +197,7 @@ afterEach(async () => {
     server.closeAllConnections()
     server.close(() => resolve())
   })
+  await github.close()
   for (const home of [dir, ...homes]) rmSync(home, { recursive: true, force: true })
 })
 
@@ -291,6 +296,19 @@ const nothingTypedAnywhere = (box: Box, term: Terminal, ...typed: string[]): voi
   const record = JSON.stringify({ transcript: term.transcript, audits: box.audits })
   for (const secret of [PASSWORD, ...typed]) expect(record).not.toContain(secret)
 }
+
+const piped = (box: Box, wrapper: readonly string[]) =>
+  new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+    const child = spawn(wrapper[0] ?? '', wrapper.slice(1), {
+      env: { PATH: process.env.PATH ?? '', HOME: box.home, COOKREW_SOCKET: box.socketPath, COOKREW_TERMINAL_ID: 'term-box' }
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => (out += chunk))
+    child.stderr.on('data', (chunk) => (err += chunk))
+    child.stdin.end(`${PASSWORD}\n`)
+    child.on('exit', (code) => resolve({ code, out, err }))
+  })
 
 describe.skipIf(!hasPython)('the guard on this file', () => {
   it('will not send a credential anywhere but loopback', async () => {
@@ -454,18 +472,6 @@ describe.skipIf(!hasPython)('the app going away mid-prompt', () => {
 })
 
 describe.skipIf(!hasPython)('an agent, or a script', () => {
-  const piped = (box: Box, wrapper: readonly string[]) =>
-    new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(wrapper[0] ?? '', wrapper.slice(1), {
-        env: { PATH: process.env.PATH ?? '', HOME: box.home, COOKREW_SOCKET: box.socketPath, COOKREW_TERMINAL_ID: 'term-box' }
-      })
-      let out = ''
-      let err = ''
-      child.stdout.on('data', (chunk) => (out += chunk))
-      child.stderr.on('data', (chunk) => (err += chunk))
-      child.stdin.end(`${PASSWORD}\n`)
-      child.on('exit', (code) => resolve({ code, out, err }))
-    })
 
   it('cannot pipe a password in, and the try is on the record', async () => {
     await ownerDevice()
@@ -506,6 +512,63 @@ describe.skipIf(!hasPython)('an agent, or a script', () => {
       expect(result.err).not.toContain('SENTINEL-argv')
     }
     expect(box.audits).toEqual([])
+  })
+})
+
+describe.skipIf(!hasPython)('cookrew login --github, through the real CLI', () => {
+  it('shows the code, asks for a name in the open, and never asks for a password', async () => {
+    const box = await bootBox()
+    const term = shellOn(box, ['login', '--github'])
+    await term.sees('type this code: WDJB-MJHT')
+    await term.sees('Choose your Cookrew name [octo-cat]: ')
+    term.type('\r')
+    await term.sees('Signed in as @octo-cat')
+    await term.sees('choose a passcode')
+    expect(await term.exit()).toBe(0)
+    expect(term.transcript).not.toContain('Password for')
+    expect(term.transcript).not.toContain('dev-code-secret')
+    expect(loadAccount(box.home)).toMatchObject({ username: 'octo-cat', passwordless: true, unlock: null })
+  })
+
+  it('Ctrl-C at the wait ends it, and nothing is written', async () => {
+    github.device.answer = 'pending'
+    const box = await bootBox()
+    const term = shellOn(box, ['login', '--github'])
+    await term.sees('Waiting for GitHub')
+    term.type('\x03')
+    expect(await term.exit()).toBe(130)
+    expect(existsSync(accountFilePath(box.home))).toBe(false)
+    await vi.waitFor(() => expect(box.audits.map((a) => a.type)).toContain('account.login-refused'))
+  })
+
+  it('cookrew logout on a passwordless machine points at the app and asks for nothing', async () => {
+    const box = await bootBox()
+    const first = shellOn(box, ['login', '--github'])
+    await first.sees('Choose your Cookrew name')
+    first.type('nopass\r')
+    expect(await first.exit()).toBe(0)
+    const leaving = shellOn(box, ['logout'])
+    await leaving.sees('has no password')
+    expect(await leaving.exit()).toBe(1)
+    expect(leaving.transcript).not.toContain('Password for')
+    expect(existsSync(accountFilePath(box.home))).toBe(true)
+  })
+
+  it('takes no username beside the flag, and logout takes no flag, before a socket exists', async () => {
+    const box = await bootBox()
+    for (const argv of [['login', 'octo', '--github'], ['login', '--github', 'octo'], ['logout', '--github']]) {
+      const result = await piped(box, [process.execPath, CLI, ...argv])
+      expect(result.code).toBe(1)
+      expect(result.err).toContain('cookrew login --github')
+    }
+    expect(box.audits).toEqual([])
+  })
+
+  it('a script has no keyboard, flag or not', async () => {
+    const box = await bootBox()
+    const result = await piped(box, [process.execPath, CLI, 'login', '--github'])
+    expect(result.code).toBe(3)
+    expect(github.device.polls).toBe(0)
   })
 })
 

@@ -37,7 +37,7 @@ import type { V2Seated } from './served-endpoints'
 export interface SeatsApi {
   get<T>(pathname: string): Promise<AccountResult<T>>
   post<T>(pathname: string, body: unknown): Promise<AccountResult<T>>
-  del(pathname: string): Promise<AccountResult<void>>
+  del(pathname: string, body?: unknown): Promise<AccountResult<void>>
 }
 
 /** The seam over the owner's account. The session token stays inside Accounts. */
@@ -46,7 +46,12 @@ export function seatsApiOverAccounts(accounts: Accounts): SeatsApi {
     get: (pathname) => accounts.authed(pathname),
     post: (pathname, body) =>
       accounts.authed(pathname, { method: 'POST', body: JSON.stringify(body) }),
-    del: (pathname) => accounts.authed(pathname, { method: 'DELETE', parse: false })
+    del: (pathname, body) =>
+      accounts.authed(pathname, {
+        method: 'DELETE',
+        parse: false,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
+      })
   }
 }
 
@@ -98,9 +103,13 @@ export class DoorSeats {
       : { ok: false, reason: 'unknown' }
   }
 
-  /** END a seat. Call tokens stop being minted from it at once. */
-  end(team: string, id: string): Promise<AccountResult<void>> {
-    return this.api.del(`${teamPath(team)}/seats/${encodeURIComponent(id)}`)
+  /**
+   * END a seat. Call tokens stop being minted from it at once. `proof` is what
+   * a passwordless owner brings to the step-up on this route.
+   */
+  end(team: string, id: string, proof?: { stepUp: string }): Promise<AccountResult<void>> {
+    const path = `${teamPath(team)}/seats/${encodeURIComponent(id)}`
+    return proof === undefined ? this.api.del(path) : this.api.del(path, proof)
   }
 
   /**

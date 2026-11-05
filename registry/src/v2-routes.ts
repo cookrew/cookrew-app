@@ -34,7 +34,9 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { readAndStepUp } from './v2-step-up'
+import { heldIfPasswordless, readAndStepUp } from './v2-step-up'
+import { handleOAuthRoute } from './v2-oauth-routes'
+import { linkedView } from './v2-links'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -79,6 +81,9 @@ export function handleV2Route(ctx: V2Context): boolean {
   }
   const rest = parts.slice(1)
 
+  // Third-party sign-in, first because `/v2/me` below would swallow its
+  // `/v2/me/links/…`. It answers false for every path it does not own.
+  if (handleOAuthRoute(ctx, rest)) return true
   // PHASE 4, in one line and ahead of everything: the ladder's routes live
   // under /v2/sessions/… and /v2/me/… , and `/v2/me` below would swallow the
   // second half of them. It answers false for every path it does not own.
@@ -475,7 +480,11 @@ export function meBody(
     })),
     desktops: account.desktops.map((desktop) => desktopBody(desktop, names(desktop.deviceId))),
     recoveryCodesLeft: account.recovery.length,
-    factors
+    factors,
+    // Owner-only, like everything on this body. `publicProfile` carries none.
+    hasPassword: account.passwordless !== true,
+    email: account.email ?? null,
+    links: linkedView(account)
   }
 }
 
@@ -637,6 +646,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'recovery-codes' && method === 'POST') {
+    if (!(await heldIfPasswordless(ctx, signed, 'add-factor'))) return
     const codes = v2.accounts.mintRecoveryCodes(account.username, claims.jti)
     // Shown ONCE. They are stored hashed, so this is the only moment they
     // exist in readable form anywhere.
