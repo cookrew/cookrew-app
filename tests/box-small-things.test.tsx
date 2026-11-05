@@ -27,6 +27,14 @@ describe('the search box', () => {
     expect(saysNothingMatches({ hits: 2, actions: 0 })).toBe(false)
   })
 
+  it('stacks an action row above the panel: beside it, it floated over the page, see-through', () => {
+    const css = readFileSync('src/renderer/src/header.css', 'utf8')
+    const pop = /\.cr-board-pop \{[^}]*\}/.exec(css)?.[0] ?? ''
+    expect(pop).toMatch(/flex-direction: column/)
+    const roster = readFileSync('src/renderer/src/agent-roster.css', 'utf8')
+    expect(/\.cr-board-actions \{[^}]*\}/.exec(roster)?.[0]).toMatch(/background: var\(--cream-hi\)/)
+  })
+
   it('the panel under the box is told what the box found', () => {
     expect(readFileSync('src/renderer/src/BoardSearch.tsx', 'utf8')).toMatch(/actionCount=\{actions\.length\}/)
     expect(readFileSync('src/renderer/src/RosterPanel.tsx', 'utf8')).toMatch(/saysNothingMatches\(\{ hits: results\.length \+ itemHits\.length, actions: actionCount \}\)/)
