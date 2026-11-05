@@ -396,7 +396,11 @@ export interface CanvasRelay {
    * last seen by this process (null: not since it started).
    */
   presence(username: string): ReadonlyMap<string, DesktopPresence>
-  /** The account was deleted: its desktops' lines end, and when they were seen is forgotten. */
+  /**
+   * The account was deleted: its desktops' lines end, and when they were seen is
+   * forgotten. Forgotten by name, not by `deviceIds`: a device signed out earlier
+   * is on no such list, and its sighting named the account in plain text.
+   */
   hangUp(username: string, deviceIds: readonly string[]): void
   /** Answered it? False when the path belongs to somebody else. */
   handle(request: IncomingMessage, response: ServerResponse, parts: string[], url: URL): boolean
@@ -496,6 +500,8 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   /** When each line was last opened, beaten or closed — presence's lastSeenAt, kept across a restart. */
   const nowMs = deps.now ?? ((): number => Date.now())
   const seen = createLineSeen(deps.seenFile ?? null, nowMs)
+  // A build before this one left deleted accounts' sightings behind.
+  seen.forgetWhere((name) => deps.v2.accounts.isRetired(name.slice(1, name.indexOf('/'))))
   const sawLine = (name: string): void => seen.see(name)
 
   /** The account a canvas name belongs to. The name is built from a token. */
@@ -982,11 +988,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     hub,
     live: (username, deviceId) => hub.has(canvasName(username, deviceId)),
     hangUp: (username, deviceIds) => {
-      for (const deviceId of deviceIds) {
-        const name = canvasName(username, deviceId)
-        dropLink(name, 'account deleted')
-        seen.forget(name)
-      }
+      const under = `@${username}/`
+      const lines = new Set([...deviceIds.map((id) => canvasName(username, id)), ...hub.namesUnder(under)])
+      for (const name of lines) dropLink(name, 'account deleted')
+      seen.forgetWhere((name) => name.startsWith(under))
     },
     presence,
     stats: () => ({ links: live.size, ...counts }),

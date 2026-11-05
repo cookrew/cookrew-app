@@ -20,8 +20,8 @@ export const SEEN_MAX = 50_000
 export interface LineSeen {
   get(name: string): number | undefined
   see(name: string): void
-  /** The line's account was deleted. */
-  forget(name: string): void
+  /** Forget every line this answers true for, and write at once: a deleted name must not wait out the flush. */
+  forgetWhere(gone: (name: string) => boolean): void
   /** Write now if anything changed (tests, shutdown). */
   flush(): void
 }
@@ -59,8 +59,8 @@ export function createLineSeen(file: string | null, now: () => number = Date.now
 
   return {
     get: (name) => seen.get(name),
-    forget: (name) => {
-      if (seen.delete(name)) dirty = true
+    forgetWhere: (gone) => {
+      for (const name of [...seen.keys()]) if (gone(name) && seen.delete(name)) dirty = true
       flush()
     },
     see: (name) => {

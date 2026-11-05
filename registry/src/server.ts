@@ -322,6 +322,7 @@ export function createRegistry(deps: RegistryDeps): Server {
     relay?.hangUpHandle(username)
     canvas?.hangUp(username, account.devices.map((device) => device.id))
     deps.stars?.forgetAccount(username)
+    deps.pulse?.forgetAccount(username)
     deps.identity?.forget(username)
     deps.pricing?.payouts.forget(username)
   }
