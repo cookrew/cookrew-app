@@ -15,7 +15,7 @@ describe('noteNameFromContent', () => {
   })
 
   it('keeps a word that is not English', () => {
-    expect(noteNameFromContent('## 发布计划')).toBe('发布计划')
+    expect(noteNameFromContent('## Überblick')).toBe('Überblick')
   })
 
   it('falls back to untitled for empty content', () => {
