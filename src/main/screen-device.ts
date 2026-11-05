@@ -255,7 +255,7 @@ export class ScreenDevice implements PixelDevice {
       }
       return
     }
-    const point = op.op === 'drag' ? { x: op.x1, y: op.y1 } : op.op === 'ping' ? null : { x: op.x, y: op.y }
+    const point = op.op === 'drag' ? { x: op.x1, y: op.y1 } : op.op === 'ping' || op.op === 'unlock' ? null : { x: op.x, y: op.y }
     if (!point) return
     const top = windows.find((w) => point.x >= w.x && point.x < w.x + w.width && point.y >= w.y && point.y < w.y + w.height)
     if (top && top.id !== window.id) {

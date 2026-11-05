@@ -166,6 +166,8 @@ export function ownerSecretPaths(
     path.join(base, 'pairing-token'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
+    // What a phone's sealed Mac password opens under (remote-unlock.ts).
+    path.join(base, 'unlock-key.json'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
     // plugin-providers.json, logins.json, plugin auth — is every upstream key
     // the owner holds; the Sous ledger and its Magpie facts; the owner's

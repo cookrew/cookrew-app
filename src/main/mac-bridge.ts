@@ -23,7 +23,9 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child
  *
  * THE HAND ASKS ABOUT THE LOCK ITSELF, on every operation, inside the helper:
  * a cached answer would leave a window where keys land in the lock screen's
- * password field, and remote unlock is out. A locked session gets no event.
+ * password field. A locked session gets no event, with one exception: `unlock`,
+ * which only remote-unlock.ts sends and no viewer or agent verb can reach. It
+ * uses physical key codes, because a secure field ignores a bare unicode event.
  */
 
 export interface MacDisplay {
@@ -108,6 +110,7 @@ ObjC.import('Foundation'); ObjC.import('CoreGraphics'); ObjC.import('AppKit')
 ObjC.bindFunction('CGSessionCopyCurrentDictionary', ['id', []])
 const locked = () => { const session = ObjC.deepUnwrap($.CGSessionCopyCurrentDictionary()) || {}; return session.CGSSessionScreenIsLocked === true || session.kCGSSessionOnConsoleKey === false }
 const COMMAND = 0x100000
+const SHIFT = 0x20000
 const stdin = $.NSFileHandle.fileHandleWithStandardInput
 const stdout = $.NSFileHandle.fileHandleWithStandardOutput
 const say = (s) => stdout.writeData($(s + '\\n').dataUsingEncoding($.NSUTF8StringEncoding))
@@ -115,9 +118,25 @@ let dry = false
 const post = (ev) => { if (!dry) $.CGEventPost(0, ev) }
 const mouse = (type, x, y) => { const ev = $.CGEventCreateMouseEvent(null, type, { x, y }, 0); $.CGEventSetIntegerValueField(ev, 1, 1); post(ev) }
 const num = (v) => { if (typeof v !== 'number' || !isFinite(v)) throw new Error('bad number'); return v }
+const press = (k) => {
+  const code = k.code < 0 ? 0 : num(k.code)
+  const unit = Ref('unsigned short'); unit[0] = num(k.unit)
+  for (const down of [true, false]) { const ev = $.CGEventCreateKeyboardEvent(null, code, down); if (k.shift === true) $.CGEventSetFlags(ev, SHIFT); $.CGEventKeyboardSetUnicodeString(ev, 1, unit); post(ev) }
+  delay(0.03)
+}
+const unlockScreen = (op) => {
+  if (!locked()) throw new Error('not locked')
+  if (!Array.isArray(op.keys) || op.keys.length === 0 || op.keys.length > 128) throw new Error('bad keys')
+  // Any key brings the password field up; shift types nothing into it.
+  for (const down of [true, false]) post($.CGEventCreateKeyboardEvent(null, 56, down))
+  delay(0.7)
+  op.keys.forEach(press)
+  press({ code: 36, unit: 13 })
+}
 function run(op) {
   dry = op.dry === true
   if (op.op === 'ping') return
+  if (op.op === 'unlock') return unlockScreen(op)
   if (locked()) throw new Error('the screen is locked')
   switch (op.op) {
     case 'click': { const x = num(op.x), y = num(op.y); mouse(5, x, y); mouse(1, x, y); delay(0.02); mouse(2, x, y); return }
@@ -236,6 +255,27 @@ const MAC_KEYS: Record<string, number> = {
 
 export const macKeyCode = (name: string): number | null => MAC_KEYS[name] ?? null
 
+/** One character as a key press; `code` -1 when no key makes it, and only `unit` can say it. */
+export interface MacKeystroke {
+  readonly code: number
+  readonly shift: boolean
+  readonly unit: number
+}
+
+const SYMBOL_KEYS: Readonly<Record<string, number>> = { ' ': 49, '-': 27, '=': 24, '[': 33, ']': 30, '\\': 42, ';': 41, "'": 39, ',': 43, '.': 47, '/': 44, '`': 50 }
+const SHIFTED: Readonly<Record<string, string>> = { '!': '1', '@': '2', '#': '3', $: '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9', ')': '0', _: '-', '+': '=', '{': '[', '}': ']', '|': '\\', ':': ';', '"': "'", '<': ',', '>': '.', '?': '/', '~': '`' }
+
+/** ANSI positions, as the rest of this file assumes. */
+export function macKeystrokes(text: string): MacKeystroke[] {
+  return Array.from({ length: text.length }, (_, i): MacKeystroke => {
+    const char = text[i]
+    const unit = text.charCodeAt(i)
+    const base = SHIFTED[char] ?? (/[A-Z]/.test(char) ? char.toLowerCase() : char)
+    const code = MAC_KEYS[base] ?? SYMBOL_KEYS[base]
+    return code === undefined ? { code: -1, shift: false, unit } : { code, shift: base !== char, unit }
+  })
+}
+
 export type MacOp =
   | { op: 'ping' }
   | { op: 'click'; x: number; y: number }
@@ -243,6 +283,7 @@ export type MacOp =
   | { op: 'scroll'; x: number; y: number; dx: number; dy: number }
   | { op: 'key'; code: number; cmd?: true }
   | { op: 'type'; text: string }
+  | { op: 'unlock'; keys: readonly MacKeystroke[] }
 
 interface Waiter {
   resolve: () => void

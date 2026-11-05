@@ -59,7 +59,7 @@ export interface RemoteState {
   readonly waiting: boolean
 }
 
-export type RemoteActionId = 'open-screen-settings' | 'open-accessibility-settings' | 'check-again' | 'restart' | 'wake-display' | 'show-the-screen' | 'pick-another'
+export type RemoteActionId = 'unlock' | 'open-screen-settings' | 'open-accessibility-settings' | 'check-again' | 'restart' | 'wake-display' | 'show-the-screen' | 'pick-another'
 
 export interface RemoteConfirm {
   readonly title: string
@@ -114,6 +114,8 @@ export interface RemoteControlFacts {
   readonly available: boolean
   readonly switchOn: boolean
   readonly accessibility: boolean
+  /** The unlock key in six words, for comparing with what a phone shows. */
+  readonly unlockWords?: readonly string[]
 }
 
 export interface RemoteAccess {
@@ -257,6 +259,9 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
     case 'ready':
       return plain('Ready', 'The screen of this Mac can be shared.', false, [])
     case 'locked':
+      if (where === 'away' && state.platform === 'darwin') {
+        return plain('This Mac is locked', `Unlock it from here with its password, and the picture comes back by itself${seen}.`, false, [{ id: 'unlock', label: 'Unlock' }, CHECK])
+      }
       return plain('This Mac is locked', `It needs someone at the Mac to unlock it, and the picture comes back by itself${seen}.`, true)
     case 'needs-screen-recording':
       return permissionView(state, where, 'Screen Recording is off', 'open-screen-settings', `Turn on ${name} in ${SCREEN_PANE}.${listedWords(state.build)}`)

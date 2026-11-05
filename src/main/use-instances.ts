@@ -10,7 +10,7 @@ import { CamDevice } from './cam-device'
 import { cameraAccess, ElectronCaptureHost } from './capture-host'
 import type { RemoteState } from '../shared/remote-access'
 import { LinuxScreenDevice, linuxSources } from './linux-screen'
-import { listMacScreens, MacInput, macWindowAlive } from './mac-bridge'
+import { listMacScreens, MacInput, macWindowAlive, macKeystrokes } from './mac-bridge'
 import { PixelInstance, type PixelDevice, type RemoteGate } from './pixel-instance'
 import type { SettingsPane } from './remote-desk'
 import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
@@ -60,6 +60,8 @@ export interface UseInstances {
   makeInstance(target: UseTarget, node: { id: string }): BrowserInstance | null
   /** The window picker's source for this machine; null where there is none. */
   sources(): UseSourceProvider | null
+  /** Types a password at this Mac's lock screen. Only remote-unlock.ts calls this. */
+  typeAtLock(password: string): Promise<void>
   /** Every live card hears its status again. */
   refresh(): void
   /** Every live card looks at its device now. */
@@ -149,6 +151,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
     wake() {
       for (const instance of live.values()) instance.wake()
     },
+    typeAtLock: (password) => handOf().send({ op: 'unlock', keys: macKeystrokes(password) }),
     dispose() {
       hand?.close()
       hand = null

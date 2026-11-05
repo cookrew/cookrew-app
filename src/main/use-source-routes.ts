@@ -14,6 +14,8 @@ import { NO_SOURCE, type UseSourceService } from './use-source-service'
  *   POST /api/use/sources/control    Take control of a card, or give it back: { card, on }
  *   POST /api/use/sources/restart    relaunch, on a build that can, to finish a grant
  *   POST /api/use/sources/wake       wake a sleeping display
+ *   POST /api/use/sources/unlock/begin  the Mac's key and a one-time challenge
+ *   POST /api/use/sources/unlock     { sealed }: a password sealed on the phone
  *
  * Everything here is a device somewhere else, so `where` is always away. The
  * machine switch is not here and never will be: it is the Mac's alone to set.
@@ -81,6 +83,17 @@ export async function handleUseSourceRoutes(
     if (method !== 'POST') return wrongMethod()
     const answer = await service.wake(workspaceId, service.whoIs(credential))
     return answer.ok ? respondJson(response, 200, { ok: true }) : respondJson(response, answer.status, { ok: false, error: answer.error })
+  }
+  if (path === `${USE_SOURCES_PATH}/unlock/begin`) {
+    if (method !== 'POST') return wrongMethod()
+    const answer = await service.unlockBegin(workspaceId, service.whoIs(credential))
+    return answer.ok ? respondJson(response, 200, answer.value) : respondJson(response, answer.status, { ok: false, error: answer.error })
+  }
+  if (path === `${USE_SOURCES_PATH}/unlock`) {
+    if (method !== 'POST') return wrongMethod()
+    const body = await readJson<{ sealed?: unknown } | null>(request).catch(() => null)
+    const answer = await service.unlock(workspaceId, body?.sealed, service.whoIs(credential))
+    return answer.ok ? respondJson(response, 200, answer.value) : respondJson(response, answer.status, { ok: false, error: answer.error })
   }
   respondJson(response, 404, { ok: false, error: 'Not found' })
 }

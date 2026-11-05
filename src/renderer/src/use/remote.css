@@ -288,3 +288,33 @@
     min-height: 36px;
   }
 }
+
+/* The unlock sheet: the Mac's key in words, and the password. */
+.rp-unlock-words {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.rp-unlock-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0;
+  padding: 10px;
+  font-size: 16px; /* Under 16 px an iPhone zooms the page on focus. */
+}
+
+.rp-unlock-remember {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.rp-unlock-error {
+  margin-top: 8px;
+  color: var(--sumi-wait, var(--danger, #c0392b));
+}

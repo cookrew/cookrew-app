@@ -150,3 +150,44 @@ describe('a served session', () => {
     expect(added).toEqual([])
   })
 })
+
+describe('the unlock routes', () => {
+  const door = () => ({
+    begin: vi.fn(async () => ({ ok: true as const, key: 'k', challenge: 'c' })),
+    unlock: vi.fn(async () => ({ ok: true as const, outcome: 'unlocked' as const }))
+  })
+
+  it('a paired device gets the key and sends what it sealed', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {} })).body).toEqual({ ok: true, key: 'k', challenge: 'c' })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' } })).body).toEqual({ ok: true, outcome: 'unlocked' })
+    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box')
+  })
+
+  it('the wall token reaches neither', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: WALL, body: {} })).status).toBeGreaterThanOrEqual(401)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: WALL, body: { sealed: 'e.box' } })).status).toBeGreaterThanOrEqual(401)
+    expect(unlock.begin).not.toHaveBeenCalled()
+    expect(unlock.unlock).not.toHaveBeenCalled()
+  })
+
+  it('a served seat reaches neither', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const served = { ...deps(), store: { focusedId: 'served' } } as MobileApiDeps
+    expect((await call(served, 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {} })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('refuses anything that is not a sealed string', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 7 } })).status).toBe(400)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'x'.repeat(5000) } })).status).toBe(400)
+    expect(unlock.unlock).not.toHaveBeenCalled()
+  })
+})
+
