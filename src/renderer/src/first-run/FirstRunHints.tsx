@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { activityStore } from '../activity-thumb-store'
 import { PairPhoneSheet } from '../account/PairPhoneSheet'
 import { HINT_COPY } from '../../../shared/first-run-copy'
-import { stepTurns, type TurnMemory } from './first-run-rules'
+import { stepTurns, stillFinished, type TurnMemory } from './first-run-rules'
 import { firstRun, useFirstRunStage } from './first-run-state'
 import './first-run.css'
 
@@ -14,6 +14,8 @@ import './first-run.css'
  */
 
 export type HintKind = 'phone' | 'second'
+
+const SETTLE_MS = 2_500
 
 export function HintCard({ kind, onGo, onClose }: { kind: HintKind; onGo: () => void; onClose: () => void }): React.JSX.Element {
   const phone = kind === 'phone'
@@ -43,15 +45,26 @@ export function FirstRunHints(): React.JSX.Element | null {
   useEffect(() => {
     if ((stage !== 'phone' && stage !== 'second') || shown !== null) return
     let memory: TurnMemory = new Map()
+    let settling: ReturnType<typeof setTimeout> | null = null
     const read = (): void => {
       const step = stepTurns(memory, Object.values(activityStore.getSnapshot()))
       memory = step.memory
-      if (!step.ended) return
-      setShown(stage)
-      void firstRun.advance(stage === 'phone' ? 'second' : 'closed')
+      if (step.ended.length === 0 || settling !== null) return
+      const [id] = step.ended
+      // Replied can be a pause between steps: look again before saying "finished".
+      settling = setTimeout(() => {
+        settling = null
+        if (!stillFinished(activityStore.get(id))) return
+        setShown(stage)
+        void firstRun.advance(stage === 'phone' ? 'second' : 'closed')
+      }, SETTLE_MS)
     }
     read()
-    return activityStore.subscribeGlobal(read)
+    const off = activityStore.subscribeGlobal(read)
+    return () => {
+      off()
+      if (settling !== null) clearTimeout(settling)
+    }
   }, [stage, shown])
   return (
     <>

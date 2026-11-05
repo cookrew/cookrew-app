@@ -84,12 +84,19 @@ function answerOf(watch: LineWatch): string {
   return at < 0 ? (watch.echoed ? watch.tail : '') : watch.tail.slice(at + watch.line.length)
 }
 
+/**
+ * tmux's status bar (pty.ts · TMUX_CONF) arrives in the pane's stream, last, with
+ * only cursor moves between it and the prompt. Left in, the prompt was never the
+ * last line, the button stuck on running, and every Install stayed disabled.
+ */
+const withoutStatusBar = (text: string): string => text.replace(/[ \t]*cookrew · .*$/gm, '')
+
 /** A line wider than the pane comes back wrapped: the shell breaks it where the row ends. */
 const unwrapped = (text: string): string => text.replace(/\s+/g, '')
 
 export function observeOutput(watch: LineWatch, chunk: string): LineWatch {
   if (watch.done) return watch
-  const tail = (watch.tail + cleanOutput(chunk)).slice(-TAIL_MAX)
+  const tail = withoutStatusBar(watch.tail + cleanOutput(chunk)).slice(-TAIL_MAX)
   const echoed = watch.echoed || unwrapped(tail).includes(unwrapped(watch.line))
   const last = lastLine(tail)
   // The echo line itself ends in the command, never in a prompt character.

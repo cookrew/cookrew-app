@@ -284,6 +284,127 @@
   background: var(--zv-hair-2);
 }
 
+.fr-named {
+  margin: 8px 0 0;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+/* an agent getting ready: its real terminal, to answer what it asks */
+
+.fr-wait .fr-setup > :last-child {
+  height: 340px;
+}
+
+.fr-held {
+  margin: 16px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.fr-held span {
+  display: block;
+  color: var(--zv-muted);
+  font-size: 11.5px;
+}
+
+.fr-back {
+  position: absolute;
+  z-index: 46;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  color: var(--zv-ink);
+  font: 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+/* the road with no account; also inside the Routing panel, so every token has a fallback */
+
+.fr-access {
+  margin-top: 22px;
+}
+
+.fr-access-head {
+  margin: 0 0 6px;
+  font: 600 13px/1.4 var(--zv-mono, ui-monospace, Menlo, monospace);
+}
+
+.fr-access-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--zv-hair-2, rgba(0, 0, 0, 0.12));
+}
+
+.fr-endpoint {
+  margin-top: 8px;
+}
+
+.fr-protocols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.fr-protocol {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2, rgba(0, 0, 0, 0.12));
+  color: inherit;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.fr-protocol.on {
+  background: var(--zv-ink, #1d1a16);
+  color: var(--zv-paper, #f4efe4);
+}
+
+.fr-field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.fr-field span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--zv-muted, #6f675b);
+  font-size: 11.5px;
+}
+
+.fr-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--zv-card, #fbf7ee);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2, rgba(0, 0, 0, 0.12));
+  color: inherit;
+  font: inherit;
+}
+
+.fr-field small {
+  display: block;
+  margin-top: 4px;
+  color: var(--zv-muted, #6f675b);
+  font-size: 11px;
+}
+
 /* the tool check has no prompt yet; the first screen's box shows its words and nothing else */
 
 body.cr-first-preflight .zv-controls,
@@ -298,10 +419,11 @@ body.cr-first-task .cr-prompt .cr-prompt-tools {
 
 /* the hints: over the work, never in its way */
 
+/* Low on the right: the top of a full view holds LIVE/CHAT and its ＋ buttons. */
 .fr-hint {
   position: fixed;
   z-index: 60;
-  top: 64px;
+  bottom: 88px;
   right: 16px;
   width: min(340px, calc(100vw - 32px));
   padding: 14px 16px;
@@ -350,7 +472,7 @@ body.cr-first-task .cr-prompt .cr-prompt-tools {
   }
 
   .fr-hint {
-    top: 56px;
+    bottom: 84px;
     right: 12px;
   }
 }

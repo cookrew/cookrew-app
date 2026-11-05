@@ -1,5 +1,6 @@
 import type { MenuAct } from '../../shared/wait-choice'
-import type { FirstRunStage } from '../../shared/first-run'
+import type { FirstRunStage, FirstTask } from '../../shared/first-run'
+import type { AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
 import type { PreflightRow } from '../../shared/preflight'
 import type { TelemetryStatus } from '../../shared/funnel-events'
 import type { OpenBrowserStream } from './stream-line'
@@ -369,7 +370,7 @@ export interface CookrewApi {
     prompt?: string;
     /** `name` is a stand-in read off `prompt`: Sous names the card once it answers. */
     autoName?: boolean;
-    /** A person's first task: held until the composer is drawn, never typed blind. */
+    /** A person's first task: held until the composer is drawn, never typed blind (main/first-task.ts). */
     patient?: boolean;
     /** The model and effort it starts on, as launch flags (shared/launch-tune). */
     tune?: LaunchTune;
@@ -909,6 +910,17 @@ export interface CookrewApi {
   firstRunAdvance?: (to: FirstRunStage) => Promise<FirstRunStage>;
   /** One row per tool. Never rejects on a failed check: that row is "unknown". */
   firstRunPreflight?: () => Promise<readonly PreflightRow[]>;
+  /** The first task while no agent has it yet: held, or handed back. */
+  firstRunTask?: () => Promise<FirstTask | null>;
+  /** Call off a held task: its words come back, and its agent closes. */
+  firstRunDiscard?: () => Promise<void>;
+  /** Why this preset cannot start an agent now, or null when it can. */
+  firstRunCanStart?: (preset: string) => Promise<string | null>;
+  onFirstRun?: (cb: (view: { stage: FirstRunStage; task: FirstTask | null }) => void) => () => void;
+  /** The person's own endpoint (shared/agent-access.ts). Never carries the key. */
+  accessState?: () => Promise<AccessState>;
+  accessSave?: (input: EndpointInput) => Promise<AccessSaveAnswer>;
+  accessClear?: () => Promise<AccessState>;
   /** The one URL the popout draws as a QR, or null when there is none yet. */
   accountPairingUrl?: () => Promise<PairingHandout | null>;
   /** Phones this Mac has let in, listed beside the registry's devices. */
@@ -984,6 +996,8 @@ export interface CookrewApi {
   reconnect?: () => void;
   quitApp: () => void;
 }
+
+export type AccessSaveAnswer = { ok: true; state: AccessState } | { ok: false; field: EndpointField; why: string };
 
 import { createDemoApi } from "./demo-api";
 import { createRemoteApi } from "./remote-api";

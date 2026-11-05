@@ -3,7 +3,6 @@
 // rename that refuses a name another card of the workspace already wears.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildNamePrompt, buildNameSystem, cleanAgentName, nameFromPrompt, sanitizeAgentName, AGENT_NAME_MAX } from '../src/shared/agent-name'
-import { EXAMPLE_TASKS } from '../src/shared/first-run-copy'
 import { planRename, stillStandIn } from '../src/main/agent-rename'
 import { nameAgent } from '../src/main/agent-namer'
 
@@ -168,8 +167,7 @@ describe('no Ollama on this Mac: the plain name stays, and nothing is said', () 
     error.mockRestore()
   })
 
-  it('gives each example task a name a person can read, by rule alone', () => {
-    const names = EXAMPLE_TASKS.map(nameFromPrompt)
-    expect(names).toEqual(['Folder', 'Broken Outdated', 'Short Readme'])
+  it('falls back to a plain name a person can read, by rule alone', () => {
+    expect(nameFromPrompt('Write a short README for this folder')).toBe('Short Readme')
   })
 })

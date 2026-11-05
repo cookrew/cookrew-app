@@ -160,6 +160,10 @@ export function ownerSecretPaths(
     // owner's companion to whoever holds it.
     path.join(base, 'secrets'),
     path.join(base, 'pairing-token'),
+    // A person's own endpoint (agent-access.ts): its key, copied out for panes
+    // to read at boot, and where it points. A seat never runs on either.
+    path.join(base, 'access-keys'),
+    path.join(base, 'access.json'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
     // plugin-providers.json, logins.json, plugin auth — is every upstream key
     // the owner holds; the Sous ledger and its Magpie facts; the owner's

@@ -1,4 +1,5 @@
 import { FIX_LABELS, TOOL_COPY, TOOL_NOTES } from './first-run-copy'
+import { codexInstallLine, piInstallLine } from './route-lines'
 
 /**
  * WHAT THIS MACHINE HAS, AS ROWS. Main answers the facts (main/preflight.ts);
@@ -19,6 +20,8 @@ export interface ToolFacts {
   claudeSignedIn: boolean | null
   codex: ToolState
   codexSignedIn: boolean | null
+  pi: ToolState
+  opencode: ToolState
   herdr: ToolState
   tmux: ToolState
   chrome: ToolState
@@ -29,6 +32,10 @@ export interface ToolFacts {
   /** The backend hosting terminals right now; null when it could not be read. */
   host: string | null
   platform: string
+  /** The processor, which names the release to fetch. */
+  arch: string
+  /** Tools the person's own endpoint runs on: for them it stands in for a sign-in. */
+  endpointTools?: readonly string[]
 }
 
 export const UNKNOWN_FACTS: ToolFacts = {
@@ -36,6 +43,8 @@ export const UNKNOWN_FACTS: ToolFacts = {
   claudeSignedIn: null,
   codex: 'unknown',
   codexSignedIn: null,
+  pi: 'unknown',
+  opencode: 'unknown',
   herdr: 'unknown',
   tmux: 'unknown',
   chrome: 'unknown',
@@ -44,7 +53,8 @@ export const UNKNOWN_FACTS: ToolFacts = {
   brew: 'unknown',
   npm: 'unknown',
   host: null,
-  platform: 'unknown'
+  platform: 'unknown',
+  arch: 'unknown'
 }
 
 export type ToolId = keyof typeof TOOL_COPY
@@ -69,6 +79,7 @@ export interface PreflightRow {
 
 const CLAUDE_INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
 const CODEX_NPM = 'npm i -g @openai/codex'
+const OPENCODE_INSTALL = 'curl -fsSL https://opencode.ai/install | bash'
 const MAGPIE_INSTALL = 'curl -fsSL https://usemagpie.ai/install.sh | sh'
 const HOMEBREW_INSTALL = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
@@ -91,9 +102,18 @@ function installFix(id: ToolId, facts: ToolFacts): ToolFix | null {
   switch (id) {
     case 'claude':
       return { label: FIX_LABELS.INSTALL, line: CLAUDE_INSTALL }
-    case 'codex':
+    case 'codex': {
       if (facts.npm === 'found') return { label: FIX_LABELS.INSTALL, line: CODEX_NPM }
-      return throughBrew(facts, { label: FIX_LABELS.INSTALL, line: 'brew install codex' })
+      if (hasBrew(facts)) return { label: FIX_LABELS.INSTALL, line: 'brew install codex' }
+      const line = codexInstallLine(facts.platform, facts.arch)
+      return line === null ? null : { label: FIX_LABELS.INSTALL, line }
+    }
+    case 'pi': {
+      const line = piInstallLine(facts.platform, facts.arch)
+      return line === null ? null : { label: FIX_LABELS.INSTALL, line }
+    }
+    case 'opencode':
+      return { label: FIX_LABELS.INSTALL, line: OPENCODE_INSTALL }
     case 'multiplexer':
       return throughBrew(facts, { label: FIX_LABELS.INSTALL_TMUX, line: 'brew install tmux' })
     case 'chrome':
@@ -124,6 +144,7 @@ function row(id: ToolId, state: ToolState, facts: ToolFacts, extra: Partial<Pick
 
 function agentRow(id: 'claude' | 'codex', state: ToolState, signedIn: boolean | null, loginLine: string, facts: ToolFacts): PreflightRow {
   if (state !== 'found' || signedIn !== false) return row(id, state, facts)
+  if (facts.endpointTools?.includes(TOOL_COPY[id].name)) return row(id, state, facts, { note: TOOL_NOTES.USES_ENDPOINT })
   return row(id, state, facts, { note: TOOL_NOTES.NOT_SIGNED_IN, fix: { label: FIX_LABELS.SIGN_IN, line: loginLine } })
 }
 
@@ -138,6 +159,8 @@ export function preflightRows(facts: ToolFacts): PreflightRow[] {
   return [
     agentRow('claude', facts.claude, facts.claudeSignedIn, 'claude', facts),
     agentRow('codex', facts.codex, facts.codexSignedIn, 'codex login', facts),
+    row('pi', facts.pi, facts),
+    row('opencode', facts.opencode, facts),
     keeperRow(facts),
     row('chrome', facts.chrome, facts),
     row('magpie', facts.magpie, facts),
@@ -145,7 +168,10 @@ export function preflightRows(facts: ToolFacts): PreflightRow[] {
   ]
 }
 
+/** The rows that run agents, in the order a first agent would take them. */
+export const AGENT_TOOLS: readonly ToolId[] = ['claude', 'codex', 'pi', 'opencode']
+
 /** One agent tool is the whole requirement, and a failed check never counts as absent. */
 export function mayContinue(rows: readonly PreflightRow[]): boolean {
-  return rows.some((r) => (r.id === 'claude' || r.id === 'codex') && r.state !== 'missing')
+  return rows.some((r) => AGENT_TOOLS.includes(r.id) && r.state !== 'missing')
 }

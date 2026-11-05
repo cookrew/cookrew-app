@@ -85,6 +85,7 @@
 .zv-fv-who small { display: flex; flex-wrap: wrap; gap: 10px; font: 10.5px/1.2 var(--fv-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fv-muted); }
 .zv-fv-state { color: var(--fv-soft); }
 .zv-fv-state.waiting { color: var(--fv-wait); }
+.zv-fv-state.failed { color: #b3392f; }
 .zv-fv-used { margin-left: auto; display: flex; align-items: center; gap: 10px; font: 11px/1 var(--fv-mono); color: var(--fv-muted); }
 .zv-fv-used em { font-style: normal; letter-spacing: 0.12em; text-transform: uppercase; }
 .zv-fv-used i { display: flex; align-items: center; gap: 5px; font-style: normal; color: var(--fv-ink); }

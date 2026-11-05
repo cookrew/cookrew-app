@@ -259,7 +259,7 @@ describe('the account card (D8) — asked for by what the person reached', () =>
 
   it('tells the person nothing here waits on an account', () => {
     expect(ACCOUNT_COPY.ASK_PHONE_LEDE).toContain('keeps working without one')
-    expect(ACCOUNT_COPY.ASK_JOIN_LEDE).toContain('Nothing on this Mac needs an account')
+    expect(ACCOUNT_COPY.ASK_JOIN_LEDE).toContain('Nothing on this computer needs an account')
   })
 
   it('offers SIGN IN WITH PASSWORD · CREATE AN ACCOUNT · NOT NOW, in that order', () => {

@@ -6,7 +6,8 @@ import { runningLabel, type SetupRunning } from '../routing/setup-line-state'
 import type { RunOptions, RunOutcome, SetupError } from '../routing/use-setup-terminal'
 import { PREFLIGHT_COPY } from '../../../shared/first-run-copy'
 import { mayContinue, preflightRows, UNKNOWN_FACTS, type PreflightRow, type ToolState } from '../../../shared/preflight'
-import { firstHarness } from './first-run-rules'
+import { AccessRows } from './AccessRows'
+import { firstAgentHarness } from './first-run-rules'
 import { firstRun } from './first-run-state'
 
 /**
@@ -124,7 +125,7 @@ export interface PreflightSetup {
   running: SetupRunning | null
 }
 
-export function Preflight({ setup }: { setup: PreflightSetup }): React.JSX.Element {
+export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: () => void }): React.JSX.Element {
   const [rows, setRows] = useState<readonly PreflightRow[] | null>(null)
   /** Set by the first press: until then there is no terminal to look at. */
   const [pressed, setPressed] = useState(false)
@@ -158,10 +159,14 @@ export function Preflight({ setup }: { setup: PreflightSetup }): React.JSX.Eleme
     if (wasRunning.current && setup.running === null) check()
     wasRunning.current = setup.running !== null
   }, [setup.running, check])
-  const onward = (): void => {
-    const harness = rows ? firstHarness(rows) : null
+  const onward = async (): Promise<void> => {
+    const access = await cookrew()
+      .accessState?.()
+      .catch(() => null)
+    const harness = firstAgentHarness(rows ?? [], access?.active?.tools ?? null)
     if (harness) rememberHarness(harness)
     void firstRun.advance('task')
+    onDone()
   }
   return (
     <PreflightView
@@ -178,10 +183,11 @@ export function Preflight({ setup }: { setup: PreflightSetup }): React.JSX.Eleme
         setReleased(true)
         check()
       }}
-      onContinue={onward}
-      // No agent tool at all: the first screen could only make a card that dies, so this leaves the run.
-      onSkip={() => void firstRun.advance('closed')}
+      onContinue={() => void onward()}
+      // On to the first screen, which keeps the way back here: skipping is not leaving.
+      onSkip={() => void onward()}
     >
+      <AccessRows onChange={check} />
       {pressed && setup.terminalId && (
         <div className="fr-setup" ref={(el) => el?.scrollIntoView({ block: 'nearest' })}>
           <p className="fr-setup-title">{PREFLIGHT_COPY.SETUP_TITLE}</p>

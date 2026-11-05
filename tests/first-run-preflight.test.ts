@@ -14,6 +14,8 @@ const allFound: ToolFacts = {
   claudeSignedIn: true,
   codex: 'found',
   codexSignedIn: true,
+  pi: 'found',
+  opencode: 'found',
   herdr: 'found',
   tmux: 'found',
   chrome: 'found',
@@ -22,7 +24,8 @@ const allFound: ToolFacts = {
   brew: 'found',
   npm: 'found',
   host: 'herdr',
-  platform: 'darwin'
+  platform: 'darwin',
+  arch: 'arm64'
 }
 const bareMac: ToolFacts = {
   ...allFound,
@@ -30,6 +33,8 @@ const bareMac: ToolFacts = {
   claudeSignedIn: null,
   codex: 'missing',
   codexSignedIn: null,
+  pi: 'missing',
+  opencode: 'missing',
   herdr: 'missing',
   tmux: 'missing',
   chrome: 'missing',
@@ -46,8 +51,8 @@ const row = (rows: readonly PreflightRow[], id: PreflightRow['id']): PreflightRo
 }
 
 describe('the rows', () => {
-  it('lists the six tools in the order they matter', () => {
-    expect(preflightRows(allFound).map((r) => r.id)).toEqual(['claude', 'codex', 'multiplexer', 'chrome', 'magpie', 'ollama'])
+  it('lists the tools in the order they matter, every harness the app can run', () => {
+    expect(preflightRows(allFound).map((r) => r.id)).toEqual(['claude', 'codex', 'pi', 'opencode', 'multiplexer', 'chrome', 'magpie', 'ollama'])
   })
 
   it('marks only Magpie and Ollama optional', () => {
@@ -87,12 +92,25 @@ describe('the fix each row offers', () => {
     expect(fix?.line).toBe('curl -fsSL https://claude.ai/install.sh | bash')
   })
 
-  it('prefers npm for Codex, then Homebrew, then getting Homebrew', () => {
+  it('prefers npm for Codex, then Homebrew, then its own release: no box is left without a press', () => {
     expect(row(preflightRows({ ...bareMac, npm: 'found' }), 'codex').fix?.line).toBe('npm i -g @openai/codex')
     expect(row(preflightRows({ ...bareMac, brew: 'found' }), 'codex').fix?.line).toBe('brew install codex')
-    const first = row(preflightRows(bareMac), 'codex').fix
-    expect(first?.label).toBe('Install Homebrew first')
-    expect(first?.line).toContain('Homebrew/install')
+    expect(row(preflightRows(bareMac), 'codex').fix?.line).toContain('codex-aarch64-apple-darwin.tar.gz')
+    expect(row(preflightRows({ ...bareMac, platform: 'linux', arch: 'x64' }), 'codex').fix?.line).toContain('codex-x86_64-unknown-linux-musl.tar.gz')
+  })
+
+  it('installs Pi from its own release, with no npm or Node on the box', () => {
+    const line = row(preflightRows({ ...bareMac, platform: 'linux', arch: 'x64' }), 'pi').fix?.line
+    expect(line).toContain('releases/latest/download/pi-linux-x64.tar.gz')
+    expect(line).not.toMatch(/\bnpm\b|\bnode\b/)
+  })
+
+  it('installs OpenCode with its own script', () => {
+    expect(row(preflightRows(bareMac), 'opencode').fix?.line).toBe('curl -fsSL https://opencode.ai/install | bash')
+  })
+
+  it('offers no release it does not know the name of', () => {
+    expect(row(preflightRows({ ...bareMac, arch: 'ia32' }), 'pi').fix).toBeNull()
   })
 
   it('installs tmux for the missing keeper, through Homebrew', () => {
@@ -109,7 +127,6 @@ describe('the fix each row offers', () => {
 
   it('offers no Homebrew off a Mac', () => {
     const linux = preflightRows({ ...bareMac, platform: 'linux' })
-    expect(row(linux, 'codex').fix).toBeNull()
     expect(row(linux, 'multiplexer').fix).toBeNull()
     expect(row(linux, 'chrome').fix).toBeNull()
     expect(row(linux, 'ollama').fix).toBeNull()
@@ -122,6 +139,12 @@ describe('the fix each row offers', () => {
     expect(row(rows, 'codex').fix).toEqual({ label: 'Sign in', line: 'codex login' })
   })
 
+  it('takes an endpoint for a sign-in, on the tools that run on it', () => {
+    const rows = preflightRows({ ...allFound, claudeSignedIn: false, codexSignedIn: false, endpointTools: ['Claude Code', 'Pi'] })
+    expect(row(rows, 'claude').fix).toBeNull()
+    expect(row(rows, 'codex').fix?.label).toBe('Sign in')
+  })
+
   it('never offers an install for a state it could not read', () => {
     expect(preflightRows(UNKNOWN_FACTS).every((r) => r.state === 'unknown' && r.fix === null)).toBe(true)
   })
@@ -131,7 +154,7 @@ describe('the fix each row offers', () => {
     for (const brew of states) {
       for (const npm of states) {
         for (const signedIn of [true, false, null]) {
-          const facts = { ...bareMac, brew, npm, claudeSignedIn: signedIn, codexSignedIn: signedIn }
+          const facts = { ...bareMac, brew, npm, claudeSignedIn: signedIn, codexSignedIn: signedIn, platform: brew === 'found' ? 'darwin' : 'linux', arch: npm === 'found' ? 'x64' : 'arm64' }
           for (const r of [...preflightRows(facts), ...preflightRows({ ...facts, claude: 'found', codex: 'found' })]) {
             if (r.fix) expect(setupLineAllowed(r.fix.line), r.fix.line).toBe(true)
           }
@@ -150,10 +173,9 @@ describe('the fix each row offers', () => {
 })
 
 describe('whether the person may go on', () => {
-  it('needs one of the two agents', () => {
+  it('needs one tool that runs agents, whichever it is', () => {
     expect(mayContinue(preflightRows(bareMac))).toBe(false)
-    expect(mayContinue(preflightRows({ ...bareMac, codex: 'found' }))).toBe(true)
-    expect(mayContinue(preflightRows({ ...bareMac, claude: 'found' }))).toBe(true)
+    for (const id of ['claude', 'codex', 'pi', 'opencode']) expect(mayContinue(preflightRows({ ...bareMac, [id]: 'found' })), id).toBe(true)
   })
 
   it('never blocks on anything else', () => {

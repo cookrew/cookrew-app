@@ -1,7 +1,9 @@
-// THE FIRST RUN, PHOTOGRAPHED: the four screens the owner reviews, on the demo
-// api's fresh install, at a desktop and a phone width. Walks the real screens:
-// the example is tapped, Enter pressed, and the turn the demo plays ends.
-//   node scripts/first-run-shoot.mjs <cdpPort> <vitePort> <outDir>
+// THE FIRST RUN, PHOTOGRAPHED: the screens the owner reviews, on the demo api's
+// fresh install, at a desktop and a phone width. Walks the real screens: the
+// example is tapped, Enter pressed, and the turn the demo plays ends.
+//   COOKREW_TELEMETRY=0 node scripts/first-run-shoot.mjs <cdpPort> <vitePort> <outDir>
+// The demo has no main process and no network: nothing here reaches a registry,
+// and it refuses to drive anything but loopback.
 // A probe per shot records the width the page really laid out at: headless
 // Chrome clamps its OS window near 500 px, so a width is checked, never assumed.
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -9,6 +11,7 @@ import { connectPage } from './perf-dom-probe.mjs'
 
 const [cdpPort, vitePort, out] = process.argv.slice(2)
 if (!out) throw new Error('usage: first-run-shoot.mjs <cdpPort> <vitePort> <outDir>')
+if (process.env.COOKREW_TELEMETRY !== '0') throw new Error('set COOKREW_TELEMETRY=0: a QA run must never count as an install')
 mkdirSync(out, { recursive: true })
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const page = await connectPage(Number(cdpPort))
@@ -52,7 +55,7 @@ async function open(query, w, h) {
 
 for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
   await open('fresh=gaps', w, h)
-  await until(`document.querySelectorAll('.fr-row').length === 6`, 'the tool rows')
+  await until(`document.querySelectorAll('.fr-row').length === 8`, 'the tool rows')
   await shot(`${label}-1-preflight-gaps`)
   if (await value(`!!document.querySelector('.cr-acct-firstrun')`)) throw new Error('the account card appeared at launch')
 
@@ -64,7 +67,7 @@ for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
   await until(`document.querySelector('.fr-task')`, 'the first screen, past the Setup card')
 
   await open('fresh=green', w, h)
-  await until(`document.querySelectorAll('.fr-row.found').length === 6`, 'six found rows')
+  await until(`document.querySelectorAll('.fr-row.found').length === 8`, 'six found rows')
   await shot(`${label}-2-preflight-green`)
 
   await press('.fr-go', 'Continue')
@@ -73,12 +76,14 @@ for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
 
   await press('.fr-folder')
   await until(`document.querySelector('.fr-folder.chosen')`, 'the folder chosen')
+  await until(`document.body.textContent.includes('now called my-site')`, 'the workspace named after its folder')
   await press('.fr-example', 'README')
   await until(`document.querySelector('.cr-prompt input')?.value.includes('README')`, 'the example in the box')
   await shot(`${label}-3b-first-screen-ready`)
 
   await value(`document.querySelector('.cr-prompt').requestSubmit()`)
   await until(`document.querySelector('.fr-hint')`, 'the phone offer')
+  await until(`/done|resting/i.test(document.querySelector('.zv-root')?.textContent ?? '')`, 'the card at rest under the offer')
   await shot(`${label}-4-first-turn-phone-offer`)
 
   await press('.fr-go', 'Show the QR')
@@ -101,15 +106,81 @@ for (const [label, w, h] of [['1440', 1440, 900], ['412', 412, 915]]) {
   await until(`!document.querySelector('.fr-hint')`, 'the hint closed')
 
   await open('fresh=none', w, h)
-  await until(`document.querySelectorAll('.fr-row').length === 6`, 'the tool rows')
+  await until(`document.querySelectorAll('.fr-row').length === 8`, 'the tool rows')
   await shot(`${label}-7-preflight-no-agent-tool`)
-  // No agent tool: Skip leaves the run rather than start a card that would die.
+  // Skip keeps the first screen, and the first screen keeps the way back.
   await press('.fr-quiet', 'Skip')
-  await until(`!document.querySelector('.fr-stage') && document.querySelector('.zv-empty')`, 'the plain board')
+  await until(`document.querySelector('.fr-task')`, 'the first screen, after Skip')
+  await shot(`${label}-7b-first-screen-after-skip`)
+  await press('.fr-quiet', 'Check this computer again')
+  await until(`document.querySelectorAll('.fr-row').length === 8`, 'the way back to the check')
+  await press('.fr-quiet', 'Skip')
+  await until(`document.querySelector('.fr-task')`, 'the first screen again')
+  await press('.fr-quiet', 'Look around first')
+  await until(`document.querySelector('.fr-back') && !document.querySelector('.fr-task')`, 'the app, with a way back')
+  await press('.fr-back')
+  await until(`document.querySelector('.fr-task')`, 'back to getting started')
 
   await open('fresh=unknown', w, h)
-  await until(`document.querySelectorAll('.fr-row.unknown').length === 6`, 'unknown rows')
+  await until(`document.querySelectorAll('.fr-row.unknown').length === 8`, 'unknown rows')
   await shot(`${label}-8-preflight-unknown`)
+
+  // The road with no account: the form, a refusal that names the field, then saved.
+  await open('fresh=gaps', w, h)
+  await until(`document.querySelector('.fr-access-row')`, 'the endpoint row')
+  await press('.fr-access-row .fr-fix', 'Set up')
+  await until(`document.querySelector('.fr-endpoint')`, 'the endpoint form')
+  const type = (index, text) =>
+    value(`(() => { const box = document.querySelectorAll('.fr-endpoint input')[${index}]; const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(box, ${JSON.stringify(text)}); box.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+  await type(0, 'http://api.example.com')
+  await type(1, 'fake-demo-key')
+  await type(2, 'example-model-1')
+  await sleep(150)
+  await value(`document.querySelector('.fr-endpoint').requestSubmit()`)
+  await until(`document.querySelector('.fr-endpoint .fr-error')`, 'the refusal of plain http')
+  await value(`document.querySelector('.fr-endpoint').scrollIntoView({ block: 'center' })`)
+  await shot(`${label}-9-endpoint-form`)
+  await type(0, 'https://api.example.com')
+  await sleep(150)
+  await value(`document.querySelector('.fr-endpoint').requestSubmit()`)
+  await until(`document.body.textContent.includes('Your agents use api.example.com')`, 'the endpoint saved')
+  if (await value(`document.body.textContent.includes('fake-demo-key')`)) throw new Error('the key is on the screen')
+  await shot(`${label}-9b-endpoint-saved`)
+
+  // A first task waiting on the agent, with its real terminal to answer in.
+  const send = async (agent) => {
+    await open(`fresh=green&stage=task&agent=${agent}`, w, h)
+    await until(`document.querySelector('.fr-task') && document.querySelector('.fr-example')`, 'the first screen')
+    await press('.fr-folder')
+    await until(`document.querySelector('.fr-folder.chosen')`, 'the folder')
+    await press('.fr-example', 'README')
+    await until(`document.querySelector('.cr-prompt input')?.value.includes('README')`, 'the example in the box')
+    await value(`document.querySelector('.cr-prompt').requestSubmit()`)
+  }
+  for (const [agent, name, words] of [['asks', '10-agent-asks', 'question first'], ['signin', '11-agent-sign-in', 'Sign in to'], ['consent', '12-agent-consent', 'Yes, I accept']]) {
+    await send(agent)
+    await until(`document.querySelector('.fr-wait') && document.body.textContent.includes(${JSON.stringify(words)})`, name)
+    await until(`document.querySelector('.fr-wait .xterm-rows')?.textContent.trim().length > 0 || document.querySelector('.fr-wait .xterm-screen')`, 'the live terminal')
+    await shot(`${label}-${name}`)
+  }
+  // From the sign-in, the road: the agent closes, the words come back, the form is there.
+  await send('signin')
+  await until(`document.querySelector('.fr-wait') && document.body.textContent.includes('Sign in to')`, 'the sign-in wait')
+  await press('.fr-go', 'No account?')
+  await until(`document.querySelector('.fr-access-row') && document.querySelectorAll('.fr-row').length === 8`, 'the check, with the road')
+
+  // A refused turn: it says failed and why, and no "finished its first task" follows.
+  await send('refused')
+  await until(`document.body.textContent.includes('API Error: 400')`, 'the refusal on the card')
+  await until(`/failed/i.test(document.body.textContent)`, 'the failed status')
+  await sleep(3200)
+  if (await value(`!!document.querySelector('.fr-hint')`)) throw new Error('a refused turn was called finished')
+  await shot(`${label}-14-turn-refused`)
+
+  await send('dies')
+  await until(`document.querySelector('.fr-task .fr-error')`, 'the reason the agent stopped')
+  await until(`document.querySelector('.cr-prompt input')?.value.includes('README')`, 'the words back in the box')
+  await shot(`${label}-13-agent-died-words-back`)
 }
 writeFileSync(`${out}/probes.json`, JSON.stringify({ probes, problems }, null, 1))
 console.log(JSON.stringify({ probes, problems }, null, 1))

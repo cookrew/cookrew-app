@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { observeOutput, startedLine } from '../src/renderer/src/routing/setup-line-state'
+import { observeOutput, runningView, startedLine } from '../src/renderer/src/routing/setup-line-state'
 import { createFirstRun } from '../src/renderer/src/first-run/first-run-state'
 import { createFirstFolder } from '../src/renderer/src/first-run/first-folder'
-import { firstHarness, realAgents, stepTurns, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
+import { workspaceNameAfter } from '../src/renderer/src/first-run/first-folder'
+import { agentAtWork, firstAgentHarness, firstHarness, otherAgentEnds, stepTurns, stillFinished, type TurnMemory } from '../src/renderer/src/first-run/first-run-rules'
 import { makeAgent } from '../src/renderer/src/zoom/make-card'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
-import type { FirstRunStage } from '../src/shared/first-run'
+import type { FirstRunStage, FirstTask } from '../src/shared/first-run'
 import type { CanvasNode } from '../src/shared/model'
 import type { TerminalActivity } from '../src/shared/turn'
 
@@ -128,6 +129,61 @@ describe('the folder the first agent works in', () => {
   })
 })
 
+describe('a line under tmux (C-5): its status bar is the pane’s last line', () => {
+  const bar = '\x1b[29;1H\x1b[1m cookrew · cr-abc123 \x1b[22m 0:zsh*'
+
+  it('still sees the prompt come back, a failed line included', () => {
+    let watch = startedLine('npm i -g @earendil-works/pi-coding-agent')
+    watch = observeOutput(watch, `% npm i -g @earendil-works/pi-coding-agent\r\n${bar}`)
+    expect(watch.echoed).toBe(true)
+    expect(watch.done).toBe(false)
+    watch = observeOutput(watch, `zsh: command not found: npm\r\n% ${bar}`)
+    expect(watch.done).toBe(true)
+  })
+
+  it('does not take the bar for what the pane said', () => {
+    const watch = observeOutput(startedLine('brew install tmux'), `% brew install tmux\r\nPouring tmux\r\n${bar}`)
+    expect(runningView(watch).lastLine).toBe('Pouring tmux')
+  })
+})
+
+describe('naming the workspace after its folder', () => {
+  it('takes the folder’s name while the workspace still has the seeded one', () => {
+    expect(workspaceNameAfter('My Workspace', null, '/Users/new/my-site/')).toBe('my-site')
+  })
+
+  it('follows a change of mind', () => {
+    expect(workspaceNameAfter('my-site', 'my-site', '/Users/new/blog')).toBe('blog')
+  })
+
+  it('never renames what the person named', () => {
+    expect(workspaceNameAfter('Client work', 'my-site', '/Users/new/blog')).toBeNull()
+  })
+})
+
+describe('the first task’s record on screen', () => {
+  it('follows main: a held task, a stage moved when the agent took it', async () => {
+    let push: (view: { stage: FirstRunStage; task: FirstTask | null }) => void = () => undefined
+    const run = createFirstRun(() => ({ firstRunRead: async () => 'task' as const, firstRunTask: async () => null, onFirstRun: (cb) => ((push = cb), () => undefined) }))
+    run.subscribe(() => undefined)
+    await settle()
+    const held: FirstTask = { state: 'holding', id: 'a', words: 'x', harness: 'Codex', wait: 'starting' }
+    push({ stage: 'task', task: held })
+    expect(run.task()).toEqual(held)
+    push({ stage: 'phone', task: null })
+    expect(run.get()).toBe('phone')
+    expect(run.task()).toBeNull()
+  })
+
+  it('reads a task main was already holding at boot', async () => {
+    const held: FirstTask = { state: 'returned', words: 'x', why: 'it stopped' }
+    const run = createFirstRun(() => ({ firstRunRead: async () => 'task' as const, firstRunTask: async () => held }))
+    run.subscribe(() => undefined)
+    await settle()
+    expect(run.task()).toEqual(held)
+  })
+})
+
 describe('the first agent', () => {
   it('asks main to hold its prompt for a composer: the only thing it adds to the ordinary path', async () => {
     const createTerminal = vi.fn(async () => ({ id: 'a1' }))
@@ -167,13 +223,47 @@ describe('reading the board', () => {
   const node = (over: Partial<CanvasNode>): CanvasNode =>
     ({ kind: 'terminal', id: 'x', name: 'x', preset: 'Claude Code', command: 'claude', cwd: '~', orch: false, role: null, position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, ...over }) as CanvasNode
 
-  it('does not count the Setup card as the first agent', () => {
-    expect(realAgents([node({ name: 'Setup', preset: 'Shell' })])).toBe(0)
-    expect(realAgents([node({ name: 'Setup', preset: 'Shell' }), node({ name: 'Readme' })])).toBe(1)
+  // Round 2: a card existing is no proof. A dead agent has a card too, and the
+  // stage moved on it (bug 3), so it takes a sign of work to count.
+  const works = (id: string, phase: TerminalActivity['phase'], turnCount = 0): TerminalActivity => ({ terminalId: id, agent: true, phase, turnCount }) as TerminalActivity
+
+  it('counts an agent that is working or has finished a turn', () => {
+    expect(agentAtWork([node({ id: 'a' })], [works('a', 'thinking')])).toBe(true)
+    expect(agentAtWork([node({ id: 'a' })], [works('a', 'idle', 1)])).toBe(true)
+  })
+
+  it('does not count a card that shows no sign of work: a dead agent is one', () => {
+    expect(agentAtWork([node({ id: 'a' })], [])).toBe(false)
+    expect(agentAtWork([node({ id: 'a' })], [works('a', 'idle')])).toBe(false)
+  })
+
+  it('does not count the Setup card or a Shell', () => {
+    expect(agentAtWork([node({ id: 's', name: 'Setup', preset: 'Shell' })], [works('s', 'thinking')])).toBe(false)
+    expect(agentAtWork([node({ id: 's', preset: 'Shell' })], [works('s', 'idle', 3)])).toBe(false)
   })
 
   it('does not count a note', () => {
-    expect(realAgents([{ kind: 'note', id: 'n', name: 'n', customName: null, content: '', locked: false, position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }])).toBe(0)
+    expect(agentAtWork([{ kind: 'note', id: 'n', name: 'n', customName: null, content: '', locked: false, position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }], [works('n', 'thinking')])).toBe(false)
+  })
+
+  // Review, round 2: a cancelled task's card is still on the board for a beat, and
+  // one parked on a menu reads as working, which ended the run for good. But a
+  // handed-back task must not hold the run open against a real agent either.
+  it('ignores the agent a task was taken back from, and no other', () => {
+    const back = { state: 'returned' as const, words: 'x', why: null, id: 'a' }
+    expect(otherAgentEnds([node({ id: 'a' })], [works('a', 'waiting')], null)).toBe(true)
+    expect(otherAgentEnds([node({ id: 'a' })], [works('a', 'waiting')], back)).toBe(false)
+    expect(otherAgentEnds([node({ id: 'a' }), node({ id: 'b' })], [works('b', 'thinking')], back)).toBe(true)
+    expect(otherAgentEnds([node({ id: 'a' })], [works('a', 'waiting')], { state: 'holding', id: 'a', words: 'x', harness: 'Codex', wait: 'choice' })).toBe(false)
+  })
+
+  it('lets a saved endpoint choose among the tools that speak it', () => {
+    const found = (over: Partial<ToolFacts>): ToolFacts => ({ ...UNKNOWN_FACTS, claude: 'missing', codex: 'missing', pi: 'missing', opencode: 'missing', ...over })
+    expect(firstAgentHarness(preflightRows(found({ codex: 'found' })), ['Claude Code', 'Pi'])).toBe('Claude Code')
+    expect(firstAgentHarness(preflightRows(found({ pi: 'found' })), ['Claude Code', 'Pi'])).toBe('Pi')
+    expect(firstAgentHarness(preflightRows(found({ claude: 'found' })), ['Pi'])).toBe('Pi')
+    expect(firstAgentHarness(preflightRows(found({ codex: 'found' })), null)).toBe('Codex')
+    expect(firstAgentHarness(preflightRows(found({ opencode: 'found' })), null)).toBe('OpenCode')
   })
 
   it('takes the tool that was found for the first agent, Claude Code first', () => {
@@ -193,7 +283,7 @@ describe('a finished turn', () => {
     return frames.map((frame) => {
       const step = stepTurns(memory, frame)
       memory = step.memory
-      return step.ended
+      return step.ended.length > 0
     })
   }
 
@@ -207,6 +297,37 @@ describe('a finished turn', () => {
 
   it('is a new completed turn, for a phase that never showed the work', () => {
     expect(walk([[activity('a', 'idle', 0)], [activity('a', 'idle', 1)]])).toEqual([false, true])
+  })
+
+  // C-2: a file-backed harness records the turn as it STARTS, so the count rises
+  // with the card on WORKING, and the hint said "finished" 5 s in.
+  it('is not a count rising while the agent still works', () => {
+    expect(walk([[activity('a', 'idle', 0)], [activity('a', 'thinking', 1)], [activity('a', 'thinking', 1)]])).toEqual([false, false, false])
+  })
+
+  it('is the end of that same turn, once', () => {
+    expect(walk([[activity('a', 'idle', 0)], [activity('a', 'thinking', 1)], [activity('a', 'replied', 1)], [activity('a', 'replied', 1)]])).toEqual([false, false, true, false])
+  })
+
+  it('is not an agent that died mid-turn', () => {
+    expect(walk([[activity('a', 'thinking', 0)], [activity('a', 'idle', 0)]])).toEqual([false, false])
+  })
+
+  // C-3: a provider's 400 ended as done, and the hint called it finished.
+  it('is not a refused turn', () => {
+    const refused = { ...activity('a', 'replied', 1), reply: 'API Error: 400 Unable to generate parser for this template' }
+    expect(walk([[activity('a', 'thinking')], [refused]])).toEqual([false, false])
+  })
+
+  it('names which agent, so the hint can wait and look again', () => {
+    expect(stepTurns(stepTurns(new Map(), [activity('a', 'thinking')]).memory, [activity('a', 'replied', 1)]).ended).toEqual(['a'])
+  })
+
+  it('has settled only while the agent stays finished', () => {
+    expect(stillFinished(activity('a', 'replied', 1))).toBe(true)
+    expect(stillFinished(activity('a', 'thinking', 1))).toBe(false)
+    expect(stillFinished(undefined)).toBe(false)
+    expect(stillFinished({ ...activity('a', 'replied', 1), reply: 'API Error: 500 oops' })).toBe(false)
   })
 
   it('is nothing at first sight: an old reply on the screen is not news', () => {

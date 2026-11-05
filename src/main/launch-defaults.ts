@@ -91,5 +91,10 @@ export function appendedPath(current: string | undefined, dirs: readonly string[
  */
 export function widenedPath(env: Env, home: string, platform: string = process.platform): string {
   if (platform === 'win32') return env.PATH ?? ''
-  return appendedPath(env.PATH, ['/opt/homebrew/bin', '/usr/local/bin', `${home}/.local/bin`, `${home}/.claude/local`])
+  return appendedPath(env.PATH, installerDirs(home, platform))
+}
+
+/** Where installers put a tool, whether or not any shell has been told. */
+export function installerDirs(home: string, platform: string = process.platform): string[] {
+  return platform === 'win32' ? [] : ['/opt/homebrew/bin', '/usr/local/bin', `${home}/.local/bin`, `${home}/.claude/local`, `${home}/.opencode/bin`]
 }

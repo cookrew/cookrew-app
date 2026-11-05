@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { cookrew } from '../api'
-import { advancedStage, type FirstRunStage } from '../../../shared/first-run'
+import { advancedStage, type FirstRunStage, type FirstTask } from '../../../shared/first-run'
 
 /**
  * WHERE THE FIRST RUN STANDS, for the screens. Main owns the stage; this is
@@ -16,32 +16,52 @@ import { advancedStage, type FirstRunStage } from '../../../shared/first-run'
 export interface FirstRunBridge {
   firstRunRead?: () => Promise<FirstRunStage>
   firstRunAdvance?: (to: FirstRunStage) => Promise<FirstRunStage>
+  firstRunTask?: () => Promise<FirstTask | null>
+  onFirstRun?: (cb: (view: { stage: FirstRunStage; task: FirstTask | null }) => void) => () => void
 }
 
 export interface FirstRun {
   get: () => FirstRunStage | null
+  /** The first task while no agent has it. */
+  task: () => FirstTask | null
   subscribe: (listener: () => void) => () => void
   advance: (to: FirstRunStage) => Promise<void>
 }
 
 export function createFirstRun(api: () => FirstRunBridge): FirstRun {
   let stage: FirstRunStage | null = null
+  let task: FirstTask | null = null
   let asked = false
   const listeners = new Set<() => void>()
+  const tell = (): void => {
+    for (const listener of listeners) listener()
+  }
   const show = (next: FirstRunStage): void => {
     if (next === stage) return
     stage = next
-    for (const listener of listeners) listener()
+    tell()
+  }
+  const hold = (next: FirstTask | null): void => {
+    task = next
+    tell()
   }
   const load = async (): Promise<void> => {
     try {
-      show((await api().firstRunRead?.()) ?? 'closed')
+      const bridge = api()
+      bridge.onFirstRun?.((view) => {
+        hold(view.task)
+        show(view.stage)
+      })
+      const opening = (await bridge.firstRunRead?.()) ?? 'closed'
+      if (opening !== 'closed') hold((await bridge.firstRunTask?.()) ?? null)
+      show(opening)
     } catch {
       show('closed')
     }
   }
   return {
     get: () => stage,
+    task: () => task,
     subscribe(listener) {
       listeners.add(listener)
       if (!asked) {
@@ -66,4 +86,8 @@ export const firstRun = createFirstRun(() => cookrew())
 
 export function useFirstRunStage(): FirstRunStage | null {
   return useSyncExternalStore(firstRun.subscribe, firstRun.get, () => null)
+}
+
+export function useFirstTask(): FirstTask | null {
+  return useSyncExternalStore(firstRun.subscribe, firstRun.task, () => null)
 }

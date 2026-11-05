@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { writeFileAtomic } from './atomic-file'
-import { advancedStage, isFirstRunStage, openingStage, type FirstRunStage } from '../shared/first-run'
+import { advancedStage, isFirstRunStage, isFirstTask, openingStage, type FirstRunStage, type FirstTask } from '../shared/first-run'
 
 /**
  * THE FIRST RUN'S ONE DURABLE FACT: how far it has got, in userData.
@@ -21,31 +21,70 @@ export interface FirstRunFacts {
   hasAccount: () => boolean
 }
 
-function readSaved(file: string): FirstRunStage | null {
+interface Saved {
+  stage: FirstRunStage | null
+  task: FirstTask | null
+  dirs: readonly string[]
+}
+
+function readSaved(file: string): Saved {
   try {
-    const stage = (JSON.parse(readFileSync(file, 'utf8')) as { stage?: unknown }).stage
-    return isFirstRunStage(stage) ? stage : null
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { stage?: unknown; task?: unknown; dirs?: unknown }
+    return {
+      stage: isFirstRunStage(saved.stage) ? saved.stage : null,
+      task: isFirstTask(saved.task) ? saved.task : null,
+      dirs: Array.isArray(saved.dirs) ? saved.dirs.filter((dir): dir is string => typeof dir === 'string') : []
+    }
   } catch {
-    return null
+    return { stage: null, task: null, dirs: [] }
   }
 }
 
 export class FirstRunStore {
   private stage: FirstRunStage | null = null
+  private held: FirstTask | null
+  private known: readonly string[]
 
   constructor(
     private readonly file: string,
     private readonly facts: FirstRunFacts
-  ) {}
+  ) {
+    const saved = readSaved(file)
+    this.held = saved.task
+    this.known = saved.dirs
+  }
 
   /** The stage, deciding it on the first read: at boot, before the Conductor is seeded. */
   read(): FirstRunStage {
     if (this.stage !== null) return this.stage
-    return this.keep(readSaved(this.file) ?? this.opening())
+    return this.keep(readSaved(this.file).stage ?? this.opening())
   }
 
   advance(to: FirstRunStage): FirstRunStage {
     return this.keep(advancedStage(this.read(), to))
+  }
+
+  /** The first task's words, kept here so a restart cannot lose them. */
+  task(): FirstTask | null {
+    return this.held
+  }
+
+  setTask(task: FirstTask | null): void {
+    this.held = task
+    this.save()
+  }
+
+  /** What the tool check learned about the login shell: panes need it before any check runs. */
+  dirs(): readonly string[] {
+    return this.known
+  }
+
+  rememberDirs(dirs: readonly string[]): void {
+    const next = [...new Set([...this.known, ...dirs])]
+    if (next.length === this.known.length) return
+    this.known = next
+    this.read()
+    this.save()
   }
 
   private opening(): FirstRunStage {
@@ -58,14 +97,16 @@ export class FirstRunStore {
   }
 
   private keep(stage: FirstRunStage): FirstRunStage {
-    if (stage !== this.stage) this.save(stage)
+    const moved = stage !== this.stage
     this.stage = stage
+    if (moved) this.save()
     return stage
   }
 
-  private save(stage: FirstRunStage): void {
+  private save(): void {
     try {
-      writeFileAtomic(this.file, `${JSON.stringify({ stage })}\n`)
+      const { stage, held: task, known: dirs } = this
+      writeFileAtomic(this.file, `${JSON.stringify({ stage, ...(task ? { task } : {}), ...(dirs.length > 0 ? { dirs } : {}) })}\n`)
     } catch (error) {
       console.error('First run: the stage could not be saved:', error)
     }

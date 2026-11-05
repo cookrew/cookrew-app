@@ -34,7 +34,7 @@ describe('the machines', () => {
 
   it('gaps has an agent tool and is missing the rest', () => {
     const missing = rows('gaps').filter((r) => r.state === 'missing').map((r) => r.id)
-    expect(missing).toEqual(['codex', 'multiplexer', 'chrome', 'magpie', 'ollama'])
+    expect(missing).toEqual(['codex', 'pi', 'opencode', 'multiplexer', 'chrome', 'magpie', 'ollama'])
     expect(mayContinue(rows('gaps'))).toBe(true)
   })
 
@@ -45,6 +45,67 @@ describe('the machines', () => {
   it('unknown is a check that failed, and holds nothing', () => {
     expect(rows('unknown').every((r) => r.state === 'unknown')).toBe(true)
     expect(mayContinue(rows('unknown'))).toBe(true)
+  })
+})
+
+describe('the first task, on an agent the demo plays', () => {
+  const base = (): CookrewApi =>
+    ({
+      createTerminal: vi.fn(async () => ({ id: 't1', name: 'x' })),
+      removeNode: vi.fn(async () => undefined),
+      ptyInput: vi.fn(),
+      ptyAttach: vi.fn(() => () => undefined),
+      onTerminalActivity: () => () => undefined
+    }) as unknown as CookrewApi
+  const send = (api: CookrewApi) => api.createTerminal({ name: 'x', preset: 'Claude Code', prompt: 'do it', patient: true } as never)
+
+  it('takes it and moves on, by default', async () => {
+    vi.useFakeTimers()
+    const api = freshDemoApi(base(), 'green', '?fresh=green&stage=task')
+    const views: unknown[] = []
+    api.onFirstRun?.((view) => views.push(view))
+    await send(api)
+    await vi.runAllTimersAsync()
+    expect(views.at(-1)).toEqual({ stage: 'phone', task: null })
+    vi.useRealTimers()
+  })
+
+  it('asks a question with ?agent=asks, and holds the words', async () => {
+    vi.useFakeTimers()
+    const api = freshDemoApi(base(), 'green', '?fresh=green&stage=task&agent=asks')
+    await send(api)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await api.firstRunTask?.()).toMatchObject({ state: 'holding', wait: 'choice', words: 'do it' })
+    vi.useRealTimers()
+  })
+
+  it('plays a refused turn with ?agent=refused: delivered, then a provider’s error', async () => {
+    vi.useFakeTimers()
+    const api = freshDemoApi(base(), 'green', '?fresh=green&stage=task&agent=refused')
+    const heard: TerminalActivity[] = []
+    api.onTerminalActivity((a) => heard.push(a))
+    await send(api)
+    await vi.runAllTimersAsync()
+    expect(heard.at(-1)?.reply).toMatch(/^API Error: 400/)
+    vi.useRealTimers()
+  })
+
+  it('hands the words back with ?agent=dies, with the stage where it was', async () => {
+    vi.useFakeTimers()
+    const api = freshDemoApi(base(), 'green', '?fresh=green&stage=task&agent=dies')
+    await send(api)
+    await vi.runAllTimersAsync()
+    expect(await api.firstRunTask?.()).toMatchObject({ state: 'returned', words: 'do it' })
+    expect(await api.firstRunRead?.()).toBe('task')
+    vi.useRealTimers()
+  })
+
+  it('checks an endpoint form like main, and never echoes the key', async () => {
+    const api = freshDemoApi(base(), 'gaps', '?fresh=gaps')
+    expect(await api.accessSave?.({ protocol: 'anthropic', baseUrl: 'http://a.example', key: 'k', model: 'm' })).toMatchObject({ ok: false, field: 'baseUrl' })
+    const saved = await api.accessSave?.({ protocol: 'anthropic', baseUrl: 'https://a.example', key: 'fake', model: 'm' })
+    expect(saved).toMatchObject({ ok: true, state: { active: { host: 'a.example' } } })
+    expect(JSON.stringify(await api.accessState?.())).not.toContain('fake')
   })
 })
 

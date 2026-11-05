@@ -3,15 +3,18 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { PreflightView } from '../src/renderer/src/first-run/Preflight'
 import { FirstScreenView } from '../src/renderer/src/first-run/FirstScreen'
 import { HintCard } from '../src/renderer/src/first-run/FirstRunHints'
-import { EXAMPLE_TASKS, FIRST_SCREEN_COPY, HINT_COPY, PREFLIGHT_COPY, TOOL_NOTES } from '../src/shared/first-run-copy'
+import { FirstWaitView } from '../src/renderer/src/first-run/FirstWait'
+import { AccessRowsView, EndpointFormView } from '../src/renderer/src/first-run/AccessRows'
+import { ACCESS_ROWS } from '../src/shared/agent-access'
+import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, HINT_COPY, PREFLIGHT_COPY, TOOL_NOTES, WAIT_COPY } from '../src/shared/first-run-copy'
 import { preflightRows, UNKNOWN_FACTS, type ToolFacts } from '../src/shared/preflight'
 
 const green: ToolFacts = {
-  claude: 'found', claudeSignedIn: true, codex: 'found', codexSignedIn: true, herdr: 'found', tmux: 'found',
-  chrome: 'found', magpie: 'found', ollama: 'found', brew: 'found', npm: 'found', host: 'herdr', platform: 'darwin'
+  claude: 'found', claudeSignedIn: true, codex: 'found', codexSignedIn: true, pi: 'found', opencode: 'found', herdr: 'found', tmux: 'found',
+  chrome: 'found', magpie: 'found', ollama: 'found', brew: 'found', npm: 'found', host: 'herdr', platform: 'darwin', arch: 'arm64'
 }
-const gaps: ToolFacts = { ...green, codex: 'missing', codexSignedIn: null, herdr: 'missing', tmux: 'missing', host: 'direct', ollama: 'missing' }
-const none: ToolFacts = { ...gaps, claude: 'missing', claudeSignedIn: null }
+const gaps: ToolFacts = { ...green, codex: 'missing', codexSignedIn: null, pi: 'found', herdr: 'missing', tmux: 'missing', host: 'direct', ollama: 'missing' }
+const none: ToolFacts = { ...gaps, claude: 'missing', claudeSignedIn: null, pi: 'missing', opencode: 'missing' }
 const view = (facts: ToolFacts | null, over: Partial<Parameters<typeof PreflightView>[0]> = {}): string =>
   renderToStaticMarkup(
     <PreflightView rows={facts ? preflightRows(facts) : null} running={null} error={null} onRun={vi.fn()} onCheck={vi.fn()} onContinue={vi.fn()} onSkip={vi.fn()} {...over} />
@@ -24,7 +27,7 @@ describe('the tool check on screen', () => {
 
   it('draws one row per tool, each with its state', () => {
     const html = view(gaps)
-    expect(html.match(/class="fr-row /g)).toHaveLength(6)
+    expect(html.match(/class="fr-row /g)).toHaveLength(8)
     expect(html).toContain(PREFLIGHT_COPY.FOUND)
     expect(html).toContain(PREFLIGHT_COPY.MISSING)
   })
@@ -48,6 +51,10 @@ describe('the tool check on screen', () => {
     expect(html).toContain(PREFLIGHT_COPY.UNKNOWN)
     expect(html).not.toContain('fr-fix')
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Continue/)
+  })
+
+  it('marks the check that came back from Skip with the same screen', () => {
+    expect(view(none)).toContain(PREFLIGHT_COPY.SKIP)
   })
 
   it('holds the way on only with neither agent tool, and says why', () => {
@@ -85,7 +92,7 @@ describe('the tool check on screen', () => {
 
 describe('the first screen', () => {
   const screen = (folder: string | null): string =>
-    renderToStaticMarkup(<FirstScreenView folder={folder} problem={null} onChoose={vi.fn()} onExample={vi.fn()} />)
+    renderToStaticMarkup(<FirstScreenView folder={folder} problem={null} onChoose={vi.fn()} onExample={vi.fn()} onCheck={vi.fn()} onLater={vi.fn()} />)
 
   it('asks the one question, with the three examples', () => {
     const html = screen(null)
@@ -107,6 +114,109 @@ describe('the first screen', () => {
     expect(html).toContain('site')
     expect(html).toContain('/Users/new/site')
     expect(html).toContain(FIRST_SCREEN_COPY.FOLDER_CHANGE)
+  })
+})
+
+describe('the first screen after a skip or a dead agent (bugs 3, 6)', () => {
+  const screen = (problem: string | null): string =>
+    renderToStaticMarkup(<FirstScreenView folder={null} problem={problem} onChoose={vi.fn()} onExample={vi.fn()} onCheck={vi.fn()} onLater={vi.fn()} />)
+
+  it('always has the way back to the tool check, and a way to look around', () => {
+    expect(screen(null)).toContain(FIRST_SCREEN_COPY.RECHECK)
+    expect(screen(null)).toContain(FIRST_SCREEN_COPY.LATER)
+  })
+
+  it('says why the agent did not take the task', () => {
+    expect(screen('Claude Code stopped before it took your task.')).toContain('Claude Code stopped before it took your task.')
+  })
+
+  it('says what the workspace is called now that it has a folder', () => {
+    const html = renderToStaticMarkup(<FirstScreenView folder="/Users/new/my-site" problem={null} onChoose={vi.fn()} onExample={vi.fn()} onCheck={vi.fn()} onLater={vi.fn()} />)
+    expect(html).toContain(FIRST_SCREEN_COPY.named('my-site'))
+  })
+})
+
+describe('an agent that is waiting (bug 4)', () => {
+  const view = (wait: 'starting' | 'choice' | 'sign-in' | 'consent', children?: React.ReactNode): string =>
+    renderToStaticMarkup(
+      <FirstWaitView task={{ state: 'holding', id: 'a', words: 'write a readme', harness: 'Claude Code', wait }} onCancel={vi.fn()} onEndpoint={vi.fn()}>
+        {children}
+      </FirstWaitView>
+    )
+
+  it('says a choice is waiting, in place of RESTING, and shows the task it is holding', () => {
+    const html = view('choice')
+    expect(html).toContain(WAIT_COPY.choice.title('Claude Code'))
+    expect(html).toContain('write a readme')
+    expect(html).not.toMatch(/resting/i)
+  })
+
+  it('tells a sign-in apart, and offers the road for a person with no account', () => {
+    const html = view('sign-in')
+    expect(html).toContain(WAIT_COPY['sign-in'].title('Claude Code'))
+    expect(html).toContain(WAIT_COPY.NO_ACCOUNT)
+    expect(view('choice')).not.toContain(WAIT_COPY.NO_ACCOUNT)
+  })
+
+  it('says which row to take on the consent, whose default row exits', () => {
+    expect(view('consent')).toContain('Yes, I accept')
+  })
+
+  it('shows the live screen to answer in, once there is something to answer', () => {
+    expect(view('choice', <i id="pane" />)).toContain('id="pane"')
+    expect(view('starting', <i id="pane" />)).not.toContain('id="pane"')
+  })
+
+  it('can always be called off', () => {
+    expect(view('starting')).toContain(WAIT_COPY.CANCEL)
+  })
+})
+
+describe('the road with no account', () => {
+  const none = { rows: ACCESS_ROWS, active: null }
+  const form = { protocol: 'anthropic' as const, baseUrl: '', key: '', model: '' }
+  const fields = (over: Partial<Parameters<typeof EndpointFormView>[0]> = {}): string =>
+    renderToStaticMarkup(<EndpointFormView form={form} busy={false} problem={null} onChange={vi.fn()} onSave={vi.fn()} onCancel={vi.fn()} {...over} />)
+
+  it('lists every row it is given: a credits row is one more entry', () => {
+    const rows = [...ACCESS_ROWS, { id: 'credits', title: 'Use Cookrew credits', does: 'Pay as you go.', form: 'endpoint' as const }]
+    const html = renderToStaticMarkup(<AccessRowsView state={{ rows, active: null }} onOpen={vi.fn()} onRemove={vi.fn()} />)
+    expect(html).toContain(ENDPOINT_COPY.HEAD)
+    expect(html).toContain('Use your own endpoint')
+    expect(html).toContain('Use Cookrew credits')
+  })
+
+  it('asks for the address, the key and the model, with the key masked', () => {
+    const html = fields()
+    expect(html).toContain(ENDPOINT_COPY.URL)
+    expect(html).toContain(ENDPOINT_COPY.MODEL)
+    expect(html).toMatch(/type="password"/)
+    expect(html).toContain('autoComplete="off"')
+  })
+
+  it('says each protocol runs on which tool, and what Codex needs', () => {
+    expect(fields()).toContain(ENDPOINT_COPY.ANTHROPIC)
+    expect(fields()).toContain(ENDPOINT_COPY.OPENAI)
+  })
+
+  it('shows why it was refused, and waits while it asks', () => {
+    expect(fields({ problem: 'The endpoint refused that key.' })).toContain('role="alert"')
+    expect(fields({ busy: true })).toContain(ENDPOINT_COPY.SAVING)
+  })
+
+  it('stays out of an existing person’s Routing panel until they have one', () => {
+    expect(renderToStaticMarkup(<AccessRowsView state={none} whenActive onOpen={vi.fn()} onRemove={vi.fn()} />)).toBe('')
+    const active = { id: 'endpoint', label: 'Your endpoint', protocol: 'openai' as const, model: 'm', host: 'a.example', tools: ['Pi'] }
+    expect(renderToStaticMarkup(<AccessRowsView state={{ ...none, active }} whenActive onOpen={vi.fn()} onRemove={vi.fn()} />)).toContain('a.example')
+  })
+
+  it('shows what is on, without the key, and how to take it off', () => {
+    const html = renderToStaticMarkup(
+      <AccessRowsView state={{ ...none, active: { id: 'endpoint', label: 'Your endpoint', protocol: 'anthropic', model: 'm-1', host: 'api.example.com', tools: ['Claude Code', 'Pi'] } }} onOpen={vi.fn()} onRemove={vi.fn()} />
+    )
+    expect(html).toContain('api.example.com')
+    expect(html).toContain('m-1')
+    expect(html).toContain(ENDPOINT_COPY.REMOVE)
   })
 })
 

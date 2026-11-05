@@ -47,8 +47,32 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^brew install [A-Za-z0-9][A-Za-z0-9._/@-]*$/
 ]
 
+const RELEASES = 'https://github.com'
+
+/**
+ * A harness from its own release, for a box with no npm or Node (Part C: Pi was
+ * only ever an `npm i -g`, and `npm` was not there). Null where no release of
+ * that name exists. Both proved on a PATH of /usr/bin:/bin, 2026-11-05.
+ */
+export function piInstallLine(platform: string, arch: string): string | null {
+  const os = platform === 'darwin' || platform === 'linux' ? platform : null
+  if (os === null || (arch !== 'x64' && arch !== 'arm64')) return null
+  return `mkdir -p ~/.local/share ~/.local/bin && curl -fsSL ${RELEASES}/earendil-works/pi/releases/latest/download/pi-${os}-${arch}.tar.gz | tar -xz -C ~/.local/share && ln -sf ~/.local/share/pi/pi ~/.local/bin/pi`
+}
+
+export function codexInstallLine(platform: string, arch: string): string | null {
+  const cpu = arch === 'x64' ? 'x86_64' : arch === 'arm64' ? 'aarch64' : null
+  const os = platform === 'darwin' ? 'apple-darwin' : platform === 'linux' ? 'unknown-linux-musl' : null
+  if (cpu === null || os === null) return null
+  const name = `codex-${cpu}-${os}`
+  return `mkdir -p ~/.local/bin && curl -fsSL ${RELEASES}/openai/codex/releases/latest/download/${name}.tar.gz | tar -xz -C ~/.local/bin && mv ~/.local/bin/${name} ~/.local/bin/codex`
+}
+
+const releaseLines = ['darwin', 'linux'].flatMap((platform) => ['x64', 'arm64'].flatMap((arch) => [piInstallLine(platform, arch), codexInstallLine(platform, arch)]))
+
 /** Exact lines, for the first-run tool check (shared/preflight.ts). */
 export const FIRST_RUN_LINES: ReadonlySet<string> = new Set([
+  ...releaseLines.filter((line): line is string => line !== null),
   'curl -fsSL https://claude.ai/install.sh | bash',
   '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
   'brew install --cask google-chrome',

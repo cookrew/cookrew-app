@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { ownerSubmit } from './ask'
 import { dialogOnScreen, waitChoiceOfScreen } from '../shared/wait-choice'
+import { harnessFor } from './harness'
 import { DEFAULT_TERMINAL_SIZE, TerminalNodeData, uniqueName } from '../shared/model'
 import { buildForkPreamble, buildResumeForkNotice } from '../shared/fork'
 import { isClaudeCommand, stripSessionFlags } from '../shared/claude-fork'
@@ -42,9 +43,10 @@ const BOOT_QUIET_MS = 1500
 const BOOT_TIMEOUT_MS = 25000
 /**
  * How long a person's first task waits for its agent. A new Claude opens on a
- * theme picker and a sign-in, which take as long as they take.
+ * theme picker, notes and a sign-in, which take as long as they take: past this
+ * the words go back to the box, and nothing is typed anywhere.
  */
-export const FIRST_TASK_WAIT_MS = 15 * 60_000
+export const FIRST_TASK_WAIT_MS = 6 * 60 * 60_000
 
 /**
  * HAS CLAUDE DRAWN ITS INPUT BOX? (2026-11-01: a prompt made from the global
@@ -215,6 +217,37 @@ export function forkContextReady(nodeId: string): Promise<void> {
  * context the same way after a workspace switch boots the forked agents.
  */
 /**
+ * HAS CODEX DRAWN ITS INPUT LINE? Quiet proves nothing for it: 1.5 s of silence
+ * can be a blank screen, and keys queued there answer the trust or sign-in row
+ * when it appears. Read off a real 0.166 boot: `› Ask Codex…`, `? for shortcuts`.
+ */
+export function codexComposerDrawn(screen: string): boolean {
+  return screen.split('\n').some((line) => /^\s*›\s+\D/.test(line) || /\? for shortcuts/.test(line))
+}
+
+/** Pi's footer, read off a real 1.4 boot: `0.0%/128k (auto)`. It asks nothing first. */
+export function piComposerDrawn(screen: string): boolean {
+  return /\d(?:\.\d+)?%\/\d+k\b/.test(screen)
+}
+
+/**
+ * Is this harness's input drawn? OpenCode's could not be read here (its one
+ * service per machine was in use), so that is only "past its server start".
+ */
+function composerUp(command: string, screen: string): boolean {
+  switch (harnessFor(command)?.id) {
+    case 'codex':
+      return codexComposerDrawn(screen)
+    case 'pi':
+      return piComposerDrawn(screen)
+    case 'opencode':
+      return screen.trim() !== '' && !/starting background server/i.test(screen)
+    default:
+      return true
+  }
+}
+
+/**
  * Ready, and asking nothing. A dialog can pass for a composer: the folder-trust
  * one has a rule and a ❯ row, the bypass consent says "bypass permissions", and
  * Enter on either takes the default row, which quits. Waits on any menu at all,
@@ -223,6 +256,7 @@ export function forkContextReady(nodeId: string): Promise<void> {
 function freeForFirstTask(session: PtySession): boolean {
   if (!harnessReadyForInput(session)) return false
   const screen = session.viewportText()
+  if (!composerUp(session.command ?? '', screen)) return false
   return waitChoiceOfScreen(screen) === null && !dialogOnScreen(screen)
 }
 
@@ -234,14 +268,23 @@ export interface InjectOptions {
    * that is not the composer its Enter answers whatever is being asked.
    */
   onlyWhenReady?: boolean
+  /** The agent's process ended: stop waiting, and say so. */
+  gone?: () => boolean
+  /** Up and quiet, and not taking input: what is on its screen. */
+  onWait?: (screen: string) => void
 }
 
 export async function injectWhenReady(session: PtySession, preamble: string, options: InjectOptions = {}): Promise<void> {
-  const { timeoutMs = BOOT_TIMEOUT_MS, onlyWhenReady = false } = options
+  const { timeoutMs = BOOT_TIMEOUT_MS, onlyWhenReady = false, gone, onWait } = options
   const startedAt = Date.now()
   const ready = await new Promise<boolean>((resolve) => {
     const timer = setInterval(() => {
+      if (gone?.()) {
+        clearInterval(timer)
+        return resolve(false)
+      }
       const now = onlyWhenReady ? freeForFirstTask(session) : harnessReadyForInput(session)
+      if (!now && onWait && session.idleFor() >= BOOT_QUIET_MS) onWait(session.viewportText())
       if (now || Date.now() - startedAt >= timeoutMs) {
         clearInterval(timer)
         resolve(now)

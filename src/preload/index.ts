@@ -269,6 +269,18 @@ const api = {
   firstRunRead: () => ipcRenderer.invoke('first-run:read'),
   firstRunAdvance: (to: string) => ipcRenderer.invoke('first-run:advance', to),
   firstRunPreflight: () => ipcRenderer.invoke('first-run:preflight'),
+  firstRunTask: () => ipcRenderer.invoke('first-run:task'),
+  firstRunDiscard: () => ipcRenderer.invoke('first-run:discard'),
+  firstRunCanStart: (preset: string) => ipcRenderer.invoke('first-run:can-start', preset),
+  onFirstRun: (cb: (view: unknown) => void) => {
+    const listener = (_e: unknown, view: unknown): void => cb(view)
+    ipcRenderer.on('first-run:changed', listener)
+    return () => ipcRenderer.removeListener('first-run:changed', listener)
+  },
+  accessState: () => ipcRenderer.invoke('access:state'),
+  // The key crosses once, into the secrets store, and is never sent back.
+  accessSave: (input: unknown) => ipcRenderer.invoke('access:save', input),
+  accessClear: () => ipcRenderer.invoke('access:clear'),
   listPins: (terminalId: string) => ipcRenderer.invoke('pins:list', terminalId),
 
   /** Translate a checkpoint body with Sous. Never rejects; see main. */

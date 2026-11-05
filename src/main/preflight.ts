@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { UNKNOWN_FACTS, type ToolFacts, type ToolState } from '../shared/preflight'
-import { HarnessScan, onPath } from './route/setup'
+import { harnessFor } from './harness'
+import { HARNESS_FACTS, HarnessScan, onPath } from './route/setup'
 
 /**
  * WHAT THIS MACHINE HAS (first run, the tool check).
@@ -13,11 +14,11 @@ import { HarnessScan, onPath } from './route/setup'
  * tool is started here. Running `herdr` from a pane can stop the app's own
  * server, and a check has no business waking anything.
  *
- * PATH IS WHERE THE AGENTS WILL RUN: the app's own, plus what the person's
- * login shell adds (nvm and friends only exist there), read once per check and
- * bounded, since an rc file may do anything. Panes start on the app's PATH, so
- * what the shell added is handed to the app (`adoptDirs`): Found has to mean
- * the agent can start, not that a shell somewhere could find it.
+ * THE PATH IS THE ONE PANES GET (pane-path.ts), in every build. What the login
+ * shell knows (nvm and friends live only there) is read once per check, bounded
+ * since an rc file may do anything, and handed over FIRST: the check then looks
+ * only where a pane would. Found means the agent can start, not that some shell
+ * somewhere could find it.
  */
 
 const PROBE_BUDGET_MS = 8_000
@@ -32,7 +33,10 @@ export interface AgentFact {
 
 export interface ProbeDeps {
   home: string
-  pathEnv: string | undefined
+  /** What a pane gets, read after `adoptDirs`. */
+  panePath: () => string
+  /** Give panes the dirs the login shell had. */
+  adoptDirs: (dirs: readonly string[]) => void
   platform: string
   exists: (file: string) => boolean
   /** Claude Code and Codex, as the route panel reads them. */
@@ -42,8 +46,12 @@ export interface ProbeDeps {
   /** The backend hosting terminals now. */
   host: () => string | null
   shellDirs: () => Promise<readonly string[]>
-  /** Give the app the dirs the login shell had, for the panes it starts next. */
-  adoptDirs?: (dirs: readonly string[]) => void
+  /** The tools the person's own endpoint runs on, if they saved one. */
+  endpointTools?: () => readonly string[]
+  /** The processor: names the release to fetch. */
+  arch?: string
+  /** What panes inherit: a key here is a sign-in. */
+  env?: Readonly<Record<string, string | undefined>>
 }
 
 /** The directories on the marked line of the login shell's output. */
@@ -75,10 +83,14 @@ function agentState(agents: readonly AgentFact[] | null, id: string): { state: T
   return agent?.installed ? { state: 'found', signedIn: agent.signedIn } : { state: 'missing', signedIn: null }
 }
 
+/** A key a pane will inherit signs the agent in, whatever the login files say. */
+function signedIn(fact: boolean | null, env: ProbeDeps['env'], keys: readonly string[]): boolean | null {
+  return fact === false && keys.some((key) => Boolean(env?.[key])) ? true : fact
+}
+
 async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
-  const shell = await deps.shellDirs().catch(() => [] as readonly string[])
-  deps.adoptDirs?.(shell)
-  const pathEnv = [deps.pathEnv ?? '', ...shell].filter((dir) => dir !== '').join(path.delimiter)
+  deps.adoptDirs(await deps.shellDirs().catch(() => [] as readonly string[]))
+  const pathEnv = deps.panePath()
   const agents = await deps.agents(pathEnv).catch(() => null)
   const claude = agentState(agents, 'claude')
   const codex = agentState(agents, 'codex')
@@ -95,9 +107,11 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
   }
   return {
     claude: claude.state,
-    claudeSignedIn: claude.signedIn,
+    claudeSignedIn: signedIn(claude.signedIn, deps.env, ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']),
     codex: codex.state,
-    codexSignedIn: codex.signedIn,
+    codexSignedIn: signedIn(codex.signedIn, deps.env, ['OPENAI_API_KEY', 'CODEX_API_KEY']),
+    pi: agentState(agents, 'pi').state,
+    opencode: agentState(agents, 'opencode').state,
     herdr: bin('herdr'),
     tmux: bin('tmux'),
     chrome: check(deps.chrome),
@@ -106,7 +120,9 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
     brew: bin('brew'),
     npm: bin('npm'),
     host,
-    platform: deps.platform
+    platform: deps.platform,
+    arch: deps.arch ?? 'unknown',
+    endpointTools: deps.endpointTools?.() ?? []
   }
 }
 
@@ -121,12 +137,13 @@ export function probeTools(deps: ProbeDeps, budgetMs = PROBE_BUDGET_MS): Promise
 }
 
 /** The real machine's checks; `chrome`, `magpie` and `host` come from what owns them. */
-export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host' | 'adoptDirs'>): ProbeDeps {
+export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host' | 'adoptDirs' | 'panePath' | 'endpointTools'>): ProbeDeps {
   const home = homedir()
   return {
     home,
-    pathEnv: process.env.PATH,
     platform: process.platform,
+    arch: process.arch,
+    env: process.env,
     exists: existsSync,
     agents: (pathEnv) => {
       const scan = new HarnessScan({ home, pathEnv, dockCommands: () => [], harnessOfCommand: () => null, installed: (bin) => onPath(bin, pathEnv) })
@@ -135,4 +152,15 @@ export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host' 
     shellDirs: () => readLoginShellDirs(),
     ...deps
   }
+}
+
+/**
+ * Can this command start in a pane? A command that is no known harness (a shell,
+ * a remote line) has nothing to check. Asked before an agent is made for its
+ * tool: a Conductor or a first agent with no binary is a card that dies.
+ */
+export function agentToolReady(command: string, pathEnv: string, installed: (bin: string, pathEnv: string) => boolean = onPath): boolean {
+  const id = harnessFor(command)?.id
+  const bin = HARNESS_FACTS.find((facts) => facts.id === id)?.bin
+  return bin === undefined || installed(bin, pathEnv)
 }

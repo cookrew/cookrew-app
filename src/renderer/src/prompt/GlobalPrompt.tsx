@@ -11,7 +11,7 @@ import { CardTune } from '../nodes/CardTune'
 import type { LaunchKnob } from '../../../shared/launch-tune'
 import { zoomStore } from '../zoom/zoom-store'
 import { nameFromPrompt } from '../../../shared/agent-name'
-import { lastHarness, rememberHarness } from './harness-pref'
+import { lastHarness, onHarnessPref, rememberHarness } from './harness-pref'
 import { lastLaunchTune, offeredPick, rememberLaunchTune, withLaunchKnob } from './launch-pref'
 import { NewAgentTune, type NewAgentGateway } from './NewAgentTune'
 import { useRouteState } from '../routing/use-route-state'
@@ -59,7 +59,7 @@ import { useWaitAnswer, type WaitAnswering } from './wait-answer'
 import { promptBox } from './box-focus'
 import { firstFolder } from '../first-run/first-folder'
 import { useFirstRunStage } from '../first-run/first-run-state'
-import { FIRST_SCREEN_COPY } from '../../../shared/first-run-copy'
+import { FIRST_SCREEN_COPY, exampleName } from '../../../shared/first-run-copy'
 import './global-prompt.css'
 
 /**
@@ -286,6 +286,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setHarness(picked.current && harnesses.includes(picked.current) ? picked.current : lastHarness(harnesses))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offered, firstTask])
+  // Chosen elsewhere (the tool check, a saved endpoint): the box follows.
+  useEffect(() => onHarnessPref(() => setHarness(lastHarness(harnesses))), [offered]) // eslint-disable-line react-hooks/exhaustive-deps
   /** The harness menu, anchored over its chip: the dock clips anything that hangs out of it. */
   const [picking, setPicking] = useState<RiseAnchor | null>(null)
   useEffect(() => setPicking(null), [to?.id])
@@ -444,6 +446,12 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     setBusy(true)
     setError(null)
     if (firstTask) {
+      // No tool, no card: a card would die, and the words are safest where they are.
+      const blocked = await cookrew().firstRunCanStart?.(harness)
+      if (blocked) {
+        setBusy(false)
+        return setError(blocked)
+      }
       const folder = await firstFolder.ready()
       if (folder !== 'ready') {
         setBusy(false)
@@ -453,8 +461,10 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     }
     const { words: prompt, refs } = said(withItemRef(raw, attachedItem, artifacts))
     const tune = offeredPick(launchTune, offer, gateway)
-    // Named from the words typed, not from the item riding ahead of them.
-    const made = await makeAgent(cookrew(), { name: nameFromPrompt(said(raw).words), preset: harness, orch: orch || firstTask, prompt, patient: firstTask, autoName: true, tune }, nodes)
+    // Named from the words typed, not from the item riding ahead of them. An example has a name of its own.
+    const example = firstTask ? exampleName(raw) : null
+    const choice = { name: example ?? nameFromPrompt(said(raw).words), preset: harness, orch: orch || firstTask, prompt, patient: firstTask, autoName: true, tune }
+    const made = await makeAgent(cookrew(), example ? { ...choice, autoName: false } : choice, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
     if (made.id) {
@@ -464,7 +474,8 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       setReleased(null)
       setStandIn({ id: made.id, at: zoomMoveKey(zoomStore.get()) })
     }
-    toast.leave(`New ${harness} agent`, shownWords(raw))
+    // A first task has not arrived yet: the waiting screen says how it is going.
+    if (!firstTask) toast.leave(`New ${harness} agent`, shownWords(raw))
     setText('')
   }
 

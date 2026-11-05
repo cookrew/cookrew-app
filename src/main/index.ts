@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, Notification, powerMonitor, shell } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
@@ -251,10 +251,15 @@ import { createBrowserCast } from './browser-cast'
 import { createBrowserCastIpc } from './browser-cast-ipc'
 import { BrowserThumbCache } from './browser-thumb-cache'
 import { findChrome } from './headless-chrome'
-import { appendedPath, interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
+import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
+import { addPaneDirs, installerDirs, panePath } from './pane-path'
+import { bootStep, paintFailure } from './boot-failure'
+import { registerAccessIpc } from './access-ipc'
+import { AccessStore, probeEndpoint } from './agent-access'
+import { FirstTasks } from './first-task'
 import { registerFirstRunIpc } from './first-run-ipc'
 import { FirstRunStore } from './first-run-store'
-import { machineProbe, probeTools, readLoginShellDirs } from './preflight'
+import { agentToolReady, machineProbe, probeTools, readLoginShellDirs } from './preflight'
 import { conductorWaits } from '../shared/first-run'
 import { HeadlessBrowserManager } from './headless-browser-manager'
 import { HeadlessBrowserCommandEngine } from './headless-browser-command'
@@ -392,15 +397,17 @@ app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Before anything probes for a tool: a Dock launch has no Homebrew on its PATH.
-// What the login shell adds lands a moment later, for the panes started after it.
-const adoptShellDirs = (dirs: readonly string[]): void => {
-  if (app.isPackaged) process.env.PATH = appendedPath(process.env.PATH, dirs)
-}
+// What a pane gets, in every build: installers' dirs now, what the login shell
+// adds when the check (or, packaged, this read) learns it. process.env.PATH is
+// another matter: it picks the terminal host, so only a packaged app widens it.
+addPaneDirs(installerDirs(homedir()))
 if (app.isPackaged) {
   process.env.PATH = widenedPath(process.env, homedir())
-  void readLoginShellDirs().then(adoptShellDirs)
+  void readLoginShellDirs().then(addPaneDirs)
 }
+
+/** A boot step failed: say why in a window, if the app can still draw one. */
+const bootFailed = (error: unknown): void => paintFailure(() => app.whenReady(), () => new BrowserWindow({ width: 640, height: 420 }), error)
 
 // The durable lineage, installed BEFORE the store can patch a node: every
 // session id ever bound to a card gets a copy outside workspace.json, so the
@@ -414,7 +421,7 @@ installLineageSpill(new LineageSpill())
 const freshInstall = isFreshInstall()
 startTelemetry({ appVersion: app.getVersion() })
 
-const store = new WorkspaceStore()
+const store = bootStep(() => new WorkspaceStore(), bootFailed)
 /** Version pins per terminal (§10) — what the rail's third marker class draws. */
 const pinStore = new PinStore()
 
@@ -436,7 +443,7 @@ function recordPins(nodes: readonly CanvasNode[], pin: VersionPinRecord): void {
     }
   }
 }
-const ptys = new PtyManager({ instance: app.getPath('userData') })
+const ptys = bootStep(() => new PtyManager({ instance: app.getPath('userData') }), bootFailed)
 // Another live Cookrew owns the herdr session (a QA run with its own userData
 // slips past the single-instance lock below). This one has not run a single
 // session command and must not: on 2026-09-18 such an instance closed all 56
@@ -971,6 +978,30 @@ const legacyHandleNow = (): string | null => accounts.legacyHandle()
 const firstRunStore = new FirstRunStore(path.join(app.getPath('userData'), 'first-run.json'), {
   hasContent: () => !store.freshInstall || store.hasContent(),
   hasAccount: () => accounts.account() !== null || legacyHandleNow() !== null
+})
+addPaneDirs(firstRunStore.dirs())
+/** The person's own endpoint, for someone with no Claude or Codex account (agent-access.ts). */
+const accessStore = new AccessStore({
+  file: path.join(homedir(), '.cookrew', 'access.json'),
+  keyDir: path.join(homedir(), '.cookrew', 'access-keys'),
+  secrets
+})
+/** The first task, held until an agent has it (first-task.ts). */
+const firstTasks = new FirstTasks<PtySession>({
+  store: firstRunStore,
+  inject: (session, words, hooks) => injectWhenReady(session, words, { timeoutMs: FIRST_TASK_WAIT_MS, onlyWhenReady: true, ...hooks }),
+  session: (id) => {
+    const live = ptys.get(id)
+    if (live) return live
+    const node = store.nodeAcrossWorkspaces(id)?.node
+    if (node?.kind !== 'terminal') return null
+    spawnTracked(node)
+    return ptys.get(id) ?? null
+  },
+  removeCard: (id) => void removeNode(id).catch((error) => console.error('Clearing the first agent failed:', error)),
+  emit: () => {
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send('first-run:changed', { stage: firstRunStore.read(), task: firstRunStore.task() })
+  }
 })
 
 /**
@@ -2998,10 +3029,13 @@ function spawnTracked(t: {
   // of each MCP server (route/shared-mcp.ts). Appended AFTER the route's args:
   // claude's --mcp-config is variadic and must be last on the line.
   const mcpArgs = cardNode?.kind === 'terminal' && !served ? routeService.sharedMcpFor(cardNode) : []
-  const spawnRoute = route && !served ? { env: route.env, args: [...route.args, ...mcpArgs] } : null
+  // A person's own endpoint, for a card nothing else routes. Never a served
+  // session: a stranger's seat must not run on the owner's key.
+  const access = cardNode?.kind === 'terminal' && !served && route?.effective === 'direct' ? accessStore.launchFor(harnessFor(effective)?.id) : null
+  const spawnRoute = route && !served ? { env: { ...route.env, ...access?.env }, args: [...route.args, ...(access?.args ?? []), ...mcpArgs] } : null
   // A routed card runs the route's model: a launch pick's model gives way to it.
   // A direct claude card's alias is spelled for the gateway its own settings name (claude-model-route.ts).
-  const launched = spawnRoute && route && route.effective !== 'direct' ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
+  const launched = spawnRoute && route && (route.effective !== 'direct' || access) ? withoutRoutedPick(effective, harnessFor(effective)?.id) : directClaudeLine(effective)
   const fresh = !ptys.get(t.id)
   const session = ptys.spawn(
     {
@@ -3972,6 +4006,8 @@ dispatchSweep.unref?.()
  */
 function seedConductorIfEmpty(): void {
   if (store.terminals().length > 0 || conductorWaits(firstRunStore.read())) return
+  // A card whose tool is not here is a card that dies on its first key.
+  if (!agentToolReady(DEFAULT_ORCH_PRESET.command, panePath())) return
   store.addNode({
     kind: 'terminal',
     id: randomUUID(),
@@ -4889,6 +4925,15 @@ interface CreateTerminalOpts {
   command?: string
 }
 
+/** A folder as the OS resolves it; as given when it cannot be read. */
+function realDir(dir: string): string {
+  try {
+    return realpathSync(dir)
+  } catch {
+    return dir
+  }
+}
+
 function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   const role = opts.roleName ? roles.get(opts.roleName) : undefined
   if (opts.roleName && !role) throw new Error(`No saved role '${opts.roleName}'`)
@@ -4926,14 +4971,16 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   const pickedRoute = !role && opts.command === undefined && opts.tune !== undefined ? newAgentLaunch(preset.command, opts.tune).route : undefined
   const placed = pickedRoute !== undefined ? { ...terminal, route: pickedRoute } : opts.tune === undefined ? terminal : routedNewAgent(terminal)
   // The person chose this folder for the agent, on a screen saying what it may
-  // do there: the answer to Claude's trust dialog, which the prompt box cannot draw.
-  if (opts.patient === true && isClaudeCommand(terminal.command)) trustDirectory(terminal.cwd, path.join(app.getPath('home'), '.claude.json'))
+  // do there: the owner's ruling (2026-11-05) is that this answers Claude's trust
+  // dialog. By real path: Claude keys its answer on one, and /tmp is a symlink.
+  if (opts.patient === true && isClaudeCommand(terminal.command)) trustDirectory(realDir(terminal.cwd), path.join(app.getPath('home'), '.claude.json'))
   const added = store.addNode(placed)
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
   const first = typeof opts.prompt === 'string' && terminal.command.trim() ? opts.prompt.trim() : ''
   const boot = [role ? buildRoleBootMessage(role.name, role.rolePrompt) : '', first].filter(Boolean).join('\n\n')
-  if (boot) {
+  if (opts.patient === true && first) firstTasks.hold(added.id, first, added.kind === 'terminal' ? added.preset : preset.name)
+  else if (boot) {
     const session = ptys.get(added.id)
     if (session) {
       const injected = opts.patient === true ? injectWhenReady(session, boot, { timeoutMs: FIRST_TASK_WAIT_MS, onlyWhenReady: true }) : injectWhenReady(session, boot)
@@ -7214,6 +7261,8 @@ app.on('before-quit', (event) => {
   latestWatch.dispose()
   doorWatch.dispose()
   turns.flushHistories()
+  // Panes going down with the app are no dead agents: a held task waits for the next launch.
+  firstTasks.stop()
   turns.disposeAll()
   ptys.disposeAll()
   // The shared CLI path goes only if it still holds the socket we bound: a
@@ -7758,16 +7807,27 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('lane:auto', (_e, nodeId: string, on: boolean) => laneAuto(nodeId, on))
   registerFirstRunIpc(ipcMain, {
     store: firstRunStore,
+    tasks: firstTasks,
+    blocked: (name) => {
+      const found = PRESETS.find((p) => p.name === name)
+      return !found || agentToolReady(found.command, panePath()) ? null : `${found.name} is not installed yet. Check this computer again to install it.`
+    },
     probe: () =>
       probeTools(
         machineProbe({
           chrome: () => findChrome() !== null,
           magpie: () => magpieInstalled({ home: homedir(), env: process.env }, existsSync),
           host: () => multiplexer()?.id ?? null,
-          adoptDirs: adoptShellDirs
+          panePath: () => panePath(),
+          adoptDirs: (dirs) => {
+            addPaneDirs(dirs)
+            firstRunStore.rememberDirs(dirs)
+          },
+          endpointTools: () => accessStore.state().active?.tools ?? []
         })
       )
   })
+  registerAccessIpc(ipcMain, { store: accessStore, probe: (input) => probeEndpoint(input) })
   ipcMain.handle('dir:pick', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })

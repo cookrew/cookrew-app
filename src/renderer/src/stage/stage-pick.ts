@@ -68,7 +68,7 @@ export function pickBackground(rows: readonly AgentRow[], popped: readonly Poppe
   return last === null ? null : { terminalId: last.id, item: null, why: 'latest' }
 }
 
-const PHASE_RANK: Record<AgentRow['phase'], number> = { waiting: 0, working: 1, done: 2, quiet: 3, offline: 4 }
+const PHASE_RANK: Record<AgentRow['phase'], number> = { waiting: 0, failed: 0, working: 1, done: 2, quiet: 3, offline: 4 }
 
 /** The avatars, top to bottom: who needs you, who is working, who finished; newest first within each. */
 export function railOrder(rows: readonly AgentRow[]): AgentRow[] {

@@ -68,6 +68,11 @@ export function useZoomSlots(): ZoomSlots {
   return useSyncExternalStore(subscribe, snapshot, serverSnapshot)
 }
 
+/** A name a person can read: `<synthetic>` is what a harness records for a turn no model answered. */
+export function cleanModelName(name: string | null | undefined): string | null {
+  return !name || name.startsWith('<') ? null : name
+}
+
 /**
  * Which one switch the bar shows for the model. A routed card's model is its
  * ROUTE — the harness's own record then reads a gateway id or `<synthetic>`,
@@ -93,7 +98,7 @@ export function tuneSummary(input: {
   const pick = (knob: string): string | null => {
     const dial = input.dials.find((d) => d.knob === knob)
     if (!dial || dial.reading === null) return null
-    return knob === 'model' ? (dial.current ?? dial.reading) : dial.reading
+    return knob === 'model' ? cleanModelName(dial.current ?? dial.reading) : dial.reading
   }
   const routed = modelSwitchKind({ routeDial: input.routeDial, route: input.route }) === 'route'
   const route = input.route ?? ''

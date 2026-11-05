@@ -1,19 +1,42 @@
+import type { FirstTask } from '../../../shared/first-run'
+import { turnFailure } from '../../../shared/turn-failure'
 import type { CanvasNode } from '../../../shared/model'
-import type { PreflightRow } from '../../../shared/preflight'
+import { AGENT_TOOLS, type PreflightRow } from '../../../shared/preflight'
 import type { TerminalActivity, TurnPhase } from '../../../shared/turn'
-import { SETUP_CARD_NAME } from '../routing/use-setup-terminal'
 import { SHELL_PRESET } from '../prompt/harness-pref'
 
 /** The first run's small decisions, pure, so each is tested without a screen. */
 
-/** Terminals of the person's own: the Setup card the tool check made is not their first agent. */
-export function realAgents(nodes: readonly CanvasNode[]): number {
-  return nodes.filter((n) => n.kind === 'terminal' && !(n.name === SETUP_CARD_NAME && n.preset === SHELL_PRESET)).length
+/**
+ * An agent of the person's own has really started: it works, or has finished a
+ * turn. A card alone proves nothing: a dead agent has one, and the first run must
+ * not move on it. A Shell is no agent, the Setup card least of all.
+ */
+export function agentAtWork(nodes: readonly CanvasNode[], activities: readonly TerminalActivity[]): boolean {
+  const agents = new Set(nodes.filter((n) => n.kind === 'terminal' && n.preset !== SHELL_PRESET).map((n) => n.id))
+  return activities.some((a) => agents.has(a.terminalId) && (a.phase !== 'idle' || a.turnCount > 0))
+}
+
+/**
+ * An agent made some other way (a phone, the CLI) ends the screens. Not while a
+ * task is held: that outcome is main's to say. And not the agent a task was taken
+ * back from: its card reads as working for a beat as it goes.
+ */
+export function otherAgentEnds(nodes: readonly CanvasNode[], activities: readonly TerminalActivity[], task: FirstTask | null): boolean {
+  if (task?.state === 'holding') return false
+  const gone = task?.id
+  return agentAtWork(nodes.filter((n) => n.id !== gone), activities)
+}
+
+/** A saved endpoint runs on certain tools: the first of them that is here, or the first to install. */
+export function firstAgentHarness(rows: readonly PreflightRow[], endpointTools: readonly string[] | null): string | null {
+  if (endpointTools === null || endpointTools.length === 0) return firstHarness(rows)
+  return endpointTools.find((tool) => rows.some((r) => r.name === tool && r.state === 'found')) ?? endpointTools[0]
 }
 
 /** The tool the first agent runs on: the first one found; the row's name is the preset's. */
 export function firstHarness(rows: readonly PreflightRow[]): string | null {
-  return rows.find((r) => (r.id === 'claude' || r.id === 'codex') && r.state === 'found')?.name ?? null
+  return rows.find((r) => AGENT_TOOLS.includes(r.id) && r.state === 'found')?.name ?? null
 }
 
 interface Seen {
@@ -26,18 +49,27 @@ export type TurnMemory = ReadonlyMap<string, Seen>
 const working = (phase: TurnPhase): boolean => phase === 'thinking' || phase === 'waiting'
 
 /**
- * DID A TURN JUST END? An agent working that reached its reply, or a new
- * completed turn for one whose phase never showed the work. First sight says
- * nothing (a reply already on screen is old), and a shell is never an agent.
+ * WHICH TURNS JUST ENDED? An agent working that reached its reply, or a new turn
+ * on record once it has stopped. A rising count alone is nothing: a file-backed
+ * harness records a turn as it STARTS, and "finished" was said 5 s into the work.
+ * First sight says nothing (a reply already on screen is old), a shell is never
+ * an agent, a refused turn did not finish, and a turn that just stopped (a dead
+ * agent) did not reach a reply.
  */
-export function stepTurns(memory: TurnMemory, activities: Iterable<TerminalActivity>): { memory: TurnMemory; ended: boolean } {
+export function stepTurns(memory: TurnMemory, activities: Iterable<TerminalActivity>): { memory: TurnMemory; ended: readonly string[] } {
   const next = new Map(memory)
-  let ended = false
+  const ended: string[] = []
   for (const activity of activities) {
     if (!activity.agent) continue
     const before = memory.get(activity.terminalId)
-    if (before && ((working(before.phase) && activity.phase === 'replied') || activity.turnCount > before.turns)) ended = true
+    const reached = before !== undefined && !working(activity.phase) && ((working(before.phase) && activity.phase === 'replied') || activity.turnCount > before.turns)
+    if (reached && turnFailure(activity) === null) ended.push(activity.terminalId)
     next.set(activity.terminalId, { phase: activity.phase, turns: activity.turnCount })
   }
   return { memory: next, ended }
+}
+
+/** Looked at again a moment later: a quiet patch inside a turn starts working again. */
+export function stillFinished(activity: TerminalActivity | undefined): boolean {
+  return activity !== undefined && !working(activity.phase) && turnFailure(activity) === null
 }

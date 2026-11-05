@@ -134,12 +134,12 @@ describe('what counts as content', () => {
 describe('the bridge', () => {
   it('registers exactly the channel table: tests/ipc-channels.test.ts reads it as the registration', () => {
     const registered: string[] = []
-    registerFirstRunIpc({ handle: (channel: string) => void registered.push(channel) }, { store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS })
+    registerFirstRunIpc({ handle: (channel: string) => void registered.push(channel) }, { store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS, tasks: { resume: () => undefined, discard: () => undefined }, blocked: () => null })
     expect(registered).toEqual([...FIRST_RUN_CHANNELS])
   })
 
   it('moves only to a stage it knows, and answers where the run stands', () => {
-    const handlers = firstRunHandlers({ store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS })
+    const handlers = firstRunHandlers({ store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS, tasks: { resume: () => undefined, discard: () => undefined }, blocked: () => null })
     expect(handlers.read()).toBe('preflight')
     expect(handlers.advance('task')).toBe('task')
     expect(handlers.advance('door')).toBe('task')
@@ -147,7 +147,7 @@ describe('the bridge', () => {
   })
 
   it('answers rows from the facts', async () => {
-    const handlers = firstRunHandlers({ store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS })
-    expect((await handlers.preflight()).map((r) => r.state)).toEqual(Array(6).fill('unknown'))
+    const handlers = firstRunHandlers({ store: new FirstRunStore(fileIn(), nothing), probe: async () => UNKNOWN_FACTS, tasks: { resume: () => undefined, discard: () => undefined }, blocked: () => null })
+    expect((await handlers.preflight()).map((r) => r.state)).toEqual(Array(8).fill('unknown'))
   })
 })

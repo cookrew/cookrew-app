@@ -82,11 +82,11 @@ export const ACCOUNT_COPY = {
    * THE ASK, once a person reaches something that needs an account. Each says
    * what they just reached and that nothing here waits on it.
    */
-  ASK_PHONE_TITLE: 'Reach this Mac from anywhere',
+  ASK_PHONE_TITLE: 'Reach this computer from anywhere',
   ASK_PHONE_LEDE:
-    'Your phone already works on this Wi-Fi. Away from it you need a free Cookrew account. Everything on this Mac keeps working without one.',
-  ASK_JOIN_TITLE: 'Use this Mac with your Cookrew account',
-  ASK_JOIN_LEDE: 'Type the code from your other device, or sign in. Nothing on this Mac needs an account.',
+    'Your phone already works on this Wi-Fi. Away from it you need a free Cookrew account. Everything on this computer keeps working without one.',
+  ASK_JOIN_TITLE: 'Use this computer with your Cookrew account',
+  ASK_JOIN_LEDE: 'Type the code from your other device, or sign in. Nothing on this computer needs an account.',
   /** The way to the join half, from the sheet the avatar opens. */
   ASK_HAVE_CODE: 'Have a code from another device?',
   /** D8, the join half — live in cut 2 (V3-10). */

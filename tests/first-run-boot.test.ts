@@ -36,8 +36,29 @@ describe('a real launch', () => {
   // (its rows have no numbers), so the person would wait behind it unseen.
   it('trusts the chosen folder for the first task alone, before the agent starts', () => {
     const create = body('createTerminal')
-    expect(create).toMatch(/opts\.patient === true && isClaudeCommand\(terminal\.command\)\) trustDirectory\(terminal\.cwd/)
+    expect(create).toMatch(/opts\.patient === true && isClaudeCommand\(terminal\.command\)\) trustDirectory\(realDir\(terminal\.cwd\)/)
     expect(create.indexOf('trustDirectory(')).toBeLessThan(create.indexOf('spawnTracked('))
+  })
+
+  it('gives panes the installers’ dirs in every build, outside the packaged branch', () => {
+    const at = source.indexOf('addPaneDirs(installerDirs(homedir()))')
+    expect(at).toBeGreaterThan(-1)
+    expect(at).toBeLessThan(source.indexOf('if (app.isPackaged) {'))
+  })
+
+  it('never seeds a Conductor whose tool is not here', () => {
+    const seed = body('seedConductorIfEmpty')
+    expect(seed).toMatch(/agentToolReady\(DEFAULT_ORCH_PRESET\.command, panePath\(\)\)/)
+    expect(seed.indexOf('agentToolReady')).toBeLessThan(seed.indexOf('store.addNode'))
+  })
+
+  it('holds a first task instead of typing it, and only a first task', () => {
+    expect(body('createTerminal')).toMatch(/if \(opts\.patient === true && first\) firstTasks\.hold\(/)
+    expect(body('createTerminal')).toMatch(/injectWhenReady\(session, boot\)/)
+  })
+
+  it('keeps a stranger’s seat off the owner’s endpoint', () => {
+    expect(source).toMatch(/!served && route\?\.effective === 'direct' \? accessStore\.launchFor/)
   })
 
   it('sets PATH before the terminal host is chosen', () => {

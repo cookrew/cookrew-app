@@ -9,9 +9,12 @@ import { UNKNOWN_FACTS } from '../src/shared/preflight'
  * tool: a file on PATH is the fact, so a probe cannot touch a running herdr.
  */
 
-const deps = (over: Partial<ProbeDeps> = {}): ProbeDeps => ({
+const deps = (over: Partial<ProbeDeps> = {}): ProbeDeps => {
+  const dirs = ['/usr/bin', '/bin']
+  return {
   home: '/Users/new',
-  pathEnv: '/usr/bin:/bin',
+  panePath: () => dirs.join(':'),
+  adoptDirs: (more) => void dirs.push(...more),
   platform: 'darwin',
   exists: () => false,
   agents: async () => [
@@ -23,12 +26,13 @@ const deps = (over: Partial<ProbeDeps> = {}): ProbeDeps => ({
   host: () => 'direct',
   shellDirs: async () => [],
   ...over
-})
+  }
+}
 
 describe('the facts', () => {
   it('reads a bare machine as missing, without an error', async () => {
     const facts = await probeTools(deps())
-    expect(facts).toMatchObject({ claude: 'missing', codex: 'missing', herdr: 'missing', tmux: 'missing', chrome: 'missing', magpie: 'missing', ollama: 'missing', brew: 'missing', npm: 'missing', host: 'direct', platform: 'darwin' })
+    expect(facts).toMatchObject({ claude: 'missing', codex: 'missing', pi: 'missing', opencode: 'missing', herdr: 'missing', tmux: 'missing', chrome: 'missing', magpie: 'missing', ollama: 'missing', brew: 'missing', npm: 'missing', host: 'direct', platform: 'darwin' })
   })
 
   it('finds a tool on PATH by its file', async () => {
@@ -41,14 +45,6 @@ describe('the facts', () => {
   it('finds what only the login shell knows: the agents will run there', async () => {
     const facts = await probeTools(deps({ shellDirs: async () => ['/Users/new/.nvm/bin'], exists: (p) => p === '/Users/new/.nvm/bin/npm' }))
     expect(facts.npm).toBe('found')
-  })
-
-  // Panes run on the app's PATH, so a tool only the login shell knows would
-  // read Found and then fail to start. What the check found, the app takes on.
-  it('hands what the login shell added to the app, so a found tool can start', async () => {
-    const adoptDirs = vi.fn()
-    await probeTools(deps({ shellDirs: async () => ['/Users/new/.nvm/bin'], adoptDirs }))
-    expect(adoptDirs).toHaveBeenCalledWith(['/Users/new/.nvm/bin'])
   })
 
   it('still answers when the login shell cannot be read', async () => {
@@ -66,6 +62,21 @@ describe('the facts', () => {
     expect(facts.claudeSignedIn).toBe(false)
     expect(facts.codex).toBe('missing')
     expect(facts.codexSignedIn).toBeNull()
+  })
+})
+
+describe('a sign-in that is a key in the environment (C-7)', () => {
+  const agents = async () => [{ id: 'claude', installed: true, signedIn: false }, { id: 'codex', installed: true, signedIn: false }]
+
+  it('counts a token the agent will inherit', async () => {
+    expect((await probeTools(deps({ agents, env: { ANTHROPIC_AUTH_TOKEN: 't' } }))).claudeSignedIn).toBe(true)
+    expect((await probeTools(deps({ agents, env: { ANTHROPIC_API_KEY: 't' } }))).claudeSignedIn).toBe(true)
+    expect((await probeTools(deps({ agents, env: { OPENAI_API_KEY: 't' } }))).codexSignedIn).toBe(true)
+  })
+
+  it('does not count an empty one, or the other tool’s', async () => {
+    const facts = await probeTools(deps({ agents, env: { ANTHROPIC_AUTH_TOKEN: '' , OPENAI_API_KEY: 't' } }))
+    expect(facts.claudeSignedIn).toBe(false)
   })
 })
 
@@ -118,7 +129,7 @@ describe('a Dock launch gets the same tools as a terminal launch', () => {
   })
 
   it('adds nothing twice, so a terminal launch keeps its PATH as it is', () => {
-    const full = '/opt/homebrew/bin:/usr/local/bin:/Users/new/.local/bin:/Users/new/.claude/local:/usr/bin:/bin'
+    const full = '/opt/homebrew/bin:/usr/local/bin:/Users/new/.local/bin:/Users/new/.claude/local:/Users/new/.opencode/bin:/usr/bin:/bin'
     expect(widenedPath({ PATH: full }, '/Users/new')).toBe(full)
   })
 

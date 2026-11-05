@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { EXAMPLE_TASKS, FIRST_SCREEN_COPY, FIX_LABELS, HINT_COPY, PREFLIGHT_COPY, TOOL_COPY, TOOL_NOTES } from '../src/shared/first-run-copy'
+import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, FIX_LABELS, HINT_COPY, PREFLIGHT_COPY, TOOL_COPY, TOOL_NOTES, WAIT_COPY, exampleName } from '../src/shared/first-run-copy'
+import { ACCESS_ROWS } from '../src/shared/agent-access'
 import { ACCOUNT_COPY, accountAskView } from '../src/renderer/src/account/account-store'
 import { promptPlaceholder } from '../src/renderer/src/prompt/prompt-words'
 
@@ -19,7 +20,9 @@ const strings = (value: unknown): string[] => {
 }
 
 describe('the first run’s words', () => {
-  const all = strings([PREFLIGHT_COPY, TOOL_COPY, TOOL_NOTES, FIX_LABELS, FIRST_SCREEN_COPY, EXAMPLE_TASKS, HINT_COPY])
+  const said = (copy: Record<string, unknown>): unknown[] => Object.values(copy).map((value) => (typeof value === 'function' ? (value as (name: string) => string)('Claude Code') : value))
+  const waits = Object.values(WAIT_COPY).map((value) => (typeof value === 'object' ? said(value) : value))
+  const all = strings([PREFLIGHT_COPY, TOOL_COPY, TOOL_NOTES, FIX_LABELS, said(FIRST_SCREEN_COPY), EXAMPLE_TASKS, HINT_COPY, waits, ENDPOINT_COPY, ACCESS_ROWS.map((row) => [row.title, row.does])])
 
   it('has words to check', () => {
     expect(all.length).toBeGreaterThan(30)
@@ -36,7 +39,20 @@ describe('the first run’s words', () => {
   })
 
   it('says what choosing a folder allows: that sentence is what stands in for Claude’s trust dialog', () => {
-    expect(FIRST_SCREEN_COPY.LEDE).toMatch(/read, change and run files in the folder you choose/)
+    expect(FIRST_SCREEN_COPY.LEDE).toMatch(/read, change and run files in the folder you choose, without stopping to ask/)
+  })
+
+  it('does not promise bypass mode stays in the folder: it does not', () => {
+    expect(WAIT_COPY.consent.lede).not.toMatch(/folder/)
+  })
+
+  it('never says Mac: the same screens run on Linux', () => {
+    expect(all.filter((line) => /\bMac\b/.test(line))).toEqual([])
+  })
+
+  it('gives each example an agent name a person would use', () => {
+    expect(EXAMPLE_TASKS.map(exampleName)).toEqual(['Folder Tour', 'File Check', 'Readme Writer'])
+    expect(exampleName('fix the login bug')).toBeNull()
   })
 
   it('offers exactly three example tasks, none of them destructive', () => {
