@@ -1,7 +1,7 @@
 // A LINK THAT STAYS UP (path/rtc-link.ts, round P3): it rides out a blip,
 // notices a Mac that went quiet, checks itself when the page comes back, and
 // moves the plane before it fails the requests that were riding it.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { connectRtcLink, type RtcLink, type RtcLinkDeps } from '../src/renderer/src/path/rtc-link'
 import { adoptRtcLink, type RtcRow } from '../src/renderer/src/path/rtc-adopt'
 import { dataPlane, fallBackToRelay, resetDataPlane, setDataPlane } from '../src/renderer/src/data-plane'
@@ -120,10 +120,11 @@ describe('the heartbeat', () => {
   })
 
   it('ends a link whose Mac went quiet', async () => {
-    const { link, channel } = await tracked({ pingMs: 10, deadMs: 35 })
+    // Its own clock: on a busy machine a late timer reads as a suspended page, and is forgiven.
+    let clock = 0
+    const { link, channel } = await tracked({ pingMs: 10, deadMs: 35, now: () => (clock += 5) })
     channel.pongs = false
-    await wait(90)
-    expect(link.ended()?.reason).toBe('silent')
+    await vi.waitFor(() => expect(link.ended()?.reason).toBe('silent'), { timeout: 5_000 })
   })
 
   it('does not blame the Mac for a page the phone suspended', async () => {

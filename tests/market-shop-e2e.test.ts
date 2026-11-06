@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -269,8 +269,8 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     const star = 'button[data-star="drej/alpha"]'
     await go(`${origin}/drej/alpha`)
     await click(star)
-    await new Promise((r) => setTimeout(r, 600))
-    expect(await text(`${star} span`)).toBe('1')
+    // Once, and waited on: a second click would take the star back.
+    await vi.waitFor(async () => expect(await text(`${star} span`)).toBe('1'), { timeout: 10_000, interval: 100 })
     expect(await page.evaluate(`document.querySelector('${star}').classList.contains('on')`)).toBe(true)
     expect(await count('dialog[open]')).toBe(0)
     expect(await count('#signin-sheet')).toBe(0)
