@@ -88,16 +88,41 @@ export const openWebSocket = (scopedUrl: string): WebSocket => {
 /** The socket at a Mac path, as an event stream down and POSTs up. */
 export const openBridgedSocket = (path: string): BridgeWebSocket =>
   new BridgeWebSocket({
-    stream: () => openEventSource(apiPath(`/api/socket-bridge?path=${encodeURIComponent(path)}`)),
-    post: async (id, messages) => {
+    stream: (resume) =>
+      openEventSource(
+        apiPath(
+          resume
+            ? `/api/socket-bridge?resume=${encodeURIComponent(resume.id)}&after=${resume.after}`
+            : `/api/socket-bridge?v=2&path=${encodeURIComponent(path)}`
+        )
+      ),
+    post: async (id, body) => {
       const response = await planeFetch(apiPath(`/api/socket-bridge/${id}`), {
         method: 'POST',
         headers: { ...authHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify({ m: messages })
+        body: JSON.stringify(body)
       })
-      return response.status !== 404
-    }
+      if (response.status === 404) return 'gone'
+      return response.ok ? 'ok' : 'retry'
+    },
+    watch: watchNetwork
   })
+
+/** Anything that says the phone's network may have moved under the page. */
+const watchNetwork = (changed: () => void): (() => void) => {
+  const connection = (navigator as Navigator & { connection?: EventTarget }).connection
+  const visible = (): void => {
+    if (!document.hidden) changed()
+  }
+  window.addEventListener('online', changed)
+  document.addEventListener('visibilitychange', visible)
+  connection?.addEventListener?.('change', changed)
+  return () => {
+    window.removeEventListener('online', changed)
+    document.removeEventListener('visibilitychange', visible)
+    connection?.removeEventListener?.('change', changed)
+  }
+}
 
 /**
  * The same stream, taken by fetch on the relay. `new EventSource` cannot set a

@@ -25,6 +25,8 @@ export interface OutboundFrameMeta {
   deviceHeight?: number
   displayScale: number
   pageScaleFactor: number
+  /** Where the page is scrolled to in this picture, so a phone can lead its finger (scroll-lead.ts). */
+  scrollY?: number
   mobile: boolean
   revision: number
 }
@@ -219,6 +221,7 @@ export class CastViewer {
         deviceHeight,
         displayScale: frameContext.displayScale,
         pageScaleFactor: this.observedPageScaleFactor,
+        ...(typeof meta.scrollOffsetY === 'number' ? { scrollY: meta.scrollOffsetY } : {}),
         mobile: meta.mobile ?? viewport?.mobile ?? false,
         revision
       }

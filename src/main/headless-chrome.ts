@@ -148,6 +148,8 @@ export interface FrameMeta {
   deviceHeight?: number
   /** Visual viewport zoom reported by Page.screencastFrame metadata. */
   pageScaleFactor?: number
+  /** How far the page is scrolled, in CSS pixels: Page.screencastFrame's own name for it. */
+  scrollOffsetY?: number
   mobile?: boolean
   revision?: number
 }
@@ -740,12 +742,15 @@ export class HeadlessInstance {
         }).catch(() => null) as Promise<{ data?: string } | null>,
         page.cdp.send('Page.getLayoutMetrics').catch(() => null) as Promise<{
           visualViewport?: { scale?: unknown }
+          cssVisualViewport?: { pageY?: unknown }
         } | null>
       ])
       const scale = layout?.visualViewport?.scale
       if (shot?.data && typeof scale === 'number' && Number.isFinite(scale) && scale > 0) {
+        const pageY = layout?.cssVisualViewport?.pageY
         this.emitFrame(shot.data, {
-          pageScaleFactor: scale
+          pageScaleFactor: scale,
+          ...(typeof pageY === 'number' && Number.isFinite(pageY) ? { scrollOffsetY: pageY } : {})
         })
       }
     } catch {

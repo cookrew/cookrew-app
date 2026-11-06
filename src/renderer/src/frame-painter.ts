@@ -24,6 +24,9 @@ export interface PaintableFrame {
   src?: string
   /** The JPEG itself — a frame from the desktop's port. */
   bytes?: Uint8Array
+  /** Where the page is scrolled to in this picture, in CSS pixels. */
+  scrollY?: number
+  pageScale?: number
 }
 
 export interface PaintedFrame {
@@ -33,6 +36,8 @@ export interface PaintedFrame {
   height: number
   /** The frame's JPEG: what the card keeps as its picture at zoom-out (browser-poster.ts). */
   blob: Blob
+  scrollY?: number
+  pageScale?: number
 }
 
 export interface PainterEvents {
@@ -123,7 +128,15 @@ export class FramePainter {
       }
       const { width, height } = pictureSize(picture)
       this.draw(picture, width, height)
-      this.events.onPainted({ seq: frame.seq, revision: frame.revision, width, height, blob })
+      this.events.onPainted({
+        seq: frame.seq,
+        revision: frame.revision,
+        width,
+        height,
+        blob,
+        ...(frame.scrollY !== undefined ? { scrollY: frame.scrollY } : {}),
+        ...(frame.pageScale !== undefined ? { pageScale: frame.pageScale } : {})
+      })
     } finally {
       this.decoding = false
       const next = this.waiting

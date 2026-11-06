@@ -53,6 +53,7 @@ const keep = (event: React.PointerEvent | React.MouseEvent): void => {
 
 export function RemoteKeyBar({
   composition,
+  typed,
   mode,
   note,
   onPaste,
@@ -61,6 +62,8 @@ export function RemoteKeyBar({
   onHide
 }: {
   composition: string
+  /** What just went up, before the page can show it. A password shows as dots. */
+  typed: string
   mode: FieldMode
   note: string | null
   onPaste: () => void
@@ -69,6 +72,7 @@ export function RemoteKeyBar({
   onHide: () => void
 }): React.JSX.Element {
   const inset = useKeyboardTop()
+  const echo = mode === 'password' ? '•'.repeat([...typed].length) : typed
   const button = (label: string, title: string, action: () => void): React.JSX.Element => (
     <button type="button" className="remote-keybar-btn" title={title} aria-label={title} onPointerDown={keep} onMouseDown={keep} onClick={action}>
       {label}
@@ -77,7 +81,7 @@ export function RemoteKeyBar({
   return createPortal(
     <div className="remote-keybar" style={{ bottom: inset }} data-remote-keybar="open" onPointerDown={keep}>
       <span className={`remote-keybar-text${composition ? ' composing' : ''}`} aria-live="polite">
-        {note ?? (composition || MODE_WORDS[mode])}
+        {note ?? (composition || echo || MODE_WORDS[mode])}
       </span>
       {button('Paste', 'Paste from this phone into the page', onPaste)}
       {button('Copy', 'Copy what is selected on the page', onCopy)}

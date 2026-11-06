@@ -22,6 +22,8 @@ export interface StreamLineHandlers {
   onMessage: (message: StreamMessage) => void
   /** The line dropped or failed; called once. */
   onClose: () => void
+  /** The line is down and being dialled again; messages wait (path/bridge-socket.ts). */
+  onResuming?: (on: boolean) => void
 }
 
 export interface StreamLine {
@@ -31,7 +33,15 @@ export interface StreamLine {
   /** The other end ever answered (a port arrived, a socket opened), whatever happened since. */
   answered: () => boolean
   send: (message: object) => void
+  /** A frame was drawn or passed over, for a line paced by that. */
+  receipt: (seq: number) => void
   close: () => void
+}
+
+/** A socket that takes paint receipts and says when it is resuming (path/bridge-socket.ts). */
+interface ResumingSocket {
+  painted?: (seq: number) => void
+  onresuming?: ((on: boolean) => void) | null
 }
 
 /** The preload's port to main (preload/index.ts · openBrowserStream). */
@@ -75,6 +85,9 @@ export function portLine(open: OpenBrowserStream, browserId: string, handlers: S
     send: (message) => {
       if (opened && !closed) port.post(message)
     },
+    receipt: (seq) => {
+      if (opened && !closed) port.post({ t: 'painted', seq })
+    },
     close: () => {
       if (closed) return
       closed = true
@@ -97,6 +110,8 @@ export function socketLine(socket: WebSocket, handlers: StreamLineHandlers): Str
   }
   socket.onerror = drop
   socket.onclose = drop
+  const resuming = socket as WebSocket & ResumingSocket
+  if ('onresuming' in resuming) resuming.onresuming = (on) => handlers.onResuming?.(on)
   socket.onmessage = (event: MessageEvent): void => {
     if (closed) return
     const message = parseStreamMessage(event.data)
@@ -108,6 +123,9 @@ export function socketLine(socket: WebSocket, handlers: StreamLineHandlers): Str
     answered: () => opened,
     send: (message) => {
       if (!closed && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
+    },
+    receipt: (seq) => {
+      if (!closed) resuming.painted?.(seq)
     },
     close: () => {
       closed = true

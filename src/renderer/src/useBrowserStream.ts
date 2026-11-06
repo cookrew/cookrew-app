@@ -12,6 +12,7 @@ import {
   inputWithRevision,
   nextStreamStatus,
   reconnectDelayMs,
+  remoteReconnectDelayMs,
   streamCanDrive,
   streamInputAllowed,
   streamPath,
@@ -44,6 +45,12 @@ const VIEWPORT_REPORT_DEBOUNCE_MS = 200
 
 /** No frame for this long -> treat the view as NOT live (frozen), input OFF. */
 export const FRAME_STALE_MS = 1200
+/**
+ * A phone's, longer. Live gates input, and losing it releases whatever the finger
+ * is doing, so over the relay a second of jitter cut swipes in half. The line's
+ * own silence watch (path/bridge-socket.ts) is what says a line is dead.
+ */
+export const REMOTE_FRAME_STALE_MS = 6000
 
 /** One received frame, ready to paint (frame-painter.ts). */
 export interface StreamFrame extends PaintableFrame {
@@ -83,6 +90,8 @@ export interface BrowserStream {
   release: () => void
   /** Every frame of the current revision, as it arrives. */
   subscribeFrames: (listener: (frame: StreamFrame) => void) => () => void
+  /** The picture has not changed: this seq now stands for the one on screen. */
+  subscribeBeats: (listener: (seq: number) => void) => () => void
   /** The newest frame not yet superseded, for a painter that subscribes late. */
   latestFrame: () => StreamFrame | null
   /** A frame was painted or skipped: over the port, that is what lets main send the next. */
@@ -179,6 +188,9 @@ export function useBrowserStream(
   const transitioningRef = useRef(false)
   const latestFrameRef = useRef<StreamFrame | null>(null)
   const frameListenersRef = useRef(new Set<(frame: StreamFrame) => void>())
+  const beatListenersRef = useRef(new Set<(seq: number) => void>())
+  /** The plane this view's line was opened on: a move keeps the picture while the line changes. */
+  const routeRef = useRef(planeRoute)
   const viewportRef = useRef(viewport)
   viewportRef.current = viewport
   const watchFieldsRef = useRef(options.watchFields === true)
@@ -222,12 +234,19 @@ export function useBrowserStream(
   const release = useCallback((): void => sendViewportControl('release'), [sendViewportControl])
 
   const receipt = useCallback((seq: number): void => {
-    const line = lineRef.current
-    if (line?.direct && line.isOpen()) line.send({ t: 'painted', seq })
+    lineRef.current?.receipt(seq)
   }, [])
 
   const subscribeFrames = useCallback((listener: (frame: StreamFrame) => void): (() => void) => {
     const listeners = frameListenersRef.current
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }, [])
+
+  const subscribeBeats = useCallback((listener: (seq: number) => void): (() => void) => {
+    const listeners = beatListenersRef.current
     listeners.add(listener)
     return () => {
       listeners.delete(listener)
@@ -291,8 +310,12 @@ export function useBrowserStream(
       transitioningRef.current = false
       return
     }
-    const keepFrame = keepFrameRef.current
+    // A move between planes is a new line under the same picture.
+    const moved = routeRef.current !== planeRoute
+    routeRef.current = planeRoute
+    const keepFrame = keepFrameRef.current || (moved && hasFrameRef.current)
     keepFrameRef.current = false
+    if (moved && keepFrame) setReconnecting(true)
 
     warnedRef.current = false
     gotFrameRef.current = false
@@ -377,7 +400,7 @@ export function useBrowserStream(
         if (disposed) return
         keepFrameRef.current = true
         setReconnectNonce((n) => n + 1)
-      }, reconnectDelayMs(attempt))
+      }, client === 'remote' ? remoteReconnectDelayMs(attempt) : reconnectDelayMs(attempt))
     }
 
     const adoptViewportRevision = (revision: number): void => {
@@ -399,8 +422,8 @@ export function useBrowserStream(
       const revision = msg.revision ?? viewportRevisionRef.current ?? 0
       if (viewportRevisionRef.current === null) adoptViewportRevision(revision)
       if (revision !== viewportRevisionRef.current) {
-        // Not for this viewport: done with, so the port may send the next.
-        if (line?.direct) line.send({ t: 'painted', seq: msg.seq })
+        // Not for this viewport: done with, so the line may send the next.
+        line?.receipt(msg.seq)
         return
       }
       const width = msg.deviceWidth
@@ -428,12 +451,14 @@ export function useBrowserStream(
         revision,
         receivedAt,
         ...(msg.bytes ? { bytes: msg.bytes } : {}),
-        ...(msg.src ? { src: msg.src } : {})
+        ...(msg.src ? { src: msg.src } : {}),
+        ...(msg.scrollY !== undefined ? { scrollY: msg.scrollY } : {}),
+        ...(msg.pageScaleFactor !== undefined ? { pageScale: msg.pageScaleFactor } : {})
       }
       latestFrameRef.current = frame
       const listeners = frameListenersRef.current
       if (listeners.size === 0) {
-        if (line?.direct) line.send({ t: 'painted', seq: frame.seq })
+        line?.receipt(frame.seq)
       } else {
         for (const listener of listeners) listener(frame)
       }
@@ -454,6 +479,17 @@ export function useBrowserStream(
       if (msg.kind === 'error') {
         console.error(`[browser-stream] server error for ${browserId}: ${msg.msg}`)
         fail('error')
+        return
+      }
+
+      if (msg.kind === 'same') {
+        if (msg.revision !== undefined && msg.revision !== viewportRevisionRef.current) return
+        lastFrameAtRef.current = Date.now()
+        if (hasFrameRef.current && !liveRef.current) {
+          liveRef.current = true
+          setLive(true)
+        }
+        for (const listener of beatListenersRef.current) listener(msg.seq)
         return
       }
 
@@ -539,7 +575,10 @@ export function useBrowserStream(
           if (watchFieldsRef.current) line?.send({ t: 'watch-fields' })
         },
         onMessage,
-        onClose: () => fail('close')
+        onClose: () => fail('close'),
+        onResuming: (on) => {
+          if (!disposed && !failed) setReconnecting(on)
+        }
       }
       const openPort = direct && !portUnansweredRef.current ? cookrew().openBrowserStream : undefined
       try {
@@ -577,7 +616,8 @@ export function useBrowserStream(
       }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
-        if (!disposed && liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {
+        const staleMs = client === 'desktop' ? FRAME_STALE_MS : REMOTE_FRAME_STALE_MS
+        if (!disposed && liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), staleMs)) {
           liveRef.current = false
           setLive(false)
         }
@@ -657,6 +697,7 @@ export function useBrowserStream(
     claim,
     release,
     subscribeFrames,
+    subscribeBeats,
     latestFrame,
     receipt,
     latestFields,
