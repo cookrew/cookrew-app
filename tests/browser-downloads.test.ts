@@ -1,6 +1,6 @@
 // A BROWSER CARD'S DOWNLOADS ARE FOR THE AGENT TOO.
 //
-// Left alone a headless Chrome saves into ~/Downloads and tells nobody: five
+// Left alone a headless Chrome saves into ~/Downloads and tells nobody: six
 // Telegram files landed there on 2026-11-06 and no agent could say where they
 // went. Each card now saves into its own directory and names every file there.
 // Measured on Chrome 157: `allow` overwrites a second file of the same name,
