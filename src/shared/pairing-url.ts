@@ -66,7 +66,7 @@ export type PairingUrlInput = RelayDesktopInput & {
  */
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost'])
 
-const originOf = (raw: string): string | null => {
+export const originOf = (raw: string): string | null => {
   try {
     const url = new URL(raw)
     const clear = url.protocol === 'http:' && LOOPBACK.has(url.hostname)

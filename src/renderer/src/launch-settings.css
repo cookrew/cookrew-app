@@ -1,0 +1,13 @@
+.ls-field {
+  margin-top: 14px;
+}
+
+.ls-field .gs-hint {
+  margin-top: 4px;
+}
+
+.ls-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

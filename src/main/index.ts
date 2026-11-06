@@ -1,3 +1,4 @@
+import { launchBoot } from './launch-settings-boot'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
@@ -283,6 +284,7 @@ import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
+import { createLaunchSettings, launchSettingsPath } from './launch-settings'
 import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
@@ -8881,6 +8883,9 @@ function registerIpc(handlers: RestoreHandlers): void {
         installer: electronUpdateInstaller()
       })
     : null
+  const launchSettings = createLaunchSettings({ file: launchSettingsPath(homedir()), boot: launchBoot, signedIn: () => accounts.account() !== null })
+  ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))
+  ipcMain.handle('launch-settings:save', (event, input: unknown) => (ownerFrame(event) ? launchSettings.save(input) : { ok: false, reason: 'not-owner' }))
   ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
   ipcMain.handle('update:set', (event, on: unknown) => {
     if (updateCheck === null) return null
