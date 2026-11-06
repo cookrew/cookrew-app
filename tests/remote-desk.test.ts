@@ -164,6 +164,117 @@ describe('blocked: what a device asks before each frame', () => {
 })
 
 describe('the machine switch', () => {
+  const remembering = (held = false) => {
+    const memory = { held, writes: [] as boolean[], read: () => memory.held, write: (on: boolean) => { memory.held = on; memory.writes.push(on) } }
+    return memory
+  }
+  const up = () => ({ running: false, start() { this.running = true }, stop() { this.running = false } })
+
+  it('stays on across a restart: the owner sets it once and then works from anywhere', () => {
+    const memory = remembering()
+    rig({ switchMemory: memory }).desk.setSwitch(true)
+    expect(memory.writes).toEqual([true])
+    const next = rig({ switchMemory: memory })
+    expect(next.desk.controlFacts().switchOn).toBe(false)
+    next.desk.restoreSwitch()
+    expect(next.desk.controlFacts().switchOn).toBe(true)
+    expect(next.desk.inputRefusal()).toBeNull()
+  })
+
+  it('off is remembered too, and a restart leaves it off', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    r.desk.restoreSwitch()
+    r.desk.setSwitch(false)
+    expect(memory.held).toBe(false)
+    const next = rig({ switchMemory: memory })
+    next.desk.restoreSwitch()
+    expect(next.desk.controlFacts().switchOn).toBe(false)
+  })
+
+  it('a restore is on the record, and names itself', () => {
+    const r = rig({ switchMemory: remembering(true) })
+    r.desk.restoreSwitch()
+    expect(r.records).toContainEqual(expect.objectContaining({ type: 'remote.switch-on', details: 'restored at launch' }))
+  })
+
+  it('memory that cannot be read leaves it off', () => {
+    const r = rig({ switchMemory: { read: () => { throw new Error('no key') }, write: () => undefined } })
+    r.desk.restoreSwitch()
+    expect(r.desk.controlFacts().switchOn).toBe(false)
+  })
+
+  it('still turns on for this run when it cannot be remembered, and says so', () => {
+    const r = rig({ switchMemory: { read: () => false, write: () => { throw new Error('no key') } } })
+    expect(r.desk.setSwitch(true)).toMatchObject({ ok: false, error: expect.stringContaining('next restart') })
+    expect(r.desk.controlFacts().switchOn).toBe(true)
+  })
+
+  it('pressing off always clears what is kept, even when it already reads off', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    expect(r.desk.controlFacts().switchOn).toBe(false)
+    r.desk.setSwitch(false)
+    expect(memory.held).toBe(false)
+  })
+
+  it('a door closed by wrong passwords stays closed across a restart', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    r.desk.restoreSwitch()
+    r.desk.forgetSwitch()
+    expect(memory.held).toBe(false)
+    expect(r.desk.controlFacts().switchOn).toBe(true)
+    const next = rig({ switchMemory: memory })
+    next.desk.restoreSwitch()
+    expect(next.desk.controlFacts().switchOn).toBe(false)
+  })
+
+  it('pressing on again puts back what a closed door took away', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    r.desk.restoreSwitch()
+    r.desk.forgetSwitch()
+    r.desk.setSwitch(true)
+    expect(memory.held).toBe(true)
+  })
+
+  it('tells the host it is on, with nobody watching: the menu bar must show it', () => {
+    const r = rig({ switchMemory: remembering(true) })
+    r.desk.restoreSwitch()
+    expect(r.desk.hostView()).toMatchObject({ rows: [], switchOn: true })
+    expect(r.host).toHaveBeenLastCalledWith(expect.objectContaining({ switchOn: true }))
+  })
+
+  it('clears what is kept before anything that could fail on the way', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory, host: () => { throw new Error('tray') } })
+    r.desk.restoreSwitch = r.desk.restoreSwitch
+    expect(() => r.desk.setSwitch(false)).not.toThrow()
+    expect(memory.held).toBe(false)
+  })
+
+  it('there is nothing to restore off a Mac', () => {
+    const r = rig({ platform: 'linux', switchMemory: remembering(true) })
+    r.desk.restoreSwitch()
+    expect(r.desk.controlFacts().switchOn).toBe(false)
+  })
+
+  it('keeps the Mac from sleeping while it is on, or a locked Mac drops off the network', () => {
+    const stayUp = up()
+    const r = rig({ stayUp })
+    r.desk.setSwitch(true)
+    expect(stayUp.running).toBe(true)
+    r.desk.setSwitch(false)
+    expect(stayUp.running).toBe(false)
+  })
+
+  it('a restored switch keeps it up as well', () => {
+    const stayUp = up()
+    rig({ stayUp, switchMemory: remembering(true) }).desk.restoreSwitch()
+    expect(stayUp.running).toBe(true)
+  })
+
   it('is off by default, and off means no viewer and no agent', async () => {
     const r = rig()
     expect(r.desk.controlFacts().switchOn).toBe(false)
@@ -208,7 +319,7 @@ describe('the machine switch', () => {
     expect(r.desk.inputRefusal()).toContain('Electron')
   })
 
-  it('is off at every launch, whatever any file says: nothing on disk can turn it on', () => {
+  it('a plain file cannot turn it on: only what the app itself sealed can', () => {
     const r = rig({ settings: { read: () => ({ on: true, waiting: null, holdUntil: 0 }) as never, write: () => undefined } })
     expect(r.desk.controlFacts().switchOn).toBe(false)
     expect(r.desk.inputRefusal()).toMatch(/Remote control/)

@@ -136,6 +136,8 @@ export interface RemoteSessionRow {
 export interface RemoteHostView {
   readonly rows: readonly RemoteSessionRow[]
   readonly awake: boolean
+  /** The machine switch, for the menu bar: someone at the Mac should be able to see it is on. */
+  readonly switchOn?: boolean
 }
 
 export const NOBODY_ON_HOST: RemoteHostView = { rows: [], awake: false }

@@ -5,7 +5,7 @@ import { hostOutsideTheMac } from '../src/shared/remote-unlock'
 
 const noop = (): void => undefined
 const draw = (over: Partial<UnlockSheetViewProps>): string =>
-  renderToStaticMarkup(<UnlockSheetView relayed={false} trust="same" words={['able', 'baby']} saved={false} busy={false} error={null} password="" remember={false} onPassword={noop} onRemember={noop} onUnlock={noop} onForget={noop} onTrustNew={noop} onClose={noop} {...over} />)
+  renderToStaticMarkup(<UnlockSheetView needsCode={false} stale={false} onCode={noop} canRemember trust="same" words={['able', 'baby']} saved={false} busy={false} error={null} password="" remember={false} onPassword={noop} onRemember={noop} onUnlock={noop} onForget={noop} onTrustNew={noop} onClose={noop} {...over} />)
 
 describe('UnlockSheetView', () => {
   it('asks for the password as a password, and offers to remember it', () => {
@@ -25,11 +25,22 @@ describe('UnlockSheetView', () => {
     expect(html).toContain('Forget password')
   })
 
-  it('a page the relay served never asks for the password', () => {
-    const html = draw({ relayed: true })
+  it('with no connect code it asks for one before any password', () => {
+    const html = draw({ needsCode: true })
     expect(html).not.toContain('type="password"')
     expect(html).not.toContain('Remember on this device')
-    expect(html).toContain('Wi-Fi or Tailscale')
+    expect(html).toContain('pairing code')
+    expect(html).toContain('aria-label="Pairing link"')
+  })
+
+  it('keeps no password on a page cookrew.dev serves: one altered page could read it without a keystroke', () => {
+    expect(draw({ canRemember: false })).not.toContain('Remember on this device')
+    expect(draw({ canRemember: false })).toContain('type="password"')
+  })
+
+  it('says when the code it held has been replaced', () => {
+    expect(draw({ needsCode: true })).not.toContain('out of date')
+    expect(draw({ needsCode: true, stale: true })).toContain('out of date')
   })
 
   it('a changed key takes no password at all', () => {

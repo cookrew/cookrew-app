@@ -180,6 +180,9 @@ export function ownerSecretPaths(
     path.join(base, 'downloads'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
+    // The sealed switch (remote-switch-memory.ts): a copy could be put back after it is off.
+    path.join(base, 'remote-switch'),
+    path.join(base, 'remote-switch.tmp'),
     // What a phone's sealed Mac password opens under (remote-unlock.ts).
     path.join(base, 'unlock-key.json'),
     path.join(base, 'unlock-key.json.tmp'),

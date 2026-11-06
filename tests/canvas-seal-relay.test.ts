@@ -22,6 +22,7 @@ import { createCanvasLink, type CanvasLink } from '../src/main/canvas-link'
 import { createSealTerminus, isSealPath, routeSeal, type SealTerminus } from '../src/main/canvas-seal-terminus'
 import { connectCodeId, newConnectCode } from '../src/shared/canvas-seal'
 import type { SealFrame } from '../src/shared/canvas-seal-wire'
+import { openSeal } from '../src/renderer/src/path/seal-client'
 import { SealPhone, until } from './support/seal-phone'
 
 const PASSWORD = 'correct horse battery staple'
@@ -215,6 +216,19 @@ describe('the sealed session through the real relay', () => {
     for (const canary of [BEARER, 'canary-pairing-token', REPLY, ROUTE, UPLOAD]) expect(read, canary).not.toContain(canary)
     expect(read).not.toContain(Buffer.from(code).toString('base64url'))
     phone.hangUp()
+  })
+
+  it('the phone page\'s own client carries a request through it, and the relay sees none of it', async () => {
+    const from = lines.length
+    const withCookie: typeof fetch = (input, init) => fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string>), cookie } })
+    const client = await openSeal({ url: (route) => `${prefix()}${route}`, code: Buffer.from(code).toString('base64url'), fetchFn: withCookie })
+    const answer = await client.request({ method: 'POST', path: ROUTE, headers: { authorization: BEARER }, body: PASSWORD })
+    client.close()
+    expect(Buffer.from(answer.body).toString()).toBe(REPLY)
+    expect(seen.at(-1)).toMatchObject({ authorization: BEARER, relayed: '1', body: PASSWORD, path: ROUTE })
+    const read = relayCouldRead(from)
+    for (const canary of [BEARER, 'canary-pairing-token', REPLY, ROUTE, PASSWORD]) expect(read, canary).not.toContain(canary)
+    expect(read).not.toContain(Buffer.from(code).toString('base64url'))
   })
 
   it('the same words in the clear are found by the same search', async () => {
