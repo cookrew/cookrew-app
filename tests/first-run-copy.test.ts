@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, FIX_LABELS, HINT_COPY, PREFLIGHT_COPY, TOOL_COPY, TOOL_NOTES, WAIT_COPY, exampleName } from '../src/shared/first-run-copy'
+import { ENDPOINT_COPY, EXAMPLE_TASKS, FIRST_SCREEN_COPY, FIX_LABELS, HINT_COPY, PREFLIGHT_COPY, REMOTE_SETUP_COPY, TOOL_COPY, TOOL_NOTES, WAIT_COPY, exampleName } from '../src/shared/first-run-copy'
 import { ACCESS_ROWS } from '../src/shared/agent-access'
 import { ACCOUNT_COPY, accountAskView } from '../src/renderer/src/account/account-store'
 import { promptPlaceholder } from '../src/renderer/src/prompt/prompt-words'
@@ -22,7 +22,7 @@ const strings = (value: unknown): string[] => {
 describe('the first run’s words', () => {
   const said = (copy: Record<string, unknown>): unknown[] => Object.values(copy).map((value) => (typeof value === 'function' ? (value as (name: string) => string)('Claude Code') : value))
   const waits = Object.values(WAIT_COPY).map((value) => (typeof value === 'object' ? said(value) : value))
-  const all = strings([PREFLIGHT_COPY, TOOL_COPY, TOOL_NOTES, FIX_LABELS, said(FIRST_SCREEN_COPY), EXAMPLE_TASKS, HINT_COPY, waits, ENDPOINT_COPY, ACCESS_ROWS.map((row) => [row.title, row.does])])
+  const all = strings([PREFLIGHT_COPY, REMOTE_SETUP_COPY, TOOL_COPY, TOOL_NOTES, FIX_LABELS, said(FIRST_SCREEN_COPY), EXAMPLE_TASKS, HINT_COPY, waits, ENDPOINT_COPY, ACCESS_ROWS.map((row) => [row.title, row.does])])
 
   it('has words to check', () => {
     expect(all.length).toBeGreaterThan(30)

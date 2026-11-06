@@ -535,3 +535,16 @@ body.cr-first-task .cr-prompt .cr-prompt-tools {
     right: 12px;
   }
 }
+
+.fr-remote-lede {
+  margin: 0 0 10px;
+  color: var(--zv-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fr-remote-said {
+  margin: 8px 0 0;
+  color: var(--zv-muted);
+  font-size: 12px;
+}
