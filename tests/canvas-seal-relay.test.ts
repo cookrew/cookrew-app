@@ -4,7 +4,7 @@
 // shows the search can find it.
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { createServer, type Server } from 'node:http'
+import { createServer, request as httpRequest, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -178,6 +178,24 @@ const relayCouldRead = (from: number): string => {
   })
   return [...kept, ...decoded].join('\n')
 }
+
+describe('a body on a method with no framing, through the real relay', () => {
+  it('stays inside its request: nothing reaches this Mac as a second, unmarked request', async () => {
+    const before = seen.length
+    const smuggled = 'POST /smuggled HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n'
+    const target = new URL(`${prefix()}/api/plain`)
+    await new Promise<void>((resolve, reject) => {
+      const asked = httpRequest({ host: target.hostname, port: target.port, path: target.pathname, method: 'GET', headers: { cookie, 'transfer-encoding': 'chunked' } }, (answer) => {
+        answer.resume()
+        answer.on('end', resolve)
+      })
+      asked.on('error', reject)
+      asked.end(smuggled)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(seen.slice(before).map((request) => request.path)).toEqual(['/api/plain'])
+  })
+})
 
 describe('the sealed session through the real relay', () => {
   it('carries a request and its answer, and the relay sees none of it', async () => {

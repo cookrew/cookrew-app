@@ -135,6 +135,19 @@ export const loggedPath = (path: string): string => {
   return cut === -1 ? path : `${path.slice(0, cut)}?…`
 }
 
+/** What says where a request ends or what the socket becomes: only this file may say that. */
+const FRAMING_HEADERS = new Set(['content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer', 'expect'])
+
+const withoutFraming = (headers: Readonly<Record<string, string>>): Record<string, string> =>
+  Object.fromEntries(Object.entries(headers).filter(([name]) => !FRAMING_HEADERS.has(name.toLowerCase())))
+
+/**
+ * A BODY NEVER OUTLIVES ITS REQUEST. Node sends no framing for GET, DELETE, OPTIONS
+ * or HEAD by default, and a caller can name any length, so without this the bytes
+ * of a body reach the keep-alive socket raw and the server reads them as a second
+ * request: one with no marker, on loopback, which this Mac takes for itself. So no
+ * length from outside is believed, and any body at all goes chunked.
+ */
 export const loopbackDialer =
   (port: number, host: string = BRIDGE_HOST): BridgeDialer =>
   (input, onResponse, onError) => {
@@ -145,7 +158,7 @@ export const loopbackDialer =
         method: input.method,
         path: input.path,
         headers: {
-          ...input.headers,
+          ...withoutFraming(input.headers),
           // The server builds its URL from this, so it must be present and
           // parseable — and it must be OURS, never whatever a caller sent.
           host: `${host}:${port}`,
@@ -168,7 +181,10 @@ export const loopbackDialer =
     )
     request.on('error', onError)
     return {
-      write: (body) => void request.write(body),
+      write: (body) => {
+        if (!request.headersSent) request.setHeader('transfer-encoding', 'chunked')
+        request.write(body)
+      },
       end: () => request.end(),
       destroy: () => request.destroy()
     }

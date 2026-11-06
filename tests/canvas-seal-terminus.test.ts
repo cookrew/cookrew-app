@@ -16,6 +16,7 @@ import {
   SEAL_OUTBOX_HARD,
   SEAL_OUTBOX_HIGH,
   SEAL_PING_MS,
+  SEAL_SILENT_MS,
   type SealTerminus,
   type SealTerminusDeps
 } from '../src/main/canvas-seal-terminus'
@@ -109,7 +110,8 @@ async function bed(options: { auto?: boolean; deps?: Partial<SealTerminusDeps> }
   const clock = { now: 1_800_000_000_000 }
   const terminus = createSealTerminus({ codeFor: (asked) => (asked === id ? code : null), dial, now: () => clock.now, ...options.deps })
   const server = createServer((request, response) => {
-    void terminus.handle(request, response, { base: '/relay/@me/desktop/d', device: 'device-1', deviceName: 'My phone' })
+    const device = typeof request.headers['x-test-device'] === 'string' ? request.headers['x-test-device'] : 'device-1'
+    void terminus.handle(request, response, { base: '/relay/@me/desktop/d', device, deviceName: 'My phone' })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   servers.push(server)
@@ -268,6 +270,27 @@ describe('an exchange', () => {
     await until(() => phone.of(2).length === 1, 'the other answer')
   })
 
+  it('a request Node will not build is one refused stream, not a stuck one', async () => {
+    const dial: BridgeDialer = () => {
+      throw new Error('unescaped characters')
+    }
+    const { phone: start, terminus } = await bed({ deps: { dial } })
+    const phone = await start()
+    await phone.send(open(1, '/api/\u4e2d'))
+    await until(() => phone.of(1).some((frame) => frame.kind === 'abort'), 'the refusal')
+    expect(terminus.stats().sessions).toBe(1)
+    await phone.send(open(1))
+    await until(() => phone.of(1).filter((frame) => frame.kind === 'abort').length === 2, 'the slot to be free again')
+  })
+
+  it.each(['CONNECT', 'TRACE'])('%s is not a thing a page asks of this Mac', async (method) => {
+    const { phone: start, calls } = await bed()
+    const phone = await start()
+    await phone.send(open(1, '/api/x', {}, method))
+    await until(() => phone.of(1).some((frame) => frame.kind === 'abort'), 'the refusal')
+    expect(calls).toHaveLength(0)
+  })
+
   it('a stream already open cannot be opened again, and there is a limit', async () => {
     const { phone: start, calls } = await bed({ auto: false })
     const phone = await start()
@@ -319,6 +342,23 @@ describe('getting there exactly once', () => {
     const record = await phone.sealed(open(1))
     expect((await fetch(url, { method: 'POST', body: Buffer.from(encodeRecord({ seq: 100_000, box: record.box })) })).status).toBe(409)
     expect((await fetch(url, { method: 'POST', body: 'garbage!' })).status).toBe(400)
+  })
+
+  it('stops at the first forged record: a POST of junk costs one failed open', async () => {
+    const { origin, phone: start } = await bed()
+    const phone = await start()
+    const junk = Array.from({ length: 2000 }, (_, i) => Buffer.from(encodeRecord({ seq: i, box: new Uint8Array(16) })))
+    const started = performance.now()
+    expect((await fetch(`${origin}/~seal/up?s=${phone.session?.id}`, { method: 'POST', body: Buffer.concat(junk) })).status).toBe(400)
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
+  it('a body too large gets an answer, not a hang-up', async () => {
+    const { origin, phone: start } = await bed()
+    const phone = await start()
+    const answer = await fetch(`${origin}/~seal/up?s=${phone.session?.id}`, { method: 'POST', body: Buffer.alloc(5 * 1024 * 1024) })
+    expect(answer.status).toBe(413)
+    expect((await fetch(`${origin}/~seal/hello`, { method: 'POST', body: Buffer.alloc(9000) })).status).toBe(400)
   })
 
   it('a dropped down stream picks up where it left off, with the same bytes', async () => {
@@ -398,6 +438,68 @@ describe('keeping it bounded', () => {
     expect(calls[0].destroyed).toBe(true)
     expect(terminus.stats().sessions).toBe(0)
     expect((await phone.send(open(2))).status).toBe(404)
+  })
+
+  it('only something sealed keeps a session alive: junk POSTs and a held stream do not', async () => {
+    const { origin, phone: start, terminus, clock } = await bed()
+    const phone = await start()
+    const url = `${origin}/~seal/up?s=${phone.session?.id}`
+    clock.now += SEAL_SILENT_MS / 2
+    await fetch(url, { method: 'POST', body: Buffer.from(encodeRecord({ seq: 0, box: new Uint8Array(32) })) })
+    clock.now += SEAL_SILENT_MS / 2 + 1
+    terminus.tick()
+    expect(terminus.stats().sessions).toBe(0)
+  })
+
+  it('a sealed ping does', async () => {
+    const { phone: start, terminus, clock } = await bed()
+    const phone = await start()
+    clock.now += SEAL_SILENT_MS / 2
+    await phone.send({ kind: 'ping', stream: 0 })
+    clock.now += SEAL_SILENT_MS / 2 + 1
+    terminus.tick()
+    expect(terminus.stats().sessions).toBe(1)
+  })
+
+  it('an ack without reading does not defeat the wait: bytes stuck on the socket count', async () => {
+    const stuck = { writableLength: SEAL_OUTBOX_HIGH + 1 }
+    const { phone: start, calls, terminus } = await bed({ auto: false, deps: { socketBacklog: () => stuck.writableLength } })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    calls[0].answer(200)
+    calls[0].chunk('x')
+    await until(() => calls[0].paused > 0, 'the answer to pause')
+    await until(() => phone.text(1) === 'x', 'the record')
+    await phone.send({ kind: 'ack', stream: 0, next: phone.inbox?.next() ?? 0 })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls[0].resumed).toBe(0)
+    stuck.writableLength = 0
+    terminus.tick()
+    await until(() => calls[0].resumed > 0, 'the answer to resume')
+  })
+
+  it('a device that keeps shaking hands slows itself, not the others', async () => {
+    const { origin, code } = await bed()
+    const { hello } = await startHandshake(code)
+    const asDevice = (device: string): Promise<Response> => fetch(`${origin}/~seal/hello`, { method: 'POST', headers: { 'x-test-device': device }, body: JSON.stringify(hello) })
+    for (let i = 0; i <= SEAL_HANDSHAKES_PER_MINUTE; i += 1) await asDevice('one')
+    expect((await asDevice('one')).status).toBe(429)
+    expect((await asDevice('two')).status).toBe(200)
+  })
+
+  it('dropping a session spares one that is listening', async () => {
+    const { phone: start, clock } = await bed({ deps: { handshakesPerMinute: 1000 } })
+    const listening = await start()
+    clock.now += 1000
+    const quiet: Phone[] = []
+    for (let i = 0; i < SEAL_MAX_SESSIONS; i += 1) {
+      const phone = await start()
+      phone.hangUp()
+      quiet.push(phone)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect((await listening.send(open(1))).status).toBe(204)
   })
 
   it('a fast answer to a slow phone waits, rather than filling this process', async () => {

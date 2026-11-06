@@ -38,6 +38,8 @@ export const SEAL_MAX_STREAMS = 64
 export const SEAL_PING_MS = 20_000
 /** A session with nobody listening for this long is over. The phone shakes hands again. */
 export const SEAL_DOWN_GRACE_MS = 120_000
+/** A phone pings well inside this. Anyone can hold a stream open; only a phone can seal. */
+export const SEAL_SILENT_MS = 300_000
 /** Past this, answers wait for the phone to catch up. */
 export const SEAL_OUTBOX_HIGH = 8 * 1024 * 1024
 /** Past this the session ends: something ignored the wait. */
@@ -46,6 +48,8 @@ const SEAL_PENDING_MAX = 8
 const SEAL_PENDING_MS = 30_000
 const SEAL_TICK_MS = 5_000
 const SMALL_BODY = 4096
+/** What a page asks. CONNECT and TRACE would each mean something else on this socket. */
+const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
 
 /** What the relay said about this reader, on the request that opened the session. */
 export interface SealOuter {
@@ -59,6 +63,8 @@ export interface SealTerminusDeps {
   codeFor(id: string): Uint8Array | null
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
+  /** Bytes the down socket has not taken yet. Only tests say otherwise. */
+  socketBacklog?: (socket: http.ServerResponse | null) => number
   now?: () => number
   log?: (message: string) => void
 }
@@ -93,7 +99,7 @@ export async function routeSeal(request: http.IncomingMessage, response: http.Se
 
 /** Hop by hop, and everything only the bridge may say. The dialer writes host and the marker itself. */
 const NOT_FROM_INSIDE = new Set([
-  'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length',
+  'host', 'connection', 'keep-alive', 'proxy-connection', 'proxy-authorization', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'content-length', 'expect',
   'x-real-ip', RELAY_MARKER, RELAY_BASE_HEADER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER, DOOR_MARKER
 ])
 
@@ -124,9 +130,10 @@ interface LiveSession {
   listen(response: http.ServerResponse, from: number): void
   tick(at: number): void
   close(why: string): void
-  lastSeen(): number
   listening(): boolean
   retained(): number
+  /** The last time something sealed arrived. */
+  lastHeard(): number
 }
 
 interface SessionDeps {
@@ -137,12 +144,16 @@ interface SessionDeps {
   now(): number
   log(message: string): void
   onClosed(): void
+  socketBacklog(socket: http.ServerResponse | null): number
 }
 
 function openSession(deps: SessionDeps): LiveSession {
   const { sealed, outer, dial, now, log } = deps
   const streams = new Map<number, Stream>()
   let outbox: Array<{ seq: number; wire: Uint8Array }> = []
+  /** Where the unacknowledged records start: dropping from the front must not cost the whole array. */
+  let head = 0
+  let acked = 0
   let retained = 0
   /** Handed to the cipher, not on the outbox yet. */
   let queued = 0
@@ -150,10 +161,20 @@ function openSession(deps: SessionDeps): LiveSession {
   let sealedCount = 0
   let tail: Promise<void> = Promise.resolve()
   let down: http.ServerResponse | null = null
-  let lastSeen = now()
+  let lastHeard = now()
+  let downGone = now()
   let lastPing = now()
   let waiting = false
   let closed = false
+
+  /** What is held for this phone, by whichever count is larger: an ack is no proof it read anything. */
+  const pressure = (): number => Math.max(retained, deps.socketBacklog(down)) + queued
+
+  const release = (): void => {
+    if (!waiting || pressure() >= SEAL_OUTBOX_HIGH / 2) return
+    waiting = false
+    for (const stream of streams.values()) stream.response?.resume?.()
+  }
 
   const close = (why: string): void => {
     if (closed) return
@@ -163,6 +184,7 @@ function openSession(deps: SessionDeps): LiveSession {
     down?.end()
     down = null
     outbox = []
+    head = 0
     retained = 0
     log(`canvas seal: session ended, ${why}`)
     deps.onClosed()
@@ -184,9 +206,9 @@ function openSession(deps: SessionDeps): LiveSession {
     if (closed) return
     const plain = encodeFrame(frame)
     queued += plain.length
-    if (retained + queued > SEAL_OUTBOX_HARD) return close('the phone fell too far behind')
+    if (pressure() > SEAL_OUTBOX_HARD) return close('the phone fell too far behind')
     tail = tail.then(() => put(plain)).catch((error: unknown) => close(`sealing failed: ${String(error)}`))
-    if (!waiting && retained + queued > SEAL_OUTBOX_HIGH) {
+    if (!waiting && pressure() > SEAL_OUTBOX_HIGH) {
       waiting = true
       for (const stream of streams.values()) stream.response?.pause?.()
     }
@@ -221,20 +243,25 @@ function openSession(deps: SessionDeps): LiveSession {
 
   const start = (frame: Extract<SealFrame, { kind: 'open' }>): void => {
     const id = frame.stream
+    if (closed) return
+    if (!METHODS.has(frame.method)) return send({ kind: 'abort', stream: id, reason: 'bad-method' })
     if (id === 0 || streams.has(id)) return send({ kind: 'abort', stream: id, reason: 'in-use' })
     if (streams.size >= SEAL_MAX_STREAMS) return send({ kind: 'abort', stream: id, reason: 'busy' })
     const stream: Stream = { call: null, response: null, bytes: 0, requestDone: false, done: false }
     streams.set(id, stream)
-    stream.call = dial(
-      { method: frame.method, path: frame.path, headers: innerHeaders(frame.headers, outer) },
-      (response) => answered(id, stream, response),
-      (error) => {
-        if (stream.done) return
-        log(`canvas seal: ${frame.method} ${loggedPath(frame.path)} failed: ${error.message}`)
-        send({ kind: 'abort', stream: id, reason: 'companion-failed' })
-        settle(id, stream)
-      }
-    )
+    const failed = (error: Error): void => {
+      if (stream.done) return
+      log(`canvas seal: ${frame.method} ${loggedPath(frame.path)} failed: ${error.message}`)
+      send({ kind: 'abort', stream: id, reason: 'companion-failed' })
+      settle(id, stream)
+    }
+    try {
+      stream.call = dial({ method: frame.method, path: frame.path, headers: innerHeaders(frame.headers, outer) }, (response) => answered(id, stream, response), failed)
+    } catch (error) {
+      // Node refuses to build some requests outright: a path or a value past latin1.
+      failed(error instanceof Error ? error : new Error(String(error)))
+      return
+    }
     if (stream.done) stream.call.destroy()
   }
 
@@ -250,16 +277,17 @@ function openSession(deps: SessionDeps): LiveSession {
   }
 
   const acknowledged = (next: number): void => {
-    if (next > sealedCount) return
-    outbox = outbox.filter((item) => {
-      if (item.seq >= next) return true
-      retained -= item.wire.length
-      return false
-    })
-    if (waiting && retained + queued < SEAL_OUTBOX_HIGH / 2) {
-      waiting = false
-      for (const stream of streams.values()) stream.response?.resume?.()
+    if (next > sealedCount || next <= acked) return
+    acked = next
+    while (head < outbox.length && outbox[head].seq < next) {
+      retained -= outbox[head].wire.length
+      head += 1
     }
+    if (head > 1024) {
+      outbox = outbox.slice(head)
+      head = 0
+    }
+    release()
   }
 
   const receive = (frame: SealFrame): void => {
@@ -307,7 +335,6 @@ function openSession(deps: SessionDeps): LiveSession {
   return {
     confirm: deps.confirm,
     async up(raw) {
-      lastSeen = now()
       let records
       try {
         records = createRecordReader().push(raw)
@@ -315,7 +342,14 @@ function openSession(deps: SessionDeps): LiveSession {
         return 400
       }
       const answers: InboxAnswer[] = []
-      for (const record of records) answers.push(await inbox.accept(record))
+      for (const record of records) {
+        if (closed) break
+        const answer = await inbox.accept(record)
+        answers.push(answer)
+        if (answer === 'taken') lastHeard = now()
+        // One failed open per POST: a relay with no code must not buy more than that.
+        if (answer === 'forged') break
+      }
       if (answers.some((answer) => answer === 'taken' || answer === 'duplicate')) send({ kind: 'ack', stream: 0, next: inbox.next() })
       return statusOf(answers)
     },
@@ -327,27 +361,30 @@ function openSession(deps: SessionDeps): LiveSession {
       // between here and the phone already streams this type without holding it back.
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store, no-transform', 'x-accel-buffering': 'no' })
       response.flushHeaders()
-      for (const item of outbox) if (item.seq >= from) response.write(item.wire)
+      for (const item of outbox.slice(head)) if (item.seq >= from) response.write(item.wire)
       // The relay holds a head back until the first bytes behind it, so an idle
       // stream would never open at the phone. It also says this line is live.
       send({ kind: 'ping', stream: 0 })
+      response.on('drain', release)
       response.on('close', () => {
         if (down !== response) return
         down = null
-        lastSeen = now()
+        downGone = now()
       })
     },
     tick(at) {
+      if (at - lastHeard > SEAL_SILENT_MS) return close('the phone went silent')
       if (down === null) {
-        if (at - lastSeen > SEAL_DOWN_GRACE_MS) close('nobody was listening')
+        if (at - Math.max(lastHeard, downGone) > SEAL_DOWN_GRACE_MS) close('nobody was listening')
         return
       }
+      release()
       if (at - lastPing < SEAL_PING_MS) return
       lastPing = at
       send({ kind: 'ping', stream: 0 })
     },
     close,
-    lastSeen: () => lastSeen,
+    lastHeard: () => lastHeard,
     listening: () => down !== null,
     retained: () => retained
   }
@@ -367,12 +404,13 @@ const reply = (response: http.ServerResponse, status: number, body?: unknown): v
 async function readBytes(request: http.IncomingMessage, limit: number): Promise<Buffer | null> {
   const chunks: Buffer[] = []
   let size = 0
+  // Read to the end whatever the size: leaving the loop early destroys the request,
+  // and its answer with it. The relay already caps what can arrive.
   for await (const chunk of request as AsyncIterable<Buffer>) {
     size += chunk.byteLength
-    if (size > limit) return null
-    chunks.push(chunk)
+    if (size <= limit) chunks.push(chunk)
   }
-  return Buffer.concat(chunks)
+  return size > limit ? null : Buffer.concat(chunks)
 }
 
 async function readSmallJson(request: http.IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -395,6 +433,7 @@ interface Pending {
 export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const now = deps.now ?? Date.now
   const log = deps.log ?? ((): void => undefined)
+  const socketBacklog = deps.socketBacklog ?? ((socket: http.ServerResponse | null): number => socket?.writableLength ?? 0)
   const limiter = new FixedWindowLimiter(deps.handshakesPerMinute ?? SEAL_HANDSHAKES_PER_MINUTE, 60_000, now)
   const pending = new Map<string, Pending>()
   const sessions = new Map<string, LiveSession>()
@@ -402,7 +441,7 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const hello = async (request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
     const body = await readSmallJson(request)
     if (body === null) return reply(response, 400, { error: 'not a hello' })
-    if (!limiter.take('hello')) return reply(response, 429, { error: 'too many handshakes' })
+    if (!limiter.take(outer.device ?? 'no-device')) return reply(response, 429, { error: 'too many handshakes' })
     const code = typeof body.id === 'string' ? deps.codeFor(body.id) : null
     if (code === null) return reply(response, 403, { error: 'no such code' })
     const accepted = await acceptHandshake(code, body as unknown as SealHello)
@@ -413,14 +452,18 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   }
 
   const dropQuietest = (): void => {
-    const [quietest] = [...sessions.entries()].reduce((held, entry) => (entry[1].lastSeen() < held[1].lastSeen() ? entry : held))
+    const rank = (live: LiveSession): [boolean, number] => [live.listening(), live.lastHeard()]
+    const [quietest] = [...sessions.entries()].reduce((held, entry) => {
+      const [a, b] = [rank(entry[1]), rank(held[1])]
+      return a[0] !== b[0] ? (a[0] ? held : entry) : a[1] < b[1] ? entry : held
+    })
     sessions.get(quietest)?.close('too many sessions')
   }
 
   const promote = (id: string, { accepted, outer }: Pending): void => {
     pending.delete(id)
     if (sessions.size >= SEAL_MAX_SESSIONS) dropQuietest()
-    const live = openSession({ sealed: accepted.session, confirm: accepted.confirm, outer, dial: deps.dial, now, log, onClosed: () => sessions.delete(id) })
+    const live = openSession({ sealed: accepted.session, confirm: accepted.confirm, outer, dial: deps.dial, now, log, socketBacklog, onClosed: () => sessions.delete(id) })
     sessions.set(id, live)
   }
 
