@@ -1486,6 +1486,7 @@ function Canvas(): React.JSX.Element {
           view={view}
           onViewChange={setView}
           onWall={wall.open}
+          onActivity={() => setMetricsOpen(true)}
           onRouting={routeState.available ? () => setRoutingOpen(true) : undefined}
           routeStatus={routeState.state?.status ?? null}
           onResync={resync}
