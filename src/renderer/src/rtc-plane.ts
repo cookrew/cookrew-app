@@ -90,11 +90,9 @@ export const openBridgedSocket = (path: string): BridgeWebSocket =>
   new BridgeWebSocket({
     stream: (resume) =>
       openEventSource(
-        apiPath(
-          resume
-            ? `/api/socket-bridge?resume=${encodeURIComponent(resume.id)}&after=${resume.after}`
-            : `/api/socket-bridge?v=2&path=${encodeURIComponent(path)}`
-        )
+        resume
+          ? apiPath(`/api/socket-bridge?resume=${encodeURIComponent(resume.id)}&after=${resume.after}`)
+          : apiPath(`/api/socket-bridge?path=${encodeURIComponent(path)}&v=2`)
       ),
     post: async (id, body, signal) => {
       const response = await planeFetch(apiPath(`/api/socket-bridge/${id}`), {
