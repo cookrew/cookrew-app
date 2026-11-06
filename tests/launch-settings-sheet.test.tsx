@@ -27,7 +27,7 @@ describe('LaunchSettingsView', () => {
     const html = render()
     expect(html).toContain('value="https://cookrew.dev"')
     expect(html).toContain('Run workspaces independently')
-    expect(html).toContain('Drive pages with Chrome')
+    expect(html).toContain('Run pages in Chrome')
     expect(html).toMatch(/<option value="herdr" selected/)
     expect(html.match(/type="checkbox"[^>]*checked/g)).toHaveLength(2)
   })
@@ -49,12 +49,37 @@ describe('LaunchSettingsView', () => {
     expect(render({ draft: values, status: { ...STATUS, values, restart: true } })).toContain('a turn in progress is lost')
   })
 
-  it('names what the workspace switch really takes away', () => {
+  it('says a direct host ends agents with the app, and promises no fallback it does not need', () => {
+    const html = render({ draft: { ...LAUNCH_DEFAULTS, multiplexer: 'direct' } })
+    expect(html).toContain('Agents end when Cookrew quits or its window closes')
+    expect(html).not.toContain('falls back')
+  })
+
+  it('moves an agent when its workspace opens, not all at once', () => {
+    expect(render({ draft: { ...LAUNCH_DEFAULTS, multiplexer: 'tmux' } })).toContain('when its workspace next opens')
+  })
+
+  it('has nothing to move off a direct host: those agents ended with the app', () => {
+    const running = { ...LAUNCH_DEFAULTS, multiplexer: 'direct' }
+    const html = render({ status: { ...STATUS, values: running, running } })
+    expect(html).not.toContain('a turn in progress is lost')
+    expect(html).not.toContain('Save and move agents')
+  })
+
+  it('says the registry carries served crews as well as the account and phones', () => {
     expect(render()).toContain('served crews')
   })
 
-  it('says a direct host ends agents with the window', () => {
-    expect(render({ draft: { ...LAUNCH_DEFAULTS, multiplexer: 'direct' } })).toContain('end when the window closes')
+  it('leads the workspace switch with what it does', () => {
+    expect(render()).toContain('holds one workspace at a time')
+    expect(render()).toContain('agents there keep running')
+  })
+
+  it('says what pages do either way: agents can use them both ways, a phone cannot', () => {
+    const html = render()
+    expect(html).toContain('Off: pages live in this window')
+    expect(html).toContain('a phone only sees pictures of them')
+    expect(html).toContain('without one this stays off')
   })
 
   it('locks what a variable set, and names the variable', () => {
