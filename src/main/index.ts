@@ -173,6 +173,7 @@ import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
+import { sealProofHeaders } from './seal-proof'
 import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
 import { mintWatchInvite, registerAccountIpc } from './account-ipc'
@@ -1420,7 +1421,7 @@ canvasLink.onDrop(canvasBridge.reset)
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
-  dial: loopbackDialer(MOBILE_PORT),
+  dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog(),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
