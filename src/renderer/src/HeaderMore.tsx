@@ -17,6 +17,7 @@ import { setTheme, useTheme } from './color-scheme'
 import { canFullscreen, installedFullscreen, pageMedia, toggleFullscreen, useFullscreen } from './fullscreen'
 import { TelemetryRow } from './TelemetryRow'
 import { UpdateRows, useUpdateStatus } from './UpdateRow'
+import { LaunchSettingsRow, LaunchSettingsSheet } from './LaunchSettingsSheet'
 import { WatchPairRow } from './WatchPairRow'
 import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
@@ -50,6 +51,8 @@ export function HeaderMore({
 }: HeaderMoreProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pairingWatch, setPairingWatch] = useState(false)
+  const [launchSheet, setLaunchSheet] = useState(false)
+  const closeLaunchSheet = useCallback(() => setLaunchSheet(false), [])
   const sounds = useSoundsOn()
   const theme = useTheme()
   const fullscreen = useFullscreen()
@@ -189,6 +192,12 @@ export function HeaderMore({
           )}
           {update && <UpdateRows status={update} />}
           <TelemetryRow />
+          <LaunchSettingsRow
+            onOpen={() => {
+              close()
+              setLaunchSheet(true)
+            }}
+          />
           <button type="button" className="cr-more-item" onClick={onResync}>
             <CrIcon name="expand" />
             <span className="cr-more-label">Refresh</span>
@@ -197,6 +206,7 @@ export function HeaderMore({
       )}
     </div>
     {pairingWatch && <WatchPairSheet onClose={() => setPairingWatch(false)} />}
+    {launchSheet && <LaunchSettingsSheet onClose={closeLaunchSheet} />}
     </>
   )
 }

@@ -1,3 +1,4 @@
+import type { LaunchSaveResult, LaunchStatus, LaunchValues } from '../../shared/launch-settings'
 import type { MenuAct } from '../../shared/wait-choice'
 import type { FirstRunStage, FirstTask } from '../../shared/first-run'
 import type { AccessSimpleAnswer, AccessState, EndpointField, EndpointInput } from '../../shared/agent-access'
@@ -561,6 +562,9 @@ export interface CookrewApi {
   /** The usage-data switch (TelemetryRow.tsx). Optional: it belongs to this machine, so the phone has none. */
   telemetryStatus?: () => Promise<TelemetryStatus | null>;
   setTelemetry?: (on: boolean) => Promise<TelemetryStatus | null>;
+  /** Launch settings (LaunchSettingsSheet.tsx). Optional: they belong to this machine. */
+  launchSettings?: () => Promise<LaunchStatus | null>;
+  saveLaunchSettings?: (choices: Partial<LaunchValues>) => Promise<LaunchSaveResult>;
   updateStatus?: () => Promise<unknown>;
   setUpdateCheck?: (on: boolean) => Promise<unknown>;
   restartToUpdate?: () => Promise<unknown>;

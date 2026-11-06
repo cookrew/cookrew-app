@@ -6,7 +6,10 @@
  * carried to the phone inside the relay URL that cookrew.dev serves this
  * desktop at.
  *
- *   https://cookrew.dev/relay/@drej/desktop/<deviceId>/#pair=<token>
+ *   https://cookrew.dev/relay/@drej/desktop/<deviceId>/#pair=<token>&code=<code>
+ *
+ * `code` is the connect code of the sealed session (shared/canvas-seal.ts). Its
+ * whole worth is that the relay has never seen it, so it can live nowhere else.
  *
  * THE TOKEN IS IN THE FRAGMENT, and that is the whole reason this file exists
  * rather than a template literal at each call site. A fragment is never put on
@@ -29,6 +32,7 @@
 
 /** The fragment key. Read here and, on the companion, nowhere else. */
 export const PAIR_FRAGMENT = 'pair'
+export const CODE_FRAGMENT = 'code'
 
 /** A registry handle: lowercase, 1–32, no leading or trailing dash. */
 const USERNAME = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
@@ -44,6 +48,8 @@ export type RelayDesktopInput = {
 
 export type PairingUrlInput = RelayDesktopInput & {
   readonly pairingToken: string
+  /** This Mac's connect code, base64url. */
+  readonly connectCode?: string | null
 }
 
 /**
@@ -60,7 +66,7 @@ export type PairingUrlInput = RelayDesktopInput & {
  */
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost'])
 
-const originOf = (raw: string): string | null => {
+export const originOf = (raw: string): string | null => {
   try {
     const url = new URL(raw)
     const clear = url.protocol === 'http:' && LOOPBACK.has(url.hostname)
@@ -90,8 +96,18 @@ export const relayDesktopUrl = (input: RelayDesktopInput): string | null => {
 export const pairingUrl = (input: PairingUrlInput): string | null => {
   const base = relayDesktopUrl(input)
   if (!base || input.pairingToken.length === 0) return null
-  return `${base}#${PAIR_FRAGMENT}=${encodeURIComponent(input.pairingToken)}`
+  const code = input.connectCode ? `&${CODE_FRAGMENT}=${encodeURIComponent(input.connectCode)}` : ''
+  return `${base}#${PAIR_FRAGMENT}=${encodeURIComponent(input.pairingToken)}${code}`
 }
+
+/**
+ * The same link without its connect code, for anywhere it gets printed.
+ *
+ * Text in a pane reaches a phone through the relay in the clear, and the code is
+ * worth nothing once the relay has seen it. The link still pairs; only the QR on
+ * the owner's own screen carries the code.
+ */
+export const withoutConnectCode = (url: string): string => url.replace(new RegExp(`&${CODE_FRAGMENT}=[^&]*`), '')
 
 /**
  * The token out of a fragment, or null.

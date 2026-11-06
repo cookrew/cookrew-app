@@ -1,14 +1,19 @@
 /**
  * UNLOCKING A MAC FROM A PHONE: what both ends agree on (owner 2026-11-05).
  *
- * A PAGE THE RELAY SERVED NEVER SEES THE PASSWORD. A seal only helps if the code
- * doing the sealing can be trusted, and whoever serves a page can change it, so
- * a page from cookrew.dev could capture what is typed before any seal. Only a
- * page the Mac served itself, on its Wi-Fi or Tailscale address, asks for it. The
- * Mac refuses the rest (use-source-routes.ts) and the page draws no field.
+ * IT WORKS FROM ANY NETWORK (owner 2026-11-06). A password reaches the Mac in one of
+ * two ways: from a page the Mac served itself, or inside the sealed session, whose
+ * keys rest on a connect code the relay has never seen. A plain relayed request is
+ * refused (use-source-routes.ts), so the relay cannot read a password in passing.
  *
- * On that direct path the password is still sealed to the Mac's key, which the
- * phone pins, and each message answers a one-time challenge.
+ * THE LIMIT, ACCEPTED BY THE OWNER: a page from cookrew.dev is still written by whoever
+ * serves it, and an altered page could read what is typed before any seal. Sealing
+ * stops a relay that reads, not one that acts: it can rewrite its pages, and until plain
+ * routes close it can read the connect code through a pane. A native client ends that.
+ * So a password is kept on a device only on a page the Mac served itself.
+ *
+ * Either way the password is also sealed to the Mac's key, which the phone pins, and
+ * each message answers a one-time challenge.
  */
 
 const OPERATOR_DOMAIN = 'cookrew.dev'
@@ -28,11 +33,14 @@ export function hostOutsideTheMac(host: string | undefined): boolean {
 /** Written over whatever came in on a door's way to this server (relay-serving.ts). */
 export const DOOR_MARKER = 'x-cookrew-door'
 
+/** Carries the terminus's proof (main/seal-proof.ts). The value is the point, not the name. */
+export const SEALED_MARKER = 'x-cookrew-sealed'
+
 /** The seal's label: this key seals nothing else. */
 export const UNLOCK_INFO = 'mac-unlock/1'
 export const UNLOCK_PASSWORD_MAX = 128
 
-export const UNLOCK_DIRECT_ONLY = 'A password never passes through cookrew.dev. Open Cookrew at this Mac’s Wi-Fi or Tailscale address to unlock it.'
+export const UNLOCK_NEEDS_SEAL = 'A password only reaches this Mac inside its sealed session.'
 
 export type UnlockOutcome = 'unlocked' | 'wrong' | 'not-locked' | 'refused' | 'resting' | 'closed' | 'busy' | 'failed'
 

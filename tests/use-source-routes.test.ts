@@ -7,6 +7,7 @@ import type http from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
 import { scopedRouteSupported } from '../src/main/mobile-slug-route'
+import { sealProofHeaders } from '../src/main/seal-proof'
 import { SERVED_USE_REFUSED } from '../src/main/use-commands'
 import { createUseSourceService, type UseSourceProvider, type UseSourceServiceDeps } from '../src/main/use-source-service'
 import type { BrowserNodeData } from '../src/shared/model'
@@ -184,7 +185,33 @@ describe('the unlock routes', () => {
     expect(unlock.begin).not.toHaveBeenCalled()
   })
 
-  it('nothing that came through the relay or WebRTC reaches it: those pages are not the Mac’s own', async () => {
+  it('out of the sealed session it opens, from any network: the owner ruled unlock works away from home', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', ...sealProofHeaders() }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(200)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers })).status).toBe(200)
+    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box')
+  })
+
+  it('the proof does not stand in for the pairing token', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', ...sealProofHeaders() }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { body: {}, headers })).status).toBeGreaterThanOrEqual(400)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: WALL, body: {}, headers })).status).toBeGreaterThanOrEqual(400)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('a guessed proof on a relayed request is a relayed request', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { host: '127.0.0.1:8643', 'x-cookrew-relay': '1', 'x-cookrew-sealed': 'guess' }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('nothing that came through the relay or WebRTC in the clear reaches it', async () => {
     const unlock = door()
     const { deps } = bed({ unlock })
     const headers = { ...direct, 'x-cookrew-relay': '1' }

@@ -34,6 +34,12 @@ describe('ownerSecretPaths — a served agent may not read the owner browsing id
     expect(paths.some((p) => p.includes('interactive-browser'))).toBe(true)
   })
 
+  it('denies what the owner\'s cards downloaded', () => {
+    // Files saved out of logged-in sites sit outside the profiles, under a
+    // blanket read allow, so the profile deny above does not reach them.
+    expect(paths).toContain(path.join(BASE, 'downloads'))
+  })
+
   it('denies the canvas webview partitions too', () => {
     expect(paths.some((p) => p.endsWith('Partitions'))).toBe(true)
   })

@@ -30,10 +30,10 @@ import { SERVED_USE_REFUSED } from './use-commands'
  *
  *   THE MACHINE SWITCH. "Allow remote control of this Mac", off by default,
  *   writable only from the Mac's own window (index.ts · ownerOnly): there is
- *   no route to it. Off means nobody drives, viewer or agent. It lives in this
- *   process and nowhere else, so it is off at every launch: anything on disk
- *   could be written by an agent running as the same user, and "changeable
- *   only at the Mac" has to hold against that too.
+ *   no route to it. Off means nobody drives, viewer or agent. It outlives a
+ *   restart only as a mark sealed under the app's own key (remote-switch-memory.ts):
+ *   a plain file could be written by an agent running as the same user, and
+ *   "changeable only at the Mac" has to hold against that too.
  *
  *   THE CARD. View only by default. Take control from an owner device holds
  *   for CONTROL_MS and is then off again, by itself. It belongs to the one
@@ -61,7 +61,7 @@ export interface RemoteSession {
 
 export type SettingsPane = 'screen' | 'accessibility'
 
-/** What outlives a restart. Never the machine switch. */
+/** What outlives a restart here. The machine switch does too, but only sealed: see switchMemory. */
 export interface RemoteSettings {
   /** Someone away from the Mac asked to hear when this pane's grant is done. */
   readonly waiting: SettingsPane | null
@@ -84,6 +84,10 @@ export interface RemoteDeskDeps {
   cardName(card: string): string
   record(type: string, card: string, name: string, details?: string): void
   keepAwake: { start(): void; stop(): void }
+  /** The switch across a restart (remote-switch-memory.ts). Absent: this run only. */
+  switchMemory?: { read(): boolean; write(on: boolean): void }
+  /** While the switch is on the machine stays up: a Mac asleep is off the network. */
+  stayUp?: { start(): void; stop(): void }
   /** The banner and the tray. */
   host(view: RemoteHostView): void
   /** A card's viewers should hear its status again. */
@@ -154,6 +158,10 @@ export interface RemoteDesk {
   takeControl(card: string, who: ViewerWho): Promise<RemoteAnswer>
   endControl(card: string, who: ViewerWho): void
   setSwitch(on: boolean): RemoteAnswer
+  /** Once, after the app is ready: its key is not there before. */
+  restoreSwitch(): void
+  /** The next launch starts off, whatever this run is doing. */
+  forgetSwitch(): void
   /** A card's instance went: replaced, re-addressed or deleted. */
   cardGone(card: string): void
   /** A paired device was forgotten or revoked. */
@@ -299,7 +307,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
 
   const hostView = (): RemoteHostView => {
     const list = rows()
-    return list.length === 0 && !awake ? NOBODY_ON_HOST : { rows: list, awake }
+    if (list.length === 0 && !awake && !switchOn) return NOBODY_ON_HOST
+    return { rows: list, awake, ...(switchOn ? { switchOn } : {}) }
   }
 
   const syncHost = (): void => {
@@ -431,12 +440,46 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       if (holder && (holder.who.key === who.key || who.here)) ended(card, `ended by ${who.name}`)
     },
     setSwitch(on) {
-      if (on === switchOn) return { ok: true }
-      switchOn = on
-      if (!on) endAllGrants('remote control was turned off at the Mac')
-      deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), 'at the Mac')
+      // First: nothing below may stand between pressing off and what is kept going.
+      let saved = true
+      try {
+        deps.switchMemory?.write(on)
+      } catch {
+        saved = false
+      }
+      if (on !== switchOn) {
+        switchOn = on
+        if (on) deps.stayUp?.start()
+        else deps.stayUp?.stop()
+        if (!on) endAllGrants('remote control was turned off at the Mac')
+        deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), 'at the Mac')
+        deps.refreshCards()
+        syncHost()
+      }
+      if (saved) return { ok: true }
+      return refuse(on ? 'Remote control is on, but it could not be saved: it turns off at the next restart.' : 'Remote control is off, but it could not be saved: it may come back at the next restart.')
+    },
+    restoreSwitch() {
+      if (!mac || switchOn) return
+      let held = false
+      try {
+        held = deps.switchMemory?.read() ?? false
+      } catch {
+        // Unreadable is off: the owner turns it on again at the Mac.
+      }
+      if (!held) return
+      switchOn = true
+      deps.stayUp?.start()
+      deps.record('remote.switch-on', MACHINE, word('this Mac'), 'restored at launch')
       deps.refreshCards()
-      return { ok: true }
+      syncHost()
+    },
+    forgetSwitch() {
+      try {
+        deps.switchMemory?.write(false)
+      } catch {
+        // Nothing more can be done from here; the door is shut for this run either way.
+      }
     },
     cardGone(card) {
       ended(card, 'the card changed')

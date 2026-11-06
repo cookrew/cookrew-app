@@ -1,3 +1,4 @@
+import { SEALED_MARKER } from '../shared/remote-unlock'
 import http from 'node:http'
 import { decodeFrame, encodeFrame, type RelayFrame } from '../shared/relay-frame'
 import { bodiless } from './http-compress'
@@ -136,7 +137,7 @@ export const loggedPath = (path: string): string => {
 }
 
 /** What says where a request ends or what the socket becomes: only this file may say that. */
-const FRAMING_HEADERS = new Set(['host', RELAY_MARKER, 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer', 'expect'])
+const FRAMING_HEADERS = new Set(['host', RELAY_MARKER, SEALED_MARKER, 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer', 'expect'])
 
 const withoutFraming = (headers: Readonly<Record<string, string>>): Record<string, string> =>
   Object.fromEntries(Object.entries(headers).filter(([name]) => !FRAMING_HEADERS.has(name.toLowerCase())))
@@ -149,7 +150,7 @@ const withoutFraming = (headers: Readonly<Record<string, string>>): Record<strin
  * length from outside is believed, and any body at all goes chunked.
  */
 export const loopbackDialer =
-  (port: number, host: string = BRIDGE_HOST): BridgeDialer =>
+  (port: number, host: string = BRIDGE_HOST, marks: Readonly<Record<string, string>> = {}): BridgeDialer =>
   (input, onResponse, onError) => {
     const request = http.request(
       {
@@ -162,7 +163,8 @@ export const loopbackDialer =
           // The server builds its URL from this, so it must be present and
           // parseable — and it must be OURS, never whatever a caller sent.
           host: `${host}:${port}`,
-          [RELAY_MARKER]: '1'
+          [RELAY_MARKER]: '1',
+          ...marks
         }
       },
       (response) => {

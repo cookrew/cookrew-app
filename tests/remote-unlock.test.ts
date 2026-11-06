@@ -186,6 +186,53 @@ describe('unlock', () => {
     expect(await t.send(phone, PASSWORD)).toMatchObject({ ok: false, outcome: 'not-locked' })
   })
 
+  it('a restart does not forgive wrong passwords: guessing 8 at a time still closes it', async () => {
+    const held = { count: 0 }
+    const misses = { read: () => held.count, write: (count: number) => { held.count = count } }
+    const first = bed({ misses })
+    for (let miss = 0; miss < UNLOCK_MISSES_MAX - 1; miss += 1) {
+      await first.send(phone, 'nope')
+      first.clock.now += UNLOCK_REST_MS + 1
+    }
+    expect(held.count).toBe(UNLOCK_MISSES_MAX - 1)
+    const next = bed({ misses })
+    await next.send(phone, 'nope')
+    next.clock.now += UNLOCK_REST_MS + 1
+    expect(await next.send(phone, PASSWORD)).toMatchObject({ ok: false, outcome: 'closed' })
+  })
+
+  it('someone at the Mac reopening it clears the count', async () => {
+    const held = { count: UNLOCK_MISSES_MAX }
+    const t = bed({ misses: { read: () => held.count, write: (count: number) => { held.count = count } } })
+    expect(await t.send(phone, PASSWORD)).toMatchObject({ ok: false, outcome: 'closed' })
+    t.door.reopen()
+    expect(held.count).toBe(0)
+    expect(await t.send(phone, PASSWORD)).toEqual({ ok: true, outcome: 'unlocked' })
+  })
+
+  it('the right password clears the count', async () => {
+    const held = { count: 4 }
+    const t = bed({ misses: { read: () => held.count, write: (count: number) => { held.count = count } } })
+    expect(await t.send(phone, PASSWORD)).toEqual({ ok: true, outcome: 'unlocked' })
+    expect(held.count).toBe(0)
+  })
+
+  it('a count it cannot read or save does not stop an unlock', async () => {
+    const t = bed({ misses: { read: () => { throw new Error('no') }, write: () => { throw new Error('no') } } })
+    expect(await t.send(phone, PASSWORD)).toEqual({ ok: true, outcome: 'unlocked' })
+  })
+
+  it('tells the desk once when it closes, so a restart cannot reopen it', async () => {
+    let closes = 0
+
+    const t = bed({ closed: () => { closes += 1 } })
+    for (let miss = 0; miss < UNLOCK_MISSES_MAX; miss += 1) {
+      await t.send(phone, 'nope')
+      t.clock.now += UNLOCK_REST_MS + 1
+    }
+    expect(closes).toBe(1)
+  })
+
   it('closes after too many wrong passwords, until someone at the Mac reopens it', async () => {
     const t = bed()
     for (let miss = 0; miss < UNLOCK_MISSES_MAX; miss += 1) {

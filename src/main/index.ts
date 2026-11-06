@@ -1,3 +1,4 @@
+import { launchBoot } from './launch-settings-boot'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
@@ -171,6 +172,11 @@ import { createReachPublisher, type ReachPublisher } from './reach'
 import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
+import { createSealTerminus } from './canvas-seal-terminus'
+import { sealProofHeaders } from './seal-proof'
+import { sealedSwitchMemory } from './remote-switch-memory'
+import { singleConfirm } from './remote-switch-confirm'
+import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
 import { mintWatchInvite, registerAccountIpc } from './account-ipc'
 import type { AccountDoor, LoginAudit } from './login-cli'
@@ -244,7 +250,7 @@ import { macKeystrokes, readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
-import { createUnlockDoor, loadUnlockKey } from './remote-unlock'
+import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
 import type { SealKeyPair } from '../shared/relay-seal'
 import { fingerprintOfDigest } from '../shared/key-fingerprint'
 import { electronUpdateInstaller } from './update-install'
@@ -281,6 +287,7 @@ import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
+import { createLaunchSettings, launchSettingsPath } from './launch-settings'
 import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
@@ -1358,7 +1365,8 @@ const currentPairingHandout = (): PairingHandout | null =>
     },
     registryOrigin: () => registryOrigin(),
     endpoints: () => mobileEndpointList(),
-    pairingToken: () => activePairingTokenValue() ?? pairingToken
+    pairingToken: () => activePairingTokenValue() ?? pairingToken,
+    connectCode: () => connectCodes.encoded()
   })
 let reachPublisher: ReachPublisher | null = null
 
@@ -1409,6 +1417,16 @@ canvasLink.onFrame(canvasBridge.frame)
 // A line that ended takes every exchange riding it with it; a local request
 // left running would be an event stream nobody will ever read again.
 canvasLink.onDrop(canvasBridge.reset)
+
+// The sealed session (canvas-seal-terminus.ts). The bridge reads an answer as fast
+// as loopback gives it, so a slow phone only shows up on the relay line itself.
+const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
+const sealTerminus = createSealTerminus({
+  codeFor: (id) => connectCodes.codeFor(id),
+  dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
+  socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog(),
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
 
 /**
  * The idle lock covers the OWNER'S RENDERER and nothing else: agents keep
@@ -1485,7 +1503,8 @@ const requests = new Requests({
   // ALLOW's own half (R2): this phone gets a token of its own, and the URL
   // that carries it is sealed to the key the request arrived with. The root
   // pairing credential never leaves this process for a device that asked
-  // through the queue.
+  // through the queue. Nor does the connect code: that key came through the
+  // registry and the owner has nothing to compare it with (connect-code.ts).
   reach: {
     admit: (device) => admittedDevices.admit(device),
     pairingUrlFor: (token) => {
@@ -6565,6 +6584,15 @@ function currentBuild(): RemoteBuild {
   })
 }
 let keepAwakeId: number | null = null
+let stayUpId: number | null = null
+const confirmSwitch = singleConfirm({
+  canTouch: () => systemPreferences.canPromptTouchID(),
+  touch: () => systemPreferences.promptTouchID('turn on remote control of this Mac'),
+  ask: async () => {
+    const options = { type: 'warning' as const, message: 'Turn on remote control of this Mac?', detail: 'Your paired devices can unlock it with its password, from any network, until you turn this off.', buttons: ['Turn on', 'Cancel'], defaultId: 1, cancelId: 1 }
+    return (await dialog.showMessageBox(options)).response === 0
+  }
+})
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
   build: currentBuild,
@@ -6586,6 +6614,17 @@ const remoteDesk = createRemoteDesk({
       keepAwakeId = null
     }
   },
+  // The display may sleep; the machine may not, or a locked Mac drops off the network.
+  stayUp: {
+    start: () => {
+      stayUpId ??= powerSaveBlocker.start('prevent-app-suspension')
+    },
+    stop: () => {
+      if (stayUpId !== null) powerSaveBlocker.stop(stayUpId)
+      stayUpId = null
+    }
+  },
+  switchMemory: sealedSwitchMemory(path.join(homedir(), '.cookrew', 'remote-switch'), electronSealer(safeStorage)),
   host: (view) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:remote-host', view)
     remoteTray.show(view)
@@ -6608,6 +6647,8 @@ const remoteDesk = createRemoteDesk({
   }
 })
 const unlockDoor = createUnlockDoor({
+  closed: () => remoteDesk.forgetSwitch(),
+  misses: unlockMissesFile(path.join(homedir(), '.cookrew', 'unlock-misses')),
   keyPair: unlockKey,
   refusal: (who) => remoteDesk.unlockRefusal(who),
   locked: async () => {
@@ -7534,7 +7575,15 @@ app.whenReady().then(() => {
       watchPairing.unpair()
       // Whoever came in on the old token: a socket outlives the token that opened it.
       remoteDesk.forgetDevice('root')
-      return rotateActivePairingToken()
+      const rotated = rotateActivePairingToken()
+      // The same revocation: whoever holds the old code is out with the old token.
+      // Last, because a code that cannot be saved throws, and the owner should hear it.
+      try {
+        connectCodes.rotate()
+      } finally {
+        sealTerminus.endSessions('the pairing was rotated')
+      }
+      return rotated
     },
     pairingHandout: currentPairingHandout,
     listWorkspaces,
@@ -7829,6 +7878,7 @@ app.whenReady().then(() => {
     // tailnet peer gets this bundle instead, because the unbundled graph is
     // 159 dependent requests and a relayed link never finishes them.
     rendererDir: path.join(dirname, '../renderer'),
+    sealTerminus: () => sealTerminus,
     rendererDevUrl: process.env.ELECTRON_RENDERER_URL,
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
@@ -8040,6 +8090,7 @@ app.on('before-quit', (event) => {
   // owner's phone a name whose Mac is quitting — a downlink the process drops
   // silently is a relay that claims this desktop for as long as it takes the
   // pulse to notice.
+  sealTerminus.close()
   canvasLink.stop()
   store.flush()
   events.flush()
@@ -8857,6 +8908,9 @@ function registerIpc(handlers: RestoreHandlers): void {
         installer: electronUpdateInstaller()
       })
     : null
+  const launchSettings = createLaunchSettings({ file: launchSettingsPath(homedir()), boot: launchBoot, signedIn: () => accounts.account() !== null })
+  ipcMain.handle('launch-settings:status', (event) => (ownerFrame(event) ? launchSettings.status() : null))
+  ipcMain.handle('launch-settings:save', (event, input: unknown) => (ownerFrame(event) ? launchSettings.save(input) : { ok: false, reason: 'not-owner' }))
   ipcMain.handle('update:status', () => updateCheck?.status() ?? null)
   ipcMain.handle('update:set', (event, on: unknown) => {
     if (updateCheck === null) return null
@@ -8939,12 +8993,18 @@ function registerIpc(handlers: RestoreHandlers): void {
     const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
   }))
-  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => {
+  ipcMain.handle('use:remote-switch', ownerOnly(async (on: unknown) => {
     if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
+    if (on && !(await confirmSwitch())) return { ok: false, error: 'Remote control stays off: it was not confirmed at the Mac.' }
     // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
     if (on) unlockDoor.reopen()
     return remoteDesk.setSwitch(on)
   }))
+  try {
+    remoteDesk.restoreSwitch()
+  } catch (error) {
+    console.error('[cookrew] remote control could not be restored', error)
+  }
   ipcMain.handle('use:remote-stop', ownerOnly(() => {
     remoteDesk.stopAll()
     return { ok: true }

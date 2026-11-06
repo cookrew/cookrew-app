@@ -324,7 +324,7 @@ export interface MobileServerDeps {
   wallToken?: string
   /** Built renderer bundle — the full desktop canvas UI served to phones. */
   rendererDir: string
-  /** The sealed session's end, once this Mac holds connect codes. */
+  /** The sealed session's end (canvas-seal-terminus.ts). */
   sealTerminus?: () => SealTerminus | undefined
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string

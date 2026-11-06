@@ -12,6 +12,7 @@ import { HeadlessInstance, type HeadlessOptions, type HeadlessPageState } from '
 import type { BrowserInstance } from './browser-instance'
 import { parseUseUrl, useUrl, type UseTarget } from '../shared/use-url'
 import { mainDrawsCard } from './browser-owner'
+import { browserDownloadsDir } from './browser-downloads'
 
 const SIZE_MIN = 320
 const SIZE_MAX = 2048
@@ -32,6 +33,8 @@ export interface HeadlessBrowserManagerDeps {
   profileRoot: () => string
   /** One store for installation-scope Chrome data shared by every profile. */
   sharedInstallationRoot?: () => string
+  /** Where each card's downloads directory goes. Absent: ~/.cookrew/downloads. */
+  downloadsRoot?: () => string
   resolveNode: (browserId: string) => BrowserNodeData | null
   /** Clock for "last used" (liveIds); Date.now by default. */
   now?: () => number
@@ -229,6 +232,7 @@ export class HeadlessBrowserManager {
     const options: HeadlessOptions = {
       executablePath,
       profileDir: path.join(this.deps.profileRoot(), browserId),
+      downloadDir: browserDownloadsDir(browserId, this.deps.downloadsRoot?.()),
       ...(this.deps.sharedInstallationRoot
         ? { sharedInstallationDir: this.deps.sharedInstallationRoot() }
         : {}),

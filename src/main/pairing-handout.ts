@@ -51,6 +51,8 @@ export type PairingHandoutDeps = {
   readonly endpoints: () => readonly PairingEndpoint[]
   /** The persisted pairing token; null before the mobile server has started. */
   readonly pairingToken: () => string | null
+  /** The sealed session's code, for the relay link only: a direct address needs none. */
+  readonly connectCode?: () => string | null
 }
 
 /** The first address a phone could actually dial, spelled its best way. */
@@ -73,7 +75,8 @@ export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null 
       registryOrigin: deps.registryOrigin(),
       username: account.username,
       deviceId: account.deviceId,
-      pairingToken: token
+      pairingToken: token,
+      connectCode: deps.connectCode?.() ?? null
     })
     // A malformed handle or a registry origin we would not send a phone to
     // falls through to the direct address rather than showing nothing: the

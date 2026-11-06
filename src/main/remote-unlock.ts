@@ -31,6 +31,10 @@ export interface UnlockDoorDeps {
   refusal(who: ViewerWho): string | null
   /** A fresh read, never a cached one. */
   locked(): Promise<boolean>
+  /** Shut until someone at the Mac reopens it. */
+  closed?(): void
+  /** The running count of wrong passwords: a restart must not forgive them. */
+  misses?: { read(): number; write(count: number): void }
   wake(): Promise<void>
   /** Every character has a key. Absent: assumed. */
   typable?(password: string): boolean
@@ -65,14 +69,42 @@ const readSealed = (opened: string | null): { challenge: string; password: strin
   }
 }
 
+/**
+ * A plain file on purpose: this is against a lost phone, which cannot edit it. An agent
+ * that can edit it can already delete the switch, which ends remote unlock altogether.
+ */
+export function unlockMissesFile(file: string): { read(): number; write(count: number): void } {
+  return {
+    read: () => Number(readFileSync(file, 'utf8')),
+    write: (count) => writeFileAtomic(file, String(count))
+  }
+}
+
 export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
   const now = deps.now ?? Date.now
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const challenges = new Map<string, { value: string; until: number }>()
   let misses = 0
-  let missesInAll = 0
+  let missesInAll = readMisses()
   let restUntil = 0
   let typing = false
+
+  function readMisses(): number {
+    try {
+      const held = deps.misses?.read() ?? 0
+      return Number.isInteger(held) && held > 0 ? held : 0
+    } catch {
+      return 0
+    }
+  }
+
+  const keepMisses = (): void => {
+    try {
+      deps.misses?.write(missesInAll)
+    } catch {
+      // Held in memory for this run.
+    }
+  }
 
   /** What stops any ask, before anything is opened or read. */
   const stopped = (who: ViewerWho): { ok: false; error: string; outcome?: UnlockOutcome } | null => {
@@ -102,6 +134,8 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
   const missed = (who: ViewerWho): UnlockAnswer => {
     misses += 1
     missesInAll += 1
+    keepMisses()
+    if (missesInAll === UNLOCK_MISSES_MAX) deps.closed?.()
     if (misses >= UNLOCK_ATTEMPTS) {
       misses = 0
       restUntil = now() + UNLOCK_REST_MS
@@ -120,6 +154,7 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
       if (!(await opensUp())) return missed(who)
       misses = 0
       missesInAll = 0
+      keepMisses()
       deps.record('unlocked', who)
       return { ok: true, outcome: 'unlocked' }
     } catch {
@@ -161,6 +196,7 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
       misses = 0
       missesInAll = 0
       restUntil = 0
+      keepMisses()
     }
   }
 }

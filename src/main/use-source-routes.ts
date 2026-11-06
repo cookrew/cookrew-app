@@ -1,4 +1,5 @@
-import { DOOR_MARKER, hostOutsideTheMac, UNLOCK_DIRECT_ONLY } from '../shared/remote-unlock'
+import { DOOR_MARKER, hostOutsideTheMac, UNLOCK_NEEDS_SEAL } from '../shared/remote-unlock'
+import { carriesSealProof } from './seal-proof'
 import { RELAY_MARKER } from './relay-base'
 import type http from 'node:http'
 import { USE_SOURCES_PATH } from '../shared/use-sources'
@@ -104,7 +105,7 @@ export async function handleUseSourceRoutes(
     const answer = await service.wake(workspaceId, service.whoIs(credential))
     return answer.ok ? respondJson(response, 200, { ok: true }) : respondJson(response, answer.status, { ok: false, error: answer.error })
   }
-  if (path.startsWith(`${USE_SOURCES_PATH}/unlock`) && !fromTheMacsOwnPage(request)) return respondJson(response, 403, { ok: false, error: UNLOCK_DIRECT_ONLY })
+  if (path.startsWith(`${USE_SOURCES_PATH}/unlock`) && !carriesSealProof(request) && !fromTheMacsOwnPage(request)) return respondJson(response, 403, { ok: false, error: UNLOCK_NEEDS_SEAL })
   if (path === `${USE_SOURCES_PATH}/unlock/begin`) {
     if (method !== 'POST') return wrongMethod()
     const answer = await service.unlockBegin(workspaceId, service.whoIs(credential))
