@@ -10,8 +10,7 @@ import {
   TOKEN_KEY,
   tokenFromInput,
   tokenParam,
-  type StorageLike
-} from '../src/renderer/src/auth-gate'
+  type StorageLike, connectCodeFromInput } from '../src/renderer/src/auth-gate'
 
 function memoryStorage(seed: Record<string, string> = {}): StorageLike & { data: Record<string, string> } {
   const data = { ...seed }
@@ -352,3 +351,40 @@ describe('the Not paired copy', () => {
     )
   })
 })
+
+describe('the connect code', () => {
+  const CODE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ'
+  const BASE = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
+  const KEY = 'cr_code:11111111-2222-3333-4444-555555555555'
+
+  it('is kept from the link, under this desktop', () => {
+    const local = memoryStorage()
+    const store = createAuthStore({ local, base: BASE, hash: `#pair=abcdefghijklmnop&code=${CODE}` })
+    expect(store.connectCode()).toBe(CODE)
+    expect(local.getItem(KEY)).toBe(CODE)
+  })
+
+  it('survives a reload, and a link without one leaves it', () => {
+    const local = memoryStorage({ [KEY]: CODE })
+    expect(createAuthStore({ local, base: BASE }).connectCode()).toBe(CODE)
+    expect(createAuthStore({ local, base: BASE, hash: '#pair=abcdefghijklmnop' }).connectCode()).toBe(CODE)
+  })
+
+  it('goes with the token when this phone is unpaired', () => {
+    const local = memoryStorage({ [KEY]: CODE })
+    const store = createAuthStore({ local, base: BASE })
+    store.clear()
+    expect(store.connectCode()).toBeNull()
+    expect(local.getItem(KEY)).toBeNull()
+  })
+
+  it('a pasted link brings it too', () => {
+    const local = memoryStorage()
+    const store = createAuthStore({ local, base: BASE })
+    store.saveConnectCode(connectCodeFromInput(`https://cookrew.dev${BASE}/#pair=abcdefghijklmnop&code=${CODE}`))
+    expect(store.connectCode()).toBe(CODE)
+    store.saveConnectCode(connectCodeFromInput('abcdefghijklmnop'))
+    expect(store.connectCode()).toBe(CODE)
+  })
+})
+

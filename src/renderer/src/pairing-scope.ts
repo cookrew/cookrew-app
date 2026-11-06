@@ -105,6 +105,18 @@ export const TOKEN_PARAM = 'token'
 /** The fragment parameter the canonical relay URL carries: `#pair=`. */
 export const PAIR_PARAM = 'pair'
 
+/** The sealed session's connect code, beside the token in the same fragment. */
+export const CODE_PARAM = 'code'
+
+/** 32 bytes, base64url, as main/connect-code.ts writes it. */
+const CONNECT_CODE_SHAPE = /^[A-Za-z0-9_-]{43}$/
+
+/** `cr_code:<desktop id>`: one origin hosts many Macs, as for the token. */
+export const codeKeyForBase = (base: string): string => {
+  const trimmed = base.replace(/\/+$/, '')
+  return trimmed.length === 0 ? 'cr_code' : `cr_code:${desktopIdFromBase(trimmed) ?? trimmed}`
+}
+
 /**
  * `?from=relay` — the marker the retired OPEN ON WI-FI button wrote. Nothing
  * writes it now, but links and bookmarks made with it still arrive, so it is
@@ -143,13 +155,25 @@ export const tokenFromFragment = (hash: string): string | null => {
   }
 }
 
-/** The same fragment with the token taken out, keeping whatever else it held. */
+/** The connect code carried by a fragment, or null when there is none. */
+export const connectCodeFromFragment = (hash: string): string | null => {
+  if (!hash || !hash.includes(CODE_PARAM)) return null
+  try {
+    const found = splitHash(hash).params.get(CODE_PARAM)
+    return found && CONNECT_CODE_SHAPE.test(found) ? found : null
+  } catch {
+    return null
+  }
+}
+
+/** The same fragment with the credentials taken out, keeping whatever else it held. */
 export const stripPairFragment = (hash: string): string => {
   if (!hash) return hash
   try {
     const { prefix, params } = splitHash(hash)
-    if (!params.has(PAIR_PARAM)) return hash
+    if (!params.has(PAIR_PARAM) && !params.has(CODE_PARAM)) return hash
     params.delete(PAIR_PARAM)
+    params.delete(CODE_PARAM)
     const rest = params.toString()
     return rest.length === 0 ? '' : `#${prefix}${rest}`
   } catch {

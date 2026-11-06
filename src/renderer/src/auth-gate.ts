@@ -22,6 +22,8 @@ import { clientBase } from './api-base'
 import {
   ROOT_TOKEN_KEY,
   scrubPairingFromUrl,
+  codeKeyForBase,
+  connectCodeFromFragment,
   tokenFromFragment,
   tokenKeyForBase
 } from './pairing-scope'
@@ -77,6 +79,10 @@ export interface AuthStoreInput {
 export interface AuthStore {
   token: () => string | null
   save: (token: string) => void
+  /** The sealed session's connect code for this desktop, base64url. */
+  connectCode: () => string | null
+  /** Null changes nothing: a link with no code says nothing about the one held. */
+  saveConnectCode: (code: string | null) => void
   clear: () => void
   /** Current blocked state, or null while authorized. */
   blocked: () => AuthError | null
@@ -120,6 +126,15 @@ export function tokenFromInput(raw: string): string | null {
   // harder than that on purpose: a token typed by a person predates v2.1 and
   // an over-tight rule here would refuse a credential the Mac would accept.
   return /[\s/]/.test(trimmed) ? null : trimmed
+}
+
+/** The connect code in a pasted link. A bare token carries none. */
+export function connectCodeFromInput(raw: string): string | null {
+  try {
+    return connectCodeFromFragment(new URL(raw.trim()).hash)
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -202,12 +217,25 @@ export function createAuthStore(input: AuthStoreInput): AuthStore {
     return legacy
   })()
 
+  const codeKey = codeKeyForBase(base)
+  let code: string | null = (() => {
+    const fromUrl = connectCodeFromFragment(input.hash ?? '')
+    if (fromUrl) input.local.setItem(codeKey, fromUrl)
+    return fromUrl ?? input.local.getItem(codeKey)
+  })()
+
   const notify = (): void => {
     for (const listener of listeners) listener(blocked)
   }
 
   return {
     token: () => token,
+    connectCode: () => code,
+    saveConnectCode: (next) => {
+      if (next === null) return
+      code = next
+      input.local.setItem(codeKey, next)
+    },
     save: (next) => {
       token = next
       input.local.setItem(key, next)
@@ -218,7 +246,9 @@ export function createAuthStore(input: AuthStoreInput): AuthStore {
     },
     clear: () => {
       token = null
+      code = null
       input.local.removeItem(key)
+      input.local.removeItem(codeKey)
       input.session?.removeItem(key)
     },
     blocked: () => blocked,

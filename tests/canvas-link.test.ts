@@ -357,3 +357,24 @@ describe('dialling the line', () => {
     await until(() => !relay!.holding(DEVICE), 'the relay to let the name go')
   })
 })
+
+describe('what the uplink has not sent', () => {
+  it('reads zero with no line, and the uplink’s own count with one', async () => {
+    const lines: Array<(line: string) => void> = []
+    const link = createCanvasLink({
+      origin: () => 'http://relay.local',
+      credential: () => ({ token: 't', deviceId: 'd' }),
+      transport: {
+        down: () => ({ onLine: (listener) => void lines.push(listener), onEnd: () => undefined, close: () => undefined }),
+        up: () => ({ write: () => undefined, backlog: () => 4096, onEnd: () => undefined, close: () => undefined })
+      }
+    })
+    expect(link.backlog()).toBe(0)
+    link.start()
+    await new Promise((resolve) => setImmediate(resolve))
+    lines[0]?.(encodeFrame({ t: 'ready', name: '@u/desktop/d' }))
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(link.backlog()).toBe(4096)
+    link.stop()
+  })
+})

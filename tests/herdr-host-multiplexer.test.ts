@@ -1091,6 +1091,7 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
     expect(types.length).toBe(1)
   })
 
+  // settleMs sets the whole retype window (six of it): at 10 a busy runner spends it on one look.
   it('DOES retype while the pane still shows a bare shell — the keys were dropped', () => {
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]),
@@ -1099,7 +1100,7 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
       }),
       '-o args=': '-zsh'
     })
-    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 100 })
       .ensureSession(SPEC)
     const types = runner.calls.filter((c) => c.args[1] === 'send-text')
     expect(types.length).toBeGreaterThan(1)

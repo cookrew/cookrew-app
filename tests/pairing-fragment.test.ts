@@ -26,6 +26,8 @@ import { describe, expect, it } from 'vitest'
 import {
   DESKTOP_TOKEN_PREFIX,
   ROOT_TOKEN_KEY,
+  codeKeyForBase,
+  connectCodeFromFragment,
   desktopIdFromBase,
   isPairingToken,
   scrubPairingFromUrl,
@@ -152,3 +154,31 @@ describe('desktopIdFromBase / tokenKeyForBase — one origin, many Macs', () => 
     expect(key.startsWith(DESKTOP_TOKEN_PREFIX)).toBe(true)
   })
 })
+
+describe('the connect code', () => {
+  const CODE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ'
+
+  it('rides the same fragment as the token', () => {
+    expect(connectCodeFromFragment(`#pair=${TOKEN}&code=${CODE}`)).toBe(CODE)
+    expect(tokenFromFragment(`#pair=${TOKEN}&code=${CODE}`)).toBe(TOKEN)
+  })
+
+  it('is 32 bytes or nothing', () => {
+    expect(connectCodeFromFragment('#code=short')).toBeNull()
+    expect(connectCodeFromFragment(`#code=${CODE}A`)).toBeNull()
+    expect(connectCodeFromFragment('')).toBeNull()
+  })
+
+  it('leaves the address bar with the token', () => {
+    expect(stripPairFragment(`#pair=${TOKEN}&code=${CODE}`)).toBe('')
+    expect(stripPairFragment(`#code=${CODE}&x=1`)).toBe('#x=1')
+    const clean = scrubPairingFromUrl(`https://cookrew.dev${BASE}/#pair=${TOKEN}&code=${CODE}`)
+    expect(clean).toBe(`https://cookrew.dev${BASE}/`)
+  })
+
+  it('is kept per desktop: one origin hosts many Macs', () => {
+    expect(codeKeyForBase(BASE)).toBe(`cr_code:${DEVICE}`)
+    expect(codeKeyForBase('')).toBe('cr_code')
+  })
+})
+

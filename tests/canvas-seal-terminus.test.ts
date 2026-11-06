@@ -590,6 +590,28 @@ describe('keeping it bounded', () => {
     expect((await first.send(open(1))).status).toBe(404)
   })
 
+  it('a rotated code ends who came in on the old one, and the terminus stays up', async () => {
+    const { phone: start, terminus, calls } = await bed({ auto: false })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    terminus.endSessions('the code was rotated')
+    expect(calls[0].destroyed).toBe(true)
+    expect(terminus.stats().sessions).toBe(0)
+    expect((await phone.send(open(2))).status).toBe(404)
+    await start()
+    expect(terminus.stats().sessions).toBe(1)
+  })
+
+  it('a handshake begun before the rotation does not finish after it', async () => {
+    const { origin, code, terminus } = await bed()
+    const started = await startHandshake(code)
+    const hello = (await (await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(started.hello) })).json()) as { session: string; accept: { e: string; proof: string } }
+    terminus.endSessions('the code was rotated')
+    const done = await started.finish(hello.accept)
+    expect((await fetch(`${origin}/~seal/finish`, { method: 'POST', body: JSON.stringify({ session: hello.session, ...done!.finish }) })).status).toBe(404)
+  })
+
   it('close ends everything', async () => {
     const { phone: start, terminus, calls } = await bed({ auto: false })
     const phone = await start()

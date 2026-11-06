@@ -49,6 +49,8 @@ export interface LinkDownlink {
 /** Frames to the relay, as lines on a body that never finishes. */
 export interface LinkUplink {
   write(line: string): void
+  /** Bytes written and not on the wire yet. */
+  backlog?(): number
   onEnd(listener: (why: string) => void): void
   close(): void
 }
@@ -82,6 +84,8 @@ export interface CanvasLink {
   readonly name: () => string | null
   /** One frame up. Queued while the uplink is opening, dropped when there is no line. */
   readonly send: (line: string) => void
+  /** Bytes the uplink has not sent yet: the one place a slow relay shows up here. */
+  readonly backlog: () => number
   /** Every frame down that is not the link's own housekeeping. */
   readonly onFrame: (listener: (line: string) => void) => () => void
   /** Held changed. Reach republishes from this. */
@@ -223,6 +227,7 @@ export const httpTransport = (): LinkTransport => ({
       write: (line) => {
         if (!request.writableEnded && !request.destroyed) request.write(`${line}\n`)
       },
+      backlog: () => request.writableLength,
       onEnd: (listener) => void ends.push(listener),
       close: () => {
         request.destroy()
@@ -374,6 +379,7 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
   }
 
   return {
+    backlog: () => up?.backlog?.() ?? 0,
     start: () => {
       if (running) return
       running = true

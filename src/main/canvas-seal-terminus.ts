@@ -79,6 +79,8 @@ export interface SealTerminusDeps {
 export interface SealTerminus {
   handle(request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void>
   tick(): void
+  /** Everyone on an old code is out, and the terminus stays up for the new one. */
+  endSessions(why: string): void
   close(): void
   stats(): { sessions: number; pending: number; listening: number; retained: number; held: number }
 }
@@ -529,6 +531,11 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     for (const live of [...sessions.values()]) live.tick(at)
   }
 
+  const endSessions = (why: string): void => {
+    pending.clear()
+    for (const live of [...sessions.values()]) live.close(why)
+  }
+
   const timer = setInterval(tick, SEAL_TICK_MS)
   timer.unref?.()
 
@@ -542,10 +549,10 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
       }
     },
     tick,
+    endSessions,
     close() {
       clearInterval(timer)
-      pending.clear()
-      for (const live of [...sessions.values()]) live.close('the app is closing')
+      endSessions('the app is closing')
     },
     stats: () => ({
       sessions: sessions.size,
