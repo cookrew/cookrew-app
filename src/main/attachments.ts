@@ -21,14 +21,19 @@ export function saveAttachment(dir: string, name: string, data: Buffer): string 
     throw new Error(`Attachment too large (max ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB)`)
   }
   mkdirSync(dir, { recursive: true })
-  const safe = sanitizeAttachmentName(name)
-  const dot = safe.lastIndexOf('.')
-  const stem = dot > 0 ? safe.slice(0, dot) : safe
-  const ext = dot > 0 ? safe.slice(dot) : ''
-  let target = path.join(dir, safe)
+  const target = freeTarget(dir, sanitizeAttachmentName(name))
+  writeFileSync(target, data)
+  return target
+}
+
+/** A path in `dir` nothing holds yet: `name`, or `name-2`, `name-3`, the extension kept. */
+export function freeTarget(dir: string, name: string): string {
+  const dot = name.lastIndexOf('.')
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  const ext = dot > 0 ? name.slice(dot) : ''
+  let target = path.join(dir, name)
   for (let n = 2; existsSync(target); n += 1) {
     target = path.join(dir, `${stem}-${n}${ext}`)
   }
-  writeFileSync(target, data)
   return target
 }

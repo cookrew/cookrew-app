@@ -175,6 +175,9 @@ export function ownerSecretPaths(
     // to read at boot, and where it points. A seat never runs on either.
     path.join(base, 'access-keys'),
     path.join(base, 'access.json'),
+    // What the owner's browser cards saved (browser-downloads.ts): chat files
+    // from logged-in sites, as private as the profiles they came out of.
+    path.join(base, 'downloads'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
     // What a phone's sealed Mac password opens under (remote-unlock.ts).

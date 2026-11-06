@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -9,6 +9,7 @@ import type { BrowserNodeData, BrowserTab } from '../src/shared/model'
 import { HeadlessBrowserManager } from '../src/main/headless-browser-manager'
 import { findChrome, HeadlessInstance, type FrameMeta } from '../src/main/headless-chrome'
 import { jpegSize } from '../src/main/jpeg-size'
+import { listDownloads } from '../src/main/browser-downloads'
 
 const chrome = findChrome()
 const enabled = process.env.COOKREW_REAL_CHROME_TEST === '1' && chrome !== null
@@ -21,6 +22,14 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
   beforeAll(async () => {
     server = http.createServer((request, response) => {
       const page = request.url?.slice(1) || 'a'
+      if (page.startsWith('file-')) {
+        response.writeHead(200, {
+          'content-type': 'application/octet-stream',
+          'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent('合同 最终版.json')}`
+        })
+        response.end(page)
+        return
+      }
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(
         `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">` +
@@ -37,6 +46,40 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     rmSync(profileDir, { recursive: true, force: true })
   })
+
+  it('saves a page\'s files into the card directory under their own names, never over each other', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cookrew-headless-downloads-'))
+    const downloadDir = path.join(root, 'card')
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir: path.join(root, 'profile'),
+      downloadDir,
+      width: 720,
+      height: 480,
+      tabs: [{ id: 'tab-a', url: `${origin}/a`, title: '' }],
+      activeTabId: 'tab-a'
+    })
+    try {
+      await instance.start()
+      // A click while the first page still loads is dropped with the load.
+      await waitFor(async () => (await instance.evaluate('document.readyState')) === 'complete')
+      const names = (): string[] => listDownloads(downloadDir).map((f) => path.basename(f.path)).sort()
+      const save = (file: string): Promise<unknown> =>
+        instance.evaluate(`(() => { const a = document.createElement('a'); a.href = '/${file}'; a.click() })()`)
+      await save('file-one')
+      await waitFor(() => names().includes('合同-最终版.json'))
+      await save('file-two')
+      await waitFor(() => names().includes('合同-最终版-2.json'))
+      expect(names()).toEqual(['合同-最终版-2.json', '合同-最终版.json'])
+      expect(readFileSync(path.join(downloadDir, '合同-最终版.json'), 'utf8')).toBe('file-one')
+      if (process.platform === 'darwin') {
+        expect(execFileSync('xattr', [path.join(downloadDir, '合同-最终版.json')]).toString()).toContain('com.apple.quarantine')
+      }
+    } finally {
+      await instance.stop()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 30000)
 
   it('shares tabs, emits frames, persists profile state, and exits cleanly', async () => {
     const executablePath = chrome as string

@@ -2115,6 +2115,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew browser tap "Card" X Y | swipe "Card" X1 Y1 X2 Y2 [ms]   Point at a screen (any card)
   cookrew browser type|key|scroll|status "Card" ...   Drive a screen card; status says live or why offline
   cookrew browser tabs "Browser"                  List the browser's tabs (pages opened by the site land here)
+  cookrew browser downloads "Browser"             Files the card saved, newest first: absolute paths to read
   cookrew browser tab-new "Browser" URL           Open a new tab in the browser
   cookrew browser tab-select|tab-close "Browser" N   Switch to / close tab N
   cookrew connect "From" "To"                   (Orch) Wire two nodes together
