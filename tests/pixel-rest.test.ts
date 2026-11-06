@@ -15,7 +15,7 @@ const settle = async (): Promise<void> => {
 function rig(url = 'window://WeChat?id=7', over: Partial<RemoteGate> = {}) {
   let now = 1_000
   const timers: Array<{ fn: () => void; ms: number; live: boolean }> = []
-  const state = { frame: 'AAA', subject: 7, fail: null as Error | null, captures: 0, opens: 0, rests: 0, gestures: [] as Gesture[], blocked: null as RemoteState | null }
+  const state = { frame: 'AAA', subject: 7, fail: null as Error | null, captures: 0, opens: 0, rests: 0, gestures: [] as Gesture[], subjects: [] as Array<number | undefined>, blocked: null as RemoteState | null }
   const remote: RemoteGate = {
     blocked: async () => state.blocked,
     inputRefusal: () => null,
@@ -39,9 +39,13 @@ function rig(url = 'window://WeChat?id=7', over: Partial<RemoteGate> = {}) {
       state.captures += 1
       return { jpeg: state.frame, subject: state.subject }
     },
-    perform: async (g) => {
+    perform: async (g, subject) => {
       if (state.fail) throw state.fail
+      state.subjects.push(subject)
       state.gestures.push(g)
+    },
+    probe: async () => {
+      if (state.fail) throw state.fail
     },
     rest: () => {
       state.rests += 1
@@ -92,6 +96,17 @@ function rig(url = 'window://WeChat?id=7', over: Partial<RemoteGate> = {}) {
 }
 
 const tap: Gesture = { method: 'input.tap', params: { x: 5, y: 5 } }
+
+describe('a card that never rests', () => {
+  it('stopping a phone says nothing of a session: its thumbnail stays', async () => {
+    const onRest = vi.fn()
+    const device: PixelDevice = { target: parseUseUrl('adb://default')!, open: async () => ({ width: 1, height: 1 }), capture: async () => ({ jpeg: 'A' }) }
+    const instance = new PixelInstance({ url: 'adb://default', device, onRest, schedule: () => () => undefined })
+    await instance.start()
+    await instance.stop()
+    expect(onRest).not.toHaveBeenCalled()
+  })
+})
 
 describe('nobody watching', () => {
   it('takes no frame at all, from the moment the card exists', async () => {
@@ -370,6 +385,14 @@ describe('the agent has to have seen it', () => {
     expect(r.state.gestures).toHaveLength(1)
   })
 
+  it('the hand carries what the agent saw, for the device to hold it to', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    await r.instance.act([tap])
+    expect(r.state.subjects).toEqual([7])
+  })
+
   it('a look that failed is not a look', async () => {
     const r = rig()
     await r.instance.start()
@@ -382,6 +405,38 @@ describe('the agent has to have seen it', () => {
 })
 
 describe('status', () => {
+  it('takes no frame: polling status must not become a capture loop on the owner\'s window', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    r.state.frame = 'BBB'
+    for (let i = 0; i < 3; i += 1) await r.instance.check()
+    expect(r.state.captures).toBe(1)
+    expect(await r.instance.snapshot()).toBe('AAA')
+    expect(r.instance.status.state).toBe('live')
+  })
+
+  it('a screen it could not read is a look lost: the hand waits for a new one, and says to take it', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    r.state.fail = new Error('This Mac is locked')
+    await r.instance.check()
+    r.state.fail = null
+    await r.instance.check()
+    await expect(r.instance.act([tap])).rejects.toThrow(/screenshot/)
+    expect(r.state.gestures).toEqual([])
+  })
+
+  it('a card with no way to ask keeps what it knows, and takes no frame', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    delete (r.instance as unknown as { opts: { device: PixelDevice } }).opts.device.probe
+    await r.instance.check()
+    expect(r.state.captures).toBe(1)
+  })
+
   it('asks the device when nothing is polling: a closed app does not read live', async () => {
     const r = rig()
     await r.instance.start()

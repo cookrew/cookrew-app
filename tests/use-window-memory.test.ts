@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
-import { fileWindowMemory } from '../src/main/use-window-memory'
+import { fileWindowMemory, forgetCardWindow } from '../src/main/use-window-memory'
 
 let dir = ''
 let file = ''
@@ -14,7 +14,7 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-const memo = { from: 7, id: 9, title: 'Weixin', pid: 200 }
+const memo = { from: 7, id: 9, title: 'Weixin', pid: 200, alone: true }
 
 describe('fileWindowMemory', () => {
   it('keeps one window per card, for its owner alone', () => {
@@ -23,6 +23,15 @@ describe('fileWindowMemory', () => {
     expect(fileWindowMemory(file, 'a').read()).toEqual(memo)
     expect(fileWindowMemory(file, 'b').read()?.id).toBe(10)
     expect(statSync(file).mode & 0o777).toBe(0o600)
+  })
+
+  it('a card that goes takes its title with it', () => {
+    fileWindowMemory(file, 'a').write(memo)
+    fileWindowMemory(file, 'b').write(memo)
+    forgetCardWindow(file, 'a')
+    expect(fileWindowMemory(file, 'a').read()).toBeNull()
+    expect(fileWindowMemory(file, 'b').read()).toEqual(memo)
+    expect(() => forgetCardWindow(path.join(dir, 'none.json'), 'a')).not.toThrow()
   })
 
   it('remembers nothing for a card it never met', () => {

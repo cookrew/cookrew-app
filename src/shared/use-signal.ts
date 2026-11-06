@@ -42,7 +42,7 @@ export interface UseSignal {
 
 /** A card's device, as the cast tells its viewers (`{t: 'status'}`). */
 export interface UseStatus {
-  /** resting: no session, nothing captured or held; the next use reconnects. */
+  /** resting: no session, nothing captured or held; a viewer or a screenshot reconnects. */
   readonly state: 'connecting' | 'live' | 'offline' | 'resting'
   /** Why it is offline, in a sentence the owner can act on. */
   readonly message: string | null

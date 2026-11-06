@@ -181,7 +181,7 @@ export function MobileBrowserFrame({
     // The zoom-out EDGE: the last painted live frame becomes the card's
     // picture — once, here, never per frame. Read before the reset below
     // forgets it.
-    if (shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null })) {
+    if (shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null, computer: stream.deviceStatus?.use === 'computer' })) {
       handOffBlob(thumbStore, browserId, lastPaintedRef.current as Blob)
     }
     wasOpenRef.current = open

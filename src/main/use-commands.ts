@@ -18,7 +18,7 @@ import { machineCopy } from '../shared/machine-words'
  *   cookrew browser type "Card" TEXT              typed into whatever has focus
  *   cookrew browser key "Card" Enter              Enter Backspace Tab Escape Space Arrow…
  *   cookrew browser scroll "Card" down [AMOUNT]   at the middle of the screen
- *   cookrew browser status "Card"                 live, or offline and why
+ *   cookrew browser status "Card"                 live, offline and why, or resting
  *
  * `tap`, `swipe` and `screenshot` work on a web card too — a pointed click
  * at a canvas app is sometimes the only click there is. Every acting

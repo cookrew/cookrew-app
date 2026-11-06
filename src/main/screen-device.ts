@@ -169,8 +169,8 @@ export class ScreenDevice implements PixelDevice {
   /** The bound window, or the reason it cannot be shown. A failed lookup throws as itself: that proves nothing closed. */
   private async boundWindow(screens: MacScreens, id: number): Promise<MacWindow> {
     const window = screens.windows.find((w) => w.id === id)
-    if (window && sameApp(window.app, this.target.name)) {
-      this.remember(window)
+    if (window && sameApp(window.app, this.target.name) && !this.isAnother(window)) {
+      this.remember(window, screens)
       return window
     }
     if (!window) {
@@ -185,25 +185,37 @@ export class ScreenDevice implements PixelDevice {
     throw new DeviceGoneError('window', `The '${this.target.name}' window this card showed has closed${after}`)
   }
 
+  /** The id came round again: same number, another process, so not this window. */
+  private isAnother(window: MacWindow): boolean {
+    const held = this.bound
+    return held !== null && held.id === window.id && held.pid !== null && window.pid !== undefined && held.pid !== window.pid
+  }
+
+  private sharing(screens: MacScreens, title: string): readonly MacWindow[] {
+    return screens.windows.filter((w) => sameApp(w.app, this.target.name) && w.title === title)
+  }
+
   /** A title macOS is hiding (no Screen Recording) teaches nothing. */
-  private remember(window: MacWindow): void {
+  private remember(window: MacWindow, screens: MacScreens): void {
     const from = this.target.windowId
     if (from === undefined || !window.title) return
-    const next: WindowMemo = { from, id: window.id, title: window.title, pid: window.pid ?? null }
+    const alone = this.sharing(screens, window.title).length === 1
+    const next: WindowMemo = { from, id: window.id, title: window.title, pid: window.pid ?? null, alone }
     const held = this.bound
-    if (held && held.id === next.id && held.title === next.title && held.pid === next.pid) return
+    if (held && held.id === next.id && held.title === next.title && held.pid === next.pid && held.alone === alone) return
     this.bound = next
     this.deps.memory?.write(next)
   }
 
   private cameBack(screens: MacScreens): MacWindow | null {
     const held = this.bound
-    if (!held || held.pid === null) return null
-    const same = screens.windows.filter((w) => sameApp(w.app, this.target.name) && w.title === held.title)
+    // A title it shared before: there is no telling which of the two came back.
+    if (!held || held.pid === null || !held.alone) return null
+    const same = this.sharing(screens, held.title)
     const [window] = same
     if (same.length !== 1 || window.pid === undefined || window.pid === held.pid) return null
     this.boundId = window.id
-    this.remember(window)
+    this.remember(window, screens)
     this.deps.rebound?.()
     return window
   }
@@ -255,7 +267,7 @@ export class ScreenDevice implements PixelDevice {
     return this.deps.remote.inputRefusal()
   }
 
-  async perform(gesture: Gesture): Promise<void> {
+  async perform(gesture: Gesture, subject?: number): Promise<void> {
     const refusal = this.inputRefusal()
     if (refusal) throw new Error(refusal)
     await this.mustBeReadable()
@@ -264,7 +276,8 @@ export class ScreenDevice implements PixelDevice {
     // id), but a click lands on whatever is on top and keys go to whatever
     // has focus. Read front to back, every time.
     const region = await this.resolve(this.target.kind === 'window')
-    if (region.window && this.capturedId !== null && region.window.id !== this.capturedId) {
+    const aimedAt = subject ?? this.capturedId
+    if (region.window && aimedAt !== null && region.window.id !== aimedAt) {
       throw new Error(`The '${this.target.name}' window has changed: take a screenshot first, it may be showing something else`)
     }
     const at = (x: number | string, y: number | string): { x: number; y: number } => ({
@@ -324,6 +337,12 @@ export class ScreenDevice implements PixelDevice {
     const w = this.region?.window
     if (w) return w.title ? `${w.app} — ${w.title}` : w.app
     return this.target.kind === 'screen' ? `Display ${this.target.name}` : this.target.name
+  }
+
+  /** For `status`: what stands in the way, with no frame taken. */
+  async probe(): Promise<void> {
+    await this.mustBeReadable()
+    await this.resolve(true)
   }
 
   /** Which window this is stays; where it was does not. */

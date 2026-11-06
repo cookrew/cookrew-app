@@ -171,6 +171,7 @@ export function useBrowserStream(
   const gotFrameRef = useRef(false)
   const warnedRef = useRef(false)
   const liveRef = useRef(false)
+  const restingRef = useRef(false)
   const hasFrameRef = useRef(false)
   const lastFrameAtRef = useRef(0)
   const frameRevisionRef = useRef<number | null>(null)
@@ -493,6 +494,7 @@ export function useBrowserStream(
         if (!(msg.status.state === 'offline' && msg.status.remote)) attemptRef.current = 0
         setReconnecting(false)
         setDeviceStatus(msg.status)
+        restingRef.current = msg.status.state === 'resting'
         return
       }
 
@@ -578,6 +580,11 @@ export function useBrowserStream(
       }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
+        // Coming back is one message, and on the relay a lost POST is gone: a page in
+        // plain sight with no frames coming says it again.
+        if (!disposed && !document.hidden && (restingRef.current || (liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)))) {
+          line?.send({ t: 'visibility', hidden: false })
+        }
         if (!disposed && liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {
           liveRef.current = false
           setLive(false)

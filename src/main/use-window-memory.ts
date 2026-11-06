@@ -20,6 +20,8 @@ export interface WindowMemo {
   readonly title: string
   /** The process that owned it: the same one means the app never went away. */
   readonly pid: number | null
+  /** No other window of the app had this title, so the title can name it. */
+  readonly alone: boolean
 }
 
 export interface WindowMemory {
@@ -29,7 +31,7 @@ export interface WindowMemory {
 
 const isMemo = (raw: unknown): raw is WindowMemo => {
   const memo = raw as Partial<WindowMemo> | null
-  return typeof memo?.from === 'number' && typeof memo.id === 'number' && typeof memo.title === 'string' && (memo.pid === null || typeof memo.pid === 'number')
+  return typeof memo?.from === 'number' && typeof memo.id === 'number' && typeof memo.title === 'string' && (memo.pid === null || typeof memo.pid === 'number') && typeof memo.alone === 'boolean'
 }
 
 function readAll(file: string): Record<string, unknown> {
@@ -41,6 +43,22 @@ function readAll(file: string): Record<string, unknown> {
   }
 }
 
+const writeAll = (file: string, all: Record<string, unknown>): void => {
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileAtomic(file, JSON.stringify(all))
+}
+
+/** The card is gone: its window's title has no reason to stay on disk. */
+export function forgetCardWindow(file: string, card: string): void {
+  const { [card]: gone, ...rest } = readAll(file)
+  if (gone === undefined) return
+  try {
+    writeAll(file, rest)
+  } catch (error) {
+    console.error('Failed to forget a card window:', error)
+  }
+}
+
 export function fileWindowMemory(file: string, card: string): WindowMemory {
   return {
     read() {
@@ -49,8 +67,7 @@ export function fileWindowMemory(file: string, card: string): WindowMemory {
     },
     write(memo) {
       try {
-        mkdirSync(path.dirname(file), { recursive: true })
-        writeFileAtomic(file, JSON.stringify({ ...readAll(file), [card]: memo }))
+        writeAll(file, { ...readAll(file), [card]: memo })
       } catch (error) {
         // Only a window that closes before the next write is lost by this.
         console.error('Failed to remember a card window:', error)

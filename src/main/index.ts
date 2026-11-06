@@ -288,6 +288,7 @@ import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
 import { interactiveBrowserDefault, relayOrigin, widenedPath } from './launch-defaults'
 import { createLaunchSettings, launchSettingsPath } from './launch-settings'
+import { forgetCardWindow } from './use-window-memory'
 import { addPaneDirs, installerDirs, panePath } from './pane-path'
 import { bootStep, paintFailure } from './boot-failure'
 import { registerAccessIpc } from './access-ipc'
@@ -5466,6 +5467,7 @@ async function removeNode(id: string, opContext: { actor?: EventActor; via?: str
     defaultProducerLease().forgetTerminal(id)
     routeService.forget(id)
     browserThumbs.forget(id)
+    forgetCardWindow(USE_WINDOWS_FILE, id)
     const browserStopped = node?.kind === 'browser'
       ? browserManager.discard(id)
       : browserManager.remove(id)
@@ -6669,6 +6671,7 @@ function viewerWho(credential: string | null): ViewerWho {
   if (id === null) return { key: 'root', name: 'A paired device', here: false }
   return { key: `device:${id}`, name: admittedDevices.list().find((device) => device.deviceId === id)?.name ?? 'A paired phone', here: false }
 }
+const USE_WINDOWS_FILE = path.join(homedir(), '.cookrew', 'use-windows.json')
 const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
   remote: (card) => remoteGate(remoteDesk, card),
@@ -6678,7 +6681,7 @@ const useInstances = createUseInstances({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:rested', card)
   },
   onRebound: (card) => remoteDesk.endControl(card, MAC_VIEWER),
-  windowsFile: path.join(homedir(), '.cookrew', 'use-windows.json')
+  windowsFile: USE_WINDOWS_FILE
 })
 /**
  * A card showing this machine's own screen. Its picture is shown to a viewer

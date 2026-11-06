@@ -135,8 +135,8 @@ export interface PixelDevice {
   /** Opens the device and answers its screen in points; throws the sentence a viewer should read. */
   open(): Promise<ScreenPoints>
   capture(): Promise<PixelFrame>
-  /** One gesture in points. Absent: the screen is watched, never driven. */
-  perform?: (gesture: Gesture) => Promise<void>
+  /** One gesture in points. `subject`: the window it was aimed at. Absent: the screen is watched, never driven. */
+  perform?: (gesture: Gesture, subject?: number) => Promise<void>
   /** Why input is refused, when it is (computer input is off unless the owner turned it on). */
   inputRefusal?: () => string | null
   navigate?: (url: string) => Promise<void>
@@ -148,6 +148,8 @@ export interface PixelDevice {
   readClipboard?: () => string
   /** The session ended: forget where things were. */
   rest?: () => void
+  /** Throws what stands in the way, and takes no frame. */
+  probe?: () => Promise<void>
 }
 
 export interface PixelInstanceOptions {
@@ -325,20 +327,26 @@ export class PixelInstance {
       this.latest = frame.jpeg
       if (changed || due) this.emit(frame.jpeg)
     } catch (error) {
-      this.failures += 1
-      // A device that failed after opening may come back a different size
-      // (another phone on the cable, the window reopened): open it again.
-      this.opened = false
-      const remote = error instanceof DeviceBlockedError ? { ...error.state, lastSeenAt: this.lastFrameAt } : undefined
-      // Never a stale picture standing in for a screen that cannot be read.
-      if (remote) this.blind()
-      this.setStatus('offline', error instanceof Error ? error.message : String(error), error instanceof DeviceGoneError ? error.gone : undefined, remote)
+      this.failed(error)
     } finally {
       this.polling = false
     }
     const soon = this.pollAgainSoon && this.failures === 0
     this.pollAgainSoon = false
     this.schedule(soon ? PIXEL_FAST_POLL_MS : this.cadence())
+  }
+
+  private failed(error: unknown): void {
+    this.failures += 1
+    // A device that failed after opening may come back a different size
+    // (another phone on the cable, the window reopened): open it again.
+    this.opened = false
+    // Whatever the agent saw is from before this.
+    this.seen = null
+    const remote = error instanceof DeviceBlockedError ? { ...error.state, lastSeenAt: this.lastFrameAt } : undefined
+    // Never a stale picture standing in for a screen that cannot be read.
+    if (remote) this.blind()
+    this.setStatus('offline', error instanceof Error ? error.message : String(error), error instanceof DeviceGoneError ? error.gone : undefined, remote)
   }
 
   private adoptPoints(points: ScreenPoints): void {
@@ -410,7 +418,7 @@ export class PixelInstance {
     return true
   }
 
-  /** The lock lifted, or something else this card was waiting for: look now, not at the next backoff. */
+  /** The lock lifted, or something else this card was waiting for: a watched card looks now, not at the next backoff. */
   wake(): void {
     if (!this.closed && !this.polling) this.schedule(PIXEL_FAST_POLL_MS)
   }
@@ -493,7 +501,7 @@ export class PixelInstance {
     if (refusal) throw new Error(refusal)
     if (!this.opts.device.perform) throw new Error(`a ${this.opts.device.target.use} camera is watched, not driven`)
     if (this.rests && (this.seen === null || this.seen.subject !== this.subject)) throw new Error(LOOK_FIRST)
-    if (!this.opened) throw new Error(this.statusNow.message ?? 'the device is not connected yet')
+    if (!this.opened) throw new Error(this.rests ? LOOK_FIRST : (this.statusNow.message ?? 'the device is not connected yet'))
     this.acting += 1
     this.armRest()
     try {
@@ -509,11 +517,13 @@ export class PixelInstance {
     const device = this.opts.device
     if (!device.perform) return Promise.resolve()
     this.lastInputAt = this.now()
+    // An agent aims at what it saw, which a viewer's frame may have moved on from.
+    const aimedAt = surface ? (this.seen?.subject ?? undefined) : undefined
     let failure: unknown = null
     // Serialised: a tap must never overtake the swipe before it. Called ON
     // the device: a class's perform reads its own fields (adb's serial).
     for (const gesture of gestures) {
-      this.inputQueue = this.inputQueue.then(() => (stillAllowed && !stillAllowed() ? undefined : device.perform?.(gesture))).then(
+      this.inputQueue = this.inputQueue.then(() => (stillAllowed && !stillAllowed() ? undefined : device.perform?.(gesture, aimedAt))).then(
         () => undefined,
         (error: unknown) => {
           failure = failure ?? error
@@ -574,11 +584,20 @@ export class PixelInstance {
 
   /**
    * For `status`: with no viewer nothing is polling, so what it last knew may be old.
-   * It wakes nothing, and it is not a look: the agent is shown no picture.
+   * It takes no frame and wakes nothing: an agent polling this must not become a
+   * capture loop on the owner's window, and it is shown no picture, so it is no look.
    */
   async check(): Promise<void> {
-    if (this.closed || this.keepsLooking || this.resting || this.opts.device.remote?.admit(AGENT_VIEWER)) return
-    await this.readNow()
+    const { device } = this.opts
+    if (this.closed || this.keepsLooking || this.resting || !device.probe || device.remote?.admit(AGENT_VIEWER)) return
+    try {
+      await withDeadline(device.probe(), PIXEL_OPEN_TIMEOUT_MS, 'the device')
+      // Clear again, with no session to be live in: the next look opens one.
+      if (this.opened) this.setStatus('live', null)
+      else this.rest()
+    } catch (error) {
+      this.failed(error)
+    }
   }
 
   /** A viewer's page went out of sight, or came back. Its line stays up. */
@@ -684,12 +703,12 @@ export class PixelInstance {
     this.restCancel = null
     this.viewportCoordinator.dispose()
     this.statusListeners.clear()
-    this.opts.onRest?.()
     try {
       await this.opts.device.close?.()
     } catch {
       // Closing a device that already went away is not a failure.
     }
+    if (this.rests) this.opts.onRest?.()
     return { pid: null, forced: false }
   }
 }
