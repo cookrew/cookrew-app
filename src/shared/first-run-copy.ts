@@ -21,6 +21,29 @@ export const PREFLIGHT_COPY = {
   RUNNING: 'Working…'
 } as const
 
+/** Remote desktop, offered in the tool check. Names of panes are System Settings' own. */
+export const REMOTE_SETUP_COPY = {
+  HEAD: 'Use this computer from your phone?',
+  OPTIONAL: 'Optional',
+  LEDE: 'See this screen and use it from your own phone, from any network. Nothing is shared until you turn it on.',
+  SCREEN_NAME: 'Screen & System Audio Recording',
+  SCREEN_DOES: 'Lets your phone see this screen.',
+  ACCESSIBILITY_NAME: 'Accessibility',
+  ACCESSIBILITY_DOES: 'Lets your phone click and type here.',
+  SWITCH_NAME: 'Allow remote desktop',
+  SWITCH_DOES:
+    'Your paired devices can unlock this computer with its password and take control, and agents can click and type here. It stays on after a restart until you turn it off, and keeps this computer awake while its lid is open.',
+  ON: 'On',
+  OFF: 'Off',
+  RESTART_NEEDED: 'Restart needed',
+  ALLOW: 'Allow',
+  TURN_ON: 'Turn on',
+  TURN_OFF: 'Turn off',
+  RESTART: 'Restart Cookrew',
+  TURN_ON_ROW: (name: string): string => `Turn on ${name} in System Settings.`,
+  STALE: 'Already on there? Select it, press −, and add it again.'
+} as const
+
 /** A Setup line, in the tool check and the Routing panel alike (main/setup-line.ts). */
 export const SETUP_LINE_COPY = {
   BUSY: 'The Setup pane is busy, so nothing was typed. Finish what it is doing there, or press Stop.',

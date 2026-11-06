@@ -7,6 +7,7 @@ import type { RunOptions, RunOutcome, SetupEnded, SetupError } from '../routing/
 import { PREFLIGHT_COPY, SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { mayContinue, preflightRows, UNKNOWN_FACTS, type PreflightRow, type ToolState } from '../../../shared/preflight'
 import { AccessRows } from './AccessRows'
+import { RemoteRows } from './RemoteRows'
 import { firstAgentHarness, stillMissing } from './first-run-rules'
 import { firstRun } from './first-run-state'
 
@@ -233,6 +234,7 @@ export function Preflight({ setup, onDone }: { setup: PreflightSetup; onDone: ()
       }
     >
       <AccessRows onChange={check} />
+      <RemoteRows />
     </PreflightView>
   )
 }
