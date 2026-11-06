@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 // THE MAC'S INPUT HAND (main/mac-bridge.ts), DRY: the real osascript helper
 // builds every event and posts none, so this never moves the owner's mouse.
@@ -59,6 +61,53 @@ describe.skipIf(process.platform !== 'darwin' || process.env.COOKREW_MAC_LOCK_TE
 
 // Runs the real script: it asks who answers for a process and touches no
 // permission, so unlike the hand above it can never raise a dialog.
+describe('letting the hand go', () => {
+  const helper = (): { child: ChildProcessWithoutNullStreams; ended: () => boolean; killed: () => boolean } => {
+    const stdin = new EventEmitter() as unknown as { write: () => boolean; end: () => void; on: () => void }
+    let ended = false
+    let killed = false
+    stdin.write = () => true
+    stdin.end = () => void (ended = true)
+    const child = Object.assign(new EventEmitter(), {
+      stdin,
+      stdout: Object.assign(new EventEmitter(), { setEncoding: () => undefined }),
+      stderr: new EventEmitter(),
+      exitCode: null,
+      killed: false,
+      kill: () => ((killed = true), true)
+    }) as unknown as ChildProcessWithoutNullStreams
+    return { child, ended: () => ended, killed: () => killed }
+  }
+
+  it('closes when nothing is in flight', async () => {
+    const h = helper()
+    const hand = new MacInput({ spawnHelper: () => h.child })
+    const sent = hand.send({ op: 'ping' })
+    h.child.stdout.emit('data', 'ok\n')
+    await sent
+    expect(hand.closeWhenIdle()).toBe(true)
+    expect(h.ended()).toBe(true)
+  })
+
+  it('never cuts off what is in flight: a password going into a lock screen, say', () => {
+    const h = helper()
+    const hand = new MacInput({ spawnHelper: () => h.child })
+    void hand.send({ op: 'ping' }).catch(() => undefined)
+    expect(hand.closeWhenIdle()).toBe(false)
+    expect(h.ended()).toBe(false)
+    hand.close()
+  })
+
+  it('close lets an op finish instead of killing it with the mouse button down', () => {
+    const h = helper()
+    const hand = new MacInput({ spawnHelper: () => h.child })
+    void hand.send({ op: 'ping' }).catch(() => undefined)
+    hand.close()
+    expect(h.ended()).toBe(true)
+    expect(h.killed()).toBe(false)
+  })
+})
+
 describe.skipIf(process.platform !== 'darwin')('readMacListedApp', () => {
   it('answers with an app bundle, or with nothing when no app is behind the launch', async () => {
     const answer = await readMacListedApp()

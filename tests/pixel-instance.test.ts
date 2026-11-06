@@ -12,7 +12,6 @@ import {
   PIXEL_HEARTBEAT_MS,
   PIXEL_IDLE_POLL_MS,
   PIXEL_MAX_BACKOFF_MS,
-  PIXEL_OFFLINE_UNWATCHED_POLL_MS,
   PIXEL_OPEN_TIMEOUT_MS,
   PIXEL_UNWATCHED_POLL_MS,
   PixelInstance,
@@ -346,6 +345,8 @@ describe('a screen behind the remote desk', () => {
       perform: async (gesture) => void gestures.push(gesture)
     }
     const instance = new PixelInstance({ url: 'screen://main', device, now: clock.now, schedule: clock.schedule })
+    // Somebody is watching: with nobody, nothing is read at all (pixel-rest.test.ts).
+    instance.frameListeners.add(() => undefined)
     return { clock, gestures, instance, allow, block: (next: RemoteState | null) => (blocked = next) }
   }
 
@@ -399,17 +400,6 @@ describe('a screen behind the remote desk', () => {
     block(null)
     instance.wake()
     expect(clock.due).toBe(PIXEL_FAST_POLL_MS)
-  })
-
-  it('an offline card nobody watches looks rarely: each look is a process', async () => {
-    const { clock, instance, block } = rig()
-    await instance.start()
-    block(state('locked'))
-    await clock.run()
-    expect(clock.due).toBe(PIXEL_OFFLINE_UNWATCHED_POLL_MS)
-    instance.frameListeners.add(() => undefined)
-    await clock.run()
-    expect(clock.due).toBeLessThanOrEqual(PIXEL_MAX_BACKOFF_MS)
   })
 
   it('input needs a named viewer who may drive: no name, no input', async () => {
@@ -494,6 +484,7 @@ describe('a screen behind the remote desk', () => {
     }
     const instance = new PixelInstance({ url: 'screen://main', device, now: clock.now, schedule: clock.schedule, copyDelayMs: 0 })
     instance.copyListeners.add(copied)
+    instance.frameListeners.add(() => undefined)
     await instance.start()
     instance.dispatchInput('Input.dispatchKeyEvent', { type: 'keyDown', key: 'c', code: 'KeyC', modifiers: 2 }, phone)
     await new Promise((r) => setTimeout(r, 5))

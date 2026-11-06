@@ -3,7 +3,7 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { BrowserInstance } from '../src/main/browser-instance'
 import { SERVED_USE_REFUSED, handlesUseCommand, runUseCommand, servedUseRefusal, shotName, type UseCommandContext } from '../src/main/use-commands'
 import type { Gesture } from '../src/main/vphone-input'
@@ -93,6 +93,15 @@ describe('runUseCommand', () => {
     expect(readFileSync(file).toString()).toBe('jpegbytes')
     expect(out).toMatch(/screen: 400x800 points/)
     expect(signals.at(-1)?.verb).toBe('look')
+  })
+
+  it('a screen card is looked at for the screenshot, not read from what it last held', async () => {
+    const { instance, ctx } = screenCard()
+    const snapshot = vi.fn(async () => null)
+    const look = vi.fn(async () => Buffer.from('fresh').toString('base64'))
+    await runUseCommand('screenshot', [], { ...instance, snapshot, look }, ctx)
+    expect(look).toHaveBeenCalledTimes(1)
+    expect(snapshot).not.toHaveBeenCalled()
   })
 
   it('status reads the device line; a screenshot with no frame says why', async () => {

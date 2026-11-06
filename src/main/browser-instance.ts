@@ -33,6 +33,8 @@ export interface BrowserInstance {
   syncTabs(tabs: BrowserTab[], activeTabId: string): Promise<void>
   resize(width: number, height: number): Promise<void>
   snapshot(): Promise<string | null>
+  /** A frame taken for this look, where snapshot only reads what is held. Absent: snapshot is as fresh as it gets. */
+  look?(): Promise<string | null>
   evaluate(expression: string): Promise<unknown>
   navigate(url: string): Promise<void>
   pageInfo(): Promise<HeadlessPageState & { viewport: string }>

@@ -98,7 +98,7 @@ export async function runUseCommand(
     }
     case 'screenshot':
     case 'snapshot': {
-      const jpeg = await instance.snapshot()
+      const jpeg = await (instance.look?.() ?? instance.snapshot())
       if (!jpeg) {
         const why = instance.status?.message
         throw new Error(why ? `no frame yet — ${why}` : 'no frame yet; try again in a moment')

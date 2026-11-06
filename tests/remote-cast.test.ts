@@ -110,6 +110,8 @@ describe('a viewer of the Mac', () => {
     desk.setSwitch(true)
     await instance.start()
     const { line, viewer } = watch(phone)
+    // A resting card opens as the viewer arrives: live a moment later.
+    await new Promise((r) => setTimeout(r, 0))
     expect(lastStatus(line)).toMatchObject({ state: 'live', input: false, control: { switchOn: true, until: null } })
     await new Promise((r) => setTimeout(r, VIEWPORT_DEBOUNCE_MS + 60))
     frame(instance)

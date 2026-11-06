@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { nativeImage, systemPreferences } from 'electron'
@@ -57,7 +57,7 @@ export function encodeJpeg(input: Buffer, crop: Roi | null, maxSide: number): Bu
 }
 
 export interface UseInstances {
-  makeInstance(target: UseTarget, node: { id: string }): BrowserInstance | null
+  makeInstance(target: UseTarget, node: { id: string; name?: string }): BrowserInstance | null
   /** The window picker's source for this machine; null where there is none. */
   sources(): UseSourceProvider | null
   /** Types a password at this Mac's lock screen. Only remote-unlock.ts calls this. */
@@ -80,17 +80,40 @@ export interface UseInstancesOptions {
   readonly platform?: NodeJS.Platform
 }
 
+/** The window title in a card named by the picker, `App — Title`. A renamed card has none. */
+export function cardWindowTitle(name: string | undefined, app: string): string | null {
+  const prefix = `${app} — `
+  return name?.startsWith(prefix) ? name.slice(prefix.length).trim() || null : null
+}
+
+/** A capture cut off by a kill leaves a picture of the screen here, under its own name. */
+function sweepCaptures(dir: string): void {
+  try {
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith('cookrew-roi-')) rmSync(path.join(dir, name), { force: true })
+    }
+  } catch (error) {
+    console.error('Failed to clear old captures:', error)
+  }
+}
+
 export function createUseInstances(options: UseInstancesOptions): UseInstances {
   const platform = options.platform ?? process.platform
   const live = new Map<string, PixelInstance>()
   const screenAccess = (): string => systemPreferences.getMediaAccessStatus('screen')
   mkdirSync(options.captureDir, { recursive: true, mode: 0o700 })
+  sweepCaptures(options.captureDir)
   let hand: MacInput | null = null
   let host: ElectronCaptureHost | null = null
   const handOf = (): MacInput => (hand ??= new MacInput())
   const hostOf = (): ElectronCaptureHost => (host ??= new ElectronCaptureHost(path.join(options.captureDir, 'capture-host.html')))
 
-  const deviceFor = (target: UseTarget, card: string): PixelDevice | null => {
+  /** Nothing is using the keyboard: the helper holding the Accessibility grant can go. */
+  const releaseHand = (): void => {
+    if ([...live.values()].every((instance) => instance.stopped || !instance.rests || instance.resting)) hand?.closeWhenIdle()
+  }
+
+  const deviceFor = (target: UseTarget, card: string, cardName?: string): PixelDevice | null => {
     switch (target.kind) {
       case 'adb': {
         const adb = findAdb()
@@ -114,7 +137,8 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
           remote: options.remote(card),
           hand: handOf,
           readClipboard: readMachineClipboard,
-          tmp: options.captureDir
+          tmp: options.captureDir,
+          titleHint: () => cardWindowTitle(cardName, target.name)
         })
       case 'cam':
         return new CamDevice(target, { host: hostOf, cameraAccess })
@@ -125,9 +149,9 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
 
   return {
     makeInstance(target, node) {
-      const device = deviceFor(target, node.id)
+      const device = deviceFor(target, node.id, node.name)
       if (!device) return null
-      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id) })
+      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id), onRest: releaseHand })
       live.set(node.id, instance)
       return instance
     },

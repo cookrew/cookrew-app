@@ -28,10 +28,16 @@ import { machineCopy } from '../shared/machine-words'
  * window used to be.
  *
  * A BOUND CARD (`?id=`, what the picker writes) holds that one window. Its
- * id must still be on screen and still be the app's; nothing else of that
- * name stands in. Missing from the on-screen list it is asked after directly:
- * alive but off screen is an ordinary offline that recovers by itself, and
- * only a window macOS no longer knows is gone (DeviceGoneError).
+ * id must still be on screen and still be the app's. Missing from the on-screen
+ * list it is asked after directly: alive but off screen is an ordinary offline
+ * that recovers by itself, and only a window macOS no longer knows is gone
+ * (DeviceGoneError).
+ *
+ * An app that quit and came back has new window ids, so the card finds its window
+ * again by the title it had: same app, same title, and exactly one such window.
+ * Anything looser would show the owner's other windows on a card meant for one, so
+ * failing that it stays gone. And nothing is pressed into a window that came back
+ * until a frame of it has been taken: it may be showing something else now.
  *
  * THE DESK DECIDES (remote-desk.ts). Before every frame and every gesture
  * this asks what stands in the way: the lock, Screen Recording, the display.
@@ -55,6 +61,8 @@ export interface ScreenDeps {
   readClipboard?: () => string
   now?: () => number
   tmp?: string
+  /** The title the card was made for, for a window that has to be found again. */
+  titleHint?: () => string | null
 }
 
 export const SCREEN_FRAME_MAX_SIDE = 1920
@@ -97,6 +105,10 @@ export class ScreenDevice implements PixelDevice {
   private region: Region | null = null
   private screens: MacScreens | null = null
   private listedAt = Number.NEGATIVE_INFINITY
+  private boundId: number | undefined
+  private boundTitle: string | null = null
+  /** The bound window came back under a new id, and nobody has looked at it yet. */
+  private unseen = false
   private readonly file: string
   private readonly now: () => number
 
@@ -110,6 +122,7 @@ export class ScreenDevice implements PixelDevice {
     this.remote = deps.remote
     this.readClipboard = deps.readClipboard
     this.now = deps.now ?? Date.now
+    this.boundId = target.windowId
     this.file = path.join(deps.tmp ?? tmpdir(), `cookrew-roi-${randomUUID()}.jpg`)
   }
 
@@ -121,7 +134,7 @@ export class ScreenDevice implements PixelDevice {
     let area: { x: number; y: number; width: number; height: number }
     let window: MacWindow | null = null
     if (this.target.kind === 'window') {
-      window = this.target.windowId ? await this.boundWindow(screens, this.target.windowId) : this.namedWindow(screens)
+      window = this.boundId ? await this.boundWindow(screens, this.boundId) : this.namedWindow(screens)
       area = window
     } else {
       const index = this.target.name === 'main' ? 1 : Number(this.target.name)
@@ -144,15 +157,37 @@ export class ScreenDevice implements PixelDevice {
 
   /** The bound window, or the reason it cannot be shown. A failed lookup throws as itself: that proves nothing closed. */
   private async boundWindow(screens: MacScreens, id: number): Promise<MacWindow> {
-    const closed = new DeviceGoneError('window', `The '${this.target.name}' window this card showed has closed`)
     const window = screens.windows.find((w) => w.id === id)
-    if (window) {
-      if (!sameApp(window.app, this.target.name)) throw closed
+    if (window && sameApp(window.app, this.target.name)) {
+      if (window.title) this.boundTitle = window.title
       return window
     }
-    const alive = await this.deps.windowAlive(id)
-    if (!alive || !sameApp(alive.app, this.target.name)) throw closed
-    throw new Error(`The '${this.target.name}' window is minimised or on another Space — bring it back to see it here`)
+    if (!window) {
+      const alive = await this.deps.windowAlive(id)
+      if (alive && sameApp(alive.app, this.target.name)) {
+        throw new Error(`The '${this.target.name}' window is minimised or on another Space — bring it back to see it here`)
+      }
+    }
+    const back = this.cameBack(screens)
+    if (back) return back
+    const title = this.titleWanted()
+    const after = title ? ' — open it again and this card finds it' : ''
+    throw new DeviceGoneError('window', `The '${this.target.name}' window this card showed has closed${after}`)
+  }
+
+  private titleWanted(): string | null {
+    return this.boundTitle || this.deps.titleHint?.() || null
+  }
+
+  private cameBack(screens: MacScreens): MacWindow | null {
+    const title = this.titleWanted()
+    if (!title) return null
+    const same = screens.windows.filter((w) => sameApp(w.app, this.target.name) && w.title === title)
+    if (same.length !== 1) return null
+    this.boundId = same[0].id
+    this.boundTitle = title
+    this.unseen = true
+    return same[0]
   }
 
   /** Throws what stands in the way, in the words the card shows. */
@@ -184,13 +219,14 @@ export class ScreenDevice implements PixelDevice {
           ? { x: (region.x - w.x) / w.width, y: (region.y - w.y) / w.height, width: region.width / w.width, height: region.height / w.height }
           : null
       const jpeg = this.deps.encode(raw, crop, SCREEN_FRAME_MAX_SIDE)
+      this.unseen = false
       return { jpeg: jpeg.toString('base64'), points: { width: region.width, height: region.height } }
     } catch (error) {
       // The window may be gone: look it up afresh next time.
       this.listedAt = Number.NEGATIVE_INFINITY
       await this.mustBeReadable(true)
       // A bound window: say what happened to it, not what screencapture said.
-      if (this.target.windowId) await this.resolve(true)
+      if (this.boundId) await this.resolve(true)
       throw error instanceof Error ? error : new Error(String(error))
     } finally {
       await this.deps.remove(this.file).catch(() => undefined)
@@ -210,6 +246,7 @@ export class ScreenDevice implements PixelDevice {
     // id), but a click lands on whatever is on top and keys go to whatever
     // has focus. Read front to back, every time.
     const region = await this.resolve(this.target.kind === 'window')
+    if (this.unseen) throw new Error(`The '${this.target.name}' window was reopened: take a screenshot first, it may be showing something else`)
     const at = (x: number | string, y: number | string): { x: number; y: number } => ({
       x: region.x + clamp(Number(x), 0, region.width - 1),
       y: region.y + clamp(Number(y), 0, region.height - 1)
@@ -267,6 +304,13 @@ export class ScreenDevice implements PixelDevice {
     const w = this.region?.window
     if (w) return w.title ? `${w.app} — ${w.title}` : w.app
     return this.target.kind === 'screen' ? `Display ${this.target.name}` : this.target.name
+  }
+
+  /** Which window this is stays; where it was does not. */
+  rest(): void {
+    this.region = null
+    this.screens = null
+    this.listedAt = Number.NEGATIVE_INFINITY
   }
 
   async close(): Promise<void> {

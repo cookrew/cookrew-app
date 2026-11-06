@@ -220,6 +220,73 @@ describe('a card bound to one window', () => {
     expect(captured[0]).toContain('-l43')
   })
 
+  describe('the app closed and came back', () => {
+    const reopened = (windows: MacScreens['windows']): MacScreens => ({ ...screens, windows })
+    const chat = { id: 9, app: 'WeChat', title: 'Weixin', x: 0, y: 0, width: 800, height: 600 }
+
+    it('finds its window again: same app, same title, and only one such', async () => {
+      const { device, captured } = bed('window://WeChat?id=7', { list: async () => reopened([chat]), titleHint: () => 'Weixin' })
+      await expect(device.open()).resolves.toEqual({ width: 800, height: 600 })
+      await device.capture()
+      expect(captured[0]).toContain('-l9')
+    })
+
+    it('never takes another window of that app for it', async () => {
+      const other = { ...chat, title: 'Moments' }
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([other]), titleHint: () => 'Weixin' })
+      await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+    })
+
+    it('never guesses between two of the same title', async () => {
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([chat, { ...chat, id: 10 }]), titleHint: () => 'Weixin' })
+      await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+    })
+
+    it('never matches on an empty title, or another app of that title', async () => {
+      const blank = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, title: '' }]), titleHint: () => '' })
+      await expect(blank.device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+      const stranger = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, app: 'Notes' }]), titleHint: () => 'Weixin' })
+      await expect(stranger.device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+    })
+
+    it('remembers the title it saw, for a card renamed since', async () => {
+      let windows = [{ ...chat, id: 7 }]
+      const { device, tick } = bed('window://WeChat?id=7', { list: async () => reopened(windows) })
+      await device.open()
+      windows = [chat]
+      tick(5000)
+      await expect(device.open()).resolves.toEqual({ width: 800, height: 600 })
+    })
+
+    it('with the app closed it says how to bring the card back', async () => {
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([]), titleHint: () => 'Weixin' })
+      await expect(device.open()).rejects.toThrow(/open it again/)
+    })
+
+    it('presses nothing into a window that came back until someone has looked: another chat may be open', async () => {
+      let windows = [{ ...chat, id: 7 }]
+      const { device, ops, tick } = bed('window://WeChat?id=7', { list: async () => reopened(windows) })
+      await device.open()
+      await device.capture()
+      windows = [chat]
+      tick(5000)
+      await expect(device.perform({ method: 'input.tap', params: { x: 5, y: 5 } })).rejects.toThrow(/screenshot/)
+      expect(ops).toEqual([])
+      await device.capture()
+      await device.perform({ method: 'input.tap', params: { x: 5, y: 5 } })
+      expect(ops).toHaveLength(1)
+    })
+
+    it('rest forgets where the window was, not which window it is', async () => {
+      const lists: number[] = []
+      const { device } = bed('window://WeChat?id=7', { list: async () => (lists.push(1), reopened([{ ...chat, id: 7 }])) })
+      await device.open()
+      device.rest()
+      await device.capture()
+      expect(lists.length).toBe(2)
+    })
+  })
+
   it('a closed window is gone, and never falls back to another window of that app', async () => {
     const { device, captured } = bed('window://Simulator?id=43', { list: async () => without(43), windowAlive: async () => null })
     const failure = await device.open().catch((e: unknown) => e)

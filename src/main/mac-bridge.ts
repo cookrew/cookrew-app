@@ -317,6 +317,8 @@ interface Waiter {
  * answers in order. `dry` builds every event and posts none — for tests that
  * must never move the owner's mouse.
  */
+const HELPER_LEAVE_MS = 8000
+
 export class MacInput {
   private child: ChildProcessWithoutNullStreams | null = null
   private readonly waiters: Waiter[] = []
@@ -378,9 +380,25 @@ export class MacInput {
     })
   }
 
+  /** True when it let go. A password going into a lock screen is never cut off. */
+  closeWhenIdle(): boolean {
+    if (this.waiters.length > 0) return false
+    this.close()
+    return true
+  }
+
+  /**
+   * Ends stdin, and the helper leaves when the op in hand is done: killed now, a drag
+   * would leave the mouse button down. A helper that hangs goes after the longest op.
+   * If this process dies first the pipe closes all the same.
+   */
   close(): void {
-    this.child?.stdin.end()
-    this.child?.kill()
+    const child = this.child
     this.child = null
+    if (!child) return
+    child.stdin.end()
+    const timer = setTimeout(() => child.kill(), HELPER_LEAVE_MS)
+    timer.unref?.()
+    child.once('exit', () => clearTimeout(timer))
   }
 }
