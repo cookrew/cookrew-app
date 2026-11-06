@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PAIR_FRAGMENT,
   pairingUrl,
+  withoutConnectCode,
   parsePairingFragment,
   relayDesktopUrl
 } from '../src/shared/pairing-url'
@@ -195,6 +196,13 @@ describe('the reach card still carries no credential', () => {
 describe('the connect code in the link', () => {
   const input = { registryOrigin: 'https://cookrew.dev', username: 'drej', deviceId: '11111111-2222-3333-4444-555555555555', pairingToken: 'tok' }
   const CODE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ'
+
+  it('can be taken back out, leaving the link that pairs', () => {
+    const sealed = pairingUrl({ ...input, connectCode: CODE }) as string
+    expect(sealed).toContain(`&code=${CODE}`)
+    expect(withoutConnectCode(sealed)).toBe(pairingUrl(input))
+    expect(withoutConnectCode(pairingUrl(input) as string)).toBe(pairingUrl(input))
+  })
 
   it('rides the fragment, never the path or the query', () => {
     const url = new URL(pairingUrl({ ...input, connectCode: CODE }) as string)

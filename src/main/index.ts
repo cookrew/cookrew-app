@@ -1498,7 +1498,8 @@ const requests = new Requests({
   // ALLOW's own half (R2): this phone gets a token of its own, and the URL
   // that carries it is sealed to the key the request arrived with. The root
   // pairing credential never leaves this process for a device that asked
-  // through the queue.
+  // through the queue. Nor does the connect code: that key came through the
+  // registry and the owner has nothing to compare it with (connect-code.ts).
   reach: {
     admit: (device) => admittedDevices.admit(device),
     pairingUrlFor: (token) => {
@@ -1508,8 +1509,7 @@ const requests = new Requests({
         registryOrigin: registryOrigin(),
         username: account.username,
         deviceId: account.deviceId,
-        pairingToken: token,
-        connectCode: connectCodes.encoded()
+        pairingToken: token
       })
     }
   }
@@ -7548,10 +7548,15 @@ app.whenReady().then(() => {
       watchPairing.unpair()
       // Whoever came in on the old token: a socket outlives the token that opened it.
       remoteDesk.forgetDevice('root')
+      const rotated = rotateActivePairingToken()
       // The same revocation: whoever holds the old code is out with the old token.
-      connectCodes.rotate()
-      sealTerminus.endSessions('the pairing was rotated')
-      return rotateActivePairingToken()
+      // Last, because a code that cannot be saved throws, and the owner should hear it.
+      try {
+        connectCodes.rotate()
+      } finally {
+        sealTerminus.endSessions('the pairing was rotated')
+      }
+      return rotated
     },
     pairingHandout: currentPairingHandout,
     listWorkspaces,

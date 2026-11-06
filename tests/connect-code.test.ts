@@ -1,10 +1,11 @@
 // THE CONNECT CODE: what the relay has never seen. It goes into the seal's keys, so
 // it has to stay on this Mac, and a rotation has to end whoever came in on the old one.
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createConnectCodes } from '../src/main/connect-code'
+import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { connectCodeId, SEAL_CODE_BYTES } from '../src/shared/canvas-seal'
 
 let dir = ''
@@ -46,6 +47,16 @@ describe('createConnectCodes', () => {
     expect(createConnectCodes(file).encoded()).toBe(codes.encoded())
   })
 
+  it('a rotation it cannot save says so, and the old code is dead for this run anyway', async () => {
+    const codes = createConnectCodes(file)
+    const old = bytes(codes.encoded())
+    const nested = path.dirname(file)
+    renameSync(nested, `${nested}-moved`)
+    writeFileSync(nested, 'not a directory')
+    expect(() => codes.rotate()).toThrow(/could not be saved/)
+    expect(codes.codeFor(await connectCodeId(old))).toBeNull()
+  })
+
   it('a damaged file makes a new code rather than a weak one', () => {
     const first = createConnectCodes(file).encoded()
     writeFileSync(file, 'short\n')
@@ -54,8 +65,11 @@ describe('createConnectCodes', () => {
     expect(bytes(next)).toHaveLength(SEAL_CODE_BYTES)
   })
 
-  it('a served seat cannot read it', () => {
-    expect(readFileSync('src/main/owner-secrets.ts', 'utf8')).toContain("'connect-code'")
+  it('a served seat cannot read it, nor catch it on its way to disk', () => {
+    const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
+    expect(denied).toContain('/Users/me/.cookrew/connect-code')
+    expect(denied).toContain('/Users/me/.cookrew/connect-code.tmp')
+    expect(denied).toContain('/Users/me/.cookrew/unlock-key.json.tmp')
   })
 })
 
@@ -69,17 +83,26 @@ describe('the wiring', () => {
 
   it('one rotation shuts out the old token and the old code together', () => {
     const rotate = main.slice(main.indexOf('rotatePairingToken: () => {'))
-    const body = rotate.slice(0, rotate.indexOf('return rotateActivePairingToken()'))
+    const body = rotate.slice(0, rotate.indexOf('return rotated'))
+    expect(body).toContain('rotateActivePairingToken()')
     expect(body).toContain('connectCodes.rotate()')
     expect(body).toContain('sealTerminus.endSessions(')
+  })
+
+  it('a code that cannot be saved still ends the sessions, and the token has already gone', () => {
+    const rotate = main.slice(main.indexOf('rotatePairingToken: () => {'))
+    expect(rotate.indexOf('rotateActivePairingToken()')).toBeLessThan(rotate.indexOf('connectCodes.rotate()'))
+    expect(rotate).toMatch(/try \{\s*connectCodes\.rotate\(\)\s*\} finally \{\s*sealTerminus\.endSessions\(/)
   })
 
   it('a slow phone is seen on the relay line, not only on loopback', () => {
     expect(main).toContain('canvasLink.backlog()')
   })
 
-  it('both ways a link is made carry the code', () => {
-    expect(main.match(/connectCodes\.encoded\(\)/g)).toHaveLength(2)
+  it('only the link on the owner\'s own screen carries the code', () => {
+    expect(main.match(/connectCodes\.encoded\(\)/g)).toHaveLength(1)
+    const handoff = main.slice(main.indexOf('pairingUrlFor: (token) => {'))
+    expect(handoff.slice(0, handoff.indexOf('const factors'))).not.toContain('connectCode')
   })
 })
 

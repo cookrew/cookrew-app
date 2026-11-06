@@ -101,6 +101,15 @@ export const pairingUrl = (input: PairingUrlInput): string | null => {
 }
 
 /**
+ * The same link without its connect code, for anywhere it gets printed.
+ *
+ * Text in a pane reaches a phone through the relay in the clear, and the code is
+ * worth nothing once the relay has seen it. The link still pairs; only the QR on
+ * the owner's own screen carries the code.
+ */
+export const withoutConnectCode = (url: string): string => url.replace(new RegExp(`&${CODE_FRAGMENT}=[^&]*`), '')
+
+/**
  * The token out of a fragment, or null.
  *
  * The inverse belongs beside the assembly so the two cannot drift: the

@@ -218,7 +218,8 @@ function openSession(deps: SessionDeps): LiveSession {
     if (closed) return
     const plain = encodeFrame(frame)
     queued += plain.length
-    if (pressure() > SEAL_OUTBOX_HARD) return close('the phone fell too far behind')
+    // Only this session's own bytes: the line is shared, and a big plain download on it is not this phone's fault.
+    if (retained + queued > SEAL_OUTBOX_HARD) return close('the phone fell too far behind')
     tail = tail.then(() => put(plain)).catch((error: unknown) => close(`sealing failed: ${String(error)}`))
     if (!waiting && pressure() > SEAL_OUTBOX_HIGH) {
       waiting = true
@@ -469,6 +470,8 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     if (code === null) return reply(response, 403, { error: 'no such code' })
     const accepted = await acceptHandshake(code, body as unknown as SealHello)
     if (accepted === null) return reply(response, 400, { error: 'not a hello' })
+    // A rotation during that await has already cleared `pending`, so this hello would outlive it.
+    if (deps.codeFor(body.id as string) === null) return reply(response, 403, { error: 'no such code' })
     if (pending.size >= SEAL_PENDING_MAX) pending.delete(pending.keys().next().value as string)
     pending.set(accepted.session.id, { accepted, outer, until: now() + SEAL_PENDING_MS })
     reply(response, 200, { session: accepted.session.id, accept: accepted.accept })

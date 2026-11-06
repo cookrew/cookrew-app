@@ -182,8 +182,11 @@ export function ownerSecretPaths(
     path.join(base, 'remote-control.json'),
     // What a phone's sealed Mac password opens under (remote-unlock.ts).
     path.join(base, 'unlock-key.json'),
+    path.join(base, 'unlock-key.json.tmp'),
     // What the sealed session's keys rest on (connect-code.ts).
     path.join(base, 'connect-code'),
+    // writeFileAtomic's way there: a seat that polls could catch it, and a crash leaves it.
+    path.join(base, 'connect-code.tmp'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
     // plugin-providers.json, logins.json, plugin auth — is every upstream key
     // the owner holds; the Sous ledger and its Magpie facts; the owner's

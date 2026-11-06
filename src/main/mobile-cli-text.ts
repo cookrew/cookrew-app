@@ -3,6 +3,7 @@
 
 import type { EndpointKind, MobileEndpoint } from './mobile-endpoints'
 import type { PairingHandout } from '../shared/account-v2'
+import { withoutConnectCode } from '../shared/pairing-url'
 
 /**
  * THE PAIRING URL, PRINTED FIRST — and the direct ones underneath, unchanged.
@@ -20,7 +21,7 @@ const pairingLines = (pairing: PairingHandout | null | undefined): string[] => {
   if (!pairing || pairing.via !== 'relay') return []
   return [
     '  From anywhere, through cookrew.dev',
-    `    ${pairing.url}`,
+    `    ${withoutConnectCode(pairing.url)}`,
     '    The token is after the # — cookrew.dev never sees it.',
     ''
   ]
@@ -177,7 +178,7 @@ export function renderRotated(
   endpoints: MobileEndpoint[],
   pairing?: PairingHandout | null
 ): string {
-  const relay = pairing && pairing.via === 'relay' ? [`  ${pairing.url}`] : []
+  const relay = pairing && pairing.via === 'relay' ? [`  ${withoutConnectCode(pairing.url)}`] : []
   return [
     'Pairing token rotated. Every previously paired device is now unpaired',
     'and will ask to re-pair.',

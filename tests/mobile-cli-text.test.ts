@@ -20,6 +20,26 @@ const withTailnet = mobileEndpoints({
   token: 'tok'
 })
 
+describe('the connect code stays out of a pane', () => {
+  const pairing: PairingHandout = {
+    via: 'relay',
+    url: 'https://cookrew.dev/relay/@drej/desktop/mac-1/#pair=tok&code=SECRET',
+    desktopName: 'Mac'
+  }
+
+  it('the help prints the pairing link without it', () => {
+    const text = renderMobileHelp({ endpoints: withTailnet, pairing, secure: true, uncovered: [], tailnet: true })
+    expect(text).toContain('#pair=tok')
+    expect(text).not.toContain('SECRET')
+  })
+
+  it('a rotation prints the pairing link without it', () => {
+    const text = renderRotated(withTailnet, pairing)
+    expect(text).toContain('#pair=tok')
+    expect(text).not.toContain('SECRET')
+  })
+})
+
 describe('renderMobileHelp', () => {
   it('groups the URLs under a heading that says when to use them', () => {
     const text = renderMobileHelp({
