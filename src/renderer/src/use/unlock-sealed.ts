@@ -8,7 +8,7 @@ import type { UnlockApi } from './unlock-flow'
  * relay prefix: the terminus hands it straight to the server. The pairing token rides
  * in here too, so on this path the relay sees neither it nor the sealed password.
  */
-export function sealedUnlockApi(client: SealClient, auth: () => Record<string, string>): UnlockApi {
+export function sealedUnlockApi(client: SealClient, auth: () => Record<string, string>, scope: (path: string) => string = (path) => path): UnlockApi {
   const post = async <T>(path: string, body: unknown): Promise<T> => {
     const answer = await client.request({ method: 'POST', path, headers: { ...auth(), 'content-type': 'application/json' }, body: JSON.stringify(body) })
     const said = JSON.parse(new TextDecoder().decode(answer.body)) as { ok?: unknown; error?: unknown }
@@ -16,7 +16,7 @@ export function sealedUnlockApi(client: SealClient, auth: () => Record<string, s
     throw new Error(typeof said.error === 'string' ? said.error : `The Mac could not answer (${answer.status}).`)
   }
   return {
-    begin: () => post<UnlockBegin>(`${USE_SOURCES_PATH}/unlock/begin`, {}),
-    send: (sealed) => post<UnlockAnswer>(`${USE_SOURCES_PATH}/unlock`, { sealed })
+    begin: () => post<UnlockBegin>(scope(`${USE_SOURCES_PATH}/unlock/begin`), {}),
+    send: (sealed) => post<UnlockAnswer>(scope(`${USE_SOURCES_PATH}/unlock`), { sealed })
   }
 }

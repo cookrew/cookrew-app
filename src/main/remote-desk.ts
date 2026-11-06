@@ -440,6 +440,13 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       if (holder && (holder.who.key === who.key || who.here)) ended(card, `ended by ${who.name}`)
     },
     setSwitch(on) {
+      // First: nothing below may stand between pressing off and what is kept going.
+      let saved = true
+      try {
+        deps.switchMemory?.write(on)
+      } catch {
+        saved = false
+      }
       if (on !== switchOn) {
         switchOn = on
         if (on) deps.stayUp?.start()
@@ -449,13 +456,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
         deps.refreshCards()
         syncHost()
       }
-      // Even when nothing moved: what is kept may not match what this run reads.
-      try {
-        deps.switchMemory?.write(on)
-      } catch {
-        return refuse(on ? 'Remote control is on, but it could not be saved: it turns off at the next restart.' : 'Remote control is off, but it could not be saved: it may come back at the next restart.')
-      }
-      return { ok: true }
+      if (saved) return { ok: true }
+      return refuse(on ? 'Remote control is on, but it could not be saved: it turns off at the next restart.' : 'Remote control is off, but it could not be saved: it may come back at the next restart.')
     },
     restoreSwitch() {
       if (!mac || switchOn) return

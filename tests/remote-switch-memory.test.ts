@@ -6,7 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { sealedSwitchMemory } from '../src/main/remote-switch-memory'
-import { confirmSwitchOn } from '../src/main/remote-switch-confirm'
+import { confirmSwitchOn, singleConfirm } from '../src/main/remote-switch-confirm'
 
 let dir = ''
 let file = ''
@@ -108,11 +108,22 @@ describe('turning it on', () => {
     expect(await confirmSwitchOn(deps({ canTouch: () => false, ask: async () => false }))).toBe(false)
   })
 
+  it('raises one prompt at a time: repeated presses cannot pile them up', async () => {
+    let raised = 0
+    let answer = (): void => undefined
+    const confirm = singleConfirm(deps({ touch: () => new Promise<void>((resolve) => { raised += 1; answer = resolve }) }))
+    const first = confirm()
+    expect(await confirm()).toBe(false)
+    answer()
+    expect(await first).toBe(true)
+    expect(raised).toBe(1)
+  })
+
   it('the press itself goes through it, before anything changes', () => {
     const main = readFileSync('src/main/index.ts', 'utf8')
     const handler = main.slice(main.indexOf("'use:remote-switch'"))
-    expect(handler.indexOf('confirmSwitchOn(')).toBeGreaterThan(-1)
-    expect(handler.indexOf('confirmSwitchOn(')).toBeLessThan(handler.indexOf('unlockDoor.reopen()'))
-    expect(handler.indexOf('confirmSwitchOn(')).toBeLessThan(handler.indexOf('remoteDesk.setSwitch(on)'))
+    expect(handler.indexOf('confirmSwitch()')).toBeGreaterThan(-1)
+    expect(handler.indexOf('confirmSwitch()')).toBeLessThan(handler.indexOf('unlockDoor.reopen()'))
+    expect(handler.indexOf('confirmSwitch()')).toBeLessThan(handler.indexOf('remoteDesk.setSwitch(on)'))
   })
 })

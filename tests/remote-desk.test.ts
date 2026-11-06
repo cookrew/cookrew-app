@@ -246,6 +246,14 @@ describe('the machine switch', () => {
     expect(r.host).toHaveBeenLastCalledWith(expect.objectContaining({ switchOn: true }))
   })
 
+  it('clears what is kept before anything that could fail on the way', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory, host: () => { throw new Error('tray') } })
+    r.desk.restoreSwitch = r.desk.restoreSwitch
+    expect(() => r.desk.setSwitch(false)).not.toThrow()
+    expect(memory.held).toBe(false)
+  })
+
   it('there is nothing to restore off a Mac', () => {
     const r = rig({ platform: 'linux', switchMemory: remembering(true) })
     r.desk.restoreSwitch()

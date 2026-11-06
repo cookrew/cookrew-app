@@ -15,6 +15,10 @@ import type { SecretSealer } from './secrets-store'
  * THE LIMITS: on a dev run, code run as the same unsigned Electron can open that key;
  * a signed build closes that. And a copy of the file taken while it was on would turn
  * it back on if put back after it was turned off. Taking the file away only turns it off.
+ *
+ * Reading it opens the keychain on the main thread, as secrets.migrate() already does at
+ * boot. With the app's own binary that asks nothing. After a build changes the binary,
+ * macOS can prompt, and on a locked Mac nobody answers until someone is there.
  */
 
 const ON = 'cookrew-remote-switch-on/1'

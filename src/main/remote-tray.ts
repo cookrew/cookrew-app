@@ -34,8 +34,8 @@ export function createRemoteTray(onStop: () => void, platform: string): RemoteTr
         Menu.buildFromTemplate([
           ...words.rows.map((label) => ({ label, enabled: false })),
           ...(words.awake ? [{ label: words.awake, enabled: false }] : []),
-          { type: 'separator' as const },
-          { label: 'Stop', click: onStop }
+          // Stop ends a session; with nobody on, it would only shut the owner's own phone out.
+          ...(words === SWITCH_ONLY ? [] : [{ type: 'separator' as const }, { label: 'Stop', click: onStop }])
         ])
       )
     },

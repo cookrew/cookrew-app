@@ -9,6 +9,7 @@ import { hostOutsideTheMac, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-u
 import { cookrew } from '../api'
 import { clientBase } from '../api-base'
 import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
+import { seated } from '../device-seat'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
 import { prepareUnlock, runUnlock, type UnlockFlowDeps } from './unlock-flow'
@@ -155,7 +156,7 @@ function useUnlockWay(attempt: number): Way {
       .then((opened) => {
         client = opened
         if (!alive) return opened.close()
-        setWay({ kind: 'ready', deps: flowFor(sealedUnlockApi(opened, authHeaders)) })
+        setWay({ kind: 'ready', deps: flowFor(sealedUnlockApi(opened, authHeaders, seated)) })
       })
       .catch((failure: unknown) => {
         if (!alive) return
@@ -203,7 +204,11 @@ function UnlockSheetBody(): React.JSX.Element {
   }
 
   const unlock = async (): Promise<void> => {
-    if (!deps || !shown) return
+    // Nothing to send yet: the way there failed, and this press is the retry.
+    if (!deps || !shown) {
+      setError(null)
+      return setAttempt((tries) => tries + 1)
+    }
     setBusy(true)
     setError(null)
     try {

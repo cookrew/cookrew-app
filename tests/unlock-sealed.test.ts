@@ -25,6 +25,12 @@ describe('sealedUnlockApi', () => {
     expect(line.asked[0]).toMatchObject({ method: 'POST', path: '/api/use/sources/unlock/begin', headers: { authorization: 'Bearer t' } })
   })
 
+  it('names the phone\'s seat, as the direct path does', async () => {
+    const line = client(200, { ok: true, key: 'k', challenge: 'c' })
+    await sealedUnlockApi(line, auth, (path) => `${path}?seat=w2`).begin()
+    expect(line.asked[0].path).toBe('/api/use/sources/unlock/begin?seat=w2')
+  })
+
   it('sends what was sealed and nothing else', async () => {
     const line = client(200, { ok: true, outcome: 'unlocked' })
     await sealedUnlockApi(line, auth).send('e.box')

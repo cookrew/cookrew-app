@@ -18,6 +18,20 @@ export interface SwitchConfirmDeps {
   ask(): Promise<boolean>
 }
 
+/** One prompt at a time: an agent pressing the window must not stack them up. */
+export function singleConfirm(deps: SwitchConfirmDeps): () => Promise<boolean> {
+  let asking = false
+  return async () => {
+    if (asking) return false
+    asking = true
+    try {
+      return await confirmSwitchOn(deps)
+    } finally {
+      asking = false
+    }
+  }
+}
+
 export async function confirmSwitchOn(deps: SwitchConfirmDeps): Promise<boolean> {
   if (!deps.canTouch()) return deps.ask()
   try {

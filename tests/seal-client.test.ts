@@ -181,6 +181,25 @@ describe('openSeal', () => {
     await expect(client.request({ method: 'GET', path: '/a', headers: {} })).rejects.toThrow(/ended|forged|tampered/i)
   })
 
+  it('needs nothing newer than the browsers X25519 runs on', async () => {
+    const { url, code } = await bed()
+    const any = AbortSignal.any
+    Object.defineProperty(AbortSignal, 'any', { value: undefined, configurable: true })
+    try {
+      const client = await open(url, code)
+      expect((await client.request({ method: 'GET', path: '/a', headers: {} })).status).toBe(200)
+    } finally {
+      Object.defineProperty(AbortSignal, 'any', { value: any, configurable: true })
+    }
+  })
+
+  it('a finish that fails for its own reasons is not called a bad code', async () => {
+    const { url, code } = await bed({}, (path) => (path.startsWith('/~seal/finish') ? 502 : null))
+    const failed = await open(url, code).catch((error: unknown) => error)
+    expect(failed).toBeInstanceOf(Error)
+    expect(failed).not.toBeInstanceOf(SealRefusedError)
+  })
+
   it('close fails what is waiting and stops listening', async () => {
     const stuck: BridgeDialer = () => ({ write: () => undefined, end: () => undefined, destroy: () => undefined })
     const { url, code, terminus } = await bed({ dial: stuck })

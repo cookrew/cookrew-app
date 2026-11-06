@@ -82,7 +82,8 @@ async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch): Promise<
   const done = await started.finish(answer.accept).catch(() => null)
   if (done === null) throw new SealRefusedError('proof')
   const finish = await post('/~seal/finish', { session: answer.session, ...done.finish })
-  if (!finish.ok) throw new SealRefusedError('proof')
+  if (finish.status === 403) throw new SealRefusedError('proof')
+  if (!finish.ok) throw new Error(`The sealed session did not open (${finish.status}).`)
   return done.session
 }
 
@@ -119,7 +120,12 @@ export async function openSeal(deps: SealClientDeps): Promise<SealClient> {
       for (const frame of frames) records.push(await session.seal(encodeFrame(frame)))
       const hung = new AbortController()
       const timer = setTimeout(() => hung.abort(), deps.upMs ?? UP_MS)
-      const up = await fetchFn(deps.url(`/~seal/up?s=${session.id}`), { method: 'POST', body: concat(...records.map(encodeRecord)) as BodyInit, signal: AbortSignal.any([stop.signal, hung.signal]) }).finally(() => clearTimeout(timer))
+      const release = (): void => hung.abort()
+      stop.signal.addEventListener('abort', release, { once: true })
+      const up = await fetchFn(deps.url(`/~seal/up?s=${session.id}`), { method: 'POST', body: concat(...records.map(encodeRecord)) as BodyInit, signal: hung.signal }).finally(() => {
+        clearTimeout(timer)
+        stop.signal.removeEventListener('abort', release)
+      })
       if (!up.ok) throw new Error('The sealed session has ended.')
     })
     // Numbered records with a gap are never read past it, so a lost POST ends the session.
