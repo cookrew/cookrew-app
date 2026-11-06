@@ -11,7 +11,8 @@ import { concat, SEAL_RECORD_MAX, type SealRecord, type SealSession } from './ca
  *   RESEND THE SAME BYTES. A resealed record has a new number, and the old one
  *   stays a gap the inbox waits on for ever.
  *   KEEP IN-FLIGHT RECORDS UNDER THE WINDOW, and treat `ahead` as slow down.
- *   SEND A SEALED `ping` on a clock. Silence is otherwise all a truncation looks like.
+ *   SEND A SEALED `ping` on a clock, both ways. Silence is otherwise all a truncation
+ *   looks like, and a phone that only reads is ended for going quiet.
  *   NEVER REPLAY a non-idempotent request by itself after a new handshake.
  *   CAP STREAMS, AND RATE LIMIT HANDSHAKES before keeping anything for one.
  */
