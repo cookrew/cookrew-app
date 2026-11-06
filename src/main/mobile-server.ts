@@ -67,6 +67,7 @@ import {
 } from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
 import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
+import { isSealPath, routeSeal, type SealTerminus } from './canvas-seal-terminus'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
 import { certFingerprint, reachAnswer, reachCard, type PublishState } from './reach'
 import { applyCompanionCors } from './companion-cors'
@@ -323,6 +324,8 @@ export interface MobileServerDeps {
   wallToken?: string
   /** Built renderer bundle — the full desktop canvas UI served to phones. */
   rendererDir: string
+  /** The sealed session's end, once this Mac holds connect codes. */
+  sealTerminus?: () => SealTerminus | undefined
   /** electron-vite renderer URL; proxied to phones in development. */
   rendererDevUrl?: string
   /**
@@ -1254,6 +1257,10 @@ export async function handle(
   if (applyCompanionCors(request, response, allowedCompanionOrigins(deps.identity?.registryOrigin() ?? ''))) {
     return
   }
+
+  // The sealed session reads the bridge's own device and base headers, so it goes
+  // first, and it answers nothing the bridge did not carry (canvas-seal-terminus.ts).
+  if (isSealPath(url.pathname)) return routeSeal(request, response, deps.sealTerminus?.())
 
   // FIRST, and before any route can read them: the caller's own
   // `x-cookrew-device` headers are taken off the request whatever they say, so

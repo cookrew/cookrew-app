@@ -64,6 +64,9 @@ export interface BridgeResponse {
   readonly headers: Record<string, string>
   onData(listener: (chunk: Buffer) => void): void
   onEnd(listener: () => void): void
+  /** Hold the answer back while whoever reads it catches up. */
+  pause?(): void
+  resume?(): void
 }
 
 /** One local request in flight. */
@@ -157,7 +160,9 @@ export const loopbackDialer =
           status: response.statusCode ?? 502,
           headers: flattenHeaders(response.headers),
           onData: (listener) => void response.on('data', (chunk: Buffer) => listener(chunk)),
-          onEnd: (listener) => void response.on('end', listener)
+          onEnd: (listener) => void response.on('end', listener),
+          pause: () => void response.pause(),
+          resume: () => void response.resume()
         })
       }
     )
