@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { nameFromPrompt } from '../src/shared/agent-name'
 import { boxPin, boxTargetId, heldAfter, mentionTarget, promptTargetOf, releaseAfter, zoomMoveKey, type Release } from '../src/renderer/src/prompt/prompt-target'
 import { draftKey, getDraft, setDraft, subscribeDrafts } from '../src/renderer/src/prompt/prompt-draft'
+import { earClosed } from '../src/renderer/src/prompt/dictation'
 import { lastHarness, rememberHarness } from '../src/renderer/src/prompt/harness-pref'
 
 describe('nameFromPrompt', () => {
@@ -149,6 +150,50 @@ describe('what pins the box', () => {
   })
   it('a hold on an agent that is gone moves to whoever the box carries', () => {
     expect(heldAfter({ id: 'gone' }, { boxId: 'a2', heldWords: 'fix it', known })).toEqual({ id: 'a2' })
+  })
+})
+
+// Owner, 2026-11-06: a ⌘ held a beat with nothing said left the box on that
+// agent for good; opening another card did not move it, only a reload did.
+describe('an ear that closes', () => {
+  const known = (id: string): boolean => ['iwatch', 'desk'].includes(id)
+  /** The box's side of a close, as GlobalPrompt.tsx wires it. */
+  const boxWith = (aim: { id: string | null } | null) => {
+    const box = {
+      aim,
+      said: [] as string[],
+      onEnd: () => {
+        box.aim = null
+      },
+      onFinal: (words: string) => {
+        box.said.push(`words:${words}`)
+      },
+      onError: (message: string) => {
+        box.said.push(`error:${message}`)
+      }
+    }
+    return box
+  }
+
+  it('on silence, lets go of the agent: the box follows the view again', () => {
+    const box = boxWith({ id: 'iwatch' })
+    earClosed('', [], null, box)
+    expect(box.aim).toBeNull()
+    expect(box.said).toEqual([])
+    expect(boxTargetId({ viewed: 'desk', pin: boxPin(box.aim, null, ''), released: null, known })).toBe('desk')
+  })
+
+  it('on silence with nobody aimed at, does not keep the box on a new agent', () => {
+    const box = boxWith({ id: null })
+    earClosed('   ', [], null, box)
+    expect(boxTargetId({ viewed: 'desk', pin: boxPin(box.aim, null, ''), released: null, known })).toBe('desk')
+  })
+
+  it('with words or an error, lets go too; the words first, so an error after them stands', () => {
+    const box = boxWith({ id: 'iwatch' })
+    earClosed(' fix it ', ['fix it'], 'the mic dropped', box)
+    expect(box.aim).toBeNull()
+    expect(box.said).toEqual(['words:fix it', 'error:the mic dropped'])
   })
 })
 
