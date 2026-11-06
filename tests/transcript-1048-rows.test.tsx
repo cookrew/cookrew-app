@@ -138,9 +138,11 @@ describe('the overlay with 1,048 rows', () => {
       for (let n = 0; n < 40; n += 1) transcriptIdentitySpace(identities, loaded)
       return performance.now() - started
     }
+    // The best of five: one sample of a few milliseconds measures the scheduler.
+    const bestMs = (count: number): number => Math.min(...Array.from({ length: 5 }, () => spaceMs(count)))
     spaceMs(128) // warm
-    const small = spaceMs(131)
-    const big = spaceMs(ROWS)
+    const small = bestMs(131)
+    const big = bestMs(ROWS)
     expect(
       transcriptIdentitySpace(
         Array.from({ length: ROWS }, (_, at) => at + 1),
