@@ -171,6 +171,8 @@ import { createReachPublisher, type ReachPublisher } from './reach'
 import { createNetworkWatch } from './network-watch'
 import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
+import { createSealTerminus } from './canvas-seal-terminus'
+import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
 import { mintWatchInvite, registerAccountIpc } from './account-ipc'
 import type { AccountDoor, LoginAudit } from './login-cli'
@@ -1358,7 +1360,8 @@ const currentPairingHandout = (): PairingHandout | null =>
     },
     registryOrigin: () => registryOrigin(),
     endpoints: () => mobileEndpointList(),
-    pairingToken: () => activePairingTokenValue() ?? pairingToken
+    pairingToken: () => activePairingTokenValue() ?? pairingToken,
+    connectCode: () => connectCodes.encoded()
   })
 let reachPublisher: ReachPublisher | null = null
 
@@ -1409,6 +1412,16 @@ canvasLink.onFrame(canvasBridge.frame)
 // A line that ended takes every exchange riding it with it; a local request
 // left running would be an event stream nobody will ever read again.
 canvasLink.onDrop(canvasBridge.reset)
+
+// The sealed session (canvas-seal-terminus.ts). The bridge reads an answer as fast
+// as loopback gives it, so a slow phone only shows up on the relay line itself.
+const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
+const sealTerminus = createSealTerminus({
+  codeFor: (id) => connectCodes.codeFor(id),
+  dial: loopbackDialer(MOBILE_PORT),
+  socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog(),
+  log: (message) => console.error(`[cookrew] ${message}`)
+})
 
 /**
  * The idle lock covers the OWNER'S RENDERER and nothing else: agents keep
@@ -1485,7 +1498,8 @@ const requests = new Requests({
   // ALLOW's own half (R2): this phone gets a token of its own, and the URL
   // that carries it is sealed to the key the request arrived with. The root
   // pairing credential never leaves this process for a device that asked
-  // through the queue.
+  // through the queue. Nor does the connect code: that key came through the
+  // registry and the owner has nothing to compare it with (connect-code.ts).
   reach: {
     admit: (device) => admittedDevices.admit(device),
     pairingUrlFor: (token) => {
@@ -7534,7 +7548,15 @@ app.whenReady().then(() => {
       watchPairing.unpair()
       // Whoever came in on the old token: a socket outlives the token that opened it.
       remoteDesk.forgetDevice('root')
-      return rotateActivePairingToken()
+      const rotated = rotateActivePairingToken()
+      // The same revocation: whoever holds the old code is out with the old token.
+      // Last, because a code that cannot be saved throws, and the owner should hear it.
+      try {
+        connectCodes.rotate()
+      } finally {
+        sealTerminus.endSessions('the pairing was rotated')
+      }
+      return rotated
     },
     pairingHandout: currentPairingHandout,
     listWorkspaces,
@@ -7829,6 +7851,7 @@ app.whenReady().then(() => {
     // tailnet peer gets this bundle instead, because the unbundled graph is
     // 159 dependent requests and a relayed link never finishes them.
     rendererDir: path.join(dirname, '../renderer'),
+    sealTerminus: () => sealTerminus,
     rendererDevUrl: process.env.ELECTRON_RENDERER_URL,
     rendererSrcDir: path.join(app.getAppPath(), 'src/renderer/src')
   })
@@ -8040,6 +8063,7 @@ app.on('before-quit', (event) => {
   // owner's phone a name whose Mac is quitting — a downlink the process drops
   // silently is a relay that claims this desktop for as long as it takes the
   // pulse to notice.
+  sealTerminus.close()
   canvasLink.stop()
   store.flush()
   events.flush()

@@ -527,6 +527,51 @@ describe('keeping it bounded', () => {
     await until(() => calls[0].resumed > 0, 'the answer to resume')
   })
 
+  it('a line full of someone else\'s bytes waits, and does not end the session', async () => {
+    const { phone: start, calls, terminus } = await bed({ auto: false, deps: { socketBacklog: () => SEAL_OUTBOX_HARD * 2 } })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    calls[0].answer(200)
+    calls[0].chunk('x')
+    await until(() => calls[0].paused > 0, 'the answer to pause')
+    await until(() => phone.text(1) === 'x', 'the record')
+    expect(terminus.stats().sessions).toBe(1)
+    expect(calls[0].destroyed).toBe(false)
+  })
+
+  it('a relay cannot pile replays onto a line that has not drained', async () => {
+    const line = { writableLength: 0 }
+    const { origin, phone: start, calls, terminus } = await bed({ auto: false, deps: { socketBacklog: () => line.writableLength } })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    calls[0].answer(200)
+    calls[0].chunk('x')
+    await until(() => phone.text(1) === 'x', 'the record')
+    line.writableLength = SEAL_OUTBOX_HIGH + 1
+    const again = `${origin}/~seal/down?s=${phone.session?.id}&from=0`
+    expect((await fetch(again)).status).toBe(503)
+    expect(terminus.stats().sessions).toBe(1)
+    calls[0].chunk('y')
+    await until(() => phone.text(1) === 'xy', 'the phone\'s own line to stay up')
+    line.writableLength = 0
+    const stop = new AbortController()
+    expect((await fetch(again, { signal: stop.signal })).status).toBe(200)
+    stop.abort()
+  })
+
+  it('a phone that never reads is still let go once its own bytes pass the limit', async () => {
+    const { phone: start, calls, terminus } = await bed({ auto: false })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    calls[0].answer(200)
+    const slab = 'x'.repeat(SEAL_OUTBOX_HIGH)
+    for (let sent = 0; sent <= SEAL_OUTBOX_HARD; sent += slab.length) calls[0].chunk(slab)
+    await until(() => terminus.stats().sessions === 0, 'the session to end')
+  })
+
   it('a device that keeps shaking hands slows itself, not the others', async () => {
     const { origin, code } = await bed()
     const { hello } = await startHandshake(code)
@@ -588,6 +633,40 @@ describe('keeping it bounded', () => {
     }
     expect(terminus.stats().sessions).toBe(SEAL_MAX_SESSIONS)
     expect((await first.send(open(1))).status).toBe(404)
+  })
+
+  it('a rotated code ends who came in on the old one, and the terminus stays up', async () => {
+    const { phone: start, terminus, calls } = await bed({ auto: false })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    terminus.endSessions('the code was rotated')
+    expect(calls[0].destroyed).toBe(true)
+    expect(terminus.stats().sessions).toBe(0)
+    expect((await phone.send(open(2))).status).toBe(404)
+    await start()
+    expect(terminus.stats().sessions).toBe(1)
+  })
+
+  it('a handshake begun before the rotation does not finish after it', async () => {
+    const { origin, code, terminus } = await bed()
+    const started = await startHandshake(code)
+    const hello = (await (await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(started.hello) })).json()) as { session: string; accept: { e: string; proof: string } }
+    terminus.endSessions('the code was rotated')
+    const done = await started.finish(hello.accept)
+    expect((await fetch(`${origin}/~seal/finish`, { method: 'POST', body: JSON.stringify({ session: hello.session, ...done!.finish }) })).status).toBe(404)
+  })
+
+  it('a rotation that lands mid-hello leaves nothing to finish', async () => {
+    const code = newConnectCode()
+    const id = await connectCodeId(code)
+    let asked = 0
+    const codeFor = (named: string): Uint8Array | null => (named === id && (asked += 1) === 1 ? code : null)
+    const { origin, terminus } = await bed({ deps: { codeFor } })
+    const started = await startHandshake(code)
+    const said = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(started.hello) })
+    expect(said.status).toBe(403)
+    expect(terminus.stats().pending).toBe(0)
   })
 
   it('close ends everything', async () => {

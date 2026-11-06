@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AuthError, authStore, REAUTH_COPY, reauthMessage, tokenFromInput } from './auth-gate'
+import { AuthError, authStore, REAUTH_COPY, reauthMessage, tokenFromInput, connectCodeFromInput } from './auth-gate'
 import { checkAuth } from './remote-api'
 import './auth-gate.css'
 
@@ -46,6 +46,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
         return
       }
       authStore().save(token)
+      authStore().saveConnectCode(connectCodeFromInput(pasted))
       setPasted('')
       if (scope === 'read-only') {
         setError(null)
