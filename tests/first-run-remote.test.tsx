@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RemoteRowsView, remoteSteps, type RemoteRowsViewProps } from '../src/renderer/src/first-run/RemoteRows'
+import { RemoteRowsView, effectiveRemoteState, remoteRestartAction, remoteSteps, type RemoteRowsViewProps } from '../src/renderer/src/first-run/RemoteRows'
 import { REMOTE_SETUP_COPY } from '../src/shared/first-run-copy'
 import type { RemoteAccess, RemoteBuild, RemoteState, RemoteStateId } from '../src/shared/remote-access'
 
@@ -35,6 +35,12 @@ describe('remoteSteps', () => {
 
   it('a grant macOS has not applied yet needs a restart, not another trip to Settings', () => {
     expect(remoteSteps(access('needs-restart')).screen).toBe('restart')
+  })
+
+  it('locked plus a pending restart still exposes the restart action', () => {
+    const pending = access('locked', {}, { then: 'needs-restart' })
+    expect(effectiveRemoteState(pending).id).toBe('needs-restart')
+    expect(remoteRestartAction(pending)?.id).toBe('restart')
   })
 
   it('reads through a lock, a sleeping display and what comes after them', () => {
@@ -90,6 +96,11 @@ describe('the section', () => {
   it('a build that cannot restart itself offers no press it cannot keep', () => {
     const byHand = access('needs-restart', {}, { build: { ...build, restart: 'by-hand' } })
     expect(draw({ access: byHand })).not.toContain(`>${REMOTE_SETUP_COPY.RESTART}<`)
+  })
+
+  it('disables every remote action while the first-run request is busy', () => {
+    const html = draw({ busy: true })
+    expect(html.match(/class="fr-fix"[^>]*disabled/g)?.length).toBeGreaterThanOrEqual(3)
   })
 
   it('the switch says all of what it allows, agents included', () => {

@@ -18,35 +18,37 @@ export const SWITCH_MEANS = 'Your paired devices can unlock this Mac with its pa
 /** What was pressed is what is sent: two surfaces show this switch, and either may be behind the other. */
 export const switchAnswer = (set: (on: boolean) => Promise<RemoteAnswer>, on: boolean): Promise<RemoteAnswer> => set(on)
 
-export function useRemoteSwitch(active: boolean, onFlipped?: () => void): { facts: RemoteControlFacts | null; error: string | null; flip: (on: boolean) => void } {
+export function useRemoteSwitch(active: boolean, onFlipped?: () => void): { facts: RemoteControlFacts | null; error: string | null; busy: boolean; flip: (on: boolean) => void } {
   const [facts, setFacts] = useState<RemoteControlFacts | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (!active) return
     void cookrew().remoteAccess?.().then((answer) => setFacts(accessOf(answer)?.control ?? null)).catch(() => undefined)
   }, [active])
   const flip = (on: boolean): void => {
     const set = cookrew().setRemoteSwitch
-    if (!set) return
+    if (!set || busy) return
+    setBusy(true)
     void switchAnswer(set, on).then((answer) => {
       setError(answer.ok ? null : answer.error)
       // A refusal can still mean it moved: on for this run, and not saved.
       if (!answer.ok) return void cookrew().remoteAccess?.().then((next) => setFacts(accessOf(next)?.control ?? null))
       setFacts((now) => (now ? { ...now, switchOn: on } : now))
       onFlipped?.()
-    })
+    }).finally(() => setBusy(false))
   }
-  return { facts, error, flip }
+  return { facts, error, busy, flip }
 }
 
 /** The ⋯ menu's row. */
 export function RemoteSwitchRow(): React.JSX.Element | null {
   const settable = typeof cookrew().setRemoteSwitch === 'function'
-  const { facts, flip } = useRemoteSwitch(settable)
+  const { facts, busy, flip } = useRemoteSwitch(settable)
   if (!settable || !facts?.available) return null
   const words = facts.switchOn ? facts.unlockWords?.join(' ') : undefined
   return (
-    <button type="button" className={`cr-more-item${words ? ' tall' : ''}${facts.switchOn ? ' on' : ''}`} role="switch" aria-checked={facts.switchOn} title={SWITCH_MEANS} onClick={() => flip(!facts.switchOn)}>
+    <button type="button" disabled={busy} className={`cr-more-item${words ? ' tall' : ''}${facts.switchOn ? ' on' : ''}`} role="switch" aria-checked={facts.switchOn} title={SWITCH_MEANS} onClick={() => flip(!facts.switchOn)}>
       <CrIcon name="select" />
       <span className="cr-more-text">
         <span className="cr-more-label">{facts.switchOn ? 'Remote control: on' : SWITCH_LABEL}</span>

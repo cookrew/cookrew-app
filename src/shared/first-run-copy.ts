@@ -25,7 +25,7 @@ export const PREFLIGHT_COPY = {
 export const REMOTE_SETUP_COPY = {
   HEAD: 'Use this computer from your phone?',
   OPTIONAL: 'Optional',
-  LEDE: 'See this screen and use it from your own phone, from any network. Nothing is shared until you turn it on.',
+  LEDE: 'See this screen from your own phone, from any network. Turn on remote control if you also want paired devices and agents to click and type here.',
   SCREEN_NAME: 'Screen & System Audio Recording',
   SCREEN_DOES: 'Lets your phone see this screen.',
   ACCESSIBILITY_NAME: 'Accessibility',

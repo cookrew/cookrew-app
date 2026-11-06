@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react'
 import { REMOTE_SETUP_COPY as COPY } from '../../../shared/first-run-copy'
-import type { RemoteAccess, RemoteAction } from '../../../shared/remote-access'
+import type { RemoteAccess, RemoteAction, RemoteState } from '../../../shared/remote-access'
 import { remoteView } from '../../../shared/remote-access'
 import { cookrew } from '../api'
 import { useRemoteAccess, useRemoteActs } from '../use/remote-acts'
@@ -26,10 +26,19 @@ export interface RemoteSteps {
 }
 
 /** A lock and a sleeping display say nothing of the grant, so what comes after them does. */
-export function remoteSteps({ state, control }: RemoteAccess): RemoteSteps {
-  const stands = state.id === 'locked' ? state.then : state.id
+export function effectiveRemoteState(access: RemoteAccess): RemoteState {
+  const { state } = access
+  return state.id === 'locked' && state.then !== null ? { ...state, id: state.then, then: null } : state
+}
+
+export function remoteRestartAction(access: RemoteAccess): RemoteAction | null {
+  return remoteView(effectiveRemoteState(access), 'here').actions.find((candidate) => candidate.id === 'restart') ?? null
+}
+
+export function remoteSteps(access: RemoteAccess): RemoteSteps {
+  const stands = effectiveRemoteState(access).id
   const screen: RemoteGrant = stands === 'needs-screen-recording' ? 'off' : stands === 'needs-restart' ? 'restart' : 'on'
-  return { screen, accessibility: control.accessibility ? 'on' : 'off', on: control.switchOn }
+  return { screen, accessibility: access.control.accessibility ? 'on' : 'off', on: access.control.switchOn }
 }
 
 export interface RemoteRowsViewProps {
@@ -111,7 +120,7 @@ const OPEN: Readonly<Record<'screen' | 'accessibility', RemoteAction>> = {
 export function RemoteRows(): React.JSX.Element | null {
   const settable = typeof cookrew().setRemoteSwitch === 'function'
   const { access, read } = useRemoteAccess(settable)
-  const { error, flip } = useRemoteSwitch(settable, () => void read())
+  const { error, busy: switchBusy, flip } = useRemoteSwitch(settable, () => void read())
   const acts = useRemoteActs({ state: access?.state ?? null, onCheck: read })
   // Back from System Settings is when a grant has changed.
   useEffect(() => {
@@ -121,13 +130,13 @@ export function RemoteRows(): React.JSX.Element | null {
     return () => window.removeEventListener('focus', again)
   }, [read, settable])
   const restart = useCallback((): void => {
-    const action = access ? remoteView(access.state, 'here').actions.find((candidate) => candidate.id === 'restart') : undefined
+    const action = access ? remoteRestartAction(access) : null
     if (action) acts.act(action)
   }, [access, acts])
   if (!settable || !access?.control.available) return null
   return (
     <>
-      <RemoteRowsView access={access} busy={acts.busy} said={error ?? acts.note} onOpen={(pane) => acts.act(OPEN[pane])} onRestart={restart} onSwitch={flip} />
+      <RemoteRowsView access={access} busy={acts.busy || switchBusy} said={error ?? acts.note} onOpen={(pane) => acts.act(OPEN[pane])} onRestart={restart} onSwitch={flip} />
       {acts.confirm && <RemoteConfirmView confirm={acts.confirm} onYes={() => acts.answerConfirm(true)} onNo={() => acts.answerConfirm(false)} />}
     </>
   )
