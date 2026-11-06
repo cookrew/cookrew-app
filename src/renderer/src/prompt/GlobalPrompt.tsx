@@ -368,9 +368,9 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
       aimRef.current = to?.id ?? null
       setAim({ id: aimRef.current })
     },
+    onEnd: () => setAim(null),
     onFinal: (words, alternates) => {
       const id = aimRef.current
-      setAim(null)
       // The Mac's other ear may have caught "Sous" where the first one heard
       // another syllable: any reading addressed to Sous asks Sous.
       const readings = [words, ...alternates]
@@ -392,10 +392,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
           setError(`Sous did not answer: ${String(e)}`)
         })
     },
-    onError: (message) => {
-      setAim(null)
-      setError(message)
-    }
+    onError: setError
   })
   const hearing = dictation.phase === 'hearing'
   // Words held back while the agent asked a question go in once it is done asking.
