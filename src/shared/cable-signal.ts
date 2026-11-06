@@ -70,15 +70,29 @@ export function browserVerbKind(verb: string): Extract<CableSignalKind, 'write' 
     case 'key':
     case 'scroll':
     case 'evaluate':
+    case 'tap':
+    case 'swipe':
       return 'write'
     case 'text':
     case 'html':
     case 'snapshot':
+    case 'screenshot':
     case 'info':
       return 'read'
     default:
       return null
   }
+}
+
+const QUIET_USES = new Set(['status', 'tabs', 'downloads', 'tab-new', 'tab-select', 'tab-close'])
+
+/**
+ * Does this verb use the card it names? Using a card is the relation (owner,
+ * 2026-11-06, as asking is), so it wires, even where no traffic moves to light the
+ * cable. `create` wires by its own path. A verb nobody knows uses nothing.
+ */
+export function browserVerbUsesCard(verb: string): boolean {
+  return browserVerbKind(verb) !== null || QUIET_USES.has(verb)
 }
 
 /** Is this frame off the wire a signal? A stream is untrusted input like any other. */

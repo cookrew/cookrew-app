@@ -36,7 +36,7 @@ import { deliverToRecruit, type RecruitDeliveryOptions, type RecruitEvidence, ty
 import { PtyManager, multiplexer, sessionNameFor, type PtySession } from './pty'
 import { askRaw, askTerminal, decodeRawEscapes, waitForReady } from './ask'
 import { adoptRequestPictures } from './picture-adopt'
-import { browserVerbKind, noteVerbKind } from '../shared/cable-signal'
+import { browserVerbKind, browserVerbUsesCard, noteVerbKind } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
 import { cmdBrowserScoped } from './cli-browser'
 import {
@@ -916,21 +916,24 @@ export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): P
       : null
     if (error) throw new Error(error)
   }
+  // Resolved by name on the active canvas: the same browser the engine will drive.
+  const browser = name ? deps.store.nodeByName(name, 'browser') : undefined
+  // Using a card of your own canvas wires you to it. Before the verb, as an ask does:
+  // a use that is refused is still this agent at this card. Checked in memory first:
+  // this runs on every click of a browser session.
+  if (browser && browserVerbUsesCard(sub ?? '')) {
+    const ownCanvasIsActive = deps.store.ownerOf(me.id) === deps.store.focusedId
+    if (ownCanvasIsActive && !deps.isServed(me.id) && !deps.store.isConnected(me.id, browser.id)) {
+      wire(deps, me, browser.id, `browser ${sub}`)
+    }
+  }
   // Same repair for every other subcommand. These do not anchor a node, but the
   // id still names who is driving, and one identity per command beats two.
   const result = await deps.browserCommand(request.args, me.id)
   // The cable lights once the verb has run: driving the page is agent →
   // browser, reading it is browser → agent (shared/cable-signal browserVerbKind).
-  // Resolved by name on the active canvas — the same browser the engine drove.
   const kind = browserVerbKind(sub ?? '')
-  const browser = name ? deps.store.nodeByName(name, 'browser') : undefined
   if (kind && browser) {
-    // Driving or reading a page of your own canvas wires you to it. Checked
-    // in memory first: this runs on every click of a browser session.
-    const ownCanvasIsActive = deps.store.ownerOf(me.id) === deps.store.focusedId
-    if (ownCanvasIsActive && !deps.isServed(me.id) && !deps.store.isConnected(me.id, browser.id)) {
-      wire(deps, me, browser.id, `browser ${sub}`)
-    }
     deps.signal?.(kind === 'write' ? { from: me.id, to: browser.id, kind } : { from: browser.id, to: me.id, kind })
   }
   return result

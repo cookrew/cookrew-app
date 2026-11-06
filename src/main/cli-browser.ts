@@ -9,7 +9,7 @@
 // socket-server.ts · cmdBrowser, because there the page really does exist
 // only where the window looks.
 import type { BrowserNodeData, CliRequest, TerminalNodeData } from '../shared/model'
-import { browserVerbKind } from '../shared/cable-signal'
+import { browserVerbKind, browserVerbUsesCard } from '../shared/cable-signal'
 import { servedUseRefusal } from './use-commands'
 import { browserForCaller, type BrowserReachStore } from './browser-reach'
 
@@ -53,14 +53,16 @@ export async function cmdBrowserScoped(ctx: ScopedBrowserContext): Promise<strin
   // the engine was asked to drive, whatever the page does to its card while
   // the command is in flight (a rename, a title-driven move).
   const kind = browserVerbKind(sub ?? '')
-  const hit = kind && name ? find(name) : null
+  const hit = name && browserVerbUsesCard(sub ?? '') ? find(name) : null
+  // Using a card of your own canvas wires you to it, on screen or not. Before the
+  // verb, as an ask does: a use that is refused is still this agent at this card.
+  if (hit && !ctx.served && hit.workspaceId === ctx.store.ownerOf(ctx.me.id) && !isWired(ctx, hit.node.id)) {
+    ctx.wire(hit.node.id, `browser ${sub}`)
+  }
   const result = await ctx.browserCommand(ctx.args, ctx.me.id)
   // The cable lights once the verb has run: driving the page is agent →
   // browser, reading it is browser → agent (shared/cable-signal browserVerbKind).
   if (kind && hit) {
-    // Driving a page of your own canvas wires you to it — on screen or not.
-    const own = hit.workspaceId === ctx.store.ownerOf(ctx.me.id)
-    if (own && !ctx.served && !isWired(ctx, hit.node.id)) ctx.wire(hit.node.id, `browser ${sub}`)
     ctx.signal?.(
       kind === 'write' ? { from: ctx.me.id, to: hit.node.id, kind } : { from: hit.node.id, to: ctx.me.id, kind }
     )
