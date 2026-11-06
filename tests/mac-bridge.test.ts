@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 // THE MAC'S INPUT HAND (main/mac-bridge.ts), DRY: the real osascript helper
 // builds every event and posts none, so this never moves the owner's mouse.
 // It proves the JSON-line protocol, the closed vocabulary, and that one bad
@@ -62,5 +63,16 @@ describe.skipIf(process.platform !== 'darwin')('readMacListedApp', () => {
   it('answers with an app bundle, or with nothing when no app is behind the launch', async () => {
     const answer = await readMacListedApp()
     expect(answer === null || answer.endsWith('.app')).toBe(true)
+  })
+
+  it('finds the bundle in what macOS answers: a run under a terminal names that terminal', async () => {
+    const answer = await readMacListedApp()
+    if (process.env.TERM_PROGRAM === 'Cookrew') expect(answer).toMatch(/^\/.+\.app$/)
+  })
+
+  it('reads the path macOS keeps, not the pid: once the launcher has gone the pid names this process, and TCC still asks about the launcher', () => {
+    const source = readFileSync('src/main/mac-bridge.ts', 'utf8')
+    expect(source).toContain('responsibility_get_responsible_for_pid')
+    expect(source).not.toContain('responsibility_get_pid_responsible_for_pid')
   })
 })
