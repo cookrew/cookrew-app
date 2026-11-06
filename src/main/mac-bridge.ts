@@ -96,13 +96,23 @@ JSON.stringify({ locked: session.CGSSessionScreenIsLocked === true || session.kC
  * that app, and it follows the launch: started from a terminal it is the
  * terminal, whatever bundle the binary sits in. A child inherits it, so this
  * helper reads the same answer main would.
+ *
+ * The path and never the pid: once that terminal session has gone the pid names this
+ * process, while TCC goes on asking about the path. Reading the pid, the card said
+ * "turn on Electron" for a row that could never appear (measured 2026-11-06).
  */
 const LISTED_APP_SCRIPT = `
-ObjC.import('AppKit')
+ObjC.import('Foundation')
 ObjC.bindFunction('getpid', ['int', []])
-ObjC.bindFunction('responsibility_get_pid_responsible_for_pid', ['int', ['int']])
-const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier($.responsibility_get_pid_responsible_for_pid($.getpid()))
-app.isNil() || app.bundleURL.isNil() ? '' : app.bundleURL.path.js
+ObjC.bindFunction('responsibility_get_responsible_for_pid', ['int', ['int', 'void *', 'void *', 'void *', 'void *']])
+const pid = $.NSMutableData.dataWithLength(8)
+const unique = $.NSMutableData.dataWithLength(8)
+const room = $.NSMutableData.dataWithData($.NSData.alloc.initWithBase64EncodedStringOptions('ABAAAAAAAAA=', 0))
+const path = $.NSMutableData.dataWithLength(4096)
+const failed = $.responsibility_get_responsible_for_pid($.getpid(), pid.mutableBytes, unique.mutableBytes, room.mutableBytes, path.mutableBytes)
+const found = failed ? '' : $.NSString.alloc.initWithDataEncoding(path, $.NSUTF8StringEncoding).js.split(String.fromCharCode(0))[0]
+const bundle = /^(.*?\\.app)\\//.exec(found)
+bundle ? bundle[1] : ''
 `
 
 export const MAC_INPUT_SCRIPT = `
