@@ -304,6 +304,11 @@ const api = {
   accessSimple: (input: unknown) => ipcRenderer.invoke('access:simple', input),
   accessSimpleOffer: (terminalId: string) => ipcRenderer.invoke('access:simple-offer', terminalId),
   useSources: () => ipcRenderer.invoke('use:sources'),
+  onUseRested: (cb: (card: string) => void) => {
+    const listener = (_event: unknown, card: string): void => cb(card)
+    ipcRenderer.on('use:rested', listener)
+    return () => ipcRenderer.removeListener('use:rested', listener)
+  },
   openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
   openScreenSettings: (pane?: string) => ipcRenderer.invoke('use:screen-settings', pane),
   remoteAccess: () => ipcRenderer.invoke('use:remote-access'),

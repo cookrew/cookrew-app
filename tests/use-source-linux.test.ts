@@ -88,6 +88,7 @@ describe('LinuxScreenDevice', () => {
     expect((screen as { perform?: unknown }).perform).toBeUndefined()
     expect(screen.inputRefusal()).toBe(LINUX_INPUT_OFF)
     const instance = new PixelInstance({ url: 'screen://main', device: screen, schedule: () => () => undefined })
+    instance.frameListeners.add(() => undefined)
     await instance.start()
     expect(instance.status).toMatchObject({ state: 'live', input: false, use: 'computer' })
     await expect(instance.act([{ method: 'input.tap', params: { x: 1, y: 1 } } as never])).rejects.toThrow(LINUX_INPUT_OFF)
@@ -100,6 +101,7 @@ describe('the same states as a Mac', () => {
   it('a locked or sleeping machine gives no frame, and says so on the card', async () => {
     const frames2 = vi.fn(async () => frames)
     const instance = new PixelInstance({ url: 'screen://main', device: device('screen://main', { remote: gate(stateOf('locked')), frames: frames2 }), schedule: () => () => undefined })
+    instance.frameListeners.add(() => undefined)
     await instance.start()
     expect(instance.status).toMatchObject({ state: 'offline', input: false, remote: { id: 'locked', platform: 'linux' } })
     expect(instance.status.message).not.toMatch(/System Settings|\bMac\b/)

@@ -1043,6 +1043,17 @@ function Canvas(): React.JSX.Element {
    * cards, none at mini, never the zoomed one (its card is behind the live
    * view), capped. A card scrolled into view is photographed on the next tick.
    */
+  // A screen card with no session holds no picture, here as much as in main.
+  useEffect(
+    () =>
+      cookrew().onUseRested?.((card) => {
+        const old = thumbStore.get(card)
+        if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+        thumbStore.delete(card)
+      }),
+    []
+  )
+
   useEffect(() => {
     if (!shouldSnapshotLocally({ remote: isRemoteMode(), interactive: interactiveBrowser })) return
     const snapshot = cookrew().browserSnapshot

@@ -183,6 +183,9 @@ export function ownerSecretPaths(
     // The sealed switch (remote-switch-memory.ts): a copy could be put back after it is off.
     path.join(base, 'remote-switch'),
     path.join(base, 'remote-switch.tmp'),
+    // Window titles a card has held (use-window-memory.ts): they can name people.
+    path.join(base, 'use-windows.json'),
+    path.join(base, 'use-windows.json.tmp'),
     // What a phone's sealed Mac password opens under (remote-unlock.ts).
     path.join(base, 'unlock-key.json'),
     path.join(base, 'unlock-key.json.tmp'),

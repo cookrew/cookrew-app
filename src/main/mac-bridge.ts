@@ -181,7 +181,8 @@ function run(op) {
 let pending = ''
 for (;;) {
   const data = stdin.availableData
-  if (data.length === 0) break
+  // A string in JXA, so comparing it as it comes never ends this and the loop spins a core.
+  if (Number(data.length) === 0) break
   pending += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js
   let nl
   while ((nl = pending.indexOf('\\n')) >= 0) {
@@ -192,6 +193,7 @@ for (;;) {
 `
 
 const OSASCRIPT = '/usr/bin/osascript'
+const HELPER_LEAVE_MS = 8000
 
 export interface MacSessionFacts {
   readonly locked: boolean
@@ -319,8 +321,8 @@ interface Waiter {
  */
 export class MacInput {
   private child: ChildProcessWithoutNullStreams | null = null
-  private readonly waiters: Waiter[] = []
-  private buffered = ''
+  /** Each helper's own: one on its way out must not touch the next one's work. */
+  private waiters: Waiter[] = []
 
   constructor(
     private readonly options: { dry?: boolean; timeoutMs?: number; spawnHelper?: () => ChildProcessWithoutNullStreams } = {}
@@ -329,12 +331,16 @@ export class MacInput {
   private ensure(): ChildProcessWithoutNullStreams {
     if (this.child && this.child.exitCode === null && !this.child.killed) return this.child
     const child = (this.options.spawnHelper ?? (() => spawn(OSASCRIPT, ['-l', 'JavaScript', '-e', MAC_INPUT_SCRIPT])))()
-    this.buffered = ''
+    const waiters: Waiter[] = []
+    let buffered = ''
+    this.waiters = waiters
     child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => this.onOutput(chunk))
+    child.stdout.on('data', (chunk: string) => {
+      buffered = this.onOutput(buffered + chunk, waiters)
+    })
     child.on('exit', () => {
       if (this.child === child) this.child = null
-      for (const waiter of this.waiters.splice(0)) {
+      for (const waiter of waiters.splice(0)) {
         clearTimeout(waiter.timer)
         waiter.reject(new Error('the input helper stopped'))
       }
@@ -349,38 +355,57 @@ export class MacInput {
     return child
   }
 
-  private onOutput(chunk: string): void {
-    this.buffered += chunk
+  /** Answers every whole line; what is left is the start of the next. */
+  private onOutput(text: string, waiters: Waiter[]): string {
+    let rest = text
     let nl: number
-    while ((nl = this.buffered.indexOf('\n')) >= 0) {
-      const line = this.buffered.slice(0, nl)
-      this.buffered = this.buffered.slice(nl + 1)
-      const waiter = this.waiters.shift()
+    while ((nl = rest.indexOf('\n')) >= 0) {
+      const line = rest.slice(0, nl)
+      rest = rest.slice(nl + 1)
+      const waiter = waiters.shift()
       if (!waiter) continue
       clearTimeout(waiter.timer)
       if (line === 'ok') waiter.resolve()
       else waiter.reject(new Error(line.replace(/^err\s*/, 'the Mac refused the input: ')))
     }
+    return rest
   }
 
   send(op: MacOp): Promise<void> {
     const child = this.ensure()
+    const waiters = this.waiters
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        const at = this.waiters.findIndex((w) => w.timer === timer)
-        if (at >= 0) this.waiters.splice(at, 1)
+        const at = waiters.findIndex((w) => w.timer === timer)
+        if (at >= 0) waiters.splice(at, 1)
         reject(new Error('the Mac did not take the input in time'))
         // Out of step now: answers would pair with the wrong waiter.
         child.kill()
       }, this.options.timeoutMs ?? 8000)
-      this.waiters.push({ resolve, reject, timer })
+      waiters.push({ resolve, reject, timer })
       child.stdin.write(`${JSON.stringify(this.options.dry ? { ...op, dry: true } : op)}\n`)
     })
   }
 
+  /** True when it let go. A password going into a lock screen is never cut off. */
+  closeWhenIdle(): boolean {
+    if (this.waiters.length > 0) return false
+    this.close()
+    return true
+  }
+
+  /**
+   * Ends stdin, and the helper leaves when the op in hand is done: killed now, a drag
+   * would leave the mouse button down. One that hangs goes after the longest op. If
+   * this process dies first the pipe closes all the same, and it leaves by itself.
+   */
   close(): void {
-    this.child?.stdin.end()
-    this.child?.kill()
+    const child = this.child
     this.child = null
+    if (!child) return
+    child.stdin.end()
+    const timer = setTimeout(() => child.kill(), HELPER_LEAVE_MS)
+    timer.unref?.()
+    child.once('exit', () => clearTimeout(timer))
   }
 }
