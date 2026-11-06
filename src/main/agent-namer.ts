@@ -8,6 +8,10 @@
 // configured, else local Ollama on the owner's `localModel` (a 1.5b model
 // names every Chinese task in English; measured, 2026-11-01). Never throws:
 // null means "keep the stand-in".
+//
+// OLLAMA IS OPTIONAL. Not installed, not running, or the model not pulled is
+// the ordinary state of a new Mac, so it is no error: the stand-in is already
+// a plain name, and nothing is logged for it.
 
 import { SOUS_BASE_URL, SOUS_DISABLED, SOUS_KEEP_ALIVE, SOUS_POLISH_MODEL } from './sous-config'
 import { localTranslateModel, remoteSous } from './sous-remote-config'
@@ -40,7 +44,8 @@ export async function nameAgent(
     return answer === null ? null : sanitizeAgentName(answer, task)
   } catch (error) {
     const name = (error as { name?: string } | null)?.name
-    if (name !== 'TimeoutError' && name !== 'AbortError') console.error('Sous name: request failed:', error)
+    const absent = !remoteSous() && error instanceof TypeError
+    if (!absent && name !== 'TimeoutError' && name !== 'AbortError') console.error('Sous name: request failed:', error)
     return null
   }
 }
@@ -63,7 +68,7 @@ async function nameLocal(task: string, budget: number, fetchFn: typeof fetch): P
     })
   })
   if (!res.ok) {
-    console.error(`Sous name: Ollama returned ${res.status} for model ${model}`)
+    if (res.status !== 404) console.error(`Sous name: Ollama returned ${res.status} for model ${model}`)
     return null
   }
   const body = (await res.json()) as OllamaGenerateResponse

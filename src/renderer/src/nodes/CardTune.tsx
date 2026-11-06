@@ -15,7 +15,7 @@ import { routeDialAllowed, routeDialInput, routeDialLines } from '../../../share
 import { currentModelValue, modelAskState, modelRows } from '../../../shared/model-pick'
 import type { ModelDialProps } from './ModelDial'
 import type { TurnPhase } from '../../../shared/turn'
-import { tuneSummary } from '../zoom-bar'
+import { cleanModelName, tuneSummary } from '../zoom-bar'
 
 export interface CardTuneProps {
   terminalId: string
@@ -60,7 +60,7 @@ export function CardTune({ terminalId, phase, remote, onMouseDown, rise = false,
     ? {
         rows: modelRows(routeDial.choices),
         current,
-        reading: reading?.model ?? null,
+        reading: cleanModelName(reading?.model),
         ask: modelAskState(tuning.state?.asks ?? [], current, reading),
         // A direct card has no route turn: the last one is from before it went direct.
         turn: cardRoute.state?.route === 'direct' ? null : lines.turn,

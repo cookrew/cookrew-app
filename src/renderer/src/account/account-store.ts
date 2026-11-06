@@ -65,7 +65,7 @@ export const ACCOUNT_COPY = machineTable({
    * that was already lowercase — so the person retyped it, was refused again,
    * and had no way to learn the real rule.
    */
-  USERNAME_RESERVED: 'acct- is reserved for the doors — pick another name.',
+  USERNAME_RESERVED: 'acct- is reserved — pick another name.',
   /** D2, weak. */
   PASSWORD_WEAK: 'Too easy to guess. Use 12 characters or more; a sentence works.',
   /** D2, the second field. */
@@ -79,11 +79,17 @@ export const ACCOUNT_COPY = machineTable({
   SIGNIN_USERNAME_HINT: 'Your username at cookrew.dev.',
   /** D9, the sign-in side, under the password. No rule: it is an existing password. */
   SIGNIN_PASSWORD_HINT: 'It goes only to cookrew.dev.',
-  /** D8, the card's caption. */
-  FIRST_RUN_TITLE: 'Use this Mac with your Cookrew account',
-  /** D8, what an account is for — and that nothing here waits on one. */
-  FIRST_RUN_LEDE:
-    'Serve teams, reach this Mac from your phone, take your seats with you. Nothing local needs it.',
+  /**
+   * THE ASK, once a person reaches something that needs an account. Each says
+   * what they just reached and that nothing here waits on it.
+   */
+  ASK_PHONE_TITLE: 'Reach this computer from anywhere',
+  ASK_PHONE_LEDE:
+    'Your phone already works on this Wi-Fi. Away from it you need a free Cookrew account. Everything on this computer keeps working without one.',
+  ASK_JOIN_TITLE: 'Use this computer with your Cookrew account',
+  ASK_JOIN_LEDE: 'Type the code from your other device, or sign in. Nothing on this computer needs an account.',
+  /** The way to the join half, from the sheet the avatar opens. */
+  ASK_HAVE_CODE: 'Have a code from another device?',
   /** D8, the join half — live in cut 2 (V3-10). */
   FIRST_RUN_JOIN_ASK: 'Have Cookrew on another device?',
   FIRST_RUN_JOIN_HOW: 'On your phone or other Mac: avatar → Devices → ADD A MAC.',
@@ -329,7 +335,7 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
     case 'weak_password':
       return ACCOUNT_COPY.PASSWORD_WEAK
     case 'rate_limited':
-      return 'cookrew.dev is asking us to slow down. Try again in a minute.'
+      return machineCopy('cookrew.dev is asking us to slow down. Try again in a minute.', hostPlatform())
     case 'offline':
       return ACCOUNT_COPY.REGISTRY_DOWN
     case 'no_passwords_yet':
@@ -383,7 +389,7 @@ export function refusalSentence(reason: AccountRefusal, message?: string, userna
       // NOT "something went wrong": that sentence was on screen for eleven
       // different failures and told a person nothing about any of them. This
       // one at least says who answered and what it cost them — nothing.
-      return 'cookrew.dev answered something this app could not read. Nothing was changed.'
+      return machineCopy('cookrew.dev answered something this app could not read. Nothing was changed.', hostPlatform())
   }
 }
 
@@ -426,7 +432,7 @@ export function avatarView(status: AccountStatus | null): AvatarView {
     title:
       requests === null
         ? `@${status.username}`
-        : `@${status.username} — ${requests} device${requests === 1 ? '' : 's'} waiting`,
+        : `@${status.username} — ${requests} request${requests === 1 ? '' : 's'} waiting`,
     badge: requests,
     avatar: status.avatar,
   }
@@ -485,6 +491,8 @@ function usernameField(raw: string, check: ClaimFields['check']): FieldView {
       return { tone: 'good', tag: 'free ✓', note: ACCOUNT_COPY.USERNAME_FREE }
     case 'taken':
       return { tone: 'bad', tag: 'taken', note: takenSentence(username) }
+    case 'retired':
+      return { tone: 'bad', tag: 'unavailable', note: accountCopy('d9.crossing.retired', { handle: normaliseUsername(username) }) }
     case 'unknown':
       // NEVER OPTIMISTIC. The primary stays down, and the reason is the
       // registry's, not the person's.
@@ -791,7 +799,7 @@ export function crossingFor(input: CrossingInput): Landing {
   return { kind: 'stay', sentence: refusalSentence(reason, message, name) }
 }
 
-/** What one of the first-run card's buttons does. */
+/** What one of the card's buttons does. */
 export type FirstRunAction = 'signin' | 'register' | 'dismiss'
 
 export interface FirstRunView {
@@ -802,47 +810,28 @@ export interface FirstRunView {
   buttons: readonly { action: FirstRunAction; label: string }[]
 }
 
-/**
- * JOIN ships in cut 2, and this is that cut (V3-10). It was false while the
- * half had no destination — a greyed button with no way to make it work is a
- * card asking a question it cannot answer — and the constant stays as the one
- * place that decides, rather than the truth being spread across a component.
- */
-const FIRST_RUN_JOIN_SHIPS = true
-
-export interface FirstRunInput {
-  status: AccountStatus | null
-  /**
-   * How many workspaces this Mac has. A fresh install seeds ONE, with a
-   * Conductor on it, so "no workspaces" in the design's words is "none the
-   * person made": one is fresh, two is a Mac somebody has been using.
-   */
-  workspaceCount: number | null
-  /** Closed once, closed for good. */
-  dismissed: boolean
-}
+/** What the person reached: the phone away from this Wi-Fi, or a code from another device. */
+export type AccountAsk = 'phone' | 'join'
 
 /**
- * THE FIRST-RUN CARD (D8), or null — which is the answer on every Mac but a
- * fresh one. No account file, no v1 key, no workspace of the person's own, and
- * never closed. Both facts must be KNOWN: a card drawn while the status is
- * still loading would flash at every owner on every launch.
+ * THE ACCOUNT, ASKED FOR WHEN IT IS NEEDED (first run, 2026-11-05). This card
+ * used to greet every fresh Mac at launch, before the person had seen an
+ * agent. It now answers a reach: the surface draws it only when something
+ * asks (open-request.ts · requestAccountAsk), so there is no fresh-Mac rule
+ * left here, and "closed once" no longer holds: reaching the need again is a
+ * new question. Buying and serving ask through the sheet itself (G1).
  */
-export function firstRunView(input: FirstRunInput): FirstRunView | null {
-  const { status, workspaceCount } = input
-  if (input.dismissed || status === null || workspaceCount === null) return null
-  if (status.username !== null || status.legacy !== null || workspaceCount > 1) return null
+export function accountAskView(reason: AccountAsk): FirstRunView {
+  const phone = reason === 'phone'
   return {
-    title: ACCOUNT_COPY.FIRST_RUN_TITLE,
-    lede: ACCOUNT_COPY.FIRST_RUN_LEDE,
-    join: FIRST_RUN_JOIN_SHIPS
-      ? {
-          ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK,
-          how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW,
-          label: ACCOUNT_COPY.JOIN_FIELD_LABEL,
-          go: ACCOUNT_COPY.JOIN_GO,
-        }
-      : null,
+    title: phone ? ACCOUNT_COPY.ASK_PHONE_TITLE : ACCOUNT_COPY.ASK_JOIN_TITLE,
+    lede: phone ? ACCOUNT_COPY.ASK_PHONE_LEDE : ACCOUNT_COPY.ASK_JOIN_LEDE,
+    join: {
+      ask: ACCOUNT_COPY.FIRST_RUN_JOIN_ASK,
+      how: ACCOUNT_COPY.FIRST_RUN_JOIN_HOW,
+      label: ACCOUNT_COPY.JOIN_FIELD_LABEL,
+      go: ACCOUNT_COPY.JOIN_GO,
+    },
     buttons: [
       { action: 'signin', label: 'SIGN IN WITH PASSWORD' },
       { action: 'register', label: 'CREATE AN ACCOUNT' },
@@ -930,7 +919,7 @@ function lockLine(outcome: LockOutcome, passwordPending: boolean): string {
   // the registry's own reason, never "not it", which would send the owner to
   // change what they are typing.
   if (outcome.reason === 'unproven') return refusalSentence(outcome.refusal, outcome.message)
-  return 'There is no account on this Mac to unlock.'
+  return machineCopy('There is no account on this Mac to unlock.', hostPlatform())
 }
 
 

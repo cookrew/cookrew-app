@@ -7,10 +7,16 @@
  * and the relay, and a renderer must not turn an arbitrary string it was
  * handed into shell. So the renderer refuses anything that is not one of
  * these shapes, whoever sent it — and the shapes admit no shell
- * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the two fixed
+ * metacharacter anywhere: no `$`, backtick, `;`, `|` outside the fixed
  * install pipes, `&`, `<`, `>`, quote (but the plugin path's own single
  * quotes), `\`, newline. A key line ends in a space: the user pastes the
  * key and presses Enter themselves.
+ *
+ * THE ONE EXCEPTION IS WHOLE LINES, NOT SHAPES: FIRST_RUN_LINES are compared
+ * character for character, so nothing a sender chooses can reach them. They
+ * are the first-run tool check's fixes for a Mac that has neither npm nor
+ * Homebrew, Homebrew's own installer among them (its `$(...)` is required:
+ * piped into bash it has no terminal to ask for the password on).
  */
 
 /**
@@ -37,11 +43,46 @@ export const ROUTE_LINE_PATTERNS: readonly RegExp[] = [
   /^npm i(nstall)? -g @[a-z0-9-]+\/[a-z0-9-]+$/,
   /^(claude|claude login|codex login|opencode auth login)$/,
   /^curl -fsSL https:\/\/opencode\.ai\/install \| bash$/,
+  /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/,
   // A formula starts with a letter or digit: `--cask` and `-f` are not formulae.
   /^brew install [A-Za-z0-9][A-Za-z0-9._/@-]*$/
 ]
 
+const RELEASES = 'https://github.com'
+
+/**
+ * A harness from its own release, for a box with no npm or Node (Part C: Pi was
+ * only ever an `npm i -g`, and `npm` was not there). Null where no release of
+ * that name exists. Both proved on a PATH of /usr/bin:/bin, 2026-11-05.
+ */
+export function piInstallLine(platform: string, arch: string): string | null {
+  const os = platform === 'darwin' || platform === 'linux' ? platform : null
+  if (os === null || (arch !== 'x64' && arch !== 'arm64')) return null
+  return `mkdir -p ~/.local/share ~/.local/bin && curl -fsSL ${RELEASES}/earendil-works/pi/releases/latest/download/pi-${os}-${arch}.tar.gz | tar -xz -C ~/.local/share && ln -sf ~/.local/share/pi/pi ~/.local/bin/pi`
+}
+
+export function codexInstallLine(platform: string, arch: string): string | null {
+  const cpu = arch === 'x64' ? 'x86_64' : arch === 'arm64' ? 'aarch64' : null
+  const os = platform === 'darwin' ? 'apple-darwin' : platform === 'linux' ? 'unknown-linux-musl' : null
+  if (cpu === null || os === null) return null
+  const name = `codex-${cpu}-${os}`
+  return `mkdir -p ~/.local/bin && curl -fsSL ${RELEASES}/openai/codex/releases/latest/download/${name}.tar.gz | tar -xz -C ~/.local/bin && mv ~/.local/bin/${name} ~/.local/bin/codex`
+}
+
+const releaseLines = ['darwin', 'linux'].flatMap((platform) => ['x64', 'arm64'].flatMap((arch) => [piInstallLine(platform, arch), codexInstallLine(platform, arch)]))
+
+/** Exact lines, for the first-run tool check (shared/preflight.ts). */
+export const FIRST_RUN_LINES: ReadonlySet<string> = new Set([
+  ...releaseLines.filter((line): line is string => line !== null),
+  'curl -fsSL https://claude.ai/install.sh | bash',
+  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+  'brew install --cask google-chrome',
+  'open https://www.google.com/chrome/',
+  'open https://ollama.com/download'
+])
+
 export function setupLineAllowed(line: string): boolean {
+  if (FIRST_RUN_LINES.has(line)) return true
   if (line.length > 400 || /[\r\n\x00]/.test(line)) return false
   return ROUTE_LINE_PATTERNS.some((pattern) => pattern.test(line))
 }

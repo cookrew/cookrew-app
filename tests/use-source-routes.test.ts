@@ -43,10 +43,10 @@ function bed(over: Partial<UseSourceServiceDeps> = {}) {
   return { provider, added, deps }
 }
 
-async function call(deps: MobileApiDeps, method: string, path: string, opts: { token?: string; body?: unknown } = {}) {
+async function call(deps: MobileApiDeps, method: string, path: string, opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}) {
   const request = Readable.from(opts.body === undefined ? [] : [JSON.stringify(opts.body)]) as http.IncomingMessage
   request.method = method
-  request.headers = opts.token ? { authorization: `Bearer ${opts.token}` } : {}
+  request.headers = { ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}), ...opts.headers }
   const out: { status: number; headers: Record<string, string>; body: unknown } = { status: 0, headers: {}, body: undefined }
   const response = {
     writeHead(status: number, headers: Record<string, string> = {}) {
@@ -150,3 +150,88 @@ describe('a served session', () => {
     expect(added).toEqual([])
   })
 })
+
+describe('the unlock routes', () => {
+  const direct = { host: '192.168.1.5:8643' }
+  const door = () => ({
+    begin: vi.fn(async () => ({ ok: true as const, key: 'k', challenge: 'c' })),
+    reopen: vi.fn(),
+    unlock: vi.fn(async () => ({ ok: true as const, outcome: 'unlocked' as const }))
+  })
+
+  it('a paired device gets the key and sends what it sealed', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: direct })).body).toEqual({ ok: true, key: 'k', challenge: 'c' })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers: direct })).body).toEqual({ ok: true, outcome: 'unlocked' })
+    expect(unlock.unlock).toHaveBeenCalledWith(expect.anything(), 'e.box')
+  })
+
+  it('the wall token reaches neither', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: WALL, body: {} })).status).toBeGreaterThanOrEqual(401)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: WALL, body: { sealed: 'e.box' } })).status).toBeGreaterThanOrEqual(401)
+    expect(unlock.begin).not.toHaveBeenCalled()
+    expect(unlock.unlock).not.toHaveBeenCalled()
+  })
+
+  it('a served seat reaches neither', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const served = { ...deps(), store: { focusedId: 'served' } } as MobileApiDeps
+    expect((await call(served, 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers: direct })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('nothing that came through the relay or WebRTC reaches it: those pages are not the Mac’s own', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { ...direct, 'x-cookrew-relay': '1' }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'e.box' }, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+    expect(unlock.unlock).not.toHaveBeenCalled()
+  })
+
+  it('a page from cookrew.dev that moved its traffic to the LAN is still that page', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { origin: 'https://cookrew.dev', host: '192.168.1.5:8643' }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('a name under d.cookrew.dev is no page of the Mac’s own: cookrew.dev runs that DNS and its certificates', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const name = '192-168-1-5.abc.d.cookrew.dev:8643'
+    const headers = { origin: `https://${name}`, host: name }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('what a door carried in reaches neither, Origin or none', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { ...direct, 'x-cookrew-door': '1' }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(403)
+    expect(unlock.begin).not.toHaveBeenCalled()
+  })
+
+  it('a page the Mac served itself gets through', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    const headers = { origin: 'https://192.168.1.5:8643', host: '192.168.1.5:8643' }
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock/begin', { token: TOKEN, body: {}, headers })).status).toBe(200)
+  })
+
+  it('refuses anything that is not a sealed string', async () => {
+    const unlock = door()
+    const { deps } = bed({ unlock })
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 7 }, headers: direct })).status).toBe(400)
+    expect((await call(deps(), 'POST', '/api/use/sources/unlock', { token: TOKEN, body: { sealed: 'x'.repeat(5000) }, headers: direct })).status).toBe(400)
+    expect(unlock.unlock).not.toHaveBeenCalled()
+  })
+})
+

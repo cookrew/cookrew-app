@@ -395,7 +395,7 @@
     }
     const options = await api('POST', '/v2/me/passkeys/options', {})
     if (options.status !== 200) return toast(said(options, 'That did not go through.'), 6000)
-    const name = prompt('Name this passkey (for example "This Mac")', 'This browser')
+    const name = prompt('Name this passkey (for example "This laptop")', 'This browser')
     if (name === null) return
     let credential
     try {
@@ -618,7 +618,7 @@
     panel.replaceChildren()
     panel.hidden = false
     panel.append(
-      el('p', 'meta', 'Your new password goes only to cookrew.dev. Changing it signs every other device out.')
+      el('p', 'meta', 'Your new password goes only to this site. Changing it signs every other device out.')
     )
 
     const current = secretField('Current password', 'current-password')

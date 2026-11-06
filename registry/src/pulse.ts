@@ -72,6 +72,21 @@ export class Pulse {
     this.schedule()
   }
 
+  /**
+   * The account was deleted. Its doors and team pages are keyed by its handle,
+   * and a count that names a deleted person is not a count "never who". Written
+   * now, not at the next flush.
+   */
+  forgetAccount(handle: string): void {
+    const door = `@${handle}/`
+    const page = `/${handle}/`
+    const without = <T>(counts: Record<string, T>, prefix: string): Record<string, T> =>
+      Object.fromEntries(Object.entries(counts).filter(([name]) => !name.startsWith(prefix)))
+    this.days = new Map([...this.days].map(([day, { doors, pages }]) => [day, { doors: without(doors, door), pages: without(pages, page) }]))
+    this.dirty = true
+    void this.flush()
+  }
+
   doorToday(name: string): DoorPulse {
     return this.today().doors[name] ?? { lines: 0, calls: 0 }
   }

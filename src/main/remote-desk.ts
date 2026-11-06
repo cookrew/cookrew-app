@@ -47,7 +47,8 @@ import { SERVED_USE_REFUSED } from './use-commands'
  *   SERVED WORK. A workspace a caller's session runs in is refused watching
  *   and driving, and a grant dies the moment a workspace turns served.
  *
- * Remote unlock is not here, on purpose: a locked Mac needs someone there.
+ * Remote unlock asks here whether it may, and lives in remote-unlock.ts: this
+ * file never sees a password.
  */
 
 export interface RemoteSession {
@@ -92,6 +93,8 @@ export interface RemoteDeskDeps {
   openSettings(pane: SettingsPane): Promise<void>
   relaunch(): void
   wakeDisplay?(): Promise<void>
+  /** The Mac's unlock key in six words, for a phone to check. */
+  unlockWords?(): readonly string[]
   now?: () => number
   schedule?: (fn: () => void, ms: number) => () => void
 }
@@ -167,6 +170,8 @@ export interface RemoteDesk {
   openSettings(pane: SettingsPane, where: RemoteWhere): Promise<RemoteAnswer>
   restart(who: ViewerWho): Promise<RemoteAnswer>
   wake(who: ViewerWho): Promise<RemoteAnswer>
+  /** Why this viewer may not type a password at the lock screen; null when it may. */
+  unlockRefusal(who: ViewerWho): string | null
   /** The lock or the display just changed. */
   sessionChanged(): void
 }
@@ -250,7 +255,12 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   const state = async (where: RemoteWhere): Promise<RemoteState> =>
     where === 'away' && held() ? stateOf('stopped', { until: settings.holdUntil }) : machineState()
 
-  const controlFacts = (): RemoteControlFacts => ({ available: mac, switchOn: mac && switchOn, accessibility: mac && deps.accessibility() })
+  const controlFacts = (): RemoteControlFacts => ({
+    available: mac,
+    switchOn: mac && switchOn,
+    accessibility: mac && deps.accessibility(),
+    ...(mac && switchOn && deps.unlockWords ? { unlockWords: deps.unlockWords() } : {})
+  })
 
   const switchOff = (): string => word('Remote control of this Mac is off. Someone at the Mac can turn it on in the ⋯ menu.')
   const stopped = (): string => word('Stopped at the Mac: someone there ended this session.')
@@ -512,6 +522,11 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       deps.record('remote.restart', MACHINE, word('this Mac'), who.name)
       deps.relaunch()
       return { ok: true }
+    },
+    unlockRefusal(who) {
+      if (!mac) return 'Only a Mac can be unlocked from here.'
+      if (who.here) return 'You are at the Mac: unlock it there.'
+      return held() ? stopped() : inputRefusal()
     },
     async wake(who) {
       if (held() && !who.here) return refuse(stopped())

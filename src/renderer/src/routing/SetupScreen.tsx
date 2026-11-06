@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
+// Its own: the first run has no other terminal on screen, and without this xterm's
+// input box and measuring strip draw into the pane.
+import '@xterm/xterm/css/xterm.css'
 import { cookrew } from '../api'
+import { cursorScrollTop, shrunkFontSize } from './screen-fit'
 
 /**
  * THE SETUP CARD'S LIVE SCREEN inside the Routing panel — the same PTY the
@@ -17,6 +21,8 @@ import { cookrew } from '../api'
  * has to land in the pane, not on the document.
  */
 
+const FONT_SIZE = 12
+
 const PHOSPHOR = {
   background: '#14110A',
   foreground: '#E9B949',
@@ -29,12 +35,31 @@ const PHOSPHOR = {
   brightWhite: '#FFFEF5'
 }
 
-export function SetupScreen({ terminalId, focusTick }: { terminalId: string; focusTick: number }): React.JSX.Element {
+export function SetupScreen({
+  terminalId,
+  focusTick,
+  fit: fitMode,
+  prompting = false
+}: {
+  terminalId: string
+  focusTick: number
+  /** Shrink the type to show the screen: `whole` for a question, `width` for a shell. Absent, the box clips. */
+  fit?: 'whole' | 'width'
+  /**
+   * The pane stopped on a password prompt: keep the cursor's row in the box. Only then:
+   * a TUI hides its cursor and parks it anywhere, and on a tall grid a young shell's
+   * prompt is far above the bottom, with tmux's bar the last thing drawn.
+   */
+  prompting?: boolean
+}): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   /** A focus asked for while xterm was still loading. */
   const pendingFocus = useRef(false)
   const seenTick = useRef(focusTick)
+  const promptingRef = useRef(prompting)
+  promptingRef.current = prompting
+  const repin = useRef<() => void>(() => undefined)
 
   useEffect(() => {
     const host = hostRef.current
@@ -44,7 +69,7 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
     void (async () => {
       const [{ Terminal: XTerminal }, { FitAddon }] = await Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')])
       if (disposed) return
-      const term = new XTerminal({ theme: PHOSPHOR, fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace', fontSize: 12, cursorBlink: true, scrollback: 400 })
+      const term = new XTerminal({ theme: PHOSPHOR, fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace', fontSize: FONT_SIZE, cursorBlink: true, scrollback: 400 })
       const fit = new FitAddon()
       term.loadAddon(fit)
       term.open(host)
@@ -62,18 +87,64 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
       cleanups.push(() => cancelAnimationFrame(raf))
       // THE BOUNDARY. The PTY's rows are the canvas card's and can exceed
       // this box; the box clips (CSS), and after every render the newest
-      // rows — the prompt — are brought into view by scrolling the host to
-      // its bottom. Programmatic scroll works under overflow:hidden, so the
-      // user never sees a scrollbar and never sees text outside the frame.
+      // rows are brought into view by scrolling the host to its bottom, or to
+      // the cursor at a password prompt. Programmatic scroll works under
+      // overflow:hidden, so the user never sees a scrollbar and never sees
+      // text outside the frame.
       let pinned: number | null = null
       const pin = (): void => {
         if (pinned !== null) return
         pinned = requestAnimationFrame(() => {
           pinned = null
-          if (!disposed) host.scrollTop = host.scrollHeight
+          if (disposed) return
+          if (!promptingRef.current) {
+            host.scrollTop = host.scrollHeight
+            return
+          }
+          const drawn = host.querySelector('.xterm-screen')?.getBoundingClientRect()
+          host.scrollTop = cursorScrollTop({
+            cursorRow: term.buffer.active.cursorY,
+            rows: term.rows,
+            screenHeight: drawn?.height ?? 0,
+            boxHeight: host.clientHeight,
+            padding: parseFloat(getComputedStyle(host).paddingTop)
+          })
         })
       }
-      const rendered = term.onRender(pin)
+      repin.current = pin
+      // The screen's own size, once it is drawn, sets the type for the next draw.
+      const fitType = (): void => {
+        if (!fitMode || disposed) return
+        const drawn = host.querySelector('.xterm-screen')?.getBoundingClientRect()
+        if (!drawn) return
+        const room = getComputedStyle(host)
+        const size = shrunkFontSize({
+          screen: { width: drawn.width, height: drawn.height },
+          box: {
+            width: host.clientWidth - parseFloat(room.paddingLeft) - parseFloat(room.paddingRight),
+            height: host.clientHeight - parseFloat(room.paddingTop) - parseFloat(room.paddingBottom)
+          },
+          current: term.options.fontSize ?? FONT_SIZE,
+          base: FONT_SIZE,
+          whole: fitMode === 'whole'
+        })
+        if (size !== term.options.fontSize) term.options.fontSize = size
+      }
+      const rendered = term.onRender(() => {
+        pin()
+        fitType()
+      })
+      // A new grid or box starts over from the full size; the fit then only comes down.
+      const refit = (): void => {
+        if (!fitMode || disposed) return
+        if (term.options.fontSize !== FONT_SIZE) term.options.fontSize = FONT_SIZE
+        fitType()
+      }
+      if (typeof ResizeObserver !== 'undefined') {
+        const box = new ResizeObserver(refit)
+        box.observe(host)
+        cleanups.push(() => box.disconnect())
+      }
       cleanups.push(() => rendered.dispose(), () => {
         if (pinned !== null) cancelAnimationFrame(pinned)
       })
@@ -84,12 +155,17 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
           // The PTY's geometry is the canvas card's; this viewer follows it
           // and never pushes its own back.
           if (disposed || cols <= 0 || rows <= 0) return
+          const same = term.cols === cols && term.rows === rows
           term.resize(cols, rows)
           pin()
+          if (same) fitType()
+          else refit()
         }
       )
       const input = term.onData((data) => cookrew().ptyInput(terminalId, data))
-      cleanups.push(() => input.dispose(), detach, () => term.dispose())
+      // One tick later: xterm's viewport queues a timeout as it is made, and a
+      // screen gone within that tick (a first agent's wait, called off) threw there.
+      cleanups.push(() => input.dispose(), detach, () => void setTimeout(() => term.dispose(), 0))
       if (pendingFocus.current) {
         pendingFocus.current = false
         term.focus()
@@ -100,7 +176,9 @@ export function SetupScreen({ terminalId, focusTick }: { terminalId: string; foc
       for (const cleanup of cleanups) cleanup()
       termRef.current = null
     }
-  }, [terminalId])
+  }, [terminalId, fitMode])
+
+  useEffect(() => repin.current(), [prompting])
 
   // A key line was typed: the cursor goes to the pane so the paste lands
   // there. If the pane is not built yet, the wish waits for it.

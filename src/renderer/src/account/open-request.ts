@@ -1,3 +1,5 @@
+import type { AccountAsk } from './account-store'
+
 /**
  * "OPEN THE ACCOUNT SHEET" — asked from outside the account surface.
  *
@@ -63,4 +65,28 @@ export function onJoinRequest(listener: JoinListener): () => void {
 export function requestJoin(code: string): boolean {
   for (const listener of joinListeners) listener(code)
   return joinListeners.size > 0
+}
+
+/**
+ * "THE PERSON REACHED SOMETHING THAT NEEDS AN ACCOUNT" (first run): the third
+ * ask of the same seam. The surface draws the card that says what they
+ * reached; a person who already has an account never comes here.
+ */
+type AskListener = (reason: AccountAsk) => void
+
+const askListeners = new Set<AskListener>()
+
+export function onAccountAsk(listener: AskListener): () => void {
+  askListeners.add(listener)
+  return () => {
+    askListeners.delete(listener)
+  }
+}
+
+/** Whether anything would answer: the demo and the phone have no account surface. */
+export const accountAskable = (): boolean => askListeners.size > 0
+
+export function requestAccountAsk(reason: AccountAsk): boolean {
+  for (const listener of askListeners) listener(reason)
+  return askListeners.size > 0
 }

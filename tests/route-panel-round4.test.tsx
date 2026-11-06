@@ -12,6 +12,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { setupLines } from '../src/main/route/setup'
 import { setupLineAllowed } from '../src/shared/route-lines'
 import { LINE_UNEXPECTED, WORKSPACE_CHANGED, runLine } from '../src/renderer/src/routing/use-setup-terminal'
+import { SETUP_LINE_COPY } from '../src/shared/first-run-copy'
 import { AddMenu } from '../src/renderer/src/routing/RoutingSections'
 import { ROUTING_COPY, routeDialInput } from '../src/shared/route-view'
 import { cardRouteFixture, routeFixture } from '../src/shared/route-fixture'
@@ -50,35 +51,52 @@ describe('no option reaches the vendor CLI', () => {
 describe('the run decision', () => {
   it('refuses a line of no known shape before touching the card', async () => {
     let ensured = 0
-    const out = await runLine({ line: 'rm -rf ~', enter: true, currentKey: () => 'a', ensure: async () => (ensured += 1, 't1'), type: () => undefined })
-    expect(out).toEqual({ ok: false, reason: LINE_UNEXPECTED })
+    const out = await runLine({ line: 'rm -rf ~', currentKey: () => 'a', ensure: async () => (ensured += 1, { id: 't1', fresh: false }), send: async () => ({ ok: true, runId: null }) })
+    expect(out).toEqual({ ok: false, reason: LINE_UNEXPECTED, busy: false })
     expect(ensured).toBe(0)
   })
 
   it('refuses after a workspace switch during ensure, typing nothing', async () => {
     let key = 'Cookrew Dev | /a'
-    const typed: string[] = []
+    const sent: string[] = []
     const out = await runLine({
       line: 'magpie serve',
-      enter: true,
       currentKey: () => key,
       ensure: async () => {
         key = 'Lab | /b' // the owner switched while the card was being made
-        return 't-old'
+        return { id: 't-old', fresh: true }
       },
-      type: (_id, bytes) => void typed.push(bytes)
+      send: async ({ id }) => {
+        sent.push(id)
+        return { ok: true, runId: 'r' }
+      }
     })
-    expect(out).toEqual({ ok: false, reason: WORKSPACE_CHANGED })
-    expect(typed).toEqual([])
+    expect(out).toEqual({ ok: false, reason: WORKSPACE_CHANGED, busy: false })
+    expect(sent).toEqual([])
   })
 
-  it('reports a card that never appeared as the sentence, and types the bytes otherwise', async () => {
-    const failed = await runLine({ line: 'magpie serve', enter: true, currentKey: () => 'a', ensure: async () => { throw new Error('the Setup card did not appear on the canvas') }, type: () => undefined })
-    expect(failed).toEqual({ ok: false, reason: 'the Setup card did not appear on the canvas' })
-    const typed: [string, string][] = []
-    const ok = await runLine({ line: 'magpie provider add deepseek ', enter: false, currentKey: () => 'a', ensure: async () => 't1', type: (id, bytes) => void typed.push([id, bytes]) })
-    expect(ok).toEqual({ ok: true })
-    expect(typed).toEqual([['t1', 'magpie provider add deepseek ']])
+  it('reports a card that never appeared as the sentence, and asks main otherwise', async () => {
+    const failed = await runLine({ line: 'magpie serve', currentKey: () => 'a', ensure: async () => { throw new Error('the Setup card did not appear on the canvas') }, send: async () => ({ ok: true, runId: null }) })
+    expect(failed).toEqual({ ok: false, reason: 'the Setup card did not appear on the canvas', busy: false })
+    const sent: [string, boolean][] = []
+    const ok = await runLine({ line: 'magpie provider add deepseek ', currentKey: () => 'a', ensure: async () => ({ id: 't1', fresh: true }), send: async ({ id, fresh }) => (sent.push([id, fresh]), { ok: true, runId: null }) })
+    expect(ok).toEqual({ ok: true, runId: null, id: 't1' })
+    expect(sent).toEqual([['t1', true]])
+  })
+
+  it('passes main’s refusal on whole, so a screen can offer Stop', async () => {
+    const out = await runLine({ line: 'magpie serve', currentKey: () => 'a', ensure: async () => ({ id: 't1', fresh: false }), send: async () => ({ ok: false, reason: 'busy', busy: true }) })
+    expect(out).toEqual({ ok: false, reason: 'busy', busy: true })
+  })
+
+  it('reads a bridge with no such door as an old desktop, not as a crash', async () => {
+    const out = await runLine({ line: 'magpie serve', currentKey: () => 'a', ensure: async () => ({ id: 't1', fresh: false }), send: async () => { throw new Error('404') } })
+    expect(out).toEqual({ ok: false, reason: SETUP_LINE_COPY.OLD_DESKTOP, busy: false })
+  })
+
+  it('does not call a dropped network an old desktop', async () => {
+    const out = await runLine({ line: 'magpie serve', currentKey: () => 'a', ensure: async () => ({ id: 't1', fresh: false }), send: async () => { throw new Error('Load failed') } })
+    expect(out).toEqual({ ok: false, reason: SETUP_LINE_COPY.NOT_SENT, busy: false })
   })
 })
 

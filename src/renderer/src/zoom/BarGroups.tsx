@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasNode } from '../../../shared/model'
+import { cookrew } from '../api'
 import type { AgentRow } from '../agent-rows'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { ownersOf } from '../stage/stage-select'
@@ -11,10 +12,11 @@ import { Page } from './ZoomParts'
 import { itemViewOf, type AgentView, type ItemView } from './zoom-model'
 import { BAR_SIDES, type ZoomDir } from './zoom-path'
 import { zoomStore } from './zoom-store'
-import { barSeen, itemSig, replySig, useSeenPage } from './bar-seen'
+import { barSeen, itemSig, useSeenPage } from './bar-seen'
 import { agentInbox, groupSize, itemInbox, sinceWord, withHeld, type AgentEntry, type ItemEntry } from './bar-inbox'
 import { barCard, useBarCard, type FaceBox } from './bar-pick'
 import { BarAgentCard, BarItemCard } from './BarCards'
+import { pageInView } from '../page-in-view'
 import './bar-groups.css'
 
 /**
@@ -136,20 +138,15 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
   useEffect(() => {
     if (workspaceId && loaded) barSeen.observe(workspaceId, sigs)
   }, [workspaceId, loaded, sigs])
-  // A full view opened is a look, and so is every change seen while it is open.
+  // A full view opened is a look, and so is every change seen while it is open
+  // with the window in view (page-in-view.ts). An agent's is its overlay's to say.
   const fullItem = zoom.full === 'item' ? zoom.id : null
   const fullItemSig = fullItem ? sigs.find((s) => s.id === fullItem)?.sig ?? null : null
   useEffect(() => {
-    if (workspaceId && fullItem && fullItemSig) barSeen.mark(workspaceId, fullItem, fullItemSig)
+    if (workspaceId && fullItem && fullItemSig && pageInView()) barSeen.mark(workspaceId, fullItem, fullItemSig)
   }, [workspaceId, fullItem, fullItemSig])
-  const fullRow = zoom.full === 'agent' && zoom.id ? rows.find((r) => r.id === zoom.id) ?? null : null
-  const fullReply = fullRow ? replySig(fullRow) : null
-  useEffect(() => {
-    if (workspaceId && fullRow && fullReply) barSeen.mark(workspaceId, fullRow.id, fullReply)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, fullRow?.id, fullReply])
 
-  const agentEntries = useMemo(() => agentInbox(rows, page).filter((e) => agents.has(e.id)), [rows, page, agents])
+  const agentEntries = useMemo(() => agentInbox(rows).filter((e) => agents.has(e.id)), [rows, agents])
   const itemEntries = useMemo(() => itemInbox(sigs, page), [sigs, page])
   const agentById = useMemo(() => new Map(agentEntries.map((e) => [e.id, e])), [agentEntries])
   const itemById = useMemo(() => new Map(itemEntries.map((e) => [e.id, e])), [itemEntries])
@@ -201,8 +198,7 @@ export function BarGroups({ workspaceId, nodes, rows, agents, attachIndex, side,
       return onAgentFull(id)
     }
     barCard.open({ kind: 'agent', id }, boxOf(el.getBoundingClientRect()))
-    const entry = agentById.get(id)
-    if (workspaceId && entry?.why === 'reply') barSeen.mark(workspaceId, id, entry.sig)
+    if (agentById.get(id)?.why === 'reply') cookrew().turnSeen(id)
   }
   const tapItem = (id: string): void => {
     const open = barCard.get()

@@ -80,7 +80,7 @@ export { DEFAULT_LOCK_AFTER_MS }
  * second wording of the same rule.
  */
 export const RESERVED_SENTENCE = (username: string): string =>
-  `${RESERVED_PREFIXES.find((prefix) => username.startsWith(prefix)) ?? 'That prefix'} is reserved for the doors — pick another name.`
+  `${RESERVED_PREFIXES.find((prefix) => username.startsWith(prefix)) ?? 'That prefix'} is reserved — pick another name.`
 
 /** Where the account lives. `base` exists so tests never touch a real home. */
 export function accountFilePath(base?: string): string {
@@ -788,6 +788,7 @@ export class Accounts {
       )
       if (response.status === 200) return 'taken'
       if (response.status === 404) return 'free'
+      if (response.status === 410) return 'retired'
       return 'unknown'
     } catch {
       return 'unknown'
@@ -1223,7 +1224,7 @@ export class Accounts {
       }
       nonce = body.nonce
     } catch {
-      return this.renewFailed('cookrew.dev could not be reached')
+      return this.renewFailed('the registry could not be reached')
     }
 
     try {
@@ -1245,7 +1246,7 @@ export class Accounts {
       this.renewProblem = null
       return true
     } catch {
-      return this.renewFailed('cookrew.dev could not be reached')
+      return this.renewFailed('the registry could not be reached')
     }
   }
 

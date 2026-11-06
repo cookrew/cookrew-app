@@ -13,6 +13,7 @@ import { buildAgentRows, checkpointWanted, type AgentRow as Row } from './agent-
 import { useStreamTails } from './stream/use-stream-tails'
 import { advanceClock, type ActivityClock } from './activity-clock'
 import { searchAgents } from './agent-search'
+import { saysNothingMatches } from './board-actions'
 import { itemCorpus, searchItems, type BoardItem, type ItemHit } from './item-search'
 import {
   KIND_ORDER,
@@ -78,6 +79,7 @@ export function RosterPanel({
   query: queryProp,
   onQueryChange,
   variant = 'modal',
+  actionCount = 0,
 }: {
   /** Opens WHO CAN CALL — the next step after an agent becomes exportable. */
   onOpenGrants?: () => void
@@ -111,6 +113,8 @@ export function RosterPanel({
    * the query, Esc and the outside click, so the panel draws no field of its own.
    */
   variant?: 'modal' | 'view' | 'popover'
+  /** Rows the search box itself found above this panel (board-actions.ts). */
+  actionCount?: number
   /** The search, CONTROLLED by the header's box in the popover. Absent → local. */
   query?: string
   onQueryChange?: (query: string) => void
@@ -691,7 +695,7 @@ export function RosterPanel({
           <div className="tf-role-note">No agents yet.</div>
         ) : searching ? (
           <div className="roster-list" ref={searchList}>
-            {results.length === 0 && itemHits.length === 0 ? (
+            {saysNothingMatches({ hits: results.length + itemHits.length, actions: actionCount }) ? (
               <div className="tf-role-note">
                 Nothing matches “{query.trim()}” — in any agent's name, current task or checkpoint
                 history, or in this workspace's browsers and notes.

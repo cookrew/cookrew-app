@@ -59,13 +59,18 @@ describe('remoteView · at the Mac', () => {
     expect(ids(remoteView(state('needs-accessibility'), 'here'))).toEqual(['open-accessibility-settings', 'check-again'])
   })
 
-  it('a locked Mac needs someone there, wherever the reader is, and offers no way to unlock', () => {
-    for (const where of ['here', 'away'] as const) {
-      const view = remoteView(state('locked'), where)
-      expect(view.title).toContain('locked')
-      expect(view.needsYouThere).toBe(true)
-      expect(ids(view)).toEqual(['check-again'])
-    }
+  it('a locked Mac offers an unlock to a reader away from it, and only there', () => {
+    const away = remoteView(state('locked'), 'away')
+    expect(away.title).toContain('locked')
+    expect(away.needsYouThere).toBe(false)
+    expect(ids(away)).toEqual(['unlock', 'check-again'])
+    const here = remoteView(state('locked'), 'here')
+    expect(here.needsYouThere).toBe(true)
+    expect(ids(here)).toEqual(['check-again'])
+  })
+
+  it('a locked Linux machine offers no unlock: the hand is a Mac one', () => {
+    expect(ids(remoteView({ ...state('locked'), platform: 'linux' }, 'away'))).toEqual(['check-again'])
   })
 
   it('says what comes after the lock, so nobody finds out at the Mac', () => {

@@ -13,6 +13,7 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { ASSETS } from '../registry/src/assets-bundle'
 import { WEB_V3_COPY } from '../registry/src/v3-copy'
+import { machineCopy } from '../src/shared/machine-words'
 import { esc } from '../registry/src/site-shell'
 
 /**
@@ -134,7 +135,7 @@ describe('/me', () => {
     // The lede is the shared D1 sentence (v3), not a line written here: the
     // same words the avatar hovers on the Mac. Asserted BY THE TABLE so the
     // day it is reworded this test moves with it instead of failing.
-    expect(body).toContain(esc(WEB_V3_COPY['avatar.no-account']))
+    expect(body).toContain(esc(machineCopy(WEB_V3_COPY['avatar.no-account'], 'any')))
     expect(body).toContain('noindex')
   })
 

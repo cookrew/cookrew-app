@@ -307,7 +307,7 @@ export type TranslateResult =
   | { ok: false; failure: TranslateFailure }
 
 export const TRANSLATE_FAILURE_TEXT: Record<TranslateFailure, string> = {
-  disabled: 'Sous is switched off (COOKREW_SOUS=0), so nothing was translated.',
+  disabled: 'Sous is switched off for this launch, so nothing was translated.',
   unreachable: 'Sous could not be reached — is Ollama running on this machine?',
   'model-missing': 'Sous is running but the translation model is not pulled.',
   timeout: 'Sous did not finish in time; the transcript is unchanged.',

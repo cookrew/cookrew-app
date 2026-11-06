@@ -1,0 +1,36 @@
+{
+  "label": "cookrew-canvas-seal/1",
+  "code": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+  "initiatorPrivate": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "responderPrivate": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+  "initiatorPublic": "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a",
+  "responderPublic": "493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d",
+  "id": "2b58d7dc38523c4ef2e2b49a77a53f33",
+  "transcript": "42c2105ac0b17a74c970cfd4f6e5408c3f1a97927f8a715bf3c92c5807b3cdfa",
+  "sharedSecret": "dcd77236231add34de0561c47859a65d304f2a8550e8df98df053cf5dfabea0b",
+  "keyToResponder": "1f48edcca0bd2f0de6236928169c9023de03d6019316884c2707971b18c2fe54",
+  "keyToInitiator": "4268443fe2d869d689a21b57d97bc29e82422010d0603738fb234d0901719c55",
+  "keyConfirm": "31ee86ed371db7c109f4c896e69daba6f0db928dae0adac6421b4de86da9f8d9",
+  "proofResponder": "36f1d0c1164af77011ff08250ac402bfb3670963b57b06c42231a61bfd6e7fa0",
+  "proofInitiator": "98852a27978b3e64f5266f57103d934fb263d995c761c5fbe7dac4fa6d1dc13f",
+  "records": [
+    {
+      "seq": 0,
+      "plain": "68656c6c6f",
+      "toResponder": "1787910e4acc3545cf86b069ec0369e0ff6bf5ccaa",
+      "toInitiator": "86eccea2eb1a8cc413a5a12ba4f61035ee7ab8cbe0"
+    },
+    {
+      "seq": 1,
+      "plain": "00ff01fe",
+      "toResponder": "62355beb6768ac1d650878d3fae1157f7988d31a",
+      "toInitiator": "d39c0cd998958f44593a20b6d63914886c1abf64"
+    },
+    {
+      "seq": 4294967296,
+      "plain": "",
+      "toResponder": "247adfff27ae76e6b2889c6008fc7d76",
+      "toInitiator": "e0934f7e8268f90c7aa1a72a58b772de"
+    }
+  ]
+}

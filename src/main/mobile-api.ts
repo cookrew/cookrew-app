@@ -58,6 +58,7 @@ import { readBytes, readJson, respondJson, startSse, pairingAuthorized, presente
 import { cardCheckpoint, handleWatchClaim, handleWatchHello, handleWatchRoutes, watchRouteAllowed, watchTokenAccepted, watchWriteRefusal } from "./watch-routes";
 import { bridgeablePath, SOCKET_BRIDGE_MESSAGE_MAX, SOCKET_BRIDGE_PATH, SOCKET_BRIDGE_POST_MESSAGES, type SocketBridge } from "./socket-bridge";
 import { dynamicCompressionStats } from "./http-compress";
+import type { SetupLines } from "./setup-line";
 import type { StreamService } from "./stream-service";
 import { handleStreamRoutes } from "./stream-routes";
 import { handleStreamAdapters } from "./stream-adapters";
@@ -361,6 +362,8 @@ export interface MobileApiDeps {
   signalBus?: CableSignalBus;
   /** An agent acting on a card (use-signal-bus.ts): the cursor a phone viewer of that card draws. */
   useBus?: UseSignalBus;
+  /** The Setup card's lines (setup-line.ts). */
+  setupLines?: Pick<SetupLines, "start" | "now" | "current">;
   /**
    * The route program (shared/route.ts): the gateway state, the owner's one
    * default, each card's route. `routeBus` carries 'route' (the whole state,
@@ -827,6 +830,20 @@ export async function handleMobileApi(
       ...(deps.route ? { route: deps.route.health() } : {})
     });
     return true;
+  }
+  // A Setup line: the same door the desktop's is. The start is a POST, so it needs
+  // pairing, and main types only an allowlisted line at the Setup card's prompt.
+  if (p === "/api/setup-line" && deps.setupLines) {
+    if (method === "POST") {
+      respondJson(response, 200, await deps.setupLines.start(await readJson<unknown>(request)));
+      return true;
+    }
+    if (method === "GET") {
+      const terminalId = url.searchParams.get("terminal") ?? "";
+      const runId = url.searchParams.get("run");
+      respondJson(response, 200, runId === null ? deps.setupLines.current(terminalId) : await deps.setupLines.now(terminalId, runId));
+      return true;
+    }
   }
   // THE ROUTE. One fleet-wide read for the panel, one write for the owner's
   // default, one read and one write per card. The blanket gates above cover

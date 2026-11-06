@@ -4,7 +4,7 @@
 // WHY A LAUNCHER AND NOT A SYMLINK
 // --------------------------------
 // The app already installs a copy of this CLI into its runtime dir
-// (/tmp/cookrew-runtime) and injects that dir into every pane's PATH — which is
+// ($TMPDIR/cookrew-runtime, with -<uid> on Linux) and injects that dir into every pane's PATH — which is
 // why `cookrew` works inside an agent's terminal and nowhere else.
 //
 // Symlinking to that copy would be the obvious move and it is wrong: the
@@ -23,7 +23,8 @@ import { launcherScript, pickBinDir, stableNodePath } from './install-cli-lib.mj
 import process from 'node:process'
 
 const REPO_CLI = path.resolve(import.meta.dirname, '..', 'cli', 'cookrew.mjs')
-const RUNTIME_CLI = path.join(tmpdir(), 'cookrew-runtime', 'cookrew.mjs')
+// The shared name. Which dir holds this user's copy is the launcher's to work out.
+const RUNTIME_DIR = path.join(tmpdir(), 'cookrew-runtime')
 
 function main() {
   const explicit = process.env.COOKREW_BIN_DIR
@@ -53,11 +54,11 @@ function main() {
 
   const target = path.join(dir, 'cookrew')
   const node = stableNodePath(process.execPath, existsSync)
-  writeFileSync(target, launcherScript(RUNTIME_CLI, REPO_CLI, node, path.join(homedir(), '.cookrew', 'runtime')))
+  writeFileSync(target, launcherScript(RUNTIME_DIR, REPO_CLI, node, path.join(homedir(), '.cookrew', 'runtime')))
   chmodSync(target, 0o755)
 
   console.log(`installed: ${target}`)
-  console.log(`  runtime CLI: ${RUNTIME_CLI}${existsSync(RUNTIME_CLI) ? '' : '  (appears after the app launches)'}`)
+  console.log(`  runtime CLI: under ${RUNTIME_DIR}  (appears after the app launches)`)
   console.log(`  fallback   : ${REPO_CLI}`)
   console.log(`  node       : ${node}`)
 

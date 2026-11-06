@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AgentLatest } from './AgentLatest'
 import { launchRefusal } from '../prompt/launch-gate'
 import { AgentFailure } from './AgentFailure'
+import { useSimpleFix } from './simple-fix'
+import { TurnRefused } from './TurnRefused'
 import { draftKey, getDraft, useDraft } from '../prompt/prompt-draft'
 import { noteSent } from '../prompt/input-refused'
 import { submitLine, typeLine, useLiveLine } from '../prompt/live-line'
@@ -84,6 +86,7 @@ export function useQuickReply(agentId: string, onDraft?: (text: string) => void,
 
 /** What the card says: its latest turn, or the reply just sent. */
 export function CardWords({ agent, sent }: { agent: AgentView; sent: string | null }): React.JSX.Element {
+  const fix = useSimpleFix(agent.id)
   if (sent !== null) {
     return (
       <div className="ag-latest">
@@ -94,6 +97,8 @@ export function CardWords({ agent, sent }: { agent: AgentView; sent: string | nu
     )
   }
   if (agent.failure) return <AgentFailure failure={agent.failure} />
+  // A restart outlasts the refusal: the new pane is blank for a while. Nothing else does.
+  if (agent.refused || fix?.state === 'working' || fix?.state === 'done') return <TurnRefused id={agent.id} raw={agent.turn?.latest?.full ?? agent.refused ?? ''} />
   return <AgentLatest turn={agent.turn} fallback={agent.line} />
 }
 

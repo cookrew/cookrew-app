@@ -1,6 +1,7 @@
 import type { SetupRunning } from './setup-line-state'
 import { useEffect, useState } from 'react'
 import type { HarnessRow, RouteState } from '../../../shared/route'
+import { SETUP_LINE_COPY } from '../../../shared/first-run-copy'
 import { ROUTING_COPY } from '../../../shared/route-view'
 import { Accounts, Harnesses, LiveRoutes, Rented, SignInLink, StatusLine, type RunLine } from './RoutingSections'
 import { SetupScreen } from './SetupScreen'
@@ -16,11 +17,9 @@ import './routing-panel.css'
  * and the status line re-reads by itself when the line has run. There is no
  * connect button — the plugin writes the file, or the probe finds the port.
  *
- * Opens once by itself on first boot when nothing is installed; after that
- * it is a menu entry in the header.
+ * A menu entry in the header, and nothing more: Magpie is optional, so this
+ * never opens by itself (round 2: it covered the first run, in red).
  */
-
-export const ROUTING_SEEN_KEY = 'cr-routing-seen'
 
 export interface RoutingPanelProps {
   open: boolean
@@ -36,6 +35,9 @@ export interface RoutingPanelProps {
   focusTick: number
   /** The Setup line still running, so its button says so and cannot be pressed twice. */
   running?: SetupRunning | null
+  /** A press found the Setup pane taken: `error` says so, and Stop clears it. */
+  stuck?: boolean
+  onStop?: () => void
   onSetDefault: (model: string | null) => void
   onSetSharedMcp?: (on: boolean) => void
   /** Why the last default pick or Setup line did nothing; one line under the status. */
@@ -44,16 +46,13 @@ export interface RoutingPanelProps {
   /** Card names for the live rows. */
   names: ReadonlyMap<string, string>
   onZoom?: (terminalId: string) => void
+  /** The person's own endpoint: where it is changed once the first run is over. */
+  access?: React.ReactNode
 }
 
 export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null {
-  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onSetSharedMcp, error, onAddToDock, names, onZoom, running = null } = props
+  const { open, onClose, state, available, onRun, setupTerminalId, focusTick, onSetDefault, onSetSharedMcp, error, onAddToDock, names, onZoom, running = null, stuck = false, onStop } = props
   const [setupOpen, setSetupOpen] = useState(true)
-  // The first-boot flag burns when the panel is actually on screen, not when
-  // it was merely decided — a panel that never mounted must come back.
-  useEffect(() => {
-    if (open && typeof window !== 'undefined') markRoutingSeen(window.localStorage)
-  }, [open])
   // A key line was typed: the fold opens so the paste has somewhere to land.
   useEffect(() => {
     if (focusTick > 0) setSetupOpen(true)
@@ -86,6 +85,15 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
           <>
             <StatusLine state={state} onRun={onRun} running={running} />
             <SignInLink running={running} />
+            {(running !== null || stuck) && onStop && (
+              <div className="cr-routing-stop" role="status">
+                {running?.asking === 'password' && <span>{SETUP_LINE_COPY.PASSWORD}</span>}
+                <span className="sp" />
+                <button type="button" className="cr-routing-btn" onClick={onStop}>
+                  {SETUP_LINE_COPY.STOP}
+                </button>
+              </div>
+            )}
             {error && (
               <div className="cr-routing-bad" role="alert">
                 {error}
@@ -97,13 +105,14 @@ export function RoutingPanel(props: RoutingPanelProps): React.JSX.Element | null
             <Rented state={state} />
           </>
         )}
+        {props.access}
         <details className="cr-routing-fold cr-routing-setup" open={setupOpen} onToggle={(e) => setSetupOpen((e.target as HTMLDetailsElement).open)}>
           <summary>▾ Setup terminal · every button above lands on one line here · the phone drives the same PTY</summary>
           <div>
             {setupTerminalId === null ? (
               <div className="cr-routing-hint">the Setup card appears on the canvas the first time a button needs it</div>
             ) : (
-              <SetupScreen terminalId={setupTerminalId} focusTick={focusTick} />
+              <SetupScreen terminalId={setupTerminalId} focusTick={focusTick} prompting={running?.asking === 'password'} />
             )}
           </div>
         </details>
@@ -122,23 +131,4 @@ export function RoutingEntry({ status, onOpen }: { status: RouteState['status'] 
       <span className="word">Routing</span>
     </button>
   )
-}
-
-/** Should the panel open by itself on this boot? Only while nothing is installed, and only until it has been shown once. */
-export function shouldAutoOpen(status: RouteState['status'] | null, storage: Pick<Storage, 'getItem'>): boolean {
-  if (status !== 'absent') return false
-  try {
-    return !storage.getItem(ROUTING_SEEN_KEY)
-  } catch {
-    return false
-  }
-}
-
-/** The panel is on screen: it will not open by itself again. */
-export function markRoutingSeen(storage: Pick<Storage, 'setItem'>): void {
-  try {
-    storage.setItem(ROUTING_SEEN_KEY, String(Date.now()))
-  } catch {
-    // storage refused; the panel may open again next boot, which is the safer failure
-  }
 }

@@ -3,6 +3,7 @@
 // --env, the direct backend hands it to the spawn options; the args land on
 // the command line shell-quoted; a served pane never carries any of it.
 
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { AttachSpec } from '../src/main/multiplexer'
 import { bootScript, commandWithArgs, routeExports } from '../src/main/tmux-multiplexer'
@@ -93,5 +94,14 @@ describe('the direct backend', () => {
     expect(spawn.args[2]).toContain('codex -c model_provider=magpie')
     expect(spawn.env).toEqual({ MAGPIE_GATEWAY_KEY: 'magpie-cookrew' })
     expect(mux.attachSpawn(base)).toEqual({ file: '/bin/zsh', args: ['-l', '-c', 'codex'] })
+  })
+
+  it('NODE_OPTIONS joins what the shell already has: rc files ran first, and a boot must not erase them', () => {
+    const line = routeExports({ ...base, env: { NODE_OPTIONS: '--require="/a b/g.cjs"' } })[0]
+    const read = (start: string) =>
+      execFileSync('sh', ['-c', `${line}; printf %s "$NODE_OPTIONS"`], { env: { ...process.env, NODE_OPTIONS: start }, encoding: 'utf8' })
+    expect(read('--max-old-space-size=8192')).toBe('--max-old-space-size=8192 --require="/a b/g.cjs"')
+    expect(read('')).toBe('--require="/a b/g.cjs"')
+    expect(read('--require="/a b/g.cjs"')).toBe('--require="/a b/g.cjs"')
   })
 })

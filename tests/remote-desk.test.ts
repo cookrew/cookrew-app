@@ -274,12 +274,12 @@ describe('take control', () => {
     expect(answer).toMatchObject({ ok: false, state: { id: 'needs-accessibility' } })
   })
 
-  it('refuses on a locked Mac: nothing here reaches a lock screen', async () => {
+  it('refuses on a locked Mac: control waits for the unlock, which has its own door', async () => {
     const r = rig({}, { locked: true })
     r.desk.setSwitch(true)
     const answer = await r.desk.takeControl('c1', phone)
     expect(answer).toMatchObject({ ok: false, state: { id: 'locked' } })
-    expect((answer as { error: string }).error).toContain('someone at the Mac')
+    expect((answer as { error: string }).error).toContain('Unlock it from here')
   })
 
   it('there is no control on Linux, whatever the switch says', async () => {
@@ -633,3 +633,35 @@ describe('a wait that was answered twice', () => {
     expect(r.types().filter((t) => t === 'remote.ready')).toHaveLength(1)
   })
 })
+
+describe('who may type a password at the lock screen', () => {
+  const phone = { key: 'device:p', name: 'Phone', here: false }
+
+  it('a paired device, with the switch on', () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    expect(r.desk.unlockRefusal(phone)).toBeNull()
+  })
+
+  it('never with the switch off: only someone at the Mac turns that on', () => {
+    expect(rig().desk.unlockRefusal(phone)).toContain('Remote control of this Mac is off')
+  })
+
+  it('not the Mac’s own window', () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    expect(r.desk.unlockRefusal({ key: 'mac', name: 'This Mac', here: true })).toContain('at the Mac')
+  })
+
+  it('not after Stop', () => {
+    const r = rig()
+    r.desk.setSwitch(true)
+    r.desk.stopAll()
+    expect(r.desk.unlockRefusal(phone)).not.toBeNull()
+  })
+
+  it('not on Linux', () => {
+    expect(rig({ platform: 'linux' }).desk.unlockRefusal(phone)).not.toBeNull()
+  })
+})
+

@@ -124,7 +124,7 @@ describe('a reserved prefix is refused HERE, and named', () => {
     const result = await script.it.claim({ username: 'acct-x', password: PASSWORD })
     expect(result).toMatchObject({ ok: false, reason: 'bad_username' })
     expect(result.ok === false && result.message).toBe(
-      'acct- is reserved for the doors — pick another name.',
+      'acct- is reserved — pick another name.',
     )
     expect(script.urls).toHaveLength(0)
     expect(loadAccount(base)).toBeNull()

@@ -290,7 +290,7 @@ describe('the server-rendered row', () => {
 
   it('says what the badge means, in the section’s own sentence', () => {
     const html = oneDesktop('11111111-2222-3333-4444-555555555555')
-    expect(html).toContain('holding its line at cookrew.dev')
+    expect(html).toContain('holding its line here')
   })
 
   it('tells a reader with no desktop why the list is empty', () => {

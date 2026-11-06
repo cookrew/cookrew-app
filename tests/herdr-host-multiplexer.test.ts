@@ -1091,6 +1091,7 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
     expect(types.length).toBe(1)
   })
 
+  // settleMs sets the whole retype window (six of it): at 10 a busy runner spends it on one look.
   it('DOES retype while the pane still shows a bare shell — the keys were dropped', () => {
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]),
@@ -1099,7 +1100,7 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
       }),
       '-o args=': '-zsh'
     })
-    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 10 })
+    new HerdrHostMultiplexer({ session: 'cookrewtest', configPath: '/c', runner, settleMs: 100 })
       .ensureSession(SPEC)
     const types = runner.calls.filter((c) => c.args[1] === 'send-text')
     expect(types.length).toBeGreaterThan(1)
@@ -1127,6 +1128,24 @@ describe('sanitizeAgentEnv — the launcher session must not leak into agents', 
     expect(clean.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
     expect(clean.PATH).toBe('/usr/bin')
     expect(clean.HERDR_SESSION).toBe('cookrew')
+  })
+})
+
+describe('sanitizeAgentEnv — what a person set on purpose reaches the agent (C-4)', () => {
+  it('passes CLAUDE_CODE_ settings when no Claude session launched this app: they can only be the person’s', () => {
+    const clean = sanitizeAgentEnv({ CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: '1', PATH: '/usr/bin' })
+    expect(clean.CLAUDE_CODE_SIMPLE).toBe('1')
+    expect(clean.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT).toBe('1')
+  })
+
+  it('still takes out a session’s own markers, wherever they came from', () => {
+    const clean = sanitizeAgentEnv({ CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SSE_PORT: '1234', CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_SIMPLE: '1' })
+    expect(Object.keys(clean)).toEqual(['CLAUDE_CODE_SIMPLE'])
+  })
+
+  it('strips them all when a Claude session did launch it: nothing tells its vars from a person’s', () => {
+    const clean = sanitizeAgentEnv({ CLAUDECODE: '1', CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_SOMETHING_NEW: '1', PATH: '/usr/bin' })
+    expect(Object.keys(clean)).toEqual(['PATH'])
   })
 })
 

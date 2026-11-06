@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { registryFromArgv } from '../shared/machine-words'
 
 let deepLinkSubscriber: ((link: unknown) => void) | null = null
 let heldDeepLinks: readonly unknown[] = []
@@ -282,6 +283,26 @@ const api = {
   disconnect: (connId: string) => ipcRenderer.invoke('node:disconnect', connId),
   listPresets: () => ipcRenderer.invoke('preset:list'),
   createTerminal: (opts: unknown) => ipcRenderer.invoke('terminal:create', opts),
+  firstRunRead: () => ipcRenderer.invoke('first-run:read'),
+  firstRunAdvance: (to: string) => ipcRenderer.invoke('first-run:advance', to),
+  firstRunPreflight: () => ipcRenderer.invoke('first-run:preflight'),
+  firstRunTask: () => ipcRenderer.invoke('first-run:task'),
+  firstRunDiscard: () => ipcRenderer.invoke('first-run:discard'),
+  firstRunCanStart: (preset: string) => ipcRenderer.invoke('first-run:can-start', preset),
+  onFirstRun: (cb: (view: unknown) => void) => {
+    const listener = (_e: unknown, view: unknown): void => cb(view)
+    ipcRenderer.on('first-run:changed', listener)
+    return () => ipcRenderer.removeListener('first-run:changed', listener)
+  },
+  setupLineStart: (ask: unknown) => ipcRenderer.invoke('setup-line:start', ask),
+  setupLineNow: (terminalId: string, runId: string) => ipcRenderer.invoke('setup-line:now', terminalId, runId),
+  setupLineCurrent: (terminalId: string) => ipcRenderer.invoke('setup-line:current', terminalId),
+  accessState: () => ipcRenderer.invoke('access:state'),
+  // The key crosses once, into the secrets store, and is never sent back.
+  accessSave: (input: unknown) => ipcRenderer.invoke('access:save', input),
+  accessClear: () => ipcRenderer.invoke('access:clear'),
+  accessSimple: (input: unknown) => ipcRenderer.invoke('access:simple', input),
+  accessSimpleOffer: (terminalId: string) => ipcRenderer.invoke('access:simple-offer', terminalId),
   useSources: () => ipcRenderer.invoke('use:sources'),
   openUseSource: (pick: unknown) => ipcRenderer.invoke('use:open-source', pick),
   openScreenSettings: (pane?: string) => ipcRenderer.invoke('use:screen-settings', pane),
@@ -734,5 +755,6 @@ contextBridge.exposeInMainWorld('cookrew', api)
 // before any page script runs. The phone and the site never get it, and their
 // sentences stand as written.
 contextBridge.exposeInMainWorld('cookrewPlatform', process.platform)
+contextBridge.exposeInMainWorld('cookrewRegistry', registryFromArgv(process.argv))
 
 export type CookrewApi = typeof api

@@ -25,7 +25,8 @@ import {
 
 export interface BrowserCastDeps {
   getInstance: (browserId: string) => Promise<BrowserInstance | null>
-  enabled: () => boolean
+  /** Main draws this card (browser-owner.ts); a page in a webview has no stream. */
+  enabled: (browserId: string) => boolean
   /** Per-process secret used only by the cross-origin Electron renderer. */
   desktopToken: () => string
   /**
@@ -136,11 +137,13 @@ export function createBrowserCast(deps: BrowserCastDeps): BrowserCast {
     // the same constraint EventSource has and the same answer the HTTP gate
     // gives it (mobile-http.ts · pairingAuthorized).
     const authorized = desktopAuthorized || deps.paired(url.searchParams.get('token'))
+    // Credentials before the card: `enabled` reads the store, and a stranger on
+    // the LAN must not be able to make main walk it.
     if (
-      !deps.enabled() ||
       typeof key !== 'string' ||
       !authorized ||
-      (!originAllowed(req, deps.allowedOrigins?.() ?? []) && !desktopAuthorized)
+      (!originAllowed(req, deps.allowedOrigins?.() ?? []) && !desktopAuthorized) ||
+      !deps.enabled(browserId)
     ) {
       return void socket.destroy()
     }

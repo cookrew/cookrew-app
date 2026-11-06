@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { hostPlatform, machineCopy } from '../../shared/machine-words'
 import { cookrew } from './api'
 import { CrIcon } from './icons'
 
@@ -39,7 +40,7 @@ export function WatchPairRow({ onPair }: { onPair: () => void }): React.JSX.Elem
   }
   return (
     <>
-      <button type="button" className="cr-more-item" title="Pair an Apple Watch with this Mac" onClick={onPair}>
+      <button type="button" className="cr-more-item" title={machineCopy('Pair an Apple Watch with this Mac', hostPlatform())} onClick={onPair}>
         <CrIcon name="watch" />
         <span className="cr-more-label">{failed ? 'Apple Watch · try again' : 'Apple Watch…'}</span>
       </button>

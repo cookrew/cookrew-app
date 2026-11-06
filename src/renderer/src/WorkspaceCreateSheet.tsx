@@ -177,7 +177,9 @@ export function WorkspaceCreateSheet({
         )}
       </div>
       {(refused ?? reason) && <p className="cr-ws-say refused" role="alert">{refused ?? reason}</p>}
-      {verdict?.notes.map((note) => (
+      {/* Said once there is something to say it about: a name makes CREATE
+          pressable, so this still comes before anything can be created. */}
+      {(name.trim() || chosen.current) && verdict?.notes.map((note) => (
         <p className="cr-ws-say" key={note}>{note}</p>
       ))}
       {!name.trim() && <p className="cr-ws-say quiet">Give it a name to create it.</p>}

@@ -20,7 +20,7 @@ same crew, and every agent gets a `cookrew` CLI to talk to the others.
 There is no Intel Mac or Linux release. Windows is a preview: agents end when the app
 closes, and the `cookrew` CLI is not supported there.
 
-> **Not notarized yet.** Releases up to and including 0.5.0 are unsigned, so macOS
+> **Not notarized yet.** Releases up to and including 0.5.1 are unsigned, so macOS
 > stops them on first launch. Until a release says it is notarized, drag Cookrew to
 > Applications and clear the quarantine flag before opening it:
 >

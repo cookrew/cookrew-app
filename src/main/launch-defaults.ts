@@ -53,13 +53,14 @@ export function multiInstanceDefault(env: Env = process.env): boolean {
 }
 
 /**
- * Browser cards driven by a headless Chrome main owns (agents and the phone
- * can drive them). That needs a Chrome, so with nothing set it is on exactly
- * when one is installed — otherwise every browser card would come up blank.
- * An explicit COOKREW_INTERACTIVE_BROWSER wins both ways, without probing.
+ * PAGES driven by a headless Chrome main owns (agents and the phone can drive
+ * them). That needs a Chrome, so it is on exactly when one is installed, and
+ * setting COOKREW_INTERACTIVE_BROWSER=1 cannot conjure one: forced on without
+ * Chrome, every page came up dark (box round 3). =0 still turns it off, without
+ * probing. Use cards are not decided here at all (browser-owner.ts).
  */
 export function interactiveBrowserDefault(env: Env, chromeFound: () => boolean): boolean {
-  return readSwitch(env.COOKREW_INTERACTIVE_BROWSER) ?? chromeFound()
+  return readSwitch(env.COOKREW_INTERACTIVE_BROWSER) !== false && chromeFound()
 }
 
 /**
@@ -68,4 +69,33 @@ export function interactiveBrowserDefault(env: Env, chromeFound: () => boolean):
  */
 export function multiplexerPreference(env: Env = process.env): string {
   return env.COOKREW_MULTIPLEXER?.trim() || DEFAULT_MULTIPLEXER
+}
+
+/** `current` to the character, then each dir it does not hold yet. */
+export function appendedPath(current: string | undefined, dirs: readonly string[]): string {
+  const held = (current ?? '').split(':')
+  const missing = dirs.filter((dir, i) => dir !== '' && !held.includes(dir) && dirs.indexOf(dir) === i)
+  return [current ?? '', ...missing].filter((part) => part !== '').join(':')
+}
+
+/**
+ * A DOCK LAUNCH GETS THE PATH OF NOBODY'S SHELL. launchd hands a GUI app
+ * /usr/bin:/bin and little else, so `tmux` from Homebrew and `herdr` in
+ * ~/.local/bin both failed their probe, and the app fell to the direct backend
+ * (agents die with the window) on a Mac that had what it needed. The places
+ * installers use are appended, never put first, so the person's own order
+ * still wins. Set before PtyManager is built: the host is chosen there, once.
+ *
+ * PACKAGED APPS ONLY, by the caller. A launch from a terminal has the PATH its
+ * person chose, and a QA instance's safety rests on that: a PATH without herdr
+ * is what keeps a second Electron off the fleet's host.
+ */
+export function widenedPath(env: Env, home: string, platform: string = process.platform): string {
+  if (platform === 'win32') return env.PATH ?? ''
+  return appendedPath(env.PATH, installerDirs(home, platform))
+}
+
+/** Where installers put a tool, whether or not any shell has been told. */
+export function installerDirs(home: string, platform: string = process.platform): string[] {
+  return platform === 'win32' ? [] : ['/opt/homebrew/bin', '/usr/local/bin', `${home}/.local/bin`, `${home}/.claude/local`, `${home}/.opencode/bin`]
 }

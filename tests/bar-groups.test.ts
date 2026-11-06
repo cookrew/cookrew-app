@@ -8,10 +8,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BAR_SIDES } from '../src/renderer/src/zoom/zoom-path'
-import { EMPTY_PAGE, itemSig, markSeen, observe, pageOf, readBook, replySig, isUnseen } from '../src/renderer/src/zoom/bar-seen'
+import { EMPTY_PAGE, itemSig, markSeen, observe, pageOf, readBook, isUnseen } from '../src/renderer/src/zoom/bar-seen'
 import { agentInbox, groupSize, itemInbox, sinceWord, withHeld } from '../src/renderer/src/zoom/bar-inbox'
 import { barCardSpot } from '../src/renderer/src/zoom/BarCards'
 import { barCard, FROM_FRESH_MS } from '../src/renderer/src/zoom/bar-pick'
+import { pageInView } from '../src/renderer/src/page-in-view'
 import type { CanvasNode } from '../src/shared/model'
 
 const read = (...p: string[]): string => readFileSync(join(__dirname, '../src/renderer/src', ...p), 'utf8')
@@ -81,12 +82,11 @@ describe('the seen book (since you last looked)', () => {
     book = observe(book, ws, [{ id: 'a', sig: 'x' }], 300)
     expect(pageOf(book, ws).noticed.tmp).toBeUndefined()
   })
-  it("pruning a big page keeps the agents' read replies", () => {
+  it('pruning a big page drops what the board no longer has', () => {
     const many = Array.from({ length: 4001 }, (_, k) => ({ id: `i${k}`, sig: 'b1' }))
     let book = observe({}, ws, many, 1)
-    book = markSeen(book, ws, 'agent1', 'r55')
     book = observe(book, ws, [{ id: 'i0', sig: 'b1' }], 2)
-    expect(pageOf(book, ws).seen).toEqual({ i0: 'b1', agent1: 'r55' })
+    expect(pageOf(book, ws).seen).toEqual({ i0: 'b1' })
   })
   it('never mutates the book it was given', () => {
     const book = Object.freeze(observe({}, ws, [{ id: 'a', sig: 'x' }], 100))
@@ -106,17 +106,37 @@ describe('the seen book (since you last looked)', () => {
 describe('what the AGENTS group holds', () => {
   it('waiting on you first, then a reply not read yet; working and resting are not in it', () => {
     const rows = [row('work', 'working', 50), row('rest', 'quiet', 60), row('read', 'done', 70), row('reply', 'done', 80, true), row('wait1', 'waiting', 10), row('wait2', 'waiting', 30), row('off', 'offline', 90)]
-    expect(agentInbox(rows, EMPTY_PAGE).map((e) => [e.id, e.why])).toEqual([['wait2', 'waiting'], ['wait1', 'waiting'], ['reply', 'reply']])
+    expect(agentInbox(rows).map((e) => [e.id, e.why])).toEqual([['wait2', 'waiting'], ['wait1', 'waiting'], ['reply', 'reply']])
   })
-  it('a reply seen (its card or full view opened) leaves; the next reply comes back', () => {
+  it('a reply is in it while the tracker says unread, and no time on this device moves that', () => {
     const r = row('reply', 'done', 80, true)
-    const page = pageOf(markSeen({}, 'w', 'reply', replySig(r)), 'w')
-    expect(agentInbox([r], page)).toEqual([])
-    expect(agentInbox([{ ...r, lastActivityAt: 81 }], page).map((e) => e.id)).toEqual(['reply'])
+    expect(agentInbox([r]).map((e) => e.id)).toEqual(['reply'])
+    expect(agentInbox([{ ...r, unread: false }])).toEqual([])
+    expect(agentInbox([{ ...r, unread: false, lastActivityAt: 999_999 }])).toEqual([])
+  })
+  it('opening its card reads it for every device; the seen book holds no replies', () => {
+    const groups = read('zoom', 'BarGroups.tsx')
+    expect(groups).toContain("if (agentById.get(id)?.why === 'reply') cookrew().turnSeen(id)")
+    expect(groups).not.toContain('replySig')
   })
   it('a waiting agent stays until it is answered, card opened or not', () => {
     const w = row('w', 'waiting', 5)
-    expect(agentInbox([w], pageOf(markSeen({}, 'x', 'w', replySig(w)), 'x')).map((e) => e.id)).toEqual(['w'])
+    expect(agentInbox([w]).map((e) => e.id)).toEqual(['w'])
+  })
+})
+
+describe('a look needs the window in view', () => {
+  const page = (visibilityState: DocumentVisibilityState, focused: boolean): Pick<Document, 'visibilityState' | 'hasFocus'> => ({ visibilityState, hasFocus: () => focused })
+  it('only a visible, focused window is looking', () => {
+    expect(pageInView(page('visible', true))).toBe(true)
+    expect(pageInView(page('visible', false))).toBe(false)
+    expect(pageInView(page('hidden', false))).toBe(false)
+    expect(pageInView(page('hidden', true))).toBe(false)
+  })
+  it('a reply that lands behind another app is not read by the view left open', () => {
+    expect(read('TerminalOverlay.tsx')).toContain("if (phase === 'replied' && pageInView()) cookrew().turnSeen(node.id)")
+    const groups = read('zoom', 'BarGroups.tsx')
+    expect(groups).toContain('fullItem && fullItemSig && pageInView()')
   })
 })
 

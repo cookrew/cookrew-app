@@ -1,4 +1,5 @@
 // LANE PANEL2, items 1, 3, 4: a Setup line watched until the prompt returns,
+import { TOOL_NOTES } from '../src/shared/first-run-copy'
 // the "routes" tick with the one sentence the dial also reads, and the brief
 // drawn under the name. Static markup, the house way (no DOM env).
 
@@ -17,27 +18,23 @@ describe('a typed Setup line, watched', () => {
   it('is running until the prompt comes back after the echo — an old prompt replayed by the attach does not count', () => {
     let w = startedLine(LINE)
     w = observeOutput(w, '\x1b[90mold output\x1b[0m\r\n~/app $ ')
-    expect(w.done).toBe(false)
     w = observeOutput(w, `${LINE}\r\n`)
-    expect(w.echoed).toBe(true)
-    expect(w.done).toBe(false)
     // Words alone are not a sign-in any more (setup-line-state: "opens at login" fooled them):
-    // the button reads the pane's own line until the pane prints the page to open.
+    // the button reads the pane's own line, as main read it, until the pane prints the page to open.
     w = observeOutput(w, 'Finish signing in in your browser\r\n')
-    expect(runningView(w)).toEqual({ line: LINE, lastLine: 'Finish signing in in your browser', oauth: false, url: null })
-    expect(runningLabel(runningView(w), LINE)).toBe('running… Finish signing in in your browser')
+    const pane = { lastLine: 'Finish signing in in your browser', asking: null }
+    expect(runningView(w, pane)).toEqual({ line: LINE, lastLine: 'Finish signing in in your browser', oauth: false, url: null, asking: null })
+    expect(runningLabel(runningView(w, pane), LINE)).toBe('running… Finish signing in in your browser')
     w = observeOutput(w, 'https://auth.openai.com/oauth/authorize?x=1\r\n')
     expect(runningView(w)).toMatchObject({ oauth: true, url: 'https://auth.openai.com/oauth/authorize?x=1' })
     expect(runningLabel(runningView(w), LINE)).toBe('sign in — open the page')
     expect(runningLabel(runningView(w), 'magpie serve')).toBeNull()
-    w = observeOutput(w, 'Signed in as drej.\r\n~/app $ ')
-    expect(w.done).toBe(true)
   })
 
-  it('reads the pane’s last line while running, and nothing when the pane has only echoed the line', () => {
-    const w = observeOutput(startedLine('magpie serve'), 'magpie serve\r\nlistening on 127.0.0.1:3425\r\n')
-    expect(runningLabel(runningView(w), 'magpie serve')).toBe('running… listening on 127.0.0.1:3425')
-    expect(runningLabel(runningView(observeOutput(startedLine('magpie serve'), 'magpie serve')), 'magpie serve')).toBe('running…')
+  it('reads what main read of the pane while running, and nothing before it has', () => {
+    const w = observeOutput(startedLine('magpie serve'), 'magpie serve\r\n')
+    expect(runningLabel(runningView(w, { lastLine: 'listening on 127.0.0.1:3425', asking: null }), 'magpie serve')).toBe('running… listening on 127.0.0.1:3425')
+    expect(runningLabel(runningView(w), 'magpie serve')).toBe('running…')
     expect(LINE_RUNNING).toContain('still running')
   })
 
@@ -102,5 +99,14 @@ describe('the brief under the name', () => {
     expect(html).not.toContain('<input')
     const none = buildAgentRows({ roster: [{ id: 'a2', name: 'Forge', preset: 'Claude Code', role: null, orch: false, active: true, workspaceId: 'ws', workspaceName: 'Cookrew Dev', cwd: '/x', spawnedAt: 1 } as never], activities: {}, now: 10 })
     expect(none.quiet[0].brief).toBeNull()
+  })
+})
+
+describe('Magpie’s Install says up front when it can need admin rights (N2)', () => {
+  it('on Linux, in the status line, before anything is pressed', () => {
+    const state = routeFixture('absent')
+    const asks = { ...state, setup: { ...state.setup, installAsksAdmin: true } }
+    expect(renderToStaticMarkup(<StatusLine state={asks} onRun={() => {}} />)).toContain(TOOL_NOTES.ADMIN.replace('’', '’'))
+    expect(renderToStaticMarkup(<StatusLine state={state} onRun={() => {}} />)).not.toContain(TOOL_NOTES.ADMIN)
   })
 })

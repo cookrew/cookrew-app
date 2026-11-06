@@ -406,6 +406,41 @@
   }
   const devicePayload = (d) => ({ id: d.id, kind: d.kind, name: d.name, jwk: d.jwk })
 
+  /**
+   * `cr_token:<desktop id>`, the pairing token for a Mac this browser reaches
+   * (reach.js, pairing-scope.ts). Storage can be refused; that means none held.
+   */
+  const PAIRING_PREFIX = 'cr_token:'
+  const pairingKeys = () => {
+    try {
+      const store = globalThis.localStorage
+      return Array.from({ length: store?.length ?? 0 }, (_, at) => store.key(at)).filter((key) => key?.startsWith(PAIRING_PREFIX))
+    } catch {
+      return []
+    }
+  }
+  const dropPairingKeys = (keys) => {
+    try {
+      for (const key of keys) globalThis.localStorage.removeItem(key)
+    } catch {
+      // Refused storage holds nothing to drop.
+    }
+  }
+  /**
+   * A MAC THE ACCOUNT NO LONGER HAS. A delete made on another device tells this
+   * browser nothing, so a signed-out page reads the public revoked list and lets
+   * go of the tokens it names. Unread, it keeps them: a stale key costs nothing,
+   * and a wrongly dropped one is a pairing to redo.
+   */
+  const dropTakenBackTokens = async () => {
+    const held = pairingKeys()
+    if (held.length === 0) return
+    const out = await v2('GET', '/v2/keys').catch(() => ({ status: 0 }))
+    if (out.status !== 200 || !Array.isArray(out.body?.revoked)) return
+    const gone = new Set(out.body.revoked.map((id) => String(id).toLowerCase()))
+    dropPairingKeys(held.filter((key) => gone.has(key.slice(PAIRING_PREFIX.length).toLowerCase())))
+  }
+
   const v2 = async (method, path, body) => {
     const res = await fetch(path, {
       method,
@@ -548,12 +583,17 @@
       try {
         const res = await fetch(`/v2/accounts/${encodeURIComponent(name)}`, { method: 'HEAD' })
         if (mine !== checking) return
+        if (res.status === 410) {
+          chip('acct-username-note', 'unavailable', 'no')
+          note(`@${name} cannot be used. Choose another name.`)
+          return
+        }
         chip('acct-username-note', res.status === 200 ? 'taken' : 'free', res.status === 200 ? 'no' : 'ok')
         note(res.status === 200 ? `@${name} is someone else’s. Try another.` : 'Yours to take.')
       } catch {
         if (mine !== checking) return
         chip('acct-username-note', 'unknown')
-        note('cookrew.dev did not answer, so this name cannot be checked yet.')
+        note('This site did not answer, so this name cannot be checked yet.')
       }
     }
 
@@ -790,10 +830,14 @@
         const current = $('me-delete-password').value
         void v2('DELETE', '/v2/me', { confirm: confirmName, current }).then((out) => {
           if (out.status === 204) {
-            // This browser's key named a device that stays revoked for a month,
-            // so a new account here must not sign in with it.
-            const dropped = indexedDB.deleteDatabase('cookrew-device')
-            dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+            // By the revoked list, not all of them: the keys name no account, and
+            // this browser may hold a pairing for somebody else's Mac.
+            void dropTakenBackTokens().finally(() => {
+              // This browser's key named a device that stays revoked for a month,
+              // so a new account here must not sign in with it.
+              const dropped = indexedDB.deleteDatabase('cookrew-device')
+              dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+            })
             return
           }
           toast(out.body?.message ?? 'Your account could not be deleted.', 6000)
@@ -1048,6 +1092,7 @@
 
   /** Who the header should name: a v2 session first, then the v1 key. */
   void v2('GET', '/v2/me').then((out) => {
+    if (out.status === 401) void dropTakenBackTokens()
     if (out.status !== 200 || !out.body?.username) return
     const button = $('signin')
     if (!button) return

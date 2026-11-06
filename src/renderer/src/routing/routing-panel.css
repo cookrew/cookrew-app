@@ -61,13 +61,13 @@
   background: var(--cream-md);
   font-size: 13px;
 }
-.cr-routing-status.absent, .cr-routing-status.offline { border-color: var(--rose); background: rgba(220, 38, 38, 0.07) }
+.cr-routing-status.offline { border-color: var(--rose); background: rgba(220, 38, 38, 0.07) }
 .cr-routing-status.online { border-color: #2a7d4f; background: #dcefd3; color: #1f4d14 }
 .cr-routing-status .big { font-family: var(--font-pixel); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase }
 .cr-routing-status .sp { flex: 1 }
 .cr-routing-lamp { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--dim) }
 .cr-routing-status.online .cr-routing-lamp { background: var(--hp); box-shadow: 0 0 6px rgba(107, 190, 88, 0.8) }
-.cr-routing-status.absent .cr-routing-lamp, .cr-routing-status.offline .cr-routing-lamp { background: var(--rose) }
+.cr-routing-status.offline .cr-routing-lamp { background: var(--rose) }
 .cr-routing-source { font-family: var(--font-mono); font-size: 10.5px; color: #1f4d14; border: 1px solid #2a7d4f; padding: 1px 6px; background: var(--cream-hi) }
 
 .cr-routing-seg {
@@ -260,8 +260,8 @@
 /* The Setup card's screen, folded under everything. The PTY's geometry is
    the canvas card's (SetupScreen.tsx follows it, never pushes back), so the
    card's rows can be taller than this box: the box CLIPS, and the viewer
-   keeps the newest rows — the prompt — in view by scrolling to the bottom
-   after every render. Nothing of the terminal paints outside this frame. */
+   keeps the newest rows in view by scrolling to the bottom after every
+   render, or to the cursor at a password prompt. Nothing of the terminal paints outside this frame. */
 .cr-routing-setup { margin-top: 8px }
 .cr-routing-screen {
   height: 240px;
@@ -275,6 +275,15 @@
 .cr-routing-screen .xterm { height: 100% }
 .cr-routing-screen .xterm-viewport { overflow: hidden !important }
 .cr-routing-hint { font-family: var(--font-mono); font-size: 11px; color: var(--muted); padding: 4px 10px }
+
+.cr-routing-stop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.cr-routing-stop .sp { flex: 1 }
 
 /* One line for what did not happen: a refused line, a default that did not land. */
 .cr-routing-signin {
@@ -327,7 +336,7 @@
 }
 .cr-routing-entry .cr-routing-lamp { width: 8px; height: 8px }
 .cr-routing-entry.online .cr-routing-lamp { background: var(--hp); box-shadow: 0 0 5px rgba(107, 190, 88, 0.8) }
-.cr-routing-entry.absent .cr-routing-lamp, .cr-routing-entry.offline .cr-routing-lamp { background: var(--rose) }
+.cr-routing-entry.offline .cr-routing-lamp { background: var(--rose) }
 
 /* The phone: one column, the ticks wrap under the name, the screen shorter. */
 @media (max-width: 700px) {

@@ -161,7 +161,7 @@ export function discover(d: DiscoveryEnv, hasBinary: boolean): Discovered {
     key: DEFAULT_KEY,
     defaultModel: null,
     known: false,
-    why: `${source} names ${url}, which is not this machine; set COOKREW_ROUTE_REMOTE=1 to allow a remote gateway`
+    why: `${source} names ${url}, which is not this machine, so nothing routes through it`
   })
   const plugin = readPluginRoute(d)
   if (plugin) {
@@ -179,7 +179,7 @@ export function discover(d: DiscoveryEnv, hasBinary: boolean): Discovered {
     }
   }
   const fromEnv = d.env.MAGPIE_ADDR ? parseAddr(d.env.MAGPIE_ADDR) : null
-  if (fromEnv && !hostAllowed(fromEnv.url, d.env)) return refused('MAGPIE_ADDR', fromEnv.url)
+  if (fromEnv && !hostAllowed(fromEnv.url, d.env)) return refused('This launch', fromEnv.url)
   const port = fromEnv?.port ?? settingsPort(d) ?? DEFAULT_PORT
   const url = fromEnv?.url ?? `http://127.0.0.1:${port}`
   return {

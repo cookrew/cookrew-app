@@ -5,6 +5,8 @@ import { MAC_VIEWER, type RemoteAccess, type RemoteState, type RemoteWhere, type
 import { cardNameOf, emptySourceList, isUseSourceId, type UseSource, type UseSourceCard, type UseSourceList } from '../shared/use-sources'
 import { withDeadline } from './pixel-instance'
 import type { RemoteDesk, SettingsPane } from './remote-desk'
+import type { UnlockDoor } from './remote-unlock'
+import type { UnlockAnswer, UnlockBegin } from '../shared/remote-unlock'
 import { servedUseRefusal } from './use-commands'
 
 /**
@@ -33,6 +35,8 @@ export const USE_SOURCES_FRESH_MS = 2_000
 /** Past the capturer's own deadline: a hung read must fail, or every later ask joins it. */
 export const USE_SOURCES_LIST_MS = 12_000
 const PICK_FRESH_MS = 30_000
+/** A sealed password is a few hundred bytes; anything far past that is not one. */
+const UNLOCK_WIRE_MAX = 4096
 
 export interface UseSourceProvider {
   list(): Promise<UseSourceList>
@@ -52,6 +56,7 @@ export interface UseSourceServiceDeps {
   cardAt?(workspaceId: string, url: string): BrowserNodeData | null
   /** Absent: this machine has no desk, and everything asked of it is refused. */
   desk?: RemoteDesk
+  unlock?: UnlockDoor
   /** Who a presented credential is. */
   who?(credential: string | null): ViewerWho
   now?: () => number
@@ -72,6 +77,8 @@ export interface UseSourceService {
   control(workspaceId: string, ask: unknown, who: ViewerWho): Promise<UseSourceAnswer<null>>
   restart(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<null>>
   wake(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<null>>
+  unlockBegin(workspaceId: string, who: ViewerWho): Promise<UseSourceAnswer<UnlockBegin>>
+  unlock(workspaceId: string, wire: unknown, who: ViewerWho): Promise<UseSourceAnswer<UnlockAnswer>>
   whoIs(credential: string | null): ViewerWho
 }
 
@@ -256,6 +263,23 @@ export function createUseSourceService(deps: UseSourceServiceDeps): UseSourceSer
         if (!deps.desk) return refused(503, NO_DESK)
         const answer = await deps.desk.wake(who)
         return answer.ok ? { ok: true, value: null } : refused(409, answer.error)
+      }),
+
+    unlockBegin: (workspaceId, who) =>
+      answering(async () => {
+        const refusal = gate(workspaceId)
+        if (refusal) return refused(403, refusal)
+        if (!deps.unlock) return refused(503, NO_DESK)
+        return { ok: true, value: await deps.unlock.begin(who) }
+      }),
+
+    unlock: (workspaceId, wire, who) =>
+      answering(async () => {
+        const refusal = gate(workspaceId)
+        if (refusal) return refused(403, refusal)
+        if (!deps.unlock) return refused(503, NO_DESK)
+        if (typeof wire !== 'string' || wire.length > UNLOCK_WIRE_MAX) return refused(400, 'That request could not be read.')
+        return { ok: true, value: await deps.unlock.unlock(who, wire) }
       }),
 
     whoIs: (credential) => deps.who?.(credential) ?? SOME_DEVICE

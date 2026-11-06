@@ -138,6 +138,13 @@ export function ownerSecretPaths(
     at(appDir === DEFAULT_APP_DIR ? '.cookrew' : appDir, 'sous-decisions.jsonl'),
     // The one the ruling names by hand.
     at('.claude', '.credentials.json'),
+    // The login keychain. `security` opens this file in its own process, so the
+    // read is a file read: with this denied a seat's lookup finds nothing, and
+    // without it the seat rules read a canary item out (2026-11-06). Any item that
+    // trusts `security` is in reach otherwise, a pane's key (pane-keychain.ts) and
+    // an owner's Claude sign-in among them. A seat runs on what it is lent, so
+    // nothing it is meant to have is here.
+    at('Library', 'Keychains'),
     at('.claude.json'),
     at('.ssh'),
     at('.aws'),
@@ -164,8 +171,14 @@ export function ownerSecretPaths(
     // owner's companion to whoever holds it.
     path.join(base, 'secrets'),
     path.join(base, 'pairing-token'),
+    // A person's own endpoint (agent-access.ts): its key, copied out for panes
+    // to read at boot, and where it points. A seat never runs on either.
+    path.join(base, 'access-keys'),
+    path.join(base, 'access.json'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
+    // What a phone's sealed Mac password opens under (remote-unlock.ts).
+    path.join(base, 'unlock-key.json'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,
     // plugin-providers.json, logins.json, plugin auth — is every upstream key
     // the owner holds; the Sous ledger and its Magpie facts; the owner's

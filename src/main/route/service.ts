@@ -191,7 +191,7 @@ export class RouteService extends EventEmitter {
       autoGroup: this.models.some((m) => m.id === 'group/auto'),
       sharedMcp: this.sharedMcp,
       mcpServers: this.mcpServers,
-      setup: { ...lines, addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
+      setup: { ...lines, installAsksAdmin: process.platform === 'linux', addKeyLine: ADD_KEY_STEM, addGroupLine: groupLineFor(this.models.map((m) => m.id)) }
     }
   }
 

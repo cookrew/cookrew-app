@@ -6,6 +6,7 @@ import {
 } from './turn-view-model'
 import type { ActivityClock } from './activity-clock'
 import type { AgentRegistryEntry } from './agent-registry'
+import { turnFailure } from '../../shared/turn-failure'
 import type { TerminalActivity } from '../../shared/turn'
 import type { CanvasNode, TerminalNodeData } from '../../shared/model'
 import type { LaunchFailure } from '../../shared/launch-failure'
@@ -20,7 +21,7 @@ import type { LaunchFailure } from '../../shared/launch-failure'
  * everything"), which is what makes the join a lookup rather than a match.
  */
 
-export type AgentPhase = 'working' | 'waiting' | 'done' | 'offline' | 'quiet'
+export type AgentPhase = 'working' | 'waiting' | 'failed' | 'done' | 'offline' | 'quiet'
 
 export interface AgentRow {
   id: string
@@ -43,6 +44,8 @@ export interface AgentRow {
   brief?: string | null
   /** Why it is not running, when that is more than resting. */
   failure?: LaunchFailure | null
+  /** The model service's words, when it refused the last turn. */
+  refused?: string | null
   /**
    * THE sort key, descending. Start time while a turn is in flight, last
    * output once it is done — never a value that moves on its own, or the list
@@ -100,6 +103,8 @@ const FLOAT_RANK: Record<AgentPhase, number> = {
   done: 2,
   offline: 3,
   quiet: 4,
+  // A refused turn wants a person as much as a question does.
+  failed: 0,
 }
 
 /** A turn worth showing: something was asked, replied, or is on screen. */
@@ -150,6 +155,8 @@ function phaseOf(
   // the canvas card calls it too. Nothing at all is one of the 220 that have
   // never run here.
   if (!activity) return turn === null ? 'quiet' : 'done'
+  // Its last words say the provider refused it: quiet, and no more done than that.
+  if ((activity.phase === 'replied' || activity.phase === 'idle') && turnFailure(activity)) return 'failed'
   switch (activity.phase) {
     case 'thinking':
       return 'working'
@@ -174,6 +181,7 @@ function rowOf(
   // The live tracker wins the moment it has anything; the checkpoint is the
   // fallback, through the same view model the card binds (T1).
   const turn = hasTurn(activity) ? turnViewOf(activity) : checkpointViewModel(checkpoint ?? null)
+  const phase = phaseOf(activity, entry.active, turn)
   return {
     id: entry.id,
     name: entry.name,
@@ -185,12 +193,13 @@ function rowOf(
     workspaceName: entry.workspaceName,
     cwd: entry.cwd,
     spawnedAt: entry.spawnedAt,
-    phase: phaseOf(activity, entry.active, turn),
+    phase,
     unread: activity?.phase === 'replied',
     turn,
     turnCount: activity?.turnCount ?? 0,
     brief,
     failure: entry.failure ?? null,
+    refused: phase === 'failed' && activity ? turnFailure(activity) : null,
     lastActivityAt: changedAt ?? sortKeyOf(activity) ?? entry.spawnedAt,
   }
 }

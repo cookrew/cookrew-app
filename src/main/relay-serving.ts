@@ -6,6 +6,7 @@ import { attachDoorToRelay, type RelayResponse } from './relay-client'
 import { joinRelay, type JoinRefusal } from './relay-session'
 import { registryAccount } from './registry-account'
 import { generateSealKeyPair } from '../shared/relay-seal'
+import { DOOR_MARKER } from '../shared/remote-unlock'
 import type { RelayDial } from './relay-dial'
 
 /**
@@ -354,6 +355,8 @@ function askOurselves(
         method: request.method,
         headers: {
           ...outgoing,
+          // Over whatever the caller sent, so a door's traffic cannot pass for local.
+          [DOOR_MARKER]: '1',
           ...(payload ? { 'content-length': String(payload.byteLength) } : {})
         }
       },

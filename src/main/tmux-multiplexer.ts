@@ -82,9 +82,21 @@ export function commandWithArgs(spec: AttachSpec): string {
   return args.length > 0 ? `${command} ${args.join(' ')}` : command
 }
 
+/**
+ * NODE_OPTIONS joins the shell's value: rc files ran before this line, and a
+ * heap size set there must survive. Skipped when the value is already in it,
+ * as it is after herdr's --env.
+ */
+function joinNodeOptions(value: string): string {
+  const quoted = shellQuote(value)
+  return `case " $NODE_OPTIONS " in *${quoted}*) ;; *) export NODE_OPTIONS="\${NODE_OPTIONS:+$NODE_OPTIONS }"${quoted} ;; esac`
+}
+
 /** `export K='v'` per route env entry, with the single quote escaped the POSIX way. */
 export function routeExports(spec: AttachSpec): string[] {
-  return Object.entries(spec.env ?? {}).map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+  return Object.entries(spec.env ?? {}).map(([key, value]) =>
+    key === 'NODE_OPTIONS' ? joinNodeOptions(value) : `export ${key}=${shellQuote(value)}`
+  )
 }
 
 

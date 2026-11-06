@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { runtimeDirFor } from '../src/main/runtime-dir'
 // @ts-expect-error the installer lib ships no types; the test exercises runtime behaviour.
 // install-cli-LIB, not install-cli: the executable carries a shebang, and
 // vite-node on Windows inlines project .mjs imports — the unstripped `#!`
@@ -12,7 +17,7 @@ import { launcherScript, pickBinDir, stableNodePath } from '../scripts/install-c
  */
 
 const NODE = '/opt/homebrew/Cellar/node/25.9.0_1/bin/node'
-const RUNTIME = '/var/folders/xx/T/cookrew-runtime/cookrew.mjs'
+const RUNTIME = '/var/folders/xx/T/cookrew-runtime'
 const REPO = '/Users/x/workspace/cookrew-dev/cli/cookrew.mjs'
 
 describe('launcherScript', () => {
@@ -36,7 +41,8 @@ describe('launcherScript', () => {
     // effect until the app restarted, and a stale runtime copy answered with
     // pre-edit behaviour. A packaged install has no repo path, so runtime wins
     // there by absence rather than by precedence.
-    expect(script.indexOf('$REPO"')).toBeLessThan(script.indexOf('$RUNTIME"'))
+    expect(script.indexOf('exec "$NODE" "$REPO"')).toBeGreaterThan(-1)
+    expect(script.indexOf('exec "$NODE" "$REPO"')).toBeLessThan(script.indexOf('exec "$NODE" "$RUNTIME/cookrew.mjs"'))
   })
 
   it('is POSIX sh, not the user\'s shell', () => {
@@ -45,6 +51,82 @@ describe('launcherScript', () => {
 
   it('tells the user how to recover when nothing resolves', () => {
     expect(script).toContain('npm run install-cli')
+  })
+})
+
+/**
+ * WHICH COPY, on a machine with two people on it. /tmp is shared on Linux, so the
+ * app keeps a dir per user (src/main/runtime-dir.ts), and a path baked at install
+ * would name the first person's: EACCES for the second, and running a script
+ * another user wrote if the dir were open. Run for real, with a stand-in node.
+ */
+describe('the runtime copy a launcher runs', () => {
+  const cleanup: Array<() => void> = []
+  afterEach(() => {
+    for (const run of cleanup.splice(0)) run()
+  })
+  const uid = process.getuid?.() ?? 0
+
+  const box = () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'cookrew-launcher-'))
+    cleanup.push(() => rmSync(tmp, { recursive: true, force: true }))
+    const node = path.join(tmp, 'node')
+    writeFileSync(node, '#!/bin/sh\necho "$1"\n')
+    chmodSync(node, 0o755)
+    const launcher = path.join(tmp, 'cookrew')
+    writeFileSync(launcher, launcherScript(path.join(tmp, 'cookrew-runtime'), path.join(tmp, 'no-repo.mjs'), node, path.join(tmp, 'no-pointer')))
+    chmodSync(launcher, 0o755)
+    const copyIn = (dir: string): string => {
+      const at = path.join(tmp, dir)
+      mkdirSync(at)
+      writeFileSync(path.join(at, 'cookrew.mjs'), '')
+      return path.join(at, 'cookrew.mjs')
+    }
+    const run = () => spawnSync('/bin/sh', [launcher], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: tmp } })
+    return { tmp, copyIn, run }
+  }
+
+  it('finds the per-user dir the app really makes', () => {
+    const { tmp, copyIn, run } = box()
+    const made = runtimeDirFor({ tmp, platform: 'linux', uid, ownerOf: () => null })
+    const copy = copyIn(path.basename(made))
+    expect(run().stdout.trim()).toBe(copy)
+  })
+
+  it('prefers it over the shared name', () => {
+    const { copyIn, run } = box()
+    copyIn('cookrew-runtime')
+    const own = copyIn(`cookrew-runtime-${uid}`)
+    expect(run().stdout.trim()).toBe(own)
+  })
+
+  it('keeps the shared name for the person who owns it, and every Mac', () => {
+    const { copyIn, run } = box()
+    expect(run().status).toBe(1)
+    const shared = copyIn('cookrew-runtime')
+    expect(run().stdout.trim()).toBe(shared)
+  })
+
+  // A dir planted ahead of time can swap a link after the check: the dir must be
+  // the caller's own too, and really a dir.
+  it('never runs a copy through a dir that is only a link', () => {
+    const { tmp, copyIn, run } = box()
+    const elsewhere = copyIn('elsewhere')
+    symlinkSync(path.dirname(elsewhere), path.join(tmp, `cookrew-runtime-${uid}`))
+    const done = run()
+    expect(done.stdout).toBe('')
+    expect(done.status).toBe(1)
+  })
+
+  it('never runs a copy that is somebody else’s', () => {
+    const { tmp, run } = box()
+    mkdirSync(path.join(tmp, 'cookrew-runtime'))
+    // Root's file, as near as a test gets to another user's.
+    symlinkSync('/etc/hosts', path.join(tmp, 'cookrew-runtime', 'cookrew.mjs'))
+    const done = run()
+    expect(done.stdout).toBe('')
+    expect(done.stderr).toContain('CLI not found')
+    expect(done.status).toBe(1)
   })
 })
 

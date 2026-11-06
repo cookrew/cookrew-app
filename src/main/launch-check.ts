@@ -65,6 +65,20 @@ function resolves(word: string, cwd: string, searchPath: string): boolean {
     .some((dir) => dir.length > 0 && isExecutableFile(path.join(path.resolve(cwd, dir), word)) !== false)
 }
 
+/**
+ * Is the program SEEN here? The other way round from `resolves`, for a card nobody
+ * asked for: a dir this user may not read proves nothing, and neither does a
+ * command that takes a shell to say.
+ */
+export function toolSeen(command: string, cwd: string, searchPath: string): boolean {
+  const word = commandWord(command)
+  if (word === null) return false
+  if (word.includes('/')) return isExecutableFile(path.resolve(cwd, word)) === true
+  return searchPath
+    .split(':')
+    .some((dir) => dir.length > 0 && isExecutableFile(path.join(path.resolve(cwd, dir), word)) === true)
+}
+
 const failure = (over: Pick<LaunchFailure, 'kind' | 'why' | 'fix'> & Partial<LaunchFailure>): LaunchFailure => ({
   blocked: true,
   exitCode: null,
@@ -102,6 +116,13 @@ export interface LaunchCheck {
   installLine: (word: string) => string | null
 }
 
+/** A fix nobody can type is no fix: `npm i -g …` on a box with no npm (box round 3). */
+function runnableLine(line: string | null, check: LaunchCheck): string | null {
+  // Its first word, not commandWord: a curl line is a pipe, and the pipe is ours.
+  const tool = line?.trim().split(/\s+/)[0]
+  return tool && resolves(tool, check.cwd, check.path) ? line : null
+}
+
 /** What stops this card starting, or null. Only what is certain. */
 export function launchBlock(check: LaunchCheck): LaunchFailure | null {
   const folder = folderFailure(check.cwd)
@@ -109,7 +130,7 @@ export function launchBlock(check: LaunchCheck): LaunchFailure | null {
   if (!check.checkCommand) return null
   const word = commandWord(check.command)
   if (word === null || resolves(word, check.cwd, check.path)) return null
-  const install = check.installLine(path.basename(word))
+  const install = runnableLine(check.installLine(path.basename(word)), check)
   return failure({
     kind: 'command-missing',
     exitCode: 127,

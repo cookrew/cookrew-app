@@ -83,9 +83,9 @@ describe('launchBlock', () => {
       command: 'claude',
       path: bin,
       checkCommand: true,
-      installLine: (word) => (word === 'claude' ? 'npm i -g @anthropic-ai/claude-code' : null)
+      installLine: (word) => (word === 'claude' ? 'tool install claude' : null)
     })
-    expect(failure?.fix).toContain('npm i -g @anthropic-ai/claude-code')
+    expect(failure?.fix).toContain('tool install claude')
   })
 
   it('a file that is not executable is not a command', () => {

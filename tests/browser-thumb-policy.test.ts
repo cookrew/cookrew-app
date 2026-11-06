@@ -30,9 +30,9 @@ describe('browser thumbnail source policy', () => {
     expect(shouldPollThumbs({ remote: false, interactive: false })).toBe(false)
   })
 
-  it('snapshots the local headless page only on the desktop, flag on', () => {
+  it('asks main for card pictures only on the desktop, once ownership is known', () => {
     expect(shouldSnapshotLocally({ remote: false, interactive: true })).toBe(true)
-    expect(shouldSnapshotLocally({ remote: false, interactive: false })).toBe(false)
+    expect(shouldSnapshotLocally({ remote: false, interactive: false })).toBe(true)
     expect(shouldSnapshotLocally({ remote: false, interactive: null })).toBe(false)
     expect(shouldSnapshotLocally({ remote: true, interactive: true })).toBe(false)
   })

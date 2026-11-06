@@ -36,6 +36,9 @@ export interface HostPlanInput {
   deps: ClaimDeps
 }
 
+/** What the refused launch's dialog says. refusalLine, with its launch recipe, is the operator's, for the log. */
+export const REFUSAL_FOR_A_PERSON = 'Another Cookrew already runs the terminals on this machine, so this one is closing. Use the one that is open.'
+
 export function refusalLine(owner: OwnerRecord, claimDir: string, deps: ClaimDeps): string {
   return (
     `Another Cookrew owns its herdr session (pid ${owner.pid}, userData ${owner.instance}). ` +

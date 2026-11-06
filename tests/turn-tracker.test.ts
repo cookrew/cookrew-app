@@ -257,6 +257,21 @@ describe('TurnTracker recovered turns (empty-prompt history bug)', () => {
     tracker.disposeAll()
   })
 
+  // N10: a card waiting for a resend must tell a boot's spinner from the resend.
+  it('says whether anyone asked for the turn in hand', () => {
+    const { tracker, session } = makeTracker()
+    session.full = '✻ Cerebrating… (esc to interrupt · 3s)'
+    session.emit('data', '✻ Cerebrating… (esc to interrupt · 3s)')
+    const phantom = tracker.list().find((a) => a.terminalId === 'term-1')
+    expect(phantom).toMatchObject({ phase: 'thinking', asked: false })
+    tracker.disposeAll()
+
+    const asked = makeTracker()
+    asked.session.emit('input', 'do the thing\r', 'owner')
+    expect(asked.tracker.list().find((a) => a.terminalId === 'term-1')).toMatchObject({ phase: 'thinking', asked: true })
+    asked.tracker.disposeAll()
+  })
+
   // Regression (27fe569 → fixed): a first ask that merges into a boot phantom
   // was dropped because resumeThinking resets lastSubmitAt to 0, so the
   // input-seen state was lost by finalize and the turn looked like boot noise.

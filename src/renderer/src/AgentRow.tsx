@@ -20,6 +20,7 @@ import type { TurnMatch } from '../../shared/turn-search'
 const PHASE_LABEL: Record<AgentPhase, string> = {
   working: 'WORKING',
   waiting: 'NEEDS YOU',
+  failed: 'FAILED',
   done: 'DONE',
   offline: 'OFFLINE',
   quiet: 'QUIET',

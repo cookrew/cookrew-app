@@ -5,6 +5,8 @@
  * (terminal-attachments.ts); terminal↔terminal cables are its ties; the
  * workspace list and the roster give the other workspaces' marks.
  */
+import { REFUSED_COPY } from '../../../shared/first-run-copy'
+import { refusalKind } from '../../../shared/turn-failure'
 import type { AgentPhase, AgentRow } from '../agent-rows'
 import type { TurnViewModel } from '../turn-view-model'
 import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta } from '../../../shared/model'
@@ -27,6 +29,8 @@ export interface AgentView {
   word: string
   /** Why it is not running, when that is more than resting: the card says so in place of a latest. */
   failure?: LaunchFailure | null
+  /** The model service's words, when its last turn was refused: the card says what that means. */
+  refused?: string | null
   line: string
   browsers: number
   notes: number
@@ -112,6 +116,7 @@ export const COINS_PER_AGENT = 4
 /** One line of what an agent last said or does now. */
 export function lineOf(row: AgentRow | undefined, brief: string | null | undefined): string {
   if (row?.failure) return row.failure.why
+  if (row?.refused) return REFUSED_COPY[refusalKind(row.refused)]
   const t = row?.turn
   return t?.latest?.text?.trim() || t?.title?.trim() || t?.ask?.trim() || t?.tail?.trim() || brief?.trim() || 'Nothing said yet.'
 }
@@ -231,6 +236,7 @@ export function agentViewOf(row: AgentRow, attachIndex: AttachmentIndex): AgentV
     word: failureWord(row.failure) ?? statusWord(status),
     line: lineOf(row, row.brief),
     failure: row.failure ?? null,
+    refused: row.refused ?? null,
     browsers: list.filter((a) => a.kind === 'browser').length,
     notes: list.filter((a) => a.kind === 'note').length,
     turn: row.turn ?? null

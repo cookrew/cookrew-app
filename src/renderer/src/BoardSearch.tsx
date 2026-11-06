@@ -176,6 +176,7 @@ export function BoardSearch({ workspace, activeWorkspaceId, attentionCount, onAc
                 query={query}
                 onQueryChange={setQuery}
                 variant="popover"
+                actionCount={actions.length}
                 onClose={close}
               />
             </Suspense>

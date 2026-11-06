@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { parseRemoteState, type RemoteAccess, type RemoteAction, type RemoteConfirm, type RemoteHostView, type RemoteState, type RemoteWhere } from '../../../shared/remote-access'
 import { cookrew, isRemoteMode } from '../api'
+import { openUnlockSheet } from './unlock-sheet-store'
 
 /**
  * WHAT THE PANEL'S BUTTONS DO, FOR EVERY PLACE THAT DRAWS IT. Which side of the
@@ -47,6 +48,8 @@ export function useRemoteActs(options: { state: RemoteState | null; onCheck: () 
         } else if (action.id === 'restart') {
           const answer = await cookrew().remoteRestart?.()
           setNote(answer?.ok === false ? answer.error : 'Restarting Cookrew…')
+        } else if (action.id === 'unlock') {
+          openUnlockSheet(() => void onCheck())
         } else if (action.id === 'wake-display') {
           const answer = await cookrew().remoteWake?.()
           setNote(answer?.ok === false ? answer.error : 'Waking the display…')

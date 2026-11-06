@@ -28,6 +28,12 @@ describe('a sign-in is a sign-in word AND a page to open', () => {
     expect(runningView(w).url).toBeNull()
   })
 
+  it('does not read a wrapped line’s URL as a page either', () => {
+    const line = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    const w = feed(line, `${line.slice(0, 60)} \r${line.slice(60)}\r\n`, 'sign in to the App Store first\r\n')
+    expect(runningView(w).oauth).toBe(false)
+  })
+
   it('finds claude’s sign-in page and hands its URL to the panel', () => {
     const url = 'https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz'
     const w = feed('claude login', 'claude login\r\n', "Browser didn't open? Use the url below to sign in:\r\n", `${url}\r\n`, 'Paste code here if prompted > ')
@@ -52,6 +58,29 @@ describe('a sign-in is a sign-in word AND a page to open', () => {
     const url = 'https://claude.ai/oauth/authorize?x=1'
     const w = feed('claude login', 'claude login\r\n', `Sign in at \x1b[4m\x1b[36m${url}\x1b[0m\r\n`)
     expect(runningView(w).url).toBe(url)
+  })
+})
+
+describe('N1: a status bar never reaches a label', () => {
+  // What box round 3 saw on a button, bytes as tmux drew them.
+  const bar = '\x1b[30;1H\x1b(B\x1b[m\x1b[1m cookrew ·\x1b[22m1:bash*\x1b(B\x1b[m'
+  const LINE = 'curl -fsSL https://claude.ai/install.sh | bash'
+
+  it('takes nothing from the stream for a button: the words are what main read of the pane', () => {
+    const watch = feed(LINE, `${LINE}\r\n`, `installing…\r\n${bar}`)
+    expect(runningLabel(runningView(watch), LINE)).toBe('running…')
+    expect(runningLabel(runningView(watch, { lastLine: 'installing…', asking: null }), LINE)).toBe('running… installing…')
+  })
+
+  it('still finds a sign-in page in a stream with the bar in it', () => {
+    const url = 'https://claude.ai/oauth/authorize?x=1'
+    const watch = feed('claude login', 'claude login\r\n', `Sign in at ${url}\r\n${bar}`)
+    expect(runningView(watch).url).toBe(url)
+  })
+
+  it('strips the charset escape the old pattern left behind as (B', () => {
+    const watch = feed('claude', 'claude\r\n', `done\x1b(B\r\n`)
+    expect(watch.tail).not.toContain('(B')
   })
 })
 

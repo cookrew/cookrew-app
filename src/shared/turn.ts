@@ -28,6 +28,11 @@ export interface TerminalActivity {
   /** True when the terminal runs an agent preset (non-empty command). */
   agent: boolean
   /**
+   * Input is behind the turn in hand. A spinner in a booting pane reads as a turn
+   * too, and nobody asked for that one (the tracker calls it a phantom).
+   */
+  asked?: boolean
+  /**
    * PHASE ONLY, from the multiplexer — no local mirror stood behind this.
    *
    * A cold canvas has no PTY attached to anything, so the only thing known
@@ -634,6 +639,8 @@ const NUMBERED_ROW_RE = /^\s*[❯›>▶►]?\s*\d{1,2}[.)]\s/
  */
 const AGENT_METER_RE = /\S*\/\d+k\s+\(auto\)/
 const AGENT_CWD_RE = /^\s*[~/]\S*(?:\s+\([^)]+\))?\s*$/
+/** A TUI's own timing line ("Took 0.0s", on the box's board): no words of the agent's. */
+const TOOK_RE = /^\s*Took \d+(?:\.\d+)?s\s*$/
 
 /**
  * Reduce raw appended terminal text to displayable summary lines: drop TUI
@@ -651,6 +658,7 @@ export function cleanTurnLines(text: string): string[] {
       (!STATUS_RE.test(l) || NUMBERED_ROW_RE.test(l)) &&
       !TMUX_STATUS_RE.test(l) &&
       !AGENT_METER_RE.test(l) &&
+      !TOOK_RE.test(l) &&
       !(AGENT_CWD_RE.test(l) && AGENT_METER_RE.test(lines[i + 1] ?? '')),
   )
   return kept.reduce<string[]>((acc, line) => {

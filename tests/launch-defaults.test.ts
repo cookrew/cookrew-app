@@ -72,19 +72,20 @@ describe('every default can still be overridden', () => {
     expect(multiInstanceDefault({ COOKREW_MULTI_INSTANCE: '0' })).toBe(false)
   })
 
-  it('COOKREW_INTERACTIVE_BROWSER wins over the Chrome probe both ways', () => {
+  it('COOKREW_INTERACTIVE_BROWSER=0 turns headless pages off; =1 cannot conjure a Chrome', () => {
     expect(interactiveBrowserDefault({ COOKREW_INTERACTIVE_BROWSER: '0' }, yes)).toBe(false)
-    expect(interactiveBrowserDefault({ COOKREW_INTERACTIVE_BROWSER: '1' }, no)).toBe(true)
+    expect(interactiveBrowserDefault({ COOKREW_INTERACTIVE_BROWSER: '1' }, yes)).toBe(true)
+    expect(interactiveBrowserDefault({ COOKREW_INTERACTIVE_BROWSER: '1' }, no)).toBe(false)
   })
 
   it('COOKREW_MULTIPLEXER picks another host', () => {
     expect(multiplexerPreference({ COOKREW_MULTIPLEXER: 'tmux' })).toBe('tmux')
   })
 
-  it('never probes for Chrome when the switch is explicit', () => {
+  it('never probes for Chrome when the switch is off', () => {
     const probe = () => {
       throw new Error('probed')
     }
-    expect(interactiveBrowserDefault({ COOKREW_INTERACTIVE_BROWSER: '1' }, probe)).toBe(true)
+    expect(interactiveBrowserDefault({ COOKREW_INTERACTIVE_BROWSER: '0' }, probe)).toBe(false)
   })
 })
