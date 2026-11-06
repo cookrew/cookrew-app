@@ -174,6 +174,7 @@ import { createCanvasLink } from './canvas-link'
 import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
 import { sealProofHeaders } from './seal-proof'
+import { sealedSwitchMemory } from './remote-switch-memory'
 import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
 import { mintWatchInvite, registerAccountIpc } from './account-ipc'
@@ -6582,6 +6583,7 @@ function currentBuild(): RemoteBuild {
   })
 }
 let keepAwakeId: number | null = null
+let stayUpId: number | null = null
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
   build: currentBuild,
@@ -6603,6 +6605,17 @@ const remoteDesk = createRemoteDesk({
       keepAwakeId = null
     }
   },
+  // The display may sleep; the machine may not, or a locked Mac drops off the network.
+  stayUp: {
+    start: () => {
+      stayUpId ??= powerSaveBlocker.start('prevent-app-suspension')
+    },
+    stop: () => {
+      if (stayUpId !== null) powerSaveBlocker.stop(stayUpId)
+      stayUpId = null
+    }
+  },
+  switchMemory: sealedSwitchMemory(path.join(homedir(), '.cookrew', 'remote-switch'), electronSealer(safeStorage)),
   host: (view) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:remote-host', view)
     remoteTray.show(view)
@@ -8975,6 +8988,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     if (on) unlockDoor.reopen()
     return remoteDesk.setSwitch(on)
   }))
+  remoteDesk.restoreSwitch()
   ipcMain.handle('use:remote-stop', ownerOnly(() => {
     remoteDesk.stopAll()
     return { ok: true }

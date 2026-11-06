@@ -13,7 +13,7 @@ import { accessOf } from './remote-acts'
  */
 
 export const SWITCH_LABEL = 'Allow remote control of this Mac'
-export const SWITCH_MEANS = 'Your paired devices can unlock this Mac with its password and take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on until Cookrew restarts, and someone at the Mac can stop it at any time.'
+export const SWITCH_MEANS = 'Your paired devices can unlock this Mac with its password and take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on after a restart until you turn it off here, keeps this Mac from sleeping while it is on, and someone at the Mac can stop it at any time.'
 
 /** What was pressed is what is sent: two surfaces show this switch, and either may be behind the other. */
 export const switchAnswer = (set: (on: boolean) => Promise<RemoteAnswer>, on: boolean): Promise<RemoteAnswer> => set(on)
@@ -30,7 +30,8 @@ export function useRemoteSwitch(active: boolean, onFlipped?: () => void): { fact
     if (!set) return
     void switchAnswer(set, on).then((answer) => {
       setError(answer.ok ? null : answer.error)
-      if (!answer.ok) return
+      // A refusal can still mean it moved: on for this run, and not saved.
+      if (!answer.ok) return void cookrew().remoteAccess?.().then((next) => setFacts(accessOf(next)?.control ?? null))
       setFacts((now) => (now ? { ...now, switchOn: on } : now))
       onFlipped?.()
     })
