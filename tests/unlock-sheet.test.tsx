@@ -5,7 +5,7 @@ import { hostOutsideTheMac } from '../src/shared/remote-unlock'
 
 const noop = (): void => undefined
 const draw = (over: Partial<UnlockSheetViewProps>): string =>
-  renderToStaticMarkup(<UnlockSheetView needsCode={false} stale={false} onCode={noop} trust="same" words={['able', 'baby']} saved={false} busy={false} error={null} password="" remember={false} onPassword={noop} onRemember={noop} onUnlock={noop} onForget={noop} onTrustNew={noop} onClose={noop} {...over} />)
+  renderToStaticMarkup(<UnlockSheetView needsCode={false} stale={false} onCode={noop} canRemember trust="same" words={['able', 'baby']} saved={false} busy={false} error={null} password="" remember={false} onPassword={noop} onRemember={noop} onUnlock={noop} onForget={noop} onTrustNew={noop} onClose={noop} {...over} />)
 
 describe('UnlockSheetView', () => {
   it('asks for the password as a password, and offers to remember it', () => {
@@ -31,6 +31,11 @@ describe('UnlockSheetView', () => {
     expect(html).not.toContain('Remember on this device')
     expect(html).toContain('pairing code')
     expect(html).toContain('aria-label="Pairing link"')
+  })
+
+  it('keeps no password on a page cookrew.dev serves: one altered page could read it without a keystroke', () => {
+    expect(draw({ canRemember: false })).not.toContain('Remember on this device')
+    expect(draw({ canRemember: false })).toContain('type="password"')
   })
 
   it('says when the code it held has been replaced', () => {

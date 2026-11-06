@@ -15,6 +15,8 @@ const PING_MS = 60_000
 /** Typing a password into a lock screen takes seconds, and a line can be slow. */
 const REQUEST_MS = 60_000
 const RETRY_MS = 1_000
+/** A POST that hangs would hold every record behind it. */
+const UP_MS = 20_000
 /** A down stream that keeps refusing is a session that has ended. */
 const DOWN_TRIES = 8
 
@@ -52,6 +54,7 @@ export interface SealClientDeps {
   readonly fetchFn?: typeof fetch
   readonly retryMs?: number
   readonly requestMs?: number
+  readonly upMs?: number
 }
 
 interface Waiting {
@@ -114,10 +117,13 @@ export async function openSeal(deps: SealClientDeps): Promise<SealClient> {
       if (closed) throw new Error('The sealed session has ended.')
       const records: SealRecord[] = []
       for (const frame of frames) records.push(await session.seal(encodeFrame(frame)))
-      const up = await fetchFn(deps.url(`/~seal/up?s=${session.id}`), { method: 'POST', body: concat(...records.map(encodeRecord)) as BodyInit, signal: stop.signal })
-      if (up.status === 404) end('The sealed session has ended.')
+      const hung = new AbortController()
+      const timer = setTimeout(() => hung.abort(), deps.upMs ?? UP_MS)
+      const up = await fetchFn(deps.url(`/~seal/up?s=${session.id}`), { method: 'POST', body: concat(...records.map(encodeRecord)) as BodyInit, signal: AbortSignal.any([stop.signal, hung.signal]) }).finally(() => clearTimeout(timer))
+      if (!up.ok) throw new Error('The sealed session has ended.')
     })
-    tail = sent.catch(() => undefined)
+    // Numbered records with a gap are never read past it, so a lost POST ends the session.
+    tail = sent.catch(() => end('The sealed session has ended.'))
     return sent
   }
 
@@ -152,7 +158,12 @@ export async function openSeal(deps: SealClientDeps): Promise<SealClient> {
     for (;;) {
       const { done, value } = await stream.read()
       if (done) return true
-      for (const record of reader.push(value)) await inbox.accept(record)
+      for (const record of reader.push(value)) {
+        if ((await inbox.accept(record)) === 'forged') {
+          end('The sealed session has ended: a record was tampered with.')
+          return false
+        }
+      }
     }
   }
 

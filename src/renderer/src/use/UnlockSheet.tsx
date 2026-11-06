@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { hostOutsideTheMac, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
 import { cookrew } from '../api'
-import { apiPath, clientBase } from '../api-base'
+import { clientBase } from '../api-base'
 import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
 import { closeUnlockSheet, subscribeUnlockSheet, unlockSheetOpen } from './unlock-sheet-store'
@@ -21,6 +21,8 @@ export interface UnlockSheetViewProps {
   needsCode: boolean
   /** It had one, and it is out of date. */
   stale: boolean
+  /** Only on a page the Mac served itself: a saved password needs no typing to be read. */
+  canRemember: boolean
   onCode: (pasted: string) => void
   trust: KeyTrust | null
   words: readonly string[] | null
@@ -69,10 +71,12 @@ function PasswordForm(props: UnlockSheetViewProps): React.JSX.Element {
       ) : (
         <>
           <input className="rp-unlock-input" type="password" aria-label="Mac password" autoComplete="off" maxLength={UNLOCK_PASSWORD_MAX} value={password} disabled={busy} onChange={(event) => onPassword(event.target.value)} />
-          <label className="rp-unlock-remember">
-            <input type="checkbox" checked={remember} disabled={busy} onChange={(event) => onRemember(event.target.checked)} />
-            <span>Remember on this device. Anyone who can open Cookrew on it can then unlock this Mac.</span>
-          </label>
+          {props.canRemember && (
+            <label className="rp-unlock-remember">
+              <input type="checkbox" checked={remember} disabled={busy} onChange={(event) => onRemember(event.target.checked)} />
+              <span>Remember on this device. Anyone who can open Cookrew on it can then unlock this Mac.</span>
+            </label>
+          )}
         </>
       )}
       <div className="rp-actions">
@@ -146,7 +150,8 @@ function useUnlockWay(attempt: number): Way {
     let alive = true
     let client: SealClient | null = null
     setWay({ kind: 'opening' })
-    openSeal({ url: apiPath, code })
+    // The relay's prefix and nothing else: this must not follow a direct plane or a slug.
+    openSeal({ url: (path) => `${clientBase()}${path}`, code })
       .then((opened) => {
         client = opened
         if (!alive) return opened.close()
@@ -154,7 +159,8 @@ function useUnlockWay(attempt: number): Way {
       })
       .catch((failure: unknown) => {
         if (!alive) return
-        setWay(failure instanceof SealRefusedError ? { kind: 'needs-code', stale: true } : { kind: 'failed', message: messageOf(failure) })
+        const stale = failure instanceof SealRefusedError && failure.why === 'code'
+        setWay(stale ? { kind: 'needs-code', stale } : { kind: 'failed', message: messageOf(failure) })
       })
     return () => {
       alive = false
@@ -209,6 +215,9 @@ function UnlockSheetBody(): React.JSX.Element {
       await prepare()
     } catch (failure) {
       setError(messageOf(failure))
+      // The session may be what failed: the next try gets a new one.
+      setShown(null)
+      setAttempt((tries) => tries + 1)
     } finally {
       setPassword('')
       setBusy(false)
@@ -219,6 +228,7 @@ function UnlockSheetBody(): React.JSX.Element {
     <UnlockSheetView
       needsCode={way.kind === 'needs-code'}
       stale={way.kind === 'needs-code' && way.stale}
+      canRemember={onTheMacsOwnPage()}
       onCode={useCode}
       trust={shown?.trust ?? null}
       words={shown?.words ?? null}
@@ -226,7 +236,7 @@ function UnlockSheetBody(): React.JSX.Element {
       busy={busy || (way.kind !== 'needs-code' && shown === null && error === null && way.kind !== 'failed')}
       error={error ?? (way.kind === 'failed' ? way.message : null)}
       password={password}
-      remember={remember}
+      remember={remember && onTheMacsOwnPage()}
       onPassword={setPassword}
       onRemember={setRemember}
       onUnlock={() => void unlock()}

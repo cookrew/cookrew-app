@@ -61,7 +61,7 @@ export interface RemoteSession {
 
 export type SettingsPane = 'screen' | 'accessibility'
 
-/** What outlives a restart. Never the machine switch. */
+/** What outlives a restart here. The machine switch does too, but only sealed: see switchMemory. */
 export interface RemoteSettings {
   /** Someone away from the Mac asked to hear when this pane's grant is done. */
   readonly waiting: SettingsPane | null
@@ -160,6 +160,8 @@ export interface RemoteDesk {
   setSwitch(on: boolean): RemoteAnswer
   /** Once, after the app is ready: its key is not there before. */
   restoreSwitch(): void
+  /** The next launch starts off, whatever this run is doing. */
+  forgetSwitch(): void
   /** A card's instance went: replaced, re-addressed or deleted. */
   cardGone(card: string): void
   /** A paired device was forgotten or revoked. */
@@ -305,7 +307,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
 
   const hostView = (): RemoteHostView => {
     const list = rows()
-    return list.length === 0 && !awake ? NOBODY_ON_HOST : { rows: list, awake }
+    if (list.length === 0 && !awake && !switchOn) return NOBODY_ON_HOST
+    return { rows: list, awake, ...(switchOn ? { switchOn } : {}) }
   }
 
   const syncHost = (): void => {
@@ -437,13 +440,16 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       if (holder && (holder.who.key === who.key || who.here)) ended(card, `ended by ${who.name}`)
     },
     setSwitch(on) {
-      if (on === switchOn) return { ok: true }
-      switchOn = on
-      if (on) deps.stayUp?.start()
-      else deps.stayUp?.stop()
-      if (!on) endAllGrants('remote control was turned off at the Mac')
-      deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), 'at the Mac')
-      deps.refreshCards()
+      if (on !== switchOn) {
+        switchOn = on
+        if (on) deps.stayUp?.start()
+        else deps.stayUp?.stop()
+        if (!on) endAllGrants('remote control was turned off at the Mac')
+        deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), 'at the Mac')
+        deps.refreshCards()
+        syncHost()
+      }
+      // Even when nothing moved: what is kept may not match what this run reads.
       try {
         deps.switchMemory?.write(on)
       } catch {
@@ -464,6 +470,14 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       deps.stayUp?.start()
       deps.record('remote.switch-on', MACHINE, word('this Mac'), 'restored at launch')
       deps.refreshCards()
+      syncHost()
+    },
+    forgetSwitch() {
+      try {
+        deps.switchMemory?.write(false)
+      } catch {
+        // Nothing more can be done from here; the door is shut for this run either way.
+      }
     },
     cardGone(card) {
       ended(card, 'the card changed')

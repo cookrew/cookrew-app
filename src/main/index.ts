@@ -175,6 +175,7 @@ import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
 import { sealProofHeaders } from './seal-proof'
 import { sealedSwitchMemory } from './remote-switch-memory'
+import { confirmSwitchOn } from './remote-switch-confirm'
 import { createConnectCodes } from './connect-code'
 import { IdleLock } from './lock'
 import { mintWatchInvite, registerAccountIpc } from './account-ipc'
@@ -6584,6 +6585,14 @@ function currentBuild(): RemoteBuild {
 }
 let keepAwakeId: number | null = null
 let stayUpId: number | null = null
+const switchConfirm = {
+  canTouch: () => systemPreferences.canPromptTouchID(),
+  touch: () => systemPreferences.promptTouchID('turn on remote control of this Mac'),
+  ask: async () => {
+    const options = { type: 'warning' as const, message: 'Turn on remote control of this Mac?', detail: 'Your paired devices can unlock it with its password, from any network, until you turn this off.', buttons: ['Turn on', 'Cancel'], defaultId: 1, cancelId: 1 }
+    return (await dialog.showMessageBox(options)).response === 0
+  }
+}
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
   build: currentBuild,
@@ -6638,6 +6647,7 @@ const remoteDesk = createRemoteDesk({
   }
 })
 const unlockDoor = createUnlockDoor({
+  closed: () => remoteDesk.forgetSwitch(),
   keyPair: unlockKey,
   refusal: (who) => remoteDesk.unlockRefusal(who),
   locked: async () => {
@@ -8982,13 +8992,18 @@ function registerIpc(handlers: RestoreHandlers): void {
     const answer = await useSources.restart(store.focusedId, MAC_VIEWER)
     return answer.ok ? { ok: true } : { ok: false, error: answer.error }
   }))
-  ipcMain.handle('use:remote-switch', ownerOnly((on: unknown) => {
+  ipcMain.handle('use:remote-switch', ownerOnly(async (on: unknown) => {
     if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
+    if (on && !(await confirmSwitchOn(switchConfirm))) return { ok: false, error: 'Remote control stays off: it was not confirmed at the Mac.' }
     // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
     if (on) unlockDoor.reopen()
     return remoteDesk.setSwitch(on)
   }))
-  remoteDesk.restoreSwitch()
+  try {
+    remoteDesk.restoreSwitch()
+  } catch (error) {
+    console.error('[cookrew] remote control could not be restored', error)
+  }
   ipcMain.handle('use:remote-stop', ownerOnly(() => {
     remoteDesk.stopAll()
     return { ok: true }

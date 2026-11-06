@@ -186,6 +186,17 @@ describe('unlock', () => {
     expect(await t.send(phone, PASSWORD)).toMatchObject({ ok: false, outcome: 'not-locked' })
   })
 
+  it('tells the desk once when it closes, so a restart cannot reopen it', async () => {
+    let closes = 0
+
+    const t = bed({ closed: () => { closes += 1 } })
+    for (let miss = 0; miss < UNLOCK_MISSES_MAX; miss += 1) {
+      await t.send(phone, 'nope')
+      t.clock.now += UNLOCK_REST_MS + 1
+    }
+    expect(closes).toBe(1)
+  })
+
   it('closes after too many wrong passwords, until someone at the Mac reopens it', async () => {
     const t = bed()
     for (let miss = 0; miss < UNLOCK_MISSES_MAX; miss += 1) {

@@ -6,6 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
 import { sealedSwitchMemory } from '../src/main/remote-switch-memory'
+import { confirmSwitchOn } from '../src/main/remote-switch-confirm'
 
 let dir = ''
 let file = ''
@@ -84,5 +85,34 @@ describe('sealedSwitchMemory', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
     expect(denied).toContain('/Users/me/.cookrew/remote-switch')
     expect(denied).toContain('/Users/me/.cookrew/remote-switch.tmp')
+  })
+})
+
+describe('turning it on', () => {
+  const deps = (over: Partial<Parameters<typeof confirmSwitchOn>[0]> = {}) => ({ canTouch: () => true, touch: async () => undefined, ask: async () => true, ...over })
+
+  it('takes a finger where there is a sensor: a synthetic click cannot press one', async () => {
+    let asked = 0
+    expect(await confirmSwitchOn(deps({ ask: async () => { asked += 1; return true } }))).toBe(true)
+    expect(asked).toBe(0)
+  })
+
+  it('a finger refused is a no, with no second way past it', async () => {
+    let asked = 0
+    expect(await confirmSwitchOn(deps({ touch: async () => { throw new Error('cancelled') }, ask: async () => { asked += 1; return true } }))).toBe(false)
+    expect(asked).toBe(0)
+  })
+
+  it('with no sensor it asks in a system dialog, which window input cannot reach', async () => {
+    expect(await confirmSwitchOn(deps({ canTouch: () => false }))).toBe(true)
+    expect(await confirmSwitchOn(deps({ canTouch: () => false, ask: async () => false }))).toBe(false)
+  })
+
+  it('the press itself goes through it, before anything changes', () => {
+    const main = readFileSync('src/main/index.ts', 'utf8')
+    const handler = main.slice(main.indexOf("'use:remote-switch'"))
+    expect(handler.indexOf('confirmSwitchOn(')).toBeGreaterThan(-1)
+    expect(handler.indexOf('confirmSwitchOn(')).toBeLessThan(handler.indexOf('unlockDoor.reopen()'))
+    expect(handler.indexOf('confirmSwitchOn(')).toBeLessThan(handler.indexOf('remoteDesk.setSwitch(on)'))
   })
 })

@@ -132,6 +132,55 @@ describe('openSeal', () => {
     await expect(client.request({ method: 'GET', path: '/a', headers: {} })).rejects.toThrow(/answer/)
   })
 
+  it('a lost POST ends the session rather than wedging it: records after a gap are never read', async () => {
+    const { url, code } = await bed()
+    let drop = false
+    const flaky = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (drop && String(input).includes('/~seal/up')) return new Response(null, { status: 503 })
+      return fetch(input, init)
+    }
+    const client = await openSeal({ url, code: encoded(code), fetchFn: flaky, retryMs: 5 })
+    clients.push(client)
+    drop = true
+    await expect(client.request({ method: 'GET', path: '/a', headers: {} })).rejects.toThrow(/ended|line/)
+    await expect(client.request({ method: 'GET', path: '/b', headers: {} })).rejects.toThrow(/ended/)
+  })
+
+  it('a POST that hangs ends the session too', async () => {
+    const { url, code } = await bed()
+    let hang = false
+    const stalled = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (!hang || !String(input).includes('/~seal/up')) return fetch(input, init)
+      return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
+    }
+    const client = await openSeal({ url, code: encoded(code), fetchFn: stalled, retryMs: 5, upMs: 30 })
+    clients.push(client)
+    hang = true
+    await expect(client.request({ method: 'GET', path: '/a', headers: {} })).rejects.toThrow()
+  })
+
+  it('a forged record on the down line ends the session', async () => {
+    const { url, code } = await bed()
+    const tampered = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const answer = await fetch(input, init)
+      if (!String(input).includes('/~seal/down') || !answer.body) return answer
+      const reader = answer.body.getReader()
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const { done, value } = await reader.read()
+          if (done) return controller.close()
+          const spoiled = value.slice()
+          spoiled[spoiled.length - 1] ^= 0xff
+          controller.enqueue(spoiled)
+        }
+      })
+      return new Response(body, { status: answer.status })
+    }
+    const client = await openSeal({ url, code: encoded(code), fetchFn: tampered, retryMs: 5 })
+    clients.push(client)
+    await expect(client.request({ method: 'GET', path: '/a', headers: {} })).rejects.toThrow(/ended|forged|tampered/i)
+  })
+
   it('close fails what is waiting and stops listening', async () => {
     const stuck: BridgeDialer = () => ({ write: () => undefined, end: () => undefined, destroy: () => undefined })
     const { url, code, terminus } = await bed({ dial: stuck })

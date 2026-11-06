@@ -8,7 +8,9 @@
  *
  * THE LIMIT, ACCEPTED BY THE OWNER: a page from cookrew.dev is still written by whoever
  * serves it, and an altered page could read what is typed before any seal. Sealing
- * stops a relay that reads, not one that rewrites its pages. A native client ends that.
+ * stops a relay that reads, not one that acts: it can rewrite its pages, and until plain
+ * routes close it can read the connect code through a pane. A native client ends that.
+ * So a password is kept on a device only on a page the Mac served itself.
  *
  * Either way the password is also sealed to the Mac's key, which the phone pins, and
  * each message answers a one-time challenge.

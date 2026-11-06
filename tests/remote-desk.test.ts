@@ -210,6 +210,42 @@ describe('the machine switch', () => {
     expect(r.desk.controlFacts().switchOn).toBe(true)
   })
 
+  it('pressing off always clears what is kept, even when it already reads off', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    expect(r.desk.controlFacts().switchOn).toBe(false)
+    r.desk.setSwitch(false)
+    expect(memory.held).toBe(false)
+  })
+
+  it('a door closed by wrong passwords stays closed across a restart', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    r.desk.restoreSwitch()
+    r.desk.forgetSwitch()
+    expect(memory.held).toBe(false)
+    expect(r.desk.controlFacts().switchOn).toBe(true)
+    const next = rig({ switchMemory: memory })
+    next.desk.restoreSwitch()
+    expect(next.desk.controlFacts().switchOn).toBe(false)
+  })
+
+  it('pressing on again puts back what a closed door took away', () => {
+    const memory = remembering(true)
+    const r = rig({ switchMemory: memory })
+    r.desk.restoreSwitch()
+    r.desk.forgetSwitch()
+    r.desk.setSwitch(true)
+    expect(memory.held).toBe(true)
+  })
+
+  it('tells the host it is on, with nobody watching: the menu bar must show it', () => {
+    const r = rig({ switchMemory: remembering(true) })
+    r.desk.restoreSwitch()
+    expect(r.desk.hostView()).toMatchObject({ rows: [], switchOn: true })
+    expect(r.host).toHaveBeenLastCalledWith(expect.objectContaining({ switchOn: true }))
+  })
+
   it('there is nothing to restore off a Mac', () => {
     const r = rig({ platform: 'linux', switchMemory: remembering(true) })
     r.desk.restoreSwitch()

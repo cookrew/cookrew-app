@@ -13,7 +13,7 @@ import { accessOf } from './remote-acts'
  */
 
 export const SWITCH_LABEL = 'Allow remote control of this Mac'
-export const SWITCH_MEANS = 'Your paired devices can unlock this Mac with its password and take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on after a restart until you turn it off here, keeps this Mac from sleeping while it is on, and someone at the Mac can stop it at any time.'
+export const SWITCH_MEANS = 'Your paired devices can unlock this Mac with its password and take control of a card for 15 minutes, and agents can click and type on this Mac. It stays on after a restart until you turn it off here, keeps this Mac awake while its lid is open, and someone at the Mac can stop it at any time.'
 
 /** What was pressed is what is sent: two surfaces show this switch, and either may be behind the other. */
 export const switchAnswer = (set: (on: boolean) => Promise<RemoteAnswer>, on: boolean): Promise<RemoteAnswer> => set(on)

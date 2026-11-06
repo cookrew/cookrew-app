@@ -31,6 +31,8 @@ export interface UnlockDoorDeps {
   refusal(who: ViewerWho): string | null
   /** A fresh read, never a cached one. */
   locked(): Promise<boolean>
+  /** Shut until someone at the Mac reopens it: the counts here do not survive a restart. */
+  closed?(): void
   wake(): Promise<void>
   /** Every character has a key. Absent: assumed. */
   typable?(password: string): boolean
@@ -102,6 +104,7 @@ export function createUnlockDoor(deps: UnlockDoorDeps): UnlockDoor {
   const missed = (who: ViewerWho): UnlockAnswer => {
     misses += 1
     missesInAll += 1
+    if (missesInAll === UNLOCK_MISSES_MAX) deps.closed?.()
     if (misses >= UNLOCK_ATTEMPTS) {
       misses = 0
       restUntil = now() + UNLOCK_REST_MS
