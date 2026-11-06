@@ -352,6 +352,9 @@ describe('round two: four kinds, and the direction is the pair', () => {
   it('maps every browser verb: driving the page goes in, taking its words or picture comes out', () => {
     for (const v of ['navigate', 'click', 'fill', 'type', 'key', 'scroll', 'evaluate']) expect(browserVerbKind(v), v).toBe('write')
     for (const v of ['text', 'html', 'snapshot', 'info']) expect(browserVerbKind(v), v).toBe('read')
+    for (const v of ['tap', 'swipe']) expect(browserVerbKind(v)).toBe('write')
+    expect(browserVerbKind('screenshot')).toBe('read')
+    expect(browserVerbKind('status')).toBeNull()
     expect(browserVerbKind('create')).toBeNull()
     expect(browserVerbKind('tab-new')).toBeNull()
   })

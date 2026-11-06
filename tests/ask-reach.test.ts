@@ -12,7 +12,9 @@
 //  - a card on another workspace's canvas is never reached unwired;
 //  - a served caller keeps the old rule (wired only) — its canvas is a
 //    sandbox the owner prepared, not a room it may rewire;
-//  - `note delete` still needs a wire: removing is not asking.
+//  - `note delete` still needs a wire: removing is not asking;
+//  - any use of a browser or screen card wires it, before the verb runs (owner,
+//    2026-11-06): an agent's artifacts list must show what it has been using.
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -193,6 +195,30 @@ describe('asking wires the asker to what it asked', () => {
     await cmdBrowser(request('browser', ['snapshot', 'Docs'], me.id), deps)
     expect(store.isConnected(me.id, page.id)).toBe(true)
     expect(pulses).toEqual([{ from: page.id, to: me.id, wired: true }])
+  })
+
+  it.each(['screenshot', 'tap', 'swipe', 'status', 'tabs', 'downloads', 'text'])('using a card with `%s` wires it: any use is the relation', async (verb) => {
+    const { store, deps } = setup({ browserCommand: async () => 'ok' })
+    const me = store.addNode(terminal('t1', 'Velvet')) as TerminalNodeData
+    const page = store.addNode(browser('b1', 'Docs')) as BrowserNodeData
+    await cmdBrowser(request('browser', [verb, 'Docs'], me.id), deps)
+    expect(store.isConnected(me.id, page.id)).toBe(true)
+  })
+
+  it('a use that fails still wires it, as a refused ask does: the agent went to that card', async () => {
+    const { store, deps } = setup({ browserCommand: async () => Promise.reject(new Error('Take a screenshot first')) })
+    const me = store.addNode(terminal('t1', 'Velvet')) as TerminalNodeData
+    const page = store.addNode(browser('b1', 'Docs')) as BrowserNodeData
+    await expect(cmdBrowser(request('browser', ['tap', 'Docs', '1', '1'], me.id), deps)).rejects.toThrow('screenshot')
+    expect(store.isConnected(me.id, page.id)).toBe(true)
+  })
+
+  it('a verb that means nothing wires nothing', async () => {
+    const { store, deps } = setup({ browserCommand: async () => 'no' })
+    const me = store.addNode(terminal('t1', 'Velvet')) as TerminalNodeData
+    const page = store.addNode(browser('b1', 'Docs')) as BrowserNodeData
+    await cmdBrowser(request('browser', ['nonsense', 'Docs'], me.id), deps)
+    expect(store.isConnected(me.id, page.id)).toBe(false)
   })
 
   it('does not wire a browser when the verb is not traffic on it', async () => {
