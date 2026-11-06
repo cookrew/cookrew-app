@@ -42,6 +42,7 @@ import { handOffBlob, shouldHandOff } from './browser-poster'
 import { useRemoteKeyboard } from './useRemoteKeyboard'
 import { FramePainter } from './frame-painter'
 import { createInputPump } from './input-pump'
+import { useGestureLead, type GestureLead } from './use-gesture-lead'
 import { RemoteKeyBar } from './RemoteKeyBar'
 import { LONG_PRESS_MS, stillHolding, type HoldStart } from './touch-select'
 import { readClipboardText, writeClipboardLater, writeClipboardText } from './clipboard'
@@ -101,6 +102,7 @@ export function MobileBrowserFrame({
   const boxRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const paintedFrameSeq = useRef<number | null>(null)
+  const leadRef = useRef<GestureLead | null>(null)
   /**
    * The painted frame's own pixel size, set in the same breath as its seq:
    * input is mapped against exactly the frame the server will map it back
@@ -166,6 +168,9 @@ export function MobileBrowserFrame({
   const lastTapAt = useRef(0)
   const raisedAt = useRef(0)
   const [fieldMode, setFieldMode] = useState<FieldMode>('text')
+  // Words typed for one field are not shown under another's rules: a password stays dots.
+  const { clearTyped } = kbd
+  useEffect(() => clearTyped(), [fieldMode, clearTyped])
   /** A short word on the frame: "Copied", "Nothing selected". */
   const [note, setNote] = useState<string | null>(null)
   /** A copy this phone could not write without a tap (iOS), offered as one. */
@@ -215,7 +220,16 @@ export function MobileBrowserFrame({
 
   // THE PAINTER: frames go from the stream to the canvas without React.
   // Only the frame's size and "painted at this revision" ever re-render.
-  const { subscribeFrames, latestFrame, receipt } = stream
+  const { subscribeFrames, subscribeBeats, latestFrame, receipt } = stream
+  // The same picture again: the line is alive, and input may be bound to this seq.
+  useEffect(
+    () =>
+      subscribeBeats((seq) => {
+        if (paintedFrameSeq.current !== null) paintedFrameSeq.current = seq
+        if (boxRef.current) boxRef.current.dataset.lastFrameAt = String(Date.now())
+      }),
+    [subscribeBeats]
+  )
   useEffect(() => {
     const canvas = canvasRef.current
     if (!open || !canvas) return
@@ -225,6 +239,7 @@ export function MobileBrowserFrame({
         paintedFrameSeq.current = frame.seq
         paintedSize.current = { w: frame.width, h: frame.height }
         lastPaintedRef.current = frame.blob
+        leadRef.current?.painted(frame.scrollY ?? null, frame.pageScale ?? null)
         const box = boxRef.current
         if (box) {
           // Probe-facing, set here rather than rendered: per frame, never a render.
@@ -453,6 +468,18 @@ export function MobileBrowserFrame({
     const touch = e.touches.length === 1 ? e.touches[0] : null
     tapStart.current = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null
   }
+  /** The tap landed, said here and now: the page's own answer is a round trip away. */
+  const showTap = (clientX: number, clientY: number): void => {
+    const box = boxRef.current
+    if (!box || stream.direct) return
+    const r = box.getBoundingClientRect()
+    const ring = document.createElement('span')
+    ring.className = 'browser-tap-ring'
+    ring.style.left = `${clientX - r.left}px`
+    ring.style.top = `${clientY - r.top}px`
+    ring.addEventListener('animationend', () => ring.remove())
+    box.append(ring)
+  }
   const onTouchEnd = (e: React.TouchEvent): void => {
     const start = tapStart.current
     tapStart.current = null
@@ -461,6 +488,7 @@ export function MobileBrowserFrame({
     const touch = e.changedTouches[0]
     if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > TAP_SLOP_PX || Date.now() - start.at > TAP_MS) return
     lastTapAt.current = Date.now()
+    showTap(touch.clientX, touch.clientY)
     const point = framePointAt(touch.clientX, touch.clientY)
     const fields = stream.latestFields()
     if (!point || !fields || fields.revision !== stream.frameRevision) return
@@ -483,6 +511,19 @@ export function MobileBrowserFrame({
   const [pump] = useState(() => createInputPump(sendFrameInput))
   pump.retarget(sendFrameInput)
   useEffect(() => () => pump.cancel(), [pump])
+  // THE PICTURE LEADS THE FINGER on a web page seen through a socket; a device's
+  // own screen answers for itself, and the desktop's port has no lag to hide.
+  const leadView = (): { fitWidth: number; deviceWidth: number } => ({
+    fitWidth: fit.width,
+    deviceWidth: stream.effectiveViewport?.width ?? natural.w
+  })
+  const flingPoint = useRef<{ x: number; y: number } | null>(null)
+  const gestureLead = useGestureLead(canvasRef, interactive && !desktopInput && !stream.direct && stream.deviceStatus === null, leadView, (viewDelta) => {
+    const point = flingPoint.current
+    const { fitWidth, deviceWidth } = leadView()
+    if (point && fitWidth > 0) pump.wheel(point, 0, (-viewDelta * deviceWidth) / fitWidth, 0)
+  })
+  leadRef.current = gestureLead
 
   // PRESS AND HOLD SELECTS (touch-select.ts): the held finger becomes a mouse
   // that double-pressed, so the word is selected and a drag extends it.
@@ -506,6 +547,7 @@ export function MobileBrowserFrame({
     const contact = gesture.contacts[0]
     if (!start || gesture.contacts.length !== 1 || !contact || contact.pointerId !== start.pointerId) return
     touchGesture.current = emptyTouchGesture()
+    leadRef.current?.cancel()
     sendFrameInput({ t: 'touchcancel' })
     const point = { x: contact.x, y: contact.y }
     selecting.current = { pointerId: start.pointerId, last: point }
@@ -574,6 +616,8 @@ export function MobileBrowserFrame({
       touchGesture.current = update.state
       e.currentTarget.setPointerCapture(e.pointerId)
       sendFrameInput(update.message)
+      gestureLead.down(e.pointerId, e.clientX, e.clientY)
+      flingPoint.current = point
       // One finger on a web page may become a selection; a second is a pinch.
       // A device's screen (a use card) keeps its own touch.
       if (update.state.contacts.length === 1 && stream.deviceStatus === null) {
@@ -619,6 +663,8 @@ export function MobileBrowserFrame({
       if (!update) return
       touchGesture.current = update.state
       sendFrameInput(update.message)
+      gestureLead.move(e.pointerId, e.clientX, e.clientY)
+      flingPoint.current = point
       return
     }
     if (e.pointerType === 'touch') return
@@ -631,6 +677,8 @@ export function MobileBrowserFrame({
     pump.move(moveMsg(point, dragging ? e.buttons : 0, modsOf(e)))
   }
   const onPointerUp = (e: React.PointerEvent): void => {
+    // Before the gesture's own bookkeeping, which forgets both fingers at the first lift.
+    gestureLead.up(e.pointerId)
     if (holdStart.current?.pointerId === e.pointerId) stopHold()
     const held = selecting.current
     if (held && held.pointerId === e.pointerId) {
@@ -891,6 +939,7 @@ export function MobileBrowserFrame({
       {!desktopInput && kbd.open && interactive && (
         <RemoteKeyBar
           composition={kbd.composition}
+          typed={kbd.typed}
           mode={fieldMode}
           note={note}
           onPaste={pasteIntoPage}

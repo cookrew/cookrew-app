@@ -958,24 +958,35 @@ export async function handleMobileApi(
   // THE BROWSER CARD'S SOCKET OVER PLAIN HTTP (socket-bridge.ts): down as an
   // event stream, up as POSTs — the two things the relay carries.
   if (deps.socketBridge && p === SOCKET_BRIDGE_PATH && method === "GET") {
+    const resuming = url.searchParams.get("resume");
+    if (resuming !== null) {
+      const after = Number(url.searchParams.get("after") ?? 0);
+      if (!Number.isInteger(after) || after < 0 || !deps.socketBridge.resume(resuming, after, response, presentedToken(request, url)))
+        respondJson(response, 404, { error: "no such bridged socket" });
+      return true;
+    }
     const target = url.searchParams.get("path") ?? "";
-    if (!deps.socketBridge.open(target, response, presentedToken(request, url)))
+    const v = Number(url.searchParams.get("v") ?? 1);
+    if (!deps.socketBridge.open(target, response, presentedToken(request, url), { v }))
       respondJson(response, bridgeablePath(target) ? 503 : 400, { error: "that socket cannot be bridged now" });
     return true;
   }
   const bridgePost = p.match(/^\/api\/socket-bridge\/([0-9a-f-]{36})$/);
   if (deps.socketBridge && bridgePost && method === "POST") {
-    const body = await readJson<{ m?: unknown }>(request);
+    const body = await readJson<{ m?: unknown; s?: unknown; a?: unknown; end?: unknown }>(request);
     const messages = Array.isArray(body.m) ? body.m : [];
+    const start = Number.isInteger(body.s) && (body.s as number) > 0 ? (body.s as number) : undefined;
+    const painted = Number.isInteger(body.a) && (body.a as number) >= 0 ? (body.a as number) : undefined;
+    const leaving = body.end === true;
     if (
-      messages.length === 0 ||
+      (messages.length === 0 && painted === undefined && !leaving) ||
       messages.length > SOCKET_BRIDGE_POST_MESSAGES ||
       !messages.every((m): m is string => typeof m === "string" && m.length <= SOCKET_BRIDGE_MESSAGE_MAX)
     ) {
       respondJson(response, 400, { error: "m must be a short list of strings" });
       return true;
     }
-    if (!deps.socketBridge.post(bridgePost[1], messages)) {
+    if (!deps.socketBridge.post(bridgePost[1], { m: messages, s: start, a: painted, end: leaving }, presentedToken(request, url))) {
       respondJson(response, 404, { error: "no such bridged socket" });
       return true;
     }

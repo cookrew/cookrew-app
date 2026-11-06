@@ -6660,3 +6660,33 @@ body.cookrew-mobile.cr-overlay-owns-stage .react-flow__background {
   font-size: 13px;
   pointer-events: none;
 }
+
+/* A tap on a phone, said at once: the page's own answer is a round trip away. */
+.browser-tap-ring {
+  position: absolute;
+  z-index: 4;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border: 2px solid var(--accent, #e0a84f);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: browser-tap-ring 260ms ease-out forwards;
+}
+
+@keyframes browser-tap-ring {
+  from {
+    opacity: 0.85;
+    transform: scale(0.35);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-tap-ring {
+    animation-duration: 1ms;
+  }
+}

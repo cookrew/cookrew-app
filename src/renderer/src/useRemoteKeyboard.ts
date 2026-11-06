@@ -34,6 +34,17 @@ import { composeMsg, keyMsg, modsOf, pasteMsg, textMsg, type CastInputMsg, type 
 
 export type KeyboardMode = 'desktop' | 'touch'
 
+const TYPED_HOLD_MS = 1600
+const TYPED_MAX = 24
+
+/** The tail of what was typed, after one more edit. Pure — unit-tested. */
+export function typedAfter(text: string, inputType: string, data: string | null): string {
+  if (inputType === 'deleteContentBackward' || inputType === 'deleteWordBackward') return [...text].slice(0, -1).join('')
+  if (inputType === 'insertLineBreak' || inputType === 'insertParagraph') return ''
+  if (!inputType.startsWith('insert') || !data) return text
+  return [...(text + data)].slice(-TYPED_MAX).join('')
+}
+
 /** Pure: map one beforeinput (inputType, data) to whitelisted messages. Composition is not here: it has its own events. */
 export function keyMsgsForInput(inputType: string, data: string | null): CastInputMsg[] {
   switch (inputType) {
@@ -125,6 +136,8 @@ export interface RemoteKeyboard {
   auto: boolean
   /** The IME's text being composed on the phone, not sent yet (the bar shows it). */
   composition: string
+  typed: string
+  clearTyped: () => void
   /** Raise the keyboard — MUST be called synchronously from a tap's handler. */
   raise: (options?: RaiseOptions) => void
   /** Toggle the phone keyboard — MUST be called from a user gesture (button tap). */
@@ -169,6 +182,14 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
   const [open, setOpen] = useState(false)
   const [auto, setAuto] = useState(false)
   const [composition, setComposition] = useState('')
+  /** What just went up, shown at once: on the relay the page's own echo is a round trip away. */
+  const [typed, setTyped] = useState('')
+  const clearTyped = useCallback((): void => setTyped(''), [])
+  useEffect(() => {
+    if (typed === '') return undefined
+    const timer = setTimeout(() => setTyped(''), TYPED_HOLD_MS)
+    return () => clearTimeout(timer)
+  }, [typed])
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const composingRef = useRef(false)
 
@@ -238,6 +259,7 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
       const ie = event as InputEvent
       if (ie.isComposing || composingRef.current) return
       for (const msg of keyMsgsForInput(ie.inputType, ie.data)) send(msg)
+      setTyped((text) => typedAfter(text, ie.inputType, ie.data))
     }
     el.addEventListener('beforeinput', onBeforeInput)
     return () => el.removeEventListener('beforeinput', onBeforeInput)
@@ -345,6 +367,8 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
     open,
     auto,
     composition,
+    typed,
+    clearTyped,
     raise,
     toggle,
     close,
