@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  BRIDGE_POST_TIMEOUT_MS,
   BRIDGE_RESUME_BUDGET_MS,
   BRIDGE_SILENT_MS,
   BRIDGE_UP_IN_FLIGHT,
@@ -25,7 +26,9 @@ class FakeStream implements BridgeStream {
   }
 }
 
-function setup(post?: (id: string, body: BridgeBody) => Promise<'ok' | 'gone'>) {
+const POST_RETRY_FOR_TEST = 500
+
+function setup(post?: (id: string, body: BridgeBody, signal?: AbortSignal) => Promise<'ok' | 'gone'>) {
   const streams: FakeStream[] = []
   const asked: (BridgeResume | undefined)[] = []
   const posts: BridgeBody[] = []
@@ -37,9 +40,9 @@ function setup(post?: (id: string, body: BridgeBody) => Promise<'ok' | 'gone'>) 
       streams.push(s)
       return s
     },
-    post: (id, body) => {
+    post: (id, body, signal) => {
       posts.push(body)
-      return post ? post(id, body) : Promise.resolve('ok')
+      return post ? post(id, body, signal) : Promise.resolve('ok')
     },
     watch: (fn) => {
       nudge = fn
@@ -136,6 +139,55 @@ describe('a dropped stream is a pause, not an ending', () => {
     await flush()
     expect(streams[1].closed).toBe(false)
     expect(asked).toHaveLength(2)
+  })
+
+  it('a POST that hangs does not block what comes after it', async () => {
+    const hung: AbortSignal[] = []
+    const { ws, posts } = setup((_id, body, signal) =>
+      body.m?.length && hung.length < 2
+        ? new Promise((_, reject) => {
+            hung.push(signal as AbortSignal)
+            signal?.addEventListener('abort', () => reject(new Error('aborted')))
+          })
+        : Promise.resolve('ok')
+    )
+    ws.send('{"t":"key","key":"a"}')
+    ws.send('{"t":"key","key":"b"}')
+    ws.send('{"t":"key","key":"c"}')
+    await vi.advanceTimersByTimeAsync(BRIDGE_POST_TIMEOUT_MS + 1500)
+    expect(hung).toHaveLength(2)
+    const sent = posts.flatMap((p) => p.m ?? [])
+    expect(sent.filter((t) => t.includes('"c"'))).toHaveLength(1)
+    expect(sent.filter((t) => t.includes('"a"')).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('a resume replaces POSTs stuck on the old line at once', async () => {
+    let stuck = 0
+    const { ws, streams, posts } = setup((_id, body, signal) => {
+      if (!body.m?.length || stuck > 0) return Promise.resolve('ok')
+      stuck += 1
+      return new Promise((_, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted'))))
+    })
+    ws.send('{"t":"key","key":"a"}')
+    streams[0].emit('error')
+    await flush()
+    await vi.advanceTimersByTimeAsync(5)
+    streams[1].emit('id', { id: 'S', v: 2 })
+    await vi.advanceTimersByTimeAsync(POST_RETRY_FOR_TEST)
+    expect(posts.filter((p) => p.m?.length)).toHaveLength(2)
+  })
+
+  it('takes no aim while the line is down, and holds the typing that aim was for', async () => {
+    const { ws, streams, posts } = setup()
+    streams[0].emit('error')
+    await flush()
+    ws.send('{"t":"touchstart","x":1,"y":1}')
+    ws.send('{"t":"key","key":"p"}')
+    ws.send('{"t":"touchend"}')
+    streams[1]?.emit('id', { id: 'S', v: 2 })
+    await vi.advanceTimersByTimeAsync(10)
+    const sent = posts.flatMap((p) => p.m ?? []).filter((text) => text !== '')
+    expect(sent).toEqual(['{"t":"touchend"}'])
   })
 
   it('ends at once when the Mac has forgotten the session, so the card redials', async () => {

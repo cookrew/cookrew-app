@@ -3,6 +3,7 @@ import {
   LEAD_SLOP_PX,
   flingStep,
   flingVelocity,
+  leadAnswered,
   leadFrame,
   leadMoved,
   leadOffset,
@@ -20,7 +21,8 @@ import {
  * All of this writes one CSS transform on the canvas, outside React: a touch moves
  * sixty times a second and nothing here is state anyone renders. The touches still
  * go to the page exactly as before; this adds a preview, and, after a flick, the
- * momentum CDP's touch has none of, as wheels.
+ * momentum CDP's touch has none of, as wheels. The wheels wait until a frame shows
+ * the page really scrolled: on a map a wheel is a zoom, and nobody flicked to zoom.
  */
 
 export interface GestureLeadView {
@@ -66,6 +68,8 @@ export function useGestureLead(
     pinch: null as { startDistance: number; asked: number; startScale: number | null; originX: number; originY: number } | null,
     pinchAt: 0,
     velocity: 0,
+    /** Flick distance shown but not yet sent. */
+    owed: 0,
     fade: 0,
     raf: 0,
     lastTick: 0
@@ -101,20 +105,26 @@ export function useGestureLead(
       if (step) {
         s.velocity = step.velocity
         if (s.lead) s.lead = leadMoved(s.lead, s.lead.asked + step.delta, s.lead.progressAt)
-        flingRef.current(step.delta)
+        s.owed += step.delta
       } else s.velocity = 0
+    }
+    if (s.owed !== 0 && s.lead && leadAnswered(s.lead)) {
+      flingRef.current(s.owed)
+      s.owed = 0
     }
     if (s.lead && leadStalled(s.lead, now)) {
       // The page is not following: the picture eases back rather than jumping.
       s.fade = leadOffsetBefore(s.lead, perCss())
       s.lead = null
       s.off = true
+      s.velocity = 0
+      s.owed = 0
     }
     if (s.pinch && s.fingers.size === 0 && now - s.pinchAt > 1000) s.pinch = null
     s.fade = Math.abs(s.fade) < 0.5 ? 0 : s.fade * FADE
     apply()
     const settled = !s.lead || leadOffset(s.lead, perCss(), now) === 0
-    if (s.fingers.size > 0 || s.velocity !== 0 || s.fade !== 0 || s.pinch || !settled) s.raf = requestAnimationFrame(tick)
+    if (s.fingers.size > 0 || s.velocity !== 0 || s.owed !== 0 || s.fade !== 0 || s.pinch || !settled) s.raf = requestAnimationFrame(tick)
     else {
       if (s.fingers.size === 0) s.lead = null
       s.lastTick = 0
@@ -132,6 +142,7 @@ export function useGestureLead(
     s.lead = null
     s.pinch = null
     s.velocity = 0
+    s.owed = 0
     s.fade = 0
     s.off = true
     write(0, 1)
@@ -155,6 +166,7 @@ export function useGestureLead(
         const s = state.current
         if (!enabledRef.current) return
         s.velocity = 0
+        s.owed = 0
         if (s.fingers.size === 0) {
           s.lead = null
           s.off = false

@@ -32,6 +32,8 @@ import { startSse, type SseSend } from './mobile-http'
 import type { LoopbackSocket } from './ws-client'
 
 export const SOCKET_BRIDGE_RESUME_MS = 30_000
+/** A phone gone this long gives the viewport up, so the Mac's own view is not held to its shape. */
+export const SOCKET_BRIDGE_RELEASE_MS = 3000
 /** Frames sent and not yet painted: where the count starts and how far it can go. */
 export const SOCKET_BRIDGE_CREDIT = 2
 export const SOCKET_BRIDGE_CREDIT_MAX = 6
@@ -75,6 +77,7 @@ interface Held {
   readonly text: string
   readonly seq: number
   readonly data: string | null
+  readonly revision: number | undefined
 }
 
 const sameCredential = (a: string, b: string): boolean => {
@@ -85,20 +88,16 @@ const sameCredential = (a: string, b: string): boolean => {
 
 const frameOf = (text: string): Held => {
   try {
-    const frame = JSON.parse(text) as { seq?: unknown; data?: unknown }
+    const frame = JSON.parse(text) as { seq?: unknown; data?: unknown; meta?: { revision?: unknown } }
     return {
       text,
       seq: typeof frame.seq === 'number' ? frame.seq : 0,
-      data: typeof frame.data === 'string' ? frame.data : null
+      data: typeof frame.data === 'string' ? frame.data : null,
+      revision: typeof frame.meta?.revision === 'number' ? frame.meta.revision : undefined
     }
   } catch {
-    return { text, seq: 0, data: null }
+    return { text, seq: 0, data: null, revision: undefined }
   }
-}
-
-const revisionOf = (text: string): number | undefined => {
-  const match = /"revision":(\d+)/.exec(text.slice(-200))
-  return match ? Number(match[1]) : undefined
 }
 
 export class BridgeSession {
@@ -113,6 +112,8 @@ export class BridgeSession {
   private ringBytes = 0
   private held: Held | null = null
   private lastData: string | null = null
+  private lastRevision: number | undefined
+  private releaseTimer: ReturnType<typeof setTimeout> | null = null
   private inFlight: { seq: number; bytes: number; at: number }[] = []
   private lastSentAt = 0
   private credit = SOCKET_BRIDGE_CREDIT
@@ -142,13 +143,26 @@ export class BridgeSession {
     this.dropListener()
     this.listener = listener
     this.detachedAt = null
+    this.clearRelease()
     response.on('close', () => {
       clearInterval(beat)
       if (this.listener !== listener) return
       this.listener = null
       this.detachedAt = this.now()
+      this.releaseTimer = setTimeout(() => this.upstream?.send('{"t":"viewport-release"}'), SOCKET_BRIDGE_RELEASE_MS)
+      this.releaseTimer.unref?.()
       this.onDetach()
     })
+  }
+
+  private clearRelease(): void {
+    if (this.releaseTimer !== null) clearTimeout(this.releaseTimer)
+    this.releaseTimer = null
+  }
+
+  /** The phone that opened this session, by the token it presented. */
+  owns(credential: string): boolean {
+    return sameCredential(credential, this.credential)
   }
 
   private dropListener(): void {
@@ -165,7 +179,7 @@ export class BridgeSession {
 
   /** False when this phone cannot pick the session up from where it says it was. */
   resume(after: number, response: http.ServerResponse, credential: string): boolean {
-    if (this.ended || !sameCredential(credential, this.credential)) return false
+    if (this.ended || !this.owns(credential)) return false
     const oldest = this.ring[0]?.n ?? this.nextN
     if (after + 1 < oldest) return false
     this.attach(response)
@@ -175,6 +189,11 @@ export class BridgeSession {
     this.inFlight = []
     this.lastData = null
     this.lastSentAt = 0
+    // A drain armed on the old response will never fire.
+    if (this.paused) {
+      this.paused = false
+      this.upstream?.resume()
+    }
     // Very likely another network: what was learned about the last one is no use.
     this.credit = SOCKET_BRIDGE_CREDIT
     this.fastest = Number.POSITIVE_INFINITY
@@ -211,8 +230,9 @@ export class BridgeSession {
 
   private frame(text: string): void {
     const frame = frameOf(text)
-    if (this.listener && !this.held && frame.data !== null && frame.data === this.lastData) {
-      const revision = revisionOf(text)
+    // Same bytes under a new viewport revision are still a new picture to the phone.
+    if (this.listener && !this.held && frame.data !== null && frame.data === this.lastData && frame.revision === this.lastRevision) {
+      const { revision } = frame
       this.listener.send('b', { t: 'same', seq: frame.seq, ...(revision !== undefined ? { revision } : {}) })
       return
     }
@@ -229,7 +249,10 @@ export class BridgeSession {
     const held = this.held
     if (this.ended || !listener || !held) return
     const now = this.now()
+    const unreceipted = this.inFlight.length
     this.inFlight = this.inFlight.filter((frame) => now - frame.at < SOCKET_BRIDGE_CREDIT_TIMEOUT_MS)
+    // That late means queueing, or a line this slow should be sent less.
+    if (this.inFlight.length < unreceipted) this.credit = Math.max(SOCKET_BRIDGE_CREDIT, this.credit - 1)
     const bytes = this.inFlight.reduce((sum, frame) => sum + frame.bytes, 0)
     if (this.inFlight.length >= Math.floor(this.credit) || bytes >= SOCKET_BRIDGE_CREDIT_BYTES) {
       this.frameTimer = setTimeout(() => this.pump(), SOCKET_BRIDGE_CREDIT_TIMEOUT_MS)
@@ -242,6 +265,7 @@ export class BridgeSession {
     }
     this.held = null
     this.lastData = held.data
+    this.lastRevision = held.revision
     this.lastSentAt = now
     this.inFlight = [...this.inFlight, { seq: held.seq, bytes: held.text.length, at: now }]
     listener.send('f', held.text)
@@ -296,6 +320,7 @@ export class BridgeSession {
     if (this.ended) return
     this.ended = true
     if (this.frameTimer !== null) clearTimeout(this.frameTimer)
+    this.clearRelease()
     this.held = null
     this.ring = []
     this.onEnd(this.id)

@@ -7677,7 +7677,7 @@ app.whenReady().then(() => {
     // The direct link over WebRTC (rtc-peer.ts), answered on the published addresses.
     rtc: rtcHost,
     // The browser card's socket over plain HTTP, for a phone on the relay.
-    socketBridge: createSocketBridge(),
+    socketBridge: createSocketBridge({ port: MOBILE_PORT }),
     build: { id: () => buildId, bus: buildBus },
     // Gates slug routing: off, /<slug>/... is not a route (see mobile-server).
     multiInstance: () => store.isMultiInstance,

@@ -46,9 +46,10 @@ const VIEWPORT_REPORT_DEBOUNCE_MS = 200
 /** No frame for this long -> treat the view as NOT live (frozen), input OFF. */
 export const FRAME_STALE_MS = 1200
 /**
- * A phone's, longer. Live gates input, and losing it releases whatever the finger
- * is doing, so over the relay a second of jitter cut swipes in half. The line's
- * own silence watch (path/bridge-socket.ts) is what says a line is dead.
+ * The relay's bridge, longer. Live gates input, and losing it releases whatever the
+ * finger is doing, so a second of jitter cut swipes in half. That line watches its
+ * own silence and holds aimed input while it is down (path/bridge-socket.ts); no
+ * other line does, so the rest keep the short limit.
  */
 export const REMOTE_FRAME_STALE_MS = 6000
 
@@ -577,7 +578,10 @@ export function useBrowserStream(
         onMessage,
         onClose: () => fail('close'),
         onResuming: (on) => {
-          if (!disposed && !failed) setReconnecting(on)
+          if (disposed || failed) return
+          setReconnecting(on)
+          // The Mac let the viewport go if this took a while.
+          if (!on && !document.hidden) sendControl('offer')
         }
       }
       const openPort = direct && !portUnansweredRef.current ? cookrew().openBrowserStream : undefined
@@ -616,7 +620,7 @@ export function useBrowserStream(
       }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
-        const staleMs = client === 'desktop' ? FRAME_STALE_MS : REMOTE_FRAME_STALE_MS
+        const staleMs = line?.paced ? REMOTE_FRAME_STALE_MS : FRAME_STALE_MS
         if (!disposed && liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), staleMs)) {
           liveRef.current = false
           setLive(false)

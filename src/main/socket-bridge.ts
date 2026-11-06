@@ -42,6 +42,7 @@ import { dialLoopbackSocket, type LoopbackSocket, type LoopbackSocketDeps } from
 export {
   SOCKET_BRIDGE_CREDIT,
   SOCKET_BRIDGE_HIGH,
+  SOCKET_BRIDGE_RELEASE_MS,
   SOCKET_BRIDGE_RESUME_MS,
   isBrowserFrame,
   type BridgeUp
@@ -94,8 +95,8 @@ export interface SocketBridge {
   ) => boolean
   /** The same session on a new stream; false when it is gone or not this phone's. */
   readonly resume: (id: string, after: number, response: http.ServerResponse, credential?: string | null) => boolean
-  /** What the phone sent; false for a session that is not open. */
-  readonly post: (id: string, up: BridgeUp) => boolean
+  /** What the phone sent; false for a session that is not open, or not this phone's. */
+  readonly post: (id: string, up: BridgeUp, credential?: string | null) => boolean
   /** End the sessions nobody came back for. */
   readonly sweep: () => void
   readonly size: () => number
@@ -222,9 +223,10 @@ export const createSocketBridge = (deps: SocketBridgeDeps = {}): SocketBridge =>
   const resume = (id: string, after: number, response: http.ServerResponse, credential?: string | null): boolean =>
     resumable.get(id)?.resume(after, response, credential ?? '') ?? false
 
-  const post = (id: string, up: BridgeUp): boolean => {
+  const post = (id: string, up: BridgeUp, credential?: string | null): boolean => {
     const session = resumable.get(id)
     if (session) {
+      if (!session.owns(credential ?? '')) return false
       session.post(up)
       return true
     }

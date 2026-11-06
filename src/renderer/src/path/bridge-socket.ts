@@ -1,4 +1,4 @@
-import { coalesceInput, stripStale, type OutboxItem } from './bridge-outbox'
+import { aimedInput, coalesceInput, stripStale, type OutboxItem } from './bridge-outbox'
 
 /**
  * A WEBSOCKET OVER PLAIN HTTP — the phone's end of main/socket-bridge.ts.
@@ -36,7 +36,9 @@ const CLOSED = 3
 export const BRIDGE_POST_BATCH = 64
 export const BRIDGE_UP_IN_FLIGHT = 2
 /** The Mac beats every second and holds the session for thirty. */
-export const BRIDGE_SILENT_MS = 5000
+export const BRIDGE_SILENT_MS = 8000
+/** A POST on a dead path does not fail, it hangs; numbered, it can safely go again. */
+export const BRIDGE_POST_TIMEOUT_MS = 8000
 export const BRIDGE_RESUME_BUDGET_MS = 25_000
 /** Heard from within this long: a network change is no news to this line. */
 const HEARD_LATELY_MS = 1500
@@ -75,8 +77,8 @@ export type BridgePosted = 'ok' | 'gone' | 'retry'
 
 export interface BridgeSocketDeps {
   readonly stream: (resume?: BridgeResume) => BridgeStream
-  /** Rejects when the network ate it. */
-  readonly post: (id: string, body: BridgeBody) => Promise<BridgePosted>
+  /** Rejects when the network ate it or the signal aborts it. */
+  readonly post: (id: string, body: BridgeBody, signal?: AbortSignal) => Promise<BridgePosted>
   /** Calls back when the phone's network may have changed; returns the way to stop. */
   readonly watch?: (changed: () => void) => () => void
 }
@@ -104,6 +106,10 @@ export class BridgeWebSocket {
   private outbox: OutboxItem[] = []
   private redo: Batch[] = []
   private flying = 0
+  private readonly posts = new Set<AbortController>()
+  private keysHeld = false
+  /** The last the line was heard of before it went down. */
+  private lossHeard: number | undefined
   private nextSeq = 1
   private lastN = 0
   private painted_ = 0
@@ -131,6 +137,12 @@ export class BridgeWebSocket {
 
   send(text: string): void {
     if (this.readyState !== OPEN || this.id === null) throw new DOMException('not open', 'InvalidStateError')
+    // A press on a picture nobody can vouch for goes nowhere, and neither does what
+    // is typed for it. The chip says the line is down.
+    if (this.resuming && aimedInput(text)) {
+      this.keysHeld = true
+      return
+    }
     const waiting = this.outbox.at(-1)
     const folded = waiting ? coalesceInput(waiting.text, text) : null
     const item = { text: folded ?? text, at: Date.now() }
@@ -267,6 +279,7 @@ export class BridgeWebSocket {
     this.clearPatience()
     if (!this.resuming) {
       this.resuming = true
+      this.lossHeard = this.lastHeard
       this.attempt = 0
       this.deadline = Date.now() + BRIDGE_RESUME_BUDGET_MS
       this.onresuming?.(true)
@@ -304,14 +317,27 @@ export class BridgeWebSocket {
     this.resuming = false
     this.resumedAt = Date.now()
     this.onresuming?.(false)
+    // What is still in flight went down the old line and may never answer.
+    for (const post of [...this.posts]) post.abort()
     this.pump()
+  }
+
+  private strip(items: readonly OutboxItem[]): OutboxItem[] {
+    const stripped = stripStale(items, {
+      now: Date.now(),
+      keysHeld: this.keysHeld,
+      heardAt: this.lossHeard,
+      ...(this.resuming ? {} : { until: this.resumedAt })
+    })
+    this.keysHeld = stripped.keysHeld
+    return stripped.items
   }
 
   private takeBatch(): Batch | null {
     const again = this.redo.shift()
-    if (again) return { s: again.s, items: stripStale(again.items, Date.now()) }
+    if (again) return { s: again.s, items: this.strip(again.items) }
     if (this.outbox.length === 0) return null
-    const items = stripStale(this.outbox.slice(0, BRIDGE_POST_BATCH), Date.now())
+    const items = this.strip(this.outbox.slice(0, BRIDGE_POST_BATCH))
     this.outbox = this.outbox.slice(items.length)
     const batch = { s: this.nextSeq, items }
     this.nextSeq += items.length
@@ -334,16 +360,24 @@ export class BridgeWebSocket {
       const body: BridgeBody = this.resumable
         ? { ...(batch ? { s: batch.s, m: texts } : {}), ...(ack !== undefined ? { a: ack } : {}) }
         : { m: texts }
+      const abort = new AbortController()
+      this.posts.add(abort)
+      const timer = setTimeout(() => abort.abort(), BRIDGE_POST_TIMEOUT_MS)
+      const landed = (): void => {
+        clearTimeout(timer)
+        this.posts.delete(abort)
+        this.flying -= 1
+      }
       void this.deps
-        .post(id, body)
+        .post(id, body, abort.signal)
         .then((answer) => {
-          this.flying -= 1
+          landed()
           if (answer === 'gone') return this.fail()
           if (answer === 'retry') return this.again(batch)
           this.pump()
         })
         .catch(() => {
-          this.flying -= 1
+          landed()
           this.again(batch)
           // Proof the path died, unless a newer line has already replaced it.
           if (this.resumable && !this.resuming && postedAt >= this.resumedAt) this.lost()
@@ -374,6 +408,7 @@ export class BridgeWebSocket {
     this.redo = []
     for (const timer of [this.dialTimer, this.patience, this.retryTimer]) if (timer !== null) clearTimeout(timer)
     this.dialTimer = this.patience = this.retryTimer = null
+    for (const post of [...this.posts]) post.abort()
     if (this.watchdog !== null) clearInterval(this.watchdog)
     this.watchdog = null
     this.unwatch?.()

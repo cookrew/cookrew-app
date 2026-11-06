@@ -3,6 +3,7 @@ import { Socket } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import {
   SOCKET_BRIDGE_CREDIT,
+  SOCKET_BRIDGE_RELEASE_MS,
   SOCKET_BRIDGE_RESUME_MS,
   createSocketBridge
 } from '../src/main/socket-bridge'
@@ -95,6 +96,21 @@ describe('a bridged socket outlives the line it came down', () => {
     expect(next.events().some((e) => e.event === 'c')).toBe(true)
   })
 
+  it('gives the viewport up soon after the phone goes, and offers again on return is the phone\'s to do', async () => {
+    const { first, sent } = harness()
+    first.close()
+    await tick(SOCKET_BRIDGE_RELEASE_MS + 50)
+    expect(sent).toEqual(['{"t":"viewport-release"}'])
+  })
+
+  it('a phone back in time keeps it', async () => {
+    const { bridge, id, first, sent } = harness()
+    first.close()
+    bridge.resume(id, 0, fakeResponse().response, 'tok')
+    await tick(SOCKET_BRIDGE_RELEASE_MS + 50)
+    expect(sent).toEqual([])
+  })
+
   it('ends the viewer once the phone has been gone too long', async () => {
     let now = 0
     const { first, state, bridge } = harness({ now: () => now })
@@ -107,7 +123,7 @@ describe('a bridged socket outlives the line it came down', () => {
 
   it('a phone that says it is leaving ends at once', () => {
     const { bridge, id, state } = harness()
-    bridge.post(id, { end: true })
+    bridge.post(id, { end: true }, 'tok')
     expect(state.closed).toBe(true)
   })
 
@@ -129,33 +145,43 @@ describe('a bridged socket outlives the line it came down', () => {
   })
 })
 
+describe('a session answers only to the phone that opened it', () => {
+  it('refuses input from another paired device that learned the id', () => {
+    const { bridge, id, sent, state } = harness()
+    expect(bridge.post(id, { s: 1, m: ['a'] }, 'other')).toBe(false)
+    expect(bridge.post(id, { end: true }, 'other')).toBe(false)
+    expect(sent).toEqual([])
+    expect(state.closed).toBe(false)
+  })
+})
+
 describe('input arrives once, in order, whatever the line did', () => {
   it('holds a later POST until the earlier one lands', () => {
     const { bridge, id, sent } = harness()
-    bridge.post(id, { s: 3, m: ['c'] })
+    bridge.post(id, { s: 3, m: ['c'] }, 'tok')
     expect(sent).toEqual([])
-    bridge.post(id, { s: 1, m: ['a', 'b'] })
+    bridge.post(id, { s: 1, m: ['a', 'b'] }, 'tok')
     expect(sent).toEqual(['a', 'b', 'c'])
   })
 
   it('takes a retry whose first try got through without saying the words twice', () => {
     const { bridge, id, sent } = harness()
-    bridge.post(id, { s: 1, m: ['a', 'b'] })
-    bridge.post(id, { s: 1, m: ['a', 'b'] })
-    bridge.post(id, { s: 2, m: ['b', 'c'] })
+    bridge.post(id, { s: 1, m: ['a', 'b'] }, 'tok')
+    bridge.post(id, { s: 1, m: ['a', 'b'] }, 'tok')
+    bridge.post(id, { s: 2, m: ['b', 'c'] }, 'tok')
     expect(sent).toEqual(['a', 'b', 'c'])
   })
 
   it('skips a blanked stale item', () => {
     const { bridge, id, sent } = harness()
-    bridge.post(id, { s: 1, m: ['', 'b'] })
+    bridge.post(id, { s: 1, m: ['', 'b'] }, 'tok')
     expect(sent).toEqual(['b'])
   })
 
   it('still takes a POST while the stream is down', () => {
     const { bridge, id, first, sent } = harness()
     first.close()
-    expect(bridge.post(id, { s: 1, m: ['a'] })).toBe(true)
+    expect(bridge.post(id, { s: 1, m: ['a'] }, 'tok')).toBe(true)
     expect(sent).toEqual(['a'])
   })
 })
@@ -173,7 +199,7 @@ describe('frames go at the speed the phone paints them', () => {
     up().onMessage(frame(50))
     await tick(120)
     expect(frames(first.events())).toBe(SOCKET_BRIDGE_CREDIT)
-    bridge.post(id, { a: 50 })
+    bridge.post(id, { a: 50 }, 'tok')
     await tick(120)
     expect(frames(first.events())).toBe(SOCKET_BRIDGE_CREDIT + 1)
     expect(first.events().at(-1)?.data).toContain('pic50')
@@ -203,7 +229,7 @@ describe('frames go at the speed the phone paints them', () => {
       up().onMessage(frame(seq))
       await tick(0)
       now += took
-      bridge.post(id, { a: seq })
+      bridge.post(id, { a: seq }, 'tok')
       await tick(0)
     }
     /** How many go before the first receipt, then clear them. */
@@ -224,6 +250,15 @@ describe('frames go at the speed the phone paints them', () => {
     expect(await burst()).toBeGreaterThan(SOCKET_BRIDGE_CREDIT)
     for (let i = 0; i < 8; i += 1) await oneFrame(900)
     expect(await burst()).toBeLessThanOrEqual(SOCKET_BRIDGE_CREDIT + 1)
+  })
+
+  it('a viewport that changed gets a whole picture, even of the same bytes', async () => {
+    const { first, up } = harness()
+    up().onMessage(JSON.stringify({ t: 'frame', seq: 1, data: 'p', meta: { revision: 1 } }))
+    await tick(100)
+    up().onMessage(JSON.stringify({ t: 'frame', seq: 2, data: 'p', meta: { revision: 3 } }))
+    await tick(100)
+    expect(frames(first.events())).toBe(2)
   })
 
   it('a lost receipt does not stop the picture for good', async () => {

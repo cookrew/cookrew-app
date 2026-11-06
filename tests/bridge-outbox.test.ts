@@ -65,7 +65,32 @@ describe('what is too old to send after a dropped line', () => {
   })
 
   it('blanks a stale item in a batch without moving the sequence numbers', () => {
-    const batch = [{ text: j({ t: 'tap' }), at: old }, { text: j({ t: 'key', key: 'a' }), at: old }]
-    expect(stripStale(batch, at).map((item) => item.text)).toEqual(['', j({ t: 'key', key: 'a' })])
+    const batch = [{ text: j({ t: 'key', key: 'a' }), at: old }, { text: j({ t: 'tap' }), at: old }]
+    expect(stripStale(batch, { now: at }).items.map((item) => item.text)).toEqual([j({ t: 'key', key: 'a' }), ''])
+  })
+
+  it('does not type into a field the tap never reached', () => {
+    const batch = [
+      { text: j({ t: 'tap' }), at: old },
+      { text: j({ t: 'key', key: 'p' }), at: old },
+      { text: j({ t: 'text', text: 'secret' }), at: at },
+      { text: j({ t: 'touchend' }), at: old }
+    ]
+    const { items, keysHeld } = stripStale(batch, { now: at })
+    expect(items.map((item) => item.text)).toEqual(['', '', '', j({ t: 'touchend' })])
+    expect(keysHeld).toBe(true)
+  })
+
+  it('a fresh press lets typing go again', () => {
+    const batch = [{ text: j({ t: 'tap' }), at }, { text: j({ t: 'key', key: 'p' }), at }]
+    const { items, keysHeld } = stripStale(batch, { now: at, keysHeld: true })
+    expect(items.map((item) => item.text)).toEqual(batch.map((item) => item.text))
+    expect(keysHeld).toBe(false)
+  })
+
+  it('a press made on a picture the line had already stopped updating is stale whatever its age', () => {
+    const batch = [{ text: j({ t: 'tap' }), at: at - 100 }]
+    expect(stripStale(batch, { now: at, heardAt: at - 2000 }).items[0].text).toBe('')
+    expect(stripStale(batch, { now: at, heardAt: at - 500 }).items[0].text).not.toBe('')
   })
 })

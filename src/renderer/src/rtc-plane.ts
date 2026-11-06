@@ -96,14 +96,16 @@ export const openBridgedSocket = (path: string): BridgeWebSocket =>
             : `/api/socket-bridge?v=2&path=${encodeURIComponent(path)}`
         )
       ),
-    post: async (id, body) => {
+    post: async (id, body, signal) => {
       const response = await planeFetch(apiPath(`/api/socket-bridge/${id}`), {
         method: 'POST',
         headers: { ...authHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal
       })
-      if (response.status === 404) return 'gone'
-      return response.ok ? 'ok' : 'retry'
+      if (response.ok) return 'ok'
+      // The relay busy or the Mac's line down goes again; a refusal will not change.
+      return response.status >= 500 || response.status === 429 ? 'retry' : 'gone'
     },
     watch: watchNetwork
   })

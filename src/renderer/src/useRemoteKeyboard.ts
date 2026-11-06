@@ -137,6 +137,7 @@ export interface RemoteKeyboard {
   /** The IME's text being composed on the phone, not sent yet (the bar shows it). */
   composition: string
   typed: string
+  clearTyped: () => void
   /** Raise the keyboard — MUST be called synchronously from a tap's handler. */
   raise: (options?: RaiseOptions) => void
   /** Toggle the phone keyboard — MUST be called from a user gesture (button tap). */
@@ -183,6 +184,7 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
   const [composition, setComposition] = useState('')
   /** What just went up, shown at once: on the relay the page's own echo is a round trip away. */
   const [typed, setTyped] = useState('')
+  const clearTyped = useCallback((): void => setTyped(''), [])
   useEffect(() => {
     if (typed === '') return undefined
     const timer = setTimeout(() => setTyped(''), TYPED_HOLD_MS)
@@ -366,6 +368,7 @@ export function useRemoteKeyboard(send: (msg: CastInputMsg) => void, mode: Keybo
     auto,
     composition,
     typed,
+    clearTyped,
     raise,
     toggle,
     close,

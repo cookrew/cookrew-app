@@ -10,14 +10,16 @@
  *
  * After a dropped line the question is the opposite one: what is too old to
  * deliver. A tap aimed at a page from twenty seconds ago must not land on what is
- * there now. What was typed still goes, and every release goes, or a finger stays
- * down in Chrome for good.
+ * there now, and neither must the words typed after it, which were meant for the
+ * field it would have focused. Every release goes, or a finger stays down in Chrome.
  *
  * Pure. Messages are the socket's own text.
  */
 
 /** A press older than this is aimed at a picture that has moved on. */
 export const BRIDGE_INPUT_STALE_MS = 3000
+/** A press made this long after the line last said anything was aimed at a stale picture. */
+const BLIND_MS = 1500
 
 export interface OutboxItem {
   readonly text: string
@@ -68,13 +70,41 @@ export function coalesceInput(waiting: string, next: string): string | null {
 
 const AIMED = new Set(['tap', 'down', 'move', 'wheel', 'pinch', 'touchstart', 'touchmove'])
 
-export function staleInput(text: string, at: number, now: number): boolean {
-  if (now - at <= BRIDGE_INPUT_STALE_MS) return false
+const TYPED = new Set(['key', 'text', 'paste', 'compose'])
+
+/** Aimed at something: a press lands where the picture was. */
+export const aimedInput = (text: string): boolean => {
   const message = read(text)
   return message !== null && AIMED.has(message.t as string)
 }
 
+export function staleInput(text: string, at: number, now: number): boolean {
+  return now - at > BRIDGE_INPUT_STALE_MS && aimedInput(text)
+}
+
+export interface StaleCheck {
+  readonly now: number
+  /** A press was dropped and nothing has been aimed since: typing has no known target. */
+  readonly keysHeld?: boolean
+  /** When the line last said anything before it went down. */
+  readonly heardAt?: number
+  /** When it came back; absent while it is still down. */
+  readonly until?: number
+}
+
+const blind = (at: number, check: StaleCheck): boolean =>
+  check.heardAt !== undefined && at - check.heardAt > BLIND_MS && (check.until === undefined || at <= check.until)
+
 /** A batch keeps its length: its numbers are already spent. A blank is skipped at the Mac. */
-export function stripStale(batch: readonly OutboxItem[], now: number): OutboxItem[] {
-  return batch.map((item) => (staleInput(item.text, item.at, now) ? { ...item, text: '' } : item))
+export function stripStale(batch: readonly OutboxItem[], check: StaleCheck): { items: OutboxItem[]; keysHeld: boolean } {
+  let keysHeld = check.keysHeld ?? false
+  const items = batch.map((item) => {
+    if (aimedInput(item.text)) {
+      keysHeld = staleInput(item.text, item.at, check.now) || blind(item.at, check)
+      return keysHeld ? { ...item, text: '' } : item
+    }
+    const message = read(item.text)
+    return keysHeld && message !== null && TYPED.has(message.t as string) ? { ...item, text: '' } : item
+  })
+  return { items, keysHeld }
 }

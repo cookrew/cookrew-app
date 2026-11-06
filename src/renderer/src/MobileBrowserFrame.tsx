@@ -168,6 +168,9 @@ export function MobileBrowserFrame({
   const lastTapAt = useRef(0)
   const raisedAt = useRef(0)
   const [fieldMode, setFieldMode] = useState<FieldMode>('text')
+  // Words typed for one field are not shown under another's rules: a password stays dots.
+  const { clearTyped } = kbd
+  useEffect(() => clearTyped(), [fieldMode, clearTyped])
   /** A short word on the frame: "Copied", "Nothing selected". */
   const [note, setNote] = useState<string | null>(null)
   /** A copy this phone could not write without a tap (iOS), offered as one. */
@@ -674,6 +677,8 @@ export function MobileBrowserFrame({
     pump.move(moveMsg(point, dragging ? e.buttons : 0, modsOf(e)))
   }
   const onPointerUp = (e: React.PointerEvent): void => {
+    // Before the gesture's own bookkeeping, which forgets both fingers at the first lift.
+    gestureLead.up(e.pointerId)
     if (holdStart.current?.pointerId === e.pointerId) stopHold()
     const held = selecting.current
     if (held && held.pointerId === e.pointerId) {
@@ -692,7 +697,6 @@ export function MobileBrowserFrame({
         touchGesture.current = update.state
         sendFrameInput(update.message)
       }
-      gestureLead.up(e.pointerId)
       for (const active of contacts) {
         if (e.currentTarget.hasPointerCapture?.(active.pointerId)) {
           e.currentTarget.releasePointerCapture(active.pointerId)

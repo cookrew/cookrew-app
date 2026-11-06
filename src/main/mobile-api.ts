@@ -986,7 +986,7 @@ export async function handleMobileApi(
       respondJson(response, 400, { error: "m must be a short list of strings" });
       return true;
     }
-    if (!deps.socketBridge.post(bridgePost[1], { m: messages, s: start, a: painted, end: leaving })) {
+    if (!deps.socketBridge.post(bridgePost[1], { m: messages, s: start, a: painted, end: leaving }, presentedToken(request, url))) {
       respondJson(response, 404, { error: "no such bridged socket" });
       return true;
     }

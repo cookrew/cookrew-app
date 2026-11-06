@@ -52,6 +52,9 @@ export const leadFrame = (lead: Lead, scrollY: number | null, at: number): Lead 
 export const viewPerCss = (fitWidth: number, deviceWidth: number, pageScale: number): number =>
   deviceWidth > 0 ? (fitWidth / deviceWidth) * pageScale : 0
 
+/** The page has really moved since the finger came down. */
+export const leadAnswered = (lead: Lead): boolean => lead.scroll !== null && lead.scroll !== lead.startScroll
+
 export const leadStalled = (lead: Lead, now: number): boolean => now - lead.progressAt > LEAD_PATIENCE_MS
 
 /** Where the picture should sit now, relative to where the frame draws it. */

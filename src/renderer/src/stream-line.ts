@@ -29,6 +29,8 @@ export interface StreamLineHandlers {
 export interface StreamLine {
   /** Frames come as bytes over the desktop's port; receipts pace them. */
   readonly direct: boolean
+  /** The relay's bridge, which watches its own silence and paces by receipts. */
+  readonly paced: boolean
   isOpen: () => boolean
   /** The other end ever answered (a port arrived, a socket opened), whatever happened since. */
   answered: () => boolean
@@ -80,6 +82,7 @@ export function portLine(open: OpenBrowserStream, browserId: string, handlers: S
   })
   return {
     direct: true,
+    paced: false,
     isOpen: () => opened && !closed,
     answered: () => opened,
     send: (message) => {
@@ -119,6 +122,7 @@ export function socketLine(socket: WebSocket, handlers: StreamLineHandlers): Str
   }
   return {
     direct: false,
+    paced: 'painted' in resuming,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     answered: () => opened,
     send: (message) => {

@@ -97,6 +97,8 @@ export class CastViewer {
   private hasObservedPageScaleFactor = false
   /** A pinch step is animated in Chrome (~70 ms): one at a time, the rest folded into the next. */
   private pinchBusy = false
+  private pressed: { message: Record<string, unknown>; ctx: MapContext } | null = null
+  private touching = false
   private pinchPending: CdpInputCommand | null = null
   /** Watching the page's text fields (page-fields.ts) — a phone asks, to raise its keyboard on a tap. */
   private unwatchFields: (() => void) | null = null
@@ -262,7 +264,9 @@ export class CastViewer {
 
   private rememberFrameContext(seq: number, revision: number, ctx: MapContext): void {
     this.frameContexts.set(seq, { ctx, revision })
-    while (this.frameContexts.size > 32) {
+    // By count, of frames Chrome made, not frames a phone saw: a page at 60 a second on
+    // a line at 4 must still have the context of the frame on the phone's screen.
+    while (this.frameContexts.size > FRAME_CONTEXTS) {
       const oldest = this.frameContexts.keys().next().value
       if (typeof oldest !== 'number') break
       this.frameContexts.delete(oldest)
@@ -300,12 +304,16 @@ export class CastViewer {
       : undefined
     const releasesActivePointer = input.t === 'up' || input.t === 'touchend' || input.t === 'touchcancel'
     const viewport = instance.viewportState
+    // A release is cleanup: it lands whatever has happened to the page since, or a
+    // finger stays down in Chrome.
     if (
-      ((viewport.transitioning || viewport.agentHeld) && !releasesActivePointer) ||
-      !Number.isInteger(revision) ||
-      revision !== viewport.revision ||
-      revision !== this.deliveredRevision ||
-      (needsFrameContext && (!frameContext || frameContext.revision !== revision))
+      !releasesActivePointer &&
+      (viewport.transitioning ||
+        viewport.agentHeld ||
+        !Number.isInteger(revision) ||
+        revision !== viewport.revision ||
+        revision !== this.deliveredRevision ||
+        (needsFrameContext && (!frameContext || frameContext.revision !== revision)))
     ) return
     const pasted = sanitizePaste(raw)
     if (pasted !== null) {
@@ -317,6 +325,27 @@ export class CastViewer {
     if (!commands) return
     for (const command of commands) this.dispatch(instance, command)
     this.lastInputAt = Date.now()
+    this.remember(raw as Record<string, unknown>, frameContext?.ctx ?? this.ctx)
+  }
+
+  /** What is held down in Chrome on this viewer's behalf, for a viewer that leaves mid-press. */
+  private remember(input: Record<string, unknown>, ctx: MapContext): void {
+    if (input.t === 'down') this.pressed = { message: { ...input, t: 'up' }, ctx }
+    else if (input.t === 'up') this.pressed = null
+    else if (input.t === 'touchstart') this.touching = true
+    else if (input.t === 'touchend' || input.t === 'touchcancel') this.touching = false
+  }
+
+  private letGo(): void {
+    const instance = this.instance
+    if (!instance) return
+    const releases = [
+      ...(this.touching ? [sanitizeInput({ t: 'touchcancel' }, this.ctx)] : []),
+      ...(this.pressed ? [sanitizeInput(this.pressed.message, this.pressed.ctx)] : [])
+    ]
+    this.touching = false
+    this.pressed = null
+    for (const commands of releases) for (const command of commands ?? []) this.dispatch(instance, command)
   }
 
   private paste(instance: BrowserInstance, text: string): void {
@@ -396,6 +425,7 @@ export class CastViewer {
 
   close = (): void => {
     if (this.closed) return
+    this.letGo()
     this.closed = true
     this.latest = null
     this.latestContext = null
@@ -424,6 +454,8 @@ export class CastViewer {
 }
 
 /** Input with no point on the page: it needs no painted frame to map against. */
+const FRAME_CONTEXTS = 1024
+
 const POINTLESS = new Set(['key', 'touchend', 'touchcancel', 'text', 'compose', 'paste'])
 
 /** Two pinch steps as one: scales multiply, the newest anchor wins. */

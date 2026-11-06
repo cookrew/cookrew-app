@@ -3,6 +3,7 @@ import {
   LEAD_PATIENCE_MS,
   flingStep,
   flingVelocity,
+  leadAnswered,
   leadFrame,
   leadMoved,
   leadOffset,
@@ -55,6 +56,12 @@ describe('the picture follows the finger before the Mac answers', () => {
     let lead = leadMoved(startLead({ scrollY: 500, at: 0 }), -400, 10)
     lead = leadFrame(lead, 520, LEAD_PATIENCE_MS)
     expect(leadOffset(lead, k, LEAD_PATIENCE_MS + 100)).toBe(-380)
+  })
+
+  it('knows whether the page has really moved', () => {
+    const lead = leadMoved(startLead({ scrollY: 500, at: 0 }), -100, 10)
+    expect(leadAnswered(lead)).toBe(false)
+    expect(leadAnswered(leadFrame(lead, 520, 50))).toBe(true)
   })
 
   it('does nothing for a page that does not say where it is', () => {
