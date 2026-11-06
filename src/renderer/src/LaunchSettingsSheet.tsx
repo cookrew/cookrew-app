@@ -30,7 +30,7 @@ const FAILURE: Readonly<Record<LaunchSaveFailure, string>> = {
 const HOST_NAMES: Readonly<Record<string, string>> = {
   herdr: 'herdr: agents outlive the app',
   tmux: 'tmux: agents outlive the app',
-  direct: 'Direct: no terminal host'
+  direct: 'Direct: agents end with the app'
 }
 
 export interface LaunchSettingsViewProps {
@@ -50,11 +50,12 @@ function Pinned({ name, status }: { name: LaunchKey; status: LaunchStatus }): Re
   return <p className="gs-hint">Set by {LAUNCH_ENV[name]} for this launch. Start Cookrew without it to change this here.</p>
 }
 
+/** A direct host has nothing to move: its agents ended with the last run. */
 const movesHost = (draft: LaunchValues, status: LaunchStatus): boolean =>
-  !status.pinned.includes('multiplexer') && draft.multiplexer !== status.running.multiplexer
+  !status.pinned.includes('multiplexer') && status.running.multiplexer !== 'direct' && draft.multiplexer !== status.running.multiplexer
 
-const MOVE_NOTE = 'At the next start, agents are stopped on the old host and resumed on this one, so a turn in progress is lost. Other terminals stay on the old host, and a new one starts beside them.'
-const DIRECT_NOTE = 'Agents end when the window closes.'
+const MOVE_NOTE = 'After a restart, each agent moves when its workspace next opens: it is stopped on the old host and resumed on this one, so a turn in progress is lost. Other terminals stay on the old host, and a new one starts beside them.'
+const DIRECT_NOTE = 'Agents end when Cookrew quits or its window closes.'
 
 function Switch(props: { name: 'interactiveBrowser' | 'multiInstance'; label: string; note: string } & Pick<LaunchSettingsViewProps, 'draft' | 'status' | 'onDraft'>): React.JSX.Element {
   const { name, label, note, draft, status, onDraft } = props
@@ -108,7 +109,7 @@ export function LaunchSettingsView({ draft, status, saved, error, busy, onDraft,
             spellCheck={false}
             onChange={(event) => onDraft({ ...draft, registry: event.target.value })}
           />
-          <p className="gs-hint">Where your account lives, and how phones reach you from anywhere.</p>
+          <p className="gs-hint">Your account, phones reaching you from anywhere, and served crews all go through it.</p>
           {status.signedIn && <p className="gs-hint">Sign out to change this: your session belongs to this registry.</p>}
           <Pinned name="registry" status={status} />
         </div>
@@ -129,13 +130,13 @@ export function LaunchSettingsView({ draft, status, saved, error, busy, onDraft,
               </option>
             ))}
           </select>
-          <p className="gs-hint">Tried first. If it is not installed, Cookrew falls back to the next one.</p>
+          {draft.multiplexer !== 'direct' && <p className="gs-hint">Tried first. If it is not installed, Cookrew falls back to the next one.</p>}
           {draft.multiplexer === 'direct' && <p className="gs-hint">{DIRECT_NOTE}</p>}
           {moves && <p className="gs-hint">{MOVE_NOTE}</p>}
           <Pinned name="multiplexer" status={status} />
         </div>
-        <Switch name="multiInstance" label="Run workspaces independently" note="Off: workspaces lose their own addresses, served crews stop answering, and a phone that switches workspace moves this window too." draft={draft} status={status} onDraft={onDraft} />
-        <Switch name="interactiveBrowser" label="Drive pages with Chrome" note="Lets agents and your phone use pages. Needs Chrome installed." draft={draft} status={status} onDraft={onDraft} />
+        <Switch name="multiInstance" label="Run workspaces independently" note="Off: Cookrew holds one workspace at a time and drops the one you leave, though agents there keep running. Workspaces lose their own addresses, served crews stop answering, and a phone that switches workspace moves this window too." draft={draft} status={status} onDraft={onDraft} />
+        <Switch name="interactiveBrowser" label="Run pages in Chrome" note="On: pages run in a background Chrome, keep going in workspaces you are not in, and a phone can watch and use them live. Off: pages live in this window, and a phone only sees pictures of them. Needs Chrome, Chromium or Edge; without one this stays off." draft={draft} status={status} onDraft={onDraft} />
         {error !== null && (
           <p className="gs-paste-error" role="alert">
             {error}
