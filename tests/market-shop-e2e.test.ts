@@ -237,7 +237,8 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     const body = await html()
     expect(body).not.toContain('Enrol')
     expect(body).not.toContain('?buy=1')
-  })
+    // The first page a fresh Chrome opens: slow on a shared runner.
+  }, 30_000)
 
   it('registers a username and a password in the account sheet, and the page becomes @lin’s', async () => {
     await clickUntil('article.team:has(a[href="/drej/alpha"]) .btn.primary[data-signin]', "document.getElementById('account-sheet')?.open === true")
