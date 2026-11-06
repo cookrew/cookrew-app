@@ -183,6 +183,16 @@ export function LaunchSettingsSheet({ onClose }: { onClose: () => void }): React
     }
   }, [onClose])
 
+  // On the window as well: a pressed button goes disabled while saving, focus falls to
+  // the body, and the sheet's own handler no longer hears the key.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   if (status === null || draft === null) return null
 
   const edit = (next: LaunchValues): void => {
