@@ -14,6 +14,9 @@ import { writeFileAtomic } from './atomic-file'
  * ALLOW seals to a key that came through the registry, with nothing for the owner
  * to compare, so a registry that swapped the key would be handed the code.
  *
+ * This holds against a relay that reads, not yet one that acts: until plain routes
+ * close, a relay holding the token can type into a terminal and read this file.
+ *
  * One per Mac, rotated with the pairing token, so `cookrew mobile --rotate` is
  * still the one way to shut every phone out. The file is 0600 and denied to served
  * seats (owner-secrets.ts); an agent of the owner's own can read it, as it can the

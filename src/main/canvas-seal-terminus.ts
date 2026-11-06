@@ -369,6 +369,9 @@ function openSession(deps: SessionDeps): LiveSession {
       return statusOf(answers)
     },
     listen(response, from) {
+      // Every listen writes out all that is unacked, and the relay can see this id: a
+      // line that has not drained the last one waits, or repeated GETs fill this Mac's memory.
+      if (retained > 0 && deps.socketBacklog(down) > SEAL_OUTBOX_HIGH) return reply(response, 503, { error: 'the line is still full' })
       down?.end()
       down = response
       lastPing = now()

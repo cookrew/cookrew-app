@@ -540,6 +540,27 @@ describe('keeping it bounded', () => {
     expect(calls[0].destroyed).toBe(false)
   })
 
+  it('a relay cannot pile replays onto a line that has not drained', async () => {
+    const line = { writableLength: 0 }
+    const { origin, phone: start, calls, terminus } = await bed({ auto: false, deps: { socketBacklog: () => line.writableLength } })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    calls[0].answer(200)
+    calls[0].chunk('x')
+    await until(() => phone.text(1) === 'x', 'the record')
+    line.writableLength = SEAL_OUTBOX_HIGH + 1
+    const again = `${origin}/~seal/down?s=${phone.session?.id}&from=0`
+    expect((await fetch(again)).status).toBe(503)
+    expect(terminus.stats().sessions).toBe(1)
+    calls[0].chunk('y')
+    await until(() => phone.text(1) === 'xy', 'the phone\'s own line to stay up')
+    line.writableLength = 0
+    const stop = new AbortController()
+    expect((await fetch(again, { signal: stop.signal })).status).toBe(200)
+    stop.abort()
+  })
+
   it('a phone that never reads is still let go once its own bytes pass the limit', async () => {
     const { phone: start, calls, terminus } = await bed({ auto: false })
     const phone = await start()
