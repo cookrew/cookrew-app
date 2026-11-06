@@ -10,15 +10,17 @@
  * and a released app has no launch line, so it shipped none of them. From
  * 0.4.0 that line IS the default. Every variable still overrides — this file
  * only decides what an unset one means, and the off switch for each is named
- * beside it.
+ * beside it. The same four can be set in the app: a saved choice arrives here
+ * as the variable (launch-settings.ts).
  *
  * Main-only: the renderer has no environment (see registry-origin.ts).
  */
 
-type Env = Readonly<Record<string, string | undefined>>
+import { DEFAULT_MULTIPLEXER, DEFAULT_REGISTRY, type LaunchValues } from '../shared/launch-settings'
 
-export const DEFAULT_REGISTRY = 'https://cookrew.dev'
-export const DEFAULT_MULTIPLEXER = 'herdr'
+export { DEFAULT_MULTIPLEXER, DEFAULT_REGISTRY }
+
+type Env = Readonly<Record<string, string | undefined>>
 
 const ON = new Set(['1', 'true', 'yes', 'on'])
 const OFF = new Set(['0', 'false', 'no', 'off'])
@@ -69,6 +71,16 @@ export function interactiveBrowserDefault(env: Env, chromeFound: () => boolean):
  */
 export function multiplexerPreference(env: Env = process.env): string {
   return env.COOKREW_MULTIPLEXER?.trim() || DEFAULT_MULTIPLEXER
+}
+
+/** All four, as the settings sheet shows them. Whether Chrome exists is not a setting. */
+export function launchValues(env: Env): LaunchValues {
+  return {
+    registry: relayOrigin(env),
+    interactiveBrowser: readSwitch(env.COOKREW_INTERACTIVE_BROWSER) !== false,
+    multiInstance: multiInstanceDefault(env),
+    multiplexer: multiplexerPreference(env)
+  }
 }
 
 /** `current` to the character, then each dir it does not hold yet. */

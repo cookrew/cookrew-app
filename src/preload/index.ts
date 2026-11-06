@@ -613,6 +613,8 @@ const api = {
   /** The usage-data switch; it lives on this machine, so the phone has no such call. */
   telemetryStatus: () => ipcRenderer.invoke('telemetry:status'),
   setTelemetry: (on: boolean) => ipcRenderer.invoke('telemetry:set', on),
+  launchSettings: () => ipcRenderer.invoke('launch-settings:status'),
+  saveLaunchSettings: (choices: unknown) => ipcRenderer.invoke('launch-settings:save', choices),
   updateStatus: () => ipcRenderer.invoke('update:status'),
   setUpdateCheck: (on: boolean) => ipcRenderer.invoke('update:set', on),
   restartToUpdate: () => ipcRenderer.invoke('update:restart'),
