@@ -47,6 +47,7 @@ const bar = (attention = 0): string =>
       onViewChange={() => undefined}
       onWall={() => undefined}
       onResync={() => undefined}
+      onActivity={() => undefined}
       search={<BoardSearch workspace={null} activeWorkspaceId={null} attentionCount={attention} />}
     />
   )
