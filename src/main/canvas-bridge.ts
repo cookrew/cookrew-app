@@ -136,7 +136,7 @@ export const loggedPath = (path: string): string => {
 }
 
 /** What says where a request ends or what the socket becomes: only this file may say that. */
-const FRAMING_HEADERS = new Set(['content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer', 'expect'])
+const FRAMING_HEADERS = new Set(['host', RELAY_MARKER, 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'te', 'trailer', 'expect'])
 
 const withoutFraming = (headers: Readonly<Record<string, string>>): Record<string, string> =>
   Object.fromEntries(Object.entries(headers).filter(([name]) => !FRAMING_HEADERS.has(name.toLowerCase())))

@@ -9,7 +9,9 @@ import {
   createSealTerminus,
   isSealPath,
   routeSeal,
+  SEAL_BODY_MS,
   SEAL_DOWN_GRACE_MS,
+  SEAL_HANDSHAKES_ALL_PER_MINUTE,
   SEAL_HANDSHAKES_PER_MINUTE,
   SEAL_MAX_SESSIONS,
   SEAL_MAX_STREAMS,
@@ -449,6 +451,52 @@ describe('keeping it bounded', () => {
     clock.now += SEAL_SILENT_MS / 2 + 1
     terminus.tick()
     expect(terminus.stats().sessions).toBe(0)
+  })
+
+  it('a request whose body never ends gives its slot back', async () => {
+    const { phone: start, terminus, clock, calls } = await bed({ auto: false })
+    const phone = await start()
+    await phone.send(open(1, '/api/x', {}, 'POST'))
+    await until(() => calls.length === 1, 'the call')
+    await phone.send({ kind: 'ping', stream: 0 })
+    clock.now += SEAL_BODY_MS + 1
+    terminus.tick()
+    expect(calls[0].destroyed).toBe(true)
+    await until(() => phone.of(1).some((frame) => frame.kind === 'abort'), 'the abort')
+  })
+
+  it('an event stream with its request ended runs as long as it likes', async () => {
+    const { phone: start, terminus, clock, calls } = await bed({ auto: false })
+    const phone = await start()
+    await phone.send(open(1, '/api/events'), end(1))
+    await until(() => calls.length === 1, 'the call')
+    clock.now += SEAL_BODY_MS + 1
+    terminus.tick()
+    expect(calls[0].destroyed).toBe(false)
+  })
+
+  it('what the phone acknowledged is let go of, not just uncounted', async () => {
+    const { phone: start, calls, terminus } = await bed({ auto: false })
+    const phone = await start()
+    await phone.send(open(1), end(1))
+    await until(() => calls.length === 1, 'the call')
+    calls[0].answer(200)
+    calls[0].chunk(Buffer.alloc(2 * 1024 * 1024))
+    calls[0].finish()
+    await until(() => phone.of(1).some((frame) => frame.kind === 'end'), 'the answer')
+    expect(terminus.stats().held).toBeGreaterThan(2 * 1024 * 1024)
+    await phone.send({ kind: 'ack', stream: 0, next: phone.inbox?.next() ?? 0 })
+    await until(() => terminus.stats().held < 1024, 'the bytes to go')
+  })
+
+  it('a relay naming a new device each time still meets a ceiling', async () => {
+    const { origin, code } = await bed({ deps: { handshakesPerMinute: 2 } })
+    const { hello } = await startHandshake(code)
+    const statuses: number[] = []
+    for (let i = 0; i < SEAL_HANDSHAKES_ALL_PER_MINUTE + 1; i += 1) {
+      statuses.push((await fetch(`${origin}/~seal/hello`, { method: 'POST', headers: { 'x-test-device': `d${i}` }, body: JSON.stringify(hello) })).status)
+    }
+    expect(statuses.at(-1)).toBe(429)
   })
 
   it('a sealed ping does', async () => {

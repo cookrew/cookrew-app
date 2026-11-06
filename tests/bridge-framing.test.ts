@@ -70,6 +70,13 @@ describe('the bridge’s local request', () => {
     expect(seen.map((request) => request.url)).toEqual(['/first'])
   })
 
+  it('a host or a marker from outside is not believed, however it is spelled', async () => {
+    const { port, seen } = await companion()
+    await call(port, 'GET', { 'X-Cookrew-Relay': '0', HOST: 'evil' }, [])
+    await settled()
+    expect(seen[0].marker).toBe('1')
+  })
+
   it('a POST in pieces arrives whole, and one with no body stays empty', async () => {
     const { port, seen } = await companion()
     await call(port, 'POST', {}, ['one', 'two'])

@@ -32,6 +32,10 @@ import { DOOR_MARKER } from '../shared/remote-unlock'
  */
 
 export const SEAL_HANDSHAKES_PER_MINUTE = 30
+/** The device name comes from the relay, so a relay can vary it: this one it cannot. */
+export const SEAL_HANDSHAKES_ALL_PER_MINUTE = 120
+/** How long a request may take to finish arriving. An answer may run as long as it likes. */
+export const SEAL_BODY_MS = 120_000
 export const SEAL_MAX_SESSIONS = 32
 export const SEAL_MAX_STREAMS = 64
 /** Under the relay's 120 s idle deadline, and how soon a phone can tell the line died. */
@@ -63,7 +67,10 @@ export interface SealTerminusDeps {
   codeFor(id: string): Uint8Array | null
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
-  /** Bytes the down socket has not taken yet. Only tests say otherwise. */
+  /**
+   * Bytes on their way to the phone and not gone yet. Must include the relay line's
+   * own socket: the bridge reads the down stream eagerly, so loopback alone sees nothing.
+   */
   socketBacklog?: (socket: http.ServerResponse | null) => number
   now?: () => number
   log?: (message: string) => void
@@ -73,7 +80,7 @@ export interface SealTerminus {
   handle(request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void>
   tick(): void
   close(): void
-  stats(): { sessions: number; pending: number; listening: number; retained: number }
+  stats(): { sessions: number; pending: number; listening: number; retained: number; held: number }
 }
 
 const SEAL_PREFIX = '/~seal/'
@@ -119,6 +126,7 @@ interface Stream {
   call: BridgeCall | null
   response: BridgeResponse | null
   bytes: number
+  openedAt: number
   requestDone: boolean
   done: boolean
 }
@@ -132,6 +140,8 @@ interface LiveSession {
   close(why: string): void
   listening(): boolean
   retained(): number
+  /** Bytes in the outbox, by what it really holds. */
+  held(): number
   /** The last time something sealed arrived. */
   lastHeard(): number
 }
@@ -150,7 +160,7 @@ interface SessionDeps {
 function openSession(deps: SessionDeps): LiveSession {
   const { sealed, outer, dial, now, log } = deps
   const streams = new Map<number, Stream>()
-  let outbox: Array<{ seq: number; wire: Uint8Array }> = []
+  let outbox: Array<{ readonly seq: number; wire: Uint8Array | null }> = []
   /** Where the unacknowledged records start: dropping from the front must not cost the whole array. */
   let head = 0
   let acked = 0
@@ -247,7 +257,7 @@ function openSession(deps: SessionDeps): LiveSession {
     if (!METHODS.has(frame.method)) return send({ kind: 'abort', stream: id, reason: 'bad-method' })
     if (id === 0 || streams.has(id)) return send({ kind: 'abort', stream: id, reason: 'in-use' })
     if (streams.size >= SEAL_MAX_STREAMS) return send({ kind: 'abort', stream: id, reason: 'busy' })
-    const stream: Stream = { call: null, response: null, bytes: 0, requestDone: false, done: false }
+    const stream: Stream = { call: null, response: null, bytes: 0, openedAt: now(), requestDone: false, done: false }
     streams.set(id, stream)
     const failed = (error: Error): void => {
       if (stream.done) return
@@ -280,7 +290,9 @@ function openSession(deps: SessionDeps): LiveSession {
     if (next > sealedCount || next <= acked) return
     acked = next
     while (head < outbox.length && outbox[head].seq < next) {
-      retained -= outbox[head].wire.length
+      retained -= outbox[head].wire?.length ?? 0
+      // Now, not at the next compaction: a slot's bytes are the whole cost of keeping it.
+      outbox[head].wire = null
       head += 1
     }
     if (head > 1024) {
@@ -361,7 +373,7 @@ function openSession(deps: SessionDeps): LiveSession {
       // between here and the phone already streams this type without holding it back.
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store, no-transform', 'x-accel-buffering': 'no' })
       response.flushHeaders()
-      for (const item of outbox.slice(head)) if (item.seq >= from) response.write(item.wire)
+      for (const { seq, wire } of outbox.slice(head)) if (seq >= from && wire !== null) response.write(wire)
       // The relay holds a head back until the first bytes behind it, so an idle
       // stream would never open at the phone. It also says this line is live.
       send({ kind: 'ping', stream: 0 })
@@ -379,6 +391,12 @@ function openSession(deps: SessionDeps): LiveSession {
         return
       }
       release()
+      for (const [id, stream] of [...streams]) {
+        if (stream.requestDone || at - stream.openedAt <= SEAL_BODY_MS) continue
+        send({ kind: 'abort', stream: id, reason: 'body-timed-out' })
+        stream.call?.destroy()
+        settle(id, stream)
+      }
       if (at - lastPing < SEAL_PING_MS) return
       lastPing = at
       send({ kind: 'ping', stream: 0 })
@@ -386,7 +404,8 @@ function openSession(deps: SessionDeps): LiveSession {
     close,
     lastHeard: () => lastHeard,
     listening: () => down !== null,
-    retained: () => retained
+    retained: () => retained,
+    held: () => outbox.reduce((total, { wire }) => total + (wire?.length ?? 0), 0)
   }
 }
 
@@ -435,13 +454,15 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
   const log = deps.log ?? ((): void => undefined)
   const socketBacklog = deps.socketBacklog ?? ((socket: http.ServerResponse | null): number => socket?.writableLength ?? 0)
   const limiter = new FixedWindowLimiter(deps.handshakesPerMinute ?? SEAL_HANDSHAKES_PER_MINUTE, 60_000, now)
+  const ceiling = new FixedWindowLimiter(SEAL_HANDSHAKES_ALL_PER_MINUTE, 60_000, now)
   const pending = new Map<string, Pending>()
   const sessions = new Map<string, LiveSession>()
 
   const hello = async (request: http.IncomingMessage, response: http.ServerResponse, outer: SealOuter): Promise<void> => {
     const body = await readSmallJson(request)
     if (body === null) return reply(response, 400, { error: 'not a hello' })
-    if (!limiter.take(outer.device ?? 'no-device')) return reply(response, 429, { error: 'too many handshakes' })
+    const allowed = [ceiling.take('all'), limiter.take(outer.device ?? 'no-device')].every(Boolean)
+    if (!allowed) return reply(response, 429, { error: 'too many handshakes' })
     const code = typeof body.id === 'string' ? deps.codeFor(body.id) : null
     if (code === null) return reply(response, 403, { error: 'no such code' })
     const accepted = await acceptHandshake(code, body as unknown as SealHello)
@@ -530,7 +551,8 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
       sessions: sessions.size,
       pending: pending.size,
       listening: [...sessions.values()].filter((live) => live.listening()).length,
-      retained: [...sessions.values()].reduce((total, live) => total + live.retained(), 0)
+      retained: [...sessions.values()].reduce((total, live) => total + live.retained(), 0),
+      held: [...sessions.values()].reduce((total, live) => total + live.held(), 0)
     })
   }
 }
