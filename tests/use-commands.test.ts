@@ -3,7 +3,7 @@
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { BrowserInstance } from '../src/main/browser-instance'
 import { SERVED_USE_REFUSED, handlesUseCommand, runUseCommand, servedUseRefusal, shotName, type UseCommandContext } from '../src/main/use-commands'
 import type { Gesture } from '../src/main/vphone-input'
@@ -93,6 +93,33 @@ describe('runUseCommand', () => {
     expect(readFileSync(file).toString()).toBe('jpegbytes')
     expect(out).toMatch(/screen: 400x800 points/)
     expect(signals.at(-1)?.verb).toBe('look')
+  })
+
+  it('says the size the look found, not the one the card had before it', async () => {
+    const { instance, ctx } = screenCard()
+    const card = { ...instance, viewport: { width: 800, height: 600 } }
+    const look = vi.fn(async () => {
+      card.viewport = { width: 1440, height: 900 }
+      return Buffer.from('fresh').toString('base64')
+    })
+    const out = await runUseCommand('screenshot', [], Object.assign(card, { look }), ctx)
+    expect(out).toContain('1440x900')
+  })
+
+  it('status asks the device before it answers', async () => {
+    const { instance, ctx } = screenCard()
+    const check = vi.fn(async () => undefined)
+    await runUseCommand('status', [], { ...instance, check }, ctx)
+    expect(check).toHaveBeenCalledTimes(1)
+  })
+
+  it('a screen card is looked at for the screenshot, not read from what it last held', async () => {
+    const { instance, ctx } = screenCard()
+    const snapshot = vi.fn(async () => null)
+    const look = vi.fn(async () => Buffer.from('fresh').toString('base64'))
+    await runUseCommand('screenshot', [], { ...instance, snapshot, look }, ctx)
+    expect(look).toHaveBeenCalledTimes(1)
+    expect(snapshot).not.toHaveBeenCalled()
   })
 
   it('status reads the device line; a screenshot with no frame says why', async () => {

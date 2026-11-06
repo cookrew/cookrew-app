@@ -280,6 +280,10 @@ export class CastViewer {
     }
     if (typeof raw !== 'object' || raw === null) return
     const input = raw as Record<string, unknown>
+    if (input.t === 'visibility') {
+      instance.viewerHidden?.(this.id, input.hidden === true)
+      return
+    }
     if (input.t === 'watch-fields') {
       if (!this.unwatchFields && instance.watchFields) this.unwatchFields = instance.watchFields(this.fieldsListener)
       return

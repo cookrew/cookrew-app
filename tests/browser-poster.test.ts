@@ -34,6 +34,7 @@ import { KeyedStore } from '../src/renderer/src/keyed-store'
 
 describe('when the hand-off happens', () => {
   it('on the zoom-out edge, when a frame was painted', () => {
+    expect(shouldHandOff({ wasOpen: true, open: false, painted: true, computer: true })).toBe(false)
     expect(shouldHandOff({ wasOpen: true, open: false, painted: true })).toBe(true)
   })
 
@@ -120,7 +121,7 @@ describe('the zoomed frame', () => {
   it('remembers the last painted live frame, and hands it off on the edge and at unmount', () => {
     // The live view is a canvas now (frame-painter.ts): what it remembers is the painted JPEG.
     expect(frame).toContain('lastPaintedRef.current = frame.blob')
-    expect(frame).toContain('shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null })')
+    expect(frame).toContain("shouldHandOff({ wasOpen: wasOpenRef.current, open, painted: lastPaintedRef.current !== null, computer: stream.deviceStatus?.use === 'computer' })")
     expect(frame).toContain('handOffBlob(thumbStore, browserId, lastPaintedRef.current)')
   })
 

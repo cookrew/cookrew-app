@@ -1,7 +1,7 @@
 // WHICH SCREEN SOURCE A MACHINE GETS (main/use-instances.ts), with Electron
 // faked: the Linux branch is the desktopCapturer one, with no way to act on
 // the screen, and the Mac branch keeps its id lookup wired.
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -51,14 +51,30 @@ beforeEach(() => {
   electron.openExternal.mockClear()
 })
 
+describe('what a killed app leaves behind', () => {
+  it('a capture cut off mid-way is swept at the next start: it is a picture of the screen', () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'use-sweep-')), 'c')
+    mkdirSync(dir, { recursive: true })
+    const left = path.join(dir, 'cookrew-roi-1234.jpg')
+    const kept = path.join(dir, 'capture-host.html')
+    writeFileSync(left, 'pixels')
+    writeFileSync(kept, 'page')
+    createUseInstances({ captureDir: dir, remote: () => ({}) as never, blocked: async () => null, platform: 'darwin' })
+    expect(existsSync(left)).toBe(false)
+    expect(existsSync(kept)).toBe(true)
+  })
+})
+
 describe('on Linux', () => {
   it('screen://main is a live card from desktopCapturer, view only even with computer input on', async () => {
     const instance = make('linux').makeInstance(parseUseUrl('screen://main')!, { id: 'n' }) as unknown as {
       start(): Promise<void>
+      look(): Promise<unknown>
       stop(): Promise<unknown>
       status: { state: string; input: boolean }
     }
     await instance.start()
+    await instance.look()
     expect(instance.status).toMatchObject({ state: 'live', input: false })
     expect(electron.getSources).toHaveBeenCalled()
     await instance.stop()

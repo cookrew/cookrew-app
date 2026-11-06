@@ -382,6 +382,8 @@ export interface CookrewApi {
    * grant. A phone reaches the same service over /api/use/sources.
    */
   useSources?: () => Promise<UseSourceList>;
+  /** A screen card's session ended: its picture goes too. */
+  onUseRested?: (cb: (card: string) => void) => () => void;
   openUseSource?: (pick: UseSourcePick) => Promise<UseSourceOpened>;
   /** The grant's page on the Mac. From a phone this opens it there, for later. */
   openScreenSettings?: (pane?: 'screen' | 'accessibility') => Promise<UseSourceSettings>;

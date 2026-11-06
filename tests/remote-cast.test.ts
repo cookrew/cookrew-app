@@ -91,6 +91,17 @@ const tapOn = (viewer: CastViewer, instance: PixelInstance): void => {
 }
 
 describe('a viewer of the Mac', () => {
+  it('a page out of sight says so, apart from releasing the viewport, and is not counted as watching', async () => {
+    const { instance, watch } = rig()
+    await instance.start()
+    const { viewer } = watch(phone)
+    const hidden = vi.spyOn(instance, 'viewerHidden')
+    viewer.handleMessage({ t: 'visibility', hidden: true })
+    expect(hidden).toHaveBeenCalledWith(expect.any(String), true)
+    viewer.handleMessage({ t: 'visibility', hidden: false })
+    expect(hidden).toHaveBeenLastCalledWith(expect.any(String), false)
+  })
+
   it('holding control, its tap reaches the hand through the whole line', async () => {
     const { desk, gestures, instance, watch } = rig()
     desk.setSwitch(true)
@@ -110,6 +121,8 @@ describe('a viewer of the Mac', () => {
     desk.setSwitch(true)
     await instance.start()
     const { line, viewer } = watch(phone)
+    // A resting card opens as the viewer arrives: live a moment later.
+    await new Promise((r) => setTimeout(r, 0))
     expect(lastStatus(line)).toMatchObject({ state: 'live', input: false, control: { switchOn: true, until: null } })
     await new Promise((r) => setTimeout(r, VIEWPORT_DEBOUNCE_MS + 60))
     frame(instance)

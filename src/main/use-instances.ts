@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { nativeImage, systemPreferences } from 'electron'
@@ -17,6 +17,7 @@ import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles }
 import { grabScreenFrames, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
 import { macSources } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
+import { fileWindowMemory } from './use-window-memory'
 
 /**
  * THE USES, BUILT FOR THIS MAC (computer, phone and hardware use).
@@ -77,7 +78,24 @@ export interface UseInstancesOptions {
   readonly blocked: () => Promise<RemoteState | null>
   /** A card went blind: its held picture must go too. */
   readonly onBlocked?: (card: string) => void
+  /** A card's session ended: nothing of it may stay on the board. */
+  readonly onRested?: (card: string) => void
+  /** A card found its window again under a new id. */
+  readonly onRebound?: (card: string) => void
+  /** What cards remember of their windows; absent: nothing across a restart. */
+  readonly windowsFile?: string
   readonly platform?: NodeJS.Platform
+}
+
+/** A capture cut off by a kill leaves a picture of the screen here, under its own name. */
+function sweepCaptures(dir: string): void {
+  try {
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith('cookrew-roi-')) rmSync(path.join(dir, name), { force: true })
+    }
+  } catch (error) {
+    console.error('Failed to clear old captures:', error)
+  }
 }
 
 export function createUseInstances(options: UseInstancesOptions): UseInstances {
@@ -85,10 +103,16 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
   const live = new Map<string, PixelInstance>()
   const screenAccess = (): string => systemPreferences.getMediaAccessStatus('screen')
   mkdirSync(options.captureDir, { recursive: true, mode: 0o700 })
+  sweepCaptures(options.captureDir)
   let hand: MacInput | null = null
   let host: ElectronCaptureHost | null = null
   const handOf = (): MacInput => (hand ??= new MacInput())
   const hostOf = (): ElectronCaptureHost => (host ??= new ElectronCaptureHost(path.join(options.captureDir, 'capture-host.html')))
+
+  /** Nothing is using the keyboard: the helper holding the Accessibility grant can go. */
+  const releaseHand = (): void => {
+    if ([...live.values()].every((instance) => instance.stopped || !instance.rests || instance.resting)) hand?.closeWhenIdle()
+  }
 
   const deviceFor = (target: UseTarget, card: string): PixelDevice | null => {
     switch (target.kind) {
@@ -114,7 +138,9 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
           remote: options.remote(card),
           hand: handOf,
           readClipboard: readMachineClipboard,
-          tmp: options.captureDir
+          tmp: options.captureDir,
+          rebound: () => options.onRebound?.(card),
+          ...(options.windowsFile ? { memory: fileWindowMemory(options.windowsFile, card) } : {})
         })
       case 'cam':
         return new CamDevice(target, { host: hostOf, cameraAccess })
@@ -127,7 +153,10 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
     makeInstance(target, node) {
       const device = deviceFor(target, node.id)
       if (!device) return null
-      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id) })
+      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id), onRest: () => {
+          releaseHand()
+          options.onRested?.(node.id)
+        } })
       live.set(node.id, instance)
       return instance
     },
@@ -151,7 +180,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
     wake() {
       for (const instance of live.values()) instance.wake()
     },
-    typeAtLock: (password) => handOf().send(macUnlockOp(password)),
+    typeAtLock: (password) => handOf().send(macUnlockOp(password)).finally(releaseHand),
     dispose() {
       hand?.close()
       hand = null

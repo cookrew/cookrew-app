@@ -391,7 +391,7 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
   if (obj.t === 'status') {
     const state = obj.state
     const use = obj.use
-    if (state !== 'connecting' && state !== 'live' && state !== 'offline') return null
+    if (state !== 'connecting' && state !== 'live' && state !== 'offline' && state !== 'resting') return null
     if (use !== 'computer' && use !== 'phone' && use !== 'hardware') return null
     const remote = parseRemoteState(obj.remote)
     const control = parseCardControl(obj.control)
@@ -523,6 +523,7 @@ export interface PointerOptions {
 
 /** Client→server input messages — the closed vocabulary Forge whitelists. */
 export type CastInputMsg =
+  | { t: 'visibility'; hidden: boolean }
   | { t: 'tap'; x: number; y: number; count?: number; button?: MouseButtonName; mods?: number }
   | { t: 'down'; x: number; y: number; count?: number; button?: MouseButtonName; mods?: number }
   | { t: 'up'; x: number; y: number; count?: number; button?: MouseButtonName; mods?: number }
