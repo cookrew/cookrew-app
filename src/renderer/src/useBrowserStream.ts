@@ -52,6 +52,8 @@ export const FRAME_STALE_MS = 1200
  * other line does, so the rest keep the short limit.
  */
 export const REMOTE_FRAME_STALE_MS = 6000
+/** Just under main's SOCKET_BRIDGE_RELEASE_MS, which counts from a little later. */
+const VIEWPORT_LET_GO_MS = 2500
 
 /** One received frame, ready to paint (frame-painter.ts). */
 export interface StreamFrame extends PaintableFrame {
@@ -367,6 +369,7 @@ export function useBrowserStream(
     let deadline: ReturnType<typeof setTimeout> | null = null
     let staleTimer: ReturnType<typeof setInterval> | null = null
     let redial: ReturnType<typeof setTimeout> | null = null
+    let resumingSince = 0
 
     const sendControl = (kind: ViewportControlKind): void => {
       const size = viewportRef.current
@@ -583,8 +586,10 @@ export function useBrowserStream(
         onResuming: (on) => {
           if (disposed || failed) return
           setReconnecting(on)
-          // The Mac let the viewport go if this took a while.
-          if (!on && !document.hidden) sendControl('offer')
+          // The Mac let the viewport go if this took a while; offering it back any
+          // sooner is a viewport change for nothing.
+          if (on) resumingSince = Date.now()
+          else if (Date.now() - resumingSince >= VIEWPORT_LET_GO_MS && !document.hidden) sendControl('offer')
         }
       }
       const openPort = direct && !portUnansweredRef.current ? cookrew().openBrowserStream : undefined

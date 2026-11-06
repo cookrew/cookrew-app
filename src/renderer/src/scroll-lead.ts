@@ -44,7 +44,8 @@ export const leadMoved = (lead: Lead, asked: number, at: number): Lead => ({
 })
 
 export const leadFrame = (lead: Lead, scrollY: number | null, at: number): Lead => {
-  if (scrollY === null || lead.scroll === null || scrollY === lead.scroll) return lead
+  // Under a pixel is rounding: the screencast and a still report the same page apart.
+  if (scrollY === null || lead.scroll === null || Math.abs(scrollY - lead.scroll) < 1) return lead
   return { ...lead, scroll: scrollY, progressAt: at }
 }
 

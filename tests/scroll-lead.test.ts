@@ -58,6 +58,12 @@ describe('the picture follows the finger before the Mac answers', () => {
     expect(leadOffset(lead, k, LEAD_PATIENCE_MS + 100)).toBe(-380)
   })
 
+  it('a fraction of a pixel is not the page moving: two frame sources round differently', () => {
+    let lead = leadMoved(startLead({ scrollY: 500, at: 0 }), -100, 10)
+    for (let at = 100; at < LEAD_PATIENCE_MS; at += 100) lead = leadFrame(lead, at % 200 === 0 ? 500.4 : 500, at)
+    expect(leadOffset(lead, k, LEAD_PATIENCE_MS + 20) === 0).toBe(true)
+  })
+
   it('knows whether the page has really moved', () => {
     const lead = leadMoved(startLead({ scrollY: 500, at: 0 }), -100, 10)
     expect(leadAnswered(lead)).toBe(false)
