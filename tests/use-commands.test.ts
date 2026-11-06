@@ -95,6 +95,24 @@ describe('runUseCommand', () => {
     expect(signals.at(-1)?.verb).toBe('look')
   })
 
+  it('says the size the look found, not the one the card had before it', async () => {
+    const { instance, ctx } = screenCard()
+    const card = { ...instance, viewport: { width: 800, height: 600 } }
+    const look = vi.fn(async () => {
+      card.viewport = { width: 1440, height: 900 }
+      return Buffer.from('fresh').toString('base64')
+    })
+    const out = await runUseCommand('screenshot', [], Object.assign(card, { look }), ctx)
+    expect(out).toContain('1440x900')
+  })
+
+  it('status asks the device before it answers', async () => {
+    const { instance, ctx } = screenCard()
+    const check = vi.fn(async () => undefined)
+    await runUseCommand('status', [], { ...instance, check }, ctx)
+    expect(check).toHaveBeenCalledTimes(1)
+  })
+
   it('a screen card is looked at for the screenshot, not read from what it last held', async () => {
     const { instance, ctx } = screenCard()
     const snapshot = vi.fn(async () => null)

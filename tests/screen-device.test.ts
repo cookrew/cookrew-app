@@ -1,9 +1,10 @@
+import type { WindowMemo } from '../src/main/use-window-memory'
 // A REGION OF THIS MAC'S SCREEN (main/screen-device.ts): which window an
 // address names, what screencapture is asked for, how a roi is cut, how a
 // gesture lands in global points and never outside the region, and the two
 // grants that refuse in words.
 import { machineCopy } from '../src/shared/machine-words'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { MacOp, MacScreens } from '../src/main/mac-bridge'
 import { DeviceBlockedError, DeviceGoneError, type RemoteGate } from '../src/main/pixel-instance'
 import { ScreenDevice, clipRoi, findWindow, type ScreenDeps } from '../src/main/screen-device'
@@ -222,50 +223,83 @@ describe('a card bound to one window', () => {
 
   describe('the app closed and came back', () => {
     const reopened = (windows: MacScreens['windows']): MacScreens => ({ ...screens, windows })
-    const chat = { id: 9, app: 'WeChat', title: 'Weixin', x: 0, y: 0, width: 800, height: 600 }
+    const chat = { id: 9, pid: 200, app: 'WeChat', title: 'Weixin', x: 0, y: 0, width: 800, height: 600 }
+    const held = (over: Partial<WindowMemo> = {}): WindowMemo => ({ from: 7, id: 7, title: 'Weixin', pid: 100, ...over })
+    const remembering = (memo: WindowMemo | null = held()) => {
+      const store = { memo, read: () => store.memo, write: (next: WindowMemo) => void (store.memo = next) }
+      return store
+    }
 
-    it('finds its window again: same app, same title, and only one such', async () => {
-      const { device, captured } = bed('window://WeChat?id=7', { list: async () => reopened([chat]), titleHint: () => 'Weixin' })
+    it('finds its window again: same app, same title, only one, and a new process', async () => {
+      const { device, captured } = bed('window://WeChat?id=7', { list: async () => reopened([chat]), memory: remembering() })
       await expect(device.open()).resolves.toEqual({ width: 800, height: 600 })
       await device.capture()
       expect(captured[0]).toContain('-l9')
     })
 
+    it('the same process means the app never went: a sibling of that title is not this window', async () => {
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, pid: 100 }]), memory: remembering() })
+      await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+    })
+
     it('never takes another window of that app for it', async () => {
-      const other = { ...chat, title: 'Moments' }
-      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([other]), titleHint: () => 'Weixin' })
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, title: 'Moments' }]), memory: remembering() })
       await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
     })
 
     it('never guesses between two of the same title', async () => {
-      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([chat, { ...chat, id: 10 }]), titleHint: () => 'Weixin' })
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([chat, { ...chat, id: 10 }]), memory: remembering() })
       await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
     })
 
-    it('never matches on an empty title, or another app of that title', async () => {
-      const blank = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, title: '' }]), titleHint: () => '' })
-      await expect(blank.device.open()).rejects.toBeInstanceOf(DeviceGoneError)
-      const stranger = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, app: 'Notes' }]), titleHint: () => 'Weixin' })
+    it('never matches another app of that title, or with nothing remembered', async () => {
+      const stranger = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, app: 'Notes' }]), memory: remembering() })
       await expect(stranger.device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+      const blank = bed('window://WeChat?id=7', { list: async () => reopened([chat]), memory: remembering(null) })
+      await expect(blank.device.open()).rejects.toBeInstanceOf(DeviceGoneError)
     })
 
-    it('remembers the title it saw, for a card renamed since', async () => {
-      let windows = [{ ...chat, id: 7 }]
-      const { device, tick } = bed('window://WeChat?id=7', { list: async () => reopened(windows) })
-      await device.open()
+    it('ignores what it remembers about a window this card no longer names', async () => {
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([chat]), memory: remembering(held({ from: 3 })) })
+      await expect(device.open()).rejects.toBeInstanceOf(DeviceGoneError)
+    })
+
+    it('learns the window while it can see it, and keeps what it found across a restart', async () => {
+      const memory = remembering(null)
+      let windows: MacScreens['windows'] = [{ ...chat, id: 7, pid: 100 }]
+      const first = bed('window://WeChat?id=7', { list: async () => reopened(windows), memory })
+      await first.device.open()
+      expect(memory.memo).toEqual(held())
       windows = [chat]
-      tick(5000)
-      await expect(device.open()).resolves.toEqual({ width: 800, height: 600 })
+      first.tick(5000)
+      await first.device.open()
+      expect(memory.memo).toEqual({ from: 7, id: 9, title: 'Weixin', pid: 200 })
+      const next = bed('window://WeChat?id=7', { list: async () => reopened(windows), memory })
+      await expect(next.device.open()).resolves.toEqual({ width: 800, height: 600 })
     })
 
-    it('with the app closed it says how to bring the card back', async () => {
-      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([]), titleHint: () => 'Weixin' })
-      await expect(device.open()).rejects.toThrow(/open it again/)
+    it('a title macOS is hiding is not learned over the one it knew', async () => {
+      const memory = remembering()
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([{ ...chat, id: 7, pid: 100, title: '' }]), memory })
+      await device.open()
+      expect(memory.memo?.title).toBe('Weixin')
+    })
+
+    it('with the app closed it says what to do next', async () => {
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([]), memory: remembering() })
+      await expect(device.open()).rejects.toThrow(/open it again, then take a screenshot/)
+    })
+
+    it('ends anyone\'s control: what it was given over is not what this card shows now', async () => {
+      const rebound = vi.fn()
+      const { device } = bed('window://WeChat?id=7', { list: async () => reopened([chat]), memory: remembering(), rebound })
+      await device.open()
+      expect(rebound).toHaveBeenCalledTimes(1)
     })
 
     it('presses nothing into a window that came back until someone has looked: another chat may be open', async () => {
-      let windows = [{ ...chat, id: 7 }]
-      const { device, ops, tick } = bed('window://WeChat?id=7', { list: async () => reopened(windows) })
+      let windows: MacScreens['windows'] = [{ ...chat, id: 7, pid: 100 }]
+      const { device, ops, tick } = bed('window://WeChat?id=7', { list: async () => reopened(windows), memory: remembering() })
       await device.open()
       await device.capture()
       windows = [chat]
@@ -277,9 +311,23 @@ describe('a card bound to one window', () => {
       expect(ops).toHaveLength(1)
     })
 
+    it('a card by name that moved to another window takes no keys meant for the first', async () => {
+      const alice = { ...chat, id: 1, title: 'Alice' }
+      const boss = { ...chat, id: 2, title: 'Boss' }
+      let windows = [alice, boss]
+      const { device, ops, tick } = bed('window://WeChat', { list: async () => reopened(windows) })
+      await device.open()
+      const frame = await device.capture()
+      expect(frame.subject).toBe(1)
+      windows = [boss, alice]
+      tick(5000)
+      await expect(device.perform({ method: 'input.type', params: { text: 'hi' } })).rejects.toThrow(/screenshot/)
+      expect(ops).toEqual([])
+    })
+
     it('rest forgets where the window was, not which window it is', async () => {
       const lists: number[] = []
-      const { device } = bed('window://WeChat?id=7', { list: async () => (lists.push(1), reopened([{ ...chat, id: 7 }])) })
+      const { device } = bed('window://WeChat?id=7', { list: async () => (lists.push(1), reopened([{ ...chat, id: 7, pid: 100 }])) })
       await device.open()
       device.rest()
       await device.capture()

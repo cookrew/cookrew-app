@@ -2113,7 +2113,9 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
                                                 A USE card: a Mac display or window (?roi=x,y,w,h), a phone, a camera
   cookrew browser screenshot "Card" [file.jpg]   Save what the card shows; prints its point size
   cookrew browser tap "Card" X Y | swipe "Card" X1 Y1 X2 Y2 [ms]   Point at a screen (any card)
-  cookrew browser type|key|scroll|status "Card" ...   Drive a screen card; status says live or why offline
+  cookrew browser type|key|scroll|status "Card" ...   Drive a screen card; take a screenshot first, and again
+                                                after a pause: with nobody watching a card takes no frames
+                                                and rests after a minute; status says live, why offline, or resting
   cookrew browser tabs "Browser"                  List the browser's tabs (pages opened by the site land here)
   cookrew browser downloads "Browser"             Files the card saved, newest first: absolute paths to read
   cookrew browser tab-new "Browser" URL           Open a new tab in the browser

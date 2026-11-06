@@ -32,8 +32,9 @@ import { VphoneGestureMapper, type Gesture, type ScreenPoints } from './vphone-i
  *   REST. A computer's screen holds whatever the owner has open, so with no viewer
  *   it is not read at all: an agent's look takes one frame, and a card left alone for
  *   PIXEL_SESSION_IDLE_MS ends its session and holds no picture. The next use
- *   reconnects, and the first hand after that needs a look first, because the screen
- *   may have moved on: a message typed from an old picture goes to the wrong chat.
+ *   reconnects. An agent's hand also needs a look of the agent's own: a viewer's frame
+ *   is not the agent seeing anything, and a message typed from an old picture goes to
+ *   the wrong chat.
  *   Phones and cameras keep slow frames: their thumbnail is read from them.
  *
  *   HONESTY. There is no page: evaluate refuses in words, tabs and resize are
@@ -125,6 +126,8 @@ export interface PixelFrame {
   readonly jpeg: string
   /** The screen in points, when the device knows it changed (a resized window, a rotated phone). */
   readonly points?: ScreenPoints
+  /** What the picture is of, when that can change under the card: a window's id. */
+  readonly subject?: number
 }
 
 export interface PixelDevice {
@@ -163,8 +166,8 @@ export interface PixelInstanceOptions {
 /** Who is asking when an agent reads a screen: never at the Mac, so Stop and a served workspace reach it. */
 const AGENT_VIEWER: ViewerWho = { key: 'agent', name: 'An agent', here: false }
 const COPY_DELAY_MS = 200
-const RESTING = 'Nothing is being captured; the next use reconnects'
-const LOOK_FIRST = 'This card has no session: take a screenshot first, the screen may have changed'
+const RESTING = 'Nothing is being captured: take a screenshot to reconnect'
+const LOOK_FIRST = 'Take a screenshot first: the screen may have changed since you last saw it'
 /** The most a copy carries to a viewer: a clipboard can hold a whole file. */
 const MAX_COPY_CHARS = 64 * 1024
 
@@ -196,6 +199,11 @@ export class PixelInstance {
   private polling = false
   private ticking: Promise<void> | null = null
   private readonly viewers = new Set<string>()
+  /** Viewers whose page is hidden: still connected, looking at nothing. */
+  private readonly hidden = new Set<string>()
+  private subject: number | null = null
+  /** What the agent itself last saw; null when that is nothing. */
+  private seen: { readonly subject: number | null } | null = null
   private restCancel: (() => void) | null = null
   /** Gestures on their way: a session never ends under a hand. */
   private acting = 0
@@ -251,7 +259,8 @@ export class PixelInstance {
   }
 
   private get watched(): boolean {
-    return this.viewers.size > 0 || this.frameListeners.size > 0
+    if (this.viewers.size === 0) return this.frameListeners.size > 0
+    return [...this.viewers].some((viewer) => !this.hidden.has(viewer))
   }
 
   private get keepsLooking(): boolean {
@@ -307,6 +316,7 @@ export class PixelInstance {
       }
       const frame = await withDeadline(this.opts.device.capture(), PIXEL_CAPTURE_TIMEOUT_MS, 'the device')
       if (frame.points) this.adoptPoints(frame.points)
+      this.subject = frame.subject ?? null
       this.failures = 0
       this.lastFrameAt = this.now()
       this.setStatus('live', null)
@@ -384,6 +394,7 @@ export class PixelInstance {
     if (this.ticking || this.acting > 0) return this.armRest()
     this.opened = false
     this.failures = 0
+    this.seen = null
     this.blind()
     this.opts.device.rest?.()
     this.setStatus('resting', RESTING)
@@ -481,7 +492,7 @@ export class PixelInstance {
     const refusal = this.opts.device.inputRefusal?.() ?? this.opts.device.remote?.agentRefusal() ?? null
     if (refusal) throw new Error(refusal)
     if (!this.opts.device.perform) throw new Error(`a ${this.opts.device.target.use} camera is watched, not driven`)
-    if (this.resting) throw new Error(LOOK_FIRST)
+    if (this.rests && (this.seen === null || this.seen.subject !== this.subject)) throw new Error(LOOK_FIRST)
     if (!this.opened) throw new Error(this.statusNow.message ?? 'the device is not connected yet')
     this.acting += 1
     this.armRest()
@@ -530,19 +541,65 @@ export class PixelInstance {
     return this.opts.device.remote?.admit(AGENT_VIEWER) ? null : this.latest
   }
 
-  /** The screen as it is now, for an agent. Null with the status saying why. */
+  private async readNow(): Promise<void> {
+    if (this.ticking) await this.ticking
+    await this.tick()
+  }
+
+  private agentRefused(): void {
+    const refusal = this.opts.device.remote?.admit(AGENT_VIEWER)
+    if (!refusal) return
+    this.seen = null
+    throw new Error(refusal.message)
+  }
+
+  /** The screen as it is now, for an agent. Null with the status saying why; Stop is thrown. */
   async look(): Promise<string | null> {
-    if (this.closed || this.opts.device.remote?.admit(AGENT_VIEWER)) return null
-    if (this.keepsLooking) return this.latest
-    this.wakeFromRest()
-    try {
-      if (this.ticking) await this.ticking
-      await this.tick()
-    } finally {
-      this.armRest()
+    if (this.closed) return null
+    this.agentRefused()
+    if (!this.keepsLooking) {
+      this.wakeFromRest()
+      try {
+        await this.readNow()
+      } finally {
+        this.armRest()
+      }
+      this.agentRefused()
     }
     // An old picture never answers for a screen that could not be read.
-    return this.statusNow.state === 'live' ? this.latest : null
+    const frame = this.statusNow.state === 'live' ? this.latest : null
+    this.seen = frame === null ? null : { subject: this.subject }
+    return frame
+  }
+
+  /**
+   * For `status`: with no viewer nothing is polling, so what it last knew may be old.
+   * It wakes nothing, and it is not a look: the agent is shown no picture.
+   */
+  async check(): Promise<void> {
+    if (this.closed || this.keepsLooking || this.resting || this.opts.device.remote?.admit(AGENT_VIEWER)) return
+    await this.readNow()
+  }
+
+  /** A viewer's page went out of sight, or came back. Its line stays up. */
+  viewerHidden(id: string, hidden: boolean): void {
+    if (this.closed || !this.viewers.has(id) || this.hidden.has(id) === hidden) return
+    if (hidden) {
+      this.hidden.add(id)
+      this.idleIfUnwatched()
+      return
+    }
+    this.hidden.delete(id)
+    const rested = this.wakeFromRest()
+    if (rested) void this.tick()
+    else if (!this.polling) this.schedule(PIXEL_FAST_POLL_MS)
+  }
+
+  private idleIfUnwatched(): void {
+    if (this.keepsLooking) return
+    this.cancel?.()
+    this.cancel = null
+    this.armRest()
   }
 
   async evaluate(_expression: string): Promise<unknown> {
@@ -589,11 +646,9 @@ export class PixelInstance {
 
   unregisterViewportViewer(id: string): void {
     this.viewers.delete(id)
+    this.hidden.delete(id)
     this.viewportCoordinator.unregisterViewer(id)
-    if (this.keepsLooking) return
-    this.cancel?.()
-    this.cancel = null
-    this.armRest()
+    this.idleIfUnwatched()
   }
 
   onViewportState(listener: (state: BrowserViewportState) => void): () => void {
@@ -629,6 +684,7 @@ export class PixelInstance {
     this.restCancel = null
     this.viewportCoordinator.dispose()
     this.statusListeners.clear()
+    this.opts.onRest?.()
     try {
       await this.opts.device.close?.()
     } catch {

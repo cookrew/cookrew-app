@@ -92,6 +92,7 @@ export async function runUseCommand(
   const size = `${viewport.width}x${viewport.height}`
   switch (sub) {
     case 'status': {
+      await instance.check?.()
       const status = instance.status
       if (!status) return 'live'
       return status.message ? `${status.state}: ${status.message}` : status.state
@@ -103,11 +104,13 @@ export async function runUseCommand(
         const why = instance.status?.message
         throw new Error(why ? `no frame yet — ${why}` : 'no frame yet; try again in a moment')
       }
+      // After the look: a card that rested only learns the screen's size now.
+      const seen = instance.viewport
       const file = path.join(ctx.shotsDir, shotName(sub === 'screenshot' ? params[0] : undefined, ctx))
       await mkdir(path.dirname(file), { recursive: true })
       await writeFile(file, Buffer.from(jpeg, 'base64'))
-      signal(ctx, 'look', null, viewport)
-      return `${file}\nscreen: ${size} points — tap, swipe and scroll take points in this space (the image may be larger; scale its pixels down to ${viewport.width} wide)`
+      signal(ctx, 'look', null, seen)
+      return `${file}\nscreen: ${seen.width}x${seen.height} points — tap, swipe and scroll take points in this space (the image may be larger; scale its pixels down to ${seen.width} wide)`
     }
     case 'tap':
     case 'click': {

@@ -438,6 +438,7 @@ describe('a screen behind the remote desk', () => {
     let stopped = false
     const { instance, gestures } = rig({ agentRefusal: () => (stopped ? 'Stopped at the Mac' : null), admit: () => (stopped ? { message: 'Stopped', state: state('stopped') } : null) })
     await instance.start()
+    await instance.look()
     const acting = instance.act([{ method: 'input.tap', params: { x: 1, y: 1 } }, { method: 'input.tap', params: { x: 2, y: 2 } }])
     stopped = true
     await acting

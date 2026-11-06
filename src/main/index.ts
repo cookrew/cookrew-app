@@ -6673,7 +6673,12 @@ const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
   remote: (card) => remoteGate(remoteDesk, card),
   blocked: () => remoteDesk.blocked(),
-  onBlocked: (card) => browserThumbs.forget(card)
+  onBlocked: (card) => browserThumbs.forget(card),
+  onRested: (card) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:rested', card)
+  },
+  onRebound: (card) => remoteDesk.endControl(card, MAC_VIEWER),
+  windowsFile: path.join(homedir(), '.cookrew', 'use-windows.json')
 })
 /**
  * A card showing this machine's own screen. Its picture is shown to a viewer

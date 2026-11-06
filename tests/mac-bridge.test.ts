@@ -98,6 +98,21 @@ describe('letting the hand go', () => {
     hand.close()
   })
 
+  it('what the old helper does on its way out touches nothing of the new one', async () => {
+    const helpers = [helper(), helper()]
+    let made = 0
+    const hand = new MacInput({ spawnHelper: () => helpers[made++].child })
+    const first = hand.send({ op: 'ping' })
+    helpers[0].child.stdout.emit('data', 'ok\n')
+    await first
+    hand.closeWhenIdle()
+    const second = hand.send({ op: 'ping' })
+    helpers[0].child.emit('exit', 0)
+    helpers[1].child.stdout.emit('data', 'ok\n')
+    await expect(second).resolves.toBeUndefined()
+    hand.close()
+  })
+
   it('close lets an op finish instead of killing it with the mouse button down', () => {
     const h = helper()
     const hand = new MacInput({ spawnHelper: () => h.child })
@@ -105,6 +120,26 @@ describe('letting the hand go', () => {
     hand.close()
     expect(h.ended()).toBe(true)
     expect(h.killed()).toBe(false)
+  })
+})
+
+// The real helper, and only `ping`, which touches no input. A fake child cannot show this:
+// JXA's length is a string, so a comparison with 0 never ended the loop, and it spun a core.
+describe.skipIf(process.platform !== 'darwin')('the real helper at the end of its stdin', () => {
+  it('leaves by itself', async () => {
+    const child = spawn('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_INPUT_SCRIPT])
+    const left = new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 3000)
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolve(true)
+      })
+    })
+    child.stdout.once('data', () => child.stdin.end())
+    child.stdin.write('{"op":"ping"}\n')
+    const gone = await left
+    child.kill('SIGKILL')
+    expect(gone).toBe(true)
   })
 })
 

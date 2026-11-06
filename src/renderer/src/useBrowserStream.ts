@@ -536,6 +536,7 @@ export function useBrowserStream(
           if (disposed || failed) return
           advance('open')
           sendControl(document.hidden ? 'release' : 'offer')
+          if (document.hidden) line?.send({ t: 'visibility', hidden: true })
           if (watchFieldsRef.current) line?.send({ t: 'watch-fields' })
         },
         onMessage,
@@ -619,8 +620,11 @@ export function useBrowserStream(
 
   useEffect(() => {
     if (!open || !enabled) return
-    const reportVisibility = (): void =>
+    const reportVisibility = (): void => {
       sendViewportControl(document.hidden ? 'release' : 'offer')
+      // Said apart from the viewport: a viewer can release that and go on watching.
+      lineRef.current?.send({ t: 'visibility', hidden: document.hidden })
+    }
     document.addEventListener('visibilitychange', reportVisibility)
     return () => document.removeEventListener('visibilitychange', reportVisibility)
   }, [open, enabled, sendViewportControl])

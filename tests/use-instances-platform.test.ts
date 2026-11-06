@@ -32,7 +32,7 @@ vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: electron.access, isTrustedAccessibilityClient: electron.trusted }
 }))
 
-const { cardWindowTitle, createUseInstances } = await import('../src/main/use-instances')
+const { createUseInstances } = await import('../src/main/use-instances')
 const { parseUseUrl } = await import('../src/shared/use-url')
 const { LINUX_WAYLAND } = await import('../src/main/linux-screen')
 const { ASK_DEADLINE_MS } = await import('../src/main/use-source-electron')
@@ -62,18 +62,6 @@ describe('what a killed app leaves behind', () => {
     createUseInstances({ captureDir: dir, remote: () => ({}) as never, blocked: async () => null, platform: 'darwin' })
     expect(existsSync(left)).toBe(false)
     expect(existsSync(kept)).toBe(true)
-  })
-})
-
-describe('the title a card was named for', () => {
-  it('is what its name says after the app', () => {
-    expect(cardWindowTitle('WeChat — Weixin', 'WeChat')).toBe('Weixin')
-  })
-
-  it('is nothing when the card was renamed, or never had one', () => {
-    expect(cardWindowTitle('My chat', 'WeChat')).toBeNull()
-    expect(cardWindowTitle(undefined, 'WeChat')).toBeNull()
-    expect(cardWindowTitle('WeChat — ', 'WeChat')).toBeNull()
   })
 })
 

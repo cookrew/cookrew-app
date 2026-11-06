@@ -15,7 +15,7 @@ const settle = async (): Promise<void> => {
 function rig(url = 'window://WeChat?id=7', over: Partial<RemoteGate> = {}) {
   let now = 1_000
   const timers: Array<{ fn: () => void; ms: number; live: boolean }> = []
-  const state = { frame: 'AAA', fail: null as Error | null, captures: 0, opens: 0, rests: 0, gestures: [] as Gesture[], blocked: null as RemoteState | null }
+  const state = { frame: 'AAA', subject: 7, fail: null as Error | null, captures: 0, opens: 0, rests: 0, gestures: [] as Gesture[], blocked: null as RemoteState | null }
   const remote: RemoteGate = {
     blocked: async () => state.blocked,
     inputRefusal: () => null,
@@ -37,7 +37,7 @@ function rig(url = 'window://WeChat?id=7', over: Partial<RemoteGate> = {}) {
     capture: async () => {
       if (state.fail) throw state.fail
       state.captures += 1
-      return { jpeg: state.frame }
+      return { jpeg: state.frame, subject: state.subject }
     },
     perform: async (g) => {
       if (state.fail) throw state.fail
@@ -187,11 +187,35 @@ describe('an agent looks', () => {
     expect(r.state.captures).toBe(0)
   })
 
-  it('after Stop it takes nothing', async () => {
+  it('after Stop it takes nothing, and says Stop: not that it will reconnect', async () => {
     const r = rig('window://WeChat?id=7', { admit: () => ({ message: 'Stopped at the Mac', state: {} as RemoteState }) })
     await r.instance.start()
-    expect(await r.instance.look()).toBeNull()
+    await expect(r.instance.look()).rejects.toThrow('Stopped at the Mac')
     expect(r.state.captures).toBe(0)
+  })
+
+  it('a Stop that lands during the look still gives no picture', async () => {
+    let stopped = false
+    const r = rig('window://WeChat?id=7', { admit: () => (stopped ? { message: 'Stopped at the Mac', state: {} as RemoteState } : null) })
+    await r.instance.start()
+    const device = (r.instance as unknown as { opts: { device: PixelDevice } }).opts.device
+    const capture = device.capture.bind(device)
+    device.capture = async () => {
+      stopped = true
+      return capture()
+    }
+    await expect(r.instance.look()).rejects.toThrow('Stopped at the Mac')
+    expect(await r.instance.snapshot()).toBeNull()
+  })
+
+  it('a watched card that cannot be read gives no old picture', async () => {
+    const r = rig()
+    await r.instance.start()
+    r.watch()
+    await settle()
+    r.state.fail = new Error('gone for a moment')
+    await r.pass(1000)
+    expect(await r.instance.look()).toBeNull()
   })
 })
 
@@ -267,12 +291,13 @@ describe('the session ends by itself', () => {
     expect(r.pending()).toEqual([])
   })
 
-  it('stop ends the countdown', async () => {
+  it('stop ends the countdown, and lets go of what the session held', async () => {
     const r = rig()
     await r.instance.start()
     await r.instance.look()
     await r.instance.stop()
     expect(r.pending()).toEqual([])
+    expect(r.onRest).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -314,6 +339,123 @@ describe('the next use reconnects', () => {
     const r = rig()
     await r.instance.start()
     await expect(r.instance.act([tap])).rejects.toThrow(/screenshot/)
+  })
+})
+
+describe('the agent has to have seen it', () => {
+  it('somebody else looking does not count: the agent saw nothing', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    await r.pass(PIXEL_SESSION_IDLE_MS)
+    const leave = r.watch()
+    await settle()
+    leave()
+    expect(r.instance.status.state).toBe('live')
+    await expect(r.instance.act([tap])).rejects.toThrow(/screenshot/)
+    expect(r.state.gestures).toEqual([])
+  })
+
+  it('a different window under the card since the look: look again', async () => {
+    const r = rig()
+    await r.instance.start()
+    r.watch()
+    await settle()
+    await r.instance.look()
+    r.state.subject = 8
+    await r.pass(1000)
+    await expect(r.instance.act([tap])).rejects.toThrow(/screenshot/)
+    await r.instance.look()
+    await r.instance.act([tap])
+    expect(r.state.gestures).toHaveLength(1)
+  })
+
+  it('a look that failed is not a look', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    r.state.fail = new Error('covered')
+    await r.instance.look()
+    r.state.fail = null
+    await expect(r.instance.act([tap])).rejects.toThrow(/screenshot/)
+  })
+})
+
+describe('status', () => {
+  it('asks the device when nothing is polling: a closed app does not read live', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.look()
+    r.state.fail = new DeviceGoneError('window', 'has closed')
+    await r.instance.check()
+    expect(r.instance.status.state).toBe('offline')
+  })
+
+  it('wakes nothing, and is not a look', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.check()
+    expect(r.instance.status.state).toBe('resting')
+    expect(r.state.captures).toBe(0)
+    expect(r.instance.status.message).toMatch(/screenshot/)
+  })
+
+  it('after a session lapses on status alone the hand still needs a look', async () => {
+    const r = rig()
+    await r.instance.start()
+    await r.instance.check()
+    await expect(r.instance.act([tap])).rejects.toThrow(/screenshot/)
+  })
+})
+
+describe('a viewer that went away without leaving', () => {
+  it('a hidden page is not watching: no frames until it comes back', async () => {
+    const r = rig()
+    await r.instance.start()
+    r.watch()
+    await settle()
+    r.instance.viewerHidden('v1', true)
+    const seen = r.state.captures
+    await r.pass(5000)
+    expect(r.state.captures).toBe(seen)
+    expect(r.pending().every((t) => t.ms === PIXEL_SESSION_IDLE_MS)).toBe(true)
+  })
+
+  it('comes back to a frame at once, even from rest', async () => {
+    const r = rig()
+    await r.instance.start()
+    r.watch()
+    await settle()
+    r.instance.viewerHidden('v1', true)
+    await r.pass(PIXEL_SESSION_IDLE_MS)
+    expect(r.instance.status.state).toBe('resting')
+    const seen = r.state.captures
+    r.instance.viewerHidden('v1', false)
+    await settle()
+    expect(r.instance.status.state).toBe('live')
+    expect(r.state.captures).toBeGreaterThan(seen)
+  })
+
+  it('one hidden viewer does not stop one still looking', async () => {
+    const r = rig()
+    await r.instance.start()
+    r.watch('a')
+    r.watch('b')
+    await settle()
+    r.instance.viewerHidden('a', true)
+    const seen = r.state.captures
+    await r.pass(1000)
+    expect(r.state.captures).toBeGreaterThan(seen)
+  })
+
+  it('a viewer that never offered is watching', async () => {
+    const r = rig()
+    await r.instance.start()
+    r.watch()
+    await settle()
+    const seen = r.state.captures
+    await r.pass(1000)
+    expect(r.state.captures).toBeGreaterThan(seen)
   })
 })
 

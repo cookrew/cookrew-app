@@ -35,6 +35,10 @@ export interface BrowserInstance {
   snapshot(): Promise<string | null>
   /** A frame taken for this look, where snapshot only reads what is held. Absent: snapshot is as fresh as it gets. */
   look?(): Promise<string | null>
+  /** Asks the device what it knows, for `status`. Absent: the status is kept current. */
+  check?(): Promise<void>
+  /** This viewer's page went out of sight, or came back. */
+  viewerHidden?(id: string, hidden: boolean): void
   evaluate(expression: string): Promise<unknown>
   navigate(url: string): Promise<void>
   pageInfo(): Promise<HeadlessPageState & { viewport: string }>

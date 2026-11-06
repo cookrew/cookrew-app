@@ -17,6 +17,7 @@ import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles }
 import { grabScreenFrames, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
 import { macSources } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
+import { fileWindowMemory } from './use-window-memory'
 
 /**
  * THE USES, BUILT FOR THIS MAC (computer, phone and hardware use).
@@ -57,7 +58,7 @@ export function encodeJpeg(input: Buffer, crop: Roi | null, maxSide: number): Bu
 }
 
 export interface UseInstances {
-  makeInstance(target: UseTarget, node: { id: string; name?: string }): BrowserInstance | null
+  makeInstance(target: UseTarget, node: { id: string }): BrowserInstance | null
   /** The window picker's source for this machine; null where there is none. */
   sources(): UseSourceProvider | null
   /** Types a password at this Mac's lock screen. Only remote-unlock.ts calls this. */
@@ -77,13 +78,13 @@ export interface UseInstancesOptions {
   readonly blocked: () => Promise<RemoteState | null>
   /** A card went blind: its held picture must go too. */
   readonly onBlocked?: (card: string) => void
+  /** A card's session ended: nothing of it may stay on the board. */
+  readonly onRested?: (card: string) => void
+  /** A card found its window again under a new id. */
+  readonly onRebound?: (card: string) => void
+  /** What cards remember of their windows; absent: nothing across a restart. */
+  readonly windowsFile?: string
   readonly platform?: NodeJS.Platform
-}
-
-/** The window title in a card named by the picker, `App — Title`. A renamed card has none. */
-export function cardWindowTitle(name: string | undefined, app: string): string | null {
-  const prefix = `${app} — `
-  return name?.startsWith(prefix) ? name.slice(prefix.length).trim() || null : null
 }
 
 /** A capture cut off by a kill leaves a picture of the screen here, under its own name. */
@@ -113,7 +114,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
     if ([...live.values()].every((instance) => instance.stopped || !instance.rests || instance.resting)) hand?.closeWhenIdle()
   }
 
-  const deviceFor = (target: UseTarget, card: string, cardName?: string): PixelDevice | null => {
+  const deviceFor = (target: UseTarget, card: string): PixelDevice | null => {
     switch (target.kind) {
       case 'adb': {
         const adb = findAdb()
@@ -138,7 +139,8 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
           hand: handOf,
           readClipboard: readMachineClipboard,
           tmp: options.captureDir,
-          titleHint: () => cardWindowTitle(cardName, target.name)
+          rebound: () => options.onRebound?.(card),
+          ...(options.windowsFile ? { memory: fileWindowMemory(options.windowsFile, card) } : {})
         })
       case 'cam':
         return new CamDevice(target, { host: hostOf, cameraAccess })
@@ -149,9 +151,12 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
 
   return {
     makeInstance(target, node) {
-      const device = deviceFor(target, node.id, node.name)
+      const device = deviceFor(target, node.id)
       if (!device) return null
-      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id), onRest: releaseHand })
+      const instance = new PixelInstance({ url: useUrl(target), device, onBlocked: () => options.onBlocked?.(node.id), onRest: () => {
+          releaseHand()
+          options.onRested?.(node.id)
+        } })
       live.set(node.id, instance)
       return instance
     },
@@ -175,7 +180,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
     wake() {
       for (const instance of live.values()) instance.wake()
     },
-    typeAtLock: (password) => handOf().send(macUnlockOp(password)),
+    typeAtLock: (password) => handOf().send(macUnlockOp(password)).finally(releaseHand),
     dispose() {
       hand?.close()
       hand = null
