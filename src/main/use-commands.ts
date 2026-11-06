@@ -18,7 +18,7 @@ import { machineCopy } from '../shared/machine-words'
  *   cookrew browser type "Card" TEXT              typed into whatever has focus
  *   cookrew browser key "Card" Enter              Enter Backspace Tab Escape Space Arrow…
  *   cookrew browser scroll "Card" down [AMOUNT]   at the middle of the screen
- *   cookrew browser status "Card"                 live, or offline and why
+ *   cookrew browser status "Card"                 live, offline and why, or resting
  *
  * `tap`, `swipe` and `screenshot` work on a web card too — a pointed click
  * at a canvas app is sometimes the only click there is. Every acting
@@ -92,22 +92,25 @@ export async function runUseCommand(
   const size = `${viewport.width}x${viewport.height}`
   switch (sub) {
     case 'status': {
+      await instance.check?.()
       const status = instance.status
       if (!status) return 'live'
       return status.message ? `${status.state}: ${status.message}` : status.state
     }
     case 'screenshot':
     case 'snapshot': {
-      const jpeg = await instance.snapshot()
+      const jpeg = await (instance.look?.() ?? instance.snapshot())
       if (!jpeg) {
         const why = instance.status?.message
         throw new Error(why ? `no frame yet — ${why}` : 'no frame yet; try again in a moment')
       }
+      // After the look: a card that rested only learns the screen's size now.
+      const seen = instance.viewport
       const file = path.join(ctx.shotsDir, shotName(sub === 'screenshot' ? params[0] : undefined, ctx))
       await mkdir(path.dirname(file), { recursive: true })
       await writeFile(file, Buffer.from(jpeg, 'base64'))
-      signal(ctx, 'look', null, viewport)
-      return `${file}\nscreen: ${size} points — tap, swipe and scroll take points in this space (the image may be larger; scale its pixels down to ${viewport.width} wide)`
+      signal(ctx, 'look', null, seen)
+      return `${file}\nscreen: ${seen.width}x${seen.height} points — tap, swipe and scroll take points in this space (the image may be larger; scale its pixels down to ${seen.width} wide)`
     }
     case 'tap':
     case 'click': {

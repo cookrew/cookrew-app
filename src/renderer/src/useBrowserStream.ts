@@ -171,6 +171,7 @@ export function useBrowserStream(
   const gotFrameRef = useRef(false)
   const warnedRef = useRef(false)
   const liveRef = useRef(false)
+  const restingRef = useRef(false)
   const hasFrameRef = useRef(false)
   const lastFrameAtRef = useRef(0)
   const frameRevisionRef = useRef<number | null>(null)
@@ -493,6 +494,7 @@ export function useBrowserStream(
         if (!(msg.status.state === 'offline' && msg.status.remote)) attemptRef.current = 0
         setReconnecting(false)
         setDeviceStatus(msg.status)
+        restingRef.current = msg.status.state === 'resting'
         return
       }
 
@@ -536,6 +538,7 @@ export function useBrowserStream(
           if (disposed || failed) return
           advance('open')
           sendControl(document.hidden ? 'release' : 'offer')
+          if (document.hidden) line?.send({ t: 'visibility', hidden: true })
           if (watchFieldsRef.current) line?.send({ t: 'watch-fields' })
         },
         onMessage,
@@ -577,6 +580,11 @@ export function useBrowserStream(
       }, client === 'desktop' ? FIRST_FRAME_TIMEOUT_MS : REMOTE_FIRST_FRAME_TIMEOUT_MS)
 
       staleTimer = setInterval(() => {
+        // Coming back is one message, and on the relay a lost POST is gone: a page in
+        // plain sight with no frames coming says it again.
+        if (!disposed && !document.hidden && (restingRef.current || (liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)))) {
+          line?.send({ t: 'visibility', hidden: false })
+        }
         if (!disposed && liveRef.current && !frameIsFresh(lastFrameAtRef.current, Date.now(), FRAME_STALE_MS)) {
           liveRef.current = false
           setLive(false)
@@ -619,8 +627,11 @@ export function useBrowserStream(
 
   useEffect(() => {
     if (!open || !enabled) return
-    const reportVisibility = (): void =>
+    const reportVisibility = (): void => {
       sendViewportControl(document.hidden ? 'release' : 'offer')
+      // Said apart from the viewport: a viewer can release that and go on watching.
+      lineRef.current?.send({ t: 'visibility', hidden: document.hidden })
+    }
     document.addEventListener('visibilitychange', reportVisibility)
     return () => document.removeEventListener('visibilitychange', reportVisibility)
   }, [open, enabled, sendViewportControl])

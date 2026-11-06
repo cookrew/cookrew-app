@@ -30,8 +30,9 @@ import type { KeyedStore } from './keyed-store'
  */
 
 /** The zoom-out edge, and only when there is a painted frame to hand over. */
-export function shouldHandOff(input: { wasOpen: boolean; open: boolean; painted: boolean }): boolean {
-  return input.wasOpen && !input.open && input.painted
+export function shouldHandOff(input: { wasOpen: boolean; open: boolean; painted: boolean; computer?: boolean }): boolean {
+  // A picture of a computer has no name, no banner and no Stop, so none stays behind.
+  return input.wasOpen && !input.open && input.painted && input.computer !== true
 }
 
 /**

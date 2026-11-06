@@ -21,6 +21,26 @@
 
 export type Ear = 'mac' | 'web' | 'phone'
 
+/** What the box hears of an ear closing (use-dictation.ts · finish). */
+export interface EarEnd {
+  /** The ear closed, for any reason: a silent one says nothing else. */
+  onEnd: () => void
+  onFinal: (text: string, alternates: string[]) => void
+  onError: (message: string) => void
+}
+
+/**
+ * THE ONE WAY AN EAR CLOSES, heard or not. ⌘ held a beat with nothing said is
+ * the everyday close: no words, no error. What the ear held for its length
+ * goes on onEnd, or it stays held for good (owner, 2026-11-06). The words
+ * come before the error: an error said after them must not be cleared by them.
+ */
+export function earClosed(text: string, alternates: string[], error: string | null, box: EarEnd): void {
+  box.onEnd()
+  if (text.trim()) box.onFinal(text.trim(), alternates)
+  if (error) box.onError(error)
+}
+
 /** Set in sessionStorage once a browser's own recognizer failed for want of its service. */
 export const WEB_EAR_BROKEN_KEY = 'cookrew.dictation.webBroken'
 

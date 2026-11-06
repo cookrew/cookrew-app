@@ -3,7 +3,7 @@ import { PTT_IDLE, pttStep, type PttState } from '../../../shared/ptt-machine'
 import { hostPlatform, machineCopy } from '../../../shared/machine-words'
 import type { ListenEvent } from '../../../main/listen'
 import { cookrew } from '../api'
-import { listensThroughPauses, pickEar, preferPhoneEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
+import { earClosed, listensThroughPauses, pickEar, preferPhoneEar, transcriptOf, WEB_EAR_BROKEN_KEY, webEarUnreachable, webEndError, webErrorText, webLang, webRecognizer, type Ear, type Recognizer } from './dictation'
 import { micErrorText, PHONE_MAX_SECONDS } from './phone-audio'
 import { canRecord, startPhoneRecording, type PhoneRecording } from './phone-recorder'
 
@@ -42,6 +42,8 @@ const MAC_TAKES_OVER = 'The mic now records for the Mac to hear: tap it again.'
 export function useDictation(options: {
   /** The ear opened: whatever the words are for is fixed now. */
   onStart: () => void
+  /** The ear closed, whatever it heard: the one end of what onStart began. */
+  onEnd: () => void
   /** The finished sentence, and what the Mac's other ears heard of it. */
   onFinal: (text: string, alternates: string[]) => void
   onError: (message: string) => void
@@ -59,6 +61,8 @@ export function useDictation(options: {
   const [heard, setHeard] = useState('')
   const onStartRef = useRef(options.onStart)
   onStartRef.current = options.onStart
+  const onEndRef = useRef(options.onEnd)
+  onEndRef.current = options.onEnd
   const onFinalRef = useRef(options.onFinal)
   onFinalRef.current = options.onFinal
   const onErrorRef = useRef(options.onError)
@@ -107,9 +111,7 @@ export function useDictation(options: {
     pttRef.current = pttStep(pttRef.current, { type: 'ended' }, performance.now()).state
     setPhase('idle')
     setHeard('')
-    // The words first: an error said after them must not be cleared by them.
-    if (text.trim()) onFinalRef.current(text.trim(), alternates)
-    if (error) onErrorRef.current(error)
+    earClosed(text, alternates, error, { onEnd: onEndRef.current, onFinal: onFinalRef.current, onError: onErrorRef.current })
   }, [])
 
   /**
