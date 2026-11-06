@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BrowserNodeData } from '../src/shared/model'
 import { HeadlessBrowserManager } from '../src/main/headless-browser-manager'
 import type { HeadlessInstance, HeadlessOptions } from '../src/main/headless-chrome'
+import { browserDownloadsDir } from '../src/main/browser-downloads'
 
 function browser(id = 'browser-1'): BrowserNodeData {
   return {
@@ -49,6 +50,14 @@ function managerWith(
 }
 
 describe('HeadlessBrowserManager node ownership', () => {
+  it('gives each card its own downloads directory', async () => {
+    const makeInstance = vi.fn((_options: HeadlessOptions) => fakeInstance())
+    const manager = managerWith(makeInstance)
+    await manager.replaceNodes([browser('browser-1')])
+    await manager.syncNode(browser('browser-1'))
+    expect(makeInstance.mock.calls[0][0].downloadDir).toBe(browserDownloadsDir('browser-1'))
+  })
+
   it('restores cold browser cards without launching Chromium', async () => {
     const makeInstance = vi.fn(() => fakeInstance())
     const manager = managerWith(makeInstance)

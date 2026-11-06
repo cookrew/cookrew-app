@@ -6,6 +6,7 @@ import type { Gesture } from './vphone-input'
 import type { ViewportMetrics } from '../shared/cast-viewport'
 import type { BrowserTab } from '../shared/model'
 import type { BrowserViewportState } from './browser-viewport'
+import type { ArrivingDownload } from './browser-downloads'
 import type { FrameMeta, HeadlessPageState, HeadlessStopResult } from './headless-chrome'
 
 /**
@@ -74,6 +75,8 @@ export interface BrowserInstance {
   watchFields?(listener: (report: FieldReport) => void): () => void
   /** The viewer's paste: a page paste event, typed in if the page leaves it. Absent → Input.insertText. */
   paste?(text: string): Promise<void>
+  /** Files the page is saving right now. Absent on a use card: a device screen saves nothing here. */
+  activeDownloads?(): readonly ArrivingDownload[]
   /** The agent's hand on a screen: gestures in viewport points, resolved once the device took them. */
   act?(gestures: readonly Gesture[]): Promise<void>
 }

@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import http from 'node:http'
 import path from 'node:path'
 import { shareInstallationDirs } from './browser-scope'
+import { DownloadWatcher, type ArrivingDownload } from './browser-downloads'
 import type { BrowserTab } from '../shared/model'
 import { observedBrowserUrl } from '../shared/browser-navigation'
 import type { CdpInputCommand } from '../shared/cast-input'
@@ -131,6 +132,8 @@ export interface HeadlessOptions {
    * otherwise download for itself. Absent means each profile keeps its own.
    */
   sharedInstallationDir?: string
+  /** Where this card's files land (browser-downloads.ts). Absent: Chrome's default, ~/Downloads. */
+  downloadDir?: string
   width: number
   height: number
   tabs: BrowserTab[]
@@ -228,7 +231,10 @@ export class HeadlessInstance {
   onTabOpened: (tab: BrowserTab) => void = () => undefined
   onTabClosed: (tabId: string) => void = () => undefined
 
+  private readonly downloads: DownloadWatcher | null
+
   constructor(private readonly opts: HeadlessOptions) {
+    this.downloads = opts.downloadDir ? new DownloadWatcher(opts.downloadDir) : null
     this.width = opts.width
     this.height = opts.height
     this.activeTabId = opts.activeTabId
@@ -288,6 +294,7 @@ export class HeadlessInstance {
       throw new Error('instance closed during startup')
     }
     this.browserCdp = browserCdp
+    await this.downloads?.attach(browserCdp)
 
     // In this order: /json still lists a closing probe page for a moment, and
     // firstPageTarget must not pick it.
@@ -302,6 +309,10 @@ export class HeadlessInstance {
     browserCdp.on('Target.targetInfoChanged', (params) => this.onTargetInfoChanged(params))
     await browserCdp.send('Target.setDiscoverTargets', { discover: true })
     this.pollTimer = setInterval(() => void this.pollTick(), POLL_INTERVAL_MS)
+  }
+
+  activeDownloads(): readonly ArrivingDownload[] {
+    return this.downloads?.active() ?? []
   }
 
   private async readDevToolsPort(): Promise<number> {

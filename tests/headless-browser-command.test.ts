@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -95,6 +95,39 @@ describe('HeadlessBrowserCommandEngine', () => {
     expect(manager.syncNode).toHaveBeenCalledWith(expect.objectContaining({ id: browser().id }))
     expect(instance.evaluate).toHaveBeenCalledWith('sessionStorage.token')
     expect(instance.beginAgentViewportActivity).toHaveBeenCalledTimes(1)
+  })
+
+  describe('downloads', () => {
+    const withRoot = (peek: unknown = null): { root: string; run: () => Promise<string> } => {
+      const root = mkdtempSync(path.join(tmpdir(), 'cookrew-card-downloads-'))
+      const asked = new HeadlessBrowserCommandEngine({
+        store,
+        manager: { ...manager, syncNode: manager.syncNode, peek: vi.fn(() => peek) } as unknown as HeadlessBrowserManager,
+        addNode: (node) => store.addNode(node),
+        updateNode: (id, patch) => store.updateNode(id, patch),
+        connectNodes: (a, b) => void store.connectAcross(a, b),
+        downloadsRoot: root
+      })
+      return { root, run: () => asked.run(['downloads', 'Shared'], terminal().id) }
+    }
+
+    it('names the files of a card whose Chrome is asleep, without waking it', async () => {
+      const { root, run } = withRoot()
+      mkdirSync(path.join(root, browser().id))
+      writeFileSync(path.join(root, browser().id, 'a.json'), '{}')
+      await expect(run()).resolves.toContain(path.join(root, browser().id, 'a.json'))
+      expect(manager.syncNode).not.toHaveBeenCalled()
+    })
+
+    it('says what is still arriving on a live card', async () => {
+      const { run } = withRoot({ activeDownloads: () => [{ name: 'big.bin', receivedBytes: 1, totalBytes: 2 }] })
+      await expect(run()).resolves.toBe('downloading big.bin (1 of 2 bytes)')
+    })
+
+    it('answers a card that cannot download, a use card has no such thing', async () => {
+      const { root, run } = withRoot({})
+      await expect(run()).resolves.toBe(`No downloads yet. They land in ${path.join(root, browser().id)}`)
+    })
   })
 
   it('routes navigation to headless Chrome', async () => {

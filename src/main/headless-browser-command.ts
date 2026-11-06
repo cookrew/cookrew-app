@@ -13,6 +13,7 @@ import type { BrowserInstance } from './browser-instance'
 import { parseUseUrl } from '../shared/use-url'
 import type { UseSignal } from '../shared/use-signal'
 import { handlesUseCommand, runUseCommand } from './use-commands'
+import { browserDownloadsDir, downloadsReport, listDownloads } from './browser-downloads'
 
 export interface HeadlessBrowserCommandDeps {
   store: WorkspaceStore
@@ -25,6 +26,8 @@ export interface HeadlessBrowserCommandDeps {
   onUse?: (signal: UseSignal) => void
   /** Where `screenshot` without a file name saves. */
   shotsDir?: string
+  /** Where the cards' download directories are. Absent: ~/.cookrew/downloads. */
+  downloadsRoot?: string
   now?: () => number
   /**
    * The card a name means for THIS caller (browser-reach.ts) — its own
@@ -126,6 +129,7 @@ export class HeadlessBrowserCommandEngine {
     if (!browserName) throw new Error(`Usage: cookrew browser ${sub} "Browser" ...`)
     const node = this.findBrowser(browserName, terminalId)
     if (sub === 'tabs') return this.runTabCommand(sub, node, rest.slice(1))
+    if (sub === 'downloads') return this.downloads(node)
 
     // ANOTHER DEVICE IS A NEW ADDRESS FOR THE CARD, not a page for the old device
     // to open: the card's tab is re-addressed and the manager swaps the instance
@@ -301,6 +305,13 @@ export class HeadlessBrowserCommandEngine {
       throw new Error(`Browser '${name}' not found. Run 'cookrew list'.`)
     }
     return node
+  }
+
+  /** Answered from disk: asking what a sleeping card saved must not wake its Chrome. */
+  private downloads(node: BrowserNodeData): string {
+    const dir = browserDownloadsDir(node.id, this.deps.downloadsRoot)
+    const arriving = this.deps.manager.peek(node.id)?.activeDownloads?.() ?? []
+    return downloadsReport(dir, listDownloads(dir), arriving)
   }
 
   private async requireInstance(node: BrowserNodeData): Promise<BrowserInstance> {
