@@ -34,6 +34,8 @@ interface HeaderMoreProps {
   onRouting?: () => void
   routeStatus: RouteStatus | null
   onWall: () => void
+  /** Activity and history (MetricsPanel.tsx): what the fleet did, across workspaces. */
+  onActivity: () => void
   onResync: () => void
   demo: boolean
 }
@@ -46,6 +48,7 @@ export function HeaderMore({
   onRouting,
   routeStatus,
   onWall,
+  onActivity,
   onResync,
   demo
 }: HeaderMoreProps): React.JSX.Element {
@@ -147,6 +150,14 @@ export function HeaderMore({
               <RoutingEntry status={routeStatus} onOpen={onRouting} />
             </div>
           )}
+          {/* ACTIVITY IS ONE CLICK FROM HERE (owner, 2026-11-07): it used to sit
+              in the wall's footer, three clicks away, behind a screen that is
+              not what someone opening their history came for. The wall keeps it
+              too, for whoever is already there. */}
+          <button type="button" className="cr-more-item" title="Activity and history" onClick={onActivity} aria-haspopup="dialog">
+            <CrIcon name="summary" />
+            <span className="cr-more-label">Activity…</span>
+          </button>
           <button type="button" className="cr-more-item" onClick={onWall} aria-haspopup="dialog">
             <CrIcon name="canvas" />
             <span className="cr-more-label">Workspaces…</span>
