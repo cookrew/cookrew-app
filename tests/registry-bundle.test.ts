@@ -194,7 +194,8 @@ describe('the minified bundle', () => {
     expect(res.status).toBe(200)
     expect(await res.text()).toContain('id="me-desktops"')
     expect((await fetch(`${up.origin}/`, { headers: bearer(who), redirect: 'manual' })).status).toBe(200)
-  })
+    // The front page reads GitHub before it answers, so this waits on the network.
+  }, 30_000)
 
   sharedRoutes(() => up, () => who)
 })
