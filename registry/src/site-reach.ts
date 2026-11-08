@@ -1,6 +1,7 @@
 import { esc } from './site-shell'
 import { machineCopy } from '../../src/shared/machine-words'
 import { webCopy } from './v3-copy'
+import { LEGAL_PUBLISHED } from './site-legal-entity'
 import type { V2Desktop } from './v2-accounts'
 
 /**
@@ -114,7 +115,7 @@ export function desktopsSection(username: string, desktops: readonly V2Desktop[]
       ? `<li><span class="meta">No desktop has registered its workspaces yet. Claim this username in the app and they appear here.</span></li>`
       : desktops.map((desktop) => desktopRow(username, desktop)).join('')
   return `<h2 id="desktops" style="margin-top:30px">Your machines</h2>
-<p class="meta">Names and workspaces only — this site stores nothing that is on a canvas, though OPEN carries it through the relay, which is not end-to-end sealed yet (<a href="/privacy#relay">privacy</a>). ONLINE means that machine is holding its line here right now, so OPEN reaches it; its address stays here. USE WI-FI asks that machine once for its keyboard on this network; ${esc(machineCopy(webCopy('m5.no-account'), 'any'))}</p>
+<p class="meta">Names and workspaces only — this site stores nothing that is on a canvas, though OPEN carries it through the relay, which is not end-to-end sealed yet${LEGAL_PUBLISHED ? ' (<a href="/privacy#relay">privacy</a>)' : ''}. ONLINE means that machine is holding its line here right now, so OPEN reaches it; its address stays here. USE WI-FI asks that machine once for its keyboard on this network; ${esc(machineCopy(webCopy('m5.no-account'), 'any'))}</p>
 <ul class="doors me-list" id="me-desktops"
   data-asked="${esc(machineCopy(webCopy('m5.asked'), 'any'))}"
   data-allowed="${esc(machineCopy(webCopy('m5.allowed', { device: '{device}' }), 'any'))}"

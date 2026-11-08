@@ -34,6 +34,7 @@ import {
   CONTACT_EMAIL,
   GOVERNING_LAW,
   LEGAL_ENTITY,
+  LEGAL_PUBLISHED,
   PRIVACY,
   TERMS,
   type LegalSection
@@ -104,7 +105,7 @@ const allWords = (sections: readonly LegalSection[]): string => sections.map(wor
 const live = (sections: readonly LegalSection[]): readonly LegalSection[] => sections.filter((s) => !s.planned)
 const planned = (sections: readonly LegalSection[]): readonly LegalSection[] => sections.filter((s) => s.planned)
 
-describe('the addresses', () => {
+describe.runIf(LEGAL_PUBLISHED)('the addresses', () => {
   it.each(['/privacy', '/terms'])('%s answers as a page, not as an owner called that', async (address) => {
     const response = await fetch(`${origin}${address}`)
     expect(response.status).toBe(200)
@@ -132,7 +133,33 @@ describe('the addresses', () => {
   })
 })
 
-describe('the footer of every page', () => {
+describe.runIf(!LEGAL_PUBLISHED)('while a placeholder is unfilled, the pages are not published', () => {
+  it.each(['/privacy', '/terms'])('%s answers 404', async (address) => {
+    expect((await fetch(`${origin}${address}`)).status).toBe(404)
+    expect((await fetch(`${origin}${address}`, { method: 'HEAD' })).status).toBe(404)
+  })
+
+  it('neither is in the sitemap', () => {
+    const xml = sitemapXml([])
+    expect(xml).not.toContain('/privacy</loc>')
+    expect(xml).not.toContain('/terms</loc>')
+  })
+
+  it.each(['/', '/market', '/join', '/nobody-here'])('%s links neither', async (address) => {
+    const html = await (await fetch(`${origin}${address}`)).text()
+    expect(html).not.toContain('href="/privacy')
+    expect(html).not.toContain('href="/terms')
+  })
+
+  it('the install page, the machines list and the FAQ point nowhere', () => {
+    expect(installPageHtml({ kind: 'unknown' })).not.toContain('/privacy')
+    expect(desktopsSection('mira', [])).not.toContain('/privacy')
+    for (const f of FAQ) expect(f.a).not.toContain('/privacy')
+    expect(llmsText()).not.toContain('/privacy')
+  })
+})
+
+describe.runIf(LEGAL_PUBLISHED)('the footer of every page', () => {
   it.each([
     '/',
     '/market',
@@ -359,7 +386,7 @@ describe('the words match the code', () => {
     const answer = FAQ.find((f) => f.q === 'Is my code sent to cookrew.dev?')?.a ?? ''
     expect(answer).not.toMatch(/never touches cookrew\.dev unless you serve a team\.$/)
     expect(answer).toMatch(/relay/)
-    expect(answer).toContain('/privacy')
+    if (LEGAL_PUBLISHED) expect(answer).toContain('/privacy')
     expect(answer).not.toMatch(/every byte is sealed/)
     expect(answer).not.toMatch(/from outside your network/)
   })
@@ -370,7 +397,7 @@ describe('the words match the code', () => {
     expect(author).toMatch(/^Yes\./)
     const machines = desktopsSection('mira', [])
     expect(machines).not.toContain('never holds what is on a canvas')
-    expect(machines).toContain('href="/privacy#relay"')
+    if (LEGAL_PUBLISHED) expect(machines).toContain('href="/privacy#relay"')
     expect(machines).not.toContain('opening one stays here')
   })
 

@@ -1,5 +1,6 @@
 import type { ListedDoor } from './site'
 import type { Release } from './releases'
+import { LEGAL_PUBLISHED } from './site-legal-entity'
 import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
 
 /**
@@ -159,8 +160,12 @@ export function sitemapXml(allDoors: readonly ListedDoor[]): string {
     // /start and /features are anchors on the homepage now; a fragment is not
     // a sitemap URL, and the redirects cover old links.
     ...FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
-    { path: '/privacy', priority: 0.3 },
-    { path: '/terms', priority: 0.3 },
+    ...(LEGAL_PUBLISHED
+      ? [
+          { path: '/privacy', priority: 0.3 },
+          { path: '/terms', priority: 0.3 }
+        ]
+      : []),
     ...handles.map((h) => ({ path: `/${h}`, priority: 0.5 })),
     // No lastmod on a team: its heartbeat is not a change, and a date that
     // moves every minute tells a crawler nothing.

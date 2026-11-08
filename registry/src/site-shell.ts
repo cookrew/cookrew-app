@@ -4,6 +4,7 @@ import { BRAND_MARK_SVG } from './site-brand'
 import { GITHUB_REPO, SITE_ORIGIN } from './site-content'
 import { jsonLd } from './site-seo'
 import { webCopy } from './v3-copy'
+import { LEGAL_PUBLISHED } from './site-legal-entity'
 
 /**
  * THE SITE'S ONE SHELL — cookrew.dev in the app's own dress.
@@ -299,7 +300,7 @@ function shell(options: ShellOptions, main: string): string {
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+<nav class="row" aria-label="Site"><a href="/market">Marketplace</a><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a><a href="/v1/doors">Directory as data</a><a href="/sitemap.xml">Sitemap</a><a href="/llms.txt">llms.txt</a>${LEGAL_PUBLISHED ? '<a href="/privacy">Privacy</a><a href="/terms">Terms</a>' : ''}</nav>
 <p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. Every page here is generated from the registry's live directory; nothing is staged, and every number carries its date.</p>
 </div></footer>
 <div class="toast" id="toast" hidden></div>
