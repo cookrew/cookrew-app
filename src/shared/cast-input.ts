@@ -323,7 +323,11 @@ export function sanitizeInput(raw: unknown, ctx: MapContext): CdpInputCommand[] 
         ...(modifiers ? { modifiers } : {}),
         // Non-text keys need the virtual key code or the browser won't act on
         // them (Backspace won't delete, Enter won't submit, arrows won't move).
-        ...(vk !== undefined ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {})
+        // Never as nativeVirtualKeyCode: on a Mac that is a different numbering,
+        // and Escape, PageUp and PageDown sent that way made Chrome open
+        // chrome://help by itself (measured 2026-11-09). Without it every key
+        // still does its job.
+        ...(vk !== undefined ? { windowsVirtualKeyCode: vk } : {})
       }
       return [
         { method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', ...base, ...(command ? { commands: [command] } : {}) } },
