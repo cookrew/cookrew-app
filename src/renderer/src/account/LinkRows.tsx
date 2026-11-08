@@ -6,6 +6,7 @@ import { cookrew } from '../api'
 import { Row } from './FactorRows'
 import { useProviders, useTripGuard } from './ProviderButtons'
 import { PROVIDER_COPY, passcodeView, providerRefusal } from './provider-store'
+import { linkCallFor } from './browser-auth-store'
 
 /**
  * A link or an unlink, waiting for what must be typed: the password, or a rescue
@@ -46,8 +47,9 @@ export function LinkRows({
   const trip = useTripGuard()
 
   const run = (target: Asking, typed: string): void => {
-    const api = cookrew()
-    const call = target.verb === 'link' ? api.accountOAuthLink : api.accountOAuthUnlink
+    // A link goes to the one sign-in page where it is offered, under the same
+    // proof; main takes the provider trip instead on a registry without it.
+    const call = linkCallFor(cookrew(), target.verb)
     if (!call || busy) return
     setBusy(true)
     setTripping(true)

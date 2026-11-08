@@ -6,6 +6,8 @@ import { DOING, problemSentence, refusedSentence } from './problem'
 import { ResumeLadder } from './ResumeLadder'
 import { ProviderButtons, useProviders, useTripGuard } from './ProviderButtons'
 import { PROVIDER_COPY, providerRefusal } from './provider-store'
+import { BROWSER_COPY, pageOffered, runPageTrip } from './browser-auth-store'
+import { BrowserWait } from './BrowserPane'
 import type { ProviderId } from '../../../shared/oauth'
 import '../grant-surface.css'
 
@@ -33,6 +35,10 @@ import '../grant-surface.css'
  * commonest way to arrive here is a password changed on the web, which leaves
  * that verifier holding the OLD password: checking against it first would
  * refuse the new password before cookrew.dev ever saw it.
+ *
+ * WHERE THE ONE SIGN-IN PAGE IS OFFERED, the way back is the browser: this
+ * account's name and this Mac's device, and nothing typed here. A registry
+ * without the page answers 'unsupported' and the card is what it was before.
  */
 export function ResumeSession({
   onResumed,
@@ -56,6 +62,31 @@ export function ResumeSession({
    * without leaving a secret in a closure.
    */
   const [step, setStep] = useState<{ step: SecondFactorStep; lede: string } | null>(null)
+  /** The page is the way back, until a registry says it has none. */
+  const [page, setPage] = useState(() => pageOffered(cookrew().accountBrowserResume))
+  const [onPage, setOnPage] = useState(false)
+
+  /** The page, for this account. A landing there is a landing here. */
+  const resumeOnPage = (): void => {
+    const call = cookrew().accountBrowserResume
+    if (!call || busy || waiting !== null || onPage) return
+    setOnPage(true)
+    setError(null)
+    void runPageTrip(() => call(), trip, {
+      done: (status) => {
+        setOnPage(false)
+        onResumed(status)
+      },
+      fallback: () => {
+        setOnPage(false)
+        setPage(false)
+      },
+      refused: (sentence) => {
+        setOnPage(false)
+        setError(sentence)
+      },
+    })
+  }
 
   const resume = (): void => {
     const call = cookrew().accountResume
@@ -115,6 +146,26 @@ export function ResumeSession({
         trip.end()
         setWaiting(null)
       })
+  }
+
+  if (page) {
+    return (
+      <section className="cr-acct-resume" aria-label="Your session ended">
+        <p className="gs-consequence">{BROWSER_COPY.SESSION_ENDED}</p>
+        {onPage ? (
+          <BrowserWait onCancel={() => void cookrew().accountOAuthCancel?.()} />
+        ) : (
+          <button className="gs-primary" disabled={busy} onClick={resumeOnPage}>
+            {BROWSER_COPY.RESUME}
+          </button>
+        )}
+        {error && (
+          <p className="gs-paste-error" role="alert">
+            {error}
+          </p>
+        )}
+      </section>
+    )
   }
 
   return (

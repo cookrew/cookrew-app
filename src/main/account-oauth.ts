@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomBytes } from 'node:crypto'
 import type {
   AccountDeviceInput,
@@ -7,12 +6,14 @@ import type {
   ProviderSignInAnswer,
   SignInAnswer,
 } from '../shared/account-v2'
-import { OAUTH_SCHEME_HOST, type OAuthIntent, type ProviderId, type ProviderOffer } from '../shared/oauth'
+import type { OAuthIntent, ProviderId, ProviderOffer } from '../shared/oauth'
 import type { StepUpAct } from '../shared/step-up'
 import { stepFrom } from './account-ladder'
 import { bodyOf, classify, plainRefusal } from './account-wire'
 import type { AccountSession } from './account-v2'
-import { listenForReturn, type LoopbackListener } from './oauth-loopback'
+import { Trips, type Returned } from './account-trip'
+
+export { TRIP_WAIT_MS, parseOAuthReturn } from './account-trip'
 
 /**
  * THE APP'S HALF OF A PROVIDER SIGN-IN.
@@ -40,10 +41,10 @@ import { listenForReturn, type LoopbackListener } from './oauth-loopback'
  *
  * Electron-free, like the rest of the account layer: the browser and the scheme
  * check arrive through the port, so a headless caller can use all of this.
+ *
+ * THE TRIP ITSELF IS SHARED (account-trip.ts): the one sign-in page sends the
+ * browser out the same way, and one Cancel must end whichever is out.
  */
-
-/** Long enough to find a password manager; a forgotten tab must not wait for ever. */
-export const TRIP_WAIT_MS = 5 * 60 * 1000
 
 export type TripProof = { current: string } | { stepUp: string }
 
@@ -79,61 +80,21 @@ export interface ProviderPort {
   firstLink: () => Promise<AccountResult<ProviderId>>
 }
 
-type Returned = { handoff: string } | { error: string } | { over: 'cancelled' | 'timeout' }
-
-interface Trip {
-  state: string
-  settled: boolean
-  settle: (returned: Returned) => void
-}
-
-/** The one shape a return may have, or null. Never throws. */
-export function parseOAuthReturn(raw: string): { handoff: string | null; error: string | null; state: string } | null {
-  let url: URL
-  try {
-    url = new URL(raw.trim())
-  } catch {
-    return null
-  }
-  if (url.protocol !== 'cookrew:' || url.hostname !== OAUTH_SCHEME_HOST) return null
-  if (url.username || url.password || url.search.length > 0) return null
-  if (url.pathname !== '' && url.pathname !== '/') return null
-  return readFields(new URLSearchParams(url.hash.replace(/^#/, '')))
-}
-
-function readFields(fields: URLSearchParams): { handoff: string | null; error: string | null; state: string } | null {
-  const state = fields.get('state')
-  const handoff = fields.get('handoff')
-  const error = fields.get('error')
-  if (state === null || state === '' || (handoff === null) === (error === null)) return null
-  return { handoff, error, state }
-}
-
 /** How a trip ended, as a result. */
 function readReturned(returned: Returned, verifier: string): AccountResult<{ handoff: string; verifier: string }> {
   if ('handoff' in returned) return { ok: true, value: { handoff: returned.handoff, verifier } }
   if ('over' in returned) return { ok: false, reason: returned.over === 'timeout' ? 'expired' : 'cancelled' }
+  // The sign-in page's code is no handoff: this trip was not to it.
+  if ('code' in returned) return { ok: false, reason: 'unknown' }
   return { ok: false, reason: returned.error === 'denied' ? 'cancelled' : 'provider_down' }
 }
 
 const refusedOf = (status: number, body: Record<string, unknown>): { reason: AccountRefusal; message?: string } =>
   classify(status, body as { error?: string; message?: string })
 
-/** Only somewhere a browser should go. A bad registry answer must not reach `openExternal`. */
-function safeToOpen(raw: unknown): raw is string {
-  if (typeof raw !== 'string') return false
-  try {
-    const url = new URL(raw)
-    if (url.protocol === 'https:') return true
-    return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')
-  } catch {
-    return false
-  }
-}
-
 export class ProviderAccess {
   private readonly port: ProviderPort
-  private trip: Trip | null = null
+  private readonly trips: Trips
   /** A proven identity waiting for a name. The ticket never crosses the bridge. */
   private claimable: {
     ticket: string
@@ -142,14 +103,11 @@ export class ProviderAccess {
     /** The device flow left this one, so the terminal's leaving ends it. */
     terminal: boolean
   } | null = null
-  /** Set while a device-flow poll is running, so it can be ended. */
-  private deviceCancelled: (() => void) | null = null
-  /** How many cancels there have been. An act remembers the one it began under. */
-  private cancels = 0
-  private readonly act = new AsyncLocalStorage<number>()
 
-  constructor(port: ProviderPort) {
+  /** `trips` is shared with the sign-in page's flow, so one cancel ends either. */
+  constructor(port: ProviderPort, trips: Trips = new Trips(port)) {
     this.port = port
+    this.trips = trips
   }
 
   /** What to draw. Silence, a 404 and an old registry all mean no button. */
@@ -166,29 +124,22 @@ export class ProviderAccess {
 
   /** A trip in flight ended by the person. True when there was one. */
   cancel(): boolean {
-    const running = this.trip !== null || this.deviceCancelled !== null
-    this.cancels += 1
-    this.trip?.settle({ over: 'cancelled' })
-    this.deviceCancelled?.()
-    return running
+    return this.trips.cancel()
   }
 
   /** One act, however many trips it takes. A cancel anywhere in it ends it. */
   during<T>(run: () => Promise<T>): Promise<T> {
-    if (this.act.getStore() !== undefined) return run()
-    this.cancel()
-    return this.act.run(this.cancels, run)
+    return this.trips.during(run)
   }
 
   /** Has the act this code is running in been cancelled? */
   private ended(): boolean {
-    const began = this.act.getStore()
-    return began !== undefined && began !== this.cancels
+    return this.trips.ended()
   }
 
   /** A browser is out. The idle clock waits for it. */
   tripping(): boolean {
-    return this.trip !== null
+    return this.trips.tripping()
   }
 
   /**
@@ -208,17 +159,7 @@ export class ProviderAccess {
 
   /** A `cookrew://oauth#…` link arrived. True when it belonged to this trip. */
   arrive(raw: string): boolean {
-    const fields = parseOAuthReturn(raw)
-    return fields !== null && this.accept(fields)
-  }
-
-  private accept(fields: { handoff: string | null; error: string | null; state: string }): boolean {
-    const trip = this.trip
-    // A return this process did not start is dropped here: that is what stops
-    // a stranger's link signing this Mac in to the stranger's account.
-    if (trip === null || fields.state !== trip.state) return false
-    trip.settle(fields.handoff !== null ? { handoff: fields.handoff } : { error: fields.error ?? 'provider' })
-    return true
+    return this.trips.arrive(raw)
   }
 
   /** The browser round trip. Answers the handoff and the verifier that spends it. */
@@ -228,66 +169,16 @@ export class ProviderAccess {
     extra: Record<string, unknown>,
     start: (path: string, body: unknown) => Promise<AccountResult<{ status: number; body: Record<string, unknown> }>>,
   ): Promise<AccountResult<{ handoff: string; verifier: string }>> {
-    if (this.ended()) return { ok: false, reason: 'cancelled' }
     const verifier = randomBytes(32).toString('base64url')
-    const state = randomBytes(32).toString('base64url')
     const challenge = createHash('sha256').update(verifier).digest('base64url')
-    const { trip, returned } = this.begin(state)
-    let listener: LoopbackListener | null = null
-    try {
-      listener = await listenForReturn((query) => {
-        const fields = readFields(query)
-        return fields !== null && this.accept(fields)
-      })
-      const handled = this.port.schemeHandled()
-      const started = await start(`/v2/oauth/${provider}/start`, {
-        intent,
-        state,
-        challenge,
-        back: { scheme: handled || listener === null, ...(listener === null ? {} : { port: listener.port }) },
-        ...extra,
-      })
-      // Ended while the registry was being asked: the browser never opens.
-      if (trip.settled) return readReturned(await returned, verifier)
+    const back = await this.trips.travel(async (state, way) => {
+      const started = await start(`/v2/oauth/${provider}/start`, { intent, state, challenge, back: way, ...extra })
       if (!started.ok) return started
-      if (started.value.status !== 201) {
-        return { ok: false, ...refusedOf(started.value.status, started.value.body) }
-      }
+      if (started.value.status !== 201) return { ok: false, ...refusedOf(started.value.status, started.value.body) }
       const url = started.value.body.authorizeUrl
-      if (!safeToOpen(url)) return { ok: false, reason: 'unknown' }
-      Promise.resolve()
-        .then(() => this.port.openBrowser(url))
-        .catch(() => trip.settle({ error: 'provider' }))
-      return readReturned(await returned, verifier)
-    } finally {
-      // Every way out ends the trip; settling twice is nothing.
-      trip.settle({ over: 'cancelled' })
-      listener?.close()
-    }
-  }
-
-  /** Registered at once, ending the one before. Its timer can only end itself. */
-  private begin(state: string): { trip: Trip; returned: Promise<Returned> } {
-    this.trip?.settle({ over: 'cancelled' })
-    let trip: Trip | null = null
-    const returned = new Promise<Returned>((resolve) => {
-      const held: Trip = {
-        state,
-        settled: false,
-        settle: (answer) => {
-          if (held.settled) return
-          held.settled = true
-          clearTimeout(timer)
-          if (this.trip === held) this.trip = null
-          resolve(answer)
-        },
-      }
-      const timer = setTimeout(() => held.settle({ over: 'timeout' }), TRIP_WAIT_MS)
-      timer.unref()
-      trip = held
+      return typeof url === 'string' ? { ok: true, value: url } : { ok: false, reason: 'unknown' }
     })
-    this.trip = trip
-    return { trip: trip as unknown as Trip, returned }
+    return back.ok ? readReturned(back.value, verifier) : back
   }
 
   private post = async (
@@ -460,7 +351,7 @@ export class ProviderAccess {
       cancelled = true
       wake?.()
     }
-    this.deviceCancelled = stop
+    const release = this.trips.hold(stop)
     if (options.signal?.aborted === true) cancelled = true
     options.signal?.addEventListener('abort', stop, { once: true })
     try {
@@ -497,7 +388,7 @@ export class ProviderAccess {
       }
     } finally {
       options.signal?.removeEventListener('abort', stop)
-      this.deviceCancelled = null
+      release()
     }
   }
 }
