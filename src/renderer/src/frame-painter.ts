@@ -126,7 +126,7 @@ export class FramePainter {
         if ('close' in picture) picture.close()
         return this.events.onSkipped(frame.seq)
       }
-      const { width, height } = pictureSize(picture)
+      const { width, height } = this.drawSize(frame.revision, pictureSize(picture))
       this.draw(picture, width, height)
       this.events.onPainted({
         seq: frame.seq,
@@ -145,16 +145,38 @@ export class FramePainter {
     }
   }
 
+  /**
+   * The size to draw at. While a page scrolls, Chrome sends frames at 1x to a
+   * 2x viewer (measured 2026-11-09: 1600x640 at rest, 800x320 mid-scroll, one
+   * viewport revision). Sized by each frame, the picture jumped between two
+   * sizes. Within one revision a smaller frame of the same shape is stretched
+   * over the largest one seen; a new revision or a new shape starts over.
+   */
+  private drawSize(revision: number, size: { width: number; height: number }): { width: number; height: number } {
+    const kept = this.kept
+    const sameShape =
+      kept !== null && Math.abs(kept.width * size.height - size.width * kept.height) <= 0.02 * kept.width * size.height
+    if (kept === null || kept.revision !== revision || !sameShape || size.width > kept.width) {
+      this.kept = { revision, ...size }
+      return size
+    }
+    return { width: kept.width, height: kept.height }
+  }
+
+  private kept: { revision: number; width: number; height: number } | null = null
+
   private draw(picture: Picture, width: number, height: number): void {
     const canvas = this.canvas
-    // Resizing a canvas clears it, so only when the frame's size changed.
+    // Resizing a canvas clears it, so only when the drawn size changed.
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width
       canvas.height = height
       this.context = null
     }
     this.context ??= canvas.getContext('2d', { alpha: false })
-    this.context?.drawImage(picture, 0, 0)
+    const own = pictureSize(picture)
+    if (own.width === width && own.height === height) this.context?.drawImage(picture, 0, 0)
+    else this.context?.drawImage(picture, 0, 0, width, height)
     if ('close' in picture) picture.close()
   }
 }
