@@ -181,7 +181,7 @@ describe('sanitizeInput — key vocab', () => {
   })
   it('Backspace/Enter/arrows carry a virtual key code so the browser acts on them', () => {
     expect(sanitizeInput({ t: 'key', key: 'Backspace', code: 'Backspace' }, ctx)?.[0]).toMatchObject({
-      params: { key: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }
+      params: { key: 'Backspace', windowsVirtualKeyCode: 8 }
     })
     expect(sanitizeInput({ t: 'key', key: 'Enter', code: 'Enter' }, ctx)?.[0]).toMatchObject({
       params: { windowsVirtualKeyCode: 13 }
@@ -202,6 +202,18 @@ describe('sanitizeInput — key vocab', () => {
     expect(sanitizeInput({ t: 'key', key: 'a', text: 'a' }, ctx)?.[0].params).not.toHaveProperty(
       'windowsVirtualKeyCode'
     )
+  })
+  it('never sends a Windows key code as the native (Mac) one: Escape, PageUp and PageDown opened chrome://help', () => {
+    // Measured 2026-11-09 on Chrome 157 headless: with nativeVirtualKeyCode = the Windows code these three
+    // keys made Chrome open chrome://help/ by itself; without it every key still does its job.
+    for (const key of ['Escape', 'PageUp', 'PageDown', 'Backspace', 'Enter', 'Tab', 'ArrowLeft', 'Delete']) {
+      for (const command of sanitizeInput({ t: 'key', key, code: key }, ctx) ?? []) {
+        expect(command.params, key).not.toHaveProperty('nativeVirtualKeyCode')
+      }
+    }
+    for (const command of sanitizeInput({ t: 'key', key: 'a', code: 'KeyA', text: 'a' }, ctx) ?? []) {
+      expect(command.params).not.toHaveProperty('nativeVirtualKeyCode')
+    }
   })
 })
 
