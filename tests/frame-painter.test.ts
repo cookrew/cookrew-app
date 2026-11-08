@@ -149,4 +149,46 @@ describe('FramePainter', () => {
     }
     expect(resizes).toBe(2)
   })
+
+  describe("Chrome's low-resolution frames while a page scrolls (owner report 2026-11-09)", () => {
+    // Measured: a 2x viewer gets 1600x640 at rest and 800x320 frames mid-scroll, same viewport revision.
+    const sized = (width: number, height: number) => ({ width, height, close: () => void (closed += 1) })
+    const at = (seq: number, revision: number) => ({ seq, revision, bytes: new Uint8Array([0xff, seq]) })
+    let draws: unknown[][]
+    beforeEach(() => {
+      draws = []
+      canvas.getContext = () => ({ drawImage: (...args: unknown[]) => draws.push(args.slice(1)) })
+    })
+
+    async function paint(instance: FramePainter, seq: number, revision: number, width: number, height: number): Promise<void> {
+      instance.push(at(seq, revision))
+      decodes.at(-1)?.resolve(sized(width, height))
+      await flush()
+    }
+
+    it('keeps the size and stretches a smaller frame of the same picture over it', async () => {
+      const { instance, painted } = painter()
+      await paint(instance, 1, 1, 1600, 640)
+      await paint(instance, 2, 1, 800, 320)
+      await paint(instance, 3, 1, 1600, 640)
+      expect([canvas.width, canvas.height]).toEqual([1600, 640])
+      expect(draws[1]).toEqual([0, 0, 1600, 640])
+      expect(painted.map((p) => `${p.width}x${p.height}`)).toEqual(['1600x640', '1600x640', '1600x640'])
+    })
+
+    it('takes the new size when the viewport changes (a new revision)', async () => {
+      const { instance, painted } = painter()
+      await paint(instance, 1, 1, 1600, 640)
+      await paint(instance, 2, 2, 800, 320)
+      expect([canvas.width, canvas.height]).toEqual([800, 320])
+      expect(painted.at(-1)).toMatchObject({ width: 800, height: 320 })
+    })
+
+    it('takes the new size when the shape changes, whatever the revision', async () => {
+      const { instance } = painter()
+      await paint(instance, 1, 1, 1600, 640)
+      await paint(instance, 2, 1, 390, 700)
+      expect([canvas.width, canvas.height]).toEqual([390, 700])
+    })
+  })
 })
