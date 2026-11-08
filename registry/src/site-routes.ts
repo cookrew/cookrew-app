@@ -9,6 +9,7 @@ import { FEATURES, llmsText } from './site-content'
 import { notFoundPage, respondPage } from './site-shell'
 import { joinPage } from './site-account'
 import { privacyPage, termsPage } from './site-legal'
+import { LEGAL_PUBLISHED } from './site-legal-entity'
 import type { ListedDoor } from './site'
 import type { Pulse } from './pulse'
 
@@ -74,11 +75,11 @@ export function handleSiteRoute(ctx: SiteRouteContext): boolean {
     respondPage(response, joinPage())
     return true
   }
-  if (parts.length === 1 && parts[0] === 'privacy') {
+  if (LEGAL_PUBLISHED && parts.length === 1 && parts[0] === 'privacy') {
     respondPage(response, privacyPage())
     return true
   }
-  if (parts.length === 1 && parts[0] === 'terms') {
+  if (LEGAL_PUBLISHED && parts.length === 1 && parts[0] === 'terms') {
     respondPage(response, termsPage())
     return true
   }

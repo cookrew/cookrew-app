@@ -36,9 +36,8 @@ import { SESSION_TTL_MS } from './v2-tokens'
 /** A list of sentences as one run of text inside a sentence of its own. */
 const asOneRun = (lines: readonly string[]): string => lines.join(' ')
 
-export const LEGAL_ENTITY = '[LEGAL ENTITY]'
-export const CONTACT_EMAIL = '[CONTACT EMAIL]'
-export const GOVERNING_LAW = '[GOVERNING LAW]'
+export { CONTACT_EMAIL, GOVERNING_LAW, LEGAL_ENTITY, LEGAL_PUBLISHED } from './site-legal-entity'
+import { CONTACT_EMAIL, GOVERNING_LAW, LEGAL_ENTITY } from './site-legal-entity'
 
 const UPDATED = '2026-11-05'
 const DAY_MS = 86_400_000
