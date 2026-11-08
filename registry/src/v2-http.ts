@@ -20,6 +20,7 @@ import { OAuthFlows } from './v2-oauth-flows'
 import { createProviders, type OAuthConfig, type OAuthProvider } from './v2-oauth-providers'
 import type { ProviderId } from '../../src/shared/oauth'
 import { HELLO_SKEW_MS } from './hello-verify'
+import { AuthRequests, type AuthRequest } from './auth-requests'
 
 /**
  * IDENTITY v2 — THE PLUMBING EVERY /v2 ROUTE SHARES.
@@ -122,6 +123,13 @@ export interface V2Identity {
    * "use the Host", which is what a dev binary and a test do.
    */
   origin: string | null
+  /**
+   * AUTH.COOKREW.DEV, when this deployment serves it: the auth origin and the
+   * requests in flight there. Null is the off state, and an off registry
+   * answers every /v2/auth route 404, which is how a new client knows to fall
+   * back to its own sheet.
+   */
+  auth: { origin: string; requests: AuthRequests } | null
 }
 
 export interface V2Options {
@@ -145,6 +153,8 @@ export interface V2Options {
   origin?: string
   /** Client ids and secrets. Absent means no provider and no button. */
   oauth?: OAuthConfig
+  /** The auth origin (https://auth.cookrew.dev). Absent: the one sign-in page is off. */
+  authOrigin?: string
 }
 
 /**
@@ -195,7 +205,8 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       providers: createProviders(options.oauth, { now: options.now }),
       flows: new OAuthFlows(options.now)
     },
-    origin: options.origin ?? null
+    origin: options.origin ?? null,
+    auth: options.authOrigin === undefined ? null : { origin: options.authOrigin, requests: new AuthRequests(options.authOrigin, options.now) }
   }
 }
 
@@ -237,6 +248,12 @@ export interface V2Context {
    * desktop reads offline, which is the truth for a registry with no relay.
    */
   presence?: (username: string) => ReadonlyMap<string, DesktopPresence>
+  /**
+   * SET ONLY ON THE AUTH ORIGIN: the request this browser claimed. Its device
+   * is the only device any sign-in here may attach, and a finished sign-in
+   * here becomes a one-use code for that request instead of a session.
+   */
+  auth?: { request: AuthRequest }
 }
 
 // ── answers ──────────────────────────────────────────────────────────────

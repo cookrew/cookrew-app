@@ -1,4 +1,5 @@
 import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify, type KeyObject } from 'node:crypto'
+import { AUTH_TRANSCRIPT_CONTEXT, AUTH_TRANSCRIPT_PURPOSE } from '../../src/shared/auth-site'
 
 /**
  * AUTH — THE DEVICE-BOUND TRANSACTION, and nothing else.
@@ -46,9 +47,9 @@ import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify, type
  * rare and is read as raw, so it fails. Ed25519 signatures are the 64 raw bytes.
  */
 
-export const DEVICE_TRANSACTION_CONTEXT = 'cookrew-auth/device-transaction/v1'
+export const DEVICE_TRANSACTION_CONTEXT = AUTH_TRANSCRIPT_CONTEXT
 /** The only purpose a transaction transcript can carry. */
-export const DEVICE_TRANSACTION_PURPOSE = 'authenticate-device'
+export const DEVICE_TRANSACTION_PURPOSE = AUTH_TRANSCRIPT_PURPOSE
 const BROWSER_SECRET_DOMAIN = 'cookrew-auth/browser-secret/v1'
 const CSRF_DOMAIN = 'cookrew-auth/csrf-token/v1'
 const CALLBACK_STATE_DOMAIN = 'cookrew-auth/callback-state/v1'
@@ -133,7 +134,7 @@ export type RedeemOutcome =
 export interface DeviceTransactionsOptions {
   /** Only `false` means live; `true`, anything else, or a throw is treated as revoked. */
   isDeviceRevoked: (deviceId: string) => boolean
-  /** The origin every transcript names: `https://host[:port]`, or `http://` on localhost, 127.0.0.1 or [::1]. Exact serialization, no path. */
+  /** The origin every transcript names: `https://host[:port]`, or `http://` on localhost, *.localhost, 127.0.0.1 or [::1]. Exact serialization, no path. */
   audience: string
   /** Must return integer milliseconds; the expiry is signed. */
   now?: () => number
@@ -156,7 +157,10 @@ function readAudience(value: unknown): string | null {
   }
   if (url.origin !== value) return null
   if (url.protocol === 'https:') return value
-  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname) ? value : null
+  // `*.localhost` is loopback by definition (RFC 6761), which is where a dev
+  // registry puts its auth origin beside `localhost`.
+  const loopback = LOOPBACK_HOSTS.has(url.hostname) || url.hostname.endsWith('.localhost')
+  return url.protocol === 'http:' && loopback ? value : null
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -402,17 +406,31 @@ interface Held {
 }
 
 function signatureValid(held: Held, signature: unknown): boolean {
+  return signatureOver(held.device.publicKeyJwk, held.key, held.transcript, signature)
+}
+
+function signatureOver(jwk: DeviceJwk, key: KeyObject, transcript: Buffer, signature: unknown): boolean {
   const bytes = canonicalBase64url(signature, SIGNATURE_MAX)
   if (bytes === null) return false
   try {
-    if (held.device.publicKeyJwk.kty === 'OKP') {
-      return bytes.byteLength === ED25519_SIGNATURE_BYTES && verify(null, held.transcript, held.key, bytes)
+    if (jwk.kty === 'OKP') {
+      return bytes.byteLength === ED25519_SIGNATURE_BYTES && verify(null, transcript, key, bytes)
     }
     const raw = bytes.byteLength === P256_SIGNATURE_BYTES ? bytes : p1363FromDer(bytes)
-    return raw !== null && verify('sha256', held.transcript, { key: held.key, dsaEncoding: 'ieee-p1363' }, raw)
+    return raw !== null && verify('sha256', transcript, { key, dsaEncoding: 'ieee-p1363' }, raw)
   } catch {
     return false
   }
+}
+
+/**
+ * Did this device's key sign exactly these bytes? The same two encodings and
+ * the same single verification the store uses, for a caller holding its own
+ * transcript (the auth request, which binds a key before anyone signs in).
+ */
+export function deviceSigned(device: DevicePayload, transcript: string, signature: unknown): boolean {
+  const key = importKey(device.publicKeyJwk)
+  return key !== null && signatureOver(device.publicKeyJwk, key, Buffer.from(transcript, 'utf8'), signature)
 }
 
 /** One DER INTEGER at `at`: minimal, non-negative, at most 32 value bytes. Returned left-padded to 32. */

@@ -5,6 +5,7 @@ import { factorError, type FactorError } from './v2-factor-copy'
 import { SESSION_COOKIE, type V2Context } from './v2-routes'
 import type { Pending } from './v2-pending'
 import { SESSION_TTL_MS } from './v2-tokens'
+import { authorizeSession } from './auth-finish'
 
 /**
  * IDENTITY v2, PHASE 4 — THE SHAPE OF AN ANSWER.
@@ -72,6 +73,13 @@ export const asking = (ctx: V2Context): string =>
  * arrived on, which is what a browser used and therefore what it signed over.
  */
 export function relyingParty(ctx: V2Context): { origin: string; rpId: string } {
+  // ON THE AUTH ORIGIN the browser signs over that origin, and the passkeys it
+  // offers are the product's: their rpId is the product's host, a registrable
+  // suffix of the auth host, so one passkey opens both.
+  const auth = ctx.auth === undefined ? null : ctx.v2.auth
+  if (auth !== null && ctx.v2.origin !== null && ctx.v2.origin !== '') {
+    return { origin: auth.origin, rpId: new URL(ctx.v2.origin).hostname }
+  }
   // An empty configured origin is NOT a configuration: it would make
   // `new URL('')` throw and quietly hand the rpId back to the Host header.
   const configured = ctx.v2.origin === null || ctx.v2.origin === '' ? null : ctx.v2.origin
@@ -85,6 +93,14 @@ export function relyingParty(ctx: V2Context): { origin: string; rpId: string } {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * THE DEVICE A SIGN-IN MAY ATTACH. Whatever a body sent, on the auth origin it
+ * is the device the request bound before anybody authenticated: a page there
+ * never names one, and a body that tried is not believed.
+ */
+export const deviceFor = (ctx: V2Context, sent: unknown): unknown =>
+  ctx.auth === undefined ? sent : ctx.auth.request.device
 
 /**
  * ENOUGH OF A DEVICE TO DECIDE THE LADDER BY.
@@ -138,10 +154,15 @@ export function finishRung(ctx: V2Context, pending: Pending, id: string): void {
 
 export function completeSignIn(ctx: V2Context, username: string, device: unknown): boolean {
   const { v2, response } = ctx
-  const attached = v2.accounts.attachDevice(username, device)
+  // On the auth origin the only device is the one the request bound.
+  const attached = v2.accounts.attachDevice(username, deviceFor(ctx, device))
   if (!attached.ok) {
     refuse(response, attached.reason === 'bad_device' ? 400 : 401, attached.reason)
     return false
+  }
+  // The auth origin: the same attach, then a code for the client instead of a cookie.
+  if (ctx.auth !== undefined) {
+    return authorizeSession(ctx, ctx.auth.request, username, attached.device.id, attached.account.passwordless !== true)
   }
   const session = v2.accounts.startSession(username, attached.device.id)
   if (session === null) {

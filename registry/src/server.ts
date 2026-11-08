@@ -28,9 +28,9 @@ import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
-import { authOriginPolicy, validateOriginIsolation } from './auth-origin-policy'
-import { createAuthDeviceHttp, type ProviderBindingHttpOptions } from './auth-device-http'
-import type { DeviceTransactionsOptions } from './auth-device-transaction'
+import { authHostOf, handleAuthHost } from './auth-host'
+import { completeWeb } from './v2-auth-routes'
+import type { V2Context } from './v2-http'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -110,15 +110,6 @@ export interface RegistryDeps {
    * something a person will copy, so it is configured rather than reflected.
    */
   origin?: string
-  authOrigin?: string
-  /** Explicit opt-in for proof only; never issues a session. */
-  authDeviceTransactions?: Omit<DeviceTransactionsOptions, 'audience'>
-  /**
-   * Explicit opt-in: a proven device may take a provider trip whose callback
-   * returns to `origin`'s existing /v2/oauth/:provider/callback. Needs
-   * `authDeviceTransactions` and a canonical `origin`; never issues a session.
-   */
-  authProviderBinding?: ProviderBindingHttpOptions
   /** Stars on served teams — a sort key for the market, never a gate. */
   stars?: StarStore
   /** The current build, from GitHub — the homepage's download buttons and /download. */
@@ -167,19 +158,6 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
 }
 
 export function createRegistry(deps: RegistryDeps): Server {
-  const authOrigin = deps.authOrigin ?? null
-  authOriginPolicy({ configuredOrigin: authOrigin, host: undefined, path: '/', method: 'GET' })
-  validateOriginIsolation(authOrigin, deps.origin)
-  if (deps.authDeviceTransactions && !authOrigin) throw new Error('Device transactions require a configured auth origin')
-  if (deps.authProviderBinding && !deps.authDeviceTransactions) throw new Error('Provider binding requires device transactions')
-  if (deps.authProviderBinding && deps.origin === undefined) throw new Error('Provider binding requires a canonical product origin')
-  // The callback origin is the configured product origin, never a Host header.
-  const authDeviceHttp = deps.authDeviceTransactions && authOrigin
-    ? createAuthDeviceHttp(
-        { ...deps.authDeviceTransactions, audience: authOrigin },
-        deps.authProviderBinding && deps.origin !== undefined ? { ...deps.authProviderBinding, callbackOrigin: deps.origin } : undefined
-      )
-    : null
   const { store, log } = deps
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
   const funnel = deps.funnel ? createFunnelRoute(deps.funnel, deps.v2) : null
@@ -391,6 +369,9 @@ export function createRegistry(deps: RegistryDeps): Server {
     json(response, verdict.code, body, headers)
   }
 
+  // The auth origin's exact host, when this registry serves the sign-in page.
+  const authHost = authHostOf(deps.v2)
+
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
     try {
       route(request, response)
@@ -404,16 +385,50 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
   })
 
-  function route(request: IncomingMessage, response: ServerResponse): void {
-    const authHost = authOriginPolicy({ configuredOrigin: authOrigin, host: request.headers.host, path: '/', method: 'GET' })
-    if (authHost !== 'other-origin') {
-      if (authHost === 'redirect' && authDeviceHttp) { authDeviceHttp.handle(request, response); return }
-      json(response, 404, {})
-      return
+  /** The context every /v2 route reads, built the same way for both origins. */
+  function v2Context(request: IncomingMessage, response: ServerResponse, parts: string[]): V2Context | null {
+    if (!deps.v2) return null
+    return {
+      method: request.method ?? 'GET',
+      parts,
+      request,
+      response,
+      v2: deps.v2,
+      // Whether the BROWSER reached us over https, which is what decides
+      // the Secure flag on the session cookie. Taken from the proxy's
+      // header or from the configured origin — never from the bound port,
+      // which says nothing behind a terminator.
+      secure: request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
+      decode,
+      // The directory, for the seat routes: a seat is held at a TEAM, and
+      // the team's own terms (free or priced, and on which rails) are the
+      // door's to state, never the seat's.
+      ...(deps.doors === undefined ? {} : { doors: deps.doors }),
+      // The v1 credentials, for the migration route: which handles are
+      // spoken for by a key that has no password yet (phase 6).
+      ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
+      // The names half, for the cert route and the `names` bit on a card.
+      ...(deps.names === undefined ? {} : { names: deps.names }),
+      // Which desktops hold their relay line, for the fleet rows.
+      ...(canvas === null ? {} : { presence: canvas.presence }),
+      accountGone
     }
+  }
+
+  function route(request: IncomingMessage, response: ServerResponse): void {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
+
+    // ── AUTH.COOKREW.DEV, first and alone ─────────────────────────────────
+    //
+    // The exact configured host answers the sign-in page and nothing else:
+    // no relay, no door, no profile is reachable through it.
+    if (authHost !== null && deps.v2 && (request.headers.host ?? '').toLowerCase() === authHost) {
+      const v2 = deps.v2
+      handleAuthHost(v2, request, response, url, (p) => v2Context(request, response, p) as V2Context)
+      return
+    }
 
     // ── THE RELAY, first ──────────────────────────────────────────────────
     //
@@ -430,49 +445,20 @@ export function createRegistry(deps: RegistryDeps): Server {
     // route by route below.
     if (canvas && canvas.handle(request, response, parts, url)) return
 
-    // ── A DEVICE-BOUND PROVIDER CALLBACK, by its one-use state ─────────────
-    //
-    // The binding shares the legacy flow's registered callback path. It claims
-    // a callback only on the canonical product host and only when the state is
-    // its own; it spends nothing to find out, so every other callback reaches
-    // the identity routes below exactly as it did before.
-    if (authDeviceHttp && authDeviceHttp.providerCallback(request, response, url)) return
-
     // ── IDENTITY v2 ──────────────────────────────────────────────────────
     //
     // Owns its whole prefix: nothing under /v2 is served by the rest of this
     // file, and nothing above it answers a /v2 path. Mounted early so a
     // future top-level page can never shadow a sign-in.
-    if (
-      deps.v2 &&
-      handleV2Route({
-        method,
-        parts,
-        request,
-        response,
-        v2: deps.v2,
-        // Whether the BROWSER reached us over https, which is what decides
-        // the Secure flag on the session cookie. Taken from the proxy's
-        // header or from the configured origin — never from the bound port,
-        // which says nothing behind a terminator.
-        secure:
-          request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
-        decode,
-        // The directory, for the seat routes: a seat is held at a TEAM, and
-        // the team's own terms (free or priced, and on which rails) are the
-        // door's to state, never the seat's.
-        ...(deps.doors === undefined ? {} : { doors: deps.doors }),
-        // The v1 credentials, for the migration route: which handles are
-        // spoken for by a key that has no password yet (phase 6).
-        ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
-        // The names half, for the cert route and the `names` bit on a card.
-        ...(deps.names === undefined ? {} : { names: deps.names }),
-        // Which desktops hold their relay line, for the fleet rows.
-        ...(canvas === null ? {} : { presence: canvas.presence }),
-        accountGone
-      })
-    )
+    const v2ctx = v2Context(request, response, parts)
+    if (v2ctx !== null && handleV2Route(v2ctx)) return
+
+    // GET /auth/complete — the web's way back from the auth origin: a one-use
+    // code spent here with the verifier the browser never saw.
+    if (deps.v2?.auth && method === 'GET' && url.pathname === '/auth/complete') {
+      completeWeb(deps.v2, request, response, url)
       return
+    }
 
     // ── THE ONBOARDING FUNNEL: POST an event, GET the owner's totals ──────
     if (funnel && funnel.handle(request, response, url.pathname)) return

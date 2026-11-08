@@ -142,6 +142,12 @@ export interface Pending {
    * it, so behind it the asker has to be named and refused by name.
    */
   opener?: { jti: string; device: string }
+  /**
+   * THE AUTH REQUEST THIS SIGN-IN BELONGS TO, when it was opened on the auth
+   * origin. Such a pending is climbable only there, by the browser that
+   * claimed the request, and it finishes as that request's one-use code.
+   */
+  authRequest?: string
 }
 
 /** What answering an approval came to. */
@@ -165,6 +171,8 @@ export interface OpenInput {
   opener?: { jti: string; device: string }
   /** Set when a provider, not the password, opened this. */
   via?: { provider: ProviderId; subject: string }
+  /** Set on the auth origin: the request this sign-in finishes. */
+  authRequest?: string
 }
 
 /**
@@ -211,6 +219,7 @@ export class PendingSignIns {
       approval: null,
       ...(input.act === undefined ? {} : { act: input.act }),
       ...(input.opener === undefined ? {} : { opener: input.opener }),
+      ...(input.authRequest === undefined ? {} : { authRequest: input.authRequest }),
       authorised: false
     }
     // Bounded by count as well as by time — this account's own oldest first,

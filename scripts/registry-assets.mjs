@@ -8,6 +8,7 @@
 // tests and type-checks see the same bytes production serves.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'acorn'
@@ -31,7 +32,9 @@ function shipped(source, file) {
 
 /** name on the wire → source file, content type. */
 const FILES = [
-  ['xterm.js', 'vendor/xterm.js.txt', 'text/javascript; charset=utf-8'],
+  // GZIPPED IN THE BUNDLE, served as the same bytes: the vendored terminal is
+  // over a quarter of the ConfigMap, and it is the one asset never read as text.
+  ['xterm.js', 'vendor/xterm.js.txt', 'text/javascript; charset=utf-8', 'gzip'],
   ['xterm.css', 'vendor/xterm.css.txt', 'text/css; charset=utf-8'],
   ['addon-fit.js', 'vendor/addon-fit.js.txt', 'text/javascript; charset=utf-8'],
   ['device-id.js', 'device-id.js', 'text/javascript; charset=utf-8'],
@@ -41,13 +44,20 @@ const FILES = [
   ['factors.js', 'factors.js', 'text/javascript; charset=utf-8'],
   ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
   ['line.js', 'line.js', 'text/javascript; charset=utf-8'],
+  ['auth.js', 'auth.js', 'text/javascript; charset=utf-8'],
   ['inter.woff2', 'fonts/inter.woff2', 'font/woff2', 'base64'],
   ['jetbrains-mono.woff2', 'fonts/jetbrains-mono.woff2', 'font/woff2', 'base64'],
 ]
 
 const entries = FILES.map(([name, file, type, encoding]) => {
-  const body = encoding === 'base64' ? readFileSync(path.join(assets, file)).toString('base64') : shipped(readFileSync(path.join(assets, file), 'utf8'), file)
-  return `  ${JSON.stringify(name)}: { type: ${JSON.stringify(type)}, body: ${JSON.stringify(body)}${encoding === 'base64' ? ", encoding: 'base64'" : ''} }`
+  const raw = readFileSync(path.join(assets, file))
+  const body =
+    encoding === 'base64'
+      ? raw.toString('base64')
+      : encoding === 'gzip'
+        ? gzipSync(raw, { level: 9 }).toString('base64')
+        : shipped(raw.toString('utf8'), file)
+  return `  ${JSON.stringify(name)}: { type: ${JSON.stringify(type)}, body: ${JSON.stringify(body)}${encoding === undefined ? '' : `, encoding: '${encoding}'`} }`
 })
 
 const version = createHash('sha256').update(entries.join('\n')).digest('hex').slice(0, 12)
@@ -58,8 +68,8 @@ export const ASSET_VERSION = ${JSON.stringify(version)}
 export interface BundledAsset {
   type: string
   body: string
-  /** Binary assets travel as base64; text ones as they are. */
-  encoding?: 'base64'
+  /** Binary assets travel as base64, the vendored terminal as gzip in base64; text ones as they are. */
+  encoding?: 'base64' | 'gzip'
 }
 
 export const ASSETS: Readonly<Record<string, BundledAsset>> = {
