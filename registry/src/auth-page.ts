@@ -184,6 +184,7 @@ export function authPageHtml(opts: AuthPageOptions): string {
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>${FONT_FACES(version)}
 ${PALETTE}${STYLE}</style>
+<script src="/assets/auth-kit.js?v=${version}" defer></script>
 <script src="/assets/auth.js?v=${version}" defer></script>
 </head>
 <body data-path="${path}" data-product="${product}" data-legal="${LEGAL_PUBLISHED ? '1' : ''}">

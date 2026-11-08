@@ -192,13 +192,23 @@ export function safeReturnPath(raw: unknown): string | null {
 export const AUTH_TRANSCRIPT_CONTEXT = 'cookrew-auth/device-transaction/v1'
 export const AUTH_TRANSCRIPT_PURPOSE = 'authenticate-device'
 
-/** Is this an auth transcript, naming this request? */
-export function isAuthTranscript(transcript: unknown, request: string): boolean {
+/**
+ * Is this an auth transcript naming this request — and, when the client knows
+ * them, the auth origin it opens and the device it offered? A registry that
+ * slipped another audience or another key into the string gets no signature.
+ */
+export function isAuthTranscript(
+  transcript: unknown,
+  request: string,
+  expect: { audience?: string; deviceId?: string } = {}
+): boolean {
   if (typeof transcript !== 'string') return false
   const lines = transcript.split('\n')
   return (
     lines[0] === AUTH_TRANSCRIPT_CONTEXT &&
     lines[1] === `purpose:${AUTH_TRANSCRIPT_PURPOSE}` &&
-    lines.includes(`transaction:${request}`)
+    lines.includes(`transaction:${request}`) &&
+    (expect.audience === undefined || lines.includes(`audience:${expect.audience}`)) &&
+    (expect.deviceId === undefined || lines.includes(`device:${expect.deviceId}`))
   )
 }

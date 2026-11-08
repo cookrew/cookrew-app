@@ -1,7 +1,9 @@
 import { createHash, createPrivateKey, randomBytes, sign } from 'node:crypto'
 import type { AccountDeviceInput, AccountRefusal, AccountResult, SignInAnswer } from '../shared/account-v2'
 import {
+  AUTH_CODE_TTL_MS,
   AUTH_POLL_MS,
+  AUTH_REQUEST_TTL_MS,
   AUTH_TRANSCRIPT_CONTEXT,
   isAuthTranscript,
   type AuthIntent,
@@ -89,8 +91,25 @@ export type BrowserSignInAnswer = SignInAnswer<AccountSession>
 /** A registry without the route says so with one of these, or with an answer that is not JSON. */
 const NO_ROUTE: ReadonlySet<number> = new Set([404, 405, 501])
 
+/** A page trip waits as long as a request and its code can live. */
+const PAGE_TRIP_WAIT_MS = AUTH_REQUEST_TTL_MS + AUTH_CODE_TTL_MS
+
+/** What the transcript must name: the origin the page is on, and the device this Mac offered. */
+function expectedOf(created: AuthRequestCreated, offered: OfferedDevice): { audience?: string; deviceId: string } {
+  let audience: string | undefined
+  try {
+    audience = new URL(created.authorizeUrl).origin
+  } catch {
+    audience = undefined
+  }
+  return { ...(audience === undefined ? {} : { audience }), deviceId: String(offered.device.id) }
+}
+
 function unsupported(answer: Answer): boolean {
   if (NO_ROUTE.has(answer.status)) return true
+  // A gateway's HTML 502 during a deploy is a registry that is down for a
+  // moment, not one without the page: falling back would stick for the run.
+  if (answer.status >= 500) return false
   // 401 and 429 say enough with their status alone, body or not.
   if (answer.status === 401 || answer.status === 429) return false
   if (!answer.json) return true
@@ -192,7 +211,9 @@ export class BrowserAuth {
     if (unsupported(made.value)) return { ok: false, reason: 'unsupported' }
     if (made.value.status !== 201) return { ok: false, ...refusedOf(made.value.status, made.value.body) }
     const created = createdFrom(made.value.body)
-    if (created === null || !isAuthTranscript(created.transcript, created.request)) return { ok: false, reason: 'unknown' }
+    if (created === null || !isAuthTranscript(created.transcript, created.request, expectedOf(created, offered))) {
+      return { ok: false, reason: 'unknown' }
+    }
     let signature: string
     try {
       signature = signTranscript(offered.privateKeyJwk, created.transcript)
@@ -212,10 +233,12 @@ export class BrowserAuth {
     offered: OfferedDevice,
     send: Send,
   ): Promise<AccountResult<string>> {
+    // As long as the page can run: a person saving recovery codes before the
+    // handoff must not come back to an app that stopped listening.
     const back = await this.trips.travel(async (state, way) => {
       const opened = await this.open(body(state, way), offered, send)
       return opened.ok ? { ok: true, value: opened.value.authorizeUrl } : opened
-    })
+    }, PAGE_TRIP_WAIT_MS)
     return back.ok ? codeOf(back.value) : back
   }
 
@@ -322,19 +345,24 @@ export class BrowserAuth {
     if (!opened.ok) return plainRefusal(opened)
     const created = opened.value
     if (created.userCode === undefined || created.verificationUri === undefined) return { ok: false, reason: 'unknown' }
-    const complete = created.verificationUriComplete ?? null
+    // The code is TYPED at the page, never carried in the link: the registry
+    // no longer sends a link with the code in it, so nothing here can either.
+    const page = created.verificationUri
     options.onCode({
       userCode: created.userCode,
-      verificationUri: created.verificationUri,
-      verificationUriComplete: complete,
+      verificationUri: page,
+      verificationUriComplete: null,
       expiresAt: created.expiresAt,
     })
-    if (safeToOpen(complete)) {
+    if (safeToOpen(page)) {
       Promise.resolve()
-        .then(() => this.port.openBrowser(complete))
+        .then(() => this.port.openBrowser(page))
         .catch(() => undefined)
     }
-    return this.poll(created, verifier, offered, options)
+    // How long the page can run, counted on this machine's clock: the
+    // registry's absolute time and ours need not agree.
+    const deadline = this.port.now() + AUTH_REQUEST_TTL_MS + AUTH_CODE_TTL_MS
+    return this.poll({ ...created, expiresAt: deadline }, verifier, offered, options)
   }
 
   private async poll(

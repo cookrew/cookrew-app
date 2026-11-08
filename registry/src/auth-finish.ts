@@ -1,7 +1,23 @@
 import { OAUTH_LOOPBACK_PATH, OAUTH_SCHEME_HOST } from '../../src/shared/oauth'
 import { AUTH_CODE_TTL_MS, AUTH_REQUEST_TTL_MS, type AuthHandoff } from '../../src/shared/auth-site'
 import type { AuthRequest, AuthResult } from './auth-requests'
+import type { ProviderProof } from './v2-oauth-providers'
 import { refuse, v2Json, type V2Context, type V2Identity } from './v2-http'
+
+/**
+ * IS THIS REQUEST STILL WAITING? Asked at the last moment before anything is
+ * minted: a cancel can land while a password is being checked, and a
+ * sign-in that finishes after it must not hand anybody a session.
+ */
+export function stillOpen(ctx: V2Context, request: AuthRequest): boolean {
+  if (ctx.v2.auth?.requests.isOpen(request) === true) return true
+  const denied = request.stage === 'denied'
+  v2Json(ctx.response, 410, {
+    error: denied ? 'denied' : 'expired',
+    message: denied ? 'This sign-in was cancelled. Start again from the app that asked.' : 'This sign-in is over. Start again.'
+  })
+  return false
+}
 
 /**
  * THE END OF A SIGN-IN ON THE AUTH ORIGIN.
@@ -36,11 +52,18 @@ export function handoffFor(v2: V2Identity, request: AuthRequest, outcome: { code
 }
 
 /** Hold the result for the client and tell the page where to go. */
-export function finishRequest(ctx: V2Context, request: AuthRequest, result: AuthResult, extra: Record<string, unknown> = {}): void {
+export function finishRequest(
+  ctx: V2Context,
+  request: AuthRequest,
+  result: AuthResult,
+  extra: Record<string, unknown> = {},
+  linkProof: ProviderProof | null = null
+): void {
+  if (!stillOpen(ctx, request)) return
   // A page showing recovery codes keeps the person for as long as saving them
   // takes; the code waiting behind that screen lives as long as a request.
   const ttl = extra.codes === undefined ? AUTH_CODE_TTL_MS : AUTH_REQUEST_TTL_MS
-  const code = ctx.v2.auth?.requests.complete(request, result, ttl) ?? null
+  const code = ctx.v2.auth?.requests.complete(request, result, ttl, linkProof) ?? null
   ctx.v2.auth?.log(`auth request finished: client=${request.client} intent=${request.intent} status=${result.status}`)
   const handoff = code === null ? handoffFor(ctx.v2, request, { error: 'expired' }) : handoffFor(ctx.v2, request, { code })
   v2Json(ctx.response, 200, { status: 'authorized', handoff: request.client === 'cli' ? { kind: 'cli' } : handoff, ...extra })
@@ -60,6 +83,7 @@ export function authorizeSession(
   options: { codes?: boolean } = {}
 ): boolean {
   const { v2, response } = ctx
+  if (!stillOpen(ctx, request)) return false
   const session = v2.accounts.startSession(username, deviceId)
   if (session === null) {
     refuse(response, 500, 'malformed')

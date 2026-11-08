@@ -285,7 +285,8 @@ describe('the real account door, a fake registry', () => {
       'request,verifier',
       'request,verifier',
     ])
-    expect(opened).toEqual([`${AUDIENCE}/device?code=BCDF-GHJK`])
+    // The page without the code: the person types what the terminal printed.
+    expect(opened).toEqual([`${AUDIENCE}/device`])
     expect(loadAccount(base)).toMatchObject({ username: 'octo', name: 'Linux · box', unlockBy: 'passcode' })
     deps.requests.stop()
   })

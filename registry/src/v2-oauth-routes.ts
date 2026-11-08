@@ -285,22 +285,13 @@ export function continueRequest(ctx: V2Context, request: AuthRequest): void {
     return
   }
   const opener = request.opener
-  const account = opener === null ? null : ctx.v2.accounts.get(opener.username)
-  if (opener === null || account === null || !ctx.v2.accounts.isLiveSession(opener.username, opener.jti)) {
+  if (opener === null || !ctx.v2.accounts.isLiveSession(opener.username, opener.jti)) {
     refuse(ctx.response, 401, 'unauthenticated')
     return
   }
-  const added = ctx.v2.links.add(account.username, proof)
-  if (!added.ok) {
-    refuseOAuth(ctx.response, 409, added.reason)
-    return
-  }
-  ctx.v2.events.append(account.username, { kind: 'linked', device: PROVIDER_LABEL[proof.provider] })
-  finishLinked(ctx, request, proof.provider)
-}
-
-function finishLinked(ctx: V2Context, request: AuthRequest, provider: string): void {
-  finishRequest(ctx, request, { status: 200, body: { status: 'linked', provider } }, { linked: provider })
+  // NOTHING IS LINKED YET. The proof waits on the request for the client that
+  // opened it, which writes it when it spends the code with its own session.
+  finishRequest(ctx, request, { status: 200, body: { status: 'linked', provider: proof.provider } }, { linked: proof.provider }, proof)
 }
 
 /** The page that hands back to the app. Script-free, so it needs no exception. */

@@ -560,11 +560,29 @@ describe('providers through the page', () => {
     await walk(String(started.body.authorizeUrl))
     const linked = await browser.page('POST', '/auth/api/continue', opened.request, {})
     expect(linked.body.status).toBe('authorized')
-    const spent = await app.call(P, 'POST', '/v2/auth/token', { code: codeOf(linked.body.handoff).code, verifier: opened.verifier })
+    // Finishing the page links nothing: the opener writes it when it spends the code.
+    const before = await app.call(P, 'GET', '/v2/me', undefined, bearer(owner.token))
+    expect(before.body.links).toEqual([])
+    const spent = await app.call(P, 'POST', '/v2/auth/token', { code: codeOf(linked.body.handoff).code, verifier: opened.verifier }, bearer(owner.token))
     expect(spent.status).toBe(200)
     expect(spent.body).toEqual({ status: 'linked', provider: 'github' })
     const me = await app.call(P, 'GET', '/v2/me', undefined, bearer(owner.token))
     expect((me.body.links as { provider: string }[]).map((l) => l.provider)).toEqual(['github'])
+  })
+
+  it('a link code spent without the opener’s session links nothing', async () => {
+    const owner = await passwordAccount('drej')
+    const app = new Client()
+    const opened = await openDesktop(app, owner.device, { intent: 'link', provider: 'github', current: PASSWORD }, bearer(owner.token))
+    const thief = new Client('thief')
+    await thief.page('POST', '/auth/api/claim', null, { request: opened.request })
+    const started = await thief.page('POST', '/v2/oauth/github/start', opened.request, {})
+    await walk(String(started.body.authorizeUrl))
+    const finished = await thief.page('POST', '/auth/api/continue', opened.request, {})
+    const stolen = await app.call(P, 'POST', '/v2/auth/token', { code: codeOf(finished.body.handoff).code, verifier: opened.verifier })
+    expect(stolen.status).toBe(401)
+    const me = await app.call(P, 'GET', '/v2/me', undefined, bearer(owner.token))
+    expect(me.body.links).toEqual([])
   })
 })
 
@@ -620,6 +638,71 @@ describe('the web', () => {
     expect(me.status).toBe(200)
     expect(me.body.username).toBe('webby')
     expect([...browser.jar.keys()]).not.toContain(`localhost:${port}|__Host-cr_auth_web`)
+  })
+})
+
+describe('the review fixes', () => {
+  it('a terminal request is claimed by its typed code only, then again by the same browser', async () => {
+    const terminal = new Client('terminal')
+    const device = desktopDevice('Box')
+    const { challenge } = pkce()
+    const opened = await terminal.call(P, 'POST', '/v2/auth/requests', { client: 'cli', device: device.payload, challenge })
+    expect(opened.body.authorizeUrl).toBe(`${A}/device`)
+    expect(opened.body.verificationUriComplete).toBeUndefined()
+    await terminal.call(P, 'POST', `/v2/auth/requests/${opened.body.request}/proof`, { signature: signTranscript(device, String(opened.body.transcript)) })
+    const browser = new Client('browser')
+    const byId = await browser.page('POST', '/auth/api/claim', null, { request: opened.body.request })
+    expect(byId.status).toBe(403)
+    expect(byId.body.error).toBe('use_code')
+    expect((await browser.page('POST', '/auth/api/device', null, { code: opened.body.userCode })).status).toBe(200)
+    expect((await browser.page('POST', '/auth/api/claim', null, { request: opened.body.request })).status).toBe(200)
+  })
+
+  it('a cancel that lands while a password is checked mints nothing', async () => {
+    const owner = await passwordAccount('drej')
+    const app = new Client()
+    const opened = await openDesktop(app, owner.device)
+    const browser = new Client('browser')
+    await browser.page('POST', '/auth/api/claim', null, { request: opened.request })
+    const sessionsBefore = v2.accounts.get('drej')?.sessions.length ?? 0
+    const signing = browser.page('POST', '/v2/sessions', opened.request, { username: 'drej', password: PASSWORD })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const cancelled = await browser.page('POST', '/auth/api/cancel', opened.request, {})
+    expect(cancelled.status).toBe(200)
+    const signed = await signing
+    expect(signed.status).toBe(410)
+    expect(signed.body.error).toBe('denied')
+    expect(v2.accounts.get('drej')?.sessions.length ?? 0).toBe(sessionsBefore)
+    // And a second cancel does not deny it again.
+    expect((await browser.page('POST', '/auth/api/cancel', opened.request, {})).status).toBe(410)
+  })
+
+  it('an unproven request lasts a minute; one address holds ten at most', async () => {
+    const app = new Client()
+    const device = desktopDevice()
+    const { challenge, state } = pkce()
+    const open = () => app.call(P, 'POST', '/v2/auth/requests', { client: 'desktop', device: device.payload, challenge, state, back: { scheme: true } })
+    const first = await open()
+    clock += 61_000
+    const late = await app.call(P, 'POST', `/v2/auth/requests/${first.body.request}/proof`, { signature: signTranscript(device, String(first.body.transcript)) })
+    expect(late.status).toBe(410)
+    for (let i = 0; i < 10; i += 1) expect((await open()).status).toBe(201)
+    expect((await open()).status).toBe(429)
+  })
+
+  it('the web cannot open a link request, and a web cancel lands back where it began', async () => {
+    const browser = new Client('browser')
+    const device = browserDevice()
+    const link = await browser.call(P, 'POST', '/v2/auth/requests', { client: 'web', intent: 'link', provider: 'github', device: device.payload }, { origin: P })
+    expect(link.status).toBe(400)
+    const opened = await browser.call(P, 'POST', '/v2/auth/requests', { client: 'web', device: device.payload, return: '/market' }, { origin: P })
+    await browser.call(P, 'POST', `/v2/auth/requests/${opened.body.request}/proof`, { signature: signTranscript(device, String(opened.body.transcript)) }, { origin: P })
+    await browser.page('POST', '/auth/api/claim', null, { request: opened.body.request })
+    const cancelled = await browser.page('POST', '/auth/api/cancel', String(opened.body.request), {})
+    const url = new URL((cancelled.body.handoff as { url: string }).url)
+    const landed = await browser.call(P, 'GET', `${url.pathname}${url.search}`)
+    expect(landed.status).toBe(303)
+    expect(landed.headers.location).toBe('/market')
   })
 })
 

@@ -155,7 +155,17 @@ function mount(hash: string, signedIn: boolean, authSite = false, device: Record
         return {
           ok: true,
           status: 201,
-          json: async () => ({ request: 'r1', transcript: 'cookrew-auth/device-transaction/v1', authorizeUrl: 'https://auth.cookrew.dev/?request=r1' })
+          json: async () => ({
+            request: 'r1',
+            transcript: [
+              'cookrew-auth/device-transaction/v1',
+              'purpose:authenticate-device',
+              'audience:https://auth.cookrew.dev',
+              'transaction:r1',
+              `device:${String(device?.id ?? '')}`
+            ].join('\n'),
+            authorizeUrl: 'https://auth.cookrew.dev/?request=r1'
+          })
         }
       }
       return { ok: true, status: 204, json: async () => ({}) }

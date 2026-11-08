@@ -39,7 +39,15 @@ import type { ProviderProof } from './v2-oauth-providers'
  */
 
 const REQUESTS_MAX = 1000
-/** Wrong binding or verifier this many times and the request is dropped. */
+/**
+ * A REQUEST NOBODY HAS PROVEN IS WORTH A MINUTE. A client proves its key the
+ * moment it opens one, so an unproven request is either in that moment or
+ * litter; it must not hold a slot for ten minutes.
+ */
+const UNPROVEN_TTL_MS = 60 * 1000
+/** Open requests one address may hold at once; a flood from one place fills only its own. */
+const PER_ADDRESS_MAX = 10
+/** A terminal's wrong verifier this many times and its request is dropped. */
 const FAILURES_MAX = 5
 
 export interface AuthOpener {
@@ -69,6 +77,8 @@ export interface AuthRequest {
   readonly usernameHint: string | null
   readonly userCode: string | null
   readonly opener: AuthOpener | null
+  /** Who opened it, for the per-address cap. Never shown, never logged. */
+  readonly address: string
   readonly createdAt: number
   readonly expiresAt: number
   proven: boolean
@@ -76,6 +86,13 @@ export interface AuthRequest {
   stage: 'open' | 'provider' | 'done' | 'denied'
   deniedWhy: 'denied' | 'expired' | null
   proof: ProviderProof | null
+  /**
+   * A LINK WAITING FOR ITS OPENER. The provider proved an identity for a link
+   * request, and it is written to the account only when the client that opened
+   * the request spends the code — with the verifier and the opener's session —
+   * never because some browser finished the page.
+   */
+  linkProof: ProviderProof | null
   result: AuthResult | null
   codeHash: string | null
   codeExpiresAt: number
@@ -94,6 +111,7 @@ export interface OpenInput {
   returnPath: string | null
   usernameHint: string | null
   opener: AuthOpener | null
+  address: string
 }
 
 const token = (): string => randomBytes(32).toString('base64url')
@@ -136,7 +154,16 @@ export class AuthRequests {
     this.sweep(at)
     const payload = readDevicePayload({ publicKeyJwk: input.device.jwk, deviceId: input.device.id, name: input.device.name })
     if (payload === null) return 'invalid'
-    if (this.held.size >= REQUESTS_MAX) return 'capacity'
+    const mine = [...this.held.values()].filter((held) => held.address === input.address)
+    if (mine.length >= PER_ADDRESS_MAX) return 'capacity'
+    // FULL MEANS THE OLDEST UNPROVEN GOES, never "everyone is refused": a
+    // stranger filling the store with requests they never prove must not stop
+    // anybody else from signing in.
+    if (this.held.size >= REQUESTS_MAX) {
+      const oldest = [...this.held.values()].filter((held) => !held.proven).sort((a, b) => a.createdAt - b.createdAt)[0]
+      if (oldest === undefined) return 'capacity'
+      this.drop(oldest)
+    }
     let id = token()
     while (this.held.has(id)) id = token()
     const expiresAt = at + AUTH_REQUEST_TTL_MS
@@ -163,6 +190,7 @@ export class AuthRequests {
       usernameHint: input.usernameHint,
       userCode: code,
       opener: input.opener,
+      address: input.address,
       createdAt: at,
       expiresAt,
       proven: false,
@@ -170,6 +198,7 @@ export class AuthRequests {
       stage: 'open',
       deniedWhy: null,
       proof: null,
+      linkProof: null,
       result: null,
       codeHash: null,
       codeExpiresAt: 0,
@@ -222,13 +251,26 @@ export class AuthRequests {
     return same(request.binding, hash)
   }
 
-  /** Is this browser the one that claimed it? A miss counts towards the drop. */
+  /**
+   * Is this browser the one that claimed it? A miss is refused and nothing
+   * more: the id is in a desktop's URL, so a miss counting towards a drop
+   * would let anybody holding the link end somebody else's sign-in.
+   */
   bound(id: unknown, secret: string | null): AuthRequest | null {
     const request = this.get(id)
     if (request === null || secret === null || request.binding === null) return null
-    if (same(request.binding, digest(secret))) return request
-    this.fail(request)
-    return null
+    return same(request.binding, digest(secret)) ? request : null
+  }
+
+  /** Still waiting for the person: neither finished nor refused. */
+  isOpen(request: AuthRequest): boolean {
+    return (request.stage === 'open' || request.stage === 'provider') && this.held.get(request.id) === request
+  }
+
+  /** The request a cookie names, whatever its stage, for the way back alone. */
+  peek(id: unknown): AuthRequest | null {
+    if (typeof id !== 'string') return null
+    return this.held.get(id) ?? null
   }
 
   /** A provider answered for this request; the bound browser continues it. */
@@ -248,11 +290,15 @@ export class AuthRequests {
    * THE PERSON IS THROUGH. The result is held for the client and nothing else
    * travels: a desktop and the web get a one-use code, a terminal polls.
    */
-  complete(request: AuthRequest, result: AuthResult, ttlMs: number = AUTH_CODE_TTL_MS): string | null {
+  complete(request: AuthRequest, result: AuthResult, ttlMs: number = AUTH_CODE_TTL_MS, linkProof: ProviderProof | null = null): string | null {
+    const at = this.now()
     request.stage = 'done'
     request.result = result
     request.proof = null
-    request.codeExpiresAt = this.now() + Math.min(ttlMs, AUTH_REQUEST_TTL_MS)
+    request.linkProof = linkProof
+    // A code shown behind recovery codes may wait while they are saved, but
+    // never past the request itself: a client waits for exactly that long.
+    request.codeExpiresAt = at + Math.max(AUTH_CODE_TTL_MS, Math.min(ttlMs, request.expiresAt - at))
     if (request.client === 'cli') return null
     const code = token()
     request.codeHash = digest(code)
@@ -325,14 +371,19 @@ export class AuthRequests {
     if (request !== undefined) request.nextPollAt = 0
   }
 
+  /** When this request stops being anything at all. */
+  private until(request: AuthRequest): number {
+    // A finished request stays readable until its code goes cold, so a page
+    // reloaded on the handoff screen still shows it rather than "expired".
+    if (request.stage === 'done' || request.stage === 'denied') return request.codeExpiresAt
+    return request.proven ? request.expiresAt : request.createdAt + UNPROVEN_TTL_MS
+  }
+
   private live(id: unknown): AuthRequest | null {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(id)) return null
     const request = this.held.get(id)
     if (request === undefined) return null
-    // A finished request stays readable until its code goes cold, so a page
-    // reloaded on the handoff screen still shows it rather than "expired".
-    const until = request.stage === 'done' || request.stage === 'denied' ? request.codeExpiresAt : request.expiresAt
-    if (this.now() >= until) {
+    if (this.now() >= this.until(request)) {
       this.drop(request)
       return null
     }
@@ -352,9 +403,6 @@ export class AuthRequests {
   }
 
   private sweep(at: number): void {
-    for (const request of [...this.held.values()]) {
-      const until = request.stage === 'done' || request.stage === 'denied' ? request.codeExpiresAt : request.expiresAt
-      if (at >= until) this.drop(request)
-    }
+    for (const request of [...this.held.values()]) if (at >= this.until(request)) this.drop(request)
   }
 }

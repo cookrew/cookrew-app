@@ -803,6 +803,25 @@
       failed(opened)
       return true
     }
+    // Sign this protocol's string for this request, this auth origin and this
+    // device, and nothing else: the key also proves who this browser is.
+    const lines = String(opened.body.transcript ?? '').split('\n')
+    let audience = ''
+    try {
+      audience = new URL(opened.body.authorizeUrl).origin
+    } catch {
+      audience = ''
+    }
+    const fits =
+      lines[0] === 'cookrew-auth/device-transaction/v1' &&
+      lines[1] === 'purpose:authenticate-device' &&
+      lines.includes(`transaction:${opened.body.request}`) &&
+      lines.includes(`audience:${audience}`) &&
+      lines.includes(`device:${device.id}`)
+    if (!fits) {
+      failed({ body: null })
+      return true
+    }
     const algorithm = device.jwk.kty === 'OKP' ? { name: 'Ed25519' } : { name: 'ECDSA', hash: 'SHA-256' }
     const signature = await crypto.subtle.sign(algorithm, device.pair.privateKey, enc.encode(opened.body.transcript))
     const proved = await v2('POST', `/v2/auth/requests/${encodeURIComponent(opened.body.request)}/proof`, { signature: b64u(signature) })

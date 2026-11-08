@@ -17,11 +17,11 @@ export const DAY = 24 * 60 * 60 * 1000
 
 export const sha256 = (value: string): string => createHash('sha256').update(value).digest('base64url')
 
-export const transcriptFor = (request: string, deviceId: string): string =>
+export const transcriptFor = (request: string, deviceId: string, audience: string = AUDIENCE): string =>
   [
     AUTH_TRANSCRIPT_CONTEXT,
     'purpose:authenticate-device',
-    `audience:${AUDIENCE}`,
+    `audience:${audience}`,
     `transaction:${request}`,
     `challenge:${'c'.repeat(43)}`,
     'expires:9999999999999',
@@ -85,25 +85,23 @@ export class FakeRegistry {
     return Response.json(
       {
         request: 'req-1',
-        transcript: this.transcript ?? transcriptFor('req-1', device.id),
+        transcript: this.transcript ?? transcriptFor('req-1', device.id, this.audience()),
         expiresAt: NOW + 600_000,
-        authorizeUrl: this.authorizeUrl ?? (cli ? `${AUDIENCE}/device?code=BCDF-GHJK` : `${AUDIENCE}/?request=req-1`),
-        ...(cli
-          ? {
-              userCode: 'BCDF-GHJK',
-              verificationUri: `${AUDIENCE}/device`,
-              verificationUriComplete: `${AUDIENCE}/device?code=BCDF-GHJK`,
-              intervalMs: 1,
-            }
-          : {}),
+        authorizeUrl: this.authorizeUrl ?? (cli ? `${AUDIENCE}/device` : `${AUDIENCE}/?request=req-1`),
+        ...(cli ? { userCode: 'BCDF-GHJK', verificationUri: `${AUDIENCE}/device`, intervalMs: 1 } : {}),
       },
       { status: 201 },
     )
   }
 
+  /** The origin the page is on: what a transcript must name as its audience. */
+  private audience(): string {
+    return this.authorizeUrl === null ? AUDIENCE : new URL(this.authorizeUrl).origin
+  }
+
   private prove(body: Record<string, unknown>): Response {
     const device = (this.opened?.device ?? {}) as { id: string; jwk: Record<string, unknown> }
-    const transcript = this.transcript ?? transcriptFor('req-1', device.id)
+    const transcript = this.transcript ?? transcriptFor('req-1', device.id, this.audience())
     let good = false
     try {
       const key = createPublicKey({ key: device.jwk as never, format: 'jwk' })

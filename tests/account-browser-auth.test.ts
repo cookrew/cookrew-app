@@ -464,11 +464,11 @@ describe('the terminal: a code to type, and a poll', () => {
       {
         userCode: 'BCDF-GHJK',
         verificationUri: `${AUDIENCE}/device`,
-        verificationUriComplete: `${AUDIENCE}/device?code=BCDF-GHJK`,
+        verificationUriComplete: null,
         expiresAt: NOW + 600_000,
       },
     ])
-    await vi.waitFor(() => expect(m.opened).toEqual([`${AUDIENCE}/device?code=BCDF-GHJK`]))
+    await vi.waitFor(() => expect(m.opened).toEqual([`${AUDIENCE}/device`]))
     const polls = m.registry.calls('/v2/auth/token')
     expect(polls).toHaveLength(3)
     expect(Object.keys(polls[0].body).sort()).toEqual(['request', 'verifier'])

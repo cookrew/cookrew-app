@@ -166,10 +166,11 @@ export class Trips {
    */
   async travel(
     start: (state: string, back: TripBack) => Promise<AccountResult<string>>,
+    waitMs: number = TRIP_WAIT_MS,
   ): Promise<AccountResult<Returned>> {
     if (this.ended()) return { ok: false, reason: 'cancelled' }
     const state = randomBytes(32).toString('base64url')
-    const { trip, returned } = this.begin(state)
+    const { trip, returned } = this.begin(state, waitMs)
     let listener: LoopbackListener | null = null
     try {
       listener = await listenForReturn((query) => {
@@ -199,7 +200,7 @@ export class Trips {
   }
 
   /** Registered at once, ending the one before. Its timer can only end itself. */
-  private begin(state: string): { trip: Trip; returned: Promise<Returned> } {
+  private begin(state: string, waitMs: number = TRIP_WAIT_MS): { trip: Trip; returned: Promise<Returned> } {
     this.trip?.settle({ over: 'cancelled' })
     let trip: Trip | null = null
     const returned = new Promise<Returned>((resolve) => {
@@ -214,7 +215,7 @@ export class Trips {
           resolve(answer)
         },
       }
-      const timer = setTimeout(() => held.settle({ over: 'timeout' }), TRIP_WAIT_MS)
+      const timer = setTimeout(() => held.settle({ over: 'timeout' }), waitMs)
       timer.unref()
       trip = held
     })

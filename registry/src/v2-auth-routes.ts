@@ -48,7 +48,8 @@ const SENTENCES = {
   expired: 'This sign-in timed out. Start again from the app that asked.',
   claimed: 'This sign-in was opened in another browser. Start again from the app that asked.',
   no_code: 'That code is not one we know. Check it against your terminal.',
-  oauth_off: 'This sign-in is not available here.'
+  oauth_off: 'This sign-in is not available here.',
+  use_code: 'Type the code from your terminal at the device page instead.'
 } as const
 
 type Sentence = keyof typeof SENTENCES
@@ -142,7 +143,9 @@ function parse(ctx: V2Context, body: Record<string, unknown>): Parsed | null {
   }
   let provider: ProviderId | null = null
   if (intent === 'link') {
-    if (client === 'cli' || !isProviderId(body.provider) || !providers.has(body.provider)) {
+    // Only a desktop links through the page: its code comes back to a client
+    // that holds the opener's session. The web has no such client.
+    if (client !== 'desktop' || !isProviderId(body.provider) || !providers.has(body.provider)) {
       refuseAuth(ctx.response, 400, 'bad_flow')
       return null
     }
@@ -230,14 +233,15 @@ async function openRequest(ctx: V2Context): Promise<void> {
     back,
     returnPath: client === 'web' ? (safeReturnPath(body.return) ?? '/me') : null,
     usernameHint: opener?.username ?? (USERNAME.test(hint) ? hint : null),
-    opener
+    opener,
+    address: asking(ctx)
   })
   if (opened === 'invalid') {
     refuse(response, 400, 'bad_device')
     return
   }
   if (opened === 'capacity') {
-    refuse(response, 503, 'busy', undefined, { 'retry-after': '5' })
+    refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
   // ONE LINE PER WAY IN, and nothing in it that names a person or opens
@@ -250,18 +254,13 @@ async function openRequest(ctx: V2Context): Promise<void> {
     request: opened.id,
     transcript: opened.transcript,
     expiresAt: opened.expiresAt,
-    authorizeUrl:
-      opened.userCode === null
-        ? `${auth.origin}/?request=${encodeURIComponent(opened.id)}`
-        : `${verification}?code=${encodeURIComponent(opened.userCode)}`,
+    // A TERMINAL'S CODE IS TYPED, never carried in a link: a link with the
+    // code in it is a link an attacker can send, and the person would only
+    // have to press Continue to sign the attacker's terminal in.
+    authorizeUrl: opened.userCode === null ? `${auth.origin}/?request=${encodeURIComponent(opened.id)}` : verification,
     ...(opened.userCode === null
       ? {}
-      : {
-          userCode: opened.userCode,
-          verificationUri: verification,
-          verificationUriComplete: `${verification}?code=${encodeURIComponent(opened.userCode)}`,
-          intervalMs: AUTH_POLL_MS
-        })
+      : { userCode: opened.userCode, verificationUri: verification, intervalMs: AUTH_POLL_MS })
   }
   v2Json(
     response,
@@ -320,6 +319,10 @@ async function spend(ctx: V2Context): Promise<void> {
       refuse(response, 401, 'bad_credentials')
       return
     }
+    if (spent.request.intent === 'link') {
+      spendLink(ctx, spent.request)
+      return
+    }
     v2Json(response, spent.result.status, spent.result.body)
     return
   }
@@ -346,6 +349,34 @@ async function spend(ctx: V2Context): Promise<void> {
 }
 
 /**
+ * THE LINK IS WRITTEN HERE AND ONLY HERE: by the client that opened the
+ * request, holding its verifier (checked by the redeem) and the very session
+ * that proved itself when the request was opened. A browser that got hold of
+ * a link request's URL can finish the page and link nothing.
+ */
+function spendLink(ctx: V2Context, request: AuthRequest): void {
+  const { v2, response } = ctx
+  const signed = signedIn(ctx.request, v2, 'bearer')
+  const proof = request.linkProof
+  if (signed === null || request.opener === null || proof === null || signed.claims.jti !== request.opener.jti) {
+    refuse(response, 401, 'unauthenticated')
+    return
+  }
+  const added = v2.links.add(signed.account.username, proof)
+  if (!added.ok) {
+    v2Json(response, 409, { error: added.reason, message: LINK_REFUSED[added.reason] })
+    return
+  }
+  v2.events.append(signed.account.username, { kind: 'linked', device: PROVIDER_LABEL[proof.provider] })
+  v2Json(response, 200, { status: 'linked', provider: proof.provider })
+}
+
+const LINK_REFUSED: Record<string, string> = {
+  link_taken: 'That account is already linked to another Cookrew account.',
+  link_exists: 'A different account from this provider is linked here. Remove it first.'
+}
+
+/**
  * GET /auth/complete?code&state — THE WEB'S WAY BACK, redeemed here and only
  * here, with the verifier the browser never saw. The session cookie is the
  * product origin's own; nothing is shared with the auth origin.
@@ -357,6 +388,14 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
   const [id, verifier] = held === null ? [null, null] : held.split('.', 2)
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
+  // CANCELLED on the page: back where the person started, signed out as they were.
+  if (code === null && url.searchParams.get('error') !== null) {
+    const asked = auth?.requests.peek(id) ?? null
+    const back = asked !== null && asked.client === 'web' && asked.clientState === state ? (asked.returnPath ?? '/') : '/'
+    response.writeHead(303, { location: back, 'cache-control': 'private, no-store', 'content-length': '0', 'set-cookie': cleared })
+    response.end()
+    return
+  }
   const spent = auth === null || code === null ? null : auth.requests.redeem(code, 'web', verifier)
   if (spent === null || spent.request.id !== id || spent.request.clientState !== state || spent.result.status !== 201) {
     const words = url.searchParams.get('error') === null ? 'That sign-in did not finish.' : 'Sign-in was cancelled.'
@@ -452,6 +491,10 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   if (auth === null || !path.startsWith('/auth/api/')) return false
   const name = path.slice('/auth/api/'.length)
   if (name === 'request' && method === 'GET') {
+    if (!v2.limits.lookups.take(`authpage|${asking(ctx)}`)) {
+      refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+      return true
+    }
     const request = boundRequest(ctx)
     if (request !== null) v2Json(response, 200, summaryOf(v2, request))
     return true
@@ -472,6 +515,11 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   if (name === 'claim') {
     const request = auth.requests.get(read.value.request)
     if (request === null) refuseAuth(response, 410, 'expired')
+    // A terminal's request is claimed by typing its code at /device and in no
+    // other way, so the warning beside the code box is never skipped.
+    else if (request.client === 'cli' && auth.requests.bound(request.id, cookieOf(ctx.request, AUTH_BINDING_COOKIE)) === null) {
+      refuseAuth(response, 403, 'use_code')
+    }
     else bindAndAnswer(ctx, request)
     return true
   }
@@ -493,10 +541,14 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
     continueRequest({ ...ctx, auth: { request } }, request)
     return true
   }
-  if (request.stage !== 'done') {
-    auth.requests.deny(request, 'denied')
-    auth.log(`auth request cancelled: client=${request.client} intent=${request.intent}`)
+  // Over is over: a finished request keeps its code, a cancelled one is not
+  // cancelled again (which would keep pushing its ending back).
+  if (!auth.requests.isOpen(request)) {
+    refuseAuth(response, 410, 'expired')
+    return true
   }
+  auth.requests.deny(request, 'denied')
+  auth.log(`auth request cancelled: client=${request.client} intent=${request.intent}`)
   v2Json(response, 200, { status: 'cancelled', handoff: handoffFor(v2, request, { error: 'denied' }) })
   return true
 }

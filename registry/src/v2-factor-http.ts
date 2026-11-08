@@ -5,7 +5,7 @@ import { factorError, type FactorError } from './v2-factor-copy'
 import { SESSION_COOKIE, type V2Context } from './v2-routes'
 import type { Pending } from './v2-pending'
 import { SESSION_TTL_MS } from './v2-tokens'
-import { authorizeSession } from './auth-finish'
+import { authorizeSession, stillOpen } from './auth-finish'
 
 /**
  * IDENTITY v2, PHASE 4 — THE SHAPE OF AN ANSWER.
@@ -154,6 +154,8 @@ export function finishRung(ctx: V2Context, pending: Pending, id: string): void {
 
 export function completeSignIn(ctx: V2Context, username: string, device: unknown): boolean {
   const { v2, response } = ctx
+  // Cancelled while this rung was being climbed: nothing attaches.
+  if (ctx.auth !== undefined && !stillOpen(ctx, ctx.auth.request)) return false
   // On the auth origin the only device is the one the request bound.
   const attached = v2.accounts.attachDevice(username, deviceFor(ctx, device))
   if (!attached.ok) {

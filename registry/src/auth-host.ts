@@ -20,7 +20,7 @@ import { refuse, v2Json, type V2Context, type V2Identity } from './v2-http'
  * suffix, never a forwarded header.
  */
 
-const ASSETS = new Set(['auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
+const ASSETS = new Set(['auth-kit.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 /** The ladder's routes a page may reach, by method. A link request reaches only the provider trip. */
