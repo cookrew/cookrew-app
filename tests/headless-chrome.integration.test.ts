@@ -360,6 +360,41 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
     }
   }, 30_000)
 
+  it('Escape, PageUp and PageDown from a viewer never make Chrome open chrome://help', async () => {
+    // Owner report 2026-11-09: chrome://settings/help popped up mid sign-in. The keys carried the Windows
+    // key code as the native (Mac) one, and Chrome read these three as its help shortcut.
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir: path.join(profileDir, 'help-keys'),
+      width: 720,
+      height: 560,
+      tabs: [{ id: 'keys-tab', url: `${origin}/keys`, title: '' }],
+      activeTabId: 'keys-tab'
+    })
+    await instance.start()
+    const watcher = new CdpClient()
+    const internal: string[] = []
+    try {
+      const version = await fetch(`http://127.0.0.1:${instance.devToolsPort}/json/version`).then((r) => r.json() as Promise<{ webSocketDebuggerUrl: string }>)
+      await watcher.connect(version.webSocketDebuggerUrl)
+      watcher.on('Target.targetCreated', (params) => {
+        const info = params.targetInfo as { type?: string; url?: string }
+        if (info.type === 'page' && info.url?.startsWith('chrome')) internal.push(info.url)
+      })
+      await watcher.send('Target.setDiscoverTargets', { discover: true })
+      for (const key of ['Escape', 'PageUp', 'PageDown', 'Escape']) {
+        for (const command of sanitizeInput({ t: 'key', key, code: key }, { displayScale: 1, viewportWidth: 720, viewportHeight: 560 }) ?? []) {
+          instance.dispatchInput(command.method, command.params)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      }
+      expect(internal).toEqual([])
+    } finally {
+      watcher.close()
+      await instance.stop()
+    }
+  }, 30_000)
+
   it('closes a chrome:// page Chrome opens on its own instead of making it a tab, and still adopts a site page', async () => {
     // After a Google sign-in Chrome opened chrome://settings/help by itself (owner report 2026-11-09).
     // A second CDP client stands in for Chrome: the instance did not ask for either target.

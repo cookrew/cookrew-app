@@ -143,9 +143,10 @@ export function headlessLaunchArgs(
     // Nothing else is disguised. See browser-signin.ts.
     '--disable-blink-features=AutomationControlled',
     // A card signs in to Google SITES, never to Chrome itself. With browser
-    // sign-in allowed, a web sign-in made Chrome adopt the account, raise its
-    // "sign in to Chrome" bubble and open chrome://settings/help on its own
-    // (2026-11-09). Measured: Google still takes the email step with this off.
+    // sign-in allowed, a web sign-in made Chrome adopt the account and raise a
+    // "sign in to Chrome" bubble nobody can see (2026-11-09). Measured: Google
+    // still takes the email step with this off. (The chrome://settings/help
+    // pop-up of the same day was the key codes, see cast-input.ts.)
     '--allow-browser-signin=false',
     ...THROTTLE_FLAGS,
     url

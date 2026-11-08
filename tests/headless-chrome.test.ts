@@ -24,7 +24,7 @@ describe('headless sign-in flag (owner ruling 2026-11-08)', () => {
     expect(args).toContain('--disable-blink-features=AutomationControlled')
   })
 
-  it('keeps Google sign-in on the web only, so Chrome never adopts the account (and opens chrome://settings/help)', () => {
+  it('keeps Google sign-in on the web only, so Chrome never adopts the account', () => {
     const args = headlessLaunchArgs('/profiles/browser-1', 720, 560, 'https://example.test')
     expect(args).toContain('--allow-browser-signin=false')
   })
