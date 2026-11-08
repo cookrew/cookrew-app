@@ -119,6 +119,12 @@ export function headlessLaunchArgs(
     '--disable-component-update',
     '--disable-sync',
     `--disable-features=${DISABLED_BACKGROUND_FEATURES.join(',')}`,
+    // Owner ruling 2026-11-08: --remote-debugging-port alone sets
+    // navigator.webdriver=true (measured on Chrome 157, headed or headless), and
+    // Google now refuses sign-in right after the email step because of it. A
+    // person drives this card, so the owner chose to drop that one marker.
+    // Nothing else is disguised. See browser-signin.ts.
+    '--disable-blink-features=AutomationControlled',
     ...THROTTLE_FLAGS,
     url
   ]

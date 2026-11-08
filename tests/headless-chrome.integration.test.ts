@@ -332,6 +332,8 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
       const agent = (await instance.evaluate('navigator.userAgent')) as string
       expect(agent).not.toContain('Headless')
       expect(agent).toMatch(/Chrome\/\d+\.0\.0\.0/)
+      // Owner ruling 2026-11-08: --remote-debugging-port alone set this true and Google refused sign-in.
+      expect(await instance.evaluate('navigator.webdriver')).toBe(false)
 
       const hints = JSON.parse(
         (await instance.evaluate(`navigator.userAgentData.getHighEntropyValues(

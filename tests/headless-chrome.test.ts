@@ -17,6 +17,18 @@ describe('headless profile storage flags', () => {
   })
 })
 
+describe('headless sign-in flag (owner ruling 2026-11-08)', () => {
+  it('turns off the AutomationControlled blink feature so a remote-debugged card is not marked navigator.webdriver', () => {
+    const args = headlessLaunchArgs('/profiles/browser-1', 720, 560, 'https://example.test')
+    expect(args).toContain('--disable-blink-features=AutomationControlled')
+  })
+
+  it('keeps the page address last, after every flag', () => {
+    const args = headlessLaunchArgs('/profiles/browser-1', 720, 560, 'https://example.test')
+    expect(args.at(-1)).toBe('https://example.test')
+  })
+})
+
 describe('headless static-frame liveness', () => {
   it('deduplicates rapid repeats but emits a heartbeat before the UI stale window', () => {
     expect(shouldEmitFrame('same', 'same', 100, 0)).toBe(true)
