@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   STATIC_FRAME_HEARTBEAT_MS,
   headlessLaunchArgs,
+  internalPageKind,
   shouldEmitFrame
 } from '../src/main/headless-chrome'
 
@@ -26,6 +27,18 @@ describe('headless sign-in flag (owner ruling 2026-11-08)', () => {
   it('keeps the page address last, after every flag', () => {
     const args = headlessLaunchArgs('/profiles/browser-1', 720, 560, 'https://example.test')
     expect(args.at(-1)).toBe('https://example.test')
+  })
+})
+
+describe('pages Chrome opens on its own', () => {
+  it('tells chrome:// pages, Chrome UI bubbles and sites apart', () => {
+    expect(internalPageKind('chrome://settings/help')).toBe('page')
+    expect(internalPageKind('chrome-untrusted://print/')).toBe('page')
+    expect(internalPageKind('chrome://signin-dice-web-intercept.top-chrome/chrome-signin')).toBe('browser-ui')
+    expect(internalPageKind('https://accounts.google.com/')).toBe('site')
+    expect(internalPageKind('about:blank')).toBe('site')
+    expect(internalPageKind('')).toBe('site')
+    expect(internalPageKind('https://chrome.example/settings')).toBe('site')
   })
 })
 

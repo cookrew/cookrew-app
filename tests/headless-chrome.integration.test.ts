@@ -9,6 +9,7 @@ import type { BrowserNodeData, BrowserTab } from '../src/shared/model'
 import { HeadlessBrowserManager } from '../src/main/headless-browser-manager'
 import { findChrome, HeadlessInstance, type FrameMeta } from '../src/main/headless-chrome'
 import { jpegSize } from '../src/main/jpeg-size'
+import { CdpClient } from '../src/main/cdp-client'
 import { listDownloads } from '../src/main/browser-downloads'
 
 const chrome = findChrome()
@@ -355,6 +356,40 @@ describe.skipIf(!enabled)('HeadlessInstance real Chromium', () => {
       expect(refusal).toMatchObject({ name: 'NotAllowedError' })
       expect((refusal as { ms: number }).ms).toBeLessThan(1000)
     } finally {
+      await instance.stop()
+    }
+  }, 30_000)
+
+  it('closes a chrome:// page Chrome opens on its own instead of making it a tab, and still adopts a site page', async () => {
+    // After a Google sign-in Chrome opened chrome://settings/help by itself (owner report 2026-11-09).
+    // A second CDP client stands in for Chrome: the instance did not ask for either target.
+    const opened: BrowserTab[] = []
+    const instance = new HeadlessInstance({
+      executablePath: chrome as string,
+      profileDir: path.join(profileDir, 'internal-pages'),
+      width: 720,
+      height: 560,
+      tabs: [{ id: 'main-tab', url: `${origin}/main`, title: '' }],
+      activeTabId: 'main-tab'
+    })
+    instance.onTabOpened = (tab) => void opened.push(tab)
+    await instance.start()
+    const outsider = new CdpClient()
+    try {
+      const version = await fetch(`http://127.0.0.1:${instance.devToolsPort}/json/version`).then((r) => r.json() as Promise<{ webSocketDebuggerUrl: string }>)
+      await outsider.connect(version.webSocketDebuggerUrl)
+      await outsider.send('Target.createTarget', { url: 'chrome://settings/help' })
+      await outsider.send('Target.createTarget', { url: `${origin}/opened` })
+      await waitFor(() => opened.some((tab) => tab.url === `${origin}/opened`))
+      const pageUrls = async (): Promise<string[]> =>
+        ((await fetch(`http://127.0.0.1:${instance.devToolsPort}/json/list`).then((r) => r.json())) as Array<{ type: string; url: string }>)
+          .filter((target) => target.type === 'page')
+          .map((target) => target.url)
+      await waitFor(async () => !(await pageUrls()).some((url) => url.startsWith('chrome://settings')))
+      expect(opened.map((tab) => tab.url)).toEqual([`${origin}/opened`])
+      expect((await instance.pageInfo()).url).toBe(`${origin}/main`)
+    } finally {
+      outsider.close()
       await instance.stop()
     }
   }, 30_000)
