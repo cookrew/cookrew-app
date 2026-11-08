@@ -28,6 +28,9 @@ import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
+import { authOriginPolicy, validateOriginIsolation } from './auth-origin-policy'
+import { createAuthDeviceHttp, type ProviderBindingHttpOptions } from './auth-device-http'
+import type { DeviceTransactionsOptions } from './auth-device-transaction'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -107,6 +110,15 @@ export interface RegistryDeps {
    * something a person will copy, so it is configured rather than reflected.
    */
   origin?: string
+  authOrigin?: string
+  /** Explicit opt-in for proof only; never issues a session. */
+  authDeviceTransactions?: Omit<DeviceTransactionsOptions, 'audience'>
+  /**
+   * Explicit opt-in: a proven device may take a provider trip whose callback
+   * returns to `origin`'s existing /v2/oauth/:provider/callback. Needs
+   * `authDeviceTransactions` and a canonical `origin`; never issues a session.
+   */
+  authProviderBinding?: ProviderBindingHttpOptions
   /** Stars on served teams — a sort key for the market, never a gate. */
   stars?: StarStore
   /** The current build, from GitHub — the homepage's download buttons and /download. */
@@ -155,6 +167,19 @@ function defaultAuthorize(store: RegistryStore): (id: string) => Verdict {
 }
 
 export function createRegistry(deps: RegistryDeps): Server {
+  const authOrigin = deps.authOrigin ?? null
+  authOriginPolicy({ configuredOrigin: authOrigin, host: undefined, path: '/', method: 'GET' })
+  validateOriginIsolation(authOrigin, deps.origin)
+  if (deps.authDeviceTransactions && !authOrigin) throw new Error('Device transactions require a configured auth origin')
+  if (deps.authProviderBinding && !deps.authDeviceTransactions) throw new Error('Provider binding requires device transactions')
+  if (deps.authProviderBinding && deps.origin === undefined) throw new Error('Provider binding requires a canonical product origin')
+  // The callback origin is the configured product origin, never a Host header.
+  const authDeviceHttp = deps.authDeviceTransactions && authOrigin
+    ? createAuthDeviceHttp(
+        { ...deps.authDeviceTransactions, audience: authOrigin },
+        deps.authProviderBinding && deps.origin !== undefined ? { ...deps.authProviderBinding, callbackOrigin: deps.origin } : undefined
+      )
+    : null
   const { store, log } = deps
   const authorize = deps.authorize ?? ((id: string) => defaultAuthorize(store)(id))
   const funnel = deps.funnel ? createFunnelRoute(deps.funnel, deps.v2) : null
@@ -380,6 +405,12 @@ export function createRegistry(deps: RegistryDeps): Server {
   })
 
   function route(request: IncomingMessage, response: ServerResponse): void {
+    const authHost = authOriginPolicy({ configuredOrigin: authOrigin, host: request.headers.host, path: '/', method: 'GET' })
+    if (authHost !== 'other-origin') {
+      if (authHost === 'redirect' && authDeviceHttp) { authDeviceHttp.handle(request, response); return }
+      json(response, 404, {})
+      return
+    }
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
@@ -398,6 +429,14 @@ export function createRegistry(deps: RegistryDeps): Server {
     // whole origin's worth of app, so the prefix is claimed here rather than
     // route by route below.
     if (canvas && canvas.handle(request, response, parts, url)) return
+
+    // ── A DEVICE-BOUND PROVIDER CALLBACK, by its one-use state ─────────────
+    //
+    // The binding shares the legacy flow's registered callback path. It claims
+    // a callback only on the canonical product host and only when the state is
+    // its own; it spends nothing to find out, so every other callback reaches
+    // the identity routes below exactly as it did before.
+    if (authDeviceHttp && authDeviceHttp.providerCallback(request, response, url)) return
 
     // ── IDENTITY v2 ──────────────────────────────────────────────────────
     //

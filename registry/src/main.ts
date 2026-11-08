@@ -331,6 +331,7 @@ createRegistry({
   // The address printed on a team's page is something a person copies, so it
   // is the configured origin rather than whatever Host a caller sent.
   origin: resolved.config.origin,
+  ...(process.env.AUTH_ORIGIN === undefined ? {} : { authOrigin: process.env.AUTH_ORIGIN }),
   // The market's sort key and the homepage's download buttons — both real:
   // stars are a file beside the doors, the build is whatever GitHub says.
   stars: new StarStore(DATA),
