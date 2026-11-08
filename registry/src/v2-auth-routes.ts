@@ -240,6 +240,11 @@ async function openRequest(ctx: V2Context): Promise<void> {
     refuse(response, 503, 'busy', undefined, { 'retry-after': '5' })
     return
   }
+  // ONE LINE PER WAY IN, and nothing in it that names a person or opens
+  // anything: which client, which screen, and for the web where it returns.
+  const resume = client === 'desktop' && parsed.intent === 'sign-in' && opener === null && USERNAME.test(hint) ? ' resume' : ''
+  const landing = opened.returnPath === null ? '' : ` return=${opened.returnPath}`
+  auth.log(`auth request opened: client=${client} intent=${parsed.intent}${resume}${landing}`)
   const verification = `${auth.origin}/device`
   const created: Record<string, unknown> = {
     request: opened.id,
@@ -488,7 +493,10 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
     continueRequest({ ...ctx, auth: { request } }, request)
     return true
   }
-  if (request.stage !== 'done') auth.requests.deny(request, 'denied')
+  if (request.stage !== 'done') {
+    auth.requests.deny(request, 'denied')
+    auth.log(`auth request cancelled: client=${request.client} intent=${request.intent}`)
+  }
   v2Json(response, 200, { status: 'cancelled', handoff: handoffFor(v2, request, { error: 'denied' }) })
   return true
 }

@@ -41,6 +41,7 @@ export function finishRequest(ctx: V2Context, request: AuthRequest, result: Auth
   // takes; the code waiting behind that screen lives as long as a request.
   const ttl = extra.codes === undefined ? AUTH_CODE_TTL_MS : AUTH_REQUEST_TTL_MS
   const code = ctx.v2.auth?.requests.complete(request, result, ttl) ?? null
+  ctx.v2.auth?.log(`auth request finished: client=${request.client} intent=${request.intent} status=${result.status}`)
   const handoff = code === null ? handoffFor(ctx.v2, request, { error: 'expired' }) : handoffFor(ctx.v2, request, { code })
   v2Json(ctx.response, 200, { status: 'authorized', handoff: request.client === 'cli' ? { kind: 'cli' } : handoff, ...extra })
 }

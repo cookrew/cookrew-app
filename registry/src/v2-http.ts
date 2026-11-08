@@ -129,7 +129,7 @@ export interface V2Identity {
    * answers every /v2/auth route 404, which is how a new client knows to fall
    * back to its own sheet.
    */
-  auth: { origin: string; requests: AuthRequests } | null
+  auth: { origin: string; requests: AuthRequests; log: (message: string) => void } | null
 }
 
 export interface V2Options {
@@ -206,7 +206,10 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       flows: new OAuthFlows(options.now)
     },
     origin: options.origin ?? null,
-    auth: options.authOrigin === undefined ? null : { origin: options.authOrigin, requests: new AuthRequests(options.authOrigin, options.now) }
+    auth:
+      options.authOrigin === undefined
+        ? null
+        : { origin: options.authOrigin, requests: new AuthRequests(options.authOrigin, options.now), log: options.log ?? (() => undefined) }
   }
 }
 

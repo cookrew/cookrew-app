@@ -228,6 +228,9 @@ if (!authOrigin.ok) {
 }
 const v2 = createV2(DATA, {
   origin: resolved.config.origin,
+  // Operational lines only (a seat cap reached, an auth request opened): never
+  // a name, a token or a code.
+  log: (message) => console.log(message),
   ...(authOrigin.origin === null ? {} : { authOrigin: authOrigin.origin }),
   // Behind a proxy every caller is one address, and one stranger would spend
   // the sign-in budget for everybody. The same peers the funnel names.

@@ -35,6 +35,7 @@ let v2: V2Identity
 let clock: number
 let P: string
 let A: string
+let logged: string[]
 
 const freePort = (): Promise<number> =>
   new Promise((resolve) => {
@@ -52,7 +53,9 @@ async function boot(options: { auth?: boolean } = {}): Promise<void> {
   P = `http://localhost:${port}`
   A = `http://auth.localhost:${port}`
   clock = Date.now()
+  logged = []
   v2 = createV2(dir, {
+    log: (message) => logged.push(message),
     limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, oauthPerMinute: 1000, lookupsPerMinute: 1000, joinPerMinute: 1000 },
     oauth: fake.config(),
     origin: P,
@@ -345,6 +348,25 @@ describe('desktop sign-in through the page', () => {
     const me = await app.call(P, 'GET', '/v2/me', undefined, bearer(String(spent.body.token)))
     expect(me.status).toBe(200)
     expect((await app.call(P, 'POST', '/v2/auth/token', { code: back.code, verifier: opened.verifier })).status).toBe(401)
+  })
+
+  it('logs each way in and its ending, naming no request, code or person', async () => {
+    const owner = await passwordAccount('drej')
+    const app = new Client()
+    const opened = await openDesktop(app, owner.device, { username: 'drej' })
+    const browser = new Client('browser')
+    await browser.page('POST', '/auth/api/claim', null, { request: opened.request })
+    const signedIn = await browser.page('POST', '/v2/sessions', opened.request, { username: 'drej', password: PASSWORD })
+    const { code } = codeOf(signedIn.body.handoff)
+    expect(logged).toEqual([
+      'auth request opened: client=desktop intent=sign-in resume',
+      'auth request finished: client=desktop intent=sign-in status=201'
+    ])
+    for (const line of logged) {
+      expect(line).not.toContain(opened.request)
+      expect(line).not.toContain(String(code))
+      expect(line).not.toContain('drej')
+    }
   })
 
   it('burns a code presented with the wrong verifier', async () => {
