@@ -2105,7 +2105,8 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew secret read <name>                    Print a sealed secret — into the pane and its transcript; prefer exec
   cookrew secret list                           Sealed secret names, never values
                                                 (owner panes only; every read is logged)
-  cookrew login [username]                      Sign this machine in, in an owner pane: hidden password, then the second factor
+  cookrew login [username]                      Sign this machine in, in an owner pane: a code to enter at the sign-in page, in any browser
+  cookrew login [username] --password           The same at a hidden password prompt, then the second factor (an older registry always asks this way)
   cookrew login --github                        The same with no password: GitHub's device flow, for a machine with no browser
   cookrew logout                                Take this machine off the account, in an owner pane
   cookrew whoami                                The account and device this machine is signed in as

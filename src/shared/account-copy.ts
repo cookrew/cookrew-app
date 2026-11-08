@@ -410,6 +410,14 @@ export const CLI_COPY = {
   'device.code': 'Open {url} and type this code: {code}',
   'device.waiting': 'Waiting for GitHub. Ctrl-C stops.',
 
+  'browser.code': 'Open {url} and enter {code}',
+  'browser.direct': 'Or open {url}, which has the code in it already.',
+  'browser.waiting': 'Waiting for you to finish in the browser. Ctrl-C stops.',
+  'browser.cancelled': 'Stopped before the browser finished. Nothing was attached.',
+  'browser.denied': 'That sign-in was refused in the browser. Nothing was attached.',
+  'browser.expired': 'That code went cold before the browser finished. Run cookrew login to start again.',
+  'browser.wrong_identity': 'The browser signed in to another account, not the one on this Mac. Nothing changed.',
+
   'said.new-identity':
     'Nobody on Cookrew has this GitHub account yet. Already have an account? Press Ctrl-C, run cookrew login with your password, then link GitHub in Security.',
   'said.passcode-next':

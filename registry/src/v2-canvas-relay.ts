@@ -233,7 +233,7 @@ export function callerDeviceHeaders(device: { id: string; name: string }): Recor
  * prefixed one a browser holds now, and the name it had before, so a stale
  * copy still sitting in somebody's jar is dropped here rather than travelling.
  */
-const OUR_COOKIES = new Set(['__Host-cr_session', 'cr_session', 'cr_account'])
+const OUR_COOKIES = new Set(['__Host-cr_session', 'cr_session', 'cr_account', '__Host-cr_auth_web'])
 /** Hop-by-hop, plus the length we cannot honour because we stream. */
 const HOP_BY_HOP = new Set([
   'connection',

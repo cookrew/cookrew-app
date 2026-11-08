@@ -45,6 +45,14 @@ import {
 import { bodyOf, classify, plainRefusal, wireError } from './account-wire'
 import { machineCopy } from '../shared/machine-words'
 import { ProviderAccess, type DeviceCode, type MintedDevice, type TripProof } from './account-oauth'
+import { Trips } from './account-trip'
+import {
+  BrowserAuth,
+  type BrowserCode,
+  type BrowserIntent,
+  type BrowserSignInAnswer,
+  type OfferedDevice,
+} from './account-browser-auth'
 import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
@@ -431,6 +439,8 @@ export class Accounts {
   private readonly ladder: LadderPasswords
   private readonly machine: AccountsDeps['machine']
   private readonly provider: ProviderAccess
+  /** The one sign-in page. Shares the provider's trip slot, so one Cancel ends either. */
+  private readonly browser: BrowserAuth
 
   constructor(deps: AccountsDeps = {}) {
     this.base = deps.base
@@ -444,19 +454,76 @@ export class Accounts {
     this.changed = deps.onChange
     this.ladder = new LadderPasswords(this.now)
     this.machine = deps.machine
-    this.provider = new ProviderAccess({
-      http: this.http,
-      origin: this.origin,
-      now: this.now,
-      openBrowser: deps.openBrowser ?? (() => Promise.reject(new Error('no browser here'))),
-      schemeHandled: deps.schemeHandled ?? (() => true),
-      device: () => this.providerDevice(),
-      hasAccount: () => this.cached !== null,
-      rememberPending: (pending, minted) => this.ladder.remember(pending, NO_PASSWORD, minted),
-      land: (body, minted) => this.landSession(NO_PASSWORD, body, minted),
-      authed: (pathname, body) => this.authedPost(pathname, body),
-      firstLink: () => this.firstLink(),
-    })
+    const openBrowser = deps.openBrowser ?? ((): Promise<void> => Promise.reject(new Error('no browser here')))
+    const trips = new Trips({ openBrowser, schemeHandled: deps.schemeHandled ?? (() => true) })
+    this.provider = new ProviderAccess(
+      {
+        http: this.http,
+        origin: this.origin,
+        now: this.now,
+        openBrowser,
+        schemeHandled: deps.schemeHandled ?? (() => true),
+        device: () => this.providerDevice(),
+        hasAccount: () => this.cached !== null,
+        rememberPending: (pending, minted) => this.ladder.remember(pending, NO_PASSWORD, minted),
+        land: (body, minted) => this.landSession(NO_PASSWORD, body, minted),
+        authed: (pathname, body) => this.authedPost(pathname, body),
+        firstLink: () => this.firstLink(),
+      },
+      trips,
+    )
+    this.browser = new BrowserAuth(
+      {
+        http: this.http,
+        origin: this.origin,
+        now: this.now,
+        openBrowser,
+        device: () => this.browserDevice(),
+        username: () => this.cached?.username ?? null,
+        // No password was in hand: the page took it, if there was one at all.
+        land: (body, minted) => this.landSession(NO_PASSWORD, body, minted),
+        authed: (pathname, body) => this.authedPost(pathname, body),
+      },
+      trips,
+    )
+  }
+
+  // ── the one sign-in page (account-browser-auth.ts holds the flow) ─────────
+  //
+  // Each answers 'unsupported' on a registry that predates the page, having
+  // proved nothing and opened nothing, and the caller goes the old way.
+
+  /** Sign in or create on the page, or start at a provider's button there. */
+  browserSignIn(intent: BrowserIntent, options: { username?: string } = {}): Promise<BrowserSignInAnswer> {
+    return this.browser.signIn(intent, options)
+  }
+
+  /** The session ended: the page, for this account's name and this Mac's device. */
+  browserResume(): Promise<BrowserSignInAnswer> {
+    return this.browser.resume()
+  }
+
+  /** Add a provider on the page, under a fresh proof. */
+  browserLink(id: ProviderId, proof: TripProof): Promise<AccountResult<void>> {
+    return this.browser.link(id, proof)
+  }
+
+  /** The seam `cookrew login` calls: a code to type at the page, and a poll. */
+  browserTerminalSignIn(options: {
+    onCode: (code: BrowserCode) => void
+    signal?: AbortSignal
+    everyMs?: number
+    username?: string
+  }): Promise<BrowserSignInAnswer> {
+    return this.browser.terminalSignIn(options)
+  }
+
+  /** The device a page request names, with the key that proves it, read together. */
+  private browserDevice(): OfferedDevice {
+    const held = this.cached
+    const offered = this.providerDevice()
+    const privateKeyJwk = offered.minted?.keys.privateKeyJwk ?? held?.privateKeyJwk ?? {}
+    return { ...offered, privateKeyJwk }
   }
 
   // ── third-party sign-in (account-oauth.ts holds the flow) ─────────────────

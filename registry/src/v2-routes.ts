@@ -38,6 +38,9 @@ import { heldIfPasswordless, mayGuessPassword, readAndStepUp } from './v2-step-u
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
+import { handleAuthRoute } from './v2-auth-routes'
+import { authorizeSession } from './auth-finish'
+import { deviceFor } from './v2-factor-http'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -82,6 +85,8 @@ export function handleV2Route(ctx: V2Context): boolean {
   }
   const rest = parts.slice(1)
 
+  // The one sign-in page's own routes: opening a request, its proof, the code.
+  if (handleAuthRoute(ctx, rest)) return true
   // Third-party sign-in, first because `/v2/me` below would swallow its
   // `/v2/me/links/…`. It answers false for every path it does not own.
   if (handleOAuthRoute(ctx, rest)) return true
@@ -163,11 +168,17 @@ async function claimAccount(ctx: V2Context): Promise<void> {
   const out = await v2.accounts.create({
     username: body.value.username,
     password: body.value.password,
-    device: body.value.device
+    device: deviceFor(ctx, body.value.device)
   })
   if (!out.ok) {
     const username = typeof body.value.username === 'string' ? body.value.username : undefined
     refuse(response, out.reason === 'taken' ? 409 : 400, out.reason, username)
+    return
+  }
+  // Made on the auth page: a code for the client, and the recovery codes shown
+  // once to the person who just made the account.
+  if (ctx.auth !== undefined) {
+    authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, true, { codes: true })
     return
   }
   const session = v2.accounts.startSession(out.account.username, out.device.id)
@@ -299,9 +310,13 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
     refuse(response, 401, 'bad_credentials')
     return
   }
-  const attached = v2.accounts.attachDevice(named, body.value.device)
+  const attached = v2.accounts.attachDevice(named, deviceFor(ctx, body.value.device))
   if (!attached.ok) {
     refuse(response, attached.reason === 'bad_device' ? 400 : 401, attached.reason)
+    return
+  }
+  if (ctx.auth !== undefined) {
+    authorizeSession(ctx, ctx.auth.request, attached.account.username, attached.device.id, attached.account.passwordless !== true)
     return
   }
   const session = v2.accounts.startSession(named, attached.device.id)

@@ -65,6 +65,7 @@ import { Pulse } from './pulse'
 import { FunnelCounts } from './funnel-counts'
 import { createV2 } from './v2-routes'
 import { readOAuthEnv } from './v2-oauth-providers'
+import { readAuthOrigin } from './auth-origin'
 import { AcmeClient, LETSENCRYPT_STAGING } from './acme-client'
 import { createNames, type NamesFeature } from './names'
 import { ORDERS_PER_WEEK } from './cert-store'
@@ -217,8 +218,20 @@ if (!resolved.ok) {
 const identity = new IdentityService(DATA, resolved.config)
 // The v2 half, built before the names half because the DNS zone reads its
 // desktops: one store of where a Mac is, answered on two protocols.
+// AUTH.COOKREW.DEV — the one sign-in page, served by this same process on its
+// own host. Environment only, like the provider keys; absent means off, and an
+// off registry answers /v2/auth with the 404 a new client falls back on.
+const authOrigin = readAuthOrigin(process.env.AUTH_ORIGIN, resolved.config.origin)
+if (!authOrigin.ok) {
+  console.error(`refusing to start: ${authOrigin.reason}`)
+  process.exit(1)
+}
 const v2 = createV2(DATA, {
   origin: resolved.config.origin,
+  // Operational lines only (a seat cap reached, an auth request opened): never
+  // a name, a token or a code.
+  log: (message) => console.log(message),
+  ...(authOrigin.origin === null ? {} : { authOrigin: authOrigin.origin }),
   // Behind a proxy every caller is one address, and one stranger would spend
   // the sign-in budget for everybody. The same peers the funnel names.
   trustedProxies: flag('funnel-proxies', process.env.FUNNEL_PROXIES ?? '').split(',').filter(Boolean),
@@ -365,6 +378,7 @@ createRegistry({
   // said 127.0.0.1 while identity accepted only localhost, so the server was
   // advertising the one address on which nobody could authenticate.
   console.log(`registry on ${resolved.config.origin}  data=${DATA}${DEV ? '  [DEV]' : ''}`)
+  if (authOrigin.origin !== null) console.log(`sign-in page on ${authOrigin.origin}`)
   if (payments.facilitator === null) console.log('payments off: no facilitator, priced presets are refused')
   if (names !== undefined && DNS_NS !== null) {
     // ONE LINE PER FEATURE, and nothing in either of them that is a secret:

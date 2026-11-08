@@ -55,6 +55,8 @@ export interface Flow {
   nonce: string
   back: OAuthBack
   opener?: FlowOpener
+  /** Opened on the auth origin: the callback finishes that request, never an app's handoff. */
+  authRequest?: string
   at: number
   expiresAt: number
 }
@@ -80,6 +82,8 @@ export interface Ticket {
   id: string
   proof: ProviderProof
   expiresAt: number
+  /** Minted for a request on the auth origin: only that request may spend it. */
+  authRequest?: string
 }
 
 const secret = (): string => randomBytes(32).toString('base64url')
@@ -115,7 +119,7 @@ export class OAuthFlows {
     this.now = now
   }
 
-  open(input: Pick<Flow, 'provider' | 'intent' | 'act' | 'clientState' | 'challenge' | 'back' | 'opener'>): Flow {
+  open(input: Pick<Flow, 'provider' | 'intent' | 'act' | 'clientState' | 'challenge' | 'back' | 'opener' | 'authRequest'>): Flow {
     const at = this.now()
     this.sweep(at)
     dropOldest(this.flows, FLOWS_MAX)
@@ -167,11 +171,16 @@ export class OAuthFlows {
 
   // ── tickets: a proven identity with no account yet ───────────────────────
 
-  mintTicket(proof: ProviderProof): Ticket {
+  mintTicket(proof: ProviderProof, authRequest?: string): Ticket {
     const at = this.now()
     this.sweep(at)
     dropOldest(this.tickets, TICKETS_MAX)
-    const ticket: Ticket = { id: secret(), proof, expiresAt: at + TICKET_TTL_MS }
+    const ticket: Ticket = {
+      id: secret(),
+      proof,
+      expiresAt: at + TICKET_TTL_MS,
+      ...(authRequest === undefined ? {} : { authRequest })
+    }
     this.tickets.set(ticket.id, ticket)
     return ticket
   }

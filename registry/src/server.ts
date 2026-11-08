@@ -28,6 +28,9 @@ import { teamAddress } from './v2-seats'
 import { mePage } from './site-account'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
+import { authHostOf, handleAuthHost } from './auth-host'
+import { completeWeb } from './v2-auth-routes'
+import type { V2Context } from './v2-http'
 
 /**
  * REGISTRY SERVER (P2-A1) — routes only. Every answer is chosen by a decision
@@ -366,6 +369,9 @@ export function createRegistry(deps: RegistryDeps): Server {
     json(response, verdict.code, body, headers)
   }
 
+  // The auth origin's exact host, when this registry serves the sign-in page.
+  const authHost = authHostOf(deps.v2)
+
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
     try {
       route(request, response)
@@ -379,10 +385,50 @@ export function createRegistry(deps: RegistryDeps): Server {
     }
   })
 
+  /** The context every /v2 route reads, built the same way for both origins. */
+  function v2Context(request: IncomingMessage, response: ServerResponse, parts: string[]): V2Context | null {
+    if (!deps.v2) return null
+    return {
+      method: request.method ?? 'GET',
+      parts,
+      request,
+      response,
+      v2: deps.v2,
+      // Whether the BROWSER reached us over https, which is what decides
+      // the Secure flag on the session cookie. Taken from the proxy's
+      // header or from the configured origin — never from the bound port,
+      // which says nothing behind a terminator.
+      secure: request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
+      decode,
+      // The directory, for the seat routes: a seat is held at a TEAM, and
+      // the team's own terms (free or priced, and on which rails) are the
+      // door's to state, never the seat's.
+      ...(deps.doors === undefined ? {} : { doors: deps.doors }),
+      // The v1 credentials, for the migration route: which handles are
+      // spoken for by a key that has no password yet (phase 6).
+      ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
+      // The names half, for the cert route and the `names` bit on a card.
+      ...(deps.names === undefined ? {} : { names: deps.names }),
+      // Which desktops hold their relay line, for the fleet rows.
+      ...(canvas === null ? {} : { presence: canvas.presence }),
+      accountGone
+    }
+  }
+
   function route(request: IncomingMessage, response: ServerResponse): void {
     const url = new URL(request.url ?? '/', 'http://registry.local')
     const method = request.method ?? 'GET'
     const parts = url.pathname.split('/').filter(Boolean)
+
+    // ── AUTH.COOKREW.DEV, first and alone ─────────────────────────────────
+    //
+    // The exact configured host answers the sign-in page and nothing else:
+    // no relay, no door, no profile is reachable through it.
+    if (authHost !== null && deps.v2 && (request.headers.host ?? '').toLowerCase() === authHost) {
+      const v2 = deps.v2
+      handleAuthHost(v2, request, response, url, (p) => v2Context(request, response, p) as V2Context)
+      return
+    }
 
     // ── THE RELAY, first ──────────────────────────────────────────────────
     //
@@ -404,36 +450,15 @@ export function createRegistry(deps: RegistryDeps): Server {
     // Owns its whole prefix: nothing under /v2 is served by the rest of this
     // file, and nothing above it answers a /v2 path. Mounted early so a
     // future top-level page can never shadow a sign-in.
-    if (
-      deps.v2 &&
-      handleV2Route({
-        method,
-        parts,
-        request,
-        response,
-        v2: deps.v2,
-        // Whether the BROWSER reached us over https, which is what decides
-        // the Secure flag on the session cookie. Taken from the proxy's
-        // header or from the configured origin — never from the bound port,
-        // which says nothing behind a terminator.
-        secure:
-          request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
-        decode,
-        // The directory, for the seat routes: a seat is held at a TEAM, and
-        // the team's own terms (free or priced, and on which rails) are the
-        // door's to state, never the seat's.
-        ...(deps.doors === undefined ? {} : { doors: deps.doors }),
-        // The v1 credentials, for the migration route: which handles are
-        // spoken for by a key that has no password yet (phase 6).
-        ...(deps.identity === undefined ? {} : { legacy: deps.identity }),
-        // The names half, for the cert route and the `names` bit on a card.
-        ...(deps.names === undefined ? {} : { names: deps.names }),
-        // Which desktops hold their relay line, for the fleet rows.
-        ...(canvas === null ? {} : { presence: canvas.presence }),
-        accountGone
-      })
-    )
+    const v2ctx = v2Context(request, response, parts)
+    if (v2ctx !== null && handleV2Route(v2ctx)) return
+
+    // GET /auth/complete — the web's way back from the auth origin: a one-use
+    // code spent here with the verifier the browser never saw.
+    if (deps.v2?.auth && method === 'GET' && url.pathname === '/auth/complete') {
+      completeWeb(deps.v2, request, response, url)
       return
+    }
 
     // ── THE ONBOARDING FUNNEL: POST an event, GET the owner's totals ──────
     if (funnel && funnel.handle(request, response, url.pathname)) return

@@ -238,6 +238,12 @@ const api = {
     ipcRenderer.invoke('account:oauthLink', input),
   accountOAuthUnlink: (input: { provider: string; current?: string }) =>
     ipcRenderer.invoke('account:oauthUnlink', input),
+  // The one sign-in page. The request, the proof and the code stay in main.
+  accountBrowserSignIn: (intent: string, username?: string) =>
+    ipcRenderer.invoke('account:browserSignIn', intent, username),
+  accountBrowserResume: () => ipcRenderer.invoke('account:browserResume'),
+  accountBrowserLink: (input: { provider: string; current?: string; rescue?: string }) =>
+    ipcRenderer.invoke('account:browserLink', input),
   accountSetPasscode: (input: { next: string; current?: string }) =>
     ipcRenderer.invoke('account:setPasscode', input),
   accountSetTouchId: (on: boolean) => ipcRenderer.invoke('account:setTouchId', on),
