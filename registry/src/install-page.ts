@@ -1,4 +1,5 @@
 import { COOKREW_HOME, MKT_INSTALL, fillInstallCopy } from './install-copy'
+import { LEGAL_PUBLISHED } from './site-legal-entity'
 import { authorLabel, versionLabel } from '../../src/shared/marketplace-copy'
 
 /**
@@ -108,7 +109,7 @@ a { color: inherit; }
 `.trim()
 
 /** This page keeps its own markup, so the site footer's two legal links are repeated here. */
-const LEGAL_LINKS = '<p class="note"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>'
+const LEGAL_LINKS = LEGAL_PUBLISHED ? '<p class="note"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>' : ''
 
 function page(title: string, body: string): string {
   return `<!DOCTYPE html>
