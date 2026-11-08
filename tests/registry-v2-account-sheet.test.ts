@@ -15,6 +15,11 @@ import vm from 'node:vm'
  * `site.js` is a browser file with no build step, so it is LOADED AND RUN here
  * against a document reduced to what the sheet touches, rather than described
  * by a test that agrees with a copy of it.
+ *
+ * SINCE AUTH.COOKREW.DEV the same hash goes to the one sign-in page: the page
+ * opens an auth request for this browser's device key, proves the key, and
+ * leaves. The sheet is what a registry without that page still gets — it
+ * answers /v2/auth/requests with a 404.
  */
 
 const source = readFileSync(path.join(__dirname, '..', 'registry', 'assets', 'site.js'), 'utf8')
@@ -72,11 +77,59 @@ function stub(id: string): Stub {
 interface Mounted {
   sheet: Stub
   assigned: string[]
+  asked: { path: string; body: Record<string, unknown> }[]
   hashchange: (hash: string) => void
 }
 
-/** `signedIn` decides what /v2/me answers, which is the whole branch here. */
-function mount(hash: string, signedIn: boolean): Mounted {
+/** A device this browser already holds: what IndexedDB would hand back. */
+let held: Record<string, unknown> | null = null
+async function heldDevice(): Promise<Record<string, unknown>> {
+  if (held !== null) return held
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+  const jwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  held = {
+    id: '0b6c2f0e-1d2a-8c3b-9d4e-5f6a7b8c9d0e',
+    kind: 'browser',
+    name: 'Chrome on macOS',
+    jwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y },
+    pair
+  }
+  return held
+}
+
+/** IndexedDB, reduced to the one read the device takes. */
+function deviceDb(device: Record<string, unknown>): unknown {
+  const later = (fn: () => void): void => void setTimeout(fn, 0)
+  return {
+    open: () => {
+      const request: Record<string, unknown> = { onupgradeneeded: null, onsuccess: null, onerror: null }
+      const db = {
+        close: () => undefined,
+        transaction: () => {
+          const tx: Record<string, unknown> = { oncomplete: null }
+          tx.objectStore = () => ({
+            get: () => {
+              const read: Record<string, unknown> = { result: device, onsuccess: null }
+              later(() => (read.onsuccess as (() => void) | null)?.())
+              return read
+            }
+          })
+          return tx
+        }
+      }
+      request.result = db
+      later(() => (request.onsuccess as (() => void) | null)?.())
+      return request
+    }
+  }
+}
+
+/**
+ * `signedIn` decides what /v2/me answers; `authSite` whether this registry
+ * serves the one sign-in page — off, it answers /v2/auth the way an older
+ * registry does.
+ */
+function mount(hash: string, signedIn: boolean, authSite = false, device: Record<string, unknown> | null = null): Mounted {
   const nodes = new Map<string, Stub>()
   const byId = (id: string): Stub => {
     const held = nodes.get(id)
@@ -93,11 +146,26 @@ function mount(hash: string, signedIn: boolean): Mounted {
   const assigned: string[] = []
   const listeners = new Map<string, (event: unknown) => void>()
 
-  const fetchStub = async (address: string): Promise<unknown> => ({
-    ok: true,
-    status: address.includes('/v2/me') && signedIn ? 200 : 401,
-    json: async () => (signedIn ? { username: 'mira' } : { error: 'unauthenticated' })
-  })
+  const asked: { path: string; body: Record<string, unknown> }[] = []
+  const fetchStub = async (address: string, init?: { body?: string }): Promise<unknown> => {
+    if (address.startsWith('/v2/auth/')) {
+      asked.push({ path: address, body: init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {} })
+      if (!authSite) return { ok: false, status: 404, json: async () => ({ error: 'not_found' }) }
+      if (address === '/v2/auth/requests') {
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ request: 'r1', transcript: 'cookrew-auth/device-transaction/v1', authorizeUrl: 'https://auth.cookrew.dev/?request=r1' })
+        }
+      }
+      return { ok: true, status: 204, json: async () => ({}) }
+    }
+    return {
+      ok: true,
+      status: address.includes('/v2/me') && signedIn ? 200 : 401,
+      json: async () => (signedIn ? { username: 'mira' } : { error: 'unauthenticated' })
+    }
+  }
 
   const sandbox: Record<string, unknown> = {
     fetch: fetchStub,
@@ -114,13 +182,14 @@ function mount(hash: string, signedIn: boolean): Mounted {
     sessionStorage: { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
     // Never opened: every path here reaches the sheet or /me before a key is
     // needed, and a request that hangs is a promise nobody awaits.
-    indexedDB: { open: () => ({ onupgradeneeded: null, onsuccess: null, onerror: null }) },
+    indexedDB: device === null ? { open: () => ({ onupgradeneeded: null, onsuccess: null, onerror: null }) } : deviceDb(device),
     location: {
       get hash() {
         return hash
       },
       origin: 'https://cookrew.dev',
       hostname: 'cookrew.dev',
+      pathname: '/market',
       protocol: 'https:',
       search: '',
       assign: (url: string) => assigned.push(url),
@@ -145,6 +214,7 @@ function mount(hash: string, signedIn: boolean): Mounted {
   return {
     sheet: byId('account-sheet'),
     assigned,
+    asked,
     hashchange: (next: string) => {
       hash = next
       listeners.get('hashchange')?.({})
@@ -157,16 +227,41 @@ const settle = async (turns = 8): Promise<void> => {
 }
 
 describe('the sign-in hash', () => {
-  it('opens the v2 sheet on #account, which is where the front page sends people', async () => {
-    const page = mount('#account', false)
+  it('opens the v2 sheet on #account when the registry has no sign-in page', async () => {
+    const page = mount('#account', false, false, await heldDevice())
     await settle()
+    expect(page.asked.map((a) => a.path)).toEqual(['/v2/auth/requests'])
     expect(page.sheet.open).toBe(true)
   })
 
   it('opens it on #signin too, because that is the other name for the same door', async () => {
-    const page = mount('#signin', false)
+    const page = mount('#signin', false, false, await heldDevice())
     await settle()
     expect(page.sheet.open).toBe(true)
+  })
+
+  it('goes to the one sign-in page when the registry serves it, the key proven first', async () => {
+    const device = await heldDevice()
+    const page = mount('#account', false, true, device)
+    await settle(16)
+    expect(page.sheet.open).toBe(false)
+    expect(page.asked.map((a) => a.path)).toEqual(['/v2/auth/requests', '/v2/auth/requests/r1/proof'])
+    expect(page.asked[0].body).toEqual({
+      client: 'web',
+      intent: 'sign-in',
+      device: { id: device.id, kind: 'browser', name: 'Chrome on macOS', jwk: device.jwk },
+      return: '/market'
+    })
+    // A raw r‖s P-256 signature: 64 bytes, base64url.
+    expect(String(page.asked[1].body.signature)).toMatch(/^[A-Za-z0-9_-]{86}$/)
+    expect(page.assigned).toEqual(['https://auth.cookrew.dev/?request=r1'])
+  })
+
+  it('#create asks the page for its create-account screen', async () => {
+    const page = mount('#create', false, true, await heldDevice())
+    await settle(16)
+    expect(page.asked[0].body.intent).toBe('create')
+    expect(page.assigned).toEqual(['https://auth.cookrew.dev/?request=r1'])
   })
 
   it('leaves an ordinary page alone', async () => {
@@ -184,7 +279,7 @@ describe('the sign-in hash', () => {
   })
 
   it('answers a second click on the same link, which changes no URL', async () => {
-    const page = mount('', false)
+    const page = mount('', false, false, await heldDevice())
     await settle()
     expect(page.sheet.open).toBe(false)
     page.hashchange('#account')

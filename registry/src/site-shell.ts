@@ -279,8 +279,8 @@ function shell(options: ShellOptions, main: string): string {
         ? `<button class="btn sm" id="signin" data-signin="me">@${esc(who)}</button>`
         : `<a class="btn sm" href="/me">@${esc(who)}</a>`
       : options.kind === 'app'
-        ? `<button class="btn sm" id="signin" data-signin>${icon('key')} Sign in</button>`
-        : `<a class="btn sm" href="/market#account">${icon('key')} Sign in</a>`
+        ? `<button class="btn sm" id="signin" data-signin>${icon('key')} Sign in</button><button class="btn sm" id="create-account" data-signin="create">Create account</button>`
+        : `<a class="btn sm" href="/market#account">${icon('key')} Sign in</a><a class="btn sm" href="/market#create">Create account</a>`
   // The ladder's screens travel with the account sheet: every page that
   // carries site.js is a page a second factor can be asked on.
   const scripts = (options.kind === 'app' ? options.scripts ?? [] : [])

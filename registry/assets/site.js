@@ -239,9 +239,9 @@
       navigator.clipboard.writeText(el.dataset.copy).then(() => toast('Address copied. Paste it into Cookrew → Import a team.'))
     } else if (el.dataset.signin !== undefined) {
       event.preventDefault()
-      // The header's button and every card's "Sign in" are the one sheet.
+      // The header's buttons and every card's "Sign in" go to the one page.
       if (el.dataset.signin === 'me') location.assign('/me')
-      else openAccountSheet()
+      else openSignIn(el.dataset.signin === 'create' ? 'create' : 'sign-in')
     }
   })
 
@@ -778,7 +778,55 @@
     })
   }
 
-  function openAccountSheet() {
+  /*
+   * THE ONE SIGN-IN PAGE (auth.cookrew.dev).
+   *
+   * Signing in and making an account happen there, in front of the person,
+   * for every client alike. This page only opens the request: it names this
+   * browser's device key, proves it holds it by signing the registry's
+   * transcript, and goes. The verifier that spends the code coming back is
+   * the registry's own, in an HttpOnly cookie, so nothing that returns here is
+   * worth anything to a script. A registry without the page answers 404, and
+   * the sheet below is still the way in.
+   */
+  async function signInThroughAuthSite(intent) {
+    const device = await deviceIdentity()
+    const opened = await v2('POST', '/v2/auth/requests', {
+      client: 'web',
+      intent,
+      device: devicePayload(device),
+      return: location.pathname
+    })
+    if (opened.status === 404) return false
+    const failed = (out) => toast(out.body?.message ?? 'Sign-in could not start. Try again in a moment.', 5000)
+    if (opened.status !== 201 || typeof opened.body?.request !== 'string') {
+      failed(opened)
+      return true
+    }
+    const algorithm = device.jwk.kty === 'OKP' ? { name: 'Ed25519' } : { name: 'ECDSA', hash: 'SHA-256' }
+    const signature = await crypto.subtle.sign(algorithm, device.pair.privateKey, enc.encode(opened.body.transcript))
+    const proved = await v2('POST', `/v2/auth/requests/${encodeURIComponent(opened.body.request)}/proof`, { signature: b64u(signature) })
+    if (proved.status !== 204) {
+      failed(proved)
+      return true
+    }
+    location.assign(opened.body.authorizeUrl)
+    return true
+  }
+
+  let starting = false
+  function openSignIn(intent) {
+    if (starting) return
+    starting = true
+    void signInThroughAuthSite(intent)
+      .catch(() => false)
+      .then((handled) => {
+        starting = false
+        if (!handled) openAccountSheet(intent === 'create' ? 'register' : undefined)
+      })
+  }
+
+  function openAccountSheet(mode) {
     const dialog = accountSheet()
     if (!dialog) {
       // A document page carries no sheet. It used to fall through to the v1
@@ -790,6 +838,7 @@
     }
     if (dialog.open) return
     dialog.showModal()
+    if (mode === 'register') dialog.querySelector('[data-acct-tab="register"]')?.click()
     $('acct-username')?.focus()
   }
 
@@ -805,14 +854,14 @@
    * `hashchange` as well as load, because a second click on the same link
    * from the same page changes nothing about the URL the browser will report.
    */
-  const SHEET_HASH = /^#(account|signin)$/
+  const SHEET_HASH = /^#(account|signin|create)$/
   const openFromHash = async () => {
     if (!SHEET_HASH.test(location.hash)) return
     // Somebody already signed in does not want to be asked again: the same
     // link means "my account", and for them that page is /me.
     const out = await v2('GET', '/v2/me').catch(() => ({ status: 0 }))
     if (out.status === 200 && out.body?.username) location.assign('/me')
-    else openAccountSheet()
+    else openSignIn(location.hash === '#create' ? 'create' : 'sign-in')
   }
   window.addEventListener('hashchange', () => void openFromHash())
   void openFromHash()
@@ -1098,6 +1147,8 @@
     if (!button) return
     button.textContent = `@${out.body.username}`
     button.dataset.signin = 'me'
+    const create = $('create-account')
+    if (create) create.hidden = true
   })
 
   /* ── the crew builder (/start) ─────────────────────────────────────────── */
@@ -1154,8 +1205,8 @@
      * any more; the v1 key survives only to carry an old handle across to a
      * v2 account (migrateWithOldKey) and to keep its cookie fresh meanwhile.
      */
-    signIn: openAccountSheet,
-    account: openAccountSheet,
+    signIn: () => openSignIn('sign-in'),
+    account: () => openSignIn('sign-in'),
     toast,
     doorKey
   }
