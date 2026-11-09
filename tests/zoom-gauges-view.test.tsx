@@ -13,6 +13,7 @@ const reading = (over: Partial<Reading> = {}): Reading => ({
   memory: { usedBytes: 14.4 * GB, totalBytes: 16 * GB, swapUsedBytes: 9 * GB, kernelLevel: 2 },
   disk: { freeBytes: 212e9, totalBytes: 994e9 },
   gpuPercent: 12,
+  gpuAbsent: false,
   ...over
 })
 const html = (r: Reading | null | undefined): string => renderToStaticMarkup(<GaugeRow reading={r} />)
@@ -47,6 +48,19 @@ describe('a reading', () => {
     expect(page).toMatch(/data-gauge="gpu"[^>]*>.*no reading/)
     expect(page).not.toMatch(/data-gauge="gpu"[^>]*>.*scaleX/)
     expect(page).not.toContain('>0%<')
+  })
+})
+
+describe('a machine with no GPU', () => {
+  it('says GPU none, muted like a missing number, with no bar and no no reading', () => {
+    const page = html(reading({ gpuPercent: null, gpuAbsent: true }))
+    expect(page).toMatch(/data-gauge="gpu"[^>]*data-none[^>]*>.*>GPU<.*>none</)
+    expect(page).not.toContain('no reading')
+    expect(page).not.toMatch(/data-gauge="gpu"[^>]*>.*scaleX/)
+    expect(page).toContain('aria-label="GPU none"')
+  })
+  it('a GPU that could not be read still says no reading', () => {
+    expect(html(reading({ gpuPercent: null, gpuAbsent: false }))).toMatch(/data-gauge="gpu"[^>]*>.*no reading/)
   })
 })
 

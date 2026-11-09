@@ -90,7 +90,8 @@
   color: var(--zv-ink);
 }
 
-/* A narrow column cuts a number's words, not these two. */
+/* No number: "no reading", or "none" for a machine with no GPU. A narrow column
+   cuts a number's words, not these. */
 .zv-gauge[data-none] .zv-gauge-value {
   white-space: normal;
   color: var(--zv-muted);

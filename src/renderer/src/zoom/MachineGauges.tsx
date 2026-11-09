@@ -13,7 +13,7 @@
  * which is also what stops the asking.
  */
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { gaugeCells, NO_READING, type GaugeCell } from '../../../shared/machine-gauges'
+import { gaugeCells, NO_GPU, NO_READING, type GaugeCell } from '../../../shared/machine-gauges'
 import { atDevicesStop, gaugeStore, type GaugeReading } from './gauge-store'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { zoomStore } from './zoom-store'
@@ -28,11 +28,14 @@ const WAITING_CELLS: readonly GaugeCell[] = (['CPU', 'MEM', 'DISK', 'GPU'] as co
   tone: 'calm'
 }))
 
+/** No number in the cell: a failed read, or no GPU at all. Both are muted words, which may wrap. */
+const numberless = (cell: GaugeCell): boolean => cell.value === NO_READING || cell.value === NO_GPU
+
 const spoken = (cell: GaugeCell): string => `${cell.label} ${cell.value}${cell.sub ? `, ${cell.sub}` : ''}`
 
 function Cell({ cell }: { cell: GaugeCell }): React.JSX.Element {
   return (
-    <span className="zv-gauge" data-gauge={cell.key} data-tone={cell.tone} data-none={cell.value === NO_READING ? '' : undefined} role="img" aria-label={spoken(cell)}>
+    <span className="zv-gauge" data-gauge={cell.key} data-tone={cell.tone} data-none={numberless(cell) ? '' : undefined} role="img" aria-label={spoken(cell)}>
       <span className="zv-gauge-label">{cell.label}</span>
       <span className="zv-gauge-value">{cell.value}</span>
       {cell.sub !== null && <span className="zv-gauge-sub">{cell.sub}</span>}
