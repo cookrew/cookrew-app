@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>CookrewBase</key>
 	<string>$(COOKREW_BASE)</string>
+	<key>CookrewRegistry</key>
+	<string>$(COOKREW_REGISTRY)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -31,8 +33,6 @@
 	<string>Cookrew reaches your Mac on this network.</string>
 	<key>WKApplication</key>
 	<true/>
-	<key>WKCompanionAppBundleIdentifier</key>
-	<string>dev.cookrew.watch</string>
 	<key>WKWatchOnly</key>
 	<true/>
 </dict>

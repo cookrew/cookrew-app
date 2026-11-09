@@ -89,6 +89,10 @@ function host(pairing: WatchPairing, over: Partial<WatchHost> = {}): WatchHost {
     stop: async (id) => id === 'working',
     speaksTo: (id) => id !== 'shell',
     menuOnScreen: (id) => id === 'unparsed-menu',
+    workspaces: () => [
+      { id: 'ws', name: 'Cookrew Dev' },
+      { id: 'other', name: 'Elsewhere' }
+    ],
     accountKind: () => 'password',
     invite: async (current) =>
       current === 'right' ? { ok: true, code: 'K7QM-2XPD', expiresAt: Date.now() + 600_000 } : { ok: false, reason: 'bad_credentials' },
@@ -246,6 +250,10 @@ describe('browser input from a wrist', () => {
   it('points are fractions of the picture; anything outside it is refused', () => {
     expect(browserInputOf({ t: 'tap', x: 0.5, y: 0.25 }, viewport)).toEqual({ t: 'tap', x: 400, y: 150 })
     expect(browserInputOf({ t: 'tap', x: 1.2, y: 0.25 }, viewport)).toBeNull()
+    // A swipe is a share of the picture's height, so it moves the page as far as the finger moved on it, under the finger.
+    expect(browserInputOf({ t: 'scroll', dy: 90, fy: 0.5, x: 0.25, y: 0.75 }, viewport)).toEqual({ t: 'wheel', x: 200, y: 450, dy: 300 })
+    expect(browserInputOf({ t: 'scroll', fy: -9 }, viewport)).toEqual({ t: 'wheel', x: 400, y: 300, dy: -1800 })
+    expect(browserInputOf({ t: 'scroll', dy: 60 }, viewport)).toEqual({ t: 'wheel', x: 400, y: 300, dy: 60 })
     expect(browserInputOf({ t: 'tap', x: 'a', y: 0 }, viewport)).toBeNull()
   })
   it('a crown turn is a wheel at the middle of the page; Enter is a key; nothing else passes', () => {
@@ -341,6 +349,20 @@ describe('through the real gate', () => {
     expect((await call('/api/watch/item/n1', WALL)).status).toBe(401)
   })
 
+  it('the cards say every workspace, and one workspace’s cards are only its own', async () => {
+    const token = await paired()
+    const all = (await (await call('/api/watch/cards', token)).json()) as { workspaces: { id: string; agents: number; waiting: number }[] }
+    expect(all.workspaces).toEqual([
+      expect.objectContaining({ id: 'ws', name: 'Cookrew Dev', waiting: 1 }),
+      expect.objectContaining({ id: 'other', name: 'Elsewhere', waiting: 0, working: 0 })
+    ])
+    // The fixture draws one canvas for every workspace: its terminal is in Elsewhere's crew too, found by its id.
+    const one = (await (await call('/api/watch/cards?workspace=other', token)).json()) as { cards: { id: string; status: string; workspace: { id: string } }[] }
+    expect(one.cards.map((card) => [card.id, card.workspace.id, card.status])).toEqual([['replied', 'other', 'done']])
+    const mine = (await (await call('/api/watch/cards?workspace=ws', token)).json()) as { cards: unknown[] }
+    expect(mine.cards.length).toBeGreaterThan(0)
+  })
+
   it('a watch token is nothing anywhere off its list', async () => {
     const token = await paired()
     expect((await call('/api/workspace', token)).status).toBe(401)
@@ -370,6 +392,18 @@ describe('through the real gate', () => {
     const frame = await call('/api/watch/item/b1/frame', token)
     expect(frame.headers.get('content-type')).toBe('image/jpeg')
     expect((await call('/api/watch/item/b9/frame', token)).status).toBe(404)
+  })
+
+  it('a thumbnail only peeks: it asks for the picture the Mac already has, and starts no browser for it', async () => {
+    const frame = vi.fn(async () => ({ type: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 2]) }))
+    setWatchHost(host(pairing, { frame }))
+    const token = await paired()
+    expect((await call('/api/watch/item/b1/frame?w=160&peek=1', token)).status).toBe(200)
+    expect((await call('/api/watch/item/b1/frame?w=300', token)).status).toBe(200)
+    expect(frame.mock.calls).toEqual([
+      ['b1', 160, true],
+      ['b1', 300, false]
+    ])
   })
 
   it('a machine\'s screen is never driven from a wrist: refused out loud, and nothing reaches it', async () => {

@@ -70,12 +70,31 @@ public func eventsBetween(_ old: [Card], _ new: [Card]) -> [WatchEvent] {
   }
 }
 
+/**
+ * An agent starting to wait in a workspace the wrist is not inside: its tile's
+ * count rose. Inside one workspace the cards say only that one, so the others
+ * speak through their counts.
+ */
+public func eventsElsewhere(_ old: [WorkspaceTile], _ new: [WorkspaceTile], inside scope: String) -> [WatchEvent] {
+  let before = Dictionary(old.map { ($0.id, $0.waiting) }, uniquingKeysWith: { first, _ in first })
+  return new.compactMap { tile in
+    guard tile.id != scope, let was = before[tile.id], tile.waiting > was else { return nil }
+    return .needsYou(tile.name)
+  }
+}
+
 public let newAgentPage = "__new_agent__"
 
 @MainActor
 @Observable
 public final class WatchStore {
   public private(set) var cards: [Card] = []
+  /** Every workspace on the Mac, counted: the workspaces stop. */
+  public private(set) var workspaces: [WorkspaceTile] = []
+  /** The workspace the wrist has zoomed into; nil above them. */
+  public private(set) var scope: String?
+  /** The Mac's own active workspace: the dot on its tile. */
+  public private(set) var activeWorkspaceId: String?
   public private(set) var link: WatchLink = .connecting
   /** The page the crown is on: a card's id, or newAgentPage. Kept by id, so a reorder never moves it. */
   public var page: String?
@@ -89,6 +108,10 @@ public final class WatchStore {
   @ObservationIgnored private let now: () -> Date
   @ObservationIgnored private let feel: (WatchEvent) -> Void
   @ObservationIgnored private var tag: String?
+  /** Moves on every zoom: a read sent before one is answered for a place the wrist has left. */
+  @ObservationIgnored private var zooms = 0
+  /** The workspace the cards in hand are all from, when they were read for one. */
+  @ObservationIgnored private var cardsScope: String?
   @ObservationIgnored private let sleep: @Sendable (Double) async -> Void
   /**
    * What is on screen depends on the time as well as the data: a row's fill
@@ -125,34 +148,83 @@ public final class WatchStore {
 
   public var currentCard: Card? { cards.first { $0.id == page } }
 
+  private func shown(_ list: [Card]) -> [Card] {
+    guard let scope else { return list }
+    return list.filter { $0.workspace.id == scope }
+  }
+
+  /** The cards of the workspace zoomed into, or all of them above it. */
+  public var visibleCards: [Card] { shown(cards) }
+
+  /** Where a new agent from the wrist starts: inside a workspace, there, as a phone seated in it starts one; above them, the Mac's own. */
+  public var newAgentWorkspace: String? {
+    let id = scope ?? activeWorkspaceId
+    return workspaces.first { $0.id == id }?.name ?? cards.first { $0.workspace.id == id }?.workspace.name
+  }
+
+  /**
+   * Zoom into a workspace, or back out with nil. Its cards are read afresh, and
+   * the crown starts on its first card. Going in is not news: nothing buzzes.
+   */
+  public func enter(workspace: String?) async {
+    guard workspace != scope else { return }
+    scope = workspace
+    zooms &+= 1
+    tag = nil
+    // With no card in hand yet, none: the reply's first card takes the page, not the new agent.
+    page = visibleCards.first?.id
+    await refresh()
+  }
+
   /** Once, or on every poll: a 304 changes nothing. */
   public func refresh() async {
+    let asked = scope
+    let zoom = zooms
+    // The wrist zoomed while this was out, even out and back: its answer, or its failure, is for a place it has left.
+    var current: Bool { zoom == zooms }
     do {
-      switch try await api.cards(tag: tag) {
+      let answer = try await api.cards(tag: tag, workspace: asked)
+      guard current else { return }
+      switch answer {
       case .same:
         link = .live
       case .new(let reply, let nextTag):
         tag = nextTag
-        adopt(reply.cards)
+        adopt(reply, readFor: asked)
       }
       signedOut = false
     } catch WatchError.unpaired {
       unpaired = true
     } catch WatchError.signedOut {
+      guard current else { return }
       signedOut = true
       link = .lost
     } catch {
+      guard current else { return }
       link = .lost
     }
   }
 
-  func adopt(_ next: [Card]) {
+  func adopt(_ reply: CardsReply, readFor asked: String? = nil) {
+    let next = reply.cards
+    let tiles = reply.workspaces ?? tilesFrom(next)
     let first = link != .live && cards.isEmpty
-    let events = first ? [] : eventsBetween(cards, next)
+    var events: [WatchEvent] = []
+    if !first {
+      // A Mac too old to scope still sends every card; inside a workspace only its own speak.
+      events = eventsBetween(shown(cards), shown(next))
+      // The cards in hand, or these, were one workspace's: every other one speaks through its count.
+      if let inside = asked ?? cardsScope { events += eventsElsewhere(workspaces, tiles, inside: inside) }
+    }
     cards = next
+    // Only cards that really are one workspace's: a Mac too old to scope sends them all, and those speak for themselves.
+    cardsScope = asked.flatMap { id in next.allSatisfy { $0.workspace.id == id } ? id : nil }
+    workspaces = tiles
+    activeWorkspaceId = reply.activeWorkspaceId
     link = .live
     // A card that left takes its page with it; the first page is the one that needs the owner.
-    if page != newAgentPage, page == nil || !next.contains(where: { $0.id == page }) { page = next.first?.id ?? newAgentPage }
+    let visible = shown(next)
+    if page != newAgentPage, page == nil || !visible.contains(where: { $0.id == page }) { page = visible.first?.id ?? newAgentPage }
     readIds = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
     for card in next where card.choice == nil { answers[card.id] = nil }
     for event in events { feel(event) }
@@ -205,7 +277,7 @@ public final class WatchStore {
         guard let menu = card?.choice?.id else { return }
         try await api.answer(.words(words), menu: menu, to: id)
       case .newAgent:
-        try await api.newAgent(words)
+        try await api.newAgent(words, in: scope)
       case .rowsOnly:
         return
       }
@@ -302,8 +374,11 @@ public final class WatchStore {
 #if DEBUG
 public extension WatchStore {
   /** For the drawings of each state: a store standing as it would. */
-  func stage(cards: [Card], page: String?, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil) {
+  func stage(cards: [Card], page: String?, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil, scope: String? = nil, workspaces: [WorkspaceTile]? = nil) {
     self.cards = cards
+    self.scope = scope
+    self.workspaces = workspaces ?? tilesFrom(cards)
+    self.activeWorkspaceId = self.workspaces.first { $0.active }?.id
     self.page = page
     self.link = .live
     self.drafts = draft

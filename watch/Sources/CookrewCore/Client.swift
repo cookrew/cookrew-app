@@ -25,12 +25,17 @@ public enum Fresh<Value: Sendable>: Sendable {
 /** Everything the app asks of a Mac. */
 public protocol WatchAPI: Sendable {
   func cards(tag: String?) async throws -> Fresh<CardsReply>
+  func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply>
   func send(_ text: String, to id: String) async throws
   func answer(_ act: MenuAct, menu: String, to id: String) async throws
   func stop(_ id: String) async throws
   func seen(_ id: String) async throws
   func newAgent(_ text: String) async throws
+  /** A new agent in this workspace, as a phone seated in it makes one; nil is the Mac's own. */
+  func newAgent(_ text: String, in workspace: String?) async throws
   func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data>
+  /** A thumbnail's picture: what the Mac already has, starting no browser. */
+  func peek(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data>
   func input(_ input: BrowserInput, to id: String) async throws
   func note(_ id: String) async throws -> NoteBody
   /** Tell the Mac to end this watch's token. */
@@ -40,6 +45,17 @@ public protocol WatchAPI: Sendable {
 
 public extension WatchAPI {
   var line: WatchLine { .direct }
+
+  func newAgent(_ text: String, in workspace: String?) async throws {
+    try await newAgent(text)
+  }
+
+  func peek(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> { .same }
+
+  /** One workspace's cards. A Mac that cannot scope sends every card, and the store keeps the ones asked for. */
+  func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply> {
+    try await cards(tag: tag)
+  }
 }
 
 /** The request cannot have reached the Mac: nothing was connected. */
@@ -319,7 +335,12 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   public func cards(tag: String?) async throws -> Fresh<CardsReply> {
-    let (data, http) = try await call("GET", "api/watch/cards", tag: tag)
+    try await cards(tag: tag, workspace: nil)
+  }
+
+  public func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply> {
+    let query = workspace.map { [URLQueryItem(name: "workspace", value: $0)] } ?? []
+    let (data, http) = try await call("GET", "api/watch/cards", query: query, tag: tag)
     if http.statusCode == 304 { return .same }
     try checked(data, http)
     return .new(try JSONDecoder().decode(CardsReply.self, from: data), tag: http.value(forHTTPHeaderField: "etag"))
@@ -351,11 +372,28 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   public func newAgent(_ text: String) async throws {
-    try await post("api/watch/new", ["text": text])
+    try await newAgent(text, in: nil)
+  }
+
+  public func newAgent(_ text: String, in workspace: String?) async throws {
+    // The seat is the phone's own word for it (mobile-api.ts · deviceSeat): this request's focus, nothing moved on the Mac.
+    let seat = workspace.map { [URLQueryItem(name: "seat", value: $0)] } ?? []
+    let (data, http) = try await call("POST", "api/watch/new", query: seat, body: ["text": text])
+    try checked(data, http)
   }
 
   public func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> {
-    let (data, http) = try await call("GET", "api/watch/item/\(id)/frame", query: [URLQueryItem(name: "w", value: String(width))], tag: tag)
+    try await picture(id, width: width, tag: tag, peek: false)
+  }
+
+  public func peek(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> {
+    try await picture(id, width: width, tag: tag, peek: true)
+  }
+
+  private func picture(_ id: String, width: Int, tag: String?, peek: Bool) async throws -> Fresh<Data> {
+    var query = [URLQueryItem(name: "w", value: String(width))]
+    if peek { query.append(URLQueryItem(name: "peek", value: "1")) }
+    let (data, http) = try await call("GET", "api/watch/item/\(id)/frame", query: query, tag: tag)
     if http.statusCode == 304 { return .same }
     try checked(data, http)
     return .new(data, tag: http.value(forHTTPHeaderField: "etag"))

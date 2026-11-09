@@ -3914,6 +3914,9 @@ const waker = new AgentWaker<PtySession>({
   isTerminal: (id) => store.nodeAcrossWorkspaces(id)?.node.kind === 'terminal',
   paneAlive,
   boot: (id) => ensureTerminalMirror(id),
+  // A husk herdr restored is alive to paneAlive; the boot that just resumed its
+  // agent is what makes it a cold start (herdr-conf.ts turns herdr's own resume off).
+  booted: (id, since) => (multiplexer()?.lastBootAt?.(sessionNameFor(id)) ?? -Infinity) >= since,
   // A respawned TUI paints its resumed transcript and swallows the CRs sent
   // meanwhile (ask-cold-start); Claude can also sit silent before drawing
   // anything, so a Claude session waits for its input box as well.
@@ -9127,6 +9130,7 @@ function registerIpc(handlers: RestoreHandlers): void {
         if (!session) return false
         return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
       },
+      workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
       accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
       invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
     })

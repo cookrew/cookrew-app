@@ -123,8 +123,31 @@
     return renderer.cgImage
   }
 
+  private let devices = [
+    DeviceRow(id: "m1", name: "MacBook Pro", online: true, workspaces: 3, paired: true),
+    DeviceRow(id: "m2", name: "Studio", online: false, workspaces: 1, paired: false)
+  ]
+  private let names = [MachineWorkspace(id: "w", name: "Cookrew Dev"), MachineWorkspace(id: "g", name: "GOAT Team"), MachineWorkspace(id: "p", name: "Playground")]
+
+  /** The system's bar over a stop: its back chevron and title, which a drawing has no stack to make. */
+  @MainActor private func titled(_ title: String, back: Bool, _ view: some View) -> AnyView {
+    AnyView(VStack(alignment: .leading, spacing: 2) {
+      HStack(spacing: 4) {
+        if back { Text("‹").font(.system(size: 20, weight: .semibold)) }
+        Text(title).font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1)
+      }
+      .foregroundStyle(Color(hex: 0xA8692B))
+      .padding(.leading, 12)
+      .padding(.trailing, 50)
+      .frame(height: 24)
+      view
+    })
+  }
+
   @MainActor private func shots() -> [Shot] {
     let blank = store(page: nil)
+    let inside = store(page: nil)
+    inside.stage(cards: cards, page: nil, scope: "w")
     let page = pagePicture()
     return [
       Shot(name: "01 needs you · menu", view: card("a1")),
@@ -140,10 +163,12 @@
       Shot(name: "11 asleep", view: card("a5")),
       Shot(name: "12 refused", view: card("a4", notice: "A dispatch is in flight")),
       Shot(name: "13 new agent", view: AnyView(NewAgentPage(store: blank))),
-      Shot(name: "14 all agents", view: AnyView(CrewGrid(store: blank, onPick: { _ in }))),
+      Shot(name: "14 agents · one workspace", view: titled("Cookrew Dev", back: true, CrewGrid(store: inside, onNewAgent: {}, onPick: { _ in }))),
       Shot(name: "15 browser", view: AnyView(BrowserPage(store: blank, item: items[0], first: page))),
       Shot(name: "16 note", view: AnyView(NotePage(store: blank, item: items[2], first: NoteBody(name: "plan", content: "**Watch baseline**\n\nCards first, then the box.\nCrown walks the cards.")))),
-      Shot(name: "17 pairing", view: AnyView(PairView(address: .constant("192.168.2.40"), digits: "4821", busy: false, failure: nil, onDigit: { _ in }, onDelete: {})))
+      Shot(name: "17 pairing", view: AnyView(PairView(address: .constant("192.168.2.40"), digits: "4821", busy: false, failure: nil, onDigit: { _ in }, onDelete: {}))),
+      Shot(name: "18 devices", view: titled("Devices", back: false, DevicesPage(rows: devices, onOpen: {}, onThisWatch: {}))),
+      Shot(name: "19 workspaces", view: titled("MacBook Pro", back: true, WorkspacesPage(tiles: mergedTiles(blank.workspaces, names: names), onOpen: { _ in })))
     ]
   }
 
@@ -189,7 +214,7 @@
       var list = store.cards.prefix(11).map { card in
         Shot(name: card.name, view: AnyView(CardPage(store: store, card: card, onFace: {}, onItem: { _ in })))
       }
-      list.append(Shot(name: "all agents", view: AnyView(CrewGrid(store: store, onPick: { _ in }))))
+      list.append(Shot(name: "workspaces", view: AnyView(WorkspacesPage(tiles: store.workspaces, onOpen: { _ in }))))
       if let item = store.cards.flatMap(\.items).first(where: { $0.kind == .browser }) {
         // Asking is what makes a picture exist: the app polls, so this does too.
         for _ in 0..<12 {

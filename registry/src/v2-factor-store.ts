@@ -25,7 +25,8 @@ import { mintTotpSecret, otpauthUrl, totpStepFor } from './v2-totp'
 export const FACTORS_FILE = 'factors-v2.json'
 
 /** Twenty is more keys than a person owns, and a ceiling a stranger cannot spend. */
-const PASSKEYS_MAX = 20
+/** As many passkeys as one account holds; the page asks before a browser makes one more. */
+export const PASSKEYS_MAX = 20
 const NAME_MAX = 64
 
 export interface TotpState {

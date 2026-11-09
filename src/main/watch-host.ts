@@ -10,6 +10,9 @@ import { watchBases } from './watch-bases'
 import type { WatchAccountKind, WatchHost, WatchInvite } from './watch-routes'
 import type { WatchPairing } from './watch-pairing'
 
+/** Shrunk pictures kept: a card's thumbnails and the page open on the wrist. */
+const SHRUNK_KEPT = 32
+
 export interface WatchHostDeps {
   readonly pairing: WatchPairing
   readonly deviceName: () => string
@@ -27,30 +30,40 @@ export interface WatchHostDeps {
   readonly stop: (terminalId: string) => Promise<boolean>
   /** What the terminal shows now; null when nothing is attached. */
   readonly screen: (terminalId: string) => string | null
+  readonly workspaces: () => readonly { readonly id: string; readonly name: string }[]
   readonly accountKind: () => WatchAccountKind
   readonly invite: (current: string, here: boolean) => Promise<WatchInvite>
 }
 
 export function createWatchHost(deps: WatchHostDeps): WatchHost {
   /** The last picture made small, kept while its source stands: a poll of a still page costs no resize. */
-  let shrunk: { source: Buffer; width: number; data: Buffer } | null = null
+  /** Shrunk pictures, by browser and width: a card's thumbnails and the open page do not push each other out. */
+  const shrunk = new Map<string, { source: Buffer; data: Buffer }>()
   return {
     pairing: deps.pairing,
     desktopName: deps.deviceName,
     bases: () => watchBases(deps.endpoints(), deps.httpPort),
     canvas: deps.canvas,
-    async frame(browserId, width) {
+    async frame(browserId, width, peek) {
       // A card nobody has opened has no Chrome yet: looking at it starts one,
-      // as a phone opening it does. The next poll has its picture.
-      await deps.browser(browserId).catch(() => null)
-      await deps.thumbViewed(browserId)
+      // as a phone opening it does. The next poll has its picture. A thumbnail
+      // only peeks: a card's row of them must not start a Chrome each.
+      if (!peek) {
+        await deps.browser(browserId).catch(() => null)
+        await deps.thumbViewed(browserId)
+      }
       const thumb = deps.thumb(browserId)
       if (!thumb) return null
-      if (shrunk?.source === thumb.data && shrunk.width === width) return { type: 'image/jpeg', data: shrunk.data }
+      const key = `${browserId}@${width}`
+      const known = shrunk.get(key)
+      if (known?.source === thumb.data) return { type: 'image/jpeg', data: known.data }
       const image = nativeImage.createFromBuffer(thumb.data)
       if (image.isEmpty() || image.getSize().width <= width) return thumb
       const data = image.resize({ width, quality: 'good' }).toJPEG(62)
-      shrunk = { source: thumb.data, width, data }
+      shrunk.delete(key)
+      shrunk.set(key, { source: thumb.data, data })
+      // The oldest goes first: a few cards' worth is all a wrist looks at.
+      while (shrunk.size > SHRUNK_KEPT) shrunk.delete(shrunk.keys().next().value as string)
       return { type: 'image/jpeg', data }
     },
     browser: deps.browser,
@@ -71,6 +84,7 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
       const screen = deps.screen(terminalId)
       return screen !== null && menuHeldOnScreen(screen)
     },
+    workspaces: deps.workspaces,
     accountKind: deps.accountKind,
     invite: deps.invite
   }

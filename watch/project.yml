@@ -26,6 +26,8 @@ targets:
   Cookrew:
     type: application.watchapp2-container
     platform: iOS
+    # The one scheme to build and run: xcodegen makes none for a target unless asked.
+    scheme: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.cookrew.watch
@@ -48,8 +50,8 @@ targets:
       properties:
         CFBundleDisplayName: Cookrew
         WKApplication: true
+        # Watch-only: watchOS refuses to install one that also names a companion app.
         WKWatchOnly: true
-        WKCompanionAppBundleIdentifier: dev.cookrew.watch
         CookrewBase: $(COOKREW_BASE)
         CookrewRegistry: $(COOKREW_REGISTRY)
         NSAppTransportSecurity:

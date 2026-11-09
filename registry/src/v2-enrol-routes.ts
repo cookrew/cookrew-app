@@ -7,7 +7,7 @@ import { parseRegistration } from './v2-passkeys'
 import { qrRows } from './v2-qr'
 import type { Decision } from './v2-pending'
 import { signedIn, type Signed, type V2Context } from './v2-routes'
-import { heldIfPasswordless, stepUpHeld } from './v2-step-up'
+import { hasStepUpFactor, heldIfPasswordless, stepUpHeld } from './v2-step-up'
 
 /**
  * IDENTITY v2, PHASE 4 — ADDING A FACTOR, AND ANSWERING FOR ONE.
@@ -85,6 +85,7 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
   if (rest.length === 2 && rest[0] === 'passkeys' && rest[1] === 'options' && method === 'POST') {
     void heldIfPasswordless(ctx, signed, 'add-factor').then((go) => {
       if (go) passkeyOptions(ctx, who, signed.account.displayName)
+      else enrolLog(ctx, `refused why=${gateRefusal(ctx, who)} at=me-options`)
     })
     return true
   }
@@ -330,11 +331,37 @@ async function confirmTotp(ctx: V2Context, username: string): Promise<void> {
 
 // ── passkeys ──────────────────────────────────────────────────────────────
 
+/**
+ * ONE LINE PER ENROLMENT OUTCOME, so the next "a passkey cannot be added" is
+ * in the registry log instead of only on somebody's screen. Never a name, a
+ * credential or an id: the outcome and where it happened.
+ */
+export const enrolLog = (ctx: V2Context, line: string): void => ctx.v2.auth?.log(`passkey enrolment: ${line}`)
+
+/**
+ * What the shared gate just said, read back from the state it judged: a
+ * passwordless account brings no password, so the gate answered the alarm,
+ * the missing provider trip, or the ladder.
+ */
+function gateRefusal(ctx: V2Context, username: string): string {
+  if (ctx.v2.factors.store.mustChangePassword(username)) return 'password_change_required'
+  return hasStepUpFactor(ctx, username) ? 'step_up' : 'provider_required'
+}
+
 function passkeyOptions(ctx: V2Context, username: string, displayName: string): void {
+  json(ctx.response, 200, creationOptions(ctx, username, displayName, ctx.v2.factors.challenges.issue(`enrol|${username}`)))
+}
+
+/**
+ * WHAT navigator.credentials.create IS ASKED FOR, wherever the ceremony runs.
+ * The rpId is the relying party's: on the auth origin it is still the
+ * product's host, so a passkey made there opens the account on both.
+ */
+export function creationOptions(ctx: V2Context, username: string, displayName: string, challenge: string): Record<string, unknown> {
   const { rpId } = relyingParty(ctx)
   const known = ctx.v2.factors.store.passkeys(username)
-  json(ctx.response, 200, {
-    challenge: ctx.v2.factors.challenges.issue(`enrol|${username}`),
+  return {
+    challenge,
     rp: { id: rpId, name: 'Cookrew' },
     user: {
       id: ctx.v2.factors.store.userHandle(username),
@@ -352,7 +379,7 @@ function passkeyOptions(ctx: V2Context, username: string, displayName: string): 
     attestation: 'none',
     timeout: 120_000,
     excludeCredentials: known.map((k) => ({ type: 'public-key', id: k.credentialId }))
-  })
+  }
 }
 
 async function addPasskey(ctx: V2Context, username: string): Promise<void> {
@@ -374,12 +401,14 @@ async function addPasskey(ctx: V2Context, username: string): Promise<void> {
   const { clientDataJSON, attestationObject } = inner as Record<string, unknown>
   const challenge = spendChallenge(ctx.v2.factors.challenges, `enrol|${username}`, clientDataJSON)
   if (challenge === null) {
+    enrolLog(ctx, 'refused why=challenge at=me')
     refuseFactor(ctx.response, 401, 'passkey_refused')
     return
   }
   const { origin, rpId } = relyingParty(ctx)
   const read = parseRegistration({ clientDataJSON, attestationObject }, { challenge, origin, rpId })
   if (!read.ok) {
+    enrolLog(ctx, 'refused why=attestation at=me')
     refuseFactor(ctx.response, 400, 'passkey_refused')
     return
   }
@@ -390,12 +419,15 @@ async function addPasskey(ctx: V2Context, username: string): Promise<void> {
     signCount: read.signCount
   })
   if (!added.ok) {
-    refuseFactor(
-      ctx.response,
-      added.reason === 'bad_name' ? 400 : 409,
-      added.reason === 'too_many' ? 'passkey_limit' : added.reason === 'already_known' ? 'passkey_known' : 'bad_name'
-    )
+    const error = addRefusal(added.reason)
+    enrolLog(ctx, `refused why=${error} at=me`)
+    refuseFactor(ctx.response, added.reason === 'bad_name' ? 400 : 409, error)
     return
   }
+  enrolLog(ctx, 'added at=me')
   json(ctx.response, 201, { id: added.passkey.id, name: added.passkey.name, addedAt: added.passkey.addedAt })
 }
+
+/** The store's refusal, in the ladder's words. */
+export const addRefusal = (reason: 'too_many' | 'already_known' | 'bad_name'): 'passkey_limit' | 'passkey_known' | 'bad_name' =>
+  reason === 'too_many' ? 'passkey_limit' : reason === 'already_known' ? 'passkey_known' : 'bad_name'

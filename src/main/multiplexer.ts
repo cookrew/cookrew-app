@@ -257,6 +257,16 @@ export interface Multiplexer {
   ensureSession(spec: AttachSpec): void
 
   /**
+   * When ensureSession last typed this session's boot, in ms since the epoch:
+   * into a pane it made, or into a husk the server restored. Null when it only
+   * ever re-attached a running agent. A caller that saw the pane alive learns
+   * from this that the agent behind it only just started and is not yet
+   * taking input.
+   * Optional: a backend that never boots into a surviving pane leaves it out.
+   */
+  lastBootAt?(name: string): number | null
+
+  /**
    * Prepare an existing session for a fresh attach after its client dropped.
    *
    * Optional because tmux/direct attach failures are ordinary process exits.
