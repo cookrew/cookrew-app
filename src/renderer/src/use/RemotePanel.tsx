@@ -128,6 +128,7 @@ export function RemoteBarView({
   onFit,
   band = null,
   extras = null,
+  notice = null,
   measureRef
 }: {
   control: CardControl
@@ -147,6 +148,8 @@ export function RemoteBarView({
   extras?: ReactNode
   /** The row's content, measured for the band's height. */
   measureRef?: Ref<HTMLDivElement>
+  /** A word for the person (a copy, a note): it takes the status's place, so it never stands on the picture. */
+  notice?: ReactNode
 }): React.JSX.Element {
   const line = controlLine(control, where, now)
   const mine = control.until !== null
@@ -164,6 +167,7 @@ export function RemoteBarView({
     onTouchStart: keep,
     onTouchEnd: keep,
     onClick: keep,
+    onPointerMove: keep,
     onWheel: keep,
     onContextMenu: keep
   } as const
@@ -173,14 +177,19 @@ export function RemoteBarView({
     return (
       <div className="rp-bar rp-bar-band rp-bar-pill" {...shared}>
         <span className={`rp-link rp-link-${connection}`} aria-label={CONNECTION[connection]} />
-        <span className="rp-pill-state" title={said}>{mine ? `${minutes} min` : control.heldBy !== null ? 'Held' : control.switchOn ? 'View' : 'Off'}</span>
+        {/* Everything said stays inside the column: an error or a notice takes the state's place. */}
+        {error ? (
+          <span className="rp-pill-state rp-bar-error" role="alert" title={error}>{error}</span>
+        ) : notice ? (
+          <span className="rp-pill-state">{notice}</span>
+        ) : (
+          <span className="rp-pill-state" title={said}>{mine ? `${minutes} min` : control.heldBy !== null ? 'Held' : control.switchOn ? 'View' : 'Off'}</span>
+        )}
         {canTake && <button type="button" className="rp-bar-btn rp-take" aria-label="Take control" title="Take control" disabled={busy} onClick={onTake}>Take</button>}
         {mine && <button type="button" className="rp-bar-btn" aria-label="Give back" title="Give back" disabled={busy} onClick={onGive}>Give</button>}
         {zoomed && <button type="button" className="rp-bar-btn" aria-label="Fit" title="Fit" onClick={onFit}>Fit</button>}
         {extras}
         <button type="button" className="rp-bar-btn rp-end" aria-label="End session" title="End session" onClick={onEnd}>End</button>
-        {/* Said only after the person pressed something here, beside the pill. */}
-        {error && <span className="rp-pill-say" role="alert">{error}</span>}
       </div>
     )
   }
@@ -192,6 +201,8 @@ export function RemoteBarView({
           {/* One line, whatever is said: an error takes this place, so the band keeps its height. */}
           {error ? (
             <span className="rp-control rp-bar-error" role="alert" title={error}>{error}</span>
+          ) : notice ? (
+            <span className="rp-control rp-notice">{notice}</span>
           ) : (
             <span className="rp-control" title={line.text}>{mine ? <Label long={line.text} short={`${minutes} min left`} /> : line.text}</span>
           )}
@@ -204,7 +215,8 @@ export function RemoteBarView({
           </span>
         </div>
         {hint && <p className="rp-bar-hint">{hint}</p>}
-        {awake && <p className="rp-bar-hint">{awake}</p>}
+        {/* Always its line, said or not: other viewers coming and going must not move the picture. */}
+        {band ? <p className={`rp-bar-hint${awake ? '' : ' rp-unsaid'}`} aria-hidden={awake ? undefined : true}>{awake ?? '\u00a0'}</p> : awake && <p className="rp-bar-hint">{awake}</p>}
       </div>
     </div>
   )

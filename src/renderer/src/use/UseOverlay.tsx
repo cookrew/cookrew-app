@@ -71,6 +71,7 @@ export function UseOverlay({
   onEnd,
   band = null,
   barExtras = null,
+  barNotice = null,
   onBarHeight
 }: {
   card: string
@@ -91,6 +92,8 @@ export function UseOverlay({
   barExtras?: ReactNode
   /** The row's measured height, for the band. */
   onBarHeight?: (height: number) => void
+  /** A word for the person (a copy, a note), said in the bar's status place. */
+  barNotice?: ReactNode
 }): JSX.Element | null {
   const cursors = useCardCursors(card)
   const roster = useRoster()
@@ -119,7 +122,7 @@ export function UseOverlay({
         </div>
       )}
       {gone && <GoneOffer card={card} />}
-      {bar && <RemoteBar card={card} control={bar} connection={reconnecting ? 'reconnecting' : live ? 'live' : 'stalled'} zoomed={zoomed} onFit={onFit} onEnd={onEnd} band={band} extras={barExtras} onHeight={onBarHeight} />}
+      {bar && <RemoteBar card={card} control={bar} connection={reconnecting ? 'reconnecting' : live ? 'live' : 'stalled'} zoomed={zoomed} onFit={onFit} onEnd={onEnd} band={band} extras={barExtras} notice={barNotice} onHeight={onBarHeight} />}
       {cover && <RemoteCover state={cover} onEnd={onEnd} />}
     </div>
   )
@@ -183,7 +186,7 @@ function useMeasuredHeight(onHeight: ((height: number) => void) | undefined): Re
   return ref
 }
 
-function RemoteBar({ card, control, connection, zoomed, onFit, onEnd, band, extras, onHeight }: { card: string; control: NonNullable<UseStatus['control']>; connection: RemoteConnection; zoomed: boolean; onFit?: () => void; onEnd?: () => void; band: BarBand | null; extras: ReactNode; onHeight?: (height: number) => void }): JSX.Element {
+function RemoteBar({ card, control, connection, zoomed, onFit, onEnd, band, extras, notice, onHeight }: { card: string; control: NonNullable<UseStatus['control']>; connection: RemoteConnection; zoomed: boolean; onFit?: () => void; onEnd?: () => void; band: BarBand | null; extras: ReactNode; notice: ReactNode; onHeight?: (height: number) => void }): JSX.Element {
   const measureRef = useMeasuredHeight(band?.place === 'row' ? onHeight : undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -216,7 +219,7 @@ function RemoteBar({ card, control, connection, zoomed, onFit, onEnd, band, extr
   }
   return (
     <>
-      <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} band={band} extras={extras} measureRef={measureRef} />
+      <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} band={band} extras={extras} notice={notice} measureRef={measureRef} />
       {refusal && <RemoteRefusalCover state={refusal} onRetry={() => ask(true)} onDismiss={() => setRefusal(null)} />}
     </>
   )

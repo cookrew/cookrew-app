@@ -38,7 +38,7 @@ describe('RemoteBarView in its band', () => {
 
   it('a press, a touch, a click and a wheel on the bar never go on to the machine', () => {
     const element = root(props(holding))
-    for (const handler of ['onPointerDown', 'onTouchStart', 'onTouchEnd', 'onClick', 'onWheel', 'onContextMenu']) {
+    for (const handler of ['onPointerDown', 'onPointerMove', 'onTouchStart', 'onTouchEnd', 'onClick', 'onWheel', 'onContextMenu']) {
       const event = fakeEvent()
       ;(element.props[handler] as (e: unknown) => void)(event)
       expect(event.stopPropagation, handler).toHaveBeenCalled()
@@ -55,6 +55,27 @@ describe('RemoteBarView in its band', () => {
     expect(lines(html(watching))).toBe(lines(html(holding)))
     expect(html(watching)).toContain('Take control')
     expect(html(holding)).toContain('Give back')
+  })
+
+  it('another viewer coming or going (awake) keeps the same lines: the band never moves for it', () => {
+    const html = (awake: boolean, control: CardControl) => renderToStaticMarkup(<RemoteBarView {...props({ ...control, awake })} />)
+    expect(lines(html(true, holding))).toBe(lines(html(false, holding)))
+    expect(lines(html(false, watching))).toBe(lines(html(true, holding)))
+  })
+
+  it('a notice (a copy, a note) takes the status place, not the picture and not the buttons', () => {
+    const plain = renderToStaticMarkup(<RemoteBarView {...props(holding)} />)
+    const told = renderToStaticMarkup(<RemoteBarView {...props(holding, { notice: <button type="button">Copied on the page · tap to copy here</button> })} />)
+    expect(told).toContain('Copied on the page')
+    expect(told).not.toContain('You have control')
+    expect(told).toContain('Give back')
+    expect(lines(told)).toBe(lines(plain))
+  })
+
+  it('in the pill an error stays inside the column, in the state place', () => {
+    const html = renderToStaticMarkup(<RemoteBarView {...props(holding, { band: pill, error: 'Could not give it back.' })} />)
+    expect(html).toMatch(/class="rp-pill-state rp-bar-error"[^>]*>Could not give it back\./)
+    expect(html).not.toContain('rp-pill-say')
   })
 
   it('an error takes the place of the control line instead of adding one', () => {

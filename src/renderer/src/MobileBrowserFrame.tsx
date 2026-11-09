@@ -35,7 +35,7 @@ import {
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
 import { NO_ZOOM, panZoom, pinchZoom, type FrameZoom } from './frame-zoom'
-import { pictureFit, remoteLayout, ROW_HEIGHT_GUESS } from './use/remote-layout'
+import { hitArea, pictureFit, remoteLayout, ROW_HEIGHT_GUESS } from './use/remote-layout'
 import { FRAME_CONTROLS } from './use/RemotePanel'
 import { thumbStore, useThumb } from './activity-thumb-store'
 import { stepOut } from './zoom/zoom-path'
@@ -596,6 +596,11 @@ export function MobileBrowserFrame({
     }
   }, [interactive, sendFrameInput, pump])
 
+  /** A view point is on the picture itself, not on the bar, its band or a margin (remote-layout.ts · hitArea). */
+  const onPicture = (clientX: number, clientY: number): boolean => {
+    const r = boxRef.current?.getBoundingClientRect()
+    return r !== undefined && hitArea(layout, fit, { x: clientX - r.left, y: clientY - r.top }) === 'picture'
+  }
   const framePointAt = (clientX: number, clientY: number): { x: number; y: number } | null => {
     const box = boxRef.current
     if (!box || natural.w <= 0) return null
@@ -682,6 +687,9 @@ export function MobileBrowserFrame({
     const dragging = e.pointerId === mousePointerId.current
     // Not pressed: a HOVER, so menus open, links underline and tooltips show.
     if (!dragging && mousePointerId.current !== null) return
+    // A hover off the picture (the bar, its band, a margin) is not the machine's: mapped, it
+    // would be clamped onto the screen's edge and move its pointer there (hot corners, menu bar).
+    if (!dragging && computerCard && !onPicture(e.clientX, e.clientY)) return
     const point = framePoint(e)
     if (!point) return
     if (dragging) mouseLastPoint.current = point
@@ -747,7 +755,11 @@ export function MobileBrowserFrame({
   const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
   onWheelRef.current = (e: WheelEvent): void => {
     // Native, so the bar's own stopPropagation never reaches here: a wheel on Cookrew's controls is theirs.
-    if (e.target instanceof Element && e.target.closest(FRAME_CONTROLS)) return
+    if (e.target instanceof Element && e.target.closest(FRAME_CONTROLS)) {
+      // A pinch on the bar would zoom the whole app instead.
+      if (e.ctrlKey) e.preventDefault()
+      return
+    }
     if (computerCard && e.ctrlKey) {
       // A trackpad pinch zooms the picture, not the Mac.
       e.preventDefault()
@@ -828,11 +840,18 @@ export function MobileBrowserFrame({
   }, [])
 
   // A word after a copy stands in the bar's row, not on a screen someone may be driving.
-  const rowBand = banded && layout.band?.place === 'row' ? layout.band.rect : null
-  const inBand: React.CSSProperties | undefined = rowBand ? { top: rowBand.top + rowBand.height / 2, bottom: 'auto', transform: 'translate(-50%, -50%)', maxWidth: '70%' } : undefined
+  // In a band they take the status's place in the bar instead: never on the picture, never on the bar's buttons.
+  const barNotice = !banded ? null : copyOffer !== null ? (
+    <button type="button" className="rp-notice-btn" onClick={takeCopyOffer}>
+      Copied on the page · tap to copy here
+    </button>
+  ) : note !== null && !kbd.open ? (
+    <span role="status">{note}</span>
+  ) : null
   /** The frame's own buttons: a cluster over a page, the bar's for a computer's screen. */
   const frameButtons =
-    showControl || interactive || actions ? (
+    // In a band they stay in their places, only disabled, so a stalled frame does not move the bar's buttons.
+    showControl || interactive || actions || banded ? (
       <>
           {showControl && (
             <button
@@ -852,10 +871,11 @@ export function MobileBrowserFrame({
               <CrIcon name={stream.isOwner ? 'check' : 'select'} />
             </button>
           )}
-          {interactive && !desktopInput && (
+          {(interactive || banded) && !desktopInput && (
             <button
               type="button"
               className="browser-frame-btn"
+              disabled={!interactive}
               title="Copy what is selected on the page"
               aria-label="Copy what is selected on the page"
               onPointerDown={(event) => event.stopPropagation()}
@@ -865,10 +885,11 @@ export function MobileBrowserFrame({
               <span aria-hidden="true">⧉</span>
             </button>
           )}
-          {interactive && !desktopInput && (
+          {(interactive || banded) && !desktopInput && (
             <button
               type="button"
               className={`browser-frame-btn${kbd.open ? ' on' : ''}`}
+              disabled={!interactive}
               title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
               aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
               aria-pressed={kbd.open}
@@ -969,18 +990,17 @@ export function MobileBrowserFrame({
           onHide={kbd.close}
         />
       )}
-      {copyOffer !== null && (
+      {copyOffer !== null && !banded && (
         <button
           type="button"
           className="browser-frame-copychip"
-          style={inBand}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={takeCopyOffer}
         >
           Copied on the page · tap to copy here
         </button>
       )}
-      {note !== null && !kbd.open && <span className="browser-frame-note" role="status" style={inBand}>{note}</span>}
+      {note !== null && !kbd.open && !banded && <span className="browser-frame-note" role="status">{note}</span>}
       {/* The live dot keeps the corner to itself now that the controls sit in
           the dock — nothing left up here to make room for. */}
       {frameReady && !computerCard && <span className="browser-frame-live" aria-hidden="true" />}
@@ -997,6 +1017,7 @@ export function MobileBrowserFrame({
         onEnd={endSession}
         band={banded ? layout.band : null}
         barExtras={banded ? frameButtons : null}
+        barNotice={barNotice}
         onBarHeight={setBarHeight}
       />
       {/* The live view: drawn by the painter, frame by frame, outside React. */}
