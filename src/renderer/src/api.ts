@@ -53,6 +53,7 @@ import type { VersionPinRecord } from "../../shared/version-pin";
 import type { FleetEvent } from "../../shared/fleet";
 import type { UnlockAnswer as MacUnlockAnswer, UnlockBegin } from "../../shared/remote-unlock";
 import type { AccountMachines } from "../../shared/zoom-fleet";
+import type { RemoteMachineAnswer } from "../../shared/remote-machine-calls";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
 import type {
@@ -603,8 +604,17 @@ export interface CookrewApi {
   machineGaugesOf?: (machineId: string) => Promise<unknown>;
   /** Another machine's fleet snapshot (/api/fleet), read with the key this desktop holds for it; null without one. */
   machineFleetOf?: (machineId: string) => Promise<unknown>;
-  /** Open another machine of the account in a window of its own, to work in it from here. */
-  openMachine?: (machineId: string) => Promise<boolean>;
+  /**
+   * One call on another machine of the account, from this one's zoom view
+   * (shared/remote-machine-calls.ts says which): its status and JSON, or a
+   * picture as base64; status 0 when nothing answered. Optional — feature-detect.
+   */
+  callMachine?: (
+    machineId: string,
+    method: "GET" | "POST",
+    route: string,
+    body?: Record<string, unknown>,
+  ) => Promise<RemoteMachineAnswer>;
   /** Is this machine trusted by the account's others; null where it cannot say. */
   machineTrust?: () => Promise<{ trusted: boolean } | null>;
   /** This machine's one proof to the account's others: signed in again on auth.cookrew.dev, as itself, second step and all. */

@@ -23,6 +23,7 @@ import type { FleetEvent } from '../shared/fleet'
 import { parseAccountMachines, type AccountMachines, type AccountMachinesRefusal } from '../shared/zoom-fleet'
 import { navigationEndsHold, type NavigationDetails } from './board-hold'
 import { sharedGaugeWatch } from './machine-gauges'
+import { remoteMachineCall, type RemoteMachineAnswer, type RemoteMachineCall } from '../shared/remote-machine-calls'
 import type { FleetService } from './fleet/service'
 
 export const ZOOM_FLEET_EVENT_CHANNEL = 'zoom-fleet:event'
@@ -168,6 +169,91 @@ export async function readMachine(deps: Pick<ZoomFleetIpcDeps, 'readOf'>, machin
   } catch (error) {
     console.error('Another machine could not be read:', error)
     return null
+  }
+}
+
+/**
+ * ONE CALL ON ANOTHER MACHINE, FROM THIS ONE'S ZOOM VIEW (owner 2026-11-10,
+ * design B): its answer as its status and JSON, or a picture as base64.
+ * Status 0 is "nothing answered": no key yet, no account, the relay down.
+ */
+export type RemoteAnswer = RemoteMachineAnswer
+
+export const NO_ANSWER: RemoteAnswer = { status: 0, body: null }
+
+/** The most a call carries: a reply, a menu's answer, a new agent's words. */
+const BODY_MAX = 64 * 1024
+/** The most a picture brings back: a frame is at most 640 wide. */
+const PICTURE_MAX = 4 * 1024 * 1024
+
+export interface MachineCallDeps {
+  /** Down the relay with the key this machine holds for it (index.ts · callAccountMachine). */
+  callOf?: (machineId: string, call: RemoteMachineCall, body: string | undefined) => Promise<RemoteAnswer>
+}
+
+const plainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
+
+/** A call on another machine, if it is one a machine may make (shared/remote-machine-calls.ts); NO_ANSWER for anything else. */
+export async function callMachine(deps: MachineCallDeps, machineId: unknown, method: unknown, route: unknown, body: unknown): Promise<RemoteAnswer> {
+  if (typeof machineId !== 'string' || !MACHINE_ID.test(machineId) || !deps.callOf) return NO_ANSWER
+  const call = remoteMachineCall(method, route)
+  if (call === null) return NO_ANSWER
+  let sent: string | undefined
+  if (call.method === 'POST' && body !== undefined) {
+    if (!plainObject(body)) return NO_ANSWER
+    sent = JSON.stringify(body)
+    if (sent.length > BODY_MAX) return NO_ANSWER
+  }
+  try {
+    return await deps.callOf(machineId, call, sent)
+  } catch (error) {
+    console.error('A call on another machine failed:', error)
+    return NO_ANSWER
+  }
+}
+
+/** Another machine's answer, as the renderer is given it: JSON, or an image's bytes as base64. */
+/** The most a JSON answer brings back: a whole crew with its words is well under this. */
+const JSON_MAX = 2 * 1024 * 1024
+
+/** The body, up to `max` bytes; null past it, read no further than that. */
+async function boundedBody(response: Response, max: number): Promise<Buffer | null> {
+  const said = Number(response.headers.get('content-length'))
+  if (Number.isFinite(said) && said > max) {
+    await response.body?.cancel().catch(() => undefined)
+    return null
+  }
+  if (!response.body) return Buffer.alloc(0)
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > max) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks)
+}
+
+export async function answerOf(call: RemoteMachineCall, response: Response): Promise<RemoteAnswer> {
+  const type = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+  if (call.binary && response.ok) {
+    if (!/^image\/(jpeg|png|webp)$/.test(type)) return { status: response.status, body: null }
+    const bytes = await boundedBody(response, PICTURE_MAX).catch(() => null)
+    if (bytes === null) return { status: response.status, body: null }
+    return { status: response.status, picture: { type, data: bytes.toString('base64') } }
+  }
+  const text = (await boundedBody(response, JSON_MAX).catch(() => null))?.toString('utf8') ?? ''
+  try {
+    return { status: response.status, body: text === '' ? null : (JSON.parse(text) as unknown) }
+  } catch {
+    return { status: response.status, body: null }
   }
 }
 

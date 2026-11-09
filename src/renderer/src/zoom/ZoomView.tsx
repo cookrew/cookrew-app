@@ -31,6 +31,9 @@ import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { GaugePanel } from './MachineGauges'
 import { RemoteDeskPanel } from './RemoteDeskPanel'
+import { RemoteMachineView } from './RemoteMachineView'
+import { remotePlace } from './remote-machine-store'
+import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
@@ -421,12 +424,25 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // in, the background and the back button for out), plus the stops and Esc.
   /** One stop out; false at the outermost, where there is nowhere further. */
   const stepBack = useCallback((): boolean => {
+    // Inside another machine (RemoteMachineView.tsx): out of its stops first, one a press.
+    if (remotePlace.stepOut()) return true
     const z = zoomStore.get()
     const next = stepOut(z.dir, z.v)
     if (next === z.v) return false
     motion.go(next, z.dir)
     return true
   }, [motion.go])
+  // A zoom that moves on (a stop on the bar, a jump to an agent) leaves the other machine: the stage stood on the devices stop.
+  useEffect(() => {
+    let at = zoomStore.get()
+    return zoomStore.subscribe(() => {
+      const now = zoomStore.get()
+      const moved = now.v !== at.v || now.dir !== at.dir || now.full !== at.full
+      at = now
+      if (moved && remotePlace.get().machine) remotePlace.leave()
+    })
+  }, [])
+  useEffect(() => () => remotePlace.leave(), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -650,10 +666,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               machine={m}
               bind={bind}
               onOpen={() => {
-                // A machine this desktop can reach opens in a window of its own, to work in; one it cannot says why.
-                const open = cookrew().openMachine
-                if (m.detail !== 'listed' && open) void open(m.id).then((opened) => (opened ? undefined : setError(listedOnly(m))), () => setError(listedOnly(m)))
-                else setError(listedOnly(m))
+                // A machine this desktop holds a key for is gone into, here (RemoteMachineView.tsx); one it cannot read says why.
+                if (m.online && m.detail !== 'listed' && canEnterMachines()) {
+                  setError(null)
+                  remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null })
+                } else setError(listedOnly(m))
               }}
             />
           ))}
@@ -784,6 +801,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           onClose={closeShelfCard}
         />
       )}
+      <RemoteMachineView />
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>
   )

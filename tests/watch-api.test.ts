@@ -188,6 +188,18 @@ describe('the card on the wrist says what the card on the Mac says', () => {
   })
 })
 
+describe('a device card says what it is', () => {
+  it('a computer screen is one; a web page is none', () => {
+    const nodes = [
+      { kind: 'terminal', id: 'a', name: 'a' },
+      { kind: 'browser', id: 's1', name: 'Screen', url: 'screen://main', tabs: [{ id: 't', url: 'screen://main', title: 'Main display' }], activeTabId: 't' },
+      { kind: 'browser', id: 'b1', name: 'Report', url: 'https://example.com', tabs: [{ id: 't', url: 'https://example.com', title: 'Report' }], activeTabId: 't' }
+    ] as unknown as CanvasNode[]
+    const { items } = itemsOfAgent('a', { nodes, connections: [{ id: 'c1', a: 'a', b: 's1' }, { id: 'c2', a: 'a', b: 'b1' }] as never })
+    expect(Object.fromEntries(items.map((i) => [i.id, i.use]))).toEqual({ s1: 'computer', b1: undefined })
+  })
+})
+
 describe('the words a finished card says', () => {
   const block = { id: 'b', prompt: 'do it', reply: 'Let me look at the code.\n\nDone: it is merged.', activity: [{ at: 24 }] }
   const stream = {
@@ -422,6 +434,71 @@ describe('through the real gate', () => {
       expect((await post('/api/watch/item/b1/input', token, body)).status).toBe(409)
     }
     expect(dispatchInput).not.toHaveBeenCalled()
+  })
+
+  it('another machine of the account drives a screen only once it holds control there, and as itself', async () => {
+    const dispatchInput = vi.fn(async () => undefined)
+    const who = { key: 'device:solis', name: 'Solis-Core', here: false }
+    let holds = false
+    const mayDrive = vi.fn(() => holds)
+    const instance = { viewportState: { width: 800, height: 600, transitioning: false, agentHeld: false }, dispatchInput, needsViewer: true, mayDrive }
+    setWatchHost(host(pairing, { browser: async () => instance as never }))
+    const ops = deps.ops as { useSources?: unknown }
+    ops.useSources = { whoIs: (credential: string | null) => (credential === PAIRING ? who : null) }
+    try {
+      expect((await post('/api/watch/item/b1/input', PAIRING, { t: 'tap', x: 0.5, y: 0.5 })).status).toBe(409)
+      expect(dispatchInput).not.toHaveBeenCalled()
+      holds = true
+      expect((await post('/api/watch/item/b1/input', PAIRING, { t: 'tap', x: 0.5, y: 0.5 })).status).toBe(200)
+      expect(dispatchInput).toHaveBeenCalledWith('Input.dispatchMouseEvent', expect.objectContaining({ x: 400, y: 300 }), who)
+      expect(mayDrive).toHaveBeenCalledWith(who)
+      expect((await post('/api/watch/item/b1/input', PAIRING, { t: 'text', text: 'ls' })).status).toBe(200)
+      expect(dispatchInput).toHaveBeenLastCalledWith('Input.insertText', { text: 'ls' }, who)
+      // A wrist still never drives it, control or not.
+      const token = await paired()
+      expect((await post('/api/watch/item/b1/input', token, { t: 'tap', x: 0.5, y: 0.5 })).status).toBe(409)
+    } finally {
+      delete ops.useSources
+    }
+  })
+
+  it('another machine sees a screen as a named viewer on it; a wrist never does', async () => {
+    const who = { key: 'device:solis', name: 'Solis-Core', here: false }
+    const frameListeners = new Set<(jpeg: string) => void>()
+    const leave = vi.fn()
+    const instance = {
+      viewportState: { width: 800, height: 600, transitioning: false, agentHeld: false },
+      dispatchInput: vi.fn(),
+      needsViewer: true,
+      mayDrive: () => false,
+      frameListeners,
+      refusalFor: () => null,
+      enterViewer: vi.fn(() => leave),
+      registerViewportViewer: vi.fn(),
+      unregisterViewportViewer: vi.fn()
+    }
+    const frame = vi.fn(async () => null)
+    setWatchHost(host(pairing, { browser: async () => instance as never, frame }))
+    const ops = deps.ops as { useSources?: unknown }
+    ops.useSources = { whoIs: (credential: string | null) => (credential === PAIRING ? who : null) }
+    try {
+      // The first read enters as its viewer; the picture follows.
+      expect((await call('/api/watch/item/s1/frame?w=640', PAIRING)).status).toBe(404)
+      expect(instance.enterViewer).toHaveBeenCalledWith('http:device:solis:s1', who)
+      frameListeners.forEach((listener) => listener(Buffer.from([0xff, 0xd8, 7]).toString('base64')))
+      const shown = await call('/api/watch/item/s1/frame?w=640', PAIRING)
+      expect(shown.status).toBe(200)
+      expect(shown.headers.get('content-type')).toBe('image/jpeg')
+      expect([...new Uint8Array(await shown.arrayBuffer())]).toEqual([0xff, 0xd8, 7])
+      expect(instance.enterViewer).toHaveBeenCalledOnce()
+      // A thumbnail's peek starts no viewer; a wrist gets only what the Mac's thumbnails hold (none, for a screen).
+      const token = await paired()
+      expect((await call('/api/watch/item/s1/frame?w=180&peek=1', PAIRING)).status).toBe(404)
+      expect((await call('/api/watch/item/s1/frame?w=300', token)).status).toBe(404)
+      expect(instance.enterViewer).toHaveBeenCalledOnce()
+    } finally {
+      delete ops.useSources
+    }
   })
 
   it('browser input goes through the closed vocabulary, and waits for a driving agent', async () => {
