@@ -171,7 +171,7 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
 
   rests.delete(key)
   if (by !== null) ctx.v2.accounts.markVerified(account.username, claims.jti, by)
-  const minted = ctx.v2.tokens.mintGrant(account.username, device.id, jkt)
+  const minted = ctx.v2.tokens.mintGrant(account.username, device.id, jkt, claims.jti)
   ctx.response.setHeader('cache-control', 'private, no-store')
   v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
 }
@@ -189,11 +189,26 @@ export const forgetGrantRests = (): void => rests.clear()
 export async function setFirstPassword(ctx: V2Context, signed: Signed, body: Record<string, unknown>): Promise<void> {
   const { account, claims } = signed
   const session = ctx.v2.accounts.session(account.username, claims.jti)
-  const proved =
-    freshlyVerified(session, ctx.v2.now(), undefined, ctx.v2.freshWindowMs) ||
-    ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti)
+  /**
+   * An account that holds a passkey proves it with the passkey: a provider
+   * round trip is the weaker key, and a password set on it alone would open
+   * the device pass with the provider alone (review, 11-09). Without one, any
+   * verification in the window, or a provider round trip, will do.
+   */
+  const hasPasskey = ctx.v2.factors.store.hasPasskey(account.username)
+  const proved = hasPasskey
+    ? freshlyVerified(session, ctx.v2.now(), ['passkey'], ctx.v2.freshWindowMs)
+    : freshlyVerified(session, ctx.v2.now(), undefined, ctx.v2.freshWindowMs) ||
+      ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti)
   if (!proved) {
-    said(ctx, 403, 'step_up', 'Prove it is you first: sign in again, or confirm with your provider, then set the password within five minutes.')
+    said(
+      ctx,
+      403,
+      'step_up',
+      hasPasskey
+        ? 'Prove it is you with your passkey first (sign in with it again), then set the password within five minutes.'
+        : 'Prove it is you first: sign in again, or confirm with your provider, then set the password within five minutes.'
+    )
     return
   }
   const out = await ctx.v2.accounts.setFirstPassword(account.username, body.next)
@@ -201,6 +216,6 @@ export async function setFirstPassword(ctx: V2Context, signed: Signed, body: Rec
     said(ctx, 400, out.reason, out.reason === 'weak_password' ? 'Too easy to guess. Use 12 characters or more; a sentence works.' : 'This account already has a password.')
     return
   }
-  ctx.v2.accounts.markVerified(account.username, claims.jti, 'password')
+  // Choosing a password proves nothing: the window stays as the proof left it.
   ctx.response.writeHead(204).end()
 }

@@ -128,4 +128,35 @@ describe('POST /v2/me/device-grant', () => {
     expect((await thief.registry.post(GRANT_PATHS.grant, { password: PASSWORD })).status).toBe(429)
     expect((await browser.registry.post(GRANT_PATHS.grant, { password: PASSWORD })).status).toBe(201)
   })
+
+  it('signing out publishes the sitting, so its pass stops opening machines', async () => {
+    const { username, browser } = await fresh()
+    const out = await browser.registry.post(GRANT_PATHS.grant, { password: PASSWORD })
+    const sid = v2GrantClaimsFor((out.body as { grant: string }).grant, Date.now())!.sid
+    world.v2.accounts.closeSession(username, sid)
+    expect(world.v2.accounts.revokedIds()).toContain(sid)
+  })
+
+  it('an account holding a passkey sets a first password only after the passkey, not a provider alone', async () => {
+    const { username, browser } = await fresh({ passwordless: true })
+    world.addPasskey(username)
+    const jti = world.v2.accounts.get(username)!.sessions.at(-1)!.jti
+    world.v2.accounts.markVerified(username, jti, 'provider')
+    expect((await browser.registry.post('/v2/me/password', { next: 'a brand new long password' })).status).toBe(403)
+    world.v2.accounts.markVerified(username, jti, 'passkey')
+    expect((await browser.registry.post('/v2/me/password', { next: 'a brand new long password' })).status).toBe(204)
+  })
+
+  it('a revoked device stays revoked however many times people sign out', async () => {
+    const { username } = await fresh()
+    const gone = await world.browser(username)
+    world.v2.accounts.revokeDevice(username, gone.device.id)
+    for (let i = 0; i < 250; i += 1) {
+      const b = await world.browser(username)
+      const jti = world.v2.accounts.get(username)!.sessions.at(-1)!.jti
+      world.v2.accounts.closeSession(username, jti)
+      expect(b.device.id).toBeTruthy()
+    }
+    expect(world.v2.accounts.revokedFor(username)).toContain(gone.device.id)
+  })
 })

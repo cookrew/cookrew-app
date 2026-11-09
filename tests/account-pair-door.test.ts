@@ -71,7 +71,7 @@ describe('the account pair door', () => {
   })
 
   const grantFor = (device: Phone, username = 'anvztor', key: Record<string, string> = device.jwk): string =>
-    tokens.mintGrant(username, device.id, jwkThumbprint(key) as string).token
+    tokens.mintGrant(username, device.id, jwkThumbprint(key) as string, 'sitting-1').token
 
   const asking = (device: Phone, grant: string) => ({ device: { deviceId: device.id, jwk: device.jwk, name: 'iPhone' }, grant })
 
@@ -204,5 +204,12 @@ describe('the account pair door', () => {
     const g2 = grantFor(other)
     await d.finish({ body: finishBody(await challengeOf(d, other, g2), other, g2), bridged: null })
     expect(admitted.list().map((x) => x.deviceId)).toEqual([other.id])
+  })
+
+  it('a pass ends when the sitting it was minted under ends (sign-out, password change, "Not me")', async () => {
+    const d = door()
+    const grant = grantFor(mine)
+    revoked = ['sitting-1']
+    expect((await d.begin({ body: asking(mine, grant), bridged: null })).body).toMatchObject({ outcome: 'regrant' })
   })
 })

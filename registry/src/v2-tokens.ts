@@ -48,6 +48,8 @@ export interface V2Claims {
    * (v2-device-grant.ts).
    */
   jkt?: string
+  /** The sitting a device pass was minted under: its end (sign-out, a password change, "Not me") ends the pass. */
+  sid?: string
 }
 
 /**
@@ -173,11 +175,11 @@ export class V2Tokens {
    * against /v2/keys and the revoked list, and demand a fresh signature from
    * the key it names.
    */
-  mintGrant(sub: string, dev: string, jkt: string): Minted {
+  mintGrant(sub: string, dev: string, jkt: string, sid: string): Minted {
     if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
     const exp = this.now() + GRANT_TTL_MS
     const jti = randomUUID()
-    return { token: this.mint({ sub, dev, scope: 'grant', exp, jti, jkt }), exp, jti }
+    return { token: this.mint({ sub, dev, scope: 'grant', exp, jti, jkt, sid }), exp, jti }
   }
 
   /**

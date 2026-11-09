@@ -65,6 +65,8 @@ export const SESSIONS_MAX = 50
  * its owner.
  */
 export const REVOKED_MAX = 200
+/** A session id stays published this long: past it, nothing minted under it is alive. */
+const SESSION_REVOKED_KEEP_MS = 31 * 24 * 60 * 60 * 1000
 const RECOVERY_CODES = 8
 
 /**
@@ -184,7 +186,7 @@ export interface V2Account {
    * "this one sitting was ended" (a password change ends the others without
    * detaching the phone they were on, which taking the device away would).
    */
-  revoked?: readonly { id: string; at: number }[]
+  revoked?: readonly { id: string; at: number; kind?: 'session' }[]
 }
 
 /**
@@ -458,10 +460,25 @@ export class V2Accounts {
     return (this.get(username)?.revoked ?? []).map((r) => r.id)
   }
 
-  private withRevoked(account: V2Account, ids: readonly string[]): V2Account {
+  /**
+   * Publish ids as taken back. SESSION ids are tagged: nothing minted under a
+   * sitting outlives its thirty days (and a device pass its twelve hours), so
+   * they age out after that, and when the list is full they go before any
+   * DEVICE id — a revoked device must never come back because people signed
+   * out a lot.
+   */
+  private withRevoked(account: V2Account, ids: readonly string[], sessions: readonly string[] = ids): V2Account {
     const at = this.now()
-    const held = (account.revoked ?? []).filter((r) => !ids.includes(r.id))
-    return { ...account, revoked: [...held, ...ids.map((id) => ({ id, at }))].slice(-REVOKED_MAX) }
+    const held = (account.revoked ?? [])
+      .filter((r) => !ids.includes(r.id))
+      .filter((r) => r.kind !== 'session' || at - r.at < SESSION_REVOKED_KEEP_MS)
+    const added = ids.map((id) => (sessions.includes(id) ? { id, at, kind: 'session' as const } : { id, at }))
+    const all = [...held, ...added]
+    if (all.length <= REVOKED_MAX) return { ...account, revoked: all }
+    const devices = all.filter((r) => r.kind !== 'session').slice(-REVOKED_MAX)
+    const room = REVOKED_MAX - devices.length
+    const kept = room > 0 ? all.filter((r) => r.kind === 'session').slice(-room) : []
+    return { ...account, revoked: [...devices, ...kept] }
   }
 
   /**
@@ -797,10 +814,15 @@ export class V2Accounts {
     return this.get(username)?.sessions.some((s) => s.jti === jti) ?? false
   }
 
+  /**
+   * SIGN-OUT. The id is published as revoked, like a password change's: a
+   * machine checks a device pass offline against that list, and a pass minted
+   * under this sitting must stop opening machines when the sitting ends.
+   */
   closeSession(username: string, jti: string): void {
     const account = this.get(username)
     if (!account) return
-    this.replace({ ...account, sessions: account.sessions.filter((s) => s.jti !== jti) })
+    this.replace(this.withRevoked({ ...account, sessions: account.sessions.filter((s) => s.jti !== jti) }, [jti]))
   }
 
   /**
@@ -899,7 +921,8 @@ export class V2Accounts {
           desktops: account.desktops.filter((d) => d.deviceId !== deviceId),
           sessions: account.sessions.filter((s) => s.dev !== deviceId)
         },
-        [deviceId, ...ended]
+        [deviceId, ...ended],
+        ended
       )
     )
     return { ok: true }
