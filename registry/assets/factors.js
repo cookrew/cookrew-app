@@ -38,17 +38,16 @@
   }
   const said = (out, fallback) => (out.body && out.body.message) || fallback
   /**
-   * FIVE MINUTES (auth UX 2026-11-09): adding a factor asks again once the
-   * sign-in is more than five minutes old. A password account answers with its
-   * password, typed here once; a passwordless one is told what the registry says.
+   * FIVE MINUTES (auth UX 2026-11-09): the sensitive acts ask again once the
+   * sign-in is more than five minutes old. step-up.js answers for every kind of
+   * account — a password typed here, or a trip to auth.cookrew.dev for the act
+   * and back. `resume` is what it finishes on the way back. Answers null when
+   * the page is leaving for that proof.
    */
-  const withProof = async (method, path, body) => {
-    const out = await api(method, path, body)
-    const asked = (out.status === 401 && out.body?.error === 'step_up') || (out.status === 403 && out.body?.error === 'password_required')
-    if (!asked) return out
-    const current = prompt('It has been a while since you signed in. Type your password to go on.')
-    if (current === null || current === '') return out
-    return api(method, path, { ...(body || {}), current })
+  const proven = (act, method, path, body, resume, quiet) => {
+    const send = (proof) => api(method, path, { ...(body || {}), ...proof })
+    const stepUp = window.cookrewStepUp
+    return stepUp ? stepUp.run({ act, send, resume, quiet }) : send({})
   }
 
   /* ── base64url ⇄ bytes, which is all WebAuthn speaks ───────────────────── */
@@ -429,7 +428,8 @@
       toast('Passkeys are not available in this browser. Try Safari, Chrome, Edge or Firefox.', 6000)
       return
     }
-    const options = await withProof('POST', '/v2/me/passkeys/options', {})
+    const options = await proven('add-factor', 'POST', '/v2/me/passkeys/options', {}, { kind: 'passkey' })
+    if (options === null) return
     if (options.status !== 200) return toast(said(options, 'A passkey could not be started just now. Try again in a moment.'), 6000)
     const name = prompt('Name this passkey (for example "This laptop")', 'This browser')
     if (name === null) return
@@ -538,10 +538,13 @@
    * panel, and the next ADD replaces it server-side. Only `confirm` makes it
    * a factor, and only then does the row change.
    */
-  async function addTotp() {
+  async function addTotp(proof) {
     const panel = $('me-totp')
     if (!panel) return
-    const started = await withProof('POST', '/v2/me/totp/enrol', {})
+    const started = proof
+      ? await api('POST', '/v2/me/totp/enrol', { stepUp: proof })
+      : await proven('add-factor', 'POST', '/v2/me/totp/enrol', {}, { kind: 'totp' })
+    if (started === null) return
     if (started.status !== 201) return toast(said(started, 'That did not go through.'), 6000)
     const { secret, otpauth, qr } = started.body
 
@@ -657,8 +660,12 @@
    * The primary stays disabled until all three fields are right, which is the
    * same rule the register sheet holds to — the registry judges again anyway,
    * and its sentence is what appears when it refuses.
+   *
+   * A FIRST PASSWORD (an account made with a provider) is proved BEFORE it is
+   * typed: `proof` is the confirmation auth.cookrew.dev sent back for it, or
+   * null when the last five minutes already cover it (openFirstPassword).
    */
-  function changePassword(first) {
+  function changePassword(first, proof) {
     const panel = $('me-password')
     if (!panel) return
     panel.replaceChildren()
@@ -668,7 +675,9 @@
         'p',
         'meta',
         first
-          ? 'Your password goes only to this site. Within five minutes of signing in you can set it here; later, sign in again first.'
+          ? proof
+            ? 'Confirmed. Choose your password now — within five minutes. It goes only to this site.'
+            : 'Your password goes only to this site. You enter your machines with it.'
           : 'Your new password goes only to this site. Changing it signs every other device out.'
       )
     )
@@ -716,8 +725,18 @@
     const send = async () => {
       if (!judge()) return
       save.disabled = true
-      const out = await api('POST', '/v2/me/password', first ? { next: next.field.value } : { current: current.field.value, next: next.field.value })
+      const out = await api(
+        'POST',
+        '/v2/me/password',
+        first ? { next: next.field.value, ...(proof ? { stepUp: proof } : {}) } : { current: current.field.value, next: next.field.value }
+      )
       save.disabled = false
+      // The five minutes ran out while the fields were filled: prove it again
+      // first. What was typed is dropped — a password never crosses the trip.
+      if (first && out.status === 403 && out.body?.error === 'step_up') {
+        void openFirstPassword(true)
+        return
+      }
       if (out.status !== 204) {
         // The registry's own sentence — a wrong current password, a weak new
         // one, or the one they already have — under the fields it belongs to.
@@ -747,6 +766,51 @@
       })
     }
     ;(first ? next : current).field.focus()
+  }
+
+  /**
+   * SET A PASSWORD, FOR AN ACCOUNT MADE WITH A PROVIDER (owner's ruling 3).
+   *
+   * Setting it needs a verification in the last five minutes. Within them the
+   * fields open at once; after them the panel says what happens next and one
+   * button goes to auth.cookrew.dev — passkey, provider or a code — and comes
+   * back with the fields open. Asked FIRST, so nobody types a password that the
+   * trip would throw away.
+   */
+  async function openFirstPassword(refused) {
+    const panel = $('me-password')
+    const stepUp = window.cookrewStepUp
+    if (!panel) return
+    // A registry that just refused the password has answered the question already.
+    const ready = refused === true ? false : stepUp ? await stepUp.fresh('change-password') : true
+    // Fresh, or a registry that cannot say: the fields, and the registry decides.
+    if (ready !== false || !stepUp) return changePassword(true, null)
+    panel.replaceChildren()
+    panel.hidden = false
+    panel.append(
+      el(
+        'p',
+        'meta',
+        'First, confirm it is you. Cookrew opens auth.cookrew.dev — with your passkey, your sign-in provider or a code — and brings you straight back here to choose the password.'
+      )
+    )
+    const go = button('Continue', 'primary')
+    go.dataset.stepUp = 'change-password'
+    const cancel = button('Cancel')
+    cancel.addEventListener('click', () => {
+      panel.replaceChildren()
+      panel.hidden = true
+    })
+    go.addEventListener('click', () => {
+      go.disabled = true
+      void stepUp.prove('change-password', { kind: 'password' }, null, true).then((going) => {
+        if (!going) go.disabled = false
+      })
+    })
+    const row = el('div', 'row')
+    row.append(go, cancel)
+    panel.append(row)
+    go.focus()
   }
 
   /* ── /me: D6, the approvals waiting for an answer ──────────────────────── */
@@ -794,13 +858,11 @@
       // The number goes ONLY with approve: sending it with a denial would
       // spend a try on an answer that never needed one.
       const body = decision === 'approve' ? { decision, match: number.value.trim() } : { decision }
-      const out = await api('POST', `/v2/me/approvals/${encodeURIComponent(request.id)}`, body)
+      const path = `/v2/me/approvals/${encodeURIComponent(request.id)}`
+      // "Not me" locks the account down, so it is proved like any other act.
+      if (decision === 'not-me') return void disown(request.id, null)
+      const out = await api('POST', path, body)
       if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
-      if (decision === 'not-me') {
-        toast('Every other device is signed out. Change your password now.', 8000)
-        location.reload()
-        return
-      }
       refresh()
     }
     const yes = button('Approve', 'primary')
@@ -933,57 +995,75 @@
     setInterval(draw, 5000)
   }
 
+  /** "Not me", proved first: it signs every other device out and locks the account down. */
+  async function disown(id, proof) {
+    const path = `/v2/me/approvals/${encodeURIComponent(id)}`
+    const out = proof
+      ? await api('POST', path, { decision: 'not-me', stepUp: proof })
+      : await proven('not-me', 'POST', path, { decision: 'not-me' }, { kind: 'not-me', id }, true)
+    if (out === null) return
+    if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
+    toast('Every other device is signed out. Change your password now.', 8000)
+    location.reload()
+  }
+
+  /**
+   * MINT ONE JOIN CODE AND SHOW IT. Proved first: minting is the act that
+   * widens what the account can be opened from (v2-join.ts) and it always asks.
+   */
+  async function mintJoin(kind, proof) {
+    const panel = $('me-join-code')
+    if (!panel) return
+    const lede = panel.dataset.addLede ?? ''
+    const out = proof
+      ? await api('POST', '/v2/me/join-codes', { stepUp: proof })
+      : await proven('mint-join-code', 'POST', '/v2/me/join-codes', {}, { kind: 'join', device: kind })
+    if (out === null) return
+    if (out.status !== 201) return toast(said(out, 'That code could not be minted.'), 6000)
+    panel.replaceChildren()
+    panel.hidden = false
+    panel.append(el('p', 'meta', lede))
+    /**
+     * M4 · THE PICTURE FIRST, for the device that is holding a camera.
+     *
+     * ADD A PHONE is answered by pointing a phone at this screen, so the
+     * QR is the primary thing on the panel and the typed code is the
+     * fallback under it — for a second Mac, which has no camera pointed
+     * anywhere, and for a phone standing in front of a screen too far to
+     * focus on. Both encode the same one-shot code.
+     */
+    const picture = qrSvg(Array.isArray(out.body.qr) ? out.body.qr : [])
+    if (picture) {
+      picture.setAttribute('aria-label', 'Scan this with the other device’s camera')
+      panel.append(picture)
+    }
+    panel.append(el('p', 'acct-join-code', out.body.code))
+    const until = el('p', 'meta')
+    until.textContent = `Expires in ${clock(out.body.expiresAt - Date.now())}.`
+    panel.append(until)
+    const hide = button('Done')
+    hide.addEventListener('click', () => {
+      panel.hidden = true
+      panel.replaceChildren()
+    })
+    panel.append(hide)
+    panel.scrollIntoView?.({ block: 'center' })
+  }
+
   /**
    * W5 · ADD A MAC · ADD A PHONE — one join code, shown once.
    *
    * STEP-UP, because minting is the act that widens what the account can be
-   * opened from: the registry asks for the password again (v2-join.ts) and so
-   * this asks the reader for it. `prompt` is deliberate and not a placeholder
-   * — the CSP forbids an inline script, this page has no password field of
-   * its own outside the change-password panel, and a second panel built to
-   * collect one secret and immediately forget it is more surface, not less.
+   * opened from: the registry asks for a proof every time (v2-join.ts), and
+   * step-up.js gets it — the password typed here, or auth.cookrew.dev for an
+   * account without one.
    *
    * THE CODE IS SHOWN AND NEVER STORED. It lives in the registry's memory for
    * ten minutes; here it is text in a panel that the next navigation drops.
    */
   function wireAddDevice() {
-    const panel = $('me-join-code')
-    if (!panel) return
-    const lede = panel.dataset.addLede ?? ''
     for (const trigger of document.querySelectorAll('[data-add-device]')) {
-      trigger.addEventListener('click', async () => {
-        const current = prompt('Type your password to add a device.')
-        if (current === null || current === '') return
-        const out = await api('POST', '/v2/me/join-codes', { current })
-        if (out.status !== 201) return toast(said(out, 'That code could not be minted.'), 6000)
-        panel.replaceChildren()
-        panel.hidden = false
-        panel.append(el('p', 'meta', lede))
-        /**
-         * M4 · THE PICTURE FIRST, for the device that is holding a camera.
-         *
-         * ADD A PHONE is answered by pointing a phone at this screen, so the
-         * QR is the primary thing on the panel and the typed code is the
-         * fallback under it — for a second Mac, which has no camera pointed
-         * anywhere, and for a phone standing in front of a screen too far to
-         * focus on. Both encode the same one-shot code.
-         */
-        const picture = qrSvg(Array.isArray(out.body.qr) ? out.body.qr : [])
-        if (picture) {
-          picture.setAttribute('aria-label', 'Scan this with the other device’s camera')
-          panel.append(picture)
-        }
-        panel.append(el('p', 'acct-join-code', out.body.code))
-        const until = el('p', 'meta')
-        until.textContent = `Expires in ${clock(out.body.expiresAt - Date.now())}.`
-        panel.append(until)
-        const hide = button('Done')
-        hide.addEventListener('click', () => {
-          panel.hidden = true
-          panel.replaceChildren()
-        })
-        panel.append(hide)
-      })
+      trigger.addEventListener('click', () => void mintJoin(trigger.dataset.addDevice ?? 'desktop', null))
     }
   }
 
@@ -996,23 +1076,53 @@
     event.preventDefault()
     if (target.dataset.addPasskey !== undefined) void addPasskey()
     else if (target.dataset.addTotp !== undefined) void addTotp()
-    else if (target.dataset.password !== undefined) changePassword(target.dataset.first !== undefined)
-    else if (target.dataset.dropPasskey !== undefined) {
-      // Taking a factor OFF costs the password, the same as changing it: one
-      // session must not be able to lower the account's floor by itself.
-      const current = prompt('Your password, to remove this passkey')
-      if (current === null) return
-      void api('DELETE', `/v2/me/passkeys/${encodeURIComponent(target.dataset.dropPasskey)}`, { current }).then((out) =>
-        out.status === 204 ? location.reload() : toast(said(out, 'That passkey was not removed.'), 6000)
-      )
-    } else if (target.dataset.dropTotp !== undefined) {
-      const current = prompt('Your password, to remove the authenticator')
-      if (current === null) return
-      void api('DELETE', '/v2/me/totp', { current }).then((out) =>
-        out.status === 204 ? location.reload() : toast(said(out, 'That did not go through.'), 6000)
-      )
+    else if (target.dataset.password !== undefined) {
+      if (target.dataset.first !== undefined) void openFirstPassword(false)
+      else changePassword(false, null)
     }
+    else if (target.dataset.dropPasskey !== undefined) void dropPasskey(target.dataset.dropPasskey, null)
+    else if (target.dataset.dropTotp !== undefined) void dropTotp(null)
   })
+
+  /**
+   * TAKING A FACTOR OFF is proved like changing the password: one session
+   * must not be able to lower the account's floor by itself. Within five
+   * minutes of a verification it is not asked again.
+   */
+  async function dropPasskey(id, proof) {
+    const path = `/v2/me/passkeys/${encodeURIComponent(id)}`
+    const out = proof
+      ? await api('DELETE', path, { stepUp: proof })
+      : await proven('remove-factor', 'DELETE', path, {}, { kind: 'drop-passkey', id })
+    if (out === null) return
+    if (out.status === 204) return location.reload()
+    toast(said(out, 'That passkey was not removed.'), 6000)
+  }
+  async function dropTotp(proof) {
+    const out = proof
+      ? await api('DELETE', '/v2/me/totp', { stepUp: proof })
+      : await proven('remove-factor', 'DELETE', '/v2/me/totp', {}, { kind: 'drop-totp' })
+    if (out === null) return
+    if (out.status === 204) return location.reload()
+    toast(said(out, 'That did not go through.'), 6000)
+  }
+
+  /**
+   * BACK FROM AUTH.COOKREW.DEV (step-up.js): each act this script owns
+   * finishes with the proof it earned. Only the kind and what it was about
+   * crossed the trip; a password never does, so the first-password panel
+   * comes back empty and open.
+   */
+  const stepUp = window.cookrewStepUp
+  stepUp?.on('password', (_resume, proof) => {
+    changePassword(true, proof)
+    $('me-password')?.scrollIntoView?.({ block: 'center' })
+  })
+  stepUp?.on('totp', (_resume, proof) => void addTotp(proof))
+  stepUp?.on('drop-passkey', (resume, proof) => void dropPasskey(String(resume.id), proof))
+  stepUp?.on('drop-totp', (_resume, proof) => void dropTotp(proof))
+  stepUp?.on('join', (resume, proof) => void mintJoin(resume.device === 'phone' ? 'phone' : 'desktop', proof))
+  stepUp?.on('not-me', (resume, proof) => void disown(String(resume.id), proof))
 
   if (!havePasskeys()) {
     for (const row of document.querySelectorAll('[data-passkey-note]')) {
@@ -1167,5 +1277,5 @@
     show(ways, input.step.message ?? 'Add a second step. Cookrew asks for two steps when you sign in; a passkey counts as both.')
   }
 
-  window.cookrewFactors = { ladder, setup, addPasskey, addTotp, changePassword }
+  window.cookrewFactors = { ladder, setup, addPasskey, addTotp, changePassword, openFirstPassword }
 })()

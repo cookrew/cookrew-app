@@ -10,6 +10,8 @@ import {
   type AuthIntent
 } from '../../src/shared/auth-site'
 import type { OAuthBack, ProviderId } from '../../src/shared/oauth'
+import type { StepUpAct } from '../../src/shared/step-up'
+import type { VerifiedBy } from './v2-session-age'
 import { deviceSigned, deviceTransactionTranscript, readDevicePayload, type DevicePayload } from './auth-device-transaction'
 import type { ProviderProof } from './v2-oauth-providers'
 
@@ -85,6 +87,8 @@ export interface AuthRequest {
   readonly usernameHint: string | null
   readonly userCode: string | null
   readonly opener: AuthOpener | null
+  /** A `step-up` request's one act; null for every other intent. */
+  readonly act: StepUpAct | null
   /** Who opened it, for the per-address cap. Never shown, never logged. */
   readonly address: string
   readonly createdAt: number
@@ -114,6 +118,13 @@ export interface AuthRequest {
    * session spending the code is.
    */
   enrolment: HeldPasskey | null
+  /**
+   * A `step-up` request's proof, WAITING FOR ITS OPENER: how the person proved
+   * it on the page. It counts — the sitting marked verified, the act's pending
+   * authorised — only when the browser that opened the request spends the code
+   * with its verifier and the very session that opened it (auth-step-up.ts).
+   */
+  stepBy: VerifiedBy | null
   result: AuthResult | null
   codeHash: string | null
   codeExpiresAt: number
@@ -132,6 +143,8 @@ export interface OpenInput {
   returnPath: string | null
   usernameHint: string | null
   opener: AuthOpener | null
+  /** `step-up` only. */
+  act?: StepUpAct | null
   address: string
 }
 
@@ -211,6 +224,7 @@ export class AuthRequests {
       usernameHint: input.usernameHint,
       userCode: code,
       opener: input.opener,
+      act: input.act ?? null,
       address: input.address,
       createdAt: at,
       expiresAt,
@@ -222,6 +236,7 @@ export class AuthRequests {
       linkProof: null,
       stepUp: null,
       enrolment: null,
+      stepBy: null,
       result: null,
       codeHash: null,
       codeExpiresAt: 0,
@@ -311,6 +326,12 @@ export class AuthRequests {
   holdPasskey(request: AuthRequest, passkey: HeldPasskey): void {
     request.stepUp = null
     request.enrolment = passkey
+  }
+
+  /** A `step-up` request was proven on the page; its opener makes it count. */
+  holdStepBy(request: AuthRequest, by: VerifiedBy): void {
+    request.stepUp = null
+    request.stepBy = by
   }
 
   takeProof(request: AuthRequest): ProviderProof | null {
