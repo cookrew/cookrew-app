@@ -36,6 +36,11 @@ export interface ToolFacts {
   arch: string
   /** Tools the person's own endpoint runs on: for them it stands in for a sign-in. */
   endpointTools?: readonly string[]
+  /**
+   * Claude's bypass-permissions notice, which Cookrew accepts for the owner's cards
+   * (main/claude-consent.ts). Absent or null when it was not looked at.
+   */
+  claudeConsent?: 'accepted' | 'not-yet' | 'unreadable' | null
 }
 
 export const UNKNOWN_FACTS: ToolFacts = {
@@ -153,6 +158,20 @@ function row(id: ToolId, state: ToolState, facts: ToolFacts, extra: Partial<Pick
   }
 }
 
+const CONSENT_NOTES = {
+  accepted: TOOL_NOTES.BYPASS_ACCEPTED,
+  'not-yet': TOOL_NOTES.BYPASS_ON_FIRST,
+  unreadable: TOOL_NOTES.BYPASS_UNREADABLE
+} as const
+
+/** The Claude row, with the one line about what Cookrew answers for it: never hidden. */
+function claudeRow(facts: ToolFacts): PreflightRow {
+  const base = agentRow('claude', facts.claude, facts.claudeSignedIn, 'claude', facts)
+  const consent = facts.claude === 'found' && facts.claudeConsent ? CONSENT_NOTES[facts.claudeConsent] : null
+  if (consent === null) return base
+  return { ...base, note: base.note === null ? consent : `${base.note} ${consent}` }
+}
+
 function agentRow(id: 'claude' | 'codex', state: ToolState, signedIn: boolean | null, loginLine: string, facts: ToolFacts): PreflightRow {
   if (state !== 'found' || signedIn !== false) return row(id, state, facts)
   if (facts.endpointTools?.includes(TOOL_COPY[id].name)) return row(id, state, facts, { note: TOOL_NOTES.USES_ENDPOINT })
@@ -168,7 +187,7 @@ function keeperRow(facts: ToolFacts): PreflightRow {
 
 export function preflightRows(facts: ToolFacts): PreflightRow[] {
   return [
-    agentRow('claude', facts.claude, facts.claudeSignedIn, 'claude', facts),
+    claudeRow(facts),
     agentRow('codex', facts.codex, facts.codexSignedIn, 'codex login', facts),
     row('pi', facts.pi, facts),
     row('opencode', facts.opencode, facts),

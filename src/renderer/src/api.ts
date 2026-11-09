@@ -540,6 +540,8 @@ export interface CookrewApi {
   listAgents?: () => Promise<unknown[]>;
   /** Could this offline card start now? Null when nothing stands in its way. */
   launchCheck?: (id: string) => Promise<LaunchFailure | null>;
+  /** The person's yes to Claude's trust question for this card's folder: whether it was written, and what still stops the card. */
+  trustCardFolder?: (id: string) => Promise<{ outcome: string; failure: LaunchFailure | null }>;
   /** Live panes no card reaches; absent on an older bridge. */
   listStrayPanes?: () => Promise<StrayPane[]>;
   endStrayPane?: (session: string) => Promise<{ ok: boolean; error?: string }>;

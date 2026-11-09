@@ -211,3 +211,31 @@ describe('a fix that needs admin rights says so before it is pressed (N2)', () =
     expect(note({ ...green, platform: 'linux' }, 'magpie')).toBeNull()
   })
 })
+
+describe('the Claude row says what Cookrew answers for it (Solis, 2026-11-09)', () => {
+  const claudeRow = (facts: ToolFacts): PreflightRow => preflightRows(facts).find((r) => r.id === 'claude') as PreflightRow
+
+  it('says the bypass-permissions notice is accepted, and where', () => {
+    expect(claudeRow({ ...allFound, claudeConsent: 'accepted' }).note).toBe(TOOL_NOTES.BYPASS_ACCEPTED)
+    expect(TOOL_NOTES.BYPASS_ACCEPTED).toContain('~/.claude/settings.json')
+  })
+
+  it('says it will be accepted when the first card starts', () => {
+    expect(claudeRow({ ...allFound, claudeConsent: 'not-yet' }).note).toBe(TOOL_NOTES.BYPASS_ON_FIRST)
+  })
+
+  it('says a settings file it could not read leaves the question to Claude', () => {
+    expect(claudeRow({ ...allFound, claudeConsent: 'unreadable' }).note).toBe(TOOL_NOTES.BYPASS_UNREADABLE)
+  })
+
+  it('keeps the sign-in and its fix beside it', () => {
+    const row = claudeRow({ ...allFound, claudeSignedIn: false, claudeConsent: 'accepted' })
+    expect(row.note).toBe(`${TOOL_NOTES.NOT_SIGNED_IN} ${TOOL_NOTES.BYPASS_ACCEPTED}`)
+    expect(row.fix?.line).toBe('claude')
+  })
+
+  it('says nothing of it for a Claude that is not here, or a check that did not look', () => {
+    expect(claudeRow({ ...bareMac, claudeConsent: 'accepted' }).note).toBe(null)
+    expect(claudeRow(allFound).note).toBe(null)
+  })
+})
