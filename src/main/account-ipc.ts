@@ -54,6 +54,12 @@ export interface AccountIpcDeps {
   accounts: Accounts
   lock: IdleLock
   /**
+   * The account password, just typed at this lock and checked: the one moment
+   * this machine can prove itself to its account's others, once
+   * (index.ts · trustThisMachine). Never a passcode.
+   */
+  onAccountPassword?: (password: string) => void
+  /**
    * THE ONE QUEUE (D11) — sign-ins, phones asking for Wi-Fi, guests asking for
    * a seat. The producer of `status.requests`, which is now a count of all
    * three rather than of sign-ins alone.
@@ -370,6 +376,7 @@ async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAns
   // WHAT WAS TYPED IS A PASSCODE, and a passcode never leaves this Mac. Offered
   // to cookrew.dev below it would be a local secret in a sign-in request.
   if (deps.accounts.unlockMethod() === 'passcode') return outcome
+  deps.onAccountPassword?.(password)
   if (deps.accounts.account() === null || deps.accounts.sessionLive()) return outcome
   const renewed = await deps.accounts.resume(password)
   return { ...outcome, sessionRenewed: renewed.ok }
@@ -393,6 +400,7 @@ async function foldOnUnlock(deps: AccountIpcDeps, password: string, local: Unloc
   if (!(await deps.accounts.isAccountPassword(password))) return local
   deps.accounts.foldPasscode(password)
   deps.lock.proven()
+  deps.onAccountPassword?.(password)
   return { ok: true }
 }
 

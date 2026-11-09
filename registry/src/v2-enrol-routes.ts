@@ -266,6 +266,8 @@ async function answerApproval(ctx: V2Context, signed: Signed, id: string): Promi
   }
   if (decision === 'not-me') {
     ctx.v2.accounts.endOtherSessions(username, by.jti)
+    // The password may be someone else's: every other machine proves itself again.
+    ctx.v2.accounts.untrustOtherMachines(username, signed.device.id)
     /**
      * WHAT IS DISOWNED IS WHAT OPENED THE REQUEST.
      *

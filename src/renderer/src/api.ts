@@ -601,6 +601,8 @@ export interface CookrewApi {
    * holds no credential for it has no such call. Optional — feature-detect.
    */
   machineGaugesOf?: (machineId: string) => Promise<unknown>;
+  /** Another machine's fleet snapshot (/api/fleet), read with the key this desktop holds for it; null without one. */
+  machineFleetOf?: (machineId: string) => Promise<unknown>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.
