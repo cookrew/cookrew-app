@@ -16,7 +16,7 @@ import { registerZoomFleetIpc } from '../src/main/zoom-fleet'
 import { createAdmittedDeviceStore, hashToken, writeAdmittedDevices } from '../src/main/admitted-devices'
 import { tempBase } from './support/idv2'
 
-const READING: MachineGauges = { at: 7, cpuPercent: 34, memory: null, disk: null, gpuPercent: null }
+const READING: MachineGauges = { at: 7, cpuPercent: 34, memory: null, disk: null, gpuPercent: null, gpuAbsent: false }
 const read = vi.hoisted(() => vi.fn())
 vi.mock('../src/main/machine-gauges', async (original) => ({
   ...(await original<typeof import('../src/main/machine-gauges')>()),

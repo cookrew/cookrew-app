@@ -25,18 +25,23 @@ const core = (busy: number, idle: number) => ({ times: { user: busy, nice: 0, sy
 
 interface Fake extends GaugeSamplerPorts {
   ran: string[]
+  listed: string[]
   clock: { at: number }
   active: { now: number; peak: number }
 }
 
-function fake(over: Partial<GaugeSamplerPorts> & { answers?: Record<string, ChildAnswer>; files?: Record<string, string> } = {}): Fake {
-  const { answers = {}, files = {}, ...ports } = over
+function fake(
+  over: Partial<GaugeSamplerPorts> & { answers?: Record<string, ChildAnswer>; files?: Record<string, string>; dirs?: Record<string, readonly string[] | 'failed'> } = {}
+): Fake {
+  const { answers = {}, files = {}, dirs = {}, ...ports } = over
   const clock = { at: 1000 }
   const active = { now: 0, peak: 0 }
   const ran: string[] = []
+  const listed: string[] = []
   let idle = 0
   return {
     ran,
+    listed,
     clock,
     active,
     platform: 'darwin',
@@ -50,6 +55,10 @@ function fake(over: Partial<GaugeSamplerPorts> & { answers?: Record<string, Chil
       return answers[command] ?? { stdout: null, failure: 'missing' }
     },
     readText: async (path) => files[path] ?? null,
+    listDir: async (path) => {
+      listed.push(path)
+      return dirs[path] ?? 'missing'
+    },
     statfs: async () => ({ bavail: 50, blocks: 100, bsize: 1e9 }),
     cpus: () => {
       idle += 50
@@ -112,6 +121,43 @@ describe('on a Mac', () => {
     const g = await createGaugeSampler(mac({ answers: { sysctl: ok(fx.SYSCTL_CALM), ioreg: ok(fx.IOREG_NO_STATISTICS) } })).sample()
     expect(g.gpuPercent).toBeNull()
   })
+  it('a Mac whose accelerators report no utilisation has no GPU to read: none, not no reading', async () => {
+    const g = await createGaugeSampler(mac({ answers: { sysctl: ok(fx.SYSCTL_CALM), ioreg: ok(fx.IOREG_NO_STATISTICS) } })).sample()
+    expect(g.gpuAbsent).toBe(true)
+  })
+  it('an ioreg that lists no accelerator at all is no GPU too', async () => {
+    const g = await createGaugeSampler(mac({ answers: { sysctl: ok(fx.SYSCTL_CALM), ioreg: ok('') } })).sample()
+    expect(g).toMatchObject({ gpuPercent: null, gpuAbsent: true })
+  })
+  it('stays none while the GPU rests between asks: no flicker to no reading', async () => {
+    const ports = mac({ answers: { sysctl: ok(fx.SYSCTL_CALM), ioreg: ok(fx.IOREG_NO_STATISTICS) } })
+    const sampler = createGaugeSampler(ports)
+    await sampler.sample()
+    ports.clock.at += 4000
+    expect((await sampler.sample()).gpuAbsent).toBe(true)
+    expect(ports.ran.filter((c) => c === 'ioreg')).toHaveLength(1)
+  })
+  it('a Mac shown to have no GPU stays none through an ioreg that timed out: a failed ask is not news', async () => {
+    const answers: Record<string, ChildAnswer> = { sysctl: ok(fx.SYSCTL_CALM), ioreg: ok(fx.IOREG_NO_STATISTICS) }
+    const ports = mac({ answers })
+    const sampler = createGaugeSampler(ports)
+    expect((await sampler.sample()).gpuAbsent).toBe(true)
+    answers.ioreg = { stdout: null, failure: 'timeout' }
+    ports.clock.at += GAUGE_GPU_COOL_MS
+    expect((await sampler.sample()).gpuAbsent).toBe(true)
+    ports.clock.at += GAUGE_GPU_COOL_MS
+    expect((await sampler.sample()).gpuAbsent).toBe(true)
+    answers.ioreg = ok(fx.IOREG_APPLE)
+    ports.clock.at += GAUGE_GPU_COOL_MS
+    expect(await sampler.sample()).toMatchObject({ gpuPercent: 23, gpuAbsent: false })
+  })
+  it('a Mac GPU that answers is not absent; one whose ioreg timed out or is missing is no reading, not none', async () => {
+    expect((await createGaugeSampler(mac()).sample()).gpuAbsent).toBe(false)
+    const slow = await createGaugeSampler(mac({ answers: { sysctl: ok(fx.SYSCTL_CALM), ioreg: { stdout: null, failure: 'timeout' } } })).sample()
+    expect(slow).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+    const broken = await createGaugeSampler(mac({ answers: { sysctl: ok(fx.SYSCTL_CALM) } })).sample()
+    expect(broken).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+  })
 })
 
 describe('the CPU window', () => {
@@ -152,15 +198,44 @@ describe('the CPU window', () => {
 describe('on Linux', () => {
   const linux = (over: Parameters<typeof fake>[0] = {}): Fake => {
     let reads = 0
+    const files = over.files ?? {}
     return fake({
       platform: 'linux',
       readText: async (path) => {
         if (path === '/proc/stat') return reads++ === 0 ? fx.PROC_STAT_A : fx.PROC_STAT_B
-        return path === '/proc/meminfo' ? fx.PROC_MEMINFO : null
+        return path === '/proc/meminfo' ? fx.PROC_MEMINFO : (files[path] ?? null)
       },
       ...over
     })
   }
+  const DRM = '/sys/class/drm'
+  const BUSY0 = `${DRM}/card0/device/gpu_busy_percent`
+  const BUSY1 = `${DRM}/card1/device/gpu_busy_percent`
+  const PCI = '/sys/bus/pci/devices'
+  /** The PCI bus as sysfs lists it: a directory of devices, each with its class and vendor. */
+  const bus = (devices: Record<string, { class: string; vendor: string }>) => ({
+    dirs: { [PCI]: Object.keys(devices) },
+    files: Object.fromEntries(
+      Object.entries(devices).flatMap(([id, d]) => [
+        [`${PCI}/${id}/class`, d.class],
+        [`${PCI}/${id}/vendor`, d.vendor]
+      ])
+    )
+  })
+  /** A box with one DRM card, described by its device/uevent, on a PCI bus. */
+  const oneCard = (uevent: string, devices: Record<string, { class: string; vendor: string }> = {}) => {
+    const pci = bus(devices)
+    return {
+      dirs: { [DRM]: fx.DRM_EC2, [`${DRM}/card0/device`]: fx.DRM_DEVICE_SILENT, ...pci.dirs },
+      files: { [`${DRM}/card0/device/uevent`]: uevent, ...pci.files }
+    }
+  }
+  const SOLIS = oneCard(fx.UEVENT_SIMPLEDRM, fx.PCI_EC2)
+  const twoAmd = (busy: Record<string, string>) => ({
+    dirs: { [DRM]: fx.DRM_TWO_AMD, [`${DRM}/card0/device`]: fx.DRM_DEVICE_COUNTS, [`${DRM}/card1/device`]: fx.DRM_DEVICE_COUNTS },
+    files: { [`${DRM}/card0/device/uevent`]: fx.UEVENT_AMDGPU, [`${DRM}/card1/device/uevent`]: fx.UEVENT_AMDGPU, ...busy }
+  })
+
   it('reads /proc for CPU and memory, statfs for the disk, no child at all without nvidia-smi', async () => {
     const ports = linux()
     const g = await createGaugeSampler(ports).sample()
@@ -169,6 +244,122 @@ describe('on Linux', () => {
     expect(g.disk?.freeBytes).toBe(50e9)
     expect(g.gpuPercent).toBeNull()
     expect(ports.ran).toEqual(['nvidia-smi'])
+  })
+  it('Solis-Core, an EC2 box whose only card is the firmware framebuffer and with no nvidia-smi, has no GPU: none, not no reading', async () => {
+    expect(await createGaugeSampler(linux(SOLIS)).sample()).toMatchObject({ gpuPercent: null, gpuAbsent: true })
+  })
+  it('so does the Amazon VGA under a plain driver, and a server whose only display is its BMC', async () => {
+    for (const uevent of [fx.UEVENT_AMAZON_VGA, fx.UEVENT_ASPEED]) expect((await createGaugeSampler(linux(oneCard(uevent))).sample()).gpuAbsent).toBe(true)
+  })
+  it('a box with no /sys/class/drm at all and no nvidia-smi has no GPU either', async () => {
+    expect((await createGaugeSampler(linux()).sample()).gpuAbsent).toBe(true)
+  })
+  it('stays none on every later sample, and looks for cards once: a GPU is not plugged into a running box', async () => {
+    const ports = linux(SOLIS)
+    const sampler = createGaugeSampler(ports)
+    await sampler.sample()
+    for (const step of [4000, 60 * 60_000]) {
+      ports.clock.at += step
+      expect((await sampler.sample()).gpuAbsent).toBe(true)
+    }
+    expect(ports.listed).toEqual([DRM, `${DRM}/card0/device`, PCI])
+    expect(ports.ran).toEqual(['nvidia-smi'])
+  })
+  it('a GPU on the bus that no driver has made a card of is no reading, never none: a g4dn before its NVIDIA driver', async () => {
+    const g = await createGaugeSampler(linux(oneCard(fx.UEVENT_SIMPLEDRM, fx.PCI_G4DN_NO_DRIVER))).sample()
+    expect(g).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+  })
+  it('a PCI device whose class could not be read is no reading, and the bus is looked at again', async () => {
+    let tries = 0
+    const base = linux(SOLIS)
+    const vga = `${PCI}/0000:00:03.0/class`
+    const ports: Fake = { ...base, readText: async (path) => (path === vga && tries++ === 0 ? null : base.readText(path)) }
+    const sampler = createGaugeSampler(ports)
+    expect((await sampler.sample()).gpuAbsent).toBe(false)
+    expect((await sampler.sample()).gpuAbsent).toBe(true)
+  })
+  it('an Intel laptop has a GPU whose driver keeps no busy count: no reading, never none', async () => {
+    expect(await createGaugeSampler(linux(oneCard(fx.UEVENT_I915))).sample()).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+  })
+  it('an NVIDIA card whose nvidia-smi is not installed is no reading, not none', async () => {
+    expect((await createGaugeSampler(linux(oneCard(fx.UEVENT_NVIDIA))).sample()).gpuAbsent).toBe(false)
+  })
+  it('a card nobody recognises is no reading: unsure is never none', async () => {
+    expect((await createGaugeSampler(linux(oneCard('DRIVER=panfrost\n'))).sample()).gpuAbsent).toBe(false)
+  })
+  it('an AMD box gets a real number: the busiest card’s gpu_busy_percent, without a child', async () => {
+    const ports = linux(twoAmd({ [BUSY0]: '7\n', [BUSY1]: '64\n' }))
+    expect(await createGaugeSampler(ports).sample()).toMatchObject({ gpuPercent: 64, gpuAbsent: false })
+    expect(ports.listed).not.toContain(`${DRM}/card0-DP-1/device`)
+    expect(ports.ran).toEqual(['nvidia-smi'])
+  })
+  it('a box with an AMD card and an NVIDIA one reads the busier of the two', async () => {
+    const ports = linux({ ...twoAmd({ [BUSY0]: '7\n', [BUSY1]: '7\n' }), answers: { 'nvidia-smi': ok(fx.NVIDIA_SMI_ONE) } })
+    expect((await createGaugeSampler(ports).sample()).gpuPercent).toBe(37)
+  })
+  it('a counting card whose file could not be read is no reading, and rests like a GPU tool that failed', async () => {
+    const reads: string[] = []
+    const base = linux(twoAmd({}))
+    const ports: Fake = { ...base, readText: async (path) => (path.endsWith('gpu_busy_percent') ? (reads.push(path), null) : base.readText(path)) }
+    const sampler = createGaugeSampler(ports)
+    expect(await sampler.sample()).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+    base.clock.at += 4000
+    expect((await sampler.sample()).gpuAbsent).toBe(false)
+    expect(reads).toEqual([BUSY0, BUSY1])
+    base.clock.at += GAUGE_GPU_COOL_MS
+    await sampler.sample()
+    expect(reads).toHaveLength(4)
+  })
+  it('a listing that failed is not taken for no GPU: it is no reading, and the cards are looked for again', async () => {
+    const amd = twoAmd({ [BUSY0]: '12\n', [BUSY1]: '5\n' })
+    let tries = 0
+    const listDir = async (path: string): Promise<readonly string[] | 'missing' | 'failed'> => {
+      if (path === DRM && tries++ === 0) return 'failed'
+      return amd.dirs[path as keyof typeof amd.dirs] ?? 'missing'
+    }
+    const sampler = createGaugeSampler(linux({ ...amd, listDir }))
+    expect(await sampler.sample()).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+    expect(await sampler.sample()).toMatchObject({ gpuPercent: 12, gpuAbsent: false })
+  })
+  it('a card whose uevent could not be read is no reading, and is asked about again', async () => {
+    let tries = 0
+    const base = linux(SOLIS)
+    const uevent = `${DRM}/card0/device/uevent`
+    const ports: Fake = { ...base, readText: async (path) => (path === uevent && tries++ === 0 ? null : base.readText(path)) }
+    const sampler = createGaugeSampler(ports)
+    expect((await sampler.sample()).gpuAbsent).toBe(false)
+    expect((await sampler.sample()).gpuAbsent).toBe(true)
+  })
+  it('an nvidia-smi that is there but would not say is no reading, not none', async () => {
+    for (const answer of [ok(fx.NVIDIA_SMI_NA), { stdout: null, failure: 'timeout' as const }, { stdout: null, failure: 'failed' as const }]) {
+      const g = await createGaugeSampler(linux({ ...SOLIS, answers: { 'nvidia-smi': answer } })).sample()
+      expect(g).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+    }
+  })
+  it('a GPU image on a CPU instance, where nvidia-smi says no devices were found, has no GPU', async () => {
+    const g = await createGaugeSampler(linux({ ...SOLIS, answers: { 'nvidia-smi': ok(fx.NVIDIA_SMI_NO_DEVICES) } })).sample()
+    expect(g).toMatchObject({ gpuPercent: null, gpuAbsent: true })
+  })
+  it('a counter file that hangs costs the GPU gauge, and is not read again while it is still out', async () => {
+    vi.useFakeTimers()
+    try {
+      const reads: string[] = []
+      const base = linux(twoAmd({}))
+      const readText = async (path: string): Promise<string | null> => {
+        if (!path.endsWith('gpu_busy_percent')) return base.readText(path)
+        reads.push(path)
+        return new Promise<never>(() => undefined)
+      }
+      const sampler = createGaugeSampler({ ...base, readText })
+      for (let i = 0; i < 2; i++) {
+        const pending = sampler.sample()
+        await vi.advanceTimersByTimeAsync(GAUGE_CHILD_TIMEOUT_MS + 1)
+        expect(await pending).toMatchObject({ gpuPercent: null, gpuAbsent: false })
+      }
+      expect(reads).toEqual([BUSY0])
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it('reads nvidia-smi when it is there', async () => {
     const g = await createGaugeSampler(linux({ answers: { 'nvidia-smi': ok(fx.NVIDIA_SMI_TWO) } })).sample()
@@ -199,6 +390,7 @@ describe('on Windows', () => {
     expect(g.memory).toEqual({ usedBytes: 15 * GB, totalBytes: 16 * GB, swapUsedBytes: null, kernelLevel: null })
     expect(g.disk).not.toBeNull()
     expect(g.gpuPercent).toBeNull()
+    expect(g.gpuAbsent).toBe(false)
     expect(ports.ran).toEqual([])
   })
 })
@@ -294,7 +486,7 @@ describe('when the machine will not answer', () => {
 })
 
 describe('the watch', () => {
-  const stamped = (at: number): MachineGauges => ({ at, cpuPercent: 1, memory: null, disk: null, gpuPercent: null })
+  const stamped = (at: number): MachineGauges => ({ at, cpuPercent: 1, memory: null, disk: null, gpuPercent: null, gpuAbsent: false })
   let clock = 0
   beforeEach(() => {
     clock = 1000
@@ -382,6 +574,10 @@ describe('the child runner', () => {
   it('keeps what answered when the child exits non-zero: an unknown oid must not cost the rest', async () => {
     const answer = await runGaugeChild('/bin/sh', ['-c', 'echo vm.swapusage: x; exit 1'])
     expect(answer).toEqual({ stdout: 'vm.swapusage: x\n', failure: null })
+  })
+  it('keeps nvidia-smi’s words when it exits 6 with no devices: that is how a GPU image says there is no card', async () => {
+    const answer = await runGaugeChild('/bin/sh', ['-c', 'echo "No devices were found"; exit 6'])
+    expect(answer).toEqual({ stdout: 'No devices were found\n', failure: null })
   })
   it('names a missing binary, so it is not asked again', async () => {
     expect(await runGaugeChild('/no/such/gauge-binary', [])).toEqual({ stdout: null, failure: 'missing' })

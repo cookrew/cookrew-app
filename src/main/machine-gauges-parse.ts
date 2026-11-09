@@ -57,6 +57,40 @@ export function parseIoregGpu(text: string): number | null {
   return found.length ? Math.min(100, Math.max(...found)) : null
 }
 
+/** /sys/class/drm/cardN/device/gpu_busy_percent: one whole number, which amdgpu keeps; anything else is no reading. */
+export function parseGpuBusyPercent(text: string): number | null {
+  const line = text.trim()
+  return /^\d+$/.test(line) ? Math.min(100, Number(line)) : null
+}
+
+/** Drivers that put a picture on a screen and compute nothing: a firmware framebuffer, a hypervisor's or a server BMC's display. */
+const DISPLAY_ONLY_DRIVERS = new Set([
+  'simple-framebuffer', 'simpledrm', 'efi-framebuffer', 'vesa-framebuffer', 'bochs-drm', 'bochs', 'cirrus', 'cirrus-qemu',
+  'qxl', 'virtio_gpu', 'vmwgfx', 'hyperv_drm', 'hyperv-drm', 'vboxvideo', 'ast', 'mgag200', 'udl', 'vkms'
+])
+/** PCI vendors whose display is the same kind of thing: Amazon, QEMU, Red Hat virtio and QXL, Microsoft, VMware, VirtualBox, ASPEED, Matrox, Cirrus. */
+const DISPLAY_ONLY_VENDORS = new Set(['1D0F', '1234', '1AF4', '1B36', '1414', '15AD', '80EE', '1A03', '102B', '1013'])
+
+/**
+ * Whether a DRM card is a GPU, from its device/uevent. Only a known display-only
+ * driver or vendor says no: a card nobody recognises counts as a GPU, so the
+ * page says "no reading" for it, never a "none" that might be false.
+ */
+export function drmCardIsGpu(uevent: string): boolean {
+  const named = new Map(uevent.split('\n').flatMap((line) => {
+    const cut = line.indexOf('=')
+    return cut > 0 ? [[line.slice(0, cut), line.slice(cut + 1).trim()] as const] : []
+  }))
+  const vendor = (named.get('PCI_ID') ?? '').split(':')[0].toUpperCase()
+  return !DISPLAY_ONLY_DRIVERS.has(named.get('DRIVER') ?? '') && !DISPLAY_ONLY_VENDORS.has(vendor)
+}
+
+/** A PCI device from its sysfs `class` and `vendor`: a display or 3D controller (0x03xxxx) is a GPU unless its vendor only makes displays. */
+export function pciDeviceIsGpu(pciClass: string, vendor: string): boolean {
+  const id = vendor.trim().replace(/^0x/i, '').toUpperCase()
+  return /^0x03/i.test(pciClass.trim()) && !DISPLAY_ONLY_VENDORS.has(id)
+}
+
 /** One line per card from `nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits`; `[N/A]` is no reading. */
 export function parseNvidiaSmi(text: string): number | null {
   const found = text
