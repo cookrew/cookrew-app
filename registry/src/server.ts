@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { standing } from './v2-fleet'
 import { PRESET_VERSION_HEADER, type PresetManifest } from '../../src/shared/preset-manifest'
 import { RegistryStore, isAddress } from './store'
 import { TransparencyLog } from './log'
@@ -924,6 +925,12 @@ export function createRegistry(deps: RegistryDeps): Server {
             : {
                 account: signed.account,
                 currentDeviceId: signed.claims.dev,
+                // The console: each machine with whether it holds its line now (v2-fleet.ts · standing).
+                machines: signed.account.desktops.map((desktop) => {
+                  const line = canvas?.presence(signed.account.username).get(desktop.deviceId)
+                  const { online, lastSeenAt } = standing(desktop, line, Date.now())
+                  return { id: desktop.deviceId, name: desktop.name, online, lastSeenAt, profile: desktop.profile ?? null }
+                }),
                 // Phase 4's posture: which passkeys, and whether an
                 // authenticator is active. Never a secret.
                 factors: deps.v2.factors.store.summary(signed.account.username)
