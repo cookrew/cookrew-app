@@ -446,6 +446,8 @@ export interface MobileApiDeps {
    * carry write authority. Field name matches MobileServerDeps.
    */
   wallToken?: string;
+  /** The device the relay's bridge named for this request (relay-device.ts); never one a body claims. */
+  bridgedDeviceId?: string | null;
   ops: MobileOps;
   presets: readonly { name: string; command: string }[];
   /** Persist a phone-uploaded attachment; returns its absolute path. */
@@ -730,7 +732,7 @@ export async function handleMobileApi(
   }
 
   // Six digits for a watch's token: open, as this route must be, and bounded.
-  if (await handleWatchClaim(request, response, method, p)) return true;
+  if (await handleWatchClaim(request, response, method, p, deps.bridgedDeviceId ?? null)) return true;
   if (handleWatchHello(response, url, method, p)) return true;
   const watchRefusal = watchCleared ? watchWriteRefusal(p) : null;
   if (watchRefusal) {

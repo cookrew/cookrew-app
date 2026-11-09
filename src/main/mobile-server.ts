@@ -1445,7 +1445,8 @@ export async function handle(
         activePairingToken ?? deps.pairingToken ?? null,
         !perDeviceOnlyFor(deps)
       ),
-    wallToken: activeWallToken ?? deps.wallToken
+    wallToken: activeWallToken ?? deps.wallToken,
+    bridgedDeviceId: bridgeDevice?.deviceId ?? null
   }
   recordBridgeDevice(request, url, deps, bridgeDevice)
   if (await handleMobileApi(request, response, url, authed as MobileApiDeps)) return

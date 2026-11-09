@@ -42,7 +42,7 @@ export interface PairDoorDeps {
    * into a device's: a watch reaches agents and pages, not a shell. Absent, a
    * watch's pass is refused.
    */
-  readonly watch?: { readonly enter: () => string }
+  readonly watch?: { readonly enter: (deviceId: string) => string }
   readonly now?: () => number
   readonly log?: (line: string) => void
 }
@@ -151,7 +151,7 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
     if (deps.watch === undefined) return refuse(403, 'refused', word('This Mac does not take a watch at this door.'))
     let token: string
     try {
-      token = deps.watch.enter()
+      token = deps.watch.enter(asking.deviceId)
     } catch {
       return refuse(503, 'unavailable', word('This Mac could not record the watch. Try again.'))
     }

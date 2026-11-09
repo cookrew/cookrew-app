@@ -190,9 +190,10 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
  * once, when it joined the account with a code a machine minted only after the
  * account's step-up (v2-join.ts); from then on it is handed a pass whenever it
  * asks, for its own key, and enters every machine of the account, those added
- * later included. Removing the watch in Devices, or "Not me", ends it: a
- * revoked device has no session to ask with, and the machines read the revoked
- * list. The pass is a WATCH pass (its own scope), which a machine turns into a
+ * later included. Removing the watch in Devices ends it: a revoked device has
+ * no session to ask with, and each machine drops the watch's token when the
+ * revoked list names it (watch-pairing.ts · revoked). "Not me" stops new passes
+ * and the watch's sessions; to end its tokens on the machines, remove it. The pass is a WATCH pass (its own scope), which a machine turns into a
  * watch's token — agents and pages, never a shell — and which a machine older
  * than it does not read at all.
  */
@@ -202,6 +203,8 @@ export function issueWatchGrant(ctx: V2Context, signed: Signed): void {
     return said(ctx, 403, 'not_watch', 'Only a watch is let into every machine on its pairing alone. Prove it is you instead.')
   }
   if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
+  // As the proved pass is limited: a watch asks a few times a visit, not a stream.
+  if (!ctx.v2.factors.options.take(`watch-grant|${device.id}`)) return said(ctx, 429, 'rate_limited', SAID.resting)
   const jkt = jwkThumbprint(device.jwk)
   if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
   const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti

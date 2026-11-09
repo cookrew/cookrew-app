@@ -246,3 +246,9 @@ describe('the account pair door', () => {
     })
   })
 })
+
+describe('the transcript a watch signs (watch/Sources/CookrewCore/Enter.swift)', () => {
+  it('is these bytes, which the Swift side writes too', () => {
+    expect(pairTranscript({ desktopId: 'd-1', challengeId: 'c-2', nonce: 'n-3', deviceId: 'w-4' })).toBe('cookrew-pair/2 d-1 c-2 n-3 w-4')
+  })
+})

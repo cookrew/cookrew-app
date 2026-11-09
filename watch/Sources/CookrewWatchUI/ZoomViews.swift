@@ -81,7 +81,7 @@ public struct DevicesPage: View {
           Button {
             if row.paired { onOpen() } else if row.held { onSwitch(row.id) } else { onAdd(row) }
           } label: {
-            StopRow(title: row.name, line: row.held ? line(row) : "not paired · tap to pair", mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: !row.held)
+            StopRow(title: row.name, line: row.held ? line(row) : (row.online ? "tap to open" : "offline"), mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: !row.held)
           }
           .buttonStyle(.plain)
         }
@@ -148,17 +148,21 @@ public struct WorkspacesPage: View {
 /** A machine of the account the watch holds no key for: its code, typed here, adds it. */
 public struct AddMachinePage: View {
   let name: String
+  /** Why it was not simply opened, when there is a reason worth saying. */
+  let note: String?
   let onCode: () -> Void
   @Environment(\.ink) private var ink
 
-  public init(name: String, onCode: @escaping () -> Void) {
+  public init(name: String, note: String? = nil, onCode: @escaping () -> Void) {
     self.name = name
+    self.note = note
     self.onCode = onCode
   }
 
   public var body: some View {
     CardScroll {
       VStack(alignment: .leading, spacing: 8) {
+        if let note { Text(note).font(InkType.words(12.5)).foregroundStyle(ink.wait) }
         Text("On \(name):").font(InkType.words(14)).foregroundStyle(ink.ink)
         Text("⋯ → Apple Watch → GET A CODE").font(InkType.word(10.5)).tracking(0.6).foregroundStyle(ink.sealText)
         Text("The machines already on this watch stay.").font(InkType.words(12.5)).foregroundStyle(ink.muted)

@@ -106,7 +106,7 @@ export async function grantWorld(): Promise<GrantWorld> {
     },
     browser: async (username, kind = 'phone') => {
       const minted = await mintBrowserDevice()
-      const attached = v2.accounts.attachDevice(username, { id: minted.id, kind, name: kind === 'watch' ? 'Apple Watch' : 'iPhone', jwk: minted.jwk })
+      const attached = v2.accounts.attachDevice(username, { id: minted.id, kind, name: kind === 'watch' ? 'Apple Watch' : 'iPhone', jwk: minted.jwk }, { watch: kind === 'watch' })
       if (!attached.ok) throw new Error(attached.reason)
       // As a sign-in that just finished leaves it: proved, so fresh for five minutes.
       const session = v2.accounts.startSession(username, minted.id, { verifiedBy: 'passkey' })

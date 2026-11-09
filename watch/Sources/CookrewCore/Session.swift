@@ -43,11 +43,11 @@ public struct SessionShelf: Codable, Equatable, Sendable {
   public var keys: [String] { entries.map(\.key) }
 
   /** A session paired just now: added, or in its own place if the machine was held, and gone into. */
-  @discardableResult public mutating func put(_ session: WatchSession) -> String {
+  @discardableResult public mutating func put(_ session: WatchSession, goIn: Bool = true) -> String {
     let key = sessionKey(session)
     let entry = Entry(key: key, desktop: session.desktop, bases: session.bases)
     if let at = entries.firstIndex(where: { $0.key == key }) { entries[at] = entry } else { entries.append(entry) }
-    active = key
+    if goIn || active == nil { active = key }
     return key
   }
 
@@ -220,9 +220,9 @@ public struct SessionVault: Sendable {
   }
 
   /** A machine paired just now: added beside the others, and gone into. */
-  public func save(_ session: WatchSession) {
+  public func save(_ session: WatchSession, goIn: Bool = true) {
     var shelf = shelf()
-    let key = shelf.put(session)
+    let key = shelf.put(session, goIn: goIn)
     write(Data(session.token.utf8), to: "token:\(key)")
     store(shelf)
   }

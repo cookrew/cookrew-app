@@ -71,6 +71,8 @@ export class WatchPairing {
   private readonly file: string
   private readonly now: () => number
   private token: string | null
+  /** The account's id for the watch let in by its pass; null for one paired by digits. */
+  private deviceId: string | null = null
   private live: LiveCode | null = null
   private fails: readonly number[] = []
   private pausedUntil = 0
@@ -85,7 +87,9 @@ export class WatchPairing {
   private read(): string | null {
     try {
       if (!existsSync(this.file)) return null
-      const token = readFileSync(this.file, 'utf8').trim()
+      // The token, and on a second line the watch's account device id when its pass let it in.
+      const [token = '', device = ''] = readFileSync(this.file, 'utf8').split('\n').map((line) => line.trim())
+      this.deviceId = device.length > 0 ? device : null
       return token.length >= 16 ? token : null
     } catch (error) {
       console.error('Reading the watch token failed; the watch must pair again:', error)
@@ -96,7 +100,7 @@ export class WatchPairing {
   private write(token: string): void {
     try {
       mkdirSync(path.dirname(this.file), { recursive: true })
-      writeFileSync(this.file, `${token}\n`, { encoding: 'utf8', mode: 0o600 })
+      writeFileSync(this.file, this.deviceId ? `${token}\n${this.deviceId}\n` : `${token}\n`, { encoding: 'utf8', mode: 0o600 })
       chmodSync(this.file, 0o600)
     } catch (error) {
       console.error('Writing the watch token failed (it lasts until this app quits):', error)
@@ -149,7 +153,8 @@ export class WatchPairing {
     return { ok: false, reason }
   }
 
-  claim(code: unknown): WatchClaim {
+  /** `deviceId`: the watch's account device when the relay named it; null on the six-digit LAN claim. */
+  claim(code: unknown, deviceId: string | null = null): WatchClaim {
     const now = this.now()
     if (now < this.pausedUntil) return { ok: false, reason: 'paused' }
     const live = this.live
@@ -168,24 +173,36 @@ export class WatchPairing {
       return this.failed('wrong')
     }
     this.live = null
-    return { ok: true, token: this.enter() }
+    return { ok: true, token: this.enter(deviceId) }
   }
 
   /**
    * The watch's token, with no code: a code claimed, or the account's watch pass
    * checked at the door (account-pair.ts). It replaces the watch before it.
    */
-  enter(): string {
+  enter(deviceId: string | null): string {
     const token = randomBytes(24).toString('base64url')
     this.token = token
+    this.deviceId = deviceId
     this.claimed += 1
     this.write(token)
     return token
   }
 
+  /**
+   * The account revoked these devices: if the watch let in by its pass is one,
+   * it stops here too, as a revoked phone's admission does. True when it was.
+   */
+  revoked(ids: readonly string[]): boolean {
+    if (this.deviceId === null || !ids.includes(this.deviceId)) return false
+    this.unpair()
+    return true
+  }
+
   /** Forget the watch: its token stops working here and now. */
   unpair(): void {
     this.token = null
+    this.deviceId = null
     this.live = null
     try {
       rmSync(this.file, { force: true })

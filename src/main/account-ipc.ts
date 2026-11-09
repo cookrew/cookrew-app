@@ -11,7 +11,7 @@ import { isTypedFactor } from './account-ladder'
 import type { DeviceCode, TripProof } from './account-oauth'
 import { isBrowserIntent, type BrowserCode } from './account-browser-auth'
 import { isProviderId, type ProviderId, type ProviderOffer } from '../shared/oauth'
-import type { StepUpAct } from '../shared/step-up'
+import type { StepUpAct, StepUpProof } from '../shared/step-up'
 import type { PairingHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
 import type {
@@ -836,10 +836,12 @@ async function providerProof(deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>, ac
 async function mintUnderProof(
   deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
   current: string,
+  purpose?: 'watch',
 ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
   const proof = await providerProof(deps, 'mint-join-code')
-  if (proof === null) return deps.accounts.mintJoinCode(current)
-  return proof.ok ? deps.accounts.mintJoinCode({ stepUp: proof.value }) : proof
+  const mint = (proved: StepUpProof) => (purpose ? deps.accounts.mintJoinCode(proved, purpose) : deps.accounts.mintJoinCode(proved))
+  if (proof === null) return mint(current)
+  return proof.ok ? mint({ stepUp: proof.value }) : proof
 }
 
 /**
@@ -853,7 +855,8 @@ export async function mintWatchInvite(
 ): Promise<{ ok: true; code: string; expiresAt: number } | { ok: false; reason: string; message?: string }> {
   if (deps.accounts.account() === null) return { ok: false, reason: 'no_account' }
   if (!here && deps.accounts.isPasswordless()) return { ok: false, reason: 'provider_required' }
-  const minted = await mintUnderProof(deps, current)
+  // A watch's code: the only kind a watch joins with, and it joins nothing but a watch.
+  const minted = await mintUnderProof(deps, current, 'watch')
   if (!minted.ok) return { ok: false, reason: minted.reason, ...(minted.message ? { message: minted.message } : {}) }
   return { ok: true, code: minted.value.code, expiresAt: minted.value.expiresAt }
 }
