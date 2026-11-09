@@ -20,13 +20,15 @@ import type { StreamService } from './stream-service'
 import { readJson, respondJson } from './mobile-http'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
-import { itemsOfAgent, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
+import { crewRows, itemsOfAgent, MAX_CREW, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
 import type { WatchPairing } from './watch-pairing'
 
 /** A frame as wide as the widest watch at 2x; a phone's is not needed on a wrist. */
 export const FRAME_WIDTH_DEFAULT = 416
 const FRAME_WIDTH_MIN = 120
 const FRAME_WIDTH_MAX = 640
+/** The most one swipe scrolls, in screens. */
+const SCROLL_SHARE_MAX = 3
 /** Most of a note a wrist is sent. */
 const NOTE_MAX = 8000
 /** Words for a new agent, as a person says them. */
@@ -72,7 +74,8 @@ export interface WatchHost {
   /** The workspace's canvas, for an agent's items. */
   canvas(workspaceId: string): Parameters<typeof itemsOfAgent>[1]
   /** The picture of a browser card, at most `width` wide. */
-  frame(browserId: string, width: number): Promise<{ type: string; data: Buffer } | null>
+  /** A browser's picture. A peek is a thumbnail's: the picture the Mac already has, and no browser started for it. */
+  frame(browserId: string, width: number, peek: boolean): Promise<{ type: string; data: Buffer } | null>
   browser(browserId: string): Promise<BrowserInstance | null>
   note(noteId: string): { name: string; content: string } | null
   /** Make a new agent from the words, as the prompt box does; its id. */
@@ -280,9 +283,6 @@ async function cards(
 ): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[] }> {
   // Inside a workspace the wrist shows its whole crew, so the week and not the day.
   const board = await ctx.board(workspaceId !== null)
-  const rows = rowsOfWorkspace(board.rows, workspaceId)
-  const activities = new Map(ctx.activities().map((activity) => [activity.terminalId, activity]))
-  const checkpoints = await checkpointsOf(rows, activities, ctx.checkpoint)
   const canvases = new Map<string, ReturnType<WatchHost['canvas']>>()
   const canvasOf = (workspaceId: string): ReturnType<WatchHost['canvas']> => {
     const known = canvases.get(workspaceId)
@@ -291,13 +291,26 @@ async function cards(
     canvases.set(workspaceId, canvas)
     return canvas
   }
+  // Inside a workspace: its whole crew, the agents the board has no row for too.
+  const named = workspaceId === null ? null : current.workspaces().find((w) => w.id === workspaceId)
+  const rows =
+    workspaceId === null
+      ? board.rows
+      : crewRows(canvasOf(workspaceId).nodes, rowsOfWorkspace(board.rows, workspaceId), {
+          id: workspaceId,
+          name: named?.name ?? rowsOfWorkspace(board.rows, workspaceId)[0]?.workspace.name ?? '',
+          active: workspaceId === board.activeWorkspaceId
+        })
+  const activities = new Map(ctx.activities().map((activity) => [activity.terminalId, activity]))
+  const checkpoints = await checkpointsOf(rows, activities, ctx.checkpoint)
   return {
     cards: watchCards({
       rows,
       activities,
       checkpoints,
       active: ctx.active,
-      itemsOf: (agentId, workspaceId) => itemsOfAgent(agentId, canvasOf(workspaceId))
+      itemsOf: (agentId, workspaceId) => itemsOfAgent(agentId, canvasOf(workspaceId)),
+      ...(workspaceId === null ? {} : { limit: MAX_CREW })
     }),
     activeWorkspaceId: board.activeWorkspaceId,
     workspaces: watchWorkspaces({
@@ -319,8 +332,14 @@ export function browserInputOf(body: Record<string, unknown>, viewport: { width:
       const y = fraction(body.y)
       return x === null || y === null ? null : { t: 'tap', x: x * viewport.width, y: y * viewport.height }
     }
-    case 'scroll':
-      return typeof body.dy === 'number' && Number.isFinite(body.dy) ? { t: 'wheel', x: viewport.width / 2, y: viewport.height / 2, dy: body.dy } : null
+    case 'scroll': {
+      // A swipe says its distance as a share of the picture's height (fy), which only
+      // the Mac can turn into pixels; a crown says pixels (dy). It lands where the finger was.
+      const share = typeof body.fy === 'number' && Number.isFinite(body.fy) ? Math.max(-SCROLL_SHARE_MAX, Math.min(SCROLL_SHARE_MAX, body.fy)) : null
+      const dy = share !== null ? share * viewport.height : typeof body.dy === 'number' && Number.isFinite(body.dy) ? body.dy : null
+      if (dy === null) return null
+      return { t: 'wheel', x: (fraction(body.x) ?? 0.5) * viewport.width, y: (fraction(body.y) ?? 0.5) * viewport.height, dy }
+    }
     case 'enter':
       return { t: 'key', key: 'Enter', code: 'Enter' }
     default:
@@ -430,7 +449,7 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
   if (method === 'GET' && item[2] === 'frame') {
     const asked = Number(ctx.url.searchParams.get('w'))
     const width = Number.isFinite(asked) && asked > 0 ? Math.min(FRAME_WIDTH_MAX, Math.max(FRAME_WIDTH_MIN, Math.round(asked))) : FRAME_WIDTH_DEFAULT
-    const frame = await current.frame(id, width)
+    const frame = await current.frame(id, width, ctx.url.searchParams.get('peek') === '1')
     if (!frame) respondJson(response, 404, { error: 'No picture yet' })
     else respondTagged(ctx, frame.type, frame.data)
     return true

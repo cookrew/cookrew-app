@@ -21,8 +21,10 @@ import { hostOf, tintOf } from '../shared/item-look'
 
 /** More than this is not a wrist's worth; the ones that need the owner sort first. */
 export const MAX_CARDS = 40
-/** Thumbnails on a card, as the card's own strip holds. */
-export const CARD_THUMBS = 3
+/** One workspace's crew is shown whole, as the phone's crew view holds it; this only bounds a runaway canvas. */
+export const MAX_CREW = 150
+/** A card's artifacts: all of them, as the phone's thumbs grid holds them (owner, 2026-11-02), up to a wrist's worth. */
+export const CARD_ITEMS = 24
 /** A reply longer than this is cut: the rest is for a bigger screen. */
 export const MAX_WORDS = 4000
 
@@ -88,6 +90,8 @@ export interface WatchCardsInput {
   /** Still a member of the crew: false once it was closed. */
   readonly active: (agentId: string) => boolean
   readonly itemsOf: (agentId: string, workspaceId: string) => { items: readonly WatchItem[]; browsers: number; notes: number }
+  /** How many cards at most: the day's MAX_CARDS, or a whole crew. */
+  readonly limit?: number
 }
 
 const cut = (text: string): string => (text.length > MAX_WORDS ? `${text.slice(0, MAX_WORDS)}…` : text)
@@ -99,18 +103,52 @@ function wordsOf(view: TurnViewModel | null, status: WatchStatus): WatchWords | 
   return status === 'working' ? { text: 'Working…', tone: 'working' } : null
 }
 
-const aboutOf = (view: TurnViewModel | null, row: BoardRow): string | null => view?.title ?? view?.ask ?? row.task?.title ?? row.task?.summary ?? null
+const aboutOf = (view: TurnViewModel | null, row: BoardRow): string | null => view?.title ?? view?.ask ?? row.task?.title ?? (row.task?.summary || null)
 
 /** Which rows are cards, in the crown's order: a stable sort, newest first inside a state. */
-export function cardRows(rows: readonly BoardRow[], active: (agentId: string) => boolean = () => true): readonly BoardRow[] {
+export function cardRows(rows: readonly BoardRow[], active: (agentId: string) => boolean = () => true, limit: number = MAX_CARDS): readonly BoardRow[] {
   const statusOf = (row: BoardRow): WatchStatus => (active(row.terminalId) ? STATUS_OF[row.phase] : 'offline')
   return [...rows]
     .sort((a, b) => RANK[statusOf(a)] - RANK[statusOf(b)] || b.lastActivityAt - a.lastActivityAt || a.terminalId.localeCompare(b.terminalId))
-    .slice(0, MAX_CARDS)
+    .slice(0, limit)
+}
+
+/**
+ * ONE WORKSPACE'S CREW, AS EVERY OTHER VIEW OF IT COUNTS IT (agent-rows.ts ·
+ * crewOf): one row per terminal card on its canvas, in card order. Its board
+ * row when the board has one, under the card's own name, harness and lead
+ * flag; a resting row when it has none, so an agent idle for a week, or one in
+ * a workspace nobody is looking at, is still on the wrist.
+ */
+export function crewRows(
+  nodes: readonly CanvasNode[],
+  rows: readonly BoardRow[],
+  workspace: { readonly id: string; readonly name: string; readonly active: boolean }
+): BoardRow[] {
+  const rowOf = new Map(rows.map((row) => [row.terminalId, row]))
+  return nodes.flatMap((node): BoardRow[] => {
+    if (node.kind !== 'terminal') return []
+    const agent = { name: node.name, preset: node.preset, role: node.role ?? null, orch: node.orch === true }
+    const row = rowOf.get(node.id)
+    if (row) return [{ ...row, agent }]
+    return [
+      {
+        terminalId: node.id,
+        agent,
+        workspace: { ...workspace },
+        cwd: node.cwd,
+        task: { title: null, summary: node.brief ?? '', turnIndex: 0, startedAt: 0, endedAt: 0 },
+        phase: 'done',
+        source: 'ledger',
+        lastActivityAt: 0,
+        turnCount: 0
+      }
+    ]
+  })
 }
 
 export function watchCards(input: WatchCardsInput): WatchCard[] {
-  return cardRows(input.rows, input.active).map((row) => {
+  return cardRows(input.rows, input.active, input.limit).map((row) => {
     const status = input.active(row.terminalId) ? STATUS_OF[row.phase] : 'offline'
     const activity = input.activities.get(row.terminalId)
     const live = activity ? turnViewOf(activity) : null
@@ -128,7 +166,7 @@ export function watchCards(input: WatchCardsInput): WatchCard[] {
       words: wordsOf(view, status),
       about: aboutOf(view, row),
       choice: choice ? { ...choice, id: choiceId(choice) } : null,
-      items: items.slice(0, CARD_THUMBS),
+      items: items.slice(0, CARD_ITEMS),
       browsers,
       notes,
       at: row.lastActivityAt

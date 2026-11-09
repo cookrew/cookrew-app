@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardPhase, BoardRow } from '../src/shared/board'
-import { rowsOfWorkspace, watchWorkspaces } from '../src/main/watch-cards'
+import type { CanvasNode } from '../src/shared/model'
+import { CARD_ITEMS, cardRows, crewRows, rowsOfWorkspace, watchCards, watchWorkspaces, MAX_CARDS } from '../src/main/watch-cards'
 
 const row = (id: string, phase: BoardPhase, workspace: string): BoardRow =>
   ({
@@ -49,5 +50,43 @@ describe('one workspace’s cards', () => {
     expect(rowsOfWorkspace(ROWS, 'goat').map((r) => r.terminalId)).toEqual(['c', 'd', 'e'])
     expect(rowsOfWorkspace(ROWS, null)).toHaveLength(5)
     expect(rowsOfWorkspace(ROWS, 'nowhere')).toEqual([])
+  })
+})
+
+const terminal = (id: string, name: string, extra: Partial<CanvasNode> = {}): CanvasNode =>
+  ({ kind: 'terminal', id, name, preset: 'Codex', command: 'codex', cwd: '/w', orch: false, role: null, position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, ...extra }) as CanvasNode
+
+describe('one workspace’s crew on a wrist', () => {
+  const goat = { id: 'goat', name: 'GOAT Team', active: false }
+
+  it('is every terminal on its canvas, with its board row where there is one and a resting row where there is not', () => {
+    const nodes = [terminal('c', 'Renamed C'), { kind: 'note', id: 'n1' } as unknown as CanvasNode, terminal('z', 'Zed', { brief: 'Ship the motion brief' })]
+    const crew = crewRows(nodes, rowsOfWorkspace(ROWS, 'goat'), goat)
+    expect(crew.map((r) => r.terminalId)).toEqual(['c', 'z'])
+    expect(crew[0]).toMatchObject({ phase: 'unread', agent: { name: 'Renamed C', preset: 'Codex' } })
+    expect(crew[1]).toMatchObject({ phase: 'done', lastActivityAt: 0, workspace: goat, agent: { name: 'Zed' }, task: { summary: 'Ship the motion brief' } })
+  })
+
+  it('a crew is not cut at the day’s card limit', () => {
+    const many = Array.from({ length: MAX_CARDS + 15 }, (_, i) => terminal(`t${i}`, `T${i}`))
+    const crew = crewRows(many, [], goat)
+    expect(cardRows(crew, () => true, crew.length)).toHaveLength(MAX_CARDS + 15)
+    expect(cardRows(crew)).toHaveLength(MAX_CARDS)
+  })
+})
+
+describe('a card’s artifacts on a wrist', () => {
+  it('carries every browser and note the agent has, as the phone’s thumbs grid does, up to a wrist’s worth', () => {
+    const item = (i: number) => ({ id: `b${i}`, kind: 'browser' as const, title: `Page ${i}`, host: 'example.com', tint: '#6f8a5c', initial: 'P' })
+    const cardsOf = (count: number) =>
+      watchCards({
+        rows: [row('a', 'done', 'dev')],
+        activities: new Map(),
+        checkpoints: new Map(),
+        active: () => true,
+        itemsOf: () => ({ items: Array.from({ length: count }, (_, i) => item(i)), browsers: count, notes: 0 })
+      })
+    expect(cardsOf(7)[0].items).toHaveLength(7)
+    expect(cardsOf(CARD_ITEMS + 5)[0].items).toHaveLength(CARD_ITEMS)
   })
 })
