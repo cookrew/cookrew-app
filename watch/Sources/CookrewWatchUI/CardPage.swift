@@ -47,7 +47,7 @@ struct CardHead: View {
         InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 34, weight: .large)
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("All agents")
+      .accessibilityLabel("Back to the crew")
       VStack(alignment: .leading, spacing: 1) {
         Text(card.name)
           .font(InkType.name())
@@ -411,7 +411,7 @@ public struct NewAgentPage: View {
       }
       .frame(width: 58, height: 58)
       Text("New agent").font(InkType.name(17)).foregroundStyle(ink.ink).padding(.top, 8)
-      if let workspace = store.cards.first(where: { $0.workspace.active })?.workspace.name {
+      if let workspace = store.workspaces.first(where: \.active)?.name ?? store.cards.first(where: { $0.workspace.active })?.workspace.name {
         Text("in \(workspace)").font(InkType.words(13)).foregroundStyle(ink.muted).padding(.top, 1)
       }
       if let sent = store.sent(newAgentPage) {

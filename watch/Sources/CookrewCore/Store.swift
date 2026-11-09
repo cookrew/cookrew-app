@@ -70,12 +70,31 @@ public func eventsBetween(_ old: [Card], _ new: [Card]) -> [WatchEvent] {
   }
 }
 
+/**
+ * An agent starting to wait in a workspace the wrist is not inside: its tile's
+ * count rose. Inside one workspace the cards say only that one, so the others
+ * speak through their counts.
+ */
+public func eventsElsewhere(_ old: [WorkspaceTile], _ new: [WorkspaceTile], inside scope: String) -> [WatchEvent] {
+  let before = Dictionary(old.map { ($0.id, $0.waiting) }, uniquingKeysWith: { first, _ in first })
+  return new.compactMap { tile in
+    guard tile.id != scope, let was = before[tile.id], tile.waiting > was else { return nil }
+    return .needsYou(tile.name)
+  }
+}
+
 public let newAgentPage = "__new_agent__"
 
 @MainActor
 @Observable
 public final class WatchStore {
   public private(set) var cards: [Card] = []
+  /** Every workspace on the Mac, counted: the workspaces stop. */
+  public private(set) var workspaces: [WorkspaceTile] = []
+  /** The workspace the wrist has zoomed into; nil above them. */
+  public private(set) var scope: String?
+  /** Where the Mac makes a new agent: only there can the wrist start one. */
+  public private(set) var activeWorkspaceId: String?
   public private(set) var link: WatchLink = .connecting
   /** The page the crown is on: a card's id, or newAgentPage. Kept by id, so a reorder never moves it. */
   public var page: String?
@@ -125,15 +144,43 @@ public final class WatchStore {
 
   public var currentCard: Card? { cards.first { $0.id == page } }
 
+  private func shown(_ list: [Card]) -> [Card] {
+    guard let scope else { return list }
+    return list.filter { $0.workspace.id == scope }
+  }
+
+  /** The cards of the workspace zoomed into, or all of them above it. */
+  public var visibleCards: [Card] { shown(cards) }
+
+  /** The wrist can start an agent here: the Mac makes one in its active workspace only. */
+  public var canMakeAgent: Bool { scope == nil || scope == activeWorkspaceId }
+
+  /**
+   * Zoom into a workspace, or back out with nil. Its cards are read afresh, and
+   * the crown starts on its first card. Going in is not news: nothing buzzes.
+   */
+  public func enter(workspace: String?) async {
+    guard workspace != scope else { return }
+    scope = workspace
+    tag = nil
+    let first = visibleCards.first?.id
+    page = first ?? (canMakeAgent ? newAgentPage : nil)
+    await refresh()
+  }
+
   /** Once, or on every poll: a 304 changes nothing. */
   public func refresh() async {
+    let asked = scope
     do {
-      switch try await api.cards(tag: tag) {
+      let answer = try await api.cards(tag: tag, workspace: asked)
+      // The wrist zoomed while this was out: the next read is the one asked for.
+      guard asked == scope else { return }
+      switch answer {
       case .same:
         link = .live
       case .new(let reply, let nextTag):
         tag = nextTag
-        adopt(reply.cards)
+        adopt(reply)
       }
       signedOut = false
     } catch WatchError.unpaired {
@@ -146,13 +193,25 @@ public final class WatchStore {
     }
   }
 
-  func adopt(_ next: [Card]) {
+  func adopt(_ reply: CardsReply) {
+    let next = reply.cards
+    let tiles = reply.workspaces ?? tilesFrom(next)
     let first = link != .live && cards.isEmpty
-    let events = first ? [] : eventsBetween(cards, next)
+    var events: [WatchEvent] = []
+    if !first {
+      // A Mac too old to scope still sends every card; inside a workspace only its own speak.
+      events = eventsBetween(shown(cards), shown(next))
+      if let scope { events += eventsElsewhere(workspaces, tiles, inside: scope) }
+    }
     cards = next
+    workspaces = tiles
+    activeWorkspaceId = reply.activeWorkspaceId
     link = .live
     // A card that left takes its page with it; the first page is the one that needs the owner.
-    if page != newAgentPage, page == nil || !next.contains(where: { $0.id == page }) { page = next.first?.id ?? newAgentPage }
+    let visible = shown(next)
+    let lastPage = canMakeAgent ? newAgentPage : nil
+    if page == newAgentPage, !canMakeAgent { page = nil }
+    if page != newAgentPage, page == nil || !visible.contains(where: { $0.id == page }) { page = visible.first?.id ?? lastPage }
     readIds = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
     for card in next where card.choice == nil { answers[card.id] = nil }
     for event in events { feel(event) }
@@ -302,8 +361,11 @@ public final class WatchStore {
 #if DEBUG
 public extension WatchStore {
   /** For the drawings of each state: a store standing as it would. */
-  func stage(cards: [Card], page: String?, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil) {
+  func stage(cards: [Card], page: String?, draft: [String: String] = [:], sent: [String: String] = [:], notice: String? = nil, scope: String? = nil, workspaces: [WorkspaceTile]? = nil) {
     self.cards = cards
+    self.scope = scope
+    self.workspaces = workspaces ?? tilesFrom(cards)
+    self.activeWorkspaceId = self.workspaces.first { $0.active }?.id
     self.page = page
     self.link = .live
     self.drafts = draft

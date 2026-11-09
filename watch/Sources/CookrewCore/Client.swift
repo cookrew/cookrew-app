@@ -25,6 +25,7 @@ public enum Fresh<Value: Sendable>: Sendable {
 /** Everything the app asks of a Mac. */
 public protocol WatchAPI: Sendable {
   func cards(tag: String?) async throws -> Fresh<CardsReply>
+  func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply>
   func send(_ text: String, to id: String) async throws
   func answer(_ act: MenuAct, menu: String, to id: String) async throws
   func stop(_ id: String) async throws
@@ -40,6 +41,11 @@ public protocol WatchAPI: Sendable {
 
 public extension WatchAPI {
   var line: WatchLine { .direct }
+
+  /** One workspace's cards. A Mac that cannot scope sends every card, and the store keeps the ones asked for. */
+  func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply> {
+    try await cards(tag: tag)
+  }
 }
 
 /** The request cannot have reached the Mac: nothing was connected. */
@@ -319,7 +325,12 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   public func cards(tag: String?) async throws -> Fresh<CardsReply> {
-    let (data, http) = try await call("GET", "api/watch/cards", tag: tag)
+    try await cards(tag: tag, workspace: nil)
+  }
+
+  public func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply> {
+    let query = workspace.map { [URLQueryItem(name: "workspace", value: $0)] } ?? []
+    let (data, http) = try await call("GET", "api/watch/cards", query: query, tag: tag)
     if http.statusCode == 304 { return .same }
     try checked(data, http)
     return .new(try JSONDecoder().decode(CardsReply.self, from: data), tag: http.value(forHTTPHeaderField: "etag"))

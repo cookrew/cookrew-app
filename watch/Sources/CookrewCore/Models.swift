@@ -145,9 +145,115 @@ public struct Card: Decodable, Equatable, Identifiable, Sendable {
   }
 }
 
+/** One workspace on the Mac, counted (src/main/watch-cards.ts · watchWorkspaces). */
+public struct WorkspaceTile: Decodable, Equatable, Identifiable, Sendable {
+  public let id: String
+  public let name: String
+  public let active: Bool
+  public let agents: Int
+  public let waiting: Int
+  public let working: Int
+  public let done: Int
+
+  public init(id: String, name: String, active: Bool, agents: Int, waiting: Int, working: Int, done: Int) {
+    self.id = id
+    self.name = name
+    self.active = active
+    self.agents = agents
+    self.waiting = waiting
+    self.working = working
+    self.done = done
+  }
+}
+
 public struct CardsReply: Decodable, Equatable, Sendable {
   public let cards: [Card]
   public let activeWorkspaceId: String
+  /** Every workspace on the Mac. A Mac older than the zoom sends none. */
+  public let workspaces: [WorkspaceTile]?
+
+  public init(cards: [Card], activeWorkspaceId: String, workspaces: [WorkspaceTile]? = nil) {
+    self.cards = cards
+    self.activeWorkspaceId = activeWorkspaceId
+    self.workspaces = workspaces
+  }
+}
+
+/** The tiles an old Mac never sent, counted from its cards, in the order they came. */
+public func tilesFrom(_ cards: [Card]) -> [WorkspaceTile] {
+  var order: [CardWorkspace] = []
+  var byId: [String: [Card]] = [:]
+  for card in cards {
+    if byId[card.workspace.id] == nil { order.append(card.workspace) }
+    byId[card.workspace.id, default: []].append(card)
+  }
+  return order.map { workspace in
+    let crew = byId[workspace.id] ?? []
+    let count = { (status: CardStatus) in crew.filter { $0.status == status }.count }
+    return WorkspaceTile(id: workspace.id, name: workspace.name, active: workspace.active, agents: crew.count, waiting: count(.waiting), working: count(.working), done: count(.done))
+  }
+}
+
+/**
+ * The tiles in the account's order. A workspace the account knows and the Mac
+ * did not count has no agents on the board; one the account has not heard of
+ * yet still shows, last.
+ */
+public func mergedTiles(_ tiles: [WorkspaceTile], names: [MachineWorkspace]) -> [WorkspaceTile] {
+  guard !names.isEmpty else { return tiles }
+  let named = names.map { name in
+    tiles.first { $0.id == name.id } ?? WorkspaceTile(id: name.id, name: name.name, active: false, agents: 0, waiting: 0, working: 0, done: 0)
+  }
+  return named + tiles.filter { tile in !names.contains { $0.id == tile.id } }
+}
+
+/** A workspace by name, as the account lists it. */
+public struct MachineWorkspace: Decodable, Equatable, Sendable {
+  public let id: String
+  public let name: String
+
+  public init(id: String, name: String) {
+    self.id = id
+    self.name = name
+  }
+}
+
+/** A Mac on the account (registry GET /v2/me/desktops · src/shared/zoom-fleet.ts). */
+public struct WatchMachine: Decodable, Equatable, Identifiable, Sendable {
+  public let id: String
+  public let name: String
+  public let online: Bool
+  public let workspaces: [MachineWorkspace]
+
+  public init(id: String, name: String, online: Bool, workspaces: [MachineWorkspace]) {
+    self.id = id
+    self.name = name
+    self.online = online
+    self.workspaces = workspaces
+  }
+
+  private enum Keys: String, CodingKey { case id, deviceId, name, online, workspaces }
+
+  public init(from decoder: Decoder) throws {
+    let row = try decoder.container(keyedBy: Keys.self)
+    // A registry older than the fleet rows says only deviceId.
+    guard let id = try row.decodeIfPresent(String.self, forKey: .id) ?? row.decodeIfPresent(String.self, forKey: .deviceId) else {
+      throw DecodingError.keyNotFound(Keys.id, .init(codingPath: row.codingPath, debugDescription: "no id"))
+    }
+    self.id = id
+    name = try row.decode(String.self, forKey: .name)
+    online = (try? row.decodeIfPresent(Bool.self, forKey: .online)) == true
+    workspaces = (try? row.decodeIfPresent([MachineWorkspace].self, forKey: .workspaces)) ?? []
+  }
+}
+
+/** The Mac a watch is paired with: the one its relay road names. A six-digit pairing has none. */
+public func pairedMachineId(_ bases: [Base]) -> String? {
+  for base in bases where base.kind == "relay" {
+    let parts = (URL(string: base.url)?.path() ?? "").split(separator: "/")
+    if let at = parts.firstIndex(of: "desktop"), parts.indices.contains(at + 1) { return parts[at + 1].lowercased() }
+  }
+  return nil
 }
 
 /** A way to this Mac, best first (src/main/watch-bases.ts). */
