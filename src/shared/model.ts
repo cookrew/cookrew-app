@@ -77,6 +77,11 @@ export interface TerminalNodeData {
    */
   brief?: string | null
   /**
+   * The card whose `cookrew recruit` made this one: it may dismiss it, beside the
+   * Orch (socket-server.ts · cmdDismiss). Set by main at recruit, never patchable.
+   */
+  recruitedBy?: string | null
+  /**
    * Its name was chosen, not guessed (main/agent-rename.ts): set by a rename
    * by hand, `cookrew rename` or the voice, by main alone (not patchable from
    * a renderer or the phone). Sous never names over it.

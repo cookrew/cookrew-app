@@ -1509,7 +1509,7 @@ function TerminalOverlay({
         </TranscriptFaceContext.Provider>
         {failure && (
           <div className="chat-failure" role="status">
-            <AgentFailure failure={failure} />
+            <AgentFailure failure={failure} agentId={node.id} />
           </div>
         )}
         {!failure && isRecordLook(look) && noConversation && phase !== 'thinking' && (

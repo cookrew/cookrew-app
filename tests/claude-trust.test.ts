@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { prepareChoresDir, trustDirectory } from '../src/main/claude-trust'
+import { directoryTrust, isBroadFolder, prepareChoresDir, trustDirectory } from '../src/main/claude-trust'
 
 function scratch(): { home: string; claudeJson: string; chores: string } {
   const home = mkdtempSync(path.join(tmpdir(), 'claude-trust-'))
@@ -57,5 +57,31 @@ describe('prepareChoresDir', () => {
     expect(prepareChoresDir(chores, claudeJson)).toBe('trusted')
     expect(statSync(chores).isDirectory()).toBe(true)
     expect(JSON.parse(readFileSync(claudeJson, 'utf8')).projects[chores].hasTrustDialogAccepted).toBe(true)
+  })
+})
+
+describe('directoryTrust', () => {
+  it('reads an exact entry, an ancestor entry, no entry, and an unreadable file', () => {
+    const { claudeJson } = scratch()
+    expect(directoryTrust('/w/app', claudeJson)).toBe('untrusted')
+    writeFileSync(claudeJson, JSON.stringify({ projects: { '/w': { hasTrustDialogAccepted: true }, '/x': { hasTrustDialogAccepted: false } } }))
+    expect(directoryTrust('/w', claudeJson)).toBe('trusted')
+    // Claude walks up from its folder, so a trusted parent answers for the child.
+    expect(directoryTrust('/w/app/src', claudeJson)).toBe('trusted')
+    expect(directoryTrust('/x/app', claudeJson)).toBe('untrusted')
+    expect(directoryTrust('/wx', claudeJson)).toBe('untrusted')
+    writeFileSync(claudeJson, '[1]')
+    expect(directoryTrust('/w', claudeJson)).toBe('unreadable')
+  })
+})
+
+describe('isBroadFolder', () => {
+  it('is the home folder, the root, or anything above home, and nothing below', () => {
+    expect(isBroadFolder('/home/ubuntu', '/home/ubuntu')).toBe(true)
+    expect(isBroadFolder('/', '/home/ubuntu')).toBe(true)
+    expect(isBroadFolder('/home', '/home/ubuntu')).toBe(true)
+    expect(isBroadFolder('/home/ubuntu/app', '/home/ubuntu')).toBe(false)
+    expect(isBroadFolder('/home/ubuntu2', '/home/ubuntu')).toBe(false)
+    expect(isBroadFolder('/srv/app', '/home/ubuntu')).toBe(false)
   })
 })

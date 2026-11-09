@@ -79,7 +79,10 @@ export const TOOL_NOTES = {
   RESTART: 'Installed. Restart Cookrew to turn it on.',
   NOT_SIGNED_IN: 'Not signed in yet.',
   USES_ENDPOINT: 'Uses your own endpoint, so it needs no sign-in.',
-  ADMIN: 'May need admin rights: it can ask for this computer’s password.'
+  ADMIN: 'May need admin rights: it can ask for this computer’s password.',
+  BYPASS_ACCEPTED: 'Your Claude cards run in bypass permissions; Claude’s notice about it is accepted (~/.claude/settings.json).',
+  BYPASS_ON_FIRST: 'Your Claude cards run in bypass permissions; Cookrew accepts Claude’s notice about it when the first one starts (~/.claude/settings.json).',
+  BYPASS_UNREADABLE: '~/.claude/settings.json could not be read, so a new Claude card asks about bypass permissions itself.'
 } as const
 
 export const FIX_LABELS = {

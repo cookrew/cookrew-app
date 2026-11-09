@@ -13,6 +13,7 @@
 import { accessSync, constants, statSync } from 'node:fs'
 import path from 'node:path'
 import type { LaunchFailure } from '../shared/launch-failure'
+import { isBroadFolder } from './claude-trust'
 
 /** How long after a start an exit counts as the start failing. */
 export const LAUNCH_WINDOW_MS = 20_000
@@ -103,6 +104,26 @@ export function folderFailure(cwd: string): LaunchFailure | null {
       fix: 'Create or restore it, then send again.'
     })
   }
+}
+
+/** How a broad folder reads in a sentence (claude-trust.ts · isBroadFolder). */
+function broadName(dir: string, home: string): string {
+  if (dir === home) return 'your home folder'
+  return dir === path.parse(dir).root ? 'the top of the disk' : 'a folder above your home'
+}
+
+/**
+ * A Claude card whose folder nobody trusted: Claude would open on "Is this a
+ * project you trust?", and a card nobody types into would sit there. Said on the
+ * card instead, with the two answers that work.
+ */
+export function untrustedFolderFailure(dir: string, home: string, cardName: string): LaunchFailure {
+  const where = isBroadFolder(dir, home) ? `${dir}, ${broadName(dir, home)}` : dir
+  return failure({
+    kind: 'folder-untrusted',
+    why: `Claude asks before it works in ${where}, and Cookrew does not answer that for you.`,
+    fix: `Trust it once (Trust this folder, or: cookrew trust "${cardName}"), or give this workspace a project folder. Then send again.`
+  })
 }
 
 export interface LaunchCheck {

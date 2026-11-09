@@ -602,6 +602,7 @@ const api = {
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
   launchCheck: (id: string) => ipcRenderer.invoke('agents:launch-check', id),
+  trustCardFolder: (id: string) => ipcRenderer.invoke('agents:trust-folder', id),
   listStrayPanes: () => ipcRenderer.invoke('strays:list'),
   endStrayPane: (session: string) => ipcRenderer.invoke('strays:end', session),
   onAgentChanged: (cb: (entry: unknown) => void) => {
