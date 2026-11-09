@@ -92,3 +92,50 @@ struct PageFitPaceTests {
     #expect(!pace.due(t0.addingTimeInterval(0.6 + FramePace.gap - 0.01)))
   }
 }
+
+@Suite("a page moved on the wrist before the Mac's picture comes")
+struct PageDriftTests {
+  private let t0 = Date(timeIntervalSince1970: 2000)
+
+  @Test("a move stands until the Mac's next picture, which already has it; then nothing is left to move")
+  func holds() {
+    var drift = PageDrift()
+    drift.moved(0.3, at: t0)
+    drift.moved(0.2, at: t0.addingTimeInterval(0.2))
+    #expect(abs(drift.share - 0.5) < 0.0001)
+    drift.expire(at: t0.addingTimeInterval(2))
+    #expect(abs(drift.share - 0.5) < 0.0001)
+    #expect(drift.waiting)
+    drift.pictureCame()
+    #expect(drift.share == 0)
+    #expect(!drift.waiting)
+  }
+
+  @Test("a Mac that never answers does not leave the page shifted for good, and one move is never more than a few screens")
+  func expires() {
+    var drift = PageDrift()
+    drift.moved(9, at: t0)
+    #expect(drift.share == PageDrift.most)
+    drift.expire(at: t0.addingTimeInterval(PageDrift.patience))
+    #expect(drift.share == 0)
+  }
+
+  @Test("waiting on a moved page, pictures are asked for at the gap, not at rest's pace")
+  func eager() {
+    var pace = FramePace()
+    pace.fetched(at: t0)
+    #expect(!pace.due(t0.addingTimeInterval(FramePace.gap), eager: false))
+    #expect(pace.due(t0.addingTimeInterval(FramePace.gap), eager: true))
+    #expect(!pace.due(t0.addingTimeInterval(FramePace.gap - 0.01), eager: true))
+  }
+
+  @Test("a crown turn is a share of the picture, down for a turn up")
+  func crown() {
+    var crown = CrownScroll()
+    #expect(crown.turned(to: 10) == 0)
+    let moved = crown.turned(to: 11)
+    #expect(abs(moved - CrownScroll.sharePerUnit) < 0.0001)
+    #expect(abs((crown.take() ?? 0) - CrownScroll.sharePerUnit) < 0.0001)
+    #expect(crown.take() == nil)
+  }
+}

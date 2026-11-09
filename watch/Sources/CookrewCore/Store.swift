@@ -194,12 +194,12 @@ public final class WatchStore {
       guard current else { return }
       switch answer {
       case .same:
-        link = .live
+        if link != .live { link = .live }
       case .new(let reply, let nextTag):
         tag = nextTag
         adopt(reply, readFor: asked)
       }
-      signedOut = false
+      if signedOut { signedOut = false }
     } catch WatchError.unpaired {
       unpaired = true
     } catch WatchError.signedOut {
@@ -223,18 +223,22 @@ public final class WatchStore {
       // The cards in hand, or these, were one workspace's: every other one speaks through its count.
       if let inside = asked ?? cardsScope { events += eventsElsewhere(workspaces, tiles, inside: inside) }
     }
-    macPeeks = reply.workspaces != nil
-    cards = next
+    // Every write below is one that changed: an observed property set to the same
+    // value still redraws whatever reads it, the whole pager and every face, on
+    // every poll, mid-scroll.
+    if macPeeks != (reply.workspaces != nil) { macPeeks = reply.workspaces != nil }
+    if cards != next { cards = next }
     // Only cards that really are one workspace's: a Mac too old to scope sends them all, and those speak for themselves.
     cardsScope = asked.flatMap { id in next.allSatisfy { $0.workspace.id == id } ? id : nil }
-    workspaces = tiles
-    activeWorkspaceId = reply.activeWorkspaceId
-    link = .live
+    if workspaces != tiles { workspaces = tiles }
+    if activeWorkspaceId != reply.activeWorkspaceId { activeWorkspaceId = reply.activeWorkspaceId }
+    if link != .live { link = .live }
     // A card that left takes its page with it; the first page is the one that needs the owner.
     let visible = shown(next)
     if page != newAgentPage, page == nil || !visible.contains(where: { $0.id == page }) { page = visible.first?.id ?? newAgentPage }
-    readIds = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
-    for card in next where card.choice == nil { answers[card.id] = nil }
+    let stillRead = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
+    if stillRead != readIds { readIds = stillRead }
+    for card in next where card.choice == nil && answers[card.id] != nil { answers[card.id] = nil }
     for event in events { feel(event) }
   }
 

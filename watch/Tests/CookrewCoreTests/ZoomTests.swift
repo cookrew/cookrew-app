@@ -295,3 +295,31 @@ struct PeekTests {
     #expect(s.macPeeks)
   }
 }
+
+@Suite("a poll that changes nothing redraws nothing", .serialized)
+@MainActor
+struct QuietPollTests {
+  @Test("the same cards again, or a 304, leave every view of the store alone")
+  func quiet() async {
+    let api = ScopedAPI()
+    let same = CardsReply(cards: [card("b", .working, dev)], activeWorkspaceId: "dev", workspaces: [])
+    api.replies = [same, same]
+    let s = WatchStore(api: api)
+    await s.refresh()
+    var touched = false
+    withObservationTracking {
+      _ = s.cards
+      _ = s.workspaces
+      _ = s.link
+      _ = s.signedOut
+      _ = s.page
+      _ = s.macPeeks
+      _ = s.activeWorkspaceId
+      _ = s.waitView(s.cards[0])
+    } onChange: {
+      touched = true
+    }
+    await s.refresh()
+    #expect(!touched)
+  }
+}
