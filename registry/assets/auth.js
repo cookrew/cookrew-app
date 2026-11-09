@@ -177,6 +177,7 @@
     if (out.status < 300 && b.status === 'authorized') return success(b)
     if (out.status < 300 && b.status === 'new') return chooseName(b)
     if (out.status < 300 && b.status === 'cancelled') return cancelled(b)
+    if (out.status < 300 && b.status === 'ready') return setEnrol(b.enrol), first()
     if (out.status === 401 && b.error === 'second_factor') return ladder(b)
     if (out.status === 410 && b.error === 'denied') return denied(false)
     if (out.status === 410 && b.error === 'expired') return expired()
@@ -217,8 +218,15 @@
     return first()
   }
 
+  /* A passkey request's screens live in auth-enrol.js; these are the page's parts it borrows. */
+  const passkeyIntent = () => Boolean(summary && summary.intent === 'passkey')
+  const what = () => (passkeyIntent() ? 'request' : 'sign-in')
+  const setEnrol = (enrol) => (summary = { ...summary, enrol: enrol || null })
+  const enrolUi = () => ({ call, screen, head, button, sayer, field, form, submitter, busy, badge, links, notNow, outcome, toProvider, label, setEnrol, first, summary: () => summary })
+
   function first(note) {
     const intent = summary.intent
+    if (intent === 'passkey') return window.cookrewAuthEnrol.start(enrolUi(), note)
     if (intent === 'link') return linkScreen(note)
     if (intent === 'github' || intent === 'google') return providerScreen(intent, note)
     if (intent === 'create') return create(note)
@@ -674,15 +682,17 @@
   function handoff(way) {
     over = true
     const kind = way && way.kind
+    const passkey = passkeyIntent()
     if (kind === 'web' && safe(way.url)) {
-      screen([badge('check'), ...head(null, 'Signed in.', `Taking you back to ${summary.returnHost || 'cookrew.dev'}…`), go('Continue', way.url, 'primary')])
+      const title = passkey ? 'Passkey made.' : 'Signed in.'
+      screen([badge('check'), ...head(null, title, `Taking you back to ${summary.returnHost || 'cookrew.dev'}${passkey ? ' to add it' : ''}…`), go('Continue', way.url, 'primary')])
       location.replace(way.url)
       return
     }
     if (kind === 'app' && safe(way.url)) {
       screen([
         badge('check'),
-        ...head(null, 'Opening Cookrew…', 'Your browser may ask to open the Cookrew app. Allow it, and the app finishes signing you in.'),
+        ...head(null, 'Opening Cookrew…', `Your browser may ask to open the Cookrew app. Allow it, and the app ${passkey ? 'adds the passkey to your account' : 'finishes signing you in'}.`),
         go('Open Cookrew', way.url, 'primary'),
         safe(way.fallback) ? go('Cookrew did not open? Continue here', way.fallback, '') : null,
         h('p', { class: 'note' }, 'The way back carries a one-use code only the app that asked can spend. No password or token is shown here.')
@@ -727,7 +737,7 @@
           : way.kind === 'cli'
             ? 'Your terminal will say so.'
             : ''
-    screen([badge('x', true), ...head(null, 'Cancelled.', `Nothing was signed in. ${where}`), way.kind === 'app' ? go('Back to Cookrew', way.url, '') : null])
+    screen([badge('x', true), ...head(null, 'Cancelled.', `${passkeyIntent() ? 'No passkey was added.' : 'Nothing was signed in.'} ${where}`), way.kind === 'app' ? go('Back to Cookrew', way.url, '') : null])
     if (way.kind === 'web' && safe(way.url)) later(() => location.replace(way.url), 900)
     if (way.kind === 'app' && safe(way.url)) later(() => location.assign(way.url), 400)
   }
@@ -735,8 +745,9 @@
   /** The one thing left to do once a request is over: start again where it began. */
   function restart() {
     if (summary && summary.client === 'cli') return h('p', { class: 'note' }, 'Run cookrew login again in your terminal.')
+    if (passkeyIntent() && summary.client === 'desktop') return h('p', { class: 'note' }, 'Open Security in the Cookrew app and add the passkey again.')
     if (summary && summary.client === 'desktop') return h('p', { class: 'note' }, 'Open the Cookrew app and choose Sign in again.')
-    return go('Back to cookrew.dev', `${PRODUCT}/`, 'primary')
+    return go('Back to cookrew.dev', `${PRODUCT}/${passkeyIntent() ? 'me#security' : ''}`, 'primary')
   }
 
   /** A screen that ends the request: a mark, what happened, and the one way on. */
@@ -744,16 +755,17 @@
     over = true
     screen([icon ? badge(icon, icon !== 'check') : null, ...head(null, title, lede), onward === undefined ? restart() : onward])
   }
-  const expired = () => ending('clock', 'This sign-in timed out.', `Start again from ${from()}.`)
+  const expired = () => ending('clock', `This ${what()} timed out.`, `Start again from ${from()}.`)
   const claimed = () =>
     ending('x', 'Open in another browser.', 'This sign-in is already being finished in another browser, and for your safety it works in one only. Finish it there, or start again.')
   const unknown = () =>
     ending(null, 'This sign-in link doesn’t work.', 'It may be mistyped, or already used. Start again from cookrew.dev, the Cookrew app or cookrew login.')
   const finishedElsewhere = () =>
-    ending('check', 'This sign-in is already finished.', 'There is nothing more to do here. You can close this tab.', null)
+    ending('check', `This ${what()} is already finished.`, 'There is nothing more to do here. You can close this tab.', null)
 
   function denied(retry) {
-    if (!retry) return ending('x', 'This sign-in was denied.', `It was turned down and can’t be used again. Start again from ${from()}.`)
+    if (!retry) return ending('x', `This ${what()} was denied.`, `It was turned down and can’t be used again. Start again from ${from()}.`)
+    if (passkeyIntent()) return window.cookrewAuthEnrol.notConfirmed(enrolUi())
     const provider = summary && (summary.provider || (summary.intent === 'github' || summary.intent === 'google' ? summary.intent : null))
     return screen([
       badge('x', true),

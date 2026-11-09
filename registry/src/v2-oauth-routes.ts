@@ -10,6 +10,7 @@ import { legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import { challengeFor, challengeMatches, type Flow } from './v2-oauth-flows'
 import type { OAuthProvider, ProviderProof } from './v2-oauth-providers'
 import { readAndStepUp, stepUpHeld } from './v2-step-up'
+import { continuePasskey, mayStartStepUp } from './auth-passkey'
 import {
   OAUTH_LOOPBACK_PATH,
   OAUTH_SCHEME_HOST,
@@ -120,9 +121,13 @@ function startForRequest(ctx: V2Context, provider: OAuthProvider, request: AuthR
     refuseOAuth(ctx.response, 400, 'bad_flow')
     return
   }
+  if (!mayStartStepUp(ctx, request, provider.id)) return
   const flow = ctx.v2.oauth.flows.open({
     provider: provider.id,
-    intent: request.intent === 'link' ? 'link' : 'sign-in',
+    // A passkey request's trip is the owner's step-up for adding it.
+    ...(request.intent === 'passkey'
+      ? { intent: 'step-up' as const, act: 'add-factor' as const }
+      : { intent: request.intent === 'link' ? ('link' as const) : ('sign-in' as const) }),
     clientState: 'auth-request',
     challenge: request.challenge,
     back: { scheme: false },
@@ -278,6 +283,10 @@ export function continueRequest(ctx: V2Context, request: AuthRequest): void {
   const proof = ctx.v2.auth?.requests.takeProof(request) ?? null
   if (proof === null) {
     refuseOAuth(ctx.response, 410, 'flow_over')
+    return
+  }
+  if (request.intent === 'passkey') {
+    continuePasskey(ctx, request, proof)
     return
   }
   if (request.intent !== 'link') {

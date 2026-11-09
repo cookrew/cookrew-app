@@ -206,6 +206,7 @@ export const ACCOUNT_CHANNELS = [
   'account:passkeys',
   'account:passkeyOptions',
   'account:passkeyAdd',
+  'account:passkeyBrowser',
   'account:passkeyRemove',
   // ── seats (phase 5) — owner-only like every other channel here ──
   'account:seats',
@@ -1208,6 +1209,16 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
         name: asString(record.name),
         credential: asRecord(record.credential),
       })
+    },
+    /**
+     * ADD A PASSKEY IN A BROWSER: this Electron has no platform authenticator,
+     * so the passkey is made on auth.cookrew.dev, which also runs an account's
+     * provider step-up. 'unsupported' means a registry without the page, and the
+     * card goes the old way.
+     */
+    'account:passkeyBrowser': (): Promise<AccountResult<PasskeySummary>> => {
+      if (deps.lock.locked) return Promise.resolve(LOCKED)
+      return deps.accounts.providerAct(() => deps.accounts.browserAddPasskey())
     },
     'account:passkeyRemove': async (id: unknown, current: unknown): Promise<AccountResult<void>> => {
       const proof = await removalProof(deps, current)

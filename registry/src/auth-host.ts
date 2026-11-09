@@ -7,6 +7,7 @@ import { FAVICON_SVG } from './site-brand'
 import { boundRequest, handleAuthApi } from './v2-auth-routes'
 import { handleV2Route } from './v2-routes'
 import { refuse, v2Json, type V2Context, type V2Identity } from './v2-http'
+import { SIGNED_IN_INTENTS } from '../../src/shared/auth-site'
 
 /**
  * AUTH.COOKREW.DEV — EVERYTHING THE AUTH ORIGIN ANSWERS, AND NOTHING ELSE.
@@ -20,7 +21,7 @@ import { refuse, v2Json, type V2Context, type V2Identity } from './v2-http'
  * suffix, never a forwarded header.
  */
 
-const ASSETS = new Set(['auth-kit.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
+const ASSETS = new Set(['auth-kit.js', 'auth-enrol.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 /** The ladder's routes a page may reach, by method. A link request reaches only the provider trip. */
@@ -126,9 +127,9 @@ export function handleAuthHost(
   const ctx = contextOf(parts)
   const bound = boundRequest(ctx)
   if (bound === null) return
-  // A link is a signed-in act proven before the page opened: there is nobody
-  // to sign in here, so the ladder's routes are not reachable for one.
-  if (bound.intent === 'link' && signIn) {
+  // A link or a passkey is a signed-in act for the account that opened it:
+  // there is nobody to sign in here, so the ladder's routes are not reachable.
+  if (SIGNED_IN_INTENTS.includes(bound.intent) && signIn) {
     refuse(response, 404, 'not_found')
     return
   }

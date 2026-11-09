@@ -309,6 +309,18 @@ export class PendingSignIns {
   }
 
   /**
+   * WOULD `spendAuthorised` SAY YES — without spending it. For a ceremony that
+   * has to be started before the act it allows can be finished: the passkey
+   * options are asked for under the proof, and the passkey they produce spends it.
+   */
+  holdsAuthorised(username: string, act: StepUpAct, id: unknown, jti: string): boolean {
+    if (typeof id !== 'string' || id === '') return false
+    const held = this.get(id)
+    if (held === null || !held.authorised || held.act !== act || held.username !== username) return false
+    return held.opener !== undefined && held.opener.jti === jti
+  }
+
+  /**
    * EVERY SIGN-IN THIS ACCOUNT HAS IN FLIGHT, DROPPED — what "not me" means.
    *
    * The alarm was pressed. A pending that survives it is a password-verified
