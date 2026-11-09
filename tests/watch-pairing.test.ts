@@ -157,3 +157,14 @@ describe('how the sheet knows a watch arrived', () => {
     expect(code).toMatch(/^\d{6}$/)
   })
 })
+
+describe('a watch let in by its account pass', () => {
+  it('gets a token of its own, with no code, and the token is what opens the routes', () => {
+    const pairing = new WatchPairing({ file: path.join(mkdtempSync(path.join(tmpdir(), 'watch-enter-')), 'watch-token') })
+    const token = pairing.enter()
+    expect(token).toMatch(/^[A-Za-z0-9_-]{24,}$/)
+    expect(pairing.paired).toBe(true)
+    expect(pairing.accepts(token)).toBe(true)
+    expect(pairing.claims).toBe(1)
+  })
+})

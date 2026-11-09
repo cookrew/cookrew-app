@@ -1329,6 +1329,8 @@ const accountPairDoor = createAccountPairDoor({
   grants: async (token) => (v2CallTokens === null ? null : v2CallTokens.grant(token)),
   admitted: admittedDevices,
   platform: process.platform,
+  // Read when a watch arrives, long after startup: watchPairing is declared further down.
+  watch: { enter: () => watchPairing.enter() },
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
 

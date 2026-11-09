@@ -75,7 +75,8 @@ const RECOVERY_CODES = 8
  * and the migration route is the one place that files one — a device that
  * could call itself legacy would be a stranger claiming the old world's trust.
  */
-export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'legacy'
+/** A watch is the one device that enters every machine on its pairing alone (v2-device-grant.ts · issueWatchGrant). */
+export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'watch' | 'legacy'
 
 export interface DeviceInput {
   id: string
@@ -755,7 +756,7 @@ export class V2Accounts {
     const raw = input as Partial<DeviceInput>
     const id = typeof raw.id === 'string' ? raw.id.toLowerCase() : ''
     if (!UUID.test(id)) return null
-    if (raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
+    if (raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser' && raw.kind !== 'watch') return null
     const name = typeof raw.name === 'string' ? raw.name.trim() : ''
     if (name.length === 0 || name.length > DEVICE_NAME_MAX) return null
     const jwk = sanitiseJwk(raw.jwk)

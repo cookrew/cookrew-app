@@ -212,4 +212,37 @@ describe('the account pair door', () => {
     revoked = ['sitting-1']
     expect((await d.begin({ body: asking(mine, grant), bridged: null })).body).toMatchObject({ outcome: 'regrant' })
   })
+
+  describe('a watch’s pass (owner 2026-11-09: a watch pairs once, then every machine)', () => {
+    const watchGrant = (device: Phone): string => tokens.mintWatchGrant('anvztor', device.id, jwkThumbprint(device.jwk) as string, 'sitting-1').token
+
+    const enter = async (d: ReturnType<typeof door>, grant: string) => {
+      const challenge = await challengeOf(d, mine, grant)
+      const sig = signAs(mine, pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: mine.id }))
+      return d.finish({ body: { ...asking(mine, grant), challengeId: challenge.challengeId, sig }, bridged: null })
+    }
+
+    it('gets a watch’s token, and is never written down as a device of this machine', async () => {
+      const issued: string[] = []
+      const d = door({ watch: { enter: () => (issued.push('w'), 'watch-token-abcdefghijklmnop') } })
+      const out = await enter(d, watchGrant(mine))
+      expect(out.status).toBe(200)
+      expect(out.body).toMatchObject({ ok: true, outcome: 'admitted', token: 'watch-token-abcdefghijklmnop', scope: 'watch' })
+      expect(issued).toEqual(['w'])
+      expect(admitted.list()).toEqual([])
+    })
+
+    it('a machine with no watch to give one to refuses it, and admits no device instead', async () => {
+      const out = await enter(door(), watchGrant(mine))
+      expect(out.status).toBe(403)
+      expect(admitted.list()).toEqual([])
+    })
+
+    it('a revoked watch is turned away', async () => {
+      const grant = watchGrant(mine)
+      revoked = [mine.id]
+      const out = await door({ watch: { enter: () => 'x'.repeat(24) } }).begin({ body: asking(mine, grant), bridged: null })
+      expect(out.status).toBe(401)
+    })
+  })
 })

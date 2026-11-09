@@ -168,11 +168,19 @@ export class WatchPairing {
       return this.failed('wrong')
     }
     this.live = null
+    return { ok: true, token: this.enter() }
+  }
+
+  /**
+   * The watch's token, with no code: a code claimed, or the account's watch pass
+   * checked at the door (account-pair.ts). It replaces the watch before it.
+   */
+  enter(): string {
     const token = randomBytes(24).toString('base64url')
     this.token = token
     this.claimed += 1
     this.write(token)
-    return { ok: true, token }
+    return token
   }
 
   /** Forget the watch: its token stops working here and now. */

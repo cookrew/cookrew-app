@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { forgetGrantRests } from '../registry/src/v2-device-grant'
 import { GRANT_TTL_MS } from '../registry/src/v2-tokens'
-import { v2GrantClaimsFor } from '../src/main/v2-call-token'
+import { v2GrantClaimsFor, v2WatchGrantClaimsFor } from '../src/main/v2-call-token'
 import { jwkThumbprint } from '../src/shared/jwk-thumbprint'
 import { GRANT_PATHS } from '../src/shared/account-pair'
 import { getAssertion, GET_FLAGS, GET_FLAGS_VERIFIED } from './support/webauthn'
@@ -171,5 +171,33 @@ describe('POST /v2/me/device-grant', () => {
       expect(b.device.id).toBeTruthy()
     }
     expect(world.v2.accounts.revokedFor(username)).toContain(gone.device.id)
+  })
+})
+
+describe('POST /v2/me/device-grant/watch (owner 2026-11-09: a watch pairs once)', () => {
+  it('gives a watch its pass with no proof, for its own key, in a kind an older machine refuses', async () => {
+    const { username } = await fresh()
+    const watch = await world.browser(username, 'watch')
+    const out = await watch.registry.post(GRANT_PATHS.watch, {})
+    expect(out.status).toBe(201)
+    const body = out.body as { grant: string; exp: number; deviceId: string }
+    expect(body.deviceId).toBe(watch.device.id)
+    expect(v2WatchGrantClaimsFor(body.grant, Date.now())).toMatchObject({ username, dev: watch.device.id, jkt: jwkThumbprint(watch.device.jwk), watch: true })
+    // A machine that predates watch passes reads it as no pass at all.
+    expect(v2GrantClaimsFor(body.grant, Date.now())).toBeNull()
+  })
+
+  it('a phone or a browser is not a watch: its pass still takes a proof made now', async () => {
+    const { browser } = await fresh()
+    const out = await browser.registry.post(GRANT_PATHS.watch, {})
+    expect(out.status).toBe(403)
+    expect(out.body).toMatchObject({ error: 'not_watch' })
+  })
+
+  it('an account locked by Not me gives a watch nothing', async () => {
+    const { username } = await fresh()
+    const watch = await world.browser(username, 'watch')
+    world.v2.factors.store.setMustChangePassword(username, true)
+    expect((await watch.registry.post(GRANT_PATHS.watch, {})).status).toBe(403)
   })
 })

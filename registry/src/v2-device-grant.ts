@@ -182,6 +182,34 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
 }
 
+/**
+ * POST /v2/me/device-grant/watch — A WATCH PAIRS ONCE (owner, 2026-11-09).
+ *
+ * The exception to "every pass takes a proof made now", for one kind of device:
+ * a watch has no passkey and no keyboard for a password. Its proof was made
+ * once, when it joined the account with a code a machine minted only after the
+ * account's step-up (v2-join.ts); from then on it is handed a pass whenever it
+ * asks, for its own key, and enters every machine of the account, those added
+ * later included. Removing the watch in Devices, or "Not me", ends it: a
+ * revoked device has no session to ask with, and the machines read the revoked
+ * list. The pass is a WATCH pass (its own scope), which a machine turns into a
+ * watch's token — agents and pages, never a shell — and which a machine older
+ * than it does not read at all.
+ */
+export function issueWatchGrant(ctx: V2Context, signed: Signed): void {
+  const { account, claims, device } = signed
+  if (device.kind !== 'watch') {
+    return said(ctx, 403, 'not_watch', 'Only a watch is let into every machine on its pairing alone. Prove it is you instead.')
+  }
+  if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
+  const jkt = jwkThumbprint(device.jwk)
+  if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
+  const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
+  const minted = ctx.v2.tokens.mintWatchGrant(account.username, device.id, jkt, sitting)
+  ctx.response.setHeader('cache-control', 'private, no-store')
+  v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
+}
+
 /** For tests: forget every rest. */
 export const forgetGrantRests = (): void => rests.clear()
 

@@ -25,6 +25,7 @@ const KIND_LABEL: Record<V2Device['kind'], string> = {
   desktop: 'Desktop',
   phone: 'Phone',
   browser: 'Browser',
+  watch: 'Watch',
   // The key this name held before it had a password (phase 6). Listed like
   // any other device, and revocable like one: that is how the old world ends.
   legacy: 'Key'

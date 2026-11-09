@@ -44,7 +44,7 @@ import { setupForNewAccount } from './v2-second-step'
 import { tokenExpiry } from './v2-session-age'
 import { SESSION_TTL_MS } from './v2-tokens'
 import { deviceFor } from './v2-factor-http'
-import { grantOptions, issueGrant, setFirstPassword } from './v2-device-grant'
+import { grantOptions, issueGrant, issueWatchGrant, setFirstPassword } from './v2-device-grant'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -695,6 +695,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   // ONE VERIFICATION, EVERY MACHINE, TWELVE HOURS (v2-device-grant.ts).
   if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'options' && method === 'POST') {
     grantOptions(ctx, signed)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'watch' && method === 'POST') {
+    issueWatchGrant(ctx, signed)
     return
   }
   if (rest.length === 1 && rest[0] === 'device-grant' && method === 'POST') {

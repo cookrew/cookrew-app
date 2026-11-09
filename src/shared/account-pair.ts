@@ -45,7 +45,9 @@ export const PAIR_PATHS = {
 
 export const GRANT_PATHS = {
   options: '/v2/me/device-grant/options',
-  grant: '/v2/me/device-grant'
+  grant: '/v2/me/device-grant',
+  /** A watch's pass: no proof, a watch only (registry v2-device-grant.ts · issueWatchGrant). */
+  watch: '/v2/me/device-grant/watch'
 } as const
 
 /**
@@ -99,9 +101,11 @@ export type PairAnswer =
       readonly deviceId: string
       readonly desktopId: string
       readonly token: string
-      /** When this machine stops remembering the device: the grant's own end. */
+      /** When this machine stops remembering the device: the grant's own end; 0 for a watch, kept until forgotten. */
       readonly until: number
       readonly name?: string
+      /** A watch's token, for the watch's routes only. */
+      readonly scope?: 'watch'
     }
   | {
       readonly ok: false
