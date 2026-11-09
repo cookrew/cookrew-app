@@ -198,6 +198,7 @@ const api = {
   accountPasskeyOptions: () => ipcRenderer.invoke('account:passkeyOptions'),
   accountPasskeyAdd: (input: { name: string; credential: Record<string, unknown> }) =>
     ipcRenderer.invoke('account:passkeyAdd', input),
+  accountPasskeyBrowser: () => ipcRenderer.invoke('account:passkeyBrowser'),
   accountPasskeyRemove: (id: string, current: string) =>
     ipcRenderer.invoke('account:passkeyRemove', id, current),
   /**

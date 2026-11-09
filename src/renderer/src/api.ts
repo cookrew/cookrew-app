@@ -1091,6 +1091,8 @@ export interface CookrewApi {
     name: string;
     credential: Record<string, unknown>;
   }) => Promise<AccountResult<PasskeySummary>>;
+  /** Make the passkey on auth.cookrew.dev in a browser; the app writes it when the page hands back. */
+  accountPasskeyBrowser?: () => Promise<AccountResult<PasskeySummary>>;
   accountPasskeyRemove?: (id: string, current: string) => Promise<AccountResult<void>>;
   onAccountRequests?: (cb: (requestId: string | null) => void) => () => void;
   /** account:changed, with its sentence already written (D11 · A4). */

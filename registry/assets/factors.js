@@ -388,13 +388,36 @@
 
   /* ── /me: the Security rows ────────────────────────────────────────────── */
 
+  /**
+   * ADD A PASSKEY HAPPENS ON AUTH.COOKREW.DEV, for every account and every
+   * client: an account with no password proves it is the owner there with its
+   * provider, the ceremony runs there with this site's rpId, and the passkey is
+   * written when the browser comes back here. This page only opens the request.
+   * Only a registry without that page (a 404) leaves the ceremony to this page.
+   */
+  let adding = false
   async function addPasskey() {
+    if (adding) return
+    adding = true
+    try {
+      const through = window.cookrewAccount?.throughAuthSite
+      if (through && (await through('passkey'))) return
+      await addPasskeyHere()
+    } catch {
+      toast('Adding a passkey could not start. Reload the page and try again.', 6000)
+    } finally {
+      adding = false
+    }
+  }
+
+  /** The old way, on a registry with no auth origin: the ceremony on this page. */
+  async function addPasskeyHere() {
     if (!havePasskeys()) {
-      toast('Passkeys are not available in this browser.', 6000)
+      toast('Passkeys are not available in this browser. Try Safari, Chrome, Edge or Firefox.', 6000)
       return
     }
     const options = await api('POST', '/v2/me/passkeys/options', {})
-    if (options.status !== 200) return toast(said(options, 'That did not go through.'), 6000)
+    if (options.status !== 200) return toast(said(options, 'A passkey could not be started just now. Try again in a moment.'), 6000)
     const name = prompt('Name this passkey (for example "This laptop")', 'This browser')
     if (name === null) return
     let credential
@@ -419,7 +442,7 @@
         }
       })
     } catch {
-      toast('No passkey was created.', 5000)
+      toast('No passkey was created. Press Add to try again.', 5000)
       return
     }
     const out = await api('POST', '/v2/me/passkeys', {
@@ -434,7 +457,17 @@
       }
     })
     if (out.status === 201) location.reload()
-    else toast(said(out, 'That passkey was not enrolled.'), 6000)
+    else toast(said(out, 'That passkey was not added. Press Add to try again.'), 6000)
+  }
+
+  /** Back from auth.cookrew.dev with the passkey written: say so once, and tidy the address. */
+  function landedPasskey() {
+    const query = new URLSearchParams(location.search)
+    if (query.get('passkey') !== 'added') return
+    query.delete('passkey')
+    const rest = query.toString()
+    history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`)
+    toast('Passkey added. Next time, sign in with it on auth.cookrew.dev.', 6000)
   }
 
   /**
@@ -964,6 +997,7 @@
   fitPasskeyButton()
   watchRequests()
   wireAddDevice()
+  landedPasskey()
 
   window.cookrewFactors = { ladder, addPasskey, addTotp, changePassword }
 })()

@@ -798,7 +798,8 @@
       return: location.pathname
     })
     if (opened.status === 404) return false
-    const failed = (out) => toast(out.body?.message ?? 'Sign-in could not start. Try again in a moment.', 5000)
+    const fallback = intent === 'passkey' ? 'Adding a passkey could not start. Try again in a moment.' : 'Sign-in could not start. Try again in a moment.'
+    const failed = (out) => toast(out.body?.message ?? fallback, 6000)
     if (opened.status !== 201 || typeof opened.body?.request !== 'string') {
       failed(opened)
       return true
@@ -1226,6 +1227,12 @@
      */
     signIn: () => openSignIn('sign-in'),
     account: () => openSignIn('sign-in'),
+    /**
+     * A SIGNED-IN ACT ON AUTH.COOKREW.DEV (today: `passkey`), opened with this
+     * browser's session and device key exactly as a sign-in is. Answers false
+     * when the registry has no such page (404), so the caller keeps its own way.
+     */
+    throughAuthSite: (intent) => signInThroughAuthSite(intent),
     toast,
     doorKey
   }

@@ -19,8 +19,10 @@ import type { AuthOpener, AuthRequest } from './auth-requests'
 import { handoffFor, productOrigin } from './auth-finish'
 import { cookie, refuse, signedIn, v2Json, asking, type V2Context, type V2Identity } from './v2-http'
 import { deviceShape } from './v2-factor-http'
+import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
 import { continueRequest } from './v2-oauth-routes'
+import { enrolmentOf, passkeyOnPage, passkeyOptionsOnPage, writeHeldPasskey } from './auth-passkey'
 
 /**
  * AUTH.COOKREW.DEV — THE REQUEST ROUTES.
@@ -49,7 +51,9 @@ const SENTENCES = {
   claimed: 'This sign-in was opened in another browser. Start again from the app that asked.',
   no_code: 'That code is not one we know. Check it against your terminal.',
   oauth_off: 'This sign-in is not available here.',
-  use_code: 'Type the code from your terminal at the device page instead.'
+  use_code: 'Type the code from your terminal at the device page instead.',
+  signed_out: 'Sign in first, then add the passkey from Security.',
+  other_device: 'Add the passkey from the device you are signed in on. If this is that device, sign out and sign in again here first.'
 } as const
 
 type Sentence = keyof typeof SENTENCES
@@ -151,6 +155,12 @@ function parse(ctx: V2Context, body: Record<string, unknown>): Parsed | null {
     }
     provider = body.provider
   }
+  // A passkey is added from a client holding a session that can spend the
+  // code: the app or cookrew.dev. A terminal has no browser to come back to.
+  if (intent === 'passkey' && client === 'cli') {
+    refuseAuth(ctx.response, 400, 'bad_flow')
+    return null
+  }
   const shape = deviceShape(body.device)
   if (shape === null || !kindFits(client, shape.kind)) {
     refuse(ctx.response, 400, 'bad_device')
@@ -219,6 +229,28 @@ async function openRequest(ctx: V2Context): Promise<void> {
       return
     }
     if (!(await stepUpHeld(ctx, signed, 'link-provider', body))) return
+    opener = { username: signed.account.username, jti: signed.claims.jti, device: signed.claims.dev }
+  }
+  /**
+   * A PASSKEY IS ALSO A SIGNED-IN ACT, and its proof comes on the page rather
+   * than here: the one proof an account with no password has is a provider
+   * round trip, and the page is where a browser can make one. Nothing about
+   * the session is carried to the page but who opened it.
+   */
+  if (parsed.intent === 'passkey') {
+    const signed = signedIn(ctx.request, v2)
+    if (signed === null) {
+      refuseAuth(response, 401, 'signed_out', { error: 'unauthenticated' })
+      return
+    }
+    if (shapeId(parsed.device) !== signed.claims.dev) {
+      refuseAuth(response, 403, 'other_device', { error: 'not_this_device' })
+      return
+    }
+    if (v2.factors.store.mustChangePassword(signed.account.username)) {
+      v2Json(response, 403, factorError('password_change_required'))
+      return
+    }
     opener = { username: signed.account.username, jti: signed.claims.jti, device: signed.claims.dev }
   }
 
@@ -323,6 +355,12 @@ async function spend(ctx: V2Context): Promise<void> {
       spendLink(ctx, spent.request)
       return
     }
+    if (spent.request.intent === 'passkey') {
+      const written = writeHeldPasskey(ctx, spent.request, signedIn(ctx.request, v2, 'bearer'))
+      if (written.ok) v2Json(response, 201, { status: 'passkey', passkey: written.passkey })
+      else v2Json(response, written.status, written.body)
+      return
+    }
     v2Json(response, spent.result.status, spent.result.body)
     return
   }
@@ -397,23 +435,28 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
     return
   }
   const spent = auth === null || code === null ? null : auth.requests.redeem(code, 'web', verifier)
-  if (spent === null || spent.request.id !== id || spent.request.clientState !== state || spent.result.status !== 201) {
-    const words = url.searchParams.get('error') === null ? 'That sign-in did not finish.' : 'Sign-in was cancelled.'
-    const payload = Buffer.from(
-      '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cookrew</title>' +
-        '<style>body{font:15px -apple-system,sans-serif;margin:18vh auto;max-width:30em;text-align:center;padding:0 16px}</style></head><body>' +
-        `<p>${words}</p><p><a href="/me">Back to cookrew.dev</a></p></body></html>`,
-      'utf8'
-    )
-    response.writeHead(400, {
-      'content-type': 'text/html; charset=utf-8',
-      'content-length': String(payload.byteLength),
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  const matches = spent !== null && spent.request.id === id && spent.request.clientState === state
+  if (spent !== null && matches && spent.request.intent === 'passkey') {
+    // The passkey is written by this browser's own session, the one that opened it.
+    const written = writeHeldPasskey({ v2 }, spent.request, signedIn(request, v2))
+    if (!written.ok) {
+      failPage(response, cleared, written.body.message)
+      return
+    }
+    const back = spent.request.returnPath ?? '/me'
+    response.writeHead(303, {
+      location: `${back}?passkey=added#security`,
       'cache-control': 'private, no-store',
       'referrer-policy': 'no-referrer',
+      'content-length': '0',
       'set-cookie': cleared
     })
-    response.end(payload)
+    response.end()
+    return
+  }
+  if (spent === null || !matches || spent.result.status !== 201) {
+    const words = url.searchParams.get('error') === null ? 'That sign-in did not finish.' : 'Sign-in was cancelled.'
+    failPage(response, cleared, words)
     return
   }
   const sessionToken = String(spent.result.body.token)
@@ -425,6 +468,28 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
     'set-cookie': [cookie(sessionToken), cleared]
   })
   response.end()
+}
+
+const escapeHtml = (text: string): string =>
+  text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+
+/** The web's way back, when there is nothing to land on: what happened, and the way on. */
+function failPage(response: ServerResponse, cleared: string, words: string): void {
+  const payload = Buffer.from(
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cookrew</title>' +
+      '<style>body{font:15px -apple-system,sans-serif;margin:18vh auto;max-width:30em;text-align:center;padding:0 16px}</style></head><body>' +
+      `<p>${escapeHtml(words)}</p><p><a href="/me">Back to cookrew.dev</a></p></body></html>`,
+    'utf8'
+  )
+  response.writeHead(400, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(payload.byteLength),
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'cache-control': 'private, no-store',
+    'referrer-policy': 'no-referrer',
+    'set-cookie': cleared
+  })
+  response.end(payload)
 }
 
 // ── the auth origin: the page's own calls ───────────────────────────────────
@@ -444,7 +509,8 @@ export function summaryOf(v2: V2Identity, request: AuthRequest): AuthRequestSumm
     createdAt: request.createdAt,
     expiresAt: request.expiresAt,
     providers: [...v2.oauth.providers.values()].map((p) => ({ id: p.id, label: PROVIDER_LABEL[p.id] })),
-    stage: request.stage
+    stage: request.stage,
+    enrol: enrolmentOf(v2, request)
   }
 }
 
@@ -499,12 +565,18 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
     if (request !== null) v2Json(response, 200, summaryOf(v2, request))
     return true
   }
-  if (method !== 'POST' || !['claim', 'device', 'continue', 'cancel'].includes(name)) {
+  if (method !== 'POST' || !['claim', 'device', 'continue', 'cancel', 'passkey/options', 'passkey'].includes(name)) {
     refuse(response, 404, 'not_found')
     return true
   }
   if (!v2.limits.lookups.take(`authpage|${asking(ctx)}`)) {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
+    return true
+  }
+  // The ceremony reads its own body: an attestation is larger than a page call.
+  if (name === 'passkey') {
+    const request = boundRequest(ctx)
+    if (request !== null) await passkeyOnPage({ ...ctx, auth: { request } }, request)
     return true
   }
   const read = await readJsonBody(ctx.request, SMALL_BODY)
@@ -539,6 +611,10 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   if (request === null) return true
   if (name === 'continue') {
     continueRequest({ ...ctx, auth: { request } }, request)
+    return true
+  }
+  if (name === 'passkey/options') {
+    passkeyOptionsOnPage({ ...ctx, auth: { request } }, request)
     return true
   }
   // Over is over: a finished request keeps its code, a cancelled one is not

@@ -57,6 +57,7 @@ import { legacyKey, migrateAtRegistry } from './legacy-identity'
 import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 import type { MachineProfile } from '../shared/fleet'
+import type { PasskeySummary } from '../shared/account-approvals'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -506,6 +507,11 @@ export class Accounts {
   /** Add a provider on the page, under a fresh proof. */
   browserLink(id: ProviderId, proof: TripProof): Promise<AccountResult<void>> {
     return this.browser.link(id, proof)
+  }
+
+  /** Add a passkey on the page, where a browser can make one; the account's step-up runs there. */
+  browserAddPasskey(): Promise<AccountResult<PasskeySummary>> {
+    return this.browser.addPasskey()
   }
 
   /** The seam `cookrew login` calls: a code to type at the page, and a poll. */

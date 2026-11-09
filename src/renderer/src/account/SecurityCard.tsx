@@ -98,6 +98,8 @@ export function SecurityCard({
   const passwordless = status?.passwordless === true
   /** On a passwordless account these acts wait on a browser; leaving ends them. */
   const trip = useWatchedTrip(passwordless)
+  /** Adding a passkey on the page waits on a browser for every account. */
+  const pageTrip = useWatchedTrip(true)
 
   const readFactors = useCallback(() => {
     const call = cookrew().accountFactors
@@ -118,9 +120,11 @@ export function SecurityCard({
   // ASK BEFORE OFFERING. This build may have no Touch ID to give (see
   // webauthn.ts), and a row that says so up front beats a row that says it
   // after the owner has cancelled a dialog about a security key.
+  // A build that can make the passkey on the page needs no second row: its ADD
+  // goes there, and the row appears only if that page turns out to be missing.
   useEffect(() => {
     void hasPlatformAuthenticator().then((yes) => {
-      if (!yes) setElsewhere(true)
+      if (!yes && !cookrew().accountPasskeyBrowser) setElsewhere(true)
     })
   }, [])
 
@@ -168,6 +172,27 @@ export function SecurityCard({
   }
 
   /**
+   * WITH NO TOUCH ID IN THIS BUILD (webauthn.ts measured it), the passkey is
+   * made on auth.cookrew.dev in a browser, which also runs an account's own
+   * step-up, and this app writes it when the page hands back. Answers true
+   * when that settled it; false only for a registry without the page.
+   */
+  const addOnPage = async (): Promise<boolean> => {
+    const api = cookrew()
+    if (!api.accountPasskeyBrowser || (await hasPlatformAuthenticator())) return false
+    const added = await pageTrip.watch(api.accountPasskeyBrowser())
+    if (added.ok) {
+      setElsewhere(false)
+      readFactors()
+      return true
+    }
+    if (added.reason === 'unsupported') return false
+    // Cancelling the page is a decision, not a failure to report.
+    if (added.reason !== 'cancelled') setError(refusalSentence(added.reason, added.message, username))
+    return true
+  }
+
+  /**
    * Ask the registry for options, ask the browser for a credential, and file
    * what came back — in that order, and only what came back.
    */
@@ -177,6 +202,7 @@ export function SecurityCard({
     setBusy(true)
     setError(null)
     try {
+      if (await addOnPage()) return
       const options = await trip.watch(api.accountPasskeyOptions())
       if (!options.ok) {
         setError(refusalSentence(options.reason, options.message, username))
@@ -367,7 +393,13 @@ export function SecurityCard({
           />
         )}
       </ul>
-      <TripWait shown={trip.waiting} onCancel={trip.cancel} />
+      <TripWait
+        shown={trip.waiting || pageTrip.waiting}
+        onCancel={() => {
+          trip.cancel()
+          pageTrip.cancel()
+        }}
+      />
       {(error ?? problem) && (
         <p className="gs-paste-error" role="alert">
           {error ?? problem}
