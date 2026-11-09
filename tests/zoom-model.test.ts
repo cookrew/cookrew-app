@@ -123,6 +123,8 @@ describe('the device', () => {
       nodes: [], connections: [], rows: [], crew: [], attachIndex: new Map(), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev',
       machines: [listed('linux'), listed('win32'), listed('darwin'), listed(null)]
     })
+    // Read live through this desktop's key, it says what it holds instead.
+    expect(listedOnly({ name: 'Solis-Core', os: 'linux', detail: 'live', agents: 23, waiting: 2 })).toBe('Solis-Core · 23 agents, 2 need you. Work in it on that machine for now.')
     expect(m.machines.map(listedOnly)).toEqual([
       'Solis-Core is listed, not readable from here: open it on that machine.',
       'Solis-Core is listed, not readable from here: open it on that PC.',

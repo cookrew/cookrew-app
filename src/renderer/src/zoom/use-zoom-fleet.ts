@@ -114,6 +114,11 @@ export interface FleetParts {
   /** This desktop's name from machineName, for when nothing better is known. */
   name: string | null
   account: AccountMachines | null
+  /**
+   * The account's other machines this desktop holds a key for (main ·
+   * machine-keys.ts), each as its own /api/fleet answers: read live, not by name.
+   */
+  remote?: Readonly<Record<string, FleetSnapshot>>
 }
 
 const countsOf = (workspace: FleetWorkspace): ZoomCounts => ({
@@ -221,12 +226,41 @@ function localMachine(parts: FleetParts, row: AccountMachine | undefined): ZoomF
   }
 }
 
+/** Another machine of the account read through its own feed: drawn as this desktop is, but not this desktop. */
+const readMachine = (row: AccountMachine, snapshot: FleetSnapshot): ZoomFleetMachine => ({
+  ...localMachine({ snapshot, link: 'live', list: null, name: null, account: null }, row),
+  id: row.id,
+  local: false
+})
+
 /** Every machine the navigator can draw: this desktop first, then the account's others. */
 export function composeFleet(parts: FleetParts): ZoomFleetMachine[] {
   const rows = parts.account?.ok ? parts.account.machines : []
   const current = rows.find((row) => row.current)
-  return [localMachine(parts, current), ...rows.filter((row) => row !== current).map(machineOf)]
+  const others = rows.filter((row) => row !== current).map((row) => {
+    const read = parts.remote?.[row.id]
+    if (!read) return machineOf(row)
+    // Another machine's answer, from another version perhaps: one it cannot draw is drawn by name, and nothing else stops.
+    try {
+      return readMachine(row, read)
+    } catch {
+      return machineOf(row)
+    }
+  })
+  return [localMachine(parts, current), ...others]
 }
+
+/** A fleet snapshot as another machine sent it, or null: only its shape is trusted. */
+const snapshotOf = (value: unknown): FleetSnapshot | null => {
+  if (typeof value !== 'object' || value === null) return null
+  const held = value as Partial<FleetSnapshot>
+  if (typeof held.machine !== 'object' || held.machine === null || !Array.isArray(held.workspaces)) return null
+  const readable = held.workspaces.every((w) => typeof w === 'object' && w !== null && Array.isArray(w.agents) && Array.isArray(w.loose))
+  return readable ? (value as FleetSnapshot) : null
+}
+
+/** How often another machine's feed is read while the navigator is in sight. */
+export const REMOTE_READ_MS = 5_000
 
 const ACCOUNT_SENTENCE: Partial<Record<AccountMachinesRefusal, string>> = {
   offline: 'Your other devices could not be listed: cookrew.dev did not answer.',
@@ -239,7 +273,7 @@ export const LOCAL_UNREADABLE = 'This desktop’s workspaces could not be read.'
 
 // ── the store ───────────────────────────────────────────────────────────────
 
-export type FleetApi = Partial<Pick<CookrewApi, 'subscribeZoomFleet' | 'zoomFleetMachines' | 'listWorkspaces' | 'machineName'>>
+export type FleetApi = Partial<Pick<CookrewApi, 'subscribeZoomFleet' | 'zoomFleetMachines' | 'listWorkspaces' | 'machineName' | 'machineFleetOf'>>
 
 /** Whether the window is out of sight, and word when that changes. */
 export interface Sight {
@@ -283,6 +317,9 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   let graceTimer: ReturnType<typeof setTimeout> | null = null
   let stopTimer: ReturnType<typeof setTimeout> | null = null
   let refreshTimer: ReturnType<typeof setInterval> | null = null
+  let remoteTimer: ReturnType<typeof setInterval> | null = null
+  let remoteKey = ''
+  let readingRemote = false
   let unwatch: (() => void) | null = null
   let asking = false
 
@@ -387,6 +424,26 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     if (key === accountKey) return
     accountKey = key
     set({ account: answer })
+    // The machines are known now: read the ones this desktop holds a key for.
+    void askRemote()
+  }
+
+  /** The account's other machines, each read through the key this desktop holds for it. */
+  const askRemote = async (): Promise<void> => {
+    const read = api().machineFleetOf
+    const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online) : []
+    if (!read || readingRemote || rows.length === 0) return
+    readingRemote = true
+    try {
+      const answers = await Promise.all(rows.map(async (row) => [row.id, snapshotOf(await read(row.id).catch(() => null))] as const))
+      const remote = Object.fromEntries(answers.filter((pair): pair is readonly [string, FleetSnapshot] => pair[1] !== null))
+      const key = JSON.stringify(remote)
+      if (key === remoteKey) return
+      remoteKey = key
+      set({ remote })
+    } finally {
+      readingRemote = false
+    }
   }
 
   const askLocal = async (): Promise<void> => {
@@ -408,11 +465,15 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     openFeed()
     refresh()
     refreshTimer ??= setInterval(refresh, refreshMs)
+    void askRemote()
+    remoteTimer ??= setInterval(() => void askRemote(), REMOTE_READ_MS)
   }
   const sleep = (): void => {
     closeFeed()
     if (refreshTimer !== null) clearInterval(refreshTimer)
     refreshTimer = null
+    if (remoteTimer !== null) clearInterval(remoteTimer)
+    remoteTimer = null
   }
 
   const onSight = (): void => {

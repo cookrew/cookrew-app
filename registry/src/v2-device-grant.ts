@@ -134,6 +134,42 @@ function passkeyProof(ctx: V2Context, signed: Signed, credential: unknown): bool
   return out.ok
 }
 
+/**
+ * A PROOF MADE NOW: a passkey verified by a person, or the account password.
+ * The answer, or null when it has refused (and said so). One copy, for every
+ * pass that takes one: a security boundary written twice drifts.
+ */
+async function provenNow(ctx: V2Context, signed: Signed, value: Record<string, unknown>, key: string, now: number): Promise<VerifiedBy | null> {
+  const { account } = signed
+  if (value.credential !== undefined) {
+    if (!passkeyProof(ctx, signed, value.credential)) {
+      const left = missed(key, now)
+      if (left === 0) said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
+      else said(ctx, 401, 'wrong', SAID.wrongPasskey, { triesLeft: left })
+      return null
+    }
+    rests.delete(key)
+    return 'passkey'
+  }
+  if (typeof value.password === 'string' && value.password !== '') {
+    const right = account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(account.username, value.password))
+    if (!right) {
+      const left = missed(key, now)
+      if (left === 0) said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
+      else said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
+      return null
+    }
+    rests.delete(key)
+    return 'password'
+  }
+  // ALWAYS A PROOF MADE NOW. A session that verified a minute ago is not
+  // asked again elsewhere, but a pass for every machine is: every relayed
+  // machine page shares this origin, and one of them must not be able to
+  // take a pass without the person touching a passkey or typing (review, 11-09).
+  said(ctx, 401, 'proof_required', SAID.proof)
+  return null
+}
+
 export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> {
   const { account, claims, device } = signed
   const now = ctx.v2.now()
@@ -148,33 +184,8 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   const jkt = jwkThumbprint(device.jwk)
   if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
 
-  let by: VerifiedBy | null = null
-  if (value.credential !== undefined) {
-    if (!passkeyProof(ctx, signed, value.credential)) {
-      const left = missed(key, now)
-      return left === 0
-        ? said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
-        : said(ctx, 401, 'wrong', SAID.wrongPasskey, { triesLeft: left })
-    }
-    by = 'passkey'
-  } else if (typeof value.password === 'string' && value.password !== '') {
-    const right = account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(account.username, value.password))
-    if (!right) {
-      const left = missed(key, now)
-      return left === 0
-        ? said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
-        : said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
-    }
-    by = 'password'
-  } else {
-    // ALWAYS A PROOF MADE NOW. A session that verified a minute ago is not
-    // asked again elsewhere, but a pass for every machine is: every relayed
-    // machine page shares this origin, and one of them must not be able to
-    // take a pass without the person touching a passkey or typing (review, 11-09).
-    return said(ctx, 401, 'proof_required', SAID.proof)
-  }
-
-  rests.delete(key)
+  const by = await provenNow(ctx, signed, value, key, now)
+  if (by === null) return
   ctx.v2.accounts.markVerified(account.username, claims.jti, by)
   const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
   const minted = ctx.v2.tokens.mintGrant(account.username, device.id, jkt, sitting)
@@ -209,6 +220,47 @@ export function issueWatchGrant(ctx: V2Context, signed: Signed): void {
   if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
   const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
   const minted = ctx.v2.tokens.mintWatchGrant(account.username, device.id, jkt, sitting)
+  ctx.response.setHeader('cache-control', 'private, no-store')
+  v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
+}
+
+/**
+ * POST /v2/me/device-grant/machine — THE ACCOUNT'S MACHINES TRUST EACH OTHER
+ * (owner, 2026-11-09: full control). A desktop enters every other machine of
+ * the account as a device of it, the way a paired phone does.
+ *
+ * TRUSTED ONCE, BY A PROOF MADE ON IT. "Desktop" is what a device says it is,
+ * so it is not what earns this: the FIRST pass takes the account password or a
+ * passkey from that machine, and marks the device a trusted machine; every pass
+ * after needs none. A device attached by a join code, a recovery code or a
+ * provider sign-in is a machine only once it has made that proof (security
+ * review 2026-11-09). A machine
+ * pass is its own scope: a machine older than it reads no pass at all.
+ * Revoking the machine at cookrew.dev ends its admission everywhere (the
+ * machines read the revoked list); "Not me" stops new passes.
+ */
+export async function issueMachineGrant(ctx: V2Context, signed: Signed): Promise<void> {
+  const { account, claims, device } = signed
+  if (device.kind !== 'desktop') {
+    return said(ctx, 403, 'not_machine', 'Only a machine of the account enters the others on its sign-in alone. Prove it is you instead.')
+  }
+  if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
+  if (!ctx.v2.factors.options.take(`machine-grant|${device.id}`)) return said(ctx, 429, 'rate_limited', SAID.resting)
+  const jkt = jwkThumbprint(device.jwk)
+  if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
+  if (device.machine !== true) {
+    const now = ctx.v2.now()
+    const key = restKey(signed)
+    const rest = restingFor(key, now)
+    if (rest > 0) return said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: rest })
+    const body = await readJsonBody(ctx.request, BODY_MAX)
+    const by = await provenNow(ctx, signed, body.ok ? body.value : {}, key, now)
+    if (by === null) return
+    ctx.v2.accounts.markVerified(account.username, claims.jti, by)
+    ctx.v2.accounts.trustMachine(account.username, device.id)
+  }
+  const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
+  const minted = ctx.v2.tokens.mintMachineGrant(account.username, device.id, jkt, sitting)
   ctx.response.setHeader('cache-control', 'private, no-store')
   v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
 }

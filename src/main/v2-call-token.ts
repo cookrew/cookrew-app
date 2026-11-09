@@ -79,6 +79,10 @@ export interface V2Grant {
   readonly exp: number
   /** A watch's pass: it admits a watch's token only, never a device's. */
   readonly watch?: true
+  /** Another machine of the account: admitted as a device here, until revoked. */
+  readonly machine?: true
+  /** The sign-in it was minted under: its end ends what it let in. */
+  readonly sid?: string
 }
 
 export interface V2CallTokenVerifier {
@@ -210,7 +214,13 @@ export function v2WatchGrantClaimsFor(token: string, now: number): (V2Grant & { 
   return claims === null ? null : { ...claims, watch: true }
 }
 
-function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant'): (V2Grant & { jti: string; sid: string }) | null {
+/** A machine's pass (registry v2-tokens.ts · mintMachineGrant), marked so. */
+export function v2MachineGrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string }) | null {
+  const claims = grantClaimsIn(token, now, 'machine-grant')
+  return claims === null ? null : { ...claims, machine: true }
+}
+
+function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant' | 'machine-grant'): (V2Grant & { jti: string; sid: string }) | null {
   const [body] = token.split('.')
   if (!body) return null
   let claims: Record<string, unknown>
@@ -236,11 +246,11 @@ function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant
 export function verifyV2Grant(token: string, material: V2KeyMaterial, now: number): V2Grant | null {
   if (!v2SignatureHolds(token, material.jwk)) return null
   // A device's pass or a watch's: the revoked list ends either.
-  const claims = v2GrantClaimsFor(token, now) ?? v2WatchGrantClaimsFor(token, now)
+  const claims = v2GrantClaimsFor(token, now) ?? v2WatchGrantClaimsFor(token, now) ?? v2MachineGrantClaimsFor(token, now)
   if (claims === null) return null
   const cut = [claims.dev, claims.jti, claims.sid]
   if (cut.some((id) => material.revoked.includes(id))) return null
-  return { username: claims.username, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, ...(claims.watch ? { watch: true as const } : {}) }
+  return { username: claims.username, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, sid: claims.sid, ...(claims.watch ? { watch: true as const } : {}), ...(claims.machine ? { machine: true as const } : {}) }
 }
 
 /** Was this token cut off? Device id and session id are both listed. */

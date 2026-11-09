@@ -85,6 +85,28 @@ describe('composeFleet', () => {
     expect(other.workspaces).toEqual([{ id: 'r1', name: 'remote ws', icon: null, traits: [], focused: false, live: false, agents: [], loose: [], counts: null, newest: null }])
   })
 
+  it('reads another machine of the account live once this one holds its key: its own feed, not names', () => {
+    const account: AccountMachines = { ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Solis-Core', false)] }
+    const machines = composeFleet({ snapshot: snapshot(1), link: 'live', list: null, name: null, account, remote: { [OTHER]: snapshot(4) } })
+    const other = machines[1]
+    expect(other).toMatchObject({ id: OTHER, local: false, detail: 'live', online: true })
+    expect(other.counts).toEqual({ agents: 3, notes: 4, browsers: 2, waiting: 1, working: 1 })
+    expect(other.workspaces.map((w) => [w.id, w.live, w.agents.length])).toEqual([
+      ['w1', true, 2],
+      ['w2', true, 1]
+    ])
+  })
+
+  it('a machine that answers in a shape this one cannot read is drawn by name, and the rest stand', () => {
+    const account: AccountMachines = { ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Solis-Core', false)] }
+    const broken = { machine: { name: 'Solis-Core' }, workspaces: [{ id: 'w1', name: 'x' }], at: 1 } as unknown as FleetSnapshot
+    const machines = composeFleet({ snapshot: snapshot(1), link: 'live', list: null, name: null, account, remote: { [OTHER]: broken } })
+    expect(machines.map((m) => [m.id, m.detail])).toEqual([
+      [ME, 'live'],
+      [OTHER, 'listed']
+    ])
+  })
+
   it('names this desktop from its workspace list while the feed is out, or where there is none', () => {
     const list: WorkspaceList = { workspaces: [{ id: 'w1', name: 'cookrew' } as WorkspaceList['workspaces'][number], { id: 'w2', name: 'home' } as WorkspaceList['workspaces'][number]], activeId: 'w2' }
     const [local] = composeFleet({ snapshot: null, link: 'none', list, name: 'Studio.local', account: null })
