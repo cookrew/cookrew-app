@@ -356,6 +356,78 @@ export function agentKind(command: string): string {
   return base.length > 0 ? base : 'shell'
 }
 
+/** Where the pane a boot types into came from: made by this call, the server's idle starter, or already labelled. */
+export type PaneOrigin = 'created' | 'adopted' | 'existing'
+
+/** What a pane runs, as far as typing into it is concerned — see paneRuns. */
+export type PaneRun = 'agent' | 'booting' | 'shell' | 'other' | 'unanswerable'
+
+/** One pane's process witnesses: its root (`shell_pid` + ps argv) and herdr's foreground. */
+export interface PaneProcesses {
+  rootPid: number
+  rootArgv: string
+  /** herdr's `foreground_processes`, as received — every entry, not the first. */
+  foreground: readonly unknown[]
+  foregroundGroup: number | null
+}
+
+/**
+ * Does one foreground process run an agent of this kind? By word, not by
+ * substring: the kind is a short name (`pi` is one), and a substring match
+ * would find it inside any path. A word is a path segment of argv, argv0 or
+ * the process name, with a login dash and a binary suffix taken off, so
+ * `claude`, `claude.exe`, `/opt/homebrew/bin/claude` and node running
+ * `@anthropic-ai/claude-code/cli.js` are all claude.
+ */
+function runsAgent(process: Record<string, unknown>, kind: string): boolean {
+  const argv = Array.isArray(process.argv) ? process.argv : []
+  const words = [process.name, process.argv0, ...argv, ...String(process.cmdline ?? '').split(/\s+/)]
+  return words.some((word) =>
+    String(word ?? '')
+      .split('/')
+      .map((segment) => segment.replace(/^-/, '').replace(/\.(exe|js|cjs|mjs)$/, ''))
+      .some((segment) => segment === kind || segment.startsWith(`${kind}-`))
+  )
+}
+
+/** The text a foreground process shows, for finding the boot script in it. */
+function processText(process: Record<string, unknown>): string {
+  const argv = Array.isArray(process.argv) ? process.argv.join(' ') : ''
+  return `${String(process.cmdline ?? '')} ${argv}`
+}
+
+/**
+ * Classify a pane from its two process witnesses. Pure, so the decision that
+ * licenses typing into a pane is tested on the measured shapes directly.
+ */
+export function classifyPaneRun(pane: PaneProcesses, expected: string, sessionName: string): PaneRun {
+  const bootMark = `boot-${sessionName}.sh`
+  if (pane.rootArgv.includes(expected)) return 'agent'
+  if (pane.rootArgv.includes(bootMark)) return 'booting'
+  const front = pane.foreground.filter(
+    (entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null
+  )
+  // The agent must LEAD the foreground group when herdr names the group: a
+  // passing rc-init child (`eval "$(claude completion zsh)"`) is in front for
+  // a moment but leads nothing, and taking it for a live agent would skip a
+  // husk's recovery.
+  const leads = (entry: Record<string, unknown>): boolean =>
+    pane.foregroundGroup === null || entry.pid === pane.foregroundGroup
+  if (front.some((entry) => leads(entry) && runsAgent(entry, expected))) return 'agent'
+  if (front.some((entry) => processText(entry).includes(bootMark))) return 'booting'
+
+  const words = pane.rootArgv.split(/\s+/)
+  const head = (words[0] ?? '').split('/').pop()?.replace(/^-/, '') ?? ''
+  if (!SHELL_NAMES.test(head) || words.length !== 1) return 'other'
+
+  // A bare root is a bare PROMPT only with the shell itself alone in front.
+  // An empty or unreadable foreground is no reading, and no reading is no
+  // license to type.
+  if (front.length === 0 || front.length !== pane.foreground.length) return 'other'
+  if (pane.foregroundGroup !== null && pane.foregroundGroup !== pane.rootPid) return 'other'
+  return front.every((entry) => entry.pid === pane.rootPid) ? 'shell' : 'other'
+}
+
 /**
  * The ASYNC CLI seam behind the admission-cache refresh and the delivery-leg
  * reads: run `herdr` with these args, resolve stdout, reject on any
@@ -1134,7 +1206,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // The launch check passes a husk (a pane is there): it is here that a boot
     // would start. A `cd` would fail it, but only after a dozen seconds of verify.
     if (existing && this.folderGone(spec.cwd)) throw new Error(`the folder ${spec.cwd} is gone, so '${spec.sessionName}' was not booted`)
-    const pane = existing ?? this.adoptOrCreate(spec)
+    const found = existing ? { pane: existing, origin: 'existing' as const } : this.adoptOrCreate(spec)
+    const pane = found?.pane ?? null
     if (!pane?.pane_id) throw new Error(`herdr could not create a pane for '${spec.sessionName}'`)
 
     // Label FIRST: if the boot command fails, the pane is still findable and
@@ -1154,7 +1227,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     //
     // Sourcing a file keeps the typed line to one short command, and sidesteps
     // shell-quoting hazards in the agent command as a side benefit.
-    this.bootIntoPane(pane.pane_id, spec)
+    this.bootIntoPane(pane.pane_id, spec, found?.origin ?? 'created')
 
     // REQUIRED, not decorative: `agent attach` resolves its target through the
     // agent registry and fails with agent_not_found on a pane that merely runs
@@ -1469,9 +1542,15 @@ export class HerdrHostMultiplexer implements Multiplexer {
    *   - process-info unanswerable  -> NOT a husk. Booting is TYPED into the
    *     pane, so misreading a live agent would paste a shell command into its
    *     prompt — worse than failing to recover. No answer, no action.
-   *   - foreground is a bare shell, but an AGENT was expected -> husk.
-   *   - foreground absent (shell still spawning after restore) -> husk; the
-   *     boot path waits for the shell before typing.
+   *   - root AND foreground are the bare shell alone, but an AGENT was
+   *     expected -> husk.
+   *   - foreground absent (shell still spawning after restore) -> not yet;
+   *     the poll waits for it to show the shell, and a window that expires
+   *     first refuses to act.
+   *
+   * herdr's own resume shares this pane: it restarts the agent it recorded
+   * as a child of the restored shell. That pane is LIVE, not a husk, and the
+   * foreground is what says so (see paneRuns).
    *
    * A terminal whose command IS a shell can't be told apart from its husk —
    * both show a shell — so it is never rebooted. It loses only env vars on
@@ -1531,35 +1610,52 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * whatever its tools are doing. Verified live: the pane whose foreground
    * read as `sh` had root argv `claude --permission-mode ... --resume ...`.
    *
-   * herdr reports the root pid (`shell_pid`); its argv comes from ps. The
-   * classifications, and what each licenses:
+   * But a bare-shell ROOT is not a bare shell. herdr itself resumes the agent
+   * it recorded for a restored pane, by running it as a CHILD of the restored
+   * login shell (2026-11-09, card Roaster: root `-zsh`, foreground claude.exe,
+   * started a second after the restore). The root then reads `-zsh` for that
+   * agent's whole life, and judging by it alone typed the boot line into the
+   * live claude, then retyped it every beat. So a bare root licenses typing
+   * only with the FOREGROUND agreeing: the shell itself in front, and nothing
+   * else. Neither witness can be fooled alone in the way that matters — an
+   * agent under the shell is in the foreground group, and a tool under an
+   * exec'd agent is under an agent root.
    *
-   *   'agent'   — expected token in the root argv. Live; never touch.
-   *   'booting' — the root is running this session's boot script. In flight;
-   *               wait, never type.
-   *   'shell'   — the root is a bare shell where an agent was expected: a
-   *               husk, or typed keys that were dropped. The only state that
-   *               licenses typing.
-   *   'other'   — something unrecognized; wait.
+   * herdr reports the root pid (`shell_pid`) and the foreground; the root's
+   * argv comes from ps. The classifications, and what each licenses:
+   *
+   *   'agent'   — expected token in the root argv, or an agent of the
+   *               expected kind in the foreground (claude, claude.exe, node
+   *               running claude's script). Live; never touch.
+   *   'booting' — the root or foreground is running this session's boot
+   *               script. In flight; wait, never type.
+   *   'shell'   — the root is a bare shell AND the foreground is that shell
+   *               alone, where an agent was expected: a husk, or typed keys
+   *               that were dropped. The only state that licenses typing.
+   *   'other'   — anything else, including an unreadable foreground; wait.
    */
-  private paneRuns(
-    paneId: string,
-    expected: string,
-    sessionName: string
-  ): 'agent' | 'booting' | 'shell' | 'other' | 'unanswerable' {
+  private paneRuns(paneId: string, expected: string, sessionName: string): PaneRun {
     try {
       const result = parseEnvelope(this.herdr(['pane', 'process-info', '--pane', paneId]))
       if (!result) return 'unanswerable'
-      const info = result.process_info as { shell_pid?: unknown } | undefined
+      const info = result.process_info as
+        | { shell_pid?: unknown; foreground_process_group_id?: unknown; foreground_processes?: unknown }
+        | undefined
       const pid = info?.shell_pid
       if (typeof pid !== 'number') return 'unanswerable'
       const argv = this.runner.run('ps', ['-o', 'args=', '-p', String(pid)]).trim()
       if (argv.length === 0) return 'unanswerable'
-      if (argv.includes(expected)) return 'agent'
-      if (argv.includes(`boot-${sessionName}.sh`)) return 'booting'
-      const head = (argv.split(/\s+/)[0] ?? '').split('/').pop()?.replace(/^-/, '') ?? ''
-      if (SHELL_NAMES.test(head) && argv.split(/\s+/).length === 1) return 'shell'
-      return 'other'
+      const group = info?.foreground_process_group_id
+      return classifyPaneRun(
+        {
+          rootPid: pid,
+          rootArgv: argv,
+          foreground: Array.isArray(info?.foreground_processes) ? info.foreground_processes : [],
+          foregroundGroup: typeof group === 'number' ? group : null
+        },
+        expected,
+        sessionName
+      )
     } catch {
       return 'unanswerable'
     }
@@ -1622,7 +1718,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * exactly as before. Retyping into it could stack boot commands in the NEW
    * shell, which is worse than the flake being guarded against.
    */
-  private bootIntoPane(paneId: string, spec: AttachSpec): void {
+  private bootIntoPane(paneId: string, spec: AttachSpec, origin: PaneOrigin): void {
     const bootPath = path.join(spec.cliDir, `boot-${spec.sessionName}.sh`)
     // PtyManager creates the runtime dir, but this backend must not depend on
     // the caller having done so — a missing dir would throw here and take the
@@ -1661,14 +1757,44 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // an oh-my-zsh compinit held a fresh pane for 10-30 s). Its keys were not
     // dropped, they are queued, and the terminal echoes them — so a boot line
     // still standing last on the screen is waiting its turn, and is not retyped.
-    const deadline = Date.now() + this.settleMs * 6
+    //
+    // Every line waits for a 'shell' reading, except the first into a pane
+    // this call CREATED: nothing can run in it yet but its rc init, whose keys
+    // queue. A pane that cannot be read at all (no ps) types blind only when
+    // nothing could be running in it, created or adopted, as it always did.
+    //
+    // An EXISTING (or adopted) pane's first line needs the bare shell to HOLD
+    // for a settle window, not one reading. herdr starts the agent it recorded
+    // about a second after it restores the shell (11-09: shell 11:19:57, claude
+    // 11:19:58), so a reading taken in that second is a true bare prompt that
+    // is about to stop being one. Any other reading restarts the window.
+    //
+    // 'agent' and 'booting' END the wake: the line was taken, or something else
+    // started the agent. Nothing after that is evidence of a drop, so nothing
+    // after that is typed. A small gap stays between the last reading and the
+    // keys themselves; closing it needs a "send only if the foreground is X"
+    // that herdr does not have.
     const waitABeat = this.pollBackoff()
-    type()
-    let lastTypedAt = Date.now()
+    let deadline = Date.now() + this.settleMs * 6
+    let lastTypedAt: number | null = null
+    let shellSince: number | null = null
+    let looked = false
+    const typeNow = (): void => {
+      type()
+      lastTypedAt = Date.now()
+      // The retype window runs from the first line, however long it took.
+      deadline = lastTypedAt + this.settleMs * 6
+    }
+    if (origin === 'created') typeNow()
     for (;;) {
       const seen = this.paneRuns(paneId, expected, spec.sessionName)
-      if (seen === 'agent') return
-      if (seen === 'shell' && Date.now() - lastTypedAt >= this.settleMs) {
+      if (seen === 'agent' || seen === 'booting') return
+      if (lastTypedAt === null) {
+        const blind = !looked && seen === 'unanswerable' && origin === 'adopted'
+        looked = true
+        shellSince = seen === 'shell' ? (shellSince ?? Date.now()) : null
+        if (blind || (shellSince !== null && Date.now() - shellSince >= this.settleMs)) typeNow()
+      } else if (seen === 'shell' && Date.now() - lastTypedAt >= this.settleMs) {
         if (!this.bootLineWaiting(paneId, spec.sessionName)) type()
         lastTypedAt = Date.now()
       }
@@ -1713,10 +1839,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * adopted pane keeps the SERVER's env rather than this spec's, so the boot
    * command exports what the agent needs instead of relying on the split.
    */
-  private adoptOrCreate(spec: AttachSpec): HerdrPane | null {
+  private adoptOrCreate(spec: AttachSpec): { pane: HerdrPane | null; origin: PaneOrigin } {
     const panes = this.panes()
     const idle = panes.find((pane) => !pane.label)
-    if (idle) return idle
+    if (idle) return { pane: idle, origin: 'adopted' }
 
     // An isolated herdr session starts with NO panes at all, and `pane split`
     // fails with pane_not_found when there is nothing to split. The first
@@ -1725,13 +1851,13 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // holding one pane per Cookrew agent.
     if (panes.length === 0) {
       const created = parseEnvelope(this.herdr(['workspace', 'create', '--cwd', spec.cwd]))
-      return (created?.root_pane ?? null) as HerdrPane | null
+      return { pane: (created?.root_pane ?? null) as HerdrPane | null, origin: 'created' }
     }
 
     const split = parseEnvelope(
       this.herdr(['pane', 'split', '--direction', 'right', '--cwd', spec.cwd, ...envArgs(spec)])
     )
-    return (split?.pane ?? null) as HerdrPane | null
+    return { pane: (split?.pane ?? null) as HerdrPane | null, origin: 'created' }
   }
 
   /**
