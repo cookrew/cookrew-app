@@ -59,6 +59,20 @@ describe('BrowserThumbCache', () => {
     expect(capture).toHaveBeenCalledTimes(1)
   })
 
+  it('a forced refresh takes a new picture inside the freshness window; a plain one still does not', async () => {
+    const time = clock()
+    let n = 0
+    const capture = vi.fn(async () => b64(`shot${++n}`))
+    const cache = new BrowserThumbCache({ capture, now: time.now, freshMs: 3000 })
+    await cache.refresh('b1')
+    time.advance(500)
+    await cache.refresh('b1')
+    expect(capture).toHaveBeenCalledTimes(1)
+    await cache.refresh('b1', { force: true })
+    expect(capture).toHaveBeenCalledTimes(2)
+    expect(cache.frame('b1')?.data.toString()).toBe('shot2')
+  })
+
   it('recaptures once the frame ages out', async () => {
     const time = clock()
     let n = 0
