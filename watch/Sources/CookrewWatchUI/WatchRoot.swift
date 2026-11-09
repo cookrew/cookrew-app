@@ -251,6 +251,8 @@ final class WatchApp {
     let held = vault.loadAccount()
     vault.clear()
     vault.clearAccount()
+    // The next Mac has its own workspaces: the zoom starts again at the top of it.
+    UserDefaults.standard.removeObject(forKey: keptZoomKey)
     store = nil
     username = nil
     typed = ""
@@ -393,7 +395,7 @@ struct ZoomStack: View {
     }
   }
 
-  /** The pages: every card in the workspace, then the new agent where the Mac makes one. */
+  /** The pages: every card in the workspace, then a new agent there. */
   private func pages(in workspace: String) -> some View {
     TabView(selection: $store.page) {
       ForEach(store.visibleCards) { card in
@@ -404,11 +406,7 @@ struct ZoomStack: View {
         .wholeGlass()
         .tag(Optional(card.id))
       }
-      if store.canMakeAgent {
-        NewAgentPage(store: store, onThisWatch: { path.append(.thisWatch) }).wholeGlass().tag(Optional(newAgentPage))
-      } else if store.visibleCards.isEmpty {
-        CrewGrid(store: store) { _ in }.tag(String?.none)
-      }
+      NewAgentPage(store: store, onThisWatch: { path.append(.thisWatch) }, onOut: stepOut).wholeGlass().tag(Optional(newAgentPage))
     }
     #if os(watchOS)
       .tabViewStyle(.verticalPage)

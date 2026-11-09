@@ -70,3 +70,39 @@ public struct CrownScroll: Equatable, Sendable {
     return px
   }
 }
+
+/** What a finger on the page does. */
+public enum PageTouch: Equatable, Sendable {
+  /** The whole page is too small to aim at: look closer, at the spot touched. */
+  case aim(PictureView)
+  /** Close enough to aim: a click, at these fractions of the picture. */
+  case click(CGPoint)
+  /** Off the picture. */
+  case none
+}
+
+/**
+ * A TAP ON A WRIST'S PAGE. A desktop page drawn whole on a watch is a seventh of
+ * its size, and a finger covers a whole button there: so the first tap looks
+ * closer at the spot, centred, and a tap close up is the click.
+ */
+public func touch(at point: CGPoint, view: PictureView, picture: CGSize, box: CGSize, closeZoom: Double) -> PageTouch {
+  let fit = fitRect(picture: picture, in: box)
+  guard let at = view.fraction(of: point, fit: fit) else { return .none }
+  if view.zoom > 1 { return .click(at) }
+  let width = fit.width * closeZoom
+  let height = fit.height * closeZoom
+  // The spot touched moves to the middle of the box, as far as the page's edges let it.
+  let pan = CGSize(
+    width: box.width / 2 - at.x * width - (fit.midX - width / 2),
+    height: box.height / 2 - at.y * height - (fit.midY - height / 2)
+  )
+  return .aim(PictureView(zoom: closeZoom, pan: pan).clamped(fit: fit, box: box))
+}
+
+/** A swipe as a share of the picture's height: the page moves as far as the finger did on it. Up scrolls down. */
+public func swipeShare(_ translation: CGFloat, view: PictureView, picture: CGSize, box: CGSize) -> Double {
+  let height = view.rect(fit: fitRect(picture: picture, in: box)).height
+  guard height > 0 else { return 0 }
+  return Double(-translation / height)
+}

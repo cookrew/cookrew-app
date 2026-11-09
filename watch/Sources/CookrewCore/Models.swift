@@ -305,6 +305,8 @@ public enum BrowserInput: Equatable, Sendable {
   /** Fractions of the picture. */
   case tap(x: Double, y: Double)
   case scroll(dy: Double)
+  /** A swipe: a share of the picture's height, where the finger was (fractions of the picture). */
+  case swipe(share: Double, x: Double, y: Double)
   case text(String)
   case enter
 
@@ -312,6 +314,8 @@ public enum BrowserInput: Equatable, Sendable {
     switch self {
     case .tap(let x, let y): return ["t": "tap", "x": x, "y": y]
     case .scroll(let dy): return ["t": "scroll", "dy": dy]
+    // dy is for a Mac too old to read a share: about a laptop window's height.
+    case .swipe(let share, let x, let y): return ["t": "scroll", "fy": share, "dy": (share * 800).rounded(), "x": x, "y": y]
     case .text(let text): return ["t": "text", "text": text]
     case .enter: return ["t": "enter"]
     }

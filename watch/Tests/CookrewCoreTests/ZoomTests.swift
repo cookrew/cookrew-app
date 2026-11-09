@@ -174,3 +174,81 @@ struct ZoomLevelTests {
     #expect(ZoomLevel.cards("w1").outward == .agents("w1"))
   }
 }
+
+/** A Mac whose answers come back when the test lets them. */
+@MainActor
+private final class HeldAPI: WatchAPI, @unchecked Sendable {
+  var held: [(String?, CheckedContinuation<Fresh<CardsReply>, Error>)] = []
+  var made: [String?] = []
+  nonisolated func cards(tag: String?) async throws -> Fresh<CardsReply> { try await cards(tag: tag, workspace: nil) }
+  nonisolated func cards(tag: String?, workspace: String?) async throws -> Fresh<CardsReply> {
+    try await withCheckedThrowingContinuation { go in Task { @MainActor in self.held.append((workspace, go)) } }
+  }
+  func answer(_ index: Int, _ reply: CardsReply) { held[index].1.resume(returning: .new(reply, tag: "t\(index)")) }
+  func fail(_ index: Int) { held[index].1.resume(throwing: WatchError.signedOut) }
+  nonisolated func send(_ text: String, to id: String) async throws {}
+  nonisolated func answer(_ act: MenuAct, menu: String, to id: String) async throws {}
+  nonisolated func stop(_ id: String) async throws {}
+  nonisolated func seen(_ id: String) async throws {}
+  nonisolated func newAgent(_ text: String) async throws {}
+  nonisolated func newAgent(_ text: String, in workspace: String?) async throws { await MainActor.run { made.append(workspace) } }
+  nonisolated func frame(_ id: String, width: Int, tag: String?) async throws -> Fresh<Data> { .same }
+  nonisolated func input(_ input: BrowserInput, to id: String) async throws {}
+  nonisolated func note(_ id: String) async throws -> NoteBody { NoteBody(name: "", content: "") }
+  nonisolated func unpair() async throws {}
+}
+
+@Suite("zooming while a read is out", .serialized)
+@MainActor
+struct ZoomRaceTests {
+  private func settle() async { for _ in 0..<20 { await Task.yield() } }
+
+  @Test("a read sent before going in and back out is not taken, answered or failed")
+  func outAndBack() async {
+    let api = HeldAPI()
+    let felt = Felt()
+    let s = WatchStore(api: api, feel: { felt.events.append($0) })
+    let calm = [tile("dev", "Cookrew Dev", agents: 1), tile("goat", "GOAT Team", agents: 1)]
+    let asking = [tile("dev", "Cookrew Dev", agents: 1), tile("goat", "GOAT Team", agents: 1, waiting: 1)]
+    let stale = CardsReply(cards: [card("c", .working, goat), card("b", .working, dev)], activeWorkspaceId: "dev", workspaces: calm)
+    let devOnly = CardsReply(cards: [card("b", .working, dev)], activeWorkspaceId: "dev", workspaces: calm)
+    let fresh = CardsReply(cards: [card("c", .waiting, goat), card("b", .working, dev)], activeWorkspaceId: "dev", workspaces: asking)
+    async let first: Void = s.refresh()
+    await settle(); api.answer(0, stale); await first
+    async let slow: Void = s.refresh()
+    await settle()
+    async let inside: Void = s.enter(workspace: "dev")
+    await settle(); api.answer(2, devOnly); await inside
+    // Out again: c started waiting while the wrist was inside dev, and it is said once.
+    async let outside: Void = s.enter(workspace: nil)
+    await settle(); api.answer(3, fresh); await outside
+    #expect(felt.events == [.needsYou("GOAT Team")])
+    // The read from before the zoom comes back last, with the old news: it is not taken.
+    api.answer(1, stale); await slow
+    #expect(s.cards.first { $0.id == "c" }?.status == .waiting)
+    #expect(felt.events.count == 1)
+    // One sent before a zoom fails after it: the wrist stays signed in and live.
+    async let late: Void = s.refresh()
+    await settle()
+    async let moved: Void = s.enter(workspace: "goat")
+    await settle(); api.answer(5, fresh); await moved
+    api.fail(4); await late
+    #expect(!s.signedOut)
+    #expect(s.link == .live)
+  }
+
+  @Test("a new agent from inside a workspace starts there; from above, in the Mac's own")
+  func seat() async {
+    let api = HeldAPI()
+    let s = WatchStore(api: api)
+    s.setDraft("Write the release notes", for: newAgentPage)
+    async let made: Void = s.send(page: newAgentPage)
+    await settle(); api.answer(0, CardsReply(cards: [], activeWorkspaceId: "dev")); await made
+    async let inside: Void = s.enter(workspace: "goat")
+    await settle(); api.answer(1, CardsReply(cards: [], activeWorkspaceId: "dev")); await inside
+    s.setDraft("Draft the brief", for: newAgentPage)
+    async let again: Void = s.send(page: newAgentPage)
+    await settle(); api.answer(2, CardsReply(cards: [], activeWorkspaceId: "dev")); await again
+    #expect(api.made == [nil, "goat"])
+  }
+}

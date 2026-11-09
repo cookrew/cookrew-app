@@ -3,9 +3,10 @@ import ImageIO
 import SwiftUI
 
 // A CARD'S BROWSER AND NOTE, on a wrist. A browser is a picture of its page: the
-// crown scrolls the page, a tap taps it, the magnifier looks closer, and the box
+// crown or a swipe scrolls the page, the first tap looks closer at the spot and a
+// tap close up clicks it, the magnifier goes back to the whole page, and the box
 // types into whatever field has the focus. Words typed there go in as a paste,
-// the way the phone's do.
+// the way the phone's do. After anything sent, the picture is asked for at once.
 
 func picture(_ data: Data) -> CGImage? {
   guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
@@ -17,6 +18,8 @@ struct PageFrame: View {
   let image: CGImage
   let view: PictureView
   let box: CGSize
+  /** A swipe on its way: the picture follows the finger until the page's own picture comes. */
+  var lift: CGFloat = 0
 
   var body: some View {
     let size = CGSize(width: image.width, height: image.height)
@@ -25,7 +28,7 @@ struct PageFrame: View {
       .resizable()
       .frame(width: rect.width, height: rect.height)
       .clipShape(RoundedRectangle(cornerRadius: 8 * view.zoom))
-      .position(x: rect.midX, y: rect.midY)
+      .position(x: rect.midX, y: rect.midY + lift)
   }
 }
 
@@ -48,6 +51,10 @@ public struct BrowserPage: View {
   @State private var words = ""
   @State private var tapped: CGPoint?
   @State private var failed: String?
+  /** The finger's swipe, while it is down and until the page answers it. */
+  @State private var lift: CGFloat = 0
+  /** Something was sent: the next beat asks for the picture. */
+  @State private var soon = false
 
   private static let closeZoom = 2.6
 
@@ -59,19 +66,27 @@ public struct BrowserPage: View {
 
   private var shown: CGImage? { image ?? first }
 
+  private func size(of image: CGImage) -> CGSize { CGSize(width: image.width, height: image.height) }
+
   private func tap(at point: CGPoint) {
     guard let shown else { return }
-    let fit = fitRect(picture: CGSize(width: shown.width, height: shown.height), in: box)
-    guard let fraction = view.fraction(of: point, fit: fit) else { return }
-    tapped = point
-    send(.tap(x: fraction.x, y: fraction.y))
-    Task {
-      try? await Task.sleep(nanoseconds: 350_000_000)
-      tapped = nil
+    switch touch(at: point, view: view, picture: size(of: shown), box: box, closeZoom: Self.closeZoom) {
+    case .aim(let close):
+      withAnimation(.easeOut(duration: 0.22)) { view = close }
+    case .click(let at):
+      tapped = point
+      send(.tap(x: at.x, y: at.y))
+      Task {
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        tapped = nil
+      }
+    case .none:
+      return
     }
   }
 
   private func send(_ input: BrowserInput) {
+    soon = true
     Task {
       do {
         try await store.client.input(input, to: item.id)
@@ -85,19 +100,37 @@ public struct BrowserPage: View {
   }
 
   private func zoomToggle() {
-    view = view.zoom > 1 ? PictureView() : PictureView(zoom: Self.closeZoom)
+    withAnimation(.easeOut(duration: 0.22)) { view = view.zoom > 1 ? PictureView() : PictureView(zoom: Self.closeZoom) }
   }
 
+  /** Close up a drag moves the picture; the whole page a swipe scrolls, under the finger. */
   private var drag: some Gesture {
     DragGesture(minimumDistance: 6)
       .onChanged { value in
-        guard view.zoom > 1, let shown else { return }
+        guard let shown else { return }
+        guard view.zoom > 1 else {
+          lift = value.translation.height
+          return
+        }
         let from = dragFrom ?? view.pan
         dragFrom = from
         let next = PictureView(zoom: view.zoom, pan: CGSize(width: from.width + value.translation.width, height: from.height + value.translation.height))
-        view = next.clamped(fit: fitRect(picture: CGSize(width: shown.width, height: shown.height), in: box), box: box)
+        view = next.clamped(fit: fitRect(picture: size(of: shown), in: box), box: box)
       }
-      .onEnded { _ in dragFrom = nil }
+      .onEnded { value in
+        dragFrom = nil
+        guard view.zoom <= 1, let shown else { return }
+        let picture = size(of: shown)
+        let share = swipeShare(value.translation.height, view: view, picture: picture, box: box)
+        guard abs(share) > 0.02 else { return withAnimation(.easeOut(duration: 0.15)) { lift = 0 } }
+        let at = view.fraction(of: value.startLocation, fit: fitRect(picture: picture, in: box)) ?? CGPoint(x: 0.5, y: 0.5)
+        send(.swipe(share: share, x: at.x, y: at.y))
+        // A page already at its end sends no new picture: the old one settles back.
+        Task {
+          try? await Task.sleep(nanoseconds: 1_500_000_000)
+          withAnimation(.easeOut(duration: 0.2)) { lift = 0 }
+        }
+      }
   }
 
   public var body: some View {
@@ -116,7 +149,7 @@ public struct BrowserPage: View {
         ZStack {
           ink.paper
           if let shown {
-            PageFrame(image: shown, view: view, box: geometry.size)
+            PageFrame(image: shown, view: view, box: geometry.size, lift: lift)
           } else {
             Text(failed ?? "Loading the page…").font(InkType.words(13)).foregroundStyle(ink.muted)
           }
@@ -135,7 +168,7 @@ public struct BrowserPage: View {
       .padding(.horizontal, 5)
       .overlay(alignment: .bottomTrailing) {
         Button(action: zoomToggle) {
-          Image(systemName: view.zoom > 1 ? "minus.magnifyingglass" : "plus.magnifyingglass")
+          Image(systemName: view.zoom > 1 ? "arrow.down.right.and.arrow.up.left" : "plus.magnifyingglass")
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(ink.onSeal)
             .frame(width: 28, height: 28)
@@ -202,12 +235,16 @@ public struct BrowserPage: View {
     var beat = 0
     while !Task.isCancelled {
       if let dy = crown.take() { send(.scroll(dy: dy)) }
-      if beat % 5 == 0 {
+      if beat % 5 == 0 || soon {
+        soon = false
         do {
           let width = Int(max(box.width, 180) * 2)
           if case .new(let data, let next) = try await store.client.frame(item.id, width: width, tag: tag) {
             tag = next
-            if let decoded = picture(data) { image = decoded }
+            if let decoded = picture(data) {
+              image = decoded
+              lift = 0
+            }
           }
           failed = nil
         } catch WatchError.refused(let why) {

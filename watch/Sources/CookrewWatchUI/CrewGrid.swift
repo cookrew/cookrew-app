@@ -36,7 +36,7 @@ public struct CrewGrid: View {
           ForEach(crew) { card in
             Button { onPick(card.id) } label: { seat(card) }.buttonStyle(.plain)
           }
-          if let onNewAgent, store.canMakeAgent {
+          if let onNewAgent {
             Button(action: onNewAgent) { newSeat }.buttonStyle(.plain)
           }
         }
