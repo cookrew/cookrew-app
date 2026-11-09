@@ -77,8 +77,8 @@ public struct DevicesPage: View {
             }
             .buttonStyle(.plain)
           } else {
-            // This watch holds no token for it: a code from that Mac is the way in.
-            StopRow(title: row.name, line: "pair from that Mac", mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: true)
+            // This watch holds no token for it: it is listed, and only that.
+            StopRow(title: row.name, line: "not paired", mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: true)
           }
         }
         Button(action: onThisWatch) {
@@ -101,11 +101,14 @@ public struct DevicesPage: View {
 /** The second stop: the paired Mac's workspaces, counted. */
 public struct WorkspacesPage: View {
   let tiles: [WorkspaceTile]
+  /** The word for the machine they are on. */
+  let machine: String
   let onOpen: (String) -> Void
   @Environment(\.ink) private var ink
 
-  public init(tiles: [WorkspaceTile], onOpen: @escaping (String) -> Void) {
+  public init(tiles: [WorkspaceTile], machine: String = machineWord(nil), onOpen: @escaping (String) -> Void) {
     self.tiles = tiles
+    self.machine = machine
     self.onOpen = onOpen
   }
 
@@ -120,7 +123,7 @@ public struct WorkspacesPage: View {
     CardScroll {
       VStack(alignment: .leading, spacing: 6) {
         if tiles.isEmpty {
-          Text("Reading the Mac…").font(InkType.words(13)).foregroundStyle(ink.muted).padding(.horizontal, 6)
+          Text("Reading the \(machine)…").font(InkType.words(13)).foregroundStyle(ink.muted).padding(.horizontal, 6)
         }
         ForEach(tiles) { tile in
           Button { onOpen(tile.id) } label: {

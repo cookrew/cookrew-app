@@ -26,7 +26,7 @@ public struct CrewGrid: View {
     CardScroll {
       VStack(alignment: .leading, spacing: 8) {
         if crew.isEmpty {
-          Text(store.link == .live ? "No agents here" : "Reading the Mac…")
+          Text(store.link == .live ? "No agents here" : "Reading the \(store.machine)…")
             .font(InkType.words(13))
             .foregroundStyle(ink.muted)
             .frame(maxWidth: .infinity)

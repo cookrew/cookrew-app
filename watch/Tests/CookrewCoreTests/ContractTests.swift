@@ -14,6 +14,7 @@ struct ContractTests {
   func cards() throws {
     let reply = try JSONDecoder().decode(CardsReply.self, from: fixture("cards.json"))
     #expect(reply.cards.map(\.id) == ["asking", "replied", "working", "resting", "asleep"])
+    #expect(reply.platform == "linux")
     let asking = reply.cards[0]
     #expect(asking.status == .waiting)
     #expect(asking.word == "needs you")

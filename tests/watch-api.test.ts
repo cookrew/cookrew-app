@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { CHECKPOINT_MEMO_MS, pageSettler, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
+import { CHECKPOINT_MEMO_MS, pageSettler, watchWriteRefusal, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
 import { WatchPairing } from '../src/main/watch-pairing'
 import { watchBases } from '../src/main/watch-bases'
 import { cardRows, itemsOfAgent, watchCards } from '../src/main/watch-cards'
@@ -182,7 +182,7 @@ describe('the card on the wrist says what the card on the Mac says', () => {
   })
   it('the contract the Swift client decodes is this exact shape (watch/Fixtures/cards.json)', () => {
     const file = path.join(__dirname, '..', 'watch', 'Fixtures', 'cards.json')
-    const body = `${JSON.stringify({ cards, activeWorkspaceId: 'ws' }, null, 2)}\n`
+    const body = `${JSON.stringify({ cards, activeWorkspaceId: 'ws', platform: 'linux' }, null, 2)}\n`
     if (!existsSync(file) || process.env.UPDATE_WATCH_FIXTURE === '1') writeFileSync(file, body)
     expect(readFileSync(file, 'utf8')).toBe(body)
   })
@@ -334,7 +334,7 @@ describe('through the real gate', () => {
     expect((await post('/api/watch/code', token)).status).toBe(401)
     expect((await post('/api/watch/code', null)).status).toBe(401)
     expect((await call('/api/watch/pairing', token)).status).toBe(401)
-    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password', sealed: true, claims: 1 })
+    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password', sealed: true, claims: 1, platform: 'darwin' })
   })
 
   it('a watch token reads the cards; none, a junk one or the wall’s does not', async () => {
@@ -361,6 +361,13 @@ describe('through the real gate', () => {
     expect(one.cards.map((card) => [card.id, card.workspace.id, card.status])).toEqual([['replied', 'other', 'done']])
     const mine = (await (await call('/api/watch/cards?workspace=ws', token)).json()) as { cards: unknown[] }
     expect(mine.cards.length).toBeGreaterThan(0)
+  })
+
+  it('the cards say what kind of machine it is, and so does the pairing state a phone reads', async () => {
+    setWatchHost({ ...host(pairing), platform: 'linux' })
+    const token = await paired()
+    expect(((await (await call('/api/watch/cards', token)).json()) as { platform?: string }).platform).toBe('linux')
+    expect(((await (await call('/api/watch/pairing', PAIRING)).json()) as { platform?: string }).platform).toBe('linux')
   })
 
   it('a watch token is nothing anywhere off its list', async () => {
@@ -578,6 +585,23 @@ describe('a page after a wrist touches it', () => {
       expect(take).toHaveBeenCalledTimes(3)
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('a wrist names the machine it is paired with', () => {
+  it('a refusal says the machine it is, not a Mac', () => {
+    const line = (platform: string): string => {
+      const pairing = new WatchPairing({ file: path.join(mkdtempSync(path.join(tmpdir(), 'watch-os-')), 'watch-token') })
+      setWatchHost({ ...host(pairing, { menuOnScreen: () => true, speaksTo: () => true }), platform })
+      return watchWriteRefusal('/api/terminal/a/input')?.error ?? ''
+    }
+    try {
+      expect(line('linux')).toBe('A menu is up: answer it on the machine.')
+      expect(line('win32')).toBe('A menu is up: answer it on the PC.')
+      expect(line('darwin')).toBe('A menu is up: answer it on the Mac.')
+    } finally {
+      setWatchHost(null)
     }
   })
 })

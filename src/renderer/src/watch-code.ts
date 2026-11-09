@@ -1,4 +1,4 @@
-import { hostPlatform, machineTable } from '../../shared/machine-words'
+import { hostPlatform, machineCopy } from '../../shared/machine-words'
 
 /** Six digits for a watch, as the Mac mints them (main/watch-pairing.ts). */
 export interface WatchCode {
@@ -18,6 +18,8 @@ export interface WatchState {
   sealed: boolean
   /** Watches that have arrived; a sheet compares this with what it saw on opening. */
   claims: number
+  /** What the machine is (process.platform): a phone has no other way to know. Older machines leave it out. */
+  platform?: string
 }
 
 /** The account's join code for a watch, or why not (main/watch-routes.ts). */
@@ -25,7 +27,7 @@ export type WatchInvite =
   | { ok: true; code: string; expiresAt: number; claims: number }
   | { ok: false; reason: string; message?: string }
 
-const REFUSALS: Readonly<Record<string, string>> = machineTable({
+const REFUSALS: Readonly<Record<string, string>> = {
   bad_credentials: "That password isn't right.",
   rate_limited: 'Too many tries. Wait a little, then try again.',
   provider_required: 'Your account has no password, so this has to be done on the Mac.',
@@ -33,11 +35,16 @@ const REFUSALS: Readonly<Record<string, string>> = machineTable({
   not_sealed: "This page isn't encrypted, so it can't take your password. Use the Mac, or open Cookrew over https.",
   no_account: 'Sign in on this Mac first.',
   locked: 'Unlock this Mac first.'
-}, hostPlatform())
+}
 
-/** A refusal in words a person can act on. */
-export const inviteRefusal = (reason: string, message?: string): string =>
-  REFUSALS[reason] ?? message ?? "That didn't work. Try again."
+/**
+ * A refusal in words a person can act on, naming the machine it is about. The
+ * desktop knows its own platform; a phone is told it by the pairing state.
+ */
+export function inviteRefusal(reason: string, message?: string, platform: string | undefined = hostPlatform()): string {
+  const sentence = REFUSALS[reason]
+  return sentence === undefined ? (message ?? "That didn't work. Try again.") : machineCopy(sentence, platform)
+}
 
 /**
  * Did the watch arrive? Counted, because a code also leaves the Mac by running out
