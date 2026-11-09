@@ -26,7 +26,7 @@ import path from 'node:path'
  * a stateless token cannot do for itself.
  */
 
-export type V2Scope = 'session' | 'call' | 'canvas' | 'grant' | 'watch-grant'
+export type V2Scope = 'session' | 'call' | 'canvas' | 'grant' | 'watch-grant' | 'machine-grant'
 
 export interface V2Claims {
   sub: string
@@ -185,6 +185,14 @@ export class V2Tokens {
     const exp = this.now() + GRANT_TTL_MS
     const jti = randomUUID()
     return { token: this.mint({ sub, dev, scope: 'watch-grant', exp, jti, jkt, sid }), exp, jti }
+  }
+
+  /** A MACHINE'S PASS into the account's other machines: its own scope, read by nothing older than it. */
+  mintMachineGrant(sub: string, dev: string, jkt: string, sid: string): Minted {
+    if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
+    const exp = this.now() + GRANT_TTL_MS
+    const jti = randomUUID()
+    return { token: this.mint({ sub, dev, scope: 'machine-grant', exp, jti, jkt, sid }), exp, jti }
   }
 
   mintGrant(sub: string, dev: string, jkt: string, sid: string): Minted {

@@ -371,7 +371,11 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
  * runs on a Mac, a PC or a Linux machine (shared/machine-words.ts), and one that
  * publishes no profile is a computer.
  */
-export function listedOnly(machine: Pick<MachineView, 'name' | 'os'>): string {
+export function listedOnly(machine: Pick<MachineView, 'name' | 'os'> & Partial<Pick<MachineView, 'detail' | 'agents' | 'waiting'>>): string {
   const word = machine.os ? machineWord(machine.os) : 'computer'
+  if (machine.detail === 'live' && machine.agents !== null && machine.agents !== undefined) {
+    const waiting = machine.waiting ? `, ${machine.waiting} need${machine.waiting === 1 ? 's' : ''} you` : ''
+    return `${machine.name} · ${machine.agents} agent${machine.agents === 1 ? '' : 's'}${waiting}. Work in it on that ${word} for now.`
+  }
   return `${machine.name} is listed, not readable from here: open it on that ${word}.`
 }

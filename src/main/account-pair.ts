@@ -43,6 +43,8 @@ export interface PairDoorDeps {
    * watch's pass is refused.
    */
   readonly watch?: { readonly enter: (deviceId: string) => string }
+  /** A machine of the account the owner forgot here: its machine pass is turned away (machine-keys.ts · RefusedMachines). */
+  readonly refusedMachine?: (deviceId: string) => boolean
   readonly now?: () => number
   readonly log?: (line: string) => void
 }
@@ -110,6 +112,9 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
     }
     const grant = await deps.grants(asking.grant)
     if (grant === null) return refuse(401, 'regrant', 'That pass from cookrew.dev is no longer good. Prove it is you again.')
+    if (grant.machine === true && deps.refusedMachine?.(asking.deviceId) === true) {
+      return refuse(403, 'refused', word('This Mac was told to forget that machine, and keeps it out.'))
+    }
     if (grant.username !== account.username) return refuse(403, 'refused', word('This Mac is on another account.'))
     if (grant.dev !== asking.deviceId || grant.jkt !== asking.jkt) {
       return refuse(401, 'regrant', 'That pass was issued to another device. Prove it is you again.')
@@ -127,8 +132,10 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
       minted = deps.admitted.admit({
         deviceId: asking.deviceId,
         ...(asking.name ? { name: asking.name } : {}),
-        via: 'account',
-        until: grant.exp
+        // Another machine of the account stays until it is revoked; a device, for its pass's twelve hours.
+        via: grant.machine === true ? 'machine' : 'account',
+        ...(grant.machine === true ? {} : { until: grant.exp }),
+        ...(grant.sid ? { sid: grant.sid } : {})
       })
     } catch {
       return refuse(503, 'unavailable', word('This Mac could not record the device. Try again.'))
@@ -140,7 +147,7 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
       deviceId: minted.device.deviceId,
       desktopId: account.deviceId,
       token: minted.token,
-      until: grant.exp,
+      until: grant.machine === true ? 0 : grant.exp,
       ...(minted.device.name ? { name: minted.device.name } : {})
     }
     return { status: 200, body }

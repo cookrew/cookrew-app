@@ -258,3 +258,22 @@ describe('the words', () => {
     expect(said.every((key) => key.startsWith('CHOSEN_PASSCODE_'))).toBe(true)
   })
 })
+
+describe('the account password at the lock proves this machine once (owner 2026-11-09: machines trust each other)', () => {
+  it('a password unlock hands the password to the machine’s one-time proof; a passcode never leaves', async () => {
+    const m = machine(await passwordAccount(), { fromTerminal: true })
+    await adopt(m)(PASSWORD)
+    const proved: string[] = []
+    const handlers = accountHandlers({ ...m.deps, onAccountPassword: (password) => proved.push(password) })
+    m.lock.lock()
+    expect(await (handlers['account:unlock'] as (p: string) => Promise<unknown>)(PASSWORD)).toMatchObject({ ok: true })
+    expect(proved).toEqual([PASSWORD])
+
+    const p = machine(await providerAccount(), { unlockBy: 'passcode', passwordless: true, unlock: unlockVerifierFor('a chosen one') })
+    const kept: string[] = []
+    const passcode = accountHandlers({ ...p.deps, onAccountPassword: (password) => kept.push(password) })
+    p.lock.lock()
+    expect(await (passcode['account:unlock'] as (x: string) => Promise<unknown>)('a chosen one')).toMatchObject({ ok: true })
+    expect(kept).toEqual([])
+  })
+})

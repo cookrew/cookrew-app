@@ -2,7 +2,7 @@ import { launchBoot } from './launch-settings-boot'
 import { app, BrowserWindow, dialog, ipcMain, MessageChannelMain, net, Notification, powerMonitor, powerSaveBlocker, safeStorage, shell, systemPreferences } from 'electron'
 import path from 'node:path'
 import { readTerminalSession } from './terminal-session'
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHash, randomUUID } from 'node:crypto'
@@ -69,7 +69,7 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
-import { registerZoomFleetIpc } from './zoom-fleet'
+import { registerZoomFleetIpc, type RemoteRead } from './zoom-fleet'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
@@ -157,7 +157,10 @@ import { AgentRegistry, type AgentRegistryUpsert } from './agent-registry'
 import { HARNESS_FACTS } from './route/setup'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
-import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin } from './account-v2'
+import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin, signWithDevice } from './account-v2'
+import { createMachineKeyStore, createRefusedMachines, enterMachines } from './machine-keys'
+import { parseAccountMachines } from '../shared/zoom-fleet'
+import { GRANT_PATHS } from '../shared/account-pair'
 import { relayHandle } from './legacy-identity'
 import { WorkspaceShots } from './workspace-shots'
 import { closeLane, landLane, listLanes, openLane, repoOf } from './lanes'
@@ -1327,6 +1330,90 @@ const admittedDevices = createAdmittedDeviceStore()
  * own challenge with the key the pass names (account-pair.ts). The verifier is
  * declared further down; nothing calls the door before the mobile server starts.
  */
+/**
+ * THE ACCOUNT'S MACHINES TRUST EACH OTHER (owner 2026-11-09, full control):
+ * this machine collects a key for every other one (machine-keys.ts), shortly
+ * after start and every ten minutes, and reads them with it.
+ */
+const machineKeys = createMachineKeyStore(path.join(homedir(), '.cookrew', 'machine-keys.json'))
+const MACHINE_KEYS_EVERY_MS = 10 * 60_000
+/** Machines of the account the owner forgot here: their passes are turned away at the door. */
+const refusedMachines = createRefusedMachines(path.join(homedir(), '.cookrew', 'machine-refused.json'))
+/** Present once cookrew.dev has taken this machine's one proof (registry issueMachineGrant). */
+const MACHINE_TRUSTED_FILE = path.join(homedir(), '.cookrew', 'machine-trusted')
+
+/**
+ * THIS MACHINE PROVES ITSELF ONCE, with the account password just typed at its
+ * lock (account-ipc.ts · onAccountPassword). Until then cookrew.dev hands it
+ * no machine pass: "desktop" is what a device says it is, and a device that got
+ * onto the account by a code or a provider has proved nothing (security review
+ * 2026-11-09). Sent once, never again after cookrew.dev has said yes.
+ */
+async function trustThisMachine(password: string): Promise<void> {
+  if (existsSync(MACHINE_TRUSTED_FILE)) return
+  const answer = await accounts.authed<{ grant?: unknown }>(GRANT_PATHS.machine, { method: 'POST', body: JSON.stringify({ password }) })
+  if (!answer.ok) return
+  writeFileSync(MACHINE_TRUSTED_FILE, `${new Date().toISOString()}\n`, { mode: 0o600 })
+  void collectMachineKeys().catch(() => undefined)
+}
+
+async function collectMachineKeys(): Promise<void> {
+  await enterMachines({
+    self: () => {
+      const account = accounts.account()
+      return account ? { deviceId: account.deviceId, name: account.name, jwk: account.publicKeyJwk } : null
+    },
+    desktops: async () => {
+      const answer = await accounts.authed<unknown>('/v2/me/desktops')
+      if (!answer.ok) return null
+      return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
+    },
+    grant: async () => {
+      // Not proved yet: nothing is asked until the account password has been typed here once.
+      if (!existsSync(MACHINE_TRUSTED_FILE)) return null
+      const sent = await accounts.authedResponse(GRANT_PATHS.machine, { method: 'POST', body: '{}' })
+      if (!sent.ok) return null
+      const body = (await sent.response.json().catch(() => null)) as { grant?: unknown; error?: unknown } | null
+      // cookrew.dev no longer counts this machine as proved (a new device id, a reset): prove it again at the next unlock.
+      if (sent.response.status === 401 && body?.error === 'proof_required') rmSync(MACHINE_TRUSTED_FILE, { force: true })
+      return sent.response.status === 201 && typeof body?.grant === 'string' ? body.grant : null
+    },
+    relay: async (desktopId, route, body) => {
+      const sent = await accounts.relayed(desktopId, route, { method: 'POST', body: JSON.stringify(body) })
+      if (!sent.ok) return null
+      return { status: sent.response.status, body: await sent.response.json().catch(() => null) }
+    },
+    sign: (message) => {
+      const account = accounts.account()
+      if (!account) throw new Error('no account')
+      return signWithDevice(account, message)
+    },
+    store: machineKeys,
+    log: (line) => console.error(`[cookrew] ${line}`)
+  })
+}
+
+/** Another machine's own answer, read with the key this machine holds for it. */
+async function readAccountMachine(machineId: string, route: RemoteRead): Promise<unknown | null> {
+  const key = machineKeys.token(machineId)
+  if (key === null) {
+    // No key yet (a machine added since the last round): ask for one, not on every read.
+    void collectMachineKeys().catch(() => undefined)
+    return null
+  }
+  const sent = await accounts.relayed(machineId, route, { headers: { authorization: `Bearer ${key}` } })
+  if (!sent.ok) return null
+  // That machine no longer takes this key (forgotten there, or its admission lost): drop it, so the next round asks again.
+  if (sent.response.status === 401) machineKeys.forget([machineId])
+  if (!sent.response.ok) return null
+  return sent.response.json().catch(() => null)
+}
+
+setTimeout(() => {
+  void collectMachineKeys().catch((error: unknown) => console.error('Collecting machine keys failed:', error))
+  setInterval(() => void collectMachineKeys().catch(() => undefined), MACHINE_KEYS_EVERY_MS).unref()
+}, 30_000).unref()
+
 const accountPairDoor = createAccountPairDoor({
   account: () => accounts.account(),
   grants: async (token) => (v2CallTokens === null ? null : v2CallTokens.grant(token)),
@@ -1334,6 +1421,7 @@ const accountPairDoor = createAccountPairDoor({
   platform: process.platform,
   // Read when a watch arrives, long after startup: watchPairing is declared further down.
   watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
+  refusedMachine: (deviceId) => refusedMachines.has(deviceId),
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
 
@@ -1709,6 +1797,8 @@ const v2CallTokens = RELAY_ORIGIN
       onRevoked: (revoked) => {
         // The watch let in by its pass goes with its device, as an admitted phone does.
         if (watchPairing.revoked(revoked)) console.error('Watch withdrawn: it was revoked at the registry')
+        // A machine revoked at the account: the key this one held for it goes too.
+        machineKeys.forget(revoked)
         for (const device of admittedDevices.prune(revoked)) {
           remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the
@@ -8388,6 +8478,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   accountDoor = registerAccountIpc((channel, handler) => ipcMain.handle(channel, ownerOnly(handler)), {
     accounts,
     lock: ownerLock,
+    onAccountPassword: (password) => void trustThisMachine(password).catch((error: unknown) => console.error('This machine could not prove itself to the account:', error)),
     requests,
     factors,
     envUsername: ENV_HANDLE || null,
@@ -8399,6 +8490,8 @@ function registerIpc(handlers: RestoreHandlers): void {
     admitted: {
       list: () => admittedDevices.list(),
       forget: (deviceId) => {
+        // A machine of the account would come back with its pass: forgotten here, it stays out.
+        if (admittedDevices.list().some((device) => device.deviceId === deviceId && device.via === 'machine')) refusedMachines.add(deviceId)
         const forgotten = admittedDevices.forget(deviceId)
         remoteDesk.forgetDevice(`device:${deviceId}`)
         return forgotten
@@ -9092,7 +9185,8 @@ function registerIpc(handlers: RestoreHandlers): void {
   registerZoomFleetIpc(ipcMain.handle.bind(ipcMain), {
     service: localFleetService,
     authed: (pathname) => accounts.authed<unknown>(pathname),
-    deviceId: () => accounts.account()?.deviceId ?? null
+    deviceId: () => accounts.account()?.deviceId ?? null,
+    readOf: readAccountMachine
   })
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).

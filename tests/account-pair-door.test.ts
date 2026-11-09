@@ -213,6 +213,43 @@ describe('the account pair door', () => {
     expect((await d.begin({ body: asking(mine, grant), bridged: null })).body).toMatchObject({ outcome: 'regrant' })
   })
 
+  describe('a machine’s pass (owner 2026-11-09: machines on the account trust each other, full control)', () => {
+    const machineGrant = (device: Phone): string => tokens.mintMachineGrant('anvztor', device.id, jwkThumbprint(device.jwk) as string, 'sitting-1').token
+
+    it('admits the other machine as a device of this one, with no end but its revocation', async () => {
+      const d = door()
+      const grant = machineGrant(mine)
+      const challenge = await challengeOf(d, mine, grant)
+      const sig = signAs(mine, pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: mine.id }))
+      const out = await d.finish({ body: { ...asking(mine, grant), challengeId: challenge.challengeId, sig }, bridged: null })
+      expect(out.status).toBe(200)
+      expect(out.body).toMatchObject({ ok: true, outcome: 'admitted', until: 0 })
+      expect(admitted.list()).toEqual([expect.objectContaining({ deviceId: mine.id, via: 'machine' })])
+      expect(admitted.list()[0].until).toBeUndefined()
+      // Revoked at the registry, it goes like any device.
+      expect(admitted.prune([mine.id]).map((x) => x.deviceId)).toEqual([mine.id])
+    })
+
+    it('a machine forgotten here is turned away at the door, however good its pass', async () => {
+      const refused = new Set([mine.id])
+      const d = door({ refusedMachine: (id) => refused.has(id) })
+      const out = await d.begin({ body: asking(mine, machineGrant(mine)), bridged: null })
+      expect(out.status).toBe(403)
+      expect(admitted.list()).toEqual([])
+    })
+
+    it('ends with the sign-in it came from: “Not me” reaches an admitted machine too', async () => {
+      const d = door()
+      const grant = machineGrant(mine)
+      const challenge = await challengeOf(d, mine, grant)
+      const sig = signAs(mine, pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: mine.id }))
+      await d.finish({ body: { ...asking(mine, grant), challengeId: challenge.challengeId, sig }, bridged: null })
+      expect(admitted.list()[0]).toMatchObject({ sid: 'sitting-1' })
+      expect(admitted.prune(['sitting-1']).map((x) => x.deviceId)).toEqual([mine.id])
+      expect(admitted.list()).toEqual([])
+    })
+  })
+
   describe('a watch’s pass (owner 2026-11-09: a watch pairs once, then every machine)', () => {
     const watchGrant = (device: Phone): string => tokens.mintWatchGrant('anvztor', device.id, jwkThumbprint(device.jwk) as string, 'sitting-1').token
 

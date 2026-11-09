@@ -147,6 +147,28 @@ const senderOf = (event: unknown): FleetSender | null => {
 export interface ZoomFleetIpcDeps extends AccountMachinesDeps {
   /** This desktop's fleet service (mobile-server.ts · localFleetService); null before the companion starts. */
   service: () => FleetService | null
+  /**
+   * Another machine of the account, read with the key this machine holds for it
+   * (machine-keys.ts): its fleet or its gauges, as it answers them; null without
+   * a key or an answer.
+   */
+  readOf?: (machineId: string, route: RemoteRead) => Promise<unknown | null>
+}
+
+/** What may be read off another machine: its own two answers, nothing else. */
+export type RemoteRead = 'api/fleet' | 'api/fleet/gauges'
+
+const MACHINE_ID = /^[0-9a-f-]{36}$/i
+
+/** A read of another machine, or null for an id that is not one. */
+export async function readMachine(deps: Pick<ZoomFleetIpcDeps, 'readOf'>, machineId: unknown, route: RemoteRead): Promise<unknown | null> {
+  if (typeof machineId !== 'string' || !MACHINE_ID.test(machineId) || !deps.readOf) return null
+  try {
+    return await deps.readOf(machineId, route)
+  } catch (error) {
+    console.error('Another machine could not be read:', error)
+    return null
+  }
 }
 
 export function registerZoomFleetIpc(handle: Handle, deps: ZoomFleetIpcDeps): FleetHolds {
@@ -160,6 +182,8 @@ export function registerZoomFleetIpc(handle: Handle, deps: ZoomFleetIpcDeps): Fl
     return sender ? holds.unsubscribe(sender) : false
   })
   handle('zoom-fleet:machines', () => accountMachines(deps))
+  handle('zoom-fleet:fleet-of', (_event, machineId) => readMachine(deps, machineId, 'api/fleet'))
+  handle('zoom-fleet:gauges-of', (_event, machineId) => readMachine(deps, machineId, 'api/fleet/gauges'))
   handle('zoom-fleet:gauges', () =>
     sharedGaugeWatch()
       .read()
