@@ -191,7 +191,8 @@ async function renewSession(ctx: V2Context): Promise<void> {
     })
     return
   }
-  const session = v2.accounts.startSession(found.username, deviceId, { signedInAt: live.signedInAt ?? v2.now() })
+  // The same sign-in, continued: its clock and its sitting carry over.
+  const session = v2.accounts.startSession(found.username, deviceId, { signedInAt: live.signedInAt ?? v2.now(), sitting: live.sitting ?? live.jti })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return

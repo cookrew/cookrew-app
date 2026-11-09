@@ -33,8 +33,8 @@ import { jwkThumbprint } from '../../src/shared/jwk-thumbprint'
  *   POST /v2/me/device-grant          { password } | { credential } | {}
  *                                     → 201 { grant, exp, deviceId }
  *
- * `{}` is accepted only when this sitting verified with the password or a
- * passkey within the last five minutes. Three wrong proofs rest the account's
+ * Every pass takes a proof made at that moment: a password typed or a
+ * passkey touched — never a recent verification alone. Three wrong proofs rest the account's
  * grants for a minute, like the remote unlock.
  */
 
@@ -165,13 +165,18 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
         : said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
     }
     by = 'password'
-  } else if (!freshlyVerified(ctx.v2.accounts.session(account.username, claims.jti), ctx.v2.now(), ['password', 'passkey'], ctx.v2.freshWindowMs)) {
+  } else {
+    // ALWAYS A PROOF MADE NOW. A session that verified a minute ago is not
+    // asked again elsewhere, but a pass for every machine is: every relayed
+    // machine page shares this origin, and one of them must not be able to
+    // take a pass without the person touching a passkey or typing (review, 11-09).
     return said(ctx, 401, 'proof_required', SAID.proof)
   }
 
   rests.delete(key)
-  if (by !== null) ctx.v2.accounts.markVerified(account.username, claims.jti, by)
-  const minted = ctx.v2.tokens.mintGrant(account.username, device.id, jkt, claims.jti)
+  ctx.v2.accounts.markVerified(account.username, claims.jti, by)
+  const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
+  const minted = ctx.v2.tokens.mintGrant(account.username, device.id, jkt, sitting)
   ctx.response.setHeader('cache-control', 'private, no-store')
   v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
 }

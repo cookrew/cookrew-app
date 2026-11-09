@@ -139,6 +139,20 @@ export interface V2Session extends SessionAge {
   jti: string
   dev: string
   issuedAt: number
+  /**
+   * THE SIGN-IN this session continues: its own jti at a sign-in, carried
+   * across renewals. A device pass names it (v2-device-grant.ts), so ending
+   * the sign-in — sign-out, a password change, "Not me", revoking the device —
+   * ends every pass minted under it, renewed or not.
+   */
+  sitting?: string
+}
+
+/** The ids a door must refuse once these sessions end: each jti and its sign-in. */
+const endedIds = (sessions: readonly V2Session[], kept: readonly V2Session[] = []): string[] => {
+  const live = new Set(kept.map((s) => s.sitting ?? s.jti))
+  const ids = sessions.flatMap((s) => [s.jti, ...(s.sitting !== undefined && !live.has(s.sitting) ? [s.sitting] : [])])
+  return [...new Set(ids)]
 }
 
 /**
@@ -756,23 +770,28 @@ export class V2Accounts {
   startSession(
     username: string,
     deviceId: string,
-    age: { signedInAt?: number; verifiedBy?: VerifiedBy } = {}
+    age: { signedInAt?: number; verifiedBy?: VerifiedBy; sitting?: string } = {}
   ): V2Session | null {
     const account = this.get(username)
     if (!account || !account.devices.some((d) => d.id === deviceId)) return null
     const at = this.now()
+    const jti = randomUUID()
     const session: V2Session = {
-      jti: randomUUID(),
+      jti,
       dev: deviceId,
       issuedAt: at,
+      sitting: age.sitting ?? jti,
       signedInAt: age.signedInAt ?? at,
       lastUsedAt: at,
       ...(age.verifiedBy === undefined ? {} : { verifiedAt: at, verifiedBy: age.verifiedBy })
     }
     // Bounded: the oldest goes so a long-lived account cannot grow a list
     // nobody reads into a file nobody can load.
-    const sessions = [...account.sessions, session].slice(-SESSIONS_MAX)
-    this.replace({ ...account, sessions })
+    const all = [...account.sessions, session]
+    const sessions = all.slice(-SESSIONS_MAX)
+    // Pushed out by the cap is ended too: what was minted under it must not outlive it.
+    const evicted = all.slice(0, Math.max(0, all.length - SESSIONS_MAX))
+    this.replace(evicted.length === 0 ? { ...account, sessions } : this.withRevoked({ ...account, sessions }, endedIds(evicted, sessions)))
     return session
   }
 
@@ -822,7 +841,9 @@ export class V2Accounts {
   closeSession(username: string, jti: string): void {
     const account = this.get(username)
     if (!account) return
-    this.replace(this.withRevoked({ ...account, sessions: account.sessions.filter((s) => s.jti !== jti) }, [jti]))
+    const ending = account.sessions.filter((s) => s.jti === jti)
+    const ids = ending.length === 0 ? [jti] : endedIds(ending)
+    this.replace(this.withRevoked({ ...account, sessions: account.sessions.filter((s) => s.jti !== jti) }, ids))
   }
 
   /**
@@ -912,7 +933,7 @@ export class V2Accounts {
     if (account.devices.length <= 1) return { ok: false, reason: 'last_device' }
     // The device AND every sitting it opened: a door checking offline sees
     // both in the published list, so neither outlives the revocation.
-    const ended = account.sessions.filter((s) => s.dev === deviceId).map((s) => s.jti)
+    const ended = endedIds(account.sessions.filter((s) => s.dev === deviceId))
     this.replace(
       this.withRevoked(
         {
@@ -1187,7 +1208,10 @@ export class V2Accounts {
   }
 
   private otherSessions(account: V2Account, keepJti?: string): string[] {
-    return account.sessions.filter((s) => s.jti !== keepJti).map((s) => s.jti)
+    return endedIds(
+      account.sessions.filter((s) => s.jti !== keepJti),
+      account.sessions.filter((s) => s.jti === keepJti)
+    )
   }
   private keptSessions(account: V2Account, keepJti?: string): V2Session[] {
     return account.sessions.filter((s) => s.jti === keepJti)

@@ -75,13 +75,26 @@ describe('POST /v2/me/device-grant', () => {
     expect((await ask(GET_FLAGS_VERIFIED)).status).toBe(201)
   })
 
-  it('takes a password or passkey verification made in the last five minutes, and nothing older or weaker', async () => {
-    const { username, browser } = await fresh()
-    // Signed in by passkey just now (grant-world): fresh.
-    expect((await browser.registry.post(GRANT_PATHS.grant, {})).status).toBe(201)
-    const jti = world.v2.accounts.get(username)!.sessions.at(-1)!.jti
-    world.v2.accounts.markVerified(username, jti, 'provider')
+  it('never mints a pass on a recent verification alone: a proof made now, every time', async () => {
+    const { browser } = await fresh()
+    // Signed in by passkey just now (grant-world), and still asked.
     expect((await browser.registry.post(GRANT_PATHS.grant, {})).status).toBe(401)
+  })
+
+  it('a pass names the sign-in, not the session: it survives a renewal and dies when the sign-in is ended after it', async () => {
+    const { username, browser } = await fresh()
+    const owner = await world.browser(username)
+    const out = await browser.registry.post(GRANT_PATHS.grant, { password: PASSWORD })
+    const sid = v2GrantClaimsFor((out.body as { grant: string }).grant, Date.now())!.sid
+    const before = world.v2.accounts.get(username)!.sessions.find((s) => s.sitting === sid)!
+    // The device renews on its key: a new session, the same sign-in.
+    const renewed = world.v2.accounts.startSession(username, before.dev, { signedInAt: before.signedInAt, sitting: sid })!
+    world.v2.accounts.closeOtherSessionsForDevice(username, before.dev, renewed.jti)
+    expect(world.v2.accounts.revokedIds()).not.toContain(sid)
+    // The owner changes the password from another device: every other sitting ends.
+    const ownerJti = world.v2.accounts.get(username)!.sessions.find((s) => s.dev === owner.device.id)!.jti
+    expect((await world.v2.accounts.changePassword(username, PASSWORD, 'an entirely new password', ownerJti)).ok).toBe(true)
+    expect(world.v2.accounts.revokedIds()).toContain(sid)
   })
 
   it('a provider-only account with no passkey is told to set a password first', async () => {
