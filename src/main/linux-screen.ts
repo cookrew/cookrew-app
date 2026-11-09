@@ -1,10 +1,12 @@
 import type { UseTarget } from '../shared/use-url'
 import { useUrl } from '../shared/use-url'
-import type { RemoteState } from '../shared/remote-access'
+import { LINUX_WINDOWS_NEED_XDOTOOL, type RemoteState } from '../shared/remote-access'
 import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
 import { NO_WHEEL, xdotoolCalls, type DisplayArea, type LinuxHand, type WheelCarry } from './linux-input'
-import { DeviceBlockedError, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
-import { THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
+import { listX11Windows, type X11Deps, type X11Window } from './linux-windows'
+import { DeviceBlockedError, withDeadline, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
+import { GRAB_DEADLINE_MS, MAX_WINDOWS, THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
+import { windowAppName } from '../shared/use-url'
 import type { UseSourceProvider } from './use-source-service'
 import type { Gesture, ScreenPoints } from './vphone-input'
 
@@ -13,7 +15,8 @@ import type { Gesture, ScreenPoints } from './vphone-input'
  *
  * `screen://main` and `screen://<n>` work on X11, a frame at a time: each is
  * one desktopCapturer call, the same polling the Mac does with screencapture.
- * Windows and regions do not exist here, and each refusal is a sentence.
+ * One window is its own device (linux-window-device.ts); a region is refused
+ * in a sentence.
  *
  * Input goes the way a Mac's does: the desk decides (the machine switch, the
  * card's grant, a served workspace, Stop), then the hand (linux-input.ts) sends
@@ -35,8 +38,9 @@ export interface LinuxEnv {
 export const LINUX_WAYLAND =
   'This Linux session runs Wayland, and Cookrew can only read the screen on X11 — log in to an X11 session to share it'
 export const LINUX_NO_DISPLAY = 'There is no X display here, so there is no screen to show'
-export const LINUX_NO_WINDOW = 'Picking one window works on macOS only for now — on Linux, share the entire screen'
-export const LINUX_NO_REGION = 'A region of the screen works on macOS only for now — on Linux, share the entire screen'
+export const LINUX_NO_WINDOW = 'This card shows a whole display: pick the window from the Windows tab instead'
+export const LINUX_NO_REGION = 'A region of the screen cannot be shown on Linux yet: share the entire screen, or one window'
+export const LINUX_NO_OTHER_WINDOWS = 'No other app has a window open on this machine yet — open one, and it shows here'
 
 export function linuxScreenRefusal(env: LinuxEnv): string | null {
   if (env.XDG_SESSION_TYPE === 'wayland' || env.WAYLAND_DISPLAY) return LINUX_WAYLAND
@@ -154,6 +158,39 @@ export interface LinuxSourceDeps {
   blocked(): Promise<RemoteState | null>
   grab: SourceGrab
   primaryDisplayId(): string | null
+  /** How to ask X about windows; null when xdotool is not installed. */
+  x11(): X11Deps | null
+  /** A picture of each of these parts of the X screen, as data: URLs, null where none could be taken. */
+  cropThumbs(rects: readonly DisplayArea[]): Promise<ReadonlyArray<string | null>>
+}
+
+const windowRow = (window: X11Window, thumb: string | null): UseSource => ({
+  id: `window:${window.id}`,
+  kind: 'window',
+  title: window.title || window.app || 'Window',
+  app: window.app || null,
+  address: useUrl({ kind: 'window', name: windowAppName(window.app), detail: null, roi: null, windowId: window.id }),
+  thumb,
+  icon: null,
+  width: window.width,
+  height: window.height
+})
+
+/** The Windows tab: rows, or the sentence that says why there are none. Never takes the screens down with it. */
+async function windowRows(deps: LinuxSourceDeps): Promise<{ readonly windows: UseSource[]; readonly windowsNote?: string }> {
+  const x = deps.x11()
+  if (!x) return { windows: [], windowsNote: LINUX_WINDOWS_NEED_XDOTOOL }
+  let windows: X11Window[]
+  try {
+    // A wedged X server must not hold the sheet: the screens answer either way.
+    windows = (await withDeadline(listX11Windows(x), GRAB_DEADLINE_MS, 'the X server')).slice(0, MAX_WINDOWS)
+  } catch (error) {
+    return { windows: [], windowsNote: `The windows could not be listed: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  if (windows.length === 0) return { windows: [], windowsNote: LINUX_NO_OTHER_WINDOWS }
+  // The rows stand without their pictures.
+  const thumbs = await deps.cropThumbs(windows.map((w) => ({ x: w.x, y: w.y, width: w.width, height: w.height }))).catch(() => windows.map(() => null))
+  return { windows: windows.map((w, i) => windowRow(w, thumbs[i] ?? null)) }
 }
 
 const screenRow = (grabbed: GrabbedSource, name: string): UseSource => ({
@@ -176,11 +213,11 @@ export function linuxSources(deps: LinuxSourceDeps): UseSourceProvider {
       try {
         const blocked = await deps.blocked()
         if (blocked) return blockedSourceList(blocked)
-        const displays = (await deps.grab(['screen'], THUMB_SIZE)).filter((g) => g.id.startsWith('screen:'))
+        const [grabbed, rows] = await Promise.all([deps.grab(['screen'], THUMB_SIZE), windowRows(deps)])
+        const displays = grabbed.filter((g) => g.id.startsWith('screen:'))
         const main = pickDisplay(displays, 'main', deps.primaryDisplayId())
         return readySourceList({
-          windows: [],
-          windowsNote: LINUX_NO_WINDOW,
+          ...rows,
           screens: [...(main ? [screenRow(main, 'main')] : []), ...displays.flatMap((d, i) => (d === main ? [] : [screenRow(d, String(i + 1))]))]
         })
       } catch (error) {
