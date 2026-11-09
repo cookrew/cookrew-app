@@ -53,7 +53,9 @@ export function LockScreen({
   const [rescue, setRescue] = useState<string | null>(null)
   const [rescueError, setRescueError] = useState<string | null>(null)
   const passcode = status.unlockBy === 'passcode'
-  const word = passcode ? 'passcode' : 'password'
+  // Until the account password is first typed here it folds the passcode in
+  // (owner, 2026-11-09): both open it, so both are named.
+  const word = passcode ? (status.passwordless ? 'passcode' : 'passcode or account password') : 'password'
 
   useEffect(() => {
     field.current?.focus()

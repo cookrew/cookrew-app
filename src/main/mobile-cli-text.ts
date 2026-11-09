@@ -43,8 +43,9 @@ const accountLines = (pairing: PairingHandout): string[] => {
     `  With your account${handle ? ` (@${handle})` : ''}, from any network`,
     `    ${address}`,
     `    Open it on a phone or browser signed in to cookrew.dev${handle ? ` as @${handle}` : ''},`,
-    '    then enter with a passkey or the account password. It remembers that',
-    '    device, so later it opens with one tap — or tap OPEN on cookrew.dev/me.',
+    '    then enter with a passkey or the account password. For twelve hours',
+    '    after that, every machine of the account opens with no question —',
+    '    or tap OPEN on cookrew.dev/me.',
     '',
     '  Without an account: `cookrew mobile --token` prints links that carry',
     '  this machine’s pairing token. Treat them like a password.'
