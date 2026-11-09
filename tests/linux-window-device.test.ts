@@ -3,7 +3,7 @@
 // cropping the screen where the window is, driven at ratios of that picture laid
 // on wherever the window is now, never outside it; gone and hidden said like a Mac.
 import { describe, expect, it, vi } from 'vitest'
-import { LinuxWindowDevice, type LinuxWindowDeps } from '../src/main/linux-window-device'
+import { LinuxWindowDevice, windowStack, type LinuxWindowDeps } from '../src/main/linux-window-device'
 import { linuxSources, type LinuxSourceDeps } from '../src/main/linux-screen'
 import type { XdoCall } from '../src/main/linux-input'
 import type { X11Deps } from '../src/main/linux-windows'
@@ -13,9 +13,13 @@ import { parseUseUrl } from '../src/shared/use-url'
 
 const term = { id: 4194316, title: 'term one', x: 50, y: 60, width: 400, height: 200, pid: 4680, cls: 'XTerm' }
 
-function fakeX(windows: Array<typeof term & { hidden?: boolean }>): X11Deps {
+function fakeX(windows: Array<typeof term & { hidden?: boolean }>, wm: { active: number | null } | null = null): X11Deps {
   return {
     async xdotool(argv) {
+      if (argv[0] === 'getactivewindow') {
+        if (!wm || wm.active === null) throw new Error('xdotool: Your windowmanager claims not to support _NET_ACTIVE_WINDOW')
+        return `${wm.active}\n`
+      }
       if (argv[0] === 'search') {
         const shown = windows.filter((w) => !w.hidden)
         if (shown.length === 0) throw Object.assign(new Error('exit 1'), { code: 1, stderr: '' })
@@ -44,16 +48,21 @@ const gate = (over: Partial<RemoteGate> = {}): RemoteGate => ({
   ...over
 })
 
-function rig(windows: Array<typeof term & { hidden?: boolean }>, over: Partial<LinuxWindowDeps> = {}, url = `window://XTerm?id=${term.id}`) {
+function rig(windows: Array<typeof term & { hidden?: boolean }>, over: Partial<LinuxWindowDeps> = {}, url = `window://XTerm?id=${term.id}`, wm: { active: number | null } | null = null) {
   const state = { windows }
   const send = vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined)
+  // Cookrew raised this window last: with no window manager, it is in front.
+  const stack = windowStack()
+  stack.raised(term.id)
   // The crop is half the window's size, as a fitted picture would be.
   const crop = vi.fn(async (rect: { x: number; y: number; width: number; height: number }) => ({ jpeg: Buffer.from('win'), width: rect.width / 2, height: rect.height / 2, rect }))
-  const deps: LinuxWindowDeps = { remote: gate(), hand: { refusal: () => null, send }, x11: () => fakeX(state.windows), crop, now: () => 0, ...over }
+  const hand = { refusal: () => null, send, exclusive: <T,>(work: (run: typeof send) => Promise<T>) => work(send) }
+  const deps: LinuxWindowDeps = { remote: gate(), hand, stack, screen: () => ({ x: 0, y: 0, width: 1920, height: 1080 }), x11: () => fakeX(state.windows, wm), crop, now: () => 0, ...over }
   return { device: new LinuxWindowDevice(parseUseUrl(url)!, deps), send, crop, state }
 }
 
-const argvs = (send: ReturnType<typeof vi.fn>, n = 0): string[][] => (send.mock.calls[n][0] as XdoCall[]).map((call) => [...call.argv])
+/** Every argv the hand ran, in order, across its runs. */
+const argvs = (send: ReturnType<typeof vi.fn>): string[][] => send.mock.calls.flatMap((call) => (call[0] as XdoCall[]).map((c) => [...c.argv]))
 
 describe('LinuxWindowDevice', () => {
   it('pictures the window by cropping the screen where it is, sized as the crop came back', async () => {
@@ -74,6 +83,60 @@ describe('LinuxWindowDevice', () => {
     expect(calls[1]).toEqual(['windowraise', String(term.id), 'windowfocus', String(term.id), 'sleep', '0.05'])
     expect(calls[2]).toEqual(['mousemove', String(500 + 200), String(300 + 100), 'click', '1'])
     expect((send.mock.calls[0][0] as XdoCall[])[0].optional).toBe(true)
+  })
+
+  it('the first press on a window that was not in front only brings it forward, and asks again', async () => {
+    const stack = windowStack()
+    const { device, send } = rig([term], { stack })
+    await device.capture()
+    await expect(device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/Brought the 'XTerm' window to the front: look at it again/)
+    expect(argvs(send).map((a) => a[0])).toEqual(['windowactivate', 'windowraise'])
+    await device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })
+    expect(argvs(send).at(-1)?.[0]).toBe('mousemove')
+  })
+
+  it('with a window manager, in front is the active window; one that will not activate is not pressed', async () => {
+    const wm = { active: 999 as number | null }
+    const { device, send } = rig([term], {}, `window://XTerm?id=${term.id}`, wm)
+    await device.capture()
+    await expect(device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/would not bring/)
+    expect(argvs(send).some((a) => a[0] === 'mousemove')).toBe(false)
+    wm.active = term.id
+    await device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })
+    expect(argvs(send).at(-1)?.[0]).toBe('mousemove')
+  })
+
+  it('the same id on another app (X reuses ids) is the bound window gone, never typed into', async () => {
+    let clock = 0
+    const { device, send, state } = rig([term], { now: () => (clock += 2000) })
+    await device.capture()
+    state.windows = [{ ...term, title: 'bank', pid: 5555, cls: 'Firefox' }]
+    await expect(device.perform({ method: 'input.type', params: { text: 'secret' } })).rejects.toThrow(/has closed/)
+    expect(argvs(send).some((a) => a[0] === 'type')).toBe(false)
+  })
+
+  it('the same app relaunched under the old id (another process) is gone too', async () => {
+    let clock = 0
+    const { device, state } = rig([term], { now: () => (clock += 2000) })
+    await device.capture()
+    state.windows = [{ ...term, pid: 9999 }]
+    await expect(device.capture()).rejects.toThrow(/has closed/)
+  })
+
+  it('a window that changed size since the picture is not pressed until the next picture', async () => {
+    const { device, send, state } = rig([term])
+    await device.capture()
+    state.windows = [{ ...term, width: 200 }]
+    await expect(device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/changed size/)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('a window moved off the screen since the picture is not pressed', async () => {
+    const { device, send, state } = rig([term])
+    await device.capture()
+    state.windows = [{ ...term, x: 1800 }]
+    await expect(device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/off the screen/)
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('input never lands outside the window: a point off the picture stops at its edge', async () => {
@@ -215,5 +278,21 @@ describe('linuxSources: the Windows tab on X11', () => {
     expect(list.state).toBe('ready')
     expect(list.windowsNote).toMatch(/open display/)
     expect(list.screens).toHaveLength(1)
+  })
+})
+
+describe('in front, with a window manager', () => {
+  it('active but not the one Cookrew raised last (a keyless window raised over it): the first press only brings it forward', async () => {
+    const send = vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined)
+    const stack = windowStack()
+    stack.raised(12345)
+    const device = new LinuxWindowDevice(parseUseUrl(`window://XTerm?id=${term.id}`)!, {
+      remote: gate(), hand: { refusal: () => null, send, exclusive: (work) => work(send) }, stack, screen: () => null,
+      x11: () => fakeX([term], { active: term.id }),
+      crop: async (rect) => ({ jpeg: Buffer.from('w'), width: rect.width, height: rect.height, rect }), now: () => 0
+    })
+    await device.capture()
+    await expect(device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/to the front/)
+    await device.perform({ method: 'input.tap', params: { x: 1, y: 1 } })
   })
 })

@@ -4,8 +4,8 @@ import { LINUX_WINDOWS_NEED_XDOTOOL, type RemoteState } from '../shared/remote-a
 import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
 import { NO_WHEEL, xdotoolCalls, type DisplayArea, type LinuxHand, type WheelCarry } from './linux-input'
 import { listX11Windows, type X11Deps, type X11Window } from './linux-windows'
-import { DeviceBlockedError, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
-import { MAX_WINDOWS, THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
+import { DeviceBlockedError, withDeadline, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
+import { GRAB_DEADLINE_MS, MAX_WINDOWS, THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
 import { windowAppName } from '../shared/use-url'
 import type { UseSourceProvider } from './use-source-service'
 import type { Gesture, ScreenPoints } from './vphone-input'
@@ -182,7 +182,8 @@ async function windowRows(deps: LinuxSourceDeps): Promise<{ readonly windows: Us
   if (!x) return { windows: [], windowsNote: LINUX_WINDOWS_NEED_XDOTOOL }
   let windows: X11Window[]
   try {
-    windows = (await listX11Windows(x)).slice(0, MAX_WINDOWS)
+    // A wedged X server must not hold the sheet: the screens answer either way.
+    windows = (await withDeadline(listX11Windows(x), GRAB_DEADLINE_MS, 'the X server')).slice(0, MAX_WINDOWS)
   } catch (error) {
     return { windows: [], windowsNote: `The windows could not be listed: ${error instanceof Error ? error.message : String(error)}` }
   }

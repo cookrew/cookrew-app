@@ -119,6 +119,15 @@ export async function captureRects(rects: readonly DisplayArea[], maxSide: numbe
   })
 }
 
+/** The X screen's extent in pixels: every display's place, together. Null with none. */
+export function screenExtent(): DisplayArea | null {
+  const areas = screen.getAllDisplays().map(physicalArea)
+  if (areas.length === 0) return null
+  const left = Math.min(...areas.map((a) => a.x))
+  const top = Math.min(...areas.map((a) => a.y))
+  return { x: left, y: top, width: Math.max(...areas.map((a) => a.x + a.width)) - left, height: Math.max(...areas.map((a) => a.y + a.height)) - top }
+}
+
 /** The picker's window pictures, as data: URLs. */
 export async function windowThumbs(rects: readonly DisplayArea[]): Promise<Array<string | null>> {
   const pictures = await withDeadline(captureRects(rects, Math.max(THUMB_SIZE.width, THUMB_SIZE.height)), GRAB_DEADLINE_MS, 'the screen capturer')

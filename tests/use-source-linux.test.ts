@@ -27,7 +27,10 @@ const gate = (blocked: RemoteState | null = null): RemoteGate => ({
   admit: () => null,
   enter: () => () => undefined
 })
-const fakeHand = (refusal: string | null = null) => ({ refusal: () => refusal, send: vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined) })
+const fakeHand = (refusal: string | null = null) => {
+  const send = vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined)
+  return { refusal: () => refusal, send, exclusive: <T,>(work: (run: typeof send) => Promise<T>) => work(send) }
+}
 const deps = (over: Partial<LinuxScreenDeps> = {}): LinuxScreenDeps => ({
   remote: gate(),
   frames: vi.fn(async () => frames),

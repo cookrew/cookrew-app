@@ -211,6 +211,12 @@ export interface LinuxHand {
    * calls, and Stop or the switch going off must cut it, not wait for it.
    */
   send(calls: readonly XdoCall[], stopped?: () => string | null): Promise<void>
+  /**
+   * One turn of the queue held for a gesture that must read X between its calls
+   * (a window card: where the window is, whether it is in front). Nothing from
+   * another card runs inside it, so what it read still holds when it presses.
+   */
+  exclusive<T>(work: (run: (calls: readonly XdoCall[], stopped?: () => string | null) => Promise<void>) => Promise<T>): Promise<T>
 }
 
 /** The argv as a log may show it: typed text becomes its length. */
@@ -245,13 +251,18 @@ export function createLinuxHand(deps: LinuxHandDeps): LinuxHand {
       }
     }
   }
+  const exclusive = <T>(work: (inTurn: (calls: readonly XdoCall[], stopped?: () => string | null) => Promise<void>) => Promise<T>): Promise<T> => {
+    const turn = queue.then(() => work((calls, stopped = () => null) => run(calls, stopped)))
+    queue = turn.then(
+      () => undefined,
+      () => undefined
+    )
+    return turn
+  }
   return {
     refusal,
-    send(calls, stopped = () => null) {
-      const turn = queue.then(() => run(calls, stopped))
-      queue = turn.catch(() => undefined)
-      return turn
-    }
+    send: (calls, stopped = () => null) => exclusive((inTurn) => inTurn(calls, stopped)),
+    exclusive
   }
 }
 

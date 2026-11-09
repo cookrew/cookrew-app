@@ -120,7 +120,7 @@ function noChromeBox() {
             primaryDisplayId: () => '1',
             frames: async () => [{ displayId: '1', jpeg: jpeg(1600, 1040), width: 1600, height: 1040 }],
             area: () => ({ x: 0, y: 0, width: 1600, height: 1040 }),
-            hand: { refusal: () => null, send: async () => undefined }
+            hand: { refusal: () => null, send: async () => undefined, exclusive: (work) => work(async () => undefined) }
           })
         })
     }

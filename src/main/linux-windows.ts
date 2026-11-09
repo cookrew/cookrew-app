@@ -56,8 +56,8 @@ export type X11Lookup = { readonly state: 'shown'; readonly window: X11Window } 
 const MIN_SIDE = 16
 /** Facts are read a few windows at a time: each is a process or three. */
 const AT_ONCE = 6
-/** The most windows looked at: a phone picks from a short list, and each costs processes. */
-const MAX_LOOKED_AT = 64
+/** The most shown windows read: each costs processes. Helpers are dropped after, so this is generous. */
+const MAX_LOOKED_AT = 160
 const FOCUS_TIMEOUT_MS = 3000
 
 export function parseIds(stdout: string): number[] {
@@ -109,14 +109,15 @@ async function appOf(id: number, pid: number | null, title: string, deps: X11Dep
   return cls ?? (pid !== null ? deps.comm(pid) : null) ?? title
 }
 
-async function factsOf(id: number, deps: X11Deps): Promise<X11Window> {
+/** `known`: the app read before, so a lookup each second need not ask xprop again. */
+async function factsOf(id: number, deps: X11Deps, known?: string): Promise<X11Window> {
   const place = parseGeometry(await deps.xdotool(['getwindowname', String(id), 'getwindowgeometry', '--shell', String(id)]))
   if (!place) throw new Error(`could not read where window ${id} is`)
   const pid = await deps
     .xdotool(['getwindowpid', String(id)])
     .then((out) => parseIds(out)[0] ?? null)
     .catch(() => null)
-  return { id, title: place.title, app: await appOf(id, pid, place.title, deps), pid, x: place.x, y: place.y, width: place.width, height: place.height }
+  return { id, title: place.title, app: known ?? (await appOf(id, pid, place.title, deps)), pid, x: place.x, y: place.y, width: place.width, height: place.height }
 }
 
 async function inTurns<T, R>(items: readonly T[], each: (item: T) => Promise<R>): Promise<R[]> {
@@ -132,22 +133,34 @@ const contains = (outer: X11Window, inner: X11Window): boolean =>
 export async function listX11Windows(deps: X11Deps): Promise<X11Window[]> {
   const ids = (await shownIds(deps)).slice(0, MAX_LOOKED_AT)
   // One that closed between the search and its facts is not listed.
-  const read = await inTurns(ids, (id) => factsOf(id, deps).catch(() => null))
-  const windows = read.filter((w): w is X11Window => w !== null && w.pid !== deps.selfPid && w.width >= MIN_SIDE && w.height >= MIN_SIDE)
+  const read = (await inTurns(ids, (id) => factsOf(id, deps).catch(() => null))).filter((w): w is X11Window => w !== null)
   // A frame that took its client's title would be the same window twice: keep the client inside.
-  return windows.filter((w) => !windows.some((other) => other !== w && other.title === w.title && contains(w, other) && !contains(other, w)))
+  // First, so a frame around one of Cookrew's own windows goes with it.
+  const framed = (w: X11Window): boolean => read.some((other) => other !== w && other.title === w.title && contains(w, other) && !contains(other, w))
+  const own = read.filter((w) => w.pid === deps.selfPid)
+  const aroundOwn = (w: X11Window): boolean => own.some((self) => self !== w && self.title === w.title && contains(w, self))
+  return read.filter((w) => w.pid !== deps.selfPid && !aroundOwn(w) && !framed(w) && w.width >= MIN_SIDE && w.height >= MIN_SIDE)
 }
 
 /** The one window a card is bound to, now: shown with its place, alive but not shown, or gone. */
-export async function lookupX11Window(id: number, deps: X11Deps): Promise<X11Lookup> {
+export async function lookupX11Window(id: number, deps: X11Deps, knownApp?: string): Promise<X11Lookup> {
   let window: X11Window
   try {
-    window = await factsOf(id, deps)
+    window = await factsOf(id, deps, knownApp)
   } catch (error) {
     if (isGone(error)) return { state: 'gone' }
     throw error
   }
   return (await shownIds(deps)).includes(id) ? { state: 'shown', window } : { state: 'hidden' }
+}
+
+/** The window the window manager says is active; null with no window manager (or none active). */
+export async function activeWindow(deps: X11Deps): Promise<number | null> {
+  try {
+    return parseIds(await deps.xdotool(['getactivewindow']))[0] ?? null
+  } catch {
+    return null
+  }
 }
 
 /** A window an address names by app (and title): exact app first, then an app that contains it. */
