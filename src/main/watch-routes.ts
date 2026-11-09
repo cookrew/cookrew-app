@@ -177,11 +177,13 @@ export async function handleWatchClaim(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   method: string,
-  path: string
+  path: string,
+  /** The watch's account device, when the claim came down the relay: revoking it there ends this token too. */
+  bridgedDeviceId: string | null = null
 ): Promise<boolean> {
   if (method !== 'POST' || path !== '/api/watch/claim' || !host) return false
   const body = await readJson<{ code?: unknown }>(request)
-  const claim = host.pairing.claim(body.code)
+  const claim = host.pairing.claim(body.code, bridgedDeviceId)
   if (!claim.ok) {
     respondJson(response, claim.reason === 'paused' ? 429 : 403, { ok: false, reason: claim.reason })
     return true

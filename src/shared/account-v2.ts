@@ -22,7 +22,7 @@ import type { LinkedProvider, ProviderId, VerifiedEmail } from './oauth'
  * it is listed and revoked like any other — revoking it is how the
  * pre-password world ends on that account.
  */
-export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'legacy'
+export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'watch' | 'legacy'
 
 /** One attached device, as the registry lists it. */
 export interface AccountDevice {

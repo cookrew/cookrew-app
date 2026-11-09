@@ -75,7 +75,8 @@ const RECOVERY_CODES = 8
  * and the migration route is the one place that files one — a device that
  * could call itself legacy would be a stranger claiming the old world's trust.
  */
-export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'legacy'
+/** A watch is the one device that enters every machine on its pairing alone (v2-device-grant.ts · issueWatchGrant). */
+export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'watch' | 'legacy'
 
 export interface DeviceInput {
   id: string
@@ -673,10 +674,10 @@ export class V2Accounts {
    * that signs in twice is one phone — and its name and last-seen are brought
    * up to date, because "iPhone" being renamed should show on the profile.
    */
-  attachDevice(username: string, input: unknown): Attached | Refused<'bad_credentials' | 'bad_device'> {
+  attachDevice(username: string, input: unknown, as: { watch?: boolean } = {}): Attached | Refused<'bad_credentials' | 'bad_device'> {
     const account = this.get(username)
     if (!account) return { ok: false, reason: 'bad_credentials' }
-    const device = this.readDevice(input)
+    const device = this.readDevice(input, as.watch === true)
     if (device === null) return { ok: false, reason: 'bad_device' }
     const owner = this.ownerOfDevice(device.id)
     if (owner !== null && owner !== account.username) return { ok: false, reason: 'bad_device' }
@@ -685,6 +686,8 @@ export class V2Accounts {
 
     const known = account.devices.find((d) => d.id === device.id)
     if (known && !sameKey(known.jwk, device.jwk)) return { ok: false, reason: 'bad_device' }
+    // A watch that joined as a phone (before there were watches) becomes one; nothing else does.
+    if (known && as.watch === true && known.kind !== 'phone' && known.kind !== 'watch') return { ok: false, reason: 'bad_device' }
     const attached: V2Device = known
       ? { ...known, kind: device.kind, name: device.name, lastSeenAt: this.now() }
       : device
@@ -750,18 +753,25 @@ export class V2Accounts {
     return device
   }
 
-  private readDevice(input: unknown): V2Device | null {
+  /**
+   * A device as a request names it. A WATCH only when the caller says so: a
+   * watch enters every machine on its pairing alone (v2-device-grant.ts), so it
+   * is made only by a watch's join code (v2-join.ts), and that code makes
+   * nothing else. Creating an account, recovery and every other door read the
+   * three kinds a client may name.
+   */
+  private readDevice(input: unknown, watch = false): V2Device | null {
     if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
     const raw = input as Partial<DeviceInput>
     const id = typeof raw.id === 'string' ? raw.id.toLowerCase() : ''
     if (!UUID.test(id)) return null
-    if (raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
+    if (watch ? raw.kind !== 'watch' : raw.kind !== 'desktop' && raw.kind !== 'phone' && raw.kind !== 'browser') return null
     const name = typeof raw.name === 'string' ? raw.name.trim() : ''
     if (name.length === 0 || name.length > DEVICE_NAME_MAX) return null
     const jwk = sanitiseJwk(raw.jwk)
     if (jwk === null) return null
     const at = this.now()
-    return { id, kind: raw.kind, name, jwk, addedAt: at, lastSeenAt: at }
+    return { id, kind: raw.kind as DeviceKind, name, jwk, addedAt: at, lastSeenAt: at }
   }
 
   private ownerOfDevice(id: string): string | null {

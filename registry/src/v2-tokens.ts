@@ -26,7 +26,7 @@ import path from 'node:path'
  * a stateless token cannot do for itself.
  */
 
-export type V2Scope = 'session' | 'call' | 'canvas' | 'grant'
+export type V2Scope = 'session' | 'call' | 'canvas' | 'grant' | 'watch-grant'
 
 export interface V2Claims {
   sub: string
@@ -175,6 +175,18 @@ export class V2Tokens {
    * against /v2/keys and the revoked list, and demand a fresh signature from
    * the key it names.
    */
+  /**
+   * A WATCH'S PASS: the same shape as a grant, in its own scope. A machine that
+   * knows it admits a watch with a watch's token; one older than it reads no
+   * pass at all, so a watch's pass can never become a full device token there.
+   */
+  mintWatchGrant(sub: string, dev: string, jkt: string, sid: string): Minted {
+    if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
+    const exp = this.now() + GRANT_TTL_MS
+    const jti = randomUUID()
+    return { token: this.mint({ sub, dev, scope: 'watch-grant', exp, jti, jkt, sid }), exp, jti }
+  }
+
   mintGrant(sub: string, dev: string, jkt: string, sid: string): Minted {
     if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
     const exp = this.now() + GRANT_TTL_MS

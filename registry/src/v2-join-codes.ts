@@ -42,6 +42,8 @@ export interface JoinCode {
   username: string
   at: number
   expiresAt: number
+  /** Minted for a watch (⋯ → Apple Watch): the only code a watch joins with, and it joins nothing else. */
+  purpose?: 'watch'
 }
 
 /**
@@ -63,7 +65,7 @@ export class JoinCodes {
   }
 
   /** Mint one for this account, retiring whatever it had. */
-  mint(username: string): JoinCode {
+  mint(username: string, purpose?: 'watch'): JoinCode {
     const at = this.now()
     this.sweep(at)
     for (const [key, held] of this.codes) {
@@ -76,7 +78,7 @@ export class JoinCodes {
     const block = (): string =>
       Array.from({ length: 4 }, () => RECOVERY_ALPHABET[randomInt(RECOVERY_ALPHABET.length)]).join('')
     const code = `${block()}-${block()}`
-    const minted: JoinCode = { code, username, at, expiresAt: at + this.ttlMs }
+    const minted: JoinCode = { code, username, at, expiresAt: at + this.ttlMs, ...(purpose ? { purpose } : {}) }
     this.codes.set(normaliseRecoveryCode(code), minted)
     return minted
   }
@@ -90,6 +92,11 @@ export class JoinCodes {
    * order `useRecoveryCode` is spent in, and for the same reason.
    */
   redeem(code: unknown): string | null {
+    return this.spend(code)?.username ?? null
+  }
+
+  /** Spend one, as redeem does: the code whole, its purpose with it. */
+  spend(code: unknown): JoinCode | null {
     if (typeof code !== 'string') return null
     const at = this.now()
     this.sweep(at)
@@ -98,7 +105,7 @@ export class JoinCodes {
     const held = this.codes.get(key)
     if (held === undefined) return null
     this.codes.delete(key)
-    return held.username
+    return held
   }
 
   /** "Not me": whatever this account had in flight is dead. */

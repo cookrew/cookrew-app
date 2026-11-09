@@ -1330,6 +1330,8 @@ const accountPairDoor = createAccountPairDoor({
   grants: async (token) => (v2CallTokens === null ? null : v2CallTokens.grant(token)),
   admitted: admittedDevices,
   platform: process.platform,
+  // Read when a watch arrives, long after startup: watchPairing is declared further down.
+  watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
   log: (message: string) => console.error(`[cookrew] ${message}`)
 })
 
@@ -1703,6 +1705,8 @@ const v2CallTokens = RELAY_ORIGIN
       // LAN was cut off at the registry. A second poll of the same route would
       // be a second answer, and the two would drift.
       onRevoked: (revoked) => {
+        // The watch let in by its pass goes with its device, as an admitted phone does.
+        if (watchPairing.revoked(revoked)) console.error('Watch withdrawn: it was revoked at the registry')
         for (const device of admittedDevices.prune(revoked)) {
           remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the
