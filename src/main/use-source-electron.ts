@@ -2,7 +2,7 @@ import { clipboard, desktopCapturer, screen, shell, systemPreferences, type Nati
 import type { DisplayArea } from './linux-input'
 import type { LinuxFrame, ShownDisplay } from './linux-screen'
 import { withDeadline } from './pixel-instance'
-import { type GrabbedSource, type SourceGrab } from './use-source-mac'
+import { GRAB_DEADLINE_MS, THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
 
 /**
  * ELECTRON'S SCREEN CAPTURER, FOR THE PLAIN-CODE SOURCES.
@@ -67,6 +67,63 @@ export function displayArea(shown: ShownDisplay): DisplayArea | null {
 }
 
 export const readMachineClipboard = (): string => clipboard.readText()
+
+export interface RectPicture {
+  readonly jpeg: Buffer
+  readonly width: number
+  readonly height: number
+  /** The part of the X screen it is of: the rect, cut to the display it is on. */
+  readonly rect: DisplayArea
+}
+
+const physicalArea = (display: Electron.Display): DisplayArea => {
+  const scale = display.scaleFactor > 0 ? display.scaleFactor : 1
+  const { x, y, width, height } = display.bounds
+  return { x: Math.round(x * scale), y: Math.round(y * scale), width: Math.round(width * scale), height: Math.round(height * scale) }
+}
+
+/**
+ * Pictures of parts of the X screen (one window each), from ONE capture of the
+ * displays at their full size. Chromium lists X11 windows only when a window
+ * manager has marked them, so a bare Xvfb has none to capture by id; a crop of
+ * the screen works with or without one (linux-window-device.ts). A rect is cut
+ * to the display its middle is on; none where that display, or its picture,
+ * cannot be told apart from another (several displays, no ids).
+ */
+export async function captureRects(rects: readonly DisplayArea[], maxSide: number): Promise<Array<RectPicture | null>> {
+  if (rects.length === 0) return []
+  const displays = screen.getAllDisplays().map((d) => ({ id: String(d.id), area: physicalArea(d) }))
+  const size = { width: Math.max(...displays.map((d) => d.area.width), 1), height: Math.max(...displays.map((d) => d.area.height), 1) }
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size })
+  return rects.map((rect) => {
+    const cx = rect.x + rect.width / 2
+    const cy = rect.y + rect.height / 2
+    const display = displays.find(({ area }) => cx >= area.x && cx < area.x + area.width && cy >= area.y && cy < area.y + area.height)
+    if (!display) return null
+    const source = sources.find((s) => s.display_id === display.id) ?? (sources.length === 1 && displays.length === 1 ? sources[0] : null)
+    if (!source || source.thumbnail.isEmpty()) return null
+    const { area } = display
+    const left = Math.max(rect.x, area.x)
+    const top = Math.max(rect.y, area.y)
+    const cut = { x: left, y: top, width: Math.min(rect.x + rect.width, area.x + area.width) - left, height: Math.min(rect.y + rect.height, area.y + area.height) - top }
+    if (cut.width < 2 || cut.height < 2) return null
+    const picture = source.thumbnail.getSize()
+    const sx = picture.width / area.width
+    const sy = picture.height / area.height
+    let image = source.thumbnail.crop({ x: Math.round((cut.x - area.x) * sx), y: Math.round((cut.y - area.y) * sy), width: Math.max(1, Math.round(cut.width * sx)), height: Math.max(1, Math.round(cut.height * sy)) })
+    const got = image.getSize()
+    const fit = Math.min(1, maxSide / Math.max(got.width, got.height))
+    if (fit < 1) image = image.resize({ width: Math.max(1, Math.round(got.width * fit)), height: Math.max(1, Math.round(got.height * fit)) })
+    const out = image.getSize()
+    return { jpeg: image.toJPEG(70), width: out.width, height: out.height, rect: cut }
+  })
+}
+
+/** The picker's window pictures, as data: URLs. */
+export async function windowThumbs(rects: readonly DisplayArea[]): Promise<Array<string | null>> {
+  const pictures = await withDeadline(captureRects(rects, Math.max(THUMB_SIZE.width, THUMB_SIZE.height)), GRAB_DEADLINE_MS, 'the screen capturer')
+  return pictures.map((p) => (p ? `data:image/jpeg;base64,${p.jpeg.toString('base64')}` : null))
+}
 
 /**
  * The Accessibility page. Like Screen Recording it lists an app only once the

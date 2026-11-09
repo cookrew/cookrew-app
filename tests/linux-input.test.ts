@@ -263,3 +263,14 @@ describe('createLinuxHand: cut short, and one at a time', () => {
     expect(xdotoolKey('toString')).toBeNull()
   })
 })
+
+describe('createLinuxHand: optional calls', () => {
+  it('an optional call that fails (no window manager to activate with) does not stop the gesture', async () => {
+    const run = vi.fn(async (_bin: string, argv: readonly string[]) => {
+      if (argv[0] === 'windowactivate') throw new Error('xdotool: Your windowmanager claims not to support _NET_ACTIVE_WINDOW')
+    })
+    const h = createLinuxHand({ screenRefusal: () => null, find: () => '/usr/bin/xdotool', run, dryRun: false, log: vi.fn() })
+    await h.send([{ argv: ['windowactivate', '7'], timeoutMs: 1, optional: true }, { argv: ['key', 'Return'], timeoutMs: 1 }])
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+})

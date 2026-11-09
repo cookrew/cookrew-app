@@ -179,6 +179,9 @@ export const XDOTOOL_INSTALL = 'sudo apt install -y xdotool'
 /** What stands in for Accessibility on Linux: the tool that sends the clicks and keys. */
 export const LINUX_NO_XDOTOOL = `xdotool is not installed, so nothing can click or type on this machine: install it with ${XDOTOOL_INSTALL}`
 
+/** The Windows tab and a window card on Linux, with no xdotool to ask X which windows there are. */
+export const LINUX_WINDOWS_NEED_XDOTOOL = `Showing one window needs xdotool to find it: install it with ${XDOTOOL_INSTALL}`
+
 const SCREEN_PANE = 'System Settings › Privacy & Security › Screen & System Audio Recording'
 const ACCESSIBILITY_PANE = 'System Settings › Privacy & Security › Accessibility'
 
