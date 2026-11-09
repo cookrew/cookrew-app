@@ -1048,6 +1048,7 @@ describe('attachability is re-established on EVERY attach', () => {
 })
 
 describe('boot retype discipline — junk in a live agent is worse than a husk', () => {
+  const BARE_ZSH = { argv: ['-zsh'], argv0: 'zsh', name: 'zsh', pid: 9 }
   // Live incident (2026-08-09): the first type landed and booted the agent,
   // but agents boot SLOWLY, so a cadence-based retype fired again and put
   // `clear; exec sh ...` into the freshly booted claude's input box. Retyping
@@ -1056,8 +1057,10 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
   it('does NOT retype once the pane shows the boot chain starting (`other`)', () => {
     // Stateful on purpose: a bare shell until the first type lands, then the
     // boot chain (npm exec wrapper) — the live shape of a slow agent boot.
+    // A bare prompt is the shell ALONE in front (measured shape); an empty
+    // foreground is no reading, and licenses no typing.
     const shellInfo = JSON.stringify({
-      result: { process_info: { shell_pid: 9, foreground_processes: [] } }
+      result: { process_info: { shell_pid: 9, foreground_processes: [BARE_ZSH] } }
     })
     const bootingInfo = JSON.stringify({
       result: { process_info: { shell_pid: 9, foreground_processes: [] } }
@@ -1096,7 +1099,7 @@ describe('boot retype discipline — junk in a live agent is worse than a husk',
     const runner = fakeRunner({
       'pane list': PANE_LIST([{ pane_id: 'w1:p1', label: 'cookrew_abc' }]),
       'pane process-info': JSON.stringify({
-        result: { process_info: { shell_pid: 9, foreground_processes: [] } }
+        result: { process_info: { shell_pid: 9, foreground_processes: [BARE_ZSH] } }
       }),
       '-o args=': '-zsh'
     })
