@@ -22,6 +22,7 @@ import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import { claimSocket, type SocketClaim } from './socket-claim'
 import { noteWriteReply, parseNoteWrite } from './note-write-guard'
+import { bareBrowserHint, bareNoteArgs } from './bare-card'
 import { reachByName, type ReachKind } from './ask-reach'
 import { adoptedNoteAnswer, findClaimedNote } from './note-adopt'
 import type { PairingHandout } from '../shared/account-v2'
@@ -783,6 +784,9 @@ export function cliWorkspaceScope(input: {
 }
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  // `cookrew browser "Name"`, as the prompt box names a browser: its verbs (bare-card.ts).
+  const bare = bareBrowserHint(request.args)
+  if (bare) throw new Error(bare)
   const me = self(request, deps)
   // Owner ruling 2026-11-04: every workspace works on its own. With the
   // headless engine nothing about a browser depends on the canvas on screen.
@@ -1375,7 +1379,8 @@ function adoptNote(me: TerminalNodeData, note: NoteNodeData, deps: SocketServerD
 }
 
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
-  const [sub, ...rest] = request.args
+  // `cookrew note "Name"`, as the prompt box names a note, reads it (bare-card.ts).
+  const [sub, ...rest] = bareNoteArgs(request.args)
   const me = self(request, deps)
   switch (sub) {
     case 'create': {
@@ -2098,7 +2103,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
                                                 (turn ENDED, needs a fresh dispatch) | idle
   cookrew note create ["content"] [--new]       Create a connected note on the canvas (a first line naming
                                                 a note already there wires you to it instead; --new forces a second)
-  cookrew note read "Name" [offset] [limit]     Read a note with line numbers
+  cookrew note read "Name" [offset] [limit]     Read a note with line numbers (a bare note "Name" reads it too)
   cookrew note write "Name" "content"           Replace a note's content ("" clears it)
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a note wired to you (destructive)

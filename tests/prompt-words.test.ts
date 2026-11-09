@@ -69,7 +69,7 @@ describe('the attached item rides the send as #Name', () => {
     expect(sent).toBe('#Route plan: sum it up')
     const refs = artifactRefs(sent, [plan])
     expect(refs.map((r) => r.artifact.id)).toEqual(['b1'])
-    expect(expandRefs(sent, refs)).toBe('the browser "Route plan": sum it up')
+    expect(expandRefs(sent, refs)).toBe('cookrew browser "Route plan": sum it up')
   })
 
   it('once: words that name it already are left as they are', () => {
