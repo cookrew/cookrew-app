@@ -60,7 +60,7 @@ final class WatchApp {
   /** Every machine the watch holds a key for (sessionKey), the one it is in among them. */
   private(set) var heldMachines: Set<String> = []
   /** The machine the wrist is in, as the vault keys it. */
-  private var current: String?
+  private(set) var current: String?
   private(set) var stage: PairStage = .welcome
   private(set) var typed = ""
   private(set) var padError: String?
@@ -474,6 +474,10 @@ public struct WatchRoot: View {
             await store.run()
             if store.unpaired { app.lost(.unpaired, by: store) }
           }
+          .onChange(of: store.cards) { _, cards in
+            guard let key = app.current else { return }
+            StatusAlerts.note(cards, machine: key, name: app.desktop, inFront: phase == .active)
+          }
           // Another machine is another store: its own stack and its own poll, from the top.
           .id(ObjectIdentifier(store))
       } else {
@@ -482,6 +486,9 @@ public struct WatchRoot: View {
     }
     .environment(\.ink, dim ? .night : .day)
     .environment(\.inkStill, false)
+    .task { await StatusAlerts.ask() }
+    // Leaving the wrist: the next background read is asked for, so status changes still reach it.
+    .onChange(of: phase) { _, next in if next != .active { StatusAlerts.scheduleNext() } }
   }
 }
 
