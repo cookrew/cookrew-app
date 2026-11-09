@@ -87,10 +87,13 @@ interface World {
  */
 function world(
   start: Pane | null,
-  hooks: { onType?: (n: number, pane: Pane) => Pane; onRead?: (n: number, pane: Pane) => Pane } = {}
+  hooks: { onType?: (n: number, pane: Pane) => Pane; onRead?: (n: number, pane: Pane) => Pane } = {},
+  /** 'labelled' (default with a pane), 'idle' (the server's unlabelled starter), 'none' (empty server). */
+  shape: 'labelled' | 'idle' | 'none' = start === null ? 'idle' : 'labelled'
 ): World {
   let pane: Pane = start ?? bareShell()
-  let labelled = start !== null
+  let labelled = shape === 'labelled'
+  let exists = shape !== 'none'
   let typed = 0
   let keys = 0
   let reads = 0
@@ -100,9 +103,12 @@ function world(
       if (file === 'ps') return `${pane.root}\n`
       const key = args.slice(0, 2).join(' ')
       if (key === 'pane list') {
-        return JSON.stringify({
-          result: { type: 'pane_list', panes: [{ pane_id: 'w2:pXE', label: labelled ? 'cookrew_abc' : null }] }
-        })
+        const panes = exists ? [{ pane_id: 'w2:pXE', label: labelled ? 'cookrew_abc' : null }] : []
+        return JSON.stringify({ result: { type: 'pane_list', panes } })
+      }
+      if (key === 'workspace create') {
+        exists = true
+        return JSON.stringify({ result: { root_pane: { pane_id: 'w2:pXE', label: null } } })
       }
       if (key === 'pane process-info') {
         pane = hooks.onRead?.(++reads, pane) ?? pane
@@ -207,7 +213,8 @@ describe('a wake never types into an agent that is already running', () => {
       argv: ['/opt/homebrew/bin/claude', '--resume', 'x'],
       cmdline: '/opt/homebrew/bin/claude --resume x'
     }],
-    ['a bare node with no argv to tell', { name: 'node', argv0: 'node', argv: ['node'], cmdline: 'node' }]
+    // Not recognised as claude, and not the bare shell either: it waits out the window.
+    ['a node with no argv to tell what it runs', { name: 'node', argv0: 'node', argv: ['node'], cmdline: 'node' }]
   ])('types nothing when the shell\'s foreground is %s', (_label, claude) => {
     const w = world(claudeUnderShell(claude as Proc))
     backend(w).ensureSession(SPEC)
@@ -263,6 +270,30 @@ describe('one wake, at most one boot line — plus a retry only for a line posit
     expect(w.typed()).toBe(0)
   })
 
+  it('types nothing when herdr resumes the agent a second after the shell first reads bare', () => {
+    // Both the husk verdict and the re-read can land inside that second, on a
+    // genuine bare prompt. Only a shell that HOLDS through a settle window
+    // licenses the first line into an existing pane.
+    const t0 = Date.now()
+    const w = world(bareShell(), { onRead: (_n, pane) => (Date.now() - t0 >= 1000 ? claudeUnderShell() : pane) })
+    backend(w).ensureSession(SPEC)
+    expect(w.typed()).toBe(0)
+  })
+
+  it('still recovers a husk whose rc init ran `claude completion zsh` in front for a moment', () => {
+    // That child is in the shell's group but leads nothing; it is no live agent.
+    const completion: Pane = {
+      ...bareShell(),
+      foreground: [...bareShell().foreground, { pid: 5200, name: 'claude', argv0: 'claude', argv: ['claude', 'completion', 'zsh'] }]
+    }
+    const w = world(completion, {
+      onRead: (n, pane) => (n > 3 && w.typed() === 0 ? bareShell() : pane),
+      onType: () => exec(`sh ${BOOT}`)
+    })
+    backend(w).ensureSession(SPEC)
+    expect(w.typed()).toBe(1)
+  })
+
   it('stops once the pane turns from shell to agent between retries', () => {
     // First line dropped; the second look still shows the bare prompt; then
     // herdr's own resume starts claude before the next retry is due.
@@ -301,6 +332,24 @@ describe('one wake, at most one boot line — plus a retry only for a line posit
 })
 
 describe('a pane this call created boots as before', () => {
+  it('types at once into a created pane, and retries a dropped first line once', () => {
+    const w = world(null, { onType: (n, pane) => (n === 1 ? pane : exec(`sh ${BOOT}`)) }, 'none')
+    backend(w).ensureSession(SPEC)
+    expect(w.typed()).toBe(2)
+  })
+
+  it('reads an ADOPTED pane before typing: an agent in the idle starter pane is left alone', () => {
+    const w = world(claudeUnderShell(), {}, 'idle')
+    backend(w).ensureSession(SPEC)
+    expect(w.typed()).toBe(0)
+  })
+
+  it('boots an adopted bare pane once its shell holds', () => {
+    const w = world(bareShell(), { onType: () => exec(`sh ${BOOT}`) }, 'idle')
+    backend(w).ensureSession(SPEC)
+    expect(w.typed()).toBe(1)
+  })
+
   it('types once into a fresh pane even when process-info cannot answer (no ps, Windows)', () => {
     const w = world(null)
     const runner = w.runner

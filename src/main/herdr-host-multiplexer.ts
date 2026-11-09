@@ -356,6 +356,9 @@ export function agentKind(command: string): string {
   return base.length > 0 ? base : 'shell'
 }
 
+/** Where the pane a boot types into came from: made by this call, the server's idle starter, or already labelled. */
+export type PaneOrigin = 'created' | 'adopted' | 'existing'
+
 /** What a pane runs, as far as typing into it is concerned — see paneRuns. */
 export type PaneRun = 'agent' | 'booting' | 'shell' | 'other' | 'unanswerable'
 
@@ -404,7 +407,13 @@ export function classifyPaneRun(pane: PaneProcesses, expected: string, sessionNa
   const front = pane.foreground.filter(
     (entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null
   )
-  if (front.some((entry) => runsAgent(entry, expected))) return 'agent'
+  // The agent must LEAD the foreground group when herdr names the group: a
+  // passing rc-init child (`eval "$(claude completion zsh)"`) is in front for
+  // a moment but leads nothing, and taking it for a live agent would skip a
+  // husk's recovery.
+  const leads = (entry: Record<string, unknown>): boolean =>
+    pane.foregroundGroup === null || entry.pid === pane.foregroundGroup
+  if (front.some((entry) => leads(entry) && runsAgent(entry, expected))) return 'agent'
   if (front.some((entry) => processText(entry).includes(bootMark))) return 'booting'
 
   const words = pane.rootArgv.split(/\s+/)
@@ -1197,7 +1206,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // The launch check passes a husk (a pane is there): it is here that a boot
     // would start. A `cd` would fail it, but only after a dozen seconds of verify.
     if (existing && this.folderGone(spec.cwd)) throw new Error(`the folder ${spec.cwd} is gone, so '${spec.sessionName}' was not booted`)
-    const pane = existing ?? this.adoptOrCreate(spec)
+    const found = existing ? { pane: existing, origin: 'existing' as const } : this.adoptOrCreate(spec)
+    const pane = found?.pane ?? null
     if (!pane?.pane_id) throw new Error(`herdr could not create a pane for '${spec.sessionName}'`)
 
     // Label FIRST: if the boot command fails, the pane is still findable and
@@ -1217,7 +1227,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     //
     // Sourcing a file keeps the typed line to one short command, and sidesteps
     // shell-quoting hazards in the agent command as a side benefit.
-    this.bootIntoPane(pane.pane_id, spec, !existing)
+    this.bootIntoPane(pane.pane_id, spec, found?.origin ?? 'created')
 
     // REQUIRED, not decorative: `agent attach` resolves its target through the
     // agent registry and fails with agent_not_found on a pane that merely runs
@@ -1708,7 +1718,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * exactly as before. Retyping into it could stack boot commands in the NEW
    * shell, which is worse than the flake being guarded against.
    */
-  private bootIntoPane(paneId: string, spec: AttachSpec, fresh: boolean): void {
+  private bootIntoPane(paneId: string, spec: AttachSpec, origin: PaneOrigin): void {
     const bootPath = path.join(spec.cliDir, `boot-${spec.sessionName}.sh`)
     // PtyManager creates the runtime dir, but this backend must not depend on
     // the caller having done so — a missing dir would throw here and take the
@@ -1748,31 +1758,43 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // dropped, they are queued, and the terminal echoes them — so a boot line
     // still standing last on the screen is waiting its turn, and is not retyped.
     //
-    // Every line, the first one included, waits for a fresh 'shell' reading,
-    // except the first into a pane this call just created: nothing can run in
-    // that pane yet but its rc init, whose keys queue, and a pane that cannot
-    // be read at all (no ps) has to boot as it always did. An EXISTING pane is
-    // read again right before its first line: herdr starts the agent it
-    // recorded about a second after it restores the shell (11-09), and a husk
-    // verdict from before that is stale by the time the line goes in.
+    // Every line waits for a 'shell' reading, except the first into a pane
+    // this call CREATED: nothing can run in it yet but its rc init, whose keys
+    // queue. A pane that cannot be read at all (no ps) types blind only when
+    // nothing could be running in it, created or adopted, as it always did.
+    //
+    // An EXISTING (or adopted) pane's first line needs the bare shell to HOLD
+    // for a settle window, not one reading. herdr starts the agent it recorded
+    // about a second after it restores the shell (11-09: shell 11:19:57, claude
+    // 11:19:58), so a reading taken in that second is a true bare prompt that
+    // is about to stop being one. Any other reading restarts the window.
     //
     // 'agent' and 'booting' END the wake: the line was taken, or something else
     // started the agent. Nothing after that is evidence of a drop, so nothing
-    // after that is typed.
-    const deadline = Date.now() + this.settleMs * 6
+    // after that is typed. A small gap stays between the last reading and the
+    // keys themselves; closing it needs a "send only if the foreground is X"
+    // that herdr does not have.
     const waitABeat = this.pollBackoff()
+    let deadline = Date.now() + this.settleMs * 6
     let lastTypedAt: number | null = null
-    if (fresh) {
+    let shellSince: number | null = null
+    let looked = false
+    const typeNow = (): void => {
       type()
       lastTypedAt = Date.now()
+      // The retype window runs from the first line, however long it took.
+      deadline = lastTypedAt + this.settleMs * 6
     }
+    if (origin === 'created') typeNow()
     for (;;) {
       const seen = this.paneRuns(paneId, expected, spec.sessionName)
       if (seen === 'agent' || seen === 'booting') return
-      if (seen === 'shell' && lastTypedAt === null) {
-        type()
-        lastTypedAt = Date.now()
-      } else if (seen === 'shell' && lastTypedAt !== null && Date.now() - lastTypedAt >= this.settleMs) {
+      if (lastTypedAt === null) {
+        const blind = !looked && seen === 'unanswerable' && origin === 'adopted'
+        looked = true
+        shellSince = seen === 'shell' ? (shellSince ?? Date.now()) : null
+        if (blind || (shellSince !== null && Date.now() - shellSince >= this.settleMs)) typeNow()
+      } else if (seen === 'shell' && Date.now() - lastTypedAt >= this.settleMs) {
         if (!this.bootLineWaiting(paneId, spec.sessionName)) type()
         lastTypedAt = Date.now()
       }
@@ -1817,10 +1839,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * adopted pane keeps the SERVER's env rather than this spec's, so the boot
    * command exports what the agent needs instead of relying on the split.
    */
-  private adoptOrCreate(spec: AttachSpec): HerdrPane | null {
+  private adoptOrCreate(spec: AttachSpec): { pane: HerdrPane | null; origin: PaneOrigin } {
     const panes = this.panes()
     const idle = panes.find((pane) => !pane.label)
-    if (idle) return idle
+    if (idle) return { pane: idle, origin: 'adopted' }
 
     // An isolated herdr session starts with NO panes at all, and `pane split`
     // fails with pane_not_found when there is nothing to split. The first
@@ -1829,13 +1851,13 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // holding one pane per Cookrew agent.
     if (panes.length === 0) {
       const created = parseEnvelope(this.herdr(['workspace', 'create', '--cwd', spec.cwd]))
-      return (created?.root_pane ?? null) as HerdrPane | null
+      return { pane: (created?.root_pane ?? null) as HerdrPane | null, origin: 'created' }
     }
 
     const split = parseEnvelope(
       this.herdr(['pane', 'split', '--direction', 'right', '--cwd', spec.cwd, ...envArgs(spec)])
     )
-    return (split?.pane ?? null) as HerdrPane | null
+    return { pane: (split?.pane ?? null) as HerdrPane | null, origin: 'created' }
   }
 
   /**
