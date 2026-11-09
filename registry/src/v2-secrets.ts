@@ -35,7 +35,6 @@ const stretch = promisify(scrypt) as (
 const KEY_LEN = 32
 const SALT_LEN = 16
 
-
 export interface Hashed {
   /** base64url. */
   salt: string
