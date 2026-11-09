@@ -665,6 +665,8 @@ export class HerdrHostMultiplexer implements Multiplexer {
    * already classify — 'failed', false, null — never an unowned process.
    */
   private opsClosed = false
+  /** When a boot line last went into each session's pane — see lastBootAt. */
+  private readonly bootTimes = new Map<string, number>()
 
   constructor(options: HerdrHostOptions) {
     // Sanitized: the server is every pane's PARENT, so whatever launched
@@ -1228,6 +1230,7 @@ export class HerdrHostMultiplexer implements Multiplexer {
     // Sourcing a file keeps the typed line to one short command, and sidesteps
     // shell-quoting hazards in the agent command as a side benefit.
     this.bootIntoPane(pane.pane_id, spec, found?.origin ?? 'created')
+    this.bootTimes.set(spec.sessionName, Date.now())
 
     // REQUIRED, not decorative: `agent attach` resolves its target through the
     // agent registry and fails with agent_not_found on a pane that merely runs
@@ -1247,6 +1250,18 @@ export class HerdrHostMultiplexer implements Multiplexer {
       // the attach pays no fork for it.
       setTimeout(() => void this.reconcileAgentNames(), 8_000).unref?.()
     }
+  }
+
+  /**
+   * When ensureSession last booted this session's agent: a husk recovered or a
+   * pane made, null when it only ever re-attached a running agent. A husk is
+   * still a pane to the inventory, so a waker that saw it alive learns here
+   * that its agent is only now starting (agent-wake.ts). Cookrew's herdr config
+   * turns herdr's own resume off (herdr-conf.ts), which makes the husk what
+   * every restored pane is until something reaches its card.
+   */
+  lastBootAt(name: string): number | null {
+    return this.bootTimes.get(name) ?? null
   }
 
   /**
@@ -1550,7 +1565,10 @@ export class HerdrHostMultiplexer implements Multiplexer {
    *
    * herdr's own resume shares this pane: it restarts the agent it recorded
    * as a child of the restored shell. That pane is LIVE, not a husk, and the
-   * foreground is what says so (see paneRuns).
+   * foreground is what says so (see paneRuns). Cookrew's config turns that
+   * resume off (herdr-conf.ts: its agent lacks Cookrew's env), so this reading
+   * is for a server that did not start on that config, or a herdr too old to
+   * know the key, and such an agent is left running rather than replaced.
    *
    * A terminal whose command IS a shell can't be told apart from its husk —
    * both show a shell — so it is never rebooted. It loses only env vars on

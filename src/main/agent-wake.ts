@@ -9,7 +9,8 @@
 //
 // Now any terminal card without a running mirror is woken by the first thing
 // sent to it: booted (a cold agent resumes its own session, a pane herdr still
-// holds is only re-attached), and the keys typed meanwhile wait for it, then
+// holds is only re-attached, a husk herdr restored is booted in place), and the
+// keys typed meanwhile wait for it, then
 // go in in order. Enter goes in on its own after a pause, as every other
 // submit does (ask.ts · submitDelayMs), or the TUI takes the burst for a paste.
 //
@@ -27,6 +28,12 @@ export interface WakeDeps<S> {
   paneAlive: (id: string) => boolean
   /** Boot (or re-attach) the mirror; true when there is a session now. May throw. */
   boot: (id: string) => boolean
+  /**
+   * Did the boot start the agent at `since` or later? A husk herdr restored
+   * is still a pane, so paneAlive called it warm while its agent was only now
+   * starting. Absent = only a missing pane counts as a cold start.
+   */
+  booted?: (id: string, since: number) => boolean
   /** Resolves once a freshly started agent takes input; false at its deadline. */
   ready: (session: S) => Promise<boolean>
   /** The idle-sleep ledger: a wake claims the sleep, a failed boot puts it back. */
@@ -99,7 +106,8 @@ export class AgentWaker<S extends { write: (data: string) => unknown }> {
   private async boot(id: string): Promise<S | undefined> {
     const slept = this.deps.sleep.take(id)
     // Asked before the boot: afterwards the pane exists either way.
-    const cold = !this.deps.paneAlive(id)
+    const since = Date.now()
+    const missing = !this.deps.paneAlive(id)
     let session: S | undefined
     try {
       session = this.deps.boot(id) ? this.deps.session(id) : undefined
@@ -111,7 +119,15 @@ export class AgentWaker<S extends { write: (data: string) => unknown }> {
       if (slept) this.deps.sleep.mark(id)
       return undefined
     }
-    if (cold && !(await this.deps.ready(session))) this.deps.warn?.(`Agent ${id} was still booting when it was woken`)
+    // A pane herdr kept can still be a husk the boot just brought back: its
+    // agent is painting its resumed transcript and would swallow the Enter.
+    const husk = !missing && (this.deps.booted?.(id, since) ?? false)
+    const ready = missing || husk ? await this.deps.ready(session) : true
+    if (!ready) this.deps.warn?.(`Agent ${id} was still booting when it was woken`)
+    // A husk whose agent never drew its input box may still be the bare shell
+    // herdr restored: words typed there would run as a command in the card's
+    // folder. They go back as lost instead.
+    if (husk && !ready) return undefined
     // A boot can start and die inside that wait: the keys belong to `lost`, not to a dead session.
     if (this.deps.session(id) !== session) return undefined
     return session
