@@ -17,6 +17,7 @@ import { closingMessage } from '../shared/trace-blocks'
 import type { BoardSnapshot } from './board-index'
 import type { BrowserInstance } from './browser-instance'
 import type { StreamService } from './stream-service'
+import { machineCopy } from '../shared/machine-words'
 import { readJson, respondJson } from './mobile-http'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
@@ -91,6 +92,8 @@ export interface WatchHost {
   /** This Mac's workspaces, in its own order. */
   workspaces(): readonly { readonly id: string; readonly name: string }[]
   accountKind(): WatchAccountKind
+  /** What this machine is (process.platform): the wrist and a phone say Mac, PC or machine by it. */
+  readonly platform?: string
   /** Mint a join code under this password. `here`: asked on this Mac, where a provider trip can open. */
   invite(current: string, here: boolean): Promise<WatchInvite>
 }
@@ -133,12 +136,15 @@ const TERMINAL_WRITE = /^\/api\/terminal\/([^/]+)\/(input|menu)$|^\/api\/watch\/
  *   under the cursor, which on a question nobody parsed may be "Yes". /menu,
  *   which names its row, is how a menu is answered.
  */
+/** The machine's platform: the host's word for it, else the process's own. */
+const platformOf = (current: Pick<WatchHost, 'platform'>): string => current.platform ?? process.platform
+
 export function watchWriteRefusal(path: string): { status: number; error: string } | null {
   const write = path.match(TERMINAL_WRITE)
   if (!write || !host) return null
   const id = decodeURIComponent(write[1] ?? write[3])
   if (!host.speaksTo(id)) return { status: 403, error: 'A watch does not type into a shell.' }
-  if (write[2] === 'input' && host.menuOnScreen(id)) return { status: 409, error: 'A menu is up: answer it on the Mac.' }
+  if (write[2] === 'input' && host.menuOnScreen(id)) return { status: 409, error: machineCopy('A menu is up: answer it on the Mac.', platformOf(host)) }
   return null
 }
 
@@ -282,7 +288,7 @@ async function cards(
   ctx: WatchRequest,
   current: WatchHost,
   workspaceId: string | null
-): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[] }> {
+): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[]; platform: string }> {
   // Inside a workspace the wrist shows its whole crew, so the week and not the day.
   const board = await ctx.board(workspaceId !== null)
   const canvases = new Map<string, ReturnType<WatchHost['canvas']>>()
@@ -315,6 +321,7 @@ async function cards(
       ...(workspaceId === null ? {} : { limit: MAX_CREW })
     }),
     activeWorkspaceId: board.activeWorkspaceId,
+    platform: platformOf(current),
     workspaces: watchWorkspaces({
       workspaces: current.workspaces(),
       activeId: board.activeWorkspaceId,
@@ -419,7 +426,7 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (ctx.owner && method === 'GET' && path === '/api/watch/pairing') {
-    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind(), sealed: ctx.sealed(), claims: current.pairing.claims })
+    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind(), sealed: ctx.sealed(), claims: current.pairing.claims, platform: platformOf(current) })
     return true
   }
   if (ctx.owner && method === 'POST' && path === '/api/watch/invite') {

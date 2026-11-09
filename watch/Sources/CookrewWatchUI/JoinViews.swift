@@ -49,7 +49,7 @@ public struct WelcomeView: View {
       InkFace(id: "cookrew", preset: "Claude Code", orch: true, status: .idle, size: 40, weight: .large).padding(.top, 16)
       Text("Cookrew").font(InkType.name(17)).foregroundStyle(ink.ink)
       // Never cut short: this is the only place that says where a code comes from.
-      Text("On your phone or Mac: ⋯ → Apple Watch")
+      Text("On your phone or computer: ⋯ → Apple Watch")
         .font(InkType.words(13))
         .foregroundStyle(ink.soft)
         .multilineTextAlignment(.center)

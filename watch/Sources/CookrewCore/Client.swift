@@ -325,7 +325,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
     if http.statusCode == 401 { throw WatchError.unpaired }
     guard (200..<300).contains(http.statusCode) else {
       let words = (try? JSONDecoder().decode(Refusal.self, from: data))
-      throw WatchError.refused(words?.error ?? words?.reason ?? "The Mac said no.")
+      throw WatchError.refused(words?.error ?? words?.reason ?? "The computer said no.")
     }
   }
 

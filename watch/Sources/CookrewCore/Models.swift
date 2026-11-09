@@ -171,11 +171,28 @@ public struct CardsReply: Decodable, Equatable, Sendable {
   public let activeWorkspaceId: String
   /** Every workspace on the Mac. A Mac older than the zoom sends none. */
   public let workspaces: [WorkspaceTile]?
+  /** What the machine is (its process.platform). An older one does not say. */
+  public let platform: String?
 
-  public init(cards: [Card], activeWorkspaceId: String, workspaces: [WorkspaceTile]? = nil) {
+  public init(cards: [Card], activeWorkspaceId: String, workspaces: [WorkspaceTile]? = nil, platform: String? = nil) {
     self.cards = cards
     self.activeWorkspaceId = activeWorkspaceId
     self.workspaces = workspaces
+    self.platform = platform
+  }
+}
+
+/**
+ * The word for the machine, as the desktop says it (src/shared/machine-words.ts):
+ * Cookrew runs on a Mac, a PC or a Linux machine. Before the wrist has heard
+ * which, a computer.
+ */
+public func machineWord(_ platform: String?) -> String {
+  switch platform {
+  case nil: return "computer"
+  case "darwin": return "Mac"
+  case "win32": return "PC"
+  default: return "machine"
   }
 }
 
@@ -224,15 +241,19 @@ public struct WatchMachine: Decodable, Equatable, Identifiable, Sendable {
   public let name: String
   public let online: Bool
   public let workspaces: [MachineWorkspace]
+  /** Its platform, from the profile it publishes; nil when it publishes none. */
+  public let os: String?
 
-  public init(id: String, name: String, online: Bool, workspaces: [MachineWorkspace]) {
+  public init(id: String, name: String, online: Bool, workspaces: [MachineWorkspace], os: String? = nil) {
     self.id = id
     self.name = name
     self.online = online
     self.workspaces = workspaces
+    self.os = os
   }
 
-  private enum Keys: String, CodingKey { case id, deviceId, name, online, workspaces }
+  private enum Keys: String, CodingKey { case id, deviceId, name, online, workspaces, profile }
+  private struct Profile: Decodable { let os: String? }
 
   public init(from decoder: Decoder) throws {
     let row = try decoder.container(keyedBy: Keys.self)
@@ -244,6 +265,7 @@ public struct WatchMachine: Decodable, Equatable, Identifiable, Sendable {
     name = try row.decode(String.self, forKey: .name)
     online = (try? row.decodeIfPresent(Bool.self, forKey: .online)) == true
     workspaces = (try? row.decodeIfPresent([MachineWorkspace].self, forKey: .workspaces)) ?? []
+    os = (try? row.decodeIfPresent(Profile.self, forKey: .profile))?.os
   }
 }
 

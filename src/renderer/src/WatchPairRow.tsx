@@ -12,6 +12,8 @@ export function WatchPairRow({ onPair }: { onPair: () => void }): React.JSX.Elem
   const api = cookrew()
   const [failed, setFailed] = useState(false)
   const [paired, setPaired] = useState(false)
+  /** What the machine is, as it says: a phone has no platform of its own. */
+  const [platform, setPlatform] = useState<string | undefined>(hostPlatform())
   /** Forgetting a watch takes a second tap: it means pairing again on the wrist. */
   const [forgetting, setForgetting] = useState(false)
 
@@ -19,7 +21,9 @@ export function WatchPairRow({ onPair }: { onPair: () => void }): React.JSX.Elem
     let live = true
     void api.watchState?.().then(
       (state) => {
-        if (live) setPaired(state.paired)
+        if (!live) return
+        setPaired(state.paired)
+        setPlatform((own) => own ?? state.platform)
       },
       () => undefined
     )
@@ -40,7 +44,7 @@ export function WatchPairRow({ onPair }: { onPair: () => void }): React.JSX.Elem
   }
   return (
     <>
-      <button type="button" className="cr-more-item" title={machineCopy('Pair an Apple Watch with this Mac', hostPlatform())} onClick={onPair}>
+      <button type="button" className="cr-more-item" title={machineCopy('Pair an Apple Watch with this Mac', platform)} onClick={onPair}>
         <CrIcon name="watch" />
         <span className="cr-more-label">{failed ? 'Apple Watch · try again' : 'Apple Watch…'}</span>
       </button>

@@ -502,6 +502,7 @@ export interface ZoomFleetView {
     local: boolean
     online: boolean
     detail: ZoomMachineDetail
+    os: string | null
     display: MachineDisplay | null
     workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
   }[]
@@ -515,6 +516,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       local: m.local,
       online: m.online,
       detail: m.detail,
+      os: m.profile?.os ?? null,
       display: m.display ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))
     }))

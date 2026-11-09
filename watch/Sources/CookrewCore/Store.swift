@@ -100,6 +100,8 @@ public final class WatchStore {
    * phone scrolling on that Mac feels, so it is not asked for thumbnails at all.
    */
   public private(set) var macPeeks = false
+  /** What the paired machine is; nil until it says. */
+  public private(set) var platform: String?
   /** The Mac's own active workspace: the dot on its tile. */
   public private(set) var activeWorkspaceId: String?
   public private(set) var link: WatchLink = .connecting
@@ -152,6 +154,9 @@ public final class WatchStore {
   }
 
   public var client: WatchAPI { api }
+
+  /** The word for the paired machine: Mac, PC, machine, or computer before it has said. */
+  public var machine: String { machineWord(platform) }
 
   public var currentCard: Card? { cards.first { $0.id == page } }
 
@@ -228,6 +233,7 @@ public final class WatchStore {
     // every poll, mid-scroll.
     if macPeeks != (reply.workspaces != nil) { macPeeks = reply.workspaces != nil }
     if cards != next { cards = next }
+    if let said = reply.platform, platform != said { platform = said }
     // Only cards that really are one workspace's: a Mac too old to scope sends them all, and those speak for themselves.
     cardsScope = asked.flatMap { id in next.allSatisfy { $0.workspace.id == id } ? id : nil }
     if workspaces != tiles { workspaces = tiles }
@@ -269,7 +275,7 @@ public final class WatchStore {
 
   private func refused(_ error: Error) {
     feel(.refused)
-    if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else { notice = "The Mac is not answering" }
+    if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else { notice = "The \(machine) is not answering" }
   }
 
   /** The box's words, where boxTarget says they go. The draft comes back if the Mac will not take them. */
