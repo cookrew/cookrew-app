@@ -350,7 +350,7 @@ beforeAll(async () => {
       doors: new DoorStore(dir, { allowPrivate: true }),
       stars: new StarStore(dir),
       origin: 'https://cookrew.dev',
-      v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } })
+      v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } })
     })
   )
   username = 'owner'
@@ -798,7 +798,7 @@ async function standBare(
   bounds: Partial<Parameters<typeof createCanvasRelay>[0]> = {}
 ): Promise<{ origin: string; relay: CanvasRelay; desktop: Linked; close: () => Promise<void> }> {
   const relay = createCanvasRelay({
-    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
+    v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
     ...bounds
   })
   const up = await listen(
@@ -967,7 +967,7 @@ describe('what the relay keeps', () => {
 
   beforeAll(async () => {
     relay = createCanvasRelay({
-      v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
+      v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
       log: (line) => lines.push(line)
     })
     bare = await listen(

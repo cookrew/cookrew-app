@@ -35,6 +35,8 @@ const SIGN_IN_ROUTES: readonly [string, RegExp][] = [
   ['GET', new RegExp(`^/v2/sessions/${UUID}$`)],
   ['POST', new RegExp(`^/v2/sessions/${UUID}/(totp|recovery|approve|passkey)$`)],
   ['GET', new RegExp(`^/v2/sessions/${UUID}/passkey/options$`)],
+  // A second step set up before the first session (auth UX 2026-11-09, v2-second-step.ts).
+  ['POST', new RegExp(`^/v2/sessions/${UUID}/setup/(passkey/options|passkey|totp|totp/confirm|finish)$`)],
   ['POST', /^\/v2\/oauth\/claim$/]
 ]
 const PROVIDER_ROUTES: readonly [string, RegExp][] = [

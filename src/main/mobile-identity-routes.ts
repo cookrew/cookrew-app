@@ -10,6 +10,8 @@ import type { RateCeiling } from '../shared/fixed-window-limiter'
 import { safeDeviceName, type RelayDevice } from './relay-device'
 import { publishedRequestOrigin } from '../shared/hello-proof'
 import { machineCopy } from '../shared/machine-words'
+import type { AccountPairDoor } from './account-pair'
+import { handleAccountPairRoutes } from './account-pair-routes'
 
 /**
  * THE TWO ROUTES PAIRING ADDS, AND WHY THEY SIT HERE.
@@ -122,6 +124,12 @@ export interface MobileIdentityDeps {
    * always answers true.
    */
   readonly admitLimiter: RateCeiling
+  /**
+   * ENTERING WITH THE ACCOUNT (account-pair.ts): the account's password or a
+   * passkey, checked here, admits a device of the account with no token.
+   * Absent = the routes answer 404 and the pairing token is the only way in.
+   */
+  readonly pairDoor?: AccountPairDoor
 }
 
 export const handleIdentityRoutes = async (
@@ -134,6 +142,7 @@ export const handleIdentityRoutes = async (
 ): Promise<boolean> => {
   if (!deps) return false
   if (url.pathname === '/api/admit') return admit(request, response, url, deps, bridged)
+  if (await handleAccountPairRoutes(request, response, url, deps.pairDoor, bridged)) return true
   if (url.pathname !== '/api/hello') return false
   const method = request.method ?? 'GET'
 

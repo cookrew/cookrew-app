@@ -1,3 +1,4 @@
+import { FRESH_MS } from './v2-session-age'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { V2Accounts, type V2Account, type V2Device } from './v2-accounts'
 import { V2Seats } from './v2-seats'
@@ -72,6 +73,12 @@ export const PRIVATE: Record<string, string> = {
 export interface V2Identity {
   accounts: V2Accounts
   tokens: V2Tokens
+  /** See V2Options.secondStep. */
+  secondStep: 'required' | 'legacy'
+  /** See V2Options.freshWindowMs. */
+  freshWindowMs: number
+  /** The registry's clock, injected by tests. */
+  now: () => number
   /** Who may open which door — phase 5's fact. */
   seats: V2Seats
   /** Per-IP on claiming, per username+IP on signing in. The contract's numbers. */
@@ -155,6 +162,20 @@ export interface V2Options {
   oauth?: OAuthConfig
   /** The auth origin (https://auth.cookrew.dev). Absent: the one sign-in page is off. */
   authOrigin?: string
+  /**
+   * AUTH UX 2026-11-09: 'required' (the default, and the only thing main.ts
+   * ever builds) issues no session without a second step. 'legacy' is the
+   * ladder as it was before the ruling — approve as a rung, a password alone
+   * on a known device — kept ONLY so the suites that use a sign-in as setup
+   * for something else can keep doing so. It is a code option and nothing
+   * else: no flag, no environment variable reaches it.
+   */
+  secondStep?: 'required' | 'legacy'
+  /**
+   * The sensitive acts' window (v2-session-age.ts · FRESH_MS, five minutes).
+   * Only ever narrowed: a suite proving that a stolen session is refused sets 0.
+   */
+  freshWindowMs?: number
 }
 
 /**
@@ -206,6 +227,9 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
       flows: new OAuthFlows(options.now)
     },
     origin: options.origin ?? null,
+    secondStep: options.secondStep ?? 'required',
+    freshWindowMs: Math.min(options.freshWindowMs ?? FRESH_MS, FRESH_MS),
+    now: options.now ?? Date.now,
     auth:
       options.authOrigin === undefined
         ? null

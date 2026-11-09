@@ -1,3 +1,4 @@
+import { LAST_USED_GRAIN_MS, sessionEnded, type SessionAge, type VerifiedBy } from './v2-session-age'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -64,6 +65,8 @@ export const SESSIONS_MAX = 50
  * its owner.
  */
 export const REVOKED_MAX = 200
+/** A session id stays published this long: past it, nothing minted under it is alive. */
+const SESSION_REVOKED_KEEP_MS = 31 * 24 * 60 * 60 * 1000
 const RECOVERY_CODES = 8
 
 /**
@@ -132,10 +135,24 @@ export interface V2Desktop {
   updatedAt: number
 }
 
-export interface V2Session {
+export interface V2Session extends SessionAge {
   jti: string
   dev: string
   issuedAt: number
+  /**
+   * THE SIGN-IN this session continues: its own jti at a sign-in, carried
+   * across renewals. A device pass names it (v2-device-grant.ts), so ending
+   * the sign-in — sign-out, a password change, "Not me", revoking the device —
+   * ends every pass minted under it, renewed or not.
+   */
+  sitting?: string
+}
+
+/** The ids a door must refuse once these sessions end: each jti and its sign-in. */
+const endedIds = (sessions: readonly V2Session[], kept: readonly V2Session[] = []): string[] => {
+  const live = new Set(kept.map((s) => s.sitting ?? s.jti))
+  const ids = sessions.flatMap((s) => [s.jti, ...(s.sitting !== undefined && !live.has(s.sitting) ? [s.sitting] : [])])
+  return [...new Set(ids)]
 }
 
 /**
@@ -183,7 +200,7 @@ export interface V2Account {
    * "this one sitting was ended" (a password change ends the others without
    * detaching the phone they were on, which taking the device away would).
    */
-  revoked?: readonly { id: string; at: number }[]
+  revoked?: readonly { id: string; at: number; kind?: 'session' }[]
 }
 
 /**
@@ -457,10 +474,25 @@ export class V2Accounts {
     return (this.get(username)?.revoked ?? []).map((r) => r.id)
   }
 
-  private withRevoked(account: V2Account, ids: readonly string[]): V2Account {
+  /**
+   * Publish ids as taken back. SESSION ids are tagged: nothing minted under a
+   * sitting outlives its thirty days (and a device pass its twelve hours), so
+   * they age out after that, and when the list is full they go before any
+   * DEVICE id — a revoked device must never come back because people signed
+   * out a lot.
+   */
+  private withRevoked(account: V2Account, ids: readonly string[], sessions: readonly string[] = ids): V2Account {
     const at = this.now()
-    const held = (account.revoked ?? []).filter((r) => !ids.includes(r.id))
-    return { ...account, revoked: [...held, ...ids.map((id) => ({ id, at }))].slice(-REVOKED_MAX) }
+    const held = (account.revoked ?? [])
+      .filter((r) => !ids.includes(r.id))
+      .filter((r) => r.kind !== 'session' || at - r.at < SESSION_REVOKED_KEEP_MS)
+    const added = ids.map((id) => (sessions.includes(id) ? { id, at, kind: 'session' as const } : { id, at }))
+    const all = [...held, ...added]
+    if (all.length <= REVOKED_MAX) return { ...account, revoked: all }
+    const devices = all.filter((r) => r.kind !== 'session').slice(-REVOKED_MAX)
+    const room = REVOKED_MAX - devices.length
+    const kept = room > 0 ? all.filter((r) => r.kind === 'session').slice(-room) : []
+    return { ...account, revoked: [...devices, ...kept] }
   }
 
   /**
@@ -729,14 +761,37 @@ export class V2Accounts {
 
   // ── sessions ───────────────────────────────────────────────────────────
 
-  startSession(username: string, deviceId: string): V2Session | null {
+  /**
+   * A new sitting. `signedInAt` is carried forward by a renewal (the thirty days
+   * run from the sign-in, not from the last renewal); `verifiedBy` marks a
+   * sitting that was just proved, which opens the five-minute window for
+   * sensitive acts (v2-session-age.ts).
+   */
+  startSession(
+    username: string,
+    deviceId: string,
+    age: { signedInAt?: number; verifiedBy?: VerifiedBy; sitting?: string } = {}
+  ): V2Session | null {
     const account = this.get(username)
     if (!account || !account.devices.some((d) => d.id === deviceId)) return null
-    const session: V2Session = { jti: randomUUID(), dev: deviceId, issuedAt: this.now() }
+    const at = this.now()
+    const jti = randomUUID()
+    const session: V2Session = {
+      jti,
+      dev: deviceId,
+      issuedAt: at,
+      sitting: age.sitting ?? jti,
+      signedInAt: age.signedInAt ?? at,
+      lastUsedAt: at,
+      ...(age.verifiedBy === undefined ? {} : { verifiedAt: at, verifiedBy: age.verifiedBy })
+    }
     // Bounded: the oldest goes so a long-lived account cannot grow a list
     // nobody reads into a file nobody can load.
-    const sessions = [...account.sessions, session].slice(-SESSIONS_MAX)
-    this.replace({ ...account, sessions })
+    const all = [...account.sessions, session]
+    const sessions = all.slice(-SESSIONS_MAX)
+    // Pushed out by the cap is ended too: what was minted under it must not outlive it.
+    const evicted = all.slice(0, Math.max(0, all.length - SESSIONS_MAX))
+    this.replace(evicted.length === 0 ? { ...account, sessions } : this.withRevoked({ ...account, sessions }, endedIds(evicted, sessions)))
     return session
   }
 
@@ -778,10 +833,17 @@ export class V2Accounts {
     return this.get(username)?.sessions.some((s) => s.jti === jti) ?? false
   }
 
+  /**
+   * SIGN-OUT. The id is published as revoked, like a password change's: a
+   * machine checks a device pass offline against that list, and a pass minted
+   * under this sitting must stop opening machines when the sitting ends.
+   */
   closeSession(username: string, jti: string): void {
     const account = this.get(username)
     if (!account) return
-    this.replace({ ...account, sessions: account.sessions.filter((s) => s.jti !== jti) })
+    const ending = account.sessions.filter((s) => s.jti === jti)
+    const ids = ending.length === 0 ? [jti] : endedIds(ending)
+    this.replace(this.withRevoked({ ...account, sessions: account.sessions.filter((s) => s.jti !== jti) }, ids))
   }
 
   /**
@@ -795,8 +857,55 @@ export class V2Accounts {
     if (!account) return null
     const device = account.devices.find((d) => d.id === claims.dev)
     if (!device) return null
-    if (!account.sessions.some((s) => s.jti === claims.jti)) return null
+    const session = account.sessions.find((s) => s.jti === claims.jti)
+    if (!session) return null
+    /**
+     * IDLE SEVEN DAYS, OR THIRTY SINCE THE SIGN-IN, AND IT IS OVER (auth UX
+     * 2026-11-09). Closed here, the one place every authenticated request
+     * passes, so no route can forget to ask. A session written before the
+     * ruling has no clock yet: it gets one now, so it has thirty days from
+     * the deploy rather than ending on the spot.
+     */
+    const at = this.now()
+    if (sessionEnded(session, at) !== null) {
+      this.closeSession(account.username, session.jti)
+      return null
+    }
+    const stale = session.lastUsedAt === undefined || at - session.lastUsedAt >= LAST_USED_GRAIN_MS
+    if (session.signedInAt === undefined || stale) {
+      const touched: V2Session = { ...session, signedInAt: session.signedInAt ?? at, lastUsedAt: at }
+      const next = { ...account, sessions: account.sessions.map((s) => (s.jti === session.jti ? touched : s)) }
+      this.replace(next)
+      return { account: next, device }
+    }
     return { account, device }
+  }
+
+  /**
+   * The live sitting a device would renew from: its newest, if it has not
+   * ended. Null means there is nothing to carry forward — renewal is not a
+   * way to start a new thirty days on the device key alone.
+   */
+  liveSessionOf(username: string, deviceId: string): V2Session | null {
+    const at = this.now()
+    const mine = (this.get(username)?.sessions ?? []).filter((s) => s.dev === deviceId && sessionEnded(s, at) === null)
+    return mine.sort((a, b) => b.issuedAt - a.issuedAt)[0] ?? null
+  }
+
+  /** The sitting this token names, or null. */
+  session(username: string, jti: string): V2Session | null {
+    return this.get(username)?.sessions.find((s) => s.jti === jti) ?? null
+  }
+
+  /** This sitting just proved itself again: the five-minute window opens from now. */
+  markVerified(username: string, jti: string, by: VerifiedBy): void {
+    const account = this.get(username)
+    if (!account || !account.sessions.some((s) => s.jti === jti)) return
+    const at = this.now()
+    this.replace({
+      ...account,
+      sessions: account.sessions.map((s) => (s.jti === jti ? { ...s, verifiedAt: at, verifiedBy: by } : s))
+    })
   }
 
   /** Last seen, for the Devices list. Written on a read, so it stays honest. */
@@ -824,7 +933,7 @@ export class V2Accounts {
     if (account.devices.length <= 1) return { ok: false, reason: 'last_device' }
     // The device AND every sitting it opened: a door checking offline sees
     // both in the published list, so neither outlives the revocation.
-    const ended = account.sessions.filter((s) => s.dev === deviceId).map((s) => s.jti)
+    const ended = endedIds(account.sessions.filter((s) => s.dev === deviceId))
     this.replace(
       this.withRevoked(
         {
@@ -833,7 +942,8 @@ export class V2Accounts {
           desktops: account.desktops.filter((d) => d.deviceId !== deviceId),
           sessions: account.sessions.filter((s) => s.dev !== deviceId)
         },
-        [deviceId, ...ended]
+        [deviceId, ...ended],
+        ended
       )
     )
     return { ok: true }
@@ -1081,8 +1191,27 @@ export class V2Accounts {
     return { ok: true }
   }
 
+  /**
+   * A FIRST PASSWORD for an account that began at a provider (owner's ruling
+   * 3, 2026-11-09: entering a machine with no passkey needs one). Not a change:
+   * nobody else was holding a password, so no sitting ends. The caller has
+   * checked the five-minute verification.
+   */
+  async setFirstPassword(username: string, next: unknown): Promise<{ ok: true } | Refused<'not_passwordless' | 'weak_password'>> {
+    const account = this.get(username)
+    if (!account || account.passwordless !== true) return { ok: false, reason: 'not_passwordless' }
+    if (!passwordIsAcceptable(next)) return { ok: false, reason: 'weak_password' }
+    const hashed = await passwordGate.run(() => hashPassword(next))
+    const fresh = this.get(username) ?? account
+    this.replace({ ...fresh, password: hashed, passwordless: false })
+    return { ok: true }
+  }
+
   private otherSessions(account: V2Account, keepJti?: string): string[] {
-    return account.sessions.filter((s) => s.jti !== keepJti).map((s) => s.jti)
+    return endedIds(
+      account.sessions.filter((s) => s.jti !== keepJti),
+      account.sessions.filter((s) => s.jti === keepJti)
+    )
   }
   private keptSessions(account: V2Account, keepJti?: string): V2Session[] {
     return account.sessions.filter((s) => s.jti === keepJti)

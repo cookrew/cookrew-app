@@ -79,3 +79,40 @@
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+/* The account's way in (owner 2026-11-09): a passkey, or the password beside its
+   button, then the token folded away for a machine with no account. */
+.cr-reauth-enter {
+  display: flex;
+  flex-direction: column;
+}
+
+.cr-reauth-passkey {
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+}
+
+.cr-reauth-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.cr-reauth-row .cr-reauth-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cr-reauth-fold {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cr-line, #d9d2c4);
+}
+
+.cr-reauth-fold > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--cr-ink-dim, #6b6455);
+  margin-bottom: 10px;
+}

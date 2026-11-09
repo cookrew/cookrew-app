@@ -13,6 +13,7 @@ import {
   spendChallenge
 } from './v2-factor-http'
 import { handleMeFactorRoute } from './v2-enrol-routes'
+import { handleSetupRoute, hasSecondStep, maySetUpHere, openSetup } from './v2-second-step'
 import { factorSentence } from './v2-factor-copy'
 import { FACTOR_ORDER, type Factor, type Pending } from './v2-pending'
 import { verifyAssertion } from './v2-passkeys'
@@ -51,33 +52,21 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /**
  * WHAT THIS ACCOUNT CAN FINISH WITH, in the ladder's order.
  *
- * `approve` is offered whenever the account has any attached device, because
- * the request appears on all of them; `recovery` only when codes were minted,
- * since an empty rescue is a dead end dressed as a way in.
+ * AUTH UX 2026-11-09: the second step is a passkey or an authenticator, and a
+ * recovery code is the rescue when neither is at hand. "Approve on a device
+ * already signed in" is NOT a second step any more and is never offered — a
+ * nod from a screen is not a factor the person holds. `recovery` only when
+ * codes were minted, since an empty rescue is a dead end dressed as a way in.
  */
 export function factorsFor(v2: V2Identity, account: V2Account): Factor[] {
   const has: Record<Factor, boolean> = {
     passkey: v2.factors.store.hasPasskey(account.username),
     totp: v2.factors.store.totpActive(account.username),
-    approve: account.devices.length > 0,
+    // Only the pre-ruling ladder offers it (V2Options.secondStep).
+    approve: v2.secondStep === 'legacy' && account.devices.length > 0,
     recovery: account.recovery.length > 0
   }
   return FACTOR_ORDER.filter((factor) => has[factor])
-}
-
-/**
- * Is a password enough on its own? Only for an account with no factors being
- * opened on a device it already knows — or on its very first device, which is
- * the account that has just been claimed.
- *
- * DERIVED FROM `factorsFor` AND NOTHING ELSE. It was a second predicate that
- * happened to agree with the first, which is a ladder that disappears the day
- * somebody adds a factor kind to one list and not the other.
- */
-function ladderApplies(next: readonly Factor[], account: V2Account, deviceId: string): boolean {
-  const hasFactor = next.includes('passkey') || next.includes('totp')
-  const known = account.devices.some((d) => d.id === deviceId)
-  return hasFactor || (!known && account.devices.length > 0)
 }
 
 /**
@@ -140,15 +129,35 @@ export function afterFirstFactor(
     refuse(response, 400, 'bad_device')
     return
   }
-  const next = factorsFor(v2, account)
-  if (!ladderApplies(next, account, device.id)) {
-    completeSignIn(ctx, account.username, rawDevice)
+  if (v2.secondStep === 'legacy' && legacyFinish(ctx, account, rawDevice, device.id, via === undefined ? 'password' : 'provider')) return
+  /**
+   * NO SECOND STEP YET: set one up, here, before any session — on a device
+   * the account already holds (v2-second-step.ts says why only there).
+   */
+  if (v2.secondStep !== 'legacy' && !hasSecondStep(v2, account.username)) {
+    if (!maySetUpHere(v2, account.username, device.id)) {
+      refuseFactor(response, 403, 'second_step_elsewhere')
+      return
+    }
+    /**
+     * ONLY WHERE THE DEVICE'S KEY IS PROVEN. A known device id and its public
+     * key are not a secret, so on the direct path a stranger with a phished
+     * password could name the owner's laptop and enrol a factor of their own
+     * (review, 11-09). The auth origin binds a request to a key the client
+     * proved by signing (auth-requests.ts), so the set-up runs there; here the
+     * answer is the same plain sentence, with no pending to enrol through.
+     */
+    if (ctx.auth === undefined) {
+      refuseFactor(response, 403, 'second_step_setup')
+      return
+    }
+    openSetup(ctx, account.username, rawDevice, via)
     return
   }
+  const next = factorsFor(v2, account)
   if (next.length === 0) {
-    // Cannot happen — the ladder applies only when there is a factor or a
-    // device to approve from — and it FAILS CLOSED if it ever does. A
-    // security ladder's default branch must not be "let them in".
+    // Cannot happen — the account holds a passkey or an authenticator — and it
+    // FAILS CLOSED if it ever does. A ladder's default branch must not be "in".
     refuseFactor(response, 403, 'no_factor')
     return
   }
@@ -168,11 +177,23 @@ export function afterFirstFactor(
     next,
     pending: pending.id,
     expiresAt: pending.expiresAt,
-    // THE NUMBER GOES TO THE DEVICE THAT IS SIGNING IN, and only here. This
-    // answer is the asking device's own; the owner's approvals list is built
-    // from Approvals, which do not carry it at all.
+    // Kept for clients that print it; no rung reads it now that approve is gone.
     match: pending.match
   })
+}
+
+/**
+ * THE LADDER BEFORE THE RULING, for V2Options.secondStep === 'legacy' only: a
+ * password alone opened an account with no factor on a device it knew, or on
+ * its first device. True means the sign-in finished here.
+ */
+function legacyFinish(ctx: V2Context, account: V2Account, rawDevice: unknown, deviceId: string, by: 'password' | 'provider'): boolean {
+  const next = factorsFor(ctx.v2, account)
+  const hasFactor = next.includes('passkey') || next.includes('totp')
+  const known = account.devices.some((d) => d.id === deviceId)
+  if (hasFactor || (!known && account.devices.length > 0)) return false
+  completeSignIn(ctx, account.username, rawDevice, by)
+  return true
 }
 
 // ── the router ────────────────────────────────────────────────────────────
@@ -208,6 +229,7 @@ export function handleFactorRoute(ctx: V2Context): boolean {
     refuseFactor(ctx.response, 410, 'expired')
     return true
   }
+  if (handleSetupRoute(ctx, id, rest.slice(2))) return true
   if (rest.length === 2 && method === 'GET') {
     pollPending(ctx, id)
     return true
@@ -288,7 +310,7 @@ async function totpStep(ctx: V2Context, id: string): Promise<void> {
     refuseFactor(ctx.response, 401, 'bad_code')
     return
   }
-  finishRung(ctx, pending, id)
+  finishRung(ctx, pending, id, 'totp')
 }
 
 async function recoveryStep(ctx: V2Context, id: string): Promise<void> {
@@ -305,7 +327,7 @@ async function recoveryStep(ctx: V2Context, id: string): Promise<void> {
     refuseFactor(ctx.response, 401, 'bad_recovery')
     return
   }
-  finishRung(ctx, pending, id)
+  finishRung(ctx, pending, id, 'recovery')
 }
 
 /** The options a browser needs to ask its authenticator for an assertion. */
@@ -392,7 +414,7 @@ async function pendingPasskey(ctx: V2Context, id: string): Promise<void> {
     return
   }
   if (!checkAssertion(ctx, `pending|${id}`, credential, found)) return
-  finishRung(ctx, pending, id)
+  finishRung(ctx, pending, id, 'passkey')
 }
 
 /**
@@ -477,12 +499,15 @@ function pollPending(ctx: V2Context, id: string): void {
     json(ctx.response, 202, { status: 'waiting', expiresAt: pending.expiresAt })
     return
   }
-  if (approval.decision !== 'approve') {
-    ctx.v2.factors.pending.close(id)
-    refuseFactor(ctx.response, 410, 'denied')
+  // An approval no longer finishes anything (auth UX 2026-11-09): approve is
+  // not a second step. Only a pending opened before the deploy — or the
+  // pre-ruling ladder kept for old suites — can reach here.
+  if (approval.decision === 'approve' && ctx.v2.secondStep === 'legacy') {
+    finishRung(ctx, pending, id, null)
     return
   }
-  finishRung(ctx, pending, id)
+  ctx.v2.factors.pending.close(id)
+  refuseFactor(ctx.response, 410, approval.decision === 'approve' ? 'expired' : 'denied')
 }
 
 // ── passwordless: the W1 sheet's first button ─────────────────────────────
@@ -533,5 +558,6 @@ async function passwordlessPasskey(ctx: V2Context): Promise<void> {
     return
   }
   if (!checkAssertion(ctx, `ip|${asking(ctx)}`, credential, found, true)) return
-  completeSignIn(ctx, found.username, device)
+  // A passkey with user verification is the whole sign-in: both steps at once.
+  completeSignIn(ctx, found.username, device, 'passkey')
 }

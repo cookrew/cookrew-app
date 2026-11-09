@@ -925,7 +925,11 @@
         void v2('POST', '/v2/sessions/current').then(() => location.assign('/'))
       } else if (el.dataset.recovery !== undefined) {
         if (!confirm('A new set of eight codes replaces any you already have. Show them?')) return
-        void v2('POST', '/v2/me/recovery-codes', {}).then((out) => {
+        void v2('POST', '/v2/me/recovery-codes', {}).then(async (first) => {
+          // Five minutes after signing in, minting codes asks again (auth UX 2026-11-09).
+          const asked = first.status === 401 && first.body?.error === 'step_up'
+          const current = asked ? prompt('It has been a while since you signed in. Type your password to go on.') : null
+          const out = asked && current ? await v2('POST', '/v2/me/recovery-codes', { current }) : first
           if (out.status !== 201) return toast(out.body?.message ?? 'The codes could not be made.', 6000)
           const box = $('me-codes')
           box.textContent = out.body.codes.join('\n')

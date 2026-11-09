@@ -165,6 +165,7 @@ import type { LaneInfo, LandResult } from '../shared/model'
 import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
+import { createAccountPairDoor } from './account-pair'
 import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
@@ -1315,6 +1316,21 @@ function publishDoorClaims(): void {
  * exactly as on the LAN, and none of the three has anything left to decide.
  */
 const admittedDevices = createAdmittedDeviceStore()
+
+/**
+ * ENTERING THIS MACHINE WITH THE ACCOUNT (owner 2026-11-09): a device brings a
+ * twelve-hour pass cookrew.dev issued after its password or passkey, checked
+ * here offline against /v2/keys and the revoked list, and signs this machine's
+ * own challenge with the key the pass names (account-pair.ts). The verifier is
+ * declared further down; nothing calls the door before the mobile server starts.
+ */
+const accountPairDoor = createAccountPairDoor({
+  account: () => accounts.account(),
+  grants: async (token) => (v2CallTokens === null ? null : v2CallTokens.grant(token)),
+  admitted: admittedDevices,
+  platform: process.platform,
+  log: (message: string) => console.error(`[cookrew] ${message}`)
+})
 
 /**
  * REACH v2.1 — THIS MAC'S OWN TRUSTED CERTIFICATE.
@@ -7816,7 +7832,8 @@ app.whenReady().then(() => {
       // phone waiting on cookrew.dev to learn the owner's initials is a phone
       // showing "?" every time the WAN is slow.
       profileFace: () => profileFace,
-      log: (message: string) => console.error(`[cookrew] ${message}`)
+      log: (message: string) => console.error(`[cookrew] ${message}`),
+      pairDoor: accountPairDoor
     },
     recoverAgent,
     restoreCheckpoint,

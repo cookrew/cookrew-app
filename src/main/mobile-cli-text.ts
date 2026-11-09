@@ -27,8 +27,38 @@ const pairingLines = (pairing: PairingHandout | null | undefined): string[] => {
   ]
 }
 
+/**
+ * THE ACCOUNT'S WAY IN, printed instead of a token (owner 2026-11-09).
+ *
+ * On a machine of an account the relay address needs no secret on it: a phone
+ * signed in to the account opens it and enters with a passkey or the account
+ * password, which this machine checks itself (account-pair.ts). The pairing
+ * token is a bearer secret — one has leaked into an agent's log already — so a
+ * terminal only shows it when somebody asks with --token.
+ */
+const accountLines = (pairing: PairingHandout): string[] => {
+  const address = pairing.url.split('#')[0]
+  const handle = /\/relay\/@([^/]+)\//.exec(address)?.[1]
+  return [
+    `  With your account${handle ? ` (@${handle})` : ''}, from any network`,
+    `    ${address}`,
+    `    Open it on a phone or browser signed in to cookrew.dev${handle ? ` as @${handle}` : ''},`,
+    '    then enter with a passkey or the account password. For twelve hours',
+    '    after that, every machine of the account opens with no question —',
+    '    or tap OPEN on cookrew.dev/me.',
+    '',
+    '  Without an account: `cookrew mobile --token` prints links that carry',
+    '  this machine’s pairing token. Treat them like a password.'
+  ]
+}
+
 export interface MobileHelpInput {
   endpoints: MobileEndpoint[]
+  /**
+   * `cookrew mobile --token`: print the token links even on a machine of an
+   * account. Absent or false there = the account's way only.
+   */
+  showToken?: boolean
   /**
    * The one URL to scan (pairing-handout.ts), when there is an account.
    * Absent or `direct` = this Mac has no account and prints what it always did.
@@ -92,6 +122,9 @@ const mixed = (endpoints: readonly MobileEndpoint[]): boolean =>
   anyTrusted(endpoints) && endpoints.some((endpoint) => !isTrusted(endpoint))
 
 export function renderMobileHelp(input: MobileHelpInput): string {
+  if (input.pairing?.via === 'relay' && input.showToken !== true) {
+    return ['Cookrew Mobile — open on your phone:', '', ...accountLines(input.pairing)].join('\n')
+  }
   const lines: string[] = [
     'Cookrew Mobile — open on your phone:',
     '',

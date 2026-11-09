@@ -235,7 +235,7 @@ const registry = (): Server =>
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
     origin: 'https://cookrew.dev',
-    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } })
+    v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } })
   })
 
 beforeAll(async () => {
@@ -332,7 +332,7 @@ describe('presence, one question for the fleet', () => {
         identity: new IdentityService(restartDir),
         stars: new StarStore(restartDir),
         origin: 'https://cookrew.dev',
-        v2: createV2(restartDir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } }),
+        v2: createV2(restartDir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } }),
         lineSeenFile: seenFile
       })
     const first = await listen(make())

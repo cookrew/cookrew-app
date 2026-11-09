@@ -44,7 +44,7 @@ const freePort = (): Promise<number> =>
     })
   })
 
-export async function bootAuthSite(options: { auth?: boolean } = {}): Promise<AuthSite> {
+export async function bootAuthSite(options: { auth?: boolean; secondStep?: 'required' | 'legacy'; freshWindowMs?: number } = {}): Promise<AuthSite> {
   const dir = mkdtempSync(path.join(tmpdir(), 'auth-site-'))
   const fake = await fakeOAuth()
   const port = await freePort()
@@ -56,6 +56,10 @@ export async function bootAuthSite(options: { auth?: boolean } = {}): Promise<Au
     limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, oauthPerMinute: 1000, lookupsPerMinute: 1000, joinPerMinute: 1000 },
     oauth: fake.config(),
     origin: P,
+    // The suites on this harness test the auth page's plumbing, not Gate 1;
+    // a Gate 1 suite passes 'required'.
+    secondStep: options.secondStep ?? 'legacy',
+    ...(options.freshWindowMs === undefined ? {} : { freshWindowMs: options.freshWindowMs }),
     ...(options.auth === false ? {} : { authOrigin: A })
   })
   const server: Server = createRegistry({

@@ -179,6 +179,7 @@
     if (out.status < 300 && b.status === 'cancelled') return cancelled(b)
     if (out.status < 300 && b.status === 'ready') return setEnrol(b.enrol), first()
     if (out.status === 401 && b.error === 'second_factor') return ladder(b)
+    if (out.status === 403 && b.error === 'second_step_setup' && b.pending) return setupChoose(b)
     if (out.status === 410 && b.error === 'denied') return denied(false)
     if (out.status === 410 && b.error === 'expired') return expired()
     return say(
@@ -637,6 +638,131 @@
     ])
     const mark = availability(name)
     if (answer.suggest) mark(answer.free ? 'free' : 'taken', Boolean(answer.free))
+  }
+
+  /* ── a second step, set up before the first session (auth UX 2026-11-09) ── */
+  const setupPath = (step) => `/v2/sessions/${encodeURIComponent(step.pending)}/setup`
+
+  function setupChoose(step, note) {
+    const { said, say } = sayer()
+    const ways = [
+      canPasskey() ? ['passkey', 'key', 'Use a passkey', 'Touch ID, Face ID or a security key — both steps in one'] : null,
+      ['totp', 'code', 'Use an authenticator app', 'Six digits from an app on your phone']
+    ].filter(Boolean)
+    screen([
+      ...head('One more step', 'Add a second step.', 'Cookrew asks for two steps when you sign in. Set one up now; a passkey counts as both.'),
+      h(
+        'div',
+        { class: 'rungs' },
+        ways.map(([kind, icon, title, hint]) =>
+          h(
+            'button',
+            { type: 'button', class: 'rung', onclick: () => (kind === 'passkey' ? setupPasskey(step) : setupTotp(step)) },
+            h('span', { class: 'ico', 'aria-hidden': 'true' }, svg(icon)),
+            h('span', null, h('b', null, title), h('small', null, hint)),
+            svg('arrow')
+          )
+        )
+      ),
+      said,
+      links(notNow())
+    ])
+    if (note) say(note)
+  }
+
+  /** The factor is in: the codes, then the session. */
+  function setupDone(step, out, say) {
+    if (out.status === 201 && Array.isArray(out.body.codes)) {
+      return recoveryCodes(out.body.codes.map(String), () => setupFinish(step))
+    }
+    return outcome(out, say, 'That was not set up. Try again.')
+  }
+
+  async function setupFinish(step) {
+    const { said, say } = sayer()
+    const live = screen([...head(null, 'Finishing up…', null), h('p', { class: 'wait' }, 'Signing you in.'), said])
+    const out = await call('POST', `${setupPath(step)}/finish`, { saved: true })
+    if (!live()) return undefined
+    return outcome(out, say, 'Signing in did not finish. Start again.')
+  }
+
+  async function setupPasskey(step) {
+    const { said, say } = sayer()
+    const waiting = h('p', { class: 'wait' }, 'Waiting for your passkey…')
+    const live = screen([
+      badge('key'),
+      ...head('One more step', 'Make a passkey.', 'Your browser will ask for Touch ID, Face ID, Windows Hello or a security key.'),
+      waiting,
+      said,
+      links(link('Use another way', () => setupChoose(step)), notNow())
+    ])
+    const options = await call('POST', `${setupPath(step)}/passkey/options`, {})
+    if (!live()) return undefined
+    if (options.status !== 200) return outcome(options, say, 'A passkey could not be started just now.')
+    const made = await window.cookrewAuthEnrol.makePasskey(options.body)
+    if (!live()) return undefined
+    if (made.error) {
+      waiting.hidden = true
+      return say(made.error)
+    }
+    waiting.textContent = 'Saving the passkey…'
+    const name = window.cookrewAuthEnrol.nameGuess()
+    return setupDone(step, await call('POST', `${setupPath(step)}/passkey`, { name, credential: made.credential }), say)
+  }
+
+  /** The QR the authenticator scans: rows of 0/1 from the registry, drawn as SVG. */
+  function qrPicture(rows) {
+    const NS = 'http://www.w3.org/2000/svg'
+    const quiet = 4
+    const span = rows.length + quiet * 2
+    const picture = doc.createElementNS(NS, 'svg')
+    picture.setAttribute('viewBox', `0 0 ${span} ${span}`)
+    picture.setAttribute('class', 'qr')
+    picture.setAttribute('role', 'img')
+    picture.setAttribute('aria-label', 'Scan this with your authenticator app')
+    picture.setAttribute('shape-rendering', 'crispEdges')
+    const paper = doc.createElementNS(NS, 'rect')
+    paper.setAttribute('width', String(span))
+    paper.setAttribute('height', String(span))
+    paper.setAttribute('fill', '#fff')
+    let d = ''
+    rows.forEach((line, y) => {
+      for (let x = 0; x < line.length; x += 1) if (line[x] === '1') d += `M${x + quiet} ${y + quiet}h1v1h-1z`
+    })
+    const ink = doc.createElementNS(NS, 'path')
+    ink.setAttribute('d', d)
+    ink.setAttribute('fill', '#14110a')
+    picture.append(paper, ink)
+    return picture
+  }
+
+  async function setupTotp(step) {
+    const { said, say } = sayer()
+    const live = screen([...head('One more step', 'Setting up your authenticator…', null), said])
+    const started = await call('POST', `${setupPath(step)}/totp`, {})
+    if (!live()) return undefined
+    if (started.status !== 201) return outcome(started, say, 'The authenticator could not be set up just now.')
+    const code = field('Six-digit code', { class: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', placeholder: '000000', 'data-focus': true })
+    const { said: said2, say: say2 } = sayer()
+    const { send, submit } = submitter('Verify', 'primary', async () => {
+      const value = code.input.value.trim()
+      if (!value) return say2('Type the six digits your app shows.')
+      return setupDone(step, await call('POST', `${setupPath(step)}/totp/confirm`, { code: value }), say2)
+    })
+    code.input.addEventListener('input', () => {
+      const digits = code.input.value.replace(/\D/g, '').slice(0, 6)
+      if (digits !== code.input.value) code.input.value = digits
+      if (digits.length === 6) submit()
+    })
+    const rows = Array.isArray(started.body.qr) ? started.body.qr : []
+    screen([
+      ...head('One more step', 'Scan this with your authenticator app.', 'Then type the six digits it shows.'),
+      rows.length > 0 ? qrPicture(rows) : null,
+      h('p', { class: 'note' }, 'Or type this key: ', h('code', { class: 'mono' }, String(started.body.secret || ''))),
+      form([code.row, send, said2], submit),
+      links(link('Use another way', () => setupChoose(step)), notNow())
+    ])
+    return undefined
   }
 
   /* ── through ────────────────────────────────────────────────────────────── */

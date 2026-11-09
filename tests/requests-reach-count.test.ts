@@ -43,7 +43,7 @@ beforeEach(async () => {
     log: new TransparencyLog(dir),
     identity: new IdentityService(dir),
     stars: new StarStore(dir),
-    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+    v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = loopbackOnly(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)

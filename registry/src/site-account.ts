@@ -94,6 +94,12 @@ export interface FactorSummary {
 /** The site cannot know what a desktop runs, so /me says machine for all of them. */
 const meCopy = (...args: Parameters<typeof webCopy>): string => machineCopy(webCopy(...args), 'any')
 
+const PASSWORD_ROW =
+  '<li id="me-password-row"><span class="chip">Password</span><span><b>Your password</b><br><span class="meta" id="me-password-note">At least 12 characters. It goes only to this site.</span></span><button class="btn sm" data-password>Change</button></li>'
+/** Owner's ruling 3: a provider-only account sets an account password to enter a machine without a passkey. */
+const FIRST_PASSWORD_ROW =
+  '<li id="me-password-row"><span class="chip">Password</span><span><b>No password yet</b><br><span class="meta" id="me-password-note">You sign in with your provider. Set a password to enter your machines with it — or add a passkey below.</span></span><button class="btn sm" data-password data-first>Set</button></li>'
+
 /** This page can check a password and cannot make a provider trip. */
 const DELETE_IN_THE_APP =
   '<p class="meta">This account has no password to confirm with here. Delete it from your profile in the Cookrew app, where your sign-in provider can confirm it.</p>'
@@ -181,7 +187,7 @@ ${desktopsSection(account.username, account.desktops)}
 
 <h2 style="margin-top:30px" id="security">Security</h2>
 <ul class="doors me-list" id="me-security">
-<li id="me-password-row"><span class="chip">Password</span><span><b>Your password</b><br><span class="meta" id="me-password-note">At least 12 characters. It goes only to this site.</span></span><button class="btn sm" data-password>Change</button></li>
+${account.passwordless === true ? FIRST_PASSWORD_ROW : PASSWORD_ROW}
 ${passkeyRows(factors.passkeys)}
 <li><span class="chip">Factor</span><span><b>Passkey (Touch ID / Face ID)</b><br><span class="meta" data-passkey-note>Recommended. It lives on this device and cannot be typed by anyone else.</span></span><button class="btn sm" data-add-passkey>Add</button></li>
 ${authenticatorRow(factors.totp)}

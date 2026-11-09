@@ -226,17 +226,43 @@ export const V3_COPY = machineTable({
    * than a silent failure the row says which door is still open.
    */
   /**
-   * M5, the companion's Not paired card — all the ways in, best first.
+   * M5, the companion's Not paired card, when the account cannot be used here.
    *
-   * The card used to name two doors, both of them the old one: scan the Mac's
-   * QR, or paste what the terminal printed. Both still work and both are still
-   * here, because a Mac nobody has signed in on has no other way to let a
-   * phone in. But a Mac that IS on an account now has a better door — one tap
-   * on /me, answered on the Mac — and a card that did not mention it would
-   * send every reader to the ceremony they were trying to escape.
+   * Owner 2026-11-09: the account's password or a passkey enters a machine of
+   * the account, with nobody at it (account-pair.ts). This sentence is what is
+   * left for a machine with no account — or a page that cannot ask it — and it
+   * names only doors that work there: the QR, and the token `cookrew mobile
+   * --token` prints. USE WI-FI is gone from it: it was answered at the machine.
    */
   'm5.unpaired':
-    'If this Mac is on your account, open cookrew.dev/me and tap USE WI-FI on its row — you answer on the Mac, with no scan. Otherwise scan the QR on the Mac’s avatar → Pair a phone, or paste what `cookrew mobile` printed.',
+    'Scan the QR on the Mac’s avatar → Pair a phone, or paste the link `cookrew mobile --token` printed.',
+  /**
+   * M5, the card on a machine of the account: the way in that needs nobody
+   * there. Owner 2026-11-09: one verification opens every machine of the
+   * account for twelve hours.
+   */
+  'm5.enter.lede':
+    'Enter this Mac with your account — a passkey, or the account password. Every machine of your account then lets this browser in for twelve hours.',
+  'm5.enter.entering': 'Entering with your account…',
+  'm5.enter.passkey': 'Use a passkey',
+  'm5.enter.password': 'Account password',
+  'm5.enter.go': 'Enter',
+  /** M5, a browser with no cookrew.dev device key: the account cannot vouch for it yet. */
+  'm5.enter.signin':
+    'This browser is not signed in to cookrew.dev. Sign in at cookrew.dev/me, then open this Mac again from there.',
+  /** M5, a machine of the account reached on a page that cannot use the account (a direct address). */
+  'm5.enter.elsewhere':
+    'Open this Mac from cookrew.dev/me in a browser signed in to your account, then enter with a passkey or the account password.',
+  /** M5, ruling 3: a provider-only account with no passkey sets an account password first. */
+  'm5.enter.setpassword':
+    'Set an account password first: this account signs in with Google or GitHub and has no password or passkey yet. Set one at cookrew.dev/me, then come back.',
+  /** M5, cookrew.dev could not be asked for the pass. */
+  'm5.enter.unreachable':
+    'cookrew.dev cannot be reached just now. Try again in a minute, or pair with a token instead.',
+  /** M5, a token was minted and then refused: rare, and said rather than silent. */
+  'm5.enter.kept': 'This Mac let this browser in but then refused it. Try again.',
+  /** M5, the token, kept for a machine with no account, folded away below the account. */
+  'm5.enter.token': 'Pair with a token instead',
   'm5.no-seal':
     'This browser joined before Wi-Fi sharing and cannot receive the token. OPEN works; to use Wi-Fi, add this browser again.',
 

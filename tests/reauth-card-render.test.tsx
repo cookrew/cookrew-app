@@ -44,19 +44,18 @@ describe('the Not paired card', () => {
   it('says what it is and names both ways to the credential', async () => {
     const markup = await card('none')
     expect(markup).toContain('Not paired')
-    // THREE ROUTES NOW, IN THE ORDER A READER SHOULD TRY THEM (V3-14 M5).
-    // The account route came first when it landed and belongs first: it is
-    // answered by a tap on the Mac and needs no camera at all. The QR is the
-    // fallback for a Mac that has no account, and the CLI line is for a phone
-    // that cannot scan. A card that named only the ceremony would send every
-    // reader to the one they were trying to escape.
-    expect(markup).toContain('USE WI-FI')
+    // Owner 2026-11-09: the account is the way in on a machine of the
+    // account, and the card asks the machine before it says which. Until the
+    // machine answers, the card names the doors that work without an account,
+    // in the neutral word — "Mac" on a Linux box is the one thing it must not say.
+    expect(markup).not.toContain('USE WI-FI')
     // The typographic apostrophe, not the escaped straight one: React escapes
     // ' to &#x27; and leaves \u2019 alone, so an assertion written with the
     // wrong one passes only while the copy uses the wrong one too.
-    expect(markup).toContain('scan the QR on the Mac\u2019s avatar')
+    expect(markup).toContain('Scan the QR on the machine\u2019s avatar')
     expect(markup).toContain('Pair a phone')
-    expect(markup).toContain('cookrew mobile')
+    expect(markup).toContain('cookrew mobile --token')
+    expect(markup).not.toMatch(/\bMac\b/)
   })
 
   it('carries the field label and the PAIR button', async () => {

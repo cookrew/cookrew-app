@@ -101,6 +101,12 @@ export const isStepUpAct = (value: unknown): value is StepUpAct =>
  *
  * The registry's own test suite drives every act in this table over HTTP, so a
  * route that loses its threshold cannot leave this file still claiming one.
+ *
+ * FIVE MINUTES (auth UX 2026-11-09). On top of the shapes above, the sensitive
+ * acts — change-password, add-factor, remove-factor, delete-account,
+ * revoke-device — pass without a new proof when the sitting proved itself
+ * within the last five minutes (registry/src/v2-session-age.ts), and ask
+ * otherwise. Changing the password still asks for the current one inline.
  */
 export type StepUpEnforcement = 'gate' | 'password' | 'none' | 'passwordless'
 
@@ -128,8 +134,12 @@ export const STEP_UP_ENFORCEMENT: Record<StepUpAct, StepUpEnforcement> = {
   'link-provider': 'gate',
   /** DELETE /v2/me/links/:provider. */
   'unlink-provider': 'gate',
-  /** POST /v2/me/recovery-codes · /v2/me/totp/enrol · /v2/me/passkeys/options. */
-  'add-factor': 'passwordless',
+  /**
+   * POST /v2/me/recovery-codes · /v2/me/totp/enrol · /v2/me/passkeys/options.
+   * Every account now (auth UX 2026-11-09): a verification within five minutes,
+   * or a proof at the gate.
+   */
+  'add-factor': 'gate',
   /** DELETE /v2/me. */
   'delete-account': 'gate'
 }
