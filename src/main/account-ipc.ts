@@ -1038,9 +1038,14 @@ async function adoptPassword(deps: AccountIpcDeps, password: unknown): Promise<A
   if (deps.lock.locked) return LOCKED
   const typed = asString(password)
   if (typed.length === 0) return { ok: false, reason: 'bad_credentials' }
+  // THE LOCAL LOCK COUNTS THESE TRIES TOO, as at the first unlock: five wrong
+  // ones buy a minute here, before cookrew.dev's own count is even reached.
+  const local = deps.lock.unlock(typed)
+  if (!local.ok && local.reason === 'paused') return { ok: false, reason: 'rate_limited' }
   const checked = await deps.accounts.checkAccountPassword(typed)
   if (!checked.ok) return checked
   deps.accounts.foldPasscode(typed)
+  deps.lock.proven()
   return { ok: true, value: accountStatus(deps) }
 }
 
@@ -1341,16 +1346,20 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
  */
 export function accountDoor(deps: AccountIpcDeps, platform: string = process.platform): AccountDoor {
   /**
-   * EVERY LANDING THROUGH THIS DOOR IS `cookrew login`: nobody is at this
-   * machine's screen (account-v2.ts · fromTerminal), whichever rung it landed
-   * on. Marked before the renderer can ask: `account:changed` makes it read
-   * the status in a round trip, which this microtask is always ahead of.
+   * A MACHINE FIRST SIGNED IN THROUGH THIS DOOR is `cookrew login`'s: nobody
+   * is at its screen (account-v2.ts · fromTerminal), whichever rung it landed
+   * on. Only a NEW sign-in is marked: renewing the session of a machine a
+   * person signed in at must not switch its working lock off. Marked before
+   * the renderer can ask: `account:changed` makes it read the status in a
+   * round trip, which this microtask is always ahead of.
    */
-  const terminal = <T extends { ok: boolean }>(landing: Promise<T>): Promise<T> =>
-    landing.then((result) => {
-      if (result.ok) deps.accounts.markFromTerminal()
+  const terminal = <T extends { ok: boolean }>(land: () => Promise<T>): Promise<T> => {
+    const fresh = deps.accounts.account() === null
+    return land().then((result) => {
+      if (result.ok && fresh) deps.accounts.markFromTerminal()
       return result
     })
+  }
   return {
     platform,
     who: () => {
@@ -1366,17 +1375,17 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
         mismatch: account === null ? null : deps.accounts.registryMismatch(),
       }
     },
-    signIn: (input) => terminal(signIn(deps, input)),
-    resume: (password) => terminal(resume(deps, password)),
-    climbCode: (pending, factor, code) => terminal(resumeCode(deps, { pending, factor, code })),
+    signIn: (input) => terminal(() => signIn(deps, input)),
+    resume: (password) => terminal(() => resume(deps, password)),
+    climbCode: (pending, factor, code) => terminal(() => resumeCode(deps, { pending, factor, code })),
     askApproval: (pending) => deps.accounts.resumeAsk(pending),
-    waitApproval: (pending, signal) => terminal(resumeWait(deps, pending, signal)),
+    waitApproval: (pending, signal) => terminal(() => resumeWait(deps, pending, signal)),
     abandon: (pending) => deps.accounts.abandonSignIn(pending),
     signOut: (password) => signOut(deps, password),
     devices: () => deps.accounts.devices(),
-    providerDevice: (onCode, signal) => terminal(deviceSignIn(deps, onCode, signal)),
-    browserDevice: (onCode, signal, username) => terminal(browserTerminal(deps, onCode, signal, username)),
-    providerClaim: (username) => terminal(oauthClaim(deps, username)),
+    providerDevice: (onCode, signal) => terminal(() => deviceSignIn(deps, onCode, signal)),
+    browserDevice: (onCode, signal, username) => terminal(() => browserTerminal(deps, onCode, signal, username)),
+    providerClaim: (username) => terminal(() => oauthClaim(deps, username)),
     abandonClaim: () => deps.accounts.providerForget(),
   }
 }

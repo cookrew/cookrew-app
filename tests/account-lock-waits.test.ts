@@ -152,6 +152,19 @@ describe('the account password, typed on a terminal machine once', () => {
     expect(await unlock(m)(PASSWORD)).toMatchObject({ ok: true })
   })
 
+  it('wrong tries are counted here too: five buy a pause, even with cookrew.dev’s rest forgotten', async () => {
+    const m = machine(await passwordAccount(), { fromTerminal: true })
+    let last: Record<string, unknown> = {}
+    for (let i = 0; i < 5; i += 1) {
+      forgetGrantRests()
+      last = await adopt(m)('not the password at all')
+    }
+    expect(last).toMatchObject({ ok: false, reason: 'rate_limited' })
+    forgetGrantRests()
+    expect(await adopt(m)(PASSWORD)).toMatchObject({ ok: false, reason: 'rate_limited' })
+    expect(m.accounts.lockWaits()).toBe('type-password')
+  })
+
   it('is refused behind the lock, and an empty one never leaves the machine', async () => {
     const m = machine(await passwordAccount(), {})
     expect(await adopt(m)('')).toMatchObject({ ok: false, reason: 'bad_credentials' })

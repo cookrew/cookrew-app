@@ -259,6 +259,23 @@ describe('cookrew login --github', () => {
     expect(b.app.verifyUnlock(PASSCODE)).toBe(true)
   })
 
+  it('renewing the session of a machine a person signed in at leaves its lock as it was', async () => {
+    const first = box()
+    await newAccount(first)
+    const held = loadAccount(first.home)
+    if (held === null) throw new Error('no account')
+    const { fromTerminal: _was, ...atTheScreen } = held
+    writeAccount(atTheScreen, first.home)
+    const b = box('Linux · box', first.home)
+    await b.app.call('/v2/sessions/current', { method: 'POST', parse: false })
+    await b.app.call('/v2/me')
+    expect(b.app.sessionLive()).toBe(false)
+    const { next } = await b.throughCode()
+    expect(next.exit).toBe(0)
+    expect(b.app.sessionLive()).toBe(true)
+    expect(b.app.isFromTerminal()).toBe(false)
+  })
+
   it('another GitHub account cannot take over a machine that has one', async () => {
     const b = box()
     await newAccount(b)
