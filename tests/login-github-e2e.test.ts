@@ -16,7 +16,7 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2, type V2Identity } from '../registry/src/v2-routes'
-import { Accounts, accountFilePath, loadAccount, type FetchLike } from '../src/main/account-v2'
+import { Accounts, accountFilePath, loadAccount, unlockVerifierFor, writeAccount, type FetchLike } from '../src/main/account-v2'
 import { accountDoor, type AccountIpcDeps } from '../src/main/account-ipc'
 import { Factors } from '../src/main/factors'
 import { IdleLock } from '../src/main/lock'
@@ -80,8 +80,7 @@ interface Box {
   said: string[]
 }
 
-function box(name = 'Linux · box'): Box {
-  const home = mkdtempSync(path.join(tmpdir(), 'login-gh-mac-'))
+function box(name = 'Linux · box', home = mkdtempSync(path.join(tmpdir(), 'login-gh-mac-'))): Box {
   homes.push(home)
   const app: Accounts = new Accounts({
     base: home,
@@ -96,7 +95,7 @@ function box(name = 'Linux · box'): Box {
   const lock = new IdleLock({
     lockAfterMs: 60_000,
     verify: (typed) => app.verifyUnlock(typed),
-    armed: () => !app.passcodePending()
+    armed: () => app.lockable()
   })
   const deps: AccountIpcDeps = {
     accounts: app,
@@ -147,6 +146,17 @@ function box(name = 'Linux · box'): Box {
   }
 }
 
+/**
+ * THE SAME MACHINE AFTER IT CHOSE A PASSCODE, as the app before 2026-11-09
+ * let it. No new machine is put in this state; one that is keeps its passcode.
+ */
+function choosePasscodeAsBefore(b: Box): Box {
+  const held = loadAccount(b.home)
+  if (held === null) throw new Error('no account')
+  writeAccount({ ...held, unlockBy: 'passcode', unlock: unlockVerifierFor(PASSCODE) }, b.home)
+  return box('Linux · box', b.home)
+}
+
 /** A new account, made at the terminal. */
 async function newAccount(b: Box, name = 'octo'): Promise<void> {
   const { next } = await b.throughCode()
@@ -164,7 +174,13 @@ describe('cookrew login --github', () => {
     const done = await b.send('answer', 'headless')
     expect(done.exit).toBe(0)
     expect(done.say.join(' ')).toContain('@headless')
-    expect(loadAccount(b.home)).toMatchObject({ username: 'headless', passwordless: true, unlockBy: 'passcode', unlock: null })
+    // Nobody is at this screen: no passcode, no sheet, the lock off until the
+    // account has a password and it is typed here once (owner, 2026-11-09).
+    expect(loadAccount(b.home)).toMatchObject({ username: 'headless', passwordless: true, unlock: null, fromTerminal: true })
+    expect(loadAccount(b.home)?.unlockBy).toBeUndefined()
+    expect(b.app.lockWaits()).toBe('set-password')
+    expect(done.say.join(' ')).toContain('@headless has no password yet')
+    expect(done.say.join(' ')).not.toContain('passcode')
     expect(v2.accounts.get('headless')?.passwordless).toBe(true)
     expect(b.audits.map((a) => a.type)).toEqual(['account.login'])
   })
@@ -201,7 +217,8 @@ describe('cookrew login --github', () => {
     expect(asked.ask?.kind).toBe('hidden')
     expect(existsSync(accountFilePath(b.home))).toBe(false)
     expect((await b.send('answer', codes.value[0])).exit).toBe(0)
-    expect(loadAccount(b.home)).toMatchObject({ username: 'octo', unlock: null, unlockBy: 'passcode' })
+    expect(loadAccount(b.home)).toMatchObject({ username: 'octo', unlock: null, fromTerminal: true })
+    expect(b.app.lockWaits()).toBe('set-password')
     expect(b.app.sessionLive()).toBe(true)
   })
 
@@ -223,12 +240,14 @@ describe('cookrew login --github', () => {
     expect(decided.ok).toBe(true)
     expect((await b.send('wait')).exit).toBe(0)
     expect(v2.accounts.get('octo')?.devices).toHaveLength(2)
+    // Landed on the approve rung, still from a terminal: no sheet on its screen.
+    expect(b.app.isFromTerminal()).toBe(true)
   })
 
-  it('renews a dead session on the same device, and the passcode stays', async () => {
-    const b = box()
-    await newAccount(b)
-    b.app.setPasscode(PASSCODE)
+  it('renews a dead session on the same device, and a passcode chosen before stays', async () => {
+    const first = box()
+    await newAccount(first)
+    const b = choosePasscodeAsBefore(first)
     const device = b.app.account()?.deviceId
     await b.app.call('/v2/sessions/current', { method: 'POST', parse: false })
     await b.app.call('/v2/me')
@@ -238,6 +257,23 @@ describe('cookrew login --github', () => {
     expect(b.app.sessionLive()).toBe(true)
     expect(b.app.account()?.deviceId).toBe(device)
     expect(b.app.verifyUnlock(PASSCODE)).toBe(true)
+  })
+
+  it('renewing the session of a machine a person signed in at leaves its lock as it was', async () => {
+    const first = box()
+    await newAccount(first)
+    const held = loadAccount(first.home)
+    if (held === null) throw new Error('no account')
+    const { fromTerminal: _was, ...atTheScreen } = held
+    writeAccount(atTheScreen, first.home)
+    const b = box('Linux · box', first.home)
+    await b.app.call('/v2/sessions/current', { method: 'POST', parse: false })
+    await b.app.call('/v2/me')
+    expect(b.app.sessionLive()).toBe(false)
+    const { next } = await b.throughCode()
+    expect(next.exit).toBe(0)
+    expect(b.app.sessionLive()).toBe(true)
+    expect(b.app.isFromTerminal()).toBe(false)
   })
 
   it('another GitHub account cannot take over a machine that has one', async () => {
@@ -252,9 +288,9 @@ describe('cookrew login --github', () => {
   })
 
   it('refuses behind the lock, and a landing never opens it', async () => {
-    const b = box()
-    await newAccount(b)
-    b.app.setPasscode(PASSCODE)
+    const first = box()
+    await newAccount(first)
+    const b = choosePasscodeAsBefore(first)
     await b.app.call('/v2/sessions/current', { method: 'POST', parse: false })
     await b.app.call('/v2/me')
     b.lock.lock()

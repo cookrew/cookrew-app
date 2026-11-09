@@ -9,12 +9,13 @@ import type { BrowserInstance } from './browser-instance'
 import { CamDevice } from './cam-device'
 import { cameraAccess, ElectronCaptureHost } from './capture-host'
 import type { RemoteState } from '../shared/remote-access'
-import { LinuxScreenDevice, linuxSources } from './linux-screen'
+import { LinuxScreenDevice, linuxScreenRefusal, linuxSources } from './linux-screen'
+import { linuxHandFor, type LinuxHand } from './linux-input'
 import { listMacScreens, MacInput, macWindowAlive, macUnlockOp } from './mac-bridge'
 import { PixelInstance, type PixelDevice, type RemoteGate } from './pixel-instance'
 import type { SettingsPane } from './remote-desk'
 import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
-import { grabScreenFrames, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
+import { displayArea, grabScreenFrames, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
 import { macSources } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
 import { fileWindowMemory } from './use-window-memory'
@@ -85,6 +86,8 @@ export interface UseInstancesOptions {
   /** What cards remember of their windows; absent: nothing across a restart. */
   readonly windowsFile?: string
   readonly platform?: NodeJS.Platform
+  /** Linux's hand (linux-input.ts), shared with the desk so both say the same thing about xdotool. */
+  readonly linuxHand?: LinuxHand
 }
 
 /** A capture cut off by a kill leaves a picture of the screen here, under its own name. */
@@ -105,6 +108,8 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
   mkdirSync(options.captureDir, { recursive: true, mode: 0o700 })
   sweepCaptures(options.captureDir)
   let hand: MacInput | null = null
+  let linuxHand: LinuxHand | null = options.linuxHand ?? null
+  const linuxHandOf = (): LinuxHand => (linuxHand ??= linuxHandFor(process.env, () => linuxScreenRefusal(process.env)))
   let host: ElectronCaptureHost | null = null
   const handOf = (): MacInput => (hand ??= new MacInput())
   const hostOf = (): ElectronCaptureHost => (host ??= new ElectronCaptureHost(path.join(options.captureDir, 'capture-host.html')))
@@ -125,7 +130,14 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
       case 'screen':
       case 'window':
         if (platform === 'linux') {
-          return new LinuxScreenDevice(target, { remote: options.remote(card), frames: () => grabScreenFrames(SCREEN_FRAME_MAX_SIDE), primaryDisplayId })
+          return new LinuxScreenDevice(target, {
+            remote: options.remote(card),
+            frames: () => grabScreenFrames(SCREEN_FRAME_MAX_SIDE),
+            primaryDisplayId,
+            area: displayArea,
+            hand: linuxHandOf(),
+            readClipboard: readMachineClipboard
+          })
         }
         if (platform !== 'darwin') return null
         return new ScreenDevice(target, {

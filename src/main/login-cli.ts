@@ -107,8 +107,8 @@ export interface AccountWho {
   username: string | null
   /** No password exists, so nothing here may ask for one. */
   passwordless: boolean
-  /** No password was typed here and no passcode is chosen, so no lock can engage. */
-  passcodePending: boolean
+  /** Why this machine's lock is off, when it is (account-v2.ts · lockWaits). */
+  lockWaits: 'set-password' | 'type-password' | null
   deviceId: string
   deviceName: string
   sessionLive: boolean
@@ -751,8 +751,9 @@ class Conversation {
     const via = this.github ? ' with GitHub' : this.viaBrowser ? ' in the browser' : ''
     this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}${via}${late}` })
     const said = [this.say('said.signed-in', { handle, device })]
-    const unlocked = (this.github || this.viaBrowser) && who.passcodePending
-    return this.finish(LOGIN_EXIT.ok, unlocked ? [...said, this.say('said.passcode-next')] : said, null)
+    // No password typed here: say why the lock is off and what turns it on.
+    const lockOff = who.lockWaits === 'set-password' ? 'said.lock-off-no-password' : who.lockWaits === 'type-password' ? 'said.lock-off' : null
+    return this.finish(LOGIN_EXIT.ok, lockOff === null ? said : [...said, this.say(lockOff, { handle })], null)
   }
 
   private get closed(): boolean {

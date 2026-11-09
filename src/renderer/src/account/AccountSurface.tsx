@@ -8,8 +8,8 @@ import { FirstRunCard } from './FirstRunCard'
 import { accountAskView, type AccountAsk, type FirstRunAction } from './account-store'
 import { JoinCard } from './JoinCard'
 import { LockScreen } from './LockScreen'
-import { PasscodeCard } from './PasscodeCard'
-import { shouldAskPasscode } from './provider-store'
+import { AccountPasswordCard } from './AccountPasswordCard'
+import { shouldAskAccountPassword } from './provider-store'
 import { ProfileSheet, type ProfileTab } from './ProfileSheet'
 import { ResumeSession } from './ResumeSession'
 import { SecurityCard } from './SecurityCard'
@@ -73,8 +73,8 @@ export function useAccountSurface(): AccountSurface {
   const [focusRequest, setFocusRequest] = useState<string | null>(null)
   /** A failure from the D3 card's own actions, said on the card. */
   const [problem, setProblem] = useState<string | null>(null)
-  /** LATER, for this run: a relaunch asks again, until there is a passcode. */
-  const [passcodeLater, setPasscodeLater] = useState(false)
+  /** LATER, for this run: a relaunch asks again, until the account has a password. */
+  const [passwordLater, setPasswordLater] = useState(false)
 
   /** The latest status, for listeners that must not be re-subscribed per change. */
   const statusRef = useRef(status)
@@ -280,8 +280,8 @@ export function useAccountSurface(): AccountSurface {
         />
       )}
       {/* Over the sheets, because until this is answered the lock has no key. */}
-      {status !== null && shouldAskPasscode(status, passcodeLater) && (
-        <PasscodeCard status={status} onDone={setStatus} onLater={() => setPasscodeLater(true)} />
+      {status !== null && shouldAskAccountPassword(status, passwordLater) && (
+        <AccountPasswordCard status={status} onDone={setStatus} onLater={() => setPasswordLater(true)} />
       )}
       {/* LAST, and over everything: a lock drawn under a sheet is not a lock. */}
       {status?.locked && status.username && (

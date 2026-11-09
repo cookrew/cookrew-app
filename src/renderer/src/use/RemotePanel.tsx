@@ -77,12 +77,21 @@ export type RemoteConnection = 'live' | 'stalled' | 'reconnecting'
 
 const CONNECTION: Record<RemoteConnection, string> = { live: 'Live', stalled: 'Waiting for a frame', reconnecting: 'Reconnecting' }
 
+/** Where the switch is turned on: a Mac's ⋯ menu, and on Linux a shell there as well (a headless box has no one at its screen). */
+function switchOffHint(control: CardControl, where: RemoteWhere): string {
+  if (control.machine === 'linux') {
+    return where === 'here'
+      ? 'Remote control is off: turn it on in the ⋯ menu, or run cookrew remote on in a shell here.'
+      : 'Remote control is off, and only someone at the machine can turn it on: in its ⋯ menu, or with cookrew remote on in a shell on it.'
+  }
+  return where === 'here' ? 'Remote control is off: turn it on in the ⋯ menu.' : 'Remote control is off, and only someone at the Mac can turn it on.'
+}
+
 function controlLine(control: CardControl, where: RemoteWhere, now: number): { text: string; hint: string | null } {
   if (control.until !== null) return { text: `You have control · ${Math.max(1, Math.round((control.until - now) / 60_000))} min left`, hint: null }
   if (control.heldBy !== null) return { text: `${control.heldBy} has control`, hint: null }
-  if (control.machine === 'linux') return { text: 'View only', hint: 'This machine cannot be controlled from here.' }
   if (control.switchOn) return { text: 'View only', hint: null }
-  return { text: 'View only', hint: where === 'here' ? 'Remote control is off: turn it on in the ⋯ menu.' : 'Remote control is off, and only someone at the Mac can turn it on.' }
+  return { text: 'View only', hint: switchOffHint(control, where) }
 }
 
 /** What a viewer of a computer's screen can do: take control, give it back, and leave. */
@@ -113,7 +122,7 @@ export function RemoteBarView({
 }): React.JSX.Element {
   const line = controlLine(control, where, now)
   const mine = control.until !== null
-  const canTake = !mine && control.switchOn && control.heldBy === null && control.machine === 'darwin'
+  const canTake = !mine && control.switchOn && control.heldBy === null
   const word = (sentence: string): string => machineCopy(sentence, control.machine)
   return (
     <div className="rp-bar" role="group" aria-label="Remote desktop" onPointerDown={hold}>

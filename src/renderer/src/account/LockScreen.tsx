@@ -168,12 +168,16 @@ export function LockScreen({
         )}
         {passcode && rescue === null && (
           <button className="gs-ghost" onClick={() => setRescue('')}>
-            {PROVIDER_COPY.FORGOT_PASSCODE}
+            {PROVIDER_COPY.CHOSEN_PASSCODE_FORGOT}
           </button>
         )}
         {rescue !== null && (
           <>
-            <p className="gs-sub">{PROVIDER_COPY.RESCUE_WHY}</p>
+            <p className="gs-sub">
+              {status.passwordless
+                ? PROVIDER_COPY.CHOSEN_PASSCODE_RESCUE_WHY_NO_PASSWORD
+                : PROVIDER_COPY.CHOSEN_PASSCODE_RESCUE_WHY}
+            </p>
             <input
               className="gs-input"
               aria-label="Recovery code"

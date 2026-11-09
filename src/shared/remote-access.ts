@@ -110,9 +110,10 @@ export interface CardControl {
 }
 
 export interface RemoteControlFacts {
-  /** False where nothing can drive this machine at all (Linux). */
+  /** False where nothing can drive this machine at all (Wayland, a machine with no screen to share). */
   readonly available: boolean
   readonly switchOn: boolean
+  /** What lets it send input: the Accessibility grant on a Mac, xdotool on Linux. */
   readonly accessibility: boolean
   /** The unlock key in six words, for comparing with what a phone shows. */
   readonly unlockWords?: readonly string[]
@@ -172,6 +173,11 @@ export type RemoteAnswer = { readonly ok: true } | RemoteRefusal
 
 /** How long Take control lasts; then it is off again. */
 export const CONTROL_MS = 15 * 60_000
+
+/** The one line that gives a Linux machine its hand (main/linux-input.ts), as the Setup card runs it. */
+export const XDOTOOL_INSTALL = 'sudo apt install -y xdotool'
+/** What stands in for Accessibility on Linux: the tool that sends the clicks and keys. */
+export const LINUX_NO_XDOTOOL = `xdotool is not installed, so nothing can click or type on this machine: install it with ${XDOTOOL_INSTALL}`
 
 const SCREEN_PANE = 'System Settings › Privacy & Security › Screen & System Audio Recording'
 const ACCESSIBILITY_PANE = 'System Settings › Privacy & Security › Accessibility'
@@ -268,6 +274,8 @@ function stateView(state: RemoteState, where: RemoteWhere, now: number): Omit<Re
     case 'needs-screen-recording':
       return permissionView(state, where, 'Screen Recording is off', 'open-screen-settings', `Turn on ${name} in ${SCREEN_PANE}.${listedWords(state.build)}`)
     case 'needs-accessibility':
+      // Linux has no System Settings to send anyone to: the fix is a line in a shell there.
+      if (state.platform === 'linux') return plain('xdotool is missing', state.detail ?? LINUX_NO_XDOTOOL, where === 'away')
       return permissionView(state, where, 'Accessibility is off', 'open-accessibility-settings', `Turn on ${name} in ${ACCESSIBILITY_PANE} to control this Mac.${listedWords(state.build)}`)
     case 'needs-restart':
       return restartView(state, where)

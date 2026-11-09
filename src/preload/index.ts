@@ -245,6 +245,7 @@ const api = {
   accountBrowserResume: () => ipcRenderer.invoke('account:browserResume'),
   accountBrowserLink: (input: { provider: string; current?: string; rescue?: string }) =>
     ipcRenderer.invoke('account:browserLink', input),
+  accountAdoptPassword: (password: string) => ipcRenderer.invoke('account:adoptPassword', password),
   accountSetPasscode: (input: { next: string; current?: string }) =>
     ipcRenderer.invoke('account:setPasscode', input),
   accountSetTouchId: (on: boolean) => ipcRenderer.invoke('account:setTouchId', on),

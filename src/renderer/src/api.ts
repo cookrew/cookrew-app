@@ -1044,6 +1044,8 @@ export interface CookrewApi {
   accountBrowserLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
   /** A passcode is this Mac's alone: it never goes to cookrew.dev. */
   accountSetPasscode?: (input: { next: string; current?: string }) => Promise<AccountResult<AccountStatus>>;
+  /** The account password, typed once on a machine signed in from a terminal: it becomes the lock. */
+  accountAdoptPassword?: (password: string) => Promise<AccountResult<AccountStatus>>;
   accountSetTouchId?: (on: boolean) => Promise<AccountResult<AccountStatus>>;
   accountUnlockTouchId?: () => Promise<{ ok: boolean }>;
   accountRescueUnlock?: (code: string) => Promise<AccountResult<AccountStatus>>;

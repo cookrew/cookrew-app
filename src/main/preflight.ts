@@ -121,7 +121,8 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
     host,
     platform: deps.platform,
     arch: deps.arch ?? 'unknown',
-    endpointTools: deps.endpointTools?.() ?? []
+    endpointTools: deps.endpointTools?.() ?? [],
+    ...(deps.platform === 'linux' ? { xdotool: bin('xdotool') } : {})
   }
 }
 

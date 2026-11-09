@@ -45,7 +45,7 @@ const unsupported: BrowserSeam = vi.fn(async () => ({ ok: false as const, reason
 interface Who {
   username: string | null
   passwordless?: boolean
-  passcodePending?: boolean
+  lockWaits?: 'set-password' | 'type-password' | null
   sessionLive?: boolean
 }
 
@@ -78,7 +78,7 @@ function fixture(over: Partial<AccountDoor> = {}, who: Who = { username: null })
       registry: null,
       mismatch: null,
       passwordless: who.passwordless ?? false,
-      passcodePending: who.passcodePending ?? false,
+      lockWaits: who.lockWaits ?? null,
     }),
     signIn: vi.fn(async () => landed),
     resume: vi.fn(async () => landed),
@@ -124,7 +124,7 @@ function wire(account: AccountDoor, audits: LoginAudit[] = [], released: string[
 
 describe('cookrew login, by default', () => {
   it('waits for the page: the address, the code, the full link, then the landing', async () => {
-    const f = fixture({}, { username: null, passcodePending: true })
+    const f = fixture({}, { username: null, lockWaits: 'type-password' })
     const first = await f.open()
     expect(first.wait).toEqual({ other: false })
     expect(first.ask).toBeUndefined()
@@ -136,8 +136,11 @@ describe('cookrew login, by default', () => {
     const done = await f.send('wait')
     expect(done.exit).toBe(0)
     expect(done.say.join(' ')).toContain('Signed in as @')
-    // No password was typed, so nothing will lock this Mac until a passcode is chosen.
-    expect(done.say.join(' ')).toContain('passcode')
+    // No password was typed, so the lock is off until the account password is
+    // typed here once; said on the terminal, never as a modal on its screen.
+    expect(done.say.join(' ')).toContain('will not lock itself')
+    expect(done.say.join(' ')).toContain('typed on it once')
+    expect(done.say.join(' ')).not.toContain('passcode')
     expect(f.account.signIn).not.toHaveBeenCalled()
     expect(f.audits.at(-1)?.details).toContain('in the browser')
   })
@@ -287,7 +290,8 @@ describe('the real account door, a fake registry', () => {
     ])
     // The page without the code: the person types what the terminal printed.
     expect(opened).toEqual([`${AUDIENCE}/device`])
-    expect(loadAccount(base)).toMatchObject({ username: 'octo', name: 'Linux · box', unlockBy: 'passcode' })
+    expect(loadAccount(base)).toMatchObject({ username: 'octo', name: 'Linux · box', fromTerminal: true })
+    expect(loadAccount(base)?.unlockBy).toBeUndefined()
     deps.requests.stop()
   })
 })
