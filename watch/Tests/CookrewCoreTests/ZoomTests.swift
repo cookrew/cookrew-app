@@ -352,3 +352,15 @@ struct MachineWordTests {
     #expect(machines.map(\.os) == ["linux", nil])
   }
 }
+
+@Suite("stepping out of a card")
+struct SwipeOutTests {
+  @Test("a swipe right steps out; a scroll up or down, or a short or slanted drag, does not")
+  func swipe() {
+    #expect(isSwipeOut(dx: 80, dy: 10))
+    #expect(!isSwipeOut(dx: 30, dy: 0))
+    #expect(!isSwipeOut(dx: 80, dy: 70))
+    #expect(!isSwipeOut(dx: -80, dy: 0))
+    #expect(!isSwipeOut(dx: 5, dy: 120))
+  }
+}

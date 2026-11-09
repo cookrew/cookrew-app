@@ -424,6 +424,26 @@ footer nav a{font:8.5px var(--font-pixel);letter-spacing:.06em;text-transform:up
 .stat{border:1px solid var(--hair);background:var(--cream-hi);box-shadow:var(--lift-sm);padding:14px}
 .stat b{display:block;font:700 30px/1 var(--font-pixel);letter-spacing:-.02em;margin-bottom:6px;color:var(--amber-deep)}
 .stat span{font-size:13px;color:var(--muted)}
+/* /me as the console (site-machines.ts): every machine drawn as what it is, its screen lit only past the gate. */
+.ms-grid{display:grid;gap:18px 14px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));align-items:end;margin:6px 0 10px}
+@media (max-width:560px){.ms-grid{grid-template-columns:1fr 1fr;gap:14px 10px}}
+.ms-machine{display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px;padding:8px 6px 10px;text-decoration:none;color:var(--ink);border:1px solid transparent;transition:background .15s,border-color .15s}
+a.ms-machine:hover,a.ms-machine:focus-visible{background:var(--cream-hi);border-color:var(--hair)}
+.ms-machine.off{opacity:.55}
+.ms{width:100%;max-width:220px;height:auto;overflow:visible}
+.ms-ink{fill:none;stroke:var(--ink);stroke-width:2.4;stroke-linejoin:round;stroke-linecap:round}
+.ms-body{fill:var(--cream-hi);stroke:var(--ink);stroke-width:2.4;stroke-linejoin:round}
+.ms-scr{fill:var(--cream-md);stroke:var(--ink);stroke-width:2}
+.ms-led{fill:#4f7a45}.ms-machine.off .ms-led{fill:var(--dim)}
+.ms-vendor{fill:var(--amber-deep);font:700 9px var(--font-mono)}
+.ms-face{fill:none;stroke:var(--ink);stroke-width:1.6}.ms-face.w{stroke:#c0392b;stroke-width:2.2}
+.ms-ws{fill:var(--muted);font:600 7.5px var(--font-mono)}
+.ms-name{font-size:16px;margin-top:4px}
+.ms-sub,.ms-status{font:12px var(--font-mono);color:var(--muted)}
+.ms-status.on{color:#4f7a45}.ms-need{font:600 12px var(--font-mono);color:#c0392b}
+.ms-gate{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 14px;margin:0 0 14px;border:1px solid var(--hair);background:var(--cream-hi)}
+.ms-tabs{margin:14px 0 0}
+@media (prefers-color-scheme:dark){.ms-led,.ms-status.on{fill:#8fbf7f;color:#8fbf7f}.ms-face.w{stroke:#e06a55}.ms-need{color:#e06a55}}
 /* market — one finder (tabs, search, filters, sort) above the grid; nothing before the first card
    that is not a way to narrow it. The reader strip sits under the headline and folds on a phone. */
 .finder{margin:18px 0 14px}.finder input[type=search]{width:100%;box-sizing:border-box;font:15px var(--font-mono);padding:10px 12px;border:1px solid var(--hair);background:var(--cream-hi);color:var(--ink);box-shadow:var(--lift-sm);outline:none}.finder input[type=search]:focus{background:var(--amber-soft)}

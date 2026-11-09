@@ -43,6 +43,8 @@ export interface DisplayArea {
 export interface XdoCall {
   readonly argv: readonly string[]
   readonly timeoutMs: number
+  /** A failure here is not the gesture's: asking a window manager that is not there (linux-windows.ts). */
+  readonly optional?: boolean
 }
 
 /** Wheel that has not yet added up to a whole click, per axis. */
@@ -175,15 +177,18 @@ export function xdotoolCalls(gesture: Gesture, frame: ScreenPoints, area: Displa
   }
 }
 
-/** Where xdotool is: along PATH (absolute entries only), then where packages put it. */
-export function findXdotool(env: { readonly PATH?: string }, exists: (file: string) => boolean = existsSync): string | null {
+/** Where a tool is: along PATH (absolute entries only), then where packages put it. */
+export function findTool(name: string, env: { readonly PATH?: string }, exists: (file: string) => boolean = existsSync): string | null {
   const dirs = [...(env.PATH ?? '').split(path.delimiter).filter((dir) => path.isAbsolute(dir)), ...SEARCH_DIRS]
   for (const dir of dirs) {
-    const file = path.join(dir, 'xdotool')
+    const file = path.join(dir, name)
     if (exists(file)) return file
   }
   return null
 }
+
+/** Where xdotool is. */
+export const findXdotool = (env: { readonly PATH?: string }, exists: (file: string) => boolean = existsSync): string | null => findTool('xdotool', env, exists)
 
 export const linuxInputDryRun = (env: Readonly<Record<string, string | undefined>>): boolean => env.COOKREW_LINUX_INPUT_DRY_RUN === '1'
 
@@ -206,6 +211,12 @@ export interface LinuxHand {
    * calls, and Stop or the switch going off must cut it, not wait for it.
    */
   send(calls: readonly XdoCall[], stopped?: () => string | null): Promise<void>
+  /**
+   * One turn of the queue held for a gesture that must read X between its calls
+   * (a window card: where the window is, whether it is in front). Nothing from
+   * another card runs inside it, so what it read still holds when it presses.
+   */
+  exclusive<T>(work: (run: (calls: readonly XdoCall[], stopped?: () => string | null) => Promise<void>) => Promise<T>): Promise<T>
 }
 
 /** The argv as a log may show it: typed text becomes its length. */
@@ -233,19 +244,25 @@ export function createLinuxHand(deps: LinuxHandDeps): LinuxHand {
       try {
         await deps.run(bin, call.argv, call.timeoutMs)
       } catch (error) {
+        if (call.optional) continue
         // A drag cut short would leave the button down for whoever touches the machine next.
         if (call.argv.includes('mousedown')) await deps.run(bin, ['mouseup', '1'], LET_GO_TIMEOUT_MS).catch(() => undefined)
         throw error
       }
     }
   }
+  const exclusive = <T>(work: (inTurn: (calls: readonly XdoCall[], stopped?: () => string | null) => Promise<void>) => Promise<T>): Promise<T> => {
+    const turn = queue.then(() => work((calls, stopped = () => null) => run(calls, stopped)))
+    queue = turn.then(
+      () => undefined,
+      () => undefined
+    )
+    return turn
+  }
   return {
     refusal,
-    send(calls, stopped = () => null) {
-      const turn = queue.then(() => run(calls, stopped))
-      queue = turn.catch(() => undefined)
-      return turn
-    }
+    send: (calls, stopped = () => null) => exclusive((inTurn) => inTurn(calls, stopped)),
+    exclusive
   }
 }
 

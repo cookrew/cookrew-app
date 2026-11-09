@@ -88,3 +88,8 @@ public func deviceRows(_ machines: [WatchMachine], pairedId: String?, desktop: S
   let paired = DeviceRow(id: mine?.id ?? "paired", name: mine?.name ?? desktop, online: live, workspaces: mine?.workspaces.count, paired: true, os: mine?.os)
   return [paired] + others
 }
+
+/** A finger moved mostly rightwards, far enough to mean it: a step out of a card. */
+public func isSwipeOut(dx: Double, dy: Double) -> Bool {
+  dx > 50 && abs(dy) < dx * 0.6
+}

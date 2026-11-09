@@ -184,6 +184,7 @@ export function registerZoomFleetIpc(handle: Handle, deps: ZoomFleetIpcDeps): Fl
   handle('zoom-fleet:machines', () => accountMachines(deps))
   handle('zoom-fleet:fleet-of', (_event, machineId) => readMachine(deps, machineId, 'api/fleet'))
   handle('zoom-fleet:gauges-of', (_event, machineId) => readMachine(deps, machineId, 'api/fleet/gauges'))
+
   handle('zoom-fleet:gauges', () =>
     sharedGaugeWatch()
       .read()

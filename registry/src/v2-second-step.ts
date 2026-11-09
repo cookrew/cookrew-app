@@ -226,7 +226,8 @@ async function finish(ctx: V2Context, id: string): Promise<void> {
     refuseFactor(ctx.response, 400, 'setup_unfinished')
     return
   }
-  if (completeSignIn(ctx, pending.username, pending.device, by)) ctx.v2.factors.pending.close(id)
+  // Set up in this sign-in: it proves no more than the first factor, so it trusts no machine.
+  if (completeSignIn(ctx, pending.username, pending.device, by, false)) ctx.v2.factors.pending.close(id)
 }
 
 /** The set-up routes, under /v2/sessions/:id/setup. Answers false for anything else. */

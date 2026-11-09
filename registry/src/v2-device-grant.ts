@@ -254,6 +254,8 @@ export async function issueMachineGrant(ctx: V2Context, signed: Signed): Promise
     const rest = restingFor(key, now)
     if (rest > 0) return said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: rest })
     const body = await readJsonBody(ctx.request, BODY_MAX)
+    // The password or a passkey, made now; a provider's trip alone is not enough (security
+    // review 2026-11-10): a machine signed in again with its second step is trusted at that sign-in.
     const by = await provenNow(ctx, signed, body.ok ? body.value : {}, key, now)
     if (by === null) return
     ctx.v2.accounts.markVerified(account.username, claims.jti, by)

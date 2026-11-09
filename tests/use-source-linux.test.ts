@@ -27,7 +27,10 @@ const gate = (blocked: RemoteState | null = null): RemoteGate => ({
   admit: () => null,
   enter: () => () => undefined
 })
-const fakeHand = (refusal: string | null = null) => ({ refusal: () => refusal, send: vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined) })
+const fakeHand = (refusal: string | null = null) => {
+  const send = vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined)
+  return { refusal: () => refusal, send, exclusive: <T,>(work: (run: typeof send) => Promise<T>) => work(send) }
+}
 const deps = (over: Partial<LinuxScreenDeps> = {}): LinuxScreenDeps => ({
   remote: gate(),
   frames: vi.fn(async () => frames),
@@ -187,13 +190,13 @@ describe('linuxSources', () => {
     { id: 'screen:0:0', name: 'Screen 1', displayId: '1', thumb: 'data:image/jpeg;base64,A', icon: null },
     { id: 'screen:1:0', name: 'Screen 2', displayId: '2', thumb: 'data:image/jpeg;base64,B', icon: null }
   ]
-  const sourceDeps = { blocked: async () => null, grab, primaryDisplayId: () => '2' }
+  const sourceDeps = { blocked: async () => null, grab, primaryDisplayId: () => '2', x11: () => null, cropThumbs: async () => [] }
 
-  it('lists the displays, primary first, and says windows are Mac only', async () => {
+  it('lists the displays, primary first (windows: linux-window-device.test.ts)', async () => {
     const list = await linuxSources(sourceDeps).list()
     expect(list.state).toBe('ready')
     expect(list.windows).toEqual([])
-    expect(list.windowsNote).toBe(LINUX_NO_WINDOW)
+    expect(list.windowsNote).not.toMatch(/macOS/)
     expect(list.screens.map((s) => [s.id, s.address, s.thumb])).toEqual([
       ['screen:main', 'screen://main', 'data:image/jpeg;base64,B'],
       // Its place in the capturer's list: the address the device reads back.

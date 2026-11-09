@@ -10,12 +10,14 @@ import { CamDevice } from './cam-device'
 import { cameraAccess, ElectronCaptureHost } from './capture-host'
 import type { RemoteState } from '../shared/remote-access'
 import { LinuxScreenDevice, linuxScreenRefusal, linuxSources } from './linux-screen'
+import { LinuxWindowDevice, windowStack } from './linux-window-device'
+import { machineX11 } from './linux-windows'
 import { linuxHandFor, type LinuxHand } from './linux-input'
 import { listMacScreens, MacInput, macWindowAlive, macUnlockOp } from './mac-bridge'
 import { PixelInstance, type PixelDevice, type RemoteGate } from './pixel-instance'
 import type { SettingsPane } from './remote-desk'
 import { SCREEN_FRAME_MAX_SIDE, ScreenDevice, screenCaptureRunner, screenFiles } from './screen-device'
-import { displayArea, grabScreenFrames, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
+import { captureRects, displayArea, screenExtent, grabScreenFrames, windowThumbs, grabSources, openAccessibilitySettings, openScreenRecordingSettings, primaryDisplayId, readMachineClipboard } from './use-source-electron'
 import { macSources } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
 import { fileWindowMemory } from './use-window-memory'
@@ -110,6 +112,8 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
   let hand: MacInput | null = null
   let linuxHand: LinuxHand | null = options.linuxHand ?? null
   const linuxHandOf = (): LinuxHand => (linuxHand ??= linuxHandFor(process.env, () => linuxScreenRefusal(process.env)))
+  const x11 = machineX11(process.env, process.pid)
+  const stack = windowStack()
   let host: ElectronCaptureHost | null = null
   const handOf = (): MacInput => (hand ??= new MacInput())
   const hostOf = (): ElectronCaptureHost => (host ??= new ElectronCaptureHost(path.join(options.captureDir, 'capture-host.html')))
@@ -129,6 +133,17 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
       }
       case 'screen':
       case 'window':
+        if (platform === 'linux' && target.kind === 'window') {
+          return new LinuxWindowDevice(target, {
+            remote: options.remote(card),
+            hand: linuxHandOf(),
+            stack,
+            screen: screenExtent,
+            x11,
+            crop: async (rect) => (await captureRects([rect], SCREEN_FRAME_MAX_SIDE))[0] ?? null,
+            readClipboard: readMachineClipboard
+          })
+        }
         if (platform === 'linux') {
           return new LinuxScreenDevice(target, {
             remote: options.remote(card),
@@ -173,7 +188,7 @@ export function createUseInstances(options: UseInstancesOptions): UseInstances {
       return instance
     },
     sources() {
-      if (platform === 'linux') return linuxSources({ blocked: options.blocked, grab: grabSources, primaryDisplayId })
+      if (platform === 'linux') return linuxSources({ blocked: options.blocked, grab: grabSources, primaryDisplayId, x11, cropThumbs: windowThumbs })
       if (platform !== 'darwin') return null
       return macSources({
         blocked: options.blocked,

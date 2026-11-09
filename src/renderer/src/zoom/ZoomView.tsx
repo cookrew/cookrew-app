@@ -12,6 +12,7 @@ import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf, listedOnly } from './zoom-model'
+import { MachineTrustRow } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD, shelfPage } from './zoom-layout'
@@ -644,8 +645,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         }}>
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => (
-            <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(listedOnly(m))} />
+            <MachineNode
+              key={m.id}
+              machine={m}
+              bind={bind}
+              onOpen={() => {
+                // A machine this desktop can reach opens in a window of its own, to work in; one it cannot says why.
+                const open = cookrew().openMachine
+                if (m.detail !== 'listed' && open) void open(m.id).then((opened) => (opened ? undefined : setError(listedOnly(m))), () => setError(listedOnly(m)))
+                else setError(listedOnly(m))
+              }}
+            />
           ))}
+          <MachineTrustRow others={model.machines.filter((m) => !m.local).length} />
           <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>

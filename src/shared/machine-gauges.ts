@@ -6,7 +6,9 @@
  *
  * Null is a word here, not a zero: a gauge that cannot be read says "no
  * reading". A GPU that shows 0% because nobody could ask it reads as an idle
- * GPU, which is a wrong answer that looks right.
+ * GPU, which is a wrong answer that looks right. And a machine with no GPU at
+ * all (a cloud box) says "none", quietly: that is an answer, and "no reading"
+ * there made a healthy box look broken.
  *
  * WHY MEMORY TURNS FIRST. Measured 2026-11-05 on the owner's 16 GB Mac: load
  * 89, 54 % of CPU in the kernel, swap 13.6 of 14.3 GB. The stall was paging,
@@ -39,6 +41,8 @@ const DISK_LOW_SHARE = 0.1
 const DISK_OUT_SHARE = 0.05
 
 export const NO_READING = 'no reading'
+/** The GPU cell of a machine that has no GPU to read. */
+export const NO_GPU = 'none'
 
 export interface GaugeMemory {
   usedBytes: number
@@ -61,6 +65,12 @@ export interface MachineGauges {
   memory: GaugeMemory | null
   disk: GaugeDisk | null
   gpuPercent: number | null
+  /**
+   * The machine has no GPU to read at all, where a null percent alone is one that
+   * could not be read just now. Never true beside a percent. A machine sending the
+   * older shape leaves it out, and that reads as false: no reading, as it always did.
+   */
+  gpuAbsent: boolean
 }
 
 export type GaugeTone = 'calm' | 'warn' | 'hot'
@@ -101,7 +111,15 @@ function parseDisk(raw: unknown): GaugeDisk | null {
 export function parseMachineGauges(raw: unknown): MachineGauges | null {
   const g = row(raw)
   if (!g || !size(g.at)) return null
-  return { at: g.at, cpuPercent: percent(g.cpuPercent), memory: parseMemory(g.memory), disk: parseDisk(g.disk), gpuPercent: percent(g.gpuPercent) }
+  const gpuPercent = percent(g.gpuPercent)
+  return {
+    at: g.at,
+    cpuPercent: percent(g.cpuPercent),
+    memory: parseMemory(g.memory),
+    disk: parseDisk(g.disk),
+    gpuPercent,
+    gpuAbsent: gpuPercent === null && g.gpuAbsent === true
+  }
 }
 
 export function memoryTone(memory: GaugeMemory): GaugeTone {
@@ -135,6 +153,9 @@ function busyCell(key: 'cpu' | 'gpu', label: string, value: number | null): Gaug
   return { key, label, value: `${Math.round(value)}%`, sub: null, share: value / 100, tone: value >= BUSY_PERCENT ? 'warn' : 'calm' }
 }
 
+/** No bar and no tone: nothing is wrong with a box that has no GPU, so nothing on it may look wrong. */
+const noGpuCell = (): GaugeCell => ({ key: 'gpu', label: 'GPU', value: NO_GPU, sub: null, share: null, tone: 'calm' })
+
 function memoryCell(memory: GaugeMemory | null): GaugeCell {
   if (!memory) return { key: 'memory', label: 'MEM', value: NO_READING, sub: null, share: null, tone: 'calm' }
   return {
@@ -152,7 +173,12 @@ function diskCell(disk: GaugeDisk | null): GaugeCell {
   return { key: 'disk', label: 'DISK', value: freeWords(disk.freeBytes), sub: null, share: 1 - disk.freeBytes / disk.totalBytes, tone: diskTone(disk) }
 }
 
-/** The four gauges as they are drawn, in the owner's order. */
+/**
+ * The four gauges as they are drawn, in the owner's order. Always four: a machine
+ * with no GPU keeps its cell, because the panel is one grid across machines and a
+ * missing cell would pull the next machine's name into the GPU column.
+ */
 export function gaugeCells(gauges: MachineGauges): GaugeCell[] {
-  return [busyCell('cpu', 'CPU', gauges.cpuPercent), memoryCell(gauges.memory), diskCell(gauges.disk), busyCell('gpu', 'GPU', gauges.gpuPercent)]
+  const gpu = gauges.gpuAbsent ? noGpuCell() : busyCell('gpu', 'GPU', gauges.gpuPercent)
+  return [busyCell('cpu', 'CPU', gauges.cpuPercent), memoryCell(gauges.memory), diskCell(gauges.disk), gpu]
 }
