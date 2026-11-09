@@ -94,7 +94,7 @@ let miraToken = ''
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'v2-requests-http-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, lookupsPerMinute: 1000 } })
   const doors = new DoorStore(dir, { allowPrivate: true })
   doors.register('drej', {
     handle: 'drej',

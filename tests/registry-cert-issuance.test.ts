@@ -66,7 +66,7 @@ async function up(
   } = {}
 ): Promise<Up> {
   const dir = mkdtempSync(path.join(tmpdir(), 'cert-issue-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   // The three depend on each other in a ring — DNS answers for the zone, the
   // CA reads DNS, the zone's ACME client talks to the CA — so the responder is
   // resolved lazily and the ring is closed after all three exist.

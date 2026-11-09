@@ -43,7 +43,7 @@ async function boot(configured = true): Promise<void> {
   dir = mkdtempSync(path.join(tmpdir(), 'oauth-reg-'))
   homes = []
   fake = await fakeOAuth()
-  v2 = createV2(dir, {
+  v2 = createV2(dir, { secondStep: 'legacy', 
     limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, oauthPerMinute: 1000, joinCodesPerHour: 1000 },
     ...(configured ? { oauth: fake.config() } : {})
   })

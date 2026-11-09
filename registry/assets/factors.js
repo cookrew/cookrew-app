@@ -37,6 +37,19 @@
     return { status: res.status, body: out }
   }
   const said = (out, fallback) => (out.body && out.body.message) || fallback
+  /**
+   * FIVE MINUTES (auth UX 2026-11-09): adding a factor asks again once the
+   * sign-in is more than five minutes old. A password account answers with its
+   * password, typed here once; a passwordless one is told what the registry says.
+   */
+  const withProof = async (method, path, body) => {
+    const out = await api(method, path, body)
+    const asked = (out.status === 401 && out.body?.error === 'step_up') || (out.status === 403 && out.body?.error === 'password_required')
+    if (!asked) return out
+    const current = prompt('It has been a while since you signed in. Type your password to go on.')
+    if (current === null || current === '') return out
+    return api(method, path, { ...(body || {}), current })
+  }
 
   /* ── base64url ⇄ bytes, which is all WebAuthn speaks ───────────────────── */
   const unb64u = (text) => {
@@ -416,7 +429,7 @@
       toast('Passkeys are not available in this browser. Try Safari, Chrome, Edge or Firefox.', 6000)
       return
     }
-    const options = await api('POST', '/v2/me/passkeys/options', {})
+    const options = await withProof('POST', '/v2/me/passkeys/options', {})
     if (options.status !== 200) return toast(said(options, 'A passkey could not be started just now. Try again in a moment.'), 6000)
     const name = prompt('Name this passkey (for example "This laptop")', 'This browser')
     if (name === null) return
@@ -528,7 +541,7 @@
   async function addTotp() {
     const panel = $('me-totp')
     if (!panel) return
-    const started = await api('POST', '/v2/me/totp/enrol', {})
+    const started = await withProof('POST', '/v2/me/totp/enrol', {})
     if (started.status !== 201) return toast(said(started, 'That did not go through.'), 6000)
     const { secret, otpauth, qr } = started.body
 

@@ -42,7 +42,7 @@ beforeEach(async () => {
   homes = []
   fake = await fakeOAuth()
   fake.device.answer = 'ok'
-  v2 = createV2(dir, {
+  v2 = createV2(dir, { secondStep: 'legacy', 
     limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, oauthPerMinute: 1000 },
     oauth: fake.config()
   })
@@ -272,7 +272,7 @@ describe('cookrew login --github', () => {
       server.closeAllConnections()
       server.close(() => resolve())
     })
-    v2 = createV2(dir, {})
+    v2 = createV2(dir, { secondStep: 'legacy', })
     server = createRegistry({
       store: new RegistryStore(dir),
       log: new TransparencyLog(dir),

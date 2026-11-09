@@ -4,6 +4,7 @@ import { factorError } from './v2-factor-copy'
 import { factorsFor } from './v2-factor-routes'
 import { asking } from './v2-http'
 import { STEP_UP_SENTENCE, type StepUpAct } from '../../src/shared/step-up'
+import { freshlyVerified } from './v2-session-age'
 
 /**
  * PROVE IT IS YOU, AGAIN, BEFORE THIS ONE.
@@ -168,6 +169,13 @@ export async function stepUpHeld(
     return false
   }
 
+  /**
+   * FIVE MINUTES (auth UX 2026-11-09). The sensitive acts pass without asking
+   * again when this sitting proved itself — a sign-in or a step-up — within
+   * the last five minutes; after that they ask, whatever the session's age.
+   */
+  if (SENSITIVE_ACTS.has(act) && freshlyVerified(ctx.v2.accounts.session(username, signed.claims.jti), ctx.v2.now(), undefined, ctx.v2.freshWindowMs)) return true
+
   // A rung already climbed for THIS act, spent here and never again.
   if (ctx.v2.factors.pending.spendAuthorised(username, act, body.stepUp, signed.claims.jti)) return true
 
@@ -182,6 +190,7 @@ export async function stepUpHeld(
       refuse(ctx.response, 401, 'bad_credentials')
       return false
     }
+    ctx.v2.accounts.markVerified(username, signed.claims.jti, 'password')
     return true
   }
 
@@ -265,6 +274,24 @@ export async function stepUpHeld(
  */
 export async function heldIfPasswordless(ctx: V2Context, signed: Signed, act: StepUpAct): Promise<boolean> {
   if (signed.account.passwordless !== true) return true
+  return (await readAndStepUp(ctx, signed, act)).ok
+}
+
+/**
+ * THE SENSITIVE ACTS (auth UX 2026-11-09): a verification within the last five
+ * minutes, or a proof now. Adding a factor used to ask only a passwordless
+ * account; it asks every account now, since a factor is a way back in.
+ */
+export const SENSITIVE_ACTS: ReadonlySet<StepUpAct> = new Set<StepUpAct>([
+  'change-password',
+  'add-factor',
+  'remove-factor',
+  'delete-account',
+  'revoke-device'
+])
+
+/** Fresh enough already, or prove it now. Reads the body; answers whether to go on. */
+export async function heldWhenFresh(ctx: V2Context, signed: Signed, act: StepUpAct): Promise<boolean> {
   return (await readAndStepUp(ctx, signed, act)).ok
 }
 

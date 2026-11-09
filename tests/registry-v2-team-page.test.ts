@@ -51,7 +51,7 @@ const read = (p: string, who?: string): Promise<string> =>
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'v2-team-page-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   const doors = new DoorStore(dir, { allowPrivate: true })
   const face = {
     handle: 'drej',

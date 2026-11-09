@@ -3,6 +3,8 @@ import { AUTH_CODE_TTL_MS, AUTH_REQUEST_TTL_MS, type AuthHandoff } from '../../s
 import type { AuthRequest, AuthResult } from './auth-requests'
 import type { ProviderProof } from './v2-oauth-providers'
 import { refuse, v2Json, type V2Context, type V2Identity } from './v2-http'
+import { SESSION_TTL_MS } from './v2-tokens'
+import { tokenExpiry, type VerifiedBy } from './v2-session-age'
 
 /**
  * IS THIS REQUEST STILL WAITING? Asked at the last moment before anything is
@@ -80,16 +82,16 @@ export function authorizeSession(
   username: string,
   deviceId: string,
   hasPassword: boolean,
-  options: { codes?: boolean } = {}
+  options: { codes?: boolean; verifiedBy?: VerifiedBy } = {}
 ): boolean {
   const { v2, response } = ctx
   if (!stillOpen(ctx, request)) return false
-  const session = v2.accounts.startSession(username, deviceId)
+  const session = v2.accounts.startSession(username, deviceId, options.verifiedBy === undefined ? {} : { verifiedBy: options.verifiedBy })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return false
   }
-  const minted = v2.tokens.mintSession(username, deviceId, session.jti)
+  const minted = v2.tokens.mintSession(username, deviceId, session.jti, tokenExpiry(session, ctx.v2.now(), SESSION_TTL_MS))
   const codes = options.codes === true ? v2.accounts.mintRecoveryCodes(username, session.jti) : null
   finishRequest(
     ctx,

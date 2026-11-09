@@ -2,6 +2,7 @@ import type { ServerResponse } from 'node:http'
 import { readJsonBody } from './http'
 import { emailFrom } from './v2-links'
 import { afterFirstFactor } from './v2-factor-routes'
+import { setupForNewAccount } from './v2-second-step'
 import { completeSignIn, deviceFor, json, noContent, refuse, refuseFactor, relyingParty } from './v2-factor-http'
 import { authorizeSession, finishRequest, productOrigin } from './auth-finish'
 import type { AuthRequest } from './auth-requests'
@@ -460,6 +461,8 @@ function finishStepUp(ctx: V2Context, signed: Signed, flow: Flow, proof: Provide
     opener: { jti: signed.claims.jti, device: signed.claims.dev }
   })
   v2.factors.pending.authorise(pending.id)
+  // A provider round trip is a verification too: the five minutes start now.
+  v2.accounts.markVerified(username, signed.claims.jti, 'provider')
   json(ctx.response, 200, { stepUp: pending.id, act: flow.act, expiresAt: pending.expiresAt })
 }
 
@@ -498,11 +501,14 @@ async function claim(ctx: V2Context): Promise<void> {
     return
   }
   v2.oauth.flows.spendTicket(ticket.id)
-  if (ctx.auth !== undefined) {
-    authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, false, { codes: true })
+  // A provider is the first step only (auth UX 2026-11-09): the new account
+  // sets up a passkey or an authenticator before its first session.
+  if (v2.secondStep === 'legacy') {
+    if (ctx.auth !== undefined) authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, false, { codes: true, verifiedBy: 'provider' })
+    else completeSignIn(ctx, out.account.username, device, 'provider')
     return
   }
-  completeSignIn(ctx, out.account.username, device)
+  setupForNewAccount(ctx, out.account.username, device, { provider: proof.provider, subject: proof.subject })
 }
 
 /** POST /v2/oauth/:provider/device — the device code stays in this process. */

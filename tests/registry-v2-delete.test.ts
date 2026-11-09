@@ -53,7 +53,7 @@ let receipts: ReceiptStore
 
 beforeEach(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'v2-delete-'))
-  v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  v2 = createV2(dir, { secondStep: 'legacy', freshWindowMs: 0, limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   doors = new DoorStore(dir, { allowPrivate: true })
   stars = new StarStore(dir)
   identity = new IdentityService(dir)
@@ -169,7 +169,7 @@ describe('who may delete', () => {
 
   it('takes a second factor as proof, in place of the password', async () => {
     const owner = await claim('drej')
-    const { secret } = (await (await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))).json()) as { secret: string }
+    const { secret } = (await (await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))).json()) as { secret: string }
     const { base32Decode, totpAt, TOTP_STEP_MS } = await import('../registry/src/v2-totp')
     const code = (shift: number): string => totpAt(base32Decode(secret) as Buffer, Date.now() + shift * TOTP_STEP_MS)
     expect((await call('POST', '/v2/me/totp/confirm', { code: code(-1) }, bearer(owner.token))).status).toBe(204)
@@ -225,7 +225,7 @@ describe('what a delete takes', () => {
 
   it('removes the sign-in factors with the account', async () => {
     const owner = await claim('drej')
-    await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+    await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))
     await remove(owner.token, { current: PASSWORD }, 'drej')
     expect(readFileSync(path.join(dir, 'factors-v2.json'), 'utf8')).not.toContain('drej')
   })
@@ -348,7 +348,7 @@ describe('what proves a delete', () => {
   it('never offers the approve rung: another device sees a join prompt, not this', async () => {
     const owner = await claim('drej')
     await secondDevice(owner)
-    const codes = await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
+    const codes = await call('POST', '/v2/me/recovery-codes', { current: PASSWORD }, bearer(owner.token))
     expect(codes.status).toBe(201)
     const res = await remove(owner.token, {}, 'drej')
     expect(res.status).toBe(401)
@@ -358,7 +358,7 @@ describe('what proves a delete', () => {
   })
 
   it('counts guesses at the password, so a stolen session cannot try forever', async () => {
-    const tight = createV2(mkdtempSync(path.join(tmpdir(), 'v2-delete-tight-')), { limits: { sessionsPerMinute: 2, accountsPerMinute: 100 } })
+    const tight = createV2(mkdtempSync(path.join(tmpdir(), 'v2-delete-tight-')), { secondStep: 'legacy', freshWindowMs: 0, limits: { sessionsPerMinute: 2, accountsPerMinute: 100 } })
     const local = createRegistry({ store: new RegistryStore(dir), log: new TransparencyLog(dir), identity, v2: tight })
     await new Promise<void>((resolve) => local.listen(0, '127.0.0.1', resolve))
     const at = loopbackOnly(`http://127.0.0.1:${(local.address() as AddressInfo).port}`)
