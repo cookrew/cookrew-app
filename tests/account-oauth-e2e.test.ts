@@ -481,13 +481,17 @@ describe('configured', () => {
       expect(deps.lock.locked).toBe(false)
     })
 
-    it('Touch ID is not offered where it is not available, or to a password Mac', async () => {
+    it('Touch ID replaces typing on a password Mac too, and is never offered where it is not available (owner, 2026-11-09)', async () => {
       const m = mac()
       await m.app.claim({ username: 'alice', password: PASSWORD })
+      const none = wired(m, { touchId: { available: () => false, prompt: () => Promise.resolve(true) } })
+      expect(accountStatus(none.deps).touchId).toEqual({ available: false, on: false })
+      expect(await none.handlers['account:setTouchId'](true)).toMatchObject({ ok: false })
       const touchId = { available: () => true, prompt: () => Promise.resolve(true) }
       const { deps, handlers } = wired(m, { touchId })
-      expect(accountStatus(deps).touchId).toEqual({ available: false, on: false })
-      expect(await handlers['account:setTouchId'](true)).toMatchObject({ ok: false })
+      expect(accountStatus(deps).touchId).toEqual({ available: true, on: false })
+      expect(await handlers['account:setTouchId'](true)).toMatchObject({ ok: true })
+      expect(accountStatus(deps).touchId).toEqual({ available: true, on: true })
     })
 
     it('a password Mac still resumes on unlock, exactly as before', async () => {

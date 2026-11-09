@@ -342,7 +342,7 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     unlockBy: deps.accounts.unlockMethod(),
     passcodePending: deps.accounts.passcodePending(),
     touchId: {
-      available: deps.accounts.unlockMethod() === 'passcode' && (deps.touchId?.available() ?? false),
+      available: deps.touchId?.available() ?? false,
       on: deps.accounts.touchIdOn(),
     },
     // Non-null only when account.json names one registry and this process is
@@ -364,13 +364,30 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
 async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAnswer> {
   if (deps.accounts.passwordPending()) return firstUnlock(deps, password)
   const outcome = deps.lock.unlock(password)
-  if (!outcome.ok) return outcome
+  if (!outcome.ok) return deps.accounts.unlockMethod() === 'passcode' ? foldOnUnlock(deps, password, outcome) : outcome
   // WHAT WAS TYPED IS A PASSCODE, and a passcode never leaves this Mac. Offered
   // to cookrew.dev below it would be a local secret in a sign-in request.
   if (deps.accounts.unlockMethod() === 'passcode') return outcome
   if (deps.accounts.account() === null || deps.accounts.sessionLive()) return outcome
   const renewed = await deps.accounts.resume(password)
   return { ...outcome, sessionRenewed: renewed.ok }
+}
+
+/**
+ * THE PASSCODE FOLDS INTO THE ACCOUNT PASSWORD ON THE FIRST UNLOCK THAT USES IT
+ * (owner's ruling, 2026-11-09). On a passcode machine of an account that now
+ * has a password, what was typed and did not match the passcode may be the
+ * account password: cookrew.dev is asked, and a yes makes it this machine's
+ * unlock from now on. The passcode keeps working until then, so nobody is
+ * stranded. Only when the account HAS a password: a passcode typed wrong on a
+ * passwordless account never leaves the machine.
+ */
+async function foldOnUnlock(deps: AccountIpcDeps, password: string, local: UnlockOutcome): Promise<UnlockAnswer> {
+  if (local.ok || local.reason !== 'wrong' || !deps.accounts.hasAccountPassword()) return local
+  if (!(await deps.accounts.isAccountPassword(password))) return local
+  deps.accounts.foldPasscode(password)
+  deps.lock.proven()
+  return { ok: true }
 }
 
 /**
@@ -1178,8 +1195,20 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     // The password change the registry demands after "not me" (D6). It is the
     // same call phase 1 built; this is the channel the form needed.
-    'account:setPassword': (input: unknown): Promise<AccountResult<void>> => {
+    'account:setPassword': async (input: unknown): Promise<AccountResult<void>> => {
       const record = asRecord(input)
+      // A FIRST password for a provider-only account (owner's ruling 3): the
+      // provider proves it is you, the account gets the password, and this
+      // machine's passcode is folded into it.
+      if (deps.accounts.isPasswordless()) {
+        // Within five minutes of a verification no trip is needed; only when
+        // cookrew.dev asks for one does the provider prove it is you.
+        const plain = await deps.accounts.setFirstPassword(asString(record.next), null)
+        if (plain.ok || plain.reason !== 'step_up') return plain
+        const proof = await providerProof(deps, 'change-password')
+        if (proof !== null && !proof.ok) return proof
+        return deps.accounts.setFirstPassword(asString(record.next), proof === null ? null : proof.value)
+      }
       return deps.accounts.setPassword({
         current: asString(record.current),
         next: asString(record.next),

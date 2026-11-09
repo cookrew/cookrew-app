@@ -5,7 +5,7 @@ import { PROVIDER_LABEL, type LinkedProvider, type ProviderId, type ProviderOffe
 import { cookrew } from '../api'
 import { Row } from './FactorRows'
 import { useProviders, useTripGuard } from './ProviderButtons'
-import { PROVIDER_COPY, passcodeView, providerRefusal } from './provider-store'
+import { PROVIDER_COPY, firstPasswordView, passcodeView, providerRefusal } from './provider-store'
 import { linkCallFor } from './browser-auth-store'
 
 /**
@@ -42,6 +42,8 @@ export function LinkRows({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [passcode, setPasscode] = useState<{ current: string; next: string; confirm: string } | null>(null)
+  /** Owner's ruling 3: a provider-only account sets an account password; the passcode folds into it. */
+  const [first, setFirst] = useState<{ next: string; confirm: string } | null>(null)
   /** A browser trip is in flight, so the way out has to be on screen. */
   const [tripping, setTripping] = useState(false)
   const trip = useTripGuard()
@@ -100,6 +102,31 @@ export function LinkRows({
       })
       .catch(() => setError(machineCopy('That could not be saved on this Mac. Try again.', hostPlatform())))
       .finally(() => setBusy(false))
+  }
+
+  const saveFirstPassword = (): void => {
+    const call = cookrew().accountSetPassword
+    if (!call || first === null || busy || !firstPasswordView(first.next, first.confirm).canGo) return
+    setBusy(true)
+    setTripping(true)
+    setError(null)
+    trip.begin()
+    void call({ current: '', next: first.next })
+      .then(async (result) => {
+        if (!result.ok) {
+          setError(providerRefusal(result.reason, result.message))
+          return
+        }
+        setFirst(null)
+        const refreshed = await cookrew().accountStatus?.()
+        if (refreshed) onStatus(refreshed)
+      })
+      .catch(() => setError('The password could not be set. Try again.'))
+      .finally(() => {
+        trip.end()
+        setTripping(false)
+        setBusy(false)
+      })
   }
 
   const toggleTouchId = (): void => {
@@ -208,6 +235,39 @@ export function LinkRows({
       )}
       {email !== null && (
         <Row kind="EMAIL" label={email.address} state={`Verified by ${PROVIDER_LABEL[email.via]}`} saved action={null} />
+      )}
+      {status.passwordless && first === null && (
+        <Row
+          kind="PASSWORD"
+          label="No account password yet — set one to enter your machines and unlock with it"
+          action={
+            <button className="gs-ghost" onClick={() => setFirst({ next: '', confirm: '' })}>
+              SET
+            </button>
+          }
+        />
+      )}
+      {first !== null && (
+        <li className="cr-acct-secrow cr-acct-removefactor">
+          {(['next', 'confirm'] as const).map((field) => (
+            <input
+              key={field}
+              type="password"
+              className="gs-input"
+              aria-label={field === 'next' ? 'New account password' : 'New account password again'}
+              placeholder={field === 'next' ? 'new account password' : 'new account password again'}
+              autoComplete="new-password"
+              value={first[field]}
+              onChange={(e) => setFirst({ ...first, [field]: e.target.value })}
+            />
+          ))}
+          <button className="gs-primary" disabled={busy || !firstPasswordView(first.next, first.confirm).canGo} onClick={saveFirstPassword}>
+            SET
+          </button>
+          <button className="gs-ghost" onClick={() => setFirst(null)}>
+            CANCEL
+          </button>
+        </li>
       )}
       {status.passcodePending && passcode === null && (
         <Row

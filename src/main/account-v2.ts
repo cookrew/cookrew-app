@@ -58,6 +58,7 @@ import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 import type { MachineProfile } from '../shared/fleet'
 import type { PasskeySummary } from '../shared/account-approvals'
+import { GRANT_PATHS } from '../shared/account-pair'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -685,13 +686,70 @@ export class Accounts {
     return { ok: true, value: undefined }
   }
 
+  /**
+   * TOUCH ID REPLACES TYPING, whichever secret the lock holds (owner's ruling,
+   * 2026-11-09): the account password or, until it is folded in, a passcode.
+   */
   touchIdOn(): boolean {
-    return this.cached?.unlockBy === 'passcode' && this.cached.touchId === true
+    return this.cached !== null && this.cached.touchId === true && !this.passcodePending()
   }
 
   setTouchId(on: boolean): void {
     const account = this.cached
-    if (account?.unlockBy === 'passcode') this.save({ ...account, touchId: on })
+    if (account) this.save({ ...account, touchId: on })
+  }
+
+  /** Does the ACCOUNT have a password now, as this machine last heard? */
+  hasAccountPassword(): boolean {
+    return this.cached !== null && this.cached.passwordless !== true
+  }
+
+  /**
+   * A FIRST ACCOUNT PASSWORD, set from this machine (owner's ruling 3): the
+   * account gets it at cookrew.dev, and this machine's lock takes it at once —
+   * the passcode, if there was one, is folded into it and is gone.
+   */
+  async setFirstPassword(next: string, stepUp: string | null): Promise<AccountResult<void>> {
+    if (next.length < MIN_PASSWORD) return { ok: false, reason: 'weak_password' }
+    const result = await this.authed<void>('/v2/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ next, ...(stepUp === null ? {} : { stepUp }) }),
+      parse: false,
+    })
+    if (!result.ok) return result
+    this.foldPasscode(next)
+    return { ok: true, value: undefined }
+  }
+
+  /**
+   * THE PASSCODE FOLDS INTO THE ACCOUNT PASSWORD (owner's ruling, 2026-11-09):
+   * once the account password has been proved here, it is what unlocks this
+   * machine, and the passcode concept goes from it.
+   */
+  foldPasscode(password: string): void {
+    const account = this.cached
+    if (account === null) return
+    const { unlockBy: _gone, ...rest } = account
+    this.save({ ...rest, passwordless: false, unlock: unlockVerifierFor(password) })
+  }
+
+  /**
+   * IS THIS THE ACCOUNT PASSWORD? Asked of cookrew.dev with this machine's live
+   * session, through the device-grant route (which checks it, counts wrong
+   * tries, and answers a pass this machine simply drops). No new session, so
+   * no sign-in ladder: the machine is already signed in.
+   */
+  async isAccountPassword(password: string): Promise<boolean> {
+    const sent = await this.authedResponse(GRANT_PATHS.grant, { method: 'POST', body: JSON.stringify({ password }) })
+    return sent.ok && sent.response.status === 201
+  }
+
+  /** What /v2/me says about the account, learned whenever it is read. */
+  private learnFromProfile(profile: { hasPassword?: unknown }): void {
+    const account = this.cached
+    if (account !== null && account.passwordless === true && profile.hasPassword === true) {
+      this.save({ ...account, passwordless: false })
+    }
   }
 
   /**
@@ -1662,8 +1720,10 @@ export class Accounts {
   }
 
   /** The whole profile: who, which devices, which desktops (D4). */
-  profile(): Promise<AccountResult<AccountProfile>> {
-    return this.authed<AccountProfile>('/v2/me')
+  async profile(): Promise<AccountResult<AccountProfile>> {
+    const result = await this.authed<AccountProfile>('/v2/me')
+    if (result.ok) this.learnFromProfile(result.value as unknown as { hasPassword?: unknown })
+    return result
   }
 
   /** Just the devices — what the Devices tab redraws after a revoke. */

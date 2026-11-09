@@ -75,6 +75,15 @@ export function handleView(
   return { canGo: false, note: 'Checking…', tone: 'dim' }
 }
 
+/** The account password's own rule: twelve characters, the registry's floor. */
+export const MIN_ACCOUNT_PASSWORD = 12
+
+export function firstPasswordView(next: string, confirm: string): { canGo: boolean; note: string } {
+  if (next.length < MIN_ACCOUNT_PASSWORD) return { canGo: false, note: `Use ${MIN_ACCOUNT_PASSWORD} characters or more; a sentence works.` }
+  if (next !== confirm) return { canGo: false, note: 'Type the same password twice.' }
+  return { canGo: true, note: '' }
+}
+
 export function passcodeView(next: string, confirm: string): { canGo: boolean; note: string } {
   if (next.length < MIN_PASSCODE) return { canGo: false, note: `Use ${MIN_PASSCODE} characters or more.` }
   if (next !== confirm) return { canGo: false, note: 'Type the same passcode twice.' }
