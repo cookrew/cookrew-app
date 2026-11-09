@@ -46,7 +46,7 @@ export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAcc
       setBusy(true)
       setLine(null)
       try {
-        const result = await enterWithAccount(deps, typed)
+        const result = await enterWithAccount(deps, typed, offer.desktopId)
         setPassword('')
         if (result.kind === 'entered') {
           if (!(await onEntered(result.token))) setLine(machineSentence(REAUTH_COPY.enterKept, offer.platform))

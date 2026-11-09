@@ -9,6 +9,7 @@ import {
   ACCOUNT_PAIR_INFO,
   ACCOUNT_PAIR_REST_MS,
   ACCOUNT_PAIR_STOP_MS,
+  pairBeginMessage,
   pairDeviceMessage,
   pairProofDigestInput,
   pairTranscript,
@@ -97,10 +98,14 @@ describe('the account pair door', () => {
   })
   afterEach(() => temp.clean())
 
-  const begin = async (d: ReturnType<typeof door>, device: Phone = mine, bridged: { deviceId: string } | null = null) => {
-    const out = await d.begin({ body: { deviceId: device.id }, bridged })
-    return out
-  }
+  const signedBegin = (device: Phone, at = clock) => ({
+    deviceId: device.id,
+    jwk: device.jwk,
+    at,
+    sig: signAs(device, pairBeginMessage(account.deviceId, device.id, at))
+  })
+  const begin = async (d: ReturnType<typeof door>, device: Phone = mine, bridged: { deviceId: string } | null = null) =>
+    d.begin({ body: signedBegin(device), bridged })
 
   const transcript = (challenge: PairChallenge, device: Phone = mine): string =>
     pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: device.id })
@@ -229,9 +234,9 @@ describe('the account pair door', () => {
 
   it('down the relay, the device must be the one cookrew.dev signed in', async () => {
     const d = door()
-    const wrongStamp = await d.begin({ body: { deviceId: mine.id }, bridged: { deviceId: randomUUID() } })
+    const wrongStamp = await d.begin({ body: signedBegin(mine), bridged: { deviceId: randomUUID() } })
     expect(wrongStamp.status).toBe(401)
-    const right = await d.begin({ body: { deviceId: mine.id }, bridged: { deviceId: mine.id } })
+    const right = await d.begin({ body: signedBegin(mine), bridged: { deviceId: mine.id } })
     expect(right.status).toBe(200)
     const out = await d.finish({ body: withPassword(right.body as PairChallenge, PASSWORD), bridged: { deviceId: mine.id } })
     expect(out.status).toBe(200)
@@ -400,7 +405,30 @@ describe('the account pair door', () => {
 
   it('the machine’s own id is not a device that may ask', async () => {
     anchors = { ...(anchors as PairAnchors), devices: [...(anchors as PairAnchors).devices, { id: account.deviceId, jwk: mine.jwk }] }
-    const out = await door().begin({ body: { deviceId: account.deviceId }, bridged: null })
+    const out = await door().begin({ body: { ...signedBegin(mine), deviceId: account.deviceId }, bridged: null })
     expect(out.status).toBe(400)
+  })
+
+  it('only the device itself can open its challenge, and a stranger naming it cancels nothing', async () => {
+    const d = door()
+    const unsigned = await d.begin({ body: { deviceId: mine.id, jwk: mine.jwk, at: clock, sig: 'AAAA' }, bridged: null })
+    expect(unsigned.status).toBe(401)
+    const stale = await d.begin({ body: signedBegin(mine, clock - 10 * 60_000), bridged: null })
+    expect(stale.status).toBe(401)
+    const challenge = await challengeOf(d)
+    // Junk naming the device, with a wrong challenge id and no valid signature.
+    const junk = await d.finish({ body: { ...withPassword(challenge, PASSWORD), challengeId: randomUUID(), sig: 'AAAA' }, bridged: null })
+    expect(junk.status).toBe(401)
+    const out = await d.finish({ body: withPassword(challenge, PASSWORD), bridged: null })
+    expect(out.status).toBe(200)
+  })
+
+  it('each stop with no entry between lasts twice the last', async () => {
+    let state = { count: 8, until: 0, stops: 1 }
+    const misses = { read: () => state, write: (next: typeof state) => void (state = { ...next, stops: next.stops ?? 0 }) }
+    const d = door({ misses })
+    await d.finish({ body: withPassword(await challengeOf(d), 'one more wrong one'), bridged: null })
+    expect(state.stops).toBe(2)
+    expect(state.until - clock).toBe(2 * ACCOUNT_PAIR_STOP_MS)
   })
 })

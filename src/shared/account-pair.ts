@@ -56,6 +56,8 @@ export const ACCOUNT_PAIR_REST_MS = 60_000
  */
 export const ACCOUNT_PAIR_STOP_AFTER = 9
 export const ACCOUNT_PAIR_STOP_MS = 15 * 60_000
+/** Each stop after the first, with no entry between, lasts twice the last — up to this. */
+export const ACCOUNT_PAIR_STOP_MAX_MS = 4 * 60 * 60_000
 
 /** Long enough to type a password on a phone, short enough to be fresh. */
 export const ACCOUNT_PAIR_CHALLENGE_MS = 120_000
@@ -80,6 +82,13 @@ export const pairTranscript = (input: {
   readonly deviceId: string
 }): string =>
   `${ACCOUNT_PAIR_CONTEXT} ${input.desktopId} ${input.challengeId} ${input.nonce} ${input.deviceId}`
+
+/**
+ * BEGIN IS SIGNED TOO, so only the device itself can open (and so replace) its
+ * challenge: a stranger naming somebody's device id changes nothing.
+ */
+export const pairBeginMessage = (desktopId: string, deviceId: string, atMs: number): string =>
+  `${ACCOUNT_PAIR_CONTEXT} begin ${desktopId} ${deviceId} ${atMs}`
 
 /** GET /api/pair — may this machine be entered with the account, and how. */
 export interface PairOffer {

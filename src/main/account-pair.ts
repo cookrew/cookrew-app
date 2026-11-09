@@ -9,6 +9,8 @@ import {
   ACCOUNT_PAIR_CHALLENGE_MS,
   ACCOUNT_PAIR_INFO,
   ACCOUNT_PAIR_PASSWORD_MAX,
+  ANCHORS_SKEW_MS,
+  pairBeginMessage,
   pairDeviceMessage,
   pairProofDigestInput,
   pairTranscript,
@@ -28,9 +30,10 @@ export type { PairMisses } from './account-pair-guard'
 /**
  * THE MACHINE'S SIDE OF ENTERING WITH THE ACCOUNT (shared/account-pair.ts).
  *
- * begin  — a device of the account asks; it gets a one-use challenge and a
- *          one-use seal key, bound to its device id. One open challenge per
- *          device: a new begin replaces the old one.
+ * begin  — a device of the account asks, signing with its key; it gets a
+ *          one-use challenge and a one-use seal key, bound to its device id.
+ *          One open challenge per device: a new begin replaces the old one,
+ *          and only the device itself can sign a begin.
  * finish — it brings its key's signature over the transcript and the proof,
  *          and ONE secret: the password sealed to that key, checked against
  *          THIS machine's own verifier; or a passkey's assertion over the
@@ -268,13 +271,21 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
       }
       const rest = guard.restFor(deviceId, now())
       if (rest > 0) return resting(rest)
-      if (!begins.take(deviceId)) return refuse(429, 'resting', 'Too many requests from this device. Try again in a minute.', { retryAfterMs: 60_000 })
       const anchors = await trusted()
       if (anchors === null) return refuse(503, 'unavailable', word('This Mac cannot reach cookrew.dev to read the account just now.'))
       if (anchors.locked) return refuse(423, 'unavailable', 'This account is locked down after “Not me”. Change the password at cookrew.dev/me first.')
-      if (!anchors.devices.some((device) => device.id === deviceId)) {
+      const signedBegin = isRecord(body) ? body : {}
+      if (!deviceOnAccount(anchors, deviceId, signedBegin.jwk)) {
         return refuse(403, 'refused', 'This browser is not signed in to the account this machine is on.')
       }
+      const at = typeof signedBegin.at === 'number' ? signedBegin.at : NaN
+      const beginSig = typeof signedBegin.sig === 'string' ? signedBegin.sig : ''
+      const fresh = Number.isFinite(at) && Math.abs(now() - at) <= ANCHORS_SKEW_MS
+      if (!fresh || !deviceSignatureValid(signedBegin.jwk as Record<string, string>, pairBeginMessage(account.deviceId, deviceId, at), beginSig)) {
+        return refuse(401, 'refused', 'This device’s signature did not open. Check its clock and start again.')
+      }
+      // Counted only for a device that proved its key: a stranger fills nothing.
+      if (!begins.take(deviceId)) return refuse(429, 'resting', 'Too many requests from this device. Try again in a minute.', { retryAfterMs: 60_000 })
       const methods = methodsOf(anchors)
       if (methods.length === 0) return refuse(409, 'unavailable', word('This Mac has no way to check the account yet. Add a passkey at cookrew.dev/me.'))
       const challengeId = randomUUID()
@@ -296,9 +307,13 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
       if (checking) return refuse(429, 'resting', 'Another entry is being checked. Try again in a moment.', { retryAfterMs: 1_000 })
       checking = true
       try {
-        // Spent whatever happens next: each challenge answers one message.
-        const h = held.get(finishing.deviceId)
-        held.delete(finishing.deviceId)
+        // Spent whatever happens next — but only by a request that names it and
+        // comes from the device it was issued to, so a stranger cannot cancel it.
+        const found = held.get(finishing.deviceId)
+        const named = found !== undefined && found.challengeId === finishing.challengeId
+        const fromIt = bridged === null || bridged.deviceId === finishing.deviceId
+        const h = named && fromIt ? found : undefined
+        if (h !== undefined) held.delete(finishing.deviceId)
         const stopped = precheck(h, finishing, bridged, account)
         if (stopped !== null || h === undefined) return stopped ?? refuse(401, 'refused', 'Start again.')
         const checked = await checkSecret(h, finishing)

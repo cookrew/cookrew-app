@@ -17,6 +17,13 @@ import type { PairAnchors, PasskeyAnchor } from './pair-anchors'
  *   a passkey the registry adds opens nothing until somebody at the machine
  *   runs `cookrew mobile --repin`, which reads and pins the list again.
  *
+ * WHO PINS FIRST: whatever asks first after the machine signs in — usually the
+ * owner's own first entry, or any GET /api/pair. The registry's answer at that
+ * moment is trusted; that first read is the trust left in cookrew.dev.
+ * `--repin` is a CLI command, so an agent pane can run it as well as a person;
+ * that adds nothing, since `cookrew mobile --token` already prints a pane the
+ * whole credential.
+ *
  * Kept per username: a machine signed in to another account starts over.
  * 0600 and temp-and-rename, like every other credential file here.
  */

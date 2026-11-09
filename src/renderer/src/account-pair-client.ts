@@ -2,6 +2,7 @@ import {
   ACCOUNT_PAIR_INFO,
   ACCOUNT_PAIR_PASSWORD_MAX,
   PAIR_PATHS,
+  pairBeginMessage,
   pairDeviceMessage,
   pairProofDigestInput,
   pairTranscript,
@@ -119,13 +120,23 @@ const wireAssertion = (credential: Credential | null): PasskeyAssertionWire | nu
  * person dismissed is `cancelled`, not a refusal: nothing was asked of the
  * machine, and no try was spent.
  */
-export async function enterWithAccount(deps: PairClientDeps, password: string | null): Promise<EnterResult> {
+export async function enterWithAccount(deps: PairClientDeps, password: string | null, knownDesktopId: string | null = null): Promise<EnterResult> {
   const device = await deps.device()
   if (device === null) return { kind: 'no-device' }
   if (password !== null && (password.length === 0 || password.length > ACCOUNT_PAIR_PASSWORD_MAX)) {
     return { kind: 'refused', message: 'Type the account password.' }
   }
-  const begun = await deps.post(PAIR_PATHS.begin, { deviceId: device.id })
+  // The begin is signed for THIS machine, so the device needs its id first.
+  const desktopId = knownDesktopId ?? (await pairOffer(deps))?.desktopId ?? null
+  if (desktopId === null) return { kind: 'refused', message: 'This machine did not say who it is. Try again.' }
+  const at = Date.now()
+  let beginSig: string
+  try {
+    beginSig = b64u(await device.sign(encoder.encode(pairBeginMessage(desktopId, device.id, at))))
+  } catch {
+    return { kind: 'failed', message: 'This browser could not sign with its cookrew.dev key. Sign in at cookrew.dev/me again.' }
+  }
+  const begun = await deps.post(PAIR_PATHS.begin, { deviceId: device.id, jwk: device.jwk, at, sig: beginSig })
   const challenge = begun.status === 200 ? readChallenge(begun.body) : null
   if (challenge === null) return refusedFrom(begun.body, 'This machine did not start an entry. Try again.')
   const transcript = pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: device.id })

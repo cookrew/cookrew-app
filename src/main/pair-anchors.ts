@@ -181,20 +181,29 @@ export function createAnchorSource(deps: {
 }): AnchorSource {
   const now = deps.now ?? Date.now
   let last: { anchors: PairAnchors; at: number } | null = null
+  /** One read at a time: callers arriving together share it. */
+  let flying: Promise<unknown | null> | null = null
+  /** After a failed read, the registry is not asked again for a while. */
+  let failedAt = -Infinity
+  const read = (): Promise<unknown | null> => {
+    flying ??= deps
+      .fetch()
+      .catch(() => null)
+      .finally(() => {
+        flying = null
+      })
+    return flying
+  }
   return {
     get: async (options = {}) => {
       const username = deps.username()
       if (username === null) return null
-      if (options.fresh !== true && last !== null && last.anchors.username === username && now() - last.at < ANCHORS_FRESH_MS) {
-        return last.anchors
-      }
-      let body: unknown = null
-      try {
-        body = await deps.fetch()
-      } catch {
-        body = null
-      }
+      const cached = last !== null && last.anchors.username === username ? last : null
+      if (options.fresh !== true && cached !== null && now() - cached.at < ANCHORS_FRESH_MS) return cached.anchors
+      const resting = options.fresh !== true && now() - failedAt < ANCHORS_FRESH_MS
+      const body = resting ? null : await read()
       const fresh = body === null ? null : readAnchors(body, username)
+      if (fresh === null && !resting) failedAt = now()
       if (fresh !== null) {
         last = { anchors: fresh, at: now() }
         return fresh
