@@ -23,7 +23,7 @@
   const WAYS = {
     passkey: ['key', 'Use your passkey', 'Touch ID, Face ID or a security key'],
     totp: ['code', 'Enter a code from your authenticator', 'The six digits in your authenticator app'],
-    recovery: ['life', 'Use a recovery code', 'One of the codes you saved. It is used up.']
+    recovery: ['life', 'Use a recovery code', 'One of the codes you saved. Each works once.']
   }
 
   const row = (icon, title, small, onclick) =>
