@@ -249,7 +249,7 @@ describe('signIn against the real registry: a second Mac joins the account', () 
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'v3-signin-registry-'))
-    const v2 = createV2(dir)
+    const v2 = createV2(dir, { secondStep: 'legacy' })
     server = createServer((request: IncomingMessage, response: ServerResponse) => {
       const url = new URL(request.url ?? '/', 'http://registry.test')
       const ctx: V2Context = {

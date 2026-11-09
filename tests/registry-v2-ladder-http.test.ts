@@ -53,7 +53,7 @@ async function up(): Promise<Up> {
     stars: new StarStore(dir),
     // Loose limits: this file is about the ladder, and the per-IP sign-in
     // limiter has its own proof in registry-v2-http.
-    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+    v2: createV2(dir, { secondStep: 'legacy', freshWindowMs: 0, limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -109,7 +109,7 @@ async function claim(): Promise<Owner> {
 /* ── factors, as the /me page adds them ───────────────────────────────────── */
 
 async function addTotp(owner: Owner): Promise<string> {
-  const res = await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+  const res = await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))
   expect(res.status).toBe(201)
   const { secret, otpauth } = await bodyOf<{ secret: string; otpauth: string }>(res)
   expect(otpauth).toContain(`otpauth://totp/cookrew.dev:${owner.username}`)
@@ -125,7 +125,7 @@ const codeFor = (secret: string, shift = 0): string =>
   totpAt(base32Decode(secret) as Buffer, Date.now() + shift * TOTP_STEP_MS)
 
 async function addPasskey(owner: Owner, pair: Pair, credentialId = randomBytes(20)): Promise<Buffer> {
-  const options = await call('POST', '/v2/me/passkeys/options', {}, bearer(owner.token))
+  const options = await call('POST', '/v2/me/passkeys/options', { current: PASSWORD }, bearer(owner.token))
   expect(options.status).toBe(200)
   const { challenge } = await bodyOf<{ challenge: string }>(options)
   const credential = makeCredential({
@@ -179,7 +179,7 @@ describe('POST /v2/sessions — what a password buys', () => {
     await addPasskey(owner, p256())
     expect((await askForStep(owner)).next).toEqual(['passkey', 'totp', 'approve'])
 
-    expect((await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))).status).toBe(201)
+    expect((await call('POST', '/v2/me/recovery-codes', { current: PASSWORD }, bearer(owner.token))).status).toBe(201)
     expect((await askForStep(owner)).next).toEqual(['passkey', 'totp', 'approve', 'recovery'])
   })
 
@@ -285,7 +285,7 @@ describe('POST /v2/sessions/:pending/recovery', () => {
   it('spends the code once, and never again', async () => {
     const owner = await claim()
     const { codes } = await bodyOf<{ codes: string[] }>(
-      await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
+      await call('POST', '/v2/me/recovery-codes', { current: PASSWORD }, bearer(owner.token))
     )
     const first = await askForStep(owner)
     const used = await call('POST', `/v2/sessions/${first.pending}/recovery`, { code: codes[0] })
@@ -535,6 +535,10 @@ describe('an answered request closes every door, not just its own', () => {
   it('“not me” drops every sign-in this account has in flight', async () => {
     const owner = await claim()
     const secret = await addTotp(owner)
+    // Before the alarm: minting codes is a gated act, and the alarm refuses it.
+    const { codes } = await bodyOf<{ codes: string[] }>(
+      await call('POST', '/v2/me/recovery-codes', { current: PASSWORD }, bearer(owner.token))
+    )
     const other = await askForStep(owner, device('browser', 'A second try'))
     const theirs = await askForStep(owner, device('browser', 'Chrome on Windows'))
     const { approval } = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${theirs.pending}/approve`))
@@ -557,9 +561,6 @@ describe('an answered request closes every door, not just its own', () => {
 
     // The recovery door beside the ladder is locked too: those codes come off
     // the same screen the password was taken from.
-    const { codes } = await bodyOf<{ codes: string[] }>(
-      await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
-    )
     const rescue = await call('POST', '/v2/recovery', {
       username: owner.username,
       code: codes[0],
@@ -583,7 +584,7 @@ describe('a device that could never attach', () => {
   it('is refused at the password step, before a rescue code is burned', async () => {
     const owner = await claim()
     const { codes } = await bodyOf<{ codes: string[] }>(
-      await call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token))
+      await call('POST', '/v2/me/recovery-codes', { current: PASSWORD }, bearer(owner.token))
     )
     const unusable = { ...device(), jwk: { kty: 'RSA', n: 'nope' } }
     const res = await call('POST', '/v2/sessions', { username: owner.username, password: PASSWORD, device: unusable })
@@ -699,7 +700,7 @@ describe('passwordless passkey sign-in', () => {
 describe('POST /v2/me/totp', () => {
   it('is inactive until a code proves the app has it, and is removed in one call', async () => {
     const owner = await claim()
-    const started = await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+    const started = await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))
     expect(started.status).toBe(201)
     const { secret } = await bodyOf<{ secret: string; otpauth: string }>(started)
 
@@ -713,7 +714,7 @@ describe('POST /v2/me/totp', () => {
     expect((await askForStep(owner)).next).toEqual(['totp', 'approve'])
 
     // A second authenticator is a decision, not an accident.
-    const twice = await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+    const twice = await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))
     expect(twice.status).toBe(409)
     expect((await bodyOf<{ error: string }>(twice)).error).toBe('totp_active')
 
@@ -729,7 +730,7 @@ describe('POST /v2/me/totp', () => {
 
   it('hands down a QR of the same URL, and never a picture of anything else', async () => {
     const owner = await claim()
-    const res = await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+    const res = await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))
     expect(res.status).toBe(201)
     const started = await bodyOf<{ secret: string; otpauth: string; qr: string[] }>(res)
     // The page cannot encode it — the CSP forbids an inline script and there
@@ -744,9 +745,9 @@ describe('POST /v2/me/totp', () => {
 
   it('replaces an enrolment nobody finished, so an abandoned secret opens nothing', async () => {
     const owner = await claim()
-    const first = await bodyOf<{ secret: string }>(await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token)))
+    const first = await bodyOf<{ secret: string }>(await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token)))
     // CANCEL is just walking away: the next ADD writes over it.
-    const second = await bodyOf<{ secret: string }>(await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token)))
+    const second = await bodyOf<{ secret: string }>(await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token)))
     expect(second.secret).not.toBe(first.secret)
 
     const stale = await call('POST', '/v2/me/totp/confirm', { code: codeFor(first.secret) }, bearer(owner.token))
@@ -781,7 +782,7 @@ describe('POST /v2/me/totp', () => {
 describe('POST /v2/me/passkeys', () => {
   it('offers creation options this registry can verify, and enrols one key once', async () => {
     const owner = await claim()
-    const options = await call('POST', '/v2/me/passkeys/options', {}, bearer(owner.token))
+    const options = await call('POST', '/v2/me/passkeys/options', { current: PASSWORD }, bearer(owner.token))
     expect(options.status).toBe(200)
     const asked = await bodyOf<{
       challenge: string
@@ -820,7 +821,7 @@ describe('POST /v2/me/passkeys', () => {
     const pair = p256()
     const credentialId = await addPasskey(owner, pair)
 
-    const options = await call('POST', '/v2/me/passkeys/options', {}, bearer(owner.token))
+    const options = await call('POST', '/v2/me/passkeys/options', { current: PASSWORD }, bearer(owner.token))
     const { challenge } = await bodyOf<{ challenge: string }>(options)
     const again = makeCredential({ pair, credentialId, challenge, origin: site.origin, rpId: site.rpId })
     const known = await call('POST', '/v2/me/passkeys', { name: 'Twin', credential: again }, bearer(owner.token))
@@ -828,7 +829,7 @@ describe('POST /v2/me/passkeys', () => {
     expect((await bodyOf<{ error: string }>(known)).error).toBe('passkey_known')
 
     const fresh = await bodyOf<{ challenge: string }>(
-      await call('POST', '/v2/me/passkeys/options', {}, bearer(owner.token))
+      await call('POST', '/v2/me/passkeys/options', { current: PASSWORD }, bearer(owner.token))
     )
     const nameless = makeCredential({
       pair: p256(),
@@ -913,7 +914,7 @@ describe('every phase 4 answer', () => {
       await call('POST', `/v2/sessions/${step.pending}/totp`, { code: '000000' }),
       await call('GET', '/v2/sessions/passkey/options'),
       await call('GET', '/v2/me/approvals', undefined, bearer(owner.token)),
-      await call('POST', '/v2/me/totp/enrol', {}, bearer(owner.token))
+      await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(owner.token))
     ]
     for (const res of answers) {
       expect(res.headers.get('cache-control')).toBe('private, no-store')

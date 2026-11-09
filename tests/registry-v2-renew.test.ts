@@ -40,7 +40,7 @@ async function up(loose = true): Promise<Up> {
     identity: new IdentityService(dir),
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
-    v2: createV2(dir, {
+    v2: createV2(dir, { secondStep: 'legacy', 
       limits: {
         accountsPerMinute: 1000,
         sessionsPerMinute: 1000,

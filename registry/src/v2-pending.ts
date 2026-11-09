@@ -148,6 +148,15 @@ export interface Pending {
    * claimed the request, and it finishes as that request's one-use code.
    */
   authRequest?: string
+  /**
+   * A SIGN-IN THAT MUST FIRST SET UP A SECOND STEP (auth UX 2026-11-09).
+   *
+   * The first factor passed, but the account holds no passkey and no
+   * authenticator, and no session is issued until it does. `by` is the factor
+   * set up on this pending; `codes` is true once fresh recovery codes were
+   * handed back for the person to save. Only then may the sign-in finish.
+   */
+  setup?: { by?: 'passkey' | 'totp'; codes?: boolean }
 }
 
 /** What answering an approval came to. */
@@ -173,6 +182,8 @@ export interface OpenInput {
   via?: { provider: ProviderId; subject: string }
   /** Set on the auth origin: the request this sign-in finishes. */
   authRequest?: string
+  /** Set when the sign-in must set up a second step before it can finish. */
+  setup?: boolean
 }
 
 /**
@@ -220,6 +231,7 @@ export class PendingSignIns {
       ...(input.act === undefined ? {} : { act: input.act }),
       ...(input.opener === undefined ? {} : { opener: input.opener }),
       ...(input.authRequest === undefined ? {} : { authRequest: input.authRequest }),
+      ...(input.setup === true ? { setup: {} } : {}),
       authorised: false
     }
     // Bounded by count as well as by time — this account's own oldest first,
@@ -270,6 +282,24 @@ export class PendingSignIns {
     }
     this.pendings.set(id, next)
     return { ok: true, pending: next }
+  }
+
+  /** A second step was set up on this setup pending. */
+  setUp(id: string, by: 'passkey' | 'totp'): Pending | null {
+    const held = this.get(id)
+    if (held === null || held.setup === undefined) return null
+    const next: Pending = { ...held, setup: { ...held.setup, by } }
+    this.pendings.set(id, next)
+    return next
+  }
+
+  /** Its recovery codes were handed back, once. */
+  codesShown(id: string): Pending | null {
+    const held = this.get(id)
+    if (held === null || held.setup?.by === undefined) return null
+    const next: Pending = { ...held, setup: { ...held.setup, codes: true } }
+    this.pendings.set(id, next)
+    return next
   }
 
   close(id: string): void {

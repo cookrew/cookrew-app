@@ -36,9 +36,16 @@ export interface SessionAge {
 }
 
 /** Has this session proved itself within the last five minutes — by one of `by`, when given? */
-export function freshlyVerified(session: SessionAge | null | undefined, now: number, by?: readonly VerifiedBy[]): boolean {
-  if (!session || typeof session.verifiedAt !== 'number') return false
-  if (now - session.verifiedAt > FRESH_MS || session.verifiedAt > now + 60_000) return false
+export function freshlyVerified(
+  session: SessionAge | null | undefined,
+  now: number,
+  by?: readonly VerifiedBy[],
+  windowMs: number = FRESH_MS
+): boolean {
+  // A window of nothing is never open: a proof and the next request can land
+  // in the same millisecond, and "fresh for 0 ms" must still mean "ask again".
+  if (!session || typeof session.verifiedAt !== 'number' || windowMs <= 0) return false
+  if (now - session.verifiedAt > windowMs || session.verifiedAt > now + 60_000) return false
   return by === undefined || (session.verifiedBy !== undefined && by.includes(session.verifiedBy))
 }
 

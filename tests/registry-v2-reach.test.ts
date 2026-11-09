@@ -48,7 +48,7 @@ interface Up {
 
 async function up(): Promise<Up> {
   const dir = mkdtempSync(path.join(tmpdir(), 'v2-reach-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, helloPerMinute: 60 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, helloPerMinute: 60 } })
   const server: Server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),

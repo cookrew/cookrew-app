@@ -54,7 +54,7 @@ async function boot(options: { auth?: boolean } = {}): Promise<void> {
   A = `http://auth.localhost:${port}`
   clock = Date.now()
   logged = []
-  v2 = createV2(dir, {
+  v2 = createV2(dir, { secondStep: 'legacy', 
     log: (message) => logged.push(message),
     limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, oauthPerMinute: 1000, lookupsPerMinute: 1000, joinPerMinute: 1000 },
     oauth: fake.config(),

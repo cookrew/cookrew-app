@@ -124,8 +124,9 @@ export class V2Tokens {
     this.now = options.now ?? Date.now
   }
 
-  mintSession(sub: string, dev: string, jti: string = randomUUID()): Minted {
-    const exp = this.now() + SESSION_TTL_MS
+  /** `expAt` caps the token at the sitting's thirtieth day (v2-session-age.ts · tokenExpiry). */
+  mintSession(sub: string, dev: string, jti: string = randomUUID(), expAt?: number): Minted {
+    const exp = Math.min(this.now() + SESSION_TTL_MS, expAt ?? Infinity)
     return { token: this.mint({ sub, dev, scope: 'session', exp, jti }), exp, jti }
   }
 

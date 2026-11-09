@@ -238,7 +238,7 @@ describe('joining and first-unlocking against the real registry', () => {
       stars: new StarStore(dir),
       // Loose on the limiters this file is not about: every call here comes
       // from 127.0.0.1, so one shared address would spend its own budget.
-      v2: createV2(dir, {
+      v2: createV2(dir, { secondStep: 'legacy', 
         limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, joinPerMinute: 1000 },
       }),
     })

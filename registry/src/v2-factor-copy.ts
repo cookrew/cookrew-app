@@ -34,9 +34,23 @@ export type FactorError =
   | 'passkey_limit'
   | 'passkey_known'
   | 'bad_name'
+  /** Auth UX 2026-11-09: no session until the account has a passkey or an authenticator. */
+  | 'second_step_setup'
+  /** …and that is set up only from a device the account already knows. */
+  | 'second_step_elsewhere'
+  /** A set-up pending asked to finish before its factor and its codes. */
+  | 'setup_unfinished'
+  /** A sensitive act more than five minutes after the last verification. */
+  | 'step_up_fresh'
 
 const SENTENCES: Record<FactorError, string> = {
   second_factor: 'One more step. Prove it is you.',
+  second_step_setup:
+    'This account needs a second step before it can sign in: a passkey (Touch ID or Face ID) or an authenticator app. Finish signing in at auth.cookrew.dev to set one up, or update Cookrew.',
+  second_step_elsewhere:
+    'This account has no second step yet, and one can only be added from a device already signed in to it. Open cookrew.dev/me there, add a passkey or an authenticator under Security, then sign in here.',
+  setup_unfinished: 'Set up a passkey or an authenticator and save your recovery codes first.',
+  step_up_fresh: 'It has been more than five minutes since you last proved it is you. Prove it again to do this.',
   password_change_required:
     'Somebody said a sign-in was not them, so this password is locked out until you change it. Change it on a device you are still signed in on.',
   bad_code: 'That is not the code showing right now. Wait for the next one and type it as it appears.',

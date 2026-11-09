@@ -7,7 +7,8 @@ import { parseRegistration } from './v2-passkeys'
 import { qrRows } from './v2-qr'
 import type { Decision } from './v2-pending'
 import { signedIn, type Signed, type V2Context } from './v2-routes'
-import { hasStepUpFactor, heldIfPasswordless, stepUpHeld } from './v2-step-up'
+import { hasStepUpFactor, heldWhenFresh, stepUpHeld } from './v2-step-up'
+import { freshlyVerified } from './v2-session-age'
 
 /**
  * IDENTITY v2, PHASE 4 — ADDING A FACTOR, AND ANSWERING FOR ONE.
@@ -66,7 +67,7 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     return true
   }
   if (rest.length === 2 && rest[0] === 'totp' && rest[1] === 'enrol' && method === 'POST') {
-    void heldIfPasswordless(ctx, signed, 'add-factor').then((go) => {
+    void heldWhenFresh(ctx, signed, 'add-factor').then((go) => {
       if (go) beginTotp(ctx, who)
     })
     return true
@@ -83,7 +84,7 @@ export function handleMeFactorRoute(ctx: V2Context, rest: string[]): boolean {
     return true
   }
   if (rest.length === 2 && rest[0] === 'passkeys' && rest[1] === 'options' && method === 'POST') {
-    void heldIfPasswordless(ctx, signed, 'add-factor').then((go) => {
+    void heldWhenFresh(ctx, signed, 'add-factor').then((go) => {
       if (go) passkeyOptions(ctx, who, signed.account.displayName)
       else enrolLog(ctx, `refused why=${gateRefusal(ctx, who)} at=me-options`)
     })
@@ -141,10 +142,15 @@ async function removeFactor(ctx: V2Context, signed: Signed, remove: () => boolea
     refuseFactor(ctx.response, 403, 'password_change_required')
     return
   }
+  // FIVE MINUTES (auth UX 2026-11-09): a sitting that proved itself just now
+  // is not asked again.
+  const fresh = freshlyVerified(ctx.v2.accounts.session(username, signed.claims.jti), ctx.v2.now(), undefined, ctx.v2.freshWindowMs)
   // A PASSWORDLESS ACCOUNT HAS NO `current` TO SEND, so it brings the proof a
   // provider round trip left instead, spent here like any other step-up.
   const passwordless = ctx.v2.accounts.get(username)?.passwordless === true
-  if (passwordless) {
+  if (fresh) {
+    // Proved within the window: nothing more to ask.
+  } else if (passwordless) {
     if (!ctx.v2.factors.pending.spendAuthorised(username, 'remove-factor', body.value.stepUp, signed.claims.jti)) {
       refuseFactor(ctx.response, 403, 'provider_required')
       return
@@ -157,6 +163,8 @@ async function removeFactor(ctx: V2Context, signed: Signed, remove: () => boolea
   } else if (!(await ctx.v2.accounts.verifyPassword(username, body.value.current))) {
     refuse(ctx.response, 401, 'bad_credentials')
     return
+  } else {
+    ctx.v2.accounts.markVerified(username, signed.claims.jti, 'password')
   }
   if (!remove()) {
     refuse(ctx.response, 404, 'not_found')

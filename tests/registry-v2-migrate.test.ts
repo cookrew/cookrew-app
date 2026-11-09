@@ -90,7 +90,7 @@ async function up(limits?: { accountsPerMinute: number; sessionsPerMinute: numbe
     identity,
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
-    v2: createV2(dir, limits === undefined ? {} : { limits })
+    v2: createV2(dir, limits === undefined ? { secondStep: 'legacy' } : { secondStep: 'legacy', limits })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   return {

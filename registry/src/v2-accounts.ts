@@ -1,4 +1,4 @@
-import { type SessionAge, type VerifiedBy } from './v2-session-age'
+import { LAST_USED_GRAIN_MS, sessionEnded, type SessionAge, type VerifiedBy } from './v2-session-age'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -814,8 +814,39 @@ export class V2Accounts {
     if (!account) return null
     const device = account.devices.find((d) => d.id === claims.dev)
     if (!device) return null
-    if (!account.sessions.some((s) => s.jti === claims.jti)) return null
+    const session = account.sessions.find((s) => s.jti === claims.jti)
+    if (!session) return null
+    /**
+     * IDLE SEVEN DAYS, OR THIRTY SINCE THE SIGN-IN, AND IT IS OVER (auth UX
+     * 2026-11-09). Closed here, the one place every authenticated request
+     * passes, so no route can forget to ask. A session written before the
+     * ruling has no clock yet: it gets one now, so it has thirty days from
+     * the deploy rather than ending on the spot.
+     */
+    const at = this.now()
+    if (sessionEnded(session, at) !== null) {
+      this.closeSession(account.username, session.jti)
+      return null
+    }
+    const stale = session.lastUsedAt === undefined || at - session.lastUsedAt >= LAST_USED_GRAIN_MS
+    if (session.signedInAt === undefined || stale) {
+      const touched: V2Session = { ...session, signedInAt: session.signedInAt ?? at, lastUsedAt: at }
+      const next = { ...account, sessions: account.sessions.map((s) => (s.jti === session.jti ? touched : s)) }
+      this.replace(next)
+      return { account: next, device }
+    }
     return { account, device }
+  }
+
+  /**
+   * The live sitting a device would renew from: its newest, if it has not
+   * ended. Null means there is nothing to carry forward — renewal is not a
+   * way to start a new thirty days on the device key alone.
+   */
+  liveSessionOf(username: string, deviceId: string): V2Session | null {
+    const at = this.now()
+    const mine = (this.get(username)?.sessions ?? []).filter((s) => s.dev === deviceId && sessionEnded(s, at) === null)
+    return mine.sort((a, b) => b.issuedAt - a.issuedAt)[0] ?? null
   }
 
   /** The sitting this token names, or null. */

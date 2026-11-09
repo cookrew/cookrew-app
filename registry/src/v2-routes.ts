@@ -34,12 +34,15 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { heldIfPasswordless, mayGuessPassword, readAndStepUp } from './v2-step-up'
+import { heldWhenFresh, mayGuessPassword, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
 import { handleAuthRoute } from './v2-auth-routes'
 import { authorizeSession } from './auth-finish'
+import { setupForNewAccount } from './v2-second-step'
+import { tokenExpiry } from './v2-session-age'
+import { SESSION_TTL_MS } from './v2-tokens'
 import { deviceFor } from './v2-factor-http'
 import { grantOptions, issueGrant, setFirstPassword } from './v2-device-grant'
 
@@ -176,28 +179,34 @@ async function claimAccount(ctx: V2Context): Promise<void> {
     refuse(response, out.reason === 'taken' ? 409 : 400, out.reason, username)
     return
   }
-  // Made on the auth page: a code for the client, and the recovery codes shown
-  // once to the person who just made the account.
-  if (ctx.auth !== undefined) {
-    authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, true, { codes: true })
+  /**
+   * THE ACCOUNT EXISTS; ITS FIRST SESSION WAITS (auth UX 2026-11-09). A
+   * password is the first step only, so a new account sets up a passkey or an
+   * authenticator — and saves its recovery codes — before anything signs in.
+   * An app that cannot (0.5.x) reads the 403's sentence: finish at
+   * auth.cookrew.dev, or update.
+   */
+  if (v2.secondStep === 'legacy') {
+    legacyClaimSession(ctx, out.account.username, out.device.id)
     return
   }
-  const session = v2.accounts.startSession(out.account.username, out.device.id)
+  setupForNewAccount(ctx, out.account.username, deviceFor(ctx, body.value.device))
+}
+
+/** The claim's answer before the ruling, for V2Options.secondStep === 'legacy' only. */
+function legacyClaimSession(ctx: V2Context, username: string, deviceId: string): void {
+  const { v2, response } = ctx
+  if (ctx.auth !== undefined) {
+    authorizeSession(ctx, ctx.auth.request, username, deviceId, true, { codes: true, verifiedBy: 'password' })
+    return
+  }
+  const session = v2.accounts.startSession(username, deviceId, { verifiedBy: 'password' })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return
   }
-  const minted = v2.tokens.mintSession(out.account.username, out.device.id, session.jti)
-  v2Json(
-    response,
-    201,
-    {
-      username: out.account.username,
-      deviceId: out.device.id,
-      session: { token: minted.token, exp: minted.exp }
-    },
-    { 'set-cookie': cookie(minted.token) }
-  )
+  const minted = v2.tokens.mintSession(username, deviceId, session.jti)
+  v2Json(response, 201, { username, deviceId, session: { token: minted.token, exp: minted.exp } }, { 'set-cookie': cookie(minted.token) })
 }
 
 /**
@@ -316,16 +325,17 @@ async function redeemRecovery(ctx: V2Context): Promise<void> {
     refuse(response, attached.reason === 'bad_device' ? 400 : 401, attached.reason)
     return
   }
+  // A recovery code is the rescue: a whole sign-in, as before the ruling.
   if (ctx.auth !== undefined) {
-    authorizeSession(ctx, ctx.auth.request, attached.account.username, attached.device.id, attached.account.passwordless !== true)
+    authorizeSession(ctx, ctx.auth.request, attached.account.username, attached.device.id, attached.account.passwordless !== true, { verifiedBy: 'recovery' })
     return
   }
-  const session = v2.accounts.startSession(named, attached.device.id)
+  const session = v2.accounts.startSession(named, attached.device.id, { verifiedBy: 'recovery' })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return
   }
-  const minted = v2.tokens.mintSession(named, attached.device.id, session.jti)
+  const minted = v2.tokens.mintSession(named, attached.device.id, session.jti, tokenExpiry(session, v2.now(), SESSION_TTL_MS))
   v2Json(
     response,
     201,
@@ -689,7 +699,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
   if (rest.length === 1 && rest[0] === 'recovery-codes' && method === 'POST') {
-    if (!(await heldIfPasswordless(ctx, signed, 'add-factor'))) return
+    if (!(await heldWhenFresh(ctx, signed, 'add-factor'))) return
     const codes = v2.accounts.mintRecoveryCodes(account.username, claims.jti)
     // Shown ONCE. They are stored hashed, so this is the only moment they
     // exist in readable form anywhere.

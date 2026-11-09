@@ -49,7 +49,7 @@ async function up(): Promise<Up> {
     identity: new IdentityService(dir),
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
-    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+    v2: createV2(dir, { secondStep: 'legacy', freshWindowMs: 0, limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -119,7 +119,7 @@ const codeFor = (secret: string, shift = 0): string =>
 
 /** Give the account something stronger than its password. */
 async function addTotp(token: string): Promise<string> {
-  const res = await call('POST', '/v2/me/totp/enrol', {}, bearer(token))
+  const res = await call('POST', '/v2/me/totp/enrol', { current: PASSWORD }, bearer(token))
   expect(res.status).toBe(201)
   const { secret } = await bodyOf<{ secret: string }>(res)
   expect((await call('POST', '/v2/me/totp/confirm', { code: codeFor(secret, -1) }, bearer(token))).status).toBe(204)
@@ -526,9 +526,11 @@ describe('H3 · the step-up gate and the not-me alarm', () => {
     // The alarm first, then the factor: raising it is itself a step-up act, and
     // a helper that had to climb a ladder to set up a test about the ladder
     // would be testing itself.
+    // Factor first now: adding one is a gated act itself (auth UX 2026-11-09),
+    // and the alarm rightly refuses it; raising the alarm takes the password.
     const owner = await claim()
-    await raiseAlarm(owner)
     await addTotp(owner.token)
+    await raiseAlarm(owner)
     const after = await call('POST', '/v2/me/join-codes', {}, bearer(owner.token))
     expect(after.status).toBe(403)
     const said = await after.text()
@@ -675,8 +677,8 @@ describe('H4 · every act the list names', () => {
     // pressing NOT ME is itself a step-up act now, so an account that already
     // held a factor would have to climb it to set this up.
     const owner = await claim()
-    await raiseAlarm(owner)
     const secret = await addTotp(owner.token)
+    await raiseAlarm(owner)
     expect(secret.length).toBeGreaterThan(0)
     const removing = await call('DELETE', '/v2/me/totp', { current: PASSWORD }, bearer(owner.token))
     expect(removing.status).toBe(403)
@@ -716,6 +718,7 @@ describe('H4 · the enforcement map is not a claim, it is a test', () => {
     const bareCall: Record<string, () => Promise<Response>> = {
       'change-password': () => call('POST', '/v2/me/password', {}, bearer(owner.token)),
       'remove-factor': () => call('DELETE', '/v2/me/totp', {}, bearer(owner.token)),
+      'add-factor': () => call('POST', '/v2/me/recovery-codes', {}, bearer(owner.token)),
       'revoke-device': () => call('DELETE', `/v2/me/devices/${other.deviceId}`, undefined, bearer(owner.token)),
       'mint-join-code': () => call('POST', '/v2/me/join-codes', {}, bearer(owner.token)),
       'end-seat': () =>

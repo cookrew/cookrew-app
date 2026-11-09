@@ -1,3 +1,4 @@
+import { claimThroughSetup } from './support/second-step'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -104,13 +105,9 @@ async function signUp(origin: string): Promise<Signed> {
   const id = randomUUID()
   const username = `bundle${randomUUID().slice(0, 8)}`
   const jwk = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' })
-  const res = await fetch(`${origin}/v2/accounts`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username, password: PASSWORD, device: { id, kind: 'desktop', name: 'Invented Mac', jwk } })
-  })
-  expect(res.status).toBe(201)
-  const token = ((await res.json()) as { session: { token: string } }).session.token
+  // The production build: a new account sets up its second step before its
+  // first session (auth UX 2026-11-09), walked here exactly as a page does.
+  const { token } = await claimThroughSetup(origin, { username, password: PASSWORD, device: { id, kind: 'desktop', name: 'Invented Mac', jwk } })
   const put = await fetch(`${origin}/v2/me/desktops/${id}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },

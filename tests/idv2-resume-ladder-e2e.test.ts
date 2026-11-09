@@ -47,7 +47,7 @@ beforeEach(async () => {
     identity: new IdentityService(dir),
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
-    v2: createV2(dir),
+    v2: createV2(dir, { secondStep: 'legacy' }),
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

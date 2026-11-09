@@ -152,7 +152,7 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
         : said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
     }
     by = 'password'
-  } else if (!freshlyVerified(ctx.v2.accounts.session(account.username, claims.jti), now, ['password', 'passkey'])) {
+  } else if (!freshlyVerified(ctx.v2.accounts.session(account.username, claims.jti), ctx.v2.now(), ['password', 'passkey'], ctx.v2.freshWindowMs)) {
     return said(ctx, 401, 'proof_required', SAID.proof)
   }
 
@@ -177,7 +177,7 @@ export async function setFirstPassword(ctx: V2Context, signed: Signed, body: Rec
   const { account, claims } = signed
   const session = ctx.v2.accounts.session(account.username, claims.jti)
   const proved =
-    freshlyVerified(session, Date.now()) ||
+    freshlyVerified(session, ctx.v2.now(), undefined, ctx.v2.freshWindowMs) ||
     ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti)
   if (!proved) {
     said(ctx, 403, 'step_up', 'Prove it is you first: sign in again, or confirm with your provider, then set the password within five minutes.')

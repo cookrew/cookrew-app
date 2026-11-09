@@ -113,7 +113,7 @@ async function up(loose = true): Promise<Up> {
     stars: new StarStore(dir),
     // Loose on the sign-in limiter, which has its own proof elsewhere, and
     // DEFAULT on the two this file is about.
-    v2: createV2(dir, {
+    v2: createV2(dir, { secondStep: 'legacy', 
       limits: {
         accountsPerMinute: 1000,
         sessionsPerMinute: 1000,

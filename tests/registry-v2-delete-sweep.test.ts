@@ -59,7 +59,7 @@ const seenFile = (): string => path.join(dir, 'canvas-line-seen.json')
 
 /** The stores main.ts builds, on one directory. */
 async function boot(): Promise<Up> {
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   const identity = new IdentityService(dir)
   const store = new RegistryStore(dir)
   const payouts = new PayoutStore(dir)

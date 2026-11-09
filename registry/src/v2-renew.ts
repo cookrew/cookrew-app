@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { readJsonBody } from './http'
 import { asking, cookie, refuse, v2Json, type V2Context } from './v2-http'
 import { verifyDeviceSignature } from './v2-reach'
+import { tokenExpiry } from './v2-session-age'
+import { SESSION_TTL_MS } from './v2-tokens'
 
 /**
  * A SESSION THAT RENEWS ITSELF ON THE DEVICE KEY.
@@ -175,7 +177,21 @@ async function renewSession(ctx: V2Context): Promise<void> {
     refuse(response, 401, 'bad_credentials')
     return
   }
-  const session = v2.accounts.startSession(found.username, deviceId)
+  /**
+   * THE THIRTY DAYS RUN FROM THE SIGN-IN (auth UX 2026-11-09). A renewal
+   * carries the sitting's sign-in time forward and is refused once the sitting
+   * is over — idle a week, or thirty days old — so the device key keeps a
+   * machine reachable between sign-ins and never stands in for one.
+   */
+  const live = v2.accounts.liveSessionOf(found.username, deviceId)
+  if (live === null) {
+    v2Json(response, 401, {
+      error: 'unauthenticated',
+      message: 'This sign-in is over: a sign-in lasts thirty days, or ends after a week unused. Sign in again.'
+    })
+    return
+  }
+  const session = v2.accounts.startSession(found.username, deviceId, { signedInAt: live.signedInAt ?? v2.now() })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return
@@ -186,7 +202,7 @@ async function renewSession(ctx: V2Context): Promise<void> {
    * the old session rather than signed out of both.
    */
   v2.accounts.closeOtherSessionsForDevice(found.username, deviceId, session.jti)
-  const minted = v2.tokens.mintSession(found.username, deviceId, session.jti)
+  const minted = v2.tokens.mintSession(found.username, deviceId, session.jti, tokenExpiry(session, v2.now(), SESSION_TTL_MS))
   v2Json(
     response,
     201,
