@@ -74,6 +74,8 @@ export interface WatchHost {
   /** The workspace's canvas, for an agent's items. */
   canvas(workspaceId: string): Parameters<typeof itemsOfAgent>[1]
   /** The picture of a browser card, at most `width` wide. */
+  /** A wrist touched this page: its picture is about to change (pageSettler). */
+  moved?(browserId: string): void
   /** A browser's picture. A peek is a thumbnail's: the picture the Mac already has, and no browser started for it. */
   frame(browserId: string, width: number, peek: boolean): Promise<{ type: string; data: Buffer } | null>
   browser(browserId: string): Promise<BrowserInstance | null>
@@ -359,13 +361,43 @@ async function itemInput(ctx: WatchRequest, current: WatchHost, id: string): Pro
   if (pasted !== null) {
     if (instance.paste) await instance.paste(pasted)
     else await instance.dispatchInput('Input.insertText', { text: pasted })
+    current.moved?.(id)
     return respondJson(ctx.response, 200, { ok: true })
   }
   const message = browserInputOf(body, state)
   const commands = message && sanitizeInput(message, { displayScale: 1, viewportWidth: state.width, viewportHeight: state.height })
   if (!commands) return respondJson(ctx.response, 400, { error: 'Not an input a watch sends.' })
   for (const command of commands) await instance.dispatchInput(command.method, command.params)
+  current.moved?.(id)
   respondJson(ctx.response, 200, { ok: true })
+}
+
+/** How long after a wrist's touch the page is photographed: long enough for it to have moved. */
+export const SETTLE_MS = 450
+
+/**
+ * ONE FRESH PICTURE AFTER A WRIST TOUCHES A PAGE. The Mac otherwise photographs
+ * a page at most every few seconds, so a tap's result would reach the wrist late.
+ * A crown turning touches the page four times a second: those make one picture
+ * per SETTLE_MS, per page, and only for a wrist's touches, so a phone or the
+ * desktop working the same page pays nothing it did not before.
+ */
+export function pageSettler(take: (browserId: string) => unknown, delayMs: number = SETTLE_MS): (browserId: string) => void {
+  const waiting = new Set<string>()
+  return (browserId) => {
+    if (waiting.has(browserId)) return
+    waiting.add(browserId)
+    const timer = setTimeout(() => {
+      waiting.delete(browserId)
+      // A picture that fails waits for the next touch, or the page's own pace.
+      try {
+        void Promise.resolve(take(browserId)).catch(() => undefined)
+      } catch {
+        return
+      }
+    }, delayMs)
+    timer.unref?.()
+  }
 }
 
 /** Every /api/watch route past the gate; false for anything else. */
