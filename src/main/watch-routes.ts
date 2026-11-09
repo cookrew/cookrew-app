@@ -296,7 +296,7 @@ async function cards(
   const rows =
     workspaceId === null
       ? board.rows
-      : crewRows(canvasOf(workspaceId).nodes, rowsOfWorkspace(board.rows, workspaceId), {
+      : crewRows(canvasOf(workspaceId).nodes, board.rows, {
           id: workspaceId,
           name: named?.name ?? rowsOfWorkspace(board.rows, workspaceId)[0]?.workspace.name ?? '',
           active: workspaceId === board.activeWorkspaceId

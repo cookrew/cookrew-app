@@ -284,7 +284,21 @@ struct QuickWords: View {
 /** Pictures a card's thumbnails already have, by browser: the crown passing back over a card redraws nothing. */
 @MainActor
 enum ThumbPictures {
-  static var held: [String: (tag: String?, image: CGImage)] = [:]
+  /** A few cards' worth; the oldest goes first. */
+  static let kept = 40
+  private(set) static var held: [String: (tag: String?, image: CGImage)] = [:]
+  private static var order: [String] = []
+
+  static func keep(_ id: String, _ picture: (tag: String?, image: CGImage)) {
+    held[id] = picture
+    order = order.filter { $0 != id } + [id]
+    while order.count > kept { held[order.removeFirst()] = nil }
+  }
+
+  static func forget() {
+    held = [:]
+    order = []
+  }
 }
 
 /** How often a thumbnail looks again while its card is on screen. */
@@ -300,6 +314,7 @@ struct ItemThumb: View {
   let live: Bool
   @Environment(\.ink) private var ink
   @Environment(\.inkStill) private var still
+  @Environment(\.scenePhase) private var phase
   @State private var image: CGImage?
 
   var body: some View {
@@ -334,16 +349,17 @@ struct ItemThumb: View {
         .lineLimit(1)
     }
     .accessibilityLabel("\(item.kind == .note ? "Note" : "Browser"): \(item.title)")
-    .task(id: "\(item.id)|\(live)") { await look() }
+    .task(id: "\(item.id)|\(live)|\(phase == .active)") { await look() }
   }
 
   /** The picture the Mac already has, now and again while the card is in front of the owner. */
   private func look() async {
-    guard item.kind == .browser, live, !still else { return }
+    // Wrist down, nobody is looking: the card's own poll stops then too.
+    guard item.kind == .browser, live, !still, phase == .active else { return }
     while !Task.isCancelled {
       let held = ThumbPictures.held[item.id]
       if case .new(let data, let tag)? = try? await store.client.peek(item.id, width: thumbWidth, tag: held?.tag), let decoded = picture(data) {
-        ThumbPictures.held[item.id] = (tag, decoded)
+        ThumbPictures.keep(item.id, (tag, decoded))
         image = decoded
       }
       try? await Task.sleep(nanoseconds: UInt64(thumbSeconds * 1_000_000_000))

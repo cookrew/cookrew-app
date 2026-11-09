@@ -356,9 +356,9 @@ describe('through the real gate', () => {
       expect.objectContaining({ id: 'ws', name: 'Cookrew Dev', waiting: 1 }),
       expect.objectContaining({ id: 'other', name: 'Elsewhere', waiting: 0, working: 0 })
     ])
-    // The fixture draws one canvas for every workspace: its terminal is in Elsewhere's crew too, resting there.
+    // The fixture draws one canvas for every workspace: its terminal is in Elsewhere's crew too, found by its id.
     const one = (await (await call('/api/watch/cards?workspace=other', token)).json()) as { cards: { id: string; status: string; workspace: { id: string } }[] }
-    expect(one.cards.map((card) => [card.id, card.workspace.id, card.status])).toEqual([['replied', 'other', 'idle']])
+    expect(one.cards.map((card) => [card.id, card.workspace.id, card.status])).toEqual([['replied', 'other', 'done']])
     const mine = (await (await call('/api/watch/cards?workspace=ws', token)).json()) as { cards: unknown[] }
     expect(mine.cards.length).toBeGreaterThan(0)
   })

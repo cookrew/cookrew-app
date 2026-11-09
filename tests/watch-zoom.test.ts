@@ -90,3 +90,11 @@ describe('a card’s artifacts on a wrist', () => {
     expect(cardsOf(CARD_ITEMS + 5)[0].items).toHaveLength(CARD_ITEMS)
   })
 })
+
+describe('a crew row the board filed elsewhere', () => {
+  it('is found by its terminal, and says the workspace whose canvas it is on', () => {
+    // A row with no registry entry is filed under the active workspace (board.ts · mergeBoard).
+    const crew = crewRows([terminal('e', 'Echo')], [row('e', 'waiting', 'dev')], { id: 'goat', name: 'GOAT Team', active: false })
+    expect(crew[0]).toMatchObject({ phase: 'waiting', workspace: { id: 'goat', name: 'GOAT Team' } })
+  })
+})

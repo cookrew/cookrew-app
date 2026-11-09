@@ -252,3 +252,30 @@ struct ZoomRaceTests {
     #expect(api.made == [nil, "goat"])
   }
 }
+
+@Suite("zoom round two", .serialized)
+@MainActor
+struct ZoomRoundTwoTests {
+  @Test("on a Mac too old to scope, zooming out says a wait once, by its agent")
+  func oldMacOnce() async {
+    let api = ScopedAPI()
+    let calm = [card("a", .idle, goat), card("b", .working, dev)]
+    let asking = [card("a", .waiting, goat), card("b", .working, dev)]
+    api.replies = [CardsReply(cards: calm, activeWorkspaceId: "dev"), CardsReply(cards: calm, activeWorkspaceId: "dev"), CardsReply(cards: asking, activeWorkspaceId: "dev")]
+    let felt = Felt()
+    let s = WatchStore(api: api, feel: { felt.events.append($0) })
+    await s.refresh()
+    await s.enter(workspace: "dev")
+    await s.enter(workspace: nil)
+    #expect(felt.events == [.needsYou("A")])
+  }
+
+  @Test("going in before any card has come opens on the first card once it does, not on a new agent")
+  func firstCard() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [card("b", .working, dev)], activeWorkspaceId: "dev")]
+    let s = WatchStore(api: api)
+    await s.enter(workspace: "dev")
+    #expect(s.page == "b")
+  }
+}

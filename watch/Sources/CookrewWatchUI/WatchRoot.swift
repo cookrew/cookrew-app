@@ -253,6 +253,7 @@ final class WatchApp {
     vault.clearAccount()
     // The next Mac has its own workspaces: the zoom starts again at the top of it.
     UserDefaults.standard.removeObject(forKey: keptZoomKey)
+    ThumbPictures.forget()
     store = nil
     username = nil
     typed = ""

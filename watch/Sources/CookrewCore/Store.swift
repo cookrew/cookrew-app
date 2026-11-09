@@ -110,7 +110,7 @@ public final class WatchStore {
   @ObservationIgnored private var tag: String?
   /** Moves on every zoom: a read sent before one is answered for a place the wrist has left. */
   @ObservationIgnored private var zooms = 0
-  /** The workspace the cards in hand were read for. */
+  /** The workspace the cards in hand are all from, when they were read for one. */
   @ObservationIgnored private var cardsScope: String?
   @ObservationIgnored private let sleep: @Sendable (Double) async -> Void
   /**
@@ -171,7 +171,8 @@ public final class WatchStore {
     scope = workspace
     zooms &+= 1
     tag = nil
-    page = visibleCards.first?.id ?? newAgentPage
+    // With no card in hand yet, none: the reply's first card takes the page, not the new agent.
+    page = visibleCards.first?.id
     await refresh()
   }
 
@@ -216,7 +217,8 @@ public final class WatchStore {
       if let inside = asked ?? cardsScope { events += eventsElsewhere(workspaces, tiles, inside: inside) }
     }
     cards = next
-    cardsScope = asked
+    // Only cards that really are one workspace's: a Mac too old to scope sends them all, and those speak for themselves.
+    cardsScope = asked.flatMap { id in next.allSatisfy { $0.workspace.id == id } ? id : nil }
     workspaces = tiles
     activeWorkspaceId = reply.activeWorkspaceId
     link = .live

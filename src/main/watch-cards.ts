@@ -130,7 +130,8 @@ export function crewRows(
     if (node.kind !== 'terminal') return []
     const agent = { name: node.name, preset: node.preset, role: node.role ?? null, orch: node.orch === true }
     const row = rowOf.get(node.id)
-    if (row) return [{ ...row, agent }]
+    // Found by its terminal wherever the board filed it: a row with no registry entry goes under the active workspace.
+    if (row) return [{ ...row, agent, workspace: { ...workspace } }]
     return [
       {
         terminalId: node.id,
