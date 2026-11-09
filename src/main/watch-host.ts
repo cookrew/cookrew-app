@@ -7,7 +7,7 @@ import type { CanvasNode, Connection } from '../shared/model'
 import type { BrowserInstance } from './browser-instance'
 import type { MobileEndpoint } from './mobile-endpoints'
 import { watchBases } from './watch-bases'
-import type { WatchAccountKind, WatchHost, WatchInvite } from './watch-routes'
+import { pageSettler, type WatchAccountKind, type WatchHost, type WatchInvite } from './watch-routes'
 import type { WatchPairing } from './watch-pairing'
 
 /** Shrunk pictures kept: a card's thumbnails and the page open on the wrist. */
@@ -22,6 +22,8 @@ export interface WatchHostDeps {
   readonly canvas: (workspaceId: string) => { nodes: readonly CanvasNode[]; connections: readonly Connection[] }
   readonly node: (id: string) => CanvasNode | undefined
   readonly thumbViewed: (browserId: string) => Promise<void>
+  /** A new picture of the page now, however fresh the held one is. */
+  readonly thumbNow: (browserId: string) => Promise<void>
   readonly thumb: (browserId: string) => { type: string; data: Buffer } | undefined | null
   readonly browser: (browserId: string) => Promise<BrowserInstance | null>
   /** The harness a new agent gets: the one last used on this Mac. */
@@ -67,6 +69,7 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
       return { type: 'image/jpeg', data }
     },
     browser: deps.browser,
+    moved: pageSettler((browserId) => deps.thumbNow(browserId)),
     note(noteId) {
       const node = deps.node(noteId)
       return node?.kind === 'note' ? { name: node.name, content: node.content ?? '' } : null

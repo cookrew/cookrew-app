@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleMobileApi, type MobileApiDeps } from '../src/main/mobile-api'
-import { CHECKPOINT_MEMO_MS, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
+import { CHECKPOINT_MEMO_MS, pageSettler, cardCheckpoint, checkpointsOf, setWatchHost, watchRouteAllowed, browserInputOf, type WatchHost } from '../src/main/watch-routes'
 import { WatchPairing } from '../src/main/watch-pairing'
 import { watchBases } from '../src/main/watch-bases'
 import { cardRows, itemsOfAgent, watchCards } from '../src/main/watch-cards'
@@ -421,13 +421,16 @@ describe('through the real gate', () => {
     const dispatchInput = vi.fn(async () => undefined)
     const paste = vi.fn(async () => undefined)
     const instance = { viewportState: { width: 800, height: 600, transitioning: false, agentHeld: false }, dispatchInput, paste }
-    setWatchHost(host(pairing, { browser: async () => instance as never }))
+    const moved = vi.fn()
+    setWatchHost(host(pairing, { browser: async () => instance as never, moved }))
     const token = await paired()
     expect((await post('/api/watch/item/b1/input', token, { t: 'tap', x: 0.5, y: 0.5 })).status).toBe(200)
     expect(dispatchInput).toHaveBeenCalledWith('Input.dispatchMouseEvent', expect.objectContaining({ type: 'mousePressed', x: 400, y: 300 }))
     expect((await post('/api/watch/item/b1/input', token, { t: 'text', text: '你好' })).status).toBe(200)
     expect(paste).toHaveBeenCalledWith('你好')
+    expect(moved.mock.calls).toEqual([['b1'], ['b1']])
     expect((await post('/api/watch/item/b1/input', token, { t: 'evaluate' })).status).toBe(400)
+    expect(moved).toHaveBeenCalledTimes(2)
     instance.viewportState.agentHeld = true
     expect((await post('/api/watch/item/b1/input', token, { t: 'tap', x: 0.1, y: 0.1 })).status).toBe(409)
   })
@@ -554,5 +557,27 @@ describe('through the real gate', () => {
       expect(JSON.parse(written.body ?? '{}')).toEqual({ ok: false, reason: 'not_sealed' })
       expect(refused).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('a page after a wrist touches it', () => {
+  it('gets one fresh picture a moment later, however fast the touches come, per page', () => {
+    vi.useFakeTimers()
+    try {
+      const take = vi.fn()
+      const settle = pageSettler(take, 450)
+      for (let i = 0; i < 6; i++) {
+        settle('b1')
+        vi.advanceTimersByTime(100)
+      }
+      settle('b2')
+      expect(take.mock.calls).toEqual([['b1']])
+      vi.advanceTimersByTime(450)
+      expect(take.mock.calls).toEqual([['b1'], ['b1'], ['b2']])
+      vi.advanceTimersByTime(5000)
+      expect(take).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

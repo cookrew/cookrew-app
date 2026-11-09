@@ -279,3 +279,47 @@ struct ZoomRoundTwoTests {
     #expect(s.page == "b")
   }
 }
+
+@Suite("thumbnails only from a Mac that can peek", .serialized)
+@MainActor
+struct PeekTests {
+  @Test("a Mac that counts workspaces can peek; an older one would start a Chrome per thumbnail, so it is not asked")
+  func peeks() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [], activeWorkspaceId: "dev"), CardsReply(cards: [], activeWorkspaceId: "dev", workspaces: [])]
+    let s = WatchStore(api: api)
+    #expect(!s.macPeeks)
+    await s.refresh()
+    #expect(!s.macPeeks)
+    await s.enter(workspace: "dev")
+    #expect(s.macPeeks)
+  }
+}
+
+@Suite("a poll that changes nothing redraws nothing", .serialized)
+@MainActor
+struct QuietPollTests {
+  @Test("the same cards again, or a 304, leave every view of the store alone")
+  func quiet() async {
+    let api = ScopedAPI()
+    let same = CardsReply(cards: [card("b", .working, dev)], activeWorkspaceId: "dev", workspaces: [])
+    api.replies = [same, same]
+    let s = WatchStore(api: api)
+    await s.refresh()
+    var touched = false
+    withObservationTracking {
+      _ = s.cards
+      _ = s.workspaces
+      _ = s.link
+      _ = s.signedOut
+      _ = s.page
+      _ = s.macPeeks
+      _ = s.activeWorkspaceId
+      _ = s.waitView(s.cards[0])
+    } onChange: {
+      touched = true
+    }
+    await s.refresh()
+    #expect(!touched)
+  }
+}

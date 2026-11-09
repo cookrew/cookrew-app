@@ -9154,6 +9154,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       canvas: (workspaceId) => store.workspaceState(workspaceId),
       node: (id) => store.nodeAcrossWorkspaces(id)?.node,
       thumbViewed: noteBrowserViewed,
+      thumbNow: (id) => browserThumbs.refresh(id, { force: true }),
       thumb: (id) => browserThumbs.frame(id),
       browser: (id) => browserManager.get(id),
       // The last agent's harness; a bare shell takes no first prompt, so it is no harness to start one on.

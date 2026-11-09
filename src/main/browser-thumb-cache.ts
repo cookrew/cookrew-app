@@ -124,11 +124,12 @@ export class BrowserThumbCache {
    * Resolves once the capture lands or after `waitMs`, whichever is first:
    * never later, whatever the page does.
    */
-  async refresh(browserId: string): Promise<void> {
+  async refresh(browserId: string, opts: { force?: boolean } = {}): Promise<void> {
     const capture = this.deps.capture
     if (!capture) return
     const existing = this.frames.get(browserId)
-    if (existing && this.now() - existing.capturedAt < this.freshMs) return
+    // Forced: something was just done to the page, so the held picture is old whatever its age.
+    if (!opts.force && existing && this.now() - existing.capturedAt < this.freshMs) return
     const inFlight = this.pending.get(browserId)
     if (inFlight) return Promise.race([inFlight, settleAfter(this.waitMs)])
     let live = true
