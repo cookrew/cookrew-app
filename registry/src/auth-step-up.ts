@@ -1,12 +1,12 @@
 import type { IncomingMessage } from 'node:http'
 import { STEP_UP_LANDING_HASH, STEP_UP_LANDING_PARAM, type AuthStepUp } from '../../src/shared/auth-site'
-import { PROVIDER_LABEL, type ProviderId } from '../../src/shared/oauth'
+import { PROVIDER_LABEL, providerNames as named, type ProviderId } from '../../src/shared/oauth'
 import { STEP_UP_SENTENCE, type StepUpAct } from '../../src/shared/step-up'
 import type { AuthRequest } from './auth-requests'
 import { finishRequest } from './auth-finish'
 import { factorError } from './v2-factor-copy'
 import { asking, v2Json, type Signed, type V2Context, type V2Identity } from './v2-http'
-import { callerAddress } from './v2-limiter'
+import { Limiter, callerAddress } from './v2-limiter'
 import type { ProviderProof } from './v2-oauth-providers'
 import type { Factor, Pending } from './v2-pending'
 import type { VerifiedBy } from './v2-session-age'
@@ -36,7 +36,7 @@ import type { VerifiedBy } from './v2-session-age'
  * owner its link gets nothing: the owner's browser holds no verifier for it.
  */
 
-type Refusal = 'not_this_request' | 'over' | 'session_over' | 'not_offered' | 'wrong_identity' | 'no_rung' | 'not_the_opener'
+type Refusal = 'not_this_request' | 'over' | 'session_over' | 'not_offered' | 'wrong_identity' | 'no_rung' | 'too_many' | 'not_the_opener'
 
 const SENTENCES: Record<Refusal, string> = {
   not_this_request: 'This page was not opened to confirm anything. Start again from your account page.',
@@ -45,6 +45,7 @@ const SENTENCES: Record<Refusal, string> = {
   not_offered: 'That is not a way this account can confirm this.',
   wrong_identity: 'That is not the account linked to this Cookrew account.',
   no_rung: 'This account has no passkey or code to confirm with here.',
+  too_many: 'Too many tries. Wait a minute, then start again from your account page.',
   not_the_opener: 'Only the browser and session that asked can use this confirmation. Start again from your account page.'
 }
 
@@ -72,12 +73,36 @@ export function stepUpWays(v2: V2Identity, username: string, act: StepUpAct): St
   const account = v2.accounts.get(username)
   if (account === null) return NONE
   const passkey = v2.factors.store.hasPasskey(username)
-  if (act === 'change-password' && passkey) return { passkey: true, providers: [], codes: [] }
+  if (passkeyOnly(v2, username, act)) return { passkey: true, providers: [], codes: [] }
   const providers = [...new Set((account.links ?? []).map((link) => link.provider))].filter((id) => v2.oauth.providers.has(id))
   const codes: StepWays['codes'] = []
   if (v2.factors.store.totpActive(username)) codes.push('totp')
   if (account.recovery.length > 0) codes.push('recovery')
   return { passkey, providers, codes }
+}
+
+/** The first-password rule, read exactly as setFirstPassword and freshFor read it. */
+const passkeyOnly = (v2: V2Identity, username: string, act: StepUpAct): boolean =>
+  act === 'change-password' && v2.accounts.get(username)?.passwordless === true && v2.factors.store.hasPasskey(username)
+
+/**
+ * WHAT A GUESS COSTS HERE. Every ladder is a pending with five tries, so the
+ * ladders themselves are counted: three per request, and five a minute per
+ * sitting — the budget a sign-in's own ladder gets — so the page is never the
+ * cheaper place to guess six digits.
+ */
+const LADDERS_PER_REQUEST = 3
+const LADDERS_PER_SITTING_PER_MINUTE = 5
+const laddersOf = new WeakMap<AuthRequest, number>()
+const sittingBudgets = new WeakMap<V2Identity, Limiter>()
+function mayOpenLadder(v2: V2Identity, request: AuthRequest, jti: string): boolean {
+  const opened = laddersOf.get(request) ?? 0
+  if (opened >= LADDERS_PER_REQUEST) return false
+  const budget = sittingBudgets.get(v2) ?? new Limiter(LADDERS_PER_SITTING_PER_MINUTE, 60_000, v2.now)
+  sittingBudgets.set(v2, budget)
+  if (!budget.take(`ladder|${jti}`)) return false
+  laddersOf.set(request, opened + 1)
+  return true
 }
 
 /** What the page is told about a `step-up` request, beside the summary. */
@@ -128,9 +153,6 @@ function gate(ctx: V2Context, request: AuthRequest, at: string): Opener | null {
   return { username, jti, device, act: request.act }
 }
 
-/** "GitHub", "GitHub or Google". */
-const named = (providers: readonly ProviderId[]): string => providers.map((p) => PROVIDER_LABEL[p]).join(' or ')
-
 /**
  * POST /v2/auth/requests with intent `step-up`: may this session open one?
  * Answers the opener to record, or null with the refusal written. Only the
@@ -161,6 +183,11 @@ export function startLadder(ctx: V2Context, request: AuthRequest): void {
   if (opener === null) return
   const ways = stepUpWays(v2, opener.username, opener.act)
   const next: Factor[] = [...(ways.passkey ? (['passkey'] as const) : []), ...ways.codes]
+  if (next.length > 0 && !mayOpenLadder(v2, request, opener.jti)) {
+    say(ctx, 'refused why=rate_limited at=ladder')
+    v2Json(ctx.response, 429, { error: 'rate_limited', message: SENTENCES.too_many }, { 'retry-after': '60' })
+    return
+  }
   if (next.length === 0) {
     v2Json(ctx.response, 409, {
       error: 'no_rung',
@@ -270,7 +297,7 @@ export function spendStepUp(v2: V2Identity, request: AuthRequest, signed: Signed
     return { ok: false, message: factorError('password_change_required').message }
   }
   // The account may have gained a passkey while the person was away.
-  if (act === 'change-password' && stepBy !== 'passkey' && v2.factors.store.hasPasskey(username)) {
+  if (stepBy !== 'passkey' && passkeyOnly(v2, username, act)) {
     log('refused why=passkey_required at=spend')
     return { ok: false, message: 'This account has a passkey now. Confirm with the passkey, then set the password.' }
   }
@@ -285,7 +312,9 @@ export function spendStepUp(v2: V2Identity, request: AuthRequest, signed: Signed
     opener: { jti: opener.jti, device: signed.claims.dev }
   })
   v2.factors.pending.authorise(pending.id)
-  v2.accounts.markVerified(username, opener.jti, stepBy)
+  // After "not me" the proof opens its one act (the password, the way out of
+  // the alarm) and no five minutes for anything else (security review, 11-09).
+  if (!v2.factors.store.mustChangePassword(username)) v2.accounts.markVerified(username, opener.jti, stepBy)
   log(`proven act=${act} by=${stepBy}`)
   const back = request.returnPath ?? '/me'
   const query = new URLSearchParams({ [STEP_UP_LANDING_PARAM]: act }).toString()

@@ -44,10 +44,10 @@
    * and back. `resume` is what it finishes on the way back. Answers null when
    * the page is leaving for that proof.
    */
-  const proven = (act, method, path, body, resume) => {
+  const proven = (act, method, path, body, resume, quiet) => {
     const send = (proof) => api(method, path, { ...(body || {}), ...proof })
     const stepUp = window.cookrewStepUp
-    return stepUp ? stepUp.run({ act, send, resume }) : send({})
+    return stepUp ? stepUp.run({ act, send, resume, quiet }) : send({})
   }
 
   /* ── base64url ⇄ bytes, which is all WebAuthn speaks ───────────────────── */
@@ -734,7 +734,7 @@
       // The five minutes ran out while the fields were filled: prove it again
       // first. What was typed is dropped — a password never crosses the trip.
       if (first && out.status === 403 && out.body?.error === 'step_up') {
-        void openFirstPassword()
+        void openFirstPassword(true)
         return
       }
       if (out.status !== 204) {
@@ -777,11 +777,12 @@
    * back with the fields open. Asked FIRST, so nobody types a password that the
    * trip would throw away.
    */
-  async function openFirstPassword() {
+  async function openFirstPassword(refused) {
     const panel = $('me-password')
     const stepUp = window.cookrewStepUp
     if (!panel) return
-    const ready = stepUp ? await stepUp.fresh('change-password') : true
+    // A registry that just refused the password has answered the question already.
+    const ready = refused === true ? false : stepUp ? await stepUp.fresh('change-password') : true
     // Fresh, or a registry that cannot say: the fields, and the registry decides.
     if (ready !== false || !stepUp) return changePassword(true, null)
     panel.replaceChildren()
@@ -999,7 +1000,7 @@
     const path = `/v2/me/approvals/${encodeURIComponent(id)}`
     const out = proof
       ? await api('POST', path, { decision: 'not-me', stepUp: proof })
-      : await proven('not-me', 'POST', path, { decision: 'not-me' }, { kind: 'not-me', id })
+      : await proven('not-me', 'POST', path, { decision: 'not-me' }, { kind: 'not-me', id }, true)
     if (out === null) return
     if (out.status !== 204) return toast(said(out, 'That request could not be answered.'), 6000)
     toast('Every other device is signed out. Change your password now.', 8000)
@@ -1076,7 +1077,7 @@
     if (target.dataset.addPasskey !== undefined) void addPasskey()
     else if (target.dataset.addTotp !== undefined) void addTotp()
     else if (target.dataset.password !== undefined) {
-      if (target.dataset.first !== undefined) void openFirstPassword()
+      if (target.dataset.first !== undefined) void openFirstPassword(false)
       else changePassword(false, null)
     }
     else if (target.dataset.dropPasskey !== undefined) void dropPasskey(target.dataset.dropPasskey, null)

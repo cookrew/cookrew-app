@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { getAssertion, p256 as passkeyPair } from './support/webauthn'
 import { browserDevice, Client, openWeb, walk, webPasswordless, type Device, type Opened } from './support/auth-site-harness'
 import { addAuthenticator, bootClockedSite, codeFor, type ClockedSite } from './support/stepup-site'
+import { SESSION_COOKIE } from '../registry/src/v2-http'
 
 /**
  * EVERY SENSITIVE ACT ON /me, FOR AN ACCOUNT WITH NO PASSWORD (me-stepup, 11-09).
@@ -206,6 +207,47 @@ describe('the proof belongs to the browser and session that asked', () => {
     expect(landed.status).toBe(400)
   })
 
+  it('another session of the same account, in the browser that asked, spends nothing', async () => {
+    const { browser, device } = await owner()
+    const opened = await stepUpFor(site, browser, device, 'delete-account')
+    await claim(browser, opened)
+    const continued = await providerTrip(browser, opened)
+    // A second sitting on the same device: the cookie is swapped, the verifier is not.
+    const second = site.v2.accounts.startSession('anvztor', device.payload.id)
+    expect(second).not.toBeNull()
+    const token = site.v2.tokens.mintSession('anvztor', device.payload.id, second!.jti).token
+    browser.jar.set(`localhost:${site.port}|${SESSION_COOKIE}`, token)
+    const landed = await land(browser, continued.body.handoff)
+    expect(landed.status).toBe(400)
+    expect(landed.text).toContain('Only the browser and session that asked')
+    expect(site.logged).toContain('step-up: refused why=not_the_opener at=spend client=web')
+  })
+
+  it('an account that gained a passkey while away needs the passkey for its first password', async () => {
+    const { browser, device } = await owner()
+    const opened = await stepUpFor(site, browser, device, 'change-password')
+    await claim(browser, opened)
+    const continued = await providerTrip(browser, opened)
+    const pair = passkeyPair()
+    site.v2.factors.store.addPasskey('anvztor', { credentialId: randomBytes(16).toString('base64url'), jwk: pair.publicJwk, signCount: 0, name: 'Touch ID' })
+    const landed = await land(browser, continued.body.handoff)
+    expect(landed.status).toBe(400)
+    expect(landed.text).toContain('passkey')
+    expect(await fresh(browser, 'change-password')).toBe(false)
+  })
+
+  it('the act-bound proof outlives the five minutes it opened, for its own act only', async () => {
+    const { browser, device } = await owner()
+    const opened = await stepUpFor(site, browser, device, 'delete-account')
+    await claim(browser, opened)
+    const landed = await land(browser, (await providerTrip(browser, opened)).body.handoff)
+    site.advance(FIVE_MINUTES + 30_000)
+    expect(await fresh(browser, 'delete-account')).toBe(false)
+    expect([401, 403]).toContain((await browser.product('DELETE', '/v2/me', { confirm: 'anvztor' })).status)
+    const gone = await browser.product('DELETE', '/v2/me', { confirm: 'anvztor', stepUp: stepUpOf(landed.headers.location) })
+    expect(gone.status, gone.text).toBe(204)
+  })
+
   it('a proof for one act is not a proof for another', async () => {
     const { browser, device } = await owner()
     const opened = await stepUpFor(site, browser, device, 'add-factor')
@@ -269,6 +311,39 @@ describe('the acts that used to dead-end, start to finish', () => {
     expect((await browser.product('POST', '/v2/me/recovery-codes', {})).status).toBe(201)
     site.advance(LATER)
     expect((await browser.product('POST', '/v2/me/recovery-codes', {})).status).not.toBe(201)
+  })
+})
+
+describe('guessing a code on the page costs what a sign-in costs', () => {
+  it('a request opens at most three ladders, and a sitting five a minute', async () => {
+    const { browser, device } = await owner()
+    const opened = await stepUpFor(site, browser, device, 'delete-account')
+    await claim(browser, opened)
+    const statuses: number[] = []
+    for (let at = 0; at < 4; at += 1) statuses.push((await browser.page('POST', '/auth/api/step-up', opened.request, {})).status)
+    expect(statuses).toEqual([200, 200, 200, 429])
+    // Fresh requests from the same sitting run into the per-sitting budget.
+    const more: number[] = []
+    for (let at = 0; at < 3; at += 1) {
+      const again = await stepUpFor(site, browser, device, 'delete-account')
+      await claim(browser, again)
+      more.push((await browser.page('POST', '/auth/api/step-up', again.request, {})).status)
+    }
+    expect(more).toEqual([200, 200, 429])
+  })
+})
+
+describe('after "not me"', () => {
+  it('a provider proof for the password mints its pending but opens no five minutes', async () => {
+    const { browser, device } = await owner()
+    site.v2.factors.store.setMustChangePassword('anvztor', true)
+    const opened = await stepUpFor(site, browser, device, 'change-password')
+    await claim(browser, opened)
+    const landed = await land(browser, (await providerTrip(browser, opened)).body.handoff)
+    expect(landed.status).toBe(303)
+    expect(await fresh(browser, 'change-password')).toBe(false)
+    const set = await browser.product('POST', '/v2/me/password', { next: NEXT, stepUp: stepUpOf(landed.headers.location) })
+    expect(set.status, set.text).toBe(204)
   })
 })
 

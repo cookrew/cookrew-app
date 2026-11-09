@@ -1,5 +1,6 @@
 import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES, DELETE_ACCOUNT_WARNING } from '../../src/shared/account-delete'
 import { machineCopy } from '../../src/shared/machine-words'
+import { WEB_STEP_UP_ACTS } from '../../src/shared/auth-site'
 import { webCopy } from './v3-copy'
 import { day, esc, page, type Page } from './site-shell'
 import { desktopsSection } from './site-reach'
@@ -153,7 +154,7 @@ export function mePage(
       // themselves through it, and it finishes them on the way back.
       scripts: ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js']
     },
-    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}">
+    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}" data-step-up-acts="${WEB_STEP_UP_ACTS.join(' ')}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
 <p class="meta" id="me-display">${esc(account.displayName || 'No display name yet')} · member since ${esc(day(account.claimedAt))}</p></div>
 <span class="sp" style="flex:1"></span>

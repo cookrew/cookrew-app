@@ -13,8 +13,8 @@
  * WHAT CROSSES THE TRIP: the act and what it was about (a device id, the name
  * typed to confirm a deletion), in this tab's sessionStorage — never a
  * password. What comes back is the act in the query and a one-use proof id in
- * the fragment, scrubbed from the address bar before anything else runs. The
- * id is worth nothing without this browser's session: the registry spends it
+ * the fragment, scrubbed from the address bar as the page finishes loading,
+ * before any act runs. The id is worth nothing without this browser's session: the registry spends it
  * only for the sitting that made the trip, for that act, once.
  */
 ;(() => {
@@ -23,13 +23,14 @@
   /** A trip older than this is not finished on landing: the proof is good for five minutes anyway. */
   const TRIP_MS = 15 * 60 * 1000
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-  const ACTS = ['change-password', 'add-factor', 'remove-factor', 'revoke-device', 'delete-account', 'mint-join-code', 'not-me']
   const TRIP_LINE = 'Cookrew opens auth.cookrew.dev to confirm it — with your passkey, your sign-in provider or a code — and brings you back here to finish.'
 
   const toast = (message, ms) => window.cookrewAccount?.toast?.(message, ms)
   const me = () => document.getElementById('me')
   /** Does this account have a password to type here? The page says; the registry decides. */
   const hasPassword = () => me()?.dataset.hasPassword === '1'
+  /** The acts a landing may finish: the registry's own list (WEB_STEP_UP_ACTS), written into the page. */
+  const acts = () => String(me()?.dataset.stepUpActs ?? '').split(' ').filter(Boolean)
   const handlers = new Map()
 
   /** Was this answer the registry asking for a proof, rather than refusing the act? */
@@ -71,28 +72,31 @@
     }
     const through = window.cookrewAccount?.throughAuthSite
     const going = through ? await through('step-up', { act }) : false
-    if (!going) {
-      take()
-      toast('Confirming that is not available here yet. Try again in a moment.', 6000)
-    }
-    return going
+    if (going === true) return true
+    // Not leaving: nothing to finish on a landing. A refusal was already said.
+    take()
+    if (going !== 'refused') toast('Confirming that is not available here yet. Try again in a moment.', 6000)
+    return false
   }
 
   /**
    * RUN AN ACT, PROVING IT WHEN ASKED. `send(proof)` makes the call with the
    * proof's fields ({}, {current}, or {stepUp}). Answers the last answer, or
-   * null when the page is leaving for the proof.
+   * null when the page is leaving for the proof. `quiet` when the act already
+   * asked its own question, so nobody answers two dialogs in a row.
    */
-  async function run({ act, send, resume }) {
+  async function run({ act, send, resume, quiet }) {
     const out = await send({})
     if (!asked(out)) return out
-    const sentence = (out.body && out.body.message) || 'Prove it is you first.'
+    // The gate's own sentence names the act ("…before deleting this account").
+    // The older refusals speak of a password or a provider, which the trip replaces.
+    const sentence = out.status === 401 && out.body && out.body.message ? out.body.message : 'Prove it is you first.'
     if (hasPassword()) {
       const current = prompt(`${sentence} Type your password to go on.`)
       if (current === null || current === '') return out
       return send({ current })
     }
-    return (await prove(act, resume, sentence)) ? null : out
+    return (await prove(act, resume, sentence, quiet === true)) ? null : out
   }
 
   /** Would this act pass on the last five minutes alone? null when the registry cannot say. */
@@ -124,7 +128,7 @@
     } catch {
       // The proof is already out of the address and into this closure.
     }
-    if (!ACTS.includes(act) || typeof id !== 'string' || !UUID.test(id)) return
+    if (!acts().includes(act) || typeof id !== 'string' || !UUID.test(id)) return
     const resume = saved && saved.act === act && Date.now() - Number(saved.at) < TRIP_MS ? saved.resume : null
     const handler = resume && handlers.get(resume.kind)
     if (!handler) {

@@ -3,7 +3,7 @@ import { overloaded, refuse, v2Json, type Signed, type V2Context } from './v2-ht
 import { factorError } from './v2-factor-copy'
 import { factorsFor } from './v2-factor-routes'
 import { asking } from './v2-http'
-import { STEP_UP_SENTENCE, type StepUpAct } from '../../src/shared/step-up'
+import { STEP_UP_SENTENCE, isStepUpAct, type StepUpAct } from '../../src/shared/step-up'
 import { freshlyVerified } from './v2-session-age'
 
 /**
@@ -307,6 +307,15 @@ export function freshFor(v2: V2Context['v2'], signed: Signed, act: StepUpAct): b
     return freshlyVerified(session, v2.now(), ['passkey'], v2.freshWindowMs)
   }
   return SENSITIVE_ACTS.has(act) && freshlyVerified(session, v2.now(), undefined, v2.freshWindowMs)
+}
+
+/** GET /v2/me/step-up/:act — `freshFor`, for the caller's own sitting. */
+export function answerFresh(ctx: V2Context, signed: Signed, act: string): void {
+  if (!isStepUpAct(act)) {
+    refuse(ctx.response, 404, 'not_found')
+    return
+  }
+  v2Json(ctx.response, 200, { act, fresh: freshFor(ctx.v2, signed, act) }, { 'cache-control': 'private, no-store' })
 }
 
 /** Fresh enough already, or prove it now. Reads the body; answers whether to go on. */

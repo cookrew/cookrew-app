@@ -66,6 +66,8 @@ function openMe(options: {
   hash?: string
   stored?: Record<string, string>
   password?: string | null
+  /** What site.js's trip answers: true (leaving), 'refused' (said already), false (no auth page). */
+  trip?: boolean | 'refused'
 }): Page {
   const doc = new MiniDocument()
   const rendered = mePage({ account: account(options.passwordless ?? true), currentDeviceId: '11111111-2222-4333-8444-555555555555' })
@@ -137,7 +139,7 @@ function openMe(options: {
     toast: (message: string) => toasts.push(message),
     throughAuthSite: async (intent: string, extra: unknown) => {
       trips.push({ intent, extra })
-      return true
+      return options.trip ?? true
     }
   }
   const settle = async (): Promise<void> => {
@@ -237,6 +239,41 @@ describe('setting a first password on /me', () => {
     })
     await page.land()
     expect(sent(page, 'POST', '/v2/me/recovery-codes')).toEqual([])
+  })
+})
+
+describe('a trip the registry refuses', () => {
+  it('keeps the page where it was: Continue works again and nothing waits for a landing', async () => {
+    const page = openMe({ trip: 'refused', route: (m, u) => (u === '/v2/me/step-up/change-password' ? { status: 200, body: { fresh: false } } : undefined) })
+    page.press('[data-password]')
+    await page.settle()
+    page.press('[data-step-up]')
+    await page.settle()
+    expect(page.trips).toHaveLength(1)
+    expect(page.find('[data-step-up]')[0].disabled).toBe(false)
+    expect(page.storage.has('cr_stepup')).toBe(false)
+    // The refusal was said by site.js; nothing is said twice.
+    expect(page.toasts).toEqual([])
+  })
+
+  it('a registry that answers the password with a refusal sends the panel to the trip, not round again', async () => {
+    const page = openMe({
+      route: (m, u) =>
+        u === '/v2/me/step-up/change-password'
+          ? { status: 404, body: {} }
+          : m === 'POST' && u === '/v2/me/password'
+            ? { status: 403, body: { error: 'step_up', message: 'Prove it is you first.' } }
+            : undefined
+    })
+    page.press('[data-password]')
+    await page.settle()
+    const [next, again] = passwordFields(page)
+    type(next, NEXT)
+    type(again, NEXT)
+    page.find('#me-password button')[0].dispatch('click')
+    await page.settle()
+    expect(page.find('[data-step-up]')).toHaveLength(1)
+    expect(passwordFields(page)).toHaveLength(0)
   })
 })
 
@@ -364,8 +401,34 @@ describe('an account with a password keeps typing it here', () => {
     expect(page.doc.getElementById('me-codes')?.textContent).toContain('AAAA-BBBB')
   })
 
-  it('the delete form keeps its password field', async () => {
-    const page = openMe({ passwordless: false, route: () => undefined })
+  it('the delete form keeps its password field, and the typed password is the proof', async () => {
+    const page = openMe({ passwordless: false, route: (m, u, b) => (m === 'DELETE' && u === '/v2/me' && b.current === 'pw pw pw pw pw' ? { status: 204 } : STEP_UP) })
     expect(page.find('#me-delete-password')).toHaveLength(1)
+    page.find('#me-delete-name')[0].value = 'anvztor'
+    page.find('#me-delete-password')[0].value = 'pw pw pw pw pw'
+    page.press('[data-delete-account]')
+    await page.settle()
+    expect(sent(page, 'DELETE', '/v2/me').map((c) => c.body)).toEqual([{ confirm: 'anvztor', current: 'pw pw pw pw pw' }])
+    expect(page.trips).toEqual([])
+  })
+
+  it('adding a machine and taking the authenticator off ask for the password here', async () => {
+    const page = openMe({
+      passwordless: false,
+      password: 'pw pw pw pw pw',
+      route: (m, u, b) =>
+        u === '/v2/me/join-codes' || u === '/v2/me/totp'
+          ? b.current === 'pw pw pw pw pw'
+            ? u === '/v2/me/totp'
+              ? { status: 204 }
+              : { status: 201, body: { code: 'ABCD-EFGH', qr: [], expiresAt: Date.now() + 600_000 } }
+            : { status: 403, body: { error: 'password_required', message: 'Type your password.' } }
+          : undefined
+    })
+    page.find('[data-add-device]')[0].dispatch('click')
+    await page.settle()
+    expect(page.find('.acct-join-code')[0]?.textContent).toBe('ABCD-EFGH')
+    expect(page.prompts).toHaveLength(1)
+    expect(page.trips).toEqual([])
   })
 })

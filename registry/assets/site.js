@@ -815,7 +815,7 @@
     const failed = (out) => toast(out.body?.message ?? fallback, 6000)
     if (opened.status !== 201 || typeof opened.body?.request !== 'string') {
       failed(opened)
-      return true
+      return 'refused'
     }
     // Sign this protocol's string for this request, this auth origin and this
     // device, and nothing else: the key also proves who this browser is.
@@ -834,14 +834,14 @@
       lines.includes(`device:${device.id}`)
     if (!fits) {
       failed({ body: null })
-      return true
+      return 'refused'
     }
     const algorithm = device.jwk.kty === 'OKP' ? { name: 'Ed25519' } : { name: 'ECDSA', hash: 'SHA-256' }
     const signature = await crypto.subtle.sign(algorithm, device.pair.privateKey, enc.encode(opened.body.transcript))
     const proved = await v2('POST', `/v2/auth/requests/${encodeURIComponent(opened.body.request)}/proof`, { signature: b64u(signature) })
     if (proved.status !== 204) {
       failed(proved)
-      return true
+      return 'refused'
     }
     location.assign(opened.body.authorizeUrl)
     return true
@@ -910,8 +910,8 @@
      * the act and brought back to finish it. `run` answers null when the page is
      * leaving for that proof, and then there is nothing to say yet.
      */
-    const proven = (act, send, resume) =>
-      stepUp ? stepUp.run({ act, send, resume }) : send({})
+    const proven = (act, send, resume, quiet) =>
+      stepUp ? stepUp.run({ act, send, resume, quiet }) : send({})
 
     /** A deletion confirmed on auth.cookrew.dev, waiting for its button to be pressed again. */
     let deleteProof = null
@@ -944,14 +944,14 @@
     }
     const revoke = async (id, own, proof) => {
       const send = (more) => v2('DELETE', `/v2/me/devices/${encodeURIComponent(id)}`, { ...(proof ? { stepUp: proof } : {}), ...more })
-      const out = proof ? await send({}) : await proven('revoke-device', send, { kind: 'revoke', id, own })
+      const out = proof ? await send({}) : await proven('revoke-device', send, { kind: 'revoke', id, own }, true)
       if (out === null) return
       if (out.status === 204) return own ? location.assign('/') : refresh()
       toast(out.body?.message ?? 'That device could not be revoked.', 6000)
     }
     const showCodes = async (proof) => {
       const send = (more) => v2('POST', '/v2/me/recovery-codes', { ...(proof ? { stepUp: proof } : {}), ...more })
-      const out = proof ? await send({}) : await proven('add-factor', send, { kind: 'recovery' })
+      const out = proof ? await send({}) : await proven('add-factor', send, { kind: 'recovery' }, true)
       if (out === null) return
       if (out.status !== 201) return toast(out.body?.message ?? 'The codes could not be made.', 6000)
       const box = $('me-codes')
@@ -1295,8 +1295,10 @@
     account: () => openSignIn('sign-in'),
     /**
      * A SIGNED-IN ACT ON AUTH.COOKREW.DEV (`passkey`, or `step-up` with its act), opened with this
-     * browser's session and device key exactly as a sign-in is. Answers false
-     * when the registry has no such page (404), so the caller keeps its own way.
+     * browser's session and device key exactly as a sign-in is. Answers true
+     * when the page is leaving for it, 'refused' when the registry said no (and
+     * that was already said), and false when the registry has no such page
+     * (404), so the caller keeps its own way.
      */
     throughAuthSite: (intent, extra) => signInThroughAuthSite(intent, extra),
     toast,
