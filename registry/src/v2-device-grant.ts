@@ -56,9 +56,21 @@ const SAID = {
 type Rest = { wrong: number; until: number }
 const rests = new Map<string, Rest>()
 
-const restingFor = (username: string, now: number): number => Math.max(0, (rests.get(username)?.until ?? 0) - now)
+/**
+ * Counted per account AND device: a stolen session guessing on its own device
+ * must not lock the owner's phone out, and each device needs a full two-step
+ * sign-in of its own to guess at all.
+ */
+const restKey = (signed: Signed): string => `${signed.account.username}|${signed.device.id}`
+const restingFor = (key: string, now: number): number => Math.max(0, (rests.get(key)?.until ?? 0) - now)
+
+function sweep(now: number): void {
+  if (rests.size < 1024) return
+  for (const [key, held] of rests) if (held.until < now && held.wrong === 0) rests.delete(key)
+}
 
 function missed(username: string, now: number): number {
+  sweep(now)
   const held = rests.get(username) ?? { wrong: 0, until: 0 }
   const wrong = held.wrong + 1
   if (wrong >= GRANT_TRIES) {
@@ -129,7 +141,8 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
   const passkeys = passkeysOf(ctx, account.username)
   if (account.passwordless === true && passkeys.length === 0) return said(ctx, 409, 'password_required', SAID.needsPassword)
-  const rest = restingFor(account.username, now)
+  const key = restKey(signed)
+  const rest = restingFor(key, now)
   if (rest > 0) return said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: rest })
   const jkt = jwkThumbprint(device.jwk)
   if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
@@ -137,7 +150,7 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   let by: VerifiedBy | null = null
   if (value.credential !== undefined) {
     if (!passkeyProof(ctx, signed, value.credential)) {
-      const left = missed(account.username, now)
+      const left = missed(key, now)
       return left === 0
         ? said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
         : said(ctx, 401, 'wrong', SAID.wrongPasskey, { triesLeft: left })
@@ -146,7 +159,7 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   } else if (typeof value.password === 'string' && value.password !== '') {
     const right = account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(account.username, value.password))
     if (!right) {
-      const left = missed(account.username, now)
+      const left = missed(key, now)
       return left === 0
         ? said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
         : said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
@@ -156,7 +169,7 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
     return said(ctx, 401, 'proof_required', SAID.proof)
   }
 
-  rests.delete(account.username)
+  rests.delete(key)
   if (by !== null) ctx.v2.accounts.markVerified(account.username, claims.jti, by)
   const minted = ctx.v2.tokens.mintGrant(account.username, device.id, jkt)
   ctx.response.setHeader('cache-control', 'private, no-store')

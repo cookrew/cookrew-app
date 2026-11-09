@@ -121,4 +121,19 @@ describe('the passcode folds into the account password', () => {
     a.accounts.setTouchId(true)
     expect(a.accounts.touchIdOn()).toBe(true)
   })
+
+  it('a passcode typo never leaves the machine: only text long enough to be the account password is asked about', async () => {
+    const username = `fold${++n}`
+    await world.account(username, { passwordless: true })
+    const a = passcodeMachine(username, '1234-a')
+    const b = passcodeMachine(username, '5678-b')
+    await (a.handlers['account:setPassword'] as (i: unknown) => Promise<unknown>)({ current: '', next: NEXT })
+    await b.accounts.profile()
+    let asked = 0
+    const real = b.accounts.isAccountPassword.bind(b.accounts)
+    b.accounts.isAccountPassword = async (p: string) => ((asked += 1), real(p))
+    b.lock.lock()
+    expect(await unlockOf(b)('5687-b')).toMatchObject({ ok: false, reason: 'wrong' })
+    expect(asked).toBe(0)
+  })
 })

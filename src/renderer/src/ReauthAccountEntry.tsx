@@ -62,8 +62,9 @@ export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAcc
   }, [deps, offer.desktopId, onEntered, say])
 
   useEffect(() => {
-    void enter()
-  }, [enter])
+    // A dropped network or relay must say so, not leave "Entering…" for good.
+    enter().catch(() => setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterUnreachable) }))
+  }, [enter, say])
 
   const prove = useCallback(
     async (typed: string | null, options: GrantOptions): Promise<void> => {
@@ -72,7 +73,7 @@ export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAcc
       try {
         const result: ProveResult = await proveForGrant(deps, typed, options)
         setPassword('')
-        if (result.kind === 'granted') return await enter()
+        if (result.kind === 'granted') return await enter().catch(() => setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterUnreachable) }))
         if (result.kind === 'needs-password') return setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterSetPassword) })
         if (result.kind === 'refused' || result.kind === 'failed') setLine(refusalLine(result))
         // A refusal spends the challenge cookrew.dev issued: ask for a fresh one.

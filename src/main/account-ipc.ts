@@ -379,11 +379,15 @@ async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAns
  * has a password, what was typed and did not match the passcode may be the
  * account password: cookrew.dev is asked, and a yes makes it this machine's
  * unlock from now on. The passcode keeps working until then, so nobody is
- * stranded. Only when the account HAS a password: a passcode typed wrong on a
- * passwordless account never leaves the machine.
+ * stranded. Only when the account HAS a password, and only for text long
+ * enough to be one: a passcode typo never leaves the machine.
  */
+const ACCOUNT_PASSWORD_MIN = 12
+
 async function foldOnUnlock(deps: AccountIpcDeps, password: string, local: UnlockOutcome): Promise<UnlockAnswer> {
-  if (local.ok || local.reason !== 'wrong' || !deps.accounts.hasAccountPassword()) return local
+  // A passcode typo is short; an account password is twelve characters or more.
+  // Only something that COULD be the account password leaves this machine.
+  if (local.ok || local.reason !== 'wrong' || !deps.accounts.hasAccountPassword() || password.length < ACCOUNT_PASSWORD_MIN) return local
   if (!(await deps.accounts.isAccountPassword(password))) return local
   deps.accounts.foldPasscode(password)
   deps.lock.proven()

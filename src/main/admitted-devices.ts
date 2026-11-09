@@ -72,6 +72,8 @@ export type AdmittedVia = 'token' | 'password' | 'passkey' | 'account'
 export type AdmittedDeviceStore = {
   readonly list: () => AdmittedDevice[]
   readonly has: (deviceId: string) => boolean
+  /** Rows that still admit: a pass's twelve hours not yet run out. */
+  readonly live: () => AdmittedDevice[]
   /**
    * Note that this phone asked, and that it was allowed to.
    *
@@ -266,6 +268,7 @@ export const createAdmittedDeviceStore = (
   return {
     list: () => load().sort((a, b) => b.lastSeenAt - a.lastSeenAt),
     has: (deviceId) => load().some((device) => device.deviceId === deviceId),
+    live: () => load().filter((device) => device.until === undefined || device.until > now()),
     record: ({ deviceId, name }) => {
       const at = now()
       const existing = load()
@@ -295,7 +298,9 @@ export const createAdmittedDeviceStore = (
     deviceFor: (token) => holderOf(load(), token, now())?.deviceId ?? null,
     admit: ({ deviceId, name, via, until }) => {
       const at = now()
-      const existing = load()
+      // A pass that ran out is a row that admits nothing: it goes, so it never
+      // holds one of the ADMITTED_MAX places (review, 11-09).
+      const existing = load().filter((device) => device.until === undefined || device.until > at)
       const previous = existing.find((device) => device.deviceId === deviceId)
       const token = mintCompanionToken()
       const admitted: AdmittedDevice = {

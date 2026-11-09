@@ -139,6 +139,18 @@ export function afterFirstFactor(
       refuseFactor(response, 403, 'second_step_elsewhere')
       return
     }
+    /**
+     * ONLY WHERE THE DEVICE'S KEY IS PROVEN. A known device id and its public
+     * key are not a secret, so on the direct path a stranger with a phished
+     * password could name the owner's laptop and enrol a factor of their own
+     * (review, 11-09). The auth origin binds a request to a key the client
+     * proved by signing (auth-requests.ts), so the set-up runs there; here the
+     * answer is the same plain sentence, with no pending to enrol through.
+     */
+    if (ctx.auth === undefined) {
+      refuseFactor(response, 403, 'second_step_setup')
+      return
+    }
     openSetup(ctx, account.username, rawDevice, via)
     return
   }

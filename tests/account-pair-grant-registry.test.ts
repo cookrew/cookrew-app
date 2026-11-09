@@ -120,4 +120,12 @@ describe('POST /v2/me/device-grant', () => {
     // Set once: the next one is a change, which asks for the current password.
     expect((await browser.registry.post('/v2/me/password', { next: 'another long password here' })).status).toBe(401)
   })
+
+  it('wrong tries rest only the device that made them: a stolen session cannot lock the owner’s phone out', async () => {
+    const { username, browser } = await fresh()
+    const thief = await world.browser(username)
+    for (const guess of ['wrong one', 'wrong two', 'wrong three']) await thief.registry.post(GRANT_PATHS.grant, { password: guess })
+    expect((await thief.registry.post(GRANT_PATHS.grant, { password: PASSWORD })).status).toBe(429)
+    expect((await browser.registry.post(GRANT_PATHS.grant, { password: PASSWORD })).status).toBe(201)
+  })
 })

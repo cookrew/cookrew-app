@@ -112,7 +112,8 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
   }
 
   const admit = (asking: Asking, grant: V2Grant, account: AccountFile): PairReply<PairAnswer> => {
-    if (!deps.admitted.has(asking.deviceId) && deps.admitted.list().length >= ADMITTED_MAX) {
+    const live = deps.admitted.live()
+    if (!live.some((d) => d.deviceId === asking.deviceId) && live.length >= ADMITTED_MAX) {
       return refuse(403, 'refused', word(`This Mac is open for ${ADMITTED_MAX} devices already. Forget one in Devices to make room.`))
     }
     let minted: ReturnType<AdmittedDeviceStore['admit']>

@@ -182,11 +182,14 @@ describe('signing in', () => {
     expect(stranger.status).toBe(403)
     expect(stranger.body).toMatchObject({ error: 'second_step_elsewhere' })
     expect(stranger.body.pending).toBeUndefined()
+    // Even on its own device, the DIRECT path opens no set-up: a device id and
+    // its public key are no secret, so a phished password must not be able to
+    // enrol a factor by naming the owner's laptop (review, 11-09). The set-up
+    // runs on auth.cookrew.dev, where the key is proven (gate1-auth-site.test).
     const home = await call('POST', '/v2/sessions', { username, password: PASSWORD, device: wire(desk) })
     expect(home.status).toBe(403)
     expect(home.body.error).toBe('second_step_setup')
-    const done = await finishSetupWithTotp(site.origin, String(home.body.pending), clock)
-    expect(done.token.length).toBeGreaterThan(20)
+    expect(home.body.pending).toBeUndefined()
   })
 
   it('tells an app that cannot set one up exactly what to do, in a sentence it shows as it is', async () => {

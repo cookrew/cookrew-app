@@ -193,4 +193,16 @@ describe('the account pair door', () => {
     expect(all).not.toContain(grant.slice(0, 40))
     expect(all).not.toContain(token)
   })
+
+  it('an admission whose pass ran out leaves the device list when the next one comes, and never holds a place', async () => {
+    const d = door()
+    const grant = grantFor(mine)
+    await d.finish({ body: finishBody(await challengeOf(d, mine, grant), mine, grant), bridged: null })
+    clock += GRANT_TTL_MS + 1
+    expect(admitted.live()).toEqual([])
+    const other = phone()
+    const g2 = grantFor(other)
+    await d.finish({ body: finishBody(await challengeOf(d, other, g2), other, g2), bridged: null })
+    expect(admitted.list().map((x) => x.deviceId)).toEqual([other.id])
+  })
 })
