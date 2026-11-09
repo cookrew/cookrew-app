@@ -1,7 +1,7 @@
 // #ARTIFACT IN THE PROMPT, AS @AGENT IS (owner, 2026-11-01).
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { artifactRefs, expandRefs, pendingName, suggestionsFor, type PromptArtifact } from '../src/renderer/src/prompt/artifact-refs'
+import { agentRefs, artifactRefs, cardCommand, expandRefs, pendingName, suggestionsFor, type PromptArtifact } from '../src/renderer/src/prompt/artifact-refs'
 
 vi.mock('../src/renderer/src/api', () => ({ cookrew: () => ({ ptyInput: () => undefined }) }))
 const { lineTextFor } = await import('../src/renderer/src/prompt/live-line')
@@ -28,9 +28,32 @@ describe('artifactRefs', () => {
 })
 
 describe('expandRefs', () => {
-  it('says each one as what it is', () => {
+  const AGENTS = [{ id: 'f1', name: 'Forge' }, { id: 'f2', name: 'Forge two' }]
+
+  it('says each one as the command that reaches it (owner, 2026-11-09)', () => {
     const text = 'compare #Route plan with #localhost:5173'
-    expect(expandRefs(text, artifactRefs(text, ARTS))).toBe('compare the note "Route plan" with the browser "localhost:5173"')
+    expect(expandRefs(text, artifactRefs(text, ARTS))).toBe('compare cookrew note "Route plan" with cookrew browser "localhost:5173"')
+  })
+
+  it('says a teammate named among the words as the ask that reaches them', () => {
+    const text = 'put #Route plan in front of @Forge two, then @forge.'
+    expect(agentRefs(text, AGENTS).map((r) => r.agent.id)).toEqual(['f2', 'f1'])
+    expect(expandRefs(text, artifactRefs(text, ARTS), agentRefs(text, AGENTS))).toBe(
+      'put cookrew note "Route plan" in front of cookrew ask "Forge two", then cookrew ask "Forge".'
+    )
+    expect(agentRefs('mail me@Forge', AGENTS)).toEqual([])
+  })
+
+  it('says a name inside another name once', () => {
+    const notes = [art('ping @Forge')]
+    const text = 'read #ping @Forge'
+    expect(expandRefs(text, artifactRefs(text, notes), agentRefs(text, AGENTS))).toBe('read cookrew note "ping @Forge"')
+  })
+
+  it('quotes a name the shell would read into', () => {
+    expect(cardCommand('note', 'cost $5')).toBe(`cookrew note 'cost $5'`)
+    expect(cardCommand('note', `it's "done"`)).toBe(`cookrew note 'it'\\''s "done"'`)
+    expect(cardCommand('ask', 'Forge')).toBe('cookrew ask "Forge"')
   })
 })
 
@@ -58,7 +81,7 @@ describe('pendingName', () => {
 
 describe("the agent's line", () => {
   it('takes a whole reference as what it is, and waits for one being typed', () => {
-    expect(lineTextFor('read #Route plan now', 'a1', null, [], ARTS)).toBe('read the note "Route plan" now')
+    expect(lineTextFor('read #Route plan now', 'a1', null, [], ARTS)).toBe('read cookrew note "Route plan" now')
     expect(lineTextFor('read #Rou', 'a1', null, [], ARTS)).toBe('read ')
     // Never a raw "#" at the line's start: Claude Code reads one as its own command.
     expect(lineTextFor('#Ret', 'a1', null, [], ARTS)).toBe('')

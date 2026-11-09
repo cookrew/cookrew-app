@@ -3,7 +3,7 @@ import type { TerminalActivity } from '../../../shared/turn'
 import { useActivity, activityStore } from '../activity-thumb-store'
 import { inputRefused } from './input-refused'
 import { cookrew } from '../api'
-import { artifactRefs, expandRefs, pendingName, type PromptArtifact } from './artifact-refs'
+import { agentRefs, artifactRefs, expandRefs, pendingName, type NamedAgent, type PromptArtifact } from './artifact-refs'
 import { draftKey, getDraft, setDraft } from './prompt-draft'
 import { shownWords, withShownWords } from './draft-pictures'
 
@@ -86,14 +86,14 @@ function lineKeys(from: string, to: string): string {
  * What the agent's line should hold for this draft. "@Other …" is for
  * Other, so none of it goes into this agent's line — nor does an "@" that is
  * still on its way to naming an agent. "@Self …" is just the words. A whole
- * "#Name" goes in as what it is (artifact-refs.ts), one still being typed
- * waits for its name.
+ * "#Name", or a teammate's "@Name" among the words, goes in as the command
+ * that reaches it (artifact-refs.ts); one still being typed waits for its name.
  */
 export function lineTextFor(
   text: string,
   targetId: string,
   mention: { id: string; text: string } | null,
-  agentNames: readonly string[],
+  agents: readonly NamedAgent[],
   artifacts: readonly PromptArtifact[] = []
 ): string {
   let body = text
@@ -101,12 +101,13 @@ export function lineTextFor(
   else {
     // The words, not the picture paths after them (draft-pictures.ts).
     const naming = /^\s*@(\S*)$/u.exec(shownWords(text))
-    if (naming && agentNames.some((name) => name.toLowerCase().startsWith(naming[1].toLowerCase()))) return ''
+    if (naming && agents.some((a) => a.name.toLowerCase().startsWith(naming[1].toLowerCase()))) return ''
   }
   const words = shownWords(body)
-  const pending = pendingName(words, { '@': [], '#': artifacts.map((a) => a.name) })
+  const teammates = agents.filter((a) => a.id !== targetId)
+  const pending = pendingName(words, { '@': teammates.map((a) => a.name), '#': artifacts.map((a) => a.name) })
   if (pending) body = withShownWords(body, words.slice(0, pending.start))
-  return expandRefs(body, artifactRefs(body, artifacts))
+  return expandRefs(body, artifactRefs(body, artifacts), agentRefs(body, teammates))
 }
 
 /** Cards that cannot start: the draft stays in the box and goes whole on a send. */

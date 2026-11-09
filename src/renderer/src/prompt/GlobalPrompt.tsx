@@ -18,7 +18,7 @@ import { useRouteState } from '../routing/use-route-state'
 import { routeChoices } from '../../../shared/route-view'
 import { usePresetOffers } from './use-preset-commands'
 import { HarnessMenu, type NewMenuActs } from './HarnessMenu'
-import { artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
+import { agentRefs, artifactRefs, expandRefs, pendingName, suggestionsFor, type ArtifactRef, type PromptArtifact } from './artifact-refs'
 import { endLine, lineTextFor, submitLine, typeLine, useLiveLine } from './live-line'
 import { earSays, withHeard } from './dictation'
 import { draftKey, getDraft, setDraft, useDraft } from './prompt-draft'
@@ -88,8 +88,10 @@ import './global-prompt.css'
  * box, so the prompt is typed next (owner, 2026-11-01).
  *
  * "@Name the rest" sends to that agent from anywhere. "#Name" names a note or
- * a browser of this workspace (artifact-refs.ts): it is sent as what it is,
- * and wired to the agent it goes to. Typing "@" or "#" offers the names.
+ * a browser of this workspace (artifact-refs.ts): it is sent as the command
+ * that reaches it (`cookrew note "Name"`), and wired to the agent it goes to;
+ * an "@Name" among the words is sent as `cookrew ask "Name"`. Typing "@" or
+ * "#" offers the names.
  * A screenshot pasted or a file dropped goes in as its path
  * (prompt-attach.ts).
  *
@@ -340,7 +342,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   /** The draft, and the agent's line with it (unless an IME is mid-word). */
   const write = (next: string, composing = false): void => {
     setText(next)
-    if (to && !composing) typeLine(to.id, lineTextFor(next, to.id, mentionTarget(next, agents), names, artifacts))
+    if (to && !composing) typeLine(to.id, lineTextFor(next, to.id, mentionTarget(next, agents), agents, artifacts))
   }
 
   /**
@@ -353,7 +355,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
   landRef.current = (words, id) => {
     const next = withHeard(getDraft(draftKey(id)), words)
     setDraft(draftKey(id), next)
-    if (id && agents.some((a) => a.id === id)) typeLine(id, lineTextFor(next, id, mentionTarget(next, agents), names, artifacts))
+    if (id && agents.some((a) => a.id === id)) typeLine(id, lineTextFor(next, id, mentionTarget(next, agents), agents, artifacts))
   }
   /** What Sous said back to a spoken command, for a beat. */
   const [sous, setSous] = useState<string | null>(null)
@@ -420,7 +422,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     const id = to?.id ?? null
     if (id && asked.current.id === id && asked.current.waiting && !waiting) {
       const draft = getDraft(draftKey(id))
-      typeLine(id, lineTextFor(draft, id, mentionTarget(draft, agents), names, artifacts))
+      typeLine(id, lineTextFor(draft, id, mentionTarget(draft, agents), agents, artifacts))
     }
     asked.current = { id, waiting }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -437,10 +439,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         .catch((e: unknown) => setError(`#${artifact.name} could not be given to the agent: ${String(e)}`))
     }
   }
-  /** The words as sent: each "#Name" said as what it is. */
-  const said = (words: string): { words: string; refs: ArtifactRef[] } => {
+  /** The words as sent to `to`: each "#Name" and each teammate's "@Name" said as the command that reaches it. */
+  const said = (words: string, to: string | null): { words: string; refs: ArtifactRef[] } => {
     const refs = artifactRefs(words, artifacts)
-    return { words: expandRefs(words, refs), refs }
+    const teammates = agentRefs(words, agents.filter((a) => a.id !== to))
+    return { words: expandRefs(words, refs, teammates), refs }
   }
 
   const makeNew = async (raw: string): Promise<void> => {
@@ -460,11 +463,11 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
         return
       }
     }
-    const { words: prompt, refs } = said(withItemRef(raw, attachedItem, artifacts))
+    const { words: prompt, refs } = said(withItemRef(raw, attachedItem, artifacts), null)
     const tune = offeredPick(launchTune, offer, gateway)
     // Named from the words typed, not from the item riding ahead of them. An example has a name of its own.
     const example = firstTask ? exampleName(raw) : null
-    const choice = { name: example ?? nameFromPrompt(said(raw).words), preset: harness, orch: orch || firstTask, prompt, patient: firstTask, autoName: true, tune }
+    const choice = { name: example ?? nameFromPrompt(said(raw, null).words), preset: harness, orch: orch || firstTask, prompt, patient: firstTask, autoName: true, tune }
     const made = await makeAgent(cookrew(), example ? { ...choice, autoName: false } : choice, nodes)
     setBusy(false)
     if (!made.ok) return setError(made.error)
@@ -543,7 +546,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     if (plan.kind !== 'none' && !(plan.kind === 'new' && busy)) pressKey(sendRef.current)
     if (plan.kind === 'mention') {
       // "@Other …" goes to Other, whoever the box is carrying.
-      const out = said(withItemRef(plan.words, attachedItem, artifacts))
+      const out = said(withItemRef(plan.words, attachedItem, artifacts), plan.id)
       noteSent({ id: plan.id, box: draftKey(to?.id ?? null), words: text, at: Date.now() })
       sendToAgent(plan.id, out.words)
       wireRefs(plan.id, out.refs)
@@ -555,7 +558,7 @@ export function GlobalPrompt({ fullAgentId, agents, harnesses, nodes, orch = fal
     }
     if (plan.kind === 'agent') {
       // A bare Enter only where its terminal is in sight (send-plan.ts).
-      const out = said(withItemRef(plan.words, attachedItem, artifacts))
+      const out = said(withItemRef(plan.words, attachedItem, artifacts), plan.id)
       // A menu is on the screen: words typed at it would land as keys, and
       // their Enter would pick whatever row the cursor is on.
       const menu = waitRef.current
