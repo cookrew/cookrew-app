@@ -339,7 +339,7 @@ describe('the Not paired copy', () => {
     expect(reauthMessage('none', 'linux')).not.toMatch(/\bMac\b/)
     expect(reauthMessage('none', 'darwin')).toBe(REAUTH_COPY.unpaired)
     expect(machineSentence(REAUTH_COPY.enterLede, 'linux')).toBe(
-      'Enter this machine with your account — a passkey, or the account password. It remembers this browser, so next time it opens with one tap.'
+      'Enter this machine with your account — a passkey, or the account password. Every machine of your account then lets this browser in for twelve hours.'
     )
     for (const sentence of [REAUTH_COPY.enterSignIn, REAUTH_COPY.enterElsewhere, REAUTH_COPY.refused, REAUTH_COPY.shape]) {
       expect(machineSentence(sentence, 'linux')).not.toMatch(/\bMac\b/)

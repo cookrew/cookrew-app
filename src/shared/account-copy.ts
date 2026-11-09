@@ -236,9 +236,14 @@ export const V3_COPY = machineTable({
    */
   'm5.unpaired':
     'Scan the QR on the Mac’s avatar → Pair a phone, or paste the link `cookrew mobile --token` printed.',
-  /** M5, the card on a machine of the account: the way in that needs nobody there. */
+  /**
+   * M5, the card on a machine of the account: the way in that needs nobody
+   * there. Owner 2026-11-09: one verification opens every machine of the
+   * account for twelve hours.
+   */
   'm5.enter.lede':
-    'Enter this Mac with your account — a passkey, or the account password. It remembers this browser, so next time it opens with one tap.',
+    'Enter this Mac with your account — a passkey, or the account password. Every machine of your account then lets this browser in for twelve hours.',
+  'm5.enter.entering': 'Entering with your account…',
   'm5.enter.passkey': 'Use a passkey',
   'm5.enter.password': 'Account password',
   'm5.enter.go': 'Enter',
@@ -248,15 +253,12 @@ export const V3_COPY = machineTable({
   /** M5, a machine of the account reached on a page that cannot use the account (a direct address). */
   'm5.enter.elsewhere':
     'Open this Mac from cookrew.dev/me in a browser signed in to your account, then enter with a passkey or the account password.',
-  /**
-   * M5, a machine with nothing to check an entry against: no passkey pinned and
-   * no copy of the account password (it joined by a code or a provider).
-   */
-  'm5.enter.none':
-    'This Mac has no way to check your account yet. Add a passkey at cookrew.dev/me, then come back.',
-  /** M5, the machine could not read the account just now — not "no password". */
+  /** M5, ruling 3: a provider-only account with no passkey sets an account password first. */
+  'm5.enter.setpassword':
+    'Set an account password first: this account signs in with Google or GitHub and has no password or passkey yet. Set one at cookrew.dev/me, then come back.',
+  /** M5, cookrew.dev could not be asked for the pass. */
   'm5.enter.unreachable':
-    'This Mac cannot reach cookrew.dev to read your account just now. Try again in a minute, or pair with a token instead.',
+    'cookrew.dev cannot be reached just now. Try again in a minute, or pair with a token instead.',
   /** M5, a token was minted and then refused: rare, and said rather than silent. */
   'm5.enter.kept': 'This Mac let this browser in but then refused it. Try again.',
   /** M5, the token, kept for a machine with no account, folded away below the account. */

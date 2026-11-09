@@ -4,7 +4,6 @@ import {
   createPublicKey,
   generateKeyPairSync,
   randomBytes,
-  scrypt,
   scryptSync,
   sign,
   timingSafeEqual,
@@ -59,7 +58,6 @@ import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 import type { MachineProfile } from '../shared/fleet'
 import type { PasskeySummary } from '../shared/account-approvals'
-import { ANCHORS_PATH, ANCHORS_PROOF_HEADER, anchorsProofMessage } from '../shared/account-pair'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -199,24 +197,6 @@ export function matchesUnlock(verifier: UnlockVerifier, password: string): boole
   const stored = Buffer.from(verifier.hash)
   if (candidate.length !== stored.length) return false
   return timingSafeEqual(candidate, stored)
-}
-
-/**
- * The same check, off the event loop: a machine checking a password a phone
- * sent (account-pair.ts) must not stall every terminal it serves while it does.
- */
-export function matchesUnlockAsync(verifier: UnlockVerifier, password: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    scrypt(password, verifier.salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p }, (error, derived) => {
-      if (error) {
-        resolve(false)
-        return
-      }
-      const candidate = Buffer.from(derived.toString('base64url'))
-      const stored = Buffer.from(verifier.hash)
-      resolve(candidate.length === stored.length && timingSafeEqual(candidate, stored))
-    })
-  })
 }
 
 /**
@@ -670,30 +650,6 @@ export class Accounts {
     const links = [...(profile.value.links ?? [])].reverse()
     const link = links.find((held) => !held.paused) ?? links[0]
     return link === undefined ? { ok: false, reason: 'provider_required' } : { ok: true, value: link.provider }
-  }
-
-  /**
-   * THE ACCOUNT'S ANCHORS, for a device entering this machine with the account
-   * (account-pair.ts). The raw body or null: pair-anchors.ts reads it strictly.
-   *
-   * Signed with this machine's device key as well as carrying the bearer: the
-   * answer holds the password's scrypt record (registry/src/v2-pair-anchors.ts).
-   */
-  async pairAnchors(): Promise<unknown | null> {
-    const account = this.cached
-    if (account === null) return null
-    const at = this.now()
-    const sig = signWithDevice(account, anchorsProofMessage(account.deviceId, at))
-    const sent = await this.authedResponse(ANCHORS_PATH, {
-      method: 'GET',
-      headers: { [ANCHORS_PROOF_HEADER]: `${at}.${sig}` },
-    })
-    if (!sent.ok || sent.response.status !== 200) return null
-    try {
-      return (await sent.response.json()) as unknown
-    } catch {
-      return null
-    }
   }
 
   // ── the passcode: what unlocks a Mac where no password was typed ───────────

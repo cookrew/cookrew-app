@@ -1,15 +1,16 @@
-import { useCallback, useState } from 'react'
-import type { PairOffer } from '../../shared/account-pair'
+import { useCallback, useEffect, useState } from 'react'
+import type { GrantOptions, PairOffer } from '../../shared/account-pair'
 import { REAUTH_COPY, machineSentence } from './auth-gate'
-import type { PairClientDeps } from './account-pair-client'
-import { enterWithAccount, type EnterResult } from './account-pair-client'
+import { enterWithGrant, grantOptions, proveForGrant, type PairClientDeps, type ProveResult } from './account-pair-client'
 
 /**
  * THE ACCOUNT'S WAY IN, on the Not paired card (owner 2026-11-09).
  *
- * A passkey first where the browser has one, the account password beside it.
- * The machine checks either itself (main/account-pair.ts) and hands back a
- * token of this browser's own; the card stores it and gets out of the way.
+ * First it tries the pass this browser already holds: within twelve hours of a
+ * verification every machine of the account opens with no question at all.
+ * Without one it asks cookrew.dev how this account can prove itself and offers
+ * that — a passkey first, the account password beside it, or, for an account
+ * that has neither, the sentence that sends it to set a password.
  *
  * The password lives in this component's state for as long as it is typed and
  * is cleared on every answer, right or wrong.
@@ -24,62 +25,90 @@ export interface ReauthAccountEntryProps {
   readonly onEntered: (token: string) => Promise<boolean>
 }
 
+type Phase =
+  | { readonly kind: 'entering' }
+  | { readonly kind: 'proving'; readonly options: GrantOptions }
+  | { readonly kind: 'said'; readonly sentence: string }
+
 const secondsOf = (ms: number): number => Math.max(1, Math.ceil(ms / 1000))
 
-/** The sentence for a refusal the machine gave, with what is left if it said. */
-export function refusalLine(result: Extract<EnterResult, { kind: 'refused' }>): string {
-  if (result.retryAfterMs !== undefined) return `${result.message.replace(/ Try again in \d+ s\.$/, '')} Try again in ${secondsOf(result.retryAfterMs)} s.`
+/** The sentence for a refusal, with what is left if it said. */
+export function refusalLine(result: { message: string; triesLeft?: number; retryAfterMs?: number }): string {
+  if (result.retryAfterMs !== undefined) return `${result.message.replace(/ Try again in (a minute|\d+ s)\.$/, '')} Try again in ${secondsOf(result.retryAfterMs)} s.`
   if (result.triesLeft !== undefined) return `${result.message} ${result.triesLeft} ${result.triesLeft === 1 ? 'try' : 'tries'} left.`
   return result.message
 }
 
 export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAccountEntryProps): React.JSX.Element {
+  const [phase, setPhase] = useState<Phase>({ kind: 'entering' })
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [line, setLine] = useState<string | null>(null)
-  const say = (sentence: string): string => machineSentence(sentence, offer.platform)
-  const passkeyOffered = offer.methods.includes('passkey') && deps.passkey !== null
-  const passwordOffered = offer.methods.includes('password')
+  const say = useCallback((sentence: string): string => machineSentence(sentence, offer.platform), [offer.platform])
 
-  const run = useCallback(
-    async (typed: string | null): Promise<void> => {
+  /** Enter with the held pass; without one, ask how this account proves itself. */
+  const enter = useCallback(async (): Promise<void> => {
+    if (offer.desktopId === null) return
+    const result = await enterWithGrant(deps, offer.desktopId)
+    if (result.kind === 'entered') {
+      if (!(await onEntered(result.token))) setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterKept) })
+      return
+    }
+    if (result.kind === 'no-device') return setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterSignIn) })
+    if (result.kind === 'refused' || result.kind === 'failed') setLine(refusalLine(result))
+    const options = await grantOptions(deps.registry)
+    if (options === null) return setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterUnreachable) })
+    setPhase(options.needsPassword ? { kind: 'said', sentence: say(REAUTH_COPY.enterSetPassword) } : { kind: 'proving', options })
+  }, [deps, offer.desktopId, onEntered, say])
+
+  useEffect(() => {
+    void enter()
+  }, [enter])
+
+  const prove = useCallback(
+    async (typed: string | null, options: GrantOptions): Promise<void> => {
       setBusy(true)
       setLine(null)
       try {
-        const result = await enterWithAccount(deps, typed, offer.desktopId)
+        const result: ProveResult = await proveForGrant(deps, typed, options)
         setPassword('')
-        if (result.kind === 'entered') {
-          if (!(await onEntered(result.token))) setLine(machineSentence(REAUTH_COPY.enterKept, offer.platform))
-          return
+        if (result.kind === 'granted') return await enter()
+        if (result.kind === 'needs-password') return setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterSetPassword) })
+        if (result.kind === 'refused' || result.kind === 'failed') setLine(refusalLine(result))
+        // A refusal spends the challenge cookrew.dev issued: ask for a fresh one.
+        if (typed === null || result.kind === 'refused') {
+          const fresh = await grantOptions(deps.registry)
+          if (fresh !== null) setPhase({ kind: 'proving', options: fresh })
         }
-        if (result.kind === 'no-device') setLine(machineSentence(REAUTH_COPY.enterSignIn, offer.platform))
-        else if (result.kind === 'refused') setLine(refusalLine(result))
-        else if (result.kind === 'failed') setLine(result.message)
       } catch (cause) {
         setPassword('')
-        setLine(cause instanceof Error ? `Could not reach this machine: ${cause.message}` : 'Could not reach this machine.')
+        setLine(cause instanceof Error ? `Could not reach cookrew.dev: ${cause.message}` : 'Could not reach cookrew.dev.')
       } finally {
         setBusy(false)
       }
     },
-    [deps, onEntered, offer.platform]
+    [deps, enter, say]
   )
 
+  if (phase.kind === 'entering') return <p className="cr-reauth-body">{REAUTH_COPY.enterEntering}</p>
+  if (phase.kind === 'said') return <p className="cr-reauth-body">{phase.sentence}</p>
+  const { options } = phase
+  const passkeyOffered = options.methods.passkey && options.passkey !== null && deps.passkey !== null
   return (
     <form
       className="cr-reauth-enter"
       onSubmit={(event) => {
         event.preventDefault()
-        if (!busy && password.length > 0) void run(password)
+        if (!busy && password.length > 0) void prove(password, options)
       }}
     >
       <p className="cr-reauth-body">{say(REAUTH_COPY.enterLede)}</p>
       {passkeyOffered && (
-        <button className="cr-btn primary cr-reauth-passkey" type="button" disabled={busy} onClick={() => void run(null)}>
+        <button className="cr-btn primary cr-reauth-passkey" type="button" disabled={busy} onClick={() => void prove(null, options)}>
           {REAUTH_COPY.enterPasskey}
         </button>
       )}
-      {passwordOffered && (
+      {options.methods.password && (
         <>
           {handle && <input type="text" name="username" autoComplete="username" value={handle} readOnly hidden />}
           <label className="cr-reauth-label" htmlFor="cr-reauth-password">

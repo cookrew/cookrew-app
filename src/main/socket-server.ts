@@ -171,12 +171,6 @@ export interface SocketServerDeps {
    * the same command that prints it.
    */
   pairingHandout: () => PairingHandout | null
-  /**
-   * `cookrew mobile --repin`: trust the account's passkeys as cookrew.dev lists
-   * them now (account-pair.ts). Typed at this machine, which is the point: the
-   * registry cannot add a passkey a machine accepts without somebody here.
-   */
-  repinAccountPasskeys?: () => Promise<{ added: string[]; removed: string[] } | null>
   /** LAN URLs of the TV wall (HTTP, wall-token bearing). */
   /** Workspace registry + switching (switching rebuilds PTYs). */
   listWorkspaces: () => WorkspaceList
@@ -1915,16 +1909,7 @@ async function cmdGit(request: CliRequest, deps: SocketServerDeps): Promise<stri
   return `${info.branch ?? 'detached'} — ${state}  (${info.root})`
 }
 
-/** What `cookrew mobile --repin` says: how many passkeys came and went. */
-async function repinText(deps: SocketServerDeps): Promise<string> {
-  const changed = (await deps.repinAccountPasskeys?.()) ?? null
-  if (changed === null) return 'Could not read the account from cookrew.dev just now. Nothing was changed; try again.'
-  const said = `Passkeys pinned again: ${changed.added.length} added, ${changed.removed.length} removed.`
-  return changed.added.length === 0 && changed.removed.length === 0 ? `${said} They were already as cookrew.dev lists them.` : said
-}
-
-export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string | Promise<string> {
-  if (request.flags.repin === true) return repinText(deps)
+export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   // `flags`, not `args`: the CLI's parseArgv routes every `--token` into flags
   // and leaves args empty, so reading args[0] here meant `cookrew mobile
   // --rotate` exited 0, printed the ordinary URL list, and revoked NOTHING.

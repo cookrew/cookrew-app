@@ -28,16 +28,13 @@ const handleOfBase = (base: string): string | null => /\/relay\/@([^/]+)\/deskto
 type AccountState =
   | { readonly kind: 'asking' }
   | { readonly kind: 'enter'; readonly offer: PairOffer }
-  | { readonly kind: 'sign-in' | 'elsewhere' | 'none' | 'unreachable'; readonly offer: PairOffer }
+  | { readonly kind: 'sign-in' | 'elsewhere'; readonly offer: PairOffer }
   | { readonly kind: 'token-only'; readonly platform: string | null }
 
 /** What the card can offer here: the account, a pointer to it, or the token alone. */
 async function readAccountState(base: string): Promise<AccountState> {
-  const deps = browserPairDeps(base, accountDevice)
-  const offer = await pairOffer(deps)
-  if (offer === null || offer.desktopId === null) return { kind: 'token-only', platform: offer?.platform ?? null }
-  if (!offer.reachable) return { kind: 'unreachable', offer }
-  if (!offer.offered) return { kind: 'none', offer }
+  const offer = await pairOffer(browserPairDeps(base, accountDevice).machine)
+  if (offer === null || offer.desktopId === null || !offer.offered) return { kind: 'token-only', platform: offer?.platform ?? null }
   // The account's way in signs with cookrew.dev's device key, which exists
   // only under cookrew.dev: a direct address is another origin.
   if (handleOfBase(base) === null) return { kind: 'elsewhere', offer }
@@ -163,12 +160,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
     if (account.kind === 'enter') {
       return <ReauthAccountEntry offer={account.offer} deps={deps} handle={handleOfBase(base)} onEntered={entered} />
     }
-    const sentence = {
-      'sign-in': REAUTH_COPY.enterSignIn,
-      none: REAUTH_COPY.enterNone,
-      unreachable: REAUTH_COPY.enterUnreachable,
-      elsewhere: REAUTH_COPY.enterElsewhere
-    }[account.kind]
+    const sentence = account.kind === 'sign-in' ? REAUTH_COPY.enterSignIn : REAUTH_COPY.enterElsewhere
     return <p className="cr-reauth-body">{machineSentence(sentence, account.offer.platform)}</p>
   }
 

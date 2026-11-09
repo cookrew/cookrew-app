@@ -41,7 +41,7 @@ import { deleteAccount } from './v2-delete'
 import { handleAuthRoute } from './v2-auth-routes'
 import { authorizeSession } from './auth-finish'
 import { deviceFor } from './v2-factor-http'
-import { pairAnchorsRoute } from './v2-pair-anchors'
+import { grantOptions, issueGrant } from './v2-device-grant'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -675,10 +675,13 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     noContent(response)
     return
   }
-  // The account's anchors, for a machine of it to check an entry itself
-  // (v2-pair-anchors.ts): desktops only, with a device-key signature.
-  if (rest.length === 1 && rest[0] === 'pair-anchors' && method === 'GET') {
-    pairAnchorsRoute(ctx, signed)
+  // ONE VERIFICATION, EVERY MACHINE, TWELVE HOURS (v2-device-grant.ts).
+  if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'options' && method === 'POST') {
+    grantOptions(ctx, signed)
+    return
+  }
+  if (rest.length === 1 && rest[0] === 'device-grant' && method === 'POST') {
+    await issueGrant(ctx, signed)
     return
   }
   if (rest.length === 1 && rest[0] === 'recovery-codes' && method === 'POST') {

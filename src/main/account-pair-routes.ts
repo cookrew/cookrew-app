@@ -48,11 +48,16 @@ export async function handleAccountPairRoutes(
   }
   const method = request.method ?? 'GET'
   if (url.pathname === PAIR_PATHS.offer && method === 'GET') {
-    respondJson(response, 200, await door.offer())
+    respondJson(response, 200, door.offer())
     return true
   }
   if (method !== 'POST') {
     respondJson(response, 405, { error: 'Use POST.' })
+    return true
+  }
+  // JSON only: a cross-site form post (text/plain) must not reach the door.
+  if (!/^application\/json\b/i.test(request.headers['content-type'] ?? '')) {
+    respondJson(response, 415, { ok: false, outcome: 'refused', error: 'Send JSON.' })
     return true
   }
   let body: unknown

@@ -1,49 +1,65 @@
 import {
-  ACCOUNT_PAIR_INFO,
-  ACCOUNT_PAIR_PASSWORD_MAX,
+  GRANT_MARGIN_MS,
+  GRANT_PATHS,
   PAIR_PATHS,
-  pairBeginMessage,
-  pairDeviceMessage,
-  pairProofDigestInput,
   pairTranscript,
-  sealedPasswordPlaintext,
+  type DeviceGrant,
+  type GrantOptions,
   type PairAnswer,
-  type PairChallenge,
-  type PairMethod,
-  type PairOffer,
-  type PasskeyAssertionWire
+  type PairOffer
 } from '../../shared/account-pair'
 import type { AccountDevice } from './account-device'
-import { sealForMac } from './use/unlock-seal'
 
 /**
  * THE PHONE'S HALF OF ENTERING WITH THE ACCOUNT (shared/account-pair.ts).
  *
- * One entry, in order: ask the machine for a challenge, sign the transcript
- * with this browser's account device key, bring ONE secret — the password
- * sealed to the challenge's key, or a passkey's assertion over the transcript's
- * hash — and keep the token the machine hands back. Nothing is stored before
- * the machine says yes, and the password is never kept at all.
+ * Two steps. PROVE once to cookrew.dev — a passkey, or the account password,
+ * sent to the registry itself over TLS (this page IS cookrew.dev; the relay is
+ * not involved) — and keep the twelve-hour pass it answers with. Then ENTER
+ * any machine of the account: hand it the pass, take its challenge, sign the
+ * challenge with this browser's own cookrew.dev key. Within the twelve hours a
+ * second machine asks nothing at all.
  *
- * Everything outside the browser is injected (fetch, the device, WebAuthn), so
- * the order is tested in node against the real machine door.
+ * Everything outside the browser is injected (fetch, the device, WebAuthn, the
+ * storage), so the order is tested in node against the real machine door.
  */
 
-export interface PairClientDeps {
-  /** fetch, already aimed at this machine's base (`clientBase()`). */
-  readonly post: (path: string, body: unknown) => Promise<{ status: number; body: unknown }>
+export interface Http {
   readonly get: (path: string) => Promise<{ status: number; body: unknown }>
+  readonly post: (path: string, body: unknown) => Promise<{ status: number; body: unknown }>
+}
+
+export interface GrantStore {
+  read(): DeviceGrant | null
+  write(grant: DeviceGrant): void
+  clear(): void
+}
+
+export interface PairClientDeps {
+  /** fetch at this machine's base (`clientBase()`): through the relay on cookrew.dev. */
+  readonly machine: Http
+  /** fetch at cookrew.dev itself, with the session cookie. */
+  readonly registry: Http
   readonly device: () => Promise<AccountDevice | null>
   /** navigator.credentials.get, or null where WebAuthn is not there. */
   readonly passkey: ((options: CredentialRequestOptions) => Promise<Credential | null>) | null
+  readonly grants: GrantStore
+  readonly now?: () => number
 }
 
-export type EnterResult =
-  | { readonly kind: 'entered'; readonly token: string; readonly desktopId: string }
-  | { readonly kind: 'no-device' }
+export type ProveResult =
+  | { readonly kind: 'granted' }
   | { readonly kind: 'refused'; readonly message: string; readonly triesLeft?: number; readonly retryAfterMs?: number }
+  | { readonly kind: 'needs-password' }
   | { readonly kind: 'cancelled' }
-  /** The browser could not do its half (WebAuthn shape, the device key): said, not hidden. */
+  | { readonly kind: 'failed'; readonly message: string }
+
+export type EnterResult =
+  | { readonly kind: 'entered'; readonly token: string; readonly desktopId: string; readonly until: number }
+  | { readonly kind: 'no-device' }
+  /** No pass, or the machine refused it: prove again. */
+  | { readonly kind: 'needs-proof' }
+  | { readonly kind: 'refused'; readonly message: string; readonly retryAfterMs?: number }
   | { readonly kind: 'failed'; readonly message: string }
 
 const encoder = new TextEncoder()
@@ -65,165 +81,236 @@ const unb64u = (text: string): Uint8Array<ArrayBuffer> => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-const messageOf = (body: unknown, fallback: string): string =>
-  isRecord(body) && typeof body.error === 'string' ? body.error : fallback
+/** The sentence an answer carries: the registry's `message`, or a machine's `error` sentence. */
+const messageOf = (body: unknown, fallback: string): string => {
+  if (!isRecord(body)) return fallback
+  if (typeof body.message === 'string') return body.message
+  return typeof body.error === 'string' && body.error.includes(' ') ? body.error : fallback
+}
 
-const refusedFrom = (body: unknown, fallback: string): EnterResult => ({
-  kind: 'refused',
-  message: messageOf(body, fallback),
-  ...(isRecord(body) && typeof body.triesLeft === 'number' ? { triesLeft: body.triesLeft } : {}),
-  ...(isRecord(body) && typeof body.retryAfterMs === 'number' ? { retryAfterMs: body.retryAfterMs } : {})
-})
+const numberOf = (body: unknown, key: string): number | undefined =>
+  isRecord(body) && typeof body[key] === 'number' ? (body[key] as number) : undefined
 
-/** May this machine be entered with the account, and how. Null when it cannot say. */
-export async function pairOffer(deps: Pick<PairClientDeps, 'get'>): Promise<PairOffer | null> {
+const waits = (body: unknown): { retryAfterMs?: number } => {
+  const ms = numberOf(body, 'retryAfterMs')
+  return ms === undefined ? {} : { retryAfterMs: ms }
+}
+
+/** May this machine be entered with the account. Null when it cannot say. */
+export async function pairOffer(machine: Http): Promise<PairOffer | null> {
   try {
-    const answer = await deps.get(PAIR_PATHS.offer)
+    const answer = await machine.get(PAIR_PATHS.offer)
     if (answer.status !== 200 || !isRecord(answer.body)) return null
     const body = answer.body
-    const methods = Array.isArray(body.methods) ? body.methods.filter((m): m is PairMethod => m === 'password' || m === 'passkey') : []
     return {
-      offered: body.offered === true && methods.length > 0,
-      // Absent from an older machine: it could not tell, so it is not called unreachable.
-      reachable: body.reachable !== false,
+      offered: body.offered === true,
       desktopId: typeof body.desktopId === 'string' ? body.desktopId : null,
-      platform: typeof body.platform === 'string' ? body.platform : 'unknown',
-      methods
+      platform: typeof body.platform === 'string' ? body.platform : 'unknown'
     }
   } catch {
     return null
   }
 }
 
-const readChallenge = (body: unknown): PairChallenge | null => {
-  if (!isRecord(body)) return null
-  const { challengeId, nonce, desktopId, key, expiresAt } = body
-  if (typeof challengeId !== 'string' || typeof nonce !== 'string' || typeof desktopId !== 'string') return null
-  if (typeof key !== 'string' || typeof expiresAt !== 'number') return null
-  return body as unknown as PairChallenge
+/** A pass still good for more than the margin, for THIS device. */
+export function heldGrant(deps: Pick<PairClientDeps, 'grants' | 'now'>, deviceId: string): DeviceGrant | null {
+  const held = deps.grants.read()
+  const now = (deps.now ?? Date.now)()
+  return held !== null && held.deviceId === deviceId && held.exp - now > GRANT_MARGIN_MS ? held : null
 }
 
-const wireAssertion = (credential: Credential | null): PasskeyAssertionWire | null => {
+/** How this account can prove itself for a pass. Null when cookrew.dev cannot be asked. */
+export async function grantOptions(registry: Http): Promise<GrantOptions | null> {
+  try {
+    const answer = await registry.post(GRANT_PATHS.options, {})
+    return answer.status === 200 && isRecord(answer.body) ? (answer.body as unknown as GrantOptions) : null
+  } catch {
+    return null
+  }
+}
+
+const readGrant = (body: unknown): DeviceGrant | null =>
+  isRecord(body) && typeof body.grant === 'string' && typeof body.exp === 'number' && typeof body.deviceId === 'string'
+    ? { grant: body.grant, exp: body.exp, deviceId: body.deviceId }
+    : null
+
+const wireAssertion = (credential: Credential | null): Record<string, unknown> | null => {
   const held = credential as PublicKeyCredential | null
   const response = held?.response as AuthenticatorAssertionResponse | undefined
   if (!held || !response || !('authenticatorData' in response)) return null
   return {
     id: held.id,
-    clientDataJSON: b64u(response.clientDataJSON),
-    authenticatorData: b64u(response.authenticatorData),
-    signature: b64u(response.signature)
+    response: {
+      clientDataJSON: b64u(response.clientDataJSON),
+      authenticatorData: b64u(response.authenticatorData),
+      signature: b64u(response.signature)
+    }
   }
+}
+
+/** The passkey's answer to cookrew.dev's challenge, or why there is none. */
+async function passkeyBody(deps: PairClientDeps, options: GrantOptions): Promise<{ credential: Record<string, unknown> } | ProveResult> {
+  const asked = options.passkey
+  if (asked === null || deps.passkey === null) return { kind: 'failed', message: 'This browser cannot use a passkey here. Type the account password.' }
+  let request: CredentialRequestOptions
+  try {
+    request = {
+      publicKey: {
+        challenge: unb64u(asked.challenge),
+        rpId: asked.rpId,
+        timeout: asked.timeout,
+        userVerification: 'required',
+        allowCredentials: asked.allowCredentials.map((c) => ({ type: 'public-key' as const, id: unb64u(c.id) }))
+      }
+    }
+  } catch {
+    return { kind: 'failed', message: 'cookrew.dev sent a passkey request this browser cannot read.' }
+  }
+  let credential: Credential | null
+  try {
+    credential = await deps.passkey(request)
+  } catch {
+    return { kind: 'cancelled' }
+  }
+  const wire = wireAssertion(credential)
+  return wire === null ? { kind: 'cancelled' } : { credential: wire }
 }
 
 /**
- * ENTER. `password` for the typed way, null for the passkey. A passkey the
- * person dismissed is `cancelled`, not a refusal: nothing was asked of the
- * machine, and no try was spent.
+ * PROVE IT IS YOU, ONCE: `password` typed, or null for the passkey. The pass is
+ * stored only when cookrew.dev issued it; the password is never kept.
  */
-export async function enterWithAccount(deps: PairClientDeps, password: string | null, knownDesktopId: string | null = null): Promise<EnterResult> {
-  const device = await deps.device()
-  if (device === null) return { kind: 'no-device' }
-  if (password !== null && (password.length === 0 || password.length > ACCOUNT_PAIR_PASSWORD_MAX)) {
-    return { kind: 'refused', message: 'Type the account password.' }
-  }
-  // The begin is signed for THIS machine, so the device needs its id first.
-  const desktopId = knownDesktopId ?? (await pairOffer(deps))?.desktopId ?? null
-  if (desktopId === null) return { kind: 'refused', message: 'This machine did not say who it is. Try again.' }
-  const at = Date.now()
-  let beginSig: string
-  try {
-    beginSig = b64u(await device.sign(encoder.encode(pairBeginMessage(desktopId, device.id, at))))
-  } catch {
-    return { kind: 'failed', message: 'This browser could not sign with its cookrew.dev key. Sign in at cookrew.dev/me again.' }
-  }
-  const begun = await deps.post(PAIR_PATHS.begin, { deviceId: device.id, jwk: device.jwk, at, sig: beginSig })
-  const challenge = begun.status === 200 ? readChallenge(begun.body) : null
-  if (challenge === null) return refusedFrom(begun.body, 'This machine did not start an entry. Try again.')
-  const transcript = pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: device.id })
-  let proof: { kind: 'password'; sealed: string } | { kind: 'passkey'; credential: PasskeyAssertionWire }
+export async function proveForGrant(deps: PairClientDeps, password: string | null, options: GrantOptions): Promise<ProveResult> {
+  if (options.needsPassword) return { kind: 'needs-password' }
+  let body: Record<string, unknown>
   if (password !== null) {
-    proof = { kind: 'password', sealed: await sealForMac(challenge.key, sealedPasswordPlaintext(challenge.challengeId, password), ACCOUNT_PAIR_INFO) }
+    if (password.length === 0) return { kind: 'refused', message: 'Type the account password.' }
+    body = { password }
   } else {
-    if (challenge.passkey === null || deps.passkey === null) return { kind: 'refused', message: 'This account has no passkey this browser can use. Type the password instead.' }
-    let options: CredentialRequestOptions
-    try {
-      options = {
-        publicKey: {
-          challenge: unb64u(challenge.passkey.challenge),
-          rpId: challenge.passkey.rpId,
-          allowCredentials: challenge.passkey.allow.map((id) => ({ type: 'public-key' as const, id: unb64u(id) })),
-          userVerification: 'required',
-          timeout: 60_000
-        }
-      }
-    } catch {
-      return { kind: 'failed', message: 'This machine sent a passkey request this browser cannot read.' }
-    }
-    let credential: Credential | null
-    try {
-      credential = await deps.passkey(options)
-    } catch {
-      return { kind: 'cancelled' }
-    }
-    const wire = wireAssertion(credential)
-    if (wire === null) return { kind: 'cancelled' }
-    proof = { kind: 'passkey', credential: wire }
+    const made = await passkeyBody(deps, options)
+    if ('kind' in made) return made
+    body = made
   }
-  // The device signs the transcript AND the proof, so nobody between can swap a guess in under it.
-  let sig: string
-  try {
-    const digest = b64u(await crypto.subtle.digest('SHA-256', encoder.encode(pairProofDigestInput(proof))))
-    sig = b64u(await device.sign(encoder.encode(pairDeviceMessage(transcript, digest))))
-  } catch {
-    return { kind: 'failed', message: 'This browser could not sign with its cookrew.dev key. Sign in at cookrew.dev/me again.' }
+  const answer = await deps.registry.post(GRANT_PATHS.grant, body)
+  const grant = answer.status === 201 ? readGrant(answer.body) : null
+  if (grant !== null) {
+    deps.grants.write(grant)
+    return { kind: 'granted' }
   }
-  const finished = await deps.post(PAIR_PATHS.finish, {
-    challengeId: challenge.challengeId,
-    device: { deviceId: device.id, jwk: device.jwk, name: device.name },
-    sig,
-    proof
-  })
-  const answer = finished.body as PairAnswer | null
-  if (
-    finished.status === 200 &&
-    answer !== null &&
-    answer.ok === true &&
-    typeof answer.token === 'string' &&
-    answer.desktopId === challenge.desktopId
-  ) {
-    return { kind: 'entered', token: answer.token, desktopId: answer.desktopId }
+  if (answer.status === 409) return { kind: 'needs-password' }
+  const left = numberOf(answer.body, 'triesLeft')
+  return {
+    kind: 'refused',
+    message: messageOf(answer.body, 'cookrew.dev did not take that. Try again.'),
+    ...(left === undefined ? {} : { triesLeft: left }),
+    ...waits(answer.body)
   }
-  return refusedFrom(finished.body, 'This machine did not take that. Try again.')
 }
 
-/** The browser's own wiring: plain fetch at `base`, no credential on the request. */
-export function browserPairDeps(base: string, device: () => Promise<AccountDevice | null>): PairClientDeps {
-  const read = async (response: Response): Promise<{ status: number; body: unknown }> => {
-    let body: unknown = null
-    try {
-      body = await response.json()
-    } catch {
-      body = null
-    }
-    return { status: response.status, body }
+/** ENTER this machine with the held pass: its challenge, signed with this browser's key. */
+export async function enterWithGrant(deps: PairClientDeps, desktopId: string): Promise<EnterResult> {
+  const device = await deps.device()
+  if (device === null) return { kind: 'no-device' }
+  const grant = heldGrant(deps, device.id)
+  if (grant === null) return { kind: 'needs-proof' }
+  const asking = { deviceId: device.id, jwk: device.jwk, name: device.name }
+  const begun = await deps.machine.post(PAIR_PATHS.begin, { device: asking, grant: grant.grant })
+  const challenge = isRecord(begun.body) ? begun.body : null
+  if (challenge?.outcome === 'regrant') {
+    deps.grants.clear()
+    return { kind: 'needs-proof' }
   }
-  const credentials = typeof navigator !== 'undefined' ? navigator.credentials : undefined
+  if (begun.status !== 200 || challenge === null || typeof challenge.challengeId !== 'string' || typeof challenge.nonce !== 'string') {
+    return { kind: 'refused', message: messageOf(begun.body, 'This machine did not start an entry. Try again.'), ...waits(begun.body) }
+  }
+  if (challenge.desktopId !== desktopId) return { kind: 'failed', message: 'This is not the machine this page was opened for.' }
+  let sig: string
+  try {
+    const transcript = pairTranscript({ desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: device.id })
+    sig = b64u(await device.sign(encoder.encode(transcript)))
+  } catch {
+    return { kind: 'failed', message: 'This browser could not sign with its cookrew.dev key. Sign in at cookrew.dev/me again.' }
+  }
+  const finished = await deps.machine.post(PAIR_PATHS.finish, { challengeId: challenge.challengeId, device: asking, grant: grant.grant, sig })
+  const answer = finished.body as PairAnswer | null
+  if (finished.status === 200 && answer?.ok === true && typeof answer.token === 'string' && answer.desktopId === desktopId) {
+    return { kind: 'entered', token: answer.token, desktopId, until: answer.until }
+  }
+  if (isRecord(finished.body) && finished.body.outcome === 'regrant') {
+    deps.grants.clear()
+    return { kind: 'needs-proof' }
+  }
+  return { kind: 'refused', message: messageOf(finished.body, 'This machine did not take that. Try again.') }
+}
+
+const GRANT_KEY = 'cr_grant'
+
+/** The pass, in this origin's storage: one browser, one device key, one pass. */
+export function storageGrants(storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null): GrantStore {
   return {
-    get: async (path) => read(await fetch(`${base}${path}`, { cache: 'no-store', credentials: 'same-origin' })),
-    post: async (path, body) =>
-      read(
-        await fetch(`${base}${path}`, {
-          method: 'POST',
-          cache: 'no-store',
-          credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body)
-        })
-      ),
+    read: () => {
+      try {
+        const raw = storage?.getItem(GRANT_KEY)
+        return raw ? readGrant(JSON.parse(raw)) : null
+      } catch {
+        return null
+      }
+    },
+    write: (grant) => {
+      try {
+        storage?.setItem(GRANT_KEY, JSON.stringify(grant))
+      } catch {
+        // A browser that will not store it asks again next time.
+      }
+    },
+    clear: () => {
+      try {
+        storage?.removeItem(GRANT_KEY)
+      } catch {
+        // Nothing held.
+      }
+    }
+  }
+}
+
+const reader = async (response: Response): Promise<{ status: number; body: unknown }> => {
+  let body: unknown = null
+  try {
+    body = await response.json()
+  } catch {
+    body = null
+  }
+  return { status: response.status, body }
+}
+
+const httpAt = (base: string): Http => ({
+  get: async (path) => reader(await fetch(`${base}${path}`, { cache: 'no-store', credentials: 'same-origin' })),
+  post: async (path, body) =>
+    reader(
+      await fetch(`${base}${path}`, {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+    )
+})
+
+/** The browser's own wiring. */
+export function browserPairDeps(base: string, device: () => Promise<AccountDevice | null>): PairClientDeps {
+  const credentials = typeof navigator !== 'undefined' ? navigator.credentials : undefined
+  let storage: Storage | null = null
+  try {
+    storage = globalThis.localStorage ?? null
+  } catch {
+    storage = null
+  }
+  return {
+    machine: httpAt(base),
+    registry: httpAt(''),
     device,
-    passkey:
-      credentials && typeof globalThis.PublicKeyCredential === 'function'
-        ? (options) => credentials.get(options)
-        : null
+    passkey: credentials && typeof globalThis.PublicKeyCredential === 'function' ? (options) => credentials.get(options) : null,
+    grants: storageGrants(storage)
   }
 }
