@@ -12,6 +12,7 @@ import { challengeFor, challengeMatches, type Flow } from './v2-oauth-flows'
 import type { OAuthProvider, ProviderProof } from './v2-oauth-providers'
 import { readAndStepUp, stepUpHeld } from './v2-step-up'
 import { continuePasskey, mayStartStepUp } from './auth-passkey'
+import { continueStepUp, mayStartProvider } from './auth-step-up'
 import {
   OAUTH_LOOPBACK_PATH,
   OAUTH_SCHEME_HOST,
@@ -123,12 +124,16 @@ function startForRequest(ctx: V2Context, provider: OAuthProvider, request: AuthR
     return
   }
   if (!mayStartStepUp(ctx, request, provider.id)) return
+  if (request.intent === 'step-up' && !mayStartProvider(ctx, request, provider.id)) return
   const flow = ctx.v2.oauth.flows.open({
     provider: provider.id,
-    // A passkey request's trip is the owner's step-up for adding it.
+    // A passkey request's trip is the owner's step-up for adding it; a
+    // step-up request's is the step-up for its own one act.
     ...(request.intent === 'passkey'
       ? { intent: 'step-up' as const, act: 'add-factor' as const }
-      : { intent: request.intent === 'link' ? ('link' as const) : ('sign-in' as const) }),
+      : request.intent === 'step-up' && request.act !== null
+        ? { intent: 'step-up' as const, act: request.act }
+        : { intent: request.intent === 'link' ? ('link' as const) : ('sign-in' as const) }),
     clientState: 'auth-request',
     challenge: request.challenge,
     back: { scheme: false },
@@ -288,6 +293,10 @@ export function continueRequest(ctx: V2Context, request: AuthRequest): void {
   }
   if (request.intent === 'passkey') {
     continuePasskey(ctx, request, proof)
+    return
+  }
+  if (request.intent === 'step-up') {
+    continueStepUp(ctx, request, proof)
     return
   }
   if (request.intent !== 'link') {
