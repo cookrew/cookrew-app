@@ -109,7 +109,7 @@ describe('no surface carries a sentence the source already owns', () => {
     // an account-less Mac depends on.
     expect(REAUTH_COPY.unpaired.toLowerCase()).toContain('scan the qr')
     expect(REAUTH_COPY.unpaired).toContain('Pair a phone')
-    expect(REAUTH_COPY.unpaired).toContain('`cookrew mobile`')
+    expect(REAUTH_COPY.unpaired).toContain('`cookrew mobile --token`')
   })
 })
 

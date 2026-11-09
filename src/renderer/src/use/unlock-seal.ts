@@ -17,13 +17,14 @@ const keyBytes = (key: string): Uint8Array<ArrayBuffer> => {
   return new Uint8Array(bytes)
 }
 
-export async function sealForMac(key: string, plaintext: string): Promise<string> {
+/** `info` labels what the key seals; the unlock's is the default, the account pair passes its own. */
+export async function sealForMac(key: string, plaintext: string, info: string = UNLOCK_INFO): Promise<string> {
   const { subtle } = crypto
   const mac = await subtle.importKey('spki', keyBytes(key), { name: 'X25519' }, false, [])
   const mine = (await subtle.generateKey({ name: 'X25519' }, true, ['deriveBits'])) as CryptoKeyPair
   const shared = await subtle.deriveBits({ name: 'X25519', public: mac }, mine.privateKey, 256)
   const ikm = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits'])
-  const bits = await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode(`cookrew-relay/1 body ${UNLOCK_INFO}`) }, ikm, 256)
+  const bits = await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: encoder.encode(`cookrew-relay/1 body ${info}`) }, ikm, 256)
   const aes = await subtle.importKey('raw', bits, 'AES-GCM', false, ['encrypt'])
   // A zero nonce is sound here: this key is new and seals exactly one message.
   const sealed = await subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12), tagLength: 128 }, aes, encoder.encode(plaintext))

@@ -105,7 +105,8 @@ import {
   allowedCompanionOrigins,
   companionTokenAccepted,
   refreshMobileCert,
-  advertisedHostsNow
+  advertisedHostsNow,
+  mobileSelfOrigins
 } from './mobile-server'
 import { createDesktopCert, type DesktopCert } from './desktop-cert'
 import { createSecretsStore } from './secrets-store'
@@ -165,6 +166,8 @@ import type { LaneInfo, LandResult } from '../shared/model'
 import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
+import { createAccountPairDoor, pairMissesFile } from './account-pair'
+import { createAnchorSource } from './pair-anchors'
 import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
@@ -1315,6 +1318,29 @@ function publishDoorClaims(): void {
  * exactly as on the LAN, and none of the three has anything left to decide.
  */
 const admittedDevices = createAdmittedDeviceStore()
+
+/**
+ * ENTERING THIS MACHINE WITH THE ACCOUNT (owner 2026-11-09): a device of the
+ * account brings the account's password or a passkey, and THIS machine checks
+ * it against the anchors it reads from cookrew.dev with its own key — never on
+ * cookrew.dev's word (account-pair.ts). Built lazily: `accounts` is declared
+ * further down, and nothing calls the door before the mobile server starts.
+ */
+const accountPairDoor = createAccountPairDoor({
+  account: () => accounts.account(),
+  anchors: (() => {
+    const source = createAnchorSource({
+      fetch: () => accounts.pairAnchors(),
+      username: () => accounts.account()?.username ?? null
+    })
+    return () => source.get()
+  })(),
+  admitted: admittedDevices,
+  origins: () => [registryOrigin(), ...mobileSelfOrigins()],
+  platform: process.platform,
+  misses: pairMissesFile(path.join(homedir(), '.cookrew', 'pair-misses.json')),
+  log: (message: string) => console.error(`[cookrew] ${message}`)
+})
 
 /**
  * REACH v2.1 — THIS MAC'S OWN TRUSTED CERTIFICATE.
@@ -7816,7 +7842,8 @@ app.whenReady().then(() => {
       // phone waiting on cookrew.dev to learn the owner's initials is a phone
       // showing "?" every time the WAN is slow.
       profileFace: () => profileFace,
-      log: (message: string) => console.error(`[cookrew] ${message}`)
+      log: (message: string) => console.error(`[cookrew] ${message}`),
+      pairDoor: accountPairDoor
     },
     recoverAgent,
     restoreCheckpoint,

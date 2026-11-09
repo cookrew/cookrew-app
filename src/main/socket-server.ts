@@ -1927,6 +1927,8 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   return renderMobileHelp({
     endpoints,
     pairing: deps.pairingHandout(),
+    // `--token` alone or with any value: asking to see the secret is the act.
+    showToken: request.flags.token !== undefined && request.flags.token !== false,
     secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
     uncovered: deps.uncoveredCertHosts(),
     tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale'),

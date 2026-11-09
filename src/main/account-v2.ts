@@ -58,6 +58,7 @@ import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 import type { MachineProfile } from '../shared/fleet'
 import type { PasskeySummary } from '../shared/account-approvals'
+import { ANCHORS_PATH, ANCHORS_PROOF_HEADER, anchorsProofMessage } from '../shared/account-pair'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -650,6 +651,30 @@ export class Accounts {
     const links = [...(profile.value.links ?? [])].reverse()
     const link = links.find((held) => !held.paused) ?? links[0]
     return link === undefined ? { ok: false, reason: 'provider_required' } : { ok: true, value: link.provider }
+  }
+
+  /**
+   * THE ACCOUNT'S ANCHORS, for a device entering this machine with the account
+   * (account-pair.ts). The raw body or null: pair-anchors.ts reads it strictly.
+   *
+   * Signed with this machine's device key as well as carrying the bearer: the
+   * answer holds the password's scrypt record (registry/src/v2-pair-anchors.ts).
+   */
+  async pairAnchors(): Promise<unknown | null> {
+    const account = this.cached
+    if (account === null) return null
+    const at = this.now()
+    const sig = signWithDevice(account, anchorsProofMessage(account.deviceId, at))
+    const sent = await this.authedResponse(ANCHORS_PATH, {
+      method: 'GET',
+      headers: { [ANCHORS_PROOF_HEADER]: `${at}.${sig}` },
+    })
+    if (!sent.ok || sent.response.status !== 200) return null
+    try {
+      return (await sent.response.json()) as unknown
+    } catch {
+      return null
+    }
   }
 
   // ── the passcode: what unlocks a Mac where no password was typed ───────────

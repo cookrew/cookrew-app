@@ -53,7 +53,15 @@ export type AdmittedDevice = {
    * token.
    */
   readonly tokenHash?: string
+  /**
+   * WHAT LET IT IN: the root pairing token, or the account itself — its
+   * password or one of its passkeys, checked on this machine (account-pair.ts).
+   * Absent on rows written before it existed.
+   */
+  readonly via?: AdmittedVia
 }
+
+export type AdmittedVia = 'token' | 'password' | 'passkey'
 
 export type AdmittedDeviceStore = {
   readonly list: () => AdmittedDevice[]
@@ -105,7 +113,7 @@ export type AdmittedDeviceStore = {
    * second browser on the same phone does not leave two live credentials for
    * one device, and the row keeps its first `admittedAt`.
    */
-  readonly admit: (device: { deviceId: string; name?: string }) => {
+  readonly admit: (device: { deviceId: string; name?: string; via?: AdmittedVia }) => {
     device: AdmittedDevice
     token: string
   }
@@ -158,7 +166,8 @@ const looksLikeDevice = (value: unknown): value is AdmittedDevice => {
     typeof d.admittedAt === 'number' &&
     typeof d.lastSeenAt === 'number' &&
     (d.name === undefined || typeof d.name === 'string') &&
-    (d.tokenHash === undefined || typeof d.tokenHash === 'string')
+    (d.tokenHash === undefined || typeof d.tokenHash === 'string') &&
+    (d.via === undefined || d.via === 'token' || d.via === 'password' || d.via === 'passkey')
   )
 }
 
@@ -276,7 +285,7 @@ export const createAdmittedDeviceStore = (
     },
     accepts: (token) => holderOf(load(), token) !== null,
     deviceFor: (token) => holderOf(load(), token)?.deviceId ?? null,
-    admit: ({ deviceId, name }) => {
+    admit: ({ deviceId, name, via }) => {
       const at = now()
       const existing = load()
       const previous = existing.find((device) => device.deviceId === deviceId)
@@ -286,7 +295,8 @@ export const createAdmittedDeviceStore = (
         ...((name ?? previous?.name) ? { name: name ?? previous?.name } : {}),
         admittedAt: previous?.admittedAt ?? at,
         lastSeenAt: at,
-        tokenHash: hashToken(token)
+        tokenHash: hashToken(token),
+        ...(via ? { via } : {})
       }
       // Written BEFORE the token is answered: a token handed out ahead of a
       // write that then failed would be a credential this Mac never agreed to.

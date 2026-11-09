@@ -1,4 +1,5 @@
 import { V3_COPY, accountCopy } from '../../shared/account-copy'
+import { machineCopy } from '../../shared/machine-words'
 // Pairing credential + what happens when it stops working.
 //
 // THE FAILURE THIS REPLACES
@@ -161,14 +162,19 @@ export const REAUTH_COPY = {
   joinMismatch: V3_COPY['d10.mismatch'],
   readOnlyTitle: 'Read-only device',
   /**
-   * M5. The QR and the paste stay — an account-less Mac has no other way to
-   * let a phone in, and this card is still the only pairing surface. What is
-   * added is the door that did not exist when this sentence was written: a Mac
-   * on an account is asked with one tap on /me and answered on the Mac, so the
-   * reader is pointed there FIRST and at the old ceremony only if that is not
-   * their situation.
+   * The old doors, for a machine with no account (or a page that cannot ask
+   * the account). Owner 2026-11-09: on a machine of the account the card leads
+   * with the account (`enter*` below) and this sentence moves under a fold.
    */
   unpaired: V3_COPY['m5.unpaired'],
+  enterLede: V3_COPY['m5.enter.lede'],
+  enterPasskey: V3_COPY['m5.enter.passkey'],
+  enterPassword: V3_COPY['m5.enter.password'],
+  enterGo: V3_COPY['m5.enter.go'],
+  enterSignIn: V3_COPY['m5.enter.signin'],
+  enterElsewhere: V3_COPY['m5.enter.elsewhere'],
+  enterNone: V3_COPY['m5.enter.none'],
+  enterToken: V3_COPY['m5.enter.token'],
   readOnly:
     'This device is paired read-only. Open the pairing URL from the desktop to make changes.',
   label: 'Pairing URL or token',
@@ -178,12 +184,22 @@ export const REAUTH_COPY = {
   continueReadOnly: 'Continue read-only',
   shape: 'That is not a pairing URL or token. Paste the whole line the Mac printed.',
   refused:
-    'The Mac did not take that token. It may have been rotated — get it from the Mac again.'
+    'The Mac did not take that token. It may have been rotated — `cookrew mobile --token` on the Mac prints the current one.'
 } as const
 
+/**
+ * ONE SENTENCE IN THE MACHINE'S OWN WORD. The companion runs on a phone, so the
+ * platform is the MACHINE's, read from GET /api/pair. Until it is known the
+ * neutral word stands ("this machine"): "Mac" on a Linux box is the one thing
+ * this card must never say.
+ */
+export function machineSentence(sentence: string, platform: string | null): string {
+  return machineCopy(sentence, platform ?? 'unknown')
+}
+
 /** What to tell the user, given why they are blocked. */
-export function reauthMessage(scope: AuthScope): string {
-  return scope === 'read-only' ? REAUTH_COPY.readOnly : REAUTH_COPY.unpaired
+export function reauthMessage(scope: AuthScope, platform: string | null = null): string {
+  return machineSentence(scope === 'read-only' ? REAUTH_COPY.readOnly : REAUTH_COPY.unpaired, platform)
 }
 
 export function createAuthStore(input: AuthStoreInput): AuthStore {

@@ -35,6 +35,13 @@ const stretch = promisify(scrypt) as (
 const KEY_LEN = 32
 const SALT_LEN = 16
 
+/**
+ * THE COST, SAID ONCE FOR EVERY READER OF A RECORD. A machine of the account
+ * checks the password against this record itself (GET /v2/me/pair-anchors),
+ * so it has to stretch exactly as this file did.
+ */
+export const PASSWORD_COST = { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, keylen: KEY_LEN } as const
+
 export interface Hashed {
   /** base64url. */
   salt: string

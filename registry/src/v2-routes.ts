@@ -41,6 +41,7 @@ import { deleteAccount } from './v2-delete'
 import { handleAuthRoute } from './v2-auth-routes'
 import { authorizeSession } from './auth-finish'
 import { deviceFor } from './v2-factor-http'
+import { pairAnchorsRoute } from './v2-pair-anchors'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -672,6 +673,12 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // so the lock it put on signing in comes off.
     v2.factors.store.setMustChangePassword(account.username, false)
     noContent(response)
+    return
+  }
+  // The account's anchors, for a machine of it to check an entry itself
+  // (v2-pair-anchors.ts): desktops only, with a device-key signature.
+  if (rest.length === 1 && rest[0] === 'pair-anchors' && method === 'GET') {
+    pairAnchorsRoute(ctx, signed)
     return
   }
   if (rest.length === 1 && rest[0] === 'recovery-codes' && method === 'POST') {
