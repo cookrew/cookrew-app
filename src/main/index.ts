@@ -1453,8 +1453,8 @@ const sealTerminus = createSealTerminus({
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
-  // No account, or no passcode chosen yet: nothing could open this lock, so it
-  // does not close.
+  // No account, or a lock still waiting for the account password: nothing
+  // could open this lock, so it does not close.
   armed: () => accounts.lockable(),
   waiting: () => accounts.providerTripping(),
   onChange: (locked) => {

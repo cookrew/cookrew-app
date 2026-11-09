@@ -28,8 +28,8 @@ import { classify, plainRefusal } from './account-wire'
  * whose one-trip-at-a-time slot this shares (account-trip.ts).
  *
  * NO PASSWORD IS EVER IN HAND HERE, even when one was typed on the page. So a
- * landing goes through the same `land` a provider's does, and this Mac unlocks
- * with its own passcode or Touch ID.
+ * landing goes through the same `land` a provider's does, and this Mac's lock
+ * waits for the account password typed here once (account-v2.ts · lockWaits).
  *
  * AN OLDER REGISTRY HAS NO SUCH ROUTE, and a new app must keep working against
  * it. Its 404 (or anything that is not this wire's answer) is 'unsupported',

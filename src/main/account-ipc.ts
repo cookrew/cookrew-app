@@ -233,6 +233,7 @@ export const ACCOUNT_CHANNELS = [
   'account:browserLink',
   // ── the passcode, for a Mac where no password was typed ──
   'account:setPasscode',
+  'account:adoptPassword',
   'account:setTouchId',
   'account:unlockTouchId',
   'account:rescueUnlock',
@@ -340,7 +341,8 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     passwordPending: deps.accounts.passwordPending(),
     passwordless: account?.passwordless === true,
     unlockBy: deps.accounts.unlockMethod(),
-    passcodePending: deps.accounts.passcodePending(),
+    lockWaits: deps.accounts.lockWaits(),
+    fromTerminal: deps.accounts.isFromTerminal(),
     touchId: {
       available: deps.touchId?.available() ?? false,
       on: deps.accounts.touchIdOn(),
@@ -438,10 +440,19 @@ async function firstUnlock(deps: AccountIpcDeps, password: string): Promise<Unlo
   // rather than asserted away: if that ever changes, the lock has opened and
   // this must not be the code that argues about it.
   if (local.ok || local.reason === 'paused') return local
-  const proven = await deps.accounts.resume(password)
+  // Asked with this machine's own session (the pass route checks it and counts
+  // wrong tries): a fresh sign-in would now climb a second step (auth UX
+  // 2026-11-09), and this machine is already signed in.
+  const checked = await deps.accounts.checkAccountPassword(password)
+  // A DEAD SESSION CANNOT ASK, and there is no verifier to fall back on: a
+  // machine left idle past its session would be shut out by its own lock. So
+  // only then the password signs in afresh, as the first unlock always did
+  // (a ladder comes back `unproven`, in the registry's words).
+  const proven = !checked.ok && checked.reason === 'session-expired' ? await deps.accounts.resume(password) : checked
   if (proven.ok) {
+    deps.accounts.foldPasscode(password)
     deps.lock.proven()
-    return { ok: true, sessionRenewed: true }
+    return { ok: true, ...(checked.ok ? {} : { sessionRenewed: true }) }
   }
   if (proven.reason === 'bad_credentials' || proven.reason === 'session-expired') return local
   return {
@@ -1010,12 +1021,32 @@ async function oauthUnlink(deps: AccountIpcDeps, input: unknown): Promise<Accoun
 function setPasscode(deps: AccountIpcDeps, input: unknown): AccountResult<AccountStatus> {
   const fields = asRecord(input)
   if (deps.lock.locked) return LOCKED
-  if (deps.accounts.unlockMethod() === 'passcode' && !deps.accounts.passcodePending()) {
+  if (deps.accounts.unlockMethod() === 'passcode') {
     const checked = deps.lock.unlock(asString(fields.current))
     if (!checked.ok) return { ok: false, reason: checked.reason === 'paused' ? 'rate_limited' : 'bad_credentials' }
   }
   const set = deps.accounts.setPasscode(asString(fields.next))
   return set.ok ? { ok: true, value: accountStatus(deps) } : set
+}
+
+/**
+ * THE ACCOUNT PASSWORD, TYPED HERE ONCE (owner, 2026-11-09): a machine signed
+ * in from a terminal keeps its lock off until this; cookrew.dev confirms it
+ * through this machine's own session, and it becomes the lock.
+ */
+async function adoptPassword(deps: AccountIpcDeps, password: unknown): Promise<AccountResult<AccountStatus>> {
+  if (deps.lock.locked) return LOCKED
+  const typed = asString(password)
+  if (typed.length === 0) return { ok: false, reason: 'bad_credentials' }
+  // THE LOCAL LOCK COUNTS THESE TRIES TOO, as at the first unlock: five wrong
+  // ones buy a minute here, before cookrew.dev's own count is even reached.
+  const local = deps.lock.unlock(typed)
+  if (!local.ok && local.reason === 'paused') return { ok: false, reason: 'rate_limited' }
+  const checked = await deps.accounts.checkAccountPassword(typed)
+  if (!checked.ok) return checked
+  deps.accounts.foldPasscode(typed)
+  deps.lock.proven()
+  return { ok: true, value: accountStatus(deps) }
 }
 
 /** Turning it on needs a passing touch: it proves a finger is enrolled here. */
@@ -1271,6 +1302,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:browserResume': () => browserResume(deps),
     'account:browserLink': (input: unknown) => browserLink(deps, input),
     'account:setPasscode': (input: unknown) => setPasscode(deps, input),
+    'account:adoptPassword': (password: unknown) => adoptPassword(deps, password),
     'account:setTouchId': (on: unknown) => setTouchId(deps, on),
     'account:unlockTouchId': () => unlockTouchId(deps),
     'account:rescueUnlock': (code: unknown) => rescueUnlock(deps, code),
@@ -1313,6 +1345,21 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
  * and its desktop is filed the same way.
  */
 export function accountDoor(deps: AccountIpcDeps, platform: string = process.platform): AccountDoor {
+  /**
+   * A MACHINE FIRST SIGNED IN THROUGH THIS DOOR is `cookrew login`'s: nobody
+   * is at its screen (account-v2.ts · fromTerminal), whichever rung it landed
+   * on. Only a NEW sign-in is marked: renewing the session of a machine a
+   * person signed in at must not switch its working lock off. Marked before
+   * the renderer can ask: `account:changed` makes it read the status in a
+   * round trip, which this microtask is always ahead of.
+   */
+  const terminal = <T extends { ok: boolean }>(land: () => Promise<T>): Promise<T> => {
+    const fresh = deps.accounts.account() === null
+    return land().then((result) => {
+      if (result.ok && fresh) deps.accounts.markFromTerminal()
+      return result
+    })
+  }
   return {
     platform,
     who: () => {
@@ -1320,7 +1367,7 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
       return {
         username: account?.username ?? null,
         passwordless: deps.accounts.isPasswordless(),
-        passcodePending: deps.accounts.passcodePending(),
+        lockWaits: deps.accounts.lockWaits(),
         deviceId: account?.deviceId ?? '',
         deviceName: account?.name ?? '',
         sessionLive: deps.accounts.sessionLive(),
@@ -1328,17 +1375,17 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
         mismatch: account === null ? null : deps.accounts.registryMismatch(),
       }
     },
-    signIn: (input) => signIn(deps, input),
-    resume: (password) => resume(deps, password),
-    climbCode: (pending, factor, code) => resumeCode(deps, { pending, factor, code }),
+    signIn: (input) => terminal(() => signIn(deps, input)),
+    resume: (password) => terminal(() => resume(deps, password)),
+    climbCode: (pending, factor, code) => terminal(() => resumeCode(deps, { pending, factor, code })),
     askApproval: (pending) => deps.accounts.resumeAsk(pending),
-    waitApproval: (pending, signal) => resumeWait(deps, pending, signal),
+    waitApproval: (pending, signal) => terminal(() => resumeWait(deps, pending, signal)),
     abandon: (pending) => deps.accounts.abandonSignIn(pending),
     signOut: (password) => signOut(deps, password),
     devices: () => deps.accounts.devices(),
-    providerDevice: (onCode, signal) => deviceSignIn(deps, onCode, signal),
-    browserDevice: (onCode, signal, username) => browserTerminal(deps, onCode, signal, username),
-    providerClaim: (username) => oauthClaim(deps, username),
+    providerDevice: (onCode, signal) => terminal(() => deviceSignIn(deps, onCode, signal)),
+    browserDevice: (onCode, signal, username) => terminal(() => browserTerminal(deps, onCode, signal, username)),
+    providerClaim: (username) => terminal(() => oauthClaim(deps, username)),
     abandonClaim: () => deps.accounts.providerForget(),
   }
 }

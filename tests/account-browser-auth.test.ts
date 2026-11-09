@@ -91,7 +91,6 @@ function withAccount(live: boolean, over: Partial<AccountFile> = {}): { base: st
     registry: ORIGIN,
     session: { token: 'tok-old', exp: live ? NOW + DAY : NOW - DAY },
     unlock: null,
-    unlockBy: 'passcode',
     lockAfterMs: 900_000,
     claimedAt: NOW - DAY,
     workspacesReachable: true,
@@ -159,18 +158,23 @@ describe('signing in through the browser, on a Mac with no account', () => {
     expect(sha256(String(spent.body.verifier))).toBe(asked.challenge)
 
     const file = loadAccount(m.base)
-    expect(file).toMatchObject({ username: 'octo', deviceId: device.id, unlock: null, unlockBy: 'passcode', passwordless: true })
+    expect(file).toMatchObject({ username: 'octo', deviceId: device.id, unlock: null, passwordless: true })
+    expect(file?.unlockBy).toBeUndefined()
+    expect(m.app.lockWaits()).toBe('set-password')
     expect(file?.publicKeyJwk).toEqual(device.jwk)
     expect(file?.session?.token).toBe('tok-new')
   })
 
-  it('an account with a password typed on the page still unlocks here with a passcode', async () => {
+  it('an account with a password typed on the page asks nothing here: the first unlock takes it', async () => {
     const m = mac()
     m.registry.hasPassword = true
     expect((await m.app.browserSignIn('sign-in')).ok).toBe(true)
     const file = loadAccount(m.base)
-    expect(file).toMatchObject({ unlock: null, unlockBy: 'passcode' })
+    expect(file).toMatchObject({ unlock: null })
+    expect(file?.unlockBy).toBeUndefined()
     expect(file?.passwordless).toBeUndefined()
+    expect(m.app.lockWaits()).toBeNull()
+    expect(m.app.passwordPending()).toBe(true)
   })
 
   it('names the screen to open on, and a prefill when there is one', async () => {
@@ -310,7 +314,8 @@ describe('resuming an ended session through the browser', () => {
     expect(m.registry.opened?.device).toEqual({ id: file.deviceId, kind: 'desktop', name: 'MacBook Pro', jwk: file.publicKeyJwk })
     expect(m.registry.proofs).toEqual([true])
     const after = loadAccount(base)
-    expect(after).toMatchObject({ username: 'octo', deviceId: file.deviceId, unlockBy: 'passcode', unlock: null })
+    expect(after).toMatchObject({ username: 'octo', deviceId: file.deviceId, unlock: null })
+    expect(after?.unlockBy).toBeUndefined()
     expect(after?.privateKeyJwk).toEqual(file.privateKeyJwk)
     expect(after?.session?.token).toBe('tok-new')
     expect(m.app.sessionLive()).toBe(true)
@@ -529,7 +534,8 @@ describe('the terminal: a code to type, and a poll', () => {
     expect(polls).toHaveLength(3)
     expect(Object.keys(polls[0].body).sort()).toEqual(['request', 'verifier'])
     expect(polls[0].body.request).toBe('req-1')
-    expect(loadAccount(m.base)).toMatchObject({ username: 'octo', name: 'Linux · box', unlockBy: 'passcode' })
+    expect(loadAccount(m.base)).toMatchObject({ username: 'octo', name: 'Linux · box' })
+    expect(loadAccount(m.base)?.unlockBy).toBeUndefined()
   })
 
   it('says denied and expired apart', async () => {

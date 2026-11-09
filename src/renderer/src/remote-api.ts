@@ -917,7 +917,8 @@ export function createRemoteApi(): CookrewApi {
         // The same: how the Mac unlocks is the Mac's own, and a phone has no lock.
         passwordless: false,
         unlockBy: 'password',
-        passcodePending: false,
+        lockWaits: null,
+        fromTerminal: false,
         touchId: { available: false, on: false },
         // Which registry the DESKTOP is pointed at is the desktop's business
         // and the desktop's screen; a phone reading the companion cannot know
