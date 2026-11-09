@@ -44,11 +44,16 @@ struct CardHead: View {
   var body: some View {
     HStack(alignment: .center, spacing: 5) {
       // Out of this agent, to its crew: the chevron says it, and the face does it too.
+      // Out of this agent: the chevron and the face, one target a finger finds (44 pt tall,
+      // clear of the glass's rounded corner), and a swipe right anywhere on the card does the same.
       Button(action: onFace) {
-        HStack(spacing: 3) {
+        HStack(spacing: 2) {
           OutChevron()
           InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 34, weight: .large)
         }
+        .padding(.vertical, 5)
+        .padding(.trailing, 4)
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -456,9 +461,9 @@ struct OutChevron: View {
 
   var body: some View {
     Image(systemName: "chevron.left")
-      .font(.system(size: 14, weight: .semibold))
+      .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(ink.sealText)
-      .frame(width: 14, height: 30)
+      .frame(width: 18, height: 30)
   }
 }
 

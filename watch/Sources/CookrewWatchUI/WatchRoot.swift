@@ -481,6 +481,13 @@ struct ZoomStack: View {
     if case .cards = path.last { path.removeLast() }
   }
 
+  /** A swipe right across a card: one step out, as the system's back swipe is elsewhere. The pages go up and down, so sideways is free. */
+  private var swipeOut: some Gesture {
+    DragGesture(minimumDistance: 24).onEnded { drag in
+      if isSwipeOut(dx: drag.translation.width, dy: drag.translation.height) { stepOut() }
+    }
+  }
+
   @ViewBuilder private func itemPage(_ item: CardItem) -> some View {
     switch item.kind {
     case .browser: BrowserPage(store: store, item: item).wholeGlass()
@@ -497,6 +504,7 @@ struct ZoomStack: View {
           path.append(.item(item.id))
         })
         .wholeGlass()
+        .simultaneousGesture(swipeOut)
         .tag(Optional(card.id))
       }
       NewAgentPage(store: store, onThisWatch: { path.append(.thisWatch) }, onOut: stepOut).wholeGlass().tag(Optional(newAgentPage))

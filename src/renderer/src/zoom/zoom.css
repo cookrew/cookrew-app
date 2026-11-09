@@ -2084,3 +2084,25 @@
     white-space: nowrap;
   }
 }
+
+/* ── this machine's one proof to the account's others (MachineTrustRow) ── */
+.zv-trust {
+  margin: 6px 0;
+  font: 500 12px/1.4 var(--zv-mono, ui-monospace, monospace);
+  color: var(--ink-muted, #6f675b);
+  text-align: center;
+}
+.zv-trust-go {
+  display: block;
+  margin: 6px auto;
+  padding: 6px 12px;
+  border: 1px solid var(--ink-hair2, rgba(29, 26, 22, 0.16));
+  border-radius: 999px;
+  background: var(--ink-card, #fbf8f1);
+  color: var(--ink-ink, #1d1a16);
+  cursor: pointer;
+}
+.zv-trust-go:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
