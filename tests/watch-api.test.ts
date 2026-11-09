@@ -334,7 +334,7 @@ describe('through the real gate', () => {
     expect((await post('/api/watch/code', token)).status).toBe(401)
     expect((await post('/api/watch/code', null)).status).toBe(401)
     expect((await call('/api/watch/pairing', token)).status).toBe(401)
-    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password', sealed: true, claims: 1, platform: 'darwin' })
+    expect(await (await call('/api/watch/pairing', PAIRING)).json()).toEqual({ paired: true, pending: null, account: 'password', sealed: true, claims: 1, platform: process.platform })
   })
 
   it('a watch token reads the cards; none, a junk one or the wall’s does not', async () => {
