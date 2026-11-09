@@ -6,13 +6,16 @@ import { describe, expect, it } from 'vitest'
 import {
   cpuPercentOf,
   cpuTimesOf,
+  drmCardIsGpu,
+  pciDeviceIsGpu,
+  parseGpuBusyPercent,
   parseIoregGpu,
   parseNvidiaSmi,
   parseProcMeminfo,
   parseProcStat,
   parseSysctlMemory
 } from '../src/main/machine-gauges-parse'
-import { gaugeCells, memoryTone, NO_READING, parseMachineGauges, type MachineGauges } from '../src/shared/machine-gauges'
+import { gaugeCells, memoryTone, NO_GPU, NO_READING, parseMachineGauges, type MachineGauges } from '../src/shared/machine-gauges'
 import { pressureOf } from '../src/main/machine-pressure'
 import * as fx from './zoom-gauges-fixtures'
 
@@ -23,6 +26,7 @@ const reading = (over: Partial<MachineGauges> = {}): MachineGauges => ({
   memory: { usedBytes: 14.4 * GB, totalBytes: 16 * GB, swapUsedBytes: 7 * GB, kernelLevel: 1 },
   disk: { freeBytes: 212e9, totalBytes: 994e9 },
   gpuPercent: 12,
+  gpuAbsent: false,
   ...over
 })
 const cell = (g: MachineGauges, key: string) => gaugeCells(g).find((c) => c.key === key)!
@@ -105,6 +109,43 @@ describe('nvidia-smi', () => {
   })
 })
 
+describe('gpu_busy_percent', () => {
+  it('reads the one number amdgpu writes there', () => {
+    expect(parseGpuBusyPercent('37\n')).toBe(37)
+    expect(parseGpuBusyPercent('0\n')).toBe(0)
+  })
+  it('anything else is no reading, never 0, and never past 100', () => {
+    for (const text of ['', '\n', '-1', 'busy', '3.5']) expect(parseGpuBusyPercent(text)).toBeNull()
+    expect(parseGpuBusyPercent('150')).toBe(100)
+  })
+})
+
+describe('a DRM card’s uevent', () => {
+  it('a real GPU is one, whether or not its driver counts busy time', () => {
+    for (const uevent of [fx.UEVENT_AMDGPU, fx.UEVENT_I915, fx.UEVENT_NVIDIA]) expect(drmCardIsGpu(uevent)).toBe(true)
+  })
+  it('a firmware framebuffer, a hypervisor’s VGA or a BMC’s display is not', () => {
+    for (const uevent of [fx.UEVENT_SIMPLEDRM, fx.UEVENT_AMAZON_VGA, fx.UEVENT_ASPEED, 'DRIVER=bochs-drm\nPCI_ID=1234:1111\n']) expect(drmCardIsGpu(uevent)).toBe(false)
+  })
+  it('a card nobody recognises counts as a GPU: unsure is no reading, never a none that might be false', () => {
+    expect(drmCardIsGpu('')).toBe(true)
+    expect(drmCardIsGpu('DRIVER=panfrost\n')).toBe(true)
+  })
+})
+
+describe('a PCI device', () => {
+  it('a display or 3D controller is a GPU, bound to a driver or not', () => {
+    expect(pciDeviceIsGpu('0x030200\n', '0x10de\n')).toBe(true)
+    expect(pciDeviceIsGpu('0x030000\n', '0x8086\n')).toBe(true)
+    expect(pciDeviceIsGpu('0x038000\n', '0x1002\n')).toBe(true)
+  })
+  it('a hypervisor’s or a BMC’s display is not, and nothing outside class 0x03 is', () => {
+    expect(pciDeviceIsGpu('0x030000\n', '0x1d0f\n')).toBe(false)
+    expect(pciDeviceIsGpu('0x030000\n', '0x1a03\n')).toBe(false)
+    expect(pciDeviceIsGpu('0x010802\n', '0x10de\n')).toBe(false)
+  })
+})
+
 describe('os.cpus deltas', () => {
   const core = (user: number, sys: number, idle: number) => ({ times: { user, nice: 0, sys, idle, irq: 0 } })
   it('sums every core', () => {
@@ -135,7 +176,24 @@ describe('the wire', () => {
   })
   it('a field out of shape becomes no reading rather than a wrong number on the page', () => {
     const parsed = parseMachineGauges({ ...reading(), cpuPercent: 900, gpuPercent: '12', disk: { freeBytes: -1, totalBytes: 10 }, memory: { usedBytes: 1 } })
-    expect(parsed).toEqual({ at: 1, cpuPercent: null, memory: null, disk: null, gpuPercent: null })
+    expect(parsed).toEqual({ at: 1, cpuPercent: null, memory: null, disk: null, gpuPercent: null, gpuAbsent: false })
+  })
+  it('keeps a machine that has no GPU apart from a GPU that could not be read', () => {
+    expect(parseMachineGauges(reading({ gpuPercent: null, gpuAbsent: true }))?.gpuAbsent).toBe(true)
+    expect(parseMachineGauges(reading({ gpuPercent: null, gpuAbsent: false }))?.gpuAbsent).toBe(false)
+  })
+  it('a reading sent before there was a word for no GPU reads exactly as it did: a null GPU is no reading', () => {
+    const { gpuAbsent: _, ...old } = reading({ gpuPercent: null })
+    expect(parseMachineGauges(old)).toEqual(reading({ gpuPercent: null, gpuAbsent: false }))
+    const { gpuAbsent: __, ...oldBusy } = reading()
+    expect(parseMachineGauges(oldBusy)).toEqual(reading())
+  })
+  it('a percent outranks a claim of no GPU, and only true is a claim', () => {
+    expect(parseMachineGauges(reading({ gpuPercent: 12, gpuAbsent: true }))).toMatchObject({ gpuPercent: 12, gpuAbsent: false })
+    for (const raw of ['true', 1, 'none', null]) expect(parseMachineGauges({ ...reading({ gpuPercent: null }), gpuAbsent: raw })?.gpuAbsent).toBe(false)
+  })
+  it('the GPU percent keeps its name, so a client that has never heard of gpuAbsent still reads no reading, as before', () => {
+    expect(JSON.parse(JSON.stringify(reading({ gpuPercent: null, gpuAbsent: true })))).toHaveProperty('gpuPercent', null)
   })
 })
 
@@ -220,6 +278,15 @@ describe('the cells', () => {
     expect(gpu.value).not.toContain('0%')
     expect(gpu.share).toBeNull()
     expect(gpu.tone).toBe('calm')
+  })
+  it('a machine with no GPU says none, with no bar, and never no reading: it is an answer, not a failure', () => {
+    const gpu = cell(reading({ gpuPercent: null, gpuAbsent: true }), 'gpu')
+    expect(gpu).toEqual({ key: 'gpu', label: 'GPU', value: NO_GPU, sub: null, share: null, tone: 'calm' })
+    expect(NO_GPU).toBe('none')
+    expect(NO_GPU).not.toBe(NO_READING)
+  })
+  it('keeps the GPU cell for a machine with none: the panel is one grid, and a dropped cell would pull the next machine into its column', () => {
+    expect(gaugeCells(reading({ gpuPercent: null, gpuAbsent: true })).map((c) => c.key)).toEqual(['cpu', 'memory', 'disk', 'gpu'])
   })
   it('a GPU really at rest does say 0%', () => {
     expect(cell(reading({ gpuPercent: 0 }), 'gpu').value).toBe('0%')

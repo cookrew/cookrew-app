@@ -103,3 +103,61 @@ export const NVIDIA_SMI_TWO = `12
 /** A passively cooled card with no counter. */
 export const NVIDIA_SMI_NA = `[N/A]
 `
+
+/** /sys/class/drm on Solis-Core, an EC2 box: the hypervisor's VGA (lspci: Amazon 1111) has a card, and no driver counts it busy. */
+export const DRM_EC2 = ['card0', 'card0-Virtual-1', 'version']
+/** A box with two amdgpu cards: the connectors and render nodes beside them are not cards. */
+export const DRM_TWO_AMD = ['card0', 'card0-DP-1', 'card1', 'card1-HDMI-A-1', 'renderD128', 'renderD129', 'version']
+/** A card's device directory when its driver counts busy time (amdgpu), and when it does not. */
+export const DRM_DEVICE_COUNTS = ['boot_vga', 'device', 'driver', 'gpu_busy_percent', 'mem_busy_percent', 'vendor']
+export const DRM_DEVICE_SILENT = ['boot_vga', 'device', 'driver', 'vendor']
+
+/** card0's device/uevent on an EC2 box: the firmware's framebuffer, a picture and nothing to compute with. */
+export const UEVENT_SIMPLEDRM = `DRIVER=simple-framebuffer
+MODALIAS=platform:simple-framebuffer
+`
+/** The same Amazon VGA (lspci 1d0f:1111) if a plain driver ever binds it. */
+export const UEVENT_AMAZON_VGA = `PCI_CLASS=30000
+PCI_ID=1D0F:1111
+PCI_SLOT_NAME=0000:00:03.0
+`
+/** A server's BMC display. */
+export const UEVENT_ASPEED = `DRIVER=ast
+PCI_CLASS=30000
+PCI_ID=1A03:2000
+PCI_SLOT_NAME=0000:02:00.0
+`
+export const UEVENT_AMDGPU = `DRIVER=amdgpu
+PCI_CLASS=30000
+PCI_ID=1002:73BF
+PCI_SUBSYS_ID=1DA2:E445
+PCI_SLOT_NAME=0000:03:00.0
+MODALIAS=pci:v00001002d000073BFsv00001DA2sd0000E445bc03sc00i00
+`
+/** An Intel laptop: a real GPU whose driver keeps no gpu_busy_percent. */
+export const UEVENT_I915 = `DRIVER=i915
+PCI_CLASS=30000
+PCI_ID=8086:9A49
+PCI_SLOT_NAME=0000:00:02.0
+`
+export const UEVENT_NVIDIA = `DRIVER=nvidia
+PCI_CLASS=30000
+PCI_ID=10DE:1EB8
+PCI_SLOT_NAME=0000:00:1e.0
+`
+/** nvidia-smi on a CPU instance built from a GPU image: the tool is there, the card is not. It exits 6 and says so on stdout. */
+export const NVIDIA_SMI_NO_DEVICES = `No devices were found
+`
+
+/** /sys/bus/pci/devices on Solis-Core: host bridge, the Amazon VGA, NVMe, ENA. `class` and `vendor` per device. */
+export const PCI_EC2: Record<string, { class: string; vendor: string }> = {
+  '0000:00:00.0': { class: '0x060000\n', vendor: '0x8086\n' },
+  '0000:00:03.0': { class: '0x030000\n', vendor: '0x1d0f\n' },
+  '0000:00:04.0': { class: '0x010802\n', vendor: '0x1d0f\n' },
+  '0000:00:05.0': { class: '0x020000\n', vendor: '0x1d0f\n' }
+}
+/** A g4dn before its NVIDIA driver is installed: the T4 is on the bus as a 3D controller, and no driver has made a card of it. */
+export const PCI_G4DN_NO_DRIVER: Record<string, { class: string; vendor: string }> = {
+  ...PCI_EC2,
+  '0000:00:1e.0': { class: '0x030200\n', vendor: '0x10de\n' }
+}

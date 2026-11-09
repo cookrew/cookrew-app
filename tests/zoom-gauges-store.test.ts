@@ -16,7 +16,7 @@ import {
 import { fetchGauges, GAUGE_FETCH_TIMEOUT_MS, relayDesktopGauges } from '../src/renderer/src/relay-gauges'
 import type { MachineGauges } from '../src/shared/machine-gauges'
 
-const reading = (at: number): MachineGauges => ({ at, cpuPercent: 10, memory: null, disk: null, gpuPercent: null })
+const reading = (at: number): MachineGauges => ({ at, cpuPercent: 10, memory: null, disk: null, gpuPercent: null, gpuAbsent: false })
 const flush = async (): Promise<void> => {
   await vi.advanceTimersByTimeAsync(0)
 }
