@@ -69,7 +69,7 @@ describe('with a picture in the draft', () => {
   })
 
   it('a name still being typed waits, as it does without a picture', () => {
-    expect(lineTextFor(withShownWords(A, '@Ot'), 'me', null, ['Other'])).toBe('')
+    expect(lineTextFor(withShownWords(A, '@Ot'), 'me', null, agents)).toBe('')
     expect(lineTextFor(withShownWords(A, 'see #No'), 'me', null, [], [{ name: 'Notes', kind: 'note' } as never])).toBe(`see  ${A}`)
   })
 })

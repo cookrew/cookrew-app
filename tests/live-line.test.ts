@@ -134,7 +134,7 @@ describe('keysFor', () => {
 })
 
 describe('lineTextFor', () => {
-  const names = ['Forge', 'Fresco', 'Probe6']
+  const names = [{ id: 'f1', name: 'Forge' }, { id: 'f2', name: 'Fresco' }, { id: 'a1', name: 'Probe6' }]
   it('a plain draft is the line', () => {
     expect(lineTextFor('fix the bug', 'a1', null, names)).toBe('fix the bug')
   })
@@ -148,6 +148,13 @@ describe('lineTextFor', () => {
     expect(lineTextFor('@F', 'a1', null, names)).toBe('')
     expect(lineTextFor('@fre', 'a1', null, names)).toBe('')
     expect(lineTextFor('@src/main.ts', 'a1', null, names)).toBe('@src/main.ts')
+  })
+
+  it('a teammate named among the words goes in as the command that asks them', () => {
+    expect(lineTextFor('check with @Forge first', 'a1', null, names)).toBe('check with cookrew ask "Forge" first')
+    expect(lineTextFor('check with @For', 'a1', null, names)).toBe('check with ')
+    // Itself is no teammate: its own name stays as it was typed.
+    expect(lineTextFor('you are @Probe6', 'a1', null, names)).toBe('you are @Probe6')
   })
 })
 
