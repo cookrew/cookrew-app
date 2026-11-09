@@ -95,7 +95,10 @@ function AskPane({
       ) : !sealed ? (
         <p className="gs-consequence">{inviteRefusal('not_sealed')}</p>
       ) : (
-        <p className="gs-consequence">It joins your account and can read and answer your agents from anywhere. It can't open a terminal.</p>
+        <p className="gs-consequence">
+          It joins your account and works your agents from anywhere: it reads and answers them, starts new ones in any workspace, and taps and types in
+          their browser pages. It can't open a shell.
+        </p>
       )}
       {needsPassword && (
         <>
