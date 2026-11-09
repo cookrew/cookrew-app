@@ -1,3 +1,4 @@
+import { type SessionAge, type VerifiedBy } from './v2-session-age'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -132,7 +133,7 @@ export interface V2Desktop {
   updatedAt: number
 }
 
-export interface V2Session {
+export interface V2Session extends SessionAge {
   jti: string
   dev: string
   issuedAt: number
@@ -729,10 +730,28 @@ export class V2Accounts {
 
   // ── sessions ───────────────────────────────────────────────────────────
 
-  startSession(username: string, deviceId: string): V2Session | null {
+  /**
+   * A new sitting. `signedInAt` is carried forward by a renewal (the thirty days
+   * run from the sign-in, not from the last renewal); `verifiedBy` marks a
+   * sitting that was just proved, which opens the five-minute window for
+   * sensitive acts (v2-session-age.ts).
+   */
+  startSession(
+    username: string,
+    deviceId: string,
+    age: { signedInAt?: number; verifiedBy?: VerifiedBy } = {}
+  ): V2Session | null {
     const account = this.get(username)
     if (!account || !account.devices.some((d) => d.id === deviceId)) return null
-    const session: V2Session = { jti: randomUUID(), dev: deviceId, issuedAt: this.now() }
+    const at = this.now()
+    const session: V2Session = {
+      jti: randomUUID(),
+      dev: deviceId,
+      issuedAt: at,
+      signedInAt: age.signedInAt ?? at,
+      lastUsedAt: at,
+      ...(age.verifiedBy === undefined ? {} : { verifiedAt: at, verifiedBy: age.verifiedBy })
+    }
     // Bounded: the oldest goes so a long-lived account cannot grow a list
     // nobody reads into a file nobody can load.
     const sessions = [...account.sessions, session].slice(-SESSIONS_MAX)
@@ -797,6 +816,22 @@ export class V2Accounts {
     if (!device) return null
     if (!account.sessions.some((s) => s.jti === claims.jti)) return null
     return { account, device }
+  }
+
+  /** The sitting this token names, or null. */
+  session(username: string, jti: string): V2Session | null {
+    return this.get(username)?.sessions.find((s) => s.jti === jti) ?? null
+  }
+
+  /** This sitting just proved itself again: the five-minute window opens from now. */
+  markVerified(username: string, jti: string, by: VerifiedBy): void {
+    const account = this.get(username)
+    if (!account || !account.sessions.some((s) => s.jti === jti)) return
+    const at = this.now()
+    this.replace({
+      ...account,
+      sessions: account.sessions.map((s) => (s.jti === jti ? { ...s, verifiedAt: at, verifiedBy: by } : s))
+    })
   }
 
   /** Last seen, for the Devices list. Written on a read, so it stays honest. */
