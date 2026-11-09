@@ -6,7 +6,8 @@
  * went nowhere. A wake that cannot work is not a promise to make.
  */
 export interface LaunchFailure {
-  kind: 'folder-missing' | 'folder-not-directory' | 'command-missing' | 'exited'
+  /** folder-untrusted: Claude would sit on its trust question, which Cookrew does not answer for a broad folder. */
+  kind: 'folder-missing' | 'folder-not-directory' | 'folder-untrusted' | 'command-missing' | 'exited'
   /** One line: what is wrong, naming the folder or the command. */
   why: string
   /** One line: what to do about it. */
