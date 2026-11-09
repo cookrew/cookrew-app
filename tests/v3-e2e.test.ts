@@ -1,3 +1,4 @@
+import { registerMac } from './support/register-mac'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -84,6 +85,13 @@ function machine(name: string): { base: string; accounts: Accounts } {
   return { base, accounts: new Accounts({ base, origin, deviceName: name }) }
 }
 
+/** A Mac that has registered `username` the way a person now does (support/register-mac.ts). */
+async function registeredMachine(name: string, username: string): Promise<{ base: string; accounts: Accounts }> {
+  const made = machine(name)
+  const registered = await registerMac({ origin, base: made.base, username, password: PASSWORD, name })
+  return { base: made.base, accounts: registered.accounts }
+}
+
 /** Raw HTTP, for the routes the app has no method for yet. */
 async function call(
   method: string,
@@ -162,10 +170,10 @@ afterAll(async () => {
 
 describe('step 1 — Mac A registers @drej', () => {
   it('writes an id that is a function of the key, and stands alone on /v2/me', async () => {
-    ownerMac = machine('Mac A')
+    // A password is the first step only (auth UX 2026-11-09): the Mac's key is
+    // attached, an authenticator is set up and the codes saved before a session.
+    ownerMac = await registeredMachine('Mac A', OWNER)
     const macA = ownerMac
-    const claimed = await macA.accounts.claim({ username: OWNER, password: PASSWORD })
-    expect(claimed.ok).toBe(true)
 
     // f(jwk), recomputed here from the PUBLIC key the file kept: the id is
     // derived, never issued, so the same key on a restored backup is the same
@@ -291,10 +299,7 @@ describe('the seat spine steps 8 and 10 ride on', () => {
    */
   it('hands a seated guest a call token, and refuses the next one once the seat ends', async () => {
     const owner = ownerMac
-    const guest = machine('Guest Mac')
-    expect(await guest.accounts.claim({ username: 'lin', password: PASSWORD })).toMatchObject({
-      ok: true
-    })
+    const guest = await registeredMachine('Guest Mac', 'lin')
     const ownerToken = sessionToken(owner.base)
     const guestToken = sessionToken(guest.base)
 
@@ -342,10 +347,7 @@ describe('the seat spine steps 8 and 10 ride on', () => {
    * bought on the web is spent here, and that ending it is felt at once.
    */
   it('step 8 — a guest with a web-bought seat is admitted on the desktop, with no second payment', async () => {
-    const guest = machine('Guest Desktop')
-    expect(await guest.accounts.claim({ username: 'mira', password: PASSWORD })).toMatchObject({
-      ok: true
-    })
+    const guest = await registeredMachine('Guest Desktop', 'mira')
     const team = `@${OWNER}/${PAID_TEAM.name}`
 
     // Before the purchase the gate says no_seat — not `pay`, not `identify`.
@@ -371,10 +373,7 @@ describe('the seat spine steps 8 and 10 ride on', () => {
   }, SLOW)
 
   it('step 10 — the owner ends the seat and the next call token is refused in the gate.no_seat band', async () => {
-    const guest = machine('Ended Guest')
-    expect(await guest.accounts.claim({ username: 'bo', password: PASSWORD })).toMatchObject({
-      ok: true
-    })
+    const guest = await registeredMachine('Ended Guest', 'bo')
     const team = `@${OWNER}/${PAID_TEAM.name}`
     const ownerToken = sessionToken(ownerMac.base)
     expect(

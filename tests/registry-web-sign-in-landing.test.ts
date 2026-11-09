@@ -23,8 +23,8 @@ describe('a sign-in on a team page reloads the page instead of leaving for /me',
     expect(site.match(/dialog\.close\(\)\n\s+location\.assign\('\/me'\)/g)).toBeNull()
   })
 
-  it('the ladder and the passkey path use the same rule, with /me as the fallback', () => {
-    expect(factors.match(/window\.cookrewAfterSignIn \?\? \(\(\) => location\.assign\('\/me'\)\)/g)).toHaveLength(2)
+  it('the ladder, the passkey path and the second-step set-up use the same rule, with /me as the fallback', () => {
+    expect(factors.match(/window\.cookrewAfterSignIn \?\? \(\(\) => location\.assign\('\/me'\)\)/g)).toHaveLength(3)
   })
 })
 

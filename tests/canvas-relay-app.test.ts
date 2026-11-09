@@ -1,3 +1,4 @@
+import { claimThroughSetup, codeNow } from './support/second-step'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -115,17 +116,15 @@ beforeAll(async () => {
   )
   username = 'owner'
   deviceId = randomUUID()
-  const claimed = await fetch(`${site.origin}/v2/accounts`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      username,
-      password: PASSWORD,
-      device: { id: deviceId, kind: 'desktop', name: 'This Mac', jwk: jwkOf() }
-    })
+  // A password is the first step only (auth UX 2026-11-09): the desktop is
+  // attached, an authenticator set up and the codes saved, then the session.
+  const claimed = await claimThroughSetup(site.origin, {
+    username,
+    password: PASSWORD,
+    device: { id: deviceId, kind: 'desktop', name: 'This Mac', jwk: jwkOf() }
   })
-  expect(claimed.status).toBe(201)
-  desktopToken = ((await claimed.json()) as { session: { token: string } }).session.token
+  desktopToken = claimed.token
+  const secret = claimed.secret
   // Filed with the registry, which is what makes `relay-status` answer about
   // it at all — an unfiled desktop is a device id the account does not own.
   await fetch(`${site.origin}/v2/me/desktops/${deviceId}`, {
@@ -142,20 +141,19 @@ beforeAll(async () => {
       device: { id: randomUUID(), kind: 'phone', name: 'A phone', jwk: jwkOf() }
     })
   })
-  // Phase 4: a device the account has never seen climbs one rung; the Mac
-  // that claimed the name approves it over the wire.
+  // A device the account has never seen climbs the second step: the code the
+  // owner's authenticator shows (approving from another device no longer
+  // counts, ruling of 2026-11-09).
   expect(attached.status).toBe(401)
-  const asked = (await attached.json()) as { pending: string; match: string }
-  const request = await fetch(`${site.origin}/v2/sessions/${asked.pending}/approve`, { method: 'POST' })
-  expect(request.status).toBe(202)
-  const { approval } = (await request.json()) as { approval: string }
-  const decided = await fetch(`${site.origin}/v2/me/approvals/${approval}`, {
+  const asked = (await attached.json()) as { pending: string; next: string[] }
+  expect(asked.next).toContain('totp')
+  const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}/totp`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${desktopToken}` },
-    body: JSON.stringify({ decision: 'approve', match: asked.match })
+    headers: { 'content-type': 'application/json' },
+    // The set-up just spent this half-minute's code (each is single use), so a
+    // person types the next one, which the registry allows one step ahead.
+    body: JSON.stringify({ code: codeNow(secret, Date.now() + 30_000) })
   })
-  expect(decided.status).toBe(204)
-  const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)
   expect(done.status).toBe(201)
   phoneSession = ((await done.json()) as { token: string }).token
 
