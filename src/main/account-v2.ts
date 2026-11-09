@@ -4,6 +4,7 @@ import {
   createPublicKey,
   generateKeyPairSync,
   randomBytes,
+  scrypt,
   scryptSync,
   sign,
   timingSafeEqual,
@@ -198,6 +199,24 @@ export function matchesUnlock(verifier: UnlockVerifier, password: string): boole
   const stored = Buffer.from(verifier.hash)
   if (candidate.length !== stored.length) return false
   return timingSafeEqual(candidate, stored)
+}
+
+/**
+ * The same check, off the event loop: a machine checking a password a phone
+ * sent (account-pair.ts) must not stall every terminal it serves while it does.
+ */
+export function matchesUnlockAsync(verifier: UnlockVerifier, password: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    scrypt(password, verifier.salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p }, (error, derived) => {
+      if (error) {
+        resolve(false)
+        return
+      }
+      const candidate = Buffer.from(derived.toString('base64url'))
+      const stored = Buffer.from(verifier.hash)
+      resolve(candidate.length === stored.length && timingSafeEqual(candidate, stored))
+    })
+  })
 }
 
 /**

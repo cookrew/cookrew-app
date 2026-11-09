@@ -20,10 +20,10 @@ const deps = (passkey: boolean): PairClientDeps => ({
 const draw = (platform: string, methods: ('password' | 'passkey')[], passkey = true): string =>
   renderToStaticMarkup(
     <ReauthAccountEntry
-      offer={{ offered: true, desktopId: 'd', platform, methods }}
+      offer={{ offered: true, reachable: true, desktopId: 'd', platform, methods }}
       deps={deps(passkey)}
       handle="anvztor"
-      onEntered={async () => undefined}
+      onEntered={async () => true}
     />
   )
 

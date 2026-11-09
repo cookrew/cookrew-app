@@ -14,7 +14,7 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { pairAnchorsRoute } from '../registry/src/v2-pair-anchors'
 import { Accounts, mintDeviceKey, writeAccount } from '../src/main/account-v2'
-import { passwordMatches, readAnchors } from '../src/main/pair-anchors'
+import { readAnchors } from '../src/main/pair-anchors'
 import { ANCHORS_PATH, ANCHORS_PROOF_HEADER, anchorsProofMessage } from '../src/shared/account-pair'
 import { fakeAccount } from './support/idv2'
 import { ed25519, makeCredential } from './support/webauthn'
@@ -109,7 +109,7 @@ const anchorsAs = (desk: Desk, proof: string | null, token = desk.token): Promis
   })
 
 describe('GET /v2/me/pair-anchors', () => {
-  it('answers a desktop that signs, with a record the machine checks the password against', async () => {
+  it('answers a desktop that signs, and never with a password record', async () => {
     const desk = await claimDesk()
     const res = await anchorsAs(desk, proofFor(desk))
     expect(res.status).toBe(200)
@@ -118,8 +118,10 @@ describe('GET /v2/me/pair-anchors', () => {
     expect(anchors).not.toBeNull()
     expect(anchors?.rpId).toBe('127.0.0.1')
     expect(anchors?.devices.map((d) => d.id)).toEqual([desk.deviceId])
-    expect(await passwordMatches(anchors!.password!, PASSWORD)).toBe(true)
-    expect(await passwordMatches(anchors!.password!, 'correct horse battery stapler')).toBe(false)
+    expect(anchors?.locked).toBe(false)
+    const raw = JSON.stringify(await (await anchorsAs(desk, proofFor(desk))).json())
+    // No hash, no salt: a machine checks the password against its own verifier.
+    expect(raw).not.toMatch(/"(hash|salt|password)"/)
   })
 
   it('a bearer alone reads nothing, nor a stale signature, nor one by another key', async () => {
@@ -171,8 +173,7 @@ describe('GET /v2/me/pair-anchors', () => {
       )
       const accounts = new Accounts({ base, origin: site.origin })
       const anchors = readAnchors(await accounts.pairAnchors(), desk.username)
-      expect(anchors).not.toBeNull()
-      expect(await passwordMatches(anchors!.password!, PASSWORD)).toBe(true)
+      expect(anchors?.devices.map((d) => d.id)).toEqual([desk.deviceId])
     } finally {
       rmSync(base, { recursive: true, force: true })
     }

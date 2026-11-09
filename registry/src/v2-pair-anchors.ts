@@ -3,23 +3,20 @@ import { ANCHORS_PROOF_HEADER, ANCHORS_SKEW_MS, anchorsProofMessage } from '../.
 import { FixedWindowLimiter } from '../../src/shared/fixed-window-limiter'
 import { refuse, v2Json, type Signed, type V2Context } from './v2-http'
 import { relyingParty } from './v2-factor-http'
-import { PASSWORD_COST } from './v2-secrets'
 
 /**
  * GET /v2/me/pair-anchors — WHAT A MACHINE OF THE ACCOUNT CHECKS AN ENTRY AGAINST.
  *
  * Owner 2026-11-09: a phone enters a machine of the account with the account's
  * password or a passkey, and the MACHINE decides (src/shared/account-pair.ts).
- * To decide it needs the account's anchors: the password's scrypt record, the
- * passkeys' public keys, and which device keys are the account's. This route
- * hands them to the account's own desktops and to nobody else.
+ * To decide it needs the account's passkeys (public keys, which the machine
+ * pins on first use) and which device keys are the account's. NO PASSWORD
+ * RECORD IS EVER SENT: a desktop checks a password against its own verifier,
+ * so this registry cannot hand a machine a record it chose, and a session that
+ * merely calls itself a desktop learns nothing it could guess at offline.
  *
- * WHO MAY READ IT, AND WHY SO NARROWLY. The record is a password hash, so a
- * reader can guess at it offline. A desktop already holds a verifier of the
- * same password in its account file (src/main/account-v2.ts), so giving it this
- * one widens nothing; giving it to a phone or a browser would. And a bearer
- * alone is not enough: the request carries the desktop key's signature over a
- * fresh line, so a session token that leaked into a log reads nothing here.
+ * Desktops only, with the desktop key's signature over a fresh line beside the
+ * bearer, so a session token that leaked into a log reads nothing here.
  *
  * UNDER "NOT ME" THE ANSWER IS LOCKED: the owner said a stranger has the
  * password, so no machine may be entered with it, and the gate refuses widening
@@ -68,10 +65,6 @@ export function pairAnchorsRoute(ctx: V2Context, signed: Signed, now: number = D
     return
   }
   const locked = ctx.v2.factors.store.mustChangePassword(account.username)
-  const password =
-    locked || account.passwordless === true
-      ? null
-      : { ...PASSWORD_COST, salt: account.password.salt, hash: account.password.hash }
   const passkeys = locked
     ? []
     : ctx.v2.factors.store
@@ -82,7 +75,6 @@ export function pairAnchorsRoute(ctx: V2Context, signed: Signed, now: number = D
     username: account.username,
     rpId: relyingParty(ctx).rpId,
     locked,
-    password,
     passkeys,
     devices: account.devices.map((d) => ({ id: d.id, jwk: d.jwk }))
   })

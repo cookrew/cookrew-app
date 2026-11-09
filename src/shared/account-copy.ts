@@ -248,9 +248,17 @@ export const V3_COPY = machineTable({
   /** M5, a machine of the account reached on a page that cannot use the account (a direct address). */
   'm5.enter.elsewhere':
     'Open this Mac from cookrew.dev/me in a browser signed in to your account, then enter with a passkey or the account password.',
-  /** M5, an account with nothing to prove itself with yet. */
+  /**
+   * M5, a machine with nothing to check an entry against: no passkey pinned and
+   * no copy of the account password (it joined by a code or a provider).
+   */
   'm5.enter.none':
-    'Your account has no password or passkey yet. Add a passkey at cookrew.dev/me, then come back.',
+    'This Mac has no way to check your account yet. Add a passkey at cookrew.dev/me, then come back.',
+  /** M5, the machine could not read the account just now — not "no password". */
+  'm5.enter.unreachable':
+    'This Mac cannot reach cookrew.dev to read your account just now. Try again in a minute, or pair with a token instead.',
+  /** M5, a token was minted and then refused: rare, and said rather than silent. */
+  'm5.enter.kept': 'This Mac let this browser in but then refused it. Try again.',
   /** M5, the token, kept for a machine with no account, folded away below the account. */
   'm5.enter.token': 'Pair with a token instead',
   'm5.no-seal':

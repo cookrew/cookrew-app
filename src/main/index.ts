@@ -167,6 +167,7 @@ import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { createAccountPairDoor, pairMissesFile } from './account-pair'
+import { pairPinsFile } from './account-pair-pins'
 import { createAnchorSource } from './pair-anchors'
 import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
@@ -1333,8 +1334,15 @@ const accountPairDoor = createAccountPairDoor({
       fetch: () => accounts.pairAnchors(),
       username: () => accounts.account()?.username ?? null
     })
-    return () => source.get()
+    return (options?: { fresh?: boolean }) => source.get(options)
   })(),
+  // The machine's OWN verifier of the account password: only a machine where it
+  // was typed holds one, and a passcode is not the account password.
+  localPassword: () => {
+    const account = accounts.account()
+    return account !== null && account.unlockBy !== 'passcode' ? account.unlock : null
+  },
+  pins: pairPinsFile(path.join(homedir(), '.cookrew', 'pair-passkeys.json')),
   admitted: admittedDevices,
   origins: () => [registryOrigin(), ...mobileSelfOrigins()],
   platform: process.platform,
@@ -7623,6 +7631,7 @@ app.whenReady().then(() => {
       return rotated
     },
     pairingHandout: currentPairingHandout,
+    repinAccountPasskeys: () => accountPairDoor.repin(),
     listWorkspaces,
     createWorkspace,
     checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),

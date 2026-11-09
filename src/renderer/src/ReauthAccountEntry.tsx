@@ -20,7 +20,8 @@ export interface ReauthAccountEntryProps {
   readonly deps: PairClientDeps
   /** The handle the relay prefix names, for the password manager's username. */
   readonly handle: string | null
-  readonly onEntered: (token: string) => Promise<void>
+  /** Keeps the token; false when this machine then refuses it. */
+  readonly onEntered: (token: string) => Promise<boolean>
 }
 
 const secondsOf = (ms: number): number => Math.max(1, Math.ceil(ms / 1000))
@@ -48,11 +49,12 @@ export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAcc
         const result = await enterWithAccount(deps, typed)
         setPassword('')
         if (result.kind === 'entered') {
-          await onEntered(result.token)
+          if (!(await onEntered(result.token))) setLine(machineSentence(REAUTH_COPY.enterKept, offer.platform))
           return
         }
         if (result.kind === 'no-device') setLine(machineSentence(REAUTH_COPY.enterSignIn, offer.platform))
         else if (result.kind === 'refused') setLine(refusalLine(result))
+        else if (result.kind === 'failed') setLine(result.message)
       } catch (cause) {
         setPassword('')
         setLine(cause instanceof Error ? `Could not reach this machine: ${cause.message}` : 'Could not reach this machine.')

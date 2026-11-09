@@ -174,6 +174,8 @@ export const REAUTH_COPY = {
   enterSignIn: V3_COPY['m5.enter.signin'],
   enterElsewhere: V3_COPY['m5.enter.elsewhere'],
   enterNone: V3_COPY['m5.enter.none'],
+  enterUnreachable: V3_COPY['m5.enter.unreachable'],
+  enterKept: V3_COPY['m5.enter.kept'],
   enterToken: V3_COPY['m5.enter.token'],
   readOnly:
     'This device is paired read-only. Open the pairing URL from the desktop to make changes.',

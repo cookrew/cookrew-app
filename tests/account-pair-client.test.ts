@@ -5,7 +5,8 @@ import { createAccountPairDoor } from '../src/main/account-pair'
 import { handleAccountPairRoutes } from '../src/main/account-pair-routes'
 import { createAdmittedDeviceStore, type AdmittedDeviceStore } from '../src/main/admitted-devices'
 import type { PairAnchors } from '../src/main/pair-anchors'
-import { hashPassword } from '../registry/src/v2-secrets'
+import { unlockVerifierFor } from '../src/main/account-v2'
+import { memoryPins } from '../src/main/account-pair-pins'
 import { deviceFromStored, type AccountDevice } from '../src/renderer/src/account-device'
 import { browserPairDeps, enterWithAccount, pairOffer, type PairClientDeps } from '../src/renderer/src/account-pair-client'
 import { fakeAccount, tempBase } from './support/idv2'
@@ -66,23 +67,25 @@ describe('entering a machine from the phone', () => {
   let passkey: Pair
   let device: AccountDevice
   const account = fakeAccount({ username: 'anvztor' })
+  const verifier = unlockVerifierFor(PASSWORD)
 
   beforeEach(async () => {
     temp = tempBase()
     admitted = createAdmittedDeviceStore({ base: temp.base })
     passkey = ed25519()
     device = await browserDevice()
-    const record = await hashPassword(PASSWORD)
     anchors = {
       username: 'anvztor',
       rpId: RP_ID,
-      password: { N: 1 << 15, r: 8, p: 1, keylen: 32, salt: record.salt, hash: record.hash },
+      locked: false,
       passkeys: [{ credentialId: b64u(CREDENTIAL), jwk: passkey.publicJwk, signCount: 0 }],
       devices: [{ id: device.id, jwk: device.jwk }]
     }
     const door = createAccountPairDoor({
       account: () => account,
       anchors: async () => anchors,
+      localPassword: () => verifier,
+      pins: memoryPins(),
       admitted,
       origins: () => [base],
       platform: 'linux'
@@ -111,7 +114,7 @@ describe('entering a machine from the phone', () => {
   })
 
   it('reads the offer, with the machine’s platform for its sentences', async () => {
-    expect(await pairOffer(deps())).toEqual({ offered: true, desktopId: account.deviceId, platform: 'linux', methods: ['password', 'passkey'] })
+    expect(await pairOffer(deps())).toEqual({ offered: true, reachable: true, desktopId: account.deviceId, platform: 'linux', methods: ['password', 'passkey'] })
   })
 
   it('enters with the password and comes back with a token this machine takes', async () => {
@@ -154,5 +157,17 @@ describe('entering a machine from the phone', () => {
     const spying: PairClientDeps = { ...real, post: async (path, body) => (seen.push(JSON.stringify(body)), real.post(path, body)) }
     await enterWithAccount(spying, PASSWORD)
     expect(seen.join('\n')).not.toContain(PASSWORD)
+  })
+
+  it('a passkey request this browser cannot read is said, not taken for a closed sheet', async () => {
+    const real = deps()
+    const broken: PairClientDeps = {
+      ...real,
+      post: async (path, body) => {
+        const out = await real.post(path, body)
+        return path.endsWith('/begin') ? { ...out, body: { ...(out.body as object), passkey: { rpId: RP_ID, challenge: '%%%', allow: [] } } } : out
+      }
+    }
+    expect((await enterWithAccount(broken, null)).kind).toBe('failed')
   })
 })

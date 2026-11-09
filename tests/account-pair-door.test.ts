@@ -3,13 +3,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createAccountPairDoor, type PairDoorDeps } from '../src/main/account-pair'
 import { createAdmittedDeviceStore, type AdmittedDeviceStore } from '../src/main/admitted-devices'
 import type { PairAnchors } from '../src/main/pair-anchors'
-import { hashPassword } from '../registry/src/v2-secrets'
+import { memoryPins, type PinStore } from '../src/main/account-pair-pins'
+import { createHash } from 'node:crypto'
 import {
   ACCOUNT_PAIR_INFO,
   ACCOUNT_PAIR_REST_MS,
   ACCOUNT_PAIR_STOP_MS,
+  pairDeviceMessage,
+  pairProofDigestInput,
   pairTranscript,
   sealedPasswordPlaintext,
+  type PairProof,
   type PairChallenge
 } from '../src/shared/account-pair'
 import { packBody } from '../src/shared/relay-seal'
@@ -42,6 +46,8 @@ const phone = (): Phone => {
   return { id: randomUUID(), jwk: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y }, key: pair.privateKey }
 }
 
+const digest = (proof: PairProof): string => createHash('sha256').update(pairProofDigestInput(proof)).digest('base64url')
+
 const signAs = (device: Phone, message: string): string =>
   b64u(sign('sha256', Buffer.from(message, 'utf8'), { key: device.key, dsaEncoding: 'ieee-p1363' }))
 
@@ -55,12 +61,16 @@ describe('the account pair door', () => {
   let passkey: Pair
   let mine: Phone
   let lines: string[]
+  let pins: PinStore
+  // fakeAccount's verifier is of PASSWORD: a machine where the account password was typed.
   const account = fakeAccount({ username: 'anvztor' })
 
   const door = (over: Partial<PairDoorDeps> = {}) =>
     createAccountPairDoor({
       account: () => account,
       anchors: async () => anchors,
+      localPassword: () => account.unlock,
+      pins,
       admitted,
       origins: () => [ORIGIN],
       platform: 'linux',
@@ -76,11 +86,11 @@ describe('the account pair door', () => {
     lines = []
     passkey = ed25519()
     mine = phone()
-    const record = await hashPassword(PASSWORD)
+    pins = memoryPins()
     anchors = {
       username: 'anvztor',
       rpId: RP_ID,
-      password: { N: 1 << 15, r: 8, p: 1, keylen: 32, salt: record.salt, hash: record.hash },
+      locked: false,
       passkeys: [{ credentialId: b64u(CREDENTIAL), jwk: passkey.publicJwk, signCount: 0 }],
       devices: [{ id: mine.id, jwk: mine.jwk }]
     }
@@ -95,12 +105,15 @@ describe('the account pair door', () => {
   const transcript = (challenge: PairChallenge, device: Phone = mine): string =>
     pairTranscript({ desktopId: challenge.desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: device.id })
 
-  const withPassword = (challenge: PairChallenge, password: string, device: Phone = mine, sealFor = challenge.challengeId) => ({
+  const signed = (challenge: PairChallenge, proof: PairProof, device: Phone) => ({
     challengeId: challenge.challengeId,
     device: { deviceId: device.id, jwk: device.jwk, name: 'iPhone' },
-    sig: signAs(device, transcript(challenge, device)),
-    proof: { kind: 'password', sealed: packBody(challenge.key, ACCOUNT_PAIR_INFO, sealedPasswordPlaintext(sealFor, password)) }
+    sig: signAs(device, pairDeviceMessage(transcript(challenge, device), digest(proof))),
+    proof
   })
+
+  const withPassword = (challenge: PairChallenge, password: string, device: Phone = mine, sealFor = challenge.challengeId) =>
+    signed(challenge, { kind: 'password', sealed: packBody(challenge.key, ACCOUNT_PAIR_INFO, sealedPasswordPlaintext(sealFor, password)) }, device)
 
   const withPasskey = (challenge: PairChallenge, flags = GET_FLAGS_VERIFIED, origin = ORIGIN, device: Phone = mine) => {
     const asserted = getAssertion({
@@ -111,12 +124,7 @@ describe('the account pair door', () => {
       rpId: RP_ID,
       flags
     })
-    return {
-      challengeId: challenge.challengeId,
-      device: { deviceId: device.id, jwk: device.jwk, name: 'iPhone' },
-      sig: signAs(device, transcript(challenge, device)),
-      proof: { kind: 'passkey', credential: { id: asserted.id, ...asserted.response } }
-    }
+    return signed(challenge, { kind: 'passkey', credential: { id: asserted.id, ...asserted.response } }, device)
   }
 
   const challengeOf = async (d: ReturnType<typeof door>, device: Phone = mine): Promise<PairChallenge> => {
@@ -127,13 +135,24 @@ describe('the account pair door', () => {
 
   it('offers both ways in, and says which machine this is', async () => {
     const offer = await door().offer()
-    expect(offer).toEqual({ offered: true, desktopId: account.deviceId, platform: 'linux', methods: ['password', 'passkey'] })
+    expect(offer).toEqual({ offered: true, reachable: true, desktopId: account.deviceId, platform: 'linux', methods: ['password', 'passkey'] })
   })
 
-  it('offers nothing without an account, and nothing when the account has no secret to check', async () => {
+  it('offers nothing without an account, nothing with nothing to check against, and says when it cannot read the account', async () => {
     expect((await door({ account: () => null }).offer()).offered).toBe(false)
-    anchors = { ...(anchors as PairAnchors), password: null, passkeys: [] }
-    expect((await door().offer()).offered).toBe(false)
+    anchors = { ...(anchors as PairAnchors), passkeys: [] }
+    expect(await door({ localPassword: () => null }).offer()).toMatchObject({ offered: false, reachable: true })
+    anchors = null
+    expect(await door().offer()).toMatchObject({ offered: false, reachable: false })
+  })
+
+  it('checks a password only against this machine’s own verifier: cookrew.dev supplies no record', async () => {
+    const d = door({ localPassword: () => null })
+    const challenge = await challengeOf(d)
+    expect(challenge.methods).toEqual(['passkey'])
+    const out = await d.finish({ body: withPassword(challenge, PASSWORD), bridged: null })
+    expect(out.status).toBe(409)
+    expect(admitted.list()).toEqual([])
   })
 
   it('admits a device that brings the account password, sealed, and hands it its own token', async () => {
@@ -269,17 +288,24 @@ describe('the account pair door', () => {
     const phones = [mine, phone(), phone(), phone()]
     anchors = { ...(anchors as PairAnchors), devices: phones.map((p) => ({ id: p.id, jwk: p.jwk })) }
     const d = door({ misses })
+    // Each device rests after three; step past the minute between them.
+    const step = (): void => void (clock += 61_000)
     for (const device of phones.slice(0, 3)) {
       for (let i = 0; i < 3; i += 1) {
         await d.finish({ body: withPassword(await challengeOf(d, device), 'wrong password two', device), bridged: null })
       }
+      if (device !== phones[2]) step()
     }
-    expect(held).toBe(9)
+    // The stop starts and the count starts over: nine more are needed for the next one.
+    expect(held).toBe(0)
+    expect(until).toBe(clock + ACCOUNT_PAIR_STOP_MS)
     const fresh = door({ misses })
     const stopped = await begin(fresh, phones[3])
     expect(stopped.status).toBe(429)
     expect((stopped.body as { retryAfterMs: number }).retryAfterMs).toBe(ACCOUNT_PAIR_STOP_MS)
     clock += ACCOUNT_PAIR_STOP_MS + 1
+    const wrongAfter = await fresh.finish({ body: withPassword(await challengeOf(fresh, phones[3]), 'still wrong now', phones[3]), bridged: null })
+    expect(wrongAfter.body).toMatchObject({ outcome: 'wrong', triesLeft: 2 })
     const out = await fresh.finish({ body: withPassword(await challengeOf(fresh, phones[3]), PASSWORD, phones[3]), bridged: null })
     expect(out.status).toBe(200)
     expect(held).toBe(0)
@@ -309,5 +335,72 @@ describe('the account pair door', () => {
     expect(all).not.toContain(PASSWORD)
     expect(all).not.toContain('a wrong one here!')
     expect(all).toMatch(/admitted/)
+  })
+
+  it('runs one secret check at a time: a burst of finishes is not a burst of guesses', async () => {
+    const d = door()
+    const bodies = []
+    for (let i = 0; i < 5; i += 1) {
+      const other = phone()
+      anchors = { ...(anchors as PairAnchors), devices: [...(anchors as PairAnchors).devices, { id: other.id, jwk: other.jwk }] }
+      bodies.push(withPassword(await challengeOf(d, other), `burst guess ${i}`, other))
+    }
+    const answers = await Promise.all(bodies.map((body) => d.finish({ body, bridged: null })))
+    const statuses = answers.map((a) => a.status).sort()
+    // One was checked (a wrong password); the others were turned away unchecked.
+    expect(statuses).toEqual([401, 429, 429, 429, 429])
+  })
+
+  it('a proof swapped in under a real signature is refused', async () => {
+    const d = door()
+    const challenge = await challengeOf(d)
+    const real = withPassword(challenge, 'what the phone typed')
+    const swapped = { ...real, proof: { kind: 'password', sealed: packBody(challenge.key, ACCOUNT_PAIR_INFO, sealedPasswordPlaintext(challenge.challengeId, PASSWORD)) } }
+    const out = await d.finish({ body: swapped, bridged: null })
+    expect(out.status).toBe(401)
+    expect(out.body).toMatchObject({ outcome: 'refused' })
+    expect(admitted.list()).toEqual([])
+  })
+
+  it('a passkey cookrew.dev adds after the first read opens nothing until someone here re-pins', async () => {
+    const d = door()
+    await challengeOf(d)
+    expect(pins.read()?.passkeys.map((p) => p.credentialId)).toEqual([b64u(CREDENTIAL)])
+    // The registry swaps in a key of its own under the same credential id.
+    const planted = ed25519()
+    const honest = passkey
+    anchors = { ...(anchors as PairAnchors), passkeys: [{ credentialId: b64u(CREDENTIAL), jwk: planted.publicJwk, signCount: 0 }] }
+    passkey = planted
+    const challenge = await challengeOf(d)
+    expect(challenge.passkey).toBeNull()
+    const refused = await d.finish({ body: withPasskey({ ...challenge, passkey: { rpId: RP_ID, challenge: 'x', allow: [] } }), bridged: null })
+    expect(refused.status).toBe(401)
+    expect(admitted.list()).toEqual([])
+    // Somebody at the machine runs `cookrew mobile --repin`.
+    expect(await d.repin()).toEqual({ added: [], removed: [] })
+    const out = await d.finish({ body: withPasskey(await challengeOf(d)), bridged: null })
+    expect(out.status).toBe(200)
+    passkey = honest
+  })
+
+  it('a passkey taken off the account stops opening at once', async () => {
+    const d = door()
+    await challengeOf(d)
+    anchors = { ...(anchors as PairAnchors), passkeys: [] }
+    const challenge = await challengeOf(d)
+    expect(challenge.passkey).toBeNull()
+    expect(challenge.methods).toEqual(['password'])
+  })
+
+  it('refuses everything while the account is locked down after "Not me"', async () => {
+    anchors = { ...(anchors as PairAnchors), locked: true }
+    expect((await begin(door())).status).toBe(423)
+    expect((await door().offer()).offered).toBe(false)
+  })
+
+  it('the machine’s own id is not a device that may ask', async () => {
+    anchors = { ...(anchors as PairAnchors), devices: [...(anchors as PairAnchors).devices, { id: account.deviceId, jwk: mine.jwk }] }
+    const out = await door().begin({ body: { deviceId: account.deviceId }, bridged: null })
+    expect(out.status).toBe(400)
   })
 })

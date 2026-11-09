@@ -1,15 +1,16 @@
-import { createPublicKey, scrypt, timingSafeEqual, verify } from 'node:crypto'
+import { createPublicKey, verify } from 'node:crypto'
 import { fromB64u, verifyAssertion } from '../../registry/src/v2-passkeys'
 import type { PasskeyAssertionWire } from '../shared/account-pair'
 
 /**
- * THE ACCOUNT'S ANCHORS, AS THIS MACHINE CHECKS THEM.
+ * THE ACCOUNT'S ANCHORS, AS THIS MACHINE READS THEM.
  *
- * Three facts the registry holds and the machine needs in order to decide an
- * entry itself (shared/account-pair.ts): the password's scrypt record, the
- * account's passkeys, and which device keys are the account's. Read with the
- * machine's own credentials (account-v2.ts · pairAnchors), parsed strictly
- * here, never written to disk: a restart reads them again.
+ * Two facts the registry holds (shared/account-pair.ts): the account's passkeys
+ * and which device keys are the account's. Read with the machine's own
+ * credentials (account-v2.ts · pairAnchors) and parsed strictly here. The
+ * passkeys are then PINNED by the machine (account-pair-pins.ts); no password
+ * record ever comes from the registry — the machine checks a password against
+ * its own verifier, so cookrew.dev cannot hand it one it chose.
  *
  * THE PASSKEY VERIFIER IS THE REGISTRY'S OWN (registry/src/v2-passkeys.ts),
  * imported rather than copied. It is pure node:crypto plus a bounded CBOR
@@ -18,16 +19,6 @@ import type { PasskeyAssertionWire } from '../shared/account-pair'
 
 const B64U = /^[A-Za-z0-9_-]+$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-
-/** The registry's scrypt record (registry/src/v2-secrets.ts), with its cost. */
-export interface PasswordRecord {
-  readonly N: number
-  readonly r: number
-  readonly p: number
-  readonly keylen: number
-  readonly salt: string
-  readonly hash: string
-}
 
 export interface PasskeyAnchor {
   readonly credentialId: string
@@ -43,19 +34,11 @@ export interface AccountDevice {
 export interface PairAnchors {
   readonly username: string
   readonly rpId: string
-  readonly password: PasswordRecord | null
+  /** "Not me" was pressed: nothing may enter with this account until the password changes. */
+  readonly locked: boolean
   readonly passkeys: readonly PasskeyAnchor[]
   readonly devices: readonly AccountDevice[]
 }
-
-/**
- * THE COST A RECORD MAY ASK FOR. The registry stretches at N=2^15, r=8, p=1;
- * anything far past that is a record that would stall this machine for every
- * guess, so it reads as no password at all rather than as a slow one.
- */
-const MAX_N = 1 << 17
-const MAX_R = 16
-const MAX_P = 4
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -74,24 +57,10 @@ const stringJwk = (value: unknown): Record<string, string> | null => {
   return null
 }
 
-const readPassword = (value: unknown): PasswordRecord | null => {
-  if (!isRecord(value)) return null
-  const { N, r, p, keylen, salt, hash } = value
-  if (typeof N !== 'number' || !Number.isInteger(N) || N < 2 || N > MAX_N || (N & (N - 1)) !== 0) return null
-  if (typeof r !== 'number' || !Number.isInteger(r) || r < 1 || r > MAX_R) return null
-  if (typeof p !== 'number' || !Number.isInteger(p) || p < 1 || p > MAX_P) return null
-  if (keylen !== 32) return null
-  if (typeof salt !== 'string' || !B64U.test(salt) || salt.length > 128) return null
-  if (typeof hash !== 'string' || !B64U.test(hash) || Buffer.from(hash, 'base64url').length !== 32) return null
-  return { N, r, p, keylen, salt, hash }
-}
-
 /** The registry's answer, or null when it is not one. Unknown members are dropped. */
 export function readAnchors(body: unknown, username: string): PairAnchors | null {
   if (!isRecord(body)) return null
   if (body.username !== username || typeof body.rpId !== 'string' || body.rpId.length === 0) return null
-  const password = body.password === null ? null : readPassword(body.password)
-  if (body.password !== null && password === null) return null
   const passkeys: PasskeyAnchor[] = []
   for (const raw of Array.isArray(body.passkeys) ? body.passkeys.slice(0, 32) : []) {
     if (!isRecord(raw) || typeof raw.credentialId !== 'string' || !B64U.test(raw.credentialId)) continue
@@ -106,27 +75,7 @@ export function readAnchors(body: unknown, username: string): PairAnchors | null
     const jwk = stringJwk(raw.jwk)
     if (jwk !== null) devices.push({ id: raw.id, jwk })
   }
-  return { username, rpId: body.rpId, password, passkeys, devices }
-}
-
-/**
- * THE PASSWORD, CHECKED HERE. Async scrypt: the event loop carries every
- * terminal this machine serves, and a guess must not stall them.
- */
-export function passwordMatches(record: PasswordRecord, password: string): Promise<boolean> {
-  const salt = Buffer.from(record.salt, 'base64url')
-  const stored = Buffer.from(record.hash, 'base64url')
-  // scrypt's memory is 128 * N * r bytes; give it that and a little more.
-  const maxmem = 128 * record.N * record.r * 2
-  return new Promise((resolve) => {
-    scrypt(password, salt, record.keylen, { N: record.N, r: record.r, p: record.p, maxmem }, (error, derived) => {
-      if (error) {
-        resolve(false)
-        return
-      }
-      resolve(derived.length === stored.length && timingSafeEqual(derived, stored))
-    })
-  })
+  return { username, rpId: body.rpId, locked: body.locked === true, passkeys, devices }
 }
 
 /** The device key is the account's, byte for byte, under that id. */
@@ -208,16 +157,22 @@ export function passkeyMatches(
 }
 
 /**
- * THE ANCHORS, FRESH WHEN THEY CAN BE. Each challenge asks the registry again,
- * so a password changed a minute ago is the one that works. When the registry
- * cannot be reached the last good answer is used for a while, and said so in
- * the trust model: an old password keeps opening only for that while.
+ * THE ANCHORS, FRESH WITHIN HALF A MINUTE. A passkey removed at cookrew.dev
+ * stops opening within that. When the registry cannot be reached the last good
+ * answer is used for ten minutes, so a short outage does not shut the door.
  */
 export interface AnchorSource {
-  readonly get: () => Promise<PairAnchors | null>
+  /** `fresh` skips the short cache: a re-pin must read what the registry says now. */
+  readonly get: (options?: { fresh?: boolean }) => Promise<PairAnchors | null>
 }
 
 export const ANCHORS_STALE_MS = 10 * 60_000
+/**
+ * How long one read answers every ask. An unauthenticated GET /api/pair must
+ * not become one registry call per request — that is a way to spend the
+ * machine's own budget at cookrew.dev and shut the owner out.
+ */
+export const ANCHORS_FRESH_MS = 30_000
 
 export function createAnchorSource(deps: {
   readonly fetch: () => Promise<unknown | null>
@@ -227,9 +182,12 @@ export function createAnchorSource(deps: {
   const now = deps.now ?? Date.now
   let last: { anchors: PairAnchors; at: number } | null = null
   return {
-    get: async () => {
+    get: async (options = {}) => {
       const username = deps.username()
       if (username === null) return null
+      if (options.fresh !== true && last !== null && last.anchors.username === username && now() - last.at < ANCHORS_FRESH_MS) {
+        return last.anchors
+      }
       let body: unknown = null
       try {
         body = await deps.fetch()

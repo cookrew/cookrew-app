@@ -28,7 +28,7 @@ const handleOfBase = (base: string): string | null => /\/relay\/@([^/]+)\/deskto
 type AccountState =
   | { readonly kind: 'asking' }
   | { readonly kind: 'enter'; readonly offer: PairOffer }
-  | { readonly kind: 'sign-in' | 'elsewhere' | 'none'; readonly offer: PairOffer }
+  | { readonly kind: 'sign-in' | 'elsewhere' | 'none' | 'unreachable'; readonly offer: PairOffer }
   | { readonly kind: 'token-only'; readonly platform: string | null }
 
 /** What the card can offer here: the account, a pointer to it, or the token alone. */
@@ -36,6 +36,7 @@ async function readAccountState(base: string): Promise<AccountState> {
   const deps = browserPairDeps(base, accountDevice)
   const offer = await pairOffer(deps)
   if (offer === null || offer.desktopId === null) return { kind: 'token-only', platform: offer?.platform ?? null }
+  if (!offer.reachable) return { kind: 'unreachable', offer }
   if (!offer.offered) return { kind: 'none', offer }
   // The account's way in signs with cookrew.dev's device key, which exists
   // only under cookrew.dev: a direct address is another origin.
@@ -66,6 +67,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
   const unpaired = blocked !== null && blocked.scope !== 'read-only'
   useEffect(() => {
     if (!unpaired) return
+    setAccount({ kind: 'asking' })
     let live = true
     void readAccountState(base).then((state) => {
       if (live) setAccount(state)
@@ -89,12 +91,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
     return true
   }, [])
 
-  const entered = useCallback(
-    async (token: string): Promise<void> => {
-      await keep(token, null)
-    },
-    [keep]
-  )
+  const entered = useCallback((token: string): Promise<boolean> => keep(token, null), [keep])
 
   const submit = useCallback(async (): Promise<void> => {
     const token = tokenFromInput(pasted)
@@ -166,12 +163,12 @@ export function ReauthOverlay(): React.JSX.Element | null {
     if (account.kind === 'enter') {
       return <ReauthAccountEntry offer={account.offer} deps={deps} handle={handleOfBase(base)} onEntered={entered} />
     }
-    const sentence =
-      account.kind === 'sign-in'
-        ? REAUTH_COPY.enterSignIn
-        : account.kind === 'none'
-          ? REAUTH_COPY.enterNone
-          : REAUTH_COPY.enterElsewhere
+    const sentence = {
+      'sign-in': REAUTH_COPY.enterSignIn,
+      none: REAUTH_COPY.enterNone,
+      unreachable: REAUTH_COPY.enterUnreachable,
+      elsewhere: REAUTH_COPY.enterElsewhere
+    }[account.kind]
     return <p className="cr-reauth-body">{machineSentence(sentence, account.offer.platform)}</p>
   }
 

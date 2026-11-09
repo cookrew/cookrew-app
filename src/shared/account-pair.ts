@@ -9,21 +9,30 @@
  * WHO DECIDES IS THE MACHINE. cookrew.dev's word is never enough: a session
  * cookie, a relay stamp or a registry answer opens nothing on its own. The
  * machine hands out a one-use challenge, the device signs a transcript that
- * names that challenge and its own key, and the secret is checked HERE:
+ * names that challenge, its own key and the proof it brings, and the secret is
+ * checked HERE, against anchors THE MACHINE holds:
  *
  *   password  sealed to a key the machine made for this challenge alone
- *             (X25519 → HKDF → AES-GCM, the remote unlock's construction), so
- *             the relay carries bytes it cannot read; the machine opens it and
- *             checks it against the account's own password record.
- *   passkey   a WebAuthn assertion whose challenge is sha256(transcript), so
- *             it is bound to this machine, this challenge and this device's
- *             key; the machine checks the signature against the account's key
- *             for that credential.
+ *             (X25519 → HKDF → AES-GCM, the remote unlock's construction), and
+ *             checked against the machine's OWN verifier of the account
+ *             password (account.json, written when the password was typed on
+ *             this machine). cookrew.dev never supplies a password record, so
+ *             it cannot hand the machine one it chose.
+ *   passkey   a WebAuthn assertion whose challenge is sha256(transcript), so it
+ *             is bound to this machine, this challenge and this device's key;
+ *             checked against the account's passkeys AS THIS MACHINE PINNED
+ *             THEM the first time it read them (account-pair-pins.ts). One the
+ *             registry adds later opens nothing until somebody at the machine
+ *             runs `cookrew mobile --repin`; one it removes stops opening.
  *
- * WHAT THE REGISTRY IS STILL TRUSTED FOR: telling the machine which password
- * record and which passkeys are the account's (GET /v2/me/pair-anchors, the
- * machine's own bearer plus a device-key signature). It holds the account; it
- * cannot make a passkey answer or know a challenge's seal key.
+ * WHAT THE REGISTRY IS STILL TRUSTED FOR, said plainly: the first read of the
+ * passkeys (pinned on first use), which device keys are the account's (a key
+ * alone opens nothing), and the page the phone types into (an altered page is
+ * the accepted limit since the remote unlock). It sees the account password at
+ * its own sign-in, so a registry that kept one could enter by password; it can
+ * never make a passkey answer. The seal key is not signed by the machine: a
+ * relay that only READS carries bytes it cannot open; one that ACTS can swap it,
+ * which is the same altered-page limit.
  *
  * Both halves import this file, so the transcript cannot be spelled two ways.
  */
@@ -75,6 +84,8 @@ export const pairTranscript = (input: {
 /** GET /api/pair — may this machine be entered with the account, and how. */
 export interface PairOffer {
   readonly offered: boolean
+  /** False when the machine could not read the account just now: not "no secret". */
+  readonly reachable: boolean
   readonly desktopId: string | null
   /** process.platform of the machine, so the page can say "this machine" rightly. */
   readonly platform: string
@@ -117,7 +128,19 @@ export type PairProof =
   | { readonly kind: 'password'; readonly sealed: string }
   | { readonly kind: 'passkey'; readonly credential: PasskeyAssertionWire }
 
-/** POST /api/pair. `sig` is the device key's signature over the transcript. */
+/**
+ * THE PROOF IS SIGNED TOO. The device signs `<transcript> <sha256(proof)>`, so
+ * nobody between the phone and the machine can put a guess of their own under
+ * the device's signature.
+ */
+export const pairProofDigestInput = (proof: PairProof): string =>
+  proof.kind === 'password'
+    ? `password ${proof.sealed}`
+    : `passkey ${proof.credential.id} ${proof.credential.clientDataJSON} ${proof.credential.authenticatorData} ${proof.credential.signature}`
+
+export const pairDeviceMessage = (transcript: string, proofDigest: string): string => `${transcript} ${proofDigest}`
+
+/** POST /api/pair. `sig` is the device key's signature over pairDeviceMessage. */
 export interface PairFinish {
   readonly challengeId: string
   readonly device: PairDevice
@@ -156,10 +179,16 @@ export const ANCHORS_SKEW_MS = 120_000
 export const anchorsProofMessage = (deviceId: string, atMs: number): string =>
   `cookrew-anchors/1 ${deviceId} ${atMs}`
 
-/** What is sealed: the challenge it answers, the password, and padding to a fixed size. */
-export const sealedPasswordPlaintext = (challengeId: string, password: string): string =>
-  JSON.stringify({
-    c: challengeId,
-    p: password,
-    z: '0'.repeat(Math.max(0, ACCOUNT_PAIR_PASSWORD_MAX - password.length))
-  })
+/** The padded size of what is sealed, in bytes: above the longest password, escaped. */
+const SEALED_BYTES = 6 * ACCOUNT_PAIR_PASSWORD_MAX + 128
+
+/**
+ * What is sealed: the challenge it answers, the password, and padding to one
+ * size IN BYTES after JSON escaping, so the ciphertext says nothing about the
+ * password's length.
+ */
+export const sealedPasswordPlaintext = (challengeId: string, password: string): string => {
+  const bare = JSON.stringify({ c: challengeId, p: password, z: '' })
+  const used = new TextEncoder().encode(bare).length
+  return JSON.stringify({ c: challengeId, p: password, z: '0'.repeat(Math.max(0, SEALED_BYTES - used)) })
+}

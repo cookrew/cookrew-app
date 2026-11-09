@@ -2,6 +2,8 @@ import {
   ACCOUNT_PAIR_INFO,
   ACCOUNT_PAIR_PASSWORD_MAX,
   PAIR_PATHS,
+  pairDeviceMessage,
+  pairProofDigestInput,
   pairTranscript,
   sealedPasswordPlaintext,
   type PairAnswer,
@@ -40,6 +42,8 @@ export type EnterResult =
   | { readonly kind: 'no-device' }
   | { readonly kind: 'refused'; readonly message: string; readonly triesLeft?: number; readonly retryAfterMs?: number }
   | { readonly kind: 'cancelled' }
+  /** The browser could not do its half (WebAuthn shape, the device key): said, not hidden. */
+  | { readonly kind: 'failed'; readonly message: string }
 
 const encoder = new TextEncoder()
 
@@ -79,6 +83,8 @@ export async function pairOffer(deps: Pick<PairClientDeps, 'get'>): Promise<Pair
     const methods = Array.isArray(body.methods) ? body.methods.filter((m): m is PairMethod => m === 'password' || m === 'passkey') : []
     return {
       offered: body.offered === true && methods.length > 0,
+      // Absent from an older machine: it could not tell, so it is not called unreachable.
+      reachable: body.reachable !== false,
       desktopId: typeof body.desktopId === 'string' ? body.desktopId : null,
       platform: typeof body.platform === 'string' ? body.platform : 'unknown',
       methods
@@ -128,9 +134,9 @@ export async function enterWithAccount(deps: PairClientDeps, password: string | 
     proof = { kind: 'password', sealed: await sealForMac(challenge.key, sealedPasswordPlaintext(challenge.challengeId, password), ACCOUNT_PAIR_INFO) }
   } else {
     if (challenge.passkey === null || deps.passkey === null) return { kind: 'refused', message: 'This account has no passkey this browser can use. Type the password instead.' }
-    let credential: Credential | null
+    let options: CredentialRequestOptions
     try {
-      credential = await deps.passkey({
+      options = {
         publicKey: {
           challenge: unb64u(challenge.passkey.challenge),
           rpId: challenge.passkey.rpId,
@@ -138,7 +144,13 @@ export async function enterWithAccount(deps: PairClientDeps, password: string | 
           userVerification: 'required',
           timeout: 60_000
         }
-      })
+      }
+    } catch {
+      return { kind: 'failed', message: 'This machine sent a passkey request this browser cannot read.' }
+    }
+    let credential: Credential | null
+    try {
+      credential = await deps.passkey(options)
     } catch {
       return { kind: 'cancelled' }
     }
@@ -146,7 +158,14 @@ export async function enterWithAccount(deps: PairClientDeps, password: string | 
     if (wire === null) return { kind: 'cancelled' }
     proof = { kind: 'passkey', credential: wire }
   }
-  const sig = b64u(await device.sign(encoder.encode(transcript)))
+  // The device signs the transcript AND the proof, so nobody between can swap a guess in under it.
+  let sig: string
+  try {
+    const digest = b64u(await crypto.subtle.digest('SHA-256', encoder.encode(pairProofDigestInput(proof))))
+    sig = b64u(await device.sign(encoder.encode(pairDeviceMessage(transcript, digest))))
+  } catch {
+    return { kind: 'failed', message: 'This browser could not sign with its cookrew.dev key. Sign in at cookrew.dev/me again.' }
+  }
   const finished = await deps.post(PAIR_PATHS.finish, {
     challengeId: challenge.challengeId,
     device: { deviceId: device.id, jwk: device.jwk, name: device.name },
@@ -154,7 +173,13 @@ export async function enterWithAccount(deps: PairClientDeps, password: string | 
     proof
   })
   const answer = finished.body as PairAnswer | null
-  if (finished.status === 200 && answer !== null && answer.ok === true && typeof answer.token === 'string') {
+  if (
+    finished.status === 200 &&
+    answer !== null &&
+    answer.ok === true &&
+    typeof answer.token === 'string' &&
+    answer.desktopId === challenge.desktopId
+  ) {
     return { kind: 'entered', token: answer.token, desktopId: answer.desktopId }
   }
   return refusedFrom(finished.body, 'This machine did not take that. Try again.')
