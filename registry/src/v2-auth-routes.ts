@@ -434,6 +434,23 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
     response.end()
     return
   }
+  /**
+   * A PASSKEY IS NEVER WRITTEN BY A NAVIGATION ANOTHER SITE STARTED. The real
+   * way back is auth.cookrew.dev sending this browser here, which the browser
+   * calls same-site. A browser that claimed a leaked request URL holds a code
+   * for its own passkey; a link on some other site sending the person who
+   * opened the request here with that code must not attach it to their account.
+   * Refused before the redeem, so the code is not spent either.
+   */
+  if (url.searchParams.get('code') !== null && request.headers['sec-fetch-site'] === 'cross-site') {
+    const asked = auth?.requests.peek(id) ?? null
+    if (asked !== null && asked.intent === 'passkey') {
+      auth?.log(`passkey enrolment: refused why=cross_site at=complete client=web`)
+      // The cookie stays: the browser's own way back may still be on its way.
+      failPage(response, null, 'That passkey was not added: the link came from another site. Add it again from Security on cookrew.dev.')
+      return
+    }
+  }
   const spent = auth === null || code === null ? null : auth.requests.redeem(code, 'web', verifier)
   const matches = spent !== null && spent.request.id === id && spent.request.clientState === state
   if (spent !== null && matches && spent.request.intent === 'passkey') {
@@ -474,7 +491,7 @@ const escapeHtml = (text: string): string =>
   text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
 
 /** The web's way back, when there is nothing to land on: what happened, and the way on. */
-function failPage(response: ServerResponse, cleared: string, words: string): void {
+function failPage(response: ServerResponse, cleared: string | null, words: string): void {
   const payload = Buffer.from(
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cookrew</title>' +
       '<style>body{font:15px -apple-system,sans-serif;margin:18vh auto;max-width:30em;text-align:center;padding:0 16px}</style></head><body>' +
@@ -487,7 +504,7 @@ function failPage(response: ServerResponse, cleared: string, words: string): voi
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     'cache-control': 'private, no-store',
     'referrer-policy': 'no-referrer',
-    'set-cookie': cleared
+    ...(cleared === null ? {} : { 'set-cookie': cleared })
   })
   response.end(payload)
 }

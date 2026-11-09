@@ -7,6 +7,7 @@ import { finishRequest } from './auth-finish'
 import { json, refuseFactor, spendChallenge, relyingParty } from './v2-factor-http'
 import { factorError } from './v2-factor-copy'
 import { parseRegistration } from './v2-passkeys'
+import { PASSKEYS_MAX } from './v2-factor-store'
 import { addRefusal, creationOptions, enrolLog } from './v2-enrol-routes'
 import { asking, refuse, v2Json, type Signed, type V2Context, type V2Identity } from './v2-http'
 import type { ProviderProof } from './v2-oauth-providers'
@@ -124,6 +125,8 @@ function gate(ctx: V2Context, request: AuthRequest, at: string): { username: str
  */
 export function mayStartStepUp(ctx: V2Context, request: AuthRequest, provider: ProviderId): boolean {
   if (request.intent !== 'passkey' || request.opener === null) return true
+  // A trip that could only come back to "signed out" or the alarm is not started.
+  if (gate(ctx, request, 'start') === null) return false
   const providers = providersOf(ctx.v2, request.opener.username)
   if (providers.includes(provider)) return true
   v2Json(ctx.response, 400, {
@@ -154,6 +157,8 @@ export function continuePasskey(ctx: V2Context, request: AuthRequest, proof: Pro
     })
     return
   }
+  // One proof per request: a second trip replaces the first, which closes.
+  if (request.stepUp !== null) v2.factors.pending.close(request.stepUp)
   const pending = v2.factors.pending.open({
     username: opener.username,
     device: null,
@@ -183,6 +188,13 @@ export function passkeyOptionsOnPage(ctx: V2Context, request: AuthRequest): void
     const providers = providersOf(v2, opener.username)
     say(ctx, request, 'refused why=step_up at=options')
     v2Json(ctx.response, 403, { error: 'step_up', message: stepUpSentence(providers), providers })
+    return
+  }
+  // Said BEFORE the browser makes anything: a credential the registry then
+  // refuses would sit in the person's keychain, offered at every sign-in.
+  if (v2.factors.store.passkeys(opener.username).length >= PASSKEYS_MAX) {
+    say(ctx, request, 'refused why=passkey_limit at=options')
+    refuseFactor(ctx.response, 409, 'passkey_limit')
     return
   }
   const account = v2.accounts.get(opener.username)
@@ -245,7 +257,7 @@ export async function passkeyOnPage(ctx: V2Context, request: AuthRequest): Promi
     return
   }
   // Said here, while the person is still on the page, rather than after the
-  // trip back; the write checks both again.
+  // trip back; the limit was asked at options, and the write checks both again.
   const known = v2.factors.store.byCredentialId(parsed.credentialId) !== null
   if (known) {
     say(ctx, request, 'refused why=passkey_known at=passkey')

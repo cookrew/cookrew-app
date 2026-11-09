@@ -175,7 +175,7 @@ export function SecurityCard({
    * WITH NO TOUCH ID IN THIS BUILD (webauthn.ts measured it), the passkey is
    * made on auth.cookrew.dev in a browser, which also runs an account's own
    * step-up, and this app writes it when the page hands back. Answers true
-   * when that settled it; false only for a registry without the page.
+   * when that settled it; false only when this build can make one itself.
    */
   const addOnPage = async (): Promise<boolean> => {
     const api = cookrew()
@@ -186,7 +186,12 @@ export function SecurityCard({
       readFactors()
       return true
     }
-    if (added.reason === 'unsupported') return false
+    // A registry without the page: this build still cannot make one, so the
+    // row says where it can rather than raising a security-key dialog.
+    if (added.reason === 'unsupported') {
+      setElsewhere(true)
+      return true
+    }
     // Cancelling the page is a decision, not a failure to report.
     if (added.reason !== 'cancelled') setError(refusalSentence(added.reason, added.message, username))
     return true

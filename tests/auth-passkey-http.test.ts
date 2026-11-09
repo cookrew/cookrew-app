@@ -230,6 +230,38 @@ describe('a passwordless account adds a passkey from the desktop', () => {
   })
 })
 
+describe('refused before a browser makes anything', () => {
+  it('an account at its passkey limit hears so at options, not after Touch ID', async () => {
+    const owner = await passwordAccount(site, 'drej')
+    for (let n = 0; n < 20; n += 1) {
+      const added = site.v2.factors.store.addPasskey('drej', { credentialId: `cred-${n}`, jwk: { kty: 'EC' }, name: `key ${n}`, signCount: 0 })
+      expect(added.ok).toBe(true)
+    }
+    const app = new Client(site, 'app')
+    const opened = await openDesktop(site, app, owner.device, { intent: 'passkey' }, bearer(owner.token))
+    const browser = new Client(site, 'browser')
+    await browser.page('POST', '/auth/api/claim', null, { request: opened.request })
+    const options = await browser.page('POST', '/auth/api/passkey/options', opened.request, {})
+    expect(options.status).toBe(409)
+    expect(options.body.error).toBe('passkey_limit')
+  })
+
+  it('a session that ended meanwhile stops the trip and the ceremony with what to do', async () => {
+    const owner = await passwordlessAccount(site, 'anvztor')
+    const app = new Client(site, 'app')
+    const opened = await openDesktop(site, app, owner.device, { intent: 'passkey' }, bearer(owner.token))
+    const browser = new Client(site, 'browser')
+    await browser.page('POST', '/auth/api/claim', null, { request: opened.request })
+    expect((await app.call(site.P, 'DELETE', '/v2/sessions/current', undefined, bearer(owner.token))).status).toBeLessThan(300)
+    const started = await browser.page('POST', '/v2/oauth/github/start', opened.request, {})
+    expect(started.status).toBe(401)
+    expect(String(started.body.message)).toMatch(/Sign in again/)
+    const options = await browser.page('POST', '/auth/api/passkey/options', opened.request, {})
+    expect(options.status).toBe(401)
+    expect(options.body.error).toBe('session_over')
+  })
+})
+
 describe('a password account adds a passkey from the desktop', () => {
   it('needs no provider trip — the same threshold as /v2/me — and is written by the app', async () => {
     const owner = await passwordAccount(site, 'drej')
@@ -318,6 +350,24 @@ describe('a passwordless account adds a passkey from cookrew.dev', () => {
     expect(site.logged).toContain('passkey enrolment: added client=web')
     const signedIn = await signInWithPasskey(pair, credentialId)
     expect(signedIn.body.status).toBe('authorized')
+  })
+
+  it('a link from another site carrying the code writes nothing, and keeps the code unspent', async () => {
+    const { browser, device } = await webPasswordless(site, 'anvztor')
+    const opened = await openWeb(site, browser, device, { intent: 'passkey' })
+    await browser.page('POST', '/auth/api/claim', null, { request: opened.request })
+    await stepUp(browser, opened)
+    const { made } = await makePasskey(browser, opened)
+    const url = new URL(String((made.body.handoff as { url: string }).url))
+    const forced = await browser.call(site.P, 'GET', `${url.pathname}${url.search}`, undefined, { 'sec-fetch-site': 'cross-site' })
+    expect(forced.status).toBe(400)
+    expect(forced.text).toContain('another site')
+    expect((await browser.call(site.P, 'GET', '/v2/me/factors')).body.passkeys).toEqual([])
+    expect(site.logged).toContain('passkey enrolment: refused why=cross_site at=complete client=web')
+    // Unspent: the browser's own same-site way back still lands it.
+    const own = await browser.call(site.P, 'GET', `${url.pathname}${url.search}`, undefined, { 'sec-fetch-site': 'same-site' })
+    expect(own.status).toBe(303)
+    expect(((await browser.call(site.P, 'GET', '/v2/me/factors')).body.passkeys as unknown[]).length).toBe(1)
   })
 
   it('a passkey already on the account is refused at the page with a sentence', async () => {
