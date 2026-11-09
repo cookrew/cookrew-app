@@ -795,16 +795,23 @@
    * worth anything to a script. A registry without the page answers 404, and
    * the sheet below is still the way in.
    */
-  async function signInThroughAuthSite(intent) {
+  async function signInThroughAuthSite(intent, extra) {
     const device = await deviceIdentity()
     const opened = await v2('POST', '/v2/auth/requests', {
+      // `extra` is a step-up's act and nothing else: never a credential.
+      ...(intent === 'step-up' && extra && typeof extra.act === 'string' ? { act: extra.act } : {}),
       client: 'web',
       intent,
       device: devicePayload(device),
       return: location.pathname
     })
     if (opened.status === 404) return false
-    const fallback = intent === 'passkey' ? 'Adding a passkey could not start. Try again in a moment.' : 'Sign-in could not start. Try again in a moment.'
+    const fallback =
+      intent === 'passkey'
+        ? 'Adding a passkey could not start. Try again in a moment.'
+        : intent === 'step-up'
+          ? 'Confirming it is you could not start. Try again in a moment.'
+          : 'Sign-in could not start. Try again in a moment.'
     const failed = (out) => toast(out.body?.message ?? fallback, 6000)
     if (opened.status !== 201 || typeof opened.body?.request !== 'string') {
       failed(opened)
@@ -892,56 +899,105 @@
   window.addEventListener('hashchange', () => void openFromHash())
   void openFromHash()
 
-  /* ── /me: revoke, sign out, recovery codes, display name ───────────────── */
+  /* ── /me: revoke, sign out, recovery codes, display name, delete ──────── */
   const me = $('me')
   if (me) {
     const refresh = () => location.reload()
+    const stepUp = window.cookrewStepUp
+    /**
+     * Every sensitive act here goes through step-up.js: a password account types
+     * its password once, an account without one is taken to auth.cookrew.dev for
+     * the act and brought back to finish it. `run` answers null when the page is
+     * leaving for that proof, and then there is nothing to say yet.
+     */
+    const proven = (act, send, resume) =>
+      stepUp ? stepUp.run({ act, send, resume }) : send({})
+
+    /** A deletion confirmed on auth.cookrew.dev, waiting for its button to be pressed again. */
+    let deleteProof = null
+    const deleted = () =>
+      // By the revoked list, not all of them: the keys name no account, and
+      // this browser may hold a pairing for somebody else's Mac.
+      void dropTakenBackTokens().finally(() => {
+        // This browser's key named a device that stays revoked for a month,
+        // so a new account here must not sign in with it.
+        const dropped = indexedDB.deleteDatabase('cookrew-device')
+        dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+      })
+    const deleteAccount = async () => {
+      const confirmName = $('me-delete-name').value
+      const field = $('me-delete-password')
+      const typed = field ? field.value : ''
+      const send = (proof) =>
+        v2('DELETE', '/v2/me', {
+          confirm: confirmName,
+          ...(typed ? { current: typed } : {}),
+          ...(deleteProof ? { stepUp: deleteProof } : {}),
+          ...proof
+        })
+      // A mistyped name is refused (400) before the registry asks for any proof,
+      // so nobody is sent to prove a deletion that would not happen.
+      const out = await proven('delete-account', send, { kind: 'delete', name: confirmName })
+      if (out === null) return
+      if (out.status === 204) return deleted()
+      toast(out.body?.message ?? 'Your account could not be deleted.', 6000)
+    }
+    const revoke = async (id, own, proof) => {
+      const send = (more) => v2('DELETE', `/v2/me/devices/${encodeURIComponent(id)}`, { ...(proof ? { stepUp: proof } : {}), ...more })
+      const out = proof ? await send({}) : await proven('revoke-device', send, { kind: 'revoke', id, own })
+      if (out === null) return
+      if (out.status === 204) return own ? location.assign('/') : refresh()
+      toast(out.body?.message ?? 'That device could not be revoked.', 6000)
+    }
+    const showCodes = async (proof) => {
+      const send = (more) => v2('POST', '/v2/me/recovery-codes', { ...(proof ? { stepUp: proof } : {}), ...more })
+      const out = proof ? await send({}) : await proven('add-factor', send, { kind: 'recovery' })
+      if (out === null) return
+      if (out.status !== 201) return toast(out.body?.message ?? 'The codes could not be made.', 6000)
+      const box = $('me-codes')
+      box.textContent = out.body.codes.join('\n')
+      box.hidden = false
+      $('me-codes-note').textContent = 'Shown once. Copy them somewhere safe; each opens the account exactly once.'
+      box.scrollIntoView?.({ block: 'center' })
+    }
+
+    // Back from auth.cookrew.dev: finish what was started, with the proof it earned.
+    stepUp?.on('revoke', (resume, proof) => void revoke(String(resume.id), resume.own === true, proof))
+    stepUp?.on('recovery', (_resume, proof) => void showCodes(proof))
+    stepUp?.on('delete', (resume, proof) => {
+      // The name comes back; the button is the person's to press again, because
+      // this is the one act on the page that cannot be taken back.
+      deleteProof = proof
+      const details = $('me-delete')
+      if (details) details.open = true
+      const name = $('me-delete-name')
+      if (name) name.value = typeof resume.name === 'string' ? resume.name : ''
+      const note = $('me-delete-note')
+      if (note) {
+        note.textContent = 'Confirmed. Press Delete my account within five minutes to finish.'
+        note.hidden = false
+      }
+      document.querySelector('[data-delete-account]')?.focus?.()
+    })
+
     document.addEventListener('click', (event) => {
       const el = event.target.closest('[data-revoke],[data-signout],[data-recovery],[data-edit-name],[data-delete-account]')
       if (!el) return
       event.preventDefault()
       if (el.dataset.deleteAccount !== undefined) {
-        const confirmName = $('me-delete-name').value
-        const current = $('me-delete-password').value
-        void v2('DELETE', '/v2/me', { confirm: confirmName, current }).then((out) => {
-          if (out.status === 204) {
-            // By the revoked list, not all of them: the keys name no account, and
-            // this browser may hold a pairing for somebody else's Mac.
-            void dropTakenBackTokens().finally(() => {
-              // This browser's key named a device that stays revoked for a month,
-              // so a new account here must not sign in with it.
-              const dropped = indexedDB.deleteDatabase('cookrew-device')
-              dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
-            })
-            return
-          }
-          toast(out.body?.message ?? 'Your account could not be deleted.', 6000)
-        })
+        void deleteAccount()
       } else if (el.dataset.revoke !== undefined) {
         const own = el.dataset.current === '1'
         const question = own
           ? 'Sign this browser out and detach it from the account?'
           : 'This device stops opening the account within a minute. It keeps working on its own Wi-Fi until it is paired again. Revoke it?'
         if (!confirm(question)) return
-        void v2('DELETE', `/v2/me/devices/${encodeURIComponent(el.dataset.revoke)}`).then((out) => {
-          if (out.status === 204) return own ? location.assign('/') : refresh()
-          toast(out.body?.message ?? 'That device could not be revoked.', 6000)
-        })
+        void revoke(el.dataset.revoke, own, null)
       } else if (el.dataset.signout !== undefined) {
         void v2('POST', '/v2/sessions/current').then(() => location.assign('/'))
       } else if (el.dataset.recovery !== undefined) {
         if (!confirm('A new set of eight codes replaces any you already have. Show them?')) return
-        void v2('POST', '/v2/me/recovery-codes', {}).then(async (first) => {
-          // Five minutes after signing in, minting codes asks again (auth UX 2026-11-09).
-          const asked = first.status === 401 && first.body?.error === 'step_up'
-          const current = asked ? prompt('It has been a while since you signed in. Type your password to go on.') : null
-          const out = asked && current ? await v2('POST', '/v2/me/recovery-codes', { current }) : first
-          if (out.status !== 201) return toast(out.body?.message ?? 'The codes could not be made.', 6000)
-          const box = $('me-codes')
-          box.textContent = out.body.codes.join('\n')
-          box.hidden = false
-          $('me-codes-note').textContent = 'Shown once. Copy them somewhere safe; each opens the account exactly once.'
-        })
+        void showCodes(null)
       } else if (el.dataset.editName !== undefined) {
         const displayName = prompt('Display name (up to 40 characters)', '')
         if (displayName === null) return
@@ -1238,11 +1294,11 @@
     signIn: () => openSignIn('sign-in'),
     account: () => openSignIn('sign-in'),
     /**
-     * A SIGNED-IN ACT ON AUTH.COOKREW.DEV (today: `passkey`), opened with this
+     * A SIGNED-IN ACT ON AUTH.COOKREW.DEV (`passkey`, or `step-up` with its act), opened with this
      * browser's session and device key exactly as a sign-in is. Answers false
      * when the registry has no such page (404), so the caller keeps its own way.
      */
-    throughAuthSite: (intent) => signInThroughAuthSite(intent),
+    throughAuthSite: (intent, extra) => signInThroughAuthSite(intent, extra),
     toast,
     doorKey
   }

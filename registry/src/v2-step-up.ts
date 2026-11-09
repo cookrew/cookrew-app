@@ -290,6 +290,25 @@ export const SENSITIVE_ACTS: ReadonlySet<StepUpAct> = new Set<StepUpAct>([
   'revoke-device'
 ])
 
+/**
+ * WOULD THIS ACT PASS ON FRESHNESS ALONE, for this sitting, right now? The
+ * question cookrew.dev/me asks before it puts a password field in front of
+ * somebody, so a person is never asked to type a password that a trip to
+ * auth.cookrew.dev would then throw away. The same predicate the gates use:
+ * a first password on an account holding a passkey counts the passkey alone
+ * (setFirstPassword); every other five-minute act counts any verification;
+ * an act that always asks is never fresh.
+ */
+export function freshFor(v2: V2Context['v2'], signed: Signed, act: StepUpAct): boolean {
+  const { username } = signed.account
+  const session = v2.accounts.session(username, signed.claims.jti)
+  const account = v2.accounts.get(username)
+  if (act === 'change-password' && account?.passwordless === true && v2.factors.store.hasPasskey(username)) {
+    return freshlyVerified(session, v2.now(), ['passkey'], v2.freshWindowMs)
+  }
+  return SENSITIVE_ACTS.has(act) && freshlyVerified(session, v2.now(), undefined, v2.freshWindowMs)
+}
+
 /** Fresh enough already, or prove it now. Reads the body; answers whether to go on. */
 export async function heldWhenFresh(ctx: V2Context, signed: Signed, act: StepUpAct): Promise<boolean> {
   return (await readAndStepUp(ctx, signed, act)).ok

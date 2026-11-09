@@ -2,7 +2,8 @@ import { readJsonBody } from './http'
 import { asking, v2Json, type Signed, type V2Context } from './v2-http'
 import { relyingParty, spendChallenge } from './v2-factor-http'
 import { verifyAssertion } from './v2-passkeys'
-import { freshlyVerified, type VerifiedBy } from './v2-session-age'
+import { type VerifiedBy } from './v2-session-age'
+import { freshFor } from './v2-step-up'
 import { jwkThumbprint } from '../../src/shared/jwk-thumbprint'
 
 /**
@@ -193,26 +194,25 @@ export const forgetGrantRests = (): void => rests.clear()
  */
 export async function setFirstPassword(ctx: V2Context, signed: Signed, body: Record<string, unknown>): Promise<void> {
   const { account, claims } = signed
-  const session = ctx.v2.accounts.session(account.username, claims.jti)
   /**
    * An account that holds a passkey proves it with the passkey: a provider
    * round trip is the weaker key, and a password set on it alone would open
    * the device pass with the provider alone (review, 11-09). Without one, any
-   * verification in the window, or a provider round trip, will do.
+   * verification in the window, or a provider round trip, will do. `freshFor`
+   * is the same question cookrew.dev/me asks before it shows the fields.
    */
   const hasPasskey = ctx.v2.factors.store.hasPasskey(account.username)
-  const proved = hasPasskey
-    ? freshlyVerified(session, ctx.v2.now(), ['passkey'], ctx.v2.freshWindowMs)
-    : freshlyVerified(session, ctx.v2.now(), undefined, ctx.v2.freshWindowMs) ||
-      ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti)
+  const proved =
+    freshFor(ctx.v2, signed, 'change-password') ||
+    (!hasPasskey && ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti))
   if (!proved) {
     said(
       ctx,
       403,
       'step_up',
       hasPasskey
-        ? 'Prove it is you with your passkey first (sign in with it again), then set the password within five minutes.'
-        : 'Prove it is you first: sign in again, or confirm with your provider, then set the password within five minutes.'
+        ? 'Prove it is you with your passkey first, then set the password within five minutes. On cookrew.dev, Set takes you through it.'
+        : 'Prove it is you first — with your provider or your authenticator — then set the password within five minutes. On cookrew.dev, Set takes you through it.'
     )
     return
   }
