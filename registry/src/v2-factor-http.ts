@@ -5,7 +5,9 @@ import { factorError, type FactorError } from './v2-factor-copy'
 import { SESSION_COOKIE, type V2Context } from './v2-routes'
 import type { Pending } from './v2-pending'
 import { SESSION_TTL_MS } from './v2-tokens'
+import { tokenExpiry, type VerifiedBy } from './v2-session-age'
 import { authorizeSession, stillOpen } from './auth-finish'
+import { heldForOpener } from './auth-step-up'
 
 /**
  * IDENTITY v2, PHASE 4 — THE SHAPE OF AN ANSWER.
@@ -143,16 +145,29 @@ export function deviceShape(input: unknown): { id: string; kind: string; name: s
  * inherited the sign-in ending by default — which is the wrong default for
  * everything on the step-up list.
  */
-export function finishRung(ctx: V2Context, pending: Pending, id: string): void {
+export function finishRung(ctx: V2Context, pending: Pending, id: string, by: VerifiedBy | null): void {
+  // A step-up climbed on auth.cookrew.dev counts only when the browser that
+  // asked spends the code with its own session (auth-step-up.ts).
+  if (pending.act !== undefined && pending.authRequest !== undefined && ctx.auth !== undefined) {
+    heldForOpener(ctx, pending, id, by)
+    return
+  }
   if (pending.act !== undefined) {
     ctx.v2.factors.pending.authorise(id)
+    // The sitting that asked has just proved itself: its five minutes start now.
+    if (pending.opener !== undefined && by !== null) ctx.v2.accounts.markVerified(pending.username, pending.opener.jti, by)
     noContent(ctx.response)
     return
   }
-  if (completeSignIn(ctx, pending.username, pending.device)) ctx.v2.factors.pending.close(id)
+  if (completeSignIn(ctx, pending.username, pending.device, by)) ctx.v2.factors.pending.close(id)
 }
 
-export function completeSignIn(ctx: V2Context, username: string, device: unknown): boolean {
+/**
+ * `by` is what proved the sign-in's second step (or the passkey that was all of
+ * it): the sitting starts verified, so its first five minutes reach the
+ * sensitive acts without asking again (v2-session-age.ts).
+ */
+export function completeSignIn(ctx: V2Context, username: string, device: unknown, by: VerifiedBy | null): boolean {
   const { v2, response } = ctx
   // Cancelled while this rung was being climbed: nothing attaches.
   if (ctx.auth !== undefined && !stillOpen(ctx, ctx.auth.request)) return false
@@ -164,14 +179,14 @@ export function completeSignIn(ctx: V2Context, username: string, device: unknown
   }
   // The auth origin: the same attach, then a code for the client instead of a cookie.
   if (ctx.auth !== undefined) {
-    return authorizeSession(ctx, ctx.auth.request, username, attached.device.id, attached.account.passwordless !== true)
+    return authorizeSession(ctx, ctx.auth.request, username, attached.device.id, attached.account.passwordless !== true, by === null ? {} : { verifiedBy: by })
   }
-  const session = v2.accounts.startSession(username, attached.device.id)
+  const session = v2.accounts.startSession(username, attached.device.id, by === null ? {} : { verifiedBy: by })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return false
   }
-  const minted = v2.tokens.mintSession(username, attached.device.id, session.jti)
+  const minted = v2.tokens.mintSession(username, attached.device.id, session.jti, tokenExpiry(session, ctx.v2.now(), SESSION_TTL_MS))
   json(
     response,
     201,

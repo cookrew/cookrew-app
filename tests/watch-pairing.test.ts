@@ -157,3 +157,42 @@ describe('how the sheet knows a watch arrived', () => {
     expect(code).toMatch(/^\d{6}$/)
   })
 })
+
+describe('a watch let in by its account pass', () => {
+  it('gets a token of its own, with no code, and the token is what opens the routes', () => {
+    const pairing = new WatchPairing({ file: path.join(mkdtempSync(path.join(tmpdir(), 'watch-enter-')), 'watch-token') })
+    const token = pairing.enter('cccc-watch')
+    expect(token).toMatch(/^[A-Za-z0-9_-]{24,}$/)
+    expect(pairing.paired).toBe(true)
+    expect(pairing.accepts(token)).toBe(true)
+    expect(pairing.claims).toBe(1)
+  })
+})
+
+describe('a watch the account revoked', () => {
+  it('loses this machine with it: its token stops, and a watch paired by digits is left alone', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'watch-revoked-'))
+    const pairing = new WatchPairing({ file: path.join(dir, 'watch-token') })
+    const token = pairing.enter('aaaa-watch')
+    expect(pairing.revoked(['someone-else'])).toBe(false)
+    expect(pairing.accepts(token)).toBe(true)
+    expect(pairing.revoked(['aaaa-watch'])).toBe(true)
+    expect(pairing.accepts(token)).toBe(false)
+    // It is remembered across a restart, so a revocation later still finds it.
+    const again = new WatchPairing({ file: path.join(dir, 'watch-token') })
+    const second = again.enter('bbbb-watch')
+    expect(new WatchPairing({ file: path.join(dir, 'watch-token') }).revoked(['bbbb-watch'])).toBe(true)
+    expect(second.length).toBeGreaterThan(16)
+  })
+})
+
+describe('a watch that claimed its first machine down the relay', () => {
+  it('is known there by its account device, so revoking it ends that token too', () => {
+    const pairing = new WatchPairing({ file: path.join(mkdtempSync(path.join(tmpdir(), 'watch-claim-')), 'watch-token') })
+    const { code } = pairing.mintCode()
+    const claim = pairing.claim(code, 'dddd-watch')
+    if (!claim.ok) throw new Error('claim failed')
+    expect(pairing.revoked(['dddd-watch'])).toBe(true)
+    expect(pairing.accepts(claim.token)).toBe(false)
+  })
+})

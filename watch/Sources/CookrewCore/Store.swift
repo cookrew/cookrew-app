@@ -93,6 +93,15 @@ public final class WatchStore {
   public private(set) var workspaces: [WorkspaceTile] = []
   /** The workspace the wrist has zoomed into; nil above them. */
   public private(set) var scope: String?
+  /**
+   * The Mac can show a thumbnail without starting its browser (frame ?peek=1).
+   * It came with the workspace counts (0.5.6): a Mac that sends those peeks. An
+   * older one would start a Chrome for every thumbnail and keep it busy, which a
+   * phone scrolling on that Mac feels, so it is not asked for thumbnails at all.
+   */
+  public private(set) var macPeeks = false
+  /** What the paired machine is; nil until it says. */
+  public private(set) var platform: String?
   /** The Mac's own active workspace: the dot on its tile. */
   public private(set) var activeWorkspaceId: String?
   public private(set) var link: WatchLink = .connecting
@@ -146,6 +155,9 @@ public final class WatchStore {
 
   public var client: WatchAPI { api }
 
+  /** The word for the paired machine: Mac, PC, machine, or computer before it has said. */
+  public var machine: String { machineWord(platform) }
+
   public var currentCard: Card? { cards.first { $0.id == page } }
 
   private func shown(_ list: [Card]) -> [Card] {
@@ -187,12 +199,12 @@ public final class WatchStore {
       guard current else { return }
       switch answer {
       case .same:
-        link = .live
+        if link != .live { link = .live }
       case .new(let reply, let nextTag):
         tag = nextTag
         adopt(reply, readFor: asked)
       }
-      signedOut = false
+      if signedOut { signedOut = false }
     } catch WatchError.unpaired {
       unpaired = true
     } catch WatchError.signedOut {
@@ -216,17 +228,23 @@ public final class WatchStore {
       // The cards in hand, or these, were one workspace's: every other one speaks through its count.
       if let inside = asked ?? cardsScope { events += eventsElsewhere(workspaces, tiles, inside: inside) }
     }
-    cards = next
+    // Every write below is one that changed: an observed property set to the same
+    // value still redraws whatever reads it, the whole pager and every face, on
+    // every poll, mid-scroll.
+    if macPeeks != (reply.workspaces != nil) { macPeeks = reply.workspaces != nil }
+    if cards != next { cards = next }
+    if let said = reply.platform, platform != said { platform = said }
     // Only cards that really are one workspace's: a Mac too old to scope sends them all, and those speak for themselves.
     cardsScope = asked.flatMap { id in next.allSatisfy { $0.workspace.id == id } ? id : nil }
-    workspaces = tiles
-    activeWorkspaceId = reply.activeWorkspaceId
-    link = .live
+    if workspaces != tiles { workspaces = tiles }
+    if activeWorkspaceId != reply.activeWorkspaceId { activeWorkspaceId = reply.activeWorkspaceId }
+    if link != .live { link = .live }
     // A card that left takes its page with it; the first page is the one that needs the owner.
     let visible = shown(next)
     if page != newAgentPage, page == nil || !visible.contains(where: { $0.id == page }) { page = visible.first?.id ?? newAgentPage }
-    readIds = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
-    for card in next where card.choice == nil { answers[card.id] = nil }
+    let stillRead = readIds.filter { id in next.contains { $0.id == id && $0.status == .done } }
+    if stillRead != readIds { readIds = stillRead }
+    for card in next where card.choice == nil && answers[card.id] != nil { answers[card.id] = nil }
     for event in events { feel(event) }
   }
 
@@ -257,7 +275,7 @@ public final class WatchStore {
 
   private func refused(_ error: Error) {
     feel(.refused)
-    if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else { notice = "The Mac is not answering" }
+    if case WatchError.refused(let words) = error { notice = words } else if case WatchError.unpaired = error { unpaired = true } else { notice = "The \(machine) is not answering" }
   }
 
   /** The box's words, where boxTarget says they go. The draft comes back if the Mac will not take them. */

@@ -1,5 +1,5 @@
 import type { AuthEnrolment } from '../../src/shared/auth-site'
-import { PROVIDER_LABEL, type ProviderId } from '../../src/shared/oauth'
+import { PROVIDER_LABEL, providerNames, type ProviderId } from '../../src/shared/oauth'
 import type { StepUpAct } from '../../src/shared/step-up'
 import { readJsonBody } from './http'
 import type { AuthRequest, HeldPasskey } from './auth-requests'
@@ -55,7 +55,7 @@ const SENTENCES: Record<Refusal, string> = {
 const say = (ctx: V2Context, request: AuthRequest, line: string): void => enrolLog(ctx, `${line} client=${request.client}`)
 
 /** "GitHub", "GitHub or Google": the ways this account proves itself, in words. */
-const named = (providers: readonly ProviderId[]): string => providers.map((p) => PROVIDER_LABEL[p]).join(' or ')
+const named = providerNames
 
 /** The account's linked providers, each once. */
 function providersOf(v2: V2Identity, username: string): ProviderId[] {

@@ -25,7 +25,7 @@ import { JoinCodes, JOIN_CODE_TTL_MS } from '../registry/src/v2-join-codes'
 
 const PASSWORD = 'correct horse battery staple'
 
-const device = (kind: 'desktop' | 'phone' | 'browser' = 'desktop', name = 'Mac mini') => ({
+const device = (kind: 'desktop' | 'phone' | 'browser' | 'watch' = 'desktop', name = 'Mac mini') => ({
   id: randomUUID(),
   kind,
   name,
@@ -113,7 +113,7 @@ async function up(loose = true): Promise<Up> {
     stars: new StarStore(dir),
     // Loose on the sign-in limiter, which has its own proof elsewhere, and
     // DEFAULT on the two this file is about.
-    v2: createV2(dir, {
+    v2: createV2(dir, { secondStep: 'legacy', 
       limits: {
         accountsPerMinute: 1000,
         sessionsPerMinute: 1000,
@@ -362,5 +362,48 @@ describe('"not me" and the join door', () => {
     )
     expect(minted.status).toBe(403)
     expect((await bodyOf<{ error: string }>(minted)).error).toBe('password_change_required')
+  })
+})
+
+describe('a watch is made only by a watch’s code (security review 2026-11-09)', () => {
+  const watchCode = async (token: string): Promise<string> => {
+    const res = await call('POST', '/v2/me/join-codes', { current: PASSWORD, purpose: 'watch' }, bearer(token))
+    expect(res.status).toBe(201)
+    return (await bodyOf<{ code: string }>(res)).code
+  }
+
+  it('a watch’s code joins a watch, and the account lists it as one', async () => {
+    const owner = await claim()
+    const joining = device('watch', 'Apple Watch')
+    const res = await call('POST', '/v2/join', { code: await watchCode(owner.token), device: joining })
+    expect(res.status).toBe(201)
+    const out = await bodyOf<{ token: string }>(res)
+    const me = await bodyOf<{ devices: { id: string; kind: string }[] }>(await call('GET', '/v2/me', undefined, bearer(out.token)))
+    expect(me.devices.find((d) => d.id === joining.id)?.kind).toBe('watch')
+  })
+
+  it('any other code — the add-a-device QR, a leaked one — cannot make a watch', async () => {
+    const owner = await claim()
+    const res = await call('POST', '/v2/join', { code: await mintCode(owner.token), device: device('watch', 'Apple Watch') })
+    expect(res.status).toBe(400)
+  })
+
+  it('a known desktop or browser cannot be turned into a watch; a watch that joined as a phone can', async () => {
+    const username = `flip${++minted}`
+    const desk = device('desktop', 'Mac mini')
+    const made = await call('POST', '/v2/accounts', { username, password: PASSWORD, device: desk })
+    const token = (await bodyOf<{ session: { token: string } }>(made)).session.token
+    expect((await call('POST', '/v2/join', { code: await watchCode(token), device: { ...desk, kind: 'watch' } })).status).toBe(400)
+    const old = device('phone', 'Apple Watch')
+    expect((await call('POST', '/v2/join', { code: await mintCode(token), device: old })).status).toBe(201)
+    expect((await call('POST', '/v2/join', { code: await watchCode(token), device: { ...old, kind: 'watch' } })).status).toBe(201)
+  })
+
+  it('nor can making an account, or any device but a watch be made one', async () => {
+    const res = await call('POST', '/v2/accounts', { username: `watchmade${++minted}`, password: PASSWORD, device: device('watch', 'Apple Watch') })
+    expect(res.status).toBe(400)
+    // A phone given a watch's code joins as what it says it is not: refused, not turned into a watch.
+    const owner = await claim()
+    expect((await call('POST', '/v2/join', { code: await watchCode(owner.token), device: device('phone', 'iPhone') })).status).toBe(400)
   })
 })

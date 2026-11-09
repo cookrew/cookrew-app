@@ -4,6 +4,7 @@ import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import { UNKNOWN_FACTS, type ToolFacts, type ToolState } from '../shared/preflight'
 import { HarnessScan, onPath } from './route/setup'
+import { bypassConsentState } from './claude-consent'
 
 /**
  * WHAT THIS MACHINE HAS (first run, the tool check).
@@ -51,6 +52,8 @@ export interface ProbeDeps {
   arch?: string
   /** What panes inherit: a key here is a sign-in. */
   env?: Readonly<Record<string, string | undefined>>
+  /** Claude's bypass-permissions notice, as the user settings hold it (claude-consent.ts). */
+  claudeConsent?: () => 'accepted' | 'not-yet' | 'unreadable'
 }
 
 /** The directories on the marked line of the login shell's output. */
@@ -121,7 +124,17 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
     host,
     platform: deps.platform,
     arch: deps.arch ?? 'unknown',
-    endpointTools: deps.endpointTools?.() ?? []
+    endpointTools: deps.endpointTools?.() ?? [],
+    claudeConsent: claude.state === 'found' ? consentNow(deps) : null,
+    ...(deps.platform === 'linux' ? { xdotool: bin('xdotool') } : {})
+  }
+}
+
+function consentNow(deps: ProbeDeps): 'accepted' | 'not-yet' | 'unreadable' | null {
+  try {
+    return deps.claudeConsent?.() ?? null
+  } catch {
+    return null
   }
 }
 
@@ -144,6 +157,7 @@ export function machineProbe(deps: Pick<ProbeDeps, 'chrome' | 'magpie' | 'host' 
     arch: process.arch,
     env: process.env,
     exists: existsSync,
+    claudeConsent: () => bypassConsentState(path.join(home, '.claude', 'settings.json')),
     agents: (pathEnv) => {
       const scan = new HarnessScan({ home, pathEnv, dockCommands: () => [], harnessOfCommand: () => null, installed: (bin) => onPath(bin, pathEnv) })
       return scan.rowsSettled().finally(() => scan.dispose())

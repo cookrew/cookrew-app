@@ -12,8 +12,8 @@ public enum PairFailure: Equatable, Sendable {
 
   var words: String {
     switch self {
-    case .noAddress: return "Set the Mac's address"
-    case .unreachable: return "Can't reach that Mac"
+    case .noAddress: return "Set the computer's address"
+    case .unreachable: return "Can't reach that computer"
     case .refused("paused"): return "Too many tries · wait a minute"
     case .refused("burned"), .refused("expired"), .refused("no-code"): return "Ask for a new code"
     case .refused: return "Wrong code"
@@ -44,8 +44,8 @@ public struct PairView: View {
 
   public var body: some View {
     VStack(spacing: 3) {
-      WordsField(prompt: "Mac address", onWords: { address = $0 }) {
-        Text(address.isEmpty ? "Mac address…" : address)
+      WordsField(prompt: "Computer address", onWords: { address = $0 }) {
+        Text(address.isEmpty ? "Computer address…" : address)
           .font(InkType.word(10.5))
           .foregroundStyle(address.isEmpty ? ink.sealText : ink.muted)
           .lineLimit(1)

@@ -47,7 +47,7 @@ let deviceId = ''
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'm4-m6-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   const server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),

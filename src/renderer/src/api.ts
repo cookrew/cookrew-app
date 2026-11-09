@@ -540,6 +540,8 @@ export interface CookrewApi {
   listAgents?: () => Promise<unknown[]>;
   /** Could this offline card start now? Null when nothing stands in its way. */
   launchCheck?: (id: string) => Promise<LaunchFailure | null>;
+  /** The person's yes to Claude's trust question for this card's folder: whether it was written, and what still stops the card. */
+  trustCardFolder?: (id: string) => Promise<{ outcome: string; failure: LaunchFailure | null }>;
   /** Live panes no card reaches; absent on an older bridge. */
   listStrayPanes?: () => Promise<StrayPane[]>;
   endStrayPane?: (session: string) => Promise<{ ok: boolean; error?: string }>;
@@ -1044,6 +1046,8 @@ export interface CookrewApi {
   accountBrowserLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
   /** A passcode is this Mac's alone: it never goes to cookrew.dev. */
   accountSetPasscode?: (input: { next: string; current?: string }) => Promise<AccountResult<AccountStatus>>;
+  /** The account password, typed once on a machine signed in from a terminal: it becomes the lock. */
+  accountAdoptPassword?: (password: string) => Promise<AccountResult<AccountStatus>>;
   accountSetTouchId?: (on: boolean) => Promise<AccountResult<AccountStatus>>;
   accountUnlockTouchId?: () => Promise<{ ok: boolean }>;
   accountRescueUnlock?: (code: string) => Promise<AccountResult<AccountStatus>>;

@@ -243,9 +243,9 @@
       ("pad-typing", pad("K7QM2X", nil)),
       ("pad-wrong", pad("K7QM2XPD", "Wrong or expired code")),
       ("joining", AnyView(JoinSteps(done: [], now: "Joining your account…"))),
-      ("finding", AnyView(JoinSteps(done: ["Joined your account"], now: "Finding your Mac…"))),
+      ("finding", AnyView(JoinSteps(done: ["Joined your account"], now: "Finding your computer…"))),
       ("paired", AnyView(JoinSteps(done: ["Joined your account", "Paired with MacBook Pro"], now: nil))),
-      ("mac-away", note("Can't reach your Mac", "You're in your account. Wake the Mac, then try again.", "Try again")),
+      ("mac-away", note("Can't reach your computer", "You're in your account. Wake the computer, then try again.", "Try again")),
       ("this-watch", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: "drej", line: .relay, onForget: {}))),
       ("this-watch-no-account", AnyView(ThisWatchPage(desktop: "MacBook Pro", account: nil, line: .direct, onForget: {}))),
       ("new-agent", AnyView(NewAgentPage(store: WatchStore(api: NoAPI()))))

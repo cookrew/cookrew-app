@@ -53,11 +53,27 @@ export type AdmittedDevice = {
    * token.
    */
   readonly tokenHash?: string
+  /**
+   * WHAT LET IT IN: the root pairing token, or the account itself — its
+   * password or one of its passkeys, checked on this machine (account-pair.ts).
+   * Absent on rows written before it existed.
+   */
+  readonly via?: AdmittedVia
+  /**
+   * WHEN THE ACCOUNT'S WORD RUNS OUT. A device let in by a grant
+   * (account-pair.ts) is remembered for the grant's twelve hours and no
+   * longer; its token opens nothing after this. Absent = until forgotten.
+   */
+  readonly until?: number
 }
+
+export type AdmittedVia = 'token' | 'password' | 'passkey' | 'account'
 
 export type AdmittedDeviceStore = {
   readonly list: () => AdmittedDevice[]
   readonly has: (deviceId: string) => boolean
+  /** Rows that still admit: a pass's twelve hours not yet run out. */
+  readonly live: () => AdmittedDevice[]
   /**
    * Note that this phone asked, and that it was allowed to.
    *
@@ -105,7 +121,7 @@ export type AdmittedDeviceStore = {
    * second browser on the same phone does not leave two live credentials for
    * one device, and the row keeps its first `admittedAt`.
    */
-  readonly admit: (device: { deviceId: string; name?: string }) => {
+  readonly admit: (device: { deviceId: string; name?: string; via?: AdmittedVia; until?: number }) => {
     device: AdmittedDevice
     token: string
   }
@@ -158,7 +174,9 @@ const looksLikeDevice = (value: unknown): value is AdmittedDevice => {
     typeof d.admittedAt === 'number' &&
     typeof d.lastSeenAt === 'number' &&
     (d.name === undefined || typeof d.name === 'string') &&
-    (d.tokenHash === undefined || typeof d.tokenHash === 'string')
+    (d.tokenHash === undefined || typeof d.tokenHash === 'string') &&
+    (d.via === undefined || d.via === 'token' || d.via === 'password' || d.via === 'passkey' || d.via === 'account') &&
+    (d.until === undefined || typeof d.until === 'number')
   )
 }
 
@@ -225,12 +243,13 @@ export type AdmittedDeviceStoreDeps = {
  * are the same question asked at two widths; two loops would be two chances
  * for one of them to be the loose one.
  */
-const holderOf = (devices: readonly AdmittedDevice[], token: string): AdmittedDevice | null => {
+const holderOf = (devices: readonly AdmittedDevice[], token: string, now: number): AdmittedDevice | null => {
   if (typeof token !== 'string' || token.length === 0) return null
   const candidate = hashToken(token)
   return (
     devices.find(
       (device) =>
+        (device.until === undefined || device.until > now) &&
         typeof device.tokenHash === 'string' &&
         device.tokenHash.length === candidate.length &&
         timingSafeEqual(Buffer.from(device.tokenHash), Buffer.from(candidate))
@@ -249,6 +268,7 @@ export const createAdmittedDeviceStore = (
   return {
     list: () => load().sort((a, b) => b.lastSeenAt - a.lastSeenAt),
     has: (deviceId) => load().some((device) => device.deviceId === deviceId),
+    live: () => load().filter((device) => device.until === undefined || device.until > now()),
     record: ({ deviceId, name }) => {
       const at = now()
       const existing = load()
@@ -274,11 +294,13 @@ export const createAdmittedDeviceStore = (
       )
       return seen
     },
-    accepts: (token) => holderOf(load(), token) !== null,
-    deviceFor: (token) => holderOf(load(), token)?.deviceId ?? null,
-    admit: ({ deviceId, name }) => {
+    accepts: (token) => holderOf(load(), token, now()) !== null,
+    deviceFor: (token) => holderOf(load(), token, now())?.deviceId ?? null,
+    admit: ({ deviceId, name, via, until }) => {
       const at = now()
-      const existing = load()
+      // A pass that ran out is a row that admits nothing: it goes, so it never
+      // holds one of the ADMITTED_MAX places (review, 11-09).
+      const existing = load().filter((device) => device.until === undefined || device.until > at)
       const previous = existing.find((device) => device.deviceId === deviceId)
       const token = mintCompanionToken()
       const admitted: AdmittedDevice = {
@@ -286,7 +308,9 @@ export const createAdmittedDeviceStore = (
         ...((name ?? previous?.name) ? { name: name ?? previous?.name } : {}),
         admittedAt: previous?.admittedAt ?? at,
         lastSeenAt: at,
-        tokenHash: hashToken(token)
+        tokenHash: hashToken(token),
+        ...(via ? { via } : {}),
+        ...(until !== undefined ? { until } : {})
       }
       // Written BEFORE the token is answered: a token handed out ahead of a
       // write that then failed would be a credential this Mac never agreed to.

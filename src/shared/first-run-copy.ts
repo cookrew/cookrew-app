@@ -70,7 +70,8 @@ export const TOOL_COPY = {
   multiplexer: { name: 'herdr or tmux', does: 'Keeps your agents alive across restarts.' },
   chrome: { name: 'Chrome', does: 'Lets agents open and use web pages.' },
   magpie: { name: 'Magpie', does: 'Lets agents use other AI models.' },
-  ollama: { name: 'Ollama', does: 'Gives agents short names, on this computer.' }
+  ollama: { name: 'Ollama', does: 'Gives agents short names, on this computer.' },
+  xdotool: { name: 'xdotool', does: 'Lets your paired devices click and type on this computer, once you allow remote control.' }
 } as const
 
 export const TOOL_NOTES = {
@@ -78,7 +79,10 @@ export const TOOL_NOTES = {
   RESTART: 'Installed. Restart Cookrew to turn it on.',
   NOT_SIGNED_IN: 'Not signed in yet.',
   USES_ENDPOINT: 'Uses your own endpoint, so it needs no sign-in.',
-  ADMIN: 'May need admin rights: it can ask for this computer’s password.'
+  ADMIN: 'May need admin rights: it can ask for this computer’s password.',
+  BYPASS_ACCEPTED: 'Your Claude cards run in bypass permissions; Claude’s notice about it is accepted (~/.claude/settings.json).',
+  BYPASS_ON_FIRST: 'Your Claude cards run in bypass permissions; Cookrew accepts Claude’s notice about it when the first one starts (~/.claude/settings.json).',
+  BYPASS_UNREADABLE: '~/.claude/settings.json could not be read, so a new Claude card asks about bypass permissions itself.'
 } as const
 
 export const FIX_LABELS = {

@@ -58,6 +58,7 @@ import { renewDue, renewMessage } from '../shared/session-renew'
 import type { RegistryAccount } from './registry-account'
 import type { MachineProfile } from '../shared/fleet'
 import type { PasskeySummary } from '../shared/account-approvals'
+import { GRANT_PATHS } from '../shared/account-pair'
 
 export { DEFAULT_LOCK_AFTER_MS }
 
@@ -156,8 +157,15 @@ export interface AccountFile {
   unlockBy?: 'passcode'
   /** The account has no password at all: every step-up goes to the provider. */
   passwordless?: boolean
-  /** Opted in on a passcode Mac. */
+  /** Touch ID stands in for typing the lock's secret. */
   touchId?: boolean
+  /**
+   * SIGNED IN FROM A TERMINAL (`cookrew login`): a device code, nobody at this
+   * machine's screen — a headless box the owner may only watch. Nothing is put
+   * on its screen, and its lock stays off until the account password is typed
+   * on it once (owner, 2026-11-09). Cleared when that happens.
+   */
+  fromTerminal?: boolean
   lockAfterMs: number
   claimedAt: number
   /** May cookrew.dev offer this Mac's workspaces to the account's phones? */
@@ -306,14 +314,28 @@ export function loadAccount(base?: string): AccountFile | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(accountFilePath(base), 'utf8'))
     if (!looksLikeAccount(parsed)) return null
-    return {
+    return withoutPendingPasscode({
       ...parsed,
       workspacesReachable: parsed.workspacesReachable !== false,
       recoveryCodesSavedAt: parsed.recoveryCodesSavedAt ?? null,
-    }
+    })
   } catch {
     return null
   }
+}
+
+/**
+ * THERE IS NO SEPARATE PASSCODE ANY MORE (owner, 2026-11-09): the lock is the
+ * account password. A file that was waiting for a passcode nobody chose holds
+ * no secret at all, so it is read as exactly that — and as signed in from a
+ * terminal, because nothing now says whether a person sits at this machine and
+ * a modal on a headless box's screen is the thing that must not happen. A
+ * passcode already CHOSEN keeps working until the password is typed here.
+ */
+function withoutPendingPasscode(account: AccountFile): AccountFile {
+  if (account.unlockBy !== 'passcode' || account.unlock !== null) return account
+  const { unlockBy: _none, ...rest } = account
+  return { ...rest, fromTerminal: true }
 }
 
 /**
@@ -659,20 +681,51 @@ export class Accounts {
     return this.cached?.passwordless === true
   }
 
-  /** What the lock checks. */
+  /** What the lock checks: the account password, or a passcode chosen before there was none. */
   unlockMethod(): 'password' | 'passcode' {
     return this.cached?.unlockBy === 'passcode' ? 'passcode' : 'password'
   }
 
-  /** Is there anything that could open the lock? Only then may it close. */
-  lockable(): boolean {
-    return this.cached !== null && !this.passcodePending()
+  /**
+   * WHY THE LOCK IS OFF, when it is (owner, 2026-11-09):
+   *   'set-password'   the account has no password yet, and this machine no
+   *                    verifier — nothing could open the lock;
+   *   'type-password'  the account has one, but this machine was signed in
+   *                    from a terminal and has not seen it — the lock waits
+   *                    until it is typed here once;
+   *   null             the lock can close: a verifier is here, or (signed in
+   *                    at this screen) the first unlock asks cookrew.dev.
+   */
+  lockWaits(): 'set-password' | 'type-password' | null {
+    const account = this.cached
+    if (account === null || account.unlock !== null) return null
+    if (account.passwordless === true) return 'set-password'
+    return account.fromTerminal === true ? 'type-password' : null
   }
 
-  /** A passcode Mac with none chosen yet. The idle lock stays disarmed. */
-  passcodePending(): boolean {
+  /**
+   * Is there anything that could open the lock? Only then may it close.
+   *
+   * WITH NO VERIFIER YET, ONLY WHILE THE SESSION LIVES: the first unlock asks
+   * cookrew.dev through it, and a fresh sign-in from a lock screen cannot
+   * climb the second step (auth UX 2026-11-09). A lock closed with neither
+   * would shut the owner out of their own canvas.
+   */
+  lockable(): boolean {
     const account = this.cached
-    return account !== null && account.unlockBy === 'passcode' && account.unlock === null
+    if (account === null || this.lockWaits() !== null) return false
+    return account.unlock !== null || this.sessionLive()
+  }
+
+  /** Signed in from a terminal (`cookrew login`): nothing goes on this screen. */
+  isFromTerminal(): boolean {
+    return this.cached?.fromTerminal === true
+  }
+
+  /** `cookrew login` landed: nobody is at this screen. */
+  markFromTerminal(): void {
+    const account = this.cached
+    if (account !== null && account.fromTerminal !== true) this.save({ ...account, fromTerminal: true })
   }
 
   /** The caller has already checked the current one (account-ipc.ts). */
@@ -685,13 +738,83 @@ export class Accounts {
     return { ok: true, value: undefined }
   }
 
+  /**
+   * TOUCH ID REPLACES TYPING, whichever secret the lock holds (owner's ruling,
+   * 2026-11-09): the account password or, until it is folded in, a passcode.
+   */
   touchIdOn(): boolean {
-    return this.cached?.unlockBy === 'passcode' && this.cached.touchId === true
+    return this.cached !== null && this.cached.touchId === true && this.lockable()
   }
 
   setTouchId(on: boolean): void {
     const account = this.cached
-    if (account?.unlockBy === 'passcode') this.save({ ...account, touchId: on })
+    if (account) this.save({ ...account, touchId: on })
+  }
+
+  /** Does the ACCOUNT have a password now, as this machine last heard? */
+  hasAccountPassword(): boolean {
+    return this.cached !== null && this.cached.passwordless !== true
+  }
+
+  /**
+   * A FIRST ACCOUNT PASSWORD, set from this machine (owner's ruling 3): the
+   * account gets it at cookrew.dev, and this machine's lock takes it at once —
+   * the passcode, if there was one, is folded into it and is gone.
+   */
+  async setFirstPassword(next: string, stepUp: string | null): Promise<AccountResult<void>> {
+    if (next.length < MIN_PASSWORD) return { ok: false, reason: 'weak_password' }
+    const result = await this.authed<void>('/v2/me/password', {
+      method: 'POST',
+      body: JSON.stringify({ next, ...(stepUp === null ? {} : { stepUp }) }),
+      parse: false,
+    })
+    if (!result.ok) return result
+    this.foldPasscode(next)
+    return { ok: true, value: undefined }
+  }
+
+  /**
+   * THE PASSCODE FOLDS INTO THE ACCOUNT PASSWORD (owner's ruling, 2026-11-09):
+   * once the account password has been proved here, it is what unlocks this
+   * machine, and the passcode concept goes from it.
+   */
+  foldPasscode(password: string): void {
+    const account = this.cached
+    if (account === null) return
+    const { unlockBy: _gone, fromTerminal: _seen, ...rest } = account
+    this.save({ ...rest, passwordless: false, unlock: unlockVerifierFor(password) })
+  }
+
+  /**
+   * IS THIS THE ACCOUNT PASSWORD? Asked of cookrew.dev with this machine's live
+   * session, through the device-grant route (which checks it, counts wrong
+   * tries, and answers a pass this machine simply drops). No new session, so
+   * no sign-in ladder: the machine is already signed in.
+   */
+  async isAccountPassword(password: string): Promise<boolean> {
+    return (await this.checkAccountPassword(password)).ok
+  }
+
+  /** The same question, with why when the answer is not yes. */
+  async checkAccountPassword(password: string): Promise<AccountResult<void>> {
+    const sent = await this.authedResponse(GRANT_PATHS.grant, { method: 'POST', body: JSON.stringify({ password }) })
+    if (!sent.ok) return sent
+    if (sent.response.status === 201) return { ok: true, value: undefined }
+    const body = await bodyOf(sent.response)
+    if (sent.response.status === 401 && body.error === 'wrong') return { ok: false, reason: 'bad_credentials' }
+    const refused = classify(sent.response.status, body)
+    // A finished token is recorded here as on every authenticated call, so the
+    // surface offers to sign in again rather than refusing this forever.
+    if (refused.reason === 'session-expired') this.endSession(sent.token)
+    return plainRefusal(refused)
+  }
+
+  /** What /v2/me says about the account, learned whenever it is read. */
+  private learnFromProfile(profile: { hasPassword?: unknown }): void {
+    const account = this.cached
+    if (account !== null && account.passwordless === true && profile.hasPassword === true) {
+      this.save({ ...account, passwordless: false })
+    }
   }
 
   /**
@@ -724,7 +847,10 @@ export class Accounts {
     if (response.status !== 201) return plainRefusal(classify(response.status, body))
     const session = sessionFrom(body)
     if (session === null) return { ok: false, reason: 'unknown' }
-    this.save({ ...account, session, unlock: null, touchId: false })
+    // The chosen passcode is spent: from here the account password is the lock
+    // (owner, 2026-11-09), never a new passcode.
+    const { unlockBy: _spent, ...rest } = account
+    this.save({ ...rest, session, unlock: null, touchId: false })
     return { ok: true, value: undefined }
   }
 
@@ -1122,10 +1248,11 @@ export class Accounts {
    */
   async mintJoinCode(
     proof: StepUpProof,
+    purpose?: 'watch',
   ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
     const result = await this.authed<{ code?: unknown; expiresAt?: unknown }>('/v2/me/join-codes', {
       method: 'POST',
-      body: JSON.stringify(proofBody(proof)),
+      body: JSON.stringify({ ...proofBody(proof), ...(purpose ? { purpose } : {}) }),
     })
     if (!result.ok) return result
     const { code, expiresAt } = result.value
@@ -1161,7 +1288,8 @@ export class Accounts {
     keys: { privateKeyJwk: Record<string, unknown>; publicKeyJwk: Record<string, unknown> }
     session: AccountSession | null
   }): AccountFile {
-    const passcode = input.viaProvider === true || input.passwordless === true
+    // No passcode is ever asked for now (owner, 2026-11-09): with no password
+    // typed here the lock waits for the account password (lockWaits).
     return this.save({
       username: input.username,
       deviceId: input.deviceId,
@@ -1172,7 +1300,6 @@ export class Accounts {
       registry: this.origin,
       session: input.session,
       unlock: input.password === null ? null : unlockVerifierFor(input.password),
-      ...(passcode ? { unlockBy: 'passcode' as const } : {}),
       ...(input.passwordless === true ? { passwordless: true } : {}),
       lockAfterMs: DEFAULT_LOCK_AFTER_MS,
       claimedAt: this.now(),
@@ -1247,7 +1374,7 @@ export class Accounts {
    */
   passwordPending(): boolean {
     const account = this.cached
-    return account !== null && account.unlock === null && account.unlockBy !== 'passcode'
+    return account !== null && account.unlock === null && account.unlockBy !== 'passcode' && this.lockWaits() === null
   }
 
   /**
@@ -1662,8 +1789,10 @@ export class Accounts {
   }
 
   /** The whole profile: who, which devices, which desktops (D4). */
-  profile(): Promise<AccountResult<AccountProfile>> {
-    return this.authed<AccountProfile>('/v2/me')
+  async profile(): Promise<AccountResult<AccountProfile>> {
+    const result = await this.authed<AccountProfile>('/v2/me')
+    if (result.ok) this.learnFromProfile(result.value as unknown as { hasPassword?: unknown })
+    return result
   }
 
   /** Just the devices — what the Devices tab redraws after a revoke. */

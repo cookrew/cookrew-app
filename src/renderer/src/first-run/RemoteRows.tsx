@@ -10,7 +10,8 @@ import './first-run.css'
 
 /**
  * REMOTE DESKTOP, OFFERED ON DAY ONE. Optional: it stands in nobody's way, and only
- * a machine that can do it shows it, so the phone and Linux see nothing here.
+ * a Mac shows it: its rows are the Mac's grants. The phone sees nothing here, and
+ * Linux has its xdotool row in the tool check and its switch in ⋯.
  *
  * The two grants are the system's and each has a press of its own. The switch is
  * the same one as in ⋯, behind the same confirmation at the machine. All of it is
@@ -133,7 +134,7 @@ export function RemoteRows(): React.JSX.Element | null {
     const action = access ? remoteRestartAction(access) : null
     if (action) acts.act(action)
   }, [access, acts])
-  if (!settable || !access?.control.available) return null
+  if (!settable || !access?.control.available || access.state.platform !== 'darwin') return null
   return (
     <>
       <RemoteRowsView access={access} busy={acts.busy || switchBusy} said={error ?? acts.note} onOpen={(pane) => acts.act(OPEN[pane])} onRestart={restart} onSwitch={flip} />

@@ -38,7 +38,7 @@ let v2: V2Identity
 async function boot(configured = true): Promise<void> {
   dir = mkdtempSync(path.join(tmpdir(), 'v2-oauth-'))
   fake = await fakeOAuth()
-  v2 = createV2(dir, {
+  v2 = createV2(dir, { secondStep: 'legacy', freshWindowMs: 0, 
     limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, oauthPerMinute: 1000 },
     ...(configured ? { oauth: fake.config() } : {})
   })
@@ -579,9 +579,10 @@ describe('configured', () => {
       expect((await call('POST', '/v2/me/recovery-codes', { stepUp: proved.body.stepUp }, token)).status).toBeGreaterThanOrEqual(400)
     })
 
-    it('a password account mints as it always did', async () => {
+    it('a password account mints with its password (auth UX 2026-11-09: adding a factor asks every account)', async () => {
       const { token } = await claimByPassword('alice')
-      expect((await call('POST', '/v2/me/recovery-codes', {}, token)).status).toBe(201)
+      expect((await call('POST', '/v2/me/recovery-codes', {}, token)).status).toBeGreaterThanOrEqual(400)
+      expect((await call('POST', '/v2/me/recovery-codes', { current: PASSWORD }, token)).status).toBe(201)
     })
 
     it('a proof earned by one session cannot be spent by another of the same account', async () => {

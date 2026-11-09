@@ -371,14 +371,14 @@ struct FrameTests {
   @Test("crown turns add up and none is lost; the first reading turns nothing")
   func crown() {
     var scroll = CrownScroll()
-    scroll.turned(to: 10)
+    _ = scroll.turned(to: 10)
     #expect(scroll.take() == nil)
-    scroll.turned(to: 10.5)
-    scroll.turned(to: 11)
-    #expect(scroll.take() == 60)
+    _ = scroll.turned(to: 10.5)
+    _ = scroll.turned(to: 11)
+    #expect(abs((scroll.take() ?? 0) - CrownScroll.sharePerUnit) < 0.0001)
     #expect(scroll.take() == nil)
-    scroll.turned(to: 10)
-    #expect(scroll.take() == -60)
+    _ = scroll.turned(to: 10)
+    #expect(abs((scroll.take() ?? 0) + CrownScroll.sharePerUnit) < 0.0001)
   }
 }
 

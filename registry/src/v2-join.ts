@@ -43,7 +43,8 @@ async function mintJoinCode(ctx: V2Context, signed: Signed): Promise<void> {
     refuse(ctx.response, 429, 'rate_limited', undefined, { 'retry-after': '3600' })
     return
   }
-  const minted = ctx.v2.joinCodes.mint(username)
+  // A watch's code (⋯ → Apple Watch) is the only way a watch is made: a watch enters every machine on its pairing alone.
+  const minted = ctx.v2.joinCodes.mint(username, body.value.purpose === 'watch' ? 'watch' : undefined)
   /**
    * THE CODE, THE LINK AND THE PICTURE — one answer, because they are one
    * secret in three shapes and a screen that shows all three fits every way a
@@ -92,7 +93,8 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
-  const username = v2.joinCodes.redeem(body.value.code)
+  const spent = v2.joinCodes.spend(body.value.code)
+  const username = spent?.username ?? null
   if (username === null) {
     refuse(response, 401, 'bad_credentials')
     return
@@ -107,7 +109,8 @@ async function redeemJoinCode(ctx: V2Context): Promise<void> {
     v2Json(response, 403, factorError('password_change_required'))
     return
   }
-  const attached = v2.accounts.attachDevice(username, body.value.device)
+  // A watch's code joins a watch and nothing else; any other code joins anything but a watch.
+  const attached = v2.accounts.attachDevice(username, body.value.device, { watch: spent?.purpose === 'watch' })
   if (!attached.ok) {
     refuse(response, attached.reason === 'bad_device' ? 400 : 401, attached.reason)
     return

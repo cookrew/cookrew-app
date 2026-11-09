@@ -67,9 +67,25 @@ export interface V2KeySource {
   fetch(): Promise<V2KeyMaterial | null>
 }
 
+/**
+ * A DEVICE GRANT (registry/src/v2-device-grant.ts): this account verified this
+ * device key within the last twelve hours, for every machine of the account.
+ */
+export interface V2Grant {
+  readonly username: string
+  readonly dev: string
+  /** RFC 7638 thumbprint of the device key the grant was issued to. */
+  readonly jkt: string
+  readonly exp: number
+  /** A watch's pass: it admits a watch's token only, never a device's. */
+  readonly watch?: true
+}
+
 export interface V2CallTokenVerifier {
   /** The caller, or null. `aud` is THIS door's published name. */
   verify(token: string, aud: string): Promise<V2CallIdentity | null>
+  /** A device grant, or null: signature, scope, expiry and the revoked list. */
+  grant(token: string): Promise<V2Grant | null>
   /**
    * Ask the registry now, whatever the cache says, and answer whether it gave
    * anything. TRUE means the revoked list below is current as of this moment;
@@ -183,6 +199,50 @@ export function v2CallClaimsFor(token: string, aud: string, now: number): V2Call
   }
 }
 
+/** A grant's claims, if the body is one and it is good now. */
+export function v2GrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string }) | null {
+  return grantClaimsIn(token, now, 'grant')
+}
+
+/** A watch's pass (registry v2-tokens.ts · mintWatchGrant): a grant in its own scope, marked so. */
+export function v2WatchGrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string }) | null {
+  const claims = grantClaimsIn(token, now, 'watch-grant')
+  return claims === null ? null : { ...claims, watch: true }
+}
+
+function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant'): (V2Grant & { jti: string; sid: string }) | null {
+  const [body] = token.split('.')
+  if (!body) return null
+  let claims: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
+    if (typeof parsed !== 'object' || parsed === null) return null
+    claims = parsed as Record<string, unknown>
+  } catch {
+    return null
+  }
+  if (claims.scope !== scope || claims.aud !== undefined) return null
+  if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now) return null
+  if (typeof claims.sub !== 'string' || !V2_USERNAME.test(claims.sub)) return null
+  if (typeof claims.dev !== 'string' || claims.dev.length === 0) return null
+  if (typeof claims.jti !== 'string' || claims.jti.length === 0) return null
+  if (typeof claims.jkt !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(claims.jkt)) return null
+  // The sitting it was minted under: its end ends the pass.
+  if (typeof claims.sid !== 'string' || claims.sid.length === 0) return null
+  return { username: claims.sub, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, jti: claims.jti, sid: claims.sid }
+}
+
+/** The pure check for a grant: cookrew.dev's signature, the claims, and not cut off. */
+export function verifyV2Grant(token: string, material: V2KeyMaterial, now: number): V2Grant | null {
+  if (!v2SignatureHolds(token, material.jwk)) return null
+  // A device's pass or a watch's: the revoked list ends either.
+  const claims = v2GrantClaimsFor(token, now) ?? v2WatchGrantClaimsFor(token, now)
+  if (claims === null) return null
+  const cut = [claims.dev, claims.jti, claims.sid]
+  if (cut.some((id) => material.revoked.includes(id))) return null
+  return { username: claims.username, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, ...(claims.watch ? { watch: true as const } : {}) }
+}
+
 /** Was this token cut off? Device id and session id are both listed. */
 export function v2Revoked(claims: V2CallClaims, revoked: readonly string[]): boolean {
   return revoked.includes(claims.dev) || revoked.includes(claims.jti)
@@ -277,6 +337,19 @@ export function createV2CallTokenVerifier(options: {
       const current = stale ? await material(true) : first
       if (current === null) return null
       return verifyV2CallToken(token, current, aud, now())
+    },
+    grant: async (token) => {
+      if (typeof token !== 'string' || token.length === 0 || token.length > 4096) return null
+      const first = await material(false)
+      // The same two reasons to look again as a call token: an old key, or a
+      // cached revoked list that may be behind.
+      const claims = v2GrantClaimsFor(token, now())
+      const stale =
+        first === null ||
+        !v2SignatureHolds(token, first.jwk) ||
+        (claims !== null && [claims.dev, claims.jti, claims.sid].some((id) => first.revoked.includes(id)))
+      const current = stale ? await material(true) : first
+      return current === null ? null : verifyV2Grant(token, current, now())
     },
     refresh: async () => (await material(true)) !== null
   }

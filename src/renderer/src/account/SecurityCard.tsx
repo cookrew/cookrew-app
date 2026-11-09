@@ -386,7 +386,7 @@ export function SecurityCard({
           }
         />
         {/* Nothing could open it yet, so a button here would do nothing. */}
-        {status?.passcodePending !== true && (
+        {(status?.lockWaits ?? null) === null && (
           <Row
             kind="LOCK"
             label={machineCopy('Lock this Mac now', hostPlatform())}
@@ -411,7 +411,7 @@ export function SecurityCard({
         </p>
       )}
       <p className="gs-foot-note">
-        {status?.unlockBy === 'passcode' ? PROVIDER_COPY.LOCK_NOW_WHY : ACCOUNT_COPY.LOCK_NOW_WHY}
+        {status?.unlockBy === 'passcode' ? PROVIDER_COPY.CHOSEN_PASSCODE_LOCK_WHY : ACCOUNT_COPY.LOCK_NOW_WHY}
       </p>
       <p className="gs-foot-note">{ACCOUNT_COPY.SECURITY_WHY}</p>
       {totp && (

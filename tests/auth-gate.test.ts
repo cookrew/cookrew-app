@@ -7,6 +7,7 @@ import {
   isAuthError,
   REAUTH_COPY,
   reauthMessage,
+  machineSentence,
   TOKEN_KEY,
   tokenFromInput,
   tokenParam,
@@ -317,20 +318,32 @@ describe('tokenFromInput — the three things the Not paired card accepts', () =
 })
 
 describe('the Not paired copy', () => {
-  it('sends the reader to the Mac, by all three routes, best first (M5)', () => {
+  it('names only the doors that work without an account, and none answered at the machine (owner 2026-11-09)', () => {
     expect(REAUTH_COPY.title).toBe('Not paired')
     // The sentence is the copy table's, so the phone and the Mac cannot drift.
     expect(REAUTH_COPY.unpaired).toBe(V3_COPY['m5.unpaired'])
-    // The tap is named FIRST: it is the door that needs no scan and no paste.
     const text = REAUTH_COPY.unpaired
-    expect(text.indexOf('USE WI-FI')).toBeLessThan(text.indexOf('scan the QR'))
-    // …and the two old doors are still both here, because an account-less Mac
-    // has no other way to let a phone in.
+    // USE WI-FI was answered at the Mac: a headless box has nobody there.
+    expect(text).not.toContain('USE WI-FI')
     expect(text).toContain('Pair a phone')
-    expect(text).toContain('`cookrew mobile`')
-    expect(reauthMessage('none')).toBe(REAUTH_COPY.unpaired)
+    expect(text).toContain('`cookrew mobile --token`')
     expect(REAUTH_COPY.label).toBe('Pairing URL or token')
     expect(REAUTH_COPY.pair).toBe('Pair')
+  })
+
+  it('speaks in the machine’s own word, and never says Mac before it knows', () => {
+    // Before GET /api/pair answers, the neutral word.
+    expect(reauthMessage('none')).toBe(
+      'Scan the QR on the machine’s avatar → Pair a phone, or paste the link `cookrew mobile --token` printed.'
+    )
+    expect(reauthMessage('none', 'linux')).not.toMatch(/\bMac\b/)
+    expect(reauthMessage('none', 'darwin')).toBe(REAUTH_COPY.unpaired)
+    expect(machineSentence(REAUTH_COPY.enterLede, 'linux')).toBe(
+      'Enter this machine with your account — a passkey, or the account password. Every machine of your account then lets this browser in for twelve hours.'
+    )
+    for (const sentence of [REAUTH_COPY.enterSignIn, REAUTH_COPY.enterElsewhere, REAUTH_COPY.refused, REAUTH_COPY.shape]) {
+      expect(machineSentence(sentence, 'linux')).not.toMatch(/\bMac\b/)
+    }
   })
 
   it('names the shape when the paste is not one', () => {
@@ -339,9 +352,9 @@ describe('the Not paired copy', () => {
     )
   })
 
-  it('says the Mac refused it, not that the desktop did', () => {
+  it('says the Mac refused it, not that the desktop did, and how to get the current token', () => {
     expect(REAUTH_COPY.refused).toBe(
-      'The Mac did not take that token. It may have been rotated — get it from the Mac again.'
+      'The Mac did not take that token. It may have been rotated — `cookrew mobile --token` on the Mac prints the current one.'
     )
   })
 

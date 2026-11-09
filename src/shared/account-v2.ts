@@ -22,7 +22,7 @@ import type { LinkedProvider, ProviderId, VerifiedEmail } from './oauth'
  * it is listed and revoked like any other — revoking it is how the
  * pre-password world ends on that account.
  */
-export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'legacy'
+export type DeviceKind = 'desktop' | 'phone' | 'browser' | 'watch' | 'legacy'
 
 /** One attached device, as the registry lists it. */
 export interface AccountDevice {
@@ -124,14 +124,20 @@ export interface AccountStatus {
    * would ask for one offers the provider instead.
    */
   passwordless: boolean
-  /** What unlocks this Mac. A passcode is this Mac's alone. */
+  /**
+   * What unlocks this Mac: the account password, or a passcode chosen before
+   * there were none (it keeps working until the password is typed here).
+   */
   unlockBy: 'password' | 'passcode'
   /**
-   * No password was typed here and no passcode is chosen yet, so the idle lock
-   * has nothing to check and stays disarmed until there is one.
+   * WHY THE LOCK IS OFF, when it is (owner, 2026-11-09): 'set-password' — the
+   * account has no password yet; 'type-password' — signed in from a terminal,
+   * the lock waits for the account password typed here once. Null: it locks.
    */
-  passcodePending: boolean
-  /** Offered only on a passcode Mac, and only where the hardware can. */
+  lockWaits: 'set-password' | 'type-password' | null
+  /** Signed in with `cookrew login`: nothing is put on this machine's screen. */
+  fromTerminal: boolean
+  /** Touch ID stands in for typing, where the hardware can. */
   touchId: { available: boolean; on: boolean }
   /**
    * THE APP IS POINTED AT A REGISTRY THIS ACCOUNT WAS NOT CLAIMED AT.

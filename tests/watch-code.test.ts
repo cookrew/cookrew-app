@@ -24,6 +24,9 @@ describe('the sheet that hands a watch its code', () => {
     expect(inviteRefusal('no_account')).toContain('Sign in')
     expect(inviteRefusal('something_new', 'The registry said so.')).toBe('The registry said so.')
     expect(inviteRefusal('something_new')).toBe("That didn't work. Try again.")
+    // A phone is told what the machine is: the sentences name it, not a Mac.
+    expect(inviteRefusal('locked', undefined, 'linux')).toBe('Unlock this machine first.')
+    expect(inviteRefusal('provider_required', undefined, 'win32')).toContain('on the PC')
   })
 
   it('knows a watch arrived by the count of claims, not by the code going away', () => {

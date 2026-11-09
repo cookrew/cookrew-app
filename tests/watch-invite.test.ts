@@ -21,7 +21,8 @@ describe('a code for a watch, as main mints it', () => {
   it('spends the password the sheet took, and hands back only the code and its end', async () => {
     const d = deps()
     expect(await mintWatchInvite(d, 'pw', false)).toEqual({ ok: true, code: 'K7QM-2XPD', expiresAt: 9 })
-    expect(d.accounts.mintJoinCode).toHaveBeenCalledWith('pw')
+    // A watch's code: the only code a watch can join with (registry v2-join.ts).
+    expect(d.accounts.mintJoinCode).toHaveBeenCalledWith('pw', 'watch')
   })
 
   it('says so when this Mac has no account', async () => {
@@ -37,7 +38,7 @@ describe('a code for a watch, as main mints it', () => {
   it('takes the provider trip when asked on the Mac itself', async () => {
     const d = deps({ isPasswordless: () => true })
     expect((await mintWatchInvite(d, '', true)).ok).toBe(true)
-    expect(d.accounts.mintJoinCode).toHaveBeenCalledWith({ stepUp: 'climbed' })
+    expect(d.accounts.mintJoinCode).toHaveBeenCalledWith({ stepUp: 'climbed' }, 'watch')
   })
 
   it('carries the refusal through in the registry reason words', async () => {

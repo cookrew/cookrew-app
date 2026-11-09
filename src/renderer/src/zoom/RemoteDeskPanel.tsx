@@ -5,7 +5,7 @@ import { cookrew } from '../api'
 import { openSourcePicker } from '../use/source-picker-store'
 import { remoteWhere, useRemoteAccess, useRemoteActs } from '../use/remote-acts'
 import { RemoteConfirmView, RemotePanel } from '../use/RemotePanel'
-import { SWITCH_LABEL, SWITCH_MEANS, useRemoteSwitch } from '../use/RemoteSwitch'
+import { switchWords, useRemoteSwitch } from '../use/RemoteSwitch'
 import { barStop, BAR_STOPS } from './zoom-path'
 import { zoomStore, type ZoomState } from './zoom-store'
 import './remote-desk.css'
@@ -42,6 +42,7 @@ function Panel(): React.JSX.Element | null {
   const { state, control } = access
   const where = remoteWhere()
   const word = (sentence: string): string => machineCopy(sentence, state.platform)
+  const { label, means } = switchWords(state.platform)
   const on = control.switchOn
   return (
     <section className="zv-remote" data-open={open ? '' : undefined} aria-label="Remote desktop">
@@ -57,12 +58,12 @@ function Panel(): React.JSX.Element | null {
         </>
       ) : <RemotePanel state={state} where={where} busy={acts.busy} note={acts.note} onAct={acts.act} />)}
       {open && control.available && settable && (
-        <label className="zv-remote-switch" title={SWITCH_MEANS}>
+        <label className="zv-remote-switch" title={means}>
           <input type="checkbox" role="switch" checked={on} onChange={(event) => flip(event.target.checked)} />
-          <span>{SWITCH_LABEL}</span>
+          <span>{label}</span>
         </label>
       )}
-      {open && control.available && settable && on && <p className="zv-remote-means">{SWITCH_MEANS}</p>}
+      {open && control.available && settable && on && <p className="zv-remote-means">{means}</p>}
       {open && control.available && !settable && <p className="zv-remote-means">{word(on ? 'Remote control is on. Take control from a card.' : 'Remote control is off, and only someone at the Mac can turn it on.')}</p>}
       {open && !control.available && <p className="zv-remote-means">{word('This Mac is view only: it cannot be controlled from here.')}</p>}
       {open && error && <p className="zv-remote-error" role="alert">{error}</p>}

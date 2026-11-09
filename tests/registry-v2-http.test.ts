@@ -44,7 +44,7 @@ async function up(limits?: {
   lookupsPerMinute?: number
 }): Promise<Up> {
   const dir = mkdtempSync(path.join(tmpdir(), 'v2-http-'))
-  const v2 = createV2(dir, limits === undefined ? {} : { limits })
+  const v2 = createV2(dir, limits === undefined ? { secondStep: 'legacy' } : { secondStep: 'legacy', limits })
   const doors = new DoorStore(dir, { allowPrivate: true })
   doors.register('somebody', {
     handle: 'somebody',

@@ -21,7 +21,7 @@ import { SIGNED_IN_INTENTS } from '../../src/shared/auth-site'
  * suffix, never a forwarded header.
  */
 
-const ASSETS = new Set(['auth-kit.js', 'auth-enrol.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
+const ASSETS = new Set(['auth-kit.js', 'auth-enrol.js', 'auth-step.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 /** The ladder's routes a page may reach, by method. A link request reaches only the provider trip. */
@@ -35,7 +35,14 @@ const SIGN_IN_ROUTES: readonly [string, RegExp][] = [
   ['GET', new RegExp(`^/v2/sessions/${UUID}$`)],
   ['POST', new RegExp(`^/v2/sessions/${UUID}/(totp|recovery|approve|passkey)$`)],
   ['GET', new RegExp(`^/v2/sessions/${UUID}/passkey/options$`)],
+  // A second step set up before the first session (auth UX 2026-11-09, v2-second-step.ts).
+  ['POST', new RegExp(`^/v2/sessions/${UUID}/setup/(passkey/options|passkey|totp|totp/confirm|finish)$`)],
   ['POST', /^\/v2\/oauth\/claim$/]
+]
+/** A `step-up` request climbs its own ladder's rungs (auth-step-up.ts) and nothing of a sign-in. */
+const STEP_UP_ROUTES: readonly [string, RegExp][] = [
+  ['POST', new RegExp(`^/v2/sessions/${UUID}/(totp|recovery|passkey)$`)],
+  ['GET', new RegExp(`^/v2/sessions/${UUID}/passkey/options$`)]
 ]
 const PROVIDER_ROUTES: readonly [string, RegExp][] = [
   ['GET', /^\/v2\/oauth\/providers$/],
@@ -127,9 +134,11 @@ export function handleAuthHost(
   const ctx = contextOf(parts)
   const bound = boundRequest(ctx)
   if (bound === null) return
-  // A link or a passkey is a signed-in act for the account that opened it:
-  // there is nobody to sign in here, so the ladder's routes are not reachable.
-  if (SIGNED_IN_INTENTS.includes(bound.intent) && signIn) {
+  // A link, a passkey or a step-up is a signed-in act for the account that
+  // opened it: there is nobody to sign in here, so the ladder's routes are not
+  // reachable — but a step-up climbs the rungs of its own act's ladder.
+  const ownRung = bound.intent === 'step-up' && allowed(STEP_UP_ROUTES, method, path)
+  if (SIGNED_IN_INTENTS.includes(bound.intent) && signIn && !ownRung) {
     refuse(response, 404, 'not_found')
     return
   }

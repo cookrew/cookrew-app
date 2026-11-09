@@ -245,6 +245,7 @@ const api = {
   accountBrowserResume: () => ipcRenderer.invoke('account:browserResume'),
   accountBrowserLink: (input: { provider: string; current?: string; rescue?: string }) =>
     ipcRenderer.invoke('account:browserLink', input),
+  accountAdoptPassword: (password: string) => ipcRenderer.invoke('account:adoptPassword', password),
   accountSetPasscode: (input: { next: string; current?: string }) =>
     ipcRenderer.invoke('account:setPasscode', input),
   accountSetTouchId: (on: boolean) => ipcRenderer.invoke('account:setTouchId', on),
@@ -601,6 +602,7 @@ const api = {
   countEvents: (query: unknown) => ipcRenderer.invoke('events:count', query),
   listAgents: () => ipcRenderer.invoke('agents:list'),
   launchCheck: (id: string) => ipcRenderer.invoke('agents:launch-check', id),
+  trustCardFolder: (id: string) => ipcRenderer.invoke('agents:trust-folder', id),
   listStrayPanes: () => ipcRenderer.invoke('strays:list'),
   endStrayPane: (session: string) => ipcRenderer.invoke('strays:end', session),
   onAgentChanged: (cb: (entry: unknown) => void) => {

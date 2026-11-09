@@ -118,6 +118,7 @@ h2{font:600 30px/1.14 var(--font-serif);letter-spacing:-.01em;margin:0 0 8px}
 .link:hover{text-decoration-color:var(--ink)}
 .links:has(>:only-child){justify-content:center}
 .rungs{display:grid;gap:8px}
+.qr{display:block;width:200px;height:200px;margin:4px auto 12px;border-radius:8px}
 .rung{display:grid;grid-template-columns:auto 1fr auto;gap:13px;align-items:center;width:100%;text-align:left;padding:12px 14px;border:1px solid var(--line-soft);border-radius:12px;background:var(--cream-hi);color:var(--ink);font:inherit;cursor:pointer}
 .rung:hover{border-color:var(--ink);background:var(--amber-soft)}
 .rung b{display:block;font-weight:600;font-size:14.5px;line-height:1.3}.rung small{color:var(--muted);font-size:12.5px}
@@ -186,6 +187,7 @@ export function authPageHtml(opts: AuthPageOptions): string {
 ${PALETTE}${STYLE}</style>
 <script src="/assets/auth-kit.js?v=${version}" defer></script>
 <script src="/assets/auth-enrol.js?v=${version}" defer></script>
+<script src="/assets/auth-step.js?v=${version}" defer></script>
 <script src="/assets/auth.js?v=${version}" defer></script>
 </head>
 <body data-path="${path}" data-product="${product}" data-legal="${LEGAL_PUBLISHED ? '1' : ''}">

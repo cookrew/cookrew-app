@@ -11,7 +11,7 @@ import { isTypedFactor } from './account-ladder'
 import type { DeviceCode, TripProof } from './account-oauth'
 import { isBrowserIntent, type BrowserCode } from './account-browser-auth'
 import { isProviderId, type ProviderId, type ProviderOffer } from '../shared/oauth'
-import type { StepUpAct } from '../shared/step-up'
+import type { StepUpAct, StepUpProof } from '../shared/step-up'
 import type { PairingHandout } from '../shared/account-v2'
 import type { AccountDevice, AccountProfile } from '../shared/account-v2'
 import type {
@@ -233,6 +233,7 @@ export const ACCOUNT_CHANNELS = [
   'account:browserLink',
   // ── the passcode, for a Mac where no password was typed ──
   'account:setPasscode',
+  'account:adoptPassword',
   'account:setTouchId',
   'account:unlockTouchId',
   'account:rescueUnlock',
@@ -340,9 +341,10 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     passwordPending: deps.accounts.passwordPending(),
     passwordless: account?.passwordless === true,
     unlockBy: deps.accounts.unlockMethod(),
-    passcodePending: deps.accounts.passcodePending(),
+    lockWaits: deps.accounts.lockWaits(),
+    fromTerminal: deps.accounts.isFromTerminal(),
     touchId: {
-      available: deps.accounts.unlockMethod() === 'passcode' && (deps.touchId?.available() ?? false),
+      available: deps.touchId?.available() ?? false,
       on: deps.accounts.touchIdOn(),
     },
     // Non-null only when account.json names one registry and this process is
@@ -364,13 +366,34 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
 async function unlock(deps: AccountIpcDeps, password: string): Promise<UnlockAnswer> {
   if (deps.accounts.passwordPending()) return firstUnlock(deps, password)
   const outcome = deps.lock.unlock(password)
-  if (!outcome.ok) return outcome
+  if (!outcome.ok) return deps.accounts.unlockMethod() === 'passcode' ? foldOnUnlock(deps, password, outcome) : outcome
   // WHAT WAS TYPED IS A PASSCODE, and a passcode never leaves this Mac. Offered
   // to cookrew.dev below it would be a local secret in a sign-in request.
   if (deps.accounts.unlockMethod() === 'passcode') return outcome
   if (deps.accounts.account() === null || deps.accounts.sessionLive()) return outcome
   const renewed = await deps.accounts.resume(password)
   return { ...outcome, sessionRenewed: renewed.ok }
+}
+
+/**
+ * THE PASSCODE FOLDS INTO THE ACCOUNT PASSWORD ON THE FIRST UNLOCK THAT USES IT
+ * (owner's ruling, 2026-11-09). On a passcode machine of an account that now
+ * has a password, what was typed and did not match the passcode may be the
+ * account password: cookrew.dev is asked, and a yes makes it this machine's
+ * unlock from now on. The passcode keeps working until then, so nobody is
+ * stranded. Only when the account HAS a password, and only for text long
+ * enough to be one: a passcode typo never leaves the machine.
+ */
+const ACCOUNT_PASSWORD_MIN = 12
+
+async function foldOnUnlock(deps: AccountIpcDeps, password: string, local: UnlockOutcome): Promise<UnlockAnswer> {
+  // A passcode typo is short; an account password is twelve characters or more.
+  // Only something that COULD be the account password leaves this machine.
+  if (local.ok || local.reason !== 'wrong' || !deps.accounts.hasAccountPassword() || password.length < ACCOUNT_PASSWORD_MIN) return local
+  if (!(await deps.accounts.isAccountPassword(password))) return local
+  deps.accounts.foldPasscode(password)
+  deps.lock.proven()
+  return { ok: true }
 }
 
 /**
@@ -417,10 +440,19 @@ async function firstUnlock(deps: AccountIpcDeps, password: string): Promise<Unlo
   // rather than asserted away: if that ever changes, the lock has opened and
   // this must not be the code that argues about it.
   if (local.ok || local.reason === 'paused') return local
-  const proven = await deps.accounts.resume(password)
+  // Asked with this machine's own session (the pass route checks it and counts
+  // wrong tries): a fresh sign-in would now climb a second step (auth UX
+  // 2026-11-09), and this machine is already signed in.
+  const checked = await deps.accounts.checkAccountPassword(password)
+  // A DEAD SESSION CANNOT ASK, and there is no verifier to fall back on: a
+  // machine left idle past its session would be shut out by its own lock. So
+  // only then the password signs in afresh, as the first unlock always did
+  // (a ladder comes back `unproven`, in the registry's words).
+  const proven = !checked.ok && checked.reason === 'session-expired' ? await deps.accounts.resume(password) : checked
   if (proven.ok) {
+    deps.accounts.foldPasscode(password)
     deps.lock.proven()
-    return { ok: true, sessionRenewed: true }
+    return { ok: true, ...(checked.ok ? {} : { sessionRenewed: true }) }
   }
   if (proven.reason === 'bad_credentials' || proven.reason === 'session-expired') return local
   return {
@@ -815,10 +847,12 @@ async function providerProof(deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>, ac
 async function mintUnderProof(
   deps: Pick<AccountIpcDeps, 'accounts' | 'lock'>,
   current: string,
+  purpose?: 'watch',
 ): Promise<AccountResult<{ code: string; expiresAt: number; url: string }>> {
   const proof = await providerProof(deps, 'mint-join-code')
-  if (proof === null) return deps.accounts.mintJoinCode(current)
-  return proof.ok ? deps.accounts.mintJoinCode({ stepUp: proof.value }) : proof
+  const mint = (proved: StepUpProof) => (purpose ? deps.accounts.mintJoinCode(proved, purpose) : deps.accounts.mintJoinCode(proved))
+  if (proof === null) return mint(current)
+  return proof.ok ? mint({ stepUp: proof.value }) : proof
 }
 
 /**
@@ -832,7 +866,8 @@ export async function mintWatchInvite(
 ): Promise<{ ok: true; code: string; expiresAt: number } | { ok: false; reason: string; message?: string }> {
   if (deps.accounts.account() === null) return { ok: false, reason: 'no_account' }
   if (!here && deps.accounts.isPasswordless()) return { ok: false, reason: 'provider_required' }
-  const minted = await mintUnderProof(deps, current)
+  // A watch's code: the only kind a watch joins with, and it joins nothing but a watch.
+  const minted = await mintUnderProof(deps, current, 'watch')
   if (!minted.ok) return { ok: false, reason: minted.reason, ...(minted.message ? { message: minted.message } : {}) }
   return { ok: true, code: minted.value.code, expiresAt: minted.value.expiresAt }
 }
@@ -989,12 +1024,32 @@ async function oauthUnlink(deps: AccountIpcDeps, input: unknown): Promise<Accoun
 function setPasscode(deps: AccountIpcDeps, input: unknown): AccountResult<AccountStatus> {
   const fields = asRecord(input)
   if (deps.lock.locked) return LOCKED
-  if (deps.accounts.unlockMethod() === 'passcode' && !deps.accounts.passcodePending()) {
+  if (deps.accounts.unlockMethod() === 'passcode') {
     const checked = deps.lock.unlock(asString(fields.current))
     if (!checked.ok) return { ok: false, reason: checked.reason === 'paused' ? 'rate_limited' : 'bad_credentials' }
   }
   const set = deps.accounts.setPasscode(asString(fields.next))
   return set.ok ? { ok: true, value: accountStatus(deps) } : set
+}
+
+/**
+ * THE ACCOUNT PASSWORD, TYPED HERE ONCE (owner, 2026-11-09): a machine signed
+ * in from a terminal keeps its lock off until this; cookrew.dev confirms it
+ * through this machine's own session, and it becomes the lock.
+ */
+async function adoptPassword(deps: AccountIpcDeps, password: unknown): Promise<AccountResult<AccountStatus>> {
+  if (deps.lock.locked) return LOCKED
+  const typed = asString(password)
+  if (typed.length === 0) return { ok: false, reason: 'bad_credentials' }
+  // THE LOCAL LOCK COUNTS THESE TRIES TOO, as at the first unlock: five wrong
+  // ones buy a minute here, before cookrew.dev's own count is even reached.
+  const local = deps.lock.unlock(typed)
+  if (!local.ok && local.reason === 'paused') return { ok: false, reason: 'rate_limited' }
+  const checked = await deps.accounts.checkAccountPassword(typed)
+  if (!checked.ok) return checked
+  deps.accounts.foldPasscode(typed)
+  deps.lock.proven()
+  return { ok: true, value: accountStatus(deps) }
 }
 
 /** Turning it on needs a passing touch: it proves a finger is enrolled here. */
@@ -1178,8 +1233,20 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     },
     // The password change the registry demands after "not me" (D6). It is the
     // same call phase 1 built; this is the channel the form needed.
-    'account:setPassword': (input: unknown): Promise<AccountResult<void>> => {
+    'account:setPassword': async (input: unknown): Promise<AccountResult<void>> => {
       const record = asRecord(input)
+      // A FIRST password for a provider-only account (owner's ruling 3): the
+      // provider proves it is you, the account gets the password, and this
+      // machine's passcode is folded into it.
+      if (deps.accounts.isPasswordless()) {
+        // Within five minutes of a verification no trip is needed; only when
+        // cookrew.dev asks for one does the provider prove it is you.
+        const plain = await deps.accounts.setFirstPassword(asString(record.next), null)
+        if (plain.ok || plain.reason !== 'step_up') return plain
+        const proof = await providerProof(deps, 'change-password')
+        if (proof !== null && !proof.ok) return proof
+        return deps.accounts.setFirstPassword(asString(record.next), proof === null ? null : proof.value)
+      }
       return deps.accounts.setPassword({
         current: asString(record.current),
         next: asString(record.next),
@@ -1238,6 +1305,7 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:browserResume': () => browserResume(deps),
     'account:browserLink': (input: unknown) => browserLink(deps, input),
     'account:setPasscode': (input: unknown) => setPasscode(deps, input),
+    'account:adoptPassword': (password: unknown) => adoptPassword(deps, password),
     'account:setTouchId': (on: unknown) => setTouchId(deps, on),
     'account:unlockTouchId': () => unlockTouchId(deps),
     'account:rescueUnlock': (code: unknown) => rescueUnlock(deps, code),
@@ -1280,6 +1348,21 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
  * and its desktop is filed the same way.
  */
 export function accountDoor(deps: AccountIpcDeps, platform: string = process.platform): AccountDoor {
+  /**
+   * A MACHINE FIRST SIGNED IN THROUGH THIS DOOR is `cookrew login`'s: nobody
+   * is at its screen (account-v2.ts · fromTerminal), whichever rung it landed
+   * on. Only a NEW sign-in is marked: renewing the session of a machine a
+   * person signed in at must not switch its working lock off. Marked before
+   * the renderer can ask: `account:changed` makes it read the status in a
+   * round trip, which this microtask is always ahead of.
+   */
+  const terminal = <T extends { ok: boolean }>(land: () => Promise<T>): Promise<T> => {
+    const fresh = deps.accounts.account() === null
+    return land().then((result) => {
+      if (result.ok && fresh) deps.accounts.markFromTerminal()
+      return result
+    })
+  }
   return {
     platform,
     who: () => {
@@ -1287,7 +1370,7 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
       return {
         username: account?.username ?? null,
         passwordless: deps.accounts.isPasswordless(),
-        passcodePending: deps.accounts.passcodePending(),
+        lockWaits: deps.accounts.lockWaits(),
         deviceId: account?.deviceId ?? '',
         deviceName: account?.name ?? '',
         sessionLive: deps.accounts.sessionLive(),
@@ -1295,17 +1378,17 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
         mismatch: account === null ? null : deps.accounts.registryMismatch(),
       }
     },
-    signIn: (input) => signIn(deps, input),
-    resume: (password) => resume(deps, password),
-    climbCode: (pending, factor, code) => resumeCode(deps, { pending, factor, code }),
+    signIn: (input) => terminal(() => signIn(deps, input)),
+    resume: (password) => terminal(() => resume(deps, password)),
+    climbCode: (pending, factor, code) => terminal(() => resumeCode(deps, { pending, factor, code })),
     askApproval: (pending) => deps.accounts.resumeAsk(pending),
-    waitApproval: (pending, signal) => resumeWait(deps, pending, signal),
+    waitApproval: (pending, signal) => terminal(() => resumeWait(deps, pending, signal)),
     abandon: (pending) => deps.accounts.abandonSignIn(pending),
     signOut: (password) => signOut(deps, password),
     devices: () => deps.accounts.devices(),
-    providerDevice: (onCode, signal) => deviceSignIn(deps, onCode, signal),
-    browserDevice: (onCode, signal, username) => browserTerminal(deps, onCode, signal, username),
-    providerClaim: (username) => oauthClaim(deps, username),
+    providerDevice: (onCode, signal) => terminal(() => deviceSignIn(deps, onCode, signal)),
+    browserDevice: (onCode, signal, username) => terminal(() => browserTerminal(deps, onCode, signal, username)),
+    providerClaim: (username) => terminal(() => oauthClaim(deps, username)),
     abandonClaim: () => deps.accounts.providerForget(),
   }
 }

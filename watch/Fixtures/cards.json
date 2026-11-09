@@ -155,5 +155,6 @@
       "at": 1799999999990
     }
   ],
-  "activeWorkspaceId": "ws"
+  "activeWorkspaceId": "ws",
+  "platform": "linux"
 }

@@ -34,10 +34,10 @@ public struct WatchDevice: Codable, Equatable, Sendable {
     try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
   }
 
-  /** The registry has three kinds and a watch is the nearest to a phone. */
+  /** A watch, as the account knows it: the one kind that enters every machine on its pairing alone. */
   public func wire(name: String) -> [String: Any] {
     let publicKey = (try? key().publicKey.rawRepresentation) ?? Data()
-    return ["id": id, "kind": "phone", "name": name, "jwk": ["kty": "OKP", "crv": "Ed25519", "x": base64urlEncoded(publicKey)]]
+    return ["id": id, "kind": "watch", "name": name, "jwk": ["kty": "OKP", "crv": "Ed25519", "x": base64urlEncoded(publicKey)]]
   }
 
   public func sign(_ message: String) throws -> String {

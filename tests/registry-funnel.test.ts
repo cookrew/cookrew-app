@@ -58,7 +58,7 @@ async function up(
   const server: Server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),
-    v2: createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
+    v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
     ...(options.mounted === false
       ? {}
       : {

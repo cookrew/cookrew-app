@@ -20,15 +20,32 @@ export const PROVIDER_COPY = machineTable({
   SESSION_ENDED: 'Your session ended. Sign in with your provider once and this carries on.',
   STEP_UP: 'Your browser will open so your provider can confirm it is you.',
   LADDER_OVER: 'That sign-in was dropped. Start it again.',
-  PASSCODE_TITLE: 'Choose a passcode',
-  PASSCODE_LOCAL: 'It unlocks Cookrew on this Mac and never leaves it. Your agents keep working while it is locked.',
-  PASSCODE_LATER: 'Until you choose one, Cookrew will not lock itself on this Mac.',
-  PASSCODE_CODES: 'Save your recovery codes next. They are the way back if you forget this.',
+  /**
+   * THE FIRST-RUN CARD FOR AN ACCOUNT WITH NO PASSWORD (owner, 2026-11-09):
+   * there is no separate passcode; the account password is the lock, and the
+   * key that enters every machine of the account. Touch ID can stand in for it.
+   */
+  ACCOUNT_PASSWORD_TITLE: 'Set your account password',
+  ACCOUNT_PASSWORD_WHY:
+    'You signed in with your provider, so your account has no password yet. It will lock Cookrew on this Mac and let your phone into your machines. Touch ID can stand in for typing it.',
+  ACCOUNT_PASSWORD_LATER: 'Until you set one, Cookrew will not lock itself on this Mac.',
   LOST_PROVIDER: 'Lost access to your provider?',
   LOST_PROVIDER_WHY: 'A recovery code stands in for it while you link a new one. The code is spent even if you cancel.',
-  FORGOT_PASSCODE: 'Forgot your passcode?',
-  RESCUE_WHY: 'A recovery code opens this Mac once. You will choose a new passcode straight after.',
-  LOCK_NOW_WHY: 'Locking hides your canvas behind your passcode. Your agents keep working.',
+  /**
+   * ONLY ON A MAC THAT CHOSE A PASSCODE before there was none: it keeps
+   * working there until the account password is typed (the fold), and these
+   * are the one place the word is still said.
+   */
+  CHOSEN_PASSCODE_FORGOT: 'Forgot your passcode?',
+  CHOSEN_PASSCODE_RESCUE_WHY:
+    'A recovery code opens this Mac once. After that it unlocks with your account password.',
+  /** The same, on an account with no password yet: nothing will lock it after. */
+  CHOSEN_PASSCODE_RESCUE_WHY_NO_PASSWORD:
+    'A recovery code opens this Mac once. After that Cookrew will not lock itself here until your account has a password.',
+  CHOSEN_PASSCODE_LOCK_WHY: 'Locking hides your canvas behind the passcode you chose. Your agents keep working.',
+  /** A machine signed in from a terminal (`cookrew login`): its lock waits for the password typed here once. */
+  LOCK_WAITS_TYPE: 'The lock is off on this Mac until your account password is typed here once.',
+  LOCK_WAITS_SET: 'The lock is off on this Mac until your account has a password. Set one above.',
 } as const, hostPlatform())
 
 const REFUSALS: Partial<Record<AccountRefusal, string>> = {
@@ -75,6 +92,15 @@ export function handleView(
   return { canGo: false, note: 'Checking…', tone: 'dim' }
 }
 
+/** The account password's own rule: twelve characters, the registry's floor. */
+export const MIN_ACCOUNT_PASSWORD = 12
+
+export function firstPasswordView(next: string, confirm: string): { canGo: boolean; note: string } {
+  if (next.length < MIN_ACCOUNT_PASSWORD) return { canGo: false, note: `Use ${MIN_ACCOUNT_PASSWORD} characters or more; a sentence works.` }
+  if (next !== confirm) return { canGo: false, note: 'Type the same password twice.' }
+  return { canGo: true, note: '' }
+}
+
 export function passcodeView(next: string, confirm: string): { canGo: boolean; note: string } {
   if (next.length < MIN_PASSCODE) return { canGo: false, note: `Use ${MIN_PASSCODE} characters or more.` }
   if (next !== confirm) return { canGo: false, note: 'Type the same passcode twice.' }
@@ -114,7 +140,18 @@ export function tripGuard(cancel: () => void): {
   }
 }
 
-/** Is it time to ask? `later` is this run's answer, and a relaunch asks again. */
-export function shouldAskPasscode(status: AccountStatus | null, later: boolean): boolean {
-  return status !== null && status.passcodePending && !status.locked && !later
+/**
+ * Is it time to ask for an account password? Only on an account that has none,
+ * only on a machine a person signed in at (never one signed in from a
+ * terminal: nobody can type at its screen), and `later` is this run's answer.
+ */
+export function shouldAskAccountPassword(status: AccountStatus | null, later: boolean): boolean {
+  return (
+    status !== null &&
+    status.username !== null &&
+    status.lockWaits === 'set-password' &&
+    !status.fromTerminal &&
+    !status.locked &&
+    !later
+  )
 }

@@ -26,7 +26,7 @@ import path from 'node:path'
  * a stateless token cannot do for itself.
  */
 
-export type V2Scope = 'session' | 'call' | 'canvas'
+export type V2Scope = 'session' | 'call' | 'canvas' | 'grant' | 'watch-grant'
 
 export interface V2Claims {
   sub: string
@@ -42,6 +42,14 @@ export interface V2Claims {
    * different kinds of thing: `@handle/team` and a device id.
    */
   aud?: string
+  /**
+   * A device grant names the KEY it was issued to (RFC 7638 thumbprint), so a
+   * machine can demand a fresh signature from that key and nothing else
+   * (v2-device-grant.ts).
+   */
+  jkt?: string
+  /** The sitting a device pass was minted under: its end (sign-out, a password change, "Not me") ends the pass. */
+  sid?: string
 }
 
 /**
@@ -76,6 +84,9 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 export const CALL_TTL_MS = 10 * 60 * 1000
 /** Ten minutes: a canvas token is carried to one desktop and spent, the same way. */
 export const CANVAS_TTL_MS = 10 * 60 * 1000
+/** Twelve hours: one verification enters every machine of the account for this long (owner, 2026-11-09). */
+export const GRANT_TTL_MS = 12 * 60 * 60 * 1000
+const THUMBPRINT = /^[A-Za-z0-9_-]{43}$/
 
 const AUDIENCE = /^@[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 /** A canvas token's audience is a device id, which is a uuid and nothing else. */
@@ -84,6 +95,7 @@ const DEVICE_AUDIENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const audienceFits = (scope: V2Scope, aud: unknown): boolean => {
   if (scope === 'call') return typeof aud === 'string' && AUDIENCE.test(aud)
   if (scope === 'canvas') return typeof aud === 'string' && DEVICE_AUDIENCE.test(aud)
+  if (scope === 'grant') return aud === undefined
   return true
 }
 
@@ -114,8 +126,9 @@ export class V2Tokens {
     this.now = options.now ?? Date.now
   }
 
-  mintSession(sub: string, dev: string, jti: string = randomUUID()): Minted {
-    const exp = this.now() + SESSION_TTL_MS
+  /** `expAt` caps the token at the sitting's thirtieth day (v2-session-age.ts · tokenExpiry). */
+  mintSession(sub: string, dev: string, jti: string = randomUUID(), expAt?: number): Minted {
+    const exp = Math.min(this.now() + SESSION_TTL_MS, expAt ?? Infinity)
     return { token: this.mint({ sub, dev, scope: 'session', exp, jti }), exp, jti }
   }
 
@@ -157,6 +170,31 @@ export class V2Tokens {
   }
 
   /**
+   * A DEVICE GRANT — one verification, every machine of the account, twelve
+   * hours, for ONE device key (v2-device-grant.ts). Machines verify it offline
+   * against /v2/keys and the revoked list, and demand a fresh signature from
+   * the key it names.
+   */
+  /**
+   * A WATCH'S PASS: the same shape as a grant, in its own scope. A machine that
+   * knows it admits a watch with a watch's token; one older than it reads no
+   * pass at all, so a watch's pass can never become a full device token there.
+   */
+  mintWatchGrant(sub: string, dev: string, jkt: string, sid: string): Minted {
+    if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
+    const exp = this.now() + GRANT_TTL_MS
+    const jti = randomUUID()
+    return { token: this.mint({ sub, dev, scope: 'watch-grant', exp, jti, jkt, sid }), exp, jti }
+  }
+
+  mintGrant(sub: string, dev: string, jkt: string, sid: string): Minted {
+    if (!THUMBPRINT.test(jkt)) throw new Error('a grant names its device key by an RFC 7638 thumbprint')
+    const exp = this.now() + GRANT_TTL_MS
+    const jti = randomUUID()
+    return { token: this.mint({ sub, dev, scope: 'grant', exp, jti, jkt, sid }), exp, jti }
+  }
+
+  /**
    * Claims, or null. Null for malformed, mis-signed, expired, out-of-scope and
    * revoked alike: a caller must not be able to tell those apart and act
    * differently on the difference.
@@ -177,6 +215,7 @@ export class V2Tokens {
       if (typeof claims.exp !== 'number' || claims.exp < this.now()) return null
       if (claims.scope !== want.scope) return null
       if (!audienceFits(claims.scope, claims.aud)) return null
+      if (claims.scope === 'grant' && (typeof claims.jkt !== 'string' || !THUMBPRINT.test(claims.jkt))) return null
       // A token minted for another audience is not this one's, however well
       // it verifies: one desktop's open must never open the next.
       if (want.aud !== undefined && claims.aud !== want.aud) return null

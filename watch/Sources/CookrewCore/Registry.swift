@@ -12,6 +12,8 @@ public enum RegistryError: Error, Equatable, Sendable {
   case signedOut
   /** A Mac said no: its reason word (src/main/watch-pairing.ts). */
   case claim(String)
+  /** The account knows this watch as another kind of device. */
+  case notWatch
 }
 
 public struct JoinReply: Decodable, Equatable, Sendable {
@@ -47,10 +49,13 @@ public protocol RegistryAPI: Sendable {
   func signOut(token: String) async
   /** Every Mac on the account, for the devices stop. */
   func machines(token: String) async throws -> [WatchMachine]
+  /** The watch's pass into every machine of the account (POST /v2/me/device-grant/watch). */
+  func watchGrant(token: String) async throws -> String
 }
 
 public extension RegistryAPI {
   func machines(token: String) async throws -> [WatchMachine] { [] }
+  func watchGrant(token: String) async throws -> String { throw RegistryError.unreachable }
 }
 
 /** A list where a row that cannot be read is left out, not the whole answer. */
@@ -143,6 +148,41 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
     if status == 401 { throw RegistryError.signedOut }
     guard status == 200 else { throw RegistryError.unreachable }
     return try JSONDecoder().decode(Lossy<WatchMachine>.self, from: data).rows
+  }
+
+  public func watchGrant(token: String) async throws -> String {
+    var request = try post(origin.appending(path: "v2/me/device-grant/watch"), [:])
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+    let (data, status) = try await fetch(request)
+    struct Pass: Decodable {
+      let grant: String
+    }
+    switch status {
+    case 201: return try JSONDecoder().decode(Pass.self, from: data).grant
+    case 401: throw RegistryError.signedOut
+    case 403 where (try? JSONDecoder().decode(Reason.self, from: data))?.error == "not_watch": throw RegistryError.notWatch
+    case 403: throw RegistryError.locked
+    default: throw RegistryError.unreachable
+    }
+  }
+
+  /** One request to a machine's door down the relay, with the session the relay reads. */
+  public func door(relay: URL, token: String) -> DoorSend {
+    let session = self.session
+    return { path, body in
+      var request = URLRequest(url: relay.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+      request.httpMethod = "POST"
+      request.httpShouldHandleCookies = false
+      request.setValue("application/json", forHTTPHeaderField: "content-type")
+      request.setValue("\(sessionCookie)=\(token)", forHTTPHeaderField: "cookie")
+      request.httpBody = try JSONSerialization.data(withJSONObject: body)
+      do {
+        let (data, response) = try await session.data(for: request)
+        return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
+      } catch {
+        throw EnterError.unreachable
+      }
+    }
   }
 
   public func claim(relay: URL, code: String, token: String) async throws -> ClaimReply {

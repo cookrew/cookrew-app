@@ -25,10 +25,11 @@ describe('auth page', () => {
   it('loads exactly one script, from this origin, versioned, and runs nothing inline', () => {
     const html = authPageHtml({ ...base, path: '/' })
     const scripts = html.match(/<script\b[^>]*>/g) ?? []
-    // The toolkit first, the passkey screens, then the page: all from this origin, in order.
+    // The toolkit first, the passkey and step-up screens, then the page: all from this origin, in order.
     expect(scripts).toEqual([
       '<script src="/assets/auth-kit.js?v=abc123" defer>',
       '<script src="/assets/auth-enrol.js?v=abc123" defer>',
+      '<script src="/assets/auth-step.js?v=abc123" defer>',
       '<script src="/assets/auth.js?v=abc123" defer>'
     ])
     expect(html).toMatch(/<script src="\/assets\/auth\.js\?v=abc123" defer><\/script>/)
@@ -56,7 +57,7 @@ describe('auth page', () => {
     expect(html).not.toContain('<img src=x')
     expect(html).not.toContain('"><script>')
     expect(html).toContain('&quot;&gt;&lt;img src=x onerror=alert(1)&gt;')
-    expect(html.match(/<script\b/g)?.length).toBe(3)
+    expect(html.match(/<script\b/g)?.length).toBe(4)
   })
 
   it('wears the site palette in light and dark', () => {

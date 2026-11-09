@@ -3,6 +3,7 @@ import { HARNESS_FACTS, INSTALL_LINE } from '../src/main/route/setup'
 import { setupLineAllowed } from '../src/shared/route-lines'
 import { TOOL_NOTES } from '../src/shared/first-run-copy'
 import { UNKNOWN_FACTS, mayContinue, preflightRows, type PreflightRow, type ToolFacts, type ToolState } from '../src/shared/preflight'
+import { XDOTOOL_INSTALL } from '../src/shared/remote-access'
 
 /**
  * ONE CALM ROW PER TOOL. A row is found, or it says what is missing and holds
@@ -209,5 +210,55 @@ describe('a fix that needs admin rights says so before it is pressed (N2)', () =
 
   it('nothing on a tool that is found', () => {
     expect(note({ ...green, platform: 'linux' }, 'magpie')).toBeNull()
+  })
+})
+
+describe('the Claude row says what Cookrew answers for it (Solis, 2026-11-09)', () => {
+  const claudeRow = (facts: ToolFacts): PreflightRow => preflightRows(facts).find((r) => r.id === 'claude') as PreflightRow
+
+  it('says the bypass-permissions notice is accepted, and where', () => {
+    expect(claudeRow({ ...allFound, claudeConsent: 'accepted' }).note).toBe(TOOL_NOTES.BYPASS_ACCEPTED)
+    expect(TOOL_NOTES.BYPASS_ACCEPTED).toContain('~/.claude/settings.json')
+  })
+
+  it('says it will be accepted when the first card starts', () => {
+    expect(claudeRow({ ...allFound, claudeConsent: 'not-yet' }).note).toBe(TOOL_NOTES.BYPASS_ON_FIRST)
+  })
+
+  it('says a settings file it could not read leaves the question to Claude', () => {
+    expect(claudeRow({ ...allFound, claudeConsent: 'unreadable' }).note).toBe(TOOL_NOTES.BYPASS_UNREADABLE)
+  })
+
+  it('keeps the sign-in and its fix beside it', () => {
+    const row = claudeRow({ ...allFound, claudeSignedIn: false, claudeConsent: 'accepted' })
+    expect(row.note).toBe(`${TOOL_NOTES.NOT_SIGNED_IN} ${TOOL_NOTES.BYPASS_ACCEPTED}`)
+    expect(row.fix?.line).toBe('claude')
+  })
+
+  it('says nothing of it for a Claude that is not here, or a check that did not look', () => {
+    expect(claudeRow({ ...bareMac, claudeConsent: 'accepted' }).note).toBe(null)
+    expect(claudeRow(allFound).note).toBe(null)
+  })
+})
+
+describe('xdotool, the Linux hand for remote control', () => {
+  const linux: ToolFacts = { ...allFound, platform: 'linux', arch: 'x64', brew: 'missing' }
+
+  it('is a row on Linux only, optional, and never what holds anyone back', () => {
+    expect(preflightRows({ ...linux, xdotool: 'found' }).find((r) => r.id === 'xdotool')).toMatchObject({ state: 'found', optional: true, fix: null })
+    expect(preflightRows({ ...allFound, xdotool: 'missing' }).some((r) => r.id === 'xdotool')).toBe(false)
+    expect(mayContinue(preflightRows({ ...linux, xdotool: 'missing' }))).toBe(true)
+  })
+
+  it('missing, it holds the one line that installs it, which the Setup card accepts, and says it may ask for the password', () => {
+    const r = preflightRows({ ...linux, xdotool: 'missing' }).find((candidate) => candidate.id === 'xdotool')
+    expect(r?.fix?.line).toBe(XDOTOOL_INSTALL)
+    expect(setupLineAllowed(XDOTOOL_INSTALL)).toBe(true)
+    expect(r?.note).toBe(TOOL_NOTES.ADMIN)
+    expect(r?.does).toMatch(/click and type/)
+  })
+
+  it('a check that failed is unknown, with no install', () => {
+    expect(preflightRows(linux).find((r) => r.id === 'xdotool')).toMatchObject({ state: 'unknown', fix: null })
   })
 })

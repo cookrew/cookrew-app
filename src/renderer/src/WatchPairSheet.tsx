@@ -48,11 +48,14 @@ function useClaimed(expiresAt: number | null, seen: number, onClaimed: () => voi
 function AskPane({
   account,
   sealed,
+  platform,
   onCode,
   onDigits
 }: {
   account: WatchState['account'] | null
   sealed: boolean
+  /** The machine's platform: the desktop's own, or what a phone was told. */
+  platform: string | undefined
   onCode: (code: string, expiresAt: number, seen: number) => void
   onDigits: (code: WatchCode) => void
 }): React.JSX.Element {
@@ -75,27 +78,30 @@ function AskPane({
         setBusy(false)
         setPassword('')
         if (result.ok) onCode(result.code, result.expiresAt, result.claims)
-        else setError(inviteRefusal(result.reason, result.message))
+        else setError(inviteRefusal(result.reason, result.message, platform))
       },
       () => {
         setBusy(false)
-        setError(inviteRefusal('unknown'))
+        setError(inviteRefusal('unknown', undefined, platform))
       }
     )
   }
   const digits = (): void => {
     setError(null)
-    api.watchCode?.().then(onDigits, () => setError(inviteRefusal('unknown')))
+    api.watchCode?.().then(onDigits, () => setError(inviteRefusal('unknown', undefined, platform)))
   }
 
   return (
     <>
       {account === 'none' ? (
-        <p className="gs-consequence">{machineCopy('A watch reaches this Mac from anywhere through your account.', hostPlatform())} Without one, it only works on this network.</p>
+        <p className="gs-consequence">{machineCopy('A watch reaches this Mac from anywhere through your account.', platform)} Without one, it only works on this network.</p>
       ) : !sealed ? (
-        <p className="gs-consequence">{inviteRefusal('not_sealed')}</p>
+        <p className="gs-consequence">{inviteRefusal('not_sealed', undefined, platform)}</p>
       ) : (
-        <p className="gs-consequence">It joins your account and can read and answer your agents from anywhere. It can't open a terminal.</p>
+        <p className="gs-consequence">
+          It joins your account and works your agents from anywhere: it reads and answers them, starts new ones in any workspace, and taps and types in
+          their browser pages.
+        </p>
       )}
       {needsPassword && (
         <>
@@ -233,6 +239,8 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
 
   // Stable: the poll that calls it must outlive the countdown's redraws.
   const done = useCallback((): void => setStage({ name: 'done' }), [])
+  // On a phone the page has no platform of its own: the machine says what it is.
+  const platform = hostPlatform() ?? opened?.platform
   const again = (): void => setStage({ name: 'ask' })
 
   return createPortal(
@@ -250,11 +258,12 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
             ✕
           </button>
         </header>
-        {unread && <p className="gs-paste-error">{inviteRefusal('unknown')}</p>}
+        {unread && <p className="gs-paste-error">{inviteRefusal('unknown', undefined, platform)}</p>}
         {stage.name === 'ask' && (
           <AskPane
             account={opened?.account ?? null}
             sealed={opened?.sealed ?? false}
+            platform={platform}
             onCode={(code, expiresAt, seen) => setStage({ name: 'code', code, expiresAt, seen })}
             onDigits={(code) => setStage({ name: 'digits', code })}
           />
@@ -263,7 +272,7 @@ export function WatchPairSheet({ onClose }: { onClose: () => void }): React.JSX.
         {stage.name === 'digits' && <DigitsPane code={stage.code} seen={stage.code.claims} onDone={done} onAgain={again} />}
         {stage.name === 'done' && (
           <>
-            <p className="gs-consequence">{machineCopy('You can forget it from ⋯ on this Mac or on the watch.', hostPlatform())}</p>
+            <p className="gs-consequence">{machineCopy('You can forget it from ⋯ on this Mac or on the watch.', platform)}</p>
             <div className="gs-sheet-foot">
               <button type="button" className="gs-primary" onClick={onClose}>
                 DONE

@@ -165,6 +165,7 @@ import type { LaneInfo, LandResult } from '../shared/model'
 import { laneGit } from './git'
 import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
+import { createAccountPairDoor } from './account-pair'
 import { pairingHandout } from './pairing-handout'
 import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
@@ -248,6 +249,7 @@ import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '..
 import { parseUseUrl } from '../shared/use-url'
 import { macKeystrokes, readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
+import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
@@ -282,7 +284,7 @@ import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
-import { registryArgument } from '../shared/machine-words'
+import { machineCopy, registryArgument } from '../shared/machine-words'
 import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
@@ -347,7 +349,9 @@ import { doorMovedSentence } from '../shared/door-ownership'
 import { startRelayProxy, type RelayProxy } from './relay-proxy'
 import { importedDoors, rememberDoor, resolveDoor } from './relay-doorbook'
 import { SERVED_SESSION_END_PATH } from '../shared/served-transcript'
-import { prepareChoresDir, trustDirectory } from './claude-trust'
+import { prepareChoresDir, trustDirectory, type TrustOutcome } from './claude-trust'
+import { ClaudeCardPrep } from './claude-card-prep'
+import { forgetDeadBox } from './dead-box'
 import { DoorTranscript } from './door-transcript'
 import { DoorWatch } from './door-watch'
 import { doorNameOf, transcriptSourceFor } from './transcript-source'
@@ -1317,6 +1321,23 @@ function publishDoorClaims(): void {
 const admittedDevices = createAdmittedDeviceStore()
 
 /**
+ * ENTERING THIS MACHINE WITH THE ACCOUNT (owner 2026-11-09): a device brings a
+ * twelve-hour pass cookrew.dev issued after its password or passkey, checked
+ * here offline against /v2/keys and the revoked list, and signs this machine's
+ * own challenge with the key the pass names (account-pair.ts). The verifier is
+ * declared further down; nothing calls the door before the mobile server starts.
+ */
+const accountPairDoor = createAccountPairDoor({
+  account: () => accounts.account(),
+  grants: async (token) => (v2CallTokens === null ? null : v2CallTokens.grant(token)),
+  admitted: admittedDevices,
+  platform: process.platform,
+  // Read when a watch arrives, long after startup: watchPairing is declared further down.
+  watch: { enter: (deviceId) => watchPairing.enter(deviceId) },
+  log: (message: string) => console.error(`[cookrew] ${message}`)
+})
+
+/**
  * REACH v2.1 — THIS MAC'S OWN TRUSTED CERTIFICATE.
  *
  * The key is minted here and never leaves; cookrew.dev runs the ACME order and
@@ -1436,8 +1457,8 @@ const sealTerminus = createSealTerminus({
 const ownerLock = new IdleLock({
   lockAfterMs: accounts.account()?.lockAfterMs ?? DEFAULT_LOCK_AFTER_MS,
   verify: (password) => accounts.verifyUnlock(password),
-  // No account, or no passcode chosen yet: nothing could open this lock, so it
-  // does not close.
+  // No account, or a lock still waiting for the account password: nothing
+  // could open this lock, so it does not close.
   armed: () => accounts.lockable(),
   waiting: () => accounts.providerTripping(),
   onChange: (locked) => {
@@ -1686,6 +1707,8 @@ const v2CallTokens = RELAY_ORIGIN
       // LAN was cut off at the registry. A second poll of the same route would
       // be a second answer, and the two would drift.
       onRevoked: (revoked) => {
+        // The watch let in by its pass goes with its device, as an admitted phone does.
+        if (watchPairing.revoked(revoked)) console.error('Watch withdrawn: it was revoked at the registry')
         for (const device of admittedDevices.prune(revoked)) {
           remoteDesk.forgetDevice(`device:${device.deviceId}`)
           // One line per phone, named. "Withdrew 1 admission" would leave the
@@ -2921,15 +2944,95 @@ function bootBlockOf(t: LaunchSubject): LaunchFailure | null {
   const home = store.ownerOf(t.id)
   if (home !== undefined && servedSpawnContexts.has(home)) return null
   // spawnTracked moves a card to where its claude session lives first, so the check looks there too.
-  const repaired = isClaudeCommand(t.command) && t.claudeSessionId ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId }) : null
   return launchBlock({
-    cwd: repaired ?? t.cwd,
+    cwd: bootCwdOf(t),
     command: t.command,
     path: paneSearchPath(),
     // The direct backend boots through a login shell, whose PATH this cannot see.
     checkCommand: multiplexer()?.capabilities.persistsAcrossRestart === true,
     installLine: harnessInstallLine
   })
+}
+
+/** Where the card boots: spawnTracked moves a card to where its claude session lives first. */
+function bootCwdOf(t: LaunchSubject): string {
+  const repaired = isClaudeCommand(t.command) && t.claudeSessionId ? claudeCwdRepair({ cwd: t.cwd, sessionId: t.claudeSessionId }) : null
+  return repaired ?? t.cwd
+}
+
+/**
+ * What stops a NEW pane for this card. The Claude folder check rides here, not in
+ * bootBlockOf: a running card asked to relaunch (model pick, restore, cut) is no
+ * card Claude asks about; it answered long ago, maybe in a session nobody saved.
+ */
+function spawnBlockOf(t: LaunchSubject): LaunchFailure | null {
+  return bootBlockOf(t) ?? claudeFolderBlock(t, bootCwdOf(t))
+}
+
+/** The owner's Claude: its trust, consent and wizard, answered once per process (claude-card-prep.ts). */
+let claudePrepMemo: ClaudeCardPrep | null = null
+function claudePrep(): ClaudeCardPrep {
+  claudePrepMemo ??= new ClaudeCardPrep({ home: app.getPath('home'), env: process.env })
+  return claudePrepMemo
+}
+
+/** Every folder a person chose for a workspace of their own: a served one's sandbox is not theirs. */
+function ownerWorkspaceDirs(): string[] {
+  return store
+    .list()
+    .workspaces.filter((w) => !servedSpawnContexts.has(w.id))
+    .flatMap((w) => w.dirs)
+}
+
+/** A Claude card would sit on "Is this a project you trust?" with nobody to answer: say so on the card. */
+function claudeFolderBlock(t: LaunchSubject, cwd: string): LaunchFailure | null {
+  if (!isClaudeCommand(t.command)) return null
+  const home = store.ownerOf(t.id)
+  if (home !== undefined && servedSpawnContexts.has(home)) return null
+  const name = store.nodeAcrossWorkspaces(t.id)?.node.name
+  return claudePrep().folderBlock(cwd, ownerWorkspaceDirs(), name)
+}
+
+/** Before an owner's Claude card boots a pane. Never throws: a card that asks is better than none. */
+function prepareClaudeCard(command: string, cwd: string): void {
+  try {
+    const report = claudePrep().prepare(command, cwd, ownerWorkspaceDirs())
+    const wrote = [
+      report.trust === 'trusted' ? `trusted ${realDir(cwd)}` : null,
+      report.consent === 'accepted' ? 'accepted bypass permissions (~/.claude/settings.json)' : null,
+      report.onboarding === 'completed' ? 'completed onboarding (~/.claude.json)' : null
+    ].filter((line) => line !== null)
+    if (wrote.length > 0) console.error(`[cookrew] claude: ${wrote.join(', ')}`)
+    const unread = [report.trust, report.consent, report.onboarding].filter((o) => o === 'skipped-unreadable' || o === 'failed')
+    if (unread.length > 0) console.error(`[cookrew] claude: a config could not be read or written (${JSON.stringify(report)}); the card may ask`)
+  } catch (error) {
+    console.error('Preparing Claude for a card failed:', error)
+  }
+}
+
+/**
+ * The person's yes to Claude's trust question for a card's folder, home included
+ * (the card's button, `cookrew trust`). The card's block is looked at again.
+ */
+function trustCardFolder(id: string): { dir: string; outcome: TrustOutcome; failure: LaunchFailure | null } {
+  const hit = store.nodeAcrossWorkspaces(id)
+  if (!hit || hit.node.kind !== 'terminal') throw new Error('No such agent')
+  if (servedSpawnContexts.has(hit.workspaceId)) throw new Error("A served card's folder is its own sandbox")
+  // The folder the block was about: where the card will boot, after any session repair.
+  const cwd = bootCwdOf(hit.node as TerminalNodeData)
+  const outcome = claudePrep().trustChosen(cwd)
+  console.error(`[cookrew] claude: the person trusted ${realDir(cwd)} (${outcome})`)
+  return { dir: realDir(cwd), outcome, failure: checkLaunch(id) }
+}
+
+/** A folder chosen for a workspace: trusted for Claude now, unless it is broad. Never fails the choice. */
+function trustChosenWorkspaceFolder(dir: string): void {
+  try {
+    const outcome = claudePrep().trustWorkspaceFolder(dir)
+    if (outcome === 'trusted') console.error(`[cookrew] claude: trusted workspace folder ${realDir(dir)}`)
+  } catch (error) {
+    console.error('Trusting a workspace folder for Claude failed:', error)
+  }
 }
 
 /**
@@ -2948,7 +3051,7 @@ function toolBlockOf(command: string, cwd: string): LaunchFailure | null {
  * fork per card. A strict read, never the admission cache: a cold cache says no pane.
  */
 function launchBlockOf(t: LaunchSubject, live?: ReadonlySet<string>): LaunchFailure | null {
-  const block = bootBlockOf(t)
+  const block = spawnBlockOf(t)
   if (!block) return null
   const open = live ? live.has(sessionNameFor(t.id)) : panePresence(t.id) !== false
   return open ? null : block
@@ -2979,7 +3082,7 @@ function checkLaunch(terminalId: string, announce = true, live?: ReadonlySet<str
   }
   const known = agents.lookup(terminalId)?.failure
   if (!known?.blocked) return null
-  if (blockStands(known, bootBlockOf(hit.node as TerminalNodeData))) return known
+  if (blockStands(known, spawnBlockOf(hit.node as TerminalNodeData))) return known
   agents.clearFailure(terminalId)
   return null
 }
@@ -3241,6 +3344,14 @@ function spawnTracked(t: {
   const upgraded = LEGACY_COMMANDS[t.command.trim()]
   const command = upgraded ?? t.command
   if (upgraded) store.updateNodeUnsafe(t.id, { command })
+  if (!ptys.get(t.id)) {
+    // A pane that is gone took its input box with it (dead-box.ts): an agent that
+    // exited under an unconfirmed brief must not refuse every ask after it.
+    if (forgetDeadBox(defaultProducerLease(), t.id, () => panePresence(t.id))) {
+      console.error(`[cookrew] ${t.id}: its pane is gone, and with it the input box a delivery was unconfirmed in`)
+    }
+    if (!servedCtx && isClaudeCommand(command)) prepareClaudeCard(command, t.cwd)
+  }
   let effective = command
   if (isClaudeCommand(command)) {
     // Bind every Claude terminal to a known session id (adopting one already
@@ -4416,7 +4527,11 @@ function listWorkspaces(): ReturnType<WorkspaceStore['list']> {
 }
 
 function createWorkspace(name: string, dir: string, options: { stay?: boolean } = {}): WorkspaceMeta {
-  return openWorkspace(store, { name, dir, stay: options.stay === true, seed: seedConductorIfEmpty })
+  const meta = openWorkspace(store, { name, dir, stay: options.stay === true, seed: seedConductorIfEmpty })
+  // After the checks passed: a refused folder is trusted nowhere. A Conductor seeded
+  // meanwhile was trusted at its own spawn (prepareClaudeCard).
+  trustChosenWorkspaceFolder(meta.dir)
+  return meta
 }
 
 function switchWorkspace(nameOrId: string): WorkspaceMeta {
@@ -4565,7 +4680,9 @@ async function endWorkspace(meta: WorkspaceMeta): Promise<ReturnType<WorkspaceSt
 // ---- workspace directories + per-terminal cwd (workspace v2) ----
 
 function addWorkspaceDir(id: string, dir: string): ReturnType<WorkspaceStore['list']> {
-  return store.addWorkspaceDir(id, dir)
+  const list = store.addWorkspaceDir(id, dir)
+  if (!servedSpawnContexts.has(id)) trustChosenWorkspaceFolder(dir)
+  return list
 }
 
 function removeWorkspaceDir(id: string, dir: string): ReturnType<WorkspaceStore['list']> {
@@ -5575,7 +5692,7 @@ function createTerminal(opts: CreateTerminalOpts): CanvasNode {
   // The person chose this folder for the agent, on a screen saying what it may
   // do there: the owner's ruling (2026-11-05) is that this answers Claude's trust
   // dialog. By real path: Claude keys its answer on one, and /tmp is a symlink.
-  if (opts.patient === true && isClaudeCommand(terminal.command)) trustDirectory(realDir(terminal.cwd), path.join(app.getPath('home'), '.claude.json'))
+  if (opts.patient === true && isClaudeCommand(terminal.command)) trustDirectory(realDir(terminal.cwd), claudePrep().claudeJson)
   const added = store.addNode(placed)
   spawnTracked(added as TerminalNodeData)
   // A bare shell takes no first prompt: typed into zsh, the words would run as a command.
@@ -5806,7 +5923,9 @@ async function createWorkspaceFromTeam(
 ): Promise<WorkspaceMeta> {
   const verdict = workspaceCheck(store, name, dir)
   if (!verdict.ok) throw new Error(verdict.reason)
-  return workspaceFromTemplate(forkDepsFor(options), { name, dir: verdict.dir, team })
+  const meta = await workspaceFromTemplate(forkDepsFor(options), { name, dir: verdict.dir, team })
+  trustChosenWorkspaceFolder(verdict.dir)
+  return meta
 }
 
 /**
@@ -6590,18 +6709,26 @@ function currentBuild(): RemoteBuild {
 }
 let keepAwakeId: number | null = null
 let stayUpId: number | null = null
+// Touch ID exists only on a Mac; anywhere else the question is a dialog on this machine's own screen.
+const SWITCH_DETAIL =
+  process.platform === 'darwin'
+    ? 'Your paired devices can unlock it with its password, from any network, until you turn this off.'
+    : 'Your paired devices can take control of a card for 15 minutes, and agents can click and type here, until you turn this off.'
 const confirmSwitch = singleConfirm({
-  canTouch: () => systemPreferences.canPromptTouchID(),
+  canTouch: () => process.platform === 'darwin' && systemPreferences.canPromptTouchID(),
   touch: () => systemPreferences.promptTouchID('turn on remote control of this Mac'),
   ask: async () => {
-    const options = { type: 'warning' as const, message: 'Turn on remote control of this Mac?', detail: 'Your paired devices can unlock it with its password, from any network, until you turn this off.', buttons: ['Turn on', 'Cancel'], defaultId: 1, cancelId: 1 }
+    const options = { type: 'warning' as const, message: machineCopy('Turn on remote control of this Mac?', process.platform), detail: SWITCH_DETAIL, buttons: ['Turn on', 'Cancel'], defaultId: 1, cancelId: 1 }
     return (await dialog.showMessageBox(options)).response === 0
   }
 })
+/** This machine's hand on Linux (xdotool): the desk and the cards ask the same one. */
+const linuxHand = process.platform === 'linux' ? linuxHandFor(process.env, () => linuxScreenRefusal(process.env)) : null
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
   build: currentBuild,
   linuxRefusal: () => linuxScreenRefusal(process.env),
+  linuxInput: () => linuxHand?.refusal() ?? null,
   screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
   accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
   session: () => sessionReader.read(),
@@ -6679,6 +6806,7 @@ const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
   remote: (card) => remoteGate(remoteDesk, card),
   blocked: () => remoteDesk.blocked(),
+  ...(linuxHand ? { linuxHand } : {}),
   onBlocked: (card) => browserThumbs.forget(card),
   onRested: (card) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:rested', card)
@@ -7274,7 +7402,7 @@ app.whenReady().then(() => {
         // A chore works outside the repo: ~/.cookrew/chores, 0700, never the tree.
         const choresDir = path.join(app.getPath('home'), '.cookrew', 'chores')
         // Created 0700 and pre-trusted in ~/.claude.json: a fresh chore card must not stop at Claude's trust dialog.
-        if (cwd === 'chores') prepareChoresDir(choresDir, path.join(app.getPath('home'), '.claude.json'))
+        if (cwd === 'chores') prepareChoresDir(choresDir, claudePrep().claudeJson)
         const node = createTerminal({ name, preset, position, ...(cwd === 'chores' ? { cwd: choresDir } : {}) })
         // The sentence is the card's BRIEF, not its role: a role is a saved
         // role's name, worn by the pane chrome and typed by role boot; a brief
@@ -7535,7 +7663,8 @@ app.whenReady().then(() => {
     store,
     ptys,
     spawnTerminal: spawnTracked,
-    dismissTerminal: (id) => removeNode(id, { actor: 'orch', via: 'dismiss' }),
+    dismissTerminal: (id, by = 'orch') => removeNode(id, { actor: by, via: 'dismiss' }),
+    trustCardFolder,
     agents,
     turns,
     sous: sousDoor,
@@ -7577,6 +7706,19 @@ app.whenReady().then(() => {
     notify: showNotification,
     captureWindow,
     injectInput,
+    // `cookrew remote`: the switch from a shell on this machine. On a Mac it asks Touch ID like
+    // the ⋯ menu; elsewhere the terminal's own prompt was the question (remote-cli.ts).
+    remote: {
+      platform: process.platform,
+      access: () => remoteDesk.access('here'),
+      hostView: () => remoteDesk.hostView(),
+      setSwitch: (on, how) => {
+        if (on) unlockDoor.reopen()
+        return remoteDesk.setSwitch(on, how)
+      },
+      confirmOn: () => (process.platform === 'darwin' ? confirmSwitch() : Promise.resolve(true)),
+      stopAll: () => remoteDesk.stopAll()
+    },
     voice,
     mobileUrls,
     mobileEndpoints: mobileEndpointList,
@@ -7816,7 +7958,8 @@ app.whenReady().then(() => {
       // phone waiting on cookrew.dev to learn the owner's initials is a phone
       // showing "?" every time the WAN is slow.
       profileFace: () => profileFace,
-      log: (message: string) => console.error(`[cookrew] ${message}`)
+      log: (message: string) => console.error(`[cookrew] ${message}`),
+      pairDoor: accountPairDoor
     },
     recoverAgent,
     restoreCheckpoint,
@@ -8886,6 +9029,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('events:count', (_e, query) => events.count(query ?? {}))
   ipcMain.handle('agents:list', () => agents.list())
   ipcMain.handle('agents:launch-check', (_e, id: string) => checkLaunch(id))
+  ipcMain.handle('agents:trust-folder', (_e, id: unknown) => {
+    if (typeof id !== 'string') throw new Error('An agent id is needed')
+    const { outcome, failure } = trustCardFolder(id)
+    return { outcome, failure }
+  })
   ipcMain.handle('strays:list', () => listStrayPanes())
   ipcMain.handle('strays:end', (_e, session: string) => endStrayPane(session))
   // Activity Board snapshot for the desktop panel — same builder the HTTP
@@ -9006,7 +9154,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   }))
   ipcMain.handle('use:remote-switch', ownerOnly(async (on: unknown) => {
     if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
-    if (on && !(await confirmSwitch())) return { ok: false, error: 'Remote control stays off: it was not confirmed at the Mac.' }
+    if (on && !(await confirmSwitch())) return { ok: false, error: machineCopy('Remote control stays off: it was not confirmed at the Mac.', process.platform) }
     // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
     if (on) unlockDoor.reopen()
     return remoteDesk.setSwitch(on)
@@ -9118,6 +9266,7 @@ function registerIpc(handlers: RestoreHandlers): void {
       canvas: (workspaceId) => store.workspaceState(workspaceId),
       node: (id) => store.nodeAcrossWorkspaces(id)?.node,
       thumbViewed: noteBrowserViewed,
+      thumbNow: (id) => browserThumbs.refresh(id, { force: true }),
       thumb: (id) => browserThumbs.frame(id),
       browser: (id) => browserManager.get(id),
       // The last agent's harness; a bare shell takes no first prompt, so it is no harness to start one on.

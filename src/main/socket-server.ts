@@ -22,6 +22,7 @@ import { resolveCallerTerminalId } from '../shared/caller-identity'
 import { WorkspaceStore, WorkspaceNodeHit } from './store'
 import { claimSocket, type SocketClaim } from './socket-claim'
 import { noteWriteReply, parseNoteWrite } from './note-write-guard'
+import { bareBrowserHint, bareNoteArgs } from './bare-card'
 import { reachByName, type ReachKind } from './ask-reach'
 import { adoptedNoteAnswer, findClaimedNote } from './note-adopt'
 import type { PairingHandout } from '../shared/account-v2'
@@ -57,6 +58,9 @@ import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
 import { staleBooleanFlagError } from './cli-flags'
+import type { TrustOutcome } from './claude-trust'
+import type { LaunchFailure } from '../shared/launch-failure'
+import { cmdRemote, type RemoteCliDeps } from './remote-cli'
 import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
@@ -67,7 +71,13 @@ export interface SocketServerDeps {
   /** Spawn a terminal's PTY with turn tracking (same path as IPC creation). */
   spawnTerminal: (t: { id: string; command: string; cwd: string }) => unknown
   /** End a teammate and take its card, once the process is proved gone (index.ts · removeNode). */
-  dismissTerminal: (id: string) => Promise<CloseOutcome>
+  dismissTerminal: (id: string, by?: 'orch' | 'agent') => Promise<CloseOutcome>
+  /**
+   * The person's yes to Claude's trust question for a card's folder, home
+   * included (`cookrew trust`, claude-card-prep.ts · trustChosen); the card's
+   * block is looked at again. Absent in a test server: the verb says so.
+   */
+  trustCardFolder?: (id: string) => { dir: string; outcome: TrustOutcome; failure: LaunchFailure | null }
   /** Turn history source for `cookrew fork` validation/output. */
   turns: TurnTracker
   /**
@@ -154,6 +164,8 @@ export interface SocketServerDeps {
   captureWindow: () => Promise<string>
   /** Debug helper: inject real input events into the app window. */
   injectInput: (args: string[]) => Promise<string>
+  /** `cookrew remote`: the machine switch from a shell on the machine (remote-cli.ts). Absent: the verb refuses. */
+  remote?: RemoteCliDeps
   voice: VoiceEngine
   /** Sous driving the canvas from a sentence — `cookrew sous "…"` is its CLI door. */
   sous: SousDoor
@@ -393,6 +405,8 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
       return cmdRename(request, deps)
     case 'dismiss':
       return cmdDismiss(request, deps)
+    case 'trust':
+      return cmdTrust(request, deps)
     case 'orch':
       return cmdOrch(request, deps)
     case 'fork':
@@ -427,6 +441,9 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
       return deps.captureWindow()
     case 'ui':
       return deps.injectInput(args)
+    case 'remote':
+      if (!deps.remote) throw new Error('Remote control is not available in this build.')
+      return cmdRemote(request, deps.remote)
     case 'help':
       return HELP_TEXT
     default:
@@ -783,6 +800,9 @@ export function cliWorkspaceScope(input: {
 }
 
 export async function cmdBrowser(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  // `cookrew browser "Name"`, as the prompt box names a browser: its verbs (bare-card.ts).
+  const bare = bareBrowserHint(request.args)
+  if (bare) throw new Error(bare)
   const me = self(request, deps)
   // Owner ruling 2026-11-04: every workspace works on its own. With the
   // headless engine nothing about a browser depends on the canvas on screen.
@@ -1077,7 +1097,7 @@ function cmdListAll(deps: SocketServerDeps): string {
   return lines.join('\n')
 }
 
-async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+export async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<string> {
   const [name, prompt] = request.args
   if (!name) throw new Error(`Usage: cookrew ask "Agent Name" "prompt" | cookrew ask "Agent" - <<'EOF' (brief on stdin) | cookrew ask "Agent" --raw "bytes"`)
   const target = reachCard(request, deps, name, 'terminal', 'ask') as TerminalNodeData
@@ -1087,13 +1107,17 @@ async function cmdAsk(request: CliRequest, deps: SocketServerDeps): Promise<stri
     // Cross-workspace / after reboot: the tmux session may be alive with its
     // PTY detached (workspace switch drops clients). Reattach through the
     // normal spawn path — tmux new-session -A rejoins, never restarts.
+    let started: unknown = true
     try {
-      deps.spawnTerminal(target)
+      started = deps.spawnTerminal(target)
     } catch (error) {
       console.error('Reattach failed:', error)
     }
     session = deps.ptys.get(target.id)
     cold = true
+    // A card that cannot start says why on the card; the caller hears the same, once.
+    const failure = session ? null : startFailure(deps, target.id, started)
+    if (failure) throw new Error(`Agent '${target.name}' cannot start: ${failure.why} ${failure.fix}`)
   }
   // Still transient during a workspace switch (PTYs rebuilding) — retried once.
   if (!session) throw new RetryableDispatchError(`Agent '${target.name}' has no running terminal`)
@@ -1375,7 +1399,8 @@ function adoptNote(me: TerminalNodeData, note: NoteNodeData, deps: SocketServerD
 }
 
 export function cmdNote(request: CliRequest, deps: SocketServerDeps): string {
-  const [sub, ...rest] = request.args
+  // `cookrew note "Name"`, as the prompt box names a note, reads it (bare-card.ts).
+  const [sub, ...rest] = bareNoteArgs(request.args)
   const me = self(request, deps)
   switch (sub) {
     case 'create': {
@@ -1477,6 +1502,65 @@ export function cmdConnect(request: CliRequest, deps: SocketServerDeps): string 
   return `Connected "${a.name}" and "${b.name}"`
 }
 
+/**
+ * Why a card just asked to start did not, in the card's own words: null when it
+ * started, or when nothing on it says why (then the old answers stand).
+ */
+function startFailure(deps: SocketServerDeps, id: string, started: unknown): LaunchFailure | null {
+  if (started !== false) return null
+  return deps.agents.lookup(id)?.failure ?? null
+}
+
+const TRUST_USAGE = 'Usage: cookrew trust "Agent"  (trust that card\'s folder for Claude, home folder included)'
+
+/**
+ * The caller of `cookrew trust`: a person at a pane of this app. The rule
+ * `cookrew login` keeps (loginPaneOf, agentMidTurn, driven): an agent whose
+ * card names this command must not answer the question meant for the person.
+ */
+function trustPaneOf(request: CliRequest, deps: SocketServerDeps): TerminalNodeData {
+  const refuse = (why: string): Error => new Error(`refused: trusting a folder for Claude is the person's answer — ${why.replace('readable ', '')}`)
+  const elsewhere = 'Run it in a Shell card (cookrew recruit --preset Shell), or press Trust this folder on the card'
+  if (!request.terminalId && typeof request.flags.as !== 'string') throw refuse(`this shell is not a Cookrew terminal. ${elsewhere}`)
+  const pane = ownerPaneOf(request, deps, refuse)
+  if (isServedPane(pane)) throw refuse('never from a served session')
+  if (agentMidTurn(pane.id, deps)) throw refuse(`the agent here is mid-turn. ${elsewhere}`)
+  if (paneInputs.driven(pane.id)) throw refuse(`typed here by something other than a keyboard. ${elsewhere}`)
+  return pane
+}
+
+/**
+ * `cookrew trust "Agent"`: the person's answer to Claude's "Is this a project you
+ * trust?" for the folder a card works in. Cookrew answers it alone only for a
+ * workspace's own folder, never for a home folder or anything above it
+ * (claude-card-prep.ts); such a card says so and names this command. The answer
+ * lands in the owner's ~/.claude.json, so only a person at an owner pane gives it.
+ */
+export async function cmdTrust(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const [name] = request.args
+  if (!name) throw new Error(TRUST_USAGE)
+  const me = trustPaneOf(request, deps)
+  const wanted = name.toLowerCase()
+  const target =
+    connectedOf(deps.store, me.id).find((h) => h.node.kind === 'terminal' && h.node.name.toLowerCase() === wanted)?.node ??
+    callerCanvasNodeByName(request, deps, name, 'terminal')
+  if (!target) throw new Error(`Agent '${name}' not found in your workspace or among your connections. Run 'cookrew list --workspace'.`)
+  if (!deps.trustCardFolder) throw new Error("This build cannot answer Claude's trust question.")
+  const result = deps.trustCardFolder(target.id)
+  if (result.outcome === 'skipped-unreadable' || result.outcome === 'failed') {
+    throw new Error(
+      `Claude's config (~/.claude.json) could not be ${result.outcome === 'failed' ? 'written' : 'read'}, so nothing was trusted. Answer Claude in the card's terminal instead.`
+    )
+  }
+  const lines = [`Claude trusts ${result.dir} now, for every card that starts there (kept in ~/.claude.json).`]
+  lines.push(
+    result.failure
+      ? `"${target.name}" still cannot start: ${result.failure.why} ${result.failure.fix}`
+      : `"${target.name}" starts on the next send: cookrew ask "${target.name}" "…"`
+  )
+  return lines.join('\n')
+}
+
 const RECRUIT_USAGE =
   'Usage: cookrew recruit ["Name"] [--prompt "task" | --prompt - <<\'EOF\'] [--preset P] [--role R] [--dir PATH]\n' +
   '  With --prompt and no name, the agent is named from its prompt (Sous), the way /rename titles a chat.'
@@ -1542,6 +1626,8 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
     cwd,
     orch: false,
     role: request.flags.role ? String(request.flags.role) : null,
+    // Who may dismiss it besides the Orch (cmdDismiss). Set here alone: not patchable.
+    recruitedBy: me.id,
     // The prompt is the card's BRIEF (display only, never typed on a respawn;
     // recruit-node.ts) — it goes in once, through the dispatch below.
     ...(prompt ? { brief: prompt } : {}),
@@ -1556,11 +1642,21 @@ export async function cmdRecruit(request: CliRequest, deps: SocketServerDeps): P
     deps.store.connectAcross(me.id, node.id)
     return node
   })
-  deps.spawnTerminal(added)
-  // A command chosen by the caller runs with no keyboard anywhere near it.
-  if (request.flags.command) paneInputs.noteDriven(added.id)
+  const started = deps.spawnTerminal(added)
   const wsName = (id: string): string =>
     deps.listWorkspaces().workspaces.find((w) => w.id === id)?.name ?? id
+  // A card that cannot start gets no brief: it would wait for a prompt that never
+  // comes and give up a minute later, saying nothing. Said now, and the card stays.
+  const failure = startFailure(deps, added.id, started)
+  if (failure) {
+    throw new Error(
+      `Recruited "${added.name}" (${preset.name}) into workspace "${wsName(plan.workspaceId)}", but it cannot start: ` +
+        `${failure.why} ${failure.fix}` +
+        (prompt ? ` Its brief was not sent: once it can start, send it with cookrew ask "${added.name}" "…"` : '')
+    )
+  }
+  // A command chosen by the caller runs with no keyboard anywhere near it.
+  if (request.flags.command) paneInputs.noteDriven(added.id)
 
   // Named and briefed side by side: the name needs no running agent, and the
   // brief waits for the harness's prompt anyway.
@@ -1734,10 +1830,18 @@ export function cmdOrch(request: CliRequest, deps: SocketServerDeps): string {
     : `"${name}" is now the orch`
 }
 
-async function cmdDismiss(request: CliRequest, deps: SocketServerDeps): Promise<string> {
-  requireOrch(request, deps)
-  const target = findConnected(request, deps, request.args[0], 'terminal')
-  const closed = await deps.dismissTerminal(target.id)
+/**
+ * `cookrew dismiss`: the Orch, or the card that recruited this one. A caller
+ * that made a teammate with `cookrew recruit` can take it away again; anyone
+ * else's card stays the Orch's to remove.
+ */
+export async function cmdDismiss(request: CliRequest, deps: SocketServerDeps): Promise<string> {
+  const me = self(request, deps)
+  const target = findConnected(request, deps, request.args[0], 'terminal') as TerminalNodeData
+  if (!me.orch && target.recruitedBy !== me.id) {
+    throw new Error(`Only the Orch, or the card that recruited "${target.name}", may dismiss it.`)
+  }
+  const closed = await deps.dismissTerminal(target.id, me.orch ? 'orch' : 'agent')
   // The card stays, as the only handle on what is still running.
   if (!closed.ok) throw new Error(`"${target.name}" did not stop: ${closed.error}`)
   return `Dismissed "${target.name}"`
@@ -1927,6 +2031,8 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   return renderMobileHelp({
     endpoints,
     pairing: deps.pairingHandout(),
+    // `--token` alone or with any value: asking to see the secret is the act.
+    showToken: request.flags.token !== undefined && request.flags.token !== false,
     secure: endpoints.some((endpoint) => endpoint.url.startsWith('https')),
     uncovered: deps.uncoveredCertHosts(),
     tailnet: endpoints.some((endpoint) => endpoint.kind === 'tailscale'),
@@ -2096,7 +2202,7 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
                                                 (turn ENDED, needs a fresh dispatch) | idle
   cookrew note create ["content"] [--new]       Create a connected note on the canvas (a first line naming
                                                 a note already there wires you to it instead; --new forces a second)
-  cookrew note read "Name" [offset] [limit]     Read a note with line numbers
+  cookrew note read "Name" [offset] [limit]     Read a note with line numbers (a bare note "Name" reads it too)
   cookrew note write "Name" "content"           Replace a note's content ("" clears it)
   cookrew note edit "Name" "old" "new"          Replace a substring within a note
   cookrew note delete "Name"                    Remove a note wired to you (destructive)
@@ -2133,7 +2239,8 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew rename ["Card"] "New name"            Rename yourself, or any agent, note or browser of your
                                                 workspace (--kind agent|note|browser when two share a name);
                                                 for an agent herdr's pane title, tab and agent name follow
-  cookrew dismiss "Name"                        (Orch) Remove a teammate
+  cookrew dismiss "Name"                        Remove a teammate (the Orch, or the card that recruited it)
+  cookrew trust "Agent"                         Answer Claude's "trust this folder?" for that card's folder (home too)
   cookrew orch "Name"                           Make this agent the workspace's orch (the door)
   cookrew fork "Agent" [--turn N]               (Orch) Fork a NEW agent from a past turn (original untouched)
   cookrew preset list                           List agent presets
@@ -2143,6 +2250,9 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew sous "sentence" [--surface S]        What Sous would do with that sentence, and does it:
                                                 switch / ask / create / connect / rename / back (zh or en)
   cookrew mobile                               Print (and QR) the phone companion URL — dictation + spoken replies
+  cookrew remote status|on|off|stop             This machine's remote control switch, from a shell on it: on asks at
+                                                the terminal first and is refused in a Cookrew terminal; stop ends
+                                                every remote session
   cookrew workspace list                        List workspaces (* = active)
   cookrew workspace create "Name" --dir PATH [--team "Template"]   (Orch) New workspace (optionally from a saved team template) + switch
   cookrew team list                             List saved team templates (name, agents, saved date)

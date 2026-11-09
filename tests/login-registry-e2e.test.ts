@@ -184,7 +184,7 @@ beforeEach(async () => {
     identity: new IdentityService(dir),
     doors: new DoorStore(dir, { allowPrivate: true }),
     stars: new StarStore(dir),
-    v2: createV2(dir, { oauth: github.config() })
+    v2: createV2(dir, { secondStep: 'legacy', oauth: github.config() })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = assertLoopback(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
@@ -523,11 +523,14 @@ describe.skipIf(!hasPython)('cookrew login --github, through the real CLI', () =
     await term.sees('Choose your Cookrew name [octo-cat]: ')
     term.type('\r')
     await term.sees('Signed in as @octo-cat')
-    await term.sees('choose a passcode')
+    // No passcode to choose and no sheet on this screen: the terminal says why
+    // the lock is off and what turns it on (owner, 2026-11-09).
+    await term.sees('has no password yet')
     expect(await term.exit()).toBe(0)
     expect(term.transcript).not.toContain('Password for')
     expect(term.transcript).not.toContain('dev-code-secret')
-    expect(loadAccount(box.home)).toMatchObject({ username: 'octo-cat', passwordless: true, unlock: null })
+    expect(term.transcript).not.toContain('passcode')
+    expect(loadAccount(box.home)).toMatchObject({ username: 'octo-cat', passwordless: true, unlock: null, fromTerminal: true })
   })
 
   it('Ctrl-C at the wait ends it, and nothing is written', async () => {

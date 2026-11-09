@@ -45,7 +45,7 @@ let session = ''
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'w4-w5-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   const server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),
@@ -227,9 +227,9 @@ describe('W5 · /me — requests above devices, and the two ADD buttons', () => 
     expect(body.indexOf('id="me-devices"')).toBeLessThan(body.indexOf('data-add-device="desktop"'))
     const shipped = ASSETS['factors.js'].body
     expect(shipped).toContain("'/v2/me/join-codes'")
-    // Minting widens what the account opens from, so it steps up — the same
-    // rule that guards removing a factor.
-    expect(shipped).toMatch(/join-codes',\s*\{\s*current\s*\}/)
+    // Minting widens what the account opens from, so it steps up — through
+    // step-up.js, the same path every sensitive act on /me takes (me-stepup).
+    expect(shipped).toMatch(/proven\('mint-join-code', 'POST', '\/v2\/me\/join-codes'/)
   })
 
   it('describes the queue it actually has, naming no button that is not there', async () => {

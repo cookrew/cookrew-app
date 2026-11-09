@@ -53,7 +53,9 @@ export function LockScreen({
   const [rescue, setRescue] = useState<string | null>(null)
   const [rescueError, setRescueError] = useState<string | null>(null)
   const passcode = status.unlockBy === 'passcode'
-  const word = passcode ? 'passcode' : 'password'
+  // Until the account password is first typed here it folds the passcode in
+  // (owner, 2026-11-09): both open it, so both are named.
+  const word = passcode ? (status.passwordless ? 'passcode' : 'passcode or account password') : 'password'
 
   useEffect(() => {
     field.current?.focus()
@@ -166,12 +168,16 @@ export function LockScreen({
         )}
         {passcode && rescue === null && (
           <button className="gs-ghost" onClick={() => setRescue('')}>
-            {PROVIDER_COPY.FORGOT_PASSCODE}
+            {PROVIDER_COPY.CHOSEN_PASSCODE_FORGOT}
           </button>
         )}
         {rescue !== null && (
           <>
-            <p className="gs-sub">{PROVIDER_COPY.RESCUE_WHY}</p>
+            <p className="gs-sub">
+              {status.passwordless
+                ? PROVIDER_COPY.CHOSEN_PASSCODE_RESCUE_WHY_NO_PASSWORD
+                : PROVIDER_COPY.CHOSEN_PASSCODE_RESCUE_WHY}
+            </p>
             <input
               className="gs-input"
               aria-label="Recovery code"

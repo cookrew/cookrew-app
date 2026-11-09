@@ -1,3 +1,4 @@
+import { registerMac } from './support/register-mac'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
@@ -80,6 +81,13 @@ function machine(name: string): { base: string; accounts: Accounts } {
   const base = mkdtempSync(path.join(tmpdir(), `v3-04c-${name}-`))
   bases.push(base)
   return { base, accounts: new Accounts({ base, origin, deviceName: name }) }
+}
+
+/** A machine that has registered `username` the way a person now does (support/register-mac.ts). */
+async function registeredMachine(name: string, username: string): Promise<{ base: string; accounts: Accounts }> {
+  const made = machine(name)
+  const registered = await registerMac({ origin, base: made.base, username, password: PASSWORD, name })
+  return { base: made.base, accounts: registered.accounts }
 }
 
 const sessionToken = (base: string): string => {
@@ -355,14 +363,8 @@ afterAll(async () => {
 
 describe('the placed card at a listed door', () => {
   it('opens on the seat bought elsewhere, as the account, with no second payment', async () => {
-    const owner = machine('owner')
-    expect(await owner.accounts.claim({ username: OWNER, password: PASSWORD })).toMatchObject({
-      ok: true
-    })
-    const guest = machine('guest')
-    expect(await guest.accounts.claim({ username: 'lin', password: PASSWORD })).toMatchObject({
-      ok: true
-    })
+    const owner = await registeredMachine('owner', OWNER)
+    const guest = await registeredMachine('guest', 'lin')
 
     // The purchase that happened somewhere else — the web, in step 7 — as the
     // door reports it to cookrew.dev.
@@ -393,10 +395,7 @@ describe('the placed card at a listed door', () => {
   }, SLOW)
 
   it('a guest with NO seat is refused in the door’s own words, and does not fall back to a key', async () => {
-    const stranger = machine('stranger')
-    expect(await stranger.accounts.claim({ username: 'bo', password: PASSWORD })).toMatchObject({
-      ok: true
-    })
+    const stranger = await registeredMachine('stranger', 'bo')
     signedInAs = stranger.accounts
     openedBy = []
     doorPaths = []

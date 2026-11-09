@@ -96,7 +96,7 @@ export function CardWords({ agent, sent }: { agent: AgentView; sent: string | nu
       </div>
     )
   }
-  if (agent.failure) return <AgentFailure failure={agent.failure} />
+  if (agent.failure) return <AgentFailure failure={agent.failure} agentId={agent.id} />
   // A restart outlasts the refusal: the new pane is blank for a while. Nothing else does.
   if (agent.refused || fix?.state === 'working' || fix?.state === 'done') return <TurnRefused id={agent.id} raw={agent.turn?.latest?.full ?? agent.refused ?? ''} />
   return <AgentLatest turn={agent.turn} fallback={agent.line} />

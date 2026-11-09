@@ -36,7 +36,7 @@ const pair = generateKeyPairSync('ed25519')
 
 beforeAll(async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'v2-me-page-'))
-  const v2 = createV2(dir, { limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, helloPerMinute: 1000 } })
+  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000, helloPerMinute: 1000 } })
   const server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),

@@ -11,7 +11,7 @@ import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
-import { buildZoomModel, itemViewOf } from './zoom-model'
+import { buildZoomModel, itemViewOf, listedOnly } from './zoom-model'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
 import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD, shelfPage } from './zoom-layout'
@@ -644,7 +644,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         }}>
         <div className="zv-devices" ref={bind('devices')}>
           {model.machines.filter((m) => !m.local).map((m) => (
-            <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(`${m.name} is listed, not readable from here: open it on that Mac.`)} />
+            <MachineNode key={m.id} machine={m} bind={bind} onOpen={() => setError(listedOnly(m))} />
           ))}
           <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
         </div>

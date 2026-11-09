@@ -34,7 +34,7 @@ import {
 
 let site: AuthSite
 beforeEach(async () => {
-  site = await bootAuthSite()
+  site = await bootAuthSite({ freshWindowMs: 0 })
 })
 afterEach(() => site.close())
 
@@ -308,7 +308,7 @@ describe('opening a passkey request', () => {
 
   it('is a 404 with the auth origin off, so cookrew.dev falls back to its own button', async () => {
     await site.close()
-    site = await bootAuthSite({ auth: false })
+    site = await bootAuthSite({ auth: false, freshWindowMs: 0 })
     const owner = await passwordAccount(site, 'drej')
     const app = new Client(site, 'app')
     const off = await app.call(site.P, 'POST', '/v2/auth/requests', { client: 'desktop', intent: 'passkey', device: owner.device.payload }, bearer(owner.token))
@@ -402,7 +402,7 @@ describe('the old /me route', () => {
   it('a password account adds one there as before', async () => {
     const owner = await passwordAccount(site, 'drej')
     const app = new Client(site)
-    const options = await app.call(site.P, 'POST', '/v2/me/passkeys/options', {}, bearer(owner.token))
+    const options = await app.call(site.P, 'POST', '/v2/me/passkeys/options', { current: PASSWORD }, bearer(owner.token))
     expect(options.status).toBe(200)
     const credential = makeCredential({ pair: passkeyPair(), credentialId: randomBytes(16), challenge: String(options.body.challenge), origin: site.P, rpId: 'localhost' })
     const added = await app.call(site.P, 'POST', '/v2/me/passkeys', { name: 'Touch ID', credential }, bearer(owner.token))

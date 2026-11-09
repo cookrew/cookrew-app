@@ -279,3 +279,76 @@ struct ZoomRoundTwoTests {
     #expect(s.page == "b")
   }
 }
+
+@Suite("thumbnails only from a Mac that can peek", .serialized)
+@MainActor
+struct PeekTests {
+  @Test("a Mac that counts workspaces can peek; an older one would start a Chrome per thumbnail, so it is not asked")
+  func peeks() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [], activeWorkspaceId: "dev"), CardsReply(cards: [], activeWorkspaceId: "dev", workspaces: [])]
+    let s = WatchStore(api: api)
+    #expect(!s.macPeeks)
+    await s.refresh()
+    #expect(!s.macPeeks)
+    await s.enter(workspace: "dev")
+    #expect(s.macPeeks)
+  }
+}
+
+@Suite("a poll that changes nothing redraws nothing", .serialized)
+@MainActor
+struct QuietPollTests {
+  @Test("the same cards again, or a 304, leave every view of the store alone")
+  func quiet() async {
+    let api = ScopedAPI()
+    let same = CardsReply(cards: [card("b", .working, dev)], activeWorkspaceId: "dev", workspaces: [])
+    api.replies = [same, same]
+    let s = WatchStore(api: api)
+    await s.refresh()
+    var touched = false
+    withObservationTracking {
+      _ = s.cards
+      _ = s.workspaces
+      _ = s.link
+      _ = s.signedOut
+      _ = s.page
+      _ = s.macPeeks
+      _ = s.activeWorkspaceId
+      _ = s.waitView(s.cards[0])
+    } onChange: {
+      touched = true
+    }
+    await s.refresh()
+    #expect(!touched)
+  }
+}
+
+@Suite("the word for the machine")
+struct MachineWordTests {
+  @Test("a Mac is a Mac, Windows a PC, anything else a machine; before the wrist knows, a computer")
+  func words() {
+    #expect(machineWord("darwin") == "Mac")
+    #expect(machineWord("win32") == "PC")
+    #expect(machineWord("linux") == "machine")
+    #expect(machineWord(nil) == "computer")
+  }
+
+  @Test("the store says what its machine is once the cards say so")
+  @MainActor
+  func store() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [], activeWorkspaceId: "dev", platform: "linux")]
+    let s = WatchStore(api: api)
+    #expect(s.machine == "computer")
+    await s.refresh()
+    #expect(s.machine == "machine")
+  }
+
+  @Test("an account's machine says what it is too")
+  func account() throws {
+    let json = #"[{"id":"a","name":"Solis","online":true,"profile":{"os":"linux"}},{"id":"b","name":"Old","online":false}]"#
+    let machines = try JSONDecoder().decode([WatchMachine].self, from: Data(json.utf8))
+    #expect(machines.map(\.os) == ["linux", nil])
+  }
+}

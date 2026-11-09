@@ -28,7 +28,7 @@ describe('the connect code stays out of a pane', () => {
   }
 
   it('the help prints the pairing link without it', () => {
-    const text = renderMobileHelp({ endpoints: withTailnet, pairing, secure: true, uncovered: [], tailnet: true })
+    const text = renderMobileHelp({ endpoints: withTailnet, pairing, secure: true, uncovered: [], tailnet: true, showToken: true })
     expect(text).toContain('#pair=tok')
     expect(text).not.toContain('SECRET')
   })
@@ -218,7 +218,9 @@ describe('the pairing URL', () => {
       secure: true,
       uncovered: [],
       tailnet: true,
-      pairing: RELAY
+      pairing: RELAY,
+      // The token links are what --token asks for (owner 2026-11-09).
+      showToken: true
     })
     const relayAt = text.indexOf(RELAY_URL)
     expect(relayAt).toBeGreaterThan(-1)
@@ -233,7 +235,9 @@ describe('the pairing URL', () => {
       secure: true,
       uncovered: [],
       tailnet: true,
-      pairing: RELAY
+      pairing: RELAY,
+      // The token links are what --token asks for (owner 2026-11-09).
+      showToken: true
     })
     expect(text).toContain('#')
     expect(text).toContain('never sees')
@@ -245,7 +249,9 @@ describe('the pairing URL', () => {
       secure: true,
       uncovered: [],
       tailnet: true,
-      pairing: RELAY
+      pairing: RELAY,
+      // The token links are what --token asks for (owner 2026-11-09).
+      showToken: true
     })
     expect(text).toContain('https://192.168.2.13:8643/?token=tok')
     expect(text).toContain(machineCopy('Same Wi-Fi as this Mac', process.platform))

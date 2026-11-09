@@ -1,3 +1,4 @@
+import { claimThroughSetup, codeNow } from './support/second-step'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -194,13 +195,9 @@ beforeAll(async () => {
       })
     })
   // The owner exists already, by the API — the walk is the BUYER's.
-  const res = await fetch(`${origin}/v2/accounts`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username: 'drej', password: PASSWORD, device: device('owner mac') })
-  })
-  expect(res.status).toBe(201)
-  ownerToken = ((await res.json()) as { session: { token: string } }).session.token
+  // A password is the first step only (auth UX 2026-11-09): the owner's account
+  // is made the way a person makes it now — an authenticator, the codes saved.
+  ownerToken = (await claimThroughSetup(origin, { username: 'drej', password: PASSWORD, device: device('owner mac') })).token
 
   browser = await launchChrome({ width: 1280, height: 900 })
   page = (await connectPage(browser.port)) as Page
@@ -253,10 +250,22 @@ suite('the market, driven as a stranger who becomes @lin', () => {
     // the field when it comes back — which moves the buttons. Measure the
     // submit only once the answer is in.
     await waitFor("document.getElementById('acct-username-note')?.textContent === 'free'")
+    // A password is the first step only (auth UX 2026-11-09): the sheet asks
+    // for a second step before any session — an authenticator here, its code
+    // typed, the recovery codes saved.
+    await click('#acct-submit')
+    await waitFor("!!document.querySelector('[data-setup-totp]')")
+    await click('[data-setup-totp]')
+    await waitFor("!!document.querySelector('#acct-setup-code') && !!document.querySelector('code.totp-secret')")
+    await type('#acct-setup-code', codeNow(await text('code.totp-secret')))
+    await click('.acct-setup .btn.primary')
+    await waitFor("!!document.getElementById('acct-codes-saved')")
+    expect(await count('.acct-setup ul.codes li')).toBe(8)
+    await click('#acct-codes-saved')
     try {
-      await nextLoad(() => click('#acct-submit'))
+      await nextLoad(() => click('.acct-setup .btn.primary'))
     } catch (error) {
-      throw new Error(`${String(error)} — the sheet says: ${await text('#acct-message')}`)
+      throw new Error(`${String(error)} — the sheet says: ${await text('.acct-said')}`)
     }
     expect(await text('#yours .chip.amber')).toBe('@lin · 0 seats · 0 starred')
     expect(await text('#signin')).toBe('@lin')

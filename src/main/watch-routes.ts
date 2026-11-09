@@ -17,6 +17,7 @@ import { closingMessage } from '../shared/trace-blocks'
 import type { BoardSnapshot } from './board-index'
 import type { BrowserInstance } from './browser-instance'
 import type { StreamService } from './stream-service'
+import { machineCopy } from '../shared/machine-words'
 import { readJson, respondJson } from './mobile-http'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
@@ -74,6 +75,8 @@ export interface WatchHost {
   /** The workspace's canvas, for an agent's items. */
   canvas(workspaceId: string): Parameters<typeof itemsOfAgent>[1]
   /** The picture of a browser card, at most `width` wide. */
+  /** A wrist touched this page: its picture is about to change (pageSettler). */
+  moved?(browserId: string): void
   /** A browser's picture. A peek is a thumbnail's: the picture the Mac already has, and no browser started for it. */
   frame(browserId: string, width: number, peek: boolean): Promise<{ type: string; data: Buffer } | null>
   browser(browserId: string): Promise<BrowserInstance | null>
@@ -89,6 +92,8 @@ export interface WatchHost {
   /** This Mac's workspaces, in its own order. */
   workspaces(): readonly { readonly id: string; readonly name: string }[]
   accountKind(): WatchAccountKind
+  /** What this machine is (process.platform): the wrist and a phone say Mac, PC or machine by it. */
+  readonly platform?: string
   /** Mint a join code under this password. `here`: asked on this Mac, where a provider trip can open. */
   invite(current: string, here: boolean): Promise<WatchInvite>
 }
@@ -131,12 +136,15 @@ const TERMINAL_WRITE = /^\/api\/terminal\/([^/]+)\/(input|menu)$|^\/api\/watch\/
  *   under the cursor, which on a question nobody parsed may be "Yes". /menu,
  *   which names its row, is how a menu is answered.
  */
+/** The machine's platform: the host's word for it, else the process's own. */
+const platformOf = (current: Pick<WatchHost, 'platform'>): string => current.platform ?? process.platform
+
 export function watchWriteRefusal(path: string): { status: number; error: string } | null {
   const write = path.match(TERMINAL_WRITE)
   if (!write || !host) return null
   const id = decodeURIComponent(write[1] ?? write[3])
   if (!host.speaksTo(id)) return { status: 403, error: 'A watch does not type into a shell.' }
-  if (write[2] === 'input' && host.menuOnScreen(id)) return { status: 409, error: 'A menu is up: answer it on the Mac.' }
+  if (write[2] === 'input' && host.menuOnScreen(id)) return { status: 409, error: machineCopy('A menu is up: answer it on the Mac.', platformOf(host)) }
   return null
 }
 
@@ -169,11 +177,13 @@ export async function handleWatchClaim(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   method: string,
-  path: string
+  path: string,
+  /** The watch's account device, when the claim came down the relay: revoking it there ends this token too. */
+  bridgedDeviceId: string | null = null
 ): Promise<boolean> {
   if (method !== 'POST' || path !== '/api/watch/claim' || !host) return false
   const body = await readJson<{ code?: unknown }>(request)
-  const claim = host.pairing.claim(body.code)
+  const claim = host.pairing.claim(body.code, bridgedDeviceId)
   if (!claim.ok) {
     respondJson(response, claim.reason === 'paused' ? 429 : 403, { ok: false, reason: claim.reason })
     return true
@@ -280,7 +290,7 @@ async function cards(
   ctx: WatchRequest,
   current: WatchHost,
   workspaceId: string | null
-): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[] }> {
+): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[]; platform: string }> {
   // Inside a workspace the wrist shows its whole crew, so the week and not the day.
   const board = await ctx.board(workspaceId !== null)
   const canvases = new Map<string, ReturnType<WatchHost['canvas']>>()
@@ -313,6 +323,7 @@ async function cards(
       ...(workspaceId === null ? {} : { limit: MAX_CREW })
     }),
     activeWorkspaceId: board.activeWorkspaceId,
+    platform: platformOf(current),
     workspaces: watchWorkspaces({
       workspaces: current.workspaces(),
       activeId: board.activeWorkspaceId,
@@ -359,13 +370,43 @@ async function itemInput(ctx: WatchRequest, current: WatchHost, id: string): Pro
   if (pasted !== null) {
     if (instance.paste) await instance.paste(pasted)
     else await instance.dispatchInput('Input.insertText', { text: pasted })
+    current.moved?.(id)
     return respondJson(ctx.response, 200, { ok: true })
   }
   const message = browserInputOf(body, state)
   const commands = message && sanitizeInput(message, { displayScale: 1, viewportWidth: state.width, viewportHeight: state.height })
   if (!commands) return respondJson(ctx.response, 400, { error: 'Not an input a watch sends.' })
   for (const command of commands) await instance.dispatchInput(command.method, command.params)
+  current.moved?.(id)
   respondJson(ctx.response, 200, { ok: true })
+}
+
+/** How long after a wrist's touch the page is photographed: long enough for it to have moved. */
+export const SETTLE_MS = 450
+
+/**
+ * ONE FRESH PICTURE AFTER A WRIST TOUCHES A PAGE. The Mac otherwise photographs
+ * a page at most every few seconds, so a tap's result would reach the wrist late.
+ * A crown turning touches the page four times a second: those make one picture
+ * per SETTLE_MS, per page, and only for a wrist's touches, so a phone or the
+ * desktop working the same page pays nothing it did not before.
+ */
+export function pageSettler(take: (browserId: string) => unknown, delayMs: number = SETTLE_MS): (browserId: string) => void {
+  const waiting = new Set<string>()
+  return (browserId) => {
+    if (waiting.has(browserId)) return
+    waiting.add(browserId)
+    const timer = setTimeout(() => {
+      waiting.delete(browserId)
+      // A picture that fails waits for the next touch, or the page's own pace.
+      try {
+        void Promise.resolve(take(browserId)).catch(() => undefined)
+      } catch {
+        return
+      }
+    }, delayMs)
+    timer.unref?.()
+  }
 }
 
 /** Every /api/watch route past the gate; false for anything else. */
@@ -387,7 +428,7 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (ctx.owner && method === 'GET' && path === '/api/watch/pairing') {
-    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind(), sealed: ctx.sealed(), claims: current.pairing.claims })
+    respondJson(response, 200, { paired: current.pairing.paired, pending: current.pairing.pending(), account: current.accountKind(), sealed: ctx.sealed(), claims: current.pairing.claims, platform: platformOf(current) })
     return true
   }
   if (ctx.owner && method === 'POST' && path === '/api/watch/invite') {

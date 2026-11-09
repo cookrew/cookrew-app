@@ -2,6 +2,7 @@ import type { ServerResponse } from 'node:http'
 import { readJsonBody } from './http'
 import { emailFrom } from './v2-links'
 import { afterFirstFactor } from './v2-factor-routes'
+import { setupForNewAccount } from './v2-second-step'
 import { completeSignIn, deviceFor, json, noContent, refuse, refuseFactor, relyingParty } from './v2-factor-http'
 import { authorizeSession, finishRequest, productOrigin } from './auth-finish'
 import type { AuthRequest } from './auth-requests'
@@ -11,6 +12,7 @@ import { challengeFor, challengeMatches, type Flow } from './v2-oauth-flows'
 import type { OAuthProvider, ProviderProof } from './v2-oauth-providers'
 import { readAndStepUp, stepUpHeld } from './v2-step-up'
 import { continuePasskey, mayStartStepUp } from './auth-passkey'
+import { continueStepUp, mayStartProvider } from './auth-step-up'
 import {
   OAUTH_LOOPBACK_PATH,
   OAUTH_SCHEME_HOST,
@@ -122,12 +124,16 @@ function startForRequest(ctx: V2Context, provider: OAuthProvider, request: AuthR
     return
   }
   if (!mayStartStepUp(ctx, request, provider.id)) return
+  if (request.intent === 'step-up' && !mayStartProvider(ctx, request, provider.id)) return
   const flow = ctx.v2.oauth.flows.open({
     provider: provider.id,
-    // A passkey request's trip is the owner's step-up for adding it.
+    // A passkey request's trip is the owner's step-up for adding it; a
+    // step-up request's is the step-up for its own one act.
     ...(request.intent === 'passkey'
       ? { intent: 'step-up' as const, act: 'add-factor' as const }
-      : { intent: request.intent === 'link' ? ('link' as const) : ('sign-in' as const) }),
+      : request.intent === 'step-up' && request.act !== null
+        ? { intent: 'step-up' as const, act: request.act }
+        : { intent: request.intent === 'link' ? ('link' as const) : ('sign-in' as const) }),
     clientState: 'auth-request',
     challenge: request.challenge,
     back: { scheme: false },
@@ -287,6 +293,10 @@ export function continueRequest(ctx: V2Context, request: AuthRequest): void {
   }
   if (request.intent === 'passkey') {
     continuePasskey(ctx, request, proof)
+    return
+  }
+  if (request.intent === 'step-up') {
+    continueStepUp(ctx, request, proof)
     return
   }
   if (request.intent !== 'link') {
@@ -460,6 +470,8 @@ function finishStepUp(ctx: V2Context, signed: Signed, flow: Flow, proof: Provide
     opener: { jti: signed.claims.jti, device: signed.claims.dev }
   })
   v2.factors.pending.authorise(pending.id)
+  // A provider round trip is a verification too: the five minutes start now.
+  v2.accounts.markVerified(username, signed.claims.jti, 'provider')
   json(ctx.response, 200, { stepUp: pending.id, act: flow.act, expiresAt: pending.expiresAt })
 }
 
@@ -498,11 +510,14 @@ async function claim(ctx: V2Context): Promise<void> {
     return
   }
   v2.oauth.flows.spendTicket(ticket.id)
-  if (ctx.auth !== undefined) {
-    authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, false, { codes: true })
+  // A provider is the first step only (auth UX 2026-11-09): the new account
+  // sets up a passkey or an authenticator before its first session.
+  if (v2.secondStep === 'legacy') {
+    if (ctx.auth !== undefined) authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, false, { codes: true, verifiedBy: 'provider' })
+    else completeSignIn(ctx, out.account.username, device, 'provider')
     return
   }
-  completeSignIn(ctx, out.account.username, device)
+  setupForNewAccount(ctx, out.account.username, device, { provider: proof.provider, subject: proof.subject })
 }
 
 /** POST /v2/oauth/:provider/device — the device code stays in this process. */

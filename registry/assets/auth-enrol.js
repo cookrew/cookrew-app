@@ -153,5 +153,18 @@
     ])
   }
 
-  window.cookrewAuthEnrol = Object.freeze({ start, notConfirmed })
+  /**
+   * A passkey from the registry's creation options, for the sign-in set-up
+   * (auth.js): the wire credential, or the sentence a refusal means.
+   */
+  async function makePasskey(options) {
+    try {
+      const credential = await navigator.credentials.create({ publicKey: publicKeyOf(options) })
+      return credential ? { credential: wireCredential(credential) } : { error: refusalOf(null) }
+    } catch (error) {
+      return { error: refusalOf(error) }
+    }
+  }
+
+  window.cookrewAuthEnrol = Object.freeze({ start, notConfirmed, makePasskey, nameGuess })
 })()
