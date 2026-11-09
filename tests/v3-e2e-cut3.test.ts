@@ -1,3 +1,4 @@
+import { registerMac } from './support/register-mac'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -92,6 +93,23 @@ function machine(name: string): Machine {
     }
   })
   return { base, accounts, asked }
+}
+
+/**
+ * Days pass for machines that are RUNNING: each uses its sitting at least
+ * every six days, as a live machine does many times a day.
+ */
+async function keepRunning(ms: number): Promise<void> {
+  let left = ms
+  while (left > 0) {
+    const step = Math.min(left, 6 * DAY)
+    clock += step
+    left -= step
+    for (const one of [macA, macB, phone]) {
+      const token = loadAccount(one.base)?.session?.token
+      if (token) await call('GET', '/v2/me', undefined, token)
+    }
+  }
 }
 
 /** Raw HTTP, for the routes the app has no method for. */
@@ -203,9 +221,26 @@ beforeAll(async () => {
 
   // The chain's first two links, as cut 1 left them: Mac A holds the account
   // and the rescue codes; Mac B and the phone are devices of it.
-  macA = machine('Mac A')
-  const claimed = await macA.accounts.claim({ username: OWNER, password: PASSWORD })
-  if (!claimed.ok) throw new Error(`Mac A could not claim: ${JSON.stringify(claimed)}`)
+  // A password is the first step only (auth UX 2026-11-09): Mac A registers the
+  // way a person now does — its key attached, an authenticator set up, the
+  // codes saved — on the registry's own clock (support/register-mac.ts).
+  const made = machine('Mac A')
+  const registered = await registerMac({
+    origin,
+    base: made.base,
+    username: OWNER,
+    password: PASSWORD,
+    name: 'Mac A',
+    now,
+    accounts: {
+      now,
+      fetch: (input: string, init?: RequestInit) => {
+        made.asked.push(String(input))
+        return fetch(input, init)
+      }
+    }
+  })
+  macA = { ...made, accounts: registered.accounts }
   const codes = await macA.accounts.recoveryCodes()
   if (!codes.ok) throw new Error('no recovery codes')
   recoveryCodes = codes.value
@@ -260,7 +295,10 @@ describe('step 12 — the session renews with nobody typing', () => {
     expect(beforeDoor).not.toBeNull()
 
     // ── six days out ──
-    clock += 24 * DAY
+    // A running machine talks to the registry every day (its relay line, its
+    // renewal check), so its sitting is never idle; seven quiet days would end
+    // it (auth UX 2026-11-09). The clock moves the way the days do.
+    await keepRunning(24 * DAY)
     const due = renewDue(before, clock)
     observed.daysToExpiry = Math.round((before.exp - clock) / DAY)
     expect(due).toBe(true)
@@ -276,7 +314,10 @@ describe('step 12 — the session renews with nobody typing', () => {
     const after = loadAccount(macB.base)?.session
     observed.expAfter = after?.exp
     observed.movedForwardDays = Math.round(((after?.exp ?? 0) - before.exp) / DAY)
-    expect(after?.exp).toBeGreaterThan(before.exp)
+    // THE THIRTIETH DAY HOLDS (auth UX 2026-11-09): a renewal replaces the
+    // token on the device key, and never carries it past thirty days from the
+    // sign-in — after that a person signs this machine in again.
+    expect(after?.exp).toBe(before.exp)
     // NOBODY TYPED. Two calls: a nonce, and the signature. No password route
     // was touched, and the offline verifier is exactly the one it was.
     const spent = macB.asked.slice(askedBefore)
@@ -471,169 +512,44 @@ describe('step 12 — the session renews with nobody typing', () => {
 
 /* ── step 13 ───────────────────────────────────────────────────────────── */
 
-describe('step 13 — not me', () => {
-  it('signs the others out, locks the password, and empties the queue', async () => {
-    // A device the account has never seen asks to sign in with the password,
-    // and raises the approval Mac B is about to answer.
+describe('step 13 — a stranger with the password (auth UX 2026-11-09, ruling 2)', () => {
+  /**
+   * THIS STEP USED TO BE "NOT ME": a stranger typed the password, asked the
+   * owner's other devices to approve, and the owner pressed Not me. The owner
+   * ruled on 2026-11-09 that approving on a signed-in device no longer counts
+   * as a second step, so a stranger holding the password now meets a passkey
+   * or an authenticator and can raise nothing on the owner's devices. The
+   * not-me rules themselves are still proved at the registry
+   * (registry-v2-ladder-http and friends); what a person can reach end to end
+   * is this.
+   */
+  it('meets the second step, cannot ask the owner’s devices, and changes nothing on the account', async () => {
+    const queueBefore = await call('GET', '/v2/me/requests', undefined, sessionToken(macB.base))
+    expect(queueBefore.status).toBe(200)
+    observed.queueBefore = queueRows(queueBefore.body).length
+    const sittingsBefore = sittings()
+
     const stranger = machine('Stranger Mac')
     const step = await stranger.accounts.signIn({ username: OWNER, password: PASSWORD })
     if (step.ok || step.reason !== 'second_factor') {
       throw new Error(`expected the ladder, got ${JSON.stringify(step)}`)
     }
+    observed.strangerRungs = step.step.next
+    expect(step.step.next).not.toContain('approve')
+    expect(step.step.next).toContain('totp')
+
     const asked = await stranger.accounts.resumeAsk(step.step.pending)
-    expect(asked).toMatchObject({ ok: true })
-
-    // There is also something in the QUEUE — a seat request from a guest —
-    // so "empties the queue" is a change and not a tautology.
-    const queueBefore = await call('GET', '/v2/me/requests', undefined, sessionToken(macB.base))
-    observed.queueBefore = queueRows(queueBefore.body).length
-    observed.queueBeforeKinds = queueRows(queueBefore.body).map((r) => (r as { kind: string }).kind)
-    expect(queueBefore.status).toBe(200)
-    expect(observed.queueBefore).toBeGreaterThan(0)
-
-    /**
-     * THE LAN LEDGERS, BEFORE — with TWO rows each, and the second row is the
-     * whole reason this reads as evidence.
-     *
-     * The phone was REVOKED in step 12's renewal test, so its row is expected
-     * to go: that is step 11's line (the published revoked list reaching every
-     * Mac's Wi-Fi) still working, and nothing to do with not-me. The second
-     * row is Mac A's own device id — signed out by not-me and still ATTACHED,
-     * which is exactly the case §06's clause is about. Measuring one row would
-     * have measured the earlier revoke and called it not-me.
-     */
-    const phoneId = deviceIdOf(phone.base)
-    const macAId = deviceIdOf(macA.base)
-    for (const mac of [macA, macB]) {
-      writeAdmittedDevices(
-        [
-          {
-            deviceId: phoneId,
-            name: 'Phone (revoked in step 12)',
-            admittedAt: clock,
-            lastSeenAt: clock,
-            tokenHash: hashToken(`phone-token-${mac.base}`)
-          },
-          {
-            deviceId: macAId,
-            name: 'Mac A (signed out by not-me, still attached)',
-            admittedAt: clock,
-            lastSeenAt: clock,
-            tokenHash: hashToken(`mac-a-token-${mac.base}`)
-          }
-        ],
-        mac.base
-      )
-    }
-    observed.admittedABefore = createAdmittedDeviceStore({ base: macA.base }).list().length
-    observed.admittedBBefore = createAdmittedDeviceStore({ base: macB.base }).list().length
+    observed.strangerAsk = asked
+    expect(asked.ok).toBe(false)
 
     const approvals = await call('GET', '/v2/me/approvals', undefined, sessionToken(macB.base))
-    const rows = approvals.body as unknown as { id: string }[]
-    expect(Array.isArray(rows)).toBe(true)
-    const approvalId = rows[0]?.id
-    expect(typeof approvalId).toBe('string')
-
-    const sittingsBefore = sittings()
-    observed.sittingsBeforeNotMe = sittingsBefore.length
-    // AND SO DOES NOT ME — the other act a thief most wants (V3-16 H4).
-    const pressed = await call(
-      'POST',
-      `/v2/me/approvals/${encodeURIComponent(approvalId)}`,
-      { decision: 'not-me', current: PASSWORD },
-      sessionToken(macB.base)
-    )
-    observed.notMeStatus = pressed.status
-    expect(pressed.status).toBe(204)
-
-    // A AND THE PHONE ARE SIGNED OUT; B, which pressed it, is not.
-    const afterA = await call('GET', '/v2/me', undefined, sessionToken(macA.base))
-    const afterB = await call('GET', '/v2/me', undefined, sessionToken(macB.base))
-    observed.macAAfterNotMe = afterA.status
-    observed.macBAfterNotMe = afterB.status
-    expect(afterA.status).toBe(401)
-    expect(afterB.status).toBe(200)
-    observed.sittingsAfterNotMe = sittings().length
-    expect(sittings()).toHaveLength(1)
-
-    // THE PASSWORD IS LOCKED. The old one, on any device, answers the reason
-    // rather than a session.
-    const later = await call('POST', '/v2/sessions', {
-      username: OWNER,
-      password: PASSWORD,
-      device: {
-        id: deviceIdOf(macA.base),
-        kind: 'desktop',
-        name: 'Mac A',
-        jwk: loadAccount(macA.base)?.publicKeyJwk
-      }
-    })
-    observed.oldPasswordStatus = later.status
-    observed.oldPasswordError = later.body.error
-    expect(later.status).toBe(403)
-    expect(later.body.error).toBe('password_change_required')
-
-    // THE QUEUE IS EMPTY.
+    expect(approvals.status).toBe(200)
+    expect(approvals.body as unknown as unknown[]).toEqual([])
     const queueAfter = await call('GET', '/v2/me/requests', undefined, sessionToken(macB.base))
     observed.queueAfter = queueRows(queueAfter.body).length
-    expect(queueAfter.status).toBe(200)
-    expect(observed.queueAfter).toBe(0)
-
-    // And the app-side half of the revocation line, driven the way the timer
-    // drives it: one fetch of /v2/keys, read for the doors and for the ledger.
-    const swept: string[] = []
-    const verifier = createV2CallTokenVerifier({
-      keys: v2KeysOverHttp(origin),
-      onRevoked: (revoked) => {
-        for (const [label, mac] of [
-          ['Mac A', macA],
-          ['Mac B', macB]
-        ] as const) {
-          for (const gone of createAdmittedDeviceStore({ base: mac.base }).prune(revoked)) {
-            swept.push(`${label}:${gone.deviceId}`)
-          }
-        }
-      }
-    })
-    observed.keysRefreshed = await verifier.refresh()
-    observed.sweptIds = swept
-    observed.admittedALeft = createAdmittedDeviceStore({ base: macA.base })
-      .list()
-      .map((d) => d.name)
-    observed.admittedBLeft = createAdmittedDeviceStore({ base: macB.base })
-      .list()
-      .map((d) => d.name)
-    observed.publishedRevoked = v2.accounts.revokedFor(OWNER)
-    observed.phoneIdPublishedRevoked = v2.accounts.revokedFor(OWNER).includes(phoneId)
-    observed.macAIdPublishedRevoked = v2.accounts.revokedFor(OWNER).includes(macAId)
-
-    // STEP 11'S LINE STILL WORKS, and it is what swept the phone: its DEVICE
-    // id was published when Mac A took it back, and both ledgers dropped it.
-    expect(observed.phoneIdPublishedRevoked).toBe(true)
-    expect(swept).toEqual([`Mac A:${phoneId}`, `Mac B:${phoneId}`])
-
-    /**
-     * THE FINDING, ASSERTED AS WHAT IS RATHER THAN WHAT SHOULD BE.
-     *
-     * §06 says not-me clears the admitted list on every Mac but the one that
-     * raised it. It does not, on this branch, and the reason is structural
-     * rather than a missed line: not-me ends SITTINGS (v2-accounts.ts ·
-     * endOtherSessions, which says in as many words that "the devices stay
-     * attached"), so what joins the published revoked list is SESSION ids.
-     * The only consumer the app has is `admitted.prune(revoked)`, which
-     * filters DEVICE ids against that list and — by its own docblock — lets a
-     * session id pass through inert.
-     *
-     * So Mac A's row survives on BOTH Macs: the device that was just signed
-     * out of the account is still holding the keyboard of every Mac on this
-     * Wi-Fi, which is the opposite of what an alarm is for. Pinned here so the
-     * lane that closes it has a failing assertion to turn green, and so
-     * nobody reads the silence as the clause being met.
-     */
-    expect(observed.macAIdPublishedRevoked).toBe(false)
-    expect(swept.some((row) => row.endsWith(macAId))).toBe(false)
-    expect(observed.admittedALeft).toEqual(['Mac A (signed out by not-me, still attached)'])
-    expect(observed.admittedBLeft).toEqual(['Mac A (signed out by not-me, still attached)'])
+    expect(observed.queueAfter).toBe(observed.queueBefore)
+    expect(sittings()).toEqual(sittingsBefore)
+    expect(loadAccount(stranger.base)).toBeNull()
   }, SLOW)
 })
 

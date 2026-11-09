@@ -78,7 +78,7 @@ export function openSetup(
 export function maySetUpHere(v2: V2Identity, username: string, deviceId: string): boolean {
   const account = v2.accounts.get(username)
   if (account === null) return false
-  return account.devices.length === 0 || account.devices.some((d) => d.id === deviceId)
+  return account.devices.length === 0 || account.setupPending === true || account.devices.some((d) => d.id === deviceId)
 }
 
 /** The setup pending this request names, having spent one try. Null = answered. */
@@ -108,6 +108,8 @@ function setUp(ctx: V2Context, id: string, by: 'passkey' | 'totp'): void {
     refuseFactor(ctx.response, 410, 'expired')
     return
   }
+  // A second step exists now: an unfinished account is finished.
+  ctx.v2.accounts.amend(pending.username, (a) => (a.setupPending === true ? { ...a, setupPending: false } : a))
   // Shown here and nowhere else: they are stored hashed from this moment.
   const codes = ctx.v2.accounts.mintRecoveryCodes(pending.username)
   ctx.v2.factors.pending.codesShown(id)
@@ -231,5 +233,8 @@ export function handleSetupRoute(ctx: V2Context, id: string, rest: readonly stri
  * session, like any other. The account and its device exist; the session waits.
  */
 export function setupForNewAccount(ctx: V2Context, username: string, rawDevice: unknown, via?: { provider: ProviderId; subject: string }): void {
+  // Until a second step exists the set-up may finish elsewhere: the app that
+  // made the account may be one that cannot do it (see V2Account.setupPending).
+  ctx.v2.accounts.amend(username, (a) => ({ ...a, setupPending: true }))
   openSetup(ctx, username, rawDevice, via)
 }
