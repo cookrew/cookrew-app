@@ -53,6 +53,10 @@ final class WatchApp {
   private var keeper: AccountKeeper?
   private(set) var desktop = ""
   private(set) var username: String?
+  /** The account's Macs, for the devices stop; empty with no account. */
+  private(set) var machines: [WatchMachine] = []
+  /** The paired Mac's id, from its relay road; nil when paired by six digits. */
+  private(set) var pairedId: String?
   private(set) var stage: PairStage = .welcome
   private(set) var typed = ""
   private(set) var padError: String?
@@ -80,10 +84,25 @@ final class WatchApp {
     keeper = pass
     desktop = session.desktop
     username = held?.username
+    pairedId = pairedMachineId(session.bases)
+    machines = []
     // With no account the relay would only refuse, and read as the Mac forgetting this watch.
     let urls = session.bases.filter { held != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
     let roams = session.bases.contains { $0.kind == "relay" }
     store = WatchStore(api: HTTPWatchAPI(bases: urls, token: session.token, relay: pass, guarded: roams), feel: feel)
+  }
+
+  /** The paired Mac as the account lists it: by its id, or by its name. */
+  var pairedMachine: WatchMachine? {
+    let byId = pairedId.flatMap { id in machines.first { $0.id.lowercased() == id } }
+    return byId ?? machines.first { $0.name == desktop }
+  }
+
+  /** The account's Macs. Best effort: with no answer the devices stop shows the paired one. */
+  func readMachines() async {
+    guard let keeper else { return }
+    let token = await keeper.token()
+    if let found = try? await registry.machines(token: token) { machines = found }
   }
 
   func show(_ next: PairStage) {
@@ -232,6 +251,9 @@ final class WatchApp {
     let held = vault.loadAccount()
     vault.clear()
     vault.clearAccount()
+    // The next Mac has its own workspaces: the zoom starts again at the top of it.
+    UserDefaults.standard.removeObject(forKey: keptZoomKey)
+    ThumbPictures.forget()
     store = nil
     username = nil
     typed = ""
@@ -257,9 +279,34 @@ final class WatchApp {
 }
 
 private enum Route: Hashable {
+  case workspaces
+  case agents(String)
+  case cards(String)
   case item(CardItem.ID)
-  case crew
   case thisWatch
+}
+
+/** The stack that stands for a zoom level: each stop is one step in from the last. */
+private func routes(to level: ZoomLevel) -> [Route] {
+  switch level {
+  case .devices: return []
+  case .workspaces: return [.workspaces]
+  case .agents(let id): return [.workspaces, .agents(id)]
+  case .cards(let id): return [.workspaces, .agents(id), .cards(id)]
+  }
+}
+
+/** How far in the stack is; a page on top of a card (an item, this watch) is still that card's level. */
+private func level(of path: [Route]) -> ZoomLevel {
+  for route in path.reversed() {
+    switch route {
+    case .cards(let id): return .cards(id)
+    case .agents(let id): return .agents(id)
+    case .workspaces: return .workspaces
+    case .item, .thisWatch: continue
+    }
+  }
+  return .devices
 }
 
 private extension View {
@@ -269,34 +316,77 @@ private extension View {
   }
 }
 
-/** The pages: every card, then the new agent. The crown walks them. */
-struct CardPager: View {
+/** Where the zoom was left, across launches. */
+private let keptZoomKey = "cookrew.watch.zoom"
+
+/**
+ * THE ZOOM: devices → workspaces → agents → one card, as the Mac's zoom bar
+ * walks it. A row is a step in; the back chevron, or the card's face, a step
+ * out. The cards are read for the workspace the wrist is inside.
+ */
+struct ZoomStack: View {
   @Bindable var store: WatchStore
-  let desktop: String
-  let username: String?
-  let onSignIn: () -> Void
-  let onForget: () -> Void
+  let app: WatchApp
+  @AppStorage(keptZoomKey) private var kept = ZoomLevel.workspaces.stored
   @State private var path: [Route] = []
+  @State private var opened = false
   @State private var items: [CardItem.ID: CardItem] = [:]
 
   var body: some View {
     NavigationStack(path: $path) {
-      pages
-        .navigationDestination(for: Route.self) { route in
-          switch route {
-          case .crew:
-            CrewGrid(store: store, onThisWatch: { path = [.crew, .thisWatch] }) { id in
-              store.page = id
-              path = []
-            }
-            .wholeGlass()
-          case .thisWatch:
-            ThisWatchPage(desktop: desktop, account: username, line: store.client.line, onCode: onSignIn, onForget: onForget).wholeGlass()
-          case .item(let id):
-            if let item = items[id] { itemPage(item) }
-          }
-        }
+      DevicesPage(
+        rows: deviceRows(app.machines, pairedId: app.pairedId, desktop: app.desktop, live: store.link == .live),
+        onOpen: { path = [.workspaces] },
+        onThisWatch: { path.append(.thisWatch) }
+      )
+      .navigationTitle("Devices")
+      .navigationDestination(for: Route.self) { route in destination(route) }
     }
+    .onAppear {
+      guard !opened else { return }
+      opened = true
+      path = routes(to: ZoomLevel(stored: kept))
+    }
+    .onChange(of: path) { _, next in
+      let now = level(of: next)
+      kept = now.stored
+      Task { await store.enter(workspace: now.scope) }
+    }
+    .task { await app.readMachines() }
+  }
+
+  private func name(of workspace: String) -> String {
+    store.workspaces.first { $0.id == workspace }?.name ?? "Agents"
+  }
+
+  @ViewBuilder private func destination(_ route: Route) -> some View {
+    switch route {
+    case .workspaces:
+      WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? [])) { id in
+        path.append(.agents(id))
+      }
+      .navigationTitle(app.desktop)
+    case .agents(let id):
+      CrewGrid(store: store, onNewAgent: { open(newAgentPage, in: id) }) { card in open(card, in: id) }
+        .navigationTitle(name(of: id))
+    case .cards(let id):
+      pages(in: id)
+    case .thisWatch:
+      ThisWatchPage(desktop: app.desktop, account: app.username, line: store.client.line, onCode: app.signInAgain, onForget: { Task { await app.forget() } }).wholeGlass()
+    case .item(let id):
+      if let item = items[id] { itemPage(item) }
+    }
+  }
+
+  /** Into one card: the crown walks its workspace's cards from there. */
+  private func open(_ page: String, in workspace: String) {
+    store.page = page
+    path.append(.cards(workspace))
+  }
+
+  /** The card's face: one step out, to its crew. */
+  private func stepOut() {
+    if case .cards = path.last { path.removeLast() }
   }
 
   @ViewBuilder private func itemPage(_ item: CardItem) -> some View {
@@ -306,17 +396,18 @@ struct CardPager: View {
     }
   }
 
-  private var pages: some View {
+  /** The pages: every card in the workspace, then a new agent there. */
+  private func pages(in workspace: String) -> some View {
     TabView(selection: $store.page) {
-      ForEach(store.cards) { card in
-        CardPage(store: store, card: card, onFace: { path = [.crew] }, onItem: { item in
+      ForEach(store.visibleCards) { card in
+        CardPage(store: store, card: card, onFace: stepOut, onItem: { item in
           items[item.id] = item
-          path = [.item(item.id)]
+          path.append(.item(item.id))
         })
         .wholeGlass()
         .tag(Optional(card.id))
       }
-      NewAgentPage(store: store, onThisWatch: { path = [.thisWatch] }).wholeGlass().tag(Optional(newAgentPage))
+      NewAgentPage(store: store, onThisWatch: { path.append(.thisWatch) }, onOut: stepOut).wholeGlass().tag(Optional(newAgentPage))
     }
     #if os(watchOS)
       .tabViewStyle(.verticalPage)
@@ -338,7 +429,7 @@ public struct WatchRoot: View {
   public var body: some View {
     Group {
       if let store = app.store {
-        CardPager(store: store, desktop: app.desktop, username: app.username, onSignIn: app.signInAgain, onForget: { Task { await app.forget() } })
+        ZoomStack(store: store, app: app)
           .overlay(alignment: .bottom) { LinkChip(store: store, onSignIn: app.signInAgain) }
           .task(id: phase) {
             guard phase == .active else { return }

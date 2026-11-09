@@ -45,6 +45,31 @@ public protocol RegistryAPI: Sendable {
   func claim(relay: URL, code: String, token: String) async throws -> ClaimReply
   func renew(account: WatchAccount, device: WatchDevice) async throws -> Renewed
   func signOut(token: String) async
+  /** Every Mac on the account, for the devices stop. */
+  func machines(token: String) async throws -> [WatchMachine]
+}
+
+public extension RegistryAPI {
+  func machines(token: String) async throws -> [WatchMachine] { [] }
+}
+
+/** A list where a row that cannot be read is left out, not the whole answer. */
+private struct Lossy<Row: Decodable>: Decodable {
+  let rows: [Row]
+
+  /** Takes any value at all, so the list moves past it. */
+  private struct Skip: Decodable {
+    init(from decoder: Decoder) throws {}
+  }
+
+  init(from decoder: Decoder) throws {
+    var list = try decoder.unkeyedContainer()
+    var rows: [Row] = []
+    while !list.isAtEnd {
+      if let row = try? list.decode(Row.self) { rows.append(row) } else { _ = try list.decode(Skip.self) }
+    }
+    self.rows = rows
+  }
 }
 
 /** The cookie the relay reads; it reads no other way in. */
@@ -108,6 +133,16 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
     if status == 401 { throw RegistryError.signedOut }
     guard status == 200 else { throw RegistryError.unreachable }
     return try JSONDecoder().decode(Me.self, from: data).desktops
+  }
+
+  public func machines(token: String) async throws -> [WatchMachine] {
+    var request = URLRequest(url: origin.appending(path: "v2/me/desktops"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+    request.httpShouldHandleCookies = false
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
+    let (data, status) = try await fetch(request)
+    if status == 401 { throw RegistryError.signedOut }
+    guard status == 200 else { throw RegistryError.unreachable }
+    return try JSONDecoder().decode(Lossy<WatchMachine>.self, from: data).rows
   }
 
   public func claim(relay: URL, code: String, token: String) async throws -> ClaimReply {

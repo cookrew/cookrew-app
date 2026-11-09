@@ -9130,6 +9130,7 @@ function registerIpc(handlers: RestoreHandlers): void {
         if (!session) return false
         return (await ownerSubmit(session, '\u001b', { keyboard: true })).ok
       },
+      workspaces: () => store.list().workspaces.map((w) => ({ id: w.id, name: w.name })),
       accountKind: () => (accounts.account() === null ? 'none' : accounts.isPasswordless() ? 'passwordless' : 'password'),
       invite: (current, here) => mintWatchInvite({ accounts, lock: ownerLock }, current, here)
     })

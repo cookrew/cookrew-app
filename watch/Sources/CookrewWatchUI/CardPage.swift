@@ -42,12 +42,17 @@ struct CardHead: View {
   }
 
   var body: some View {
-    HStack(alignment: .center, spacing: 7) {
+    HStack(alignment: .center, spacing: 5) {
+      // Out of this agent, to its crew: the chevron says it, and the face does it too.
       Button(action: onFace) {
-        InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 34, weight: .large)
+        HStack(spacing: 3) {
+          OutChevron()
+          InkFace(id: card.id, preset: card.preset, orch: card.orch, status: card.status, size: 34, weight: .large)
+        }
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("All agents")
+      .accessibilityLabel("Back to the crew")
       VStack(alignment: .leading, spacing: 1) {
         Text(card.name)
           .font(InkType.name())
@@ -66,7 +71,7 @@ struct CardHead: View {
       }
       Spacer(minLength: 0)
     }
-    .padding(.leading, 11)
+    .padding(.leading, 5)
     .padding(.trailing, 6)
   }
 
@@ -276,28 +281,89 @@ struct QuickWords: View {
 }
 
 /** A browser or note on the card's strip, with its coin. */
+/** Pictures a card's thumbnails already have, by browser: the crown passing back over a card redraws nothing. */
+@MainActor
+enum ThumbPictures {
+  /** A few cards' worth; the oldest goes first. */
+  static let kept = 40
+  private(set) static var held: [String: (tag: String?, image: CGImage)] = [:]
+  private static var order: [String] = []
+
+  static func keep(_ id: String, _ picture: (tag: String?, image: CGImage)) {
+    held[id] = picture
+    order = order.filter { $0 != id } + [id]
+    while order.count > kept { held[order.removeFirst()] = nil }
+  }
+
+  static func forget() {
+    held = [:]
+    order = []
+  }
+}
+
+/** How often a thumbnail looks again while its card is on screen. */
+private let thumbSeconds = 8.0
+/** A thumbnail's picture: two columns of a 45 mm screen, at 2x. */
+private let thumbWidth = 180
+
+/** An artifact on its card: the page's own picture, or the note, with its title under it. */
 struct ItemThumb: View {
+  let store: WatchStore
   let item: CardItem
+  /** Its card is the page on screen: only then does it ask the Mac for a picture. */
+  let live: Bool
   @Environment(\.ink) private var ink
+  @Environment(\.inkStill) private var still
+  @Environment(\.scenePhase) private var phase
+  @State private var image: CGImage?
 
   var body: some View {
-    ZStack(alignment: .topLeading) {
-      RoundedRectangle(cornerRadius: 6).fill(item.kind == .note ? ink.note : ink.card)
-      VStack(alignment: .leading, spacing: 3) {
-        if item.kind == .browser {
-          RoundedRectangle(cornerRadius: 2).fill(Color(css: item.tint)).frame(height: 13)
+    VStack(alignment: .leading, spacing: 2) {
+      ZStack(alignment: .topLeading) {
+        RoundedRectangle(cornerRadius: 6).fill(item.kind == .note ? ink.note : ink.card)
+        if let image = image ?? ThumbPictures.held[item.id]?.image {
+          Image(decorative: image, scale: 1)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
+        } else if item.kind == .note {
+          Text(item.title)
+            .font(InkType.words(9.5))
+            .foregroundStyle(ink.noteText)
+            .lineLimit(3)
+            .padding(.horizontal, 5)
+            .padding(.top, 14)
+        } else {
+          RoundedRectangle(cornerRadius: 2).fill(Color(css: item.tint).opacity(0.55)).frame(height: 10).padding(.horizontal, 5).padding(.top, 14)
         }
-        RoundedRectangle(cornerRadius: 1).fill(ink.hair2).frame(height: 2.5)
-        RoundedRectangle(cornerRadius: 1).fill(ink.hair2).frame(width: 26, height: 2.5)
+        coin.offset(x: -3, y: -3)
       }
-      .padding(.top, 12)
-      .padding(.horizontal, 5)
-      coin.offset(x: -3, y: -3)
+      .frame(height: 52)
+      .frame(maxWidth: .infinity)
+      .clipShape(RoundedRectangle(cornerRadius: 6))
+      .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ink.hair2, lineWidth: 1))
+      Text(item.kind == .note ? item.title : (item.title.isEmpty ? item.host : item.title))
+        .font(InkType.words(10.5))
+        .foregroundStyle(ink.soft)
+        .lineLimit(1)
     }
-    .frame(height: 42)
-    .frame(maxWidth: .infinity)
-    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ink.hair2, lineWidth: 1))
-    .accessibilityLabel("\(item.kind.rawValue): \(item.title)")
+    .accessibilityLabel("\(item.kind == .note ? "Note" : "Browser"): \(item.title)")
+    .task(id: "\(item.id)|\(live)|\(phase == .active)") { await look() }
+  }
+
+  /** The picture the Mac already has, now and again while the card is in front of the owner. */
+  private func look() async {
+    // Wrist down, nobody is looking: the card's own poll stops then too.
+    guard item.kind == .browser, live, !still, phase == .active else { return }
+    while !Task.isCancelled {
+      let held = ThumbPictures.held[item.id]
+      if case .new(let data, let tag)? = try? await store.client.peek(item.id, width: thumbWidth, tag: held?.tag), let decoded = picture(data) {
+        ThumbPictures.keep(item.id, (tag, decoded))
+        image = decoded
+      }
+      try? await Task.sleep(nanoseconds: UInt64(thumbSeconds * 1_000_000_000))
+    }
   }
 
   private var coin: some View {
@@ -306,6 +372,7 @@ struct ItemThumb: View {
       .foregroundStyle(ink.onSeal)
       .frame(width: 15, height: 15)
       .background(Circle().fill(item.kind == .browser ? Color(css: item.tint) : ink.seal))
+      .padding(5)
   }
 }
 
@@ -349,11 +416,11 @@ public struct CardPage: View {
             Text(notice).font(InkType.words(12.5)).foregroundStyle(ink.wait)
           }
           if !card.items.isEmpty, wait == nil {
-            HStack(spacing: 6) {
+            // Every artifact the agent has, as the phone's thumbs grid holds them; the crown scrolls to the rest.
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 7) {
               ForEach(card.items) { item in
-                Button { onItem(item) } label: { ItemThumb(item: item) }.buttonStyle(.plain)
+                Button { onItem(item) } label: { ItemThumb(store: store, item: item, live: store.page == card.id) }.buttonStyle(.plain)
               }
-              ForEach(card.items.count..<3, id: \.self) { _ in Color.clear.frame(height: 1) }
             }
           }
         }
@@ -378,32 +445,53 @@ public struct CardPage: View {
   }
 }
 
+/** The zoom's way out, one step: drawn wherever the system's back chevron is not. */
+struct OutChevron: View {
+  @Environment(\.ink) private var ink
+
+  var body: some View {
+    Image(systemName: "chevron.left")
+      .font(.system(size: 14, weight: .semibold))
+      .foregroundStyle(ink.sealText)
+      .frame(width: 14, height: 30)
+  }
+}
+
 /** The page after the last card: the box with nobody on it makes a new agent. */
 public struct NewAgentPage: View {
   let store: WatchStore
   let onThisWatch: () -> Void
+  let onOut: (() -> Void)?
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}) {
+  public init(store: WatchStore, onThisWatch: @escaping () -> Void = {}, onOut: (() -> Void)? = nil) {
     self.store = store
     self.onThisWatch = onThisWatch
+    self.onOut = onOut
   }
 
   public var body: some View {
     VStack(spacing: 0) {
-      // The one page there always is: with no cards it is the only way to this watch's own page.
-      Button(action: onThisWatch) {
-        Text("THIS WATCH")
-          .font(InkType.word())
-          .tracking(1)
-          .foregroundStyle(ink.muted)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .frame(height: 26)
-          .padding(.leading, 10)
-          .padding(.trailing, clockRoom)
-          .contentShape(Rectangle())
+      HStack(spacing: 4) {
+        if let onOut {
+          Button(action: onOut) { OutChevron().padding(.horizontal, 4).contentShape(Rectangle()) }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back to the crew")
+        }
+        // The one page there always is: with no cards it is the only way to this watch's own page.
+        Button(action: onThisWatch) {
+          Text("THIS WATCH")
+            .font(InkType.word())
+            .tracking(1)
+            .foregroundStyle(ink.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 26)
+            .padding(.trailing, clockRoom)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
+      .padding(.leading, onOut == nil ? 10 : 2)
       Spacer(minLength: 0)
       ZStack {
         Circle().strokeBorder(ink.dim, style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
@@ -411,7 +499,7 @@ public struct NewAgentPage: View {
       }
       .frame(width: 58, height: 58)
       Text("New agent").font(InkType.name(17)).foregroundStyle(ink.ink).padding(.top, 8)
-      if let workspace = store.cards.first(where: { $0.workspace.active })?.workspace.name {
+      if let workspace = store.newAgentWorkspace {
         Text("in \(workspace)").font(InkType.words(13)).foregroundStyle(ink.muted).padding(.top, 1)
       }
       if let sent = store.sent(newAgentPage) {
