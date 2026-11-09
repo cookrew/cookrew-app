@@ -332,7 +332,8 @@ describe('joining and first-unlocking against the real registry', () => {
     expect(loadAccount(b.base)?.unlock).toBeNull()
 
     // The right one opens it, and WRITES THE VERIFIER on the way through.
-    expect(await unlock(PASSWORD)).toMatchObject({ ok: true, sessionRenewed: true })
+    // Asked through B's own session (the pass route), which is alive: nothing renewed.
+    expect(await unlock(PASSWORD)).toMatchObject({ ok: true })
     expect(lock.locked).toBe(false)
     expect(loadAccount(b.base)?.unlock).not.toBeNull()
     expect(b.accounts.passwordPending()).toBe(false)

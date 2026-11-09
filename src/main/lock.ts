@@ -30,7 +30,8 @@ export interface LockDeps {
   /** Told on every change of `locked`, so main can broadcast to the owner. */
   onChange?: (locked: boolean) => void
   /**
-   * IS THERE ANYTHING TO UNLOCK WITH? False while a Mac has no passcode yet.
+   * IS THERE ANYTHING TO UNLOCK WITH? False while a Mac's lock waits for the
+   * account password (account-v2.ts · lockWaits).
    * A lock with no key is not a stronger lock: it is an owner shut out of
    * their own canvas, so it does not engage. Absent means yes.
    */
