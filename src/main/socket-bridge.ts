@@ -20,19 +20,37 @@
  * machine: the phone sends the token as a header, because this route's URL goes
  * through cookrew.dev, and it is added here to the loopback dial. Both routes
  * sit behind the pairing gate like every /api route.
+ *
+ * A phone that asks for `v=2` gets a session that outlives the stream and frames
+ * paced by its own receipts (socket-bridge-session.ts). A page from before that
+ * keeps what is below: the socket ends with the stream, frames on a clock.
  */
 
 import { randomUUID } from 'node:crypto'
 import type http from 'node:http'
 import { startSse } from './mobile-http'
 import { RELAY_MARKER } from './canvas-bridge'
+import {
+  BridgeSession,
+  SOCKET_BRIDGE_HIGH,
+  SOCKET_BRIDGE_RESUME_MS,
+  isBrowserFrame,
+  type BridgeUp
+} from './socket-bridge-session'
 import { dialLoopbackSocket, type LoopbackSocket, type LoopbackSocketDeps } from './ws-client'
+
+export {
+  SOCKET_BRIDGE_CREDIT,
+  SOCKET_BRIDGE_HIGH,
+  SOCKET_BRIDGE_RELEASE_MS,
+  SOCKET_BRIDGE_RESUME_MS,
+  isBrowserFrame,
+  type BridgeUp
+} from './socket-bridge-session'
 
 export const SOCKET_BRIDGE_PATH = '/api/socket-bridge'
 /** Bridged sockets open at once; a phone has one browser card in view. */
 export const SOCKET_BRIDGE_MAX = 8
-/** Past this many bytes queued for the phone, stop reading the socket until the stream drains. */
-export const SOCKET_BRIDGE_HIGH = 2 * 1024 * 1024
 /**
  * THE BROWSER CARD'S FRAMES, PACED. On loopback nothing slows the screencast
  * down: an animated page measured 58 frames a second, 3 MB/s (2026-10-18) —
@@ -44,8 +62,6 @@ export const SOCKET_BRIDGE_HIGH = 2 * 1024 * 1024
  */
 export const SOCKET_BRIDGE_FRAME_MS = 250
 export const SOCKET_BRIDGE_FRAME_BACKLOG = 256 * 1024
-/** A browser card's screencast frame: each one is the whole picture. */
-export const isBrowserFrame = (text: string): boolean => text.startsWith('{"t":"frame"')
 /** Messages per POST, and characters per message: input and viewport control are small. */
 export const SOCKET_BRIDGE_POST_MESSAGES = 64
 export const SOCKET_BRIDGE_MESSAGE_MAX = 64 * 1024
@@ -57,6 +73,12 @@ export interface SocketBridgeDeps {
   readonly port?: number
   readonly dial?: (deps: LoopbackSocketDeps) => LoopbackSocket
   readonly max?: number
+  readonly now?: () => number
+}
+
+export interface SocketBridgeOpenOptions {
+  /** 2: the phone can resume and sends paint receipts. */
+  readonly v?: number
 }
 
 export interface SocketBridge {
@@ -65,9 +87,18 @@ export interface SocketBridge {
    * bridgeable or the bridge is full. `credential` is the token this request
    * presented, for a path that does not carry its own.
    */
-  readonly open: (path: string, response: http.ServerResponse, credential?: string | null) => boolean
-  /** Messages from the phone; false for a session that is not open. */
-  readonly post: (id: string, messages: readonly string[]) => boolean
+  readonly open: (
+    path: string,
+    response: http.ServerResponse,
+    credential?: string | null,
+    options?: SocketBridgeOpenOptions
+  ) => boolean
+  /** The same session on a new stream; false when it is gone or not this phone's. */
+  readonly resume: (id: string, after: number, response: http.ServerResponse, credential?: string | null) => boolean
+  /** What the phone sent; false for a session that is not open, or not this phone's. */
+  readonly post: (id: string, up: BridgeUp, credential?: string | null) => boolean
+  /** End the sessions nobody came back for. */
+  readonly sweep: () => void
   readonly size: () => number
 }
 
@@ -81,10 +112,57 @@ const withCredential = (path: string, credential: string | null | undefined): st
 
 export const createSocketBridge = (deps: SocketBridgeDeps = {}): SocketBridge => {
   const sessions = new Map<string, LoopbackSocket>()
+  const resumable = new Map<string, BridgeSession>()
   const max = deps.max ?? SOCKET_BRIDGE_MAX
+  const now = deps.now ?? Date.now
+  const size = (): number => sessions.size + resumable.size
 
-  const open = (path: string, response: http.ServerResponse, credential?: string | null): boolean => {
-    if (!bridgeablePath(path) || sessions.size >= max) return false
+  const sweep = (): void => {
+    for (const session of [...resumable.values()]) {
+      if (session.detachedAt !== null && now() - session.detachedAt >= SOCKET_BRIDGE_RESUME_MS) session.end()
+    }
+  }
+
+  /** A phone that has gone quiet must not keep a live one out. */
+  const makeRoom = (): void => {
+    if (size() < max) return
+    const waiting = [...resumable.values()].filter((session) => session.detachedAt !== null)
+    waiting.sort((a, b) => (a.detachedAt as number) - (b.detachedAt as number))
+    waiting[0]?.end()
+  }
+
+  const openResumable = (path: string, response: http.ServerResponse, credential: string | null | undefined): boolean => {
+    const session = new BridgeSession(
+      credential ?? '',
+      now,
+      (id) => void resumable.delete(id),
+      () => void setTimeout(sweep, SOCKET_BRIDGE_RESUME_MS + 100).unref?.()
+    )
+    resumable.set(session.id, session)
+    session.attach(response)
+    session.bind(
+      (deps.dial ?? dialLoopbackSocket)({
+        port: deps.port ?? 8639,
+        path: withCredential(path, credential),
+        headers: { [RELAY_MARKER]: '1' },
+        onOpen: () => session.opened(),
+        onMessage: (text) => session.fromSocket(text),
+        onClose: () => session.end()
+      })
+    )
+    return true
+  }
+
+  const open = (
+    path: string,
+    response: http.ServerResponse,
+    credential?: string | null,
+    options: SocketBridgeOpenOptions = {}
+  ): boolean => {
+    if (!bridgeablePath(path)) return false
+    makeRoom()
+    if (size() >= max) return false
+    if (options.v === 2) return openResumable(path, response, credential)
     const send = startSse(response)
     const id = randomUUID()
     let paused = false
@@ -142,12 +220,21 @@ export const createSocketBridge = (deps: SocketBridgeDeps = {}): SocketBridge =>
     return true
   }
 
-  const post = (id: string, messages: readonly string[]): boolean => {
+  const resume = (id: string, after: number, response: http.ServerResponse, credential?: string | null): boolean =>
+    resumable.get(id)?.resume(after, response, credential ?? '') ?? false
+
+  const post = (id: string, up: BridgeUp, credential?: string | null): boolean => {
+    const session = resumable.get(id)
+    if (session) {
+      if (!session.owns(credential ?? '')) return false
+      session.post(up)
+      return true
+    }
     const upstream = sessions.get(id)
     if (!upstream) return false
-    for (const message of messages) upstream.send(message)
+    for (const message of up.m ?? []) upstream.send(message)
     return true
   }
 
-  return { open, post, size: () => sessions.size }
+  return { open, resume, post, sweep, size }
 }

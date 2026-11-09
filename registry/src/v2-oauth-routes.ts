@@ -2,7 +2,9 @@ import type { ServerResponse } from 'node:http'
 import { readJsonBody } from './http'
 import { emailFrom } from './v2-links'
 import { afterFirstFactor } from './v2-factor-routes'
-import { completeSignIn, json, noContent, refuse, refuseFactor, relyingParty } from './v2-factor-http'
+import { completeSignIn, deviceFor, json, noContent, refuse, refuseFactor, relyingParty } from './v2-factor-http'
+import { authorizeSession, finishRequest, productOrigin } from './auth-finish'
+import type { AuthRequest } from './auth-requests'
 import { asking, signedIn, type Signed, type V2Context } from './v2-http'
 import { legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import { challengeFor, challengeMatches, type Flow } from './v2-oauth-flows'
@@ -97,11 +99,51 @@ function readBack(value: unknown): OAuthBack | null {
   return { scheme: scheme === true, ...(portOk ? { port: port as number } : {}) }
 }
 
+/**
+ * The callback the provider app registered. On the auth origin it is still the
+ * product origin's: the provider apps and their callbacks do not change.
+ */
 const callbackUrl = (ctx: V2Context, provider: OAuthProvider): string =>
-  `${relyingParty(ctx).origin}/v2/oauth/${provider.id}/callback`
+  `${ctx.auth === undefined ? relyingParty(ctx).origin : productOrigin(ctx.v2)}/v2/oauth/${provider.id}/callback`
+
+/**
+ * POST /v2/oauth/:provider/start ON THE AUTH ORIGIN. The request says what the
+ * trip is for; the page sends nothing but the provider. A link was proven when
+ * the request was opened, by a signed-in client, so nobody signs in here.
+ */
+function startForRequest(ctx: V2Context, provider: OAuthProvider, request: AuthRequest): void {
+  if (!ctx.v2.limits.oauth.take(`start|${asking(ctx)}`)) {
+    refuse(ctx.response, 429, 'rate_limited', { 'retry-after': '60' })
+    return
+  }
+  if (request.stage !== 'open' || (request.intent === 'link' && request.provider !== provider.id)) {
+    refuseOAuth(ctx.response, 400, 'bad_flow')
+    return
+  }
+  const flow = ctx.v2.oauth.flows.open({
+    provider: provider.id,
+    intent: request.intent === 'link' ? 'link' : 'sign-in',
+    clientState: 'auth-request',
+    challenge: request.challenge,
+    back: { scheme: false },
+    authRequest: request.id,
+    ...(request.opener === null ? {} : { opener: request.opener })
+  })
+  const authorizeUrl = provider.authorizeUrl({
+    state: flow.providerState,
+    challenge: challengeFor(flow.providerVerifier),
+    nonce: flow.nonce,
+    redirectUri: callbackUrl(ctx, provider)
+  })
+  json(ctx.response, 201, { authorizeUrl, expiresAt: flow.expiresAt })
+}
 
 /** POST /v2/oauth/:provider/start */
 async function start(ctx: V2Context, provider: OAuthProvider): Promise<void> {
+  if (ctx.auth !== undefined) {
+    startForRequest(ctx, provider, ctx.auth.request)
+    return
+  }
   const body = await bodyOf(ctx, 'start')
   if (body === null) return
   const intent = body.intent === undefined ? 'sign-in' : body.intent
@@ -162,6 +204,10 @@ async function callback(ctx: V2Context, provider: OAuthProvider): Promise<void> 
     page(ctx.response, 400, 'That sign-in is over. Go back to Cookrew and start again.', null)
     return
   }
+  if (flow.authRequest !== undefined) {
+    await callbackForRequest(ctx, provider, flow, params)
+    return
+  }
   const code = params.get('code')
   if (params.get('error') !== null || code === null) {
     returnPage(ctx.response, flow, { error: 'denied' })
@@ -178,6 +224,74 @@ async function callback(ctx: V2Context, provider: OAuthProvider): Promise<void> 
     return
   }
   returnPage(ctx.response, flow, { handoff: ctx.v2.oauth.flows.settle(flow, answer.proof).handoff })
+}
+
+/**
+ * A TRIP THE AUTH PAGE STARTED, BACK FROM THE PROVIDER.
+ *
+ * The proof waits on the request and the browser goes back to the page, which
+ * continues it only from the browser that claimed the request. Nothing in the
+ * redirect is a credential: the request id alone opens nothing.
+ */
+async function callbackForRequest(
+  ctx: V2Context,
+  provider: OAuthProvider,
+  flow: Flow,
+  params: URLSearchParams
+): Promise<void> {
+  const auth = ctx.v2.auth
+  const request = auth?.requests.get(flow.authRequest) ?? null
+  if (auth === null || request === null || request.stage === 'done' || request.stage === 'denied') {
+    page(ctx.response, 400, 'That sign-in is over. Go back to Cookrew and start again.', null)
+    return
+  }
+  const back = (extra: string): void => {
+    const location = `${auth.origin}/?request=${encodeURIComponent(request.id)}&${extra}`
+    ctx.response.writeHead(303, { location, 'cache-control': 'private, no-store', 'referrer-policy': 'no-referrer', 'content-length': '0' })
+    ctx.response.end()
+  }
+  const code = params.get('code')
+  if (params.get('error') !== null || code === null) {
+    back('denied=1')
+    return
+  }
+  const answer = await provider.exchange({
+    code,
+    verifier: flow.providerVerifier,
+    nonce: flow.nonce,
+    redirectUri: callbackUrl(ctx, provider)
+  })
+  if (!answer.ok) {
+    back('denied=1')
+    return
+  }
+  auth.requests.stashProof(request, answer.proof)
+  back('continue=1')
+}
+
+/**
+ * POST /auth/api/continue — the bound browser finishes what the provider began.
+ * Sign-in goes through the same `signInWith` the app's handoff does; a link is
+ * added for the session that opened the request, if that session still stands.
+ */
+export function continueRequest(ctx: V2Context, request: AuthRequest): void {
+  const proof = ctx.v2.auth?.requests.takeProof(request) ?? null
+  if (proof === null) {
+    refuseOAuth(ctx.response, 410, 'flow_over')
+    return
+  }
+  if (request.intent !== 'link') {
+    signInWith(ctx, proof, request.device)
+    return
+  }
+  const opener = request.opener
+  if (opener === null || !ctx.v2.accounts.isLiveSession(opener.username, opener.jti)) {
+    refuse(ctx.response, 401, 'unauthenticated')
+    return
+  }
+  // NOTHING IS LINKED YET. The proof waits on the request for the client that
+  // opened it, which writes it when it spends the code with its own session.
+  finishRequest(ctx, request, { status: 200, body: { status: 'linked', provider: proof.provider } }, { linked: proof.provider }, proof)
 }
 
 /** The page that hands back to the app. Script-free, so it needs no exception. */
@@ -233,7 +347,7 @@ function page(
  * rung behind this point refuses it anyway, so opening a pending here would
  * only produce a ladder nobody could climb.
  */
-function signInWith(ctx: V2Context, proof: ProviderProof, rawDevice: unknown, via: 'browser' | 'device' = 'browser'): void {
+export function signInWith(ctx: V2Context, proof: ProviderProof, rawDevice: unknown, via: 'browser' | 'device' = 'browser'): void {
   const { v2, response } = ctx
   const owner = v2.links.ownerOf(proof.provider, proof.subject)
   const account = owner === null ? null : v2.accounts.get(owner)
@@ -258,7 +372,7 @@ function askForHandle(ctx: V2Context, proof: ProviderProof, via: 'browser' | 'de
   // Whoever polls a device flow may not be whoever typed the code, so a person's
   // address must reach neither this answer nor the account a claim would make.
   const held = via === 'browser' ? proof : { ...proof, email: null }
-  const ticket = v2.oauth.flows.mintTicket(held)
+  const ticket = v2.oauth.flows.mintTicket(held, ctx.auth?.request.id)
   const suggest = suggestHandle(held.login, held.email)
   json(ctx.response, 200, {
     status: 'new',
@@ -353,16 +467,19 @@ async function claim(ctx: V2Context): Promise<void> {
     return
   }
   const ticket = v2.oauth.flows.ticket(body.value.ticket)
-  if (ticket === null) {
+  // A ticket minted for a request on the auth origin is spent only there, by
+  // that request; one minted for an app's handoff is never spent there.
+  if (ticket === null || (ticket.authRequest ?? null) !== (ctx.auth?.request.id ?? null)) {
     refuseOAuth(response, 410, 'ticket_gone')
     return
   }
   if (refuseIfLegacy(ctx, body.value.username)) return
   const { proof } = ticket
   const now = Date.now()
+  const device = deviceFor(ctx, body.value.device)
   const out = v2.accounts.createWithProvider({
     username: body.value.username,
-    device: body.value.device,
+    device,
     link: { provider: proof.provider, subject: proof.subject, login: proof.login, linkedAt: now },
     email: emailFrom(proof, now)
   })
@@ -372,7 +489,11 @@ async function claim(ctx: V2Context): Promise<void> {
     return
   }
   v2.oauth.flows.spendTicket(ticket.id)
-  completeSignIn(ctx, out.account.username, body.value.device)
+  if (ctx.auth !== undefined) {
+    authorizeSession(ctx, ctx.auth.request, out.account.username, out.device.id, false, { codes: true })
+    return
+  }
+  completeSignIn(ctx, out.account.username, device)
 }
 
 /** POST /v2/oauth/:provider/device — the device code stays in this process. */

@@ -80,6 +80,7 @@ const bar = (avatar: React.ReactNode): string =>
       onViewChange={() => undefined}
       onWall={() => undefined}
       onResync={() => undefined}
+      onActivity={() => undefined}
       avatar={avatar}
     />,
   )

@@ -16,6 +16,7 @@ import { machineCopy, registryWord } from '../shared/machine-words'
 import type { CliRequest, TerminalNodeData } from '../shared/model'
 import { LADDER_TTL_MS, type TypedFactor } from './account-ladder'
 import type { DeviceCode } from './account-oauth'
+import type { BrowserCode } from './account-browser-auth'
 import { registryOrigin } from './registry-origin'
 
 /**
@@ -132,6 +133,16 @@ export interface AccountDoor {
   /** The name, for the identity the device flow just proved. */
   providerClaim: (username: string) => Promise<SignInAnswer<unknown>>
   abandonClaim: () => void
+  /**
+   * THE ONE SIGN-IN PAGE: a code to type there, and a poll. `onCode` fires once.
+   * Answers 'unsupported' on a registry without the page, before any code.
+   * Absent on a door without it, which is the password conversation unchanged.
+   */
+  browserDevice?: (
+    onCode: (code: BrowserCode) => void,
+    signal: AbortSignal,
+    username: string | null
+  ) => Promise<SignInAnswer<unknown>>
 }
 
 /** One line in the event log. A reason and a name; never anything typed. */
@@ -178,6 +189,7 @@ type Stage =
   | { at: 'code'; step: SecondFactorStep; rungs: readonly Rung[]; factor: TypedFactor }
   | { at: 'waiting'; step: SecondFactorStep; rungs: readonly Rung[] }
   | { at: 'device' }
+  | { at: 'browser'; username: string | null; renew: boolean }
   | { at: 'handle'; suggest: string }
   | { at: 'over' }
 
@@ -206,6 +218,14 @@ const SAID_REASONS: Partial<Record<AccountRefusal, CliCopyId>> = {
   locked: 'refused.locked'
 }
 
+/** The page's endings, in its own words: a refusal there is not GitHub's or another device's. */
+const BROWSER_SAID: Partial<Record<AccountRefusal, CliCopyId>> = {
+  cancelled: 'browser.cancelled',
+  denied: 'browser.denied',
+  expired: 'browser.expired',
+  wrong_identity: 'browser.wrong_identity'
+}
+
 /** One sign-in or sign-out, from the first prompt to its end. */
 class Conversation {
   private stage: Stage = { at: 'over' }
@@ -222,6 +242,8 @@ class Conversation {
   private deviceTurn: Promise<LoginTurn> | null = null
   /** A proven identity is waiting for a name. */
   private naming = false
+  /** The one sign-in page is the way in, so no password was typed here. */
+  private viaBrowser = false
   /**
    * Over, with an ending the CLI has not collected. The poll can finish before
    * the second `wait` arrives, and a door already handed back would answer it
@@ -234,6 +256,8 @@ class Conversation {
   private readonly pane: TerminalNodeData
   private readonly leaving: boolean
   private readonly github: boolean
+  /** `--password`: the old conversation, even where the page is offered. */
+  private readonly password: boolean
   private readonly ended: () => void
   private readonly hangUp: () => unknown
 
@@ -243,6 +267,7 @@ class Conversation {
     pane: TerminalNodeData
     leaving: boolean
     github: boolean
+    password: boolean
     ended: () => void
     hangUp: () => unknown
   }) {
@@ -251,6 +276,7 @@ class Conversation {
     this.pane = input.pane
     this.leaving = input.leaving
     this.github = input.github
+    this.password = input.password
     this.ended = input.ended
     this.hangUp = input.hangUp
   }
@@ -330,11 +356,8 @@ class Conversation {
     const who = this.account.who()
     if (who.username === null) {
       if (this.github) return this.askDevice()
-      if (wanted === '') {
-        this.stage = { at: 'username' }
-        return { say: [], ask: { kind: 'text', prompt: this.say('ask.username') } }
-      }
-      return this.askPassword(wanted, 0, false, [])
+      if (this.pageOffered()) return this.askBrowser(wanted === '' ? null : wanted, false)
+      return this.askName(wanted)
     }
     if (wanted !== '' && wanted !== who.username) {
       return this.finish(LOGIN_EXIT.failed, [this.say('said.other-account', { handle: who.username, wanted })], null)
@@ -351,10 +374,33 @@ class Conversation {
       return this.finish(LOGIN_EXIT.failed, [sentence], null)
     }
     if (this.github) return this.askDevice()
-    if (who.passwordless) {
-      return this.finish(LOGIN_EXIT.failed, [this.say('said.no-password', { handle: who.username })], null)
+    if (this.pageOffered()) return this.askBrowser(who.username, true)
+    return this.renewByPassword(who.username, who.passwordless)
+  }
+
+  /** The page is the default way in, unless `--password` asked for the old one. */
+  private pageOffered(): boolean {
+    return !this.password && this.account.browserDevice !== undefined
+  }
+
+  private askName(wanted: string): LoginTurn {
+    if (wanted === '') {
+      this.stage = { at: 'username' }
+      return { say: [], ask: { kind: 'text', prompt: this.say('ask.username') } }
     }
-    return this.askPassword(who.username, 0, true, [])
+    return this.askPassword(wanted, 0, false, [])
+  }
+
+  private renewByPassword(handle: string, passwordless: boolean): LoginTurn {
+    if (passwordless) return this.finish(LOGIN_EXIT.failed, [this.say('said.no-password', { handle })], null)
+    return this.askPassword(handle, 0, true, [])
+  }
+
+  /** The CLI calls `wait` next, and that call opens the request. */
+  private askBrowser(username: string | null, renew: boolean): LoginTurn {
+    this.stage = { at: 'browser', username, renew }
+    this.viaBrowser = true
+    return { say: [], wait: { other: false } }
   }
 
   /** The CLI calls `wait` next, and that call starts the flow. */
@@ -542,7 +588,58 @@ class Conversation {
       this.collected()
       return running
     }
-    return this.flying(() => (this.stage.at === 'device' ? this.startDevice() : this.awaitNod()))
+    const stage = this.stage
+    if (stage.at === 'browser') return this.flying(() => this.startBrowser(stage))
+    return this.flying(() => (stage.at === 'device' ? this.startDevice() : this.awaitNod()))
+  }
+
+  /**
+   * THE PAGE, IN TWO WAITS, exactly as the device flow: the first answers with
+   * the address and the code, the second with the end. An older registry answers
+   * before any code, and the end is then the old conversation's first question.
+   */
+  private async startBrowser(stage: Extract<Stage, { at: 'browser' }>): Promise<LoginTurn> {
+    const page = this.account.browserDevice
+    if (page === undefined) return this.oldWay(stage)
+    const stop = new AbortController()
+    this.stopWaiting = stop
+    let shown: (code: BrowserCode) => void = () => undefined
+    const coded = new Promise<BrowserCode>((resolve) => {
+      shown = resolve
+    })
+    const answer = page((code) => shown(code), stop.signal, stage.username)
+    const ending = this.flying(async () => this.browserEnded(stage, await answer))
+    this.deviceTurn = ending
+    const code = await Promise.race([coded, ending.then(() => null)])
+    if (code === null) {
+      this.collected()
+      return ending
+    }
+    const direct = code.verificationUriComplete
+    return {
+      say: [
+        this.say('browser.code', { url: code.verificationUri, code: code.userCode }),
+        ...(direct === null ? [] : [this.say('browser.direct', { url: direct })]),
+        this.say('browser.waiting')
+      ],
+      wait: { other: false }
+    }
+  }
+
+  private browserEnded(stage: Extract<Stage, { at: 'browser' }>, answer: SignInAnswer<unknown>): Promise<LoginTurn> | LoginTurn {
+    this.stopWaiting = null
+    if (answer.ok) return this.landed()
+    if (this.gone) return { say: [] }
+    if (answer.reason === 'unsupported') return this.oldWay(stage)
+    const said = answer.message ?? this.say(BROWSER_SAID[answer.reason] ?? SAID_REASONS[answer.reason] ?? 'refused.unknown')
+    return this.finish(LOGIN_EXIT.failed, [said], answer.reason)
+  }
+
+  /** A registry without the page: the conversation this was before it. */
+  private oldWay(stage: Extract<Stage, { at: 'browser' }>): LoginTurn {
+    this.viaBrowser = false
+    if (!stage.renew) return this.askName(stage.username ?? '')
+    return this.renewByPassword(stage.username ?? '', this.account.who().passwordless)
   }
 
   /**
@@ -651,10 +748,10 @@ class Conversation {
     const device = filed ?? who.deviceName
     const handle = who.username ?? ''
     const late = this.gone ? ', after the terminal left' : ''
-    const via = this.github ? ' with GitHub' : ''
+    const via = this.github ? ' with GitHub' : this.viaBrowser ? ' in the browser' : ''
     this.deps.audit({ type: 'account.login', terminalId: this.pane.id, details: `@${handle} on ${device}${via}${late}` })
     const said = [this.say('said.signed-in', { handle, device })]
-    const unlocked = this.github && who.passcodePending
+    const unlocked = (this.github || this.viaBrowser) && who.passcodePending
     return this.finish(LOGIN_EXIT.ok, unlocked ? [...said, this.say('said.passcode-next')] : said, null)
   }
 
@@ -763,6 +860,7 @@ export class LoginDoor {
       pane,
       leaving: request.cmd === 'logout',
       github: request.flags.github === true,
+      password: request.flags.password === true,
       ended: () => {
         if (this.held?.conversation === conversation) this.held = null
       },

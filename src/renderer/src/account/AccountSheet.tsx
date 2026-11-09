@@ -24,6 +24,8 @@ import { ResumeLadder } from './ResumeLadder'
 import { HandleCard, type HandleAsked } from './HandleCard'
 import { ProviderButtons, useProviders, useTripGuard } from './ProviderButtons'
 import { PROVIDER_COPY, providerRefusal } from './provider-store'
+import { BROWSER_COPY, pageOffered, runPageTrip, type PageIntent } from './browser-auth-store'
+import { BrowserLede, BrowserWait } from './BrowserPane'
 import type { ProviderId } from '../../../shared/oauth'
 import '../grant-surface.css'
 
@@ -51,6 +53,13 @@ import '../grant-surface.css'
  * a ladder under the pending id; this component drops its copy the moment
  * the bridge answers, so a ladder card can be unmounted mid-climb without a
  * secret left in a closure.
+ *
+ * THE ONE SIGN-IN PAGE COMES FIRST. Where the bridge offers it, SIGN IN, CREATE
+ * ACCOUNT and the provider buttons all send the person to auth.cookrew.dev and
+ * the sheet waits; no password is typed here. A registry without the page
+ * answers 'unsupported', and the sheet becomes exactly what it was: the forms,
+ * and a provider button's own trip, started at once so the press still counts.
+ * The phase-6 migration has no page and keeps its form.
  */
 
 /** Long enough that a typist is not checking on every letter. */
@@ -105,6 +114,10 @@ export function AccountSheet({
   const [naming, setNaming] = useState<HandleAsked | null>(null)
   /** A provider opened this ladder, so its way back is not the password. */
   const [viaProvider, setViaProvider] = useState(false)
+  /** The page is the way in, until a registry says it has none. */
+  const [page, setPage] = useState(() => pageOffered(cookrew().accountBrowserSignIn))
+  /** The page's trip in flight, and the screen it opened on. */
+  const [onPage, setOnPage] = useState<PageIntent | null>(null)
 
   // The first field, never the primary. Re-run on a crossing: the field the
   // person should be in changes with the state.
@@ -283,8 +296,37 @@ export function AccountSheet({
       })
   }
 
+  /**
+   * TO THE PAGE. What comes back is a landing or a refusal; the page climbs any
+   * ladder and chooses any name itself. On 'unsupported' the forms come back, and
+   * a provider's button takes its own trip as it did before the page.
+   */
+  const startPage = (intent: PageIntent): void => {
+    const call = cookrew().accountBrowserSignIn
+    if (!call || busy || waiting !== null || onPage !== null) return
+    setOnPage(intent)
+    setError(null)
+    void runPageTrip(() => call(intent), trip, {
+      done: (status) => {
+        setOnPage(null)
+        onDone(status, intent === 'create' ? 'register' : 'signin')
+      },
+      fallback: () => {
+        setOnPage(null)
+        setPage(false)
+        if (intent === 'github' || intent === 'google') startProvider(intent)
+      },
+      refused: (sentence) => {
+        setOnPage(null)
+        setError(sentence)
+      },
+    })
+  }
+
   const pane = paneFor(state)
   const title = state === 'legacy' ? 'Set a password' : 'Your Cookrew account'
+  const paged = page && state !== 'legacy'
+  const tabIntent: PageIntent = state === 'register' ? 'create' : 'sign-in'
 
   return (
     <div className="gs-scrim cr-sheet" role="dialog" aria-modal="true" aria-label={title}>
@@ -301,7 +343,7 @@ export function AccountSheet({
           </button>
         </header>
 
-        {state !== 'legacy' && ladder === null && naming === null && (
+        {state !== 'legacy' && ladder === null && naming === null && onPage === null && (
           <nav className="cr-acct-tabs" role="tablist" aria-label="Sign in or create">
             {TABS.map((tab) => (
               <button
@@ -338,9 +380,12 @@ export function AccountSheet({
               setViaProvider(false)
             }}
           />
+        ) : onPage !== null ? (
+          <BrowserWait onCancel={() => void cookrew().accountOAuthCancel?.()} />
         ) : (
           <>
-            {state === 'signin' && (
+            {paged && <BrowserLede lede={state === 'register' ? BROWSER_COPY.CREATE_LEDE : BROWSER_COPY.SIGN_IN_LEDE} />}
+            {!paged && state === 'signin' && (
               <SignInPane
                 fields={fields}
                 view={signInView(fields, crossing)}
@@ -349,7 +394,7 @@ export function AccountSheet({
                 onEnter={signIn}
               />
             )}
-            {state === 'register' && (
+            {!paged && state === 'register' && (
               <RegisterPane
                 fields={fields}
                 view={registerView(fields, crossing)}
@@ -373,7 +418,7 @@ export function AccountSheet({
               <ProviderButtons
                 offers={offers}
                 waiting={waiting}
-                onStart={startProvider}
+                onStart={paged ? startPage : startProvider}
                 onCancel={() => void cookrew().accountOAuthCancel?.()}
               />
             )}
@@ -388,13 +433,19 @@ export function AccountSheet({
               <button className="gs-ghost" onClick={onClose}>
                 NOT NOW
               </button>
-              <button
-                className="gs-primary"
-                disabled={busy || waiting !== null || !pane.canGo(fields, crossing, legacy)}
-                onClick={state === 'signin' ? signIn : state === 'register' ? create : migrate}
-              >
-                {pane.primary(fields, crossing, legacy)}
-              </button>
+              {paged ? (
+                <button className="gs-primary" disabled={busy || waiting !== null} onClick={() => startPage(tabIntent)}>
+                  {tabIntent === 'create' ? BROWSER_COPY.CREATE : BROWSER_COPY.SIGN_IN}
+                </button>
+              ) : (
+                <button
+                  className="gs-primary"
+                  disabled={busy || waiting !== null || !pane.canGo(fields, crossing, legacy)}
+                  onClick={state === 'signin' ? signIn : state === 'register' ? create : migrate}
+                >
+                  {pane.primary(fields, crossing, legacy)}
+                </button>
+              )}
             </div>
             <p className="gs-foot-note">
               {state === 'legacy' ? ACCOUNT_COPY.LEGACY_KEEP_SERVING : ACCOUNT_COPY.NOT_NOW}

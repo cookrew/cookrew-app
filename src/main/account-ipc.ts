@@ -8,7 +8,8 @@ import type {
   UsernameCheck,
 } from '../shared/account-v2'
 import { isTypedFactor } from './account-ladder'
-import type { DeviceCode } from './account-oauth'
+import type { DeviceCode, TripProof } from './account-oauth'
+import { isBrowserIntent, type BrowserCode } from './account-browser-auth'
 import { isProviderId, type ProviderId, type ProviderOffer } from '../shared/oauth'
 import type { StepUpAct } from '../shared/step-up'
 import type { PairingHandout } from '../shared/account-v2'
@@ -221,6 +222,14 @@ export const ACCOUNT_CHANNELS = [
   'account:oauthClaim',
   'account:oauthLink',
   'account:oauthUnlink',
+  // ── the one sign-in page (account-browser-auth.ts) ──
+  //
+  // The same rule: the request, the proof, the verifier and the code stay in
+  // main. Each answers 'unsupported' on a registry without the page, and the
+  // surface goes the old way; the trip is ended by `account:oauthCancel`.
+  'account:browserSignIn',
+  'account:browserResume',
+  'account:browserLink',
   // ── the passcode, for a Mac where no password was typed ──
   'account:setPasscode',
   'account:setTouchId',
@@ -885,7 +894,28 @@ async function linkProof(
   return proof.ok ? { ok: true, value: { stepUp: proof.value } } : proof
 }
 
-async function oauthLink(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+function oauthLink(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  return linkUnderProof(deps, input, (provider, proof) => deps.accounts.providerLink(provider, proof))
+}
+
+/**
+ * LINK ON THE PAGE, under the same fresh proof. An older registry answers
+ * 'unsupported' having seen nothing, so that proof is still unspent and goes
+ * the old way in the same act: a rescue code is never asked for twice.
+ */
+function browserLink(deps: AccountIpcDeps, input: unknown): Promise<AccountResult<void>> {
+  return linkUnderProof(deps, input, async (provider, proof) => {
+    const viaPage = await deps.accounts.browserLink(provider, proof)
+    if (viaPage.ok || viaPage.reason !== 'unsupported') return viaPage
+    return deps.accounts.providerLink(provider, proof)
+  })
+}
+
+async function linkUnderProof(
+  deps: AccountIpcDeps,
+  input: unknown,
+  link: (provider: ProviderId, proof: TripProof) => Promise<AccountResult<void>>,
+): Promise<AccountResult<void>> {
   const fields = asRecord(input)
   if (!isProviderId(fields.provider)) return { ok: false, reason: 'not_offered' }
   if (deps.lock.locked) return LOCKED
@@ -896,8 +926,37 @@ async function oauthLink(deps: AccountIpcDeps, input: unknown): Promise<AccountR
       typeof rescue === 'string' && rescue !== ''
         ? await rescueProof(deps, provider, rescue)
         : await linkProof(deps, 'link-provider', current)
-    return proof.ok ? deps.accounts.providerLink(provider, proof.value) : proof
+    return proof.ok ? link(provider, proof.value) : proof
   })
+}
+
+/** Sign in or create on the page. A landing does not unlock, as with a provider. */
+async function browserSignIn(deps: AccountIpcDeps, intent: unknown, username: unknown) {
+  if (!isBrowserIntent(intent)) return { ok: false as const, reason: 'not_offered' as const }
+  if (deps.lock.locked) return LOCKED
+  const prefill = asString(username).trim()
+  const result = await deps.accounts.browserSignIn(intent, prefill === '' ? {} : { username: prefill })
+  return result.ok ? { ok: true as const, value: landed(deps) } : result
+}
+
+/** The session ended: the page, for this account. Where a missed delete is found, as with a provider. */
+async function browserResume(deps: AccountIpcDeps) {
+  if (deps.lock.locked) return LOCKED
+  if (await deps.accounts.forgetIfDeleted()) return leftTheAccount(deps)
+  const result = await deps.accounts.browserResume()
+  return result.ok ? { ok: true as const, value: landed(deps) } : result
+}
+
+/** `cookrew login` on the page: a code to type, and a poll. A landing does not unlock. */
+async function browserTerminal(
+  deps: AccountIpcDeps,
+  onCode: (code: BrowserCode) => void,
+  signal: AbortSignal,
+  username: string | null,
+) {
+  if (deps.lock.locked) return LOCKED
+  const result = await deps.accounts.browserTerminalSignIn({ onCode, signal, ...(username === null ? {} : { username }) })
+  return result.ok ? { ok: true as const, value: landed(deps) } : result
 }
 
 /** A rescue code in place of the provider. The Mac may lock while it is spent. */
@@ -1164,6 +1223,9 @@ export function accountHandlers(deps: AccountIpcDeps): Record<AccountChannel, Ac
     'account:oauthClaim': (username: unknown) => oauthClaim(deps, username),
     'account:oauthLink': (input: unknown) => oauthLink(deps, input),
     'account:oauthUnlink': (input: unknown) => oauthUnlink(deps, input),
+    'account:browserSignIn': (intent: unknown, username: unknown) => browserSignIn(deps, intent, username),
+    'account:browserResume': () => browserResume(deps),
+    'account:browserLink': (input: unknown) => browserLink(deps, input),
     'account:setPasscode': (input: unknown) => setPasscode(deps, input),
     'account:setTouchId': (on: unknown) => setTouchId(deps, on),
     'account:unlockTouchId': () => unlockTouchId(deps),
@@ -1231,6 +1293,7 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
     signOut: (password) => signOut(deps, password),
     devices: () => deps.accounts.devices(),
     providerDevice: (onCode, signal) => deviceSignIn(deps, onCode, signal),
+    browserDevice: (onCode, signal, username) => browserTerminal(deps, onCode, signal, username),
     providerClaim: (username) => oauthClaim(deps, username),
     abandonClaim: () => deps.accounts.providerForget(),
   }

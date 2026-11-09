@@ -376,13 +376,17 @@ function waitOut(line, wait) {
 async function converse() {
   // Refused here, before a socket exists: the app must not be sent what was
   // just typed on a command line, and the value is not repeated either.
-  const passwordFlag = Object.keys(flags).some((key) => key.startsWith('password'))
+  // A bare `--password` on login asks for the password conversation in place of
+  // the browser. With anything after it, that may be a password typed on a
+  // command line, so it is refused as every other `--password…` is.
+  const oldWay = cmd === 'login' && flags.password === true
+  const passwordFlag = Object.keys(flags).some((key) => key.startsWith('password') && !(oldWay && key === 'password'))
   if (passwordFlag || args.length > (cmd === 'login' ? 1 : 0)) {
-    fail(`usage: cookrew ${cmd === 'login' ? 'login [username]' : 'logout'} (the password is typed at a hidden prompt, never on the command line)`)
+    fail(`usage: cookrew ${cmd === 'login' ? 'login [username] [--password]' : 'logout'} (the password is typed at a hidden prompt, never on the command line)`)
   }
   // GitHub says who this is, so a name beside the flag could only disagree.
-  if (flags.github !== undefined && (cmd !== 'login' || args.length > 0)) {
-    fail('usage: cookrew login --github (GitHub says who you are, so it takes no username)')
+  if (flags.github !== undefined && (cmd !== 'login' || args.length > 0 || oldWay)) {
+    fail('usage: cookrew login --github (GitHub says who you are, so it takes no username and no password)')
   }
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true
   if (tty) startKeyboard()
@@ -392,7 +396,8 @@ async function converse() {
     flags: {
       tty,
       ...(typeof flags.as === 'string' ? { as: flags.as } : {}),
-      ...(flags.github === true ? { github: true } : {})
+      ...(flags.github === true ? { github: true } : {}),
+      ...(oldWay ? { password: true } : {})
     }
   })
   for (;;) {

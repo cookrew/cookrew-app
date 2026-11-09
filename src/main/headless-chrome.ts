@@ -71,6 +71,23 @@ export function shouldEmitFrame(
   return hash !== lastHash || lastFrameAt === 0 || now - lastFrameAt >= heartbeatMs
 }
 
+/**
+ * What a target Chrome opened by itself is. `browser-ui` is a piece of Chrome's
+ * own window (a *.top-chrome bubble such as the sign-in intercept), left alone;
+ * `page` is any other chrome:// page, which no site can open; `site` is the
+ * rest. Pages the card itself asks for never reach this question.
+ */
+export function internalPageKind(url: string): 'site' | 'page' | 'browser-ui' {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return 'site'
+  }
+  if (parsed.protocol !== 'chrome:' && parsed.protocol !== 'chrome-untrusted:') return 'site'
+  return parsed.hostname.endsWith('.top-chrome') ? 'browser-ui' : 'page'
+}
+
 export function findChrome(): string | null {
   const override = process.env.COOKREW_CHROME_PATH
   if (override && existsSync(override)) return override
@@ -119,6 +136,18 @@ export function headlessLaunchArgs(
     '--disable-component-update',
     '--disable-sync',
     `--disable-features=${DISABLED_BACKGROUND_FEATURES.join(',')}`,
+    // Owner ruling 2026-11-08: --remote-debugging-port alone sets
+    // navigator.webdriver=true (measured on Chrome 157, headed or headless), and
+    // Google now refuses sign-in right after the email step because of it. A
+    // person drives this card, so the owner chose to drop that one marker.
+    // Nothing else is disguised. See browser-signin.ts.
+    '--disable-blink-features=AutomationControlled',
+    // A card signs in to Google SITES, never to Chrome itself. With browser
+    // sign-in allowed, a web sign-in made Chrome adopt the account and raise a
+    // "sign in to Chrome" bubble nobody can see (2026-11-09). Measured: Google
+    // still takes the email step with this off. (The chrome://settings/help
+    // pop-up of the same day was the key codes, see cast-input.ts.)
+    '--allow-browser-signin=false',
     ...THROTTLE_FLAGS,
     url
   ]
@@ -148,6 +177,8 @@ export interface FrameMeta {
   deviceHeight?: number
   /** Visual viewport zoom reported by Page.screencastFrame metadata. */
   pageScaleFactor?: number
+  /** How far the page is scrolled, in CSS pixels: Page.screencastFrame's own name for it. */
+  scrollOffsetY?: number
   mobile?: boolean
   revision?: number
 }
@@ -482,6 +513,15 @@ export class HeadlessInstance {
       this.deferredTargetCreates.set(info.targetId, params)
       return
     }
+    const internal = internalPageKind(info.url ?? '')
+    if (internal === 'browser-ui') return
+    if (internal === 'page') {
+      // Chrome opened one of its own pages unasked: after a Google sign-in it
+      // put chrome://settings/help in front of the card (owner 2026-11-09).
+      // Nobody here can act on it, so it is closed, never made a tab.
+      await this.browserCdp?.send('Target.closeTarget', { targetId: info.targetId }).catch(() => undefined)
+      return
+    }
     try {
       const tab: BrowserTab = {
         id: randomUUID(),
@@ -740,12 +780,15 @@ export class HeadlessInstance {
         }).catch(() => null) as Promise<{ data?: string } | null>,
         page.cdp.send('Page.getLayoutMetrics').catch(() => null) as Promise<{
           visualViewport?: { scale?: unknown }
+          cssVisualViewport?: { pageY?: unknown }
         } | null>
       ])
       const scale = layout?.visualViewport?.scale
       if (shot?.data && typeof scale === 'number' && Number.isFinite(scale) && scale > 0) {
+        const pageY = layout?.cssVisualViewport?.pageY
         this.emitFrame(shot.data, {
-          pageScaleFactor: scale
+          pageScaleFactor: scale,
+          ...(typeof pageY === 'number' && Number.isFinite(pageY) ? { scrollOffsetY: pageY } : {})
         })
       }
     } catch {

@@ -72,6 +72,44 @@ describe('cmdBrowser on the headless engine — the window shows another workspa
     expect(signal).toHaveBeenCalledWith({ from: me.id, to: page.id, kind: 'write' })
   })
 
+  it.each(['screenshot', 'tap', 'status', 'tabs'])('`%s` on a card of its own canvas wires it, whatever is on screen', async (verb) => {
+    const { store, deps, me, goat, cookrew } = setup()
+    const page = store.addNode(browser('b-page', 'Page')) as BrowserNodeData
+    store.switchWorkspace(cookrew)
+    await cmdBrowser(request([verb, 'Page'], me.id), deps)
+    expect(store.workspaceState(goat).connections).toEqual(
+      expect.arrayContaining([expect.objectContaining({ a: me.id, b: page.id })])
+    )
+  })
+
+  it('wires before the verb runs, so a use that is refused still counts', async () => {
+    const { store, deps, browserCommand, me, goat } = setup()
+    const page = store.addNode(browser('b-page', 'Page')) as BrowserNodeData
+    browserCommand.mockRejectedValueOnce(new Error('Take a screenshot first'))
+    await expect(cmdBrowser(request(['tap', 'Page', '1', '1'], me.id), deps)).rejects.toThrow('screenshot')
+    expect(store.workspaceState(goat).connections).toEqual(
+      expect.arrayContaining([expect.objectContaining({ a: me.id, b: page.id })])
+    )
+  })
+
+  it('lights the cable for the screen verbs too', async () => {
+    const { store, deps, signal, me } = setup()
+    const page = store.addNode(browser('b-page', 'Page')) as BrowserNodeData
+    await cmdBrowser(request(['screenshot', 'Page'], me.id), deps)
+    expect(signal).toHaveBeenCalledWith({ from: page.id, to: me.id, kind: 'read' })
+  })
+
+  it('a served caller is never wired by using something', async () => {
+    const { store, deps, me } = setup()
+    const page = store.addNode(browser('b-page', 'Page')) as BrowserNodeData
+    store.connect(me.id, page.id)
+    const other = store.addNode(browser('b-other', 'Other')) as BrowserNodeData
+    const served = { ...deps, isServed: () => true } as SocketServerDeps
+    await cmdBrowser(request(['tap', 'Page', '1', '1'], me.id), served).catch(() => undefined)
+    await cmdBrowser(request(['tap', 'Other', '1', '1'], me.id), served).catch(() => undefined)
+    expect(store.isConnected(me.id, other.id)).toBe(false)
+  })
+
   it('never wires a card of the workspace on screen it was not wired to', async () => {
     const { store, deps, me, cookrew } = setup()
     store.switchWorkspace(cookrew)

@@ -29,6 +29,8 @@ interface HeaderProps {
    * and removing workspaces, and the activity history, all live behind it.
    */
   onWall: () => void
+  /** Opens Activity and history (MetricsPanel.tsx) straight from the ⋯ menu. */
+  onActivity: () => void
   /**
    * Opens the Routing panel (routing/RoutingPanel.tsx) — Magpie's models,
    * accounts and live routes inside Cookrew. Null status = not read yet.
@@ -79,6 +81,7 @@ export function Header({
   view,
   onViewChange,
   onWall,
+  onActivity,
   onRouting,
   routeStatus,
   onResync,
@@ -124,6 +127,7 @@ export function Header({
           onRouting={onRouting}
           routeStatus={routeStatus ?? null}
           onWall={onWall}
+          onActivity={onActivity}
           onResync={onResync}
           demo={isDemoMode()}
         />

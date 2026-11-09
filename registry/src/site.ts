@@ -46,6 +46,7 @@ export const RESERVED_HANDLES = new Set([
   'me',
   'relay',
   'api',
+  'auth',
   'install',
   'assets',
   'static',

@@ -336,6 +336,10 @@ export type AccountRefusal =
   // accounts, where the honest answer is that nothing changes.
   | 'legacy'
   | 'no_passwords_yet'
+  // The one sign-in page (auth.cookrew.dev). 'unsupported' is a registry that
+  // predates it: nothing was asked and nothing changed, and the caller goes
+  // the old way (the sheet's own forms, the provider trip, the password prompt).
+  | 'unsupported'
   | 'unknown'
 
 /**

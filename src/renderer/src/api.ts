@@ -1031,6 +1031,17 @@ export interface CookrewApi {
   accountOAuthClaim?: (username: string) => Promise<SignInAnswer<AccountStatus>>;
   accountOAuthLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
   accountOAuthUnlink?: (input: { provider: ProviderId; current?: string }) => Promise<AccountResult<void>>;
+  // ── the one sign-in page (auth.cookrew.dev) ──
+  //
+  // Each answers 'unsupported' on a registry without the page, and the sheet
+  // goes the old way. The trip is ended by `accountOAuthCancel`.
+  accountBrowserSignIn?: (
+    intent: 'sign-in' | 'create' | 'github' | 'google',
+    username?: string,
+  ) => Promise<SignInAnswer<AccountStatus>>;
+  accountBrowserResume?: () => Promise<SignInAnswer<AccountStatus>>;
+  /** Main falls back to the provider trip, with the same proof, on an older registry. */
+  accountBrowserLink?: (input: { provider: ProviderId; current?: string; rescue?: string }) => Promise<AccountResult<void>>;
   /** A passcode is this Mac's alone: it never goes to cookrew.dev. */
   accountSetPasscode?: (input: { next: string; current?: string }) => Promise<AccountResult<AccountStatus>>;
   accountSetTouchId?: (on: boolean) => Promise<AccountResult<AccountStatus>>;

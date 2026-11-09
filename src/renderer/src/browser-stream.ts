@@ -293,6 +293,8 @@ interface StreamFrameMeta {
   deviceHeight?: number
   displayScale?: number
   pageScaleFactor?: number
+  /** Where the page is scrolled to in this frame, in CSS pixels. */
+  scrollY?: number
   mobile?: boolean
 }
 
@@ -305,6 +307,8 @@ export type StreamMessage =
    * `bytes` straight from main over the desktop's port (browser-cast-ipc.ts).
    */
   | ({ kind: 'frame'; seq: number; src?: string; bytes?: Uint8Array } & StreamFrameMeta)
+  /** The picture has not changed: the line is alive, and this seq stands for the one on screen. */
+  | { kind: 'same'; seq: number; revision?: number }
   | { kind: 'error'; msg: string }
   | { kind: 'status'; status: UseStatus }
   /** The page copied this right after the viewer's own input: it goes on the viewer's clipboard. */
@@ -340,6 +344,10 @@ export function parseStreamMessage(raw: unknown): StreamMessage | null {
 export function parseStreamObject(raw: unknown): StreamMessage | null {
   const obj = asRecord(raw)
   if (!obj) return null
+  if (obj.t === 'same') {
+    const revision = finiteRevision(obj.revision)
+    return { kind: 'same', seq: typeof obj.seq === 'number' ? obj.seq : 0, ...(revision !== null ? { revision } : {}) }
+  }
   const jpeg = obj.t === 'frame' && obj.jpeg instanceof Uint8Array && obj.jpeg.byteLength > 0 ? obj.jpeg : null
   if (obj.t === 'frame' && (typeof obj.data === 'string' || jpeg)) {
     const meta = asRecord(obj.meta)
@@ -348,6 +356,7 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
     const deviceHeight = positiveNumber(meta?.deviceHeight)
     const displayScale = positiveNumber(meta?.displayScale)
     const pageScaleFactor = positiveNumber(meta?.pageScaleFactor)
+    const scrollY = typeof meta?.scrollY === 'number' && Number.isFinite(meta.scrollY) ? meta.scrollY : null
     const mobile = typeof meta?.mobile === 'boolean' ? meta.mobile : undefined
     return {
       kind: 'frame',
@@ -358,6 +367,7 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
       ...(deviceHeight !== null ? { deviceHeight } : {}),
       ...(displayScale !== null ? { displayScale } : {}),
       ...(pageScaleFactor !== null ? { pageScaleFactor } : {}),
+      ...(scrollY !== null ? { scrollY } : {}),
       ...(mobile !== undefined ? { mobile } : {})
     }
   }
@@ -419,6 +429,13 @@ export function parseStreamObject(raw: unknown): StreamMessage | null {
  */
 export function reconnectDelayMs(attempt: number): number {
   return Math.min(10_000, 1000 * 2 ** Math.max(0, Math.min(attempt, 4)))
+}
+
+/** A phone's first try at once: a dropped line on a moving phone is the usual case, not a failing Mac. */
+export const REMOTE_FIRST_REDIAL_MS = 150
+
+export function remoteReconnectDelayMs(attempt: number): number {
+  return attempt <= 0 ? REMOTE_FIRST_REDIAL_MS : reconnectDelayMs(attempt - 1)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

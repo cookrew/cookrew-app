@@ -4,6 +4,7 @@ import {
   asking,
   completeSignIn,
   finishRung,
+  deviceFor,
   deviceShape,
   json,
   refuse,
@@ -126,6 +127,7 @@ export function afterFirstFactor(
   via?: { provider: ProviderId; subject: string }
 ): void {
   const { v2, response } = ctx
+  rawDevice = deviceFor(ctx, rawDevice)
   const device = deviceShape(rawDevice)
   /**
    * THE WHOLE DEVICE, CHECKED HERE. `deviceShape` reads only what the ladder
@@ -157,7 +159,8 @@ export function afterFirstFactor(
     kind: device.kind,
     address: asking(ctx),
     next,
-    ...(via === undefined ? {} : { via })
+    ...(via === undefined ? {} : { via }),
+    ...(ctx.auth === undefined ? {} : { authRequest: ctx.auth.request.id })
   })
   json(response, 401, {
     error: 'second_factor',
@@ -197,6 +200,14 @@ export function handleFactorRoute(ctx: V2Context): boolean {
 
   const id = (ctx.decode(rest[1] ?? '') ?? '').toLowerCase()
   if (!UUID.test(id)) return false
+  // A sign-in opened on the auth origin is climbed only there, by the browser
+  // that claimed its request; every other pending only off it. The other side
+  // reads it as gone, which is what it is to them.
+  const held = ctx.v2.factors.pending.get(id)
+  if (held !== null && (held.authRequest ?? null) !== (ctx.auth?.request.id ?? null)) {
+    refuseFactor(ctx.response, 410, 'expired')
+    return true
+  }
   if (rest.length === 2 && method === 'GET') {
     pollPending(ctx, id)
     return true
@@ -503,7 +514,8 @@ async function passwordlessPasskey(ctx: V2Context): Promise<void> {
     return
   }
   const credential = assertionOf(body.value.credential)
-  if (credential === null || deviceShape(body.value.device) === null) {
+  const device = deviceFor(ctx, body.value.device)
+  if (credential === null || deviceShape(device) === null) {
     refuse(ctx.response, 400, credential === null ? 'malformed' : 'bad_device')
     return
   }
@@ -521,5 +533,5 @@ async function passwordlessPasskey(ctx: V2Context): Promise<void> {
     return
   }
   if (!checkAssertion(ctx, `ip|${asking(ctx)}`, credential, found, true)) return
-  completeSignIn(ctx, found.username, body.value.device)
+  completeSignIn(ctx, found.username, device)
 }

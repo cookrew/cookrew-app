@@ -253,6 +253,10 @@ export function cdpIdentityProbe(
  * Deliberately narrow. It does not touch navigator.webdriver, plugins, or any
  * of the other surfaces a bot-detection script reads — this exists to stop a
  * hang, not to defeat detection.
+ *
+ * navigator.webdriver is handled elsewhere, at launch: since 2026-11-08 (owner
+ * ruling) headlessLaunchArgs turns off the AutomationControlled blink feature,
+ * because the debugging port alone set it and Google refused sign-in on it.
  */
 export const NO_PLATFORM_AUTHENTICATOR = `
 (() => {

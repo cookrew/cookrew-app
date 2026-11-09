@@ -44,8 +44,9 @@ describe('the line signs in as the account', () => {
 describe('nothing the line can reach opens the enrolment modal', () => {
   const site = asset('site.js')
 
-  it('the exposed sign-in is the account sheet', () => {
-    expect(site).toContain('signIn: openAccountSheet')
+  it('the exposed sign-in is the one sign-in page, with the account sheet behind it', () => {
+    expect(site).toContain("signIn: () => openSignIn('sign-in')")
+    expect(site).toContain("openAccountSheet(intent === 'create' ? 'register' : undefined)")
     expect(site).not.toContain('signIn: signInFlow')
   })
 

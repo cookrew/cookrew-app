@@ -78,9 +78,9 @@ describe('the Mac end of the bridge', () => {
     const id = /event: id\ndata: \{"id":"([0-9a-f-]{36})"\}/.exec(text)?.[1]
     expect(id).toBeDefined()
     expect(text).toContain('event: m\ndata: "{\\"t\\":\\"ready\\"}"')
-    expect(bridge.post(id!, ['{"t":"offer"}'])).toBe(true)
+    expect(bridge.post(id!, { m: ['{"t":"offer"}'] })).toBe(true)
     expect(sent).toEqual(['{"t":"offer"}'])
-    expect(bridge.post('00000000-0000-0000-0000-000000000000', ['x'])).toBe(false)
+    expect(bridge.post('00000000-0000-0000-0000-000000000000', { m: ['x'] })).toBe(false)
     server.closeAllConnections()
     server.close()
     await new Promise((r) => setTimeout(r, 50))
@@ -115,9 +115,9 @@ describe('the phone end of the bridge', () => {
     let release: (ok: boolean) => void = () => undefined
     const ws = new BridgeWebSocket({
       stream: () => stream,
-      post: (_id, m) => {
-        posts.push([...m])
-        return new Promise((r) => (release = r))
+      post: (_id, body) => {
+        posts.push([...(body.m ?? [])])
+        return new Promise((r) => (release = () => r('ok')))
       }
     })
     const seen: string[] = []
@@ -138,7 +138,7 @@ describe('the phone end of the bridge', () => {
 
   it('closes, with an error, when the stream drops or the Mac forgets the session — the card reopens', async () => {
     const stream = new FakeStream()
-    const ws = new BridgeWebSocket({ stream: () => stream, post: async () => false })
+    const ws = new BridgeWebSocket({ stream: () => stream, post: async () => 'gone' })
     const seen: string[] = []
     ws.onerror = () => void seen.push('error')
     ws.onclose = () => void seen.push('close')
