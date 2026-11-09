@@ -4,6 +4,7 @@ import { WEB_STEP_UP_ACTS } from '../../src/shared/auth-site'
 import { webCopy } from './v3-copy'
 import { day, esc, page, type Page } from './site-shell'
 import { desktopsSection } from './site-reach'
+import { machinesConsole, type ConsoleMachine } from './site-machines'
 import type { V2Account, V2Device } from './v2-accounts'
 
 /**
@@ -114,7 +115,14 @@ ${passwordless ? '' : '<input id="me-delete-password" type="password" autocomple
 ${passwordless ? '<p class="meta">Cookrew asks you to confirm it is you — with your passkey, your sign-in provider or a code — then brings you back here to finish.</p>\n' : ''}<p class="meta" id="me-delete-note" role="status" hidden></p>`
 
 export function mePage(
-  input: { account: V2Account; currentDeviceId: string; factors?: FactorSummary } | null
+  input: {
+    account: V2Account
+    currentDeviceId: string
+    factors?: FactorSummary
+    /** The account's machines with their standing (v2-fleet.ts · standing); the console draws them. */
+    machines?: readonly ConsoleMachine[]
+    now?: number
+  } | null
 ): Page {
   if (input === null) {
     return page(
@@ -153,7 +161,8 @@ export function mePage(
       // device, and the opener has to be on the page by the time it lands.
       // step-up.js before site.js: the sensitive acts both scripts own prove
       // themselves through it, and it finishes them on the way back.
-      scripts: ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js']
+      // machines.js after site.js: it signs at each machine's door with this browser's key.
+      scripts: ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js', 'machines.js']
     },
     `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}" data-step-up-acts="${WEB_STEP_UP_ACTS.join(' ')}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
@@ -161,6 +170,10 @@ export function mePage(
 <span class="sp" style="flex:1"></span>
 <button class="btn" data-edit-name>Edit</button>
 <button class="btn" data-signout>Sign out</button></div>
+
+<!-- THE CONSOLE (owner 2026-11-10): the machines first, each drawn as what it is; the rest below. -->
+${machinesConsole(account.username, input.machines ?? account.desktops.map((d) => ({ id: d.deviceId, name: d.name, online: false, lastSeenAt: d.updatedAt ?? null, profile: d.profile ?? null })), input.now ?? Date.now())}
+<nav class="row ms-tabs" aria-label="More on this page"><a class="btn sm" href="#me-requests">Requests</a><a class="btn sm" href="#me-devices-heading">Devices</a><a class="btn sm" href="#security">Security</a><a class="btn sm" href="#me-delete">Account</a></nav>
 
 <!-- W5 · REQUESTS SITS ABOVE DEVICES, and the whole section hides itself when
      the queue is empty. It is above because it is the only part of this page
@@ -176,12 +189,12 @@ export function mePage(
  data-wifi-row="${esc(meCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
 </section>
 
-<!-- THE MACHINES COME FIRST. Devices and security are things to look at
-     once; a desktop row is a door into a canvas that is running right now,
-     and it is what most people open this page for. -->
+<!-- The machines' addresses and the Wi-Fi ask (M5): kept, folded under the console. -->
+<details style="margin-top:30px" id="me-reach"><summary>Machine addresses and Wi-Fi</summary>
 ${desktopsSection(account.username, account.desktops)}
+</details>
 
-<h2 style="margin-top:30px">Devices</h2>
+<h2 style="margin-top:30px" id="me-devices-heading">Devices</h2>
 <p class="meta">Every device attached to @${esc(account.username)}. ${esc(meCopy('d12.revoke', { device: 'device' }))} ${esc(meCopy('d12.last-device', { handle: account.username }))}</p>
 <ul class="doors me-list" id="me-devices">${devices}</ul>
 <!-- W5 · the two ADD buttons. Both mint the same join code; the words differ

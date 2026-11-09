@@ -41,6 +41,7 @@ const FILES = [
   ['site.js', 'site.js', 'text/javascript; charset=utf-8'],
   ['device-seal.js', 'device-seal.js', 'text/javascript; charset=utf-8'],
   ['reach.js', 'reach.js', 'text/javascript; charset=utf-8'],
+  ['machines.js', 'machines.js', 'text/javascript; charset=utf-8'],
   ['factors.js', 'factors.js', 'text/javascript; charset=utf-8'],
   ['step-up.js', 'step-up.js', 'text/javascript; charset=utf-8'],
   ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],

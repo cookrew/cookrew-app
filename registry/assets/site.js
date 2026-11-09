@@ -1274,6 +1274,17 @@
     /** This browser as a device — what a passwordless passkey sign-in attaches. */
     device: async () => devicePayload(await deviceIdentity()),
     /**
+     * A MACHINE'S DOOR CHALLENGE, signed by this browser's device key
+     * (machines.js · account-pair.ts). Only that transcript: a helper that
+     * signed any text would sign whatever a script on this origin asked.
+     */
+    doorSign: async (text) => {
+      if (typeof text !== 'string' || !/^cookrew-pair\/2 [0-9a-f-]{36} \S+ \S+ [0-9a-f-]{36}$/i.test(text)) throw new Error('not a door transcript')
+      const device = await deviceIdentity()
+      const algorithm = device.jwk.kty === 'OKP' ? { name: 'Ed25519' } : { name: 'ECDSA', hash: 'SHA-256' }
+      return b64u(await crypto.subtle.sign(algorithm, device.pair.privateKey, enc.encode(text)))
+    },
+    /**
      * The ECDH half of the device key, for opening what a Mac sealed to it
      * (M5). A CryptoKey and never key MATERIAL: it is non-extractable, so
      * handing it out lets reach.js decrypt one envelope and lets nobody
