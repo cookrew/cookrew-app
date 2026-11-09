@@ -123,7 +123,7 @@ function passkeyProof(ctx: V2Context, signed: Signed, credential: unknown): bool
 
 export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> {
   const { account, claims, device } = signed
-  const now = Date.now()
+  const now = ctx.v2.now()
   const body = await readJsonBody(ctx.request, BODY_MAX)
   const value: Record<string, unknown> = body.ok ? body.value : {}
   if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
