@@ -159,6 +159,7 @@ import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin, signWithDevice } from './account-v2'
 import { createMachineKeyStore, createRefusedMachines, enterMachines } from './machine-keys'
+import { allowedInMachineWindow, machineWindowPlan } from './machine-window'
 import { parseAccountMachines } from '../shared/zoom-fleet'
 import { GRANT_PATHS } from '../shared/account-pair'
 import { relayHandle } from './legacy-identity'
@@ -1369,14 +1370,17 @@ async function collectMachineKeys(): Promise<void> {
       return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
     },
     grant: async () => {
-      // Not proved yet: nothing is asked until the account password has been typed here once.
-      if (!existsSync(MACHINE_TRUSTED_FILE)) return null
+      // Asked every round: a desktop signed in with a proof on it is trusted from that sign-in, with nothing to do here.
       const sent = await accounts.authedResponse(GRANT_PATHS.machine, { method: 'POST', body: '{}' })
       if (!sent.ok) return null
       const body = (await sent.response.json().catch(() => null)) as { grant?: unknown; error?: unknown } | null
-      // cookrew.dev no longer counts this machine as proved (a new device id, a reset): prove it again at the next unlock.
+      if (sent.response.status === 201 && typeof body?.grant === 'string') {
+        if (!existsSync(MACHINE_TRUSTED_FILE)) writeFileSync(MACHINE_TRUSTED_FILE, `${new Date().toISOString()}\n`, { mode: 0o600 })
+        return body.grant
+      }
+      // Not proved here (signed in before machines trusted each other, or by a code): the zoom view offers the one proof.
       if (sent.response.status === 401 && body?.error === 'proof_required') rmSync(MACHINE_TRUSTED_FILE, { force: true })
-      return sent.response.status === 201 && typeof body?.grant === 'string' ? body.grant : null
+      return null
     },
     relay: async (desktopId, route, body) => {
       const sent = await accounts.relayed(desktopId, route, { method: 'POST', body: JSON.stringify(body) })
@@ -1407,6 +1411,74 @@ async function readAccountMachine(machineId: string, route: RemoteRead): Promise
   if (sent.response.status === 401) machineKeys.forget([machineId])
   if (!sent.response.ok) return null
   return sent.response.json().catch(() => null)
+}
+
+/**
+ * THE ONE PROOF, FROM THE ZOOM VIEW: a machine signed in before machines
+ * trusted each other (or unlocked by a passcode) proves itself as it does
+ * before adding a machine to the account — the password, or a provider's trip
+ * with the account's second step. True once cookrew.dev has said yes.
+ */
+async function proveThisMachine(): Promise<boolean> {
+  if (ownerLock.locked || accounts.account() === null) return false
+  // Signed in again on auth.cookrew.dev as this Mac's own device, with the account's second step:
+  // a machine so signed in is trusted at that sign-in (registry startSession). A provider's trip alone
+  // would not be, and the direct provider path refuses an account with a second step (security review).
+  const signedIn = await accounts.browserResume()
+  if (!signedIn.ok || ownerLock.locked) return false
+  await collectMachineKeys().catch(() => undefined)
+  return existsSync(MACHINE_TRUSTED_FILE)
+}
+
+/** One window per machine: opening it again brings it forward, back on that machine's page. */
+const machineWindows = new Map<string, { window: BrowserWindow; url: string; home: string }>()
+
+/**
+ * ANOTHER MACHINE OF THE ACCOUNT, WORKED FROM HERE (machine-window.ts): its own
+ * page in a window of its own, let in by the key this machine holds for it.
+ * Sandboxed, no preload, and it goes nowhere but that machine's relay address.
+ */
+async function openMachineWindow(machineId: string): Promise<boolean> {
+  const held = machineWindows.get(machineId)
+  if (held && !held.window.isDestroyed()) {
+    // Signing in left it on cookrew.dev's own pages: back to the machine, with its key.
+    if (!held.window.webContents.getURL().startsWith(held.home)) void held.window.loadURL(held.url)
+    held.window.show()
+    held.window.focus()
+    return true
+  }
+  // A full-control window onto another machine is an owner act: not behind a locked screen.
+  if (ownerLock.locked) return false
+  let key = machineKeys.token(machineId)
+  if (key === null) {
+    await collectMachineKeys().catch(() => undefined)
+    key = machineKeys.token(machineId)
+  }
+  const account = accounts.account()
+  if (key === null || account === null) return false
+  // The window signs in to cookrew.dev on its own, once, in its own store: never with this Mac's session.
+  const plan = machineWindowPlan({ registryOrigin: registryOrigin(), username: account.username, machineId, key })
+  if (plan === null) return false
+  const window = new BrowserWindow({
+    width: 1280,
+    height: 860,
+    title: 'Cookrew',
+    webPreferences: { partition: plan.partition, sandbox: true, contextIsolation: true, nodeIntegration: false }
+  })
+  // That machine's page, and nothing else: anything outside it opens in the owner's browser.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (!allowedInMachineWindow(plan, url) && /^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  window.webContents.on('will-navigate', (event, url) => {
+    if (allowedInMachineWindow(plan, url)) return
+    event.preventDefault()
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+  })
+  window.on('closed', () => machineWindows.delete(machineId))
+  machineWindows.set(machineId, { window, url: plan.url, home: plan.home })
+  await window.loadURL(plan.url)
+  return true
 }
 
 setTimeout(() => {
@@ -9188,6 +9260,12 @@ function registerIpc(handlers: RestoreHandlers): void {
     deviceId: () => accounts.account()?.deviceId ?? null,
     readOf: readAccountMachine
   })
+  // Owner acts, gated as the account's are: open another machine to work in it, and this machine's one proof.
+  ipcMain.handle('zoom-fleet:open-machine', ownerOnly((machineId: unknown) =>
+    typeof machineId === 'string' && /^[0-9a-f-]{36}$/i.test(machineId) ? openMachineWindow(machineId) : false
+  ))
+  ipcMain.handle('zoom-fleet:trust-state', ownerOnly(() => ({ trusted: existsSync(MACHINE_TRUSTED_FILE) })))
+  ipcMain.handle('zoom-fleet:trust-prove', ownerOnly(() => proveThisMachine()))
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).
   registerRestoreIpc(ipcMain.handle.bind(ipcMain), handlers)

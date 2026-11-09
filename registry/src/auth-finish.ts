@@ -82,11 +82,14 @@ export function authorizeSession(
   username: string,
   deviceId: string,
   hasPassword: boolean,
-  options: { codes?: boolean; verifiedBy?: VerifiedBy } = {}
+  options: { codes?: boolean; verifiedBy?: VerifiedBy; trust?: false } = {}
 ): boolean {
   const { v2, response } = ctx
   if (!stillOpen(ctx, request)) return false
-  const session = v2.accounts.startSession(username, deviceId, options.verifiedBy === undefined ? {} : { verifiedBy: options.verifiedBy })
+  const session = v2.accounts.startSession(username, deviceId, {
+    ...(options.verifiedBy === undefined ? {} : { verifiedBy: options.verifiedBy }),
+    ...(options.trust === false ? { trust: false as const } : {})
+  })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return false

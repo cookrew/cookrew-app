@@ -205,7 +205,8 @@ describe('POST /v2/me/device-grant/watch (owner 2026-11-09: a watch pairs once)'
 describe('POST /v2/me/device-grant/machine (owner 2026-11-09: machines on the account trust each other)', () => {
   it('a machine proves itself ONCE (password or passkey, from that machine); after that it needs nothing (security review: kind is self-declared)', async () => {
     const { username } = await fresh()
-    const desk = await world.browser(username, 'desktop')
+    // Attached with nothing proved, as a join code or a recovery code leaves a desktop.
+    const desk = await world.browser(username, 'desktop', { verified: false })
     const bare = await desk.registry.post(GRANT_PATHS.machine, {})
     expect(bare.status).toBe(401)
     expect(bare.body).toMatchObject({ error: 'proof_required' })
@@ -213,13 +214,13 @@ describe('POST /v2/me/device-grant/machine (owner 2026-11-09: machines on the ac
     expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
     // Trusted now: the next pass takes no proof, and another desktop of the account is still asked.
     expect((await desk.registry.post(GRANT_PATHS.machine, {})).status).toBe(201)
-    const other = await world.browser(username, 'desktop')
+    const other = await world.browser(username, 'desktop', { verified: false })
     expect((await other.registry.post(GRANT_PATHS.machine, {})).status).toBe(401)
   })
 
   it('gives a trusted machine its pass with no proof, in a kind an older machine refuses', async () => {
     const { username } = await fresh()
-    const desk = await world.browser(username, 'desktop')
+    const desk = await world.browser(username, 'desktop', { verified: false })
     expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
     const out = await desk.registry.post(GRANT_PATHS.machine, {})
     expect(out.status).toBe(201)
@@ -241,7 +242,7 @@ describe('a machine’s trust ends with the password it was proved under (securi
   it('a password change leaves the machine the owner is on trusted, and asks every other one to prove itself again', async () => {
     const { username } = await fresh()
     const mine = await world.browser(username, 'desktop')
-    const theirs = await world.browser(username, 'desktop')
+    const theirs = await world.browser(username, 'desktop', { verified: false })
     for (const desk of [mine, theirs]) expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
     const changed = await mine.registry.post('/v2/me/password', { current: PASSWORD, next: 'a brand new long password' })
     expect(changed.status).toBe(204)
@@ -253,12 +254,42 @@ describe('a machine’s trust ends with the password it was proved under (securi
     const username = `untrust${++n}`
     return world.account(username).then(async () => {
       const mine = await world.browser(username, 'desktop')
-      const theirs = await world.browser(username, 'desktop')
+      const theirs = await world.browser(username, 'desktop', { verified: false })
       for (const desk of [mine, theirs]) await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })
       world.v2.accounts.untrustOtherMachines(username, mine.device.id)
       const devices = world.v2.accounts.get(username)?.devices ?? []
       expect(devices.find((d) => d.id === mine.device.id)?.machine).toBe(true)
       expect(devices.find((d) => d.id === theirs.device.id)?.machine).toBeUndefined()
     })
+  })
+})
+
+describe('a machine trusted without a ritual (owner 2026-11-10: no reading on a passcode Mac)', () => {
+  it('a desktop signed in with a proof on it (password, passkey or authenticator) is a trusted machine from that moment', async () => {
+    const { username } = await fresh()
+    const desk = await world.browser(username, 'desktop')
+    expect((await desk.registry.post(GRANT_PATHS.machine, {})).status).toBe(201)
+  })
+
+  it('a desktop that signed in on a recovery code is not', async () => {
+    const { username } = await fresh()
+    const desk = await world.browser(username, 'desktop', { verified: false })
+    world.v2.accounts.startSession(username, desk.device.id, { verifiedBy: 'recovery' })
+    expect((await desk.registry.post(GRANT_PATHS.machine, {})).status).toBe(401)
+  })
+
+  it('a step-up made by a provider alone does not make a machine trusted; the password or a passkey made now does (security review 2026-11-10)', async () => {
+    const { username } = await fresh()
+    const desk = await world.browser(username, 'desktop', { verified: false })
+    expect((await desk.registry.post(GRANT_PATHS.machine, { stepUp: 'a-provider-proof' })).status).toBe(401)
+    expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
+    expect((await desk.registry.post(GRANT_PATHS.machine, {})).status).toBe(201)
+  })
+
+  it('a second step set up in the same sign-in trusts no machine: it proves no more than the first factor', async () => {
+    const { username } = await fresh()
+    const desk = await world.browser(username, 'desktop', { verified: false })
+    world.v2.accounts.startSession(username, desk.device.id, { verifiedBy: 'totp', trust: false })
+    expect((await desk.registry.post(GRANT_PATHS.machine, {})).status).toBe(401)
   })
 })

@@ -167,7 +167,11 @@ export function finishRung(ctx: V2Context, pending: Pending, id: string, by: Ver
  * it): the sitting starts verified, so its first five minutes reach the
  * sensitive acts without asking again (v2-session-age.ts).
  */
-export function completeSignIn(ctx: V2Context, username: string, device: unknown, by: VerifiedBy | null): boolean {
+/**
+ * `trust: false`: the second step was set up in this same sign-in, so it proves
+ * no more than the first factor did, and the machine is not trusted by it.
+ */
+export function completeSignIn(ctx: V2Context, username: string, device: unknown, by: VerifiedBy | null, trust: boolean = true): boolean {
   const { v2, response } = ctx
   // Cancelled while this rung was being climbed: nothing attaches.
   if (ctx.auth !== undefined && !stillOpen(ctx, ctx.auth.request)) return false
@@ -179,9 +183,12 @@ export function completeSignIn(ctx: V2Context, username: string, device: unknown
   }
   // The auth origin: the same attach, then a code for the client instead of a cookie.
   if (ctx.auth !== undefined) {
-    return authorizeSession(ctx, ctx.auth.request, username, attached.device.id, attached.account.passwordless !== true, by === null ? {} : { verifiedBy: by })
+    return authorizeSession(ctx, ctx.auth.request, username, attached.device.id, attached.account.passwordless !== true, {
+      ...(by === null ? {} : { verifiedBy: by }),
+      ...(trust ? {} : { trust: false as const })
+    })
   }
-  const session = v2.accounts.startSession(username, attached.device.id, by === null ? {} : { verifiedBy: by })
+  const session = v2.accounts.startSession(username, attached.device.id, { ...(by === null ? {} : { verifiedBy: by }), ...(trust ? {} : { trust: false as const }) })
   if (session === null) {
     refuse(response, 500, 'malformed')
     return false

@@ -603,6 +603,12 @@ export interface CookrewApi {
   machineGaugesOf?: (machineId: string) => Promise<unknown>;
   /** Another machine's fleet snapshot (/api/fleet), read with the key this desktop holds for it; null without one. */
   machineFleetOf?: (machineId: string) => Promise<unknown>;
+  /** Open another machine of the account in a window of its own, to work in it from here. */
+  openMachine?: (machineId: string) => Promise<boolean>;
+  /** Is this machine trusted by the account's others; null where it cannot say. */
+  machineTrust?: () => Promise<{ trusted: boolean } | null>;
+  /** This machine's one proof to the account's others: signed in again on auth.cookrew.dev, as itself, second step and all. */
+  proveMachine?: () => Promise<boolean>;
   /**
    * Recover an inactive teammate as it was (agent-recover feature): re-add
    * the node bound to its session and resume. Optional — feature-detect.

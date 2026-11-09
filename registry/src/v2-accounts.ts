@@ -791,7 +791,7 @@ export class V2Accounts {
   startSession(
     username: string,
     deviceId: string,
-    age: { signedInAt?: number; verifiedBy?: VerifiedBy; sitting?: string } = {}
+    age: { signedInAt?: number; verifiedBy?: VerifiedBy; sitting?: string; trust?: false } = {}
   ): V2Session | null {
     const account = this.get(username)
     if (!account || !account.devices.some((d) => d.id === deviceId)) return null
@@ -813,6 +813,10 @@ export class V2Accounts {
     // Pushed out by the cap is ended too: what was minted under it must not outlive it.
     const evicted = all.slice(0, Math.max(0, all.length - SESSIONS_MAX))
     this.replace(evicted.length === 0 ? { ...account, sessions } : this.withRevoked({ ...account, sessions }, endedIds(evicted, sessions)))
+    // A desktop signed in with a proof made on it is a trusted machine of the account from now:
+    // a password, a passkey, or the authenticator as the second step. Not a recovery code, not a
+    // provider alone, not a join code (which starts its session with no proof at all).
+    if (age.trust !== false && (age.verifiedBy === 'password' || age.verifiedBy === 'passkey' || age.verifiedBy === 'totp')) this.trustMachine(username, deviceId)
     return session
   }
 
