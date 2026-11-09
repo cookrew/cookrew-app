@@ -7,6 +7,7 @@ import type { Pending } from './v2-pending'
 import { SESSION_TTL_MS } from './v2-tokens'
 import { tokenExpiry, type VerifiedBy } from './v2-session-age'
 import { authorizeSession, stillOpen } from './auth-finish'
+import { heldForOpener } from './auth-step-up'
 
 /**
  * IDENTITY v2, PHASE 4 — THE SHAPE OF AN ANSWER.
@@ -145,6 +146,12 @@ export function deviceShape(input: unknown): { id: string; kind: string; name: s
  * everything on the step-up list.
  */
 export function finishRung(ctx: V2Context, pending: Pending, id: string, by: VerifiedBy | null): void {
+  // A step-up climbed on auth.cookrew.dev counts only when the browser that
+  // asked spends the code with its own session (auth-step-up.ts).
+  if (pending.act !== undefined && pending.authRequest !== undefined && ctx.auth !== undefined) {
+    heldForOpener(ctx, pending, id, by)
+    return
+  }
   if (pending.act !== undefined) {
     ctx.v2.factors.pending.authorise(id)
     // The sitting that asked has just proved itself: its five minutes start now.

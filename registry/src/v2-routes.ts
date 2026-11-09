@@ -34,7 +34,7 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { heldWhenFresh, mayGuessPassword, readAndStepUp } from './v2-step-up'
+import { answerFresh, heldWhenFresh, mayGuessPassword, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
@@ -661,6 +661,9 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie() } : {})
     return
   }
+  // Would this act pass on the last five minutes alone? Asked by /me before it
+  // shows a password field, so nobody types one a trip would throw away.
+  if (rest.length === 2 && rest[0] === 'step-up' && method === 'GET') return answerFresh(ctx, signed, ctx.decode(rest[1]) ?? '')
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {
     if (!mayGuessPassword(ctx, signed)) return
     const body = await readJsonBody(ctx.request, SMALL_BODY)

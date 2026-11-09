@@ -219,15 +219,17 @@
     return first()
   }
 
-  /* A passkey request's screens live in auth-enrol.js; these are the page's parts it borrows. */
+  /* A passkey request's screens live in auth-enrol.js, a step-up's in auth-step.js; these are the page's parts they borrow. */
   const passkeyIntent = () => Boolean(summary && summary.intent === 'passkey')
-  const what = () => (passkeyIntent() ? 'request' : 'sign-in')
+  const stepIntent = () => Boolean(summary && summary.intent === 'step-up')
+  const what = () => (passkeyIntent() ? 'request' : stepIntent() ? 'confirmation' : 'sign-in')
   const setEnrol = (enrol) => (summary = { ...summary, enrol: enrol || null })
-  const enrolUi = () => ({ call, screen, head, button, sayer, field, form, submitter, busy, badge, links, notNow, outcome, toProvider, label, setEnrol, first, summary: () => summary })
+  const enrolUi = () => ({ call, screen, head, button, sayer, field, form, submitter, busy, badge, links, notNow, outcome, toProvider, label, setEnrol, first, rung, summary: () => summary })
 
   function first(note) {
     const intent = summary.intent
     if (intent === 'passkey') return window.cookrewAuthEnrol.start(enrolUi(), note)
+    if (intent === 'step-up') return window.cookrewAuthStep.start(enrolUi(), note)
     if (intent === 'link') return linkScreen(note)
     if (intent === 'github' || intent === 'google') return providerScreen(intent, note)
     if (intent === 'create') return create(note)
@@ -445,7 +447,7 @@
     const stop = new AbortController()
     const live = screen([
       badge('key'),
-      ...head(step ? 'Two-step verification' : null, 'Use your passkey.', 'Your browser will ask for Touch ID, Face ID, Windows Hello or a security key.'),
+      ...head(step ? (stepIntent() ? 'Confirm it’s you' : 'Two-step verification') : null, 'Use your passkey.', 'Your browser will ask for Touch ID, Face ID, Windows Hello or a security key.'),
       waiting,
       retry,
       said,
@@ -496,6 +498,7 @@
   const sessionPath = (step) => `/v2/sessions/${encodeURIComponent(step.pending)}`
 
   function ladder(step, note) {
+    if (stepIntent()) return first(note)
     const { said, say } = sayer()
     const offered = (step.next || []).filter((k) => RUNGS[k])
     const usable = offered.filter((k) => k !== 'passkey' || canPasskey())
@@ -546,7 +549,7 @@
     }
     screen([
       ...(totp
-        ? head('Two-step verification', 'Enter your code.', 'The six digits your authenticator app shows right now.')
+        ? head(stepIntent() ? 'Confirm it’s you' : 'Two-step verification', 'Enter your code.', 'The six digits your authenticator app shows right now.')
         : head('Recovery code', 'Use a recovery code.', 'One of the recovery codes you saved. Each one works once.')),
       form([code.row, send, said], submit),
       links(link('Try another way', () => ladder(step)), notNow())
@@ -810,8 +813,9 @@
     const kind = way && way.kind
     const passkey = passkeyIntent()
     if (kind === 'web' && safe(way.url)) {
-      const title = passkey ? 'Passkey made.' : 'Signed in.'
-      screen([badge('check'), ...head(null, title, `Taking you back to ${summary.returnHost || 'cookrew.dev'}${passkey ? ' to add it' : ''}…`), go('Continue', way.url, 'primary')])
+      const title = passkey ? 'Passkey made.' : stepIntent() ? 'Confirmed.' : 'Signed in.'
+      const onward = passkey ? ' to add it' : stepIntent() ? ' to finish' : ''
+      screen([badge('check'), ...head(null, title, `Taking you back to ${summary.returnHost || 'cookrew.dev'}${onward}…`), go('Continue', way.url, 'primary')])
       location.replace(way.url)
       return
     }
@@ -863,7 +867,8 @@
           : way.kind === 'cli'
             ? 'Your terminal will say so.'
             : ''
-    screen([badge('x', true), ...head(null, 'Cancelled.', `${passkeyIntent() ? 'No passkey was added.' : 'Nothing was signed in.'} ${where}`), way.kind === 'app' ? go('Back to Cookrew', way.url, '') : null])
+    const nothing = passkeyIntent() ? 'No passkey was added.' : stepIntent() ? 'Nothing was changed.' : 'Nothing was signed in.'
+    screen([badge('x', true), ...head(null, 'Cancelled.', `${nothing} ${where}`), way.kind === 'app' ? go('Back to Cookrew', way.url, '') : null])
     if (way.kind === 'web' && safe(way.url)) later(() => location.replace(way.url), 900)
     if (way.kind === 'app' && safe(way.url)) later(() => location.assign(way.url), 400)
   }
@@ -873,7 +878,7 @@
     if (summary && summary.client === 'cli') return h('p', { class: 'note' }, 'Run cookrew login again in your terminal.')
     if (passkeyIntent() && summary.client === 'desktop') return h('p', { class: 'note' }, 'Open Security in the Cookrew app and add the passkey again.')
     if (summary && summary.client === 'desktop') return h('p', { class: 'note' }, 'Open the Cookrew app and choose Sign in again.')
-    return go('Back to cookrew.dev', `${PRODUCT}/${passkeyIntent() ? 'me#security' : ''}`, 'primary')
+    return go('Back to cookrew.dev', `${PRODUCT}/${passkeyIntent() ? 'me#security' : stepIntent() ? 'me' : ''}`, 'primary')
   }
 
   /** A screen that ends the request: a mark, what happened, and the one way on. */
@@ -892,6 +897,7 @@
   function denied(retry) {
     if (!retry) return ending('x', `This ${what()} was denied.`, `It was turned down and can’t be used again. Start again from ${from()}.`)
     if (passkeyIntent()) return window.cookrewAuthEnrol.notConfirmed(enrolUi())
+    if (stepIntent()) return window.cookrewAuthStep.notConfirmed(enrolUi())
     const provider = summary && (summary.provider || (summary.intent === 'github' || summary.intent === 'google' ? summary.intent : null))
     return screen([
       badge('x', true),
