@@ -2,7 +2,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { RemoteBarView, RemoteConfirmView, RemoteHostBannerView, RemotePanel, coverState, frameIsStale } from '../src/renderer/src/use/RemotePanel'
-import { switchAnswer } from '../src/renderer/src/use/RemoteSwitch'
+import { switchAnswer, switchWords } from '../src/renderer/src/use/RemoteSwitch'
 import type { CardControl, RemoteBuild, RemoteState, RemoteStateId } from '../src/shared/remote-access'
 import type { UseStatus } from '../src/shared/use-signal'
 
@@ -141,11 +141,29 @@ describe('RemoteBarView', () => {
     expect(bar(base, 'away', { zoomed: true })).toContain('>Fit<')
   })
 
-  it('a Linux machine never offers control', () => {
-    const html = bar({ ...base, switchOn: false, machine: 'linux' })
-    expect(html).not.toContain('Take control')
-    expect(html).toContain('View only')
+  it('a Linux machine with its switch off says how someone there turns it on, in its own words', () => {
+    for (const where of ['here', 'away'] as const) {
+      const html = bar({ ...base, switchOn: false, machine: 'linux' }, where)
+      expect(html).not.toContain('Take control')
+      expect(html).toContain('View only')
+      expect(html).toContain('cookrew remote on')
+      expect(html).not.toMatch(/\bMac\b/)
+      expect(html).not.toContain('cannot be controlled from here')
+    }
+  })
+
+  it('a Linux machine with its switch on offers control like a Mac', () => {
+    const html = bar({ ...base, switchOn: true, machine: 'linux' })
+    expect(html).toContain('Take control')
     expect(html).not.toMatch(/\bMac\b/)
+  })
+
+  it('the switch says the machine it is on, and on Linux promises no unlock', () => {
+    expect(switchWords('darwin').label).toBe('Allow remote control of this Mac')
+    expect(switchWords('darwin').means).toContain('unlock')
+    expect(switchWords('linux').label).toBe('Allow remote control of this machine')
+    expect(switchWords('linux').means).not.toMatch(/unlock|\bMac\b|lid/)
+    expect(switchWords('linux').means).toContain('15 minutes')
   })
 
   it('says why a Take control was refused', () => {

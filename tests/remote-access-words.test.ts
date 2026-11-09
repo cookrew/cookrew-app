@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import {
   hostWords,
   lastSeenWords,
+  LINUX_NO_XDOTOOL,
+  XDOTOOL_INSTALL,
   parseRemoteState,
   remoteView,
   restartConfirm,
@@ -133,6 +135,18 @@ describe('remoteView · a Linux machine', () => {
     const all: RemoteStateId[] = ['locked', 'display-asleep', 'unreachable', 'stopped']
     for (const id of all) {
       const view = remoteView(state(id, { platform: 'linux', build: linux, until: 1 }), 'away')
+      expect(`${view.title} ${view.sentence}`).not.toMatch(/System Settings|\bMac\b/)
+    }
+  })
+
+  it('xdotool stands where Accessibility would: one sentence naming the line, no System Settings', () => {
+    for (const where of ['here', 'away'] as const) {
+      const view = remoteView(state('needs-accessibility', { platform: 'linux' }), where)
+      expect(view.title).toBe('xdotool is missing')
+      expect(view.sentence).toBe(LINUX_NO_XDOTOOL)
+      expect(view.sentence).toContain(XDOTOOL_INSTALL)
+      expect(ids(view)).toEqual(['check-again'])
+      expect(view.needsYouThere).toBe(where === 'away')
       expect(`${view.title} ${view.sentence}`).not.toMatch(/System Settings|\bMac\b/)
     }
   })

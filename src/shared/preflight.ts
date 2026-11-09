@@ -1,4 +1,5 @@
 import { FIX_LABELS, TOOL_COPY, TOOL_NOTES } from './first-run-copy'
+import { XDOTOOL_INSTALL } from './remote-access'
 import { codexInstallLine, piInstallLine } from './route-lines'
 
 /**
@@ -36,6 +37,8 @@ export interface ToolFacts {
   arch: string
   /** Tools the person's own endpoint runs on: for them it stands in for a sign-in. */
   endpointTools?: readonly string[]
+  /** Linux only: what sends clicks and keys for remote control. Absent elsewhere, and from an older main. */
+  xdotool?: ToolState
 }
 
 export const UNKNOWN_FACTS: ToolFacts = {
@@ -122,6 +125,8 @@ function installFix(id: ToolId, facts: ToolFacts): ToolFix | null {
       return { label: FIX_LABELS.INSTALL, line: MAGPIE_INSTALL }
     case 'ollama':
       return brewOrPage(facts, 'brew install ollama', 'https://ollama.com/download')
+    case 'xdotool':
+      return { label: FIX_LABELS.INSTALL, line: XDOTOOL_INSTALL }
   }
 }
 
@@ -137,8 +142,10 @@ function eitherState(a: ToolState, b: ToolState): ToolState {
  * without it (Box round 3 stopped there); on a Mac it stays in the person's folders.
  */
 function needsAdmin(fix: ToolFix | null, facts: ToolFacts): boolean {
-  return fix?.line === HOMEBREW_INSTALL || (fix?.line === MAGPIE_INSTALL && facts.platform === 'linux')
+  return fix?.line === HOMEBREW_INSTALL || fix?.line === XDOTOOL_INSTALL || (fix?.line === MAGPIE_INSTALL && facts.platform === 'linux')
 }
+
+const OPTIONAL_TOOLS: readonly ToolId[] = ['magpie', 'ollama', 'xdotool']
 
 function row(id: ToolId, state: ToolState, facts: ToolFacts, extra: Partial<Pick<PreflightRow, 'note' | 'fix'>> = {}): PreflightRow {
   const fix = extra.fix ?? (state === 'missing' ? installFix(id, facts) : null)
@@ -147,7 +154,7 @@ function row(id: ToolId, state: ToolState, facts: ToolFacts, extra: Partial<Pick
     id,
     ...TOOL_COPY[id],
     state,
-    optional: id === 'magpie' || id === 'ollama',
+    optional: OPTIONAL_TOOLS.includes(id),
     note: notes.length > 0 ? notes.join(' ') : null,
     fix
   }
@@ -175,7 +182,9 @@ export function preflightRows(facts: ToolFacts): PreflightRow[] {
     keeperRow(facts),
     row('chrome', facts.chrome, facts),
     row('magpie', facts.magpie, facts),
-    row('ollama', facts.ollama, facts)
+    row('ollama', facts.ollama, facts),
+    // Remote control's hand on Linux: a Mac's is its Accessibility grant, asked elsewhere.
+    ...(facts.platform === 'linux' ? [row('xdotool', facts.xdotool ?? 'unknown', facts)] : [])
   ]
 }
 

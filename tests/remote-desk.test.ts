@@ -2,7 +2,8 @@
 // Everything here runs on fake lock, permission and session readers.
 import { describe, expect, it, vi } from 'vitest'
 import { createRemoteDesk, remoteGate, CONTROL_GRACE_MS, READY_WATCH_MS, STOP_HOLD_MS, WAKE_REST_MS, type RemoteDeskDeps, type RemoteSession } from '../src/main/remote-desk'
-import { CONTROL_MS, MAC_VIEWER, type RemoteBuild, type ViewerWho } from '../src/shared/remote-access'
+import { CONTROL_MS, LINUX_NO_XDOTOOL, MAC_VIEWER, type RemoteBuild, type ViewerWho } from '../src/shared/remote-access'
+import { SERVED_USE_REFUSED } from '../src/main/use-commands'
 
 const phone: ViewerWho = { key: 'device:p1', name: 'Pixel 9', here: false }
 const tablet: ViewerWho = { key: 'device:t1', name: 'iPad', here: false }
@@ -254,8 +255,14 @@ describe('the machine switch', () => {
     expect(memory.held).toBe(false)
   })
 
-  it('there is nothing to restore off a Mac', () => {
+  it('a Linux machine restores its switch the same way', () => {
     const r = rig({ platform: 'linux', switchMemory: remembering(true) })
+    r.desk.restoreSwitch()
+    expect(r.desk.controlFacts().switchOn).toBe(true)
+  })
+
+  it('a machine that cannot be driven at all (Wayland) restores nothing', () => {
+    const r = rig({ platform: 'linux', linuxRefusal: () => 'This Linux session runs Wayland', switchMemory: remembering(true) })
     r.desk.restoreSwitch()
     expect(r.desk.controlFacts().switchOn).toBe(false)
   })
@@ -393,10 +400,13 @@ describe('take control', () => {
     expect((answer as { error: string }).error).toContain('Unlock it from here')
   })
 
-  it('there is no control on Linux, whatever the switch says', async () => {
-    const r = rig({ platform: 'linux' })
-    expect(r.desk.controlFacts().available).toBe(false)
-    expect((await r.desk.takeControl('c1', phone)).ok).toBe(false)
+  it('there is no control on Wayland, whatever the switch says', async () => {
+    const r = rig({ platform: 'linux', linuxRefusal: () => 'This Linux session runs Wayland' })
+    r.desk.setSwitch(true)
+    expect(r.desk.controlFacts()).toMatchObject({ available: false, switchOn: false })
+    const answer = await r.desk.takeControl('c1', phone)
+    expect(answer).toMatchObject({ ok: false })
+    expect((answer as { error: string }).error).toContain('Wayland')
     expect(r.desk.mayDrive('c1', phone)).toBe(false)
   })
 
@@ -435,6 +445,84 @@ describe('take control', () => {
     again()
     r.tick(CONTROL_GRACE_MS)
     expect(r.desk.mayDrive('c1', phone)).toBe(false)
+  })
+})
+
+describe('take control of a Linux X11 machine', () => {
+  const linux = (over: Partial<RemoteDeskDeps> = {}) => rig({ platform: 'linux', linuxInput: () => null, accessibility: () => false, ...over })
+
+  it('the switch exists on Linux, off by default', async () => {
+    const r = linux()
+    expect(r.desk.controlFacts()).toMatchObject({ available: true, switchOn: false, accessibility: true })
+    expect(r.desk.controlFacts().unlockWords).toBeUndefined()
+    const answer = await r.desk.takeControl('c1', phone)
+    expect(answer.ok).toBe(false)
+    const said = (answer as { error: string }).error
+    expect(said).toContain('cookrew remote on')
+    expect(said).not.toMatch(/\bMac\b/)
+  })
+
+  it('switch on, then a grant for one device and one card, for 15 minutes', async () => {
+    const r = linux()
+    r.desk.setSwitch(true)
+    expect(await r.desk.takeControl('c1', phone)).toEqual({ ok: true })
+    expect(r.desk.mayDrive('c1', phone)).toBe(true)
+    expect(r.desk.mayDrive('c1', tablet)).toBe(false)
+    expect(r.desk.mayDrive('c2', phone)).toBe(false)
+    expect(r.desk.cardControl('c1', phone)).toMatchObject({ switchOn: true, machine: 'linux', until: expect.any(Number) })
+    expect(r.desk.cardControl('c1', tablet)).toMatchObject({ heldBy: 'Pixel 9' })
+    r.tick(CONTROL_MS)
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+  })
+
+  it('the machine says who holds control', async () => {
+    const r = linux()
+    r.desk.setSwitch(true)
+    r.desk.enter('c1', 'v1', phone)
+    await r.desk.takeControl('c1', phone)
+    expect(r.desk.hostView().rows).toEqual([expect.objectContaining({ who: 'Pixel 9', mode: 'controlling' })])
+  })
+
+  it('xdotool missing: the grant is refused in one sentence naming the fix, and agents hear it too', async () => {
+    const r = linux({ linuxInput: () => LINUX_NO_XDOTOOL })
+    r.desk.setSwitch(true)
+    expect(r.desk.controlFacts().accessibility).toBe(false)
+    expect(r.desk.inputRefusal()).toBe(LINUX_NO_XDOTOOL)
+    expect(r.desk.agentRefusal()).toBe(LINUX_NO_XDOTOOL)
+    const answer = await r.desk.takeControl('c1', phone)
+    expect(answer).toMatchObject({ ok: false, error: LINUX_NO_XDOTOOL, state: { id: 'needs-accessibility', platform: 'linux' } })
+  })
+
+  it('served work is refused on Linux too', async () => {
+    const r = linux()
+    r.desk.setSwitch(true)
+    r.access.served.add('ws')
+    expect(await r.desk.takeControl('c1', phone)).toMatchObject({ ok: false, error: SERVED_USE_REFUSED })
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+  })
+
+  it('switch off ends every grant at once', async () => {
+    const r = linux()
+    r.desk.setSwitch(true)
+    await r.desk.takeControl('c1', phone)
+    r.desk.setSwitch(false)
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+    expect(r.records.find((e) => e.type === 'remote.control-off')?.details).toContain('turned off at the machine')
+  })
+
+  it('Stop at the machine holds the door the same way', async () => {
+    const r = linux()
+    r.desk.setSwitch(true)
+    await r.desk.takeControl('c1', phone)
+    r.desk.stopAll()
+    expect(r.desk.mayDrive('c1', phone)).toBe(false)
+    expect((await r.desk.takeControl('c1', phone)).ok).toBe(false)
+  })
+
+  it('a Linux machine is still never unlocked from here', () => {
+    const r = linux()
+    r.desk.setSwitch(true)
+    expect(r.desk.unlockRefusal(phone)).not.toBeNull()
   })
 })
 

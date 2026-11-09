@@ -2,19 +2,23 @@ import type { UseTarget } from '../shared/use-url'
 import { useUrl } from '../shared/use-url'
 import type { RemoteState } from '../shared/remote-access'
 import { blockedSourceList, emptySourceList, readySourceList, type UseSource, type UseSourceList } from '../shared/use-sources'
+import { NO_WHEEL, xdotoolCalls, type DisplayArea, type LinuxHand, type WheelCarry } from './linux-input'
 import { DeviceBlockedError, type PixelDevice, type PixelFrame, type RemoteGate } from './pixel-instance'
 import { THUMB_SIZE, type GrabbedSource, type SourceGrab } from './use-source-mac'
 import type { UseSourceProvider } from './use-source-service'
-import type { ScreenPoints } from './vphone-input'
+import type { Gesture, ScreenPoints } from './vphone-input'
 
 /**
  * THE WHOLE SCREEN ON LINUX, THROUGH ELECTRON'S CAPTURER.
  *
  * `screen://main` and `screen://<n>` work on X11, a frame at a time: each is
  * one desktopCapturer call, the same polling the Mac does with screencapture.
- * Windows, regions and input do not exist here, and each refusal is a
- * sentence: this device has no `perform`, so a viewer's input goes nowhere and
- * an agent is told why.
+ * Windows and regions do not exist here, and each refusal is a sentence.
+ *
+ * Input goes the way a Mac's does: the desk decides (the machine switch, the
+ * card's grant, a served workspace, Stop), then the hand (linux-input.ts) sends
+ * it through xdotool. A point is a ratio of the last frame, laid on the display
+ * that frame was of.
  *
  * Wayland is refused by name. XWayland sets DISPLAY too and then captures
  * black, so the session type is what is asked, not DISPLAY. The desk asks
@@ -33,7 +37,6 @@ export const LINUX_WAYLAND =
 export const LINUX_NO_DISPLAY = 'There is no X display here, so there is no screen to show'
 export const LINUX_NO_WINDOW = 'Picking one window works on macOS only for now — on Linux, share the entire screen'
 export const LINUX_NO_REGION = 'A region of the screen works on macOS only for now — on Linux, share the entire screen'
-export const LINUX_INPUT_OFF = 'Driving this machine is not available on Linux: the screen is view only'
 
 export function linuxScreenRefusal(env: LinuxEnv): string | null {
   if (env.XDG_SESSION_TYPE === 'wayland' || env.WAYLAND_DISPLAY) return LINUX_WAYLAND
@@ -54,21 +57,41 @@ export interface LinuxFrame {
   readonly height: number
 }
 
+/** Which display a frame was of: its id, and its place in the capturer's list (Xvfb gives no ids). */
+export interface ShownDisplay {
+  readonly displayId: string
+  readonly index: number
+}
+
 export interface LinuxScreenDeps {
   remote: RemoteGate
   /** One picture of every display. */
   frames(): Promise<readonly LinuxFrame[]>
   primaryDisplayId(): string | null
+  /** Where that display sits on the X screen, in pixels; null when it has gone. */
+  area(shown: ShownDisplay): DisplayArea | null
+  hand: LinuxHand
+  readClipboard?: () => string
+}
+
+interface Shown extends ShownDisplay {
+  readonly width: number
+  readonly height: number
 }
 
 export class LinuxScreenDevice implements PixelDevice {
   readonly remote: RemoteGate
+  readonly readClipboard?: () => string
+  /** The display the last frame was of, at that frame's size: what a point is a ratio of. */
+  private shown: Shown | null = null
+  private wheel: WheelCarry = NO_WHEEL
 
   constructor(
     readonly target: UseTarget,
     private readonly deps: LinuxScreenDeps
   ) {
     this.remote = deps.remote
+    this.readClipboard = deps.readClipboard
   }
 
   private async frame(): Promise<LinuxFrame & { readonly jpeg: Buffer }> {
@@ -80,6 +103,7 @@ export class LinuxScreenDevice implements PixelDevice {
     const frame = pickDisplay(frames, this.target.name, this.deps.primaryDisplayId())
     if (!frame) throw new Error(`Display ${this.target.name} is not connected (this machine has ${frames.length})`)
     if (!frame.jpeg) throw new Error(`The screen capturer gave no picture of display ${this.target.name}`)
+    this.shown = { displayId: frame.displayId, index: frames.indexOf(frame), width: frame.width, height: frame.height }
     return { ...frame, jpeg: frame.jpeg }
   }
 
@@ -93,8 +117,31 @@ export class LinuxScreenDevice implements PixelDevice {
     return { jpeg: jpeg.toString('base64'), points: { width, height } }
   }
 
-  inputRefusal(): string {
-    return LINUX_INPUT_OFF
+  inputRefusal(): string | null {
+    return this.deps.remote.inputRefusal() ?? this.deps.hand.refusal()
+  }
+
+  async perform(gesture: Gesture): Promise<void> {
+    const refusal = this.inputRefusal()
+    if (refusal) throw new Error(refusal)
+    const blocked = await this.remote.blocked()
+    if (blocked) throw new DeviceBlockedError(blocked)
+    // A point is a ratio of a picture: with none yet, take one, so it is of what is there.
+    if (!this.shown) await this.frame()
+    const shown = this.shown as Shown | null
+    if (!shown) throw new Error(`The screen capturer gave no picture of display ${this.target.name}`)
+    const area = this.deps.area(shown)
+    if (!area) throw new Error(`Display ${this.target.name} is not connected`)
+    const { calls, wheel } = xdotoolCalls(gesture, shown, area, this.wheel)
+    this.wheel = wheel
+    // Asked again before each xdotool run: Stop, or the switch going off, cuts a long paste short.
+    await this.deps.hand.send(calls, () => this.remote.inputRefusal() ?? this.remote.agentRefusal())
+  }
+
+  /** The session ended: the next frame says again what the display is. */
+  rest(): void {
+    this.shown = null
+    this.wheel = NO_WHEEL
   }
 
   title(): string {
