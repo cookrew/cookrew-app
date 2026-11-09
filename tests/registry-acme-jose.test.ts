@@ -117,7 +117,12 @@ describe('signatures', () => {
     const der = Buffer.concat([
       Buffer.from([0x30, 0]),
       ...[raw.subarray(0, 32), raw.subarray(32)].map((half) => {
-        const trimmed = half[0] & 0x80 ? Buffer.concat([Buffer.from([0]), half]) : half
+        // DER integers are minimal: drop leading zero bytes (about 1 run in 256
+        // has one), then pad a zero back only when the top bit would read as a sign.
+        let start = 0
+        while (start < half.length - 1 && half[start] === 0 && !(half[start + 1] & 0x80)) start += 1
+        const minimal = half.subarray(start)
+        const trimmed = minimal[0] & 0x80 ? Buffer.concat([Buffer.from([0]), minimal]) : minimal
         return Buffer.concat([Buffer.from([0x02, trimmed.length]), trimmed])
       })
     ])
