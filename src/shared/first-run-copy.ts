@@ -70,7 +70,8 @@ export const TOOL_COPY = {
   multiplexer: { name: 'herdr or tmux', does: 'Keeps your agents alive across restarts.' },
   chrome: { name: 'Chrome', does: 'Lets agents open and use web pages.' },
   magpie: { name: 'Magpie', does: 'Lets agents use other AI models.' },
-  ollama: { name: 'Ollama', does: 'Gives agents short names, on this computer.' }
+  ollama: { name: 'Ollama', does: 'Gives agents short names, on this computer.' },
+  xdotool: { name: 'xdotool', does: 'Lets your paired devices click and type on this computer, once you allow remote control.' }
 } as const
 
 export const TOOL_NOTES = {

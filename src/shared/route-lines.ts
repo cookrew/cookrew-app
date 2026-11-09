@@ -1,3 +1,4 @@
+import { XDOTOOL_INSTALL } from './remote-access'
 /**
  * THE LINES THE SETUP CARD MAY BE ASKED TO TYPE.
  *
@@ -77,6 +78,8 @@ export const FIRST_RUN_LINES: ReadonlySet<string> = new Set([
   'curl -fsSL https://claude.ai/install.sh | bash',
   '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
   'brew install --cask google-chrome',
+  // The Linux hand for remote control (main/linux-input.ts).
+  XDOTOOL_INSTALL,
   'open https://www.google.com/chrome/',
   'open https://ollama.com/download'
 ])

@@ -249,6 +249,7 @@ import { MAC_VIEWER, restartConfirm, type RemoteBuild, type ViewerWho } from '..
 import { parseUseUrl } from '../shared/use-url'
 import { macKeystrokes, readMacListedApp, readMacSession } from './mac-bridge'
 import { linuxScreenRefusal } from './linux-screen'
+import { linuxHandFor } from './linux-input'
 import { createRemoteDesk, remoteGate } from './remote-desk'
 import { createUpdateCheck } from './update-check'
 import { createUnlockDoor, loadUnlockKey, unlockMissesFile } from './remote-unlock'
@@ -283,7 +284,7 @@ import { WatchPairing } from './watch-pairing'
 import { createWatchHost } from './watch-host'
 import { inviteWatch, setWatchHost } from './watch-routes'
 import { BrowserThumbCache } from './browser-thumb-cache'
-import { registryArgument } from '../shared/machine-words'
+import { machineCopy, registryArgument } from '../shared/machine-words'
 import { commandRunsInMain, mainDrawsCard } from './browser-owner'
 import { REFUSAL_FOR_A_PERSON } from './host-claim'
 import { findChrome } from './headless-chrome'
@@ -6606,18 +6607,26 @@ function currentBuild(): RemoteBuild {
 }
 let keepAwakeId: number | null = null
 let stayUpId: number | null = null
+// Touch ID exists only on a Mac; anywhere else the question is a dialog on this machine's own screen.
+const SWITCH_DETAIL =
+  process.platform === 'darwin'
+    ? 'Your paired devices can unlock it with its password, from any network, until you turn this off.'
+    : 'Your paired devices can take control of a card for 15 minutes, and agents can click and type here, until you turn this off.'
 const confirmSwitch = singleConfirm({
-  canTouch: () => systemPreferences.canPromptTouchID(),
+  canTouch: () => process.platform === 'darwin' && systemPreferences.canPromptTouchID(),
   touch: () => systemPreferences.promptTouchID('turn on remote control of this Mac'),
   ask: async () => {
-    const options = { type: 'warning' as const, message: 'Turn on remote control of this Mac?', detail: 'Your paired devices can unlock it with its password, from any network, until you turn this off.', buttons: ['Turn on', 'Cancel'], defaultId: 1, cancelId: 1 }
+    const options = { type: 'warning' as const, message: machineCopy('Turn on remote control of this Mac?', process.platform), detail: SWITCH_DETAIL, buttons: ['Turn on', 'Cancel'], defaultId: 1, cancelId: 1 }
     return (await dialog.showMessageBox(options)).response === 0
   }
 })
+/** This machine's hand on Linux (xdotool): the desk and the cards ask the same one. */
+const linuxHand = process.platform === 'linux' ? linuxHandFor(process.env, () => linuxScreenRefusal(process.env)) : null
 const remoteDesk = createRemoteDesk({
   platform: process.platform,
   build: currentBuild,
   linuxRefusal: () => linuxScreenRefusal(process.env),
+  linuxInput: () => linuxHand?.refusal() ?? null,
   screenAccess: () => systemPreferences.getMediaAccessStatus('screen'),
   accessibility: () => process.platform === 'darwin' && systemPreferences.isTrustedAccessibilityClient(false),
   session: () => sessionReader.read(),
@@ -6695,6 +6704,7 @@ const useInstances = createUseInstances({
   captureDir: path.join(app.getPath('userData'), 'use-capture'),
   remote: (card) => remoteGate(remoteDesk, card),
   blocked: () => remoteDesk.blocked(),
+  ...(linuxHand ? { linuxHand } : {}),
   onBlocked: (card) => browserThumbs.forget(card),
   onRested: (card) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('use:rested', card)
@@ -7593,6 +7603,19 @@ app.whenReady().then(() => {
     notify: showNotification,
     captureWindow,
     injectInput,
+    // `cookrew remote`: the switch from a shell on this machine. On a Mac it asks Touch ID like
+    // the ⋯ menu; elsewhere the terminal's own prompt was the question (remote-cli.ts).
+    remote: {
+      platform: process.platform,
+      access: () => remoteDesk.access('here'),
+      hostView: () => remoteDesk.hostView(),
+      setSwitch: (on, how) => {
+        if (on) unlockDoor.reopen()
+        return remoteDesk.setSwitch(on, how)
+      },
+      confirmOn: () => (process.platform === 'darwin' ? confirmSwitch() : Promise.resolve(true)),
+      stopAll: () => remoteDesk.stopAll()
+    },
     voice,
     mobileUrls,
     mobileEndpoints: mobileEndpointList,
@@ -9023,7 +9046,7 @@ function registerIpc(handlers: RestoreHandlers): void {
   }))
   ipcMain.handle('use:remote-switch', ownerOnly(async (on: unknown) => {
     if (typeof on !== 'boolean') return { ok: false, error: 'On or off' }
-    if (on && !(await confirmSwitch())) return { ok: false, error: 'Remote control stays off: it was not confirmed at the Mac.' }
+    if (on && !(await confirmSwitch())) return { ok: false, error: machineCopy('Remote control stays off: it was not confirmed at the Mac.', process.platform) }
     // Pressed at the Mac, so it is also what reopens an unlock closed by wrong passwords.
     if (on) unlockDoor.reopen()
     return remoteDesk.setSwitch(on)

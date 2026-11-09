@@ -58,6 +58,7 @@ import type { Surface as SousSurface } from '../shared/sous-intent'
 import type { TurnTracker } from './turn-tracker'
 import type { DispatchService } from './dispatch'
 import { staleBooleanFlagError } from './cli-flags'
+import { cmdRemote, type RemoteCliDeps } from './remote-cli'
 import { stdinPlaceholderError } from './cli-stdin'
 
 export interface SocketServerDeps {
@@ -155,6 +156,8 @@ export interface SocketServerDeps {
   captureWindow: () => Promise<string>
   /** Debug helper: inject real input events into the app window. */
   injectInput: (args: string[]) => Promise<string>
+  /** `cookrew remote`: the machine switch from a shell on the machine (remote-cli.ts). Absent: the verb refuses. */
+  remote?: RemoteCliDeps
   voice: VoiceEngine
   /** Sous driving the canvas from a sentence — `cookrew sous "…"` is its CLI door. */
   sous: SousDoor
@@ -428,6 +431,9 @@ async function dispatch(sent: CliRequest, deps: SocketServerDeps): Promise<strin
       return deps.captureWindow()
     case 'ui':
       return deps.injectInput(args)
+    case 'remote':
+      if (!deps.remote) throw new Error('Remote control is not available in this build.')
+      return cmdRemote(request, deps.remote)
     case 'help':
       return HELP_TEXT
     default:
@@ -2150,6 +2156,9 @@ Usage (\`crew\` is the short name: \`crew list\` = \`cookrew list\`):
   cookrew sous "sentence" [--surface S]        What Sous would do with that sentence, and does it:
                                                 switch / ask / create / connect / rename / back (zh or en)
   cookrew mobile                               Print (and QR) the phone companion URL — dictation + spoken replies
+  cookrew remote status|on|off|stop             This machine's remote control switch, from a shell on it: on asks at
+                                                the terminal first and is refused in a Cookrew terminal; stop ends
+                                                every remote session
   cookrew workspace list                        List workspaces (* = active)
   cookrew workspace create "Name" --dir PATH [--team "Template"]   (Orch) New workspace (optionally from a saved team template) + switch
   cookrew team list                             List saved team templates (name, agents, saved date)
