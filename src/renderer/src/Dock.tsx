@@ -9,6 +9,7 @@ import { openSourcePicker } from './use/source-picker-store'
 import { CrIcon, type CrIconName } from './icons'
 import { AgentSprite } from './nodes/AgentSprite'
 import { RoleAvatar } from './nodes/RoleAvatar'
+import { useInsideMachine } from './zoom/remote-machine-store'
 
 /** What a dock button does: open the preset row, or make its card at once. */
 export type DockTool =
@@ -152,6 +153,8 @@ export function Dock({
   const hint = tool === 'connect' ? connectHint : (HINTS[tool] ?? null)
   /** The board's toggle parks the canvas tools; a full view no longer does. */
   const slidIn = boardFor !== null
+  // Inside another machine the box would send to this one's agents: its own boxes say where they send (RemoteMachineView.tsx).
+  const insideMachine = useInsideMachine()
   // `presets` arrives as harnesses AND saved teams in one list, because a
   // saved team IS a terminal preset to the placement path. To a person they
   // are not the same act at all — one boots an agent here, the other opens a
@@ -217,7 +220,7 @@ export function Dock({
             ))}
           </div>
         )}
-        {!slidIn && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
+        {!slidIn && !insideMachine && <GlobalPrompt fullAgentId={voiceFor?.id ?? null} agents={agents} harnesses={promptHarnesses} nodes={nodes} orch={orch} artifacts={artifacts} acts={acts} workspaceName={workspaceName} />}
         {!slidIn && tool === 'terminal' && (
           <div className="cr-dock-presets">
             {/* FAMILIES, SAID OUT LOUD.

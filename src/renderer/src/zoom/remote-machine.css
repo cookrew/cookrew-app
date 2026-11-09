@@ -1,0 +1,475 @@
+/* ── ANOTHER MACHINE INSIDE THE ZOOM VIEW (RemoteMachineView.tsx; owner
+   2026-11-10, design B) ──
+   The zoom's own paper, ink and parts, one stop at a time. What is new is the
+   machine's colour: every crumb past Devices, the "on <machine>" line and every
+   box that sends wear the seal's amber, so nothing goes to the wrong machine.
+   A machine that stops answering keeps its last stop on screen, greyed. */
+
+.rm-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 43;
+  display: flex;
+  flex-direction: column;
+  color: var(--zv-ink);
+  font: 15px/1.5 var(--zv-serif);
+  background-color: var(--zv-paper);
+  background-image: radial-gradient(var(--zv-grain) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+.rm-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 18px 10px;
+  border-bottom: 1px solid var(--zv-hair-2);
+  background: var(--zv-card);
+}
+
+.rm-crumb {
+  appearance: none;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 11px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 999px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 12px/1.4 var(--zv-mono);
+  cursor: pointer;
+}
+
+.rm-crumb.remote {
+  border-color: var(--zv-seal);
+}
+
+.rm-crumb[aria-current='location'] {
+  background: var(--zv-ink);
+  color: var(--zv-paper);
+  cursor: default;
+}
+
+.rm-crumb.remote[aria-current='location'] {
+  background: var(--zv-seal-fill);
+  border-color: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+}
+
+.rm-crumb:focus-visible,
+.rm-face:focus-visible,
+.rm-thumb:focus-visible,
+.rm-cell:focus-visible {
+  outline: 2px solid var(--zv-seal);
+  outline-offset: 2px;
+}
+
+.rm-sep {
+  color: var(--zv-muted);
+  font: 12px var(--zv-mono);
+}
+
+.rm-on {
+  margin-left: auto;
+  font: 600 11px/1.4 var(--zv-mono);
+  letter-spacing: 0.04em;
+  color: var(--zv-seal-text);
+}
+
+.rm-quiet {
+  flex: none;
+  margin: 10px 18px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--zv-seal);
+  border-radius: 0 8px 8px 0;
+  background: var(--zv-card);
+  font: 12px/1.4 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.rm-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 22px 22px calc(96px + env(safe-area-inset-bottom, 0px));
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.rm-body[data-stale] {
+  opacity: 0.55;
+  filter: grayscale(1);
+}
+
+.rm-empty {
+  font: 12px/1.5 var(--zv-mono);
+  color: var(--zv-muted);
+}
+
+/* ── the workspaces: the zoom's own tiles (WorkspaceTile.tsx), at a fixed size ── */
+.rm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--rm-tile-w));
+  gap: 18px;
+  --rm-tile-w: 258px;
+  --rm-tile-s: calc(258 / 430);
+}
+
+.rm-cell {
+  position: relative;
+  width: var(--rm-tile-w);
+  height: calc(318px * var(--rm-tile-s));
+  border-radius: 12px;
+}
+
+.rm-cell > .rm-tile-at {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(calc(112px * var(--rm-tile-s)), calc(174px * var(--rm-tile-s))) scale(var(--rm-tile-s));
+  transform-origin: 0 0;
+  /* The words are drawn 1:1 on screen, as the painter keeps them (zoom-frame.ts · paintDeviceWords). */
+  --zv-k: calc(430 / 258);
+}
+
+.rm-cell .zv-tw {
+  scale: var(--zv-k);
+}
+
+/* The workspace in front on that machine: in ink, as the open tile is here. */
+.rm-cell[data-front] .zv-tile {
+  box-shadow:
+    inset 0 0 0 calc(1.5px * var(--zv-k, 1)) var(--zv-ink),
+    0 calc(1px * var(--zv-k, 1)) calc(3px * var(--zv-k, 1)) var(--zv-shadow-sm);
+}
+
+/* ── the crew: a face per agent, the zoom's ink ── */
+.rm-crew {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 14px;
+}
+
+.rm-face {
+  appearance: none;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 14px 8px 12px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 14px;
+  background: var(--zv-card);
+  color: var(--zv-ink);
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+
+@media (hover: hover) {
+  .rm-face:hover,
+  .rm-thumb:hover {
+    border-color: var(--zv-seal);
+  }
+}
+
+.rm-face .ink-avatar {
+  display: block;
+  width: 56px;
+  height: 56px;
+}
+
+.rm-face b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 14px/1.2 var(--zv-serif);
+}
+
+.rm-face .zv-st,
+.rm-head .zv-st {
+  position: static;
+  will-change: auto;
+}
+
+/* ── a box that sends to the other machine: in its colour ── */
+.rm-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 4px 0 14px;
+  border-radius: 10px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1.5px var(--zv-seal);
+}
+
+.rm-box input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--zv-ink);
+  font: 13px/1 var(--zv-mono);
+}
+
+.rm-box input::placeholder {
+  color: var(--zv-muted);
+  opacity: 1;
+}
+
+.rm-box button {
+  appearance: none;
+  flex: none;
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+  font: 600 12px/1 var(--zv-mono);
+  cursor: pointer;
+}
+
+.rm-box button:disabled {
+  background: var(--zv-paper-2);
+  color: var(--zv-dim);
+  cursor: default;
+}
+
+.rm-note {
+  min-height: 1.4em;
+  margin: 6px 2px 0;
+  font: 12px/1.4 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.rm-note.failed {
+  color: var(--zv-wait);
+}
+
+.rm-new {
+  max-width: 620px;
+  margin: 0 0 18px;
+}
+
+/* ── an agent's card ── */
+.rm-card {
+  max-width: 680px;
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+  background: var(--zv-card);
+  box-shadow:
+    inset 0 0 0 1px var(--zv-hair-2),
+    0 8px 24px var(--zv-shadow);
+}
+
+.rm-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rm-head .ink-avatar {
+  display: block;
+  width: 48px;
+  height: 48px;
+}
+
+.rm-head b {
+  display: block;
+  font: 600 19px/1.2 var(--zv-serif);
+}
+
+.rm-head small {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: 11px/1.3 var(--zv-mono);
+  color: var(--zv-seal-text);
+}
+
+.rm-stop {
+  appearance: none;
+  margin-left: auto;
+  padding: 5px 12px;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 999px;
+  background: var(--zv-paper);
+  color: var(--zv-ink);
+  font: 600 11px/1.3 var(--zv-mono);
+  cursor: pointer;
+}
+
+.rm-words {
+  margin: 12px 0 0;
+  max-height: 46vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font: 13px/1.55 var(--zv-mono);
+  color: var(--zv-ink-soft);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.rm-words .ag-latest > * {
+  white-space: normal;
+}
+
+.rm-menu {
+  margin: 12px 0 0;
+  padding: 10px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1.5px var(--zv-wait);
+}
+
+.rm-menu .wc-q {
+  margin: 0 0 8px;
+  font: 600 15px/1.35 var(--zv-serif);
+}
+
+.rm-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.rm-thumb {
+  appearance: none;
+  display: grid;
+  grid-template-rows: 92px auto;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--zv-hair-2);
+  border-radius: 10px;
+  background: var(--zv-paper-2);
+  color: var(--zv-ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.rm-thumb img {
+  width: 100%;
+  height: 92px;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+}
+
+.rm-thumb .rm-glyph {
+  display: grid;
+  place-items: center;
+  height: 92px;
+  font: 600 28px/1 var(--zv-serif);
+  color: var(--zv-on-tint);
+}
+
+.rm-thumb span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 8px 6px;
+  font: 11px/1.3 var(--zv-mono);
+  color: var(--zv-ink-soft);
+  background: var(--zv-card);
+}
+
+.rm-card .rm-box {
+  margin: 14px 0 0;
+}
+
+/* ── an item: a page or a screen to work, a note to read ── */
+.rm-item {
+  max-width: 1100px;
+}
+
+.rm-page {
+  position: relative;
+  display: block;
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--zv-paper-2);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.rm-page img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.rm-page .rm-empty {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.rm-item .rm-box {
+  margin: 12px 0 0;
+}
+
+.rm-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  font: 12px/1.4 var(--zv-mono);
+  color: var(--zv-ink-soft);
+}
+
+.rm-control button {
+  appearance: none;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--zv-seal-fill);
+  color: var(--zv-on-seal);
+  font: 600 12px/1.3 var(--zv-mono);
+  cursor: pointer;
+}
+
+.rm-text {
+  white-space: pre-wrap;
+  margin: 0;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--zv-card);
+  box-shadow: inset 0 0 0 1px var(--zv-hair-2);
+  font: 13px/1.6 var(--zv-mono);
+  color: var(--zv-ink);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+@media (max-width: 700px) {
+  .rm-body {
+    padding: 14px 12px calc(96px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .rm-tiles {
+    --rm-tile-w: 160px;
+    --rm-tile-s: calc(160 / 430);
+    gap: 12px;
+  }
+
+  .rm-cell > .rm-tile-at {
+    --zv-k: calc(430 / 160);
+  }
+
+  .rm-crew {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 10px;
+  }
+}

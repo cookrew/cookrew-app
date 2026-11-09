@@ -18,6 +18,7 @@ import type { TerminalActivity } from '../shared/turn'
 import { choiceId, type WaitChoice } from '../shared/wait-choice'
 import { checkpointViewModel, turnViewOf, type LatestCheckpoint, type TurnViewModel } from '../renderer/src/turn-view-model'
 import { hostOf, tintOf } from '../shared/item-look'
+import { parseUseUrl } from '../shared/use-url'
 
 /** More than this is not a wrist's worth; the ones that need the owner sort first. */
 export const MAX_CARDS = 40
@@ -56,6 +57,8 @@ export interface WatchItem {
   readonly host: string
   readonly tint: string
   readonly initial: string
+  /** A device card's kind (shared/use-url.ts): a computer's screen is driven only once control is taken. */
+  readonly use?: 'computer' | 'phone' | 'hardware'
 }
 
 export interface WatchWords {
@@ -235,7 +238,8 @@ function itemOf(node: CanvasNode): WatchItem | null {
   if (node.kind === 'browser') {
     const tab = activeBrowserTab(node)
     const title = tab.title?.trim() || node.name
-    return { id: node.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(node.id), initial: initialOf(title) }
+    const use = parseUseUrl(tab.url)?.use
+    return { id: node.id, kind: 'browser', title, host: hostOf(tab.url), tint: tintOf(node.id), initial: initialOf(title), ...(use ? { use } : {}) }
   }
   if (node.kind === 'note') return { id: node.id, kind: 'note', title: node.name, host: 'note', tint: tintOf(node.id), initial: '' }
   return null
