@@ -201,6 +201,15 @@ export interface V2Account {
    * detaching the phone they were on, which taking the device away would).
    */
   revoked?: readonly { id: string; at: number; kind?: 'session' }[]
+  /**
+   * MADE, NEVER FINISHED (auth UX 2026-11-09): created by an app that could not
+   * then set up its second step (0.5.x answers the 403 with a sentence). Its
+   * only device is a key that app threw away, so the set-up may finish on
+   * auth.cookrew.dev from any device until this time (ms), and only while the
+   * account holds no second step; cleared when one is set up, so removing
+   * every factor later never reopens it.
+   */
+  setupPending?: number
 }
 
 /**

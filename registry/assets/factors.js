@@ -1024,5 +1024,148 @@
   wireAddDevice()
   landedPasskey()
 
-  window.cookrewFactors = { ladder, addPasskey, addTotp, changePassword }
+
+  /**
+   * A SECOND STEP, SET UP IN THE SHEET (auth UX 2026-11-09). On a registry that
+   * sends sign-in through auth.cookrew.dev the page does this; where there is no
+   * such page the sheet itself must, or a person who just chose a password could
+   * never get a session. Passkey or authenticator, then the recovery codes,
+   * saved, then the session — the routes and the order the auth page uses.
+   */
+  function setup(input) {
+    const dialog = input.dialog ?? $('account-sheet')
+    if (!dialog) return
+    const form = dialog.querySelector('#account-form') ?? dialog
+    const path = `/v2/sessions/${encodeURIComponent(input.step.pending)}/setup`
+    const message = el('p', 'meta acct-said')
+    message.setAttribute('role', 'status')
+    const say = (text) => {
+      const note = message.isConnected ? message : $('acct-message')
+      if (note) note.textContent = text
+    }
+    const original = [...form.children]
+    const panel = el('div', 'acct-ladder acct-setup')
+    const show = (nodes, lede) => {
+      message.textContent = ''
+      panel.replaceChildren(el('p', 'meta', lede), ...nodes, message)
+      form.replaceChildren(panel)
+    }
+    dialog.addEventListener('close', () => original.length > 0 && form.replaceChildren(...original), { once: true })
+
+    const finish = async () => {
+      const out = await api('POST', `${path}/finish`, { saved: true })
+      if (out.status === 201) {
+        dialog.close()
+        ;(window.cookrewAfterSignIn ?? (() => location.assign('/me')))()
+        return
+      }
+      say(said(out, 'Signing in did not finish. Start again.'))
+    }
+    const codes = (list) => {
+      const ul = el('ul', 'codes')
+      ul.setAttribute('aria-label', 'Recovery codes')
+      for (const code of list) ul.append(el('li', null, String(code)))
+      const box = el('input')
+      box.type = 'checkbox'
+      box.id = 'acct-codes-saved'
+      const label = el('label', 'meta', ' I saved these codes somewhere safe')
+      label.prepend(box)
+      const go = button('Continue', 'primary')
+      go.disabled = true
+      box.addEventListener('change', () => (go.disabled = !box.checked))
+      go.addEventListener('click', () => void finish())
+      show([ul, label, go], 'Save a way back in. These recovery codes are shown once; each opens the account once.')
+    }
+    const done = (out) => (out.status === 201 && Array.isArray(out.body?.codes) ? codes(out.body.codes) : say(said(out, 'That was not set up. Try again.')))
+
+    const passkey = async () => {
+      const options = await api('POST', `${path}/passkey/options`, {})
+      if (options.status !== 200) return say(said(options, 'A passkey could not be started just now.'))
+      let credential
+      try {
+        credential = await navigator.credentials.create({
+          publicKey: {
+            challenge: unb64u(options.body.challenge),
+            rp: options.body.rp,
+            user: { id: unb64u(options.body.user.id), name: options.body.user.name, displayName: options.body.user.displayName },
+            pubKeyCredParams: options.body.pubKeyCredParams,
+            authenticatorSelection: options.body.authenticatorSelection,
+            attestation: options.body.attestation,
+            timeout: options.body.timeout,
+            excludeCredentials: (options.body.excludeCredentials ?? []).map((c) => ({ type: 'public-key', id: unb64u(c.id) }))
+          }
+        })
+      } catch {
+        return say('No passkey was made. Try again, or use an authenticator app.')
+      }
+      done(
+        await api('POST', `${path}/passkey`, {
+          name: 'This browser',
+          credential: {
+            id: credential.id,
+            rawId: b64u(credential.rawId),
+            response: { clientDataJSON: b64u(credential.response.clientDataJSON), attestationObject: b64u(credential.response.attestationObject) }
+          }
+        })
+      )
+    }
+    const totp = async () => {
+      const started = await api('POST', `${path}/totp`, {})
+      if (started.status !== 201) return say(said(started, 'The authenticator could not be set up just now.'))
+      const picture = qrSvg(Array.isArray(started.body.qr) ? started.body.qr : [])
+      const key = el('p', 'meta')
+      key.append(document.createTextNode('Or type this key: '), el('code', 'totp-secret', String(started.body.secret ?? '')))
+      const field = el('input')
+      field.className = 'acct-code'
+      field.id = 'acct-setup-code'
+      field.setAttribute('inputmode', 'numeric')
+      field.setAttribute('autocomplete', 'one-time-code')
+      field.setAttribute('maxlength', '6')
+      field.placeholder = '123456'
+      const verify = button('Verify', 'primary')
+      const send = async () => {
+        if (verify.disabled) return
+        verify.disabled = true
+        try {
+          done(await api('POST', `${path}/totp/confirm`, { code: field.value.trim() }))
+        } finally {
+          verify.disabled = false
+        }
+      }
+      verify.addEventListener('click', () => void send())
+      // The sheet is a method="dialog" form: Enter would close it and drop the
+      // set-up, so Enter verifies instead.
+      field.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return
+        event.preventDefault()
+        void send()
+      })
+      const row = el('div', 'row')
+      row.append(field, verify)
+      show([...(picture ? [picture] : []), key, row], 'Scan this with your authenticator app, then type the six digits it shows.')
+      field.focus()
+    }
+
+    const ways = []
+    if (havePasskeys()) {
+      const go = button('Use a passkey', 'primary')
+      go.addEventListener('click', async () => {
+        if (go.disabled) return
+        go.disabled = true
+        try {
+          await passkey()
+        } finally {
+          go.disabled = false
+        }
+      })
+      ways.push(go)
+    }
+    const app = button('Use an authenticator app', havePasskeys() ? '' : 'primary')
+    app.dataset.setupTotp = '1'
+    app.addEventListener('click', () => void totp())
+    ways.push(app)
+    show(ways, input.step.message ?? 'Add a second step. Cookrew asks for two steps when you sign in; a passkey counts as both.')
+  }
+
+  window.cookrewFactors = { ladder, setup, addPasskey, addTotp, changePassword }
 })()

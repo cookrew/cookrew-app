@@ -721,6 +721,12 @@
           window.cookrewFactors.ladder({ dialog, step: out.body, username, device })
           return
         }
+        // AUTH UX 2026-11-09: no second step yet. Where no auth page took the
+        // sign-in, the sheet sets one up itself before any session.
+        if (out.status === 403 && out.body?.error === 'second_step_setup' && out.body?.pending && window.cookrewFactors?.setup) {
+          window.cookrewFactors.setup({ dialog, step: out.body })
+          return
+        }
         // A NAME FROM BEFORE PASSWORDS, either way it is met: REGISTER is
         // told so by the 409, and SIGN IN finds out by asking, because a
         // legacy name refuses a password with the same 401 as a typo.
