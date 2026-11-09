@@ -1,5 +1,6 @@
 import { createHash, createPrivateKey, randomBytes, sign } from 'node:crypto'
 import type { AccountDeviceInput, AccountRefusal, AccountResult, SignInAnswer } from '../shared/account-v2'
+import type { PasskeySummary } from '../shared/account-approvals'
 import {
   AUTH_CODE_TTL_MS,
   AUTH_POLL_MS,
@@ -36,8 +37,8 @@ import { classify, plainRefusal } from './account-wire'
  * way: the sheet's own forms, a provider trip, a password prompt.
  */
 
-/** The screens a sign-in may open on. `link` is a signed-in act with its own call. */
-export type BrowserIntent = Exclude<AuthIntent, 'link'>
+/** The screens a sign-in may open on. `link` and `passkey` are signed-in acts with their own calls. */
+export type BrowserIntent = Exclude<AuthIntent, 'link' | 'passkey'>
 
 const BROWSER_INTENTS: readonly BrowserIntent[] = ['sign-in', 'create', 'github', 'google']
 
@@ -314,6 +315,34 @@ export class BrowserAuth {
     if (!linked.ok) return linked
     const { status, body } = linked.value
     if (status === 200 && body.status === 'linked') return { ok: true, value: undefined }
+    if (status === 410) return { ok: false, reason: body.why === 'denied' ? 'cancelled' : 'expired' }
+    return { ok: false, ...refusedOf(status, body) }
+  }
+
+  /**
+   * ADD A PASSKEY to the signed-in account, on the page: this Electron has no
+   * platform authenticator, a real browser does. The page asks an account with
+   * no password to prove it with its provider there; the passkey it makes is
+   * written when this app spends the code with its own session, so nothing is
+   * added until it arrives here.
+   */
+  async addPasskey(): Promise<AccountResult<PasskeySummary>> {
+    if (this.port.username() === null) return { ok: false, reason: 'no_account' }
+    const offered = this.port.device()
+    const { verifier, challenge } = pkce()
+    const code = await this.trip(
+      (state, back) => ({ client: 'desktop', intent: 'passkey', device: offered.device, challenge, state, back }),
+      offered,
+      this.sendAuthed,
+    )
+    if (!code.ok) return code
+    const spent = await this.sendAuthed('/v2/auth/token', { code: code.value, verifier })
+    if (!spent.ok) return spent
+    const { status, body } = spent.value
+    const passkey = body.passkey as Partial<PasskeySummary> | undefined
+    if (status === 201 && body.status === 'passkey' && typeof passkey?.id === 'string') {
+      return { ok: true, value: { id: passkey.id, name: String(passkey.name ?? ''), addedAt: Number(passkey.addedAt ?? 0) } }
+    }
     if (status === 410) return { ok: false, reason: body.why === 'denied' ? 'cancelled' : 'expired' }
     return { ok: false, ...refusedOf(status, body) }
   }

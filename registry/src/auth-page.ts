@@ -185,6 +185,7 @@ export function authPageHtml(opts: AuthPageOptions): string {
 <style>${FONT_FACES(version)}
 ${PALETTE}${STYLE}</style>
 <script src="/assets/auth-kit.js?v=${version}" defer></script>
+<script src="/assets/auth-enrol.js?v=${version}" defer></script>
 <script src="/assets/auth.js?v=${version}" defer></script>
 </head>
 <body data-path="${path}" data-product="${product}" data-legal="${LEGAL_PUBLISHED ? '1' : ''}">

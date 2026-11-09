@@ -45,6 +45,7 @@ const FILES = [
   ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
   ['line.js', 'line.js', 'text/javascript; charset=utf-8'],
   ['auth-kit.js', 'auth-kit.js', 'text/javascript; charset=utf-8'],
+  ['auth-enrol.js', 'auth-enrol.js', 'text/javascript; charset=utf-8'],
   ['auth.js', 'auth.js', 'text/javascript; charset=utf-8'],
   ['inter.woff2', 'fonts/inter.woff2', 'font/woff2', 'base64'],
   ['jetbrains-mono.woff2', 'fonts/jetbrains-mono.woff2', 'font/woff2', 'base64'],

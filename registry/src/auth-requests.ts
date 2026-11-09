@@ -61,6 +61,14 @@ export interface AuthResult {
   body: Record<string, unknown>
 }
 
+/** A passkey the page made and the registry verified, waiting for its opener to write it. */
+export interface HeldPasskey {
+  credentialId: string
+  jwk: Record<string, string>
+  signCount: number
+  name: string
+}
+
 export interface AuthRequest {
   readonly id: string
   readonly client: AuthClient
@@ -93,6 +101,19 @@ export interface AuthRequest {
    * never because some browser finished the page.
    */
   linkProof: ProviderProof | null
+  /**
+   * A `passkey` request's step-up: the id of a climbed, authorised pending for
+   * act `add-factor`, minted when the provider proved the opener's own linked
+   * identity. Held here and never sent to the page; spent by the one passkey it
+   * allows.
+   */
+  stepUp: string | null
+  /**
+   * A PASSKEY WAITING FOR ITS OPENER, for the reason `linkProof` waits: the
+   * browser that finished the page is not proof of anything, the opener's
+   * session spending the code is.
+   */
+  enrolment: HeldPasskey | null
   result: AuthResult | null
   codeHash: string | null
   codeExpiresAt: number
@@ -199,6 +220,8 @@ export class AuthRequests {
       deniedWhy: null,
       proof: null,
       linkProof: null,
+      stepUp: null,
+      enrolment: null,
       result: null,
       codeHash: null,
       codeExpiresAt: 0,
@@ -277,6 +300,17 @@ export class AuthRequests {
   stashProof(request: AuthRequest, proof: ProviderProof): void {
     request.proof = proof
     request.stage = 'provider'
+  }
+
+  /** A `passkey` request's proof that the opener is the account's owner, held server-side. */
+  holdStepUp(request: AuthRequest, pending: string): void {
+    request.stepUp = pending
+  }
+
+  /** The passkey the page made, for the opener to write when it spends the code. */
+  holdPasskey(request: AuthRequest, passkey: HeldPasskey): void {
+    request.stepUp = null
+    request.enrolment = passkey
   }
 
   takeProof(request: AuthRequest): ProviderProof | null {

@@ -360,6 +360,50 @@ describe('linking a provider through the browser', () => {
   })
 })
 
+describe('adding a passkey through the browser', () => {
+  it('opens a passkey request under the session, for this Mac, and spends the code with it', async () => {
+    const { base, file } = withAccount(true)
+    const m = mac(finishes, { base })
+    expect(await m.app.browserAddPasskey()).toEqual({ ok: true, value: { id: 'pk-1', name: 'Touch ID on this Mac', addedAt: NOW } })
+    const [asked] = m.registry.calls('/v2/auth/requests')
+    expect(asked.auth).toBe('Bearer tok-old')
+    expect(asked.body).toMatchObject({ client: 'desktop', intent: 'passkey', back: { scheme: true } })
+    // No proof travels from here: the page runs the account's own step-up.
+    expect(asked.body).not.toHaveProperty('current')
+    expect(asked.body).not.toHaveProperty('stepUp')
+    expect((asked.body.device as { id: string }).id).toBe(file.deviceId)
+    expect(m.registry.proofs).toEqual([true])
+    expect(m.opened).toEqual(['https://auth.cookrew.dev/?request=req-1'])
+    expect(m.registry.calls('/v2/auth/token')[0].auth).toBe('Bearer tok-old')
+  })
+
+  it('a page cancelled there is a cancel, not a failure', async () => {
+    const { base } = withAccount(true)
+    const m = mac(finishes, { base })
+    m.registry.over = 'denied'
+    expect(await m.app.browserAddPasskey()).toEqual({ ok: false, reason: 'cancelled' })
+  })
+
+  it('the registry’s refusal reaches the card in its own words', async () => {
+    const { base } = withAccount(true)
+    const m = mac(finishes, { base })
+    m.registry.redeem = () =>
+      Response.json({ error: 'passkey_known', message: 'That passkey is already enrolled.' }, { status: 409 })
+    expect(await m.app.browserAddPasskey()).toMatchObject({ ok: false, message: 'That passkey is already enrolled.' })
+  })
+
+  it('an old registry answers unsupported and is asked nothing more; no account asks nothing at all', async () => {
+    const { base } = withAccount(true)
+    const m = mac(finishes, { base })
+    m.registry.requests = () => new Response('Not found', { status: 404 })
+    expect(await m.app.browserAddPasskey()).toEqual({ ok: false, reason: 'unsupported' })
+    expect(m.registry.seen).toHaveLength(1)
+    const bare = mac()
+    expect(await bare.app.browserAddPasskey()).toEqual({ ok: false, reason: 'no_account' })
+    expect(bare.registry.seen).toHaveLength(0)
+  })
+})
+
 describe('the IPC', () => {
   function wired(m: Mac): { deps: AccountIpcDeps; handlers: ReturnType<typeof accountHandlers> } {
     // Armed regardless of the passcode, so a test can lock it.
@@ -382,6 +426,18 @@ describe('the IPC', () => {
     expect(await handlers['account:browserSignIn']('link')).toMatchObject({ ok: false, reason: 'not_offered' })
     expect(await handlers['account:browserSignIn']('github')).toMatchObject({ ok: true, value: { username: 'octo' } })
     expect(m.registry.opened?.intent).toBe('github')
+    deps.requests.stop()
+  })
+
+  it('adds a passkey through the page, and not from behind the lock', async () => {
+    const { base } = withAccount(true)
+    const m = mac(finishes, { base })
+    const { deps, handlers } = wired(m)
+    expect(await handlers['account:passkeyBrowser']()).toMatchObject({ ok: true, value: { id: 'pk-1' } })
+    deps.lock.lock()
+    const before = m.registry.seen.length
+    expect(await handlers['account:passkeyBrowser']()).toMatchObject({ ok: false, reason: 'locked' })
+    expect(m.registry.seen).toHaveLength(before)
     deps.requests.stop()
   })
 

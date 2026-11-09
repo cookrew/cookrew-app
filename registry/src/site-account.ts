@@ -179,7 +179,7 @@ ${desktopsSection(account.username, account.desktops)}
 <button class="btn" data-add-device="phone">Add a phone</button></p>
 <div class="totp-panel" id="me-join-code" data-add-lede="${esc(meCopy('w5.add-lede'))}" hidden></div>
 
-<h2 style="margin-top:30px">Security</h2>
+<h2 style="margin-top:30px" id="security">Security</h2>
 <ul class="doors me-list" id="me-security">
 <li id="me-password-row"><span class="chip">Password</span><span><b>Your password</b><br><span class="meta" id="me-password-note">At least 12 characters. It goes only to this site.</span></span><button class="btn sm" data-password>Change</button></li>
 ${passkeyRows(factors.passkeys)}

@@ -126,6 +126,9 @@ export class FakeRegistry {
     }
     if (this.redeem !== null) return this.redeem()
     if (this.opened.intent === 'link') return Response.json({ status: 'linked', provider: this.opened.provider })
+    if (this.opened.intent === 'passkey') {
+      return Response.json({ status: 'passkey', passkey: { id: 'pk-1', name: 'Touch ID on this Mac', addedAt: NOW } }, { status: 201 })
+    }
     const device = this.opened.device as { id: string }
     return Response.json(
       { token: 'tok-new', exp: NOW + 30 * DAY, deviceId: device.id, username: this.username, hasPassword: this.hasPassword },

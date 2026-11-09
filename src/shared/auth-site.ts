@@ -41,12 +41,37 @@ export const isAuthClient = (value: unknown): value is AuthClient =>
 
 /**
  * WHICH SCREEN THE PAGE OPENS ON. It is a hint about the first screen and
- * nothing else: every intent can reach every way in, except `link`, which is a
- * signed-in act and is only ever a provider trip.
+ * nothing else: every intent can reach every way in, except the two signed-in
+ * acts. `link` is only ever a provider trip; `passkey` adds a passkey to the
+ * account that opened it, after the account's own step-up on the page.
  */
-export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link'
+export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey'
 
-export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link']
+export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey']
+
+/** The intents a signed-in client opens for its own account; nobody signs in on them. */
+export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey']
+
+/**
+ * ADDING A PASSKEY, as the page reads it. `needs` is what stands between the
+ * person and the ceremony: `provider` (an account with no password proves it
+ * is them with a provider it already linked, once, for this one passkey) or
+ * `ready`. `providers` names the ones this account can prove itself with.
+ */
+export interface AuthEnrolment {
+  needs: 'provider' | 'ready'
+  providers: readonly ProviderId[]
+}
+
+/**
+ * What the spending client gets back for a `passkey` request: the passkey, as
+ * /v2/me/factors lists it. The web never sees this; /auth/complete writes it
+ * and lands on `/me?passkey=added`.
+ */
+export interface AuthPasskeyAdded {
+  status: 'passkey'
+  passkey: { id: string; name: string; addedAt: number }
+}
 
 export const isAuthIntent = (value: unknown): value is AuthIntent =>
   typeof value === 'string' && (AUTH_INTENTS as readonly string[]).includes(value)
@@ -156,6 +181,8 @@ export interface AuthRequestSummary {
   providers: readonly { id: ProviderId; label: string }[]
   /** 'provider' when a provider trip came back and `continue` should be called. */
   stage: 'open' | 'provider' | 'done' | 'denied'
+  /** A `passkey` request only: what the ceremony still needs. */
+  enrol: AuthEnrolment | null
 }
 
 /** The header every page call on the auth origin carries. */
