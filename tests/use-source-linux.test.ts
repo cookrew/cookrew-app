@@ -27,7 +27,7 @@ const gate = (blocked: RemoteState | null = null): RemoteGate => ({
   admit: () => null,
   enter: () => () => undefined
 })
-const fakeHand = (refusal: string | null = null) => ({ refusal: () => refusal, send: vi.fn(async (_calls: readonly XdoCall[]) => undefined) })
+const fakeHand = (refusal: string | null = null) => ({ refusal: () => refusal, send: vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined) })
 const deps = (over: Partial<LinuxScreenDeps> = {}): LinuxScreenDeps => ({
   remote: gate(),
   frames: vi.fn(async () => frames),
@@ -140,6 +140,18 @@ describe('LinuxScreenDevice', () => {
     const screen = device('screen://main', { area: () => null })
     await screen.capture()
     await expect(screen.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/Display main is not connected/)
+  })
+
+  it('Stop or the switch going off reaches into a gesture already running', async () => {
+    const hand = fakeHand()
+    let refusal: string | null = null
+    const screen = device('screen://main', { hand, remote: { ...gate(), inputRefusal: () => refusal, agentRefusal: () => refusal } })
+    await screen.capture()
+    await screen.perform({ method: 'input.type', params: { text: 'hello' } })
+    const stopped = hand.send.mock.calls[0][1] as () => string | null
+    expect(stopped()).toBeNull()
+    refusal = 'Stopped at the machine'
+    expect(stopped()).toBe('Stopped at the machine')
   })
 
   it('a shortcut reads the clipboard back for the viewer, like a Mac', async () => {

@@ -220,3 +220,46 @@ describe('createLinuxHand', () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('createLinuxHand: cut short, and one at a time', () => {
+  const pieces = (n: number) => Array.from({ length: n }, (_, i) => ({ argv: ['type', '--', `p${i}`], timeoutMs: 1000 }))
+
+  it('Stop between two pieces of a paste stops the rest', async () => {
+    const run = vi.fn(async () => undefined)
+    const h = createLinuxHand({ screenRefusal: () => null, find: () => '/usr/bin/xdotool', run, dryRun: false, log: vi.fn() })
+    let calls = 0
+    await expect(h.send(pieces(5), () => (++calls > 2 ? 'Stopped at the machine' : null))).rejects.toThrow('Stopped at the machine')
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('two cards never interleave: the second gesture waits for the first', async () => {
+    const order: string[] = []
+    let release: () => void = () => undefined
+    const run = vi.fn(async (_bin: string, argv: readonly string[]) => {
+      order.push(`start ${argv[0]}`)
+      if (argv[0] === 'mousemove') await new Promise<void>((resolve) => (release = resolve))
+      order.push(`end ${argv[0]}`)
+    })
+    const h = createLinuxHand({ screenRefusal: () => null, find: () => '/usr/bin/xdotool', run, dryRun: false, log: vi.fn() })
+    const first = h.send([{ argv: ['mousemove', '0', '0', 'mousedown', '1'], timeoutMs: 1000 }])
+    const second = h.send([{ argv: ['key', 'Return'], timeoutMs: 1000 }])
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    release()
+    await Promise.all([first, second])
+    expect(order).toEqual(['start mousemove', 'end mousemove', 'start key', 'end key'])
+  })
+
+  it('a failed gesture does not jam the ones after it', async () => {
+    const run = vi.fn(async (_bin: string, argv: readonly string[]) => {
+      if (argv[0] === 'bad') throw new Error('xdotool: no')
+    })
+    const h = createLinuxHand({ screenRefusal: () => null, find: () => '/usr/bin/xdotool', run, dryRun: false, log: vi.fn() })
+    await expect(h.send([{ argv: ['bad'], timeoutMs: 1 }])).rejects.toThrow('no')
+    await expect(h.send([{ argv: ['key', 'Return'], timeoutMs: 1 }])).resolves.toBeUndefined()
+  })
+
+  it('a key name that is an object property is still no key', () => {
+    expect(xdotoolKey('constructor')).toBeNull()
+    expect(xdotoolKey('toString')).toBeNull()
+  })
+})

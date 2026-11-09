@@ -86,7 +86,7 @@ const NAMED_KEYS: Readonly<Record<string, string>> = {
 const PLAIN_KEY = /^[a-z0-9]$/
 
 /** The keysym for a key name, or null when this vocabulary has no such key. */
-export const xdotoolKey = (name: string): string | null => NAMED_KEYS[name] ?? (PLAIN_KEY.test(name) ? name : null)
+export const xdotoolKey = (name: string): string | null => (Object.hasOwn(NAMED_KEYS, name) ? NAMED_KEYS[name] : PLAIN_KEY.test(name) ? name : null)
 
 const finite = (value: number | string | undefined): number => {
   const n = Number(value)
@@ -200,7 +200,12 @@ export interface LinuxHandDeps {
 export interface LinuxHand {
   /** Why this machine cannot take input at all; null when it can. */
   refusal(): string | null
-  send(calls: readonly XdoCall[]): Promise<void>
+  /**
+   * One gesture's calls, in order, one gesture at a time across every card (two cards'
+   * drags must not cross). `stopped` is asked before each call: a long paste is many
+   * calls, and Stop or the switch going off must cut it, not wait for it.
+   */
+  send(calls: readonly XdoCall[], stopped?: () => string | null): Promise<void>
 }
 
 /** The argv as a log may show it: typed text becomes its length. */
@@ -212,26 +217,34 @@ function loggable(argv: readonly string[]): readonly string[] {
 
 export function createLinuxHand(deps: LinuxHandDeps): LinuxHand {
   const refusal = (): string | null => deps.screenRefusal() ?? (deps.dryRun || deps.find() !== null ? null : LINUX_NO_XDOTOOL)
+  let queue: Promise<void> = Promise.resolve()
+  const run = async (calls: readonly XdoCall[], stopped: () => string | null): Promise<void> => {
+    const refused = refusal()
+    if (refused) throw new Error(refused)
+    const bin = deps.dryRun ? null : deps.find()
+    if (!deps.dryRun && bin === null) throw new Error(LINUX_NO_XDOTOOL)
+    for (const call of calls) {
+      const cut = stopped()
+      if (cut) throw new Error(cut)
+      if (bin === null) {
+        deps.log(`[cookrew] linux input dry run, nothing started: xdotool ${JSON.stringify(loggable(call.argv))}`)
+        continue
+      }
+      try {
+        await deps.run(bin, call.argv, call.timeoutMs)
+      } catch (error) {
+        // A drag cut short would leave the button down for whoever touches the machine next.
+        if (call.argv.includes('mousedown')) await deps.run(bin, ['mouseup', '1'], LET_GO_TIMEOUT_MS).catch(() => undefined)
+        throw error
+      }
+    }
+  }
   return {
     refusal,
-    async send(calls) {
-      const refused = refusal()
-      if (refused) throw new Error(refused)
-      if (deps.dryRun) {
-        for (const call of calls) deps.log(`[cookrew] linux input dry run, nothing started: xdotool ${JSON.stringify(loggable(call.argv))}`)
-        return
-      }
-      const bin = deps.find()
-      if (bin === null) throw new Error(LINUX_NO_XDOTOOL)
-      for (const call of calls) {
-        try {
-          await deps.run(bin, call.argv, call.timeoutMs)
-        } catch (error) {
-          // A drag cut short would leave the button down for whoever touches the machine next.
-          if (call.argv.includes('mousedown')) await deps.run(bin, ['mouseup', '1'], LET_GO_TIMEOUT_MS).catch(() => undefined)
-          throw error
-        }
-      }
+    send(calls, stopped = () => null) {
+      const turn = queue.then(() => run(calls, stopped))
+      queue = turn.catch(() => undefined)
+      return turn
     }
   }
 }

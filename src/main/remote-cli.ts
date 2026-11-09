@@ -20,10 +20,13 @@ import type { CliRequest } from '../shared/model'
  *   is always allowed, and Stop is the headless box's banner button.
  *
  * THE LIMIT, SAID PLAINLY: every check above is made by programs running as
- * this user. Code running as this user can write to the socket directly, and
- * on X11 it can already drive the screen with xdotool. These checks keep a
- * device away from the switch, and an agent from turning it on by accident.
- * They do not hold against code running as this user that sets out to get past them.
+ * this user, from what the client says about itself (an env var, its process
+ * tree, its terminal). A paired device typing into a Cookrew terminal already
+ * runs code as this user: it can unset the env var and answer the prompt, and on
+ * X11 it could run xdotool itself without any switch. The pane refusal closes the
+ * obvious path and stops an agent turning it on by accident, nothing more. A real
+ * boundary would ask the kernel who the socket's peer is (SO_PEERCRED) and refuse
+ * a descendant of the terminal host; that is an open question for the owner.
  */
 
 export const REMOTE_USAGE = 'usage: cookrew remote on|off|status|stop'

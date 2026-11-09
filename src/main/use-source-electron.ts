@@ -52,13 +52,14 @@ export const primaryDisplayId = (): string | null => String(screen.getPrimaryDis
 
 /**
  * Where a captured display sits on the X screen, in pixels (what xdotool moves in).
- * By id; else, as Xvfb gives the capturer no ids, the only display there is, or the
- * one at the same place in the list. Electron's bounds are in its own points, so
- * they are scaled back by the display's factor.
+ * By id; else, as Xvfb gives the capturer no ids, the only display there is. With
+ * several and no id nothing says which one the picture was of, and a guess would
+ * click on the wrong screen: null, which the card says. Electron's bounds are in its
+ * own points, so they are scaled back by the display's factor.
  */
 export function displayArea(shown: ShownDisplay): DisplayArea | null {
   const displays = screen.getAllDisplays()
-  const display = displays.find((d) => String(d.id) === shown.displayId) ?? (displays.length === 1 ? displays[0] : displays[shown.index]) ?? null
+  const display = displays.find((d) => String(d.id) === shown.displayId) ?? (displays.length === 1 ? displays[0] : null)
   if (!display) return null
   const scale = display.scaleFactor > 0 ? display.scaleFactor : 1
   const { x, y, width, height } = display.bounds

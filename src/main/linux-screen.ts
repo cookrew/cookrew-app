@@ -134,7 +134,8 @@ export class LinuxScreenDevice implements PixelDevice {
     if (!area) throw new Error(`Display ${this.target.name} is not connected`)
     const { calls, wheel } = xdotoolCalls(gesture, shown, area, this.wheel)
     this.wheel = wheel
-    await this.deps.hand.send(calls)
+    // Asked again before each xdotool run: Stop, or the switch going off, cuts a long paste short.
+    await this.deps.hand.send(calls, () => this.remote.inputRefusal() ?? this.remote.agentRefusal())
   }
 
   /** The session ended: the next frame says again what the display is. */
