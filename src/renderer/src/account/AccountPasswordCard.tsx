@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { AccountStatus } from '../../../shared/account-v2'
 import { cookrew } from '../api'
 import { PROVIDER_COPY, firstPasswordView, providerRefusal } from './provider-store'
+import { TripWait, useWatchedTrip } from './ProviderButtons'
 import '../grant-surface.css'
 
 /**
@@ -28,13 +29,20 @@ export function AccountPasswordCard({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const view = firstPasswordView(next, confirm)
+  /**
+   * SETTING IT MAY GO THROUGH A BROWSER (a provider proves it is you when the
+   * last proof is old). CANCEL ends that trip, and so does LATER or closing
+   * the sheet: an act the person walked away from must not finish anyway.
+   */
+  const trip = useWatchedTrip(true)
 
   const save = (): void => {
     const call = cookrew().accountSetPassword
     if (!call || busy || !view.canGo) return
     setBusy(true)
     setError(null)
-    void call({ current: '', next })
+    void trip
+      .watch(call({ current: '', next }))
       .then(async (result) => {
         if (!result.ok) {
           setError(providerRefusal(result.reason, result.message))
@@ -82,8 +90,15 @@ export function AccountPasswordCard({
             {error}
           </p>
         )}
+        <TripWait shown={trip.waiting} onCancel={trip.cancel} />
         <div className="gs-sheet-foot">
-          <button className="gs-ghost" disabled={busy} onClick={onLater}>
+          <button
+            className="gs-ghost"
+            onClick={() => {
+              trip.cancel()
+              onLater()
+            }}
+          >
             LATER
           </button>
           <button className="gs-primary" disabled={busy || !view.canGo} onClick={save}>

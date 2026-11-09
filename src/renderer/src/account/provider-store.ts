@@ -39,6 +39,9 @@ export const PROVIDER_COPY = machineTable({
   CHOSEN_PASSCODE_FORGOT: 'Forgot your passcode?',
   CHOSEN_PASSCODE_RESCUE_WHY:
     'A recovery code opens this Mac once. After that it unlocks with your account password.',
+  /** The same, on an account with no password yet: nothing will lock it after. */
+  CHOSEN_PASSCODE_RESCUE_WHY_NO_PASSWORD:
+    'A recovery code opens this Mac once. After that Cookrew will not lock itself here until your account has a password.',
   CHOSEN_PASSCODE_LOCK_WHY: 'Locking hides your canvas behind the passcode you chose. Your agents keep working.',
   /** A machine signed in from a terminal (`cookrew login`): its lock waits for the password typed here once. */
   LOCK_WAITS_TYPE: 'The lock is off on this Mac until your account password is typed here once.',

@@ -703,9 +703,18 @@ export class Accounts {
     return account.fromTerminal === true ? 'type-password' : null
   }
 
-  /** Is there anything that could open the lock? Only then may it close. */
+  /**
+   * Is there anything that could open the lock? Only then may it close.
+   *
+   * WITH NO VERIFIER YET, ONLY WHILE THE SESSION LIVES: the first unlock asks
+   * cookrew.dev through it, and a fresh sign-in from a lock screen cannot
+   * climb the second step (auth UX 2026-11-09). A lock closed with neither
+   * would shut the owner out of their own canvas.
+   */
   lockable(): boolean {
-    return this.cached !== null && this.lockWaits() === null
+    const account = this.cached
+    if (account === null || this.lockWaits() !== null) return false
+    return account.unlock !== null || this.sessionLive()
   }
 
   /** Signed in from a terminal (`cookrew login`): nothing goes on this screen. */
@@ -791,11 +800,13 @@ export class Accounts {
     const sent = await this.authedResponse(GRANT_PATHS.grant, { method: 'POST', body: JSON.stringify({ password }) })
     if (!sent.ok) return sent
     if (sent.response.status === 201) return { ok: true, value: undefined }
-    if (sent.response.status === 401) {
-      const body = await bodyOf(sent.response)
-      return body.error === 'wrong' ? { ok: false, reason: 'bad_credentials' } : plainRefusal(classify(401, body))
-    }
-    return plainRefusal(classify(sent.response.status, await bodyOf(sent.response)))
+    const body = await bodyOf(sent.response)
+    if (sent.response.status === 401 && body.error === 'wrong') return { ok: false, reason: 'bad_credentials' }
+    const refused = classify(sent.response.status, body)
+    // A finished token is recorded here as on every authenticated call, so the
+    // surface offers to sign in again rather than refusing this forever.
+    if (refused.reason === 'session-expired') this.endSession(sent.token)
+    return plainRefusal(refused)
   }
 
   /** What /v2/me says about the account, learned whenever it is read. */

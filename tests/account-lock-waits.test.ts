@@ -188,20 +188,50 @@ describe('a machine a person signed in at, on a password account', () => {
   })
 })
 
-describe('a first unlock on a machine whose session has died', () => {
-  it('is never told the right password is wrong: it signs in afresh, or says why it cannot', async () => {
+describe('a machine with no verifier whose session has died', () => {
+  it('does not lock at all: nothing could open it (review, 2026-11-09)', async () => {
     const m = machine(await passwordAccount(), {})
+    expect(m.accounts.lockable()).toBe(true)
     await m.accounts.call('/v2/sessions/current', { method: 'POST', parse: false })
     await m.accounts.call('/v2/me')
     expect(m.accounts.sessionLive()).toBe(false)
+    expect(m.accounts.lockable()).toBe(false)
     m.lock.lock()
+    expect(m.lock.locked).toBe(false)
+  })
+
+  it('once it holds the verifier, it locks and opens offline with the session dead', async () => {
+    const m = machine(await passwordAccount(), {})
+    m.lock.lock()
+    expect(await unlock(m)(PASSWORD)).toMatchObject({ ok: true })
+    await m.accounts.call('/v2/sessions/current', { method: 'POST', parse: false })
+    await m.accounts.call('/v2/me')
+    expect(m.accounts.lockable()).toBe(true)
+    m.lock.lock()
+    expect(await unlock(m)(PASSWORD)).toMatchObject({ ok: true })
+  })
+
+  it('if it died DURING a lock, the right password is never called wrong: the registry’s reason is said', async () => {
+    const m = machine(await passwordAccount(), {})
+    m.lock.lock()
+    expect(m.lock.locked).toBe(true)
+    await m.accounts.call('/v2/sessions/current', { method: 'POST', parse: false })
+    await m.accounts.call('/v2/me')
     expect(await unlock(m)('not the password at all')).toMatchObject({ ok: false, reason: 'wrong' })
     const answer = await unlock(m)(PASSWORD)
-    expect(answer.reason).not.toBe('wrong')
-    // This account has no second step yet, so a fresh sign-in is refused, and
-    // the lock says so in the registry's words rather than "not it".
+    // This account has no second step yet, so a fresh sign-in is refused.
     expect(answer).toMatchObject({ ok: false, reason: 'unproven' })
     expect(String(answer.message)).toContain('second step')
+  })
+
+  it('a password check the registry refuses as a finished session ends it here too', async () => {
+    const m = machine(await passwordAccount(), { fromTerminal: true })
+    // Ended at cookrew.dev; this machine has not heard yet.
+    await m.accounts.call('/v2/sessions/current', { method: 'POST', parse: false })
+    expect(m.accounts.sessionLive()).toBe(true)
+    expect(await adopt(m)(PASSWORD)).toMatchObject({ ok: false, reason: 'session-expired' })
+    expect(m.accounts.sessionLive()).toBe(false)
+    expect(accountStatus(m.deps)).toMatchObject({ sessionExpired: true })
   })
 })
 
