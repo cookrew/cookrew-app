@@ -1,4 +1,4 @@
-import { UseOverlay } from './use/UseOverlay'
+import { remoteBarControl, UseOverlay } from './use/UseOverlay'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import {
@@ -34,7 +34,9 @@ import {
   type StreamTouchPointer
 } from './browser-stream'
 import { useBrowserStream } from './useBrowserStream'
-import { NO_ZOOM, panZoom, pinchZoom, zoomedFit, type FrameZoom } from './frame-zoom'
+import { NO_ZOOM, panZoom, pinchZoom, type FrameZoom } from './frame-zoom'
+import { pictureFit, remoteLayout, ROW_HEIGHT_GUESS } from './use/remote-layout'
+import { FRAME_CONTROLS } from './use/RemotePanel'
 import { thumbStore, useThumb } from './activity-thumb-store'
 import { stepOut } from './zoom/zoom-path'
 import { zoomStore } from './zoom/zoom-store'
@@ -93,6 +95,8 @@ export function MobileBrowserFrame({
   const [view, setView] = useState({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   const [frameZoom, setFrameZoom] = useState<FrameZoom>(NO_ZOOM)
+  /** The remote bar's row, as measured: its band is this tall (remote-layout.ts). */
+  const [barHeight, setBarHeight] = useState(ROW_HEIGHT_GUESS)
   // Read at mount, not after: the first viewport offer must already say phone or desktop.
   const [coarsePointer, setCoarsePointer] = useState(
     () => typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
@@ -324,14 +328,21 @@ export function MobileBrowserFrame({
 
   // Both sources report their pixel size — the stream's on the canvas, the
   // thumb's via the <img> — used as the letterbox + input-coord basis.
-  const baseFit = fitContain(natural.w, natural.h, view.w, view.h)
   // A computer's screen zooms HERE, on the viewer: it is the only way to read a
   // Mac on a phone, and it moves the rect every mapping already reads.
   const computerCard = stream.deviceStatus?.use === 'computer'
-  // Held inside the view on every render: a phone turned sideways moves its edges.
-  const fit = computerCard ? zoomedFit(baseFit, panZoom(frameZoom, baseFit, view, 0, 0)) : baseFit
-  const zoomRef = useRef({ fit: baseFit, view, control: false })
-  zoomRef.current = { fit: baseFit, view, control: interactive }
+  // Its bar has a band of its own, in both modes, and the picture fits what is left:
+  // no pixel of a screen someone can drive is ever under Cookrew's controls.
+  const layout = remoteLayout(view, natural, computerCard && remoteBarControl(stream.deviceStatus) ? barHeight : null)
+  const area = { w: layout.area.width, h: layout.area.height }
+  const origin = { x: layout.area.left, y: layout.area.top }
+  // The letterbox in AREA coordinates: zoom works there, so a picture panned to its edge stops at the band.
+  const baseFit = fitContain(natural.w, natural.h, area.w, area.h)
+  // Held inside the area on every render: a phone turned sideways moves its edges.
+  const fit = computerCard ? pictureFit(layout, natural, frameZoom) : { ...baseFit, left: baseFit.left + origin.x, top: baseFit.top + origin.y }
+  const banded = computerCard && layout.band !== null
+  const zoomRef = useRef({ fit: baseFit, view: area, origin, control: false })
+  zoomRef.current = { fit: baseFit, view: area, origin, control: interactive }
   /** Leaving the card is what ends a viewer: the stream closes as it goes. */
   const endSession = (): void => {
     const zoom = zoomStore.get()
@@ -458,7 +469,7 @@ export function MobileBrowserFrame({
    */
   /** A touch on the frame's own controls (or the bar, portaled but still a React child) is not a tap on the page. */
   const onControl = (e: React.TouchEvent): boolean =>
-    e.target instanceof Element && e.target.closest('button, textarea, .remote-keybar') !== null
+    e.target instanceof Element && e.target.closest(FRAME_CONTROLS) !== null
   const onTouchStart = (e: React.TouchEvent): void => {
     if (onControl(e)) {
       tapStart.current = null
@@ -735,12 +746,14 @@ export function MobileBrowserFrame({
    */
   const onWheelRef = useRef<(e: WheelEvent) => void>(() => {})
   onWheelRef.current = (e: WheelEvent): void => {
+    // Native, so the bar's own stopPropagation never reaches here: a wheel on Cookrew's controls is theirs.
+    if (e.target instanceof Element && e.target.closest(FRAME_CONTROLS)) return
     if (computerCard && e.ctrlKey) {
       // A trackpad pinch zooms the picture, not the Mac.
       e.preventDefault()
       const r = boxRef.current?.getBoundingClientRect()
-      const at = { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) }
-      setFrameZoom((zoom) => pinchZoom(zoom, baseFit, view, pinchScaleFromWheel(e.deltaY), at))
+      const at = { x: e.clientX - (r?.left ?? 0) - origin.x, y: e.clientY - (r?.top ?? 0) - origin.y }
+      setFrameZoom((zoom) => pinchZoom(zoom, baseFit, area, pinchScaleFromWheel(e.deltaY), at))
       return
     }
     if (!interactive) return
@@ -761,7 +774,7 @@ export function MobileBrowserFrame({
     if (!box || !computerCard) return
     let pinch: { distance: number; x: number; y: number } | null = null
     let drag: { x: number; y: number } | null = null
-    const onControl = (e: TouchEvent): boolean => e.target instanceof Element && e.target.closest('button, .rp-bar, .rp-cover, .remote-keybar') !== null
+    const onControl = (e: TouchEvent): boolean => e.target instanceof Element && e.target.closest(FRAME_CONTROLS) !== null
     const pairOf = (e: TouchEvent): { distance: number; x: number; y: number } => {
       const [a, b] = [e.touches[0], e.touches[1]]
       const r = box.getBoundingClientRect()
@@ -775,13 +788,14 @@ export function MobileBrowserFrame({
       } else if (e.touches.length === 1 && !zoomRef.current.control) drag = { x: e.touches[0].clientX, y: e.touches[0].clientY }
     }
     const move = (e: TouchEvent): void => {
-      const { fit: base, view: size } = zoomRef.current
+      const { fit: base, view: size, origin: at } = zoomRef.current
       if (pinch && e.touches.length === 2) {
         e.preventDefault()
         const now = pairOf(e)
         const was = pinch
         pinch = now
-        setFrameZoom((zoom) => panZoom(pinchZoom(zoom, base, size, was.distance > 0 ? now.distance / was.distance : 1, now), base, size, now.x - was.x, now.y - was.y))
+        const centre = { x: now.x - at.x, y: now.y - at.y }
+        setFrameZoom((zoom) => panZoom(pinchZoom(zoom, base, size, was.distance > 0 ? now.distance / was.distance : 1, centre), base, size, now.x - was.x, now.y - was.y))
       } else if (drag && e.touches.length === 1) {
         e.preventDefault()
         const touch = e.touches[0]
@@ -812,6 +826,64 @@ export function MobileBrowserFrame({
     box.addEventListener('wheel', onWheel, { passive: false })
     return () => box.removeEventListener('wheel', onWheel)
   }, [])
+
+  // A word after a copy stands in the bar's row, not on a screen someone may be driving.
+  const rowBand = banded && layout.band?.place === 'row' ? layout.band.rect : null
+  const inBand: React.CSSProperties | undefined = rowBand ? { top: rowBand.top + rowBand.height / 2, bottom: 'auto', transform: 'translate(-50%, -50%)', maxWidth: '70%' } : undefined
+  /** The frame's own buttons: a cluster over a page, the bar's for a computer's screen. */
+  const frameButtons =
+    showControl || interactive || actions ? (
+      <>
+          {showControl && (
+            <button
+              type="button"
+              className={`browser-frame-btn${stream.isOwner ? ' on' : ''}`}
+              title={controlLabel}
+              aria-label={controlLabel}
+              aria-pressed={stream.isOwner === true}
+              disabled={controlDisabled}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={stream.isOwner ? stream.release : stream.claim}
+            >
+              <CrIcon name={stream.isOwner ? 'check' : 'select'} />
+            </button>
+          )}
+          {interactive && !desktopInput && (
+            <button
+              type="button"
+              className="browser-frame-btn"
+              title="Copy what is selected on the page"
+              aria-label="Copy what is selected on the page"
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={copyFromPage}
+            >
+              <span aria-hidden="true">⧉</span>
+            </button>
+          )}
+          {interactive && !desktopInput && (
+            <button
+              type="button"
+              className={`browser-frame-btn${kbd.open ? ' on' : ''}`}
+              title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
+              aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
+              aria-pressed={kbd.open}
+              // Focus must happen in the tap gesture (onClick) for iOS to raise
+              // the keyboard; stop pointer events reaching the drag handlers.
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={kbd.toggle}
+            >
+              <span aria-hidden="true">⌨</span>
+            </button>
+          )}
+          {actions}
+      </>
+    ) : null
 
   return (
     <div
@@ -861,59 +933,8 @@ export function MobileBrowserFrame({
       )}
       {/* One floating cluster, bottom-right OVER the page: translucent so it
           costs the browser no layout height at all — every pixel of the view
-          stays the page's. */}
-      {(showControl || interactive || actions) && (
-        <div className="browser-frame-actions">
-          {showControl && (
-            <button
-              type="button"
-              className={`browser-frame-btn${stream.isOwner ? ' on' : ''}`}
-              title={controlLabel}
-              aria-label={controlLabel}
-              aria-pressed={stream.isOwner === true}
-              disabled={controlDisabled}
-              onPointerDown={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-              }}
-              onKeyDown={(event) => event.stopPropagation()}
-              onClick={stream.isOwner ? stream.release : stream.claim}
-            >
-              <CrIcon name={stream.isOwner ? 'check' : 'select'} />
-            </button>
-          )}
-          {interactive && !desktopInput && (
-            <button
-              type="button"
-              className="browser-frame-btn"
-              title="Copy what is selected on the page"
-              aria-label="Copy what is selected on the page"
-              onPointerDown={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-              onClick={copyFromPage}
-            >
-              <span aria-hidden="true">⧉</span>
-            </button>
-          )}
-          {interactive && !desktopInput && (
-            <button
-              type="button"
-              className={`browser-frame-btn${kbd.open ? ' on' : ''}`}
-              title={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
-              aria-label={kbd.open ? 'Hide keyboard' : 'Show keyboard'}
-              aria-pressed={kbd.open}
-              // Focus must happen in the tap gesture (onClick) for iOS to raise
-              // the keyboard; stop pointer events reaching the drag handlers.
-              onPointerDown={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-              onClick={kbd.toggle}
-            >
-              <span aria-hidden="true">⌨</span>
-            </button>
-          )}
-          {actions}
-        </div>
-      )}
+          stays the page's. A computer's screen carries them in its bar instead. */}
+      {frameButtons && !banded && <div className="browser-frame-actions">{frameButtons}</div>}
       {/* Hidden keystroke capture — the desktop's after a click into the page,
           the phone's within the ⌨ gesture so its keyboard rises. Keys, IME
           compositions and pastes forward to the remote field (useRemoteKeyboard). */}
@@ -952,13 +973,14 @@ export function MobileBrowserFrame({
         <button
           type="button"
           className="browser-frame-copychip"
+          style={inBand}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={takeCopyOffer}
         >
           Copied on the page · tap to copy here
         </button>
       )}
-      {note !== null && !kbd.open && <span className="browser-frame-note" role="status">{note}</span>}
+      {note !== null && !kbd.open && <span className="browser-frame-note" role="status" style={inBand}>{note}</span>}
       {/* The live dot keeps the corner to itself now that the controls sit in
           the dock — nothing left up here to make room for. */}
       {frameReady && !computerCard && <span className="browser-frame-live" aria-hidden="true" />}
@@ -973,6 +995,9 @@ export function MobileBrowserFrame({
         zoomed={frameZoom.k > 1}
         onFit={() => setFrameZoom(NO_ZOOM)}
         onEnd={endSession}
+        band={banded ? layout.band : null}
+        barExtras={banded ? frameButtons : null}
+        onBarHeight={setBarHeight}
       />
       {/* The live view: drawn by the painter, frame by frame, outside React. */}
       <canvas

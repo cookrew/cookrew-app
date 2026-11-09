@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { RemoteState } from '../../../shared/remote-access'
 import type { UseStatus } from '../../../shared/use-signal'
 import { useRoster } from '../agent-registry'
@@ -7,6 +7,7 @@ import { useCardCursors, type CardCursor } from '../use-cursors'
 import { openSourcePicker } from './source-picker-store'
 import { accessOf, remoteWhere, useRemoteActs } from './remote-acts'
 import { coverState, frameIsStale, RemoteBarView, RemoteConfirmView, RemotePanel, type RemoteConnection } from './RemotePanel'
+import type { BarBand } from './remote-layout'
 import './use-overlay.css'
 
 /**
@@ -28,8 +29,16 @@ import './use-overlay.css'
  * A computer's screen says more (shared/remote-access.ts). When it cannot be
  * read the state stands over the frame, opaque, with its next action: a held
  * picture never passes for a live one. When it can, the remote bar says who
- * may drive, and how to take control, give it back and leave.
+ * may drive, and how to take control, give it back and leave. The bar stands
+ * in a band of its own beside the picture, never on it (remote-layout.ts): the
+ * frame reserves the band from remoteBarControl, in both modes alike.
  */
+
+/** The bar this card shows, if any: a computer's screen that is not offline and has a desk. Pure, so the frame can reserve its band first. */
+export function remoteBarControl(status: UseStatus | null): NonNullable<UseStatus['control']> | null {
+  if (status?.use !== 'computer' || status.state === 'offline' || !status.control) return null
+  return status.control
+}
 
 /** A line gone this long is the Mac gone: a redial normally lands well inside it. */
 export const LINE_LOST_MS = 8000
@@ -59,7 +68,10 @@ export function UseOverlay({
   lastFrameAt = null,
   zoomed = false,
   onFit,
-  onEnd
+  onEnd,
+  band = null,
+  barExtras = null,
+  onBarHeight
 }: {
   card: string
   box: FrameBox | null
@@ -73,6 +85,12 @@ export function UseOverlay({
   zoomed?: boolean
   onFit?: () => void
   onEnd?: () => void
+  /** The bar's band beside the picture; absent, the bar stands where it always did. */
+  band?: BarBand | null
+  /** The frame's own buttons, carried in the bar. */
+  barExtras?: ReactNode
+  /** The row's measured height, for the band. */
+  onBarHeight?: (height: number) => void
 }): JSX.Element | null {
   const cursors = useCardCursors(card)
   const roster = useRoster()
@@ -81,7 +99,7 @@ export function UseOverlay({
   const computer = status?.use === 'computer'
   const cover = coverState({ status, lineLost, lastHeardAt: lastFrameAt })
   const gone = goneOffered(status)
-  const bar = computer && !cover && !gone && status?.state !== 'offline' && status?.control ? status.control : null
+  const bar = !cover && !gone ? remoteBarControl(status) : null
   // The bar says all this line would, and a cover more.
   const line = cover || (bar && status?.state === 'live') ? null : deviceLine(status, reconnecting)
   if (!line && cursors.length === 0 && !cover && !bar && !gone) return null
@@ -101,7 +119,7 @@ export function UseOverlay({
         </div>
       )}
       {gone && <GoneOffer card={card} />}
-      {bar && <RemoteBar card={card} control={bar} connection={reconnecting ? 'reconnecting' : live ? 'live' : 'stalled'} zoomed={zoomed} onFit={onFit} onEnd={onEnd} />}
+      {bar && <RemoteBar card={card} control={bar} connection={reconnecting ? 'reconnecting' : live ? 'live' : 'stalled'} zoomed={zoomed} onFit={onFit} onEnd={onEnd} band={band} extras={barExtras} onHeight={onBarHeight} />}
       {cover && <RemoteCover state={cover} onEnd={onEnd} />}
     </div>
   )
@@ -142,7 +160,31 @@ function RemoteCover({ state, onEnd }: { state: RemoteState; onEnd?: () => void 
 }
 
 /** Take control, and the minutes left: the only ticking here, and only while it matters. */
-function RemoteBar({ card, control, connection, zoomed, onFit, onEnd }: { card: string; control: NonNullable<UseStatus['control']>; connection: RemoteConnection; zoomed: boolean; onFit?: () => void; onEnd?: () => void }): JSX.Element {
+/** The row's height, as laid out: the band is sized from it, and it does not change with the mode. */
+function useMeasuredHeight(onHeight: ((height: number) => void) | undefined): React.RefObject<HTMLDivElement> {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !onHeight || typeof ResizeObserver === 'undefined') return
+    let frame = 0
+    const tell = (): void => {
+      cancelAnimationFrame(frame)
+      // The next frame, not inside the observation: the band's change relays out the frame.
+      frame = requestAnimationFrame(() => onHeight(Math.ceil(el.getBoundingClientRect().height)))
+    }
+    const ro = new ResizeObserver(tell)
+    ro.observe(el)
+    tell()
+    return () => {
+      cancelAnimationFrame(frame)
+      ro.disconnect()
+    }
+  }, [onHeight])
+  return ref
+}
+
+function RemoteBar({ card, control, connection, zoomed, onFit, onEnd, band, extras, onHeight }: { card: string; control: NonNullable<UseStatus['control']>; connection: RemoteConnection; zoomed: boolean; onFit?: () => void; onEnd?: () => void; band: BarBand | null; extras: ReactNode; onHeight?: (height: number) => void }): JSX.Element {
+  const measureRef = useMeasuredHeight(band?.place === 'row' ? onHeight : undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refusal, setRefusal] = useState<RemoteState | null>(null)
@@ -174,7 +216,7 @@ function RemoteBar({ card, control, connection, zoomed, onFit, onEnd }: { card: 
   }
   return (
     <>
-      <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} />
+      <RemoteBarView control={control} where={remoteWhere()} connection={connection} zoomed={zoomed} now={now} error={error} busy={busy} onTake={() => ask(true)} onGive={() => ask(false)} onEnd={end} onFit={() => onFit?.()} band={band} extras={extras} measureRef={measureRef} />
       {refusal && <RemoteRefusalCover state={refusal} onRetry={() => ask(true)} onDismiss={() => setRefusal(null)} />}
     </>
   )

@@ -194,6 +194,132 @@
   color: #fff;
 }
 
+/*
+ * THE BAR IN ITS OWN BAND (remote-layout.ts): beside the picture, never on it.
+ * Opaque, filling the band, so a press anywhere in it is the bar's. One line in
+ * the row whatever is said, so the band is the same height in both modes.
+ */
+.rp-bar.rp-bar-band {
+  right: auto;
+  box-sizing: border-box;
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: #141418;
+  backdrop-filter: none;
+  container-type: inline-size;
+}
+
+.rp-bar-inner {
+  display: grid;
+  gap: 2px;
+}
+
+.rp-bar-band .rp-bar-inner {
+  padding: 6px 8px;
+  /* A grid column is as wide as its widest line unless told otherwise: the row must fit the band. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The row band clips, so nothing of it can ever stand on the picture below. */
+.rp-bar.rp-bar-band:not(.rp-bar-pill) {
+  overflow: hidden;
+}
+
+.rp-bar-band .rp-bar-row {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.rp-control {
+  min-width: 0;
+}
+
+.rp-bar-band .rp-control {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rp-bar-band .rp-control.rp-bar-error {
+  font-size: 12px;
+}
+
+.rp-bar-band .rp-bar-acts {
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.rp-short {
+  display: none;
+}
+
+/* A narrow band says the short words, and the link only its dot: nothing wraps, nothing spills. */
+@container (max-width: 460px) {
+  .rp-bar-band .rp-long {
+    display: none;
+  }
+
+  .rp-bar-band .rp-short {
+    display: inline;
+  }
+
+  .rp-bar-band .rp-link {
+    font-size: 0;
+  }
+}
+
+/* The frame's own buttons, carried in the bar instead of over the picture. */
+.rp-bar .browser-frame-btn {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: none;
+}
+
+/* The pill: a column beside the picture, for a phone on its side. */
+.rp-bar.rp-bar-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px 5px;
+  overflow: visible;
+}
+
+.rp-bar-pill .rp-link {
+  justify-content: center;
+}
+
+.rp-pill-state {
+  text-align: center;
+  font-size: 11px;
+  color: #d4d4d8;
+}
+
+.rp-bar-pill .rp-bar-btn,
+.rp-bar-pill .browser-frame-btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 2px;
+  font-size: 11.5px;
+}
+
+/* Said after a press on the pill, beside it: the person asked, so it may stand there until it is read. */
+.rp-pill-say {
+  position: absolute;
+  top: 8px;
+  right: calc(100% + 8px);
+  width: max-content;
+  max-width: 40vw;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #1f1f24;
+  color: #ffb4a2;
+  font-size: 12px;
+}
+
 .rp-confirm-scrim {
   position: absolute;
   inset: 0;
