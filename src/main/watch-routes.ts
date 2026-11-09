@@ -20,7 +20,7 @@ import type { StreamService } from './stream-service'
 import { readJson, respondJson } from './mobile-http'
 import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
-import { itemsOfAgent, watchCards, type WatchCard, type WatchItem } from './watch-cards'
+import { itemsOfAgent, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
 import type { WatchPairing } from './watch-pairing'
 
 /** A frame as wide as the widest watch at 2x; a phone's is not needed on a wrist. */
@@ -83,6 +83,8 @@ export interface WatchHost {
   speaksTo(terminalId: string): boolean
   /** A menu is on its screen, read or not: words and Enter would pick the cursor row. */
   menuOnScreen(terminalId: string): boolean
+  /** This Mac's workspaces, in its own order. */
+  workspaces(): readonly { readonly id: string; readonly name: string }[]
   accountKind(): WatchAccountKind
   /** Mint a join code under this password. `here`: asked on this Mac, where a provider trip can open. */
   invite(current: string, here: boolean): Promise<WatchInvite>
@@ -147,7 +149,8 @@ export interface WatchRequest {
   readonly cleared: boolean
   /** Encrypted on the way here (mobile-api.ts · sealedTransport): a password may arrive on it. */
   sealed(): boolean
-  board(): Promise<BoardSnapshot>
+  /** `wide`: a week of rows, for one workspace's whole crew rather than the day's. */
+  board(wide?: boolean): Promise<BoardSnapshot>
   activities(): readonly TerminalActivity[]
   checkpoint(terminalId: string): Promise<LatestCheckpoint | null>
   /** Still a member of the crew (the registry): a closed agent reads asleep. */
@@ -267,10 +270,19 @@ function respondTagged(ctx: WatchRequest, type: string, data: string | Buffer): 
   ctx.response.end(data)
 }
 
-async function cards(ctx: WatchRequest, current: WatchHost): Promise<{ cards: WatchCard[]; activeWorkspaceId: string }> {
-  const board = await ctx.board()
+/** A workspace id as a wrist may ask for one. */
+const WORKSPACE_ID = /^[A-Za-z0-9_-]{1,128}$/
+
+async function cards(
+  ctx: WatchRequest,
+  current: WatchHost,
+  workspaceId: string | null
+): Promise<{ cards: WatchCard[]; activeWorkspaceId: string; workspaces: WatchWorkspace[] }> {
+  // Inside a workspace the wrist shows its whole crew, so the week and not the day.
+  const board = await ctx.board(workspaceId !== null)
+  const rows = rowsOfWorkspace(board.rows, workspaceId)
   const activities = new Map(ctx.activities().map((activity) => [activity.terminalId, activity]))
-  const checkpoints = await checkpointsOf(board.rows, activities, ctx.checkpoint)
+  const checkpoints = await checkpointsOf(rows, activities, ctx.checkpoint)
   const canvases = new Map<string, ReturnType<WatchHost['canvas']>>()
   const canvasOf = (workspaceId: string): ReturnType<WatchHost['canvas']> => {
     const known = canvases.get(workspaceId)
@@ -281,13 +293,20 @@ async function cards(ctx: WatchRequest, current: WatchHost): Promise<{ cards: Wa
   }
   return {
     cards: watchCards({
-      rows: board.rows,
+      rows,
       activities,
       checkpoints,
       active: ctx.active,
       itemsOf: (agentId, workspaceId) => itemsOfAgent(agentId, canvasOf(workspaceId))
     }),
-    activeWorkspaceId: board.activeWorkspaceId
+    activeWorkspaceId: board.activeWorkspaceId,
+    workspaces: watchWorkspaces({
+      workspaces: current.workspaces(),
+      activeId: board.activeWorkspaceId,
+      rows: board.rows,
+      agentsIn: (id) => canvasOf(id).nodes.filter((node) => node.kind === 'terminal').length,
+      active: ctx.active
+    })
   }
 }
 
@@ -371,7 +390,12 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (method === 'GET' && path === '/api/watch/cards') {
-    respondTagged(ctx, 'application/json', JSON.stringify(await cards(ctx, current)))
+    const asked = ctx.url.searchParams.get('workspace')
+    if (asked !== null && !WORKSPACE_ID.test(asked)) {
+      respondJson(response, 400, { error: 'Not a workspace.' })
+      return true
+    }
+    respondTagged(ctx, 'application/json', JSON.stringify(await cards(ctx, current, asked)))
     return true
   }
   if (method === 'POST' && path === '/api/watch/new') {

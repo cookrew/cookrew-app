@@ -89,6 +89,10 @@ function host(pairing: WatchPairing, over: Partial<WatchHost> = {}): WatchHost {
     stop: async (id) => id === 'working',
     speaksTo: (id) => id !== 'shell',
     menuOnScreen: (id) => id === 'unparsed-menu',
+    workspaces: () => [
+      { id: 'ws', name: 'Cookrew Dev' },
+      { id: 'other', name: 'Elsewhere' }
+    ],
     accountKind: () => 'password',
     invite: async (current) =>
       current === 'right' ? { ok: true, code: 'K7QM-2XPD', expiresAt: Date.now() + 600_000 } : { ok: false, reason: 'bad_credentials' },
@@ -339,6 +343,19 @@ describe('through the real gate', () => {
     expect((await call('/api/watch/cards', 'junk-junk-junk-junk')).status).toBe(401)
     expect((await call('/api/watch/cards', WALL)).status).toBe(401)
     expect((await call('/api/watch/item/n1', WALL)).status).toBe(401)
+  })
+
+  it('the cards say every workspace, and one workspace’s cards are only its own', async () => {
+    const token = await paired()
+    const all = (await (await call('/api/watch/cards', token)).json()) as { workspaces: { id: string; agents: number; waiting: number }[] }
+    expect(all.workspaces).toEqual([
+      expect.objectContaining({ id: 'ws', name: 'Cookrew Dev', waiting: 1 }),
+      expect.objectContaining({ id: 'other', name: 'Elsewhere', waiting: 0, working: 0 })
+    ])
+    const one = (await (await call('/api/watch/cards?workspace=other', token)).json()) as { cards: unknown[] }
+    expect(one.cards).toEqual([])
+    const mine = (await (await call('/api/watch/cards?workspace=ws', token)).json()) as { cards: unknown[] }
+    expect(mine.cards.length).toBeGreaterThan(0)
   })
 
   it('a watch token is nothing anywhere off its list', async () => {

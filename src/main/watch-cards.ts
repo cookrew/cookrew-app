@@ -136,6 +136,59 @@ export function watchCards(input: WatchCardsInput): WatchCard[] {
   })
 }
 
+/** A workspace as the wrist's tiles count it: what is in it, and what of that needs the owner. */
+export interface WatchWorkspace {
+  readonly id: string
+  readonly name: string
+  readonly active: boolean
+  readonly agents: number
+  readonly waiting: number
+  readonly working: number
+  readonly done: number
+}
+
+export interface WatchWorkspacesInput {
+  /** The Mac's workspaces, in its own order. */
+  readonly workspaces: readonly { readonly id: string; readonly name: string }[]
+  readonly activeId: string
+  readonly rows: readonly BoardRow[]
+  /** The agents on a workspace's canvas, recent or not. */
+  readonly agentsIn: (workspaceId: string) => number
+  readonly active: (agentId: string) => boolean
+}
+
+/**
+ * Every workspace, the empty ones too: the wrist's workspaces stop is the
+ * phone's, and a tile that vanished while it had nothing in it would move
+ * every tile after it. Counted from the board's rows by the cards' own status
+ * rule, so a tile never says "waiting" about a card that does not.
+ */
+export function watchWorkspaces(input: WatchWorkspacesInput): WatchWorkspace[] {
+  const listed = [...input.workspaces]
+  for (const row of input.rows) {
+    if (!listed.some((w) => w.id === row.workspace.id)) listed.push({ id: row.workspace.id, name: row.workspace.name })
+  }
+  return listed.map(({ id, name }) => {
+    const statuses = input.rows
+      .filter((row) => row.workspace.id === id)
+      .map((row) => (input.active(row.terminalId) ? STATUS_OF[row.phase] : 'offline'))
+    const counted = (status: WatchStatus): number => statuses.filter((one) => one === status).length
+    return {
+      id,
+      name,
+      active: id === input.activeId,
+      agents: Math.max(input.agentsIn(id), statuses.length),
+      waiting: counted('waiting'),
+      working: counted('working'),
+      done: counted('done')
+    }
+  })
+}
+
+/** One workspace's rows, or every row when none is asked for. */
+export const rowsOfWorkspace = (rows: readonly BoardRow[], workspaceId: string | null): readonly BoardRow[] =>
+  workspaceId === null ? rows : rows.filter((row) => row.workspace.id === workspaceId)
+
 /** A browser's letter on its coin: the title's first letter or digit (zoom-model.ts · itemInitial). */
 const initialOf = (title: string): string => (title.match(/[A-Za-z0-9]/)?.[0] ?? '·').toUpperCase()
 

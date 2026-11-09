@@ -27,6 +27,7 @@ export interface WatchHostDeps {
   readonly stop: (terminalId: string) => Promise<boolean>
   /** What the terminal shows now; null when nothing is attached. */
   readonly screen: (terminalId: string) => string | null
+  readonly workspaces: () => readonly { readonly id: string; readonly name: string }[]
   readonly accountKind: () => WatchAccountKind
   readonly invite: (current: string, here: boolean) => Promise<WatchInvite>
 }
@@ -71,6 +72,7 @@ export function createWatchHost(deps: WatchHostDeps): WatchHost {
       const screen = deps.screen(terminalId)
       return screen !== null && menuHeldOnScreen(screen)
     },
+    workspaces: deps.workspaces,
     accountKind: deps.accountKind,
     invite: deps.invite
   }

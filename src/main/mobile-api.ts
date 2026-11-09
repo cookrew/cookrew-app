@@ -905,10 +905,10 @@ export async function handleMobileApi(
       owner: ownerPairing,
       cleared: hasPairing,
       sealed: () => sealedTransport(request),
-      board: async () => {
+      board: async (wide?: boolean) => {
         const board = deps.board as BoardSources;
         await probeWarmed(board);
-        return buildBoard(board, boardWindowMs(null));
+        return buildBoard(board, boardWindowMs(wide ? "7d" : null));
       },
       activities: () => turns.list(),
       checkpoint: (terminalId) => cardCheckpoint(terminalId, deps.stream, deps.latestCheckpoint),
