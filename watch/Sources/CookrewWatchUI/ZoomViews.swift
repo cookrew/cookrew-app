@@ -48,16 +48,23 @@ private struct StopRow: View {
   }
 }
 
-/** The first stop: every Mac on the account. Only the paired one can be gone into. */
+/**
+ * The first stop: every machine on the account. One the watch holds a key for
+ * is a tap away; one it does not is paired from here, with that machine's code.
+ */
 public struct DevicesPage: View {
   let rows: [DeviceRow]
   let onOpen: () -> Void
+  let onSwitch: (String) -> Void
+  let onAdd: (DeviceRow) -> Void
   let onThisWatch: () -> Void
   @Environment(\.ink) private var ink
 
-  public init(rows: [DeviceRow], onOpen: @escaping () -> Void, onThisWatch: @escaping () -> Void) {
+  public init(rows: [DeviceRow], onOpen: @escaping () -> Void, onSwitch: @escaping (String) -> Void = { _ in }, onAdd: @escaping (DeviceRow) -> Void = { _ in }, onThisWatch: @escaping () -> Void) {
     self.rows = rows
     self.onOpen = onOpen
+    self.onSwitch = onSwitch
+    self.onAdd = onAdd
     self.onThisWatch = onThisWatch
   }
 
@@ -71,15 +78,12 @@ public struct DevicesPage: View {
     CardScroll {
       VStack(alignment: .leading, spacing: 6) {
         ForEach(rows) { row in
-          if row.paired {
-            Button(action: onOpen) {
-              StopRow(title: row.name, line: line(row), mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: false)
-            }
-            .buttonStyle(.plain)
-          } else {
-            // This watch holds no token for it: it is listed, and only that.
-            StopRow(title: row.name, line: "not paired", mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: true)
+          Button {
+            if row.paired { onOpen() } else if row.held { onSwitch(row.id) } else { onAdd(row) }
+          } label: {
+            StopRow(title: row.name, line: row.held ? line(row) : "not paired · tap to pair", mark: row.online ? ink.sealText : ink.dim, badge: nil, quiet: !row.held)
           }
+          .buttonStyle(.plain)
         }
         Button(action: onThisWatch) {
           Text("THIS WATCH")
@@ -138,5 +142,41 @@ public struct WorkspacesPage: View {
       .padding(.bottom, 8)
     }
     .background(ink.paper)
+  }
+}
+
+/** A machine of the account the watch holds no key for: its code, typed here, adds it. */
+public struct AddMachinePage: View {
+  let name: String
+  let onCode: () -> Void
+  @Environment(\.ink) private var ink
+
+  public init(name: String, onCode: @escaping () -> Void) {
+    self.name = name
+    self.onCode = onCode
+  }
+
+  public var body: some View {
+    CardScroll {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("On \(name):").font(InkType.words(14)).foregroundStyle(ink.ink)
+        Text("⋯ → Apple Watch → GET A CODE").font(InkType.word(10.5)).tracking(0.6).foregroundStyle(ink.sealText)
+        Text("The machines already on this watch stay.").font(InkType.words(12.5)).foregroundStyle(ink.muted)
+        Button(action: onCode) {
+          Text("Enter the code")
+            .font(InkType.name(15))
+            .foregroundStyle(ink.onSeal)
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .background(Capsule().fill(ink.seal))
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 4)
+      }
+      .padding(.horizontal, 10)
+      .padding(.bottom, 10)
+    }
+    .background(ink.paper)
+    .navigationTitle(name)
   }
 }
