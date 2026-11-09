@@ -1116,6 +1116,22 @@ export class V2Accounts {
     return { ok: true }
   }
 
+  /**
+   * A FIRST PASSWORD for an account that began at a provider (owner's ruling
+   * 3, 2026-11-09: entering a machine with no passkey needs one). Not a change:
+   * nobody else was holding a password, so no sitting ends. The caller has
+   * checked the five-minute verification.
+   */
+  async setFirstPassword(username: string, next: unknown): Promise<{ ok: true } | Refused<'not_passwordless' | 'weak_password'>> {
+    const account = this.get(username)
+    if (!account || account.passwordless !== true) return { ok: false, reason: 'not_passwordless' }
+    if (!passwordIsAcceptable(next)) return { ok: false, reason: 'weak_password' }
+    const hashed = await passwordGate.run(() => hashPassword(next))
+    const fresh = this.get(username) ?? account
+    this.replace({ ...fresh, password: hashed, passwordless: false })
+    return { ok: true }
+  }
+
   private otherSessions(account: V2Account, keepJti?: string): string[] {
     return account.sessions.filter((s) => s.jti !== keepJti).map((s) => s.jti)
   }

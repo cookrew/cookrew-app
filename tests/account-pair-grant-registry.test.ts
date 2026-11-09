@@ -102,4 +102,22 @@ describe('POST /v2/me/device-grant', () => {
   it('needs a session: a stranger gets nothing', async () => {
     expect((await httpWithBearer(world.origin, 'nope').post(GRANT_PATHS.grant, { password: PASSWORD })).status).toBe(401)
   })
+
+  it('a provider-only account sets a first password within five minutes of a verification, then enters with it', async () => {
+    const { username, browser } = await fresh({ passwordless: true })
+    // Five minutes have passed since the sign-in: asked to prove it again.
+    const jti = world.v2.accounts.get(username)!.sessions.at(-1)!.jti
+    world.v2.accounts.amend(username, (a) => ({ ...a, sessions: a.sessions.map((s) => (s.jti === jti ? { ...s, verifiedAt: Date.now() - 6 * 60_000 } : s)) }))
+    const stale = await browser.registry.post('/v2/me/password', { next: 'a brand new long password' })
+    expect(stale.status).toBe(403)
+    world.v2.accounts.markVerified(username, jti, 'provider')
+    const set = await browser.registry.post('/v2/me/password', { next: 'a brand new long password' })
+    expect(set.status).toBe(204)
+    expect(world.v2.accounts.get(username)?.passwordless).toBe(false)
+    const options = await browser.registry.post(GRANT_PATHS.options, {})
+    expect(options.body).toMatchObject({ methods: { password: true }, needsPassword: false })
+    expect((await browser.registry.post(GRANT_PATHS.grant, { password: 'a brand new long password' })).status).toBe(201)
+    // Set once: the next one is a change, which asks for the current password.
+    expect((await browser.registry.post('/v2/me/password', { next: 'another long password here' })).status).toBe(401)
+  })
 })

@@ -645,21 +645,28 @@
    * same rule the register sheet holds to — the registry judges again anyway,
    * and its sentence is what appears when it refuses.
    */
-  function changePassword() {
+  function changePassword(first) {
     const panel = $('me-password')
     if (!panel) return
     panel.replaceChildren()
     panel.hidden = false
     panel.append(
-      el('p', 'meta', 'Your new password goes only to this site. Changing it signs every other device out.')
+      el(
+        'p',
+        'meta',
+        first
+          ? 'Your password goes only to this site. Within five minutes of signing in you can set it here; later, sign in again first.'
+          : 'Your new password goes only to this site. Changing it signs every other device out.'
+      )
     )
 
     const current = secretField('Current password', 'current-password')
+    if (first) current.field.value = '-'
     const next = secretField('New password', 'new-password')
     const again = secretField('Repeat new password', 'new-password')
-    panel.append(current.row, next.row, again.row)
+    panel.append(...(first ? [] : [current.row]), next.row, again.row)
 
-    const save = button('Change password', 'primary')
+    const save = button(first ? 'Set password' : 'Change password', 'primary')
     const cancel = button('Cancel')
     const row = el('div', 'row')
     row.append(save, cancel)
@@ -696,7 +703,7 @@
     const send = async () => {
       if (!judge()) return
       save.disabled = true
-      const out = await api('POST', '/v2/me/password', { current: current.field.value, next: next.field.value })
+      const out = await api('POST', '/v2/me/password', first ? { next: next.field.value } : { current: current.field.value, next: next.field.value })
       save.disabled = false
       if (out.status !== 204) {
         // The registry's own sentence — a wrong current password, a weak new
@@ -708,6 +715,11 @@
       close()
       // THIS SESSION SURVIVES: the registry keeps the caller's jti, so the
       // browser doing the changing is the one device left standing.
+      if (first) {
+        toast('Password set. Your machines take it now.', 6000)
+        location.reload()
+        return
+      }
       const note = $('me-password-note')
       if (note) note.textContent = 'Password changed. Every other device was signed out.'
       toast('Password changed. Every other device was signed out.', 6000)
@@ -721,7 +733,7 @@
         }
       })
     }
-    current.field.focus()
+    ;(first ? next : current).field.focus()
   }
 
   /* ── /me: D6, the approvals waiting for an answer ──────────────────────── */
@@ -971,7 +983,7 @@
     event.preventDefault()
     if (target.dataset.addPasskey !== undefined) void addPasskey()
     else if (target.dataset.addTotp !== undefined) void addTotp()
-    else if (target.dataset.password !== undefined) changePassword()
+    else if (target.dataset.password !== undefined) changePassword(target.dataset.first !== undefined)
     else if (target.dataset.dropPasskey !== undefined) {
       // Taking a factor OFF costs the password, the same as changing it: one
       // session must not be able to lower the account's floor by itself.

@@ -41,7 +41,7 @@ import { deleteAccount } from './v2-delete'
 import { handleAuthRoute } from './v2-auth-routes'
 import { authorizeSession } from './auth-finish'
 import { deviceFor } from './v2-factor-http'
-import { grantOptions, issueGrant } from './v2-device-grant'
+import { grantOptions, issueGrant, setFirstPassword } from './v2-device-grant'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -656,6 +656,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     const body = await readJsonBody(ctx.request, SMALL_BODY)
     if (!body.ok) {
       refuse(response, body.reason === 'too_large' ? 413 : 400, 'malformed')
+      return
+    }
+    if (account.passwordless === true) {
+      await setFirstPassword(ctx, signed, body.value)
       return
     }
     // The caller's own sitting is kept; every other one ends with the change.

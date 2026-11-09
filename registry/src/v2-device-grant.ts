@@ -165,3 +165,29 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
 
 /** For tests: forget every rest. */
 export const forgetGrantRests = (): void => rests.clear()
+
+/**
+ * A FIRST ACCOUNT PASSWORD (owner's ruling 3): a provider-only account sets one
+ * before it enters a machine without a passkey. Setting it is a sensitive act,
+ * so it needs a verification in the last five minutes — any sign-in step, a
+ * passkey, or a provider round trip spent for `change-password`. Nobody else
+ * held a password, so no other sitting ends.
+ */
+export async function setFirstPassword(ctx: V2Context, signed: Signed, body: Record<string, unknown>): Promise<void> {
+  const { account, claims } = signed
+  const session = ctx.v2.accounts.session(account.username, claims.jti)
+  const proved =
+    freshlyVerified(session, Date.now()) ||
+    ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti)
+  if (!proved) {
+    said(ctx, 403, 'step_up', 'Prove it is you first: sign in again, or confirm with your provider, then set the password within five minutes.')
+    return
+  }
+  const out = await ctx.v2.accounts.setFirstPassword(account.username, body.next)
+  if (!out.ok) {
+    said(ctx, 400, out.reason, out.reason === 'weak_password' ? 'Too easy to guess. Use 12 characters or more; a sentence works.' : 'This account already has a password.')
+    return
+  }
+  ctx.v2.accounts.markVerified(account.username, claims.jti, 'password')
+  ctx.response.writeHead(204).end()
+}
