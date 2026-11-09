@@ -39,7 +39,7 @@ describe('an unfinished account', () => {
 
     // A person who finishes it (here on the pending, as the page does).
     await finishSetupWithTotp(world.origin, body.pending)
-    expect(world.v2.accounts.get(username)?.setupPending).toBe(false)
+    expect(world.v2.accounts.get(username)?.setupPending).toBeUndefined()
     expect(maySetUpHere(world.v2, username, randomUUID())).toBe(false)
   })
 
@@ -47,6 +47,40 @@ describe('an unfinished account', () => {
     const username = `older${Date.now() % 100000}`
     await world.account(username)
     expect(world.v2.accounts.get(username)?.setupPending).toBeUndefined()
+    expect(maySetUpHere(world.v2, username, randomUUID())).toBe(false)
+  })
+
+  it('a set-up someone else opened in the window cannot finish after the owner’s', async () => {
+    const username = `raced${Date.now() % 100000}`
+    const made = await fetch(`${world.origin}/v2/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password: PASSWORD, device: desk() })
+    })
+    const owner = ((await made.json()) as { pending: string }).pending
+    // The attacker's own set-up, opened with the password while the account is unfinished.
+    const attacker = world.v2.factors.pending.open({
+      username,
+      device: desk(),
+      deviceName: 'Attacker',
+      kind: 'browser',
+      address: '203.0.113.9',
+      next: [],
+      setup: true
+    }).id
+    await finishSetupWithTotp(world.origin, owner)
+    const late = await fetch(`${world.origin}/v2/sessions/${attacker}/setup/totp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(late.status).toBe(410)
+  })
+
+  it('stays finishable elsewhere for three days, not for ever', async () => {
+    const username = `stale${Date.now() % 100000}`
+    await fetch(`${world.origin}/v2/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password: PASSWORD, device: desk() })
+    })
+    world.v2.accounts.amend(username, (a) => ({ ...a, setupPending: Date.now() - 1 }))
     expect(maySetUpHere(world.v2, username, randomUUID())).toBe(false)
   })
 })

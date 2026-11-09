@@ -14,7 +14,6 @@ import { createV2 } from '../registry/src/v2-routes'
 import type { V2Identity } from '../registry/src/v2-http'
 import { renewMessage } from '../registry/src/v2-renew'
 import { Accounts, loadAccount, signWithDevice, writeAccount } from '../src/main/account-v2'
-import { createAdmittedDeviceStore, hashToken, writeAdmittedDevices } from '../src/main/admitted-devices'
 import { createV2CallTokenVerifier, v2KeysOverHttp } from '../src/main/v2-call-token'
 import { RENEW_AHEAD_MS, expiryWarningDue, renewDue } from '../src/shared/session-renew'
 
@@ -345,7 +344,7 @@ describe('step 12 — the session renews with nobody typing', () => {
 
     // THE DOOR NEVER DROPPED — asked the way a caller would actually ask it.
     //
-    // This once re-verified the SAME call token across the six-day jump, which
+    // This once re-verified the SAME call token across the jump, which
     // could only ever go shut: a call token lives ten minutes by design, so
     // the assertion was measuring the TTL and calling it the door. What the
     // renewal must not break is a caller's ability to be admitted afterwards,
@@ -524,9 +523,16 @@ describe('step 13 — a stranger with the password (auth UX 2026-11-09, ruling 2
    * is this.
    */
   it('meets the second step, cannot ask the owner’s devices, and changes nothing on the account', async () => {
+    // Something real in the owner's queue first — a guest asking for a seat —
+    // so "the stranger added nothing" is a count that could have moved.
+    const guest = machine('Guest Mac')
+    const seated = await registerMac({ origin, base: guest.base, username: 'guestq', password: PASSWORD, name: 'Guest Mac', now, accounts: { now } })
+    const askedSeat = await call('POST', `/v2/teams/@${OWNER}/${TEAM.name}/seat-requests`, {}, seated.file.session?.token)
+    expect(askedSeat.status).toBeLessThan(300)
     const queueBefore = await call('GET', '/v2/me/requests', undefined, sessionToken(macB.base))
     expect(queueBefore.status).toBe(200)
     observed.queueBefore = queueRows(queueBefore.body).length
+    expect(observed.queueBefore).toBeGreaterThan(0)
     const sittingsBefore = sittings()
 
     const stranger = machine('Stranger Mac')
@@ -540,7 +546,7 @@ describe('step 13 — a stranger with the password (auth UX 2026-11-09, ruling 2
 
     const asked = await stranger.accounts.resumeAsk(step.step.pending)
     observed.strangerAsk = asked
-    expect(asked.ok).toBe(false)
+    expect(asked).toMatchObject({ ok: false, reason: 'not_offered' })
 
     const approvals = await call('GET', '/v2/me/approvals', undefined, sessionToken(macB.base))
     expect(approvals.status).toBe(200)

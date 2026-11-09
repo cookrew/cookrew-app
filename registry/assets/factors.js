@@ -1123,7 +1123,23 @@
       field.setAttribute('maxlength', '6')
       field.placeholder = '123456'
       const verify = button('Verify', 'primary')
-      verify.addEventListener('click', async () => done(await api('POST', `${path}/totp/confirm`, { code: field.value.trim() })))
+      const send = async () => {
+        if (verify.disabled) return
+        verify.disabled = true
+        try {
+          done(await api('POST', `${path}/totp/confirm`, { code: field.value.trim() }))
+        } finally {
+          verify.disabled = false
+        }
+      }
+      verify.addEventListener('click', () => void send())
+      // The sheet is a method="dialog" form: Enter would close it and drop the
+      // set-up, so Enter verifies instead.
+      field.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return
+        event.preventDefault()
+        void send()
+      })
       const row = el('div', 'row')
       row.append(field, verify)
       show([...(picture ? [picture] : []), key, row], 'Scan this with your authenticator app, then type the six digits it shows.')
@@ -1133,7 +1149,15 @@
     const ways = []
     if (havePasskeys()) {
       const go = button('Use a passkey', 'primary')
-      go.addEventListener('click', () => void passkey())
+      go.addEventListener('click', async () => {
+        if (go.disabled) return
+        go.disabled = true
+        try {
+          await passkey()
+        } finally {
+          go.disabled = false
+        }
+      })
       ways.push(go)
     }
     const app = button('Use an authenticator app', havePasskeys() ? '' : 'primary')

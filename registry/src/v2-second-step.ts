@@ -74,11 +74,15 @@ export function openSetup(
   })
 }
 
+/** How long an account made on the direct path may finish its set-up from another device. */
+export const UNFINISHED_MS = 72 * 60 * 60 * 1000
+
 /** The set-up runs only where a stranger holding the first step could not choose the second. */
 export function maySetUpHere(v2: V2Identity, username: string, deviceId: string): boolean {
   const account = v2.accounts.get(username)
   if (account === null) return false
-  return account.devices.length === 0 || account.setupPending === true || account.devices.some((d) => d.id === deviceId)
+  const unfinished = typeof account.setupPending === 'number' && account.setupPending > v2.now() && !hasSecondStep(v2, username)
+  return account.devices.length === 0 || unfinished || account.devices.some((d) => d.id === deviceId)
 }
 
 /** The setup pending this request names, having spent one try. Null = answered. */
@@ -98,6 +102,15 @@ function setupOn(ctx: V2Context, id: string): Pending | null {
     refuseFactor(ctx.response, 403, 'password_change_required')
     return null
   }
+  // A SET-UP THAT ANOTHER ONE BEAT IS OVER. Once the account holds a second
+  // step that this pending did not add, nothing more may be enrolled through
+  // it: otherwise a set-up opened in the window by someone else finishes after
+  // the owner's (review, 11-09).
+  if (hasSecondStep(ctx.v2, held.username) && tried.pending.setup?.by === undefined) {
+    ctx.v2.factors.pending.close(id)
+    refuseFactor(ctx.response, 410, 'expired')
+    return null
+  }
   return tried.pending
 }
 
@@ -108,8 +121,10 @@ function setUp(ctx: V2Context, id: string, by: 'passkey' | 'totp'): void {
     refuseFactor(ctx.response, 410, 'expired')
     return
   }
-  // A second step exists now: an unfinished account is finished.
-  ctx.v2.accounts.amend(pending.username, (a) => (a.setupPending === true ? { ...a, setupPending: false } : a))
+  // A second step exists now: an unfinished account is finished, and every
+  // other set-up open for it ends here.
+  ctx.v2.accounts.amend(pending.username, (a) => (a.setupPending === undefined ? a : { ...a, setupPending: undefined }))
+  ctx.v2.factors.pending.closeAllFor(pending.username, id)
   // Shown here and nowhere else: they are stored hashed from this moment.
   const codes = ctx.v2.accounts.mintRecoveryCodes(pending.username)
   ctx.v2.factors.pending.codesShown(id)
@@ -233,8 +248,14 @@ export function handleSetupRoute(ctx: V2Context, id: string, rest: readonly stri
  * session, like any other. The account and its device exist; the session waits.
  */
 export function setupForNewAccount(ctx: V2Context, username: string, rawDevice: unknown, via?: { provider: ProviderId; subject: string }): void {
-  // Until a second step exists the set-up may finish elsewhere: the app that
-  // made the account may be one that cannot do it (see V2Account.setupPending).
-  ctx.v2.accounts.amend(username, (a) => ({ ...a, setupPending: true }))
+  // ONLY ON THE DIRECT PATH, AND FOR A WHILE: the app that made the account
+  // there may be one that cannot set up (0.5.x), so the set-up may finish on
+  // the auth page from another device — for three days, and never once a
+  // second step exists (see V2Account.setupPending). A sign-up on the auth
+  // page or at a provider finishes where it started and needs none of it.
+  if (ctx.auth === undefined) {
+    const until = ctx.v2.now() + UNFINISHED_MS
+    ctx.v2.accounts.amend(username, (a) => ({ ...a, setupPending: until }))
+  }
   openSetup(ctx, username, rawDevice, via)
 }
