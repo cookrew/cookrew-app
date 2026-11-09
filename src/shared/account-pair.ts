@@ -47,7 +47,9 @@ export const GRANT_PATHS = {
   options: '/v2/me/device-grant/options',
   grant: '/v2/me/device-grant',
   /** A watch's pass: no proof, a watch only (registry v2-device-grant.ts · issueWatchGrant). */
-  watch: '/v2/me/device-grant/watch'
+  watch: '/v2/me/device-grant/watch',
+  /** A machine's pass into the account's others: no proof, a desktop only (issueMachineGrant). */
+  machine: '/v2/me/device-grant/machine'
 } as const
 
 /**

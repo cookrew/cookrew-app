@@ -199,7 +199,8 @@ describe('registerZoomFleetIpc', () => {
       authed: async () => ({ ok: true, value: [row(ME, 'Studio')] }),
       deviceId: () => ME
     })
-    expect([...handlers.keys()].sort()).toEqual(['zoom-fleet:gauges', 'zoom-fleet:machines', 'zoom-fleet:subscribe', 'zoom-fleet:unsubscribe'])
+    // fleet-of and gauges-of: another machine of the account, read with the key this one holds for it.
+    expect([...handlers.keys()].sort()).toEqual(['zoom-fleet:fleet-of', 'zoom-fleet:gauges', 'zoom-fleet:gauges-of', 'zoom-fleet:machines', 'zoom-fleet:subscribe', 'zoom-fleet:unsubscribe'])
     const sender = fakeSender()
     expect(handlers.get('zoom-fleet:subscribe')?.({ sender })).toBe(true)
     expect(handlers.get('zoom-fleet:unsubscribe')?.({ sender })).toBe(true)

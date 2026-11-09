@@ -92,6 +92,8 @@ export interface V2Device {
   jwk: Record<string, string>
   addedAt: number
   lastSeenAt: number
+  /** A desktop that proved itself once on this machine: it enters the account's others with no proof (v2-device-grant.ts · issueMachineGrant). */
+  machine?: true
 }
 
 export interface V2Workspace {
@@ -917,6 +919,32 @@ export class V2Accounts {
   }
 
   /** This sitting just proved itself again: the five-minute window opens from now. */
+  /**
+   * EVERY OTHER MACHINE PROVES ITSELF AGAIN. A machine's trust was earned under
+   * the password of its day; "Not me" and a password change say that password
+   * may be someone else's, so only the machine the owner is on keeps it
+   * (security review 2026-11-09).
+   */
+  untrustOtherMachines(username: string, keepDeviceId: string | null): void {
+    const account = this.get(username)
+    if (!account || !account.devices.some((d) => d.machine === true && d.id !== keepDeviceId)) return
+    const devices = account.devices.map((d) => {
+      if (d.machine !== true || d.id === keepDeviceId) return d
+      const { machine: _dropped, ...rest } = d
+      return rest
+    })
+    this.replace({ ...account, devices })
+  }
+
+  /** This desktop proved itself: from now on a trusted machine of the account. */
+  trustMachine(username: string, deviceId: string): void {
+    const account = this.get(username)
+    if (!account) return
+    const device = account.devices.find((d) => d.id === deviceId)
+    if (!device || device.kind !== 'desktop' || device.machine === true) return
+    this.replace({ ...account, devices: account.devices.map((d) => (d.id === deviceId ? { ...d, machine: true as const } : d)) })
+  }
+
   markVerified(username: string, jti: string, by: VerifiedBy): void {
     const account = this.get(username)
     if (!account || !account.sessions.some((s) => s.jti === jti)) return
@@ -1207,6 +1235,8 @@ export class V2Accounts {
         this.otherSessions(fresh, keepJti)
       )
     )
+    // A machine trusted under the old password proves itself under the new one.
+    this.untrustOtherMachines(username, fresh.sessions.find((s) => s.jti === keepJti)?.dev ?? null)
     return { ok: true }
   }
 

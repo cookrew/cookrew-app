@@ -1737,6 +1737,40 @@ export class Accounts {
   }
 
   /**
+   * ONE CALL TO ANOTHER MACHINE OF THE ACCOUNT, DOWN THE RELAY.
+   *
+   * The relay opens only for the session cookie (registry v2-http.ts ·
+   * SESSION_COOKIE), so this sends it as one; what the other machine sees is
+   * its own key, if one is passed as `Authorization`, and the bridge's word
+   * for which device asked. The session still never leaves this class.
+   */
+  async relayed(
+    desktopId: string,
+    route: string,
+    init: RequestInit = {},
+  ): Promise<{ ok: true; response: Response } | { ok: false; reason: AccountRefusal }> {
+    const account = this.cached
+    if (!account) return { ok: false, reason: 'no_account' }
+    if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
+    if (!/^[0-9a-f-]{36}$/i.test(desktopId)) return { ok: false, reason: 'unknown' }
+    const token = account.session?.token ?? ''
+    const url = `${this.origin}/relay/@${account.username}/desktop/${desktopId.toLowerCase()}/${route.replace(/^\/+/, '')}`
+    try {
+      const response = await this.http(url, {
+        ...init,
+        headers: {
+          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(init.headers as Record<string, string> | undefined),
+          cookie: `__Host-cr_session=${token}`,
+        },
+      })
+      return { ok: true, response }
+    } catch {
+      return { ok: false, reason: 'offline' }
+    }
+  }
+
+  /**
    * CHECK A LOCAL "ENDED" MARK AGAINST THE REGISTRY, WHICH IS THE AUTHORITY.
    *
    * The mark exists so a session the registry really ended is not retried

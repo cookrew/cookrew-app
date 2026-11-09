@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { forgetGrantRests } from '../registry/src/v2-device-grant'
 import { GRANT_TTL_MS } from '../registry/src/v2-tokens'
-import { v2GrantClaimsFor, v2WatchGrantClaimsFor } from '../src/main/v2-call-token'
+import { v2GrantClaimsFor, v2MachineGrantClaimsFor, v2WatchGrantClaimsFor } from '../src/main/v2-call-token'
 import { jwkThumbprint } from '../src/shared/jwk-thumbprint'
 import { GRANT_PATHS } from '../src/shared/account-pair'
 import { getAssertion, GET_FLAGS, GET_FLAGS_VERIFIED } from './support/webauthn'
@@ -199,5 +199,66 @@ describe('POST /v2/me/device-grant/watch (owner 2026-11-09: a watch pairs once)'
     const watch = await world.browser(username, 'watch')
     world.v2.factors.store.setMustChangePassword(username, true)
     expect((await watch.registry.post(GRANT_PATHS.watch, {})).status).toBe(403)
+  })
+})
+
+describe('POST /v2/me/device-grant/machine (owner 2026-11-09: machines on the account trust each other)', () => {
+  it('a machine proves itself ONCE (password or passkey, from that machine); after that it needs nothing (security review: kind is self-declared)', async () => {
+    const { username } = await fresh()
+    const desk = await world.browser(username, 'desktop')
+    const bare = await desk.registry.post(GRANT_PATHS.machine, {})
+    expect(bare.status).toBe(401)
+    expect(bare.body).toMatchObject({ error: 'proof_required' })
+    expect((await desk.registry.post(GRANT_PATHS.machine, { password: 'not it' })).status).toBe(401)
+    expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
+    // Trusted now: the next pass takes no proof, and another desktop of the account is still asked.
+    expect((await desk.registry.post(GRANT_PATHS.machine, {})).status).toBe(201)
+    const other = await world.browser(username, 'desktop')
+    expect((await other.registry.post(GRANT_PATHS.machine, {})).status).toBe(401)
+  })
+
+  it('gives a trusted machine its pass with no proof, in a kind an older machine refuses', async () => {
+    const { username } = await fresh()
+    const desk = await world.browser(username, 'desktop')
+    expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
+    const out = await desk.registry.post(GRANT_PATHS.machine, {})
+    expect(out.status).toBe(201)
+    const grant = (out.body as { grant: string }).grant
+    expect(v2MachineGrantClaimsFor(grant, Date.now())).toMatchObject({ username, dev: desk.device.id, machine: true })
+    expect(v2GrantClaimsFor(grant, Date.now())).toBeNull()
+    expect(v2WatchGrantClaimsFor(grant, Date.now())).toBeNull()
+  })
+
+  it('a phone, a browser or a watch is not a machine', async () => {
+    const { username, browser } = await fresh()
+    expect((await browser.registry.post(GRANT_PATHS.machine, {})).body).toMatchObject({ error: 'not_machine' })
+    const watch = await world.browser(username, 'watch')
+    expect((await watch.registry.post(GRANT_PATHS.machine, {})).status).toBe(403)
+  })
+})
+
+describe('a machine’s trust ends with the password it was proved under (security review 2026-11-09)', () => {
+  it('a password change leaves the machine the owner is on trusted, and asks every other one to prove itself again', async () => {
+    const { username } = await fresh()
+    const mine = await world.browser(username, 'desktop')
+    const theirs = await world.browser(username, 'desktop')
+    for (const desk of [mine, theirs]) expect((await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })).status).toBe(201)
+    const changed = await mine.registry.post('/v2/me/password', { current: PASSWORD, next: 'a brand new long password' })
+    expect(changed.status).toBe(204)
+    expect((await mine.registry.post(GRANT_PATHS.machine, {})).status).toBe(201)
+    expect(world.v2.accounts.get(username)?.devices.find((d) => d.id === theirs.device.id)?.machine).toBeUndefined()
+  })
+
+  it('“Not me” takes it from every machine but the one that raised it', () => {
+    const username = `untrust${++n}`
+    return world.account(username).then(async () => {
+      const mine = await world.browser(username, 'desktop')
+      const theirs = await world.browser(username, 'desktop')
+      for (const desk of [mine, theirs]) await desk.registry.post(GRANT_PATHS.machine, { password: PASSWORD })
+      world.v2.accounts.untrustOtherMachines(username, mine.device.id)
+      const devices = world.v2.accounts.get(username)?.devices ?? []
+      expect(devices.find((d) => d.id === mine.device.id)?.machine).toBe(true)
+      expect(devices.find((d) => d.id === theirs.device.id)?.machine).toBeUndefined()
+    })
   })
 })

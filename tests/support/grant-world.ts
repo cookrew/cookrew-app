@@ -38,7 +38,7 @@ export interface GrantWorld {
   readonly v2: V2Identity
   account(username: string, options?: { passwordless?: boolean }): Promise<void>
   /** A signed-in device; a phone unless said otherwise. */
-  browser(username: string, kind?: 'phone' | 'watch'): Promise<Browser>
+  browser(username: string, kind?: 'phone' | 'watch' | 'desktop'): Promise<Browser>
   addPasskey(username: string): { pair: Pair; credentialId: Buffer }
   close(): Promise<void>
 }
@@ -106,7 +106,7 @@ export async function grantWorld(): Promise<GrantWorld> {
     },
     browser: async (username, kind = 'phone') => {
       const minted = await mintBrowserDevice()
-      const attached = v2.accounts.attachDevice(username, { id: minted.id, kind, name: kind === 'watch' ? 'Apple Watch' : 'iPhone', jwk: minted.jwk }, { watch: kind === 'watch' })
+      const attached = v2.accounts.attachDevice(username, { id: minted.id, kind, name: kind === 'watch' ? 'Apple Watch' : kind === 'desktop' ? 'Solis-Core' : 'iPhone', jwk: minted.jwk }, { watch: kind === 'watch' })
       if (!attached.ok) throw new Error(attached.reason)
       // As a sign-in that just finished leaves it: proved, so fresh for five minutes.
       const session = v2.accounts.startSession(username, minted.id, { verifiedBy: 'passkey' })
