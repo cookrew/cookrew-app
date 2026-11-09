@@ -8,6 +8,7 @@ import {
   clientLabelOf,
   isAuthClient,
   isAuthIntent,
+  isWebStepUpAct,
   safeReturnPath,
   type AuthClient,
   type AuthDevice,
@@ -23,6 +24,8 @@ import { factorError } from './v2-factor-copy'
 import { stepUpHeld } from './v2-step-up'
 import { continueRequest } from './v2-oauth-routes'
 import { enrolmentOf, passkeyOnPage, passkeyOptionsOnPage, writeHeldPasskey } from './auth-passkey'
+import { openerForStepUp, spendStepUp, startLadder, stepOf } from './auth-step-up'
+import type { StepUpAct } from '../../src/shared/step-up'
 
 /**
  * AUTH.COOKREW.DEV — THE REQUEST ROUTES.
@@ -53,7 +56,9 @@ const SENTENCES = {
   oauth_off: 'This sign-in is not available here.',
   use_code: 'Type the code from your terminal at the device page instead.',
   signed_out: 'Sign in first, then add the passkey from Security.',
-  other_device: 'Add the passkey from the device you are signed in on. If this is that device, sign out and sign in again here first.'
+  other_device: 'Add the passkey from the device you are signed in on. If this is that device, sign out and sign in again here first.',
+  step_signed_out: 'Sign in first, then try again from your account page.',
+  step_other_device: 'Confirm from the browser you are signed in on. If this is that browser, sign out and sign in again first.'
 } as const
 
 type Sentence = keyof typeof SENTENCES
@@ -130,6 +135,7 @@ interface Parsed {
   intent: AuthRequest['intent']
   provider: ProviderId | null
   device: AuthDevice
+  act: StepUpAct | null
 }
 
 /** The shape of a request body, or the refusal already written. */
@@ -161,12 +167,22 @@ function parse(ctx: V2Context, body: Record<string, unknown>): Parsed | null {
     refuseAuth(ctx.response, 400, 'bad_flow')
     return null
   }
+  // A step-up is for one act cookrew.dev/me is about to do, and its code comes
+  // back to the browser holding that session: the web, and one act /me knows.
+  let act: StepUpAct | null = null
+  if (intent === 'step-up') {
+    if (client !== 'web' || !isWebStepUpAct(body.act)) {
+      refuseAuth(ctx.response, 400, 'bad_flow')
+      return null
+    }
+    act = body.act
+  }
   const shape = deviceShape(body.device)
   if (shape === null || !kindFits(client, shape.kind)) {
     refuse(ctx.response, 400, 'bad_device')
     return null
   }
-  return { client, intent, provider, device: body.device as AuthDevice }
+  return { client, intent, provider, device: body.device as AuthDevice, act }
 }
 
 /** POST /v2/auth/requests */
@@ -253,6 +269,24 @@ async function openRequest(ctx: V2Context): Promise<void> {
     }
     opener = { username: signed.account.username, jti: signed.claims.jti, device: signed.claims.dev }
   }
+  /**
+   * A STEP-UP, like a passkey, is proven on the page and not here: the one
+   * proof an account with no password has is a provider round trip. What is
+   * carried to the page is who opened it and for which act — nothing else.
+   */
+  if (parsed.intent === 'step-up' && parsed.act !== null) {
+    const signed = signedIn(ctx.request, v2)
+    if (signed === null) {
+      refuseAuth(response, 401, 'step_signed_out', { error: 'unauthenticated' })
+      return
+    }
+    if (shapeId(parsed.device) !== signed.claims.dev) {
+      refuseAuth(response, 403, 'step_other_device', { error: 'not_this_device' })
+      return
+    }
+    opener = openerForStepUp(ctx, signed, parsed.act)
+    if (opener === null) return
+  }
 
   const hint = typeof body.username === 'string' ? body.username.trim().toLowerCase() : ''
   const opened = auth.requests.open({
@@ -266,6 +300,7 @@ async function openRequest(ctx: V2Context): Promise<void> {
     returnPath: client === 'web' ? (safeReturnPath(body.return) ?? '/me') : null,
     usernameHint: opener?.username ?? (USERNAME.test(hint) ? hint : null),
     opener,
+    act: parsed.act,
     address: asking(ctx)
   })
   if (opened === 'invalid') {
@@ -280,7 +315,8 @@ async function openRequest(ctx: V2Context): Promise<void> {
   // anything: which client, which screen, and for the web where it returns.
   const resume = client === 'desktop' && parsed.intent === 'sign-in' && opener === null && USERNAME.test(hint) ? ' resume' : ''
   const landing = opened.returnPath === null ? '' : ` return=${opened.returnPath}`
-  auth.log(`auth request opened: client=${client} intent=${parsed.intent}${resume}${landing}`)
+  const forAct = parsed.act === null ? '' : ` act=${parsed.act}`
+  auth.log(`auth request opened: client=${client} intent=${parsed.intent}${forAct}${resume}${landing}`)
   const verification = `${auth.origin}/device`
   const created: Record<string, unknown> = {
     request: opened.id,
@@ -450,6 +486,12 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
       failPage(response, null, 'That passkey was not added: the link came from another site. Add it again from Security on cookrew.dev.')
       return
     }
+    // A step-up's proof is never made to count by a navigation another site started.
+    if (asked !== null && asked.intent === 'step-up') {
+      auth?.log(`step-up: refused why=cross_site at=complete client=web`)
+      failPage(response, null, 'That confirmation was not used: the link came from another site. Try again from your account page on cookrew.dev.')
+      return
+    }
   }
   const spent = auth === null || code === null ? null : auth.requests.redeem(code, 'web', verifier)
   const matches = spent !== null && spent.request.id === id && spent.request.clientState === state
@@ -463,6 +505,23 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
     const back = spent.request.returnPath ?? '/me'
     response.writeHead(303, {
       location: `${back}?passkey=added#security`,
+      'cache-control': 'private, no-store',
+      'referrer-policy': 'no-referrer',
+      'content-length': '0',
+      'set-cookie': cleared
+    })
+    response.end()
+    return
+  }
+  if (spent !== null && matches && spent.request.intent === 'step-up') {
+    // The proof counts for this browser's own session, the one that opened it.
+    const proven = spendStepUp(v2, spent.request, signedIn(request, v2), request)
+    if (!proven.ok) {
+      failPage(response, cleared, proven.message)
+      return
+    }
+    response.writeHead(303, {
+      location: proven.location,
       'cache-control': 'private, no-store',
       'referrer-policy': 'no-referrer',
       'content-length': '0',
@@ -527,7 +586,8 @@ export function summaryOf(v2: V2Identity, request: AuthRequest): AuthRequestSumm
     expiresAt: request.expiresAt,
     providers: [...v2.oauth.providers.values()].map((p) => ({ id: p.id, label: PROVIDER_LABEL[p.id] })),
     stage: request.stage,
-    enrol: enrolmentOf(v2, request)
+    enrol: enrolmentOf(v2, request),
+    step: stepOf(v2, request)
   }
 }
 
@@ -582,7 +642,7 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
     if (request !== null) v2Json(response, 200, summaryOf(v2, request))
     return true
   }
-  if (method !== 'POST' || !['claim', 'device', 'continue', 'cancel', 'passkey/options', 'passkey'].includes(name)) {
+  if (method !== 'POST' || !['claim', 'device', 'continue', 'cancel', 'passkey/options', 'passkey', 'step-up'].includes(name)) {
     refuse(response, 404, 'not_found')
     return true
   }
@@ -632,6 +692,10 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   }
   if (name === 'passkey/options') {
     passkeyOptionsOnPage({ ...ctx, auth: { request } }, request)
+    return true
+  }
+  if (name === 'step-up') {
+    startLadder({ ...ctx, auth: { request } }, request)
     return true
   }
   // Over is over: a finished request keeps its code, a cancelled one is not

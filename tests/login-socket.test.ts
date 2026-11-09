@@ -24,7 +24,7 @@ let signIn: AccountDoor['signIn']
 
 const account = (): AccountDoor => ({
   platform: 'linux',
-  who: () => ({ username: null, deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, passcodePending: false }),
+  who: () => ({ username: null, deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null }),
   signIn: (input) => signIn(input),
   resume: async () => ({ ok: true, value: {} }),
   climbCode: async () => ({ ok: true, value: {} }),

@@ -37,6 +37,12 @@ export interface PairDoorDeps {
   readonly grants: (token: string) => Promise<V2Grant | null>
   readonly admitted: AdmittedDeviceStore
   readonly platform: string
+  /**
+   * A watch's pass is turned into a watch's token here (watch-pairing.ts), never
+   * into a device's: a watch reaches agents and pages, not a shell. Absent, a
+   * watch's pass is refused.
+   */
+  readonly watch?: { readonly enter: (deviceId: string) => string }
   readonly now?: () => number
   readonly log?: (line: string) => void
 }
@@ -140,6 +146,20 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
     return { status: 200, body }
   }
 
+  /** A watch, by its pass: the machine's watch token, until the watch is forgotten here. */
+  const enterWatch = (asking: Asking, account: AccountFile): PairReply<PairAnswer> => {
+    if (deps.watch === undefined) return refuse(403, 'refused', word('This Mac does not take a watch at this door.'))
+    let token: string
+    try {
+      token = deps.watch.enter(asking.deviceId)
+    } catch {
+      return refuse(503, 'unavailable', word('This Mac could not record the watch. Try again.'))
+    }
+    log(`account pair: a watch entered with its pass (${asking.deviceId.slice(0, 8)})`)
+    const body: PairAnswer = { ok: true, outcome: 'admitted', deviceId: asking.deviceId, desktopId: account.deviceId, token, until: 0, scope: 'watch' }
+    return { status: 200, body }
+  }
+
   return {
     offer() {
       const account = deps.account()
@@ -185,6 +205,7 @@ export function createAccountPairDoor(deps: PairDoorDeps): AccountPairDoor {
       if (!deviceSignatureValid(asking.jwk, transcript, sig)) {
         return refuse(401, 'refused', 'This device’s signature did not open. Start again.')
       }
+      if (grant.watch === true) return enterWatch(asking, account)
       return admit(asking, grant, account)
     }
   }

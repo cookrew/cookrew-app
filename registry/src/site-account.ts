@@ -1,5 +1,6 @@
 import { DELETE_ACCOUNT_KEEPS, DELETE_ACCOUNT_TAKES, DELETE_ACCOUNT_WARNING } from '../../src/shared/account-delete'
 import { machineCopy } from '../../src/shared/machine-words'
+import { WEB_STEP_UP_ACTS } from '../../src/shared/auth-site'
 import { webCopy } from './v3-copy'
 import { day, esc, page, type Page } from './site-shell'
 import { desktopsSection } from './site-reach'
@@ -24,6 +25,7 @@ const KIND_LABEL: Record<V2Device['kind'], string> = {
   desktop: 'Desktop',
   phone: 'Phone',
   browser: 'Browser',
+  watch: 'Watch',
   // The key this name held before it had a password (phase 6). Listed like
   // any other device, and revocable like one: that is how the old world ends.
   legacy: 'Key'
@@ -100,14 +102,16 @@ const PASSWORD_ROW =
 const FIRST_PASSWORD_ROW =
   '<li id="me-password-row"><span class="chip">Password</span><span><b>No password yet</b><br><span class="meta" id="me-password-note">You sign in with your provider. Set a password to enter your machines with it — or add a passkey below.</span></span><button class="btn sm" data-password data-first>Set</button></li>'
 
-/** This page can check a password and cannot make a provider trip. */
-const DELETE_IN_THE_APP =
-  '<p class="meta">This account has no password to confirm with here. Delete it from your profile in the Cookrew app, where your sign-in provider can confirm it.</p>'
-
-const deleteForm = (username: string): string =>
+/**
+ * THE NAME, AND THE PASSWORD WHEN THERE IS ONE. An account with no password
+ * proves it on auth.cookrew.dev (step-up.js) and comes back here to press the
+ * button again; it used to be sent to the desktop app for something the web
+ * can do.
+ */
+const deleteForm = (username: string, passwordless: boolean): string =>
   `<p class="row"><input id="me-delete-name" autocomplete="off" spellcheck="false" placeholder="Type ${esc(username)} to confirm" aria-label="Type your username to confirm">
-<input id="me-delete-password" type="password" autocomplete="current-password" placeholder="Your password" aria-label="Your password">
-<button class="btn" data-delete-account>Delete my account</button></p>`
+${passwordless ? '' : '<input id="me-delete-password" type="password" autocomplete="current-password" placeholder="Your password" aria-label="Your password">\n'}<button class="btn" data-delete-account>Delete my account</button></p>
+${passwordless ? '<p class="meta">Cookrew asks you to confirm it is you — with your passkey, your sign-in provider or a code — then brings you back here to finish.</p>\n' : ''}<p class="meta" id="me-delete-note" role="status" hidden></p>`
 
 export function mePage(
   input: { account: V2Account; currentDeviceId: string; factors?: FactorSummary } | null
@@ -147,9 +151,11 @@ export function mePage(
       noindex: true,
       // device-seal.js before reach.js: M5's answer arrives sealed to this
       // device, and the opener has to be on the page by the time it lands.
-      scripts: ['device-id.js', 'site.js', 'device-seal.js', 'reach.js']
+      // step-up.js before site.js: the sensitive acts both scripts own prove
+      // themselves through it, and it finishes them on the way back.
+      scripts: ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js']
     },
-    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}">
+    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}" data-step-up-acts="${WEB_STEP_UP_ACTS.join(' ')}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
 <p class="meta" id="me-display">${esc(account.displayName || 'No display name yet')} · member since ${esc(day(account.claimedAt))}</p></div>
 <span class="sp" style="flex:1"></span>
@@ -197,11 +203,11 @@ ${authenticatorRow(factors.totp)}
 <pre class="cmd" id="me-codes" hidden></pre>
 <div class="totp-panel" id="me-totp" hidden></div>
 
-<details style="margin-top:30px"><summary>Delete account</summary>
+<details style="margin-top:30px" id="me-delete"><summary>Delete account</summary>
 <p class="lede">${esc(DELETE_ACCOUNT_WARNING)}</p>
 <p class="meta">This deletes:</p><ul>${DELETE_ACCOUNT_TAKES.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
 <p class="meta">This stays:</p><ul>${DELETE_ACCOUNT_KEEPS.map((line) => `<li>${esc(line)}</li>`).join('')}</ul>
-${account.passwordless === true ? DELETE_IN_THE_APP : deleteForm(account.username)}
+${deleteForm(account.username, account.passwordless === true)}
 </details>
 </div>`
   )

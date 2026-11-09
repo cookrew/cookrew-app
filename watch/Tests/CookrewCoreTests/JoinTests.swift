@@ -198,7 +198,7 @@ private func pair(_ api: FakeRegistry, code: String = "K7QM2XPD", held: WatchAcc
     let wire = device.wire(name: "Apple Watch")
     #expect(wire["id"] as? String == device.id)
     #expect(device.id == device.id.lowercased())
-    #expect(wire["kind"] as? String == "phone")
+    #expect(wire["kind"] as? String == "watch")
     let jwk = try #require(wire["jwk"] as? [String: String])
     #expect(jwk["kty"] == "OKP")
     #expect(jwk["crv"] == "Ed25519")

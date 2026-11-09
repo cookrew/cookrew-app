@@ -2,7 +2,8 @@ import { readJsonBody } from './http'
 import { asking, v2Json, type Signed, type V2Context } from './v2-http'
 import { relyingParty, spendChallenge } from './v2-factor-http'
 import { verifyAssertion } from './v2-passkeys'
-import { freshlyVerified, type VerifiedBy } from './v2-session-age'
+import { type VerifiedBy } from './v2-session-age'
+import { freshFor } from './v2-step-up'
 import { jwkThumbprint } from '../../src/shared/jwk-thumbprint'
 
 /**
@@ -181,6 +182,37 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
 }
 
+/**
+ * POST /v2/me/device-grant/watch — A WATCH PAIRS ONCE (owner, 2026-11-09).
+ *
+ * The exception to "every pass takes a proof made now", for one kind of device:
+ * a watch has no passkey and no keyboard for a password. Its proof was made
+ * once, when it joined the account with a code a machine minted only after the
+ * account's step-up (v2-join.ts); from then on it is handed a pass whenever it
+ * asks, for its own key, and enters every machine of the account, those added
+ * later included. Removing the watch in Devices ends it: a revoked device has
+ * no session to ask with, and each machine drops the watch's token when the
+ * revoked list names it (watch-pairing.ts · revoked). "Not me" stops new passes
+ * and the watch's sessions; to end its tokens on the machines, remove it. The pass is a WATCH pass (its own scope), which a machine turns into a
+ * watch's token — agents and pages, never a shell — and which a machine older
+ * than it does not read at all.
+ */
+export function issueWatchGrant(ctx: V2Context, signed: Signed): void {
+  const { account, claims, device } = signed
+  if (device.kind !== 'watch') {
+    return said(ctx, 403, 'not_watch', 'Only a watch is let into every machine on its pairing alone. Prove it is you instead.')
+  }
+  if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
+  // As the proved pass is limited: a watch asks a few times a visit, not a stream.
+  if (!ctx.v2.factors.options.take(`watch-grant|${device.id}`)) return said(ctx, 429, 'rate_limited', SAID.resting)
+  const jkt = jwkThumbprint(device.jwk)
+  if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
+  const sitting = ctx.v2.accounts.session(account.username, claims.jti)?.sitting ?? claims.jti
+  const minted = ctx.v2.tokens.mintWatchGrant(account.username, device.id, jkt, sitting)
+  ctx.response.setHeader('cache-control', 'private, no-store')
+  v2Json(ctx.response, 201, { grant: minted.token, exp: minted.exp, deviceId: device.id })
+}
+
 /** For tests: forget every rest. */
 export const forgetGrantRests = (): void => rests.clear()
 
@@ -193,26 +225,25 @@ export const forgetGrantRests = (): void => rests.clear()
  */
 export async function setFirstPassword(ctx: V2Context, signed: Signed, body: Record<string, unknown>): Promise<void> {
   const { account, claims } = signed
-  const session = ctx.v2.accounts.session(account.username, claims.jti)
   /**
    * An account that holds a passkey proves it with the passkey: a provider
    * round trip is the weaker key, and a password set on it alone would open
    * the device pass with the provider alone (review, 11-09). Without one, any
-   * verification in the window, or a provider round trip, will do.
+   * verification in the window, or a provider round trip, will do. `freshFor`
+   * is the same question cookrew.dev/me asks before it shows the fields.
    */
   const hasPasskey = ctx.v2.factors.store.hasPasskey(account.username)
-  const proved = hasPasskey
-    ? freshlyVerified(session, ctx.v2.now(), ['passkey'], ctx.v2.freshWindowMs)
-    : freshlyVerified(session, ctx.v2.now(), undefined, ctx.v2.freshWindowMs) ||
-      ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti)
+  const proved =
+    freshFor(ctx.v2, signed, 'change-password') ||
+    (!hasPasskey && ctx.v2.factors.pending.spendAuthorised(account.username, 'change-password', body.stepUp, claims.jti))
   if (!proved) {
     said(
       ctx,
       403,
       'step_up',
       hasPasskey
-        ? 'Prove it is you with your passkey first (sign in with it again), then set the password within five minutes.'
-        : 'Prove it is you first: sign in again, or confirm with your provider, then set the password within five minutes.'
+        ? 'Prove it is you with your passkey first, then set the password within five minutes. On cookrew.dev, Set takes you through it.'
+        : 'Prove it is you first — with your provider or your authenticator — then set the password within five minutes. On cookrew.dev, Set takes you through it.'
     )
     return
   }

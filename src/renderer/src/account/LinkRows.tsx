@@ -44,6 +44,8 @@ export function LinkRows({
   const [passcode, setPasscode] = useState<{ current: string; next: string; confirm: string } | null>(null)
   /** Owner's ruling 3: a provider-only account sets an account password; the passcode folds into it. */
   const [first, setFirst] = useState<{ next: string; confirm: string } | null>(null)
+  /** The account password, typed once on a machine signed in from a terminal. */
+  const [typed, setTyped] = useState('')
   /** A browser trip is in flight, so the way out has to be on screen. */
   const [tripping, setTripping] = useState(false)
   const trip = useTripGuard()
@@ -127,6 +129,21 @@ export function LinkRows({
         setTripping(false)
         setBusy(false)
       })
+  }
+
+  const adopt = (): void => {
+    const call = cookrew().accountAdoptPassword
+    if (!call || busy || typed.length === 0) return
+    setBusy(true)
+    setError(null)
+    void call(typed)
+      .then((result) => {
+        setTyped('')
+        if (result.ok) onStatus(result.value)
+        else setError(providerRefusal(result.reason, result.message))
+      })
+      .catch(() => setError('That could not be checked. Try again.'))
+      .finally(() => setBusy(false))
   }
 
   const toggleTouchId = (): void => {
@@ -269,18 +286,26 @@ export function LinkRows({
           </button>
         </li>
       )}
-      {status.passcodePending && passcode === null && (
-        <Row
-          kind="LOCK"
-          label={machineCopy('Choose a passcode for this Mac', hostPlatform())}
-          action={
-            <button className="gs-ghost" onClick={() => setPasscode({ current: '', next: '', confirm: '' })}>
-              CHOOSE
-            </button>
-          }
-        />
+      {status.lockWaits === 'type-password' && !status.passwordless && (
+        <li className="cr-acct-secrow cr-acct-removefactor">
+          <p className="gs-hint">{PROVIDER_COPY.LOCK_WAITS_TYPE}</p>
+          <input
+            type="password"
+            className="gs-input"
+            aria-label="Account password"
+            placeholder="account password"
+            autoComplete="current-password"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && adopt()}
+          />
+          <button className="gs-primary" disabled={busy || typed.length === 0} onClick={adopt}>
+            TURN THE LOCK ON
+          </button>
+        </li>
       )}
-      {status.unlockBy === 'passcode' && !status.passcodePending && (
+      {status.lockWaits === 'set-password' && <p className="gs-hint">{PROVIDER_COPY.LOCK_WAITS_SET}</p>}
+      {status.unlockBy === 'passcode' && (
         <Row
           kind="LOCK"
           label={machineCopy('This Mac unlocks with a passcode', hostPlatform())}
@@ -293,7 +318,7 @@ export function LinkRows({
       )}
       {passcode !== null && (
         <li className="cr-acct-secrow cr-acct-removefactor">
-          {(status.passcodePending ? (['next', 'confirm'] as const) : (['current', 'next', 'confirm'] as const)).map((field) => (
+          {(['current', 'next', 'confirm'] as const).map((field) => (
             <input
               key={field}
               type="password"

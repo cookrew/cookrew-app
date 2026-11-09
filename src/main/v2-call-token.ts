@@ -77,6 +77,8 @@ export interface V2Grant {
   /** RFC 7638 thumbprint of the device key the grant was issued to. */
   readonly jkt: string
   readonly exp: number
+  /** A watch's pass: it admits a watch's token only, never a device's. */
+  readonly watch?: true
 }
 
 export interface V2CallTokenVerifier {
@@ -199,6 +201,16 @@ export function v2CallClaimsFor(token: string, aud: string, now: number): V2Call
 
 /** A grant's claims, if the body is one and it is good now. */
 export function v2GrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string }) | null {
+  return grantClaimsIn(token, now, 'grant')
+}
+
+/** A watch's pass (registry v2-tokens.ts · mintWatchGrant): a grant in its own scope, marked so. */
+export function v2WatchGrantClaimsFor(token: string, now: number): (V2Grant & { jti: string; sid: string }) | null {
+  const claims = grantClaimsIn(token, now, 'watch-grant')
+  return claims === null ? null : { ...claims, watch: true }
+}
+
+function grantClaimsIn(token: string, now: number, scope: 'grant' | 'watch-grant'): (V2Grant & { jti: string; sid: string }) | null {
   const [body] = token.split('.')
   if (!body) return null
   let claims: Record<string, unknown>
@@ -209,7 +221,7 @@ export function v2GrantClaimsFor(token: string, now: number): (V2Grant & { jti: 
   } catch {
     return null
   }
-  if (claims.scope !== 'grant' || claims.aud !== undefined) return null
+  if (claims.scope !== scope || claims.aud !== undefined) return null
   if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp <= now) return null
   if (typeof claims.sub !== 'string' || !V2_USERNAME.test(claims.sub)) return null
   if (typeof claims.dev !== 'string' || claims.dev.length === 0) return null
@@ -223,11 +235,12 @@ export function v2GrantClaimsFor(token: string, now: number): (V2Grant & { jti: 
 /** The pure check for a grant: cookrew.dev's signature, the claims, and not cut off. */
 export function verifyV2Grant(token: string, material: V2KeyMaterial, now: number): V2Grant | null {
   if (!v2SignatureHolds(token, material.jwk)) return null
-  const claims = v2GrantClaimsFor(token, now)
+  // A device's pass or a watch's: the revoked list ends either.
+  const claims = v2GrantClaimsFor(token, now) ?? v2WatchGrantClaimsFor(token, now)
   if (claims === null) return null
   const cut = [claims.dev, claims.jti, claims.sid]
   if (cut.some((id) => material.revoked.includes(id))) return null
-  return { username: claims.username, dev: claims.dev, jkt: claims.jkt, exp: claims.exp }
+  return { username: claims.username, dev: claims.dev, jkt: claims.jkt, exp: claims.exp, ...(claims.watch ? { watch: true as const } : {}) }
 }
 
 /** Was this token cut off? Device id and session id are both listed. */

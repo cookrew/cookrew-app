@@ -12,16 +12,16 @@ import type { AccountStatus } from '../src/shared/account-v2'
 import { AccountSheet } from '../src/renderer/src/account/AccountSheet'
 import { HandleCard } from '../src/renderer/src/account/HandleCard'
 import { LockScreen } from '../src/renderer/src/account/LockScreen'
-import { PasscodeCard } from '../src/renderer/src/account/PasscodeCard'
+import { AccountPasswordCard } from '../src/renderer/src/account/AccountPasswordCard'
 import { ProviderButtons, TripWait } from '../src/renderer/src/account/ProviderButtons'
 import { LinkRows } from '../src/renderer/src/account/LinkRows'
 import { ResumeSession } from '../src/renderer/src/account/ResumeSession'
 import {
   PROVIDER_COPY,
   handleView,
-  passcodeView,
+  firstPasswordView,
   providerRefusal,
-  shouldAskPasscode,
+  shouldAskAccountPassword,
   tripGuard,
 } from '../src/renderer/src/account/provider-store'
 import { SecurityCard } from '../src/renderer/src/account/SecurityCard'
@@ -42,7 +42,8 @@ const status = (over: Partial<AccountStatus> = {}): AccountStatus => ({
   passwordPending: false,
   passwordless: true,
   unlockBy: 'passcode',
-  passcodePending: false,
+  lockWaits: null,
+  fromTerminal: false,
   touchId: { available: false, on: false },
   registryMismatch: null,
   workspacesReachable: true,
@@ -104,28 +105,37 @@ describe('choosing a handle', () => {
   })
 })
 
-describe('the passcode', () => {
-  it('asks twice and says it stays on this Mac', () => {
-    const html = renderToStaticMarkup(<PasscodeCard status={status({ passcodePending: true })} onDone={() => undefined} onLater={() => undefined} />)
-    expect(html).toContain('Choose a passcode')
-    expect(html).toContain(PROVIDER_COPY.PASSCODE_LOCAL)
+describe('no passcode is asked for any more (owner, 2026-11-09)', () => {
+  it('a provider-only account is asked for its ACCOUNT password, which becomes this Mac’s lock', () => {
+    const html = renderToStaticMarkup(
+      <AccountPasswordCard status={status({ lockWaits: 'set-password', unlockBy: 'password' })} onDone={() => undefined} onLater={() => undefined} />
+    )
+    expect(html).toContain('Set your account password')
+    expect(html).toContain(PROVIDER_COPY.ACCOUNT_PASSWORD_WHY)
+    expect(html.toLowerCase()).not.toContain('passcode')
   })
 
-  it('holds the primary until it is long enough and repeated', () => {
-    expect(passcodeView('12345', '12345').canGo).toBe(false)
-    expect(passcodeView('123456', '123457').canGo).toBe(false)
-    expect(passcodeView('123456', '123456').canGo).toBe(true)
+  it('holds the primary until it is twelve characters and repeated', () => {
+    expect(firstPasswordView('short one', 'short one').canGo).toBe(false)
+    expect(firstPasswordView('twelve chars ok', 'twelve chars no').canGo).toBe(false)
+    expect(firstPasswordView('twelve chars ok', 'twelve chars ok').canGo).toBe(true)
   })
 
-  it('is asked for on a Mac with none, once a sheet is out of the way, and not again this run after LATER', () => {
-    expect(shouldAskPasscode(status({ passcodePending: true, locked: false }), false)).toBe(true)
-    expect(shouldAskPasscode(status({ passcodePending: true, locked: false }), true)).toBe(false)
-    expect(shouldAskPasscode(status({ passcodePending: false, locked: false }), false)).toBe(false)
-    expect(shouldAskPasscode(null, false)).toBe(false)
+  it('is asked only on a machine a person signed in at, only for an account with no password, not again after LATER', () => {
+    const ask = (over: Partial<AccountStatus>, later = false): boolean =>
+      shouldAskAccountPassword(status({ locked: false, unlockBy: 'password', ...over }), later)
+    expect(ask({ lockWaits: 'set-password', fromTerminal: false })).toBe(true)
+    expect(ask({ lockWaits: 'set-password', fromTerminal: false }, true)).toBe(false)
+    // `cookrew login`: nobody can type at that screen, so no modal at all.
+    expect(ask({ lockWaits: 'set-password', fromTerminal: true })).toBe(false)
+    // The account has a password: nothing is asked up front.
+    expect(ask({ lockWaits: null })).toBe(false)
+    expect(ask({ lockWaits: 'type-password', fromTerminal: true })).toBe(false)
+    expect(shouldAskAccountPassword(null, false)).toBe(false)
   })
 })
 
-describe('the lock on a passcode Mac', () => {
+describe('the lock on a Mac that CHOSE a passcode before there were none', () => {
   const lock = (over: Partial<AccountStatus>): string =>
     renderToStaticMarkup(<LockScreen status={status(over)} onUnlocked={() => undefined} />)
 
@@ -133,7 +143,7 @@ describe('the lock on a passcode Mac', () => {
     const html = lock({})
     expect(html).toContain('placeholder="passcode"')
     expect(html).not.toContain('placeholder="password"')
-    expect(html).toContain(PROVIDER_COPY.FORGOT_PASSCODE)
+    expect(html).toContain(PROVIDER_COPY.CHOSEN_PASSCODE_FORGOT)
   })
 
   it('offers Touch ID only when it is on', () => {
@@ -148,7 +158,7 @@ describe('the lock on a passcode Mac', () => {
   it('a password Mac is unchanged', () => {
     const html = lock({ passwordless: false, unlockBy: 'password' })
     expect(html).toContain('placeholder="password"')
-    expect(html).not.toContain(PROVIDER_COPY.FORGOT_PASSCODE)
+    expect(html).not.toContain(PROVIDER_COPY.CHOSEN_PASSCODE_FORGOT)
   })
 })
 
@@ -270,21 +280,26 @@ describe('review: every surface that can start a trip owns it', () => {
   })
 })
 
-describe('review: a passcode put off', () => {
-  const pending = status({ locked: false, passcodePending: true })
-
-  it('can still be chosen from the security rows', () => {
-    const html = renderToStaticMarkup(
+describe('a lock that waits (owner, 2026-11-09)', () => {
+  const rows = (over: Partial<AccountStatus>): string =>
+    renderToStaticMarkup(
       <ul>
-        <LinkRows offers={[]} links={[]} email={null} status={pending} onStatus={() => undefined} onChanged={() => undefined} />
-      </ul>,
+        <LinkRows offers={[]} links={[]} email={null} status={status({ locked: false, unlockBy: 'password', ...over })} onStatus={() => undefined} onChanged={() => undefined} />
+      </ul>
     )
-    expect(html).toContain('CHOOSE')
+
+  it('a machine signed in from a terminal says so in its rows and takes the account password typed once', () => {
+    const html = rows({ passwordless: false, lockWaits: 'type-password', fromTerminal: true })
+    expect(html).toContain(PROVIDER_COPY.LOCK_WAITS_TYPE)
+    expect(html).toContain('TURN THE LOCK ON')
+    expect(html.toLowerCase()).not.toContain('passcode')
   })
 
-  it('warns that the recovery codes are the way back from a forgotten one', () => {
-    const html = renderToStaticMarkup(<PasscodeCard status={pending} onDone={() => undefined} onLater={() => undefined} />)
-    expect(html).toContain(PROVIDER_COPY.PASSCODE_CODES)
+  it('a provider-only account is pointed at setting its password, never at a passcode', () => {
+    const html = rows({ passwordless: true, lockWaits: 'set-password', fromTerminal: true })
+    expect(html).toContain(PROVIDER_COPY.LOCK_WAITS_SET)
+    expect(html).not.toContain('CHOOSE')
+    expect(html.toLowerCase()).not.toContain('passcode')
   })
 
   it('LOCK NOW is not offered while there is nothing to unlock with', () => {
@@ -300,8 +315,9 @@ describe('review: a passcode put off', () => {
           onCodesSaved={() => undefined}
         />,
       )
-    expect(card({ passcodePending: true })).not.toContain('LOCK NOW')
-    expect(card({ passcodePending: false })).toContain('LOCK NOW')
+    expect(card({ lockWaits: 'set-password' })).not.toContain('LOCK NOW')
+    expect(card({ lockWaits: 'type-password' })).not.toContain('LOCK NOW')
+    expect(card({ lockWaits: null })).toContain('LOCK NOW')
   })
 })
 

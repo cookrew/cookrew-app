@@ -125,7 +125,8 @@ async function factsNow(deps: ProbeDeps): Promise<ToolFacts> {
     platform: deps.platform,
     arch: deps.arch ?? 'unknown',
     endpointTools: deps.endpointTools?.() ?? [],
-    claudeConsent: claude.state === 'found' ? consentNow(deps) : null
+    claudeConsent: claude.state === 'found' ? consentNow(deps) : null,
+    ...(deps.platform === 'linux' ? { xdotool: bin('xdotool') } : {})
   }
 }
 

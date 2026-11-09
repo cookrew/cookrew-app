@@ -34,7 +34,7 @@ import { createFactorState, type FactorState } from './v2-factor-state'
 import { handleFactorRoute, signInWithLadder } from './v2-factor-routes'
 import { handleJoinRoute } from './v2-join'
 import { handleRenewRoute } from './v2-renew'
-import { heldWhenFresh, mayGuessPassword, readAndStepUp } from './v2-step-up'
+import { answerFresh, heldWhenFresh, mayGuessPassword, readAndStepUp } from './v2-step-up'
 import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
@@ -44,7 +44,7 @@ import { setupForNewAccount } from './v2-second-step'
 import { tokenExpiry } from './v2-session-age'
 import { SESSION_TTL_MS } from './v2-tokens'
 import { deviceFor } from './v2-factor-http'
-import { grantOptions, issueGrant, setFirstPassword } from './v2-device-grant'
+import { grantOptions, issueGrant, issueWatchGrant, setFirstPassword } from './v2-device-grant'
 
 /**
  * IDENTITY v2 — THE ACCOUNT ROUTES.
@@ -661,6 +661,9 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     noContent(response, id === claims.dev ? { 'set-cookie': clearedCookie() } : {})
     return
   }
+  // Would this act pass on the last five minutes alone? Asked by /me before it
+  // shows a password field, so nobody types one a trip would throw away.
+  if (rest.length === 2 && rest[0] === 'step-up' && method === 'GET') return answerFresh(ctx, signed, ctx.decode(rest[1]) ?? '')
   if (rest.length === 1 && rest[0] === 'password' && method === 'POST') {
     if (!mayGuessPassword(ctx, signed)) return
     const body = await readJsonBody(ctx.request, SMALL_BODY)
@@ -692,6 +695,10 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   // ONE VERIFICATION, EVERY MACHINE, TWELVE HOURS (v2-device-grant.ts).
   if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'options' && method === 'POST') {
     grantOptions(ctx, signed)
+    return
+  }
+  if (rest.length === 2 && rest[0] === 'device-grant' && rest[1] === 'watch' && method === 'POST') {
+    issueWatchGrant(ctx, signed)
     return
   }
   if (rest.length === 1 && rest[0] === 'device-grant' && method === 'POST') {

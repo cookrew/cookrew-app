@@ -1,12 +1,13 @@
 // THE WHOLE SCREEN ON LINUX (main/linux-screen.ts), against a fake capturer:
 // X11 works through desktopCapturer, Wayland and a missing display are said
-// in words, and there is no input of any kind.
+// in words, and input goes through the desk's gates to xdotool.
 import { describe, expect, it, vi } from 'vitest'
-import { LINUX_INPUT_OFF, LINUX_NO_DISPLAY, LINUX_NO_REGION, LINUX_NO_WINDOW, LINUX_WAYLAND, LinuxScreenDevice, linuxScreenRefusal, linuxSources, type LinuxFrame, type LinuxScreenDeps } from '../src/main/linux-screen'
+import { LINUX_NO_DISPLAY, LINUX_NO_REGION, LINUX_NO_WINDOW, LINUX_WAYLAND, LinuxScreenDevice, linuxScreenRefusal, linuxSources, type LinuxFrame, type LinuxScreenDeps } from '../src/main/linux-screen'
 import { PixelInstance } from '../src/main/pixel-instance'
 import type { RemoteGate } from '../src/main/pixel-instance'
 import type { RemoteState, RemoteStateId } from '../src/shared/remote-access'
 import { parseUseUrl } from '../src/shared/use-url'
+import type { XdoCall } from '../src/main/linux-input'
 
 const X11 = { DISPLAY: ':99', XDG_SESSION_TYPE: 'x11' }
 const frames: LinuxFrame[] = [
@@ -26,10 +27,13 @@ const gate = (blocked: RemoteState | null = null): RemoteGate => ({
   admit: () => null,
   enter: () => () => undefined
 })
+const fakeHand = (refusal: string | null = null) => ({ refusal: () => refusal, send: vi.fn(async (_calls: readonly XdoCall[], _stopped?: () => string | null) => undefined) })
 const deps = (over: Partial<LinuxScreenDeps> = {}): LinuxScreenDeps => ({
   remote: gate(),
   frames: vi.fn(async () => frames),
   primaryDisplayId: () => '1',
+  area: () => ({ x: 0, y: 0, width: 3840, height: 2160 }),
+  hand: fakeHand(),
   ...over
 })
 const device = (url: string, over: Partial<LinuxScreenDeps> = {}) => new LinuxScreenDevice(parseUseUrl(url)!, deps(over))
@@ -83,17 +87,85 @@ describe('LinuxScreenDevice', () => {
     await expect(device('screen://main?roi=0,0,100,100').open()).rejects.toThrow(LINUX_NO_REGION)
   })
 
-  it('takes no input at all: no perform, and an agent is told why', async () => {
-    const screen = device('screen://main')
-    expect((screen as { perform?: unknown }).perform).toBeUndefined()
-    expect(screen.inputRefusal()).toBe(LINUX_INPUT_OFF)
+  it('input waits on the desk: with the switch off nothing is sent, and an agent is told why', async () => {
+    const hand = fakeHand()
+    const off = 'Remote control of this machine is off.'
+    const screen = device('screen://main', { hand, remote: { ...gate(), inputRefusal: () => off, agentRefusal: () => off } })
+    expect(screen.inputRefusal()).toBe(off)
     const instance = new PixelInstance({ url: 'screen://main', device: screen, schedule: () => () => undefined })
     instance.frameListeners.add(() => undefined)
     await instance.start()
     expect(instance.status).toMatchObject({ state: 'live', input: false, use: 'computer' })
-    await expect(instance.act([{ method: 'input.tap', params: { x: 1, y: 1 } } as never])).rejects.toThrow(LINUX_INPUT_OFF)
-    instance.dispatchInput('Input.dispatchMouseEvent' as never, { type: 'mousePressed', x: 1, y: 1 } as never)
+    await expect(instance.act([{ method: 'input.tap', params: { x: 1, y: 1 } } as never])).rejects.toThrow(off)
+    await expect(screen.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(off)
+    expect(hand.send).not.toHaveBeenCalled()
     await instance.stop()
+  })
+
+  it('with the desk open and no xdotool, the hand says what to install', async () => {
+    const hand = fakeHand('install xdotool')
+    const screen = device('screen://main', { hand })
+    expect(screen.inputRefusal()).toBe('install xdotool')
+    await expect(screen.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow('install xdotool')
+    expect(hand.send).not.toHaveBeenCalled()
+  })
+
+  it('a tap on the frame lands at the same ratio of the display it shows', async () => {
+    const hand = fakeHand()
+    const area = vi.fn(() => ({ x: 1920, y: 0, width: 3840, height: 2160 }))
+    const screen = device('screen://main', { hand, area })
+    await screen.capture()
+    await screen.perform({ method: 'input.tap', params: { x: 960, y: 540 } })
+    expect(area).toHaveBeenCalledWith(expect.objectContaining({ displayId: '1', index: 1 }))
+    expect(hand.send.mock.calls[0][0]).toEqual([{ argv: ['mousemove', String(1920 + 1920), '1080', 'click', '1'], timeoutMs: expect.any(Number) }])
+  })
+
+  it('a gesture before any frame takes one first, so the ratio is of a real picture', async () => {
+    const hand = fakeHand()
+    const frames = vi.fn(async () => [{ displayId: '1', jpeg: Buffer.from('x'), width: 100, height: 50 }])
+    const screen = device('screen://main', { hand, frames })
+    await screen.perform({ method: 'input.tap', params: { x: 50, y: 25 } })
+    expect(frames).toHaveBeenCalledTimes(1)
+    expect(hand.send.mock.calls[0][0][0].argv.slice(0, 3)).toEqual(['mousemove', '1920', '1080'])
+  })
+
+  it('a blocked screen takes no input, whatever the switch says', async () => {
+    const hand = fakeHand()
+    const screen = device('screen://main', { hand, remote: gate(stateOf('locked')) })
+    await expect(screen.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/locked/)
+    expect(hand.send).not.toHaveBeenCalled()
+  })
+
+  it('a display that went away is said, not guessed', async () => {
+    const screen = device('screen://main', { area: () => null })
+    await screen.capture()
+    await expect(screen.perform({ method: 'input.tap', params: { x: 1, y: 1 } })).rejects.toThrow(/Display main is not connected/)
+  })
+
+  it('Stop or the switch going off reaches into a gesture already running', async () => {
+    const hand = fakeHand()
+    let refusal: string | null = null
+    const screen = device('screen://main', { hand, remote: { ...gate(), inputRefusal: () => refusal, agentRefusal: () => refusal } })
+    await screen.capture()
+    await screen.perform({ method: 'input.type', params: { text: 'hello' } })
+    const stopped = hand.send.mock.calls[0][1] as () => string | null
+    expect(stopped()).toBeNull()
+    refusal = 'Stopped at the machine'
+    expect(stopped()).toBe('Stopped at the machine')
+  })
+
+  it('a shortcut reads the clipboard back for the viewer, like a Mac', async () => {
+    const screen = device('screen://main', { readClipboard: () => 'copied' })
+    expect(screen.readClipboard?.()).toBe('copied')
+  })
+
+  it('a session that rests forgets the frame it measured from', async () => {
+    const frames = vi.fn(async () => [{ displayId: '1', jpeg: Buffer.from('x'), width: 100, height: 50 }])
+    const screen = device('screen://main', { frames })
+    await screen.capture()
+    screen.rest()
+    await screen.perform({ method: 'input.tap', params: { x: 1, y: 1 } })
+    expect(frames).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -103,7 +175,7 @@ describe('the same states as a Mac', () => {
     const instance = new PixelInstance({ url: 'screen://main', device: device('screen://main', { remote: gate(stateOf('locked')), frames: frames2 }), schedule: () => () => undefined })
     instance.frameListeners.add(() => undefined)
     await instance.start()
-    expect(instance.status).toMatchObject({ state: 'offline', input: false, remote: { id: 'locked', platform: 'linux' } })
+    expect(instance.status).toMatchObject({ state: 'offline', remote: { id: 'locked', platform: 'linux' } })
     expect(instance.status.message).not.toMatch(/System Settings|\bMac\b/)
     expect(frames2).not.toHaveBeenCalled()
     await instance.stop()

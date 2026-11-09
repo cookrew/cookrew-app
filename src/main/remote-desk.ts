@@ -1,6 +1,7 @@
 import { machineCopy } from '../shared/machine-words'
 import {
   CONTROL_MS,
+  LINUX_NO_XDOTOOL,
   NOBODY_ON_HOST,
   remoteView,
   type CardControl,
@@ -29,8 +30,9 @@ import { SERVED_USE_REFUSED } from './use-commands'
  * THE SECURITY MODEL, in the order it is asked:
  *
  *   THE MACHINE SWITCH. "Allow remote control of this Mac", off by default,
- *   writable only from the Mac's own window (index.ts · ownerOnly): there is
- *   no route to it. Off means nobody drives, viewer or agent. It outlives a
+ *   writable only at the machine: its own window (index.ts · ownerOnly), or on
+ *   Linux a shell on it (remote-cli.ts · `cookrew remote on`). There is no
+ *   route to it. Off means nobody drives, viewer or agent. It outlives a
  *   restart only as a mark sealed under the app's own key (remote-switch-memory.ts):
  *   a plain file could be written by an agent running as the same user, and
  *   "changeable only at the Mac" has to hold against that too.
@@ -39,6 +41,10 @@ import { SERVED_USE_REFUSED } from './use-commands'
  *   for CONTROL_MS and is then off again, by itself. It belongs to the one
  *   device that took it. Agents do not take it: they keep the rule they always
  *   had, which is the machine switch and Accessibility, and no wider.
+ *
+ *   LINUX. The same rules on an X11 session, with xdotool where a Mac has its
+ *   Accessibility grant (linux-input.ts). Wayland, or no display, is a machine
+ *   nothing can drive: no switch, no grant. Nothing on Linux is unlocked.
  *
  *   THE HOST. Anyone on this machine shows here, with who and a Stop that
  *   holds the door for STOP_HOLD_MS, and every start, stop and grant is an
@@ -74,6 +80,8 @@ export interface RemoteDeskDeps {
   build(): RemoteBuild
   /** Why this Linux session cannot share its screen; null when it can. */
   linuxRefusal(): string | null
+  /** Why this Linux machine cannot send input (no xdotool); null when it can. Absent: nothing stands in the way. */
+  linuxInput?(): string | null
   /** This process's own answer, which macOS fixes at launch. */
   screenAccess(): string
   accessibility(): boolean
@@ -157,7 +165,8 @@ export interface RemoteDesk {
   cardControl(card: string, who: ViewerWho): CardControl
   takeControl(card: string, who: ViewerWho): Promise<RemoteAnswer>
   endControl(card: string, who: ViewerWho): void
-  setSwitch(on: boolean): RemoteAnswer
+  /** `how`: where it was pressed, for the event log; the Mac's own window when absent. */
+  setSwitch(on: boolean, how?: string): RemoteAnswer
   /** Once, after the app is ready: its key is not there before. */
   restoreSwitch(): void
   /** The next launch starts off, whatever this run is doing. */
@@ -207,7 +216,15 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       return () => clearTimeout(timer)
     })
   const mac = deps.platform === 'darwin'
-  const shareable = mac || deps.platform === 'linux'
+  const linux = deps.platform === 'linux'
+  const shareable = mac || linux
+  /** Something here could take input at all: a Mac, or an X11 session (Wayland is refused by name). */
+  const drivable = (): boolean => mac || (linux && deps.linuxRefusal() === null)
+  /** The Mac's Accessibility grant, or xdotool on Linux: what sends the clicks and keys. */
+  const handMissing = (): string | null => {
+    if (mac) return deps.accessibility() ? null : accessibilityOff()
+    return deps.linuxInput?.() ?? null
+  }
   const word = (sentence: string): string => machineCopy(sentence, deps.platform)
   const grants = new Map<string, Grant>()
   const viewers = new Map<string, Viewer>()
@@ -263,20 +280,28 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   const state = async (where: RemoteWhere): Promise<RemoteState> =>
     where === 'away' && held() ? stateOf('stopped', { until: settings.holdUntil }) : machineState()
 
-  const controlFacts = (): RemoteControlFacts => ({
-    available: mac,
-    switchOn: mac && switchOn,
-    accessibility: mac && deps.accessibility(),
-    ...(mac && switchOn && deps.unlockWords ? { unlockWords: deps.unlockWords() } : {})
-  })
+  const controlFacts = (): RemoteControlFacts => {
+    const available = drivable()
+    return {
+      available,
+      switchOn: available && switchOn,
+      accessibility: available && handMissing() === null,
+      ...(mac && switchOn && deps.unlockWords ? { unlockWords: deps.unlockWords() } : {})
+    }
+  }
 
-  const switchOff = (): string => word('Remote control of this Mac is off. Someone at the Mac can turn it on in the ⋯ menu.')
+  const switchOff = (): string =>
+    linux
+      ? 'Remote control of this machine is off. Someone at the machine can turn it on in the ⋯ menu, or from a shell on it with cookrew remote on.'
+      : word('Remote control of this Mac is off. Someone at the Mac can turn it on in the ⋯ menu.')
   const stopped = (): string => word('Stopped at the Mac: someone there ended this session.')
   const accessibilityOff = (): string => `Accessibility is off for ${deps.build().settingsName}: turn it on in System Settings › Privacy & Security › Accessibility.`
+  const viewOnly = (): string => (linux ? (deps.linuxRefusal() ?? LINUX_NO_XDOTOOL) : word('Driving this Mac is not available here: the screen is view only.'))
 
   const inputRefusal = (): string | null => {
+    if (!drivable()) return viewOnly()
     if (!switchOn) return switchOff()
-    return deps.accessibility() ? null : accessibilityOff()
+    return handMissing()
   }
 
   const servedCard = (card: string): boolean => {
@@ -341,7 +366,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
   // MARK: control
 
   const standing = (card: string, who: ViewerWho): RemoteRefusal | null => {
-    if (!mac) return refuse(word('Driving this Mac is not available here: the screen is view only.'))
+    if (!drivable()) return refuse(viewOnly())
     if (servedCard(card)) return refuse(SERVED_USE_REFUSED)
     if (!switchOn) return refuse(switchOff())
     if (held() && !who.here) return refuse(stopped())
@@ -414,21 +439,22 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
     agentRefusal: () => (held() ? stopped() : inputRefusal()),
     picturesRefused: (who) => (held() && !who.here ? stopped() : null),
     mayDrive(card, who) {
-      if (!mac || !switchOn || servedCard(card)) return false
+      if (!drivable() || !switchOn || servedCard(card)) return false
       if (held() && !who.here) return false
       return liveGrant(card)?.who.key === who.key
     },
     cardControl(card, who) {
       const holder = liveGrant(card)
       const mine = holder?.who.key === who.key
-      return { switchOn: mac && switchOn, until: mine ? (holder?.until ?? null) : null, heldBy: holder && !mine ? holder.who.name : null, awake, machine: mac ? 'darwin' : 'linux' }
+      return { switchOn: drivable() && switchOn, until: mine ? (holder?.until ?? null) : null, heldBy: holder && !mine ? holder.who.name : null, awake, machine: mac ? 'darwin' : 'linux' }
     },
     async takeControl(card, who) {
       const before = standing(card, who)
       if (before) return before
       const read = await machineState()
       if (read.id !== 'ready') return refuse(remoteView(read, who.here ? 'here' : 'away').sentence, read)
-      if (!deps.accessibility()) return refuse(accessibilityOff(), stateOf('needs-accessibility'))
+      const missing = handMissing()
+      if (missing) return refuse(missing, stateOf('needs-accessibility', linux ? { detail: missing } : {}))
       // A wait is when this changes: the switch may have gone off behind the read.
       const after = standing(card, who)
       if (after) return after
@@ -439,7 +465,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       const holder = grants.get(card)
       if (holder && (holder.who.key === who.key || who.here)) ended(card, `ended by ${who.name}`)
     },
-    setSwitch(on) {
+    setSwitch(on, how = word('at the Mac')) {
       // First: nothing below may stand between pressing off and what is kept going.
       let saved = true
       try {
@@ -451,8 +477,8 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
         switchOn = on
         if (on) deps.stayUp?.start()
         else deps.stayUp?.stop()
-        if (!on) endAllGrants('remote control was turned off at the Mac')
-        deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), 'at the Mac')
+        if (!on) endAllGrants(word('remote control was turned off at the Mac'))
+        deps.record(on ? 'remote.switch-on' : 'remote.switch-off', MACHINE, word('this Mac'), how)
         deps.refreshCards()
         syncHost()
       }
@@ -460,7 +486,7 @@ export function createRemoteDesk(deps: RemoteDeskDeps): RemoteDesk {
       return refuse(on ? 'Remote control is on, but it could not be saved: it turns off at the next restart.' : 'Remote control is off, but it could not be saved: it may come back at the next restart.')
     },
     restoreSwitch() {
-      if (!mac || switchOn) return
+      if (!drivable() || switchOn) return
       let held = false
       try {
         held = deps.switchMemory?.read() ?? false

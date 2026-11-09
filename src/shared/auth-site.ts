@@ -1,4 +1,5 @@
 import type { ProviderId } from './oauth'
+import type { StepUpAct } from './step-up'
 
 /**
  * AUTH.COOKREW.DEV — THE ONE SIGN-IN PAGE, and the facts its three clients and
@@ -41,16 +42,59 @@ export const isAuthClient = (value: unknown): value is AuthClient =>
 
 /**
  * WHICH SCREEN THE PAGE OPENS ON. It is a hint about the first screen and
- * nothing else: every intent can reach every way in, except the two signed-in
+ * nothing else: every intent can reach every way in, except the signed-in
  * acts. `link` is only ever a provider trip; `passkey` adds a passkey to the
- * account that opened it, after the account's own step-up on the page.
+ * account that opened it, after the account's own step-up on the page;
+ * `step-up` is that proof on its own, for one act cookrew.dev/me is about to do.
  */
-export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey'
+export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey' | 'step-up'
 
-export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey']
+export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey', 'step-up']
 
 /** The intents a signed-in client opens for its own account; nobody signs in on them. */
-export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey']
+export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey', 'step-up']
+
+/**
+ * THE ACTS cookrew.dev/me MAY ASK THE PAGE TO PROVE, and no others: each is a
+ * button on /me whose registry route takes a step-up. A proof is for one act,
+ * so the list is closed — an act /me never performs is never proven for it.
+ */
+export const WEB_STEP_UP_ACTS: readonly StepUpAct[] = [
+  'change-password',
+  'add-factor',
+  'remove-factor',
+  'revoke-device',
+  'delete-account',
+  'mint-join-code',
+  'not-me'
+]
+
+export const isWebStepUpAct = (value: unknown): value is StepUpAct =>
+  typeof value === 'string' && (WEB_STEP_UP_ACTS as readonly string[]).includes(value)
+
+/**
+ * A `step-up` request, as the page reads it: the act, the sentence that says
+ * what is about to happen, and the ways THIS account can prove it for THIS act
+ * — a passkey, a provider already linked, or a code (authenticator, recovery).
+ * Never a secret: what kinds of proof exist, not any of them.
+ */
+export interface AuthStepUp {
+  act: StepUpAct
+  sentence: string
+  passkey: boolean
+  providers: readonly ProviderId[]
+  codes: readonly ('totp' | 'recovery')[]
+}
+
+/**
+ * THE WAY BACK FROM A STEP-UP: `/me?stepped=<act>#stepup=<id>`. The act is in
+ * the query so /me knows what it was finishing; the proof's id is in the
+ * fragment, which no server, log or Referer ever sees, and /me scrubs it from
+ * the address bar before it does anything else. The id alone opens nothing:
+ * it is spent only by the session that made the trip, for that act, once.
+ */
+export const STEP_UP_LANDING_PARAM = 'stepped'
+export const STEP_UP_LANDING_HASH = 'stepup'
 
 /**
  * ADDING A PASSKEY, as the page reads it. `needs` is what stands between the
@@ -109,6 +153,8 @@ export interface AuthRequestBody {
   intent?: AuthIntent
   /** `link` only: the provider to add. */
   provider?: ProviderId
+  /** `step-up` only: the one act the proof is for (WEB_STEP_UP_ACTS). */
+  act?: StepUpAct
   device: AuthDevice
   /** desktop and cli: base64url SHA-256 of the client's verifier (43 chars). The web's is the server's own. */
   challenge?: string
@@ -183,6 +229,8 @@ export interface AuthRequestSummary {
   stage: 'open' | 'provider' | 'done' | 'denied'
   /** A `passkey` request only: what the ceremony still needs. */
   enrol: AuthEnrolment | null
+  /** A `step-up` request only: the act and the ways to prove it. */
+  step: AuthStepUp | null
 }
 
 /** The header every page call on the auth origin carries. */

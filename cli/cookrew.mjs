@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // cookrew — CLI bridge into the Cookrew app over its Unix socket.
 // Verbs: list, ask, check, note, browser,
-// connect, recruit, dismiss, preset, notify, login, logout, whoami, help.
+// connect, recruit, dismiss, preset, notify, login, logout, whoami, remote, help.
 import net from 'node:net'
 import path from 'node:path'
 import { lstatSync, readFileSync } from 'node:fs'
@@ -413,13 +413,44 @@ async function converse() {
 
 if (CONVERSATIONS.has(cmd)) await converse()
 
+/**
+ * `cookrew remote on`: ASKED AT THE TERMINAL, AND NOTHING ELSE SAYS YES.
+ *
+ * The machine switch lets paired devices drive this screen, so it is turned on
+ * by a person at a shell here, never by a Cookrew terminal (a paired device can
+ * type into one) and never by a script with no terminal. The app checks the
+ * same and refuses without `confirmed` (src/main/remote-cli.ts); this is where
+ * a person gives it. A `--confirmed` typed on the command line is dropped:
+ * only the answer at the prompt counts.
+ */
+async function remoteFlags() {
+  if (args[0] !== 'on') return {}
+  if (terminalId !== '') {
+    fail('Turn remote control on from a shell on this machine, not from a Cookrew terminal: a paired device can type into a Cookrew terminal.')
+  }
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+    fail('cookrew remote on asks before it turns anything on: run it in a terminal on this machine and confirm it there.')
+  }
+  process.stdout.write('Turn on remote control of this machine? Your paired devices can take control of a card for 15 minutes,\nand agents can click and type here, until you run cookrew remote off.\n')
+  const { createInterface } = await import('node:readline/promises')
+  const prompt = createInterface({ input: process.stdin, output: process.stdout })
+  let answer = ''
+  try {
+    answer = await prompt.question('Type on to turn it on: ')
+  } finally {
+    prompt.close()
+  }
+  if (answer.trim().toLowerCase() !== 'on') fail('Remote control stays off.')
+  return { confirmed: true }
+}
+
 const request = {
   id: randomUUID(),
   terminalId,
   sessionId: ancestorSessionId(),
   cmd,
   args: requestArgs,
-  flags: requestFlags
+  flags: cmd === 'remote' ? await remoteFlags() : requestFlags
 }
 
 // `cookrew mobile` also renders a QR code locally for the returned URL.

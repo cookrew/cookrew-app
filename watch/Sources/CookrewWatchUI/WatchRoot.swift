@@ -48,7 +48,7 @@ private let pairedSeconds = 1.2
 final class WatchApp {
   private let vault = SessionVault()
   private let origin: String
-  private let registry: RegistryAPI
+  private let registry: HTTPRegistryAPI
   private(set) var store: WatchStore?
   private var keeper: AccountKeeper?
   private(set) var desktop = ""
@@ -59,7 +59,9 @@ final class WatchApp {
   private(set) var pairedId: String?
   /** Every machine the watch holds a key for (sessionKey), the one it is in among them. */
   private(set) var heldMachines: Set<String> = []
-  /** The machine the wrist is in, as the vault keys it. */
+  /** Machines asked in the background this launch. */
+  private var knocked: Set<String> = []
+    /** The machine the wrist is in, as the vault keys it. */
   private(set) var current: String?
   private(set) var stage: PairStage = .welcome
   private(set) var typed = ""
@@ -109,6 +111,7 @@ final class WatchApp {
     guard let keeper else { return }
     let token = await keeper.token()
     if let found = try? await registry.machines(token: token) { machines = found }
+    await enterTheRest()
   }
 
   /** Into another machine the watch holds a key for, at its workspaces. */
@@ -117,6 +120,41 @@ final class WatchApp {
     UserDefaults.standard.set(ZoomLevel.workspaces.stored, forKey: keptZoomKey)
     ThumbPictures.forget()
     open(session)
+  }
+
+  /**
+   * Into a machine of the account the watch holds no key for yet, with the watch's
+   * pass: no code (owner, 2026-11-09). Gone into when asked; kept quietly when
+   * the Devices stop finds a machine added since. Nil when it is in.
+   */
+  func enter(id: String, name: String, goIn: Bool) async -> EnterError? {
+    guard let account = vault.loadAccount(), let keeper else { return .noDoor }
+    guard let relay = relayBase(registry: account.registry, username: account.username, desktop: id) else { return .noDoor }
+    let session = await keeper.token()
+    do {
+      let grant = try await registry.watchGrant(token: session)
+      let token = try await enterMachine(device: vault.device(), machine: id, grant: grant, send: registry.door(relay: relay, token: session))
+      let entered = WatchSession(desktop: name, bases: [Base(kind: "relay", url: relay.absoluteString)], token: token)
+      vault.save(entered, goIn: goIn)
+      heldMachines = Set(vault.shelf().keys)
+      if goIn { switchTo(sessionKey(entered)) }
+      return nil
+    } catch RegistryError.notWatch {
+      return .notWatch
+    } catch let error as EnterError {
+      return error
+    } catch {
+      return .unreachable
+    }
+  }
+
+  /** Every machine of the account the watch is not in yet and can reach now: entered, not gone into. */
+  private func enterTheRest() async {
+    for machine in machines where machine.online && !heldMachines.contains(machine.id.lowercased()) && !knocked.contains(machine.id) {
+      // Once a launch: a machine that said no (older than the watch's pass) is not asked on every visit.
+      knocked.insert(machine.id)
+      _ = await enter(id: machine.id, name: machine.name, goIn: false)
+    }
   }
 
   /** Pair another machine of the account: its code adds it beside the ones held. */
@@ -317,7 +355,18 @@ private enum Route: Hashable {
   case cards(String)
   case item(CardItem.ID)
   case thisWatch
-  case addMachine(String)
+  case addMachine(String, String?)
+}
+
+/** Why a machine could not be gone into with the watch's pass, as the code page says it. */
+private func addNote(_ why: EnterError) -> String? {
+  switch why {
+  case .noDoor: return nil
+  case .notWatch: return "This watch joined before it could open every machine. One more code, from any of them, and it opens them all."
+  case .refused(let words): return words
+  case .unreachable: return "Can't reach it just now. Try again, or use its code."
+  case .wrongMachine: return "Another machine answered for it. Nothing was sent; use its code."
+  }
 }
 
 /** The stack that stands for a zoom level: each stop is one step in from the last. */
@@ -372,7 +421,12 @@ struct ZoomStack: View {
         rows: deviceRows(app.machines, pairedId: app.pairedId, desktop: app.desktop, live: store.link == .live, held: app.heldMachines),
         onOpen: { path = [.workspaces] },
         onSwitch: app.switchTo,
-        onAdd: { row in path.append(.addMachine(row.name)) },
+        onAdd: { row in
+          Task {
+            guard let why = await app.enter(id: row.id, name: row.name, goIn: true) else { return }
+            path.append(.addMachine(row.name, addNote(why)))
+          }
+        },
         onThisWatch: { path.append(.thisWatch) }
       )
       .navigationTitle("Devices")
@@ -411,8 +465,8 @@ struct ZoomStack: View {
       ThisWatchPage(desktop: app.desktop, account: app.username, line: store.client.line, onCode: app.signInAgain, onForget: { Task { await app.forget() } }).wholeGlass()
     case .item(let id):
       if let item = items[id] { itemPage(item) }
-    case .addMachine(let name):
-      AddMachinePage(name: name, onCode: app.addMachine)
+    case .addMachine(let name, let note):
+      AddMachinePage(name: name, note: note, onCode: app.addMachine)
     }
   }
 

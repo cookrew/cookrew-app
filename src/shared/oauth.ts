@@ -86,3 +86,7 @@ export function suggestHandle(login: string | null, email: string | null): strin
     .replace(/-+$/, '')
   return shaped.startsWith('acct-') ? '' : shaped
 }
+
+/** "GitHub", "GitHub or Google": the ways an account proves itself, in words. */
+export const providerNames = (providers: readonly ProviderId[]): string =>
+  providers.map((p) => PROVIDER_LABEL[p]).join(' or ')
