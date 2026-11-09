@@ -97,7 +97,7 @@ function AskPane({
       ) : (
         <p className="gs-consequence">
           It joins your account and works your agents from anywhere: it reads and answers them, starts new ones in any workspace, and taps and types in
-          their browser pages. It can't open a shell.
+          their browser pages.
         </p>
       )}
       {needsPassword && (
