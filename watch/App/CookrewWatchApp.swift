@@ -8,9 +8,15 @@ private func info(_ key: String) -> String? {
 
 @main
 struct CookrewWatchApp: App {
+  private let registry = info("CookrewRegistry") ?? "https://cookrew.dev"
+
   var body: some Scene {
     WindowGroup {
-      WatchRoot(address: info("CookrewBase") ?? "", registry: info("CookrewRegistry") ?? "https://cookrew.dev")
+      WatchRoot(address: info("CookrewBase") ?? "", registry: registry)
+    }
+    // Every quarter hour or so, as watchOS allows: agents that started waiting or finished become alerts.
+    .backgroundTask(.appRefresh(StatusAlerts.refresh)) { [registry] in
+      await StatusAlerts.check(registry: registry)
     }
   }
 }

@@ -323,3 +323,32 @@ struct QuietPollTests {
     #expect(!touched)
   }
 }
+
+@Suite("the word for the machine")
+struct MachineWordTests {
+  @Test("a Mac is a Mac, Windows a PC, anything else a machine; before the wrist knows, a computer")
+  func words() {
+    #expect(machineWord("darwin") == "Mac")
+    #expect(machineWord("win32") == "PC")
+    #expect(machineWord("linux") == "machine")
+    #expect(machineWord(nil) == "computer")
+  }
+
+  @Test("the store says what its machine is once the cards say so")
+  @MainActor
+  func store() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [], activeWorkspaceId: "dev", platform: "linux")]
+    let s = WatchStore(api: api)
+    #expect(s.machine == "computer")
+    await s.refresh()
+    #expect(s.machine == "machine")
+  }
+
+  @Test("an account's machine says what it is too")
+  func account() throws {
+    let json = #"[{"id":"a","name":"Solis","online":true,"profile":{"os":"linux"}},{"id":"b","name":"Old","online":false}]"#
+    let machines = try JSONDecoder().decode([WatchMachine].self, from: Data(json.utf8))
+    #expect(machines.map(\.os) == ["linux", nil])
+  }
+}

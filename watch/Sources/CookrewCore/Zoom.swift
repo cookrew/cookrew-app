@@ -54,15 +54,21 @@ public struct DeviceRow: Equatable, Identifiable, Sendable {
   public let online: Bool
   /** How many the account lists; nil when the wrist has no account to ask. */
   public let workspaces: Int?
-  /** The Mac this watch holds a token for: the only one it can go into. */
+  /** The machine the wrist is in now. */
   public let paired: Bool
+  /** The watch holds a key for it: a tap goes in. The one it is in is held too. */
+  public let held: Bool
+  /** Its platform, for the word that names it. */
+  public let os: String?
 
-  public init(id: String, name: String, online: Bool, workspaces: Int?, paired: Bool) {
+  public init(id: String, name: String, online: Bool, workspaces: Int?, paired: Bool, held: Bool? = nil, os: String? = nil) {
     self.id = id
     self.name = name
     self.online = online
     self.workspaces = workspaces
     self.paired = paired
+    self.held = held ?? paired
+    self.os = os
   }
 }
 
@@ -72,13 +78,13 @@ public struct DeviceRow: Equatable, Identifiable, Sendable {
  * account at all it is the only row. Online, for that one, is what the wrist
  * hears itself.
  */
-public func deviceRows(_ machines: [WatchMachine], pairedId: String?, desktop: String, live: Bool) -> [DeviceRow] {
+public func deviceRows(_ machines: [WatchMachine], pairedId: String?, desktop: String, live: Bool, held: Set<String> = []) -> [DeviceRow] {
   let byId = pairedId.flatMap { id in machines.firstIndex { $0.id.lowercased() == id.lowercased() } }
   let found = byId ?? machines.firstIndex { $0.name == desktop }
   let others = machines.indices.filter { $0 != found }.map { at in
-    DeviceRow(id: machines[at].id, name: machines[at].name, online: machines[at].online, workspaces: machines[at].workspaces.count, paired: false)
+    DeviceRow(id: machines[at].id, name: machines[at].name, online: machines[at].online, workspaces: machines[at].workspaces.count, paired: false, held: held.contains(machines[at].id.lowercased()), os: machines[at].os)
   }
   let mine = found.map { machines[$0] }
-  let paired = DeviceRow(id: mine?.id ?? "paired", name: mine?.name ?? desktop, online: live, workspaces: mine?.workspaces.count, paired: true)
+  let paired = DeviceRow(id: mine?.id ?? "paired", name: mine?.name ?? desktop, online: live, workspaces: mine?.workspaces.count, paired: true, os: mine?.os)
   return [paired] + others
 }

@@ -17,6 +17,55 @@ public struct WatchSession: Equatable, Sendable {
   public var urls: [URL] { bases.compactMap { URL(string: $0.url) } }
 }
 
+/** Which machine a session is for: its relay id, or, paired by six digits, its name. */
+public func sessionKey(_ session: WatchSession) -> String {
+  pairedMachineId(session.bases) ?? "here:\(session.desktop)"
+}
+
+/**
+ * THE MACHINES THIS WATCH HOLDS A KEY FOR, and the one it is in. A code from
+ * another machine adds it: the watch used to keep one, so pairing a second one
+ * gave up the first. The tokens are not here; the vault keeps each in the
+ * Keychain under its key.
+ */
+public struct SessionShelf: Codable, Equatable, Sendable {
+  public struct Entry: Codable, Equatable, Sendable {
+    public let key: String
+    public let desktop: String
+    public let bases: [Base]
+  }
+
+  public private(set) var entries: [Entry] = []
+  public private(set) var active: String?
+
+  public init() {}
+
+  public var keys: [String] { entries.map(\.key) }
+
+  /** A session paired just now: added, or in its own place if the machine was held, and gone into. */
+  @discardableResult public mutating func put(_ session: WatchSession) -> String {
+    let key = sessionKey(session)
+    let entry = Entry(key: key, desktop: session.desktop, bases: session.bases)
+    if let at = entries.firstIndex(where: { $0.key == key }) { entries[at] = entry } else { entries.append(entry) }
+    active = key
+    return key
+  }
+
+  public mutating func activate(_ key: String) -> Bool {
+    guard entries.contains(where: { $0.key == key }) else { return false }
+    active = key
+    return true
+  }
+
+  /** Forgotten: if it was the one in use, the next held machine is. */
+  public mutating func remove(_ key: String) {
+    entries.removeAll { $0.key == key }
+    if active == key || !entries.contains(where: { $0.key == active }) { active = entries.first?.key }
+  }
+
+  public func entry(_ key: String?) -> Entry? { entries.first { $0.key == key } }
+}
+
 /** An address that stays on the owner's own network or tailnet: the only place plain HTTP may go. */
 func isPrivateHost(_ host: String) -> Bool {
   if host.hasSuffix(".local") || host == "localhost" { return true }
@@ -134,21 +183,70 @@ public struct SessionVault: Sendable {
     return made
   }
 
+  private let shelfKey = "dev.cookrew.watch.shelf"
+
+  private func token(_ key: String) -> String? {
+    read("token:\(key)").flatMap { String(data: $0, encoding: .utf8) }
+  }
+
+  private func store(_ shelf: SessionShelf) {
+    UserDefaults.standard.set(try? JSONEncoder().encode(shelf), forKey: shelfKey)
+  }
+
+  /** The machines held. A watch from before there could be several has its one carried over. */
+  public func shelf() -> SessionShelf {
+    if let data = UserDefaults.standard.data(forKey: shelfKey), let shelf = try? JSONDecoder().decode(SessionShelf.self, from: data) { return shelf }
+    var shelf = SessionShelf()
+    if let data = read("token"), let token = String(data: data, encoding: .utf8),
+      let stored = UserDefaults.standard.data(forKey: meta), let saved = try? JSONDecoder().decode(Saved.self, from: stored)
+    {
+      let session = WatchSession(desktop: saved.desktop, bases: saved.bases, token: token)
+      write(Data(token.utf8), to: "token:\(shelf.put(session))")
+      store(shelf)
+      SecItemDelete(query("token") as CFDictionary)
+      UserDefaults.standard.removeObject(forKey: meta)
+    }
+    return shelf
+  }
+
+  public func session(_ key: String?) -> WatchSession? {
+    guard let entry = shelf().entry(key), let token = token(entry.key) else { return nil }
+    return WatchSession(desktop: entry.desktop, bases: entry.bases, token: token)
+  }
+
+  /** The machine the watch is in. */
   public func load() -> WatchSession? {
-    guard let data = read("token"),
-      let token = String(data: data, encoding: .utf8),
-      let stored = UserDefaults.standard.data(forKey: meta),
-      let saved = try? JSONDecoder().decode(Saved.self, from: stored)
-    else { return nil }
-    return WatchSession(desktop: saved.desktop, bases: saved.bases, token: token)
+    session(shelf().active)
   }
 
+  /** A machine paired just now: added beside the others, and gone into. */
   public func save(_ session: WatchSession) {
-    write(Data(session.token.utf8), to: "token")
-    UserDefaults.standard.set(try? JSONEncoder().encode(Saved(desktop: session.desktop, bases: session.bases)), forKey: meta)
+    var shelf = shelf()
+    let key = shelf.put(session)
+    write(Data(session.token.utf8), to: "token:\(key)")
+    store(shelf)
   }
 
+  /** Into another held machine. */
+  public func activate(_ key: String) -> WatchSession? {
+    var shelf = shelf()
+    guard shelf.activate(key) else { return nil }
+    store(shelf)
+    return session(key)
+  }
+
+  /** One machine let go of; the next held one is in use, if there is one. */
+  public func forget(_ key: String) {
+    var shelf = shelf()
+    shelf.remove(key)
+    SecItemDelete(query("token:\(key)") as CFDictionary)
+    store(shelf)
+  }
+
+  /** Every machine let go of. */
   public func clear() {
+    for key in shelf().keys { SecItemDelete(query("token:\(key)") as CFDictionary) }
+    UserDefaults.standard.removeObject(forKey: shelfKey)
     SecItemDelete(query("token") as CFDictionary)
     UserDefaults.standard.removeObject(forKey: meta)
   }

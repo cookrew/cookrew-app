@@ -57,6 +57,10 @@ final class WatchApp {
   private(set) var machines: [WatchMachine] = []
   /** The paired Mac's id, from its relay road; nil when paired by six digits. */
   private(set) var pairedId: String?
+  /** Every machine the watch holds a key for (sessionKey), the one it is in among them. */
+  private(set) var heldMachines: Set<String> = []
+  /** The machine the wrist is in, as the vault keys it. */
+  private(set) var current: String?
   private(set) var stage: PairStage = .welcome
   private(set) var typed = ""
   private(set) var padError: String?
@@ -85,6 +89,8 @@ final class WatchApp {
     desktop = session.desktop
     username = held?.username
     pairedId = pairedMachineId(session.bases)
+    current = sessionKey(session)
+    heldMachines = Set(vault.shelf().keys)
     machines = []
     // With no account the relay would only refuse, and read as the Mac forgetting this watch.
     let urls = session.bases.filter { held != nil || $0.kind != "relay" }.compactMap { URL(string: $0.url) }
@@ -103,6 +109,20 @@ final class WatchApp {
     guard let keeper else { return }
     let token = await keeper.token()
     if let found = try? await registry.machines(token: token) { machines = found }
+  }
+
+  /** Into another machine the watch holds a key for, at its workspaces. */
+  func switchTo(_ id: String) {
+    guard let session = vault.activate(id.lowercased()) else { return }
+    UserDefaults.standard.set(ZoomLevel.workspaces.stored, forKey: keptZoomKey)
+    ThumbPictures.forget()
+    open(session)
+  }
+
+  /** Pair another machine of the account: its code adds it beside the ones held. */
+  func addMachine() {
+    store = nil
+    enterCode()
   }
 
   func show(_ next: PairStage) {
@@ -245,8 +265,19 @@ final class WatchApp {
 
   // MARK: Leaving
 
-  /** Everything but who this watch is: pairing again is the same row on the account. */
+  /**
+   * One machine let go of. With another held the wrist goes into it; with none,
+   * everything but who this watch is goes: pairing again is the same row on the account.
+   */
   private func leave(to next: PairStage) {
+    if let current { vault.forget(current) }
+    UserDefaults.standard.removeObject(forKey: keptZoomKey)
+    ThumbPictures.forget()
+    if let other = vault.load() {
+      typed = ""
+      open(other)
+      return
+    }
     keeper?.retire()
     let held = vault.loadAccount()
     vault.clear()
@@ -256,6 +287,8 @@ final class WatchApp {
     ThumbPictures.forget()
     store = nil
     username = nil
+    heldMachines = []
+    current = nil
     typed = ""
     show(next)
     guard let held else { return }
@@ -284,6 +317,7 @@ private enum Route: Hashable {
   case cards(String)
   case item(CardItem.ID)
   case thisWatch
+  case addMachine(String)
 }
 
 /** The stack that stands for a zoom level: each stop is one step in from the last. */
@@ -303,7 +337,7 @@ private func level(of path: [Route]) -> ZoomLevel {
     case .cards(let id): return .cards(id)
     case .agents(let id): return .agents(id)
     case .workspaces: return .workspaces
-    case .item, .thisWatch: continue
+    case .item, .thisWatch, .addMachine: continue
     }
   }
   return .devices
@@ -335,8 +369,10 @@ struct ZoomStack: View {
   var body: some View {
     NavigationStack(path: $path) {
       DevicesPage(
-        rows: deviceRows(app.machines, pairedId: app.pairedId, desktop: app.desktop, live: store.link == .live),
+        rows: deviceRows(app.machines, pairedId: app.pairedId, desktop: app.desktop, live: store.link == .live, held: app.heldMachines),
         onOpen: { path = [.workspaces] },
+        onSwitch: app.switchTo,
+        onAdd: { row in path.append(.addMachine(row.name)) },
         onThisWatch: { path.append(.thisWatch) }
       )
       .navigationTitle("Devices")
@@ -362,7 +398,7 @@ struct ZoomStack: View {
   @ViewBuilder private func destination(_ route: Route) -> some View {
     switch route {
     case .workspaces:
-      WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? [])) { id in
+      WorkspacesPage(tiles: mergedTiles(store.workspaces, names: app.pairedMachine?.workspaces ?? []), machine: store.machine) { id in
         path.append(.agents(id))
       }
       .navigationTitle(app.desktop)
@@ -375,6 +411,8 @@ struct ZoomStack: View {
       ThisWatchPage(desktop: app.desktop, account: app.username, line: store.client.line, onCode: app.signInAgain, onForget: { Task { await app.forget() } }).wholeGlass()
     case .item(let id):
       if let item = items[id] { itemPage(item) }
+    case .addMachine(let name):
+      AddMachinePage(name: name, onCode: app.addMachine)
     }
   }
 
@@ -436,12 +474,21 @@ public struct WatchRoot: View {
             await store.run()
             if store.unpaired { app.lost(.unpaired, by: store) }
           }
+          .onChange(of: store.cards) { _, cards in
+            guard let key = app.current else { return }
+            StatusAlerts.note(cards, machine: key, name: app.desktop, inFront: phase == .active)
+          }
+          // Another machine is another store: its own stack and its own poll, from the top.
+          .id(ObjectIdentifier(store))
       } else {
         PairingView(app: app).wholeGlass()
       }
     }
     .environment(\.ink, dim ? .night : .day)
     .environment(\.inkStill, false)
+    .task { await StatusAlerts.ask() }
+    // Leaving the wrist: the next background read is asked for, so status changes still reach it.
+    .onChange(of: phase) { _, next in if next != .active { StatusAlerts.scheduleNext() } }
   }
 }
 
@@ -456,7 +503,7 @@ private struct PairingView: View {
     case .digits:
       PairView(address: $app.address, digits: app.digits, busy: app.busy, failure: app.failure, onDigit: app.press, onDelete: app.delete)
     case .working(.joining): JoinSteps(done: [], now: "Joining your account…")
-    case .working(.finding): JoinSteps(done: ["Joined your account"], now: "Finding your Mac…")
+    case .working(.finding): JoinSteps(done: ["Joined your account"], now: "Finding your computer…")
     case .paired(let desktop): JoinSteps(done: ["Joined your account", "Paired with \(desktop)"], now: nil)
     case .notice(let notice): noticeView(notice)
     }
@@ -469,11 +516,11 @@ private struct PairingView: View {
     case .slow:
       NoticeView(title: "Too many tries", words: "Wait a minute, then try again.", action: "Back", onAction: app.enterCode)
     case .macAway:
-      NoticeView(title: "Can't reach your Mac", words: "You're in your account. Wake the Mac, then try again.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
+      NoticeView(title: "Can't reach your computer", words: "You're in your account. Wake the computer, then try again.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
     case .noNetwork:
       NoticeView(title: "No connection", words: "The watch can't reach cookrew.dev.", action: "Try again", onAction: { Task { await app.submit() } }, onStartOver: app.home)
     case .locked:
-      NoticeView(title: "Account locked", words: "Change your password on your Mac, then get a new code.", action: "OK", onAction: app.home)
+      NoticeView(title: "Account locked", words: "Change your password on your computer, then get a new code.", action: "OK", onAction: app.home)
     case .unpaired:
       NoticeView(title: "Watch unpaired", words: "Pair it again from ⋯ → Apple Watch.", action: "Enter a code", onAction: app.enterCode)
     case .signedOut:
@@ -502,7 +549,7 @@ struct LinkChip: View {
       .buttonStyle(.plain)
       .padding(.bottom, 48)
     } else if store.link == .lost {
-      Text("MAC OFFLINE")
+      Text("\(store.machine.uppercased()) OFFLINE")
         .font(InkType.word(9.5))
         .tracking(1)
         .foregroundStyle(ink.onSeal)

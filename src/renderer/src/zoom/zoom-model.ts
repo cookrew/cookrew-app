@@ -5,6 +5,7 @@
  * (terminal-attachments.ts); terminal↔terminal cables are its ties; the
  * workspace list and the roster give the other workspaces' marks.
  */
+import { machineWord } from '../../../shared/machine-words'
 import { REFUSED_COPY } from '../../../shared/first-run-copy'
 import { refusalKind } from '../../../shared/turn-failure'
 import type { AgentPhase, AgentRow } from '../agent-rows'
@@ -93,6 +94,8 @@ export interface MachineView {
   local: boolean
   online: boolean
   detail: 'live' | 'connecting' | 'listed'
+  /** Its platform as its profile says it; null or absent when it publishes none. */
+  os?: string | null
   workspaces: { id: string; name: string; presets: string[]; waiting: boolean }[]
   agents: number | null
   waiting: number | null
@@ -192,6 +195,8 @@ export interface ZoomInput {
     local: boolean
     online: boolean
     detail: 'live' | 'connecting' | 'listed'
+    /** Its platform (darwin, win32, linux…): what to call it. */
+    os?: string | null
     /** Its display in points, as its own feed tells it: the screen it is drawn with. */
     display?: { w: number; h: number } | null
     workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number } | null }[]
@@ -348,6 +353,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       local: m.local,
       online: m.online,
       detail: m.detail,
+      os: m.os ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, presets: w.agents.map((a) => a.harness), waiting: w.agents.some((a) => a.phase === 'waiting') })),
       agents: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.agents ?? 0), 0) : null,
       waiting: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.waiting ?? 0), 0) : null
@@ -358,4 +364,14 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     hiddenItems: Math.max(0, totalCount - items.length),
     deviceAgents: agents.length + marks.reduce((n, m) => n + m.presets.length, 0)
   }
+}
+
+/**
+ * A machine of the account this one cannot read, said by what it is: Cookrew
+ * runs on a Mac, a PC or a Linux machine (shared/machine-words.ts), and one that
+ * publishes no profile is a computer.
+ */
+export function listedOnly(machine: Pick<MachineView, 'name' | 'os'>): string {
+  const word = machine.os ? machineWord(machine.os) : 'computer'
+  return `${machine.name} is listed, not readable from here: open it on that ${word}.`
 }

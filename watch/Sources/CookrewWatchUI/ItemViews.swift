@@ -106,7 +106,7 @@ public struct BrowserPage: View {
       } catch WatchError.refused(let why) {
         failed = why
       } catch {
-        failed = "The Mac is not answering"
+        failed = "The \(store.machine) is not answering"
       }
     }
   }
@@ -291,7 +291,7 @@ public struct BrowserPage: View {
         } catch WatchError.refused(let why) {
           failed = why
         } catch {
-          failed = "The Mac is not answering"
+          failed = "The \(store.machine) is not answering"
         }
       }
       try? await Task.sleep(nanoseconds: 250_000_000)
@@ -339,7 +339,7 @@ public struct NotePage: View {
         if let body = (note ?? first)?.content {
           Text(marked(body)).font(InkType.words(14)).foregroundStyle(ink.noteText)
         } else {
-          Text(failed ? "The Mac is not answering" : "Loading the note…").font(InkType.words(13)).foregroundStyle(ink.muted)
+          Text(failed ? "The \(store.machine) is not answering" : "Loading the note…").font(InkType.words(13)).foregroundStyle(ink.muted)
         }
       }
       .padding(.horizontal, 10)
