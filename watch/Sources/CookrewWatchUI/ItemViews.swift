@@ -20,7 +20,7 @@ struct PageFrame: View {
   let image: CGImage
   let view: PictureView
   let box: CGSize
-  /** A swipe on its way: the picture follows the finger until the page's own picture comes. */
+  /** How far the page has moved on the wrist that this picture does not show yet. */
   var lift: CGFloat = 0
 
   var body: some View {
@@ -53,8 +53,10 @@ public struct BrowserPage: View {
   @State private var words = ""
   @State private var tapped: CGPoint?
   @State private var failed: String?
-  /** The finger's swipe, while it is down and until the page answers it. */
-  @State private var lift: CGFloat = 0
+  /** The finger's swipe while it is down. */
+  @State private var finger: CGFloat = 0
+  /** What the page moved after the finger let go, or the crown turned it, until the Mac's picture shows it. */
+  @State private var drift = PageDrift()
   @State private var pace = FramePace()
 
   private static let closeZoom = 2.6
@@ -68,6 +70,15 @@ public struct BrowserPage: View {
   private var shown: CGImage? { image ?? first }
 
   private func size(of image: CGImage) -> CGSize { CGSize(width: image.width, height: image.height) }
+
+  /** The picture's height on screen: what one share of the page is, here. */
+  private var pictureHeight: CGFloat {
+    guard let shown else { return 0 }
+    return view.rect(fit: pageFit(picture: size(of: shown), in: box)).height
+  }
+
+  /** Where the picture stands: under the finger, plus what the page moved that it does not show yet. */
+  private var lift: CGFloat { finger - CGFloat(drift.share) * pictureHeight }
 
   private func tap(at point: CGPoint) {
     guard let shown else { return }
@@ -116,7 +127,7 @@ public struct BrowserPage: View {
       .onChanged { value in
         guard let shown else { return }
         guard view.zoom > 1 else {
-          lift = value.translation.height
+          finger = value.translation.height
           return
         }
         let fit = pageFit(picture: size(of: shown), in: box)
@@ -124,22 +135,23 @@ public struct BrowserPage: View {
         dragFrom = from
         let asked = PictureView(zoom: view.zoom, pan: CGSize(width: from.width + value.translation.width, height: from.height + value.translation.height))
         view = asked.clamped(fit: fit, box: box)
-        lift = panOverflow(asked, fit: fit, box: box)
+        finger = panOverflow(asked, fit: fit, box: box)
       }
       .onEnded { value in
         defer { dragFrom = nil }
         guard let shown else { return }
         let picture = size(of: shown)
         let fit = pageFit(picture: picture, in: box)
-        let travel = view.zoom > 1 ? lift : value.translation.height
-        let share = swipeShare(travel, view: view, picture: picture, box: box)
-        guard abs(share) > 0.02 else { return withAnimation(.easeOut(duration: 0.15)) { lift = 0 } }
+        let share = swipeShare(finger, view: view, picture: picture, box: box)
+        guard abs(share) > 0.02 else { return withAnimation(.easeOut(duration: 0.15)) { finger = 0 } }
         let at = view.fraction(of: value.startLocation, fit: fit) ?? CGPoint(x: 0.5, y: 0.5)
         send(.swipe(share: share, x: min(1, max(0, at.x)), y: min(1, max(0, at.y))))
-        // A page already at its end sends no new picture: the old one settles back.
-        Task {
-          try? await Task.sleep(nanoseconds: 1_500_000_000)
-          withAnimation(.easeOut(duration: 0.2)) { lift = 0 }
+        // The picture stays where the finger left it: the finger's move becomes the page's.
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+          drift.moved(share, at: Date())
+          finger = 0
         }
       }
   }
@@ -199,7 +211,11 @@ public struct BrowserPage: View {
     }
     .background(ink.paper)
     .modifier(CrownTurns(value: $crownValue))
-    .onChange(of: crownValue) { _, next in crown.turned(to: next) }
+    .onChange(of: crownValue) { _, next in
+      // The picture follows the crown now; the Mac is told four times a second.
+      let moved = crown.turned(to: next)
+      if moved != 0 { drift.moved(moved, at: Date()) }
+    }
     .task(id: "\(item.id)|\(phase == .active)") {
       if phase == .active { await loop() }
     }
@@ -240,20 +256,35 @@ public struct BrowserPage: View {
     .overlay(Capsule().strokeBorder(ink.hair2, lineWidth: 1))
   }
 
-  /** The crown's turns, four times a second; the picture at FramePace's pace. One ask at a time. */
+  /**
+   * The crown's turns go to the Mac four times a second; the picture comes at
+   * FramePace's pace, every gap while a moved page waits for it. One ask at a time.
+   */
   private func loop() async {
     guard !still else { return }
     while !Task.isCancelled {
-      if let dy = crown.take() { send(.scroll(dy: dy)) }
-      if pace.due(Date()) {
-        pace.fetched(at: Date())
+      if let share = crown.take() { send(.swipe(share: share, x: 0.5, y: 0.5)) }
+      let now = Date()
+      if drift.waiting {
+        let before = drift
+        drift.expire(at: now)
+        // A page already at its end never sends a moved picture: the held one settles back.
+        if drift != before { withAnimation(.easeOut(duration: 0.2)) { drift = PageDrift() } }
+      }
+      if pace.due(now, eager: drift.waiting) {
+        pace.fetched(at: now)
         do {
           let width = Int(max(box.width, 180) * 2)
           if case .new(let data, let next) = try await store.client.frame(item.id, width: width, tag: tag) {
             tag = next
             if let decoded = picture(data) {
-              image = decoded
-              lift = 0
+              // The new picture already shows the page moved: swapped in place, nothing jumps.
+              var still = Transaction()
+              still.disablesAnimations = true
+              withTransaction(still) {
+                image = decoded
+                drift.pictureCame()
+              }
             }
           }
           failed = nil

@@ -46,28 +46,73 @@ public struct PictureView: Equatable, Sendable {
 }
 
 /**
- * A crown turn as wheel distance. The crown reports faster than a Mac should be
- * told, so turns add up here and leave a few times a second, none lost.
+ * A crown turn as a share of the page's picture: the same unit a swipe speaks, so
+ * the wrist can move the picture by it at once, and the Mac turns it into the
+ * page's own pixels. The crown reports faster than a Mac should be told, so turns
+ * add up here and leave a few times a second, none lost.
  */
 public struct CrownScroll: Equatable, Sendable {
-  /** Page px per crown unit. */
-  public static let pixelsPerUnit = 60.0
+  /** A picture's height per crown unit: about a laptop wheel notch and a half. */
+  public static let sharePerUnit = 0.075
+  /** Less than this is not worth a message. */
+  private static let least = 0.005
   private var last: Double?
   private var owed = 0.0
 
   public init() {}
 
-  public mutating func turned(to value: Double) {
-    if let last { owed += (value - last) * Self.pixelsPerUnit }
-    last = value
+  /** The share this turn moved, for the picture to follow now. */
+  @discardableResult
+  public mutating func turned(to value: Double) -> Double {
+    defer { last = value }
+    guard let last else { return 0 }
+    let moved = (value - last) * Self.sharePerUnit
+    owed += moved
+    return moved
   }
 
-  /** What is owed, whole px; nil when it is nothing worth sending. */
+  /** What is owed to the Mac; nil when it is nothing worth sending. */
   public mutating func take() -> Double? {
-    let px = owed.rounded()
-    guard abs(px) >= 1 else { return nil }
-    owed -= px
-    return px
+    guard abs(owed) >= Self.least else { return nil }
+    defer { owed = 0 }
+    return owed
+  }
+}
+
+/**
+ * THE PAGE MOVED ON THE WRIST BEFORE THE MAC'S PICTURE OF IT CAME. A crown turn
+ * or a swipe moves the held picture at once, by the share sent; it stands there
+ * until the Mac's next picture, which already shows the page moved, and then
+ * there is nothing left to move: no snap back, no jump forward. A Mac that never
+ * answers does not leave the page shifted for good.
+ */
+public struct PageDrift: Equatable, Sendable {
+  /** Pictures' heights the page has moved that the held picture does not show yet. Down is positive. */
+  public private(set) var share = 0.0
+  private var since: Date?
+  /** How long a move waits for its picture. */
+  public static let patience = 3.5
+  /** No more than this many screens ahead of the picture. */
+  public static let most = 3.0
+
+  public init() {}
+
+  public var waiting: Bool { since != nil }
+
+  public mutating func moved(_ by: Double, at now: Date) {
+    share = min(Self.most, max(-Self.most, share + by))
+    if since == nil { since = now }
+  }
+
+  /** A new picture of the page: the moves are in it. */
+  public mutating func pictureCame() {
+    share = 0
+    since = nil
+  }
+
+  public mutating func expire(at now: Date) {
+    guard let since, now.timeIntervalSince(since) >= Self.patience else { return }
+    pictureCame()
   }
 }
 
@@ -143,10 +188,12 @@ public struct FramePace: Equatable, Sendable {
     if wanted == nil { wanted = now.addingTimeInterval(Self.settle) }
   }
 
-  public func due(_ now: Date) -> Bool {
+  /** Eager while a moved page waits for its picture: then every gap will do. */
+  public func due(_ now: Date, eager: Bool = false) -> Bool {
     guard let last else { return true }
     let since = now.timeIntervalSince(last)
     if since < Self.gap { return false }
+    if eager { return true }
     if let wanted, now >= wanted { return true }
     return since >= Self.idle
   }
