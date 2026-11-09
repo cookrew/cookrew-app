@@ -446,8 +446,10 @@ export const CLI_COPY = {
 
   'said.new-identity':
     'Nobody on Cookrew has this GitHub account yet. Already have an account? Press Ctrl-C, run cookrew login with your password, then link GitHub in Security.',
-  'said.passcode-next':
-    'No password was typed here, so Cookrew will not lock itself on this Mac until you choose a passcode in Security.',
+  'said.lock-off':
+    'No password was typed here, so Cookrew will not lock itself on this Mac until the account password is typed on it once (Security → Lock).',
+  'said.lock-off-no-password':
+    '@{handle} has no password yet, so Cookrew will not lock itself on this Mac. Set one at cookrew.dev/me, then type it here once (Security → Lock).',
   'said.no-password': '@{handle} has no password. Run cookrew login --github, or sign in from the app.',
   'said.logout-no-password':
     '@{handle} has no password, so leaving needs a browser. Sign this Mac out from the app, or revoke it from another device.',

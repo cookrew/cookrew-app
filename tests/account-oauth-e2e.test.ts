@@ -11,7 +11,7 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2, type V2Identity } from '../registry/src/v2-routes'
-import { Accounts, accountFilePath, deviceIdFor, loadAccount, type FetchLike } from '../src/main/account-v2'
+import { Accounts, accountFilePath, deviceIdFor, loadAccount, unlockVerifierFor, writeAccount, type FetchLike } from '../src/main/account-v2'
 import { accountHandlers, accountStatus, type AccountIpcDeps } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
 import { Requests } from '../src/main/requests'
@@ -80,6 +80,18 @@ interface Mac {
  * A Mac whose browser answers at once: consent, callback, and the return page
  * handed back through the scheme, as the OS would.
  */
+/**
+ * A MAC THAT CHOSE A PASSCODE before the ruling of 2026-11-09, written the way
+ * the old app wrote it. Such a Mac keeps unlocking with it until the account
+ * password is typed there; no new machine is ever put in this state.
+ */
+function choosePasscodeAsBefore(m: Mac, passcode: string, over: { fetch?: FetchLike } = {}): Mac {
+  const held = loadAccount(m.home)
+  if (held === null) throw new Error('no account to give a passcode')
+  writeAccount({ ...held, unlockBy: 'passcode', unlock: unlockVerifierFor(passcode) }, m.home)
+  return mac('MacBook Pro', { ...over, home: m.home })
+}
+
 function mac(name = 'MacBook Pro', over: { fetch?: FetchLike; home?: string; viaLoopback?: boolean } = {}): Mac {
   const home = over.home ?? mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
   homes.push(home)
@@ -154,7 +166,8 @@ describe('configured', () => {
       const file = readFileSync(accountFilePath(m.home), 'utf8')
       expect(file).not.toContain('gh-secret')
       const held = loadAccount(m.home)
-      expect(held).toMatchObject({ username: 'octo', unlock: null, unlockBy: 'passcode', passwordless: true })
+      expect(held).toMatchObject({ username: 'octo', unlock: null, passwordless: true })
+      expect(held?.unlockBy).toBeUndefined()
     })
 
     it('a clash stays on the question, and the ticket never reaches the answer', async () => {
@@ -258,15 +271,16 @@ describe('configured', () => {
       expect(decided.ok).toBe(true)
       const landed = await second.app.resumeWait(pending, { everyMs: 5 })
       expect(landed.ok).toBe(true)
-      expect(loadAccount(second.home)).toMatchObject({ username: 'octo', unlock: null, unlockBy: 'passcode' })
+      expect(loadAccount(second.home)).toMatchObject({ username: 'octo', unlock: null })
+      expect(second.app.lockWaits()).toBe('set-password')
     })
   })
 
   describe('a Mac that already holds the account', () => {
     it('resumes an ended session with the same device, and the passcode stays', async () => {
-      const m = mac()
-      await joinByGithub(m)
-      m.app.setPasscode(PASSCODE)
+      const joined = mac()
+      await joinByGithub(joined)
+      const m = choosePasscodeAsBefore(joined, PASSCODE)
       const before = loadAccount(m.home)
       const ended = loadAccount(m.home)?.session?.token ?? ''
       await m.app.call('/v2/sessions/current', { method: 'POST', parse: false })
@@ -287,31 +301,22 @@ describe('configured', () => {
     })
   })
 
-  describe('the passcode', () => {
-    it('unlocks offline and is a different secret from anything the registry holds', async () => {
+  describe('no separate passcode (owner, 2026-11-09)', () => {
+    it('a provider-joined Mac is never put in passcode mode: its lock waits for an account password', async () => {
       const m = mac()
       await joinByGithub(m)
-      expect(m.app.passcodePending()).toBe(true)
+      expect(m.app.account()?.unlockBy).toBeUndefined()
+      expect(m.app.lockWaits()).toBe('set-password')
+      expect(m.app.lockable()).toBe(false)
       expect(m.app.passwordPending()).toBe(false)
-      expect(m.app.setPasscode('12345')).toMatchObject({ ok: false, reason: 'weak_passcode' })
-      expect(m.app.setPasscode(PASSCODE).ok).toBe(true)
-      expect(m.app.passcodePending()).toBe(false)
-      expect(m.app.verifyUnlock(PASSCODE)).toBe(true)
-      expect(m.app.verifyUnlock('000000')).toBe(false)
-      expect(readFileSync(accountFilePath(m.home), 'utf8')).not.toContain(PASSCODE)
+      expect(m.app.setPasscode(PASSCODE)).toMatchObject({ ok: false, reason: 'not_offered' })
     })
 
-    it('a password typed on a passcode Mac leaves the passcode alone', async () => {
+    it('a password account’s provider-joined Mac takes the account password, and resume writes it as the lock', async () => {
       const first = mac('First')
       await first.app.claim({ username: 'alice', password: PASSWORD })
       const linked = await first.app.providerLink('github', { current: PASSWORD })
       expect(linked.ok).toBe(true)
-      const code = await first.app.mintJoinCode(PASSWORD)
-      if (!code.ok) throw new Error('no code')
-      const second = mac('Second')
-      await second.app.join({ code: code.value.code })
-      // A password account: this Mac met no password, so it is the v3 path.
-      expect(second.app.passwordPending()).toBe(true)
       const third = mac('Third')
       const asked = await third.app.providerSignIn('github')
       if (asked.ok || asked.reason !== 'second_factor') throw new Error('expected a ladder')
@@ -323,15 +328,17 @@ describe('configured', () => {
         parse: false
       })
       expect((await third.app.resumeWait(asked.step.pending, { everyMs: 5 })).ok).toBe(true)
-      third.app.setPasscode(PASSCODE)
-      expect(third.app.account()?.passwordless).toBeUndefined()
+      // Nothing asked up front: the first unlock checks the password through
+      // this Mac's own session (account-ipc.ts · firstUnlock).
+      expect(third.app.lockWaits()).toBeNull()
+      expect(third.app.passwordPending()).toBe(true)
+      expect(third.app.lockable()).toBe(true)
       await third.app.call('/v2/sessions/current', { method: 'POST', parse: false })
       expect((await third.app.resume(PASSWORD)).ok).toBe(true)
-      expect(third.app.verifyUnlock(PASSCODE)).toBe(true)
-      expect(third.app.verifyUnlock(PASSWORD)).toBe(false)
+      expect(third.app.verifyUnlock(PASSWORD)).toBe(true)
     })
 
-    it('a code-joined Mac on a passwordless account takes a passcode, not a password it can never type', async () => {
+    it('a code-joined Mac on a passwordless account waits for the account password, never a passcode', async () => {
       const first = mac('First')
       await joinByGithub(first)
       const proved = await first.app.providerProve('mint-join-code')
@@ -341,20 +348,34 @@ describe('configured', () => {
       const second = mac('Second')
       expect((await second.app.join({ code: code.value.code })).ok).toBe(true)
       expect(second.app.passwordPending()).toBe(false)
-      expect(second.app.passcodePending()).toBe(true)
+      expect(second.app.lockWaits()).toBe('set-password')
     })
 
-    it('a rescue code opens a forgotten passcode and clears it', async () => {
+    it('a Mac waiting for a passcode it never chose is read as a terminal machine with no lock secret', async () => {
       const m = mac()
       await joinByGithub(m)
-      m.app.setPasscode(PASSCODE)
+      const held = loadAccount(m.home)
+      if (held === null) throw new Error('no account')
+      writeAccount({ ...held, unlockBy: 'passcode', unlock: null }, m.home)
+      const again = mac('MacBook Pro', { home: m.home })
+      expect(again.app.account()?.unlockBy).toBeUndefined()
+      expect(again.app.isFromTerminal()).toBe(true)
+      expect(again.app.lockWaits()).toBe('set-password')
+    })
+
+    it('a chosen passcode keeps working; a rescue code spends it and the account password takes over', async () => {
+      const joined = mac()
+      await joinByGithub(joined)
+      const m = choosePasscodeAsBefore(joined, PASSCODE)
+      expect(m.app.verifyUnlock(PASSCODE)).toBe(true)
+      expect(readFileSync(accountFilePath(m.home), 'utf8')).not.toContain(PASSCODE)
       const codes = await codesFor(m)
       if (!codes.ok) throw new Error('no codes')
       expect(await m.app.rescuePasscode('NOT-A-CODE')).toMatchObject({ ok: false })
-      expect(m.app.verifyUnlock(PASSCODE)).toBe(true)
       expect((await m.app.rescuePasscode(codes.value[0])).ok).toBe(true)
-      expect(m.app.passcodePending()).toBe(true)
       expect(m.app.verifyUnlock(PASSCODE)).toBe(false)
+      expect(m.app.account()?.unlockBy).toBeUndefined()
+      expect(m.app.lockWaits()).toBe('set-password')
     })
   })
 
@@ -363,7 +384,7 @@ describe('configured', () => {
       const lock = new IdleLock({
         lockAfterMs: 60_000,
         verify: (typed) => m.app.verifyUnlock(typed),
-        armed: () => !m.app.passcodePending()
+        armed: () => m.app.lockable()
       })
       const deps: AccountIpcDeps = {
         accounts: m.app,
@@ -380,14 +401,13 @@ describe('configured', () => {
 
     it('A PASSCODE NEVER LEAVES THIS MAC, even with the session dead', async () => {
       const sent: string[] = []
-      const m = mac('Spied', {
-        fetch: (input, init) => {
-          sent.push(`${String(input)} ${String(init?.body ?? '')}`)
-          return fetch(input, init)
-        }
-      })
-      await joinByGithub(m)
-      m.app.setPasscode(PASSCODE)
+      const spied: FetchLike = (input, init) => {
+        sent.push(`${String(input)} ${String(init?.body ?? '')}`)
+        return fetch(input, init)
+      }
+      const joined = mac('Spied', { fetch: spied })
+      await joinByGithub(joined)
+      const m = choosePasscodeAsBefore(joined, PASSCODE, { fetch: spied })
       await m.app.call('/v2/sessions/current', { method: 'POST', parse: false })
       const held = m.app.account()
       if (held === null) throw new Error('no account')
@@ -400,23 +420,26 @@ describe('configured', () => {
       expect(sent).toEqual([])
     })
 
-    it('the idle lock stays disarmed until a passcode exists, and says so', async () => {
+    it('the idle lock stays disarmed until the account has a password, and says so', async () => {
       const m = mac()
       await joinByGithub(m)
-      const { deps } = wired(m)
+      const { deps, handlers } = wired(m)
       deps.lock.lock()
       expect(deps.lock.locked).toBe(false)
-      expect(accountStatus(deps)).toMatchObject({ passcodePending: true, passwordPending: false, passwordless: true })
-      m.app.setPasscode(PASSCODE)
+      expect(accountStatus(deps)).toMatchObject({ lockWaits: 'set-password', fromTerminal: false, passwordPending: false, passwordless: true })
+      // The same first-password path as the security card; its result is this Mac's lock.
+      expect(await handlers['account:setPassword']({ current: '', next: PASSWORD })).toMatchObject({ ok: true })
+      expect(accountStatus(deps)).toMatchObject({ lockWaits: null, passwordless: false })
+      expect(accountStatus(deps).unlockBy).toBe('password')
       deps.lock.lock()
       expect(deps.lock.locked).toBe(true)
-      expect(accountStatus(deps)).toMatchObject({ passcodePending: false, unlockBy: 'passcode' })
+      expect(await handlers['account:unlock'](PASSWORD)).toMatchObject({ ok: true })
     })
 
     it('a provider sign-in never opens the lock', async () => {
-      const m = mac()
-      await joinByGithub(m)
-      m.app.setPasscode(PASSCODE)
+      const joined = mac()
+      await joinByGithub(joined)
+      const m = choosePasscodeAsBefore(joined, PASSCODE)
       const { deps, handlers } = wired(m)
       deps.lock.lock()
       expect(await handlers['account:oauthStart']('github')).toMatchObject({ ok: false, reason: 'locked' })
@@ -424,9 +447,9 @@ describe('configured', () => {
     })
 
     it('a provider landing mid-lock leaves the lock shut', async () => {
-      const m = mac()
-      await joinByGithub(m)
-      m.app.setPasscode(PASSCODE)
+      const joined = mac()
+      await joinByGithub(joined)
+      const m = choosePasscodeAsBefore(joined, PASSCODE)
       const { deps, handlers } = wired(m)
       const lockDuringTrip = new Accounts({
         base: m.home,
@@ -443,11 +466,12 @@ describe('configured', () => {
       void handlers
     })
 
-    it('setting a passcode needs the current one, and the wrong one spends a try', async () => {
-      const m = mac()
-      await joinByGithub(m)
+    it('no new Mac is offered a passcode; a Mac that chose one changes it only with the current one', async () => {
+      const joined = mac()
+      await joinByGithub(joined)
+      expect(await wired(joined).handlers['account:setPasscode']({ next: PASSCODE })).toMatchObject({ ok: false, reason: 'not_offered' })
+      const m = choosePasscodeAsBefore(joined, PASSCODE)
       const { deps, handlers } = wired(m)
-      expect(await handlers['account:setPasscode']({ next: PASSCODE })).toMatchObject({ ok: true })
       expect(await handlers['account:setPasscode']({ next: '111111' })).toMatchObject({ ok: false, reason: 'bad_credentials' })
       expect(await handlers['account:setPasscode']({ next: '111111', current: 'nope-nope' })).toMatchObject({ ok: false })
       expect(m.app.verifyUnlock(PASSCODE)).toBe(true)
@@ -458,9 +482,9 @@ describe('configured', () => {
     })
 
     it('Touch ID opens the lock only on a passing prompt, only once it is on', async () => {
-      const m = mac()
-      await joinByGithub(m)
-      m.app.setPasscode(PASSCODE)
+      const joined = mac()
+      await joinByGithub(joined)
+      const m = choosePasscodeAsBefore(joined, PASSCODE)
       let finger = false
       const touchId = { available: () => true, prompt: () => Promise.resolve(finger) }
       const { deps, handlers } = wired(m, { touchId })
@@ -815,8 +839,7 @@ describe('review: the lock during a trip', () => {
   }
 
   /** A Mac whose browser locks the app before it answers. */
-  function lockingMac(lock: () => void): Mac {
-    const home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))
+  function lockingMac(lock: () => void, home = mkdtempSync(path.join(tmpdir(), 'oauth-mac-'))): Mac {
     homes.push(home)
     const opened: string[] = []
     const app: Accounts = new Accounts({
@@ -836,11 +859,12 @@ describe('review: the lock during a trip', () => {
   it('an act whose proof finished behind the lock does not happen', async () => {
     let armed = false
     let deps: AccountIpcDeps | null = null
-    const m = lockingMac(() => {
+    const locker = (): void => {
       if (armed) deps?.lock.lock()
-    })
-    await joinByGithub(m)
-    m.app.setPasscode(PASSCODE)
+    }
+    const joined = lockingMac(locker)
+    await joinByGithub(joined)
+    const m = lockingMac(locker, choosePasscodeAsBefore(joined, PASSCODE).home)
     deps = lockedDeps(m)
     armed = true
     expect(await accountHandlers(deps)['account:joinCode']('')).toMatchObject({ ok: false, reason: 'locked' })
@@ -861,21 +885,22 @@ describe('review: the lock during a trip', () => {
   })
 
   it('every provider act refuses behind the lock, the alarm and sign-out included', async () => {
-    const m = mac()
-    await joinByGithub(m)
-    m.app.setPasscode(PASSCODE)
+    const joined = mac()
+    await joinByGithub(joined)
+    const m = choosePasscodeAsBefore(joined, PASSCODE)
     const deps = lockedDeps(m)
     deps.lock.lock()
     const handlers = accountHandlers(deps)
     expect(await handlers['account:signOut']('')).toMatchObject({ ok: false, reason: 'locked' })
     expect(await handlers['account:decideRequest']({ id: 'x', action: 'not-me' })).toMatchObject({ ok: false, reason: 'locked' })
-    expect(m.opened).toHaveLength(1)
+    expect(joined.opened).toHaveLength(1)
+    expect(m.opened).toHaveLength(0)
   })
 
   it('a paused try at the passcode says it is paused', async () => {
-    const m = mac()
-    await joinByGithub(m)
-    m.app.setPasscode(PASSCODE)
+    const joined = mac()
+    await joinByGithub(joined)
+    const m = choosePasscodeAsBefore(joined, PASSCODE)
     const handlers = accountHandlers(lockedDeps(m))
     let last: unknown = null
     for (let i = 0; i < 6; i += 1) last = await handlers['account:setPasscode']({ next: '111111', current: 'nope-nope' })
@@ -1093,9 +1118,9 @@ describe('review: a cancel in the gaps around a trip', () => {
 
   it('the rescue branch stops if the Mac locked while the code was spent', async () => {
     const g = gate('/recovery')
-    const m = mac('RescueLock', { fetch: g.fetch })
-    await joinByGithub(m)
-    m.app.setPasscode(PASSCODE)
+    const joined = mac('RescueLock', { fetch: g.fetch })
+    await joinByGithub(joined)
+    const m = choosePasscodeAsBefore(joined, PASSCODE, { fetch: g.fetch })
     const codes = await codesFor(m)
     if (!codes.ok) throw new Error('no codes')
     const lock = new IdleLock({ lockAfterMs: 60_000, verify: () => false })
