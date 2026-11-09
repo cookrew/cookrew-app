@@ -87,7 +87,7 @@ public enum PageTouch: Equatable, Sendable {
  * closer at the spot, centred, and a tap close up is the click.
  */
 public func touch(at point: CGPoint, view: PictureView, picture: CGSize, box: CGSize, closeZoom: Double) -> PageTouch {
-  let fit = fitRect(picture: picture, in: box)
+  let fit = pageFit(picture: picture, in: box)
   guard let at = view.fraction(of: point, fit: fit) else { return .none }
   if view.zoom > 1 { return .click(at) }
   let width = fit.width * closeZoom
@@ -102,7 +102,57 @@ public func touch(at point: CGPoint, view: PictureView, picture: CGSize, box: CG
 
 /** A swipe as a share of the picture's height: the page moves as far as the finger did on it. Up scrolls down. */
 public func swipeShare(_ translation: CGFloat, view: PictureView, picture: CGSize, box: CGSize) -> Double {
-  let height = view.rect(fit: fitRect(picture: picture, in: box)).height
+  let height = view.rect(fit: pageFit(picture: picture, in: box)).height
   guard height > 0 else { return 0 }
   return Double(-translation / height)
+}
+
+/**
+ * Where a page stands on a wrist: full width, at the top of its box. A laptop
+ * page is wider than a watch is tall, so centred it floated with a gap above
+ * and below; at the top it reads like a page, and taps and swipes share it.
+ */
+public func pageFit(picture: CGSize, in box: CGSize) -> CGRect {
+  let fit = fitRect(picture: picture, in: box)
+  return CGRect(x: fit.minX, y: 0, width: fit.width, height: fit.height)
+}
+
+/** Close up, how far a drag asked to go past the page's top or bottom: that much is a scroll of the page. */
+public func panOverflow(_ asked: PictureView, fit: CGRect, box: CGSize) -> CGFloat {
+  asked.pan.height - asked.clamped(fit: fit, box: box).pan.height
+}
+
+/**
+ * HOW OFTEN A WRIST ASKS FOR THE PAGE. The Mac takes a picture of a page at most
+ * every few seconds unless a touch asks for one, and every ask is work on the
+ * Mac that a phone scrolling the same page is waiting behind. So: slowly at
+ * rest, once soon after a touch, and never closer together than the gap, however
+ * fast the crown turns.
+ */
+public struct FramePace: Equatable, Sendable {
+  public static let idle = 1.5
+  public static let settle = 0.45
+  public static let gap = 0.6
+  private var last: Date?
+  private var wanted: Date?
+
+  public init() {}
+
+  /** Something went to the page: its picture is wanted once it has had time to change. */
+  public mutating func sent(at now: Date) {
+    if wanted == nil { wanted = now.addingTimeInterval(Self.settle) }
+  }
+
+  public func due(_ now: Date) -> Bool {
+    guard let last else { return true }
+    let since = now.timeIntervalSince(last)
+    if since < Self.gap { return false }
+    if let wanted, now >= wanted { return true }
+    return since >= Self.idle
+  }
+
+  public mutating func fetched(at now: Date) {
+    last = now
+    if let at = wanted, now >= at { wanted = nil }
+  }
 }

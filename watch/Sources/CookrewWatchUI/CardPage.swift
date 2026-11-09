@@ -303,10 +303,14 @@ enum ThumbPictures {
 
 /** How often a thumbnail looks again while its card is on screen. */
 private let thumbSeconds = 8.0
-/** A thumbnail's picture: two columns of a 45 mm screen, at 2x. */
-private let thumbWidth = 180
+/** A thumbnail's picture: a third of a 45 mm screen, at 2x. */
+private let thumbWidth = 128
 
-/** An artifact on its card: the page's own picture, or the note, with its title under it. */
+/**
+ * An artifact on its card, as the card's own strip draws it: three to a row.
+ * A browser shows its page's own picture once the Mac has one to give; a note
+ * its first words. The title is what VoiceOver reads.
+ */
 struct ItemThumb: View {
   let store: WatchStore
   let item: CardItem
@@ -318,44 +322,46 @@ struct ItemThumb: View {
   @State private var image: CGImage?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      ZStack(alignment: .topLeading) {
-        RoundedRectangle(cornerRadius: 6).fill(item.kind == .note ? ink.note : ink.card)
-        if let image = image ?? ThumbPictures.held[item.id]?.image {
-          Image(decorative: image, scale: 1)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .clipped()
-        } else if item.kind == .note {
-          Text(item.title)
-            .font(InkType.words(9.5))
-            .foregroundStyle(ink.noteText)
-            .lineLimit(3)
-            .padding(.horizontal, 5)
-            .padding(.top, 14)
-        } else {
-          RoundedRectangle(cornerRadius: 2).fill(Color(css: item.tint).opacity(0.55)).frame(height: 10).padding(.horizontal, 5).padding(.top, 14)
+    ZStack(alignment: .topLeading) {
+      RoundedRectangle(cornerRadius: 6).fill(item.kind == .note ? ink.note : ink.card)
+      if let image = image ?? ThumbPictures.held[item.id]?.image {
+        Image(decorative: image, scale: 1)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+          .clipped()
+      } else if item.kind == .note {
+        Text(item.title)
+          .font(InkType.words(8.5))
+          .foregroundStyle(ink.noteText)
+          .lineLimit(2)
+          .padding(.horizontal, 4)
+          .padding(.top, 13)
+      } else {
+        VStack(alignment: .leading, spacing: 3) {
+          RoundedRectangle(cornerRadius: 2).fill(Color(css: item.tint)).frame(height: 13)
+          RoundedRectangle(cornerRadius: 1).fill(ink.hair2).frame(height: 2.5)
+          RoundedRectangle(cornerRadius: 1).fill(ink.hair2).frame(width: 26, height: 2.5)
         }
-        coin.offset(x: -3, y: -3)
+        .padding(.top, 12)
+        .padding(.horizontal, 5)
       }
-      .frame(height: 52)
-      .frame(maxWidth: .infinity)
-      .clipShape(RoundedRectangle(cornerRadius: 6))
-      .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ink.hair2, lineWidth: 1))
-      Text(item.kind == .note ? item.title : (item.title.isEmpty ? item.host : item.title))
-        .font(InkType.words(10.5))
-        .foregroundStyle(ink.soft)
-        .lineLimit(1)
     }
+    .frame(height: 42)
+    .frame(maxWidth: .infinity)
+    .clipShape(RoundedRectangle(cornerRadius: 6))
+    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ink.hair2, lineWidth: 1))
+    // The coin sits on the corner, over the edge: outside the picture's clip.
+    .overlay(alignment: .topLeading) { coin.offset(x: -3, y: -3) }
     .accessibilityLabel("\(item.kind == .note ? "Note" : "Browser"): \(item.title)")
-    .task(id: "\(item.id)|\(live)|\(phase == .active)") { await look() }
+    .task(id: "\(item.id)|\(live)|\(phase == .active)|\(store.macPeeks)") { await look() }
   }
 
   /** The picture the Mac already has, now and again while the card is in front of the owner. */
   private func look() async {
-    // Wrist down, nobody is looking: the card's own poll stops then too.
-    guard item.kind == .browser, live, !still, phase == .active else { return }
+    // Wrist down, nobody is looking: the card's own poll stops then too. A Mac
+    // that cannot peek would start a Chrome to answer: it is not asked.
+    guard item.kind == .browser, live, !still, phase == .active, store.macPeeks else { return }
     while !Task.isCancelled {
       let held = ThumbPictures.held[item.id]
       if case .new(let data, let tag)? = try? await store.client.peek(item.id, width: thumbWidth, tag: held?.tag), let decoded = picture(data) {
@@ -372,7 +378,6 @@ struct ItemThumb: View {
       .foregroundStyle(ink.onSeal)
       .frame(width: 15, height: 15)
       .background(Circle().fill(item.kind == .browser ? Color(css: item.tint) : ink.seal))
-      .padding(5)
   }
 }
 
@@ -416,8 +421,8 @@ public struct CardPage: View {
             Text(notice).font(InkType.words(12.5)).foregroundStyle(ink.wait)
           }
           if !card.items.isEmpty, wait == nil {
-            // Every artifact the agent has, as the phone's thumbs grid holds them; the crown scrolls to the rest.
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 7) {
+            // Every artifact the agent has, three to a row as the card's strip draws them; the crown scrolls to the rest.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
               ForEach(card.items) { item in
                 Button { onItem(item) } label: { ItemThumb(store: store, item: item, live: store.page == card.id) }.buttonStyle(.plain)
               }

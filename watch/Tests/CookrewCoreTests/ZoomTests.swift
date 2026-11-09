@@ -279,3 +279,19 @@ struct ZoomRoundTwoTests {
     #expect(s.page == "b")
   }
 }
+
+@Suite("thumbnails only from a Mac that can peek", .serialized)
+@MainActor
+struct PeekTests {
+  @Test("a Mac that counts workspaces can peek; an older one would start a Chrome per thumbnail, so it is not asked")
+  func peeks() async {
+    let api = ScopedAPI()
+    api.replies = [CardsReply(cards: [], activeWorkspaceId: "dev"), CardsReply(cards: [], activeWorkspaceId: "dev", workspaces: [])]
+    let s = WatchStore(api: api)
+    #expect(!s.macPeeks)
+    await s.refresh()
+    #expect(!s.macPeeks)
+    await s.enter(workspace: "dev")
+    #expect(s.macPeeks)
+  }
+}

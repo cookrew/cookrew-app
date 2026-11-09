@@ -93,6 +93,13 @@ public final class WatchStore {
   public private(set) var workspaces: [WorkspaceTile] = []
   /** The workspace the wrist has zoomed into; nil above them. */
   public private(set) var scope: String?
+  /**
+   * The Mac can show a thumbnail without starting its browser (frame ?peek=1).
+   * It came with the workspace counts (0.5.6): a Mac that sends those peeks. An
+   * older one would start a Chrome for every thumbnail and keep it busy, which a
+   * phone scrolling on that Mac feels, so it is not asked for thumbnails at all.
+   */
+  public private(set) var macPeeks = false
   /** The Mac's own active workspace: the dot on its tile. */
   public private(set) var activeWorkspaceId: String?
   public private(set) var link: WatchLink = .connecting
@@ -216,6 +223,7 @@ public final class WatchStore {
       // The cards in hand, or these, were one workspace's: every other one speaks through its count.
       if let inside = asked ?? cardsScope { events += eventsElsewhere(workspaces, tiles, inside: inside) }
     }
+    macPeeks = reply.workspaces != nil
     cards = next
     // Only cards that really are one workspace's: a Mac too old to scope sends them all, and those speak for themselves.
     cardsScope = asked.flatMap { id in next.allSatisfy { $0.workspace.id == id } ? id : nil }
