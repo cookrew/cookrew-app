@@ -19,7 +19,6 @@
  */
 import type { AccountMachine, AccountMachines } from '../../../shared/zoom-fleet'
 import type { FleetSnapshot } from '../../../shared/fleet'
-import { isNewer } from '../../../shared/update-check'
 import { composeFleet, snapshotOf, type ZoomCounts } from '../zoom/fleet-compose'
 import type { MachineBlock } from '../relay-machine-call'
 
@@ -30,6 +29,8 @@ const MACHINE_WORDS_MAX = 160
 export const MIN_MACHINE_VERSION = '0.6.0'
 export const ACCOUNT_EVERY_MS = 60_000
 export const SUMMARY_EVERY_MS = 5_000
+/** The registry said the session was over: the session renews, and the list is asked for again this soon. */
+export const REASK_AFTER_REFUSAL_MS = 5_000
 
 export const DEVICES_COPY = {
   outdated: (name: string): string => `Update Cookrew on ${name}.`,
@@ -102,11 +103,23 @@ export interface ConsoleDevices {
   watch(): () => void
   /** The gate opened or closed. */
   gateChanged(): void
-  /** Can this machine be entered right now. */
-  enterable(machineId: string): boolean
 }
 
-const outdated = (version: string | null): boolean => version === null || isNewer(MIN_MACHINE_VERSION, version)
+const triple = (version: string | null): readonly [number, number, number] | null => {
+  // A pre-release or build suffix does not change which protocol a build speaks.
+  const parts = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/.exec(version ?? '')
+  return parts === null ? null : [Number(parts[1]), Number(parts[2]), Number(parts[3])]
+}
+
+const MIN_TRIPLE = triple(MIN_MACHINE_VERSION) ?? [0, 0, 0]
+
+/** Older than the first build this console speaks to. A version it cannot read is not taken for a new one. */
+const outdated = (version: string | null): boolean => {
+  const have = triple(version)
+  if (have === null) return true
+  for (let at = 0; at < 3; at += 1) if (have[at] !== MIN_TRIPLE[at]) return have[at] < MIN_TRIPLE[at]
+  return false
+}
 
 /** Where one machine stands, and what it says about itself when it cannot be read. */
 export function standingOf(row: AccountMachine, at: { open: boolean; read: boolean; block: MachineBlock | null }): { standing: MachineStanding; say: string | null } {
@@ -135,21 +148,27 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   let watching = 0
   let accountTimer: ReturnType<typeof setInterval> | null = null
   let summaryTimer: ReturnType<typeof setInterval> | null = null
+  let reaskTimer: ReturnType<typeof setTimeout> | null = null
   const asking = new Set<string>()
   let reproofAsked = false
-  /** Bumped when what was read must not be filed any more (the gate closed, the level left). */
+  /** Machines that did not take the pass: not asked again until there is a new proof to show them. */
+  let passRefused: ReadonlySet<string> = new Set()
+  let gateWasOpen = false
+  /** Bumped when a SUMMARY read must not be filed any more (the gate closed, the level left the screen). */
   let era = 0
+  /** Bumped when the account's list must not be filed any more (signed out). The gate has no say in that. */
+  let listEra = 0
 
   const compose = (): void => {
     const open = deps.gateOpen()
     // Before the gate nothing a row carries beyond its name, platform and line is drawn, whatever the registry sent.
     const bare = rows.map((row) => ({ ...row, workspaces: [] }))
-    const drawn = composeFleet({ snapshot: null, link: 'none', list: null, name: null, account: { ok: true, machines: bare }, remote: open ? snapshots : {} }).slice(1)
-    const machines = bare.map((row, index): ConsoleMachine => {
+    const drawn = new Map(composeFleet({ snapshot: null, link: 'none', list: null, name: null, account: { ok: true, machines: bare }, remote: open ? snapshots : {} }).map((machine) => [machine.id, machine]))
+    const machines = bare.map((row): ConsoleMachine => {
       const read = open && snapshots[row.id] !== undefined && readable(row)
       const { standing, say } = standingOf(row, { open, read, block: open ? deps.why(row.id) : null })
-      const machine = drawn[index]
-      const live = standing === 'live'
+      const machine = drawn.get(row.id)
+      const live = standing === 'live' && machine !== undefined
       return {
         id: row.id,
         // The registry's name for it, always: a machine does not get to rename itself on this page.
@@ -173,9 +192,9 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   }
 
   const askAccount = async (): Promise<void> => {
-    const mine = era
+    const mine = listEra
     const answer = await deps.account().catch((): AccountMachines => ({ ok: false, reason: 'failed' }))
-    if (mine !== era || running === 0) return
+    if (mine !== listEra || running === 0) return
     if (answer.ok) {
       rows = answer.machines
       answered = true
@@ -185,9 +204,18 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       compose()
       return void askSummaries()
     }
-    if (answer.reason === 'signed-out') return deps.onSignedOut()
     error = DEVICES_COPY.unreachable
     compose()
+    if (answer.reason !== 'signed-out') return
+    // The session's keeper renews it, or learns the sign-in is over (and this is stopped). Renewed,
+    // the list is there for the asking: asked again soon, not at the next minute.
+    deps.onSignedOut()
+    if (reaskTimer === null) {
+      reaskTimer = setTimeout(() => {
+        reaskTimer = null
+        void askAccount()
+      }, REASK_AFTER_REFUSAL_MS)
+    }
   }
 
   const askOne = async (id: string): Promise<void> => {
@@ -199,9 +227,13 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       if (mine !== era) return
       if (read !== null) snapshots = { ...snapshots, [id]: read }
       else if (snapshots[id] !== undefined) snapshots = Object.fromEntries(Object.entries(snapshots).filter(([held]) => held !== id))
-      if (read === null && deps.why(id)?.kind === 'needs-proof' && !reproofAsked) {
-        reproofAsked = true
-        deps.onReproof()
+      if (read === null && deps.why(id)?.kind === 'needs-proof') {
+        // Not asked again with the same pass: each ask is its door, through the relay.
+        passRefused = new Set([...passRefused, id])
+        if (!reproofAsked) {
+          reproofAsked = true
+          deps.onReproof()
+        }
       }
       compose()
     } finally {
@@ -211,7 +243,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
 
   const askSummaries = async (): Promise<void> => {
     if (running === 0 || watching === 0 || !deps.gateOpen()) return
-    await Promise.all(rows.filter(readable).map((row) => askOne(row.id)))
+    await Promise.all(rows.filter((row) => readable(row) && !passRefused.has(row.id)).map((row) => askOne(row.id)))
   }
 
   const forgetInside = (): void => {
@@ -229,6 +261,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
     start: () => {
       running += 1
       if (running === 1) {
+        gateWasOpen = deps.gateOpen()
         void askAccount()
         accountTimer = setInterval(() => void askAccount(), ACCOUNT_EVERY_MS)
       }
@@ -240,6 +273,9 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         if (running > 0) return
         if (accountTimer !== null) clearInterval(accountTimer)
         accountTimer = null
+        if (reaskTimer !== null) clearTimeout(reaskTimer)
+        reaskTimer = null
+        listEra += 1
         era += 1
         asking.clear()
       }
@@ -264,11 +300,19 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       }
     },
     gateChanged: () => {
-      reproofAsked = false
-      if (!deps.gateOpen()) forgetInside()
+      const open = deps.gateOpen()
+      // A NEW PROOF (closed, then open) is a reason to ask everyone again. The gate saying once
+      // more that it is open is not: reset on that, one machine refusing the pass would be asked,
+      // refuse, have the gate look, and be asked again, as fast as the relay answers.
+      if (open && !gateWasOpen) {
+        reproofAsked = false
+        passRefused = new Set()
+      }
+      if (!open) forgetInside()
+      const changed = open !== gateWasOpen
+      gateWasOpen = open
       compose()
-      void askSummaries()
-    },
-    enterable: (machineId) => state.machines.some((machine) => machine.id === machineId && (machine.standing === 'live' || machine.standing === 'reading'))
+      if (changed) void askSummaries()
+    }
   }
 }

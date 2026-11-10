@@ -25,6 +25,7 @@
  * navigation), so the whole of it runs in node against the real registry.
  */
 import { isAuthTranscript } from '../../../shared/auth-site'
+import { renewMessage } from '../../../shared/session-renew'
 import type { DeviceGrant } from '../../../shared/account-pair'
 import type { ConsoleDevice } from './device-key'
 
@@ -88,6 +89,11 @@ export interface ConsoleSession {
   fresh(): Promise<string | null>
   /** The registry refused the token: renew it, or learn that the sign-in is over. */
   refused(): void
+  /**
+   * Another tab of this browser changed what is kept: take a token it renewed (a renewal closes
+   * the one this tab held), and be signed out if it signed out.
+   */
+  reread(): void
   signIn(returnTo: string): Promise<StartResult>
   /** The device pass by password: typed on the auth host, never here. */
   passByPassword(returnTo: string): Promise<StartResult>
@@ -111,7 +117,6 @@ const DEAD_ON_ARRIVAL_MS = 5_000
 const RETRY_RENEW_MS = 30_000
 /** A refusal renews at most this often. */
 export const REFUSED_EVERY_MS = 30_000
-export const RENEW_PREFIX = 'cookrew-renew/1'
 
 interface Held {
   readonly token: string
@@ -222,8 +227,32 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
     tell({ status: 'signed-out' })
   }
 
+  const readKept = (): Held | null => {
+    try {
+      return readHeld(parsed(deps.kept.getItem(SESSION_KEY)))
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * ANOTHER TAB MAY HAVE RENEWED ALREADY. Every tab of a browser is the same device, and a
+   * renewal closes the device's other sessions: two tabs each renewing would keep closing each
+   * other's. So before renewing, this tab looks at what the browser kept and takes a later token
+   * of the same sign-in if one is there.
+   */
+  const adoptKept = (): string | null => {
+    const kept = readKept()
+    if (held === null || kept === null || kept.username !== held.username || kept.deviceId !== held.deviceId || kept.exp <= held.exp) return null
+    held = kept
+    schedule()
+    return kept.token
+  }
+
   /** The same sign-in, a new fifteen minutes: the device key signs the registry's nonce. */
   const renewOnce = async (): Promise<string | null> => {
+    const adopted = adoptKept()
+    if (adopted !== null && held !== null && held.exp - now() > RENEW_BEFORE_MS) return adopted
     const was = held
     if (was === null) return null
     let device: ConsoleDevice
@@ -240,12 +269,16 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
     const asked = await deps.registry('GET', '/v2/sessions/renew-nonce')
     const nonce = isRecord(asked.body) && typeof asked.body.nonce === 'string' ? asked.body.nonce : null
     if (asked.status !== 200 || nonce === null) return retryLater(was)
-    const sig = b64u(await device.sign(encoder.encode(`${RENEW_PREFIX} ${was.username} ${device.id} ${nonce}`)))
+    const sig = b64u(await device.sign(encoder.encode(renewMessage(was.username, device.id, nonce))))
     const renewed = await deps.registry('POST', '/v2/sessions/renew', { device: device.id, nonce, sig })
     if (renewed.status === 201) {
       const next = readHeld(renewed.body)
-      // Signed out, or signed in as someone else, while the renewal was out: its answer is nobody's.
-      if (held !== was) return held?.token ?? null
+      // Signed out, or signed in as someone else, while the renewal was out: its answer is nobody's,
+      // and the session it made is ended rather than left open at the registry.
+      if (held !== was) {
+        if (next !== null) void deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(next.token)).catch(() => null)
+        return held?.token ?? null
+      }
       if (next !== null && next.username === was.username && next.deviceId === was.deviceId) {
         keep(next)
         return next.token
@@ -345,7 +378,21 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
     },
     token: usable,
     fresh,
+    reread: () => {
+      if (state.status === 'starting') return
+      const kept = readKept()
+      // Signed out in another tab.
+      if (kept === null) return held === null ? undefined : drop()
+      if (held === null) {
+        // Signed in in another tab.
+        held = kept
+        tell({ status: 'signed-in', username: kept.username })
+        return schedule()
+      }
+      adoptKept()
+    },
     refused: () => {
+      if (adoptKept() !== null) return
       // Whoever answers through the relay can say this word; it buys one renewal per while, not one per answer.
       if (now() - refusedAt < REFUSED_EVERY_MS) return
       refusedAt = now()
@@ -406,6 +453,8 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
       // sign-in with no token at all, and is kept across a sign-out, so a page that only dropped
       // its token would leave a sign-in anyone at this browser could pick up again. A token that
       // has run out is renewed first, to have one the registry takes.
+      // A renewal on its way is waited for: the token it replaces would end nothing.
+      if (renewing !== null) await renewing.catch(() => null)
       const token = await fresh().catch(() => null)
       // Renewing found the sign-in already over.
       const over = held === null

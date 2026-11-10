@@ -29,10 +29,16 @@ function MachineTile({ machine, opening, onOpen }: { machine: ConsoleMachine; op
         <div className="cd-screen">
           {machine.standing === 'live' &&
             machine.workspaces.slice(0, 6).map((workspace) => (
-              <button type="button" key={workspace.id} className="cd-ws" onClick={() => onOpen(workspace.id)}>
+              <button
+                type="button"
+                key={workspace.id}
+                className="cd-ws"
+                aria-label={`Open ${workspace.name} on ${machine.name}: ${countOf(workspace.agents, 'agent')}${workspace.waiting > 0 ? `, ${workspace.waiting} waiting` : ''}`}
+                onClick={() => onOpen(workspace.id)}
+              >
                 <span className="cd-ws-name">{workspace.name}</span>
                 <span className="cd-ws-count">{workspace.agents}</span>
-                {workspace.waiting > 0 && <i className="cd-ws-wait" aria-label={`${countOf(workspace.waiting, 'agent')} waiting`} />}
+                {workspace.waiting > 0 && <i className="cd-ws-wait" aria-hidden="true" />}
               </button>
             ))}
           {machine.standing === 'live' && machine.workspaces.length === 0 && <span className="cd-none">no workspaces</span>}

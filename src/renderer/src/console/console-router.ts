@@ -10,7 +10,8 @@
  *   an open box, then the zoom one stop out: prompt/back-guard.ts), and takes
  *   that step when the browser pops it. A second thing pushing an entry per
  *   level would make one press of back skip a step or repeat one. So the
- *   level a back lands on is written here, into the entry that is left.
+ *   level is written into whichever entry the page is on, and the entry a
+ *   pop lands on is rewritten to it (never read from).
  *
  * The code on the way back from sign-in is read once and taken off the
  * address in the same breath: it is in no reload, no share sheet and no
@@ -59,7 +60,13 @@ export function createConsoleRouter(port: HistoryPort): ConsoleRouter {
     route = next
     for (const listener of listeners) listener()
   }
-  port.onPop(() => set(read()))
+  // EVERY POP ON THIS PAGE IS THE BACK GUARD'S ENTRY COMING OFF (nothing else adds one). The
+  // entry under it still carries the address it had when the guard's was pushed, which can be a
+  // level the view has since left; adopted, it would walk the person back into a machine they
+  // just stepped out of. So a pop moves nothing: the entry landed on is told where the view is.
+  port.onPop(() => {
+    if (route.kind !== 'auth-complete') port.replace(port.state, consoleRoutePath(route))
+  })
 
   return {
     get: () => route,

@@ -346,6 +346,67 @@ describe('inside a machine', () => {
   })
 })
 
+describe('what the app does while its machine is being left', () => {
+  it('a level written back as the view lets go does not put the page back into a machine that is no longer in scope', async () => {
+    const w = world({ route: at(M, W) })
+    // As the real page behaves: taking the machine out of scope makes the view let go of its
+    // focus, and the view writes the level it then stands at back into the address, at once.
+    w.deps = { ...w.deps, enterScope: (id) => {
+      w.scope.push(id)
+      if (id === null) w.route.set(at(M))
+    } }
+    const runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    w.doors[0].answer({ kind: 'open' })
+    await settle()
+    expect(runtime.get().view).toEqual({ kind: 'machine', machine: M })
+
+    runtime.keyRefused(M)
+    await settle()
+    // Out of scope, and its door asked again: never "in the machine" with nothing in scope.
+    expect(w.scope.at(-1)).toBeNull()
+    expect(runtime.get().view).toEqual({ kind: 'entering', machine: M })
+    expect(w.doors.map((door) => door.machine)).toEqual([M, M])
+    w.doors[1].answer({ kind: 'open' })
+    await settle()
+    expect(w.scope.at(-1)).toBe(M)
+    expect(runtime.get().view).toEqual({ kind: 'machine', machine: M })
+    // Every time the page says it is in a machine, that machine is the one in scope.
+    expect(w.scope.filter((id) => id === M)).toHaveLength(2)
+  })
+
+  it('a key refused again long after a re-entry is asked for again, not given up on', async () => {
+    const w = world({ route: at(M) })
+    let clock = 1_000_000
+    const runtime = createConsoleRuntime({ ...w.deps, now: () => clock })
+    await runtime.boot()
+    w.doors[0].answer({ kind: 'open' })
+    await settle()
+    runtime.keyRefused(M)
+    w.doors[1].answer({ kind: 'open' })
+    await settle()
+    clock += 6 * 3_600_000
+    runtime.keyRefused(M)
+    await settle()
+    expect(w.doors).toHaveLength(3)
+    expect(runtime.get().notice).toBeNull()
+  })
+
+  it('opening a machine takes the last notice off the page', async () => {
+    const w = world({ route: at(M) })
+    const runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    w.doors[0].answer({ kind: 'refused', from: 'page', message: 'No.' })
+    await settle()
+    expect(runtime.get().notice).toBe('No.')
+    const heard = vi.fn()
+    runtime.subscribe(heard)
+    runtime.open(M)
+    expect(runtime.get().notice).toBeNull()
+    expect(heard).toHaveBeenCalled()
+  })
+})
+
 describe('signing out', () => {
   it('leaves the machine, forgets the pass and every machine’s key, and stops reading', async () => {
     const w = world({ route: at(M) })

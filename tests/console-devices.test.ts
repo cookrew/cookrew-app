@@ -205,6 +205,54 @@ describe('past the gate', () => {
   })
 })
 
+describe('the gate changing while the account is being asked', () => {
+  it('does not throw the account’s answer away: the machines are listed as soon as the registry says', async () => {
+    let answer: (machines: AccountMachines) => void = () => undefined
+    const w = world()
+    const store = createConsoleDevices({ ...w.deps, account: () => new Promise((resolve) => void (answer = resolve)) })
+    const stop = shown(store)
+    // The gate settles (closed, busy, closed again) before the registry answers.
+    store.gateChanged()
+    store.gateChanged()
+    answer({ ok: true, machines: [row(A, 'Studio Mac')] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get()).toMatchObject({ status: 'ready' })
+    expect(store.get().machines).toHaveLength(1)
+    stop()
+  })
+
+  it('a machine that did not take the pass is not asked again and again while the gate stays open', async () => {
+    const w = world({ open: true, blocks: { [A]: { kind: 'needs-proof' } }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
+    // As the page is wired: being told has the gate look at its pass, find it, and say it is (still) open.
+    const store = createConsoleDevices({ ...w.deps, onReproof: () => (w.reproofs += 1, store.gateChanged()) })
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(w.asked).toEqual([A])
+    expect(w.reproofs).toBe(1)
+    // A new proof (closed, then open) is a reason to ask it again.
+    w.set({ open: false })
+    store.gateChanged()
+    w.set({ open: true })
+    store.gateChanged()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(w.asked).toEqual([A, A])
+    stop()
+  })
+
+  it('a registry that says the session is over on the first ask is asked again soon, and the page says something meanwhile', async () => {
+    let calls = 0
+    const w = world()
+    const store = createConsoleDevices({ ...w.deps, account: async () => ((calls += 1) === 1 ? { ok: false, reason: 'signed-out' } : { ok: true, machines: [row(A, 'Studio Mac')] }) })
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(w.signedOut).toBe(1)
+    expect(store.get().status).toBe('failed')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(store.get()).toMatchObject({ status: 'ready', error: null })
+    stop()
+  })
+})
+
 describe('inside a machine, with the Devices level off screen', () => {
   it('goes on knowing the account’s machines and asks none of them for a summary', async () => {
     const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') } })
@@ -233,6 +281,13 @@ describe('a machine that cannot be read says the one thing to do', () => {
     expect(standingOf(row(OLD, 'Old Mini', { appVersion: null }), { open: true, read: false, block: null }).standing).toBe('outdated')
     expect(standingOf(row(A, 'Studio Mac', { appVersion: MIN_MACHINE_VERSION }), { open: true, read: true, block: null }).standing).toBe('live')
     expect(standingOf(row(A, 'Studio Mac', { appVersion: '0.7.1' }), { open: true, read: true, block: null }).standing).toBe('live')
+    expect(standingOf(row(A, 'Studio Mac', { appVersion: '0.10.0' }), { open: true, read: true, block: null }).standing).toBe('live')
+    // A pre-release of the first build that speaks to the console speaks to it.
+    expect(standingOf(row(A, 'Studio Mac', { appVersion: '0.6.0-beta.1' }), { open: true, read: true, block: null }).standing).toBe('live')
+    // A version this page cannot read is not taken for a new one.
+    for (const odd of ['v0.5.0', '0.5.9-beta.1', '', 'latest', '0.6']) {
+      expect(standingOf(row(OLD, 'Old Mini', { appVersion: odd }), { open: true, read: false, block: null }).standing, odd).toBe('outdated')
+    }
   })
 
   it('off its line: open Cookrew on it', () => {
@@ -281,13 +336,14 @@ describe('a machine that cannot be read says the one thing to do', () => {
 })
 
 describe('the registry', () => {
-  it('saying the session is over signs the page out', async () => {
+  it('saying the session is over tells the session', async () => {
     const w = world({ account: { ok: false, reason: 'signed-out' } })
     const store = createConsoleDevices(w.deps)
     const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     expect(w.signedOut).toBe(1)
     stop()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('not answering keeps what was shown and says so; answering again clears it', async () => {

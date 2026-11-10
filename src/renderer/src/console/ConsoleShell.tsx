@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState, useSyncExternalStore } from 'react'
+import { Component, Suspense, lazy, useEffect, useState, useSyncExternalStore } from 'react'
 import type { ConsoleParts } from './console-wiring'
 import { ConsoleDevicesView } from './ConsoleDevicesView'
 import './console.css'
@@ -15,6 +15,36 @@ import './console.css'
 const loadMachine = (): Promise<typeof import('./ConsoleMachine')> => import('./ConsoleMachine')
 const ConsoleMachine = lazy(loadMachine)
 
+/**
+ * The machine level is a chunk fetched when it is wanted. One that will not come (the network,
+ * or a build replaced since this page loaded) must not take the whole page down with it: it is
+ * said, with the one thing to do.
+ */
+class ChunkBoundary extends Component<{ onBack: () => void; children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  render(): React.ReactNode {
+    if (!this.state.failed) return this.props.children
+    return (
+      <main className="cd-page">
+        <p className="cd-line" role="alert">
+          This machine’s view could not be loaded. Cookrew may have been updated since this page was opened.
+        </p>
+        <p className="cd-gate-ways">
+          <button type="button" className="cd-primary" onClick={() => window.location.reload()}>
+            Reload
+          </button>
+          <button type="button" className="cd-quiet" onClick={this.props.onBack}>
+            Back to your machines
+          </button>
+        </p>
+      </main>
+    )
+  }
+}
+
 export function ConsoleShell({ parts }: { parts: ConsoleParts }): React.JSX.Element | null {
   const { runtime, session } = parts
   const state = useSyncExternalStore(runtime.subscribe, runtime.get, runtime.get)
@@ -25,13 +55,22 @@ export function ConsoleShell({ parts }: { parts: ConsoleParts }): React.JSX.Elem
   }, [who.status])
 
   const { view } = state
-  if (view.kind === 'starting') return null
+  // Finding out who is signed in: the page is there, and says nothing it does not know yet.
+  if (view.kind === 'starting') {
+    return (
+      <main className="cd-page cd-signin" aria-busy="true">
+        <h1 className="cd-mark">Cookrew</h1>
+      </main>
+    )
+  }
   if (view.kind === 'sign-in') return <SignIn parts={parts} notice={state.notice} />
   if (view.kind === 'machine') {
     return (
-      <Suspense fallback={<p className="cd-opening" role="status">Opening…</p>}>
-        <ConsoleMachine key={view.machine} machine={view.machine} parts={parts} />
-      </Suspense>
+      <ChunkBoundary key={view.machine} onBack={() => runtime.leave()}>
+        <Suspense fallback={<p className="cd-opening" role="status">Opening…</p>}>
+          <ConsoleMachine machine={view.machine} parts={parts} />
+        </Suspense>
+      </ChunkBoundary>
     )
   }
   return <ConsoleDevicesView parts={parts} view={view} notice={state.notice} username={who.status === 'signed-in' ? who.username : ''} />

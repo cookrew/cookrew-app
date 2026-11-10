@@ -67,7 +67,11 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
   let options: GrantOptions | null = null
   let closing: ReturnType<typeof setTimeout> | null = null
 
+  /** Bumped by `forget`: a check or a proof that was out when the person signed out opens nothing. */
+  let generation = 0
+
   const set = (next: GateState): void => {
+    if (JSON.stringify(next) === JSON.stringify(state)) return
     state = next
     for (const listener of listeners) listener()
   }
@@ -78,8 +82,10 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
     set({ status: 'closed', ways: options === null ? null : waysOf(options), line: line ?? (options?.needsPassword ? GATE_COPY.needsPassword : null), busy })
 
   /** How this account proves itself; a passkey challenge is good for one touch, so this is asked again after each. */
-  const askWays = async (): Promise<void> => {
-    options = await grantOptions(deps.registry)
+  const askWays = async (mine = generation): Promise<void> => {
+    const asked = await grantOptions(deps.registry)
+    if (mine !== generation) return
+    options = asked
     closed(options === null ? GATE_COPY.unreachable : null)
   }
 
@@ -93,7 +99,9 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
   }
 
   const check = async (): Promise<void> => {
+    const mine = generation
     const deviceId = await deps.deviceId().catch(() => null)
+    if (mine !== generation) return
     if (deviceId === null) {
       options = null
       return closed(GATE_COPY.noKey)
@@ -102,7 +110,7 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
     if (held !== null) return open(held)
     if (closing !== null) clearTimeout(closing)
     closing = null
-    await askWays()
+    await askWays(mine)
   }
 
   return {
@@ -116,21 +124,31 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
       if (state.status !== 'closed' || state.busy) return
       if (options === null) await askWays()
       if (options === null || !waysOf(options).passkey) return
+      const mine = generation
       closed(null, true)
       const result = await proveForGrant({ ...deps, machine: deps.registry, device: async () => null }, null, options).catch(() => ({ kind: 'failed' as const, message: GATE_COPY.unreachable }))
+      if (mine !== generation) return
       if (result.kind === 'granted') return check()
       // The challenge is spent by a touch that reached the registry: the next touch needs a new one.
       if (result.kind === 'cancelled') return closed(null)
       const said = result.kind === 'needs-password' ? GATE_COPY.needsPassword : result.message
-      options = await grantOptions(deps.registry)
+      const next = await grantOptions(deps.registry)
+      if (mine !== generation) return
+      options = next
       closed(said)
     },
     withPassword: async (returnTo) => {
       if (state.status !== 'closed' || state.busy) return
+      const mine = generation
       closed(null, true)
       const started = await deps.passwordElsewhere(returnTo).catch(() => ({ ok: false as const, message: GATE_COPY.unreachable }))
-      // Started, the browser is leaving this page: the gate stays as it is until it comes back.
-      if (!started.ok) closed(started.message)
+      if (mine !== generation) return
+      // Started, the browser is leaving this page. Should it come back to this very page (kept
+      // whole by the browser), the button must work again: not busy for long.
+      if (!started.ok) return closed(started.message)
+      setTimeout(() => {
+        if (mine === generation && state.status === 'closed' && state.busy) closed(null)
+      }, 4_000)
     },
     took: async (grant) => {
       const deviceId = await deps.deviceId().catch(() => null)
@@ -142,6 +160,7 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
       await check()
     },
     forget: () => {
+      generation += 1
       if (closing !== null) clearTimeout(closing)
       closing = null
       options = null

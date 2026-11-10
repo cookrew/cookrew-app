@@ -66,7 +66,11 @@ export interface RuntimeDeps {
   readonly takeSeat: (workspaceId: string) => void
   /** Signed out: every machine's key and seat this browser kept. */
   readonly forgetMachines: () => void
+  readonly now?: () => number
 }
+
+/** A key refused again this soon after its door was re-asked is a machine saying no, not a key that aged out. */
+export const RETRY_WINDOW_MS = 60_000
 
 export interface RuntimeState {
   readonly view: ConsoleView
@@ -98,8 +102,12 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
   let door: DoorState | null = null
   let booted = false
   let stopDevices: (() => void) | null = null
-  /** A machine whose door was re-asked because it refused the key: a second refusal is said, not retried. */
-  let retried: string | null = null
+  const now = deps.now ?? Date.now
+  /** The machine whose door was last re-asked because it refused the key, and when. */
+  let retried: { machine: string; at: number } | null = null
+  /** `evaluate` is running; a change heard meanwhile is decided on its next turn, not inside this one. */
+  let deciding = false
+  let again = false
 
   const tell = (view: ConsoleView, notice: string | null = state.notice): void => {
     if (JSON.stringify(view) === JSON.stringify(state.view) && notice === state.notice) return
@@ -107,7 +115,13 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     for (const listener of listeners) listener()
   }
 
+  /**
+   * Take the machine out of scope. ITS DOOR IS FORGOTTEN FIRST: letting go makes the view write
+   * its level back into the address at once (console/zoom-sync.ts), and anything decided on that
+   * with the door still marked open would "enter" a machine that is on its way out.
+   */
   const leaveScope = (): void => {
+    door = null
     if (entered === null) return
     entered = null
     deps.enterScope(null)
@@ -145,18 +159,36 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
 
   function evaluate(): void {
     if (!booted) return
+    // ONE DECISION AT A TIME. The acts below tell others (the router, the scope), who tell this
+    // back in the same breath; decided inside the act that caused it, a half-made change would be
+    // decided on. It is noted and decided when this turn is done.
+    if (deciding) {
+      again = true
+      return
+    }
+    deciding = true
+    try {
+      do {
+        again = false
+        decide()
+      } while (again)
+    } finally {
+      deciding = false
+    }
+  }
+
+  function decide(): void {
     // Each act changes what is known; decide again until there is nothing left to do.
     for (let turn = 0; turn < 8; turn += 1) {
       const route = deps.router.get()
       const { view, act } = decideView({ session: deps.session.get(), gate: deps.gate.get().status, route, devices: deps.devices.get(), entered, door })
       if (act.kind === 'none') {
-        if (view.kind !== 'entering' && view.kind !== 'machine') door = door?.state === 'asking' ? null : door
+        // A door still being asked for a machine the page is no longer going to: its answer will open nothing.
+        if (view.kind !== 'entering' && view.kind !== 'machine' && door?.state === 'asking') door = null
         return tell(view)
       }
-      if (act.kind === 'leave') {
-        leaveScope()
-        door = null
-      } else if (act.kind === 'open-door') {
+      if (act.kind === 'leave') leaveScope()
+      else if (act.kind === 'open-door') {
         askDoor(act.machine)
         return tell(view)
       } else if (act.kind === 'enter') {
@@ -165,11 +197,12 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
         if (route.kind === 'machine' && route.workspace !== null) deps.takeSeat(route.workspace)
       } else {
         leaveScope()
-        door = null
         state = { ...state, notice: act.notice }
         deps.router.go(DEVICES_ROUTE)
       }
     }
+    // Not reached while each act settles something; if it ever is, the page still says where it stands.
+    tell(decideView({ session: deps.session.get(), gate: deps.gate.get().status, route: deps.router.get(), devices: deps.devices.get(), entered, door }).view)
   }
 
   const onSession = (): void => {
@@ -186,7 +219,6 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
       stopDevices?.()
       stopDevices = null
       leaveScope()
-      door = null
       retried = null
       deps.gate.forget()
       deps.forgetMachines()
@@ -230,17 +262,18 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     },
     open: (machineId, workspaceId = null) => {
       retried = null
-      state = { ...state, notice: null }
+      tell(state.view, null)
       deps.router.go({ kind: 'machine', machine: machineId, workspace: workspaceId, agent: null, side: 'agents' })
     },
     leave: () => deps.router.go(DEVICES_ROUTE),
     keyRefused: (machineId) => {
       if (entered !== machineId) return
       deps.forgetDoor(machineId)
+      const repeat = retried !== null && retried.machine === machineId && now() - retried.at < RETRY_WINDOW_MS
+      retried = { machine: machineId, at: now() }
       leaveScope()
-      door = null
-      if (retried === machineId) door = { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not let this browser in.` }
-      retried = machineId
+      // Asked again a moment ago and refused again: that is the machine's answer.
+      if (repeat) door = { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not let this browser in.` }
       evaluate()
     },
     dismissNotice: () => tell(state.view, null)

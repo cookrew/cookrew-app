@@ -59,17 +59,19 @@ describe('the router', () => {
     expect(heard).toHaveLength(1)
   })
 
-  it('follows the address when the browser moves it', () => {
+  it('a pop does not move the level: the entry landed on is rewritten to where the view stands', () => {
+    // Every pop on this page is the back guard's own entry coming off (prompt/back-guard.ts). The
+    // entry under it still carries the address it had when the guard's was pushed, which may be a
+    // level the view has since left: adopted, it would walk the person back into a machine.
     const at = page(`/d/${M}`)
     const router = createConsoleRouter(at)
+    router.go({ kind: 'devices' })
     const heard: string[] = []
     router.subscribe(() => heard.push(router.get().kind))
-    ;(at as unknown as { moveTo: (path: string) => void }).moveTo('/')
+    ;(at as unknown as { moveTo: (path: string) => void }).moveTo(`/d/${M}/w/${W}`)
     expect(router.get()).toEqual({ kind: 'devices' })
-    expect(heard).toEqual(['devices'])
-    // An entry of the back guard's is the same address: nothing to follow.
-    ;(at as unknown as { moveTo: (path: string) => void }).moveTo('/')
-    expect(heard).toEqual(['devices'])
+    expect(heard).toEqual([])
+    expect(at.url()).toBe('/')
   })
 
   it('takes the code off the address the moment it is read', () => {

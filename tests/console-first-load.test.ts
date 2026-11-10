@@ -32,7 +32,9 @@ function staticImports(file: string): { local: string[]; packages: string[] } {
     if (!spec.startsWith('.')) packages.push(spec)
     else if (!/\.css$/.test(spec)) {
       const found = resolveLocal(file, spec)
-      if (found) local.push(found)
+      // An import this walk cannot follow is a part of the graph it has not looked at: that fails, it is not skipped.
+      if (found === null) throw new Error(`cannot follow ${spec} from ${path.relative(SRC, file)}`)
+      local.push(found)
     }
   }
   return { local, packages }

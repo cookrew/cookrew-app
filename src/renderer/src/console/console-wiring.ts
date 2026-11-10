@@ -21,7 +21,7 @@ import { tokenKeyForBase } from '../pairing-scope'
 import { takeSeat } from '../device-seat'
 import { readConsoleConfig, type ConsoleConfig } from './console-config'
 import { browserDeviceStore, consoleDevice, type ConsoleDevice } from './device-key'
-import { createConsoleSession, type ConsoleSession, type RegistryCall } from './console-session'
+import { SESSION_KEY, createConsoleSession, type ConsoleSession, type RegistryCall } from './console-session'
 import { createConsoleGate, type ConsoleGate } from './console-gate'
 import { createConsoleDevices, type ConsoleDevices } from './console-devices'
 import { browserHistoryPort, createConsoleRouter, type ConsoleRouter } from './console-router'
@@ -72,6 +72,8 @@ const tolerant = (held: Storage | null): Pick<Storage, 'getItem' | 'setItem' | '
   }
 })
 
+const REGISTRY_ANSWER_MS = 20_000
+
 function registryAt(origin: string): RegistryCall {
   return async (method, path, body, headers = {}) => {
     try {
@@ -79,6 +81,8 @@ function registryAt(origin: string): RegistryCall {
         method,
         cache: 'no-store',
         ...CROSS_ORIGIN_NO_COOKIE,
+        // A registry that takes the call and never answers is one that did not answer.
+        signal: AbortSignal.timeout(REGISTRY_ANSWER_MS),
         headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
         ...(body === undefined ? {} : { body: JSON.stringify(body) })
       })
@@ -205,6 +209,12 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
         // Storage that refuses held nothing.
       }
     }
+  })
+
+  // Another tab of this browser renewed the session, signed out, or signed in: this one follows
+  // (a renewal closes the token this tab holds; console-session.ts · reread).
+  win.addEventListener('storage', (event) => {
+    if (event.key === SESSION_KEY || event.key === null) session.reread()
   })
 
   // A page that slept past its token's end renews on the way back, before anything asks with the dead one.

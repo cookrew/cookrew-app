@@ -125,7 +125,7 @@ describe('signing in', () => {
     await page.session.signIn('/')
     const back = backFrom(await signInOnAuthHost(site, page.went.at(-1) ?? '', who()))
     clock += PENDING_TTL_MS + 1
-    expect((await page.session.complete(back)).ok).toBe(false)
+    expect(await page.session.complete(back)).toMatchObject({ ok: false, message: 'That took too long. Start again.' })
     expect(page.session.get()).toEqual({ status: 'signed-out' })
   })
 
@@ -245,6 +245,45 @@ describe('staying signed in', () => {
     expect(session.get()).toEqual({ status: 'signed-in', username })
     expect(session.token()).not.toBeNull()
     expect(timers.at(-1)?.ms).toBe(30_000)
+  })
+})
+
+describe('two tabs of one browser', () => {
+  it('one renews; the other takes the renewed token from what the browser kept, and renews nothing itself', async () => {
+    const one = browser()
+    await signedIn(one)
+    const a = openConsolePage(site, now, one)
+    const b = openConsolePage(site, now, one)
+    await a.session.boot()
+    await b.session.boot()
+    clock += CONSOLE_SESSION_TTL_MS - MINUTE
+    const renewed = await a.session.fresh()
+    expect(renewed).not.toBeNull()
+    // The registry closed the token both tabs started with. Tab B is told the browser kept another.
+    b.session.reread()
+    expect(b.session.token()).toBe(renewed)
+    expect(b.calls.filter((call) => call.path === '/v2/sessions/renew')).toHaveLength(0)
+    // And a tab that only finds out by being refused looks there first, too.
+    const c = openConsolePage(site, now, one)
+    await c.session.boot()
+    clock += CONSOLE_SESSION_TTL_MS - MINUTE
+    const again = await a.session.fresh()
+    c.session.refused()
+    await expect.poll(() => c.session.token()).toBe(again)
+    expect(c.calls.filter((call) => call.path === '/v2/sessions/renew')).toHaveLength(0)
+  })
+
+  it('signing out in one signs the other out', async () => {
+    const one = browser()
+    await signedIn(one)
+    const a = openConsolePage(site, now, one)
+    const b = openConsolePage(site, now, one)
+    await a.session.boot()
+    await b.session.boot()
+    await a.session.signOut()
+    b.session.reread()
+    expect(b.session.get()).toEqual({ status: 'signed-out' })
+    expect(b.session.token()).toBeNull()
   })
 })
 

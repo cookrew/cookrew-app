@@ -66,7 +66,9 @@ export function openConsolePage(site: AuthSite, now: () => number, from: Browser
     pending: from.pending,
     navigate: (url) => void went.push(url),
     now,
-    ...(timers ? { setTimer: timers.set, clearTimer: timers.clear } : {})
+    // A suite that does not drive the clock leaves no real timer behind it.
+    setTimer: timers?.set ?? (() => null),
+    clearTimer: timers?.clear ?? (() => undefined)
   })
   return { session, registry, device, kept: from.kept, pending: from.pending, went, calls }
 }
