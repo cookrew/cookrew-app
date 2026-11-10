@@ -44,18 +44,36 @@ export const VERIFY_TIMEOUT_MS = 4000
  *   console's session as a bearer and no cookie (machine-scope.ts · relay).
  *   Signed out there is nobody to ask, and nothing is asked.
  *
- * Anything but a clean `{ok:true}` is a no. A verification that cannot be
- * completed — offline, rate limited, signed out — must leave the page on the
- * relay rather than on an unproven address.
+ * TWO DIFFERENT ANSWERS, AND THEY MUST STAY DIFFERENT:
+ *
+ *   NO  (returns false)  the registry answered, and does not vouch for it.
+ *   COULD NOT ASK (throws)  offline, timed out, rate limited, a session that
+ *                           ended or is being renewed, an answer that was not
+ *                           the registry's. Nothing was learned.
+ *
+ * A switch treats both as "do not adopt" (path/plane-race.ts): an unproven
+ * address is never trusted. The re-check of a path ALREADY proved does not
+ * (path/plane-recheck.ts): a no gives the path up, and "could not ask" leaves
+ * it alone. On the console the ask depends on a session renewed every few
+ * minutes; folded into a no, every renewal that raced a re-check would throw a
+ * working LAN path out.
  */
+export class VerifyUnasked extends Error {
+  constructor(why: string) {
+    super(`the registry could not be asked: ${why}`)
+    this.name = 'VerifyUnasked'
+  }
+}
+
 export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_MS, scope: MachineScope = machineScope()): Promise<boolean> => {
   const relay = scope.relay
   const session = relay?.session() ?? null
-  if (relay !== null && (session === null || session === '')) return false
+  if (relay !== null && (session === null || session === '')) throw new VerifyUnasked('no session')
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), timeoutMs)
+  let response: Response
   try {
-    const response = await fetch(relay === null ? '/v2/verify-hello' : `${relay.origin}/v2/verify-hello`, {
+    response = await fetch(relay === null ? '/v2/verify-hello' : `${relay.origin}/v2/verify-hello`, {
       method: 'POST',
       ...(relay === null ? { credentials: 'same-origin' as const } : CROSS_ORIGIN_NO_COOKIE),
       headers: { 'content-type': 'application/json', ...(relay === null ? {} : { authorization: `Bearer ${session}` }) },
@@ -63,12 +81,21 @@ export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_
       signal: abort.signal,
       body: JSON.stringify(claim)
     })
-    if (!response.ok) return false
-    const body = (await response.json()) as { ok?: unknown }
-    return body.ok === true
   } catch {
-    return false
+    throw new VerifyUnasked('no answer')
   } finally {
     clearTimeout(timer)
   }
+  if (!response.ok) {
+    // The session was not taken: its keeper renews it, so the next ask has one that is.
+    if (response.status === 401) relay?.refused?.()
+    throw new VerifyUnasked(`HTTP ${response.status}`)
+  }
+  let body: { ok?: unknown }
+  try {
+    body = (await response.json()) as { ok?: unknown }
+  } catch {
+    throw new VerifyUnasked('not the registry’s answer')
+  }
+  return body.ok === true
 }

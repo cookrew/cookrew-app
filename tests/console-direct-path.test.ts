@@ -20,7 +20,7 @@ interface Sent {
   init: RequestInit
 }
 
-function page(answers: { verify?: unknown } = {}): { sent: Sent[] } {
+function page(answers: { verify?: unknown; cardDevice?: string } = {}): { sent: Sent[] } {
   const sent: Sent[] = []
   ;(globalThis as unknown as { window: Record<string, unknown> }).window = {
     location: { origin: 'https://console.cookrew.dev', search: '', hash: '', href: 'https://console.cookrew.dev/', replace: () => undefined, assign: () => undefined },
@@ -36,7 +36,7 @@ function page(answers: { verify?: unknown } = {}): { sent: Sent[] } {
     const url = String(input)
     sent.push({ url, init })
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-    if (url.startsWith(`${BASE}/api/reach`)) return json({ deviceId: M, lan: [{ url: 'https://192.168.1.24:8643' }], tailnet: null, trusted: [LAN] })
+    if (url.startsWith(`${BASE}/api/reach`)) return json({ deviceId: answers.cardDevice ?? M, lan: [{ url: 'https://192.168.1.24:8643' }], tailnet: null, trusted: [LAN] })
     if (url.startsWith(`${LAN}/api/hello`)) {
       const nonce = new URL(url).searchParams.get('nonce')
       return json({ v: 2, deviceId: M, origin: LAN, issuedAtMs: Date.now(), nonce, sig: 'a-signature' })
@@ -101,6 +101,20 @@ describe('inside a machine on the console', () => {
     session.startMachineSession()
     await settled(() => sent.some((one) => one.url === `${API}/v2/verify-hello`))
     await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(plane.dataPlane()).toEqual({ origin: '', kind: 'relay' })
+    scope.enterMachine(null)
+  })
+
+  it('knocks nowhere on a card that names another machine: the card is not this machine’s', async () => {
+    const { sent } = page({ cardDevice: '99999999-9999-4999-8999-999999999999' })
+    vi.resetModules()
+    const scope = await inConsole(M)
+    const plane = await import('../src/renderer/src/data-plane')
+    const session = await import('../src/renderer/src/machine-session')
+    session.startMachineSession()
+    await settled(() => sent.some((one) => one.url.startsWith(`${BASE}/api/reach`)))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(sent.some((one) => one.url.includes('/api/hello'))).toBe(false)
     expect(plane.dataPlane()).toEqual({ origin: '', kind: 'relay' })
     scope.enterMachine(null)
   })

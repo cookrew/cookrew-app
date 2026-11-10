@@ -317,3 +317,29 @@ describe('a race still running when its machine was left', () => {
     expect(run.adopted()).toMatchObject({ origin: LAN, kind: 'lan' })
   })
 })
+
+describe('what a machine may name as its own address', () => {
+  const OTHER = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+  it('only a bare https origin under ITS OWN id: not another machine’s name, not a path, not plain http', () => {
+    const offered = planeCandidates(
+      card({
+        trusted: [
+          LAN,
+          `https://192-168-1-30.${OTHER}.d.cookrew.dev:8643`,
+          `https://192-168-1-31.${DEVICE}.d.cookrew.dev:8643/api/m/x`,
+          `https://192-168-1-32.${DEVICE}.d.cookrew.dev:8643/?q=1`,
+          `http://192-168-1-33.${DEVICE}.d.cookrew.dev:8643`,
+          `https://user:pw@192-168-1-34.${DEVICE}.d.cookrew.dev:8643`,
+          'https://192-168-1-35.attacker.example'
+        ]
+      }),
+      'relay'
+    )
+    expect(offered.map((candidate) => candidate.origin)).toEqual([LAN])
+  })
+
+  it('reads the id without regard to case', () => {
+    expect(planeCandidates(card({ deviceId: DEVICE.toUpperCase(), trusted: [LAN] }), 'relay').map((c) => c.origin)).toEqual([LAN])
+  })
+})
+

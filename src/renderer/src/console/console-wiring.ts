@@ -12,7 +12,7 @@
  * makes nothing and `consoleParts` is null: the entry says so and asks nobody
  * anything.
  */
-import { CROSS_ORIGIN_NO_COOKIE, subscribeDataPlane } from '../data-plane'
+import { CROSS_ORIGIN_NO_COOKIE, RELAY_PLANE, subscribeDataPlane } from '../data-plane'
 import { configureMachineScope, enterMachine, machineBaseOf, machineScope } from '../machine-scope'
 import { browserPairDeps, enterWithGrant, type GrantStore } from '../account-pair-client'
 import { relayAccountMachines } from '../relay-machines'
@@ -205,6 +205,9 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     } finally {
       changingScope = false
     }
+    // Entered: on the relay, as every machine is at first. What its tile said of an earlier
+    // visit is not true of this one until a nearer path is proved again.
+    if (machineId !== null) paths.note(machineId, RELAY_PLANE)
   }
 
   const router = createConsoleRouter(browserHistoryPort(win))

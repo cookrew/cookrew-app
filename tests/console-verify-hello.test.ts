@@ -32,22 +32,41 @@ describe('verifying a hello on the console', () => {
     expect(init?.headers).not.toHaveProperty('x-cookrew-session')
   })
 
-  it('signed out, asks nobody and trusts nothing', async () => {
+  it('the registry saying no is a no', async () => {
+    configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session' } })
+    for (const body of [{ ok: false }, { ok: false, reason: 'bad_signature' }, { ok: 'true' }, {}]) {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body))))
+      expect(await verifyHello(claim), JSON.stringify(body)).toBe(false)
+    }
+  })
+
+  it('NOT BEING ABLE TO ASK IS NOT A NO: it is thrown, so a path already proved is not thrown out with it', async () => {
+    // The re-check gives a plane up when the registry stops vouching for it (path/plane-recheck.ts).
+    // A session being renewed, a rate limit or a registry that is slow says nothing about the
+    // machine: those must reach the re-check as "could not be asked", never as "no".
+    configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session' } })
+    for (const answer of [new Response('{}', { status: 401 }), new Response('{}', { status: 429 }), new Response('{}', { status: 503 }), new Response('<html>')]) {
+      vi.stubGlobal('fetch', vi.fn(async () => answer))
+      await expect(verifyHello(claim)).rejects.toThrow()
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new Error('offline'))))
+    await expect(verifyHello(claim)).rejects.toThrow()
+  })
+
+  it('signed out, or with a session just ending, asks nobody: that too is "could not ask"', async () => {
     configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => null } })
     const sent = vi.fn()
     vi.stubGlobal('fetch', sent)
-    expect(await verifyHello(claim)).toBe(false)
+    await expect(verifyHello(claim)).rejects.toThrow()
     expect(sent).not.toHaveBeenCalled()
   })
 
-  it('anything but a clean yes is a no', async () => {
-    configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session' } })
-    for (const answer of [new Response(JSON.stringify({ ok: false })), new Response('{}', { status: 401 }), new Response('<html>'), new Response(JSON.stringify({ ok: 'true' }))]) {
-      vi.stubGlobal('fetch', vi.fn(async () => answer))
-      expect(await verifyHello(claim)).toBe(false)
-    }
-    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new Error('offline'))))
-    expect(await verifyHello(claim)).toBe(false)
+  it('a refused session tells the session’s keeper, so the next ask has one the registry takes', async () => {
+    const refused = vi.fn()
+    configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'ended', refused } })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'unauthenticated' }), { status: 401 })))
+    await expect(verifyHello(claim)).rejects.toThrow()
+    expect(refused).toHaveBeenCalledTimes(1)
   })
 })
 

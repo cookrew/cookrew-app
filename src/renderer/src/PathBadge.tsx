@@ -1,3 +1,4 @@
+import { zoomStore } from './zoom/zoom-store'
 import { useEffect, useState } from 'react'
 import { cookrew, isRemoteMode } from './api'
 import { subscribeDataPlane } from './data-plane'
@@ -86,7 +87,15 @@ export function PathSheet({
         <footer className="gs-sheet-foot">
           {/* Offered on the console only: its first level is the account's machines. */}
           {view.switchDesktopUrl && (
-            <a className="cr-path-switch" href={view.switchDesktopUrl}>
+            <a
+              className="cr-path-switch"
+              href={view.switchDesktopUrl}
+              onClick={(event) => {
+                // The machines are the zoom's outermost stop: going there is a step out, not a reload.
+                event.preventDefault()
+                zoomStore.go(-2, zoomStore.get().dir)
+              }}
+            >
               Your machines
             </a>
           )}

@@ -1,4 +1,4 @@
-import { heldScope, registerScopeState } from '../machine-scope'
+import { heldScope, machineScope, registerScopeState } from '../machine-scope'
 import { apiPath, clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
@@ -98,6 +98,11 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
     // A card read to its end after its machine was left is not this machine's card.
     if (!sameMachine()) return null
     if (typeof body.deviceId !== 'string' || !Array.isArray(body.lan)) return null
+    // ON THE CONSOLE THE MACHINE IS KNOWN BEFORE IT SPEAKS: the one in scope, by the registry's id.
+    // A card naming another machine (one of the account's would verify) is not this machine's
+    // card, and nothing it lists is knocked on.
+    const expected = machineScope().machineId
+    if (expected !== null && body.deviceId.toLowerCase() !== expected) return null
     // `trusted` is Reach v2.1's addition and an OLDER MAC WILL NOT HAVE IT.
     // Absent reads as empty, which reads as "no live switch today" — the
     // relay keeps working and nothing announces a downgrade that is really
