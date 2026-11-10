@@ -7,12 +7,11 @@
  * `device`, which is where account-device.ts reads it for every signature the
  * page makes (sign-in, renewal, each machine's door).
  *
- * P-256, NON-EXTRACTABLE. The pair is generated extractable only so its
- * private half can be imported once as a signing key that is not; the
- * exportable original is dropped before this returns and is persisted in no
- * form. A script on this page can ask the key to sign. It cannot take the key
- * away, which is what makes a stolen session token worth fifteen minutes and
- * not a device.
+ * P-256, NON-EXTRACTABLE FROM THE MOMENT IT EXISTS: the browser makes the
+ * private half as a key no script can export, so its bytes are never in the
+ * page, not even while it is minted. A script on this page can ask the key to
+ * sign. It cannot take the key away, which is what makes a stolen session
+ * token worth fifteen minutes and not a device.
  *
  * THE ID IS DERIVED FROM THE KEY (RFC 7638 thumbprint, hashed again into a
  * version 8 UUID), exactly as the registry (auth-device-transaction.ts) and
@@ -63,14 +62,12 @@ export async function deviceIdFrom(jwk: Record<string, unknown>): Promise<string
 }
 
 export async function mintDeviceKey(): Promise<Pick<StoredDevice, 'jwk' | 'pair'>> {
-  const made = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
-  const secret = await crypto.subtle.exportKey('jwk', made.privateKey)
-  // Rebuilt member by member: an exported JWK carries `key_ops` and `ext`, and importing those back is refused.
-  const seed = { kty: secret.kty, crv: secret.crv, x: secret.x, y: secret.y, d: secret.d }
-  const privateKey = await crypto.subtle.importKey('jwk', seed, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+  const made = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'])
+  // The public half of a pair is always exportable; only the members that say which key it is are kept.
+  const open = await crypto.subtle.exportKey('jwk', made.publicKey)
   return {
-    jwk: { kty: String(secret.kty), crv: String(secret.crv), x: String(secret.x), y: String(secret.y) },
-    pair: { privateKey, publicKey: made.publicKey }
+    jwk: { kty: String(open.kty), crv: String(open.crv), x: String(open.x), y: String(open.y) },
+    pair: { privateKey: made.privateKey, publicKey: made.publicKey }
   }
 }
 
@@ -91,7 +88,14 @@ export function deviceNameOf(userAgent: string): string {
 
 export interface DeviceStore {
   readonly load: () => Promise<StoredDevice | null>
-  readonly save: (device: StoredDevice) => Promise<void>
+  /**
+   * Keep this device unless a usable one is already kept, and answer the one
+   * that is kept now. One step: two pages minting at the same moment end up
+   * holding the same key, and neither overwrites the other's.
+   */
+  readonly claim: (device: StoredDevice, usable: (held: StoredDevice) => boolean) => Promise<StoredDevice>
+  /** Erase the key. A sign-in it could have renewed can then be renewed by nobody. */
+  readonly clear: () => Promise<void>
 }
 
 const DB = 'cookrew-device'
@@ -120,19 +124,46 @@ export function browserDeviceStore(factory: IDBFactory = indexedDB): DeviceStore
   }
   return {
     load: async () => ((await run<StoredDevice | undefined>('readonly', (store) => store.get(ENTRY))) ?? null),
-    save: async (device) => void (await run('readwrite', (store) => store.put(device, ENTRY)))
+    claim: async (device, usable) => {
+      const db = await open()
+      return new Promise<StoredDevice>((resolve, reject) => {
+        // Read and write in the one transaction: no other page's write can come between them.
+        const transaction = db.transaction(STORE, 'readwrite')
+        const store = transaction.objectStore(STORE)
+        let kept = device
+        const read = store.get(ENTRY)
+        read.onsuccess = () => {
+          const held = read.result as StoredDevice | undefined
+          if (held !== undefined && usable(held)) kept = held
+          else store.put(device, ENTRY)
+        }
+        transaction.oncomplete = () => {
+          db.close()
+          resolve(kept)
+        }
+        transaction.onabort = () => {
+          db.close()
+          reject(transaction.error)
+        }
+      })
+    },
+    clear: async () => void (await run('readwrite', (store) => store.delete(ENTRY)))
   }
 }
 
 /** This browser's device: the one it holds, or one minted now and kept. */
-export async function consoleDevice(deps: DeviceStore & { readonly userAgent: string }): Promise<ConsoleDevice> {
+export async function consoleDevice(deps: Pick<DeviceStore, 'load' | 'claim'> & { readonly userAgent: string }): Promise<ConsoleDevice> {
+  const present = (held: StoredDevice): ConsoleDevice | null => {
+    const usable = deviceFromStored(held)
+    return usable === null ? null : { ...usable, payload: { id: held.id, kind: held.kind === 'phone' ? 'phone' : 'browser', name: usable.name, jwk: usable.jwk } }
+  }
   const held = await deps.load().catch(() => null)
-  const usable = held === null ? null : deviceFromStored(held)
-  if (held !== null && usable !== null) return { ...usable, payload: { id: held.id, kind: held.kind === 'phone' ? 'phone' : 'browser', name: usable.name, jwk: usable.jwk } }
+  const known = held === null ? null : present(held)
+  if (known !== null) return known
   const key = await mintDeviceKey()
   const minted: StoredDevice = { id: await deviceIdFrom(key.jwk), kind: deviceKindOf(deps.userAgent), name: deviceNameOf(deps.userAgent), jwk: key.jwk, pair: key.pair }
-  await deps.save(minted)
-  const device = deviceFromStored(minted)
+  const kept = await deps.claim(minted, (other) => deviceFromStored(other) !== null)
+  const device = present(kept)
   if (device === null) throw new Error('this browser cannot keep a device key')
-  return { ...device, payload: { id: minted.id, kind: minted.kind, name: minted.name, jwk: minted.jwk } }
+  return device
 }

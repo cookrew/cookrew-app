@@ -14,7 +14,7 @@
  */
 import { CROSS_ORIGIN_NO_COOKIE } from '../data-plane'
 import { configureMachineScope, enterMachine, machineBaseOf, machineScope } from '../machine-scope'
-import { browserPairDeps, enterWithGrant } from '../account-pair-client'
+import { browserPairDeps, enterWithGrant, type GrantStore } from '../account-pair-client'
 import { relayAccountMachines } from '../relay-machines'
 import { relayMachineWhy, relayMachines } from '../relay-machine-call'
 import { tokenKeyForBase } from '../pairing-scope'
@@ -37,7 +37,8 @@ export interface ConsoleParts {
 }
 
 const TOKEN_PREFIX = 'cr_token:'
-const SEAT_PREFIX = 'cookrew.seat:'
+/** Everything this browser keeps for a machine: its key, the seat taken on it, its connect code, a token pasted for it. */
+const MACHINE_KEYS = [TOKEN_PREFIX, 'cookrew.seat:', 'cr_code:', 'cookrew-pairing-token']
 
 const storage = (pick: () => Storage): Storage | null => {
   try {
@@ -101,17 +102,22 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
 
   let minted: Promise<ConsoleDevice> | null = null
   const device = (): Promise<ConsoleDevice> => {
-    minted ??= consoleDevice({ ...browserDeviceStore(), userAgent: win.navigator.userAgent }).catch((error: unknown) => {
+    minted ??= consoleDevice({ ...keys, userAgent: win.navigator.userAgent }).catch((error: unknown) => {
       minted = null
       throw error
     })
     return minted
   }
 
+  const keys = browserDeviceStore()
   const session = createConsoleSession({
     registry: registryAt(config.apiOrigin),
     authOrigin: config.authOrigin,
     device,
+    forgetDevice: async () => {
+      minted = null
+      await keys.clear()
+    },
     kept,
     pending,
     navigate: (url) => win.location.assign(url)
@@ -120,12 +126,21 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
   // FROM HERE ON THE PAGE IS THE CONSOLE: machines are reached through the relay, with this session.
   configureMachineScope({ relay: { origin: config.apiOrigin, session: () => session.token(), refused: () => session.refused() } })
 
+  const signedIn = (): boolean => session.get().status === 'signed-in'
   const pair = browserPairDeps('', device)
+  // NOTHING IS KEPT FOR NOBODY: an answer that lands after the person signed out (a pass, a
+  // machine's key) is not written down for whoever signs in next.
+  const grants: GrantStore = {
+    ...pair.grants,
+    write: (grant) => {
+      if (signedIn()) pair.grants.write(grant)
+    }
+  }
   const gate = createConsoleGate({
     registry: pair.registry,
     deviceId: async () => (await device()).id,
     passkey: pair.passkey,
-    grants: pair.grants,
+    grants,
     passwordElsewhere: (returnTo) => session.passByPassword(returnTo)
   })
 
@@ -138,30 +153,34 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     fleetOf: async (machineId) => (await relayMachines()).fleetOf(machineId),
     why: relayMachineWhy,
     gateOpen: () => gate.get().status === 'open',
-    onReproof: () => void gate.reproof(),
+    // It looks; it does not let go. One machine's word never takes the pass from the others.
+    onReproof: () => void gate.check(),
     // The registry refused a token the page thought good: the device key says whether the sign-in still stands.
     onSignedOut: () => session.refused()
   })
 
   const openDoor = async (machineId: string): Promise<DoorAnswer> => {
     const target = machineBaseOf(machineId)
-    if (target === null) return { kind: 'refused', message: 'That is not a machine.' }
+    if (target === null) return { kind: 'refused', from: 'page', message: 'That is not a machine.' }
     const key = tokenKeyForBase(target)
     if (kept.getItem(key) !== null) return { kind: 'open' }
     const door = browserPairDeps(target, device)
-    // One machine turning the pass away does not take it from the others: the gate decides that (needs-proof).
+    // One machine turning the pass away does not take it from the others.
     const entered = await enterWithGrant({ ...door, grants: { ...door.grants, clear: () => undefined } }, machineId)
     if (entered.kind === 'entered') {
+      // Signed out while the door was answering: its key is kept for nobody.
+      if (!signedIn()) return { kind: 'refused', from: 'page', message: 'Signed out.' }
       try {
         kept.setItem(key, entered.token)
       } catch {
-        return { kind: 'refused', message: 'This browser keeps nothing for this page, so it cannot hold a machine’s key. Private browsing does this.' }
+        return { kind: 'refused', from: 'page', message: 'This browser keeps nothing for this page, so it cannot hold a machine’s key. Private browsing does this.' }
       }
       return { kind: 'open' }
     }
     if (entered.kind === 'needs-proof') return { kind: 'needs-proof' }
-    if (entered.kind === 'no-device') return { kind: 'refused', message: 'This browser has no key for Cookrew. Sign out and in again.' }
-    return { kind: 'refused', message: entered.message }
+    if (entered.kind === 'no-device') return { kind: 'refused', from: 'page', message: 'This browser has no key for Cookrew. Sign out and in again.' }
+    // `failed` is this page's own sentence (it could not sign, or the door named another machine); `refused` is the machine's.
+    return { kind: 'refused', from: entered.kind === 'refused' ? 'machine' : 'page', message: entered.message }
   }
 
   const router = createConsoleRouter(browserHistoryPort(win))
@@ -180,8 +199,8 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     forgetMachines: () => {
       if (local === null) return
       try {
-        const keys = Array.from({ length: local.length }, (_, at) => local.key(at)).filter((key): key is string => key !== null)
-        for (const key of keys) if (key.startsWith(TOKEN_PREFIX) || key.startsWith(SEAT_PREFIX)) local.removeItem(key)
+        const held = Array.from({ length: local.length }, (_, at) => local.key(at)).filter((key): key is string => key !== null)
+        for (const key of held) if (MACHINE_KEYS.some((prefix) => key.startsWith(prefix))) local.removeItem(key)
       } catch {
         // Storage that refuses held nothing.
       }

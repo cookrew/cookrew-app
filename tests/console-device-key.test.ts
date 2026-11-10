@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { verify, createPublicKey } from 'node:crypto'
 import { deviceIdOf, type DeviceJwk } from '../registry/src/auth-device-transaction'
 import { deviceIdFor } from '../src/main/account-v2'
-import { consoleDevice, deviceIdFrom, deviceKindOf, deviceNameOf, mintDeviceKey, type StoredDevice } from '../src/renderer/src/console/device-key'
+import { consoleDevice, deviceIdFrom, deviceKindOf, deviceNameOf, mintDeviceKey, type DeviceStore, type StoredDevice } from '../src/renderer/src/console/device-key'
 import { deviceFromStored } from '../src/renderer/src/account-device'
 
 /**
@@ -15,15 +15,19 @@ import { deviceFromStored } from '../src/renderer/src/account-device'
  * registry and the desktop derive it, so one key is one device everywhere.
  */
 
-const memoryStore = (): { load: () => Promise<StoredDevice | null>; save: (device: StoredDevice) => Promise<void>; saves: number } => {
+const memoryStore = (): DeviceStore & { saves: number; put: (device: StoredDevice) => void } => {
   let held: StoredDevice | null = null
   const store = {
     saves: 0,
+    put: (device: StoredDevice) => void (held = device),
     load: async () => held,
-    save: async (device: StoredDevice) => {
+    claim: async (device: StoredDevice, usable: (held: StoredDevice) => boolean) => {
+      if (held !== null && usable(held)) return held
       held = device
       store.saves += 1
-    }
+      return device
+    },
+    clear: async () => void (held = null)
   }
   return store
 }
@@ -34,6 +38,12 @@ describe('the key', () => {
     expect(key.jwk).toMatchObject({ kty: 'EC', crv: 'P-256' })
     expect(Object.keys(key.jwk).sort()).toEqual(['crv', 'kty', 'x', 'y'])
     expect(key.pair.privateKey.extractable).toBe(false)
+    // Never extractable, not even while it is being made: nothing to hook, nothing to export.
+    const exported = vi.spyOn(crypto.subtle, 'exportKey')
+    const again = await mintDeviceKey()
+    expect(exported.mock.calls.every(([, exportedKey]) => exportedKey.type === 'public')).toBe(true)
+    expect(again.pair.privateKey.extractable).toBe(false)
+    exported.mockRestore()
     expect(key.pair.privateKey.usages).toEqual(['sign'])
     await expect(crypto.subtle.exportKey('jwk', key.pair.privateKey)).rejects.toThrow()
   })
@@ -99,9 +109,17 @@ describe('this browser as a device', () => {
 
   it('a stored entry that cannot sign is not a device: a new key is minted in its place', async () => {
     const store = memoryStore()
-    await store.save({ id: 'x', kind: 'browser', name: 'broken', jwk: { kty: 'EC', crv: 'P-256', x: 'a', y: 'b' }, pair: { privateKey: {} as CryptoKey, publicKey: {} as CryptoKey } })
+    store.put({ id: 'x', kind: 'browser', name: 'broken', jwk: { kty: 'EC', crv: 'P-256', x: 'a', y: 'b' }, pair: { privateKey: {} as CryptoKey, publicKey: {} as CryptoKey } })
     const device = await consoleDevice({ ...store, userAgent: '' })
     expect(device.id).not.toBe('x')
-    expect(store.saves).toBe(2)
+    expect(store.saves).toBe(1)
+  })
+
+  it('two pages minting at once end up as one device: the first key kept is the key', async () => {
+    const store = memoryStore()
+    const slow = { ...store, load: async () => null, userAgent: '' }
+    const [one, two] = await Promise.all([consoleDevice(slow), consoleDevice(slow)])
+    expect(two.id).toBe(one.id)
+    expect(store.saves).toBe(1)
   })
 })

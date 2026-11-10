@@ -23,6 +23,9 @@ import { isNewer } from '../../../shared/update-check'
 import { composeFleet, snapshotOf, type ZoomCounts } from '../zoom/fleet-compose'
 import type { MachineBlock } from '../relay-machine-call'
 
+/** A machine's own sentence is shown on the console's page: as its own, and no longer than this. */
+const MACHINE_WORDS_MAX = 160
+
 /** The first build that answers at api.cookrew.dev/api/m and lets the console's origin in. */
 export const MIN_MACHINE_VERSION = '0.6.0'
 export const ACCOUNT_EVERY_MS = 60_000
@@ -32,6 +35,9 @@ export const DEVICES_COPY = {
   outdated: (name: string): string => `Update Cookrew on ${name}.`,
   offline: (name: string): string => `Open Cookrew on ${name}.`,
   silent: (name: string): string => `${name} is not answering.`,
+  reproof: (name: string): string => `${name} did not take this browser’s pass. Sign out and in to prove it’s you again.`,
+  says: (name: string, words: string): string => `${name} says: ${words.slice(0, MACHINE_WORDS_MAX)}`,
+  noKey: 'This browser has no key for Cookrew. Sign out and in again.',
   unreachable: 'Cookrew’s registry is not answering. What is shown may be out of date.'
 } as const
 
@@ -81,7 +87,7 @@ export interface DevicesDeps {
   /** What stood in the way the last time that machine was asked. */
   readonly why: (machineId: string) => MachineBlock | null
   readonly gateOpen: () => boolean
-  /** A machine turned the pass away and wants a new proof. */
+  /** A machine turned the pass away: the gate looks at whether it still holds one. Never clears it. */
   readonly onReproof: () => void
   /** The registry says the session is over. */
   readonly onSignedOut: () => void
@@ -108,8 +114,11 @@ export function standingOf(row: AccountMachine, at: { open: boolean; read: boole
   if (outdated(row.appVersion)) return { standing: 'outdated', say: DEVICES_COPY.outdated(row.name) }
   if (!at.open) return { standing: 'locked', say: null }
   if (at.read) return { standing: 'live', say: null }
-  if (at.block?.kind === 'refused') return { standing: 'blocked', say: at.block.message }
+  if (at.block?.kind === 'refused') return { standing: 'blocked', say: DEVICES_COPY.says(row.name, at.block.message) }
   if (at.block?.kind === 'offline') return { standing: 'blocked', say: DEVICES_COPY.silent(row.name) }
+  // One machine not taking the pass is about that machine: the gate, and the others, stand.
+  if (at.block?.kind === 'needs-proof') return { standing: 'blocked', say: DEVICES_COPY.reproof(row.name) }
+  if (at.block?.kind === 'no-device') return { standing: 'blocked', say: DEVICES_COPY.noKey }
   return { standing: 'reading', say: null }
 }
 
@@ -143,7 +152,8 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       const live = standing === 'live'
       return {
         id: row.id,
-        name: live ? machine.name : row.name,
+        // The registry's name for it, always: a machine does not get to rename itself on this page.
+        name: row.name,
         os: row.profile?.os ?? null,
         online: row.online,
         lastSeenAt: row.lastSeenAt,

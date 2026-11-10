@@ -339,3 +339,16 @@ describe('the relay saying the account session is over', () => {
     expect(refused).not.toHaveBeenCalled()
   })
 })
+
+describe('a credential in the console’s address', () => {
+  it('is not taken: a machine’s key comes through its door, never from a link', async () => {
+    vi.resetModules()
+    const page = bareWindow(`https://console.cookrew.dev/d/${A}?token=planted-token#pair=planted-too`)
+    vi.stubGlobal('window', { ...page, COOKREW_MOBILE: 1 })
+    vi.stubGlobal('localStorage', page.localStorage)
+    await inConsole(A)
+    const gate = await import('../src/renderer/src/auth-gate')
+    expect(gate.authStore().token()).toBeNull()
+    expect((page.localStorage as Storage).getItem(`cr_token:${A}`)).toBeNull()
+  })
+})

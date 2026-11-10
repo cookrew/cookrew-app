@@ -48,6 +48,9 @@ interface World {
   seats: string[]
   log: string[]
   completes: { ok: boolean; returnTo: string; grant?: DeviceGrant; message?: string }
+  registryReachable: boolean
+  /** What the gate finds when it looks at its pass again. */
+  passHeld: boolean
 }
 
 const world = (start: { route?: ConsoleRoute; session?: SessionState; gate?: GateState; machines?: ConsoleMachine[] } = {}): World => {
@@ -65,6 +68,8 @@ const world = (start: { route?: ConsoleRoute; session?: SessionState; gate?: Gat
     seats: [],
     log: [],
     completes: { ok: true, returnTo: '/' },
+    registryReachable: true,
+    passHeld: true,
     deps: {
       session: {
         get: session.get,
@@ -80,17 +85,17 @@ const world = (start: { route?: ConsoleRoute; session?: SessionState; gate?: Gat
         signOut: async () => {
           w.log.push('sign-out')
           session.set({ status: 'signed-out' })
+          return { ended: w.registryReachable }
         }
       },
       gate: {
         get: gate.get,
         subscribe: gate.subscribe,
-        check: async () => void w.log.push('gate-check'),
-        took: async (grant) => void w.log.push(`took ${grant.grant}`),
-        reproof: async () => {
-          w.log.push('reproof')
-          gate.set({ status: 'closed', ways: { passkey: true, password: true }, line: null, busy: false })
+        check: async () => {
+          w.log.push('gate-check')
+          if (!w.passHeld && gate.get().status === 'open') gate.set({ status: 'closed', ways: { passkey: true, password: true }, line: null, busy: false })
         },
+        took: async (grant) => void w.log.push(`took ${grant.grant}`),
         forget: () => {
           w.log.push('gate-forget')
           gate.set({ status: 'unknown' })
@@ -137,7 +142,9 @@ describe('opening the page', () => {
     const runtime = createConsoleRuntime(w.deps)
     await runtime.boot()
     expect(runtime.get().view).toEqual({ kind: 'sign-in' })
-    expect(w.log).toEqual(['boot'])
+    // And nothing a sign-in that ended while the page was away left behind is kept: no pass, no machine's key.
+    expect(w.log.filter((line) => line !== 'gate-changed')).toEqual(['boot', 'gate-forget', 'forget-machines'])
+    expect(w.log).not.toContain('devices-start')
     await runtime.signIn()
     expect(w.log.at(-1)).toBe('sign-in /')
   })
@@ -209,26 +216,56 @@ describe('entering a machine', () => {
     const w = world({ route: at(M) })
     const runtime = createConsoleRuntime(w.deps)
     await runtime.boot()
-    w.doors[0].answer({ kind: 'refused', message: 'Remote access is off on this Mac.' })
+    w.doors[0].answer({ kind: 'refused', from: 'machine', message: 'Remote access is off on this Mac.' })
     await settle()
     expect(w.scope).toEqual([])
     expect(w.route.get()).toEqual(DEVICES)
-    expect(runtime.get()).toMatchObject({ view: { kind: 'devices', wants: null }, notice: 'Remote access is off on this Mac.' })
+    // Said as the machine's words, under the name the registry knows it by: a machine does not get to speak as the page.
+    expect(runtime.get()).toMatchObject({ view: { kind: 'devices', wants: null }, notice: 'Studio Mac says: Remote access is off on this Mac.' })
   })
 
-  it('a door that wants a new proof closes the gate and keeps where the page was going', async () => {
+  it('a machine’s words are cut to a sentence’s length; the page’s own are said as they are', async () => {
     const w = world({ route: at(M) })
     const runtime = createConsoleRuntime(w.deps)
     await runtime.boot()
+    w.doors[0].answer({ kind: 'refused', from: 'machine', message: `Your session expired. ${'Sign in again at a place of my choosing. '.repeat(20)}` })
+    await settle()
+    expect((runtime.get().notice ?? '').length).toBeLessThanOrEqual('Studio Mac says: '.length + 161)
+    runtime.open(N)
+    w.doors[1].answer({ kind: 'refused', from: 'page', message: 'This browser keeps nothing for this page.' })
+    await settle()
+    expect(runtime.get().notice).toBe('This browser keeps nothing for this page.')
+  })
+
+  it('no pass held after all: the gate looks again, closes, and keeps where the page was going', async () => {
+    const w = world({ route: at(M) })
+    const runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    w.passHeld = false
     w.doors[0].answer({ kind: 'needs-proof' })
     await settle()
-    expect(w.log).toContain('reproof')
+    expect(w.log.filter((line) => line === 'gate-check')).toHaveLength(2)
+    expect(w.log).not.toContain('gate-forget')
     expect(w.scope).toEqual([])
     expect(runtime.get().view).toEqual({ kind: 'devices', wants: M })
     // Proved again: the same machine's door is asked again.
     w.gate.set({ status: 'open', until: 9e15 })
     await settle()
     expect(w.doors.map((door) => door.machine)).toEqual([M, M])
+  })
+
+  it('one machine asking for a new proof while the pass is good does not close the gate for the others', async () => {
+    const w = world({ route: at(M) })
+    const runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    // The pass is still held: this is one machine's answer, not the account's.
+    w.doors[0].answer({ kind: 'needs-proof' })
+    await settle()
+    expect(w.gate.get().status).toBe('open')
+    expect(w.log).not.toContain('gate-forget')
+    expect(w.doors).toHaveLength(1)
+    expect(w.route.get()).toEqual(DEVICES)
+    expect(runtime.get().notice).toBe('Studio Mac did not take this browser’s pass.')
   })
 
   it('a door answered after the page went elsewhere opens nothing', async () => {
@@ -322,6 +359,16 @@ describe('signing out', () => {
     expect(w.log).toEqual(expect.arrayContaining(['sign-out', 'gate-forget', 'forget-machines', 'devices-stop']))
     expect(runtime.get().view).toEqual({ kind: 'sign-in' })
     expect(w.route.get()).toEqual(DEVICES)
+  })
+
+  it('says so when the registry could not be told', async () => {
+    const w = world()
+    const runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    w.registryReachable = false
+    await runtime.signOut()
+    expect(runtime.get().view).toEqual({ kind: 'sign-in' })
+    expect(runtime.get().notice).toContain('could not be reached')
   })
 
   it('the registry ending the session does the same', async () => {

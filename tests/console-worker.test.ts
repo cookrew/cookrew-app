@@ -19,13 +19,19 @@ function browser(source: string, existing: string[] = []) {
   const stores = new Map<string, Map<string, string>>(existing.map((name) => [name, new Map()]))
   const handlers: Handlers = {}
   const fetched: string[] = []
+  const reloads: string[] = []
   const state = { claimed: 0, unregistered: 0, skipped: 0 }
   const caches = {
     open: async (name: string) => {
       if (!stores.has(name)) stores.set(name, new Map())
       const store = stores.get(name)!
       return {
-        addAll: async (paths: string[]) => void paths.forEach((path) => store.set(path, `cached ${path}`)),
+        addAll: async (requests: Request[]) =>
+          void requests.forEach((request) => {
+            reloads.push(request.cache)
+            const key = new URL(request.url).pathname
+            store.set(key, `cached ${key}`)
+          }),
         // A real cache hands out a fresh answer each time it is asked.
         match: async (key: string) => (store.has(key) ? new Response(store.get(key)) : undefined)
       }
@@ -57,7 +63,7 @@ function browser(source: string, existing: string[] = []) {
     handlers.fetch?.({ request, respondWith: (given) => void (answer = given) })
     return answer === null ? null : (await (answer as Promise<Response>)).text()
   }
-  return { stores, state, fetched, run, ask }
+  return { stores, state, fetched, reloads, run, ask }
 }
 
 const source = (): string => consoleWorkerSource({ version: '0.6.0-abc1234', assets: ['/assets/console-main-AAAA.js', '/assets/App-BBBB.js', '/assets/index-CCCC.css', '/favicon.svg', '/sw.js', '/assets/App-BBBB.js'] })
@@ -67,7 +73,10 @@ describe('the worker', () => {
     const page = browser(source())
     await page.run('install')
     expect([...page.stores.keys()]).toEqual(['cookrew-console-0.6.0-abc1234'])
-    expect([...page.stores.get('cookrew-console-0.6.0-abc1234')!.keys()].sort()).toEqual(['/assets/App-BBBB.js', '/assets/console-main-AAAA.js', '/assets/index-CCCC.css', '/favicon.svg', '/index.html'])
+    // The page is kept at "/": a static host answers "/index.html" with a redirect, and a redirected answer cannot serve a navigation.
+    expect([...page.stores.get('cookrew-console-0.6.0-abc1234')!.keys()].sort()).toEqual(['/', '/assets/App-BBBB.js', '/assets/console-main-AAAA.js', '/assets/index-CCCC.css', '/favicon.svg'])
+    // Each taken past the browser's own HTTP cache: a stale copy is not what a new version keeps.
+    expect(page.reloads).toEqual(['reload', 'reload', 'reload', 'reload', 'reload'])
     // It does not push itself onto a page that is open: the old page keeps the worker it was opened with.
     expect(page.state.skipped).toBe(0)
   })
@@ -83,8 +92,8 @@ describe('the worker', () => {
   it('answers any address of the page with the page, from its cache', async () => {
     const page = browser(source())
     await page.run('install')
-    expect(await page.ask(`${ORIGIN}/d/11111111-1111-4111-8111-111111111111/w/abc`, { mode: 'navigate' })).toBe('cached /index.html')
-    expect(await page.ask(`${ORIGIN}/`, { mode: 'navigate' })).toBe('cached /index.html')
+    expect(await page.ask(`${ORIGIN}/d/11111111-1111-4111-8111-111111111111/w/abc`, { mode: 'navigate' })).toBe('cached /')
+    expect(await page.ask(`${ORIGIN}/`, { mode: 'navigate' })).toBe('cached /')
     expect(page.fetched).toEqual([])
   })
 

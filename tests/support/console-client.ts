@@ -5,7 +5,7 @@
  */
 import { expect } from 'vitest'
 import { PASSWORD, Client, bearer, type AuthSite } from './auth-site-harness'
-import { consoleDevice, type ConsoleDevice, type StoredDevice } from '../../src/renderer/src/console/device-key'
+import { consoleDevice, type ConsoleDevice, type DeviceStore, type StoredDevice } from '../../src/renderer/src/console/device-key'
 import { createConsoleSession, type ConsoleSession, type KeyValue, type RegistryCall } from '../../src/renderer/src/console/console-session'
 import { parseConsoleRoute } from '../../src/renderer/src/console/console-route'
 
@@ -15,9 +15,17 @@ export const memory = (): KeyValue & { readonly all: Map<string, string> } => {
 }
 
 /** One browser's key store: the same device for every page opened in it. */
-export const keyStore = (): { load: () => Promise<StoredDevice | null>; save: (device: StoredDevice) => Promise<void> } => {
+export const keyStore = (): DeviceStore => {
   let held: StoredDevice | null = null
-  return { load: async () => held, save: async (device) => void (held = device) }
+  return {
+    load: async () => held,
+    claim: async (device, usable) => {
+      if (held !== null && usable(held)) return held
+      held = device
+      return device
+    },
+    clear: async () => void (held = null)
+  }
 }
 
 export interface ConsolePage {

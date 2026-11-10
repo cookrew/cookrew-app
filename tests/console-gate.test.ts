@@ -206,15 +206,10 @@ describe('a pass already held', () => {
     expect(gate.get().status).toBe('closed')
   })
 
-  it('is let go of when a machine says it wants a new proof, and on sign-out', async () => {
+  it('is let go of on sign-out, and by nothing a machine says', async () => {
     const w = world()
-    w.stored.setItem('cr_grant', JSON.stringify({ grant: 'held', exp: clock + 5 * HOUR, deviceId: DEVICE }))
     const gate = createConsoleGate(w.deps)
-    await gate.check()
-    await gate.reproof()
-    expect(gate.get().status).toBe('closed')
-    expect(w.stored.getItem('cr_grant')).toBeNull()
-
+    expect('reproof' in gate).toBe(false)
     w.stored.setItem('cr_grant', JSON.stringify({ grant: 'held', exp: clock + 5 * HOUR, deviceId: DEVICE }))
     await gate.check()
     expect(gate.get().status).toBe('open')

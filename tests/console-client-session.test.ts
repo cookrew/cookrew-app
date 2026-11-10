@@ -264,12 +264,55 @@ describe('the relay refusing the session', () => {
   })
 })
 
+describe('signing out when the registry cannot be told', () => {
+  it('after the token ran out: renews first, so the sign-in is ended at the registry and the device key cannot bring it back', async () => {
+    const one = browser()
+    const page = await signedIn(one)
+    clock += CONSOLE_SESSION_TTL_MS + MINUTE
+    expect(page.session.token()).toBeNull()
+    expect(await page.session.signOut()).toEqual({ ended: true })
+    expect(page.calls.some((call) => call.method === 'DELETE' && call.path === '/v2/sessions/current')).toBe(true)
+    const reopened = openConsolePage(site, now, one)
+    await reopened.session.boot()
+    expect(reopened.session.get()).toEqual({ status: 'signed-out' })
+    // The key itself, used directly, renews nothing: the sign-in is over at the registry.
+    const device = await page.device()
+    const nonce = await page.registry('GET', '/v2/sessions/renew-nonce')
+    const sig = Buffer.from(await device.sign(new TextEncoder().encode(`cookrew-renew/1 ${username} ${device.id} ${(nonce.body as { nonce: string }).nonce}`))).toString('base64url')
+    expect((await page.registry('POST', '/v2/sessions/renew', { device: device.id, nonce: (nonce.body as { nonce: string }).nonce, sig })).status).toBe(401)
+  })
+
+  it('with the registry out of reach: says so, and erases this browser’s key, which is what could have renewed the sign-in', async () => {
+    const one = browser()
+    await signedIn(one)
+    const { createConsoleSession } = await import('../src/renderer/src/console/console-session')
+    const real = openConsolePage(site, now, one)
+    const forgot = { times: 0 }
+    const session = createConsoleSession({
+      registry: async () => ({ status: 0, body: null }),
+      authOrigin: site.A,
+      device: real.device,
+      forgetDevice: async () => void (forgot.times += 1),
+      kept: one.kept,
+      pending: one.pending,
+      navigate: () => undefined,
+      now
+    })
+    await session.boot()
+    expect(session.get().status).toBe('signed-in')
+    expect(await session.signOut()).toEqual({ ended: false })
+    expect(session.get()).toEqual({ status: 'signed-out' })
+    expect(forgot.times).toBe(1)
+    expect(one.kept.getItem(SESSION_KEY)).toBeNull()
+  })
+})
+
 describe('signing out', () => {
   it('ends the session at the registry and on the page', async () => {
     const one = browser()
     const page = await signedIn(one)
     const token = page.session.token() ?? ''
-    await page.session.signOut()
+    expect(await page.session.signOut()).toEqual({ ended: true })
     expect(page.session.get()).toEqual({ status: 'signed-out' })
     expect(page.session.token()).toBeNull()
     expect(page.kept.getItem(SESSION_KEY)).toBeNull()

@@ -241,22 +241,41 @@ describe('a machine that cannot be read says the one thing to do', () => {
     expect(standingOf(row(A, 'Old Mini', { online: false, appVersion: '0.5.0' }), { open: false, read: false, block: null }).standing).toBe('offline')
   })
 
-  it('it refused this browser: its own words', () => {
+  it('it refused this browser: its own words, said as its own and cut to a sentence’s length', () => {
     expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'refused', message: 'Remote access is off on this Mac.' } })).toEqual({
       standing: 'blocked',
-      say: 'Remote access is off on this Mac.'
+      say: 'Studio Mac says: Remote access is off on this Mac.'
     })
+    const long = standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'refused', message: 'x'.repeat(2_000) } })
+    expect((long.say ?? '').length).toBe('Studio Mac says: '.length + 160)
+    expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'needs-proof' } })).toEqual({ standing: 'blocked', say: DEVICES_COPY.reproof('Studio Mac') })
+    expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'no-device' } })).toEqual({ standing: 'blocked', say: DEVICES_COPY.noKey })
     expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'offline' } })).toEqual({ standing: 'blocked', say: DEVICES_COPY.silent('Studio Mac') })
   })
 
-  it('a machine that wants a new proof closes the gate, once', async () => {
-    const w = world({ open: true, blocks: { [A]: { kind: 'needs-proof' } }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
+  it('a machine that wants a new proof has the gate look at its pass again, once, and is not what closes it', async () => {
+    const w = world({ open: true, blocks: { [A]: { kind: 'needs-proof' } }, snapshots: { [B]: snapshot('Solis-Core') }, account: { ok: true, machines: [row(A, 'Studio Mac'), row(B, 'Solis-Core')] } })
     const store = createConsoleDevices(w.deps)
     const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(5_000)
     expect(w.reproofs).toBe(1)
+    // The pass is still held (the gate is still open): that machine says so about itself, and the other is still read.
+    expect(store.get().machines.map((m) => [m.name, m.standing])).toEqual([
+      ['Studio Mac', 'blocked'],
+      ['Solis-Core', 'live']
+    ])
+    stop()
+  })
+
+  it('a machine is called what the registry calls it, whatever it says its own name is', async () => {
+    const w = world({ open: true, snapshots: { [A]: snapshot('Solis-Core (trust me)') }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
+    const store = createConsoleDevices(w.deps)
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines[0]).toMatchObject({ name: 'Studio Mac', standing: 'live' })
     stop()
   })
 })

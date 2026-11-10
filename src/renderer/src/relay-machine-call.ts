@@ -199,7 +199,7 @@ let browserMachines: RelayMachines | null = null
 /** The page's own wiring, made on first use: this origin's storage, its fetch, its account key at each door. */
 export async function relayMachines(): Promise<RelayMachines> {
   if (browserMachines) return browserMachines
-  const [{ machineBaseOf, relayHeadersFor }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
+  const [{ machineBaseOf, relayHeadersFor, scopeNeedsMachine }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
     import('./machine-scope'),
     import('./account-pair-client'),
     import('./account-device')
@@ -224,6 +224,9 @@ export async function relayMachines(): Promise<RelayMachines> {
         }
       },
       write: (key, value) => {
+        // Through the relay a key is kept only while somebody is signed in: an answer that
+        // lands after a sign-out is kept for nobody (the relay's header is the session).
+        if (scopeNeedsMachine() && Object.keys(relayHeadersFor()).length === 0) return
         try {
           storage()?.setItem(key, value)
         } catch {

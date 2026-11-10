@@ -7,7 +7,8 @@
  *
  *   COOKREW_API_ORIGIN, COOKREW_AUTH_ORIGIN   the registry's two hosts, written
  *                                             into the page (defaults: production)
- *   COOKREW_CONSOLE_VERSION                   names the worker's cache
+ *   COOKREW_CONSOLE_LOCAL=1                   allows loopback http hosts (a local registry)
+ *   COOKREW_CONSOLE_VERSION                   the version it says it is
  *                                             (default: the package version)
  */
 import { defineConfig, type Plugin } from 'vite'
@@ -15,14 +16,30 @@ import react from '@vitejs/plugin-react'
 import path from 'node:path'
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
 import { consoleWorkerSource } from './scripts/console-sw.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }
 
+/**
+ * A registry host as the page may be built with it: a bare https origin. A
+ * loopback http one is for a local registry in a test and has to be asked for
+ * (COOKREW_CONSOLE_LOCAL=1), so a developer's environment cannot ship by
+ * accident. Anything else stops the build.
+ */
+function originFor(name: string, fallback: string): string {
+  const raw = process.env[name] ?? fallback
+  const url = new URL(raw)
+  const bare = url.origin === raw.replace(/\/$/, '') && url.username === '' && url.password === ''
+  const local = process.env.COOKREW_CONSOLE_LOCAL === '1' && url.protocol === 'http:' && /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1)$/.test(url.hostname)
+  if (!bare || (url.protocol !== 'https:' && !local)) throw new Error(`${name} must be a bare https origin (got ${JSON.stringify(raw)})`)
+  return url.origin
+}
+
 const origins = {
-  COOKREW_API_ORIGIN: process.env.COOKREW_API_ORIGIN ?? 'https://api.cookrew.dev',
-  COOKREW_AUTH_ORIGIN: process.env.COOKREW_AUTH_ORIGIN ?? 'https://auth.cookrew.dev'
+  COOKREW_API_ORIGIN: originFor('COOKREW_API_ORIGIN', 'https://api.cookrew.dev'),
+  COOKREW_AUTH_ORIGIN: originFor('COOKREW_AUTH_ORIGIN', 'https://auth.cookrew.dev')
 }
 const version = process.env.COOKREW_CONSOLE_VERSION ?? pkg.version
 const publicDir = path.join(root, 'src/renderer/public')
@@ -41,8 +58,12 @@ function consolePage(): Plugin {
       // Copied as they are, outside the bundle: the icons and the manifest.
       const copied = readdirSync(publicDir).map((file) => `/${file}`)
       const assets = [...built, ...copied].filter((file) => file !== '/index.html' && !file.endsWith('.map'))
-      this.emitFile({ type: 'asset', fileName: 'sw.js', source: consoleWorkerSource({ version, assets }) })
-      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version })}\n` })
+      // The cache is named by what is in it: file names carry their content's hash, and the page
+      // itself is hashed in, so two builds that differ at all never share a cache.
+      const pageSource = page && 'source' in page ? String(page.source) : ''
+      const build = createHash('sha256').update([...assets].sort().join('\n')).update(pageSource).digest('hex').slice(0, 12)
+      this.emitFile({ type: 'asset', fileName: 'sw.js', source: consoleWorkerSource({ version: `${version}-${build}`, assets }) })
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version, build })}\n` })
     }
   }
 }

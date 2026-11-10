@@ -56,8 +56,6 @@ export interface ConsoleGate {
   withPassword(returnTo: string): Promise<void>
   /** A pass that came back from the auth host. */
   took(grant: DeviceGrant): Promise<void>
-  /** A machine refused the pass and asked for a new proof. */
-  reproof(): Promise<void>
   /** Signed out: no pass, and nothing known. */
   forget(): void
 }
@@ -141,10 +139,6 @@ export function createConsoleGate(deps: GateDeps): ConsoleGate {
         return
       }
       deps.grants.write(grant)
-      await check()
-    },
-    reproof: async () => {
-      deps.grants.clear()
       await check()
     },
     forget: () => {

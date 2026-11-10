@@ -53,6 +53,10 @@ export type CompleteResult =
   | { readonly ok: true; readonly intent: AuthIntent; readonly returnTo: string; readonly grant?: DeviceGrant }
   | { readonly ok: false; readonly intent: AuthIntent | null; readonly returnTo: string; readonly message: string }
 
+export interface SignOutResult {
+  readonly ended: boolean
+}
+
 export type StartResult = { readonly ok: true } | { readonly ok: false; readonly message: string }
 
 export interface SessionDeps {
@@ -60,6 +64,8 @@ export interface SessionDeps {
   /** Where signing in happens. The only origin this page ever sends the browser to. */
   readonly authOrigin: string
   readonly device: () => Promise<ConsoleDevice>
+  /** Erase this browser's key (device-key.ts). Asked for only when a sign-out could not be made at the registry. */
+  readonly forgetDevice?: () => Promise<void>
   /** Survives the tab: the session, so a reopened page is still signed in. */
   readonly kept: KeyValue
   /** Lives for the tab: the verifier of a round trip in progress. */
@@ -87,7 +93,11 @@ export interface ConsoleSession {
   passByPassword(returnTo: string): Promise<StartResult>
   /** Back from the auth host with a code. */
   complete(back: { code: string | null; state: string | null; error: string | null }): Promise<CompleteResult>
-  signOut(): Promise<void>
+  /**
+   * End the sign-in. `ended` is whether the REGISTRY ended it. When it could not be told, this
+   * browser's key is erased instead: the key is what could have renewed the sign-in later.
+   */
+  signOut(): Promise<SignOutResult>
 }
 
 export const SESSION_KEY = 'cr_console_session'
@@ -392,9 +402,22 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
       return { ok: true, intent: 'sign-in', returnTo }
     },
     signOut: async () => {
-      const token = usable()
+      // THE SIGN-IN IS ENDED AT THE REGISTRY, not just forgotten here. The device key renews a
+      // sign-in with no token at all, and is kept across a sign-out, so a page that only dropped
+      // its token would leave a sign-in anyone at this browser could pick up again. A token that
+      // has run out is renewed first, to have one the registry takes.
+      const token = await fresh().catch(() => null)
+      // Renewing found the sign-in already over.
+      const over = held === null
       drop()
-      if (token !== null) await deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(token)).catch(() => null)
+      if (over) return { ended: true }
+      if (token !== null) {
+        const said = await deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(token)).catch(() => ({ status: 0, body: null }))
+        // Ended now, or already not a session the registry knows.
+        if ((said.status >= 200 && said.status < 300) || said.status === 401) return { ended: true }
+      }
+      await deps.forgetDevice?.().catch(() => undefined)
+      return { ended: false }
     }
   }
 }

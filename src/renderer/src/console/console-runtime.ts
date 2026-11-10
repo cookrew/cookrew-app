@@ -8,14 +8,26 @@
  * whole order of events runs in a test with no browser.
  */
 import type { DeviceGrant } from '../../../shared/account-pair'
-import type { CompleteResult, SessionState, StartResult } from './console-session'
+import type { CompleteResult, SessionState, SignOutResult, StartResult } from './console-session'
 import type { GateState } from './console-gate'
 import type { ConsoleDevicesState } from './console-devices'
 import { DEVICES_ROUTE, consoleRoutePath, parseConsoleRoute, type ConsoleRoute } from './console-route'
 import { decideView, type ConsoleView, type DoorState } from './console-navigator'
 
-/** What a machine's door said to this browser. */
-export type DoorAnswer = { readonly kind: 'open' } | { readonly kind: 'needs-proof' } | { readonly kind: 'refused'; readonly message: string }
+/**
+ * What came of asking a machine's door. `needs-proof`: it wants a pass this
+ * browser may no longer hold. `refused` says who is speaking: the machine (its
+ * sentence is its own, and is shown as its own) or this page.
+ */
+export type DoorAnswer =
+  | { readonly kind: 'open' }
+  | { readonly kind: 'needs-proof' }
+  | { readonly kind: 'refused'; readonly from: 'machine' | 'page'; readonly message: string }
+
+/** A machine's sentence, cut to a sentence's length: it is shown on the console's own page. */
+export const MACHINE_WORDS_MAX = 160
+export const UNTOLD_SIGN_OUT =
+  'Signed out on this browser. Cookrew’s registry could not be reached to end the sign-in, so this browser’s key was erased instead.'
 
 export interface RuntimeDeps {
   readonly session: {
@@ -24,14 +36,13 @@ export interface RuntimeDeps {
     boot(): Promise<void>
     complete(back: { code: string | null; state: string | null; error: string | null }): Promise<CompleteResult>
     signIn(returnTo: string): Promise<StartResult>
-    signOut(): Promise<void>
+    signOut(): Promise<SignOutResult>
   }
   readonly gate: {
     get(): GateState
     subscribe(listener: () => void): () => void
     check(): Promise<void>
     took(grant: DeviceGrant): Promise<void>
-    reproof(): Promise<void>
     forget(): void
   }
   readonly devices: {
@@ -102,19 +113,32 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
     deps.enterScope(null)
   }
 
+  /** The name the REGISTRY knows a machine by: a machine does not name itself on this page. */
+  const nameOf = (machineId: string): string => deps.devices.get().machines.find((machine) => machine.id === machineId)?.name ?? 'That machine'
+
   const askDoor = (machineId: string): void => {
     door = { machine: machineId, state: 'asking' }
+    const waiting = (): boolean => door?.machine === machineId && door.state === 'asking'
     void deps
       .openDoor(machineId)
-      .catch((): DoorAnswer => ({ kind: 'refused', message: 'That machine is not answering.' }))
-      .then((answer) => {
+      .catch((): DoorAnswer => ({ kind: 'refused', from: 'page', message: `${nameOf(machineId)} is not answering.` }))
+      .then(async (answer) => {
         // Answered for a door nobody is waiting at any more: it opens nothing.
-        if (door?.machine !== machineId || door.state !== 'asking') return
+        if (!waiting()) return
         if (answer.kind === 'needs-proof') {
-          door = null
-          return void deps.gate.reproof().then(evaluate)
+          // The gate looks at its pass again. With none it closes, and the page waits there for a
+          // proof. With one still held this is ONE machine's answer: said, and the gate stays
+          // open for the others (a machine cannot take the pass from the rest).
+          await deps.gate.check().catch(() => undefined)
+          if (!waiting()) return
+          door = deps.gate.get().status === 'open' ? { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not take this browser’s pass.` } : null
+          return evaluate()
         }
-        door = answer.kind === 'open' ? { machine: machineId, state: 'open' } : { machine: machineId, state: 'refused', message: answer.message }
+        if (answer.kind === 'open') door = { machine: machineId, state: 'open' }
+        else {
+          const said = answer.from === 'machine' ? `${nameOf(machineId)} says: ${answer.message.slice(0, MACHINE_WORDS_MAX)}` : answer.message
+          door = { machine: machineId, state: 'refused', message: said }
+        }
         evaluate()
       })
   }
@@ -149,20 +173,24 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
   }
 
   const onSession = (): void => {
-    const signedIn = deps.session.get().status === 'signed-in'
-    if (signedIn && stopDevices === null) {
+    const status = deps.session.get().status
+    if (status === 'signed-in' && stopDevices === null) {
       void deps.gate.check()
       stopDevices = deps.devices.start()
     }
-    if (!signedIn && stopDevices !== null) {
-      stopDevices()
+    if (status === 'signed-out') {
+      // WHENEVER NOBODY IS SIGNED IN, not only when somebody just signed out here: a sign-in that
+      // ended while the page was away (a week unused, the device taken back) leaves the same
+      // things behind, and the next person to sign in on this browser must not find them.
+      const wasIn = stopDevices !== null
+      stopDevices?.()
       stopDevices = null
       leaveScope()
       door = null
       retried = null
       deps.gate.forget()
       deps.forgetMachines()
-      deps.router.go(DEVICES_ROUTE)
+      if (wasIn) deps.router.go(DEVICES_ROUTE)
     }
     evaluate()
   }
@@ -196,7 +224,10 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
       for (const listener of listeners) listener()
     },
     signIn: () => deps.session.signIn(consoleRoutePath(deps.router.get())),
-    signOut: () => deps.session.signOut(),
+    signOut: async () => {
+      const done = await deps.session.signOut()
+      if (!done.ended) tell(state.view, UNTOLD_SIGN_OUT)
+    },
     open: (machineId, workspaceId = null) => {
       retried = null
       state = { ...state, notice: null }
@@ -208,10 +239,7 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
       deps.forgetDoor(machineId)
       leaveScope()
       door = null
-      if (retried === machineId) {
-        const name = deps.devices.get().machines.find((machine) => machine.id === machineId)?.name ?? 'That machine'
-        door = { machine: machineId, state: 'refused', message: `${name} did not let this browser in.` }
-      }
+      if (retried === machineId) door = { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not let this browser in.` }
       retried = machineId
       evaluate()
     },
