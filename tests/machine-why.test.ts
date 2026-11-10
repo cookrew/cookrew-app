@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { machineWhyWords } from '../src/renderer/src/zoom/machine-why'
+import { machineWhyShows, machineWhyWords } from '../src/renderer/src/zoom/machine-why'
 
 /**
  * A MACHINE THE VIEW CANNOT GO INTO SAYS THE ONE THING TO DO (owner 2026-11-10,
@@ -42,5 +42,23 @@ describe('machineWhyWords', () => {
       machineWhyWords(solis, { surface: 'none', trusted: null, block: null })
     ]
     for (const words of all) expect(words).not.toMatch(/on that (machine|Mac|PC|computer)/)
+  })
+})
+
+/**
+ * THE SENTENCE BELONGS TO THE DEVICES STOP (owner screenshot 2026-11-10): it
+ * points at a button "above" there, so it is said only while the view rests on
+ * that stop, and gone once the view leaves it (it had followed into an agent's
+ * full view, stretched over the chat).
+ */
+describe('machineWhyShows', () => {
+  it('on the devices stop, and not in a full view', () => {
+    expect(machineWhyShows(-2, false)).toBe(true)
+    expect(machineWhyShows(-1.6, false)).toBe(true)
+    expect(machineWhyShows(-2, true)).toBe(false)
+  })
+
+  it('on any other stop or passage: not said', () => {
+    for (const v of [-1.5, -1, 0, 1, 2, 3]) expect(machineWhyShows(v, false)).toBe(false)
   })
 })

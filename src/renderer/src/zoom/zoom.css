@@ -1605,6 +1605,9 @@
 
 .zv-root[data-full='true'] .zv-error {
   top: calc(56px + env(safe-area-inset-top, 0px));
+  /* Moved to the top, not stretched from it to the foot: with both edges set it
+     grew into a blank sheet over the whole chat (owner screenshot 2026-11-10). */
+  bottom: auto;
 }
 
 /* ── narrow: the pill takes the width; the stops become the thumb's targets ── */

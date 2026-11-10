@@ -12,7 +12,7 @@ import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf, type MachineView } from './zoom-model'
-import { machineWhyWords } from './machine-why'
+import { machineWhyShows, machineWhyWords } from './machine-why'
 import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
@@ -119,6 +119,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // The fleet's name is the one the phone can know: remote-api has no machineName().
   const machine = (nameAsked ?? localMachine?.name ?? 'This desktop').replace(/\.local$/i, '')
   const [error, setError] = useState<string | null>(null)
+  // Why a machine cannot be gone into: the devices stop's own sentence, never carried past it (machine-why.ts).
+  const [why, setWhy] = useState<string | null>(null)
+  const whyShows = machineWhyShows(zoom.v, zoom.full !== null)
+  const whyShowsNow = useRef(whyShows)
+  whyShowsNow.current = whyShows
+  useEffect(() => {
+    if (!whyShows) setWhy(null)
+  }, [whyShows])
   const [size, setSize] = useState({ w: 1000, h: 700 })
   useEffect(() => {
     let alive = true
@@ -670,11 +678,16 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               onOpen={() => {
                 // A machine this one can read is gone into, here (RemoteMachineView.tsx); one it cannot says the one thing to do.
                 const enter = (): void => {
-                  setError(null)
+                  setWhy(null)
                   remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null })
                 }
                 if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
-                else void whyNot(m).then((words) => (words === null ? enter() : setError(words)))
+                // Asked over the network: a view gone elsewhere meanwhile neither hears the answer nor is carried into the machine.
+                else void whyNot(m).then((words) => {
+                  if (!whyShowsNow.current) return
+                  if (words === null) enter()
+                  else setWhy(words)
+                })
               }}
             />
           ))}
@@ -807,6 +820,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       )}
       <RemoteMachineView />
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
+      {!error && why && whyShows && <div role="status" className="zv-error">{why}<button type="button" onClick={() => setWhy(null)} aria-label="Dismiss">×</button></div>}
     </div>
   )
 }
