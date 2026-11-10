@@ -13,6 +13,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync }
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { registryOrigin } from './registry-origin'
+import { RELAY_SESSION_HEADER, machineRelayPath } from '../shared/machine-relay'
 import {
   DEFAULT_LOCK_AFTER_MS,
   MIN_PASSCODE,
@@ -1739,10 +1740,11 @@ export class Accounts {
   /**
    * ONE CALL TO ANOTHER MACHINE OF THE ACCOUNT, DOWN THE RELAY.
    *
-   * The relay opens only for the session cookie (registry v2-http.ts ·
-   * SESSION_COOKIE), so this sends it as one; what the other machine sees is
-   * its own key, if one is passed as `Authorization`, and the bridge's word
-   * for which device asked. The session still never leaves this class.
+   * The one relay path every client uses (shared/machine-relay.ts): the
+   * account is named by this session, sent in the relay's own header, and what
+   * the other machine sees is its own key, if one is passed as
+   * `Authorization`, and the relay's word for which device asked. The session
+   * still never leaves this class, and never reaches the other machine.
    */
   async relayed(
     desktopId: string,
@@ -1752,16 +1754,17 @@ export class Accounts {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
     if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
-    if (!/^[0-9a-f-]{36}$/i.test(desktopId)) return { ok: false, reason: 'unknown' }
+    const path = machineRelayPath(desktopId, route)
+    if (path === null) return { ok: false, reason: 'unknown' }
     const token = account.session?.token ?? ''
-    const url = `${this.origin}/relay/@${account.username}/desktop/${desktopId.toLowerCase()}/${route.replace(/^\/+/, '')}`
     try {
-      const response = await this.http(url, {
+      const response = await this.http(`${this.origin}${path}`, {
         ...init,
         headers: {
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...(init.headers as Record<string, string> | undefined),
-          cookie: `__Host-cr_session=${token}`,
+          // LAST: nothing a caller passed may stand in for the session.
+          [RELAY_SESSION_HEADER]: token,
         },
       })
       return { ok: true, response }

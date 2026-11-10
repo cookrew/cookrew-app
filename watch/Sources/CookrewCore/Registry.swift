@@ -77,8 +77,8 @@ private struct Lossy<Row: Decodable>: Decodable {
   }
 }
 
-/** The cookie the relay reads; it reads no other way in. */
-let sessionCookie = "__Host-cr_session"
+/** The header the relay reads the account session from; it reads no other way in, and never forwards it. */
+let relaySessionHeader = "x-cookrew-session"
 
 private struct Reason: Decodable {
   let error: String?
@@ -174,7 +174,7 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
       request.httpMethod = "POST"
       request.httpShouldHandleCookies = false
       request.setValue("application/json", forHTTPHeaderField: "content-type")
-      request.setValue("\(sessionCookie)=\(token)", forHTTPHeaderField: "cookie")
+      request.setValue(token, forHTTPHeaderField: relaySessionHeader)
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
       do {
         let (data, response) = try await session.data(for: request)
@@ -187,7 +187,7 @@ public final class HTTPRegistryAPI: RegistryAPI, @unchecked Sendable {
 
   public func claim(relay: URL, code: String, token: String) async throws -> ClaimReply {
     var request = try post(relay.appending(path: "api/watch/claim"), ["code": code])
-    request.setValue("\(sessionCookie)=\(token)", forHTTPHeaderField: "cookie")
+    request.setValue(token, forHTTPHeaderField: relaySessionHeader)
     let (data, status) = try await fetch(request)
     let reason = try? JSONDecoder().decode(Reason.self, from: data)
     switch status {

@@ -2,14 +2,8 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:
 import { decodeFrame, encodeFrame } from '../../src/shared/relay-frame'
 import { RelayHub, type HubSocket } from './relay-hub'
 import { LinkPulse, openNdjson, readFrameLines } from './relay-link'
-import { PRIVATE, refuse, sameOrigin, signedIn, v2Json, type V2Identity } from './v2-http'
-import {
-  relayCrossSitePage,
-  relayNotYoursPage,
-  relayOfflinePage,
-  relaySignInPage
-} from './site-relay'
-import { respondPage } from './site-shell'
+import { refuse, sameOrigin, signedIn, v2Json, type V2Identity } from './v2-http'
+import { RELAY_SESSION_HEADER, isMachineId, isRelayedRoute } from '../../src/shared/machine-relay'
 import { fleetPresence, type DesktopPresence } from './v2-fleet'
 import { createLineSeen } from './v2-line-seen'
 
@@ -32,21 +26,27 @@ import { createLineSeen } from './v2-line-seen'
  *   Nothing a caller writes chooses the name, so no device can park on
  *   another's and take its owner's canvas offline.
  *
- *   THE PHONE MUST BE ON THE ACCOUNT. Everything under
- *   `/relay/@user/desktop/<id>/` needs a v2 session of a device attached to
- *   THAT account. The name forwarded to is built from the SESSION's username,
- *   never from the path, so a link cannot address somebody else's Mac.
+ *   THE CALLER MUST BE ON THE ACCOUNT. Everything under `/api/m/<machine id>/`
+ *   needs a v2 session of a device attached to that machine's account, sent in
+ *   its own header (shared/machine-relay.ts). The line forwarded to is named
+ *   from the SESSION's username: nothing in the address chooses an account, so
+ *   a link cannot address somebody else's machine. One path for every client:
+ *   the console page, the desktop app and the watch.
  *
- *   cookrew.dev IS NOT A PARTY TO THE CONVERSATION. Its own session cookie is
- *   never forwarded; cookies the desktop sets are pinned to the relay path so
- *   they can never be sent to cookrew.dev's own routes; bodies are not read
- *   and never logged. What is logged is that a session opened, that it closed,
- *   and how many bytes crossed.
+ *   NO COOKIE ADMITS ANYONE. A cookie is something another site can make a
+ *   browser send; a header is not. No cookie is read, none is forwarded, and
+ *   none a machine sets is passed back.
+ *
+ *   A MACHINE'S API CROSSES, AND NOTHING ELSE. No page, no asset, no redirect:
+ *   an answer that is a page is refused whole, and every answer is sent under
+ *   a sandbox, so a machine's bytes can never run on the origin they are read
+ *   from. The body is not read and never logged. What is logged is that a
+ *   session opened, that it closed, and how many bytes crossed.
  *
  * NOT SEALED YET, AND THIS MATTERS. TLS to cookrew.dev and TLS onward is two
  * hops, not end to end: this process handles plaintext, so a relay operator
- * could read a canvas — including the `?open=` token and the pairing key on
- * the first request. The frames reserve `sealed` for the ciphertext that fixes
+ * could read a canvas, including the credential a caller presents to its
+ * machine. The frames reserve `sealed` for the ciphertext that fixes
  * it (see relay-frame.ts); until that lands, this path is the owner reaching
  * their own machine through their own registry, and it must not be described
  * as end-to-end private.
@@ -152,34 +152,16 @@ const REQUEST_HEADERS = new Set([
  */
 
 /**
- * `authorization` CROSSES, and the reason it now does is the whole shape of
- * this path.
- *
- * It was stripped at first, on the reasoning that cookrew.dev's credential is
- * none of the desktop's business. That was right about the credential and
- * wrong about the header: the companion authenticates to its OWN Mac with
- * `Authorization: Bearer <companion token>` (mobile-http.presentedToken), so
- * stripping it made every API call the canvas issues a 401 — the phone landed
- * on a shell that could not read a thing. cookrew.dev's own session lives in
- * the cookie, which IS stripped, and nothing here reads this header any more
- * (the prefix is admitted by cookie alone), so it is the desktop's to receive.
+ * `authorization` CROSSES UNREAD. It is the caller's own credential at that
+ * machine (a pairing token, a machine key: mobile-http.presentedToken), and
+ * the relay has no use for it: the account session travels in its own header
+ * (shared/machine-relay.ts), which is read here and never forwarded.
  */
 
-/**
- * THE PREFIX THIS CANVAS IS BEING SERVED UNDER, told to the desktop.
- *
- * The companion computes every API path from a global the desktop injects into
- * index.html (`COOKREW_SLUG` → `API_BASE`, api-base.ts). Through the relay the
- * desktop cannot know it is being served under `/relay/@user/desktop/<id>` —
- * nothing in the request says so — and a client that issues root-absolute
- * `/api/...` under that prefix is asking cookrew.dev, which has no such route.
- *
- * So the registry says it, on every forwarded exchange. A client-supplied copy
- * is REMOVED first: this header is a statement about where the request was
- * addressed, and a caller that could write it could tell the desktop to serve
- * a client pointed anywhere.
- */
-export const CANVAS_BASE_HEADER = 'x-cookrew-base'
+/** A page was once served under a relay prefix and told so in this header. Nothing is now; a caller's copy is dropped. */
+const STALE_BASE_HEADER = 'x-cookrew-base'
+/** The bridge's own mark on a relayed request (main/canvas-bridge.ts): never a caller's to write. */
+const BRIDGE_MARKER = 'x-cookrew-relay'
 
 /**
  * WHO IS ASKING, told to the desktop — reach v2.1.
@@ -189,12 +171,11 @@ export const CANVAS_BASE_HEADER = 'x-cookrew-base'
  * right now. It used to learn that from the admission ceremony — a canvas
  * token plus `?device=&name=` on the query — and that whole ceremony is gone
  * (one credential, one URL). Nothing else in a relayed request says who the
- * reader is, because the credential that admitted them is cookrew.dev's own
- * cookie and the cookie is stripped.
+ * reader is, because the session that admitted them is never forwarded.
  *
  * So the registry states it, on every forwarded exchange, FROM THE SESSION it
  * just verified and from nothing the client sent. A client-supplied copy is
- * REMOVED first, exactly as `x-cookrew-base` is: a caller who could write
+ * REMOVED first: a caller who could write
  * these could sit at somebody's Mac under any name they liked, and the Mac
  * would have no way to tell.
  *
@@ -238,13 +219,6 @@ export function callerDeviceHeaders(device: { id: string; name: string }): Recor
   return { [CANVAS_DEVICE_HEADER]: id, ...(name === '' ? {} : { [CANVAS_DEVICE_NAME_HEADER]: name }) }
 }
 
-/** cookrew.dev's OWN cookies, which never leave cookrew.dev. */
-/**
- * Ours, and never forwarded. Both spellings of the session cookie: the
- * prefixed one a browser holds now, and the name it had before, so a stale
- * copy still sitting in somebody's jar is dropped here rather than travelling.
- */
-const OUR_COOKIES = new Set(['__Host-cr_session', 'cr_session', 'cr_account', '__Host-cr_auth_web'])
 /** Hop-by-hop, plus the length we cannot honour because we stream. */
 const HOP_BY_HOP = new Set([
   'connection',
@@ -261,37 +235,17 @@ const HOP_BY_HOP = new Set([
 /** A header value larger than this is not a header, it is a payload. */
 const HEADER_MAX = 8 * 1024
 
-/**
- * The cookies of this request that belong to the DESKTOP, as one header value.
- *
- * cookrew.dev's session is dropped: the desktop must never be handed the
- * credential that opens its owner's account, and a compromised canvas must not
- * become a compromised account. Everything else is the desktop's own — the
- * cookies it set under the relay path, which is the only place a browser will
- * send them back to.
- */
-export function forwardableCookies(header: string): string {
-  return header
-    .split(';')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0 && !OUR_COOKIES.has(part.slice(0, part.indexOf('=')).trim()))
-    .join('; ')
-}
-
 /** The request headers a relayed exchange may carry, lowercased. */
 export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(headers)) {
     if (typeof value !== 'string' || value.length > HEADER_MAX) continue
     const name = key.toLowerCase()
-    if (name === 'cookie') {
-      const mine = forwardableCookies(value)
-      if (mine.length > 0) out.cookie = mine
-      continue
-    }
-    // OURS TO WRITE, NEVER THEIRS. Set below from the address the request
-    // actually arrived at, and from the session it arrived with.
-    if (name === CANVAS_BASE_HEADER || name === CANVAS_DEVICE_HEADER || name === CANVAS_DEVICE_NAME_HEADER) {
+    // NO COOKIE CROSSES, whoever set it, and never the account session.
+    if (name === 'cookie' || name === RELAY_SESSION_HEADER) continue
+    // OURS TO WRITE, NEVER THEIRS: who is asking is stated below from the
+    // session, and the other two describe a relay the caller is not.
+    if (name === STALE_BASE_HEADER || name === BRIDGE_MARKER || name === CANVAS_DEVICE_HEADER || name === CANVAS_DEVICE_NAME_HEADER) {
       continue
     }
     if (REQUEST_HEADERS.has(name)) out[name] = value
@@ -305,85 +259,60 @@ export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<stri
 }
 
 /**
- * A cookie the desktop set, PINNED TO THE RELAY PATH.
- *
- * The desktop believes it is at the root of its own origin and says `Path=/`;
- * under the relay it shares an origin with cookrew.dev, and a cookie at `/`
- * would be sent to the sign-in, the market and every other route here. So the
- * path is replaced rather than accepted, and `Domain` is removed outright — a
- * desktop naming a domain is a desktop writing a cookie for cookrew.dev.
+ * AN ANSWER THAT IS A PAGE. A machine's API answers data, pictures and
+ * streams; a document a browser would render and run is never one of them, so
+ * it is refused whole rather than passed on under a sandbox and hoped for.
  */
-export function rewriteCookiePath(cookie: string, path: string): string {
-  const kept = cookie
-    .split(';')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .filter((part, index) => {
-      if (index === 0) return true
-      const name = part.slice(0, part.indexOf('=') === -1 ? part.length : part.indexOf('=')).toLowerCase()
-      return name !== 'path' && name !== 'domain'
-    })
-  return [...kept, `Path=${path}`].join('; ')
+const PAGE_TYPES = new Set(['text/html', 'application/xhtml+xml', 'image/svg+xml', 'text/xml', 'application/xml'])
+export const isPageType = (contentType: string): boolean => PAGE_TYPES.has(contentType.split(';')[0].trim().toLowerCase())
+
+/**
+ * THE ANSWER HEADERS THAT CROSS BACK. An allow-list, for the reason the
+ * request's is one: the opposite is every header a machine might invent to get
+ * a hold on the origin its answer is read from. So no Set-Cookie, no Location
+ * or Refresh, no Service-Worker-Allowed, no Link, no policy and no CORS grant
+ * of its own. What a reader needs is the type, the encoding and a validator.
+ */
+const ANSWER_HEADERS = new Set(['content-type', 'content-encoding', 'etag', 'last-modified', 'retry-after'])
+
+/** Every relayed answer is sent under this: nothing in it may run, frame or be framed. */
+export const RELAY_ANSWER_CSP = "default-src 'none'; sandbox; frame-ancestors 'none'"
+
+/** What a page of the console may send on the relay path, and how (answered to its preflight). */
+export const RELAY_CORS_HEADERS = `authorization, content-type, if-none-match, last-event-id, ${RELAY_SESSION_HEADER}`
+export const RELAY_CORS_METHODS = 'GET, POST, PUT, DELETE'
+/** Ten minutes: the ceiling OWASP names, so a changed allow-list is honoured soon (main/companion-cors.ts). */
+export const RELAY_CORS_MAX_AGE = '600'
+
+/** Never shared, never kept, and different for each origin and each session. */
+const RELAY_PRIVATE: Record<string, string> = {
+  'cache-control': 'private, no-store',
+  vary: `origin, authorization, ${RELAY_SESSION_HEADER}`
 }
 
 /**
- * WHERE A REDIRECT FROM THE DESKTOP ACTUALLY POINTS.
- *
- * The admission answers `303 Location: /?token=<companion token>` — root
- * absolute, because on the LAN the desktop IS the root. Forwarded as it stands
- * that sends the browser to `https://cookrew.dev/?token=…`, which is the home
- * page: OPEN over the relay landed on the marketing site with a credential in
- * the address bar, and the canvas was never reached. (Found on the live site,
- * 2026-09-06.)
- *
- * Three cases, and the third is the one that must NOT be rewritten:
- *   `/…`                        → under the prefix, where the desktop is.
- *   an absolute URL elsewhere   → its path, under the prefix: the desktop
- *                                 naming its own LAN origin still means "me".
- *   an absolute URL at OUR host → untouched. `?refused=key` sends the reader
- *                                 back to /me on cookrew.dev, and prefixing
- *                                 that would send them to a canvas instead.
- *
- * A relative reference (`board`) resolves against the path this exchange was
- * for, which is what a browser would have done with the desktop's answer.
- *
- * A credential on the redirect moves to the fragment, where the app already
- * looks for it. The browser would otherwise send it straight back through the
- * ingress, and its access log. No build of the app issues one any more; a Mac
- * that has not updated still can.
+ * The machine's answer, made safe to send from this origin: the few headers a
+ * reader needs, then ours over them.
  */
-export function rewriteLocation(
-  value: string,
-  at: { prefix: string; path: string; host: string }
-): string {
-  try {
-    const target = new URL(value, `https://desktop.invalid${at.path}`)
-    if (target.host === at.host) return value
-    const token = target.searchParams.get('token')
-    if (token === null) return `${at.prefix}${target.pathname}${target.search}${target.hash}`
-    target.searchParams.delete('token')
-    return `${at.prefix}${target.pathname}${target.search}#pair=${encodeURIComponent(token)}`
-  } catch {
-    // Not a location this can reason about. Left alone rather than guessed at.
-    return value
+export function relayAnswerHeaders(headers: Record<string, string>, cors: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    const name = key.toLowerCase()
+    if (ANSWER_HEADERS.has(name) && typeof value === 'string' && value.length <= HEADER_MAX) out[name] = value
   }
-}
-
-/**
- * `Refresh: 5; url=/board` — a redirect wearing a different hat, and it has to
- * be rewritten by the same rule or it is the same bug with a delay on it.
- */
-export function rewriteRefresh(value: string, at: { prefix: string; path: string; host: string }): string {
-  const semicolon = value.indexOf(';')
-  if (semicolon === -1) return value
-  const head = value.slice(0, semicolon)
-  const tail = value.slice(semicolon + 1).trim()
-  const named = /^url\s*=\s*(.*)$/i.exec(tail)
-  const target = named === null ? tail : named[1].trim()
-  if (target.length === 0) return value
-  const quoted = /^(['"])(.*)\1$/.exec(target)
-  const rewritten = rewriteLocation(quoted === null ? target : quoted[2], at)
-  return `${head}; url=${rewritten}`
+  return {
+    // A type is always said: with nosniff, an answer without one is bytes and nothing else.
+    'content-type': 'application/octet-stream',
+    ...out,
+    ...RELAY_PRIVATE,
+    ...cors,
+    'content-security-policy': RELAY_ANSWER_CSP,
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'cross-origin-resource-policy': 'cross-origin',
+    // An SSE stream must not be held by a proxy until it ends, which for a line is never.
+    'x-accel-buffering': 'no'
+  }
 }
 
 /** What the /relay prefix logs, and the only numbers it keeps. */
@@ -438,8 +367,8 @@ export interface CanvasRelayDeps {
 }
 
 /** A refusal this file words itself, for the routes only a desktop calls. */
-const deny = (response: ServerResponse, code: number, error: string, message: string): void =>
-  v2Json(response, code, { error, message })
+const deny = (response: ServerResponse, code: number, error: string, message: string, headers: Record<string, string> = {}): void =>
+  v2Json(response, code, { error, message }, headers)
 
 /** decodeURIComponent that answers null rather than throwing on a bad escape. */
 const decode = (value: string): string | null => {
@@ -451,27 +380,42 @@ const decode = (value: string): string | null => {
 }
 
 /**
- * THE COOKIE ADMITS HERE, AND ONLY THE COOKIE.
- *
- * Under this prefix a whole app arrives, and it will carry `Authorization`
- * headers of its OWN — a canvas token, a call token, whatever the companion
- * sends its Mac. Read as cookrew.dev's own credential those would turn every
- * one of the app's requests into a failed sign-in, so the session is taken
- * from the cookie a browser attached and from nowhere else. The header is not
- * forwarded either: see REQUEST_HEADERS.
+ * THE SESSION ON THE RELAY PATH: its own header, and nothing else. Not a
+ * cookie (another site can make a browser send one) and not `Authorization`
+ * (that is the caller's credential at the machine, and crosses unread).
  */
-const cookieSignedIn = (request: IncomingMessage, v2: V2Identity): ReturnType<typeof signedIn> =>
-  signedIn({ headers: { cookie: request.headers.cookie ?? '' } } as IncomingMessage, v2)
+const relaySignedIn = (request: IncomingMessage, v2: V2Identity): ReturnType<typeof signedIn> => {
+  const session = request.headers[RELAY_SESSION_HEADER]
+  if (typeof session !== 'string' || session === '') return null
+  return signedIn({ headers: { authorization: `Bearer ${session}` } } as IncomingMessage, v2, 'bearer')
+}
+
+/**
+ * WHICH PAGE MAY CALL THE RELAY PATH: the console, exactly, and no other.
+ *
+ * A caller that is not a browser (the desktop app, the watch) sends no Origin
+ * and is judged by its session alone. A browser always says where its page
+ * came from on a request like these, and only the configured console origin is
+ * answered: compared whole, never by suffix, and never echoed from the
+ * request. A registry that serves no console answers no page at all.
+ */
+type OriginVerdict = { readonly ok: true; readonly cors: Record<string, string> } | { readonly ok: false }
+const originVerdict = (request: IncomingMessage, consoleOrigin: string | null): OriginVerdict => {
+  const origin = request.headers.origin
+  if (origin === undefined) return { ok: true, cors: {} }
+  if (typeof origin !== 'string' || consoleOrigin === null || origin !== consoleOrigin) return { ok: false }
+  return { ok: true, cors: { 'access-control-allow-origin': consoleOrigin, 'access-control-expose-headers': 'etag, retry-after' } }
+}
 
 /**
  * A REQUEST ANOTHER SITE CAUSED, WHICH IS NEVER THIS PERSON'S WISH.
  *
- * Both prefixes here are state-changing in ways a `GET` usually is not: the
- * downlink CLAIMS A NAME, and a claim someone else's page can cause is a name
- * someone else's page can squat — the real desktop then finds its own line
- * taken. So the browser's own account of where the request came from is what
- * decides, and only `same-origin` (the picker's `location.assign`) and `none`
- * (a typed address or a bookmark) are this person's.
+ * The downlink is state-changing in a way a `GET` usually is not: it CLAIMS A
+ * NAME, and a claim someone else's page can cause is a name someone else's
+ * page can squat — the real desktop then finds its own line taken. So the
+ * browser's own account of where the request came from is what decides, and
+ * only `same-origin` and `none` (a typed address or a bookmark) are this
+ * person's.
  *
  * `sec-fetch-site` is absent on old browsers and on curl; there the Origin
  * check that the rest of /v2 uses is the fallback, so the posture never gets
@@ -490,10 +434,6 @@ export function crossSite(request: IncomingMessage): boolean {
  */
 const bearing = (request: IncomingMessage): boolean =>
   (request.headers.authorization ?? '').startsWith('Bearer ')
-
-/** Is the reader a browser following a link, or a script? Decides page vs JSON. */
-const wantsPage = (request: IncomingMessage): boolean =>
-  (request.headers.accept ?? '').includes('text/html')
 
 export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const log = deps.log ?? ((): void => undefined)
@@ -765,47 +705,40 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     v2Json(response, 200, answer)
   }
 
-  // ── the phone's side ───────────────────────────────────────────────────
+  // ── a caller's side ────────────────────────────────────────────────────
 
   /**
-   * EVERYTHING UNDER /relay/@user/desktop/<id>/, forwarded as it stands.
+   * EVERYTHING UNDER /api/m/<machine id>/api/, forwarded as it stands.
    *
-   * The first request is not special: OPEN on /me is a plain navigation to
-   * this prefix with nothing on the query, and the desktop serves its shell.
-   * What admits a reader HERE is the account cookie; what admits them at the
-   * MAC is the pairing token their companion already holds. Two credentials
-   * for two different questions, and neither is invented on the way through —
-   * this end only says which prefix and which device (`callerDeviceHeaders`).
+   * What admits a caller HERE is the account session in its own header; what
+   * admits them at the MACHINE is the credential they already hold there. Two
+   * credentials for two different questions, and neither is invented on the
+   * way through — this end only says which device of the account is asking
+   * (`callerDeviceHeaders`).
    */
-  const proxy = (request: IncomingMessage, response: ServerResponse, url: URL): void => {
+  const proxy = (request: IncomingMessage, response: ServerResponse, url: URL, cors: Record<string, string>): void => {
     const segments = url.pathname.split('/')
-    const signed = cookieSignedIn(request, deps.v2)
+    const signed = relaySignedIn(request, deps.v2)
     if (signed === null) {
-      if (wantsPage(request)) respondPage(response, relaySignInPage())
-      else refuse(response, 401, 'unauthenticated')
+      refuse(response, 401, 'unauthenticated', undefined, { ...RELAY_PRIVATE, ...cors })
       return
     }
-    const asked = (decode(segments[2] ?? '') ?? '').toLowerCase().replace(/^@/, '')
-    const deviceId = (decode(segments[4] ?? '') ?? '').toLowerCase()
-    // NOT YOURS READS AS NOT THERE. A signed-in reader asking about another
-    // account's desktop learns nothing about whether it exists.
-    if (asked !== signed.account.username || !DEVICE.test(deviceId)) {
-      if (wantsPage(request)) respondPage(response, relayNotYoursPage())
-      else refuse(response, 404, 'not_found')
+    const deviceId = decode(segments[3] ?? '') ?? ''
+    const route = segments.slice(4).join('/')
+    // NOT YOURS READS AS NOT THERE: a signed-in caller asking about a machine
+    // that is not a device of its own account learns nothing about whether it
+    // exists. The same answer for an address that is not a machine's API.
+    if (!isMachineId(deviceId) || !isRelayedRoute(route) || !signed.account.devices.some((device) => device.id === deviceId)) {
+      refuse(response, 404, 'not_found', undefined, { ...RELAY_PRIVATE, ...cors })
       return
     }
+    // The line is named from the SESSION's account, never from the address.
     const name = canvasName(signed.account.username, deviceId)
     if (!hub.has(name)) {
-      if (wantsPage(request)) respondPage(response, relayOfflinePage())
-      else deny(response, 503, 'no_link', 'That Mac is not holding a relay session just now.')
+      deny(response, 503, 'no_link', 'That machine is not holding a relay session just now.', { ...RELAY_PRIVATE, ...cors })
       return
     }
-    const base = `${segments.slice(0, 5).join('/')}`
-    const rest = url.pathname.slice(base.length)
-    const path = `${rest.length === 0 ? '/' : rest}${url.search}`
-    const cookiePath = `${base}/`
-    /** Our own host, so a redirect BACK to cookrew.dev is left where it points. */
-    const host = typeof request.headers.host === 'string' ? request.headers.host : ''
+    const path = `/${route}${url.search}`
 
     const method = (request.method ?? 'GET').toUpperCase()
     const chunks: Buffer[] = []
@@ -841,11 +774,11 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     request.on('end', () => {
       release()
       if (refusal === 'too_large') {
-        deny(response, 413, 'too_large', 'That was larger than this path carries. Four megabytes is the limit.')
+        deny(response, 413, 'too_large', 'That was larger than this path carries. Four megabytes is the limit.', { ...RELAY_PRIVATE, ...cors })
         return
       }
       if (refusal === 'busy') {
-        deny(response, 503, 'busy', 'cookrew.dev is carrying more than it can right now. Try again in a moment.')
+        deny(response, 503, 'busy', 'The relay is carrying more than it can right now. Try again in a moment.', { ...RELAY_PRIVATE, ...cors })
         return
       }
       const body = Buffer.concat(chunks)
@@ -854,12 +787,9 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         name,
         method,
         path,
-        prefix: base,
-        cookiePath,
-        host,
+        cors,
         headers: {
           ...allowedRequestHeaders(request.headers),
-          [CANVAS_BASE_HEADER]: base,
           // LAST, so nothing a caller invented can shadow them.
           ...callerDeviceHeaders(signed.device)
         },
@@ -876,11 +806,8 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       name: string
       method: string
       path: string
-      /** `/relay/@user/desktop/<id>`, with no trailing slash. */
-      prefix: string
-      cookiePath: string
-      /** The host this request arrived at — cookrew.dev's own. */
-      host: string
+      /** What lets the console's page read this answer, or nothing for a caller that is not a page. */
+      cors: Record<string, string>
       headers: Record<string, string>
       body: Buffer
     }
@@ -894,11 +821,16 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         response,
         503,
         'too_many_exchanges',
-        `That Mac is already carrying ${perLink} requests through the relay. Try again in a moment.`
+        `That Mac is already carrying ${perLink} requests through the relay. Try again in a moment.`,
+        { ...RELAY_PRIVATE, ...exchange.cors }
       )
       return
     }
     let headed = false
+    /** The answer was refused at its head: nothing after it is written. */
+    let refused = false
+    /** This exchange's stream on the line, once it is open. */
+    let streamId: string | null = null
     let down = 0
     const finish = (): void => {
       if (!response.writableEnded) response.end()
@@ -930,18 +862,25 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         if (!frame) return
         if (frame.t === 'head' && !headed) {
           headed = true
-          startClock(idleMs, 'went silent after its head')
-          response.writeHead(
-            frame.status,
-            answerHeaders(frame.headers, {
-              cookiePath: exchange.cookiePath,
-              prefix: exchange.prefix,
-              path: exchange.path,
-              host: exchange.host
+          // NOT AN API ANSWER: a page a browser would run, or a redirect to
+          // somewhere a machine chose. Refused whole, the machine told to stop,
+          // and not a byte of what it sent passed on.
+          const type = Object.entries(frame.headers).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? ''
+          if ((frame.status >= 300 && frame.status < 400 && frame.status !== 304) || isPageType(type)) {
+            refused = true
+            stopClock()
+            deny(response, 502, 'not_an_api', 'That machine answered with something other than its API.', {
+              ...RELAY_PRIVATE,
+              ...exchange.cors
             })
-          )
+            if (streamId !== null) hub.closeCaller(streamId)
+            return
+          }
+          startClock(idleMs, 'went silent after its head')
+          response.writeHead(frame.status, relayAnswerHeaders(frame.headers, exchange.cors))
           return
         }
+        if (refused) return
         if (frame.t === 'chunk') {
           startClock(idleMs, 'went silent mid-answer')
           const bytes = Buffer.from(frame.data, 'base64')
@@ -961,7 +900,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
           // kinder than an empty 200.
           if (!headed) {
             headed = true
-            deny(response, 502, 'no_link', 'That Mac stopped answering part-way through.')
+            deny(response, 502, 'no_link', 'That Mac stopped answering part-way through.', { ...RELAY_PRIVATE, ...exchange.cors })
           }
           finish()
         }
@@ -974,9 +913,10 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       headers: exchange.headers
     })
     if (!opened.ok) {
-      deny(response, 503, 'no_link', 'That Mac is not holding a relay session just now.')
+      deny(response, 503, 'no_link', 'That machine is not holding a relay session just now.', { ...RELAY_PRIVATE, ...exchange.cors })
       return
     }
+    streamId = opened.id
     counts.open += 1
     counts.opened += 1
     exchanges.set(exchange.name, inFlight + 1)
@@ -1024,7 +964,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       hub.closeCaller(opened.id)
       if (!headed) {
         headed = true
-        deny(response, 504, 'timed_out', 'That Mac did not answer in time. Try again, or open it directly.')
+        deny(response, 504, 'timed_out', 'That Mac did not answer in time. Try again in a moment.', { ...RELAY_PRIVATE, ...exchange.cors })
       }
       finish()
       settle()
@@ -1090,104 +1030,37 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         presenceRoute(request, response)
         return true
       }
-      // EVERYTHING under the prefix, whatever the method: this is a whole
-      // origin's worth of app arriving through one address.
-      if (parts.length >= 4 && parts[0] === 'relay' && parts[2] === 'desktop') {
-        // Admitted by the cookie, so a request another site caused would be a
-        // request spent on this person's behalf without them. The picker's own
-        // `location.assign` from /me is same-origin and passes; every method
-        // is held to it, since a GET here reaches a whole app.
-        if (crossSite(request)) {
-          if (wantsPage(request)) respondPage(response, relayCrossSitePage())
-          else refuse(response, 403, 'bad_origin')
+      // ONE RELAY PATH, for every client (shared/machine-relay.ts).
+      if (parts.length >= 3 && parts[0] === 'api' && parts[1] === 'm') {
+        const verdict = originVerdict(request, deps.v2.consoleOrigin)
+        // A page of any origin but the console's is refused before a session is
+        // read or a machine asked, and told nothing it could read.
+        if (!verdict.ok) {
+          refuse(response, 403, 'bad_origin', undefined, RELAY_PRIVATE)
           return true
         }
-        proxy(request, response, url)
+        // THE PREFLIGHT IS ANSWERED HERE, before auth and without the machine:
+        // a browser sends it with no credential by construction, and its
+        // answer is a list of names, the same for every path.
+        if (method === 'OPTIONS') {
+          if (verdict.cors['access-control-allow-origin'] === undefined) {
+            refuse(response, 403, 'bad_origin', undefined, RELAY_PRIVATE)
+            return true
+          }
+          response.writeHead(204, {
+            ...RELAY_PRIVATE,
+            ...verdict.cors,
+            'access-control-allow-methods': RELAY_CORS_METHODS,
+            'access-control-allow-headers': RELAY_CORS_HEADERS,
+            'access-control-max-age': RELAY_CORS_MAX_AGE
+          })
+          response.end()
+          return true
+        }
+        proxy(request, response, url, verdict.cors)
         return true
       }
       return false
     }
   }
-}
-
-/**
- * The desktop's answer, made safe to send from cookrew.dev's origin.
- *
- * Hop-by-hop headers describe THIS hop and not the next one; the length is
- * dropped because the answer is streamed; and every cookie is re-pinned to the
- * relay path. Several `Set-Cookie` headers travel as one value with newlines
- * between them, since a frame's headers are a map and HTTP's are not.
- */
-function answerHeaders(
-  headers: Record<string, string>,
-  at: { cookiePath: string; prefix: string; path: string; host: string }
-): Record<string, string | string[]> {
-  const out: Record<string, string | string[]> = {}
-  for (const [key, value] of Object.entries(headers)) {
-    const name = key.toLowerCase()
-    if (HOP_BY_HOP.has(name)) continue
-    // A redirect the desktop wrote is written for its own root. Both headers
-    // that carry one are moved under the prefix — see rewriteLocation.
-    if (name === 'location') out[name] = rewriteLocation(value, at)
-    else if (name === 'refresh') out[name] = rewriteRefresh(value, at)
-    else out[name] = value
-  }
-  const cookies = headers['set-cookie']
-  if (typeof cookies === 'string' && cookies.length > 0) {
-    out['set-cookie'] = cookies
-      .split('\n')
-      .map((cookie) => cookie.trim())
-      .filter((cookie) => cookie.length > 0)
-      .map((cookie) => rewriteCookiePath(cookie, at.cookiePath))
-  }
-  // A canvas is one reader's, and an SSE stream must not be held by a proxy
-  // until it ends — which for the line is never.
-  //
-  // EXCEPT the bundle's own hash-named assets. The desktop marks those
-  // `public, max-age=31536000, immutable` (mobile-server.ts serveRendererAsset)
-  // because their name IS their content, and PRIVATE spread over that made a
-  // phone re-download two megabytes of JavaScript on every open. Those keep
-  // a cache header — reshaped by immutableAssetCache below — and nothing
-  // else does: the index, every API answer and every stream stay private and
-  // uncached, exactly as before. (Perf lane L7.)
-  const kept: Record<string, string | string[]> = { ...out, ...PRIVATE, 'x-accel-buffering': 'no' }
-  const asset = immutableAssetCache(headers, at.path)
-  return asset === null ? kept : { ...kept, ...asset }
-}
-
-/**
- * THE ONE CACHE HEADER THAT SURVIVES, and only in this shape.
- *
- *   - The PATH decides, anchored at `/assets/`, never the query: `at.path`
- *     carries the search string, and `?next=/assets/x` on any route is a
- *     caller's to write. (A relayed canvas is served at its root.)
- *   - `private`, never `public`, whatever the desktop said. The win is the
- *     phone's OWN cache; `public` on a session-gated prefix would let a
- *     shared cache serve a cached 200 to an unauthenticated requester — an
- *     existence oracle for a device id, which relayStatus refuses to leak.
- *   - Never with a Set-Cookie: a cookie is per reader, a cached body is not.
- *   - The desktop's `vary` is kept, and accept-encoding is ADDED to it when
- *     it is missing (it usually says `accept-encoding, origin` — the origin
- *     half is the CORS gate's, http-compress.ts); a body whose encoding
- *     follows the request must say so, and nothing the desktop varied on
- *     may be dropped.
- */
-export function immutableAssetCache(
-  headers: Record<string, string>,
-  path: string
-): Record<string, string> | null {
-  const pathname = path.split('?')[0]
-  if (!pathname.startsWith('/assets/')) return null
-  const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]))
-  const cache = lower['cache-control']
-  if (typeof cache !== 'string' || !/\bimmutable\b/.test(cache)) return null
-  if (typeof lower['set-cookie'] === 'string' && lower['set-cookie'].length > 0) return null
-  const privately = cache
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0 && part.toLowerCase() !== 'public' && part.toLowerCase() !== 'private')
-  const vary = typeof lower.vary === 'string' ? lower.vary.trim() : ''
-  const varies =
-    vary.length === 0 ? 'accept-encoding' : /\baccept-encoding\b/i.test(vary) ? vary : `${vary}, accept-encoding`
-  return { 'cache-control': ['private', ...privately].join(', '), vary: varies }
 }

@@ -129,7 +129,7 @@ final class WatchApp {
    */
   func enter(id: String, name: String, goIn: Bool) async -> EnterError? {
     guard let account = vault.loadAccount(), let keeper else { return .noDoor }
-    guard let relay = relayBase(registry: account.registry, username: account.username, desktop: id) else { return .noDoor }
+    guard let relay = relayBase(registry: account.registry, desktop: id) else { return .noDoor }
     let session = await keeper.token()
     do {
       let grant = try await registry.watchGrant(token: session)

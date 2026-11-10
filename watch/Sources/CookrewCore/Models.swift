@@ -272,8 +272,9 @@ public struct WatchMachine: Decodable, Equatable, Identifiable, Sendable {
 /** The Mac a watch is paired with: the one its relay road names. A six-digit pairing has none. */
 public func pairedMachineId(_ bases: [Base]) -> String? {
   for base in bases where base.kind == "relay" {
+    // The relay road is `<registry>/api/m/<machine id>` (Account.swift · relayBase).
     let parts = (URL(string: base.url)?.path() ?? "").split(separator: "/")
-    if let at = parts.firstIndex(of: "desktop"), parts.indices.contains(at + 1) { return parts[at + 1].lowercased() }
+    if parts.count >= 3, parts[0] == "api", parts[1] == "m" { return parts[2].lowercased() }
   }
   return nil
 }

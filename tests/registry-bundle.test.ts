@@ -140,9 +140,9 @@ function sharedRoutes(up: () => Booted, who: () => Signed): void {
     expect(body.desktops).toEqual([{ id: rows[0].id, online: rows[0].online, lastSeenAt: rows[0].lastSeenAt }])
   })
 
-  it('keeps the classic canvas prefix: 503 while the Mac holds no line', async () => {
-    const res = await fetch(`${up().origin}/relay/@${who().username}/desktop/${who().id}/`, {
-      headers: { cookie: `__Host-cr_session=${who().token}`, accept: 'application/json' }
+  it('carries the one relay path: 503 while the Mac holds no line', async () => {
+    const res = await fetch(`${up().origin}/api/m/${who().id}/api/fleet`, {
+      headers: { 'x-cookrew-session': who().token, accept: 'application/json' }
     })
     expect(res.status).toBe(503)
   })

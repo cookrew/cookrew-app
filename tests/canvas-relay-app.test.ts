@@ -15,6 +15,7 @@ import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
 import { createCanvasLink, type CanvasLink } from '../src/main/canvas-link'
 import { createCanvasBridge, loopbackDialer, RELAY_MARKER } from '../src/main/canvas-bridge'
+import { RELAY_SESSION_HEADER } from '../src/shared/machine-relay'
 
 /**
  * IDENTITY v2, PHASE 3 — THE APP HALF AGAINST THE REAL REGISTRY.
@@ -69,6 +70,7 @@ const companion = (): Server =>
         host: request.headers.host,
         relayed: request.headers[RELAY_MARKER] ?? null,
         cookie: request.headers.cookie ?? null,
+        session: request.headers[RELAY_SESSION_HEADER] ?? null,
         authorization: request.headers.authorization ?? null
       })
     )
@@ -177,12 +179,12 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-const prefix = (): string => `/relay/@${username}/desktop/${deviceId}`
+const prefix = (): string => `/api/m/${deviceId}`
 const asPhone = async (path: string, init: RequestInit = {}): Promise<Response> =>
   fetch(`${site.origin}${prefix()}${path}`, {
     ...init,
     redirect: 'manual',
-    headers: { cookie: `__Host-cr_session=${phoneSession}`, ...(init.headers as Record<string, string>) }
+    headers: { [RELAY_SESSION_HEADER]: phoneSession, ...(init.headers as Record<string, string>) }
   })
 
 describe('the app half, holding a real line', () => {
@@ -198,7 +200,7 @@ describe('the app half, holding a real line', () => {
     const answer = await asPhone('/api/state?scope=one')
     expect(answer.status).toBe(200)
     const echo = (await answer.json()) as Record<string, unknown>
-    // The relay prefix is stripped by the registry; the companion sees the
+    // The relay path is stripped by the registry; the companion sees the
     // path it would have seen on the LAN, query and all.
     expect(echo.path).toBe('/api/state?scope=one')
     expect(echo.method).toBe('GET')
@@ -208,17 +210,16 @@ describe('the app half, holding a real line', () => {
     expect(echo.host).toMatch(/^127\.0\.0\.1:\d+$/)
   })
 
-  it("never hands the desktop cookrew.dev's own session", async () => {
-    const echo = (await (await asPhone('/api/state')).json()) as { cookie: string | null }
-    expect(echo.cookie ?? '').not.toContain('cr_session')
+  it('never hands the desktop the account session, nor any cookie', async () => {
+    const echo = (await (await asPhone('/api/state', { headers: { cookie: 'cr_seen=1' } })).json()) as { cookie: string | null; session: string | null }
+    expect(echo.cookie).toBeNull()
+    expect(echo.session).toBeNull()
   })
 
   it("hands the desktop the companion's OWN Authorization, which is what it is for", async () => {
-    // Reversed on 2026-09-06, and the reversal is the point: the companion
-    // authenticates to its Mac with `Authorization: Bearer <companion token>`
-    // (mobile-http.presentedToken). Stripped, every API call the canvas makes
-    // was a 401 and the phone sat on a shell that could read nothing.
-    // cookrew.dev's own credential is the COOKIE, and that is still stripped.
+    // The companion authenticates to its Mac with `Authorization: Bearer
+    // <companion token>` (mobile-http.presentedToken); the account session
+    // travels in the relay's own header and is never forwarded.
     const echo = (await (
       await asPhone('/api/state', { headers: { authorization: 'Bearer the-companion-token' } })
     ).json()) as { authorization: string | null }
@@ -236,19 +237,17 @@ describe('the app half, holding a real line', () => {
     expect(echo.method).toBe('POST')
   })
 
-  it('admits a phone through the relay exactly as it does over the LAN', async () => {
-    const answer = await asPhone(`/?open=a-canvas-token&key=ABC234&device=${randomUUID()}`)
-    expect(answer.status).toBe(303)
-    // UNDER THE PREFIX. The desktop says `/?token=…` because on the LAN it is
-    // the root; forwarded as it stands that sent the phone to cookrew.dev's
-    // home page with a credential in the address bar, and the canvas was never
-    // reached (found on the live site, 2026-09-06).
-    expect(answer.headers.get('location')).toBe(`${prefix()}/#pair=the-pairing-token`)
-    // The desktop said Path=/ and no Domain; the registry re-pins it under the
-    // relay prefix, so nothing it sets can ever reach cookrew.dev's own routes.
-    const cookies = answer.headers.getSetCookie()
-    expect(cookies.every((cookie) => cookie.includes(`Path=${prefix()}/`))).toBe(true)
-    expect(cookies.some((cookie) => /domain=/i.test(cookie))).toBe(false)
+  it('carries the API and never the page: the shell, its redirect and its cookies stay on the Mac', async () => {
+    // The Mac's root answers a page or a redirect with cookies (its LAN door).
+    // Down the relay that is not an API route, and it is not there.
+    const root = await asPhone(`/?open=a-canvas-token&key=ABC234&device=${randomUUID()}`)
+    expect(root.status).toBe(404)
+    expect(root.headers.get('location')).toBeNull()
+    expect(root.headers.getSetCookie()).toEqual([])
+    // And nothing an API answer sets is passed back either.
+    const api = await asPhone('/api/state')
+    expect(api.headers.getSetCookie()).toEqual([])
+    expect(api.headers.get('content-security-policy')).toContain('sandbox')
   })
 
   it('stops claiming the name the moment the desktop withdraws', async () => {

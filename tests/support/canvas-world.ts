@@ -12,12 +12,13 @@ import { IdentityService } from '../../registry/src/identity'
 import { DoorStore } from '../../registry/src/doors'
 import { StarStore } from '../../registry/src/stars'
 import { createV2 } from '../../registry/src/v2-routes'
+import { RELAY_SESSION_HEADER } from '../../src/shared/machine-relay'
 
 /**
  * A REAL REGISTRY WITH ONE DESKTOP AND ONE PHONE SIGNED IN — the world every
  * test of the Mac's own relay line starts from. The desktop holds its v2
- * session token; the phone holds a session cookie value it can call
- * `/relay/@owner/desktop/<id>/…` with.
+ * session token; the phone holds a session it can call the desktop's API with
+ * down the relay path, `/api/m/<id>/api/…`.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -43,7 +44,7 @@ export interface CanvasWorld {
   readonly site: Listening
   readonly deviceId: string
   readonly desktopToken: string
-  /** `fetch` as the signed-in phone, under the desktop's relay prefix. */
+  /** `fetch` as the signed-in phone, at a route of the desktop's API down the relay path. */
   readonly asPhone: (route: string, init?: RequestInit) => Promise<Response>
   readonly close: () => Promise<void>
 }
@@ -95,9 +96,9 @@ export const canvasWorld = async (options: { note?: (message: string) => void } 
     deviceId,
     desktopToken: claimed.token,
     asPhone: (route, init = {}) =>
-      fetch(`${site.origin}/relay/@owner/desktop/${deviceId}${route}`, {
+      fetch(`${site.origin}/api/m/${deviceId}/api${route}`, {
         ...init,
-        headers: { cookie: `__Host-cr_session=${phoneSession}`, ...(init.headers as Record<string, string>) }
+        headers: { [RELAY_SESSION_HEADER]: phoneSession, ...(init.headers as Record<string, string>) }
       }),
     close: async () => {
       await site.close()
@@ -109,7 +110,8 @@ export const canvasWorld = async (options: { note?: (message: string) => void } 
 /** A companion reduced to what the relay tests need: a fixed big body, and a tiny answer. */
 export const bodyServer = (big: Buffer): Server =>
   createServer((request, response) => {
-    if ((request.url ?? '').startsWith('/big')) {
+    // A machine's API lives under /api, which is all the relay carries.
+    if ((request.url ?? '').startsWith('/api/big')) {
       response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(big.byteLength) })
       response.end(big)
       return

@@ -24,6 +24,7 @@ import { connectCodeId, newConnectCode } from '../src/shared/canvas-seal'
 import type { SealFrame } from '../src/shared/canvas-seal-wire'
 import { openSeal } from '../src/renderer/src/path/seal-client'
 import { SealPhone, until } from './support/seal-phone'
+import { RELAY_SESSION_HEADER } from '../src/shared/machine-relay'
 
 const PASSWORD = 'correct horse battery staple'
 const BEARER = 'Bearer canary-pairing-token-7f3a'
@@ -90,7 +91,8 @@ let dir = ''
 let username = ''
 let deviceId = ''
 let desktopToken = ''
-let cookie = ''
+/** The account session, as the relay path takes it: its own header. */
+let session: Record<string, string> = {}
 let link: CanvasLink | null = null
 const code = newConnectCode()
 /** Every frame the registry sent or received on the Mac's line. */
@@ -109,7 +111,7 @@ async function signUp(): Promise<void> {
   const { approval } = (await request.json()) as { approval: string }
   await fetch(`${site.origin}/v2/me/approvals/${approval}`, { method: 'POST', headers: { ...json, authorization: `Bearer ${desktopToken}` }, body: JSON.stringify({ decision: 'approve', match: asked.match }) })
   const done = await fetch(`${site.origin}/v2/sessions/${asked.pending}`)
-  cookie = `__Host-cr_session=${((await done.json()) as { token: string }).token}`
+  session = { [RELAY_SESSION_HEADER]: ((await done.json()) as { token: string }).token }
 }
 
 beforeAll(async () => {
@@ -155,9 +157,9 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-const prefix = (): string => `${site.origin}/relay/@${username}/desktop/${deviceId}`
+const prefix = (): string => `${site.origin}/api/m/${deviceId}`
 const connected = async (): Promise<SealPhone> => {
-  const phone = new SealPhone(prefix(), code, { cookie })
+  const phone = new SealPhone(prefix(), code, session)
   await phone.connect()
   return phone
 }
@@ -186,7 +188,7 @@ describe('a body on a method with no framing, through the real relay', () => {
     const smuggled = 'POST /smuggled HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n'
     const target = new URL(`${prefix()}/api/plain`)
     await new Promise<void>((resolve, reject) => {
-      const asked = httpRequest({ host: target.hostname, port: target.port, path: target.pathname, method: 'GET', headers: { cookie, 'transfer-encoding': 'chunked' } }, (answer) => {
+      const asked = httpRequest({ host: target.hostname, port: target.port, path: target.pathname, method: 'GET', headers: { ...session, 'transfer-encoding': 'chunked' } }, (answer) => {
         answer.resume()
         answer.on('end', resolve)
       })
@@ -220,8 +222,8 @@ describe('the sealed session through the real relay', () => {
 
   it('the phone page\'s own client carries a request through it, and the relay sees none of it', async () => {
     const from = lines.length
-    const withCookie: typeof fetch = (input, init) => fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string>), cookie } })
-    const client = await openSeal({ url: (route) => `${prefix()}${route}`, code: Buffer.from(code).toString('base64url'), fetchFn: withCookie })
+    const withSession: typeof fetch = (input, init) => fetch(input, { ...init, headers: { ...(init?.headers as Record<string, string>), ...session } })
+    const client = await openSeal({ url: (route) => `${prefix()}${route}`, code: Buffer.from(code).toString('base64url'), fetchFn: withSession })
     const answer = await client.request({ method: 'POST', path: ROUTE, headers: { authorization: BEARER }, body: PASSWORD })
     client.close()
     expect(Buffer.from(answer.body).toString()).toBe(REPLY)
@@ -233,7 +235,7 @@ describe('the sealed session through the real relay', () => {
 
   it('the same words in the clear are found by the same search', async () => {
     const from = lines.length
-    const answer = await fetch(`${prefix()}${ROUTE}`, { method: 'POST', headers: { cookie, authorization: BEARER }, body: UPLOAD })
+    const answer = await fetch(`${prefix()}${ROUTE}`, { method: 'POST', headers: { ...session, authorization: BEARER }, body: UPLOAD })
     expect(await answer.text()).toBe(REPLY)
     const read = relayCouldRead(from)
     for (const canary of [BEARER, REPLY, ROUTE, UPLOAD]) expect(read, canary).toContain(canary)
@@ -282,7 +284,7 @@ describe('the sealed session through the real relay', () => {
   })
 
   it('a stranger with no code gets no session through the relay', async () => {
-    const stranger = new SealPhone(prefix(), newConnectCode(), { cookie })
+    const stranger = new SealPhone(prefix(), newConnectCode(), session)
     await expect(stranger.connect()).rejects.toThrow()
   })
 })

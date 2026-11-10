@@ -15,20 +15,17 @@ import { createV2 } from '../registry/src/v2-routes'
 import {
   allowedRequestHeaders,
   callerDeviceHeaders,
-  CANVAS_BASE_HEADER,
   CANVAS_DEVICE_HEADER,
   CANVAS_DEVICE_NAME_HEADER,
   canvasName,
   createCanvasRelay,
   crossSite,
-  rewriteLocation,
-  rewriteRefresh,
-  forwardableCookies,
   isCanvasName,
-  rewriteCookiePath,
+  isPageType,
   headerSafeName,
   type CanvasRelay
 } from '../registry/src/v2-canvas-relay'
+import { RELAY_SESSION_HEADER, isRelayedRoute, machineRelayPath } from '../src/shared/machine-relay'
 import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
 
 /**
@@ -40,10 +37,11 @@ import { decodeFrame, encodeFrame } from '../src/shared/relay-frame'
  * pass on. The desktop is a fake — a tiny mobile server on loopback with a
  * bridge that speaks frames — because the app half is written next.
  *
- * The four rules under test are the ones that would be quiet if broken: the
- * line belongs to the desktop that signed in, the prefix belongs to the
- * account, cookrew.dev's own session never crosses, and a cookie the desktop
- * sets can never come back to cookrew.dev's own routes.
+ * The rules under test are the ones that would be quiet if broken: the line
+ * belongs to the desktop that signed in, the relay path (/api/m/<machine>)
+ * belongs to the account its session names, the account session never
+ * crosses, and nothing a machine answers can run, redirect or set a cookie on
+ * the origin it is read from.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -73,7 +71,37 @@ const listen = async (server: Server): Promise<Up> => {
  */
 const mobileServer = (): Server =>
   createServer((request, response) => {
-    const url = new URL(request.url ?? '/', 'http://mobile.local')
+    // A machine's API lives under /api, and only that crosses: the routes below are named without it.
+    const url = new URL((request.url ?? '/').replace(/^\/api(?=[/?]|$)/, '') || '/', 'http://mobile.local')
+    if (url.pathname === '/page') {
+      // A page, which a machine must never be able to put on the relay's origin.
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end('<!doctype html><script>fetch("/v2/me")</script>')
+      return
+    }
+    if (url.pathname === '/typed') {
+      response.writeHead(200, { 'content-type': url.searchParams.get('as') ?? 'text/plain' })
+      response.end('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>')
+      return
+    }
+    if (url.pathname === '/grabby') {
+      // Everything a machine might send to get a hold on the origin it is read from.
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        etag: '"v7"',
+        'service-worker-allowed': '/',
+        refresh: '0; url=https://evil.example/',
+        location: 'https://evil.example/',
+        'clear-site-data': '"storage"',
+        link: '</x.js>; rel=preload; as=script',
+        'content-security-policy': "script-src 'unsafe-inline' *",
+        'access-control-allow-origin': '*',
+        'access-control-allow-credentials': 'true',
+        'set-cookie': 'grab=1; Path=/'
+      })
+      response.end('{}')
+      return
+    }
     if (url.pathname === '/events') {
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       response.write('data: one\n\n')
@@ -381,13 +409,12 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-const prefix = (): string => `/relay/@${username}/desktop/${deviceId}`
+/** The machine's API under the relay path: every route here begins `api/`, which is all that crosses. */
+const prefix = (): string => `/api/m/${deviceId}/api`
 const asPhone = (headers: Record<string, string> = {}): Record<string, string> => ({
-  cookie: `__Host-cr_session=${phoneSession}`,
+  [RELAY_SESSION_HEADER]: phoneSession,
   ...headers
 })
-
-// ── the name ─────────────────────────────────────────────────────────────
 
 describe('the second namespace', () => {
   it('is a desktop of an account, and never a door', () => {
@@ -502,36 +529,70 @@ describe('GET /v2/me/desktops/:id/relay-status', () => {
 
 // ── who may use the line ─────────────────────────────────────────────────
 
-describe('/relay/@user/desktop/:id — who is admitted to the prefix', () => {
-  it('sends a signed-out reader a page with a way in, not a machine value', async () => {
-    const res = await fetch(`${site.origin}${prefix()}/`, { headers: { accept: 'text/html' } })
-    expect(res.status).toBe(401)
-    expect(res.headers.get('content-type')).toContain('text/html')
-    expect(await res.text()).toContain('Sign in first')
+describe('/api/m/:machine — who is admitted', () => {
+  it('needs a session, and says so in JSON whatever the reader accepts', async () => {
+    for (const accept of ['text/html', 'application/json']) {
+      const res = await fetch(`${site.origin}${prefix()}/`, { headers: { accept } })
+      expect(res.status).toBe(401)
+      expect(res.headers.get('content-type')).toContain('application/json')
+      expect(((await res.json()) as { error: string }).error).toBe('unauthenticated')
+    }
   })
 
-  it('answers a script with JSON rather than a page', async () => {
-    const res = await fetch(`${site.origin}${prefix()}/`, { headers: { accept: 'application/json' } })
-    expect(res.status).toBe(401)
-    expect(((await res.json()) as { error: string }).error).toBe('unauthenticated')
+  it('takes the session from its own header and from nowhere else', async () => {
+    // A cookie admits nobody: another site can make a browser send one.
+    const cookie = await fetch(`${site.origin}${prefix()}/`, { headers: { cookie: `__Host-cr_session=${phoneSession}` } })
+    expect(cookie.status).toBe(401)
+    await cookie.arrayBuffer()
+    // Authorization is the caller's credential at the MACHINE, never read here.
+    const bearer = await fetch(`${site.origin}${prefix()}/`, { headers: { authorization: `Bearer ${phoneSession}` } })
+    expect(bearer.status).toBe(401)
+    await bearer.arrayBuffer()
   })
 
-  it('reads as not-there for another account, so it cannot be used to find desktops', async () => {
-    const res = await fetch(`${site.origin}${prefix()}/`, {
-      headers: { accept: 'text/html', cookie: `__Host-cr_session=${strangerSession}` }
-    })
+  it('reads as not-there for a machine of another account, so it cannot be used to find machines', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/`, { headers: { [RELAY_SESSION_HEADER]: strangerSession } })
     expect(res.status).toBe(404)
-    expect(await res.text()).toContain('Not found')
+    expect(((await res.json()) as { error: string }).error).toBe('not_found')
+    const unknown = await fetch(`${site.origin}/api/m/${randomUUID()}/api/`, { headers: asPhone() })
+    expect(unknown.status).toBe(404)
+    await unknown.arrayBuffer()
   })
 
-  it('says so plainly when the Mac is holding no line', async () => {
+  it('names the account from the session: nothing in the address chooses whose machine', async () => {
+    // The stranger's own session with the owner's machine id is the stranger's account, where no such machine is.
+    const res = await fetch(`${site.origin}/api/m/${deviceId}/api/fleet`, { headers: { [RELAY_SESSION_HEADER]: strangerSession } })
+    expect(res.status).toBe(404)
+    await res.arrayBuffer()
+  })
+
+  it('refuses a machine id that is not one', async () => {
+    for (const id of ['not-a-uuid', '..', `${deviceId}x`]) {
+      const res = await fetch(`${site.origin}/api/m/${encodeURIComponent(id)}/api/fleet`, { headers: asPhone() })
+      expect(res.status, id).toBe(404)
+      await res.arrayBuffer()
+    }
+  })
+
+  it('carries a machine’s API and nothing above it', async () => {
+    for (const route of ['', 'index.html', 'assets/index-abc.js', 'apiary', 'api/../secrets']) {
+      const res = await fetch(`${site.origin}/api/m/${deviceId}/${route}`, { headers: asPhone() })
+      expect(res.status, route).toBe(404)
+      await res.arrayBuffer()
+    }
+  })
+
+  it('says so plainly when the machine is holding no line', async () => {
     const asleep = await claim('sleeper', 'desktop')
-    const session = (await attach('sleeper', 'phone', asleep.token)).token
-    const res = await fetch(`${site.origin}/relay/@sleeper/desktop/${asleep.id}/`, {
-      headers: { accept: 'text/html', cookie: `__Host-cr_session=${session}` }
+    await fetch(`${site.origin}/v2/me/desktops/${asleep.id}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${asleep.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Asleep', workspaces: [] })
     })
+    const session = (await attach('sleeper', 'phone', asleep.token)).token
+    const res = await fetch(`${site.origin}/api/m/${asleep.id}/api/fleet`, { headers: { [RELAY_SESSION_HEADER]: session } })
     expect(res.status).toBe(503)
-    expect(await res.text()).toContain('Not reachable just now')
+    expect(((await res.json()) as { error: string }).error).toBe('no_link')
   })
 })
 
@@ -550,24 +611,18 @@ const echo = async (path: string, init: RequestInit = {}): Promise<{ res: Respon
   return { res, body: (await res.json()) as Echo }
 }
 
-describe('a phone of the account, reaching its own canvas', () => {
-  it('carries the admission through untouched — token, key and device on the query', async () => {
-    const { res, body } = await echo('/?open=TOKEN123&key=A2B3C4&device=abc', { headers: asPhone() })
+describe('a device of the account, reaching its own machine', () => {
+  it('forwards the route and its query as they stand, under the machine’s own root', async () => {
+    const { res, body } = await echo('/workspaces?limit=2', { headers: asPhone() })
     expect(res.status).toBe(200)
     expect(body.method).toBe('GET')
-    expect(body.path).toBe('/?open=TOKEN123&key=A2B3C4&device=abc')
-    // Streamed, so the desktop's own length is not repeated as a promise this
-    // side cannot keep.
+    expect(body.path).toBe('/api/workspaces?limit=2')
+    // Streamed, so the machine's own length is not repeated as a promise this side cannot keep.
     expect(res.headers.get('content-length')).toBeNull()
   })
 
-  it('forwards a deeper path and its query as they stand', async () => {
-    const { body } = await echo('/api/workspaces?limit=2', { headers: asPhone() })
-    expect(body.path).toBe('/api/workspaces?limit=2')
-  })
-
-  it('takes every method the canvas answers to', async () => {
-    const { body } = await echo('/api/thing', {
+  it('takes every method the machine answers to', async () => {
+    const { body } = await echo('/thing', {
       method: 'POST',
       headers: asPhone({ 'content-type': 'application/json' }),
       body: JSON.stringify({ hello: 'there' })
@@ -583,57 +638,30 @@ describe('a phone of the account, reaching its own canvas', () => {
         'x-cookrew-app': 'companion',
         'x-forwarded-for': '203.0.113.9',
         'accept-language': 'en-GB',
-        // The app's own, for its own Mac: it crosses, because that is the
-        // credential the companion authenticates with. It must never be read
-        // as cookrew.dev's own — the cookie is that, and the cookie is what
-        // admits anyone here.
-        authorization: 'Bearer a-companion-token-of-the-apps-own'
+        // The caller's own, for that machine: it crosses unread.
+        authorization: 'Bearer a-token-of-the-callers-own-at-that-machine'
       })
     })
     expect(body.headers['x-cookrew-app']).toBe('companion')
     expect(body.headers.accept).toBe('application/json')
     expect(body.headers['x-forwarded-for']).toBeUndefined()
-    expect(body.headers.authorization).toBe('Bearer a-companion-token-of-the-apps-own')
+    expect(body.headers.authorization).toBe('Bearer a-token-of-the-callers-own-at-that-machine')
     expect(body.headers['accept-language']).toBeUndefined()
   })
 
-  it('NEVER hands the desktop cookrew.dev’s own session', async () => {
-    const { body } = await echo('/', {
-      headers: { cookie: `__Host-cr_session=${phoneSession}; canvas=yes; cr_account=v1token` }
-    })
-    expect(body.headers.cookie).toBe('canvas=yes')
-    expect(body.headers.cookie).not.toContain(phoneSession)
+  it('NEVER hands the machine the account session, nor any cookie', async () => {
+    const { body } = await echo('/', { headers: asPhone({ cookie: 'canvas=yes; cr_account=v1token' }) })
+    expect(body.headers[RELAY_SESSION_HEADER]).toBeUndefined()
+    expect(body.headers.cookie).toBeUndefined()
+    expect(JSON.stringify(body.headers)).not.toContain(phoneSession)
   })
 
-  it('pins every cookie the desktop sets to the relay path, and strips its domain', async () => {
-    const { res } = await echo('/', { headers: asPhone() })
-    const cookies = res.headers.getSetCookie()
-    expect(cookies).toHaveLength(2)
-    expect(cookies[0]).toBe(`canvas=yes; HttpOnly; Path=${prefix()}/`)
-    expect(cookies[1]).toBe(`wide=1; Path=${prefix()}/`)
-    for (const cookie of cookies) expect(cookie).not.toContain('Domain')
+  it('tells the machine it is not being served under any prefix', async () => {
+    const { body } = await echo('/', { headers: asPhone({ 'x-cookrew-base': '/relay/@somebody/desktop/elsewhere' }) })
+    expect(body.headers['x-cookrew-base']).toBeUndefined()
   })
 
-  it('tells the desktop which prefix it is being served under', async () => {
-    const { body } = await echo('/', { headers: asPhone() })
-    expect(body.headers[CANVAS_BASE_HEADER]).toBe(prefix())
-  })
-
-  /**
-   * REACH v2.1 — WHO IS ASKING, FROM THE SESSION.
-   *
-   * The Mac lists the devices on its canvas. With the key ceremony retired
-   * nothing else in a relayed request names the reader, so the registry says
-   * it — and it says it from the cookie it just verified, never from a header
-   * the caller wrote.
-   */
-  it('tells the desktop which device of the account is asking', async () => {
-    const { body } = await echo('/', { headers: asPhone() })
-    expect(body.headers[CANVAS_DEVICE_HEADER]).toBe(phoneDeviceId)
-    expect(body.headers[CANVAS_DEVICE_NAME_HEADER]).toBe(phoneDeviceName)
-  })
-
-  it('does not let a caller name itself — its copies are dropped and ours written', async () => {
+  it('tells the machine which device of the account is asking, from the session', async () => {
     const { body } = await echo('/', {
       headers: asPhone({
         [CANVAS_DEVICE_HEADER]: '00000000-0000-4000-8000-000000000000',
@@ -644,100 +672,9 @@ describe('a phone of the account, reaching its own canvas', () => {
     expect(body.headers[CANVAS_DEVICE_NAME_HEADER]).toBe(phoneDeviceName)
   })
 
-  it('does not let a caller write that prefix for the desktop', async () => {
-    const { body } = await echo('/', {
-      headers: asPhone({ [CANVAS_BASE_HEADER]: '/relay/@somebody/desktop/elsewhere' })
-    })
-    expect(body.headers[CANVAS_BASE_HEADER]).toBe(prefix())
-  })
-
-  it('moves the admission’s own redirect under the prefix, where the Mac is', async () => {
-    // THE LIVE BUG (2026-09-06): the desktop answers `303 /?token=…` because on
-    // the LAN it is the root. Forwarded as it stands, OPEN landed on
-    // cookrew.dev's home page with a credential in the address bar.
-    const res = await fetch(
-      `${site.origin}${prefix()}/redirect?code=303&to=${encodeURIComponent('/?token=abc')}`,
-      { headers: asPhone(), redirect: 'manual' }
-    )
-    expect(res.status).toBe(303)
-    expect(res.headers.get('location')).toBe(`${prefix()}/#pair=abc`)
-  })
-
-  it('moves a redirect the Mac wrote to its OWN origin under the prefix too', async () => {
-    const res = await fetch(
-      `${site.origin}${prefix()}/redirect?code=302&to=${encodeURIComponent('https://127.0.0.1:8639/board?x=1')}`,
-      { headers: asPhone(), redirect: 'manual' }
-    )
-    expect(res.status).toBe(302)
-    expect(res.headers.get('location')).toBe(`${prefix()}/board?x=1`)
-  })
-
-  it('leaves a redirect back to cookrew.dev alone — that is where ?refused= goes', async () => {
-    const back = `${site.origin}/me?refused=key`
-    const res = await fetch(
-      `${site.origin}${prefix()}/redirect?code=303&to=${encodeURIComponent(back)}`,
-      { headers: asPhone(), redirect: 'manual' }
-    )
-    expect(res.status).toBe(303)
-    expect(res.headers.get('location')).toBe(back)
-  })
-
-  it('moves a Refresh header by the same rule, since it is a redirect with a delay', async () => {
-    const res = await fetch(`${site.origin}${prefix()}/refresh`, { headers: asPhone() })
-    expect(res.headers.get('refresh')).toBe(`5; url=${prefix()}/board`)
-    await res.text()
-  })
-
-  it('carries the reader’s accept-encoding, so the desktop may compress its answer', async () => {
-    const { body } = await echo('/api/workspace', { headers: asPhone({ 'accept-encoding': 'br, gzip' }) })
+  it('carries the reader’s accept-encoding, so the machine may compress its answer', async () => {
+    const { body } = await echo('/workspace', { headers: asPhone({ 'accept-encoding': 'br, gzip' }) })
     expect(body.headers['accept-encoding']).toBe('br, gzip')
-  })
-
-  it('keeps an immutable hash-named asset cacheable — privately — and nothing else', async () => {
-    const asset = await fetch(`${site.origin}${prefix()}/assets/index-abc123.js`, { headers: asPhone() })
-    expect(asset.status).toBe(200)
-    // `public` is rewritten: the phone's own cache is the win, and a shared
-    // cache on a session-gated prefix would be an existence oracle.
-    expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
-    expect(asset.headers.get('vary')).toBe('accept-encoding')
-    await asset.arrayBuffer()
-    const api = await fetch(`${site.origin}${prefix()}/immutable-api`, { headers: asPhone() })
-    expect(api.headers.get('cache-control')).toBe('private, no-store')
-    await api.arrayBuffer()
-    const { res } = await echo('/api/workspaces', { headers: asPhone() })
-    expect(res.headers.get('cache-control')).toBe('private, no-store')
-  })
-
-  it('decides by the path, never by a query that happens to say assets/', async () => {
-    const api = await fetch(`${site.origin}${prefix()}/immutable-api?next=/assets/x`, { headers: asPhone() })
-    expect(api.headers.get('cache-control')).toBe('private, no-store')
-    await api.arrayBuffer()
-  })
-
-  it('keeps the desktop’s vary when it already names accept-encoding — the origin half is the CORS gate’s', async () => {
-    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-vary.js`, { headers: asPhone() })
-    expect(asset.headers.get('cache-control')).toBe('private, max-age=31536000, immutable')
-    expect(asset.headers.get('vary')).toBe('accept-encoding, origin')
-    await asset.arrayBuffer()
-  })
-
-  it('adds accept-encoding to a vary that lacks it, dropping nothing', async () => {
-    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-origin-only.js`, { headers: asPhone() })
-    expect(asset.headers.get('vary')).toBe('origin, accept-encoding')
-    await asset.arrayBuffer()
-  })
-
-  it('keeps nothing for an assets directory that is not at the root', async () => {
-    const asset = await fetch(`${site.origin}${prefix()}/nested/assets/index-abc123.js`, { headers: asPhone() })
-    expect(asset.headers.get('cache-control')).toBe('private, no-store')
-    await asset.arrayBuffer()
-  })
-
-  it('never keeps an asset answer that sets a cookie', async () => {
-    const asset = await fetch(`${site.origin}${prefix()}/assets/assets-with-cookie.js`, { headers: asPhone() })
-    expect(asset.headers.get('cache-control')).toBe('private, no-store')
-    expect(asset.headers.get('set-cookie')).toContain(`Path=${prefix()}/`)
-    await asset.arrayBuffer()
   })
 
   it('carries bytes that are not text, unmangled', async () => {
@@ -788,6 +725,144 @@ describe('a phone of the account, reaching its own canvas', () => {
   })
 })
 
+// ── a machine's bytes never run, and never set anything, on this origin ────
+
+describe('what a machine’s answer may do here', () => {
+  it('answers under a sandbox, typed as it says and never sniffed', async () => {
+    const { res } = await echo('/', { headers: asPhone() })
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox; frame-ancestors 'none'")
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+    expect(res.headers.get('x-frame-options')).toBe('DENY')
+  })
+
+  it('drops every cookie a machine sets', async () => {
+    const { res } = await echo('/', { headers: asPhone() })
+    expect(res.headers.getSetCookie()).toEqual([])
+  })
+
+  it('never passes a page: an HTML answer is refused whole', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/page`, { headers: asPhone() })
+    expect(res.status).toBe(502)
+    const body = await res.text()
+    expect(JSON.parse(body).error).toBe('not_an_api')
+    expect(body).not.toContain('<script>')
+    expect(res.headers.get('content-type')).toContain('application/json')
+  })
+
+  it('refuses the page types a browser would also run', async () => {
+    for (const type of ['application/xhtml+xml', 'image/svg+xml', 'text/xml', 'TEXT/HTML; charset=utf-8']) {
+      const res = await fetch(`${site.origin}${prefix()}/typed?as=${encodeURIComponent(type)}`, { headers: asPhone() })
+      expect(res.status, type).toBe(502)
+      await res.arrayBuffer()
+    }
+  })
+
+  it('never follows a machine somewhere else: a redirect is refused, with no Location', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/redirect?code=303&to=${encodeURIComponent('https://evil.example/')}`, {
+      headers: asPhone(),
+      redirect: 'manual'
+    })
+    expect(res.status).toBe(502)
+    expect(res.headers.get('location')).toBeNull()
+    expect(((await res.json()) as { error: string }).error).toBe('not_an_api')
+  })
+
+  it('strips the headers that would give a machine a hold on this origin', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/grabby`, { headers: asPhone() })
+    expect(res.status).toBe(200)
+    for (const name of ['service-worker-allowed', 'refresh', 'location', 'set-cookie', 'clear-site-data', 'link', 'access-control-allow-origin', 'access-control-allow-credentials']) {
+      expect(res.headers.get(name), name).toBeNull()
+    }
+    // Its own policy is replaced by ours, never merged with it.
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox; frame-ancestors 'none'")
+    await res.arrayBuffer()
+  })
+
+  it('keeps what a reader needs: the type, the encoding and a validator', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/grabby`, { headers: asPhone() })
+    expect(res.headers.get('content-type')).toBe('application/json')
+    expect(res.headers.get('etag')).toBe('"v7"')
+    await res.arrayBuffer()
+  })
+})
+
+// ── which pages may ask ──────────────────────────────────────────────────
+
+describe('which origin may call the relay path', () => {
+  it('takes a caller that is not a browser: no Origin at all', async () => {
+    const { res } = await echo('/', { headers: asPhone() })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBeNull()
+  })
+
+  it('refuses a page of any other origin, session or not, before the machine is asked', async () => {
+    for (const origin of ['https://evil.example', 'https://cookrew.dev', 'https://console.cookrew.dev.evil.example', 'null']) {
+      const res = await fetch(`${site.origin}${prefix()}/thing`, { method: 'POST', headers: asPhone({ origin }), body: '{}' })
+      expect(res.status, origin).toBe(403)
+      expect(((await res.json()) as { error: string }).error).toBe('bad_origin')
+      expect(res.headers.get('access-control-allow-origin')).toBeNull()
+    }
+  })
+
+  it('answers no preflight for an origin it does not serve', async () => {
+    const res = await fetch(`${site.origin}${prefix()}/thing`, {
+      method: 'OPTIONS',
+      headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST', 'access-control-request-headers': 'x-cookrew-session' }
+    })
+    expect(res.status).toBe(403)
+    expect(res.headers.get('access-control-allow-origin')).toBeNull()
+    await res.arrayBuffer()
+  })
+})
+
+describe('the console’s origin, on a registry that serves one', () => {
+  const CONSOLE = 'https://console.cookrew.dev'
+  let split: { origin: string; relay: CanvasRelay; desktop: Linked; close: () => Promise<void> }
+
+  beforeAll(async () => {
+    split = await standBare({}, { consoleOrigin: CONSOLE })
+  })
+  afterAll(async () => {
+    await split.close()
+  })
+
+  it('answers the console’s preflight itself, without a session and without the machine', async () => {
+    const before = split.relay.stats().opened
+    const res = await fetch(`${split.origin}${prefix()}/thing`, {
+      method: 'OPTIONS',
+      headers: { origin: CONSOLE, 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization, x-cookrew-session, content-type' }
+    })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    expect(res.headers.get('access-control-allow-headers')).toBe('authorization, content-type, if-none-match, last-event-id, x-cookrew-session')
+    expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, DELETE')
+    expect(res.headers.get('access-control-allow-credentials')).toBeNull()
+    expect(res.headers.get('vary')).toContain('origin')
+    expect(split.relay.stats().opened).toBe(before)
+  })
+
+  it('lets the console read the answer, and nobody else', async () => {
+    const res = await fetch(`${split.origin}${prefix()}/`, { headers: asPhone({ origin: CONSOLE }) })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    expect(res.headers.get('access-control-allow-credentials')).toBeNull()
+    expect(res.headers.get('vary')).toContain('origin')
+    await res.arrayBuffer()
+    const other = await fetch(`${split.origin}${prefix()}/`, { headers: asPhone({ origin: 'https://cookrew.dev' }) })
+    expect(other.status).toBe(403)
+    expect(other.headers.get('access-control-allow-origin')).toBeNull()
+    await other.arrayBuffer()
+  })
+
+  it('lets the console read a refusal too, so a signed-out page can say so', async () => {
+    const res = await fetch(`${split.origin}${prefix()}/`, { headers: { origin: CONSOLE } })
+    expect(res.status).toBe(401)
+    expect(res.headers.get('access-control-allow-origin')).toBe(CONSOLE)
+    await res.arrayBuffer()
+  })
+})
+
 // ── the bounds, because anyone can claim a username ──────────────────────
 
 /**
@@ -795,10 +870,11 @@ describe('a phone of the account, reaching its own canvas', () => {
  * test. Everything else is the shipping code: the same hub, the same gate.
  */
 async function standBare(
-  bounds: Partial<Parameters<typeof createCanvasRelay>[0]> = {}
+  bounds: Partial<Parameters<typeof createCanvasRelay>[0]> = {},
+  identity: Parameters<typeof createV2>[1] = {}
 ): Promise<{ origin: string; relay: CanvasRelay; desktop: Linked; close: () => Promise<void> }> {
   const relay = createCanvasRelay({
-    v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } }),
+    v2: createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 }, ...identity }),
     ...bounds
   })
   const up = await listen(
@@ -898,7 +974,7 @@ describe('what one account may make this process hold', () => {
 
 // ── requests another site caused ─────────────────────────────────────────
 
-describe('the cross-site gate on both prefixes', () => {
+describe('the cross-site gate on the machine’s own line', () => {
   it('reads the browser’s own account of where a request came from', () => {
     const asked = (headers: Record<string, string>): boolean =>
       crossSite({ headers } as unknown as IncomingMessage)
@@ -928,36 +1004,19 @@ describe('the cross-site gate on both prefixes', () => {
     expect(res.status).toBe(403)
     expect(((await res.json()) as { error: string }).error).toBe('not_this_device')
   })
+})
 
-  it('refuses a cross-site navigation into the canvas, with a sentence', async () => {
-    const res = await fetch(`${site.origin}${prefix()}/`, {
-      headers: asPhone({ accept: 'text/html', 'sec-fetch-site': 'cross-site' })
-    })
-    expect(res.status).toBe(403)
-    expect(res.headers.get('content-type')).toContain('text/html')
-    expect(await res.text()).toContain('Not from here')
-  })
-
-  it('refuses a cross-site write, and answers a script in JSON', async () => {
-    const res = await fetch(`${site.origin}${prefix()}/api/thing`, {
-      method: 'POST',
-      headers: asPhone({ accept: 'application/json', 'sec-fetch-site': 'cross-site' }),
-      body: '{}'
-    })
-    expect(res.status).toBe(403)
-    expect(((await res.json()) as { error: string }).error).toBe('bad_origin')
-  })
-
-  it('lets the picker’s own navigation through — same-origin, and a typed address too', async () => {
-    for (const site_ of ['same-origin', 'none']) {
-      const { res, body } = await echo('/', { headers: asPhone({ 'sec-fetch-site': site_ }) })
-      expect(res.status, site_).toBe(200)
-      expect(body.method).toBe('GET')
+describe('the old address', () => {
+  it('is gone: nothing answers under /relay, page or call', async () => {
+    for (const accept of ['text/html', 'application/json']) {
+      const res = await fetch(`${site.origin}/relay/@${username}/desktop/${deviceId}/`, {
+        headers: { accept, cookie: `__Host-cr_session=${phoneSession}`, [RELAY_SESSION_HEADER]: phoneSession }
+      })
+      expect(res.status, accept).toBe(404)
+      await res.arrayBuffer()
     }
   })
 })
-
-// ── the numbers, and nothing else, in the log ─────────────────────────────
 
 describe('what the relay keeps', () => {
   let bare: Up
@@ -1030,16 +1089,8 @@ describe('what the relay keeps', () => {
 
 // ── the small rules, alone ───────────────────────────────────────────────
 
-describe('the header and cookie rules, by themselves', () => {
-  it('keeps the desktop’s cookies and drops cookrew.dev’s own', () => {
-    expect(forwardableCookies('__Host-cr_session=abc; canvas=1; cr_account=xyz; other=2')).toBe('canvas=1; other=2')
-    expect(forwardableCookies('__Host-cr_session=abc')).toBe('')
-    // The name it had before is dropped too, so a stale copy still in a jar
-    // never travels to somebody else's door.
-    expect(forwardableCookies('cr_session=abc; canvas=1')).toBe('canvas=1')
-  })
-
-  it('allows content-type, accept, the companion’s own credential and its headers — nothing else', () => {
+describe('the header rules, by themselves', () => {
+  it('allows content-type, accept, the caller’s own credential and its headers — nothing else', () => {
     expect(
       allowedRequestHeaders({
         'content-type': 'application/json',
@@ -1050,12 +1101,16 @@ describe('the header and cookie rules, by themselves', () => {
         'if-none-match': '"v7"',
         'x-forwarded-proto': 'https',
         'x-real-ip': '203.0.113.9',
-        host: 'cookrew.dev',
-        authorization: 'Bearer the-companion-token',
-        // A caller's own copy of the base is DROPPED: it is a statement about
-        // where the request was addressed, and the registry is what knows that.
+        host: 'api.cookrew.dev',
+        origin: 'https://console.cookrew.dev',
+        authorization: 'Bearer the-callers-token-at-that-machine',
+        // The account session is the relay's to read and never the machine's.
+        'x-cookrew-session': 'the-account-session',
+        // A statement about where a page is served, which nothing is any more.
         'x-cookrew-base': '/relay/@somebody/desktop/elsewhere',
-        referer: 'https://cookrew.dev/me'
+        // No cookie crosses, whoever set it.
+        cookie: 'canvas=1; __Host-cr_session=abc',
+        referer: 'https://console.cookrew.dev/d/x'
       })
     ).toEqual({
       'content-type': 'application/json',
@@ -1064,15 +1119,16 @@ describe('the header and cookie rules, by themselves', () => {
       'x-cr-run': 'abc',
       'accept-encoding': 'br, gzip',
       'if-none-match': '"v7"',
-      authorization: 'Bearer the-companion-token'
+      authorization: 'Bearer the-callers-token-at-that-machine'
     })
   })
 
-  it('drops a caller\u2019s copy of who it is, the same way it drops the base', () => {
+  it('drops a caller’s copy of who it is', () => {
     expect(
       allowedRequestHeaders({
         'x-cookrew-device': '00000000-0000-4000-8000-000000000000',
         'x-cookrew-device-name': 'Not this phone',
+        'x-cookrew-relay': '1',
         accept: '*/*'
       })
     ).toEqual({ accept: '*/*' })
@@ -1094,42 +1150,33 @@ describe('the header and cookie rules, by themselves', () => {
   it('makes a device name something a header can carry at all', () => {
     // Node throws ERR_INVALID_CHAR on a header outside Latin-1; a fond name
     // must not become a relay that refuses every request from that phone.
-    expect(headerSafeName('Dr\u00e9j\u2019s iPhone \u{1F4F1}')).toBe('Dr j s iPhone')
+    expect(headerSafeName('Dréj’s iPhone \u{1F4F1}')).toBe('Dr j s iPhone')
     expect(headerSafeName('  two\r\n  blanks  ')).toBe('two blanks')
     expect(headerSafeName('x'.repeat(200))).toHaveLength(64)
     expect(headerSafeName('')).toBe('')
   })
 
-  it('rewrites a Location by where it points, and only then', () => {
-    const at = { prefix: '/relay/@u/desktop/d', path: '/?open=x', host: 'cookrew.dev' }
-    // A redirect the browser would follow is a URL the ingress would log, so the
-    // credential moves to the fragment, which no request ever carries.
-    expect(rewriteLocation('/?token=abc', at)).toBe('/relay/@u/desktop/d/#pair=abc')
-    expect(rewriteLocation('/board?token=abc&x=1', at)).toBe('/relay/@u/desktop/d/board?x=1#pair=abc')
-    expect(rewriteLocation('https://127.0.0.1:8639/board', at)).toBe('/relay/@u/desktop/d/board')
-    expect(rewriteLocation('https://192.168.1.24:8643/x#y', at)).toBe('/relay/@u/desktop/d/x#y')
-    // Ours: left exactly as written, whatever the scheme in front of it.
-    expect(rewriteLocation('https://cookrew.dev/me?refused=key', at)).toBe('https://cookrew.dev/me?refused=key')
-    // A relative reference resolves against the path this exchange was for,
-    // which is what a browser would have done with the desktop's answer.
-    expect(rewriteLocation('board', { ...at, path: '/api/thing' })).toBe('/relay/@u/desktop/d/api/board')
+  it('says which answers are pages a browser would run', () => {
+    for (const type of ['text/html', 'text/html; charset=utf-8', ' TEXT/HTML', 'application/xhtml+xml', 'image/svg+xml', 'text/xml', 'application/xml']) {
+      expect(isPageType(type), type).toBe(true)
+    }
+    for (const type of ['application/json', 'text/event-stream', 'image/png', 'application/octet-stream', 'text/plain', '']) {
+      expect(isPageType(type), type).toBe(false)
+    }
   })
 
-  it('rewrites a Refresh’s url and leaves its delay alone', () => {
-    const at = { prefix: '/relay/@u/desktop/d', path: '/', host: 'cookrew.dev' }
-    expect(rewriteRefresh('5; url=/board', at)).toBe('5; url=/relay/@u/desktop/d/board')
-    expect(rewriteRefresh('0;url="/x"', at)).toBe('0; url=/relay/@u/desktop/d/x')
-    expect(rewriteRefresh('5; url=https://cookrew.dev/me', at)).toBe('5; url=https://cookrew.dev/me')
-    // No target at all is not a redirect; nothing to move.
-    expect(rewriteRefresh('30', at)).toBe('30')
-  })
-
-  it('replaces a cookie’s path rather than adding to it, and refuses a domain', () => {
-    expect(rewriteCookiePath('a=1; Path=/; HttpOnly; SameSite=Lax', '/relay/@u/desktop/d/')).toBe(
-      'a=1; HttpOnly; SameSite=Lax; Path=/relay/@u/desktop/d/'
-    )
-    expect(rewriteCookiePath('a=1; Domain=cookrew.dev', '/relay/@u/desktop/d/')).toBe(
-      'a=1; Path=/relay/@u/desktop/d/'
-    )
+  it('builds the relay path from a machine and a route, or refuses', () => {
+    const id = '11111111-2222-3333-4444-555555555555'
+    expect(machineRelayPath(id, 'api/fleet')).toBe(`/api/m/${id}/api/fleet`)
+    expect(machineRelayPath(id.toUpperCase(), '/api/watch/cards?workspace=w1')).toBe(`/api/m/${id}/api/watch/cards?workspace=w1`)
+    expect(machineRelayPath(id, 'index.html')).toBeNull()
+    expect(machineRelayPath(id, 'api/../x')).toBeNull()
+    expect(machineRelayPath('nope', 'api/fleet')).toBeNull()
+    expect(isRelayedRoute('api')).toBe(true)
+    expect(isRelayedRoute('apiary')).toBe(false)
+    // The sealed session's own routes cross too; nothing else beside the API does.
+    expect(machineRelayPath(id, '/~seal/hello')).toBe(`/api/m/${id}/~seal/hello`)
+    expect(isRelayedRoute('~sealed/x')).toBe(false)
+    expect(isRelayedRoute('assets/index.js')).toBe(false)
   })
 })

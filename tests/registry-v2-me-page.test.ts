@@ -216,13 +216,23 @@ describe('the page stays inert', () => {
   })
 })
 
-describe('the relay path, when the Mac is holding no line (phase 3)', () => {
-  it('answers 503 with a sentence and a way back, as a page', async () => {
+describe('the relay path, when the Mac is holding no line', () => {
+  it('answers 503 with a sentence, as data: the relay carries no page', async () => {
+    const res = await fetch(`${origin}/api/m/${deviceId}/api/fleet`, {
+      headers: { 'x-cookrew-session': session, accept: 'text/html' }
+    })
+    expect(res.status).toBe(503)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    const body = (await res.json()) as { error: string; message: string }
+    expect(body.error).toBe('no_link')
+    expect(body.message).toMatch(/[.!]$/)
+  })
+
+  it('answers nothing at the old per-machine page address', async () => {
     const res = await fetch(`${origin}/relay/@picker/desktop/${deviceId}/`, {
       headers: { cookie: `__Host-cr_session=${session}`, accept: 'text/html' }
     })
-    expect(res.status).toBe(503)
-    expect(res.headers.get('content-type')).toContain('text/html')
-    expect(await res.text()).toContain('Not reachable just now')
+    expect(res.status).toBe(404)
+    await res.arrayBuffer()
   })
 })

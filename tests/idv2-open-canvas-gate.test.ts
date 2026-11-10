@@ -12,7 +12,7 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
-import { CANVAS_BASE_HEADER } from '../registry/src/v2-canvas-relay'
+import { RELAY_SESSION_HEADER } from '../src/shared/machine-relay'
 import { createCanvasLink, type CanvasLink } from '../src/main/canvas-link'
 import { createCanvasBridge, loopbackDialer } from '../src/main/canvas-bridge'
 import { createAdmittedDeviceStore } from '../src/main/admitted-devices'
@@ -22,26 +22,23 @@ import { mintDeviceKey, deviceIdFor } from '../src/main/account-v2'
 import { fakeAccount, tempBase } from './support/idv2'
 
 /**
- * THE PERMANENT GATE: PRESSING OPEN LANDS ON THE CANVAS.
+ * THE PERMANENT GATE: THE RELAY CARRIES THE ASKING, AND ADMITS NOBODY.
  *
  * Every piece here is the shipping one — the registry's router, the app's own
  * canvas link and bridge, the companion's own pairing gate — and the assertion
- * is the only one the owner cares about: the phone that pressed OPEN ends up
- * looking at the companion, and the companion can then read its API.
+ * is the one the owner cares about: a device of the account reaches its
+ * machine's API down the relay path, and the machine still decides who it
+ * lets in, with the same credential it takes on the LAN.
  *
- * IT EXISTS BECAUSE THE PIECES WERE ALL GREEN AND THE PRODUCT WAS NOT. The
- * desktop answered the old admission with `303 Location: /?token=…` — correct
- * on the LAN, where it is the root — and the relay forwarded that untouched,
- * so OPEN over the relay navigated to cookrew.dev's HOME PAGE with a
- * credential in the address bar (live, 2026-09-06). Nothing in either half's
- * own suite could see it: the bug lived exactly in the seam between them.
+ * IT EXISTS BECAUSE THE PIECES WERE ALL GREEN AND THE PRODUCT WAS NOT (live,
+ * 2026-09-06: a redirect the desktop wrote for its own root was forwarded
+ * as it stood, and landed a phone on another page with a credential in the
+ * address bar). The bug lived exactly in the seam between the halves.
  *
- * REACH v2.1 REMOVES THE CEREMONY that redirect belonged to. There is one
- * credential — the pairing token — and a relayed request is authorised by it
- * exactly as a direct one is. So the rule this file enforces is now stated
- * without any redirect at all: the shell is served UNDER the prefix, and the
- * API under that prefix answers the token and refuses its absence. THE RELAY
- * ADDS NO AUTHORITY; it carries the asking.
+ * 0.6.0 REMOVES THE PAGE FROM THIS PATH ALTOGETHER. The app is served by the
+ * console and by nobody else; the relay carries a machine's API. So the rule
+ * is stated without any page at all: the machine's shell is not reachable
+ * down the relay, and its API answers the token and refuses its absence.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -159,15 +156,11 @@ beforeAll(async () => {
           return
         }
         if (url.pathname === '/') {
-          // THE SHELL, with the prefix the registry told us about injected the
-          // way mobile-server injects COOKREW_SLUG today. Through the relay
-          // this header is the ONLY way the desktop can know where it is being
-          // served from — nothing else in the request says so.
-          const told = request.headers[CANVAS_BASE_HEADER]
-          const injected = typeof told === 'string' ? told : ''
+          // THE SHELL, as the machine serves it at its own root. Nothing down the
+          // relay may ever be answered with it.
           response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
           response.end(
-            `<!doctype html><html><head><script>window.COOKREW_BASE=${JSON.stringify(injected)}</script></head><body>${ROOT_MARKER}</body></html>`
+            `<!doctype html><html><head></head><body>${ROOT_MARKER}</body></html>`
           )
           return
         }
@@ -229,57 +222,42 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-const prefix = (): string => `/relay/@${username}/desktop/${deviceId}`
+const prefix = (): string => `/api/m/${deviceId}`
 
-/** The picker's own request: same-origin, with the browser's session cookie. */
+/** A device of the account: its session in the relay's own header. */
 const asPhone = (path: string, init: RequestInit = {}): Promise<Response> =>
   fetch(`${site.origin}${path}`, {
     redirect: 'manual',
     ...init,
     headers: {
-      cookie: `__Host-cr_session=${phoneSession}`,
-      'sec-fetch-site': 'same-origin',
-      accept: 'text/html',
+      [RELAY_SESSION_HEADER]: phoneSession,
+      accept: 'application/json',
       ...(init.headers as Record<string, string>)
     }
   })
 
-describe('pressing OPEN with the relay path', () => {
-  it('serves the companion under the prefix, and gates its API on the token', async () => {
-    // OPEN is now a navigation to the prefix and nothing else: no ceremony, no
-    // redirect chain, no credential in the address bar.
-    const answer = await asPhone(`${prefix()}/`)
-    expect(answer.status).toBe(200)
-    expect(answer.headers.get('content-type')).toContain('text/html')
-    const html = await answer.text()
-    expect(html).toContain(ROOT_MARKER)
-    // And it knows where it is: every API path the client builds hangs off this.
-    expect(html).toContain(`window.COOKREW_BASE="${prefix()}"`)
+describe('reaching a machine down the relay path', () => {
+  it('carries no page, and gates the machine’s API on the machine’s own token', async () => {
+    // The machine's shell is not an API route: it is not there, however it is asked for.
+    for (const accept of ['text/html', 'application/json']) {
+      const shell = await asPhone(`${prefix()}/`, { headers: { accept } })
+      expect(shell.status).toBe(404)
+      expect(await shell.text()).not.toContain(ROOT_MARKER)
+    }
 
-    // The API the shell will call, under the same prefix, with the ONE
-    // credential — the same token that opens this Mac on the LAN.
-    const reach = await asPhone(`${prefix()}/api/reach`, {
-      headers: { accept: 'application/json', authorization: `Bearer ${PAIRING_TOKEN}` }
-    })
+    // The API, with the ONE credential — the same token that opens this Mac on the LAN.
+    const reach = await asPhone(`${prefix()}/api/reach`, { headers: { authorization: `Bearer ${PAIRING_TOKEN}` } })
     expect(reach.status).toBe(200)
     expect((await reach.json()) as { relay: boolean }).toEqual({ lan: [], relay: true })
 
-    // A phone that cannot set headers sends it as ?token=, and that works too.
-    const queried = await asPhone(`${prefix()}/api/reach?token=${PAIRING_TOKEN}`, {
-      headers: { accept: 'application/json' }
-    })
-    expect(queried.status).toBe(200)
-
     // An unauthenticated call is still refused: the relay carries the asking,
     // it never admits anyone at the Mac.
-    const bare = await asPhone(`${prefix()}/api/reach`, { headers: { accept: 'application/json' } })
+    const bare = await asPhone(`${prefix()}/api/reach`)
     expect(bare.status).toBe(401)
 
     // And a wrong token is refused the same way a wrong one is on the LAN —
-    // being signed in at cookrew.dev buys reaching the Mac, never opening it.
-    const wrong = await asPhone(`${prefix()}/api/reach`, {
-      headers: { accept: 'application/json', authorization: 'Bearer not-the-token' }
-    })
+    // being signed in to the account buys reaching the Mac, never opening it.
+    const wrong = await asPhone(`${prefix()}/api/reach`, { headers: { authorization: 'Bearer not-the-token' } })
     expect(wrong.status).toBe(401)
   })
 })

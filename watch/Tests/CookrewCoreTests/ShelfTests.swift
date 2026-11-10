@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CookrewCore
 
-private func relay(_ id: String) -> Base { Base(kind: "relay", url: "https://cookrew.dev/relay/@anvztor/desktop/\(id)") }
+private func relay(_ id: String) -> Base { Base(kind: "relay", url: "https://cookrew.dev/api/m/\(id)") }
 
 @Suite("a watch paired with more than one machine")
 struct ShelfTests {

@@ -137,6 +137,13 @@ export interface V2Identity {
    * back to its own sheet.
    */
   auth: { origin: string; requests: AuthRequests; log: (message: string) => void } | null
+  /**
+   * CONSOLE.COOKREW.DEV, when this deployment answers one: the only origin a
+   * page may call the registry's API from (CORS, compared whole). The console
+   * is a static site hosted elsewhere and this process serves none of it. Null
+   * means no page is answered at all, only callers that are not browsers.
+   */
+  consoleOrigin: string | null
 }
 
 export interface V2Options {
@@ -162,6 +169,8 @@ export interface V2Options {
   oauth?: OAuthConfig
   /** The auth origin (https://auth.cookrew.dev). Absent: the one sign-in page is off. */
   authOrigin?: string
+  /** The console's origin (https://console.cookrew.dev). Absent: no page may call the API. */
+  consoleOrigin?: string
   /**
    * AUTH UX 2026-11-09: 'required' (the default, and the only thing main.ts
    * ever builds) issues no session without a second step. 'legacy' is the
@@ -230,6 +239,7 @@ export function createV2(base: string, options: V2Options = {}): V2Identity {
     secondStep: options.secondStep ?? 'required',
     freshWindowMs: Math.min(options.freshWindowMs ?? FRESH_MS, FRESH_MS),
     now: options.now ?? Date.now,
+    consoleOrigin: options.consoleOrigin ?? null,
     auth:
       options.authOrigin === undefined
         ? null
