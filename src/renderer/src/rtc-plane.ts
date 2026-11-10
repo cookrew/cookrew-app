@@ -22,6 +22,8 @@ import { watchStream } from './stream-watch'
 let current: RtcLink | null = null
 
 export const rtcLink = (): RtcLink | null => (current?.isOpen() ? current : null)
+/** The link the page holds, open or not: what a link asks to learn whether it is still the one held. */
+export const heldRtcLink = (): RtcLink | null => current
 export const setRtcLink = (link: RtcLink | null): void => {
   current = link
 }

@@ -244,3 +244,61 @@ describe('a token being verified for one machine when another is entered', () =>
     vi.doUnmock('../src/renderer/src/auth-gate.css')
   })
 })
+
+describe('an answer whose head arrived for the last machine and whose body is read under the next', () => {
+  /** A response whose body is held back until `finish` is called. */
+  const slow = (status: number, body: unknown): { response: Response; finish: () => void } => {
+    let controller: ReadableStreamDefaultController<Uint8Array> | null = null
+    const stream = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) })
+    return {
+      response: new Response(stream, { status, headers: { 'content-type': 'application/json' } }),
+      finish: () => {
+        controller?.enqueue(new TextEncoder().encode(JSON.stringify(body)))
+        controller?.close()
+      }
+    }
+  }
+
+  it('a refusal read late does not put the next machine behind the re-pair screen', async () => {
+    const { scope, api, gate } = await consoleAt(A)
+    const reading = api.cookrew().getWorkspace()
+    const failed = expect(reading).rejects.toMatchObject({ name: 'AbortError' })
+    await tick()
+    const refusal = slow(401, { error: 'not paired' })
+    to(BASE_A, '/api/workspace')[0].answer(refusal.response)
+    await tick()
+    scope.enterMachine(B)
+    refusal.finish()
+    await failed
+    expect(gate.authStore().blocked()).toBeNull()
+  })
+
+  it('a seat read late is not taken for the next machine', async () => {
+    const { scope, api } = await consoleAt(A)
+    const seat = await import('../src/renderer/src/device-seat')
+    const switching = api.cookrew().switchWorkspace('workspace-on-a')
+    const failed = expect(switching).rejects.toMatchObject({ name: 'AbortError' })
+    await tick()
+    const answer = slow(200, { workspaces: [], activeId: 'workspace-on-a', seat: 'workspace-on-a' })
+    to(BASE_A, '/api/workspaces/switch')[0].answer(answer.response)
+    await tick()
+    scope.enterMachine(B)
+    answer.finish()
+    await failed
+    expect(seat.deviceSeat()).toBeNull()
+  })
+
+  it('a boot check read late says nothing about the next machine', async () => {
+    const { scope, api, gate } = await consoleAt(A)
+    api.cookrew()
+    await tick()
+    const verdict = slow(200, { scope: 'none', required: true })
+    to(BASE_A, '/api/auth/status')[0].answer(verdict.response)
+    await tick()
+    scope.enterMachine(B)
+    verdict.finish()
+    await tick()
+    await tick()
+    expect(gate.authStore().blocked()).toBeNull()
+  })
+})

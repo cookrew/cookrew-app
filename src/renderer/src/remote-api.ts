@@ -70,6 +70,13 @@ interface ParseOptions {
   passive?: boolean
   /** Abort the request (raw-input-queue.ts gives up on a hung keystroke). */
   signal?: AbortSignal
+  /**
+   * Is the machine this was asked of still the one in scope (machine-scope.ts
+   * · heldScope, taken before the request). An answer's body is read after
+   * its head, and another machine can be entered in between: what the body
+   * says is then acted on for nobody.
+   */
+  sameMachine?: () => boolean
 }
 
 /** Turn a server answer into a value, or into the right kind of failure. */
@@ -87,8 +94,11 @@ export class HttpStatusError extends Error {
 }
 
 async function parse<T>(response: Response, options: ParseOptions = {}): Promise<T> {
+  const sameMachine = options.sameMachine ?? heldScope()
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ error: String(response.status) }))
+    // Before the refusal is reported or a seat settled: both would land on the next machine.
+    if (!sameMachine()) throw machineLeft()
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
     if (response.status === 401) {
       // A stale credential is the most likely error this client will ever
@@ -103,6 +113,7 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
     throw new HttpStatusError(message, response.status, detail)
   }
   const text = await response.text()
+  if (!sameMachine()) throw machineLeft()
   return (text ? JSON.parse(text) : undefined) as T
 }
 
@@ -178,7 +189,7 @@ async function reqOnce<T>(path: string, method: string, body: unknown, parseOpti
   // after another machine was entered would send that machine's token to this
   // path's address, so there is none: the read ends where its machine did.
   const sameMachine = heldScope()
-  const attempt = (): Promise<T> => (sameMachine() ? reqAttempt<T>(path, method, body, parseOptions) : Promise.reject(machineLeft()))
+  const attempt = (): Promise<T> => (sameMachine() ? reqAttempt<T>(path, method, body, { ...parseOptions, sameMachine }) : Promise.reject(machineLeft()))
   try {
     return await (method === 'GET' && !parseOptions.signal ? waitOutRelayFull(attempt) : attempt())
   } catch (error) {
@@ -228,12 +239,14 @@ async function upload(name: string, body: Blob): Promise<string> {
   const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
+  const sameMachine = heldScope()
   const result = await parse<{ path: string }>(
     await planeFetch(apiPath(`/api/attachments?name=${encodeURIComponent(name)}`), {
       method: 'POST',
       headers,
       body
-    })
+    }),
+    { sameMachine }
   )
   return result.path
 }
@@ -250,9 +263,10 @@ async function speakAudio(text: string, lang?: 'zh' | 'en', requestId?: string):
   if (token) headers.authorization = `Bearer ${token}`
   const controller = new AbortController()
   if (requestId) speaking.set(requestId, controller)
+  const sameMachine = heldScope()
   try {
     const response = await planeFetch(apiPath('/api/speak'), { method: 'POST', headers, body: JSON.stringify({ text, ...(lang ? { lang } : {}) }), signal: controller.signal })
-    if (!response.ok) await parse(response)
+    if (!response.ok) await parse(response, { sameMachine })
     return await response.blob()
   } finally {
     if (requestId) speaking.delete(requestId)
@@ -272,8 +286,10 @@ async function hearRecording(audio: Blob, signal?: AbortSignal): Promise<{ text:
   const headers: Record<string, string> = { 'content-type': audio.type || 'audio/wav' }
   const token = authStore().token()
   if (token) headers.authorization = `Bearer ${token}`
+  const sameMachine = heldScope()
   const heard = await parse<{ text?: string; alternates?: Record<string, string> }>(
-    await planeFetch(apiPath('/api/listen'), { method: 'POST', headers, body: audio, ...(signal ? { signal } : {}) })
+    await planeFetch(apiPath('/api/listen'), { method: 'POST', headers, body: audio, ...(signal ? { signal } : {}) }),
+    { sameMachine }
   )
   return { text: heard.text ?? '', alternates: heard.alternates ?? {} }
 }
@@ -370,11 +386,14 @@ const rawInput = createRawInputQueue(
  */
 export async function checkAuth(candidate?: string): Promise<AuthScope> {
   const token = candidate ?? authStore().token()
+  const sameMachine = heldScope()
   const response = await planeFetch(apiPath('/api/auth/status'), {
     headers: token ? { authorization: `Bearer ${token}` } : undefined
   })
   if (!response.ok) throw new Error(`Auth check failed (HTTP ${response.status})`)
   const body = (await response.json()) as { scope?: AuthScope; required?: boolean }
+  // What this machine made of the credential is no word on the next one's.
+  if (!sameMachine()) throw machineLeft()
   // A server with no token configured authorizes everything; report that as
   // full access rather than as "none", which would strand the UI behind a
   // re-pair screen it can never satisfy.

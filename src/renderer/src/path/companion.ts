@@ -7,7 +7,7 @@ import { currentBrowser } from '../browser-family'
 import { createPathReporter, postPathReport, reportedAttempts } from './report'
 import { adoptRtcLink, type RtcRow } from './rtc-adopt'
 import { connectRtcLink } from './rtc-link'
-import { rtcLink, setRtcLink } from '../rtc-plane'
+import { heldRtcLink, rtcLink, setRtcLink } from '../rtc-plane'
 import { isLanHostname, isTailnetHostname } from '../../../shared/path-badge'
 import { pageContext } from './page-context'
 import type { PathReport } from '../../../shared/path-report'
@@ -298,7 +298,7 @@ const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[
   const probe = await adoptRtcLink({
     connect,
     live,
-    current: rtcLink,
+    current: heldRtcLink,
     plane: dataPlane,
     adopt: setDataPlane,
     fallBack: fallBackToRelay,
@@ -404,11 +404,23 @@ const startPlaneSwitch = (): (() => void) => {
       hello: (origin, nonce) => askHello(origin, nonce, { origin }),
       verify: verifyHello,
       nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
-      health: { note: health.note, condemn: health.condemn }
+      // A re-check still out when the machine was left says nothing of the next one's plane.
+      health: {
+        note: (ok) => {
+          if (live()) health.note(ok)
+        },
+        condemn: () => {
+          if (live()) health.condemn()
+        }
+      }
     }
   })
   /** One race: the link, then the names (plane-switch.ts). */
   const racePlane = async (): Promise<void> => {
+    // Asked for by something that outlived the switcher (a permission prompt
+    // answered late): there is no race to run, and none to charge the next
+    // machine's two-minute knock for.
+    if (!live()) return
     // THE LINK FIRST. It opens in about a second where it opens at all,
     // and on the owner's phone the names never answer (each race spent
     // 2.5-6 s timing them out before the link was even tried). A hold
@@ -443,7 +455,9 @@ const startPlaneSwitch = (): (() => void) => {
       },
       nonce: () => randomNonce((bytes) => window.crypto.getRandomValues(bytes)),
       held: () => health.held(),
-      probing: setProbing,
+      probing: (on) => {
+        if (live()) setProbing(on)
+      },
       note: (rows) => {
         noted = true
         if (!live()) return

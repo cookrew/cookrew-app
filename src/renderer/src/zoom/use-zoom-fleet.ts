@@ -562,13 +562,18 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
       // be drawn under the last machine's id until the next answer.
       accountKey = ''
       remoteKey = ''
-      if (graceTimer !== null) clearTimeout(graceTimer)
-      graceTimer = null
-      set({ snapshot: null, link: 'connecting', list: null, name: null, listFailed: false, account: null, remote: undefined, graceOver: false })
+      // Loading again, for a grace of its own, which ends whether or not anything is read next
+      // (with no machine in scope nothing is, and "loading" must still end).
+      state = { ...state, graceOver: false }
+      if (running) startGrace()
+      else if (graceTimer !== null) {
+        clearTimeout(graceTimer)
+        graceTimer = null
+      }
+      set({ snapshot: null, link: 'connecting', list: null, name: null, listFailed: false, account: null, remote: undefined })
     },
     resume: () => {
       if (!running) return
-      startGrace()
       void askLocal()
       if (!sight?.hidden()) {
         openFeed()

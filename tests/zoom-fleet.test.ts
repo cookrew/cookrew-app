@@ -311,6 +311,17 @@ describe('the zoom fleet store', () => {
     void feed
   })
 
+  it('stops saying it is loading after the grace even when no machine is read next (the console back at its devices)', async () => {
+    const { api } = fakeApi({ machines: () => new Promise(() => undefined) })
+    const store = createZoomFleetStore(() => api, { graceMs: 2_500 })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(3_000)
+    store.turn()
+    expect(store.get().loading).toBe(true)
+    await vi.advanceTimersByTimeAsync(2_500)
+    expect(store.get().loading).toBe(false)
+  })
+
   it('reads nothing on resume while nobody is looking', async () => {
     const { api, feed } = fakeApi()
     const store = createZoomFleetStore(() => api)
