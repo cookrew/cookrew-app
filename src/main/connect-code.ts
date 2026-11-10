@@ -53,8 +53,10 @@ function loadReplaced(file: string): Replaced[] {
   try {
     const held: unknown = JSON.parse(readFileSync(file, 'utf8'))
     if (!Array.isArray(held)) return []
+    // Only what this file would have written: an id's 16 bytes and a key's 32. A damaged entry is no entry.
     return held
       .filter((entry): entry is Replaced => typeof entry?.id === 'string' && typeof entry?.key === 'string')
+      .filter((entry) => /^[A-Za-z0-9_-]{22}$/.test(entry.id) && Buffer.from(entry.key, 'base64url').length === 32)
       .map(({ id, key }) => ({ id, key }))
       .slice(0, REPLACED_KEPT)
   } catch {
@@ -114,7 +116,7 @@ export function createConnectCodes(file: string): ConnectCodes {
       return found === undefined ? null : new Uint8Array(Buffer.from(found.key, 'base64url'))
     },
     rotate() {
-      replaced = [{ id, key: replacedKeyOf(code) }, ...replaced].slice(0, REPLACED_KEPT)
+      replaced = [{ id, key: replacedKeyOf(code) }, ...replaced.filter((entry) => entry.id !== id)].slice(0, REPLACED_KEPT)
       persistReplaced(wasFile, replaced)
       code = randomBytes(SEAL_CODE_BYTES)
       id = idOf(code)

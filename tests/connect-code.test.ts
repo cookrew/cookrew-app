@@ -85,6 +85,25 @@ describe('createConnectCodes', () => {
     expect(JSON.parse(readFileSync(`${file}.was`, 'utf8'))).toHaveLength(4)
   })
 
+  it('reads nothing out of a damaged list of replaced codes, and lists a code once', async () => {
+    const codes = createConnectCodes(file)
+    const good = { id: 'A'.repeat(22), key: Buffer.alloc(32, 7).toString('base64url') }
+    writeFileSync(`${file}.was`, JSON.stringify([{ id: 'B'.repeat(22), key: '' }, { id: 'short', key: good.key }, { id: 'C'.repeat(22), key: 'AAAA' }, 7, null, good]))
+    const read = createConnectCodes(file)
+    expect(read.replacedKeyFor('B'.repeat(22))).toBeNull()
+    expect(read.replacedKeyFor('C'.repeat(22))).toBeNull()
+    expect(read.replacedKeyFor('short')).toBeNull()
+    expect(read.replacedKeyFor(good.id)).toHaveLength(32)
+    writeFileSync(`${file}.was`, 'not json')
+    expect(createConnectCodes(file).replacedKeyFor(good.id)).toBeNull()
+    // The same code listed twice (a rotation whose new code could not be saved, then another) takes one place.
+    const id = await connectCodeId(bytes(codes.encoded()))
+    writeFileSync(`${file}.was`, JSON.stringify([{ id, key: good.key }]))
+    const again = createConnectCodes(file)
+    again.rotate()
+    expect((JSON.parse(readFileSync(`${file}.was`, 'utf8')) as { id: string }[]).filter((entry) => entry.id === id)).toHaveLength(1)
+  })
+
   it('a served seat cannot read it, nor catch it on its way to disk', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
     expect(denied).toContain('/Users/me/.cookrew/connect-code.was')

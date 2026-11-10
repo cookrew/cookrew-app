@@ -7855,6 +7855,7 @@ app.whenReady().then(() => {
       return rotated
     },
     pairingHandout: currentPairingHandout,
+    signedIn: () => accounts.account() !== null,
     listWorkspaces,
     createWorkspace,
     checkWorkspace: (name, dir) => workspaceCheck(store, name, dir),

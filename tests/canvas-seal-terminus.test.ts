@@ -151,6 +151,10 @@ describe('the handshake', () => {
     expect(answer.status).toBe(403)
     const said = (await answer.json()) as { replaced?: unknown }
     expect(await checkReplaced(old, hello, said.replaced)).toBe(true)
+    // A hello whose key is not a key gets no proof made over it.
+    const bent = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify({ ...hello, e: 'x'.repeat(3000) }) })
+    expect(bent.status).toBe(403)
+    expect(((await bent.json()) as { replaced?: unknown }).replaced).toBeUndefined()
     // Still nothing for a code it never held, with the same deps.
     const stranger = await startHandshake(newConnectCode())
     const other = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(stranger.hello) })

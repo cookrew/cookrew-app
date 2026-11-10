@@ -475,7 +475,9 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     if (code === null) {
       // A code this Mac replaced is told so, with a proof its holder can check: "the code was changed, pair
       // again" is then the Mac's word and not a relay's. Any other code is told no and nothing more.
-      const was = typeof body.id === 'string' && typeof body.e === 'string' ? (deps.replacedKeyFor?.(body.id) ?? null) : null
+      // Over a hello that could have been one: its key is 32 bytes, spelled the one way.
+      const asked = typeof body.id === 'string' && typeof body.e === 'string' && /^[A-Za-z0-9_-]{43}$/.test(body.e)
+      const was = asked ? (deps.replacedKeyFor?.(body.id as string) ?? null) : null
       if (was === null) return reply(response, 403, { error: 'no such code' })
       return reply(response, 403, { error: 'code replaced', replaced: await proveReplaced(was, { id: body.id as string, e: body.e as string }) })
     }

@@ -33,8 +33,29 @@ const tokenAskedLines = (): string[] => [
   '  open nothing. The console and the watch carry the token themselves.'
 ]
 
+/**
+ * A MACHINE OF AN ACCOUNT WITH NO CONSOLE ADDRESS TO HAND OUT (its
+ * COOKREW_CONSOLE is not an address a phone can be sent to, so the handout is
+ * null: pairing-handout.ts). That is not "no account": it still prints no
+ * token.
+ */
+const noConsoleLines = (): string[] => [
+  '  This machine is signed in, but its console address is not one a phone can',
+  '  be sent to (COOKREW_CONSOLE). Nothing is printed here: a machine of an',
+  '  account does not hand out its token.'
+]
+
+/** True on a machine of an account, whether or not it has a console address to print. */
+const ofAnAccount = (signedIn: boolean | undefined, pairing: PairingHandout | null | undefined): boolean => signedIn ?? pairing?.via === 'console'
+
 export interface MobileHelpInput {
   endpoints: MobileEndpoint[]
+  /**
+   * This machine is signed in to an account (the account's own answer, not
+   * read off the handout, which is null when there is no console address to
+   * print). Absent = judged by the handout.
+   */
+  signedIn?: boolean
   /**
    * `cookrew mobile --token`: asked to see the token links. A machine with no
    * account prints them anyway; a machine of an account prints none and says
@@ -104,8 +125,9 @@ const mixed = (endpoints: readonly MobileEndpoint[]): boolean =>
   anyTrusted(endpoints) && endpoints.some((endpoint) => !isTrusted(endpoint))
 
 export function renderMobileHelp(input: MobileHelpInput): string {
-  if (input.pairing?.via === 'console') {
-    return ['Cookrew Mobile — open on your phone:', '', ...accountLines(input.pairing), ...(input.showToken === true ? tokenAskedLines() : [])].join('\n')
+  if (ofAnAccount(input.signedIn, input.pairing)) {
+    const way = input.pairing?.via === 'console' ? accountLines(input.pairing) : noConsoleLines()
+    return ['Cookrew Mobile — open on your phone:', '', ...way, ...(input.showToken === true ? tokenAskedLines() : [])].join('\n')
   }
   const lines: string[] = [
     'Cookrew Mobile — open on your phone:',
@@ -191,8 +213,8 @@ export function renderMobileHelp(input: MobileHelpInput): string {
  * with the token (connect-code.ts): a phone that unlocked this screen holds
  * the old one, is told the code was changed, and scans again.
  */
-export function renderRotated(endpoints: MobileEndpoint[], pairing?: PairingHandout | null): string {
-  if (pairing?.via === 'console') {
+export function renderRotated(endpoints: MobileEndpoint[], pairing?: PairingHandout | null, signedIn?: boolean): string {
+  if (ofAnAccount(signedIn, pairing)) {
     return [
       'Pairing token and connect code rotated.',
       '',

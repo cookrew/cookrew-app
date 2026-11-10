@@ -85,6 +85,19 @@ describe('the --token flag, the way the CLI sends it', () => {
     expect(cmdMobile(request({ token: true }), alone)).toContain('SECRETTOKEN')
   })
 
+  it('a machine of an account whose console address cannot be handed out still prints no token, with or without the flags', () => {
+    // The handout is null there (pairing-handout.ts): that must not read as "no account".
+    const stuck = (): SocketServerDeps => ({ ...deps(), pairingHandout: () => null, signedIn: () => true }) as unknown as SocketServerDeps
+    const asked: Record<string, string | boolean>[] = [{}, { token: true }, { rotate: true }]
+    for (const flags of asked) {
+      const text = cmdMobile(request(flags), stuck())
+      expect(text, JSON.stringify(flags)).not.toContain('SECRETTOKEN')
+      expect(text, JSON.stringify(flags)).not.toContain('?token=')
+    }
+    expect(cmdMobile(request(), stuck())).toMatch(/signed in/)
+    expect(cmdMobile(request(), stuck())).toMatch(/COOKREW_CONSOLE/)
+  })
+
   it('`cookrew mobile --rotate` on a machine of an account prints no token either', () => {
     const rotating = deps()
     const text = cmdMobile(request({ rotate: true }), rotating)
