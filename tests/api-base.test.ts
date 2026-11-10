@@ -14,7 +14,8 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { API_BASE, apiPath, clientSlug } from '../src/renderer/src/api-base'
+import { apiPath, clientBase, clientSlug } from '../src/renderer/src/api-base'
+import { inConsole, relayBaseFor } from './support/console-scope'
 
 const RENDERER = path.join(__dirname, '..', 'src', 'renderer', 'src')
 
@@ -54,63 +55,98 @@ describe('apiPath at the unslugged root', () => {
     // The test process has no injected COOKREW_SLUG, which is exactly the
     // shape of a client served at `/`.
     expect(clientSlug()).toBe('')
-    expect(API_BASE).toBe('')
+    expect(clientBase()).toBe('')
     expect(apiPath('/api/state')).toBe('/api/state')
     expect(apiPath('/api/terminal/t1/input')).toBe('/api/terminal/t1/input')
   })
 })
 
-describe('apiPath under a relay prefix', () => {
+describe('apiPath on the console, with a machine in scope', () => {
   /**
-   * The globals are read ONCE at module load, deliberately — so a test that
-   * wants a different client has to load a different module instance. That is
-   * the same reason the app cannot be re-pointed at another workspace (or
-   * another desktop) by mutating a global after boot.
+   * Which machine is in scope is a value now (machine-scope.ts), not a global
+   * read at load. Each case still loads its own module instance, so one
+   * case's machine is never another's.
    */
-  const clientServedAt = async (
-    injected: Record<string, unknown>
-  ): Promise<typeof import('../src/renderer/src/api-base')> => {
+  const MACHINE = '11111111-2222-3333-4444-555555555555'
+  const OTHER = '99999999-2222-3333-4444-555555555555'
+  const BASE = relayBaseFor(MACHINE)
+
+  const consoleWith = async (machineId: string | null): Promise<typeof import('../src/renderer/src/api-base')> => {
+    vi.resetModules()
+    await inConsole(machineId)
+    return import('../src/renderer/src/api-base')
+  }
+
+  afterEach(() => {
+    delete (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
+    vi.resetModules()
+  })
+
+  it('begins every request with the machine’s address on the relay', async () => {
+    // Without it `/api/state` would be asked of the console's own origin, a
+    // static host: the page would render and then talk to nobody.
+    const api = await consoleWith(MACHINE)
+    expect(api.clientBase()).toBe(BASE)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+    expect(api.apiPath('/api/events')).toBe(`${BASE}/api/events`)
+  })
+
+  it('follows the machine in scope, with no reload in between', async () => {
+    const api = await consoleWith(MACHINE)
+    const { enterMachine } = await import('../src/renderer/src/machine-scope')
+    enterMachine(OTHER)
+    expect(api.apiPath('/api/state')).toBe(`${relayBaseFor(OTHER)}/api/state`)
+    enterMachine(MACHINE)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+  })
+
+  it('refuses to build a path when no machine is in scope, rather than ask the console’s own host', async () => {
+    const api = await consoleWith(null)
+    expect(() => api.apiPath('/api/state')).toThrow(api.NoMachineInScope)
+    const { enterMachine } = await import('../src/renderer/src/machine-scope')
+    enterMachine(MACHINE)
+    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
+    enterMachine(null)
+    expect(() => api.apiPath('/api/state')).toThrow(api.NoMachineInScope)
+  })
+
+  it('asks the relay as another origin: no cookie, and no claim about the local network', async () => {
+    const api = await consoleWith(MACHINE)
+    expect(api.apiRequestInit()).toEqual({ mode: 'cors', credentials: 'omit' })
+  })
+})
+
+describe('apiPath on a machine’s own page', () => {
+  const ownPage = async (injected: Record<string, unknown>): Promise<typeof import('../src/renderer/src/api-base')> => {
     Object.assign(globalThis, injected)
     vi.resetModules()
     return import('../src/renderer/src/api-base')
   }
 
   afterEach(() => {
-    delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
     delete (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
+    delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
     vi.resetModules()
   })
 
-  const BASE = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
-
-  it('prefixes every request with the base the page was served under', async () => {
-    // Pressing OPEN on /me lands the companion here. Without the prefix its
-    // `/api/state` leaves the relay path and hits cookrew.dev's own routes —
-    // the page renders and then talks to the registry instead of the Mac.
-    const api = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: '' })
-    expect(api.clientBase()).toBe(BASE)
-    expect(api.API_BASE).toBe(BASE)
-    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
-    expect(api.apiPath('/api/events')).toBe(`${BASE}/api/events`)
+  it('is the identity at the root, and same-origin', async () => {
+    const api = await ownPage({ COOKREW_SLUG: '' })
+    expect(api.clientBase()).toBe('')
+    expect(api.apiPath('/api/state')).toBe('/api/state')
+    expect(api.apiRequestInit()).toEqual({ credentials: 'same-origin' })
   })
 
-  it('composes with the slug rather than replacing it', async () => {
-    // Two different questions — where the app is served from, and which
-    // workspace it is for. A relayed client under a slug needs both, and
-    // preferring one would silently answer for the focused canvas.
-    const api = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: 'playground' })
-    expect(api.API_BASE).toBe(`${BASE}/playground`)
-    expect(api.apiPath('/api/state')).toBe(`${BASE}/playground/api/state`)
+  it('carries the workspace it was served for', async () => {
+    const api = await ownPage({ COOKREW_SLUG: 'playground' })
+    expect(api.clientSlug()).toBe('playground')
+    expect(api.apiPath('/api/state')).toBe('/playground/api/state')
   })
 
-  it('tolerates a trailing slash on the injected base', async () => {
-    const api = await clientServedAt({ COOKREW_BASE: `${BASE}/` })
-    expect(api.apiPath('/api/state')).toBe(`${BASE}/api/state`)
-  })
-
-  it('is the identity again for a companion served at the root', async () => {
-    const api = await clientServedAt({ COOKREW_BASE: '', COOKREW_SLUG: '' })
-    expect(api.API_BASE).toBe('')
+  it('believes no injected base: a machine serves its page at its own root and nowhere else', async () => {
+    // The relay once served a machine's page under a prefix and said so in this
+    // global. Nothing is served that way now, and a page cannot be re-pointed by it.
+    const api = await ownPage({ COOKREW_BASE: '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555', COOKREW_SLUG: '' })
+    expect(api.clientBase()).toBe('')
     expect(api.apiPath('/api/state')).toBe('/api/state')
   })
 })
@@ -178,7 +214,8 @@ describe('the streams are covered too', () => {
     expect(body).toMatch(/new RtcEventSource\(routed\.link, tokenParam\(routed\.path\)\)/)
     expect(body).toMatch(/new RtcEventSource\(headerStream\(url\), url\)/)
     expect(body).toMatch(/new EventSource\(tokenParam\(url\)\)/)
-    expect(opener).toMatch(/headers: \{ \.\.\.headers, \.\.\.authHeaders\(\) \}/)
+    // On the relay the stream goes by fetch: the machine's token and the account session, both in headers.
+    expect(opener).toMatch(/headers: \{ \.\.\.headers, \.\.\.authHeaders\(\), \.\.\.relayHeadersFor\(\) \}/)
 
     const carrying: string[] = []
     const walk = (dir: string): void => {

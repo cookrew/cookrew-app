@@ -30,6 +30,7 @@
  */
 
 import { addressSpaceInitFor, type AddressSpace, type AddressSpaceHint } from './local-network'
+import { registerScopeState } from './machine-scope'
 
 /** relay = same origin under the page's base; the others are absolute origins. */
 export type DataPlaneKind = 'relay' | 'lan' | 'tailnet'
@@ -111,16 +112,25 @@ export const resetDataPlane = (): void => {
   listeners.clear()
 }
 
+// A direct origin was proved to be ONE machine. Entering another starts on the
+// relay again, the path that is known to work, and says so to whoever follows
+// the plane (their streams restart on it). The listeners are the page's wiring
+// and stay.
+registerScopeState('data plane', () => setDataPlane(RELAY_PLANE))
+
 /**
  * HOW A REQUEST URL IS COMPOSED, as one pure rule with the two planes side by
  * side so the difference cannot be misread:
  *
- *   relay   `${base}${/slug}${path}`  — root-absolute, under the relay prefix.
+ *   relay   `${base}${/slug}${path}`  — under the machine's relay address
+ *                                      (api-base.ts: '' on a machine's own
+ *                                      page, `<api origin>/api/m/<id>` on the
+ *                                      console).
  *   direct  `${origin}${/slug}${path}` — absolute, and WITHOUT the base.
  *
- * The base is dropped on a direct origin because it is the RELAY's prefix: the
- * Mac serves the app at its own root, so carrying `/relay/@user/desktop/<id>/`
- * across would land every request on a 404 with no way back. The slug is kept
+ * The base is dropped on a direct origin because it is the RELAY's address of
+ * the machine: the machine answers at its own root, so carrying
+ * `/api/m/<id>` across would land every request on a 404. The slug is kept
  * because it answers the other question — which workspace this client is for —
  * and that is true on every path.
  */
@@ -179,7 +189,14 @@ const planeAddressSpace = (
 ): { readonly targetAddressSpace?: AddressSpace } =>
   current.hint === 'none' ? {} : addressSpaceInitFor(current.origin)
 
-export const planeRequestInit = (current: DataPlane): PlaneRequestInit =>
-  current.origin === ''
-    ? { credentials: 'same-origin' }
-    : { mode: 'cors', credentials: 'omit', ...planeAddressSpace(current) }
+export const planeRequestInit = (current: DataPlane, base = ''): PlaneRequestInit => {
+  // THE RELAY, ON THE CONSOLE, IS ANOTHER ORIGIN (the registry's API host): a
+  // cross-origin request that carries no cookie, because none admits anyone
+  // there. The account session goes in a header (plane-fetch.ts). It is a
+  // public host, so it is never annotated for the local network.
+  if (current.origin === '') return isAbsolute(base) ? { mode: 'cors', credentials: 'omit' } : { credentials: 'same-origin' }
+  return { mode: 'cors', credentials: 'omit', ...planeAddressSpace(current) }
+}
+
+/** Is this base another origin (the console's relay address) rather than a path on this one. */
+export const isAbsolute = (base: string): boolean => /^https?:\/\//i.test(base)

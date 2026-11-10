@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import { V3_COPY, accountCopy } from '../../shared/account-copy'
 import { machineCopy } from '../../shared/machine-words'
 // Pairing credential + what happens when it stops working.
@@ -335,6 +336,15 @@ export function authStore(): AuthStore {
   if (!singleton) singleton = browserStore()
   return singleton
 }
+
+// THE STORE IS FOR ONE MACHINE: its key names it (`cr_token:<machine id>`,
+// pairing-scope.ts), chosen when the store is made. Entering another machine
+// drops the store, so the next one asked for is made under the new machine's
+// key. Nothing is erased: each machine's token stays under its own key for
+// the next time it is entered.
+registerScopeState('pairing token store', () => {
+  singleton = null
+})
 
 /**
  * The pairing token as a QUERY PARAM, for clients that cannot set a header.

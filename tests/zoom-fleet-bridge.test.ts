@@ -32,6 +32,7 @@ describe('the zoom fleet bridge', () => {
     // A feed that dies without a reset is reopened, and moves with the plane.
     expect(remote).toMatch(/new ReconnectingStream\(\{[\s\S]{0,400}\/api\/fleet\/stream/)
     expect(remote).toMatch(/registerPlaneStream\(\{ restart: \(\) => stream\.restart\(\), revive: \(\) => stream\.revive\(\) \}\)/)
-    expect(remote).toMatch(/zoomFleetMachines: \(\) => relayAccountMachines\(clientBase\(\)\)/)
+    // The account's machines come from the registry, by the scope's relay access (machine-scope.ts).
+    expect(remote).toMatch(/zoomFleetMachines: \(\) => relayAccountMachines\(machineScope\(\)\)/)
   })
 })

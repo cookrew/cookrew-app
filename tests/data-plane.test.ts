@@ -1,11 +1,12 @@
 // WHERE A REQUEST GOES, WHICH IS NO LONGER WHERE THE PAGE CAME FROM.
 //
-// Reach v2.1 promises one URL for the life of a session: the phone stays at
-// cookrew.dev/relay/@user/desktop/<id>/ and the transport underneath moves.
-// That promise lives or dies on one function — apiPath — and on the two shapes
-// it has to produce:
+// One URL for the life of a session: the page stays where it is (the console,
+// or a machine's own page) and the transport underneath moves. That promise
+// lives or dies on one function — apiPath — and on the two shapes it has to
+// produce:
 //
-//   relay   /relay/@user/desktop/<id>/playground/api/state
+//   relay   https://api.cookrew.dev/api/m/<id>/api/state   (the console)
+//           /playground/api/state                           (a machine's own page)
 //   direct  https://192-168-2-40.<id>.d.cookrew.dev:8643/playground/api/state
 //
 // The difference that matters is the BASE, and it is the one a reader would
@@ -23,16 +24,18 @@ import {
   type DataPlane
 } from '../src/renderer/src/data-plane'
 import { socketUrl, streamPath } from '../src/renderer/src/browser-stream'
+import { inConsole, relayBaseFor } from './support/console-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
-const BASE = `/relay/@owner/desktop/${DEVICE}`
+/** The machine's address on the relay, as the console reaches it: another origin. */
+const BASE = relayBaseFor(DEVICE)
 const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
 const LAN_PLANE: DataPlane = { origin: LAN, kind: 'lan' }
 
 describe('the composition rule, on its own', () => {
   it('keeps the base on the relay and drops it on a direct origin', () => {
     expect(planePath(RELAY_PLANE, BASE, '', '/api/state')).toBe(`${BASE}/api/state`)
-    // The Mac serves the app at its root. The relay's prefix is the relay's.
+    // The machine answers at its own root. The relay's address of it is the relay's.
     expect(planePath(LAN_PLANE, BASE, '', '/api/state')).toBe(`${LAN}/api/state`)
   })
 
@@ -51,8 +54,13 @@ describe('the composition rule, on its own', () => {
 })
 
 describe('the credential mode', () => {
-  it('sends the account session on the relay, which gates the prefix', () => {
+  it('is same-origin on a machine’s own page, where the page and the machine are one origin', () => {
     expect(planeRequestInit(RELAY_PLANE)).toEqual({ credentials: 'same-origin' })
+    expect(planeRequestInit(RELAY_PLANE, '')).toEqual({ credentials: 'same-origin' })
+  })
+
+  it('sends no cookie to the relay from the console: it is another origin, and the session rides a header', () => {
+    expect(planeRequestInit(RELAY_PLANE, BASE)).toEqual({ mode: 'cors', credentials: 'omit' })
   })
 
   it('sends NO cookies to the Mac, only the pairing token in a header', () => {
@@ -111,35 +119,34 @@ describe('the store', () => {
   })
 })
 
-describe('apiPath, live, under a relay base', () => {
-  /** The globals api-base reads are read ONCE at module load, deliberately. */
-  const clientServedAt = async (
-    injected: Record<string, unknown>
-  ): Promise<{
+describe('apiPath, live, on the console', () => {
+  /** Each case loads its own module instance, with one machine in scope. */
+  const consoleFor = async (): Promise<{
     api: typeof import('../src/renderer/src/api-base')
     plane: typeof import('../src/renderer/src/data-plane')
+    scope: typeof import('../src/renderer/src/machine-scope')
   }> => {
-    Object.assign(globalThis, injected)
     vi.resetModules()
+    const scope = await inConsole(DEVICE)
     return {
       api: await import('../src/renderer/src/api-base'),
-      plane: await import('../src/renderer/src/data-plane')
+      plane: await import('../src/renderer/src/data-plane'),
+      scope
     }
   }
 
   afterEach(() => {
-    delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
     delete (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
     vi.resetModules()
   })
 
   it('moves every request onto the Mac and back, with no reload in between', async () => {
-    const { api, plane } = await clientServedAt({ COOKREW_BASE: BASE, COOKREW_SLUG: '' })
+    const { api, plane } = await consoleFor()
     expect(api.apiPath('/api/events')).toBe(`${BASE}/api/events`)
 
     plane.setDataPlane({ origin: LAN, kind: 'lan' })
     expect(api.apiPath('/api/events')).toBe(`${LAN}/api/events`)
-    expect(api.apiPath('/api/events')).not.toContain('/relay/')
+    expect(api.apiPath('/api/events')).not.toContain('/api/m/')
     expect(api.apiRequestInit()).toEqual({
       mode: 'cors',
       credentials: 'omit',
@@ -149,19 +156,39 @@ describe('apiPath, live, under a relay base', () => {
     // The fall back is the same seam, in reverse. Nothing was reloaded.
     plane.fallBackToRelay()
     expect(api.apiPath('/api/events')).toBe(`${BASE}/api/events`)
-    expect(api.apiRequestInit()).toEqual({ credentials: 'same-origin' })
+    expect(api.apiRequestInit()).toEqual({ mode: 'cors', credentials: 'omit' })
   })
 
-  it('carries the workspace slug onto the direct origin', async () => {
-    const { api, plane } = await clientServedAt({
-      COOKREW_BASE: BASE,
-      COOKREW_SLUG: 'playground'
-    })
+  it('starts the next machine on the relay: a direct origin was proved to be the last one', async () => {
+    const { api, plane, scope } = await consoleFor()
+    const OTHER = '99999999-2222-3333-4444-555555555555'
+    const moves: string[] = []
+    plane.subscribeDataPlane((next) => moves.push(next.kind))
+    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    scope.enterMachine(OTHER)
+    expect(plane.dataPlane()).toEqual({ origin: '', kind: 'relay' })
+    expect(api.apiPath('/api/events')).toBe(`${relayBaseFor(OTHER)}/api/events`)
+    // Whoever follows the plane heard it move (their streams restart), and is still listening.
+    expect(moves).toEqual(['lan', 'relay'])
+    plane.setDataPlane({ origin: LAN, kind: 'lan' })
+    expect(moves).toEqual(['lan', 'relay', 'lan'])
+  })
+})
+
+describe('apiPath, live, on a machine’s own page under a workspace', () => {
+  afterEach(() => {
+    delete (globalThis as { COOKREW_SLUG?: unknown }).COOKREW_SLUG
+    vi.resetModules()
+  })
+
+  it('carries the workspace slug onto a direct origin', async () => {
+    Object.assign(globalThis, { COOKREW_SLUG: 'playground' })
+    vi.resetModules()
+    const api = await import('../src/renderer/src/api-base')
+    const plane = await import('../src/renderer/src/data-plane')
+    expect(api.apiPath('/api/state')).toBe('/playground/api/state')
     plane.setDataPlane({ origin: LAN, kind: 'tailnet' })
     expect(api.apiPath('/api/state')).toBe(`${LAN}/playground/api/state`)
-    // API_BASE is still the RELAY's prefix — a constant about the page, not
-    // about the transport, and nothing may quietly re-point it.
-    expect(api.API_BASE).toBe(`${BASE}/playground`)
   })
 })
 
@@ -170,10 +197,10 @@ describe('the browser socket follows the plane too', () => {
   // which was harmless while the page origin WAS the transport.
   const ID = 'node-7'
 
-  it('completes a relay-scoped path with the page origin', () => {
-    const scoped = `${BASE}${streamPath(ID, 800, 1400)}`
-    expect(socketUrl('https://cookrew.dev', scoped)).toBe(
-      `wss://cookrew.dev${BASE}/api/browser/${ID}/stream?w=800&h=1400`
+  it('completes a path on the page’s own origin with that origin (a machine’s own page)', () => {
+    const scoped = streamPath(ID, 800, 1400)
+    expect(socketUrl('https://mac.example:8643', scoped)).toBe(
+      `wss://mac.example:8643/api/browser/${ID}/stream?w=800&h=1400`
     )
   })
 

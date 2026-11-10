@@ -203,7 +203,8 @@ describe('tokenParam / authHeaders — carrying the token to a gated read', () =
 // store has to know WHICH Mac it is holding a token for.
 
 const RELAY_DEVICE = '11111111-2222-3333-4444-555555555555'
-const RELAY_BASE = `/relay/@owner/desktop/${RELAY_DEVICE}`
+/** A machine's address on the relay, as the console reaches it. */
+const RELAY_BASE = `https://api.cookrew.dev/api/m/${RELAY_DEVICE}`
 const RELAY_TOKEN = 'Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MEFC'
 
 describe('createAuthStore — the pairing fragment', () => {
@@ -367,7 +368,7 @@ describe('the Not paired copy', () => {
 
 describe('the connect code', () => {
   const CODE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ'
-  const BASE = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
+  const BASE = 'https://api.cookrew.dev/api/m/11111111-2222-3333-4444-555555555555'
   const KEY = 'cr_code:11111111-2222-3333-4444-555555555555'
 
   it('is kept from the link, under this desktop', () => {

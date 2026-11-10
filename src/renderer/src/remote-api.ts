@@ -22,7 +22,8 @@ import type { VersionPinRecord } from '../../shared/version-pin'
 import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
-import { apiPath, clientBase } from './api-base'
+import { apiPath } from './api-base'
+import { machineScope } from './machine-scope'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import type { SetupLineNow, SetupLineRun, SetupStart } from '../../shared/setup-line'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
@@ -816,7 +817,7 @@ export function createRemoteApi(): CookrewApi {
         stream.close()
       }
     },
-    zoomFleetMachines: () => relayAccountMachines(clientBase()),
+    zoomFleetMachines: () => relayAccountMachines(machineScope()),
     // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
     machineGauges: () => fetchGauges(apiPath('/api/fleet/gauges'), authStore().token(), planeFetch),
     // EVERY MACHINE OF THE ACCOUNT, FROM HERE (relay-machine-call.ts): with this browser's own key for each,

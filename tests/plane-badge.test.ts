@@ -12,9 +12,11 @@
 // it would say LAN over a page whose every request goes through the relay.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { inConsole, relayBaseFor } from './support/console-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
-const RELAY_BASE = `/relay/@owner/desktop/${DEVICE}`
+/** The machine's address on the relay, as the console reaches it. */
+const RELAY_BASE = relayBaseFor(DEVICE)
 const LAN = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643`
 const TAILNET = `https://100-68-81-64.${DEVICE}.d.cookrew.dev:8643`
 
@@ -35,8 +37,9 @@ const servedAt = async (
   plane: typeof import('../src/renderer/src/data-plane')
   streams: typeof import('../src/renderer/src/plane-streams')
 }> => {
-  Object.assign(globalThis, { COOKREW_BASE: base })
   vi.resetModules()
+  // '' is a machine's own page; anything else is the console with that machine in scope.
+  if (base !== '') await inConsole(DEVICE)
   return {
     link: await import('../src/renderer/src/path-link'),
     plane: await import('../src/renderer/src/data-plane'),
@@ -45,7 +48,6 @@ const servedAt = async (
 }
 
 afterEach(() => {
-  delete (globalThis as { COOKREW_BASE?: unknown }).COOKREW_BASE
   vi.resetModules()
 })
 

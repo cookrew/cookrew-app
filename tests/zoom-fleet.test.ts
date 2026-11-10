@@ -1,6 +1,7 @@
 // THE ZOOM NAVIGATOR'S DEVICES, renderer side: this desktop from its own
 // fleet feed (or, without one, its workspace list by name), the account's
 // other desktops from the registry, joined per machine. Every name invented.
+import type { MachineScope } from '../src/renderer/src/machine-scope'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FleetAgent, FleetEvent, FleetSnapshot, FleetWorkspace } from '../src/shared/fleet'
 import type { AccountMachine, AccountMachines } from '../src/shared/zoom-fleet'
@@ -312,27 +313,51 @@ describe('the zoom fleet store', () => {
   })
 })
 
-describe('relayAccountMachines (the phone, through cookrew.dev)', () => {
-  const BASE = `/relay/@me/desktop/${ME}`
+describe('relayAccountMachines (the console, from the registry)', () => {
+  const API = 'https://api.cookrew.dev'
+  const scopeWith = (machineId: string | null, session: string | null = 'account-session'): MachineScope => ({
+    machineId,
+    relay: { origin: API, session: () => session },
+    slug: ''
+  })
 
-  it('reads the account’s desktops same-origin, with the cookie, and marks the desktop it is served for', async () => {
+  it('reads the account’s machines from the API host with the session as a bearer, and no cookie', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify([{ id: ME, name: 'Studio', workspaces: [] }, { id: OTHER, name: 'Laptop', workspaces: [] }]), { status: 200 }))
-    const answer = await relayAccountMachines(BASE, fetchImpl)
-    expect(fetchImpl).toHaveBeenCalledWith('/v2/me/desktops', { credentials: 'same-origin', cache: 'no-store' })
+    const answer = await relayAccountMachines(scopeWith(ME), fetchImpl)
+    expect(fetchImpl).toHaveBeenCalledWith(`${API}/v2/me/desktops`, {
+      mode: 'cors',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: { authorization: 'Bearer account-session' }
+    })
     expect(answer.ok && answer.machines.map((m) => [m.name, m.current])).toEqual([['Studio', true], ['Laptop', false]])
   })
 
-  it('does not ask from a page the Mac serves itself: no account cookie there', async () => {
+  it('marks none as current at the Devices level, where no machine is in scope', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([{ id: ME, name: 'Studio' }, { id: OTHER, name: 'Laptop' }]), { status: 200 }))
+    const answer = await relayAccountMachines(scopeWith(null), fetchImpl)
+    // The rows a console session gets carry no workspace names at all: they are read as none.
+    expect(answer.ok && answer.machines.map((m) => [m.name, m.current, m.workspaces])).toEqual([['Studio', false, []], ['Laptop', false, []]])
+  })
+
+  it('does not ask from a page a machine serves itself: no account there', async () => {
     const fetchImpl = vi.fn()
-    expect(await relayAccountMachines('', fetchImpl)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await relayAccountMachines({ machineId: null, relay: null, slug: '' }, fetchImpl)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('does not ask signed out: there is no session to send', async () => {
+    const fetchImpl = vi.fn()
+    expect(await relayAccountMachines(scopeWith(ME, null), fetchImpl)).toEqual({ ok: false, reason: 'signed-out' })
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('names a refusal, a dropped network and a body it cannot read', async () => {
-    expect(await relayAccountMachines(BASE, async () => new Response('{}', { status: 401 }))).toEqual({ ok: false, reason: 'signed-out' })
-    expect(await relayAccountMachines(BASE, async () => new Response('{}', { status: 500 }))).toEqual({ ok: false, reason: 'refused' })
-    expect(await relayAccountMachines(BASE, async () => Promise.reject(new TypeError('Load failed')))).toEqual({ ok: false, reason: 'offline' })
-    expect(await relayAccountMachines(BASE, async () => new Response('not json', { status: 200 }))).toEqual({ ok: false, reason: 'malformed' })
+    const scope = scopeWith(ME)
+    expect(await relayAccountMachines(scope, async () => new Response('{}', { status: 401 }))).toEqual({ ok: false, reason: 'signed-out' })
+    expect(await relayAccountMachines(scope, async () => new Response('{}', { status: 500 }))).toEqual({ ok: false, reason: 'refused' })
+    expect(await relayAccountMachines(scope, async () => Promise.reject(new TypeError('Load failed')))).toEqual({ ok: false, reason: 'offline' })
+    expect(await relayAccountMachines(scope, async () => new Response('not json', { status: 200 }))).toEqual({ ok: false, reason: 'malformed' })
   })
 })
 

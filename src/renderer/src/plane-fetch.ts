@@ -3,6 +3,7 @@ import { dataPlane, subscribeDataPlane, type DataPlane } from './data-plane'
 import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
+import { relayHeadersFor } from './machine-scope'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -61,6 +62,23 @@ const joined = (caller: AbortSignal | null | undefined): AbortController => {
  */
 const transportFailed = (error: unknown): boolean => (error as Error | undefined)?.name !== 'AbortError'
 
+/**
+ * THE ACCOUNT SESSION, FOR THE RELAY AND FOR NOTHING ELSE. On the console the
+ * relay wants it beside the machine's own token, in a header of its own
+ * (machine-scope.ts). It is added HERE, at the one place a request leaves on
+ * the relay plane, and judged by the plane at that moment: a request going
+ * straight to a machine (a LAN name, the direct link) never carries it. A
+ * machine has no business holding the account's session.
+ */
+const relaySession = (headers: HeadersInit | undefined): { headers?: Record<string, string> } => {
+  if (dataPlane().origin !== '') return {}
+  const session = relayHeadersFor()
+  if (Object.keys(session).length === 0) return {}
+  const own: Record<string, string> = {}
+  new Headers(headers).forEach((value, key) => void (own[key] = value))
+  return { headers: { ...own, ...session } }
+}
+
 export async function planeFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const abort = joined(init.signal)
   const unwatch = abandonOnMove(dataPlane(), abort)
@@ -95,7 +113,7 @@ async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
     }
   }
   try {
-    const response = await fetch(url, { ...init, ...apiRequestInit() })
+    const response = await fetch(url, { ...init, ...apiRequestInit(), ...relaySession(init.headers) })
     planeHealth().note(true)
     reviveStreams()
     return response

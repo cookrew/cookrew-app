@@ -1,19 +1,20 @@
 import { remoteMachineCall, type RemoteMachineAnswer } from '../../shared/remote-machine-calls'
 import type { EnterResult } from './account-pair-client'
 import { tokenKeyForBase } from './pairing-scope'
-import { relayBaseOf } from './relay-gauges'
+import { RELAY_REQUEST } from './relay-gauges'
 
 /**
- * EVERY MACHINE OF THE ACCOUNT, FROM ANY OF THEIR PAGES (owner 2026-11-10: "the
- * /me web page must be the desktop Devices view, the same page").
+ * EVERY MACHINE OF THE ACCOUNT, FROM THE CONSOLE, WHICHEVER ONE IS IN SCOPE
+ * (owner 2026-11-10: the Devices level shows them all, live).
  *
- * A page one machine serves through the relay (this page IS cookrew.dev) goes
- * into the others the way the desktop does (main/zoom-fleet.ts · callMachine),
- * with one difference: the key. A desktop holds a machine key; a browser holds
- * its OWN key for each machine (`cr_token:<id>`), and enters a machine's door
- * with the account's twelve-hour pass when it holds none (account-pair-client.ts
- * · enterWithGrant), which is how cookrew.dev/me lets a browser in. This page's
- * own token never goes to another machine (pairing-scope.ts).
+ * The console reaches each machine at its own address on the relay, the way
+ * the desktop does (main/zoom-fleet.ts · callMachine), with one difference:
+ * the key. A desktop holds a machine key; a browser holds its OWN key for each
+ * machine (`cr_token:<id>`), and enters a machine's door with the account's
+ * twelve-hour pass when it holds none (account-pair-client.ts ·
+ * enterWithGrant). One machine's token never goes to another (pairing-scope.ts).
+ * These calls are keyed by the machine's id, so they do not follow the machine
+ * in scope and are not let go of when it changes.
  *
  * The calls are the same allow-list the desktop relays (shared/remote-machine-calls.ts);
  * the answers come back in the same shape, so the zoom view cannot tell which
@@ -28,8 +29,10 @@ export type MachineBlock =
   | { readonly kind: 'offline' }
 
 export interface RelayMachineDeps {
-  /** This page's relay prefix (api-base.ts · clientBase). */
-  readonly base: () => string
+  /** A machine's address on the relay, or null for a page with none (machine-scope.ts · machineBaseOf). */
+  readonly machineBase: (machineId: string) => string | null
+  /** What the relay wants beside a machine's own token: the account session, in its own header. */
+  readonly relayHeaders: () => Record<string, string>
   readonly fetch: (input: string, init: RequestInit) => Promise<Response>
   /** Where this browser keeps its key for each machine. */
   readonly tokens: { read(key: string): string | null; write(key: string, value: string): void; drop(key: string): void }
@@ -135,7 +138,7 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
   }
 
   const send = async (id: string, method: 'GET' | 'POST', route: string, body: string | undefined, binary: boolean): Promise<RemoteMachineAnswer> => {
-    const target = MACHINE_ID.test(id) ? relayBaseOf(deps.base(), id.toLowerCase()) : null
+    const target = MACHINE_ID.test(id) ? deps.machineBase(id.toLowerCase()) : null
     if (target === null) return NOTHING
     const key = tokenKeyForBase(target)
     let token = deps.tokens.read(key) ?? (await enter(target, id.toLowerCase()))
@@ -144,13 +147,13 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
       deps.fetch(`${target}/${route}`, {
         method,
         cache: 'no-store',
-        credentials: 'same-origin',
-        headers: { authorization: `Bearer ${bearer}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+        ...RELAY_REQUEST,
+        headers: { authorization: `Bearer ${bearer}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...deps.relayHeaders() },
         ...(body !== undefined ? { body } : {})
       })
     try {
       let response = await go(token)
-      // cookrew.dev itself says 401 `unauthenticated` when this page's session has ended: no machine forgot anything.
+      // The relay itself says 401 `unauthenticated` when the account session has ended: no machine forgot anything.
       if (response.status === 401 && (await signedOut(response))) return NOTHING
       if (response.status === 401) {
         // That machine no longer takes this browser's key: its door is asked again, once.
@@ -195,8 +198,8 @@ let browserMachines: RelayMachines | null = null
 /** The page's own wiring, made on first use: this origin's storage, its fetch, its account key at each door. */
 export async function relayMachines(): Promise<RelayMachines> {
   if (browserMachines) return browserMachines
-  const [{ clientBase }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
-    import('./api-base'),
+  const [{ machineBaseOf, relayHeadersFor }, { browserPairDeps, enterWithGrant }, { accountDevice }] = await Promise.all([
+    import('./machine-scope'),
     import('./account-pair-client'),
     import('./account-device')
   ])
@@ -208,7 +211,8 @@ export async function relayMachines(): Promise<RelayMachines> {
     }
   }
   browserMachines ??= createRelayMachines({
-    base: clientBase,
+    machineBase: (machineId) => machineBaseOf(machineId),
+    relayHeaders: () => relayHeadersFor(),
     fetch: (input, init) => fetch(input, init),
     tokens: {
       read: (key) => {

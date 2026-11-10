@@ -24,6 +24,8 @@
  * and a rule that needs a browser to test is a rule that gets tested once.
  */
 
+import { MACHINE_RELAY_PREFIX } from '../../shared/machine-relay'
+
 /**
  * The shape the Mac mints: `randomBytes(24).toString('base64url')`, 32 chars.
  *
@@ -69,7 +71,8 @@ export const ROOT_TOKEN_KEY = 'cookrew-pairing-token'
 export const DESKTOP_TOKEN_PREFIX = 'cr_token:'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const DESKTOP_IN_BASE = new RegExp(`/relay/@[^/]+/desktop/(${UUID})(?:/|$)`, 'i')
+/** A machine's relay address ends with the relay prefix and its id (shared/machine-relay.ts). */
+const DESKTOP_IN_BASE = new RegExp(`${MACHINE_RELAY_PREFIX}/(${UUID})/?$`, 'i')
 
 /**
  * The desktop id inside a relay prefix, or null when the base is not one.
