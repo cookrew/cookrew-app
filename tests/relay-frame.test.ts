@@ -48,6 +48,24 @@ describe('frames survive the trip', () => {
   })
 })
 
+describe('the promise of receipts', () => {
+  it('rides ready only as true, and a ready without it is the ready it always was', () => {
+    expect(decodeFrame('{"t":"ready","name":"@u/desktop/d","receipts":true}')).toEqual({ t: 'ready', name: '@u/desktop/d', receipts: true })
+    expect(decodeFrame('{"t":"ready","name":"@u/desktop/d","receipts":"yes"}')).toEqual({ t: 'ready', name: '@u/desktop/d' })
+    expect(decodeFrame('{"t":"ready","name":"@u/desktop/d"}')).toEqual({ t: 'ready', name: '@u/desktop/d' })
+  })
+})
+
+describe('the receipt', () => {
+  it('carries a whole, non-negative byte count and nothing else', () => {
+    expect(decodeFrame(encodeFrame({ t: 'got', n: 0 }))).toEqual({ t: 'got', n: 0 })
+    expect(decodeFrame('{"t":"got","n":123456,"extra":1}')).toEqual({ t: 'got', n: 123456 })
+    for (const bad of ['{"t":"got"}', '{"t":"got","n":-1}', '{"t":"got","n":1.5}', '{"t":"got","n":"9"}', '{"t":"got","n":1e300}']) {
+      expect(decodeFrame(bad)).toBeNull()
+    }
+  })
+})
+
 describe('what it refuses, and why that matters', () => {
   it('never throws on anything a stranger can send', () => {
     for (const raw of ['', 'null', '[]', '{', 'not json', '"string"', '123', '{"t":"nope"}']) {

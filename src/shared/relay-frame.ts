@@ -46,7 +46,12 @@ export type StreamId = string
  */
 export type RelayFrame =
   /** The relay is ready and this door is bound to a name. */
-  | { t: 'ready'; name: string }
+  /**
+   * `receipts`: this relay will send `got` to an uplink that asks. Said here,
+   * before the uplink exists, so a desktop knows from the start whether to pace
+   * by receipts; a desktop from before receipts rebuilds `ready` without it.
+   */
+  | { t: 'ready'; name: string; receipts?: true }
   /** A caller opened a request. Headers are lowercased, as on the wire. */
   | {
       t: 'open'
@@ -91,6 +96,22 @@ export type RelayFrame =
    */
   | { t: 'ping'; at: number }
   | { t: 'pong'; at: number }
+  /**
+   * THE RECEIPT. Relay -> desktop on the downlink: `n` bytes of the uplink's
+   * body have ARRIVED at the relay, counted from the uplink's first byte.
+   *
+   * The desktop cannot learn this any other way. Between it and the relay sit
+   * buffers it cannot see (a TUN stack, a proxy, the kernel's own), which take
+   * every byte the moment it is written, so `writableLength` reads zero while
+   * seconds of answers wait out there in one first-in-first-out queue. With
+   * the receipt the desktop keeps only a round trip's worth out there and
+   * holds the rest itself, where a small answer can still go first and an
+   * answer nobody is reading can still be thrown away (relay-uplink.ts).
+   *
+   * Sent only to an uplink that asked (`?acks=1`): a desktop that never asked
+   * would drop it anyway, since an unknown frame decodes to null.
+   */
+  | { t: 'got'; n: number }
 
 /**
  * The biggest frame either side will accept.
@@ -128,7 +149,9 @@ export function decodeFrame(raw: string): RelayFrame | null {
   const id = typeof frame.id === 'string' && frame.id.length > 0 && frame.id.length <= 64
   switch (frame.t) {
     case 'ready':
-      return typeof frame.name === 'string' ? { t: 'ready', name: frame.name } : null
+      return typeof frame.name === 'string'
+        ? { t: 'ready', name: frame.name, ...(frame.receipts === true ? { receipts: true as const } : {}) }
+        : null
     case 'open':
       if (!id || typeof frame.method !== 'string' || typeof frame.path !== 'string') return null
       if (!validHeaders(frame.headers)) return null
@@ -181,6 +204,8 @@ export function decodeFrame(raw: string): RelayFrame | null {
       return typeof frame.at === 'number' && Number.isFinite(frame.at) ? { t: 'ping', at: frame.at } : null
     case 'pong':
       return typeof frame.at === 'number' && Number.isFinite(frame.at) ? { t: 'pong', at: frame.at } : null
+    case 'got':
+      return Number.isSafeInteger(frame.n) && (frame.n as number) >= 0 ? { t: 'got', n: frame.n as number } : null
     default:
       return null
   }

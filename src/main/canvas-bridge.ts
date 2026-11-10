@@ -108,6 +108,14 @@ export interface CanvasBridgeDeps {
    * (rtc-peer.ts) asks for less.
    */
   readonly chunk?: number
+  /**
+   * May this exchange's answer keep being read? False means its frames are
+   * piling up faster than the line takes them: the local answer is paused,
+   * and `resume` runs when there is room again (relay-uplink.ts), or `giveUp`
+   * when there never was: the exchange is aborted. Absent, an answer is read
+   * as fast as loopback gives it.
+   */
+  readonly room?: (id: string, resume: () => void, giveUp: () => void) => boolean
 }
 
 /**
@@ -276,6 +284,20 @@ export const createCanvasBridge = (deps: CanvasBridgeDeps): CanvasBridge => {
               ...seal
             })
           }
+          if (
+            deps.room &&
+            response.pause &&
+            !deps.room(
+              id,
+              () => response.resume?.(),
+              () => {
+                log(`canvas bridge: ${exchange.method} ${loggedPath(exchange.path)} gave up, the line could not carry it`)
+                ended = true
+                abort(id, 'line-too-slow')
+              }
+            )
+          )
+            response.pause()
         })
         response.onEnd(end)
       },

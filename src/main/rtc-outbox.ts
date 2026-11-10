@@ -39,7 +39,8 @@ export const RTC_OUTBOX_URGENT = 2 * 1024
 export const RTC_OUTBOX_RETRY_MS = 10
 
 export interface RtcOutboxOptions {
-  readonly budget?: number
+  /** A number, or asked afresh before each piece (the relay's window moves). */
+  readonly budget?: number | (() => number)
   readonly urgent?: number
   readonly retryMs?: number
   readonly schedule?: (run: () => void, ms: number) => unknown
@@ -84,7 +85,8 @@ interface Lane {
 const sizeOf = (pieces: readonly string[]): number => pieces.reduce((sum, piece) => sum + piece.length, 0)
 
 export const createRtcOutbox = (options: RtcOutboxOptions = {}): RtcOutbox => {
-  const budget = options.budget ?? RTC_OUTBOX_BUDGET
+  const given = options.budget ?? RTC_OUTBOX_BUDGET
+  const budget = typeof given === 'function' ? given : (): number => given
   const urgent = options.urgent ?? RTC_OUTBOX_URGENT
   const retryMs = options.retryMs ?? RTC_OUTBOX_RETRY_MS
   const schedule = options.schedule ?? ((run, ms): unknown => setTimeout(run, ms))
@@ -132,7 +134,7 @@ export const createRtcOutbox = (options: RtcOutboxOptions = {}): RtcOutbox => {
       for (;;) {
         const entry = pick()
         if (!entry) return
-        if (handed() >= budget) {
+        if (handed() >= budget()) {
           retry ??= schedule(() => {
             retry = null
             pump()
