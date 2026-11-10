@@ -42,14 +42,15 @@ describe('cookrew mobile on a signed-in machine', () => {
     expect(text).not.toContain('SECRETTOKEN')
     expect(text).not.toContain('SECRETCODE')
     expect(text).not.toContain('?token=')
-    expect(text).toContain('cookrew mobile --token')
+    // And it does not offer a flag that would print nothing here.
+    expect(text).not.toContain('--token')
   })
 
-  it('with --token, prints this machine’s own token links, and no link through the registry carries a token', () => {
+  it('with --token, a machine of an account still prints no token: the links would open nothing', () => {
     const asked = renderMobileHelp({ endpoints, pairing: CONSOLE, secure: true, uncovered: [], tailnet: false, showToken: true })
-    expect(asked).toContain('?token=SECRETTOKEN')
+    expect(asked).not.toContain('SECRETTOKEN')
     expect(asked).not.toContain('#pair=')
-    for (const url of asked.match(/https?:\/\/\S+/g) ?? []) if (url.includes('SECRETTOKEN')) expect(url).toContain('192.168.2.13')
+    expect(asked).toMatch(/signed in/)
   })
 
   it('a machine with no account keeps printing its token links: it has no other door', () => {
@@ -78,7 +79,30 @@ describe('the --token flag, the way the CLI sends it', () => {
     expect(cmdMobile(request(), deps())).not.toContain('SECRETTOKEN')
   })
 
-  it('`cookrew mobile --token` prints it', () => {
-    expect(cmdMobile(request({ token: true }), deps())).toContain('SECRETTOKEN')
+  it('`cookrew mobile --token` prints it on a machine with no account, and not on a machine of one', () => {
+    expect(cmdMobile(request({ token: true }), deps())).not.toContain('SECRETTOKEN')
+    const alone = { ...deps(), pairingHandout: () => null } as unknown as SocketServerDeps
+    expect(cmdMobile(request({ token: true }), alone)).toContain('SECRETTOKEN')
+  })
+
+  it('a machine of an account whose console address cannot be handed out still prints no token, with or without the flags', () => {
+    // The handout is null there (pairing-handout.ts): that must not read as "no account".
+    const stuck = (): SocketServerDeps => ({ ...deps(), pairingHandout: () => null, signedIn: () => true }) as unknown as SocketServerDeps
+    const asked: Record<string, string | boolean>[] = [{}, { token: true }, { rotate: true }]
+    for (const flags of asked) {
+      const text = cmdMobile(request(flags), stuck())
+      expect(text, JSON.stringify(flags)).not.toContain('SECRETTOKEN')
+      expect(text, JSON.stringify(flags)).not.toContain('?token=')
+    }
+    expect(cmdMobile(request(), stuck())).toMatch(/signed in/)
+    expect(cmdMobile(request(), stuck())).toMatch(/COOKREW_CONSOLE/)
+  })
+
+  it('`cookrew mobile --rotate` on a machine of an account prints no token either', () => {
+    const rotating = deps()
+    const text = cmdMobile(request({ rotate: true }), rotating)
+    expect(rotating.rotatePairingToken).toHaveBeenCalledTimes(1)
+    expect(text).not.toContain('SECRETTOKEN')
+    expect(text).toMatch(/watch/i)
   })
 })

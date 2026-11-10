@@ -191,6 +191,9 @@ export function ownerSecretPaths(
     path.join(base, 'unlock-key.json.tmp'),
     // What the sealed session's keys rest on (connect-code.ts).
     path.join(base, 'connect-code'),
+    // What replaced codes leave behind (an id and a one-way key each).
+    path.join(base, 'connect-code.was'),
+    path.join(base, 'connect-code.was.tmp'),
     // writeFileAtomic's way there: a seat that polls could catch it, and a crash leaves it.
     path.join(base, 'connect-code.tmp'),
     // THE ROUTE (HP round, audit §11): Magpie's own config — providers.json,

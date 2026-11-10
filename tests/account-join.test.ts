@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRegistry } from '../registry/src/server'
@@ -31,7 +31,7 @@ import { Requests } from '../src/main/requests'
 import { Factors } from '../src/main/factors'
 import { IdleLock } from '../src/main/lock'
 import { parseDeepLink } from '../src/main/deep-link'
-import { normaliseJoinCode } from '../src/shared/join-code'
+import { joinLink, normaliseJoinCode } from '../src/shared/join-code'
 import { joinRefusalSentence, ACCOUNT_COPY, lockNote } from '../src/renderer/src/account/account-store'
 import { onJoinRequest, requestJoin } from '../src/renderer/src/account/open-request'
 import { fakeAccount, tempBase } from './support/idv2'
@@ -377,4 +377,15 @@ describe('joining and first-unlocking against the real registry', () => {
       lockNote(answer as { ok: false; reason: 'unproven'; refusal: 'offline' }).line,
     ).toBe(ACCOUNT_COPY.REGISTRY_DOWN)
   }, 60_000)
+})
+
+describe('the link a join code is shown with', () => {
+  it('is the site’s /join page with the code in the fragment, and never the registry’s address', () => {
+    expect(joinLink('https://cookrew.dev', '7KQ4-M2XB')).toBe('https://cookrew.dev/join#7KQ4-M2XB')
+    expect(joinLink('https://cookrew.dev/', '7KQ4-M2XB')).toBe('https://cookrew.dev/join#7KQ4-M2XB')
+    // The registry is the API host since 0.6.0 and has no page: the account client builds the link from the site.
+    const source = readFileSync(path.join(__dirname, '..', 'src', 'main', 'account-v2.ts'), 'utf8')
+    expect(source).toContain('url: joinLink(this.site, code)')
+    expect(source).not.toMatch(/\$\{this\.origin\}\/join/)
+  })
 })

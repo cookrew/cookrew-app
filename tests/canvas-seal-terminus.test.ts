@@ -22,7 +22,7 @@ import {
   type SealTerminus,
   type SealTerminusDeps
 } from '../src/main/canvas-seal-terminus'
-import { connectCodeId, newConnectCode, startHandshake } from '../src/shared/canvas-seal'
+import { connectCodeId, newConnectCode, startHandshake, checkReplaced, replacedKeyOf } from '../src/shared/canvas-seal'
 import { createRecordReader, encodeRecord, type SealFrame } from '../src/shared/canvas-seal-wire'
 import { SealPhone as Phone, until } from './support/seal-phone'
 
@@ -138,6 +138,27 @@ describe('the handshake', () => {
     const { hello } = await startHandshake(newConnectCode())
     const answer = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(hello) })
     expect(answer.status).toBe(403)
+    expect(((await answer.json()) as { replaced?: unknown }).replaced).toBeUndefined()
+  })
+
+  it('refuses a code it replaced, and proves to its holder that it was replaced', async () => {
+    const old = newConnectCode()
+    const oldId = await connectCodeId(old)
+    const key = await replacedKeyOf(old)
+    const { origin } = await bed({ deps: { replacedKeyFor: (asked) => (asked === oldId ? key : null) } })
+    const { hello } = await startHandshake(old)
+    const answer = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(hello) })
+    expect(answer.status).toBe(403)
+    const said = (await answer.json()) as { replaced?: unknown }
+    expect(await checkReplaced(old, hello, said.replaced)).toBe(true)
+    // A hello whose key is not a key gets no proof made over it.
+    const bent = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify({ ...hello, e: 'x'.repeat(3000) }) })
+    expect(bent.status).toBe(403)
+    expect(((await bent.json()) as { replaced?: unknown }).replaced).toBeUndefined()
+    // Still nothing for a code it never held, with the same deps.
+    const stranger = await startHandshake(newConnectCode())
+    const other = await fetch(`${origin}/~seal/hello`, { method: 'POST', body: JSON.stringify(stranger.hello) })
+    expect(((await other.json()) as { replaced?: unknown }).replaced).toBeUndefined()
   })
 
   it('refuses what is not a hello', async () => {
