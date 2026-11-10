@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CONSOLE_SESSION_TTL_MS } from '../registry/src/v2-tokens'
 import { PASSWORD, Client, bearer, bootAuthSite, desktopDevice, type AuthSite, type Device } from './support/auth-site-harness'
-import { backFrom, browser, openConsolePage, signInOnAuthHost, typePasswordOnAuthHost } from './support/console-client'
+import { backFrom, browser, memory, openConsolePage, signInOnAuthHost, typePasswordOnAuthHost } from './support/console-client'
 import { PENDING_KEY, PENDING_TTL_MS, RENEW_BEFORE_MS, SESSION_KEY, safeReturn } from '../src/renderer/src/console/console-session'
 
 /**
@@ -271,6 +271,76 @@ describe('two tabs of one browser', () => {
     c.session.refused()
     await expect.poll(() => c.session.token()).toBe(again)
     expect(c.calls.filter((call) => call.path === '/v2/sessions/renew')).toHaveLength(0)
+  })
+
+  it('both renewing at once: neither ends the sign-in, and both end up on the token the registry still takes', async () => {
+    const one = browser()
+    await signedIn(one)
+    const a = openConsolePage(site, now, one)
+    const real = openConsolePage(site, now, one)
+    await a.session.boot()
+    // Tab B, with its renewal's answer held back until tab A's has landed and been taken up.
+    const { createConsoleSession } = await import('../src/renderer/src/console/console-session')
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => void (release = resolve))
+    const b = createConsoleSession({
+      registry: async (method, path, body, headers) => {
+        const answer = await real.registry(method, path, body, headers)
+        if (path === '/v2/sessions/renew') await held
+        return answer
+      },
+      authOrigin: site.A,
+      device: real.device,
+      kept: one.kept,
+      pending: one.pending,
+      navigate: () => undefined,
+      now,
+      setTimer: () => null,
+      clearTimer: () => undefined
+    })
+    await b.boot()
+    clock += CONSOLE_SESSION_TTL_MS - MINUTE
+    const renewingB = b.fresh()
+    // B's renewal reaches the registry first; then A's, which closes B's new token's predecessors... and B's.
+    await expect.poll(() => real.calls.filter((call) => call.path === '/v2/sessions/renew').length).toBe(1)
+    const tokenA = await a.session.fresh()
+    b.reread()
+    release()
+    await renewingB
+    // Nobody deleted anything: the sign-in stands.
+    expect(real.calls.some((call) => call.method === 'DELETE')).toBe(false)
+    expect(a.calls.some((call) => call.method === 'DELETE')).toBe(false)
+    // The registry takes A's (the later one); B, holding it or told to look, ends up there too.
+    expect((await a.registry('GET', '/v2/me/desktops', undefined, bearer(tokenA ?? ''))).status).toBe(200)
+    b.refused()
+    b.reread()
+    await expect.poll(async () => (await a.registry('GET', '/v2/me/desktops', undefined, bearer(b.token() ?? ''))).status).toBe(200)
+    expect(b.get()).toEqual({ status: 'signed-in', username })
+  })
+
+  it('signing out from a tab whose token another tab’s renewal replaced still ends the sign-in', async () => {
+    const one = browser()
+    await signedIn(one)
+    const a = openConsolePage(site, now, one)
+    await a.session.boot()
+    // A tab that never hears of the renewal: its own copy of what the browser kept.
+    const apart = { keys: one.keys, kept: memory(), pending: memory() }
+    apart.kept.setItem(SESSION_KEY, one.kept.getItem(SESSION_KEY) ?? '')
+    const b = openConsolePage(site, now, apart)
+    await b.session.boot()
+    clock += CONSOLE_SESSION_TTL_MS - MINUTE
+    const live = await a.session.fresh()
+    expect((await a.registry('GET', '/v2/me/desktops', undefined, bearer(live ?? ''))).status).toBe(200)
+    expect(await b.session.signOut()).toEqual({ ended: true })
+    // The token tab A still holds is ended, and the key renews nothing.
+    expect((await a.registry('GET', '/v2/me/desktops', undefined, bearer(live ?? ''))).status).toBe(401)
+    const reopened = openConsolePage(site, now, browser())
+    void reopened
+    const again = openConsolePage(site, now, { keys: one.keys, kept: memory(), pending: memory() })
+    again.kept.setItem(SESSION_KEY, one.kept.getItem(SESSION_KEY) ?? JSON.stringify({ token: live, exp: clock + MINUTE, username, deviceId: (await a.device()).id }))
+    clock += CONSOLE_SESSION_TTL_MS
+    await again.session.boot()
+    expect(again.session.get()).toEqual({ status: 'signed-out' })
   })
 
   it('signing out in one signs the other out', async () => {

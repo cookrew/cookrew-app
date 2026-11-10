@@ -265,7 +265,7 @@ describe('entering a machine', () => {
     expect(w.log).not.toContain('gate-forget')
     expect(w.doors).toHaveLength(1)
     expect(w.route.get()).toEqual(DEVICES)
-    expect(runtime.get().notice).toBe('Studio Mac did not take this browser’s pass.')
+    expect(runtime.get().notice).toBe('Studio Mac did not take this browser’s pass. Sign out and in to prove it’s you again.')
   })
 
   it('a door answered after the page went elsewhere opens nothing', async () => {
@@ -373,6 +373,30 @@ describe('what the app does while its machine is being left', () => {
     expect(runtime.get().view).toEqual({ kind: 'machine', machine: M })
     // Every time the page says it is in a machine, that machine is the one in scope.
     expect(w.scope.filter((id) => id === M)).toHaveLength(2)
+  })
+
+  it('a change heard while a decision is being carried out is decided after it, not inside it', async () => {
+    const w = world({ route: at(M) })
+    const order: string[] = []
+    let runtime: ReturnType<typeof createConsoleRuntime> | null = null
+    w.deps = { ...w.deps, enterScope: (id) => {
+      w.scope.push(id)
+      order.push(`scope ${id ?? 'none'}`)
+      // While the machine is being put in scope, the address is moved by someone who heard of it.
+      if (id === M) {
+        w.route.set(DEVICES)
+        order.push(`view during: ${runtime?.get().view.kind}`)
+      }
+    } }
+    runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    w.doors[0].answer({ kind: 'open' })
+    await settle()
+    // Entered, then (decided afterwards) left again for the machines: never both at once.
+    expect(order[0]).toBe(`scope ${M}`)
+    expect(order[1]).toBe('view during: entering')
+    expect(w.scope).toEqual([M, null])
+    expect(runtime.get().view).toEqual({ kind: 'devices', wants: null })
   })
 
   it('a key refused again long after a re-entry is asked for again, not given up on', async () => {

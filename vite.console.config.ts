@@ -29,7 +29,7 @@ const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as
  * accident. Anything else stops the build.
  */
 function originFor(name: string, fallback: string): string {
-  const raw = process.env[name] ?? fallback
+  const raw = process.env[name] || fallback
   const url = new URL(raw)
   const bare = url.origin === raw.replace(/\/$/, '') && url.username === '' && url.password === ''
   const local = process.env.COOKREW_CONSOLE_LOCAL === '1' && url.protocol === 'http:' && /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1)$/.test(url.hostname)

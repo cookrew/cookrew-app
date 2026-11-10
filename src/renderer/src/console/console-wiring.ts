@@ -214,7 +214,10 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
   // Another tab of this browser renewed the session, signed out, or signed in: this one follows
   // (a renewal closes the token this tab holds; console-session.ts · reread).
   win.addEventListener('storage', (event) => {
-    if (event.key === SESSION_KEY || event.key === null) session.reread()
+    if (event.key !== SESSION_KEY && event.key !== null) return
+    // The other tab may have signed in with a key minted since this tab last looked.
+    minted = null
+    session.reread()
   })
 
   // A page that slept past its token's end renews on the way back, before anything asks with the dead one.

@@ -278,6 +278,14 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         listEra += 1
         era += 1
         asking.clear()
+        // Nobody signed in: nothing of the account is kept for whoever signs in here next.
+        rows = []
+        answered = false
+        error = null
+        snapshots = {}
+        passRefused = new Set()
+        reproofAsked = false
+        compose()
       }
     },
     watch: () => {

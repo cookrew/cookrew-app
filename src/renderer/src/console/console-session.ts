@@ -219,15 +219,21 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
     schedule()
   }
 
-  const drop = (): void => {
+  /**
+   * Signed out on this page. What the browser keeps is removed with it, unless it is no longer
+   * this page's (another tab signed in again since): that is the other tab's to keep.
+   */
+  const drop = (always = false): void => {
+    const was = held
     held = null
     if (timer !== null) clearTimer(timer)
     timer = null
-    safely(() => deps.kept.removeItem(SESSION_KEY))
+    const kept = always || was === null ? null : readKept()
+    if (kept === null || kept.token === was?.token || (kept.username === was?.username && kept.deviceId === was?.deviceId)) safely(() => deps.kept.removeItem(SESSION_KEY))
     tell({ status: 'signed-out' })
   }
 
-  const readKept = (): Held | null => {
+  function readKept(): Held | null {
     try {
       return readHeld(parsed(deps.kept.getItem(SESSION_KEY)))
     } catch {
@@ -243,10 +249,43 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
    */
   const adoptKept = (): string | null => {
     const kept = readKept()
-    if (held === null || kept === null || kept.username !== held.username || kept.deviceId !== held.deviceId || kept.exp <= held.exp) return null
+    // Not older, and not the one already held: at the end of a sign-in's thirty days every token ends at the same moment.
+    if (held === null || kept === null || kept.username !== held.username || kept.deviceId !== held.deviceId || kept.token === held.token || kept.exp < held.exp) return null
     held = kept
     schedule()
     return kept.token
+  }
+
+  /** One renewal asked of the registry with the device key: its answer, or status 0 when it could not be asked. */
+  const askRenewal = async (username: string, device: ConsoleDevice): Promise<Answer> => {
+    const asked = await deps.registry('GET', '/v2/sessions/renew-nonce')
+    const nonce = isRecord(asked.body) && typeof asked.body.nonce === 'string' ? asked.body.nonce : null
+    if (asked.status !== 200 || nonce === null) return { status: 0, body: null }
+    const sig = b64u(await device.sign(encoder.encode(renewMessage(username, device.id, nonce))))
+    return deps.registry('POST', '/v2/sessions/renew', { device: device.id, nonce, sig })
+  }
+
+  /**
+   * IS THE SIGN-IN REALLY OVER AT THE REGISTRY. Its answer to "end this session" says yes whatever
+   * token it was handed, and another tab may have renewed past the one this page held. The key is
+   * what could bring a sign-in back, so the key is asked: refused, the sign-in is over; renewed,
+   * there was one still open, and the session that renewal made is ended in turn.
+   */
+  const endedAtRegistry = async (username: string): Promise<boolean> => {
+    let device: ConsoleDevice
+    try {
+      device = await deps.device()
+    } catch {
+      return false
+    }
+    for (let turn = 0; turn < 2; turn += 1) {
+      const probe = await askRenewal(username, device).catch((): Answer => ({ status: 0, body: null }))
+      if (probe.status === 401) return true
+      const open = probe.status === 201 ? readHeld(probe.body) : null
+      if (open === null) return false
+      await deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(open.token)).catch(() => null)
+    }
+    return false
   }
 
   /** The same sign-in, a new fifteen minutes: the device key signs the registry's nonce. */
@@ -266,16 +305,18 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
       drop()
       return null
     }
-    const asked = await deps.registry('GET', '/v2/sessions/renew-nonce')
-    const nonce = isRecord(asked.body) && typeof asked.body.nonce === 'string' ? asked.body.nonce : null
-    if (asked.status !== 200 || nonce === null) return retryLater(was)
-    const sig = b64u(await device.sign(encoder.encode(renewMessage(was.username, device.id, nonce))))
-    const renewed = await deps.registry('POST', '/v2/sessions/renew', { device: device.id, nonce, sig })
+    const renewed = await askRenewal(was.username, device)
     if (renewed.status === 201) {
       const next = readHeld(renewed.body)
-      // Signed out, or signed in as someone else, while the renewal was out: its answer is nobody's,
-      // and the session it made is ended rather than left open at the registry.
       if (held !== was) {
+        // ANOTHER TAB'S TOKEN WAS TAKEN UP while this renewal was out. Both are the same sign-in,
+        // and the registry keeps only the one it made last, which is the one that ends later: that
+        // one is held. Neither is ever deleted: deleting would end the sign-in for every tab.
+        if (next !== null && held !== null && held.username === next.username && held.deviceId === next.deviceId) {
+          if (next.exp > held.exp) keep(next)
+          return held.token
+        }
+        // Signed out (or signed in as someone else) meanwhile: the session this made is nobody's, and is ended.
         if (next !== null) void deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(next.token)).catch(() => null)
         return held?.token ?? null
       }
@@ -451,20 +492,18 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
     signOut: async () => {
       // THE SIGN-IN IS ENDED AT THE REGISTRY, not just forgotten here. The device key renews a
       // sign-in with no token at all, and is kept across a sign-out, so a page that only dropped
-      // its token would leave a sign-in anyone at this browser could pick up again. A token that
-      // has run out is renewed first, to have one the registry takes.
-      // A renewal on its way is waited for: the token it replaces would end nothing.
+      // its token would leave a sign-in anyone at this browser could pick up again.
+      // A renewal on its way is waited for, and a token another tab renewed is taken up first:
+      // the one they replace would end nothing.
       if (renewing !== null) await renewing.catch(() => null)
+      adoptKept()
       const token = await fresh().catch(() => null)
+      const who = held?.username ?? null
+      drop(true)
       // Renewing found the sign-in already over.
-      const over = held === null
-      drop()
-      if (over) return { ended: true }
-      if (token !== null) {
-        const said = await deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(token)).catch(() => ({ status: 0, body: null }))
-        // Ended now, or already not a session the registry knows.
-        if ((said.status >= 200 && said.status < 300) || said.status === 401) return { ended: true }
-      }
+      if (who === null) return { ended: true }
+      if (token !== null) await deps.registry('DELETE', '/v2/sessions/current', undefined, bearer(token)).catch(() => null)
+      if (await endedAtRegistry(who)) return { ended: true }
       await deps.forgetDevice?.().catch(() => undefined)
       return { ended: false }
     }

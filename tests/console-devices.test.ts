@@ -253,6 +253,25 @@ describe('the gate changing while the account is being asked', () => {
   })
 })
 
+describe('signed out', () => {
+  it('forgets the account’s machines: the next person to sign in here is not shown the last one’s', async () => {
+    const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') } })
+    const store = createConsoleDevices(w.deps)
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines).toHaveLength(3)
+    stop()
+    expect(store.get()).toEqual({ status: 'loading', machines: [], error: null })
+    // And the next list that fails to arrive shows nothing of the old one.
+    w.set({ account: { ok: false, reason: 'offline' } })
+    const again = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get()).toMatchObject({ status: 'failed', machines: [] })
+    again()
+  })
+})
+
 describe('inside a machine, with the Devices level off screen', () => {
   it('goes on knowing the account’s machines and asks none of them for a summary', async () => {
     const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') } })

@@ -145,7 +145,7 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
           // open for the others (a machine cannot take the pass from the rest).
           await deps.gate.check().catch(() => undefined)
           if (!waiting()) return
-          door = deps.gate.get().status === 'open' ? { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not take this browser’s pass.` } : null
+          door = deps.gate.get().status === 'open' ? { machine: machineId, state: 'refused', message: `${nameOf(machineId)} did not take this browser’s pass. Sign out and in to prove it’s you again.` } : null
           return evaluate()
         }
         if (answer.kind === 'open') door = { machine: machineId, state: 'open' }
@@ -167,14 +167,21 @@ export function createConsoleRuntime(deps: RuntimeDeps): ConsoleRuntime {
       return
     }
     deciding = true
+    let failure: unknown = null
     try {
       do {
         again = false
-        decide()
+        try {
+          decide()
+        } catch (error) {
+          // Somebody told by an act threw: what was heard meanwhile is still decided.
+          failure ??= error
+        }
       } while (again)
     } finally {
       deciding = false
     }
+    if (failure !== null) throw failure
   }
 
   function decide(): void {
