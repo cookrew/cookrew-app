@@ -14,22 +14,34 @@ import { NewerBuildView } from '../src/renderer/src/console/NewerBuild'
 
 const waitingWorker = () => ({ postMessage: vi.fn() })
 
+interface Installing {
+  state: string
+  addEventListener(type: 'statechange', listener: () => void): void
+}
+
 function bed(over: Partial<VersionDeps> = {}) {
   const waiting = waitingWorker()
-  const registration = { update: vi.fn(async () => undefined), waiting: null as ReturnType<typeof waitingWorker> | null }
+  const registration = { update: vi.fn(async () => undefined), waiting: null as ReturnType<typeof waitingWorker> | null, installing: null as Installing | null }
   const reload = vi.fn()
   let onControllerChange: (() => void) | null = null
+  // Timers the watch asks for are held here and let go by the test.
+  const waits: (() => void)[] = []
   const deps: VersionDeps = {
     own: 'aaaaaaaaaaaa',
     fetchVersion: vi.fn(async () => ({ version: '0.6.0', build: 'aaaaaaaaaaaa' })),
     registration: async () => registration,
+    controlled: () => true,
     onControllerChange: (listener) => void (onControllerChange = listener),
     reload,
+    wait: () => new Promise<void>((resolve) => waits.push(resolve)),
     ...over
   }
   const watch = createVersionWatch(deps)
-  return { watch, deps, registration, waiting, reload, controllerChanged: () => onControllerChange?.() }
+  return { watch, deps, registration, waiting, reload, controllerChanged: () => onControllerChange?.(), elapse: () => waits.splice(0).forEach((done) => done()) }
 }
+
+const NEWER = { fetchVersion: async () => ({ version: '0.6.1', build: 'bbbbbbbbbbbb' }) }
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('the console learns that a newer build is out', () => {
   it('says nothing while the host serves the build it is', async () => {
@@ -40,7 +52,7 @@ describe('the console learns that a newer build is out', () => {
   })
 
   it('says so when the host serves another build, and has the browser fetch it', async () => {
-    const { watch, registration } = bed({ fetchVersion: async () => ({ version: '0.6.1', build: 'bbbbbbbbbbbb' }) })
+    const { watch, registration } = bed(NEWER)
     const seen: boolean[] = []
     watch.subscribe(() => seen.push(watch.get().newer))
     await watch.check()
@@ -68,7 +80,7 @@ describe('the console learns that a newer build is out', () => {
 
 describe('the newer build is loaded when the person asks, and only then', () => {
   it('nothing reloads on its own, whatever is learned', async () => {
-    const { watch, reload, registration, waiting } = bed({ fetchVersion: async () => ({ version: '0.6.1', build: 'bbbbbbbbbbbb' }) })
+    const { watch, reload, registration, waiting } = bed(NEWER)
     registration.waiting = waiting
     await watch.check()
     await watch.check()
@@ -77,7 +89,7 @@ describe('the newer build is loaded when the person asks, and only then', () => 
   })
 
   it('pressing asks the waiting worker in, and the page loads again once it has taken over', async () => {
-    const { watch, reload, registration, waiting, controllerChanged } = bed({ fetchVersion: async () => ({ version: '0.6.1', build: 'bbbbbbbbbbbb' }) })
+    const { watch, reload, registration, waiting, controllerChanged } = bed(NEWER)
     registration.waiting = waiting
     await watch.check()
     await watch.update()
@@ -88,14 +100,54 @@ describe('the newer build is loaded when the person asks, and only then', () => 
     expect(reload).toHaveBeenCalledTimes(1)
   })
 
-  it('with no worker waiting (none registered, or it is still fetching), pressing loads the page again from the host', async () => {
-    const { watch, reload } = bed({ fetchVersion: async () => ({ version: '0.6.1', build: 'bbbbbbbbbbbb' }), registration: async () => null })
+  it('pressed while the new worker is still being fetched, it waits for it and then asks it in', async () => {
+    const { watch, registration, waiting, reload } = bed(NEWER)
+    const heard: (() => void)[] = []
+    const coming: Installing = { state: 'installing', addEventListener: (_type, listener) => void heard.push(listener) }
+    registration.installing = coming
+    await watch.check()
+    const pressed = watch.update()
+    await settle()
+    expect(waiting.postMessage).not.toHaveBeenCalled()
+    coming.state = 'installed'
+    registration.installing = null
+    registration.waiting = waiting
+    heard.forEach((listener) => listener())
+    await pressed
+    expect(waiting.postMessage).toHaveBeenCalledWith('take-over')
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('on a page no worker holds, pressing loads it again: the host answers that load', async () => {
+    const { watch, reload } = bed({ ...NEWER, controlled: () => false, registration: async () => null })
     await watch.check()
     await watch.update()
     expect(reload).toHaveBeenCalledTimes(1)
   })
 
-  it('a worker taking over that nobody asked for (another tab pressed) reloads nothing here', async () => {
+  it('on a page a worker holds, with no newer worker to ask in, pressing does NOT reload: the same page would come back', async () => {
+    const { watch, reload, registration } = bed(NEWER)
+    await watch.check()
+    await watch.update()
+    expect(reload).not.toHaveBeenCalled()
+    // The button is back, and the browser has been asked for the new worker again.
+    expect(watch.get()).toEqual({ newer: true, updating: false })
+    expect(registration.update).toHaveBeenCalledTimes(2)
+  })
+
+  it('a take-over that never comes gives the button back instead of saying Updating for ever', async () => {
+    const { watch, registration, waiting, elapse, reload } = bed(NEWER)
+    registration.waiting = waiting
+    await watch.check()
+    await watch.update()
+    expect(watch.get().updating).toBe(true)
+    elapse()
+    await settle()
+    expect(watch.get()).toEqual({ newer: true, updating: false })
+    expect(reload).not.toHaveBeenCalled()
+  })
+
+  it('a worker taking over that nobody here asked for (another tab pressed) reloads nothing here', async () => {
     const { reload, controllerChanged } = bed()
     controllerChanged()
     expect(reload).not.toHaveBeenCalled()

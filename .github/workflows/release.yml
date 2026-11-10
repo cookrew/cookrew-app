@@ -255,6 +255,8 @@ jobs:
           path: out/console
           include-hidden-files: true
           if-no-files-found: error
+          # A re-run of this job replaces what the first run handed on.
+          overwrite: true
           retention-days: 14
 
       - uses: actions/upload-artifact@v4
@@ -263,6 +265,7 @@ jobs:
           path: out/site
           include-hidden-files: true
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
 
   # UPLOADING THEM IS SHIPPING THEM, so it is off until the owner switches it
@@ -271,11 +274,20 @@ jobs:
   # uploads neither. This job holds the key and runs none of the repository's
   # code: it downloads what `web` built and hands it to the host's own tool.
   # The console goes first: the site's "Open console" must have somewhere to go.
+  #
+  # THE KEY IS THE ENVIRONMENT'S, not the repository's: `web-release` is to be
+  # set up to admit only `v*` tags, so a pull request that edits this file
+  # cannot read it. The host's tool is one exact version, never "the latest".
+  # One upload at a time, in the order the tags were pushed.
   web-deploy:
     needs: web
     if: startsWith(github.ref, 'refs/tags/') && vars.COOKREW_PAGES_DEPLOY == 'true' && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     permissions: {}
+    environment: web-release
+    concurrency:
+      group: web-release
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -297,5 +309,9 @@ jobs:
           test -n "$CONSOLE_PROJECT" && test -n "$SITE_PROJECT"
           test -f console/_headers && test -f console/index.html && test ! -e console/404.html
           test -f site/_headers && test -f site/_redirects && test -f site/404.html
-          npx --yes wrangler@4 pages deploy console --project-name="$CONSOLE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA"
-          npx --yes wrangler@4 pages deploy site --project-name="$SITE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA"
+          # Files only: nothing that the host would run as code of its own.
+          for dir in console site; do
+            test ! -e "$dir/_worker.js" && test ! -e "$dir/_routes.json" && test ! -e "$dir/functions"
+          done
+          npx --yes wrangler@4.160.0 pages deploy console --project-name="$CONSOLE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA"
+          npx --yes wrangler@4.160.0 pages deploy site --project-name="$SITE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA"

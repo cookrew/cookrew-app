@@ -13,6 +13,13 @@
  * worker is asked in, and the page loads again once that worker has taken
  * over. Nothing here reloads by itself, and nothing reloads under a finger.
  *
+ * A RELOAD ALONE WOULD CHANGE NOTHING on a page a worker holds: that worker
+ * answers the load with the page it has. So the press waits for the new
+ * worker when it is still being fetched, asks it in, and reloads only once it
+ * holds the page. With no newer worker to ask, the button comes back and the
+ * browser is asked for one again. A take-over that never comes (the worker
+ * was thrown away) gives the button back too.
+ *
  * Compared with the host's own version file, not with the registry: the page
  * and its files are what has to agree. A registry that outruns the console
  * answers the console's calls as it always did, or refuses them by name.
@@ -29,18 +36,31 @@ interface WaitingWorker {
   postMessage(message: unknown): void
 }
 
+interface InstallingWorker {
+  readonly state: string
+  addEventListener(type: 'statechange', listener: () => void): void
+}
+
 interface WorkerRegistration {
   update(): Promise<unknown>
   readonly waiting: WaitingWorker | null
+  readonly installing: InstallingWorker | null
 }
+
+/** How long a press waits for a worker that is still being fetched, and for one that was asked in to take over. */
+const INSTALL_WAIT_MS = 20_000
+const TAKE_OVER_WAIT_MS = 10_000
 
 export interface VersionDeps {
   /** The build this page is; null on a page that was not built (served for development). */
   readonly own: string | null
   fetchVersion(): Promise<{ version?: unknown; build?: unknown } | null>
   registration(): Promise<WorkerRegistration | null>
+  /** A worker holds this page: a reload would be answered by it, with the page it has. */
+  controlled(): boolean
   onControllerChange(listener: () => void): void
   reload(): void
+  wait(ms: number): Promise<void>
 }
 
 export interface VersionWatch {
@@ -67,6 +87,19 @@ export function createVersionWatch(deps: VersionDeps): VersionWatch {
     if (state.updating) deps.reload()
   })
   const registration = (): Promise<WorkerRegistration | null> => deps.registration().catch(() => null)
+  /** The worker waiting to come in; one still being fetched is waited for, for a while. */
+  const waitingOf = async (held: WorkerRegistration | null): Promise<WaitingWorker | null> => {
+    if (held === null || held.waiting !== null) return held?.waiting ?? null
+    const coming = held.installing
+    if (coming === null) return null
+    const done = new Promise<void>((resolve) =>
+      coming.addEventListener('statechange', () => {
+        if (coming.state === 'installed' || coming.state === 'redundant') resolve()
+      })
+    )
+    await Promise.race([done, deps.wait(INSTALL_WAIT_MS)])
+    return held.waiting
+  }
   return {
     get: () => state,
     subscribe(listener) {
@@ -84,10 +117,19 @@ export function createVersionWatch(deps: VersionDeps): VersionWatch {
     },
     async update() {
       set({ ...state, updating: true })
-      const waiting = (await registration())?.waiting ?? null
-      // With a worker waiting, the page loads again when it has taken over. With none, the host answers the load.
-      if (waiting !== null) waiting.postMessage('take-over')
-      else deps.reload()
+      // No worker holds the page: the host answers the load.
+      if (!deps.controlled()) return deps.reload()
+      const held = await registration()
+      const waiting = await waitingOf(held)
+      if (waiting === null) {
+        // Nothing to ask in yet. The button comes back, and the browser is asked for the worker again.
+        set({ ...state, updating: false })
+        await held?.update().catch(() => undefined)
+        return
+      }
+      waiting.postMessage('take-over')
+      // The page loads again when that worker holds it (onControllerChange). If it never does, the button comes back.
+      void deps.wait(TAKE_OVER_WAIT_MS).then(() => set({ ...state, updating: false }))
     }
   }
 }
@@ -103,7 +145,9 @@ export function browserVersionWatch(): VersionWatch {
       return answer.ok ? ((await answer.json()) as { version?: unknown; build?: unknown }) : null
     },
     registration: async () => (await workers?.getRegistration()) ?? null,
+    controlled: () => (workers?.controller ?? null) !== null,
     onControllerChange: (listener) => workers?.addEventListener('controllerchange', listener),
-    reload: () => window.location.reload()
+    reload: () => window.location.reload(),
+    wait: (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
   })
 }

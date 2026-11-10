@@ -11,9 +11,16 @@
 // talks to itself (its worker's install, its version file), to the API host it
 // was built for, and to a machine's own name on the machine's port: the direct
 // path, by https and by WebSocket. It cannot be framed, rebased or made to post
-// a form. `style-src 'self'` holds for the page's own sheets; a terminal that
-// writes a <style> of its own would be refused, which the real-browser
-// acceptance has to see and widen by name, not this file by guess.
+// a form.
+//
+// STYLES MAY BE WRITTEN IN PLACE ('unsafe-inline'), because the terminal does:
+// a page in a browser gets xterm's DOM renderer, which adds <style> elements
+// and style attributes for colours, the cursor and cell sizes, and the phone's
+// live history writes coloured spans. Without it the terminal is one colour
+// with no cursor. What an injected style could do with that is kept small by
+// the rest: pictures and fonts come from this origin only, and nothing but the
+// named hosts can be reached. Sound may be a data: clip: a silent one unlocks
+// the reply voice on a phone.
 //
 // THE HOST JOINS A HEADER TWO MATCHING BLOCKS SET, with a comma (Cloudflare
 // Pages; read 2026-11-11). So Cache-Control is set only in blocks that cannot
@@ -47,10 +54,10 @@ export function consolePolicy({ api, local = false }) {
   return [
     "default-src 'none'",
     "script-src 'self'",
-    "style-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${apiOrigin(api, local)} ${MACHINE_NAMES.join(' ')}`,
     "img-src 'self' data: blob:",
-    "media-src 'self' blob:",
+    "media-src 'self' blob: data:",
     "font-src 'self'",
     "worker-src 'self'",
     "manifest-src 'self'",
@@ -69,6 +76,10 @@ export function consoleHeaders(input) {
     `  Content-Security-Policy: ${consolePolicy(input)}`,
     '  X-Content-Type-Options: nosniff',
     '  Referrer-Policy: no-referrer',
+    // No other site's window keeps a handle on this one. Sign-in leaves and comes back by navigation.
+    '  Cross-Origin-Opener-Policy: same-origin',
+    // The microphone is the phone's ear. Nothing here uses the rest.
+    '  Permissions-Policy: camera=(), geolocation=(), payment=(), usb=(), microphone=(self), fullscreen=(self), clipboard-write=(self)',
     '',
     '# Named by their content: kept.',
     '/assets/*',
@@ -98,6 +109,11 @@ function loadedBy(tag, kind) {
 /** The page's own scripts, preloads and styles: what a first visit downloads before it paints. */
 export function firstLoad(html) {
   return [...html.matchAll(TAG)].map(([tag, kind]) => loadedBy(tag, kind)).filter((path) => path !== null)
+}
+
+/** The fonts a stylesheet names under /assets/: fetched before the first words are drawn. */
+export function fontsNamed(css) {
+  return [...new Set([...css.matchAll(/url\(["']?(\/assets\/[^"')?#]+\.woff2)/g)].map(([, path]) => path))]
 }
 
 /**

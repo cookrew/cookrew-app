@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { consoleHeaders, consolePolicy, firstLoad, withIntegrity } from '../scripts/console-host-files.mjs'
+import { consoleHeaders, consolePolicy, firstLoad, fontsNamed, withIntegrity } from '../scripts/console-host-files.mjs'
 
 /**
  * WHAT THE CONSOLE'S STATIC HOST IS TOLD, AND WHAT THE PAGE PINS
@@ -25,6 +25,18 @@ const blocks = (headers: string): Map<string, string[]> => {
 describe('the policy the console runs under', () => {
   const policy = consolePolicy({ api: API })
   const directive = (name: string): string => policy.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name} `)) ?? ''
+
+  it('lets the terminal draw: it writes styles of its own, and a silent sound unlocks speech on a phone', () => {
+    // xterm's DOM renderer (the one a page in a browser gets) adds <style> elements and style
+    // attributes for colours, the cursor and cell sizes, and the phone's live history writes
+    // coloured spans. Without this the terminal is one colour with no cursor.
+    expect(directive('style-src')).toBe("style-src 'self' 'unsafe-inline'")
+    // The reply voice is unlocked by playing a data: clip (prompt/reply-voice.ts).
+    expect(directive('media-src')).toBe("media-src 'self' blob: data:")
+    // What an injected style could send out stays shut: pictures and fonts from here only.
+    expect(directive('img-src')).toBe("img-src 'self' data: blob:")
+    expect(directive('font-src')).toBe("font-src 'self'")
+  })
 
   it('runs only its own scripts, and nothing inline', () => {
     expect(directive('default-src')).toBe("default-src 'none'")
@@ -60,6 +72,10 @@ describe('_headers', () => {
     expect(all).toContain(`Content-Security-Policy: ${consolePolicy({ api: API })}`)
     expect(all).toContain('X-Content-Type-Options: nosniff')
     expect(all).toContain('Referrer-Policy: no-referrer')
+    // No other site's window keeps a handle on this one; sign-in leaves and comes back by navigation.
+    expect(all).toContain('Cross-Origin-Opener-Policy: same-origin')
+    // The microphone is the phone's ear; nothing here uses a camera, a location or a payment.
+    expect(all).toContain('Permissions-Policy: camera=(), geolocation=(), payment=(), usb=(), microphone=(self), fullscreen=(self), clipboard-write=(self)')
   })
 
   it('keeps hashed files for a year and asks again for the worker and the version, every time', () => {
@@ -101,5 +117,10 @@ describe('the page pins the files it starts with', () => {
 
   it('names what the first load is: the page’s own scripts, preloads and styles', () => {
     expect(firstLoad(html).sort()).toEqual(Object.keys(files).sort())
+  })
+
+  it('and the fonts its first styles name: they are fetched before the first words are drawn', () => {
+    const css = '@font-face{src:url(/assets/inter-AAAA.woff2) format("woff2")}@font-face{src:url("/assets/mono-BBBB.woff2")}.x{background:url(/assets/pic-CCCC.png)}'
+    expect(fontsNamed(css).sort()).toEqual(['/assets/inter-AAAA.woff2', '/assets/mono-BBBB.woff2'])
   })
 })

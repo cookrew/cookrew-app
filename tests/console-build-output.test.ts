@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -67,13 +67,28 @@ describe('the built console', () => {
     expect(file('sw.js')).not.toContain('/version.json')
   })
 
-  it('passes the size gate, and the gate fails a page that is over its limit', () => {
+  it('its policy allows what its own terminal does', () => {
+    // Read off the built chunks, so the policy cannot drift from the code it is served with.
+    const chunks = readdirSync(path.join(out, 'assets')).filter((name) => name.endsWith('.js')).map((name) => file(path.join('assets', name)))
+    const policy = file('_headers')
+    if (chunks.some((code) => /createElement\(["']style["']\)/.test(code))) expect(policy).toContain("style-src 'self' 'unsafe-inline'")
+    if (chunks.some((code) => code.includes('data:audio/'))) expect(policy).toMatch(/media-src [^;]*data:/)
+    expect(chunks.some((code) => /\beval\(|new Function\(/.test(code)), 'the policy forbids eval').toBe(false)
+  })
+
+  it('passes the size gate over THIS build, and the gate fails a page over its limit or a directory that is no build', () => {
     const size = path.join(root, 'scripts', 'console-size.mjs')
     const passed = run([size, out])
     expect(passed.status, passed.said).toBe(0)
     expect(passed.said).toMatch(/first load: \d+(\.\d+)? KB/)
+    // The fonts the first styles name are counted with it.
+    expect(passed.said).toMatch(/\.woff2/)
     const failed = run([size, out, '--limit-kb', '1'])
     expect(failed.status).not.toBe(0)
     expect(failed.said).toMatch(/over/)
+    // The directory it is given is the one it measures: never a build that happens to lie in out/.
+    const nowhere = run([size, path.join(scratch, 'not-a-build')])
+    expect(nowhere.status).not.toBe(0)
+    expect(run([size, '--limit-kb', '300', path.join(scratch, 'not-a-build')]).status).not.toBe(0)
   })
 })

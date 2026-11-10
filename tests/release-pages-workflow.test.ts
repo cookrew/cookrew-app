@@ -49,6 +49,7 @@ describe('the job that builds them', () => {
   it('hands both on as artifacts and holds no key to the host', () => {
     expect(web).toContain('out/console')
     expect(web).toContain('out/site')
+    expect(web.match(/overwrite: true/g)).toHaveLength(2)
     expect(web).not.toMatch(/CLOUDFLARE/)
   })
 })
@@ -68,6 +69,19 @@ describe('the job that uploads them', () => {
     expect(deploy).not.toContain('actions/checkout')
     expect(deploy).not.toMatch(/npm (ci|install|run)/)
     expect(deploy).toMatch(/\n    permissions: \{\}\n/)
+  })
+
+  it('takes the key from an environment of its own, uses one exact version of the host’s tool, and uploads one release at a time', () => {
+    // The environment is where the owner restricts the key to release tags.
+    expect(deploy).toMatch(/\n    environment: web-release\n/)
+    expect(deploy).toMatch(/\n    concurrency:\n      group: web-release\n      cancel-in-progress: false\n/)
+    const tools = [...deploy.matchAll(/npx --yes (wrangler@\S+)/g)].map(([, tool]) => tool)
+    expect(tools).toHaveLength(2)
+    for (const tool of tools) expect(tool).toMatch(/^wrangler@\d+\.\d+\.\d+$/)
+  })
+
+  it('uploads files only: a directory holding code the host would run is refused', () => {
+    for (const name of ['_worker.js', '_routes.json', 'functions']) expect(deploy).toContain(`test ! -e "$dir/${name}"`)
   })
 
   it('uploads each directory to its own project, as the production branch', () => {
