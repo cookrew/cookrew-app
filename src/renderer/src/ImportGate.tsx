@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cookrew, type ServeFacePreview, type ServePhase, type ServeRail } from './api'
 import { GateSheet, type PayFault, type WalletChoice } from './GateSheet'
 import type { GatePhase } from '../../shared/gate-walk'
-import type { CanvasNode } from '../../shared/model'
 import { MKT_PAY, fillCopy } from '../../shared/marketplace-copy'
 import { requestAccountSheet } from './account/open-request'
 import {
@@ -33,9 +32,15 @@ import {
  * wallet this device provisioned, and talks to Stripe. A key never crosses IPC.
  *
  * EVERY REFUSAL GOES SOMEWHERE (G2/G4). A 403's button used to close the sheet
- * while naming a destination. Now `remedyFor` says what it does — the team's
- * page in a browser card, or asking again — and a 429 asks again on its own
- * in fifteen minutes, as its sentence promises.
+ * while naming a destination. Now `remedyFor` says what it does — asking the
+ * door again — and a 429 asks again on its own in fifteen minutes, as its
+ * sentence promises.
+ *
+ * A SEAT IS BOUGHT HERE (0.6.0). The seat step's BUY A SEAT asks the gate
+ * again with the intent to buy; the door answers with its price and rails and
+ * the sheet moves to the pay step it has always had. Nothing is charged by
+ * the press, and no web page is opened — the team's page that used to sell
+ * the seat no longer exists.
  */
 
 const POLL_MS = 3000
@@ -53,7 +58,7 @@ function remaining(expiry: number, now: number): string | null {
 const shortAddress = (address: string): string =>
   `${address.slice(0, 6)}…${address.slice(-4)}`
 
-const NO_FACTS: GateFacts = { door: 'install', team: null, owner: null, account: null }
+const NO_FACTS: GateFacts = { door: 'install', team: null, owner: null, account: null, seat: null }
 
 export function ImportGate({
   link,
@@ -88,12 +93,14 @@ export function ImportGate({
   const alive = useRef(true)
 
   // Ask the door what it wants. Main signs in as the account the card will
-  // use, so the session paid for here is the session it opens later.
-  const runGate = useCallback((): void => {
+  // use, so the session paid for here is the session it opens later. `intent`
+  // is the BUY A SEAT press and nothing else: every other ask — the first,
+  // a retry, the one after signing in — is a plain import.
+  const runGate = useCallback((intent?: 'buy'): void => {
     setBusy(true)
     setFault(null)
     void cookrew()
-      .serveGate(link)
+      .serveGate(link, intent)
       .then((result) => {
         if (!alive.current) return
         setBusy(false)
@@ -104,7 +111,8 @@ export function ImportGate({
             door: result.door,
             team: result.team ?? null,
             owner: result.owner ?? null,
-            account: result.account ?? null
+            account: result.account ?? null,
+            seat: result.seat ?? null
           })
         } else {
           setPhase({ kind: 'error', status: 0 })
@@ -146,7 +154,7 @@ export function ImportGate({
   // says the sheet will try again in fifteen minutes, so it does.
   useEffect(() => {
     if (phase?.kind !== 'denied' || phase.reason !== 'budget') return
-    const timer = window.setTimeout(runGate, BUDGET_RETRY_MS)
+    const timer = window.setTimeout(() => runGate(), BUDGET_RETRY_MS)
     return () => window.clearTimeout(timer)
   }, [phase, runGate])
 
@@ -293,29 +301,17 @@ export function ImportGate({
     if (facts.door === 'direct' || !requestAccountSheet()) runGate()
   }, [facts.door, runGate])
 
-  /** A refusal's one forward action — it goes where its label says. */
+  /**
+   * A refusal's one forward action: the door is asked again — as a buyer when
+   * the press was BUY A SEAT, plainly otherwise. The answer repaints the sheet,
+   * so BUY lands on the pay step with the door's own price and rails.
+   */
   const remedy = useCallback(
     (reason: string): void => {
-      const act = remedyFor(reason, facts.team)
-      if (act.kind === 'retry') {
-        runGate()
-        return
-      }
-      // The team's page, on the canvas beside this sheet rather than in a
-      // browser the person then has to find their way back from.
-      const card: CanvasNode = {
-        kind: 'browser',
-        id: crypto.randomUUID(),
-        name: 'Browser',
-        url: act.url,
-        position: { x: 160, y: 120 },
-        size: { width: 720, height: 560 }
-      }
-      void cookrew()
-        .addNode(card)
-        .catch(() => undefined)
+      const act = remedyFor(reason, facts.door)
+      runGate(act.kind === 'buy' ? 'buy' : undefined)
     },
-    [facts.team, runGate]
+    [facts.door, runGate]
   )
 
   const gatePhase: GatePhase = (() => {
@@ -340,7 +336,7 @@ export function ImportGate({
     }
   })()
 
-  const pricing = walkPricing(face, selected)
+  const pricing = walkPricing(face, selected, facts.owner)
   const priceLine =
     selected !== null
       ? `${selected.price} ${selected.asset} · ${fillCopy(MKT_PAY['mkt.pay.destination'], {
@@ -353,7 +349,14 @@ export function ImportGate({
 
   return (
     <GateSheet
-      scene={{ door: facts.door, phase: gatePhase, pricing }}
+      // At a listed team the pay step is reached WITHOUT a seat only by
+      // buying one, so the seat tick stays ahead until the payment lands.
+      scene={{
+        door: facts.door,
+        phase: gatePhase,
+        pricing,
+        buying: facts.door === 'install' && facts.seat === null
+      }}
       title={face.name}
       agentCount={face.agents}
       bannerLine={bannerLine}

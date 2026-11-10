@@ -4,8 +4,8 @@ import type { AdmissionPhase, ServeTargetRef } from './served-admission'
  * WHICH CREDENTIAL A DOOR IS ASKED WITH — one decision, in one place (v3, G1).
  *
  * V3-04 made the import walk sign in as the ACCOUNT at a listed door: the door
- * seats `acct-<username>`, which is what lets a seat bought on the web admit
- * this Mac with no second payment. The two calls that FOLLOW an import — the
+ * seats `acct-<username>`, which is what lets a seat bought on another device
+ * admit this Mac with no second payment. The two calls that FOLLOW an import — the
  * card's transcript reads and its END — kept signing in with the per-door
  * caller KEY, so one door heard two different callers for the same card. The
  * rail then read a session the card never opened, and END ended that one while

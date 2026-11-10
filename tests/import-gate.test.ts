@@ -26,32 +26,39 @@ const src = (file: string): string =>
 
 const FACE = { name: 'RESEARCH CREW', slug: 'research-crew', access: 'paid' as const, priceUsd: '4.00' }
 
-describe('remedyFor — every 403 goes somewhere (G2/G4)', () => {
-  it('no_seat is BUY, and in cut 1 BUY is the team’s page in a browser card', () => {
-    expect(remedyFor('no_seat', '@mira/research-crew')).toEqual({
-      kind: 'author-page',
-      url: 'https://cookrew.dev/@mira/research-crew'
-    })
+describe('remedyFor — every 403 goes somewhere, and none of them leaves the app (G2/G4, 0.6.0)', () => {
+  it('no_seat at a listed team is BUY — the same walk, asked again with the intent', () => {
+    expect(remedyFor('no_seat', 'install')).toEqual({ kind: 'buy' })
   })
 
-  it('seat_limit, region, version_gate and balance_empty open the author’s page', () => {
-    for (const reason of ['seat_limit', 'region', 'version_gate', 'balance_empty']) {
-      expect(remedyFor(reason, '@mira/research-crew').kind, reason).toBe('author-page')
+  it('no remedy carries an address: the team’s page is gone and nothing opens one', () => {
+    for (const reason of ['no_seat', 'seat_limit', 'region', 'version_gate', 'balance_empty', 'budget', 'nobody-shipped-this']) {
+      for (const door of ['install', 'direct'] as const) {
+        const act = remedyFor(reason, door)
+        expect(Object.keys(act), reason).toEqual(['kind'])
+        expect(JSON.stringify(act), reason).not.toMatch(/https?:|cookrew\.dev|\//)
+      }
+    }
+  })
+
+  it('what only the author can change is asked again, not sent to a page that no longer exists', () => {
+    for (const reason of ['seat_limit', 'region', 'version_gate', 'balance_empty', 'refunded', 'revoked', 'nobody-shipped-this']) {
+      expect(remedyFor(reason, 'install'), reason).toEqual({ kind: 'retry' })
     }
   })
 
   it('budget retries — and the sheet retries on its own in fifteen minutes', () => {
-    expect(remedyFor('budget', '@mira/research-crew')).toEqual({ kind: 'retry' })
+    expect(remedyFor('budget', 'install')).toEqual({ kind: 'retry' })
     expect(BUDGET_RETRY_MS).toBe(15 * 60 * 1000)
   })
 
-  it('a door with no page (the direct walk) can only be asked again', () => {
-    expect(remedyFor('seat_limit', null)).toEqual({ kind: 'retry' })
+  it('a direct door has no registry to buy a seat from: its no_seat is asked again', () => {
+    expect(remedyFor('no_seat', 'direct')).toEqual({ kind: 'retry' })
   })
 
   it('never answers with a dismiss', () => {
     for (const reason of ['no_seat', 'budget', 'scope', 'a-reason-nobody-shipped']) {
-      expect(['author-page', 'retry']).toContain(remedyFor(reason, '@a/b').kind)
+      expect(['buy', 'retry']).toContain(remedyFor(reason, 'install').kind)
     }
   })
 })
@@ -73,6 +80,14 @@ describe('walkPricing — the price the rail carries in', () => {
       expiry: 99
     })
     expect(pricing?.terms).toMatchObject({ price: '4.50', chain: 'Stripe', expiry: 99 })
+  })
+
+  it('names the OWNER as who is paid once the listed walk knows them, not the team’s slug', () => {
+    const rail = { rail: 'stripe' as const, price: '4.00', asset: 'USD' as const, chain: 'Stripe' as const, expiry: 99 }
+    expect(walkPricing(FACE, rail, 'mira')?.terms.author).toBe('@mira')
+    expect(walkPricing(FACE, null, 'mira')?.terms.author).toBe('@mira')
+    // A dialled door tells us no owner: the slug is the most there is to say.
+    expect(walkPricing(FACE, rail, null)?.terms.author).toBe('@research-crew')
   })
 
   it('a free team carries null — both steps dash, honestly', () => {
@@ -133,6 +148,23 @@ describe('the wiring, as source', () => {
   it('never wires a refusal to dismiss', () => {
     expect(gate).not.toContain('onRemedy={onDismiss}')
     expect(gate).toContain('onRemedy={remedy}')
+  })
+
+  it('BUY asks the gate again with the intent, and a plain ask never carries one', () => {
+    // The one call to main: the intent is whatever this ask was given, and
+    // every ask that is not a press of BUY is given none.
+    expect(gate).toContain('.serveGate(link, intent)')
+    expect(gate).toContain("runGate(act.kind === 'buy' ? 'buy' : undefined)")
+    expect(gate.match(/'buy'/g)?.length, 'BUY is named where the press is handled and nowhere else').toBe(3)
+  })
+
+  it('no refusal opens a web page: no browser card, no link, no site address (0.6.0)', () => {
+    for (const file of ['ImportGate.tsx', 'import-gate-remedy.ts']) {
+      const text = src(file)
+      expect(text, file).not.toMatch(/addNode|kind: 'browser'|openExternal|window\.open/)
+      expect(text, file).not.toMatch(/https?:\/\//)
+      expect(text, file).not.toContain('teamPageUrl')
+    }
   })
 
   it('the account surface listens for the request', () => {

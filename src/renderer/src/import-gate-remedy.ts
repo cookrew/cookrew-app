@@ -1,5 +1,4 @@
-import type { GateDoor, WalkPricing } from '../../shared/gate-walk'
-import { teamPageUrl } from '../../shared/seats'
+import { SEAT_DENIAL, type GateDoor, type WalkPricing } from '../../shared/gate-walk'
 import type { ServeFacePreview, ServeRail } from './api'
 
 /**
@@ -12,16 +11,12 @@ import type { ServeFacePreview, ServeRail } from './api'
  */
 
 /**
- * Where a published team's page is. The renderer has no registry setting of
- * its own — main resolves addresses — so the one public origin is named here,
- * as import-session.ts names it for main.
+ * What a refusal's forward action does. Never "close the sheet", and never
+ * "open a page": every one of them is a question put to the door again.
  */
-const REGISTRY_SITE = 'https://cookrew.dev'
-
-/** What a refusal's forward action does. Never "close the sheet". */
 export type RemedyAct =
-  /** Open the team's own page in a browser card — the author's surface. */
-  | { kind: 'author-page'; url: string }
+  /** Ask the door again as a BUYER — the walk that lands on its price and rails. */
+  | { kind: 'buy' }
   /** Ask the door again, now. */
   | { kind: 'retry' }
 
@@ -29,28 +24,26 @@ export type RemedyAct =
 export const BUDGET_RETRY_MS = 15 * 60 * 1000
 
 /**
- * The dispatch, by reason (G2). Everything the author can change — a seat,
- * their seat count, a region, a version, credit — goes to their page; the
- * refusals that pass with time are retried. `no_seat` is BUY, and BUY is the
- * team's page: cookrew.dev now mints an unseated token on an explicit
- * `intent: 'buy'` and the door admits it as far as its 402, so the page's
- * seat bar completes the purchase end to end. This sheet still sends people
- * there rather than paying in place — one purchase surface, on the author's
- * own page, until an in-app buy is worth a second one.
+ * The dispatch, by reason (G2).
+ *
+ * `no_seat` is BUY, and BUY HAPPENS HERE (0.6.0). It used to open the team's
+ * page at cookrew.dev in a browser card, because that page was the one place
+ * a seat could be bought; the page is gone, and the purchase is this sheet's
+ * own pay step. Pressing it charges nothing: the gate is asked again with the
+ * intent said out loud, the door answers with its price and its rails, and
+ * the person pays there or does not.
+ *
+ * It is offered on the INSTALL walk only. A direct door has no registry to
+ * seat anybody (gate-walk.ts), so a `no_seat` from one is asked again like
+ * any other refusal.
+ *
+ * Everything else is asked again. The refusals only the author can lift (a
+ * region, a version, a seat count, a refund) were sent to that same page to
+ * read about it; with no page, the honest act left is the question itself —
+ * the sentence on the band has already said who can change the answer.
  */
-export function remedyFor(reason: string, team: string | null): RemedyAct {
-  switch (reason) {
-    case 'budget':
-    case 'payment_unavailable':
-    case 'not_answering':
-    case 'workspace':
-    case 'scope':
-      return { kind: 'retry' }
-    default:
-      return team === null
-        ? { kind: 'retry' }
-        : { kind: 'author-page', url: teamPageUrl(REGISTRY_SITE, team) }
-  }
+export function remedyFor(reason: string, door: GateDoor): RemedyAct {
+  return reason === SEAT_DENIAL && door === 'install' ? { kind: 'buy' } : { kind: 'retry' }
 }
 
 /** The facts main returns beside the phase, on the install walk. */
@@ -59,6 +52,8 @@ export interface GateFacts {
   team: string | null
   owner: string | null
   account: string | null
+  /** The seat that admitted this account, or null: none yet, or none needed. */
+  seat: string | null
 }
 
 /**
@@ -66,12 +61,18 @@ export interface GateFacts {
  * the door quotes, a paid team's published price stands in so the seat and
  * pay steps read as AHEAD rather than dashed — a free team carries null and
  * both dash, honestly.
+ *
+ * WHO IS PAID is the owner, when the walk knows one. A listed team reaches
+ * the pay step now (a seat is bought here), and main names its owner beside
+ * the phase; a dialled door tells us nobody, so there the slug is the most
+ * there is to say.
  */
 export function walkPricing(
   face: Pick<ServeFacePreview, 'access' | 'priceUsd' | 'slug'>,
-  selected: ServeRail | null
+  selected: ServeRail | null,
+  owner: string | null = null
 ): WalkPricing | null {
-  const author = `@${face.slug}`
+  const author = `@${owner ?? face.slug}`
   if (selected !== null) {
     return {
       model: 'one-time',
