@@ -14,7 +14,7 @@
 // index.ts. Kept pure so the plan is testable with no app, no network, no pty.
 
 import type { CanvasNode, ServedSessionFacts, TerminalNodeData } from '../shared/model'
-import { registryOrigin } from './registry-origin'
+import { registryOrigin, siteOrigin } from './registry-origin'
 
 /** Where a team is served — the origin and slug from the author's address. */
 export interface ServeTarget {
@@ -54,6 +54,13 @@ export interface ServeTarget {
  */
 export const cookrewRegistry = (): string => registryOrigin()
 
+/** Where shared page links live (registry-origin.ts · siteOrigin): read as names, resolved at the registry. */
+export const cookrewSite = (): string => siteOrigin()
+
+/** Is this origin one whose page links are published names: the site's, or the registry's own. */
+export const isPageOrigin = (origin: string, registry: string = cookrewRegistry(), site: string = cookrewSite()): boolean =>
+  origin === registry || origin === site
+
 const DOOR_NAME = /^@([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/
 
 /** The public face `GET /<slug>/crew` answers with — what the owner published. */
@@ -81,7 +88,8 @@ export interface ImportFace {
  */
 export function parseServeAddress(
   link: string,
-  registry: string = cookrewRegistry()
+  registry: string = cookrewRegistry(),
+  site: string = cookrewSite()
 ): ServeTarget | null {
   const trimmed = link.trim()
   if (trimmed.length === 0) return null
@@ -112,11 +120,13 @@ export function parseServeAddress(
     // socket to whatever answers there.
     if (segments.length === 2) {
       const first = decodeURIComponent(segments[0])
-      const known = url.origin === registry
+      const known = isPageOrigin(url.origin, registry, site)
       if (!first.startsWith('@') && !known) return null
       const name = `${first.startsWith('@') ? first : `@${first}`}/${decodeURIComponent(segments[1])}`
       const parsed = DOOR_NAME.exec(name)
-      return parsed ? { origin: url.origin, slug: parsed[2], door: name } : null
+      // A page of ours names a team; the team is asked for at the registry's
+      // API, never at the page's own address (the site is static).
+      return parsed ? { origin: known ? registry : url.origin, slug: parsed[2], door: name } : null
     }
     if (segments.length !== 1) return null
     // ONE SEGMENT ON THE REGISTRY IS AN OWNER, never a door.
@@ -125,7 +135,7 @@ export function parseServeAddress(
     // registry is not that — it is a directory. Without this, cookrew.dev/drej
     // read as both an owner and a door, and which one you got depended on the
     // order the sheet happened to try them in.
-    if (url.origin === registry) return null
+    if (isPageOrigin(url.origin, registry, site)) return null
     const slug = segments[0]
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
     return { origin: url.origin, slug }
@@ -155,7 +165,8 @@ const HANDLE_ONLY = /^@?([a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)$/
  */
 export function parseAccountAddress(
   link: string,
-  registry: string = cookrewRegistry()
+  registry: string = cookrewRegistry(),
+  site: string = cookrewSite()
 ): AccountTarget | null {
   const trimmed = link.trim()
   if (trimmed.length === 0) return null
@@ -168,11 +179,11 @@ export function parseAccountAddress(
     const url = new URL(candidate)
     if (!['http:', 'https:'].includes(url.protocol)) return null
     if (url.username || url.password || url.search || url.hash) return null
-    if (url.origin !== registry) return null
+    if (!isPageOrigin(url.origin, registry, site)) return null
     const segments = url.pathname.split('/').filter((part) => part.length > 0)
     if (segments.length !== 1) return null
     const parsed = HANDLE_ONLY.exec(decodeURIComponent(segments[0]))
-    return parsed ? { origin: url.origin, handle: parsed[1] } : null
+    return parsed ? { origin: registry, handle: parsed[1] } : null
   } catch {
     return null
   }

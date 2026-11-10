@@ -18,7 +18,7 @@
    * kept in sessionStorage. Everywhere else the account page is the answer.
    */
   /** Where this page goes when it has nowhere else to: the site's root, or the page itself when it stands alone on the auth host. */
-  const HOME = document.body?.dataset.home || '/'
+  const HOME = document.body?.dataset?.home || '/'
   const afterSignIn = () => {
     // A page rendered for the reader — a team's page, the market — is reloaded
     // for who they now are; anywhere else, the account page is the answer.

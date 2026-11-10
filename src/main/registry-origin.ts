@@ -32,6 +32,17 @@ export function registryOrigin(): string {
 }
 
 /**
+ * Where the site is: the pages people share (`https://cookrew.dev/@drej/team`).
+ * A link to one is read as a published name and resolved at the registry's
+ * API; nothing is ever asked of the site itself. A registry somebody moved
+ * (`COOKREW_REGISTRY`) is its own site unless `COOKREW_SITE` says otherwise,
+ * so a test instance never treats production's pages as its own.
+ */
+export function siteOrigin(): string {
+  return process.env.COOKREW_SITE || process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
+}
+
+/**
  * Where the console is: the one web page that reaches the account's machines.
  * Links and QR codes handed to a phone point here, and it is the one origin a
  * machine lets call its API from a page. `COOKREW_CONSOLE` moves it, beside
