@@ -28,7 +28,7 @@ import { hostPlatform, machineCopy } from './machine-words'
 export const deviceIdPrefix = (deviceId: string): string => `${deviceId.slice(0, 8)}…`
 
 export const PAIRING_COPY = {
-  RELAY: 'Scan on the phone — this works from any network.',
+  CONSOLE: 'Scan on the phone and sign in to your account. Works from any network.',
   DIRECT:
     'Claim a username to pair from anywhere; this QR pairs on this Wi-Fi only.',
   NONE: 'No address to show yet — the phone server is still starting.',
@@ -36,11 +36,13 @@ export const PAIRING_COPY = {
   ANYWHERE: 'Use it away from this Wi-Fi',
   /** The same sentence `cookrew mobile` ends with, for the same reason. */
   ROTATE:
-    'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.'
+    'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.',
+  /** Under the console's QR: no way in, but not nothing: the unlock code rides its fragment (main/pairing-handout.ts). */
+  ADDRESS_ONLY: 'This QR lets nobody in by itself: whoever scans it signs in and proves it is them. It carries this Mac’s unlock code, so show it to your own phone only.'
 } as const
 
 export type PairingPopoutView = {
-  readonly mode: 'relay' | 'direct' | 'none'
+  readonly mode: 'console' | 'direct' | 'none'
   /** The exact string to encode, or null when there is nothing to show. */
   readonly qr: string | null
   readonly sentence: string
@@ -61,12 +63,12 @@ export const pairingPopoutView = (handout: PairingHandout | null): PairingPopout
       deviceIdPrefix: null
     }
   }
-  const relay = handout.via === 'relay'
+  const onConsole = handout.via === 'console'
   return {
-    mode: relay ? 'relay' : 'direct',
+    mode: onConsole ? 'console' : 'direct',
     qr: handout.url,
-    sentence: relay ? PAIRING_COPY.RELAY : PAIRING_COPY.DIRECT,
-    rotateNote: PAIRING_COPY.ROTATE,
+    sentence: onConsole ? PAIRING_COPY.CONSOLE : PAIRING_COPY.DIRECT,
+    rotateNote: onConsole ? PAIRING_COPY.ADDRESS_ONLY : PAIRING_COPY.ROTATE,
     desktopName: handout.desktopName,
     deviceIdPrefix: handout.deviceId ? deviceIdPrefix(handout.deviceId) : null
   }

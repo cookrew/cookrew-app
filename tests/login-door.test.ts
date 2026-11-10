@@ -58,7 +58,7 @@ function fixture(
   const released: string[] = []
   const account: AccountDoor = {
     platform: 'linux',
-    who: () => ({ username: null, deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null }),
+    who: () => ({ username: null, deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null }),
     signIn: vi.fn(async () => landed),
     resume: vi.fn(async () => landed),
     climbCode: vi.fn(async () => landed),
@@ -251,7 +251,7 @@ describe('the password step', () => {
 
   it('names the account and the device as cookrew.dev filed it', async () => {
     const f = fixture({
-      who: () => ({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null, passwordless: false, lockWaits: null }),
+      who: () => ({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null }),
       devices: async () => ({
         ok: true,
         value: [{ id: 'dev-1', name: 'Linux · solis-model-test', kind: 'desktop' }] as never
@@ -259,8 +259,8 @@ describe('the password step', () => {
     })
     ;(f.account as { who: AccountDoor['who'] }).who = vi
       .fn()
-      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null })
-      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null, passwordless: false, lockWaits: null })
+      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
+      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'local name', sessionLive: true, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
     await f.open()
     const turn = await f.send('answer', PASSWORD)
     expect(turn.exit).toBe(0)
@@ -274,8 +274,8 @@ describe('the password step', () => {
     const f = fixture({ devices: async () => ({ ok: false, reason: 'offline' }) })
     ;(f.account as { who: AccountDoor['who'] }).who = vi
       .fn()
-      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null })
-      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: true, registry: null, mismatch: null, passwordless: false, lockWaits: null })
+      .mockReturnValueOnce({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
+      .mockReturnValue({ username: 'drej', deviceId: 'dev-1', deviceName: 'Linux · box', sessionLive: true, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
     await f.open()
     const turn = await f.send('answer', PASSWORD)
     expect(turn.say.join(' ')).toContain('Linux · box')
@@ -312,6 +312,7 @@ describe('an account already here', () => {
     sessionLive: live,
     registry: 'https://cookrew.dev',
     mismatch: null,
+    signInAgainBecause: null,
     passwordless: false,
     lockWaits: null
   })
@@ -614,7 +615,7 @@ describe('nothing waits for ever', () => {
     const f = fixture({
       who: () => {
         if (broken) throw new Error('the file could not be read')
-        return { username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null }
+        return { username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null }
       }
     })
     await expect(f.open()).rejects.toThrow('could not be read')
@@ -639,6 +640,7 @@ describe('logout', () => {
     sessionLive: true,
     registry: 'https://cookrew.dev',
     mismatch: null,
+    signInAgainBecause: null,
     passwordless: false,
     lockWaits: null
   })
@@ -688,7 +690,7 @@ describe('whoami', () => {
   }
 
   it('names the account, the device and the registry', () => {
-    const line = whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: true, registry: 'https://cookrew.dev', mismatch: null, passwordless: false, lockWaits: null })
+    const line = whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: true, registry: 'https://cookrew.dev', mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
     expect(line).toContain('@drej')
     expect(line).toContain('Linux · box')
     expect(line).toContain('https://cookrew.dev')
@@ -696,7 +698,7 @@ describe('whoami', () => {
 
   it('exits 1 when nobody is signed in, so a script can branch on it', async () => {
     const refused = await refusal(async () =>
-      whoami({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null })
+      whoami({ username: null, deviceId: '', deviceName: '', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
     )
     expect(refused.exitCode).toBe(1)
     expect(refused.message).toContain('cookrew login')
@@ -704,7 +706,7 @@ describe('whoami', () => {
 
   it('says a session has ended rather than naming a dead one as live', async () => {
     const refused = await refusal(async () =>
-      whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null })
+      whoami({ username: 'drej', deviceId: 'd', deviceName: 'Linux · box', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
     )
     expect(refused.exitCode).toBe(1)
     expect(refused.message).toContain('ended')
@@ -891,14 +893,14 @@ describe('cookrew login --github', () => {
   })
 
   it('a signed-in machine is told so and asks GitHub nothing', async () => {
-    const who = () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive: true, registry: null, mismatch: null, passwordless: true, lockWaits: null })
+    const who = () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive: true, registry: null, mismatch: null, signInAgainBecause: null, passwordless: true, lockWaits: null })
     const f = fixture({ who })
     expect((await f.open([], GITHUB)).exit).toBe(0)
     expect(f.account.providerDevice).not.toHaveBeenCalled()
   })
 
   it('says why the lock is off when the account has no password yet, never "passcode"', async () => {
-    const who = () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, passwordless: true, lockWaits: 'set-password' as const })
+    const who = () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: true, lockWaits: 'set-password' as const })
     const f = fixture({ who })
     await f.open([], GITHUB)
     await f.send('wait')
@@ -922,7 +924,7 @@ describe('cookrew login --github, when the poll beats the second wait', () => {
 
 describe('a password resume on a Mac whose lock was waiting', () => {
   it('does not claim no password was typed: the typed password is the lock now', async () => {
-    const who = () => ({ username: 'drej', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, passwordless: false, lockWaits: null })
+    const who = () => ({ username: 'drej', deviceId: 'd', deviceName: 'Box', sessionLive: false, registry: null, mismatch: null, signInAgainBecause: null, passwordless: false, lockWaits: null })
     const f = fixture({ who })
     await f.open(['drej'])
     const done = await f.send('answer', PASSWORD)
@@ -932,7 +934,7 @@ describe('a password resume on a Mac whose lock was waiting', () => {
 })
 
 describe('a passwordless account at the terminal', () => {
-  const who = (sessionLive: boolean) => () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive, registry: null, mismatch: null, passwordless: true, lockWaits: null })
+  const who = (sessionLive: boolean) => () => ({ username: 'octo', deviceId: 'd', deviceName: 'Box', sessionLive, registry: null, mismatch: null, signInAgainBecause: null, passwordless: true, lockWaits: null })
 
   it('is never asked for a password it cannot have', async () => {
     const f = fixture({ who: who(false) })

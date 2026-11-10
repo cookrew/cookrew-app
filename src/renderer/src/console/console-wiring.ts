@@ -17,7 +17,7 @@ import { configureMachineScope, enterMachine, machineBaseOf, machineScope } from
 import { browserPairDeps, enterWithGrant, type GrantStore } from '../account-pair-client'
 import { relayAccountMachines } from '../relay-machines'
 import { relayMachineWhy, relayMachines } from '../relay-machine-call'
-import { tokenKeyForBase } from '../pairing-scope'
+import { codeKeyForBase, tokenKeyForBase } from '../pairing-scope'
 import { takeSeat } from '../device-seat'
 import { readConsoleConfig, type ConsoleConfig } from './console-config'
 import { browserDeviceStore, consoleDevice, type ConsoleDevice } from './device-key'
@@ -27,6 +27,7 @@ import { createConsoleDevices, type ConsoleDevices } from './console-devices'
 import { browserHistoryPort, createConsoleRouter, type ConsoleRouter } from './console-router'
 import { createConsoleRuntime, type ConsoleRuntime, type DoorAnswer } from './console-runtime'
 import { createMachinePaths, type MachinePaths } from './machine-paths'
+import { forgetHandedCode, landHandedCode, takeHandedCode } from './handed-code'
 
 export interface ConsoleParts {
   readonly config: ConsoleConfig
@@ -199,6 +200,9 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     if (!changingScope && machineId !== null) paths.note(machineId, plane)
   })
   const enterScope = (machineId: string | null): void => {
+    // The unlock code this machine's own screen handed over, filed before anything of the machine
+    // is made (its unlock sheet reads it when it is).
+    if (machineId !== null) landHandedCode({ machineId, pending, kept, keyFor: (id) => (machineBaseOf(id) === null ? null : codeKeyForBase(machineBaseOf(id) as string)) })
     changingScope = true
     try {
       enterMachine(machineId)
@@ -211,6 +215,12 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
   }
 
   const router = createConsoleRouter(browserHistoryPort(win))
+  // WHAT RODE THE FRAGMENT IS TAKEN OFF THE ADDRESS AT ONCE (handed-code.ts): a machine's unlock
+  // code, kept for this tab; anything else there is nobody's and goes with it.
+  if (win.location.hash !== '') {
+    takeHandedCode({ hash: win.location.hash, route: router.get(), pending })
+    win.history.replaceState(win.history.state, '', `${win.location.pathname}${win.location.search}`)
+  }
   const runtime = createConsoleRuntime({
     session,
     gate,
@@ -225,6 +235,7 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     takeSeat,
     forgetMachines: () => {
       paths.forget()
+      forgetHandedCode(pending)
       if (local === null) return
       try {
         const held = Array.from({ length: local.length }, (_, at) => local.key(at)).filter((key): key is string => key !== null)

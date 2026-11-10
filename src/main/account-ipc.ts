@@ -356,6 +356,7 @@ export function accountStatus(deps: AccountIpcDeps): AccountStatus {
     // Non-null only when account.json names one registry and this process is
     // talking to another — the state in which a 401 means nothing at all.
     registryMismatch: account === null ? null : deps.accounts.registryMismatch(),
+    signInAgainBecause: account === null ? null : deps.accounts.signInAgainBecause(),
     workspacesReachable: account?.workspacesReachable ?? false,
   }
 }
@@ -1384,6 +1385,7 @@ export function accountDoor(deps: AccountIpcDeps, platform: string = process.pla
         sessionLive: deps.accounts.sessionLive(),
         registry: account?.registry ?? null,
         mismatch: account === null ? null : deps.accounts.registryMismatch(),
+        signInAgainBecause: account === null ? null : deps.accounts.signInAgainBecause(),
       }
     },
     signIn: (input) => terminal(() => signIn(deps, input)),

@@ -1,3 +1,4 @@
+import { DEFAULT_REGISTRY, REGISTRY_WAS } from '../shared/launch-settings'
 import {
   createHash,
   createPrivateKey,
@@ -20,6 +21,7 @@ import {
   MIN_PASSWORD,
   RESERVED_PREFIXES,
   normaliseUsername,
+  type SignInAgainReason,
   usernameProblem,
   type AccountDevice,
   type AccountDeviceInput,
@@ -123,6 +125,8 @@ export interface AccountSession {
    * `sessionLive()` can answer with what the registry actually said.
    */
   endedAt?: number
+  /** Why it ended, when the reason is one the person should be told (shared/account-v2.ts · SignInAgainReason). */
+  endedWhy?: SignInAgainReason
 }
 
 /** Offline unlock: scrypt over the password, salt and hash both base64url. */
@@ -416,21 +420,32 @@ function sessionFrom(body: Record<string, unknown>): AccountSession | null {
   return { token: body.token, exp: body.exp }
 }
 
+/** Two origins, compared as origins: case and a trailing slash are not differences. */
+const plainOrigin = (origin: string): string => origin.toLowerCase().replace(/\/+$/, '')
+const sameRegistry = (a: string, b: string): boolean => plainOrigin(a) === plainOrigin(b)
+
 /**
- * IS THIS THE SAME REGISTRY, by origin. The home registry's API moved to a host
- * of its own in 0.6.0 (api.cookrew.dev). An account file written before that
- * names cookrew.dev, and it is the same registry: the same accounts, the same
- * token key. Said here, once, so a machine that was signed in stays signed in
- * and is not told it is pointed somewhere else.
+ * 0.6.0 MOVED THE HOME REGISTRY'S API to a host of its own, and keeps no
+ * compatibility (owner, 2026-11-11): a machine that signed in before it signs
+ * in again. These two names are how that one move is recognised, so the
+ * machine can be TOLD ("the registry moved, sign in again") instead of being
+ * left looking signed in at a registry that is "somewhere else". They are not
+ * an alias: nothing signed in at the old name is treated as signed in at the
+ * new one.
  */
-const HOME_REGISTRY = 'https://api.cookrew.dev'
-const HOME_REGISTRY_WAS = 'https://cookrew.dev'
-export function sameRegistry(a: string, b: string): boolean {
-  const named = (origin: string): string => {
-    const plain = origin.toLowerCase().replace(/\/+$/, '')
-    return plain === HOME_REGISTRY_WAS ? HOME_REGISTRY : plain
-  }
-  return named(a) === named(b)
+const HOME_REGISTRY = DEFAULT_REGISTRY
+const HOME_REGISTRY_WAS = REGISTRY_WAS
+
+/**
+ * An account file from before the move, opened by an app pointed at the new
+ * home: the same account, at its new address, with no session. The old token
+ * is not kept (nothing may use it, and nothing may find it "still honoured"
+ * and quietly lift the ending). Any other file is returned as it is.
+ */
+function signedOutByTheMove(account: AccountFile | null, origin: string, now: number): AccountFile | null {
+  if (account === null || typeof account.registry !== 'string') return account
+  if (plainOrigin(account.registry) !== HOME_REGISTRY_WAS || plainOrigin(origin) !== HOME_REGISTRY) return account
+  return { ...account, registry: HOME_REGISTRY, session: { token: '', exp: 0, endedAt: now, endedWhy: 'registry-moved' } }
 }
 
 /**
@@ -490,7 +505,11 @@ export class Accounts {
     this.origin = deps.origin ?? registryOrigin()
     this.platform = deps.platform ?? process.platform
     this.deviceName = deps.deviceName ?? machineCopy('This Mac', this.platform)
-    this.cached = loadAccount(deps.base)
+    // NOTHING IS WRITTEN HERE. Building this must never be able to stop a boot (a folder that
+    // cannot be written to), and a second process that opens the file on its way to quitting must
+    // not rewrite what the running one holds. The same file and the same address give the same
+    // answer every time, so a restart says it again; the next sign-in writes the new form.
+    this.cached = signedOutByTheMove(loadAccount(deps.base), this.origin, this.now())
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
     this.ladder = new LadderPasswords(this.now)
@@ -920,6 +939,12 @@ export class Accounts {
       console.error('account change listener failed:', error)
     }
     return next
+  }
+
+  /** Why this machine must sign in again, when it is more than an ordinary ended session. */
+  signInAgainBecause(): SignInAgainReason | null {
+    const session = this.cached?.session
+    return session?.endedAt !== undefined && session.endedWhy !== undefined ? session.endedWhy : null
   }
 
   /**
@@ -1833,7 +1858,7 @@ export class Accounts {
     // The file may have moved under the request (a sign-in landed). Only the
     // session that was checked is cleared.
     if (this.cached?.session?.token !== session.token) return false
-    const { endedAt: _lifted, ...kept } = session
+    const { endedAt: _lifted, endedWhy: _why, ...kept } = session
     this.save({ ...account, session: kept })
     console.error(
       "[cookrew] this Mac's session was marked ended here but the registry still honours it; the mark is lifted",

@@ -47,6 +47,7 @@ interface Who {
   passwordless?: boolean
   lockWaits?: 'set-password' | 'type-password' | null
   sessionLive?: boolean
+  signInAgainBecause?: 'registry-moved' | null
 }
 
 interface Fixture {
@@ -79,6 +80,7 @@ function fixture(over: Partial<AccountDoor> = {}, who: Who = { username: null })
       mismatch: null,
       passwordless: who.passwordless ?? false,
       lockWaits: who.lockWaits ?? null,
+      signInAgainBecause: who.signInAgainBecause ?? null,
     }),
     signIn: vi.fn(async () => landed),
     resume: vi.fn(async () => landed),
@@ -161,6 +163,15 @@ describe('cookrew login, by default', () => {
       expect((await f.send('wait')).exit).toBe(0)
       expect(f.account.resume).not.toHaveBeenCalled()
     }
+  })
+
+  it('a machine signed in before 0.6.0 is told why it signs in again, and then signs in on the page like any renewal', async () => {
+    const f = fixture({}, { username: 'octo', signInAgainBecause: 'registry-moved' })
+    const opened = await f.open()
+    expect(JSON.stringify(opened)).toContain('Cookrew 0.6.0 moved its registry to api.cookrew.dev. Sign in again on this Mac.')
+    await f.send('wait')
+    expect(f.account.browserDevice).toHaveBeenCalledWith(expect.any(Function), expect.any(AbortSignal), 'octo')
+    expect((await f.send('wait')).exit).toBe(0)
   })
 
   it('says denied, expired, cancelled and another account in the browser’s own words', async () => {

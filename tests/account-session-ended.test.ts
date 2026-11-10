@@ -10,12 +10,13 @@
 // Temp dirs only; `fetch` is injected, so no socket is opened and no real
 // ~/.cookrew is touched. No password or token value is ever asserted on.
 
+import { chmodSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Accounts, loadAccount, sameRegistry, writeAccount } from '../src/main/account-v2'
+import { Accounts, loadAccount, writeAccount } from '../src/main/account-v2'
 import { accountStatus } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
 import { Requests } from '../src/main/requests'
-import { registryMismatchSentence } from '../src/shared/account-v2'
+import { registryMismatchSentence, signInAgainSentence } from '../src/shared/account-v2'
 import { fakeAccount, tempBase } from './support/idv2'
 
 const OLD_PASSWORD = 'the-old-passphrase'
@@ -369,16 +370,6 @@ describe('a 401 from another registry is not this session ending', () => {
     expect(accountStatus(deps).registryMismatch).toBeNull()
   })
 
-  it('knows the home registry by the name it had and the name it has', () => {
-    // 0.6.0 moved the registry's API to a host of its own: an account file from before names cookrew.dev.
-    expect(sameRegistry('https://cookrew.dev', 'https://api.cookrew.dev')).toBe(true)
-    expect(sameRegistry('https://COOKREW.dev/', 'https://api.cookrew.dev')).toBe(true)
-    expect(sameRegistry('https://api.cookrew.dev', 'https://api.cookrew.dev/')).toBe(true)
-    expect(sameRegistry('https://cookrew.dev', 'http://localhost:8797')).toBe(false)
-    expect(sameRegistry('https://cookrew.dev.evil.example', 'https://api.cookrew.dev')).toBe(false)
-    expect(sameRegistry('https://staging.example', 'https://api.cookrew.dev')).toBe(false)
-  })
-
   it('compares origins, not spellings — a trailing slash is the same door', async () => {
     const base = claimed(`${ORIGIN}/`)
     const { it } = accountsAt(base, [UNAUTHENTICATED])
@@ -401,3 +392,88 @@ describe('a 401 from another registry is not this session ending', () => {
     expect(loadAccount(base)?.session?.endedAt).toBeGreaterThan(0)
   })
 })
+
+/**
+ * 0.6.0 MOVED THE REGISTRY'S API TO A HOST OF ITS OWN, and keeps no
+ * compatibility (owner, 2026-11-11): a machine signed in before it signs in
+ * again. Not silently carried over, and not left looking signed in at a
+ * registry that is "somewhere else": told, plainly, with the one thing to do.
+ */
+describe('0.6.0: the registry moved, and this machine signs in again', () => {
+  const WAS = 'https://cookrew.dev'
+  const HOME = 'https://api.cookrew.dev'
+  const LIVE = { status: 201, body: { token: 'fresh-token', exp: Date.now() + 3_600_000, deviceId: 'd' } }
+
+  it('an account signed in at the old address is signed out here, at the new one, every time it is opened', () => {
+    const base = claimed(WAS)
+    const script = scripted([UNAUTHENTICATED])
+    const it = new Accounts({ base, origin: HOME, fetch: script.fetch })
+    expect(it.sessionLive()).toBe(false)
+    expect(it.signInAgainBecause()).toBe('registry-moved')
+    // Not "pointed somewhere else": this IS where the account lives now.
+    expect(it.registryMismatch()).toBeNull()
+    // The old token is not held: nothing can use it, and nothing can find it "still honoured".
+    expect(it.account()?.session?.token).toBe('')
+    expect(it.account()?.registry).toBe(HOME)
+    expect(script.urls).toEqual([])
+    // OPENING THE FILE WRITES NOTHING: a folder that cannot be written to must not stop the app,
+    // and a second process on its way to quitting must not rewrite what the running one holds.
+    expect(loadAccount(base)?.registry).toBe(WAS)
+    // A restart says the same.
+    const again = new Accounts({ base, origin: HOME, fetch: script.fetch })
+    expect(again.sessionLive()).toBe(false)
+    expect(again.signInAgainBecause()).toBe('registry-moved')
+  })
+
+  it('is on the status the account surface reads, and in the words the CLI and the sheet say', () => {
+    expect(signInAgainSentence('registry-moved', 'darwin')).toBe('Cookrew 0.6.0 moved its registry to api.cookrew.dev. Sign in again on this Mac.')
+    expect(signInAgainSentence('registry-moved', 'linux')).not.toMatch(/\bMac\b/)
+  })
+
+  it('is told even when the folder cannot be written to: building it never throws', () => {
+    const base = claimed(WAS)
+    chmodSync(base, 0o500)
+    try {
+      const it = new Accounts({ base, origin: HOME, fetch: scripted([UNAUTHENTICATED]).fetch })
+      expect(it.signInAgainBecause()).toBe('registry-moved')
+    } finally {
+      chmodSync(base, 0o700)
+    }
+  })
+
+  it('signing in again brings the session back, and the reason is gone', async () => {
+    const base = claimed(WAS)
+    const script = scripted([LIVE])
+    const it = new Accounts({ base, origin: HOME, fetch: script.fetch })
+    expect(await it.resume(NEW_PASSWORD)).toMatchObject({ ok: true })
+    expect(it.sessionLive()).toBe(true)
+    expect(it.signInAgainBecause()).toBeNull()
+    expect(script.urls.every((url) => url.startsWith(HOME))).toBe(true)
+    const file = loadAccount(base)
+    expect(file?.session?.token).toBe('fresh-token')
+    expect(file?.registry).toBe(HOME)
+  })
+
+  it('is this one move and no other: any other two addresses are still a mismatch, and nothing is ended', () => {
+    for (const [pinned, pointed] of [
+      [WAS, 'https://staging.registry.test'],
+      ['https://staging.registry.test', HOME],
+      ['https://cookrew.dev.evil.example', HOME],
+      [HOME, WAS]
+    ]) {
+      const base = claimed(pinned)
+      const it = new Accounts({ base, origin: pointed, fetch: scripted([UNAUTHENTICATED]).fetch })
+      expect(it.registryMismatch(), `${pinned} -> ${pointed}`).toEqual({ signedInAt: pinned, pointedAt: pointed })
+      expect(it.signInAgainBecause()).toBeNull()
+      expect(loadAccount(base)?.session?.endedAt).toBeUndefined()
+    }
+  })
+
+  it('an account already at the new address is left alone', () => {
+    const base = claimed(HOME)
+    const it = new Accounts({ base, origin: `${HOME}/`, fetch: scripted([UNAUTHENTICATED]).fetch })
+    expect(it.sessionLive()).toBe(true)
+    expect(it.signInAgainBecause()).toBeNull()
+  })
+})
+

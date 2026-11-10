@@ -101,8 +101,8 @@ describe('the wiring', () => {
 
   it('only the link on the owner\'s own screen carries the code', () => {
     expect(main.match(/connectCodes\.encoded\(\)/g)).toHaveLength(1)
-    const handoff = main.slice(main.indexOf('pairingUrlFor: (token) => {'))
-    expect(handoff.slice(0, handoff.indexOf('const factors'))).not.toContain('connectCode')
+    // The request flow that once sealed a link for another device is not wired at all: it can admit nobody.
+    expect(main).not.toContain('pairingUrlFor')
   })
 })
 

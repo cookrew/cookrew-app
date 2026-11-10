@@ -21,6 +21,8 @@
  * pairing-url.ts, which takes the origin rather than naming one).
  */
 
+import { DEFAULT_REGISTRY, registryNamed } from '../shared/launch-settings'
+
 /**
  * Where the registry's API is: the account calls, the directory, the relay
  * path, this machine's own line. In 0.6.0 that is a host of its own
@@ -28,7 +30,7 @@
  * it. `COOKREW_REGISTRY` moves it, for a test deployment or a self-hosted one.
  */
 export function registryOrigin(): string {
-  return process.env.COOKREW_REGISTRY || 'https://api.cookrew.dev'
+  return process.env.COOKREW_REGISTRY ? registryNamed(process.env.COOKREW_REGISTRY) : DEFAULT_REGISTRY
 }
 
 /**
@@ -39,7 +41,10 @@ export function registryOrigin(): string {
  * so a test instance never treats production's pages as its own.
  */
 export function siteOrigin(): string {
-  return process.env.COOKREW_SITE || process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
+  if (process.env.COOKREW_SITE) return process.env.COOKREW_SITE
+  // A registry of one's own serves its own pages; the home registry's pages are the site's, not the API host's.
+  const registry = registryOrigin()
+  return registry === DEFAULT_REGISTRY ? 'https://cookrew.dev' : registry
 }
 
 /**

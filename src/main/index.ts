@@ -172,7 +172,6 @@ import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { createAccountPairDoor } from './account-pair'
 import { pairingHandout } from './pairing-handout'
-import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createNetworkWatch } from './network-watch'
@@ -1232,7 +1231,7 @@ const relayServing = RELAY_ORIGIN
             // The session, when this Mac holds a live one. It is what lets the
             // SECOND Mac of an account serve at all — the v1 registry key it
             // would otherwise prove the handle with cannot be enrolled twice.
-            ...(account.session === null ? {} : { session: account.session.token })
+            ...(account.session === null || !accounts.sessionLive() ? {} : { session: account.session.token })
           }
         },
         /**
@@ -1516,7 +1515,7 @@ const currentPairingHandout = (): PairingHandout | null =>
         ? { username: account.username, deviceId: account.deviceId, name: account.name }
         : null
     },
-    registryOrigin: () => registryOrigin(),
+    consoleOrigin: () => consoleOrigin(),
     endpoints: () => mobileEndpointList(),
     pairingToken: () => activePairingTokenValue() ?? pairingToken,
     connectCode: () => connectCodes.encoded()
@@ -1649,24 +1648,11 @@ const requests = new Requests({
     }
   },
   answered: answeredStoreIn(),
-  // ALLOW's own half (R2): this phone gets a token of its own, and the URL
-  // that carries it is sealed to the key the request arrived with. The root
-  // pairing credential never leaves this process for a device that asked
-  // through the queue. Nor does the connect code: that key came through the
-  // registry and the owner has nothing to compare it with (connect-code.ts).
-  reach: {
-    admit: (device) => admittedDevices.admit(device),
-    pairingUrlFor: (token) => {
-      const account = accounts.account()
-      if (!account) return null
-      return pairingUrl({
-        registryOrigin: registryOrigin(),
-        username: account.username,
-        deviceId: account.deviceId,
-        pairingToken: token
-      })
-    }
-  }
+  // NO `reach` HALF (0.6.0). A "use Wi-Fi" request was answered with a link to the relay's own
+  // page for this machine, sealed to the asker; that page is gone and nothing raises such a
+  // request any more. Left unwired, ALLOW on a stray one admits nobody (requests.ts answers
+  // `not_wired` before anything is minted), where a half that could build no link would have
+  // added a device nobody can use each time.
 })
 const factors = new Factors({ accounts, registry: registryOrigin() })
 
