@@ -175,8 +175,8 @@ import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createNetworkWatch } from './network-watch'
-import { createCanvasLink } from './canvas-link'
-import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
+import { createCanvasRelay } from './canvas-relay'
+import { loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
 import { sealProofHeaders } from './seal-proof'
 import { sealedSwitchMemory } from './remote-switch-memory'
@@ -1549,7 +1549,7 @@ export const rememberProfileFace = (face: {
  * expired session, or reachability switched off all mean the same thing: no
  * line. Both of the last two are the owner saying no, and neither is an error.
  */
-const canvasLink = createCanvasLink({
+const canvasRelay = createCanvasRelay({
   origin: () => registryOrigin(),
   credential: () => {
     const account = accounts.account()
@@ -1558,25 +1558,21 @@ const canvasLink = createCanvasLink({
     if (!session || session.exp <= Date.now()) return null
     return { token: session.token, deviceId: account.deviceId }
   },
-  log: (message) => console.error(`[cookrew] ${message}`)
-})
-const canvasBridge = createCanvasBridge({
-  send: (line) => canvasLink.send(line),
   dial: loopbackDialer(MOBILE_PORT),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
-canvasLink.onFrame(canvasBridge.frame)
-// A line that ended takes every exchange riding it with it; a local request
-// left running would be an event stream nobody will ever read again.
-canvasLink.onDrop(canvasBridge.reset)
+const canvasLink = canvasRelay.link
 
-// The sealed session (canvas-seal-terminus.ts). The bridge reads an answer as fast
-// as loopback gives it, so a slow phone only shows up on the relay line itself.
+// The sealed session (canvas-seal-terminus.ts). A slow line shows up as the link's
+// unconfirmed bytes, what the paced uplink still holds, and (once the bridge has
+// paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
-  socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog(),
+  // What the paced uplink still holds counts too: since relay-uplink.ts, an
+  // answer waits there rather than in Node's socket buffer.
+  socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog() + canvasRelay.uplink.queued(),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
 
