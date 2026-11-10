@@ -27,6 +27,7 @@ import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
+import { clipboardGuard, plainText } from './line-guard.mjs'
 
 const arg = (name, fallback = undefined) => {
   const at = process.argv.indexOf(`--${name}`)
@@ -402,6 +403,11 @@ function authHeaders() {
   return { authorization: `Bearer ${token}` }
 }
 
+/** One guard for the pane, kept across reconnects: its state is the pane's. */
+const shown = clipboardGuard()
+/** And one for what is typed back: an answer about the clipboard is not forwarded, whoever gave it. */
+const typedBack = clipboardGuard({ typed: true })
+
 function connectLine() {
   const req = transport.request(
     {
@@ -459,7 +465,8 @@ function connectLine() {
           // inside the socket handler and kill the card — a one-line remote
           // DoS on the caller. Render only what a terminal can render.
           if (event === 'data') {
-            if (typeof payload === 'string') process.stdout.write(payload)
+            // Through the guard: the door's bytes may set this pane's clipboard, never ask for it (line-guard.mjs).
+            if (typeof payload === 'string') process.stdout.write(shown(payload))
           } else if (event === 'hello') void post('/line/resize', { cols: cols(), rows: rows() })
           else if (event === 'exit') process.stdout.write(dim('— the orch process exited —'))
         }
@@ -558,11 +565,13 @@ async function handleLineRefusal(status, rawBody) {
     return
   }
   if (status === 429) {
-    process.stdout.write(dim(`✕ ${body?.error ?? 'the door is over its budget'}`))
+    // The door's own words, said as words: they are not the mirrored pane and do not pass its guard.
+    process.stdout.write(dim(`✕ ${plainText(body?.error) || 'the door is over its budget'}`))
     scheduleReconnect(5000)
     return
   }
-  process.stdout.write(dim(`✕ line refused (${status})${body?.error ? `: ${body.error}` : ''} — retrying`))
+  const why = plainText(body?.error)
+  process.stdout.write(dim(`✕ line refused (${status})${why ? `: ${why}` : ''} — retrying`))
   scheduleReconnect(3000)
 }
 
@@ -668,7 +677,8 @@ function wireRawInput() {
       }
       return
     }
-    if (lineUp) void post('/line/raw', { data })
+    const sent = typedBack(data)
+    if (lineUp && sent) void post('/line/raw', { data: sent })
   })
 }
 
