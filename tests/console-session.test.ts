@@ -271,6 +271,41 @@ describe('what a console session may do', () => {
     }
   })
 
+  it('cannot pass itself off as another client to do a signed-in act: no passkey, link or step-up is opened with it', async () => {
+    // The takeover a leaked console token would otherwise allow: open a passkey
+    // request as a "desktop" for the console's own device id, with a key of the
+    // thief's, then make a passkey on the auth page and spend the code.
+    const thief = desktopDevice('Thief')
+    const asDesktop = { id: signed.device.payload.id, kind: 'desktop', name: 'x', jwk: thief.payload.jwk }
+    for (const extra of [{ intent: 'passkey' }, { intent: 'link', provider: 'github' }] as Record<string, unknown>[]) {
+      const { challenge, state } = pkce()
+      const res = await new Client(site).api(
+        'POST',
+        '/v2/auth/requests',
+        { client: 'desktop', device: asDesktop, challenge, state, back: { scheme: false, port: 5555 }, ...extra },
+        bearer(signed.token)
+      )
+      expect([401, 403], JSON.stringify(extra)).toContain(res.status)
+      expect(res.body.request, JSON.stringify(extra)).toBeUndefined()
+    }
+    // And with its own key and device, still not: the console opens a way in or the device pass, nothing else.
+    const { challenge, state } = pkce()
+    const own = await signed.page.console('POST', '/v2/auth/requests', { client: 'console', intent: 'passkey', device: signed.device.payload, challenge, state }, bearer(signed.token))
+    expect(own.status).toBe(400)
+  })
+
+  it('is no session at all to a route that did not ask for one of its kind', async () => {
+    // Refused by the allow-list first; and were that ever to miss a route, the
+    // route's own reading of who is asking does not know a console session.
+    const { signedIn } = await import('../registry/src/v2-http')
+    const asked = { headers: { authorization: `Bearer ${signed.token}` } } as never
+    expect(signedIn(asked, site.v2)).toBeNull()
+    expect(signedIn(asked, site.v2, 'bearer')).toBeNull()
+    expect(signedIn(asked, site.v2, 'bearer', { console: true })?.account.username).toBe(username)
+    // A machine's session is one everywhere.
+    expect(signedIn({ headers: { authorization: `Bearer ${desktop.token}` } } as never, site.v2)?.account.username).toBe(username)
+  })
+
   it('does not narrow a machine’s own session', async () => {
     const res = await new Client(site).api('GET', '/v2/me/seats', undefined, bearer(desktop.token))
     expect(res.status).toBe(200)

@@ -14,24 +14,29 @@
 # this host must be grey-cloud (DNS only). Put the marketing site behind the
 # orange cloud instead — it is a different hostname's problem.
 
-cookrew.dev {
-	encode zstd gzip
+# TWO NAMES, ONE PROCESS (0.6.0). The registry answers on its API host and its
+# auth host and on nothing else; cookrew.dev and console.cookrew.dev are static
+# sites served elsewhere. Host is passed through as it arrived: the registry
+# routes by it, exactly.
 
-	# No compression on the relay: a compressor holds bytes back waiting for a
-	# block to fill, which is a buffer wearing another name.
-	@relay path /v1/relay/*
-	route @relay {
-		reverse_proxy 127.0.0.1:8791 {
-			flush_interval -1
-			transport http {
-				# A door's connection is meant to last. Nothing here may decide
-				# it has been quiet too long.
-				read_timeout 0
-				write_timeout 0
-			}
+api.cookrew.dev {
+	# No compression anywhere on this host: the relay (/v1/relay, /api/m) and a
+	# machine's own line (/v2/canvas/link) are streams, and a compressor holds
+	# bytes back waiting for a block to fill, which is a buffer wearing another
+	# name. A machine compresses its own answers before they cross.
+	reverse_proxy 127.0.0.1:8791 {
+		flush_interval -1
+		transport http {
+			# A line is meant to last. Nothing here may decide it has been quiet
+			# too long.
+			read_timeout 0
+			write_timeout 0
 		}
 	}
+}
 
+auth.cookrew.dev {
+	encode zstd gzip
 	reverse_proxy 127.0.0.1:8791 {
 		flush_interval -1
 	}

@@ -44,7 +44,9 @@ async function consoleSignIn(name = username, approver = desktop.token): Promise
   const { verifier, challenge, state } = pkce()
   const opened = await page.console('POST', '/v2/auth/requests', { client: 'console', device: device.payload, challenge, state })
   expect(opened.status, opened.text).toBe(201)
-  await page.console('POST', `/v2/auth/requests/${opened.body.request}/proof`, { signature: signTranscript(device, String(opened.body.transcript)) })
+  // Proved with the session in hand, as the page sends it: the route is one a console session may ask.
+  const proved = await page.console('POST', `/v2/auth/requests/${opened.body.request}/proof`, { signature: signTranscript(device, String(opened.body.transcript)) })
+  expect(proved.status).toBe(204)
   const request = String(opened.body.request)
   const browser = new Client(site, 'auth-page')
   await browser.page('POST', '/auth/api/claim', null, { request })
@@ -64,9 +66,13 @@ async function openGrant(own: Console, extra: Record<string, unknown> = {}): Pro
   const { verifier, challenge, state } = pkce()
   const opened = await own.page.console('POST', '/v2/auth/requests', { client: 'console', intent: 'grant', device: own.device.payload, challenge, state, ...extra }, bearer(own.token))
   expect(opened.status, opened.text).toBe(201)
-  const proved = await own.page.console('POST', `/v2/auth/requests/${opened.body.request}/proof`, {
-    signature: signTranscript(own.device, String(opened.body.transcript))
-  })
+  // With its bearer, as the page sends every call: a console session may prove a request it opened.
+  const proved = await own.page.console(
+    'POST',
+    `/v2/auth/requests/${opened.body.request}/proof`,
+    { signature: signTranscript(own.device, String(opened.body.transcript)) },
+    bearer(own.token)
+  )
   expect(proved.status).toBe(204)
   return { request: String(opened.body.request), verifier, state, authorizeUrl: String(opened.body.authorizeUrl) }
 }
@@ -282,13 +288,18 @@ describe('spending the code', () => {
 
   it('needs the session that asked: the code alone, or another session’s, opens nothing', async () => {
     const own = await consoleSignIn()
-    const bare = await coded(own)
-    expect((await own.page.console('POST', '/v2/auth/token', bare)).status).toBe(401)
+    const refused = async (res: Promise<{ status: number; body: Record<string, unknown> }>, who: string): Promise<void> => {
+      const answer = await res
+      expect(answer.status, who).toBe(401)
+      // Refused for who is asking, after the code and its verifier were found good.
+      expect(answer.body.error, who).toBe('unauthenticated')
+      expect(answer.body.grant, who).toBeUndefined()
+    }
+    await refused(own.page.console('POST', '/v2/auth/token', await coded(own)), 'no session')
     const second = await coded(own)
     const other = await consoleSignIn()
-    expect((await other.page.console('POST', '/v2/auth/token', second, bearer(other.token))).status).toBe(401)
-    const third = await coded(own)
-    expect((await new Client(site).api('POST', '/v2/auth/token', third, bearer(desktop.token))).status).toBe(401)
+    await refused(other.page.console('POST', '/v2/auth/token', second, bearer(other.token)), 'another console session of the account')
+    await refused(new Client(site).api('POST', '/v2/auth/token', await coded(own), bearer(desktop.token)), 'a machine’s session')
   })
 
   it('needs the verifier of the page that asked', async () => {

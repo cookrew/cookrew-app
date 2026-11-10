@@ -219,19 +219,6 @@ export function callerDeviceHeaders(device: { id: string; name: string }): Recor
   return { [CANVAS_DEVICE_HEADER]: id, ...(name === '' ? {} : { [CANVAS_DEVICE_NAME_HEADER]: name }) }
 }
 
-/** Hop-by-hop, plus the length we cannot honour because we stream. */
-const HOP_BY_HOP = new Set([
-  'connection',
-  'keep-alive',
-  'transfer-encoding',
-  'upgrade',
-  'te',
-  'trailer',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'content-length',
-  'set-cookie'
-])
 /** A header value larger than this is not a header, it is a payload. */
 const HEADER_MAX = 8 * 1024
 
@@ -263,8 +250,13 @@ export function allowedRequestHeaders(headers: IncomingHttpHeaders): Record<stri
  * streams; a document a browser would render and run is never one of them, so
  * it is refused whole rather than passed on under a sandbox and hoped for.
  */
-const PAGE_TYPES = new Set(['text/html', 'application/xhtml+xml', 'image/svg+xml', 'text/xml', 'application/xml'])
-export const isPageType = (contentType: string): boolean => PAGE_TYPES.has(contentType.split(';')[0].trim().toLowerCase())
+const PAGE_TYPES = new Set(['text/html', 'text/xml', 'application/xml', 'text/xsl', 'multipart/x-mixed-replace'])
+/** A value that names several types is judged by each: a browser takes the last, a proxy may take the first. */
+export const isPageType = (contentType: string): boolean =>
+  contentType.split(',').some((one) => {
+    const type = one.split(';')[0].trim().toLowerCase()
+    return PAGE_TYPES.has(type) || type.endsWith('+xml')
+  })
 
 /**
  * THE ANSWER HEADERS THAT CROSS BACK. An allow-list, for the reason the
@@ -274,6 +266,9 @@ export const isPageType = (contentType: string): boolean => PAGE_TYPES.has(conte
  * of its own. What a reader needs is the type, the encoding and a validator.
  */
 const ANSWER_HEADERS = new Set(['content-type', 'content-encoding', 'etag', 'last-modified', 'retry-after'])
+
+/** What a header value may be made of here: printable ASCII and tabs. */
+const HEADER_VALUE = /^[\t\x20-\x7e]*$/
 
 /** Every relayed answer is sent under this: nothing in it may run, frame or be framed. */
 export const RELAY_ANSWER_CSP = "default-src 'none'; sandbox; frame-ancestors 'none'"
@@ -298,7 +293,10 @@ export function relayAnswerHeaders(headers: Record<string, string>, cors: Record
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(headers)) {
     const name = key.toLowerCase()
-    if (ANSWER_HEADERS.has(name) && typeof value === 'string' && value.length <= HEADER_MAX) out[name] = value
+    // Only what a header can carry: printable ASCII and tabs. A line break or a
+    // character past a byte makes writeHead throw, and a machine must not be
+    // able to make this process throw.
+    if (ANSWER_HEADERS.has(name) && typeof value === 'string' && value.length <= HEADER_MAX && HEADER_VALUE.test(value)) out[name] = value
   }
   return {
     // A type is always said: with nosniff, an answer without one is bytes and nothing else.
@@ -315,7 +313,7 @@ export function relayAnswerHeaders(headers: Record<string, string>, cors: Record
   }
 }
 
-/** What the /relay prefix logs, and the only numbers it keeps. */
+/** What the relay logs about canvases, and the only numbers it keeps. */
 export interface CanvasRelayStats {
   /** Desktops holding a line right now. */
   links: number
@@ -366,7 +364,7 @@ export interface CanvasRelayDeps {
   seenFile?: string
 }
 
-/** A refusal this file words itself, for the routes only a desktop calls. */
+/** A refusal this file words itself. */
 const deny = (response: ServerResponse, code: number, error: string, message: string, headers: Record<string, string> = {}): void =>
   v2Json(response, code, { error, message }, headers)
 
@@ -387,7 +385,8 @@ const decode = (value: string): string | null => {
 const relaySignedIn = (request: IncomingMessage, v2: V2Identity): ReturnType<typeof signedIn> => {
   const session = request.headers[RELAY_SESSION_HEADER]
   if (typeof session !== 'string' || session === '') return null
-  return signedIn({ headers: { authorization: `Bearer ${session}` } } as IncomingMessage, v2, 'bearer')
+  // The relay path is the console's as much as an app's: its kind of session is taken here.
+  return signedIn({ headers: { authorization: `Bearer ${session}` } } as IncomingMessage, v2, 'bearer', { console: true })
 }
 
 /**
@@ -429,8 +428,11 @@ export function crossSite(request: IncomingMessage): boolean {
 
 /**
  * The desktop app's own path, which is not a browser and carries no cookie.
- * A browser cannot forge it: a cross-site fetch that sets `Authorization` is
- * preflighted, and this origin answers no preflight.
+ * A page cannot use it to claim a name: a fetch that sets `Authorization` is
+ * preflighted, the only page whose preflight is answered is the console's
+ * (api-host.ts), and the token it could send is a console session, which is
+ * refused this route before it is reached (console-scope.ts). A line is also
+ * only ever opened for the device the token itself names (lineFor).
  */
 const bearing = (request: IncomingMessage): boolean =>
   (request.headers.authorization ?? '').startsWith('Bearer ')
@@ -694,7 +696,8 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
    * the cap the relay holds them to, so a page can say "8 of 11 online".
    */
   const presenceRoute = (request: IncomingMessage, response: ServerResponse): void => {
-    const signed = signedIn(request, deps.v2)
+    // The console draws which machines are up: its kind of session reads this.
+    const signed = signedIn(request, deps.v2, 'any', { console: true })
     if (signed === null) {
       refuse(response, 401, 'unauthenticated')
       return
@@ -821,7 +824,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         response,
         503,
         'too_many_exchanges',
-        `That Mac is already carrying ${perLink} requests through the relay. Try again in a moment.`,
+        `That machine is already carrying ${perLink} requests through the relay. Try again in a moment.`,
         { ...RELAY_PRIVATE, ...exchange.cors }
       )
       return
@@ -856,53 +859,70 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       clock = setTimeout(() => expire(why), ms)
       clock.unref?.()
     }
-    const socket: HubSocket = {
-      send: (line) => {
-        const frame = decodeFrame(line)
-        if (!frame) return
-        if (frame.t === 'head' && !headed) {
+    /** One frame of the machine's answer, written out. */
+    const takeFrame = (line: string): void => {
+      const frame = decodeFrame(line)
+      if (!frame) return
+      if (frame.t === 'head' && !headed) {
+        headed = true
+        // NOT AN API ANSWER: a page a browser would run, or a redirect to
+        // somewhere a machine chose. Refused whole, the machine told to stop,
+        // and not a byte of what it sent passed on.
+        const type = Object.entries(frame.headers).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? ''
+        if ((frame.status >= 300 && frame.status < 400 && frame.status !== 304) || isPageType(type)) {
+          refused = true
+          stopClock()
+          deny(response, 502, 'not_an_api', 'That machine answered with something other than its API.', {
+            ...RELAY_PRIVATE,
+            ...exchange.cors
+          })
+          if (streamId !== null) hub.closeCaller(streamId)
+          return
+        }
+        startClock(idleMs, 'went silent after its head')
+        response.writeHead(frame.status, relayAnswerHeaders(frame.headers, exchange.cors))
+        return
+      }
+      if (refused) return
+      if (frame.t === 'chunk') {
+        startClock(idleMs, 'went silent mid-answer')
+        const bytes = Buffer.from(frame.data, 'base64')
+        down += bytes.byteLength
+        counts.bytesDown += bytes.byteLength
+        if (!response.writableEnded) response.write(bytes)
+        return
+      }
+      if (frame.t === 'end') {
+        stopClock()
+        finish()
+        return
+      }
+      if (frame.t === 'abort') {
+        stopClock()
+        // Nothing has been said yet: a status is still possible, and it is
+        // kinder than an empty 200.
+        if (!headed) {
           headed = true
-          // NOT AN API ANSWER: a page a browser would run, or a redirect to
-          // somewhere a machine chose. Refused whole, the machine told to stop,
-          // and not a byte of what it sent passed on.
-          const type = Object.entries(frame.headers).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? ''
-          if ((frame.status >= 300 && frame.status < 400 && frame.status !== 304) || isPageType(type)) {
-            refused = true
-            stopClock()
-            deny(response, 502, 'not_an_api', 'That machine answered with something other than its API.', {
-              ...RELAY_PRIVATE,
-              ...exchange.cors
-            })
-            if (streamId !== null) hub.closeCaller(streamId)
-            return
-          }
-          startClock(idleMs, 'went silent after its head')
-          response.writeHead(frame.status, relayAnswerHeaders(frame.headers, exchange.cors))
-          return
+          deny(response, 502, 'no_link', 'That machine stopped answering part-way through.', { ...RELAY_PRIVATE, ...exchange.cors })
         }
-        if (refused) return
-        if (frame.t === 'chunk') {
-          startClock(idleMs, 'went silent mid-answer')
-          const bytes = Buffer.from(frame.data, 'base64')
-          down += bytes.byteLength
-          counts.bytesDown += bytes.byteLength
-          if (!response.writableEnded) response.write(bytes)
-          return
-        }
-        if (frame.t === 'end') {
-          stopClock()
-          finish()
-          return
-        }
-        if (frame.t === 'abort') {
-          stopClock()
-          // Nothing has been said yet: a status is still possible, and it is
-          // kinder than an empty 200.
-          if (!headed) {
+        finish()
+      }
+    }
+    const socket: HubSocket = {
+      // NOTHING A MACHINE SENDS MAY THROW PAST HERE. This runs inside the
+      // line's own reader; an error let out of it would end the process, and
+      // with it every other machine's line. The exchange is given up instead.
+      send: (line) => {
+        try {
+          takeFrame(line)
+        } catch {
+          // Whatever it was, the reader is told plainly if nothing has gone out yet.
+          if (!response.headersSent) {
             headed = true
-            deny(response, 502, 'no_link', 'That Mac stopped answering part-way through.', { ...RELAY_PRIVATE, ...exchange.cors })
+            refused = true
+            deny(response, 502, 'not_an_api', 'That machine answered with something other than its API.', { ...RELAY_PRIVATE, ...exchange.cors })
           }
-          finish()
+          expire('answered with something the relay could not write')
         }
       },
       close: finish
@@ -964,7 +984,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       hub.closeCaller(opened.id)
       if (!headed) {
         headed = true
-        deny(response, 504, 'timed_out', 'That Mac did not answer in time. Try again in a moment.', { ...RELAY_PRIVATE, ...exchange.cors })
+        deny(response, 504, 'timed_out', 'That machine did not answer in time. Try again in a moment.', { ...RELAY_PRIVATE, ...exchange.cors })
       }
       finish()
       settle()

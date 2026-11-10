@@ -152,7 +152,10 @@ describe('what the account page’s session opens on the auth host', () => {
     const renamed = await browser.page('PATCH', '/v2/me', null, { displayName: 'The Owner' })
     expect(renamed.status).toBe(200)
     expect((await browser.call(site.A, 'GET', '/v2/me/requests')).status).toBe(200)
-    expect((await browser.call(site.A, 'GET', '/v2/me/step-up/change-password')).status).toBeLessThan(500)
+    // Reached (not the 404 of a route this host does not carry), and answered for this account.
+    const fresh = await browser.call(site.A, 'GET', '/v2/me/step-up/change-password')
+    expect(fresh.status).toBe(200)
+    expect(typeof fresh.body.fresh).toBe('boolean')
   })
 
   it('opens nothing of a machine: no list, no pass, no line, no relay', async () => {
@@ -247,8 +250,54 @@ describe('a console session, brought to the auth host', () => {
       expect(res.status, `${method} ${path}`).toBe(403)
       expect(res.body.error, `${method} ${path}`).toBe('console_scope')
       const viaBearer = await thief.call(site.A, method, path, body, { ...bearer(stolen), origin: site.A })
-      expect([401, 403], `${method} ${path} bearer`).toContain(viaBearer.status)
+      expect(viaBearer.status, `${method} ${path} bearer`).toBe(403)
+      expect(viaBearer.body.error, `${method} ${path} bearer`).toBe('console_scope')
     }
+  })
+})
+
+describe('a console session, hidden behind another credential on the auth host', () => {
+  it('is still refused: the cookie is what this host reads, so the cookie is what is judged', async () => {
+    const page = new Client(site, 'console-page')
+    const own = browserDevice('Console in Chrome')
+    const { createHash } = await import('node:crypto')
+    const verifier = 'w'.repeat(43)
+    const opened = await page.console('POST', '/v2/auth/requests', {
+      client: 'console',
+      device: own.payload,
+      challenge: createHash('sha256').update(verifier).digest('base64url'),
+      state: 't'.repeat(22)
+    })
+    const request = String(opened.body.request)
+    await page.console('POST', `/v2/auth/requests/${request}/proof`, { signature: signTranscript(own, String(opened.body.transcript)) })
+    const authPage = new Client(site, 'auth-page')
+    await authPage.page('POST', '/auth/api/claim', null, { request })
+    const asked = await authPage.page('POST', '/v2/sessions', request, { username, password: PASSWORD })
+    const rung = await authPage.page('POST', `/v2/sessions/${asked.body.pending}/approve`, request, {})
+    await new Client(site).api('POST', `/v2/me/approvals/${rung.body.approval}`, { decision: 'approve', match: asked.body.match }, bearer(desktopToken))
+    const done = await authPage.page('GET', `/v2/sessions/${asked.body.pending}`, request)
+    const spent = await page.console('POST', '/v2/auth/token', { code: new URL(String((done.body.handoff as { url: string }).url)).searchParams.get('code'), verifier })
+    const stolen = String(spent.body.token)
+    expect(stolen.length).toBeGreaterThan(20)
+
+    const thief = new Client(site, 'thief')
+    // A bearer that is nothing, so a check that reads the bearer first sees no console session at all.
+    for (const junk of ['Bearer x', 'Bearer ', `Bearer ${desktopToken.slice(0, 20)}`]) {
+      const hidden = { authorization: junk, cookie: `__Host-cr_session=${stolen}`, origin: site.A }
+      for (const [method, path, body] of [
+        ['GET', '/v2/me'],
+        ['GET', '/account'],
+        ['PATCH', '/v2/me', { displayName: 'Taken' }],
+        ['POST', '/v2/me/recovery-codes', {}],
+        ['GET', '/v2/me/requests'],
+        ['POST', '/v2/auth/requests', { client: 'web', intent: 'passkey', device: browserDevice().payload }]
+      ] as const) {
+        const res = await thief.call(site.A, method, path, body, hidden)
+        expect(res.status, `${junk} ${method} ${path}`).toBe(403)
+        expect(res.body.error, `${junk} ${method} ${path}`).toBe('console_scope')
+      }
+    }
+    expect((await browser.call(site.A, 'GET', '/v2/me')).body.displayName).toBe('The Owner')
   })
 })
 

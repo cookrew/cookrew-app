@@ -37,9 +37,12 @@ const RELAYED_ROOTS = new Set(['api', '~seal'])
  * No page, no asset.
  */
 export function isRelayedRoute(route: string): boolean {
-  const segments = route.split('?')[0].split('/')
+  const path = route.split('?')[0]
+  // No climbing out, however it is spelled: an encoded slash, backslash or dot
+  // is refused outright rather than left for a later reader to decode into one.
+  if (/%2f|%5c|%2e|\\/i.test(path)) return false
+  const segments = path.split('/')
   if (!RELAYED_ROOTS.has(segments[0])) return false
-  // No climbing out, however it is spelled.
   return !segments.some((segment) => segment === '..' || segment === '.')
 }
 

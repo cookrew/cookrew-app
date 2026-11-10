@@ -376,12 +376,25 @@ export interface Signed {
  * The account behind a request, or null. The signature is checked by the token
  * layer (which also refuses a revoked device); the store answers the half a
  * signature cannot — was this session ended, is this device still attached.
+ *
+ * A CONSOLE SESSION IS NOT ONE, UNLESS THE CALLER ASKS FOR ITS KIND. Its token
+ * lives where a page's script could read it, so a route that never thought
+ * about the console must not find itself answering one: opening a passkey
+ * request, linking a provider, publishing, seating. The few routes that are
+ * the console's say so here (`console: true`); the allow-list ahead of every
+ * route (console-scope.ts) is the first lock, and this is the second.
  */
-export function signedIn(request: IncomingMessage, v2: V2Identity, mode: 'any' | 'bearer' = 'any'): Signed | null {
+export function signedIn(
+  request: IncomingMessage,
+  v2: V2Identity,
+  mode: 'any' | 'bearer' = 'any',
+  allow: { console?: boolean } = {}
+): Signed | null {
   const token = sessionTokenOf(request, mode)
   if (token === null) return null
   const claims = v2.tokens.verify(token, 'session')
   if (claims === null) return null
+  if (claims.via === 'console' && allow.console !== true) return null
   const found = v2.accounts.authenticate(claims)
   return found === null ? null : { claims, account: found.account, device: found.device }
 }
@@ -391,15 +404,6 @@ export function v2AccountOf(request: IncomingMessage, v2: V2Identity, mode: 'any
   return signedIn(request, v2, mode)?.account.username ?? null
 }
 
-/**
- * A COOKIE-CARRIED WRITE FROM ANOTHER SITE IS NOT THIS PERSON'S WISH.
- *
- * SameSite=Lax already keeps the cookie off a cross-site POST in every browser
- * that honours it. This is the second lock: an Origin that is not ours on a
- * write is refused outright. Absent Origin is allowed, because that is what a
- * desktop app and a curl look like — and neither of them carries a cookie a
- * browser attached on somebody's behalf.
- */
 /**
  * MAY THIS WRITE BE CARRIED OUT, by where it says it came from.
  *
@@ -414,6 +418,15 @@ export function writeOriginOk(ctx: Pick<V2Context, 'request' | 'v2' | 'via'>): b
   return typeof origin === 'string' && ctx.v2.consoleOrigin !== null && origin === ctx.v2.consoleOrigin
 }
 
+/**
+ * A COOKIE-CARRIED WRITE FROM ANOTHER SITE IS NOT THIS PERSON'S WISH.
+ *
+ * SameSite=Lax already keeps the cookie off a cross-site POST in every browser
+ * that honours it. This is the second lock: an Origin that is not ours on a
+ * write is refused outright. Absent Origin is allowed, because that is what a
+ * desktop app and a curl look like — and neither of them carries a cookie a
+ * browser attached on somebody's behalf.
+ */
 export function sameOrigin(request: IncomingMessage): boolean {
   const origin = request.headers.origin
   // A literal `null` origin is NOT "no origin": it is a sandboxed frame, a

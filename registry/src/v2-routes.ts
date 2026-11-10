@@ -39,6 +39,7 @@ import { handleOAuthRoute } from './v2-oauth-routes'
 import { linkedView } from './v2-links'
 import { deleteAccount } from './v2-delete'
 import { handleAuthRoute } from './v2-auth-routes'
+import { consoleMayAsk } from './console-scope'
 import { authorizeSession } from './auth-finish'
 import { setupForNewAccount } from './v2-second-step'
 import { tokenExpiry } from './v2-session-age'
@@ -280,7 +281,8 @@ async function openSession(ctx: V2Context): Promise<void> {
 }
 
 function signOut(ctx: V2Context): void {
-  const signed = signedIn(ctx.request, ctx.v2)
+  // A console session ends itself here too, as any session does.
+  const signed = signedIn(ctx.request, ctx.v2, 'any', { console: ctx.via !== 'auth' })
   if (signed !== null) ctx.v2.accounts.closeSession(signed.account.username, signed.claims.jti)
   // 204 either way: signing out of a session that has already ended is not an
   // error, and telling a caller which it was leaks whether a token was live.
@@ -534,9 +536,17 @@ const hasNames = (ctx: V2Context): ((deviceId: string) => boolean) =>
 
 async function mine(ctx: V2Context, rest: string[]): Promise<void> {
   const { response, v2, method } = ctx
-  const signed = signedIn(ctx.request, v2)
+  // A CONSOLE SESSION READS A LITTLE OF THIS FAMILY (who is signed in, the
+  // machines from outside, the device pass) and nothing else of it, and never
+  // on the auth host. Asked for by kind here, and held to its allow-list here
+  // as well as at the door (console-scope.ts): two locks, one list.
+  const signed = signedIn(ctx.request, v2, 'any', { console: ctx.via !== 'auth' })
   if (signed === null) {
     refuse(response, 401, 'unauthenticated')
+    return
+  }
+  if (signed.claims.via === 'console' && !consoleMayAsk(method === 'HEAD' ? 'GET' : method, `/${ctx.parts.join('/')}`)) {
+    refuse(response, 403, 'console_scope')
     return
   }
   const { account, claims } = signed

@@ -476,7 +476,9 @@ describe('the registry binary', () => {
     expect(plain.status).toBe(503)
     expect(existsSync(path.join(r.data, 'receipts.jsonl'))).toBe(false)
     // And on no other name: the address alone, with no API host named, is nobody's.
-    expect((await fetch(`http://127.0.0.1:${r.port}/v1/health`)).status).toBe(404)
+    expect((await fetch(`http://127.0.0.1:${r.port}/v1/presets`)).status).toBe(404)
+    // Except the one question a cluster's probe asks by address: is the process up.
+    expect((await fetch(`http://127.0.0.1:${r.port}/v1/health`)).status).toBe(200)
   }, 30_000)
 
   it('in production mode refuses to start as one host: the API, the console and the sign-in page are named or it does not run', async () => {

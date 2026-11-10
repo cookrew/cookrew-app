@@ -449,7 +449,12 @@ export function createRegistry(deps: RegistryDeps): Server {
     // set, no page is served, and the console's is the one page that may call
     // (api-host.ts states and enforces all four before any route runs).
     if (apiHost !== null && deps.v2) {
-      if (host !== apiHost) {
+      // ONE EXCEPTION, the liveness question: a cluster's probe asks the pod by
+      // its address, with no name of ours in Host. It is answered as on the
+      // API host (no cookie read, none set) and says nothing but that the
+      // process is up.
+      const probe = url.pathname === '/v1/health' && (method === 'GET' || method === 'HEAD')
+      if (host !== apiHost && !probe) {
         json(response, 404, { error: 'not_found' })
         return
       }
@@ -474,10 +479,9 @@ export function createRegistry(deps: RegistryDeps): Server {
 
     // ── THE PRIVATE RELAY SESSION, beside it ─────────────────────────────
     //
-    // Owns /v2/canvas, /v2/me/desktops/:id/relay-status and the whole of
-    // /relay/@user/desktop/:id — a canvas arriving through one address is a
-    // whole origin's worth of app, so the prefix is claimed here rather than
-    // route by route below.
+    // Owns /v2/canvas (a machine's own line), /v2/me/presence,
+    // /v2/me/desktops/:id/relay-status and the one relay path every client
+    // uses, /api/m/<machine id>/… (v2-canvas-relay.ts).
     if (canvas && canvas.handle(request, response, parts, url)) return
 
     // ── IDENTITY v2 ──────────────────────────────────────────────────────

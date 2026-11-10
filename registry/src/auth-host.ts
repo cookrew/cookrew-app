@@ -124,16 +124,20 @@ export function handleAuthHost(
     refuse(response, 404, 'not_found')
     return
   }
-  // A CONSOLE SESSION OPENS NOTHING ON THIS HOST, however it is presented: its
-  // token lives where a page's script could read it, and the account's
-  // security is exactly what such a token must never reach (console-scope.ts).
-  if (saysConsole(sessionTokenOf(request))) {
+  // NO BEARER IS READ HERE. The one session this host knows is its own cookie,
+  // set by its own sign-in; a token a client holds is the API host's business.
+  // Taken off BEFORE anything is judged, so what is judged below is exactly
+  // what every route will then read.
+  const presented = sessionTokenOf(request, 'bearer')
+  delete request.headers.authorization
+  // A CONSOLE SESSION OPENS NOTHING ON THIS HOST, however it is presented, in
+  // the cookie or as the bearer just set aside: its token lives where a page's
+  // script could read it, and the account's security is exactly what such a
+  // token must never reach (console-scope.ts).
+  if (saysConsole(sessionTokenOf(request)) || saysConsole(presented)) {
     v2Json(response, 403, v2Error('console_scope'))
     return
   }
-  // NO BEARER IS READ HERE. The one session this host knows is its own cookie,
-  // set by its own sign-in; a token a client holds is the API host's business.
-  delete request.headers.authorization
   if ((method === 'GET' || method === 'HEAD') && (path === '/' || path === '/device')) {
     page(response, method, authPageHtml({ authOrigin: auth.origin, productOrigin: productOrigin(v2), assetVersion: ASSET_VERSION, path }))
     return

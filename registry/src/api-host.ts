@@ -56,15 +56,19 @@ const refuse = (response: ServerResponse, code: number, error: 'not_found' | 'ba
   response.end(payload)
 }
 
-/** The answer's head, as this host lets it out: no Set-Cookie, and `vary` naming the origin when a page was granted a read. */
-function ownHead<T>(headers: T, granted: boolean): T {
+/**
+ * The answer's head, as this host lets it out: no Set-Cookie, and `vary`
+ * naming the origin. Always: an answer the console may read and the same
+ * answer without that grant must never be mistaken for each other by a cache.
+ */
+function ownHead<T>(headers: T): T {
   if (Array.isArray(headers)) {
     // Raw pairs: [name, value, name, value, …].
     const kept: unknown[] = []
     for (let at = 0; at + 1 < headers.length; at += 2) {
       const name = String(headers[at]).toLowerCase()
       if (name === 'set-cookie') continue
-      kept.push(headers[at], name === 'vary' && granted ? varyingByOrigin(String(headers[at + 1])) : headers[at + 1])
+      kept.push(headers[at], name === 'vary' ? varyingByOrigin(String(headers[at + 1])) : headers[at + 1])
     }
     return kept as T
   }
@@ -72,21 +76,21 @@ function ownHead<T>(headers: T, granted: boolean): T {
   return Object.fromEntries(
     Object.entries(headers)
       .filter(([name]) => name.toLowerCase() !== 'set-cookie')
-      .map(([name, value]) => [name, name.toLowerCase() === 'vary' && granted ? varyingByOrigin(String(value)) : value])
+      .map(([name, value]) => [name, name.toLowerCase() === 'vary' ? varyingByOrigin(String(value)) : value])
   ) as T
 }
 
 const varyingByOrigin = (vary: string): string => (/(^|,)\s*origin\s*(,|$)/i.test(vary) ? vary : `${vary}, origin`)
 
 /** From here on this response carries no Set-Cookie, however a route writes its head. */
-function guardHead(response: ServerResponse, granted: () => boolean): void {
+function guardHead(response: ServerResponse): void {
   const setHeader = response.setHeader.bind(response)
   response.setHeader = ((name: string, value: number | string | readonly string[]) =>
     name.toLowerCase() === 'set-cookie' ? response : setHeader(name, value)) as typeof response.setHeader
   const writeHead = response.writeHead.bind(response) as (...args: unknown[]) => ServerResponse
   response.writeHead = ((code: number, ...rest: unknown[]) => {
     response.removeHeader('set-cookie')
-    return writeHead(code, ...rest.map((part) => (typeof part === 'string' ? part : ownHead(part, granted()))))
+    return writeHead(code, ...rest.map((part) => (typeof part === 'string' ? part : ownHead(part))))
   }) as typeof response.writeHead
 }
 
@@ -99,8 +103,9 @@ function guardHead(response: ServerResponse, granted: () => boolean): void {
  */
 export function enterApiHost(v2: V2Identity, request: IncomingMessage, response: ServerResponse, url: URL): boolean {
   delete request.headers.cookie
-  let granted = false
-  guardHead(response, () => granted)
+  guardHead(response)
+  // Kept by every answer whose route names no `vary` of its own; one that does has `origin` added (ownHead).
+  response.setHeader('vary', 'origin')
   const path = url.pathname
   if (!API_PREFIXES.some((prefix) => path.startsWith(prefix))) {
     refuse(response, 404, 'not_found')
@@ -140,10 +145,6 @@ export function enterApiHost(v2: V2Identity, request: IncomingMessage, response:
   // grant, so its browser shows it nothing; its writes are refused by the
   // routes' own origin rule (v2-http.ts · writeOriginOk), and no cookie of its
   // visitor's can ride along because none is read here.
-  if (console_) {
-    granted = true
-    response.setHeader('access-control-allow-origin', v2.consoleOrigin as string)
-    response.setHeader('vary', 'origin')
-  }
+  if (console_) response.setHeader('access-control-allow-origin', v2.consoleOrigin as string)
   return false
 }

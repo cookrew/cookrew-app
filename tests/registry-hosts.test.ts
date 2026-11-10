@@ -40,7 +40,7 @@ afterAll(async () => {
 
 describe('a name this registry does not serve', () => {
   it('answers nothing on the product host: that is a static site now, hosted elsewhere', async () => {
-    for (const path of ['/', '/me', '/market', '/v2/keys', '/v1/health', `/api/m/${desktopDevice().payload.id}/api/fleet`]) {
+    for (const path of ['/', '/me', '/market', '/v2/keys', '/v1/doors', `/api/m/${desktopDevice().payload.id}/api/fleet`]) {
       const res = await app.call(site.P, 'GET', path, undefined, bearer(token))
       expect(res.status, path).toBe(404)
       expect(res.headers['set-cookie'], path).toBeUndefined()
@@ -82,6 +82,18 @@ describe('the API host', () => {
   })
 })
 
+describe('the one question any name may ask', () => {
+  it('answers a liveness probe by the pod’s own address, and nothing else that way', async () => {
+    // A cluster's probe names no host of ours. It learns the process is up, and that is all.
+    const probe = await app.call(`http://127.0.0.1:${site.port}`, 'GET', '/v1/health', undefined, { cookie: `__Host-cr_session=${token}` })
+    expect(probe.status).toBe(200)
+    expect(probe.headers['set-cookie']).toBeUndefined()
+    for (const [method, path] of [['GET', '/v1/health/x'], ['GET', '/v2/keys'], ['POST', '/v1/health'], ['GET', '/v1/doors'], ['GET', '/']] as const) {
+      expect((await app.call(`http://127.0.0.1:${site.port}`, method, path, undefined, bearer(token))).status, `${method} ${path}`).toBe(404)
+    }
+  })
+})
+
 describe('which page may call the API host', () => {
   it('answers the console’s preflight, and names exactly that origin', async () => {
     const res = await app.call(site.API, 'OPTIONS', '/v2/me', undefined, {
@@ -108,6 +120,15 @@ describe('which page may call the API host', () => {
     }
   })
 
+  it('says every answer varies by origin, granted or not, so a cache never hands one reader another’s', async () => {
+    for (const headers of [{}, { origin: site.C }, { origin: 'https://evil.example' }] as Record<string, string>[]) {
+      const res = await app.api('GET', '/v2/keys', undefined, headers)
+      expect(String(res.headers.vary).toLowerCase(), JSON.stringify(headers)).toMatch(/(^|,\s*)origin(\s*,|$)/)
+    }
+    const health = await app.api('GET', '/v1/health')
+    expect(String(health.headers.vary).toLowerCase()).toContain('origin')
+  })
+
   it('answers no preflight for any other origin', async () => {
     for (const origin of [site.P, site.A, 'https://evil.example']) {
       const res = await app.call(site.API, 'OPTIONS', '/v2/me', undefined, { origin, 'access-control-request-method': 'GET' })
@@ -119,8 +140,10 @@ describe('which page may call the API host', () => {
   it('takes a write from the console’s page and from an app, and from no other page', async () => {
     const body = { username: 'nobody-here', password: PASSWORD, device: browserDevice().payload }
     // Refused for what it says (no such account), which is past the origin gate.
-    expect((await app.console('POST', '/v2/sessions', body)).status).not.toBe(403)
-    expect((await app.api('POST', '/v2/sessions', body)).status).not.toBe(403)
+    for (const res of [await app.console('POST', '/v2/sessions', body), await app.api('POST', '/v2/sessions', body)]) {
+      expect(res.status).toBe(401)
+      expect(res.body.error).toBe('bad_credentials')
+    }
     for (const origin of [site.P, site.A, site.API, 'https://evil.example', 'null']) {
       const res = await app.api('POST', '/v2/sessions', body, { origin })
       expect(res.status, origin).toBe(403)

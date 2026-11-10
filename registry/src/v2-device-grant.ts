@@ -63,7 +63,9 @@ const rests = new Map<string, Rest>()
  * must not lock the owner's phone out, and each device needs a full two-step
  * sign-in of its own to guess at all.
  */
-const restKey = (signed: Signed): string => `${signed.account.username}|${signed.device.id}`
+/** Tries are counted for an account on a device, wherever the password was typed. */
+const restKeyOf = (username: string, deviceId: string): string => `${username}|${deviceId}`
+const restKey = (signed: Signed): string => restKeyOf(signed.account.username, signed.device.id)
 const restingFor = (key: string, now: number): number => Math.max(0, (rests.get(key)?.until ?? 0) - now)
 
 function sweep(now: number): void {
@@ -184,7 +186,7 @@ export type PasswordTry =
  */
 export async function tryGrantPassword(ctx: Pick<V2Context, 'v2'>, username: string, deviceId: string, password: string): Promise<PasswordTry> {
   const now = ctx.v2.now()
-  const key = `${username}|${deviceId}`
+  const key = restKeyOf(username, deviceId)
   const rest = restingFor(key, now)
   if (rest > 0) return { ok: false, resting: true, retryAfterMs: rest }
   const account = ctx.v2.accounts.get(username)

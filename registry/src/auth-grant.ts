@@ -114,7 +114,7 @@ export async function grantOnPage(ctx: V2Context, request: AuthRequest, body: Re
  */
 export function spendGrant(ctx: V2Context, request: AuthRequest): void {
   const { v2, response } = ctx
-  const signed = signedIn(ctx.request, v2, 'bearer')
+  const signed = signedIn(ctx.request, v2, 'bearer', { console: true })
   const opener = request.opener
   if (
     signed === null ||
@@ -129,6 +129,9 @@ export function spendGrant(ctx: V2Context, request: AuthRequest): void {
   if (v2.factors.store.mustChangePassword(signed.account.username)) return said(ctx, 403, 'locked', SAID.locked)
   const jkt = jwkThumbprint(signed.device.jwk)
   if (jkt === null) return said(ctx, 400, 'bad_device', SAID.badDevice)
+  // The session is NOT marked freshly verified, unlike a pass asked for
+  // directly (v2-device-grant.ts): a console session can do no sensitive act,
+  // so there is no five-minute window worth opening for it.
   const minted = v2.tokens.mintGrant(signed.account.username, signed.device.id, jkt, opener.jti)
   response.setHeader('cache-control', 'private, no-store')
   v2Json(response, 201, { grant: minted.token, exp: minted.exp, deviceId: signed.device.id })

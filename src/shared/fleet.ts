@@ -62,7 +62,7 @@ export interface FleetMachine {
   profile: MachineProfile | null
   /**
    * Where this desktop's API is reached down the relay, on the API host: '/api/m/<deviceId>' (machine-relay.ts).
-   * The registry admits the account cookie; the desktop admits its own pairing
+   * The registry admits the account session, sent in its own header; the desktop admits its own pairing
    * token, which this browser keeps as localStorage 'cr_token:<deviceId>' (absent
    * = unpaired). The shell sends it as Authorization: Bearer on every request,
    * streams included: they run over fetch, so no token lands in a URL and a

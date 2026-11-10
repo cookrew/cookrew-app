@@ -25,8 +25,6 @@ import { sessionTokenOf } from './v2-http'
  * itself then rejects (v2-tokens.ts · verify).
  */
 
-const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-
 const CONSOLE_ROUTES: readonly [method: string, path: RegExp][] = [
   ['GET', /^\/v2\/me$/],
   ['GET', /^\/v2\/me\/desktops$/],
@@ -38,7 +36,8 @@ const CONSOLE_ROUTES: readonly [method: string, path: RegExp][] = [
   ['GET', /^\/v2\/sessions\/renew-nonce$/],
   ['POST', /^\/v2\/sessions\/renew$/],
   ['POST', /^\/v2\/auth\/requests$/],
-  ['POST', new RegExp(`^/v2/auth/requests/${UUID}/proof$`)],
+  // A request's id is the registry's own random token (auth-requests.ts), not a uuid.
+  ['POST', /^\/v2\/auth\/requests\/[A-Za-z0-9_-]{43}\/proof$/],
   ['POST', /^\/v2\/auth\/token$/],
   ['POST', /^\/v2\/verify-hello$/],
   ['GET', /^\/v2\/keys$/],
@@ -51,7 +50,7 @@ export function saysConsole(token: string | null): boolean {
   try {
     const body = token.split('.')[0]
     if (!body || body.length > 4096) return false
-    const claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { via?: unknown; scope?: unknown }
+    const claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { via?: unknown }
     return claims.via === 'console'
   } catch {
     return false

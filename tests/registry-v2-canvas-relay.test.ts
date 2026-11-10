@@ -22,6 +22,7 @@ import {
   crossSite,
   isCanvasName,
   isPageType,
+  relayAnswerHeaders,
   headerSafeName,
   type CanvasRelay
 } from '../registry/src/v2-canvas-relay'
@@ -571,6 +572,25 @@ describe('/api/m/:machine — who is admitted', () => {
       const res = await fetch(`${site.origin}/api/m/${encodeURIComponent(id)}/api/fleet`, { headers: asPhone() })
       expect(res.status, id).toBe(404)
       await res.arrayBuffer()
+    }
+  })
+
+  it('refuses a route with an encoded separator or dot before the machine is asked', async () => {
+    const before = (await echo('/', { headers: asPhone() })).res.status
+    expect(before).toBe(200)
+    // Sent raw: fetch would tidy these away, and the point is the request that does not.
+    const raw = (path: string): Promise<number> =>
+      new Promise((resolve, reject) => {
+        const target = new URL(site.origin)
+        const asked = httpRequest({ host: target.hostname, port: target.port, path, method: 'GET', headers: asPhone() }, (answer) => {
+          answer.resume()
+          answer.on('end', () => resolve(answer.statusCode ?? 0))
+        })
+        asked.on('error', reject)
+        asked.end()
+      })
+    for (const route of ['api/..%2Fsecrets', 'api/%2e%2e%2Fsecrets', 'api/x%5C..%5Csecrets']) {
+      expect(await raw(`/api/m/${deviceId}/${route}`), route).toBe(404)
     }
   })
 
@@ -1156,6 +1176,36 @@ describe('the header rules, by themselves', () => {
     expect(headerSafeName('')).toBe('')
   })
 
+  it('never lets a machine’s header value reach the wire if a header cannot carry it', () => {
+    // A value with a line break throws inside writeHead, and that throw was a
+    // machine taking the whole relay down with one answer.
+    const out = relayAnswerHeaders(
+      {
+        'content-type': 'application/json\r\nset-cookie: grab=1',
+        etag: 'a\nb',
+        'last-modified': 'Tue, 10 Nov 2026 12:00:00 GMT',
+        'retry-after': '\u{1F4A5}',
+        'content-encoding': 'x'.repeat(9000)
+      },
+      {}
+    )
+    expect(out['content-type']).toBe('application/octet-stream')
+    expect(out.etag).toBeUndefined()
+    expect(out['retry-after']).toBeUndefined()
+    expect(out['content-encoding']).toBeUndefined()
+    expect(out['last-modified']).toBe('Tue, 10 Nov 2026 12:00:00 GMT')
+    for (const value of Object.values(out)) expect(value).toMatch(/^[\t\x20-\x7e]*$/)
+  })
+
+  it('reads every type an answer names, and refuses it if any is a page', () => {
+    for (const type of ['application/json, text/html', 'text/plain,text/html;charset=utf-8', 'application/rss+xml', 'application/atom+xml', 'text/xsl', 'multipart/x-mixed-replace; boundary=x', 'application/vnd.x+xml']) {
+      expect(isPageType(type), type).toBe(true)
+    }
+    for (const type of ['application/json; charset=utf-8', 'image/jpeg', 'audio/mpeg', 'text/event-stream']) {
+      expect(isPageType(type), type).toBe(false)
+    }
+  })
+
   it('says which answers are pages a browser would run', () => {
     for (const type of ['text/html', 'text/html; charset=utf-8', ' TEXT/HTML', 'application/xhtml+xml', 'image/svg+xml', 'text/xml', 'application/xml']) {
       expect(isPageType(type), type).toBe(true)
@@ -1178,5 +1228,12 @@ describe('the header rules, by themselves', () => {
     expect(machineRelayPath(id, '/~seal/hello')).toBe(`/api/m/${id}/~seal/hello`)
     expect(isRelayedRoute('~sealed/x')).toBe(false)
     expect(isRelayedRoute('assets/index.js')).toBe(false)
+    // Nothing that a later reader could decode into a way out of /api.
+    for (const route of ['api/../secrets', 'api/./x', 'api/..%2Fsecrets', 'api/%2e%2e/secrets', 'api/%2E%2E%2fsecrets', 'api/x%5c..%5csecrets', 'api\\..\\secrets']) {
+      expect(isRelayedRoute(route), route).toBe(false)
+      expect(machineRelayPath(id, route), route).toBeNull()
+    }
+    // A query is the machine's own to read, whatever it holds.
+    expect(isRelayedRoute('api/watch/cards?next=%2Fapi%2F..')).toBe(true)
   })
 })

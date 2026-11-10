@@ -109,7 +109,7 @@ function readBack(value: unknown): OAuthBack | null {
  * nothing here, so the provider comes back to the auth origin: a browser
  * navigation belongs there, and the API host serves none.
  */
-export const callbackOrigin = (ctx: V2Context): string => {
+const callbackOrigin = (ctx: V2Context): string => {
   if (ctx.v2.apiOrigin !== null && ctx.v2.auth !== null) return ctx.v2.auth.origin
   return ctx.auth === undefined ? relyingParty(ctx).origin : productOrigin(ctx.v2)
 }

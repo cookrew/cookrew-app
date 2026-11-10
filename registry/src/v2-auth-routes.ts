@@ -18,6 +18,7 @@ import { PROVIDER_LABEL, isProviderId, type OAuthBack, type ProviderId } from '.
 import { readJsonBody } from './http'
 import type { AuthOpener, AuthRequest } from './auth-requests'
 import { handoffFor, productOrigin, webOrigin } from './auth-finish'
+import { jwkThumbprint } from '../../src/shared/jwk-thumbprint'
 import { grantOnPage, openerForGrant, spendGrant } from './auth-grant'
 import { cookie, refuse, signedIn, v2Json, asking, type V2Context, type V2Identity } from './v2-http'
 import { deviceShape } from './v2-factor-http'
@@ -324,8 +325,24 @@ async function openRequest(ctx: V2Context): Promise<void> {
 
   // The pass by password: the console's own session asks, for its own device.
   if (parsed.intent === 'grant') {
-    opener = openerForGrant(ctx, signedIn(ctx.request, v2, 'bearer'), shapeId(parsed.device))
+    opener = openerForGrant(ctx, signedIn(ctx.request, v2, 'bearer', { console: true }), shapeId(parsed.device))
     if (opener === null) return
+  }
+
+  /**
+   * A SIGNED-IN REQUEST IS OPENED WITH THE DEVICE'S OWN KEY. The checks above
+   * matched the device's id; the key in the body is what the proof and the
+   * page will then be bound to, so it must be the key this device signed in
+   * with. Without this a stolen session could open a request under its
+   * device's id with a key of the thief's, and prove it.
+   */
+  if (opener !== null) {
+    const stored = v2.accounts.get(opener.username)?.devices.find((device) => device.id === opener?.device)
+    const asked = jwkThumbprint(parsed.device.jwk as Record<string, unknown>)
+    if (stored === undefined || asked === null || asked !== jwkThumbprint(stored.jwk)) {
+      refuse(response, 403, 'not_this_device')
+      return
+    }
   }
 
   const hint = typeof body.username === 'string' ? body.username.trim().toLowerCase() : ''
