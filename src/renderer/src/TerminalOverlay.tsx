@@ -6,9 +6,8 @@ import { HeadToolsContext } from './head-tools'
 import './transcript-paper.css'
 import { Terminal } from '@xterm/xterm'
 import { createPortal } from 'react-dom'
-import { ClipboardAddon } from '@xterm/addon-clipboard'
-import type { IClipboardProvider } from '@xterm/addon-clipboard'
 import { readClipboardText, writeClipboardText } from './clipboard'
+import { loadTerminalClipboard } from './terminal-osc52'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
@@ -492,14 +491,10 @@ function TerminalOverlay({
     // writeClipboardText, whose execCommand fallback keeps copies working in
     // insecure remote contexts (phone over plain http) where
     // navigator.clipboard is undefined.
+    // A QUERY is refused: output never learns what the clipboard holds
+    // (terminal-osc52.ts), least of all an imported card's.
     try {
-      const provider: IClipboardProvider = {
-        readText: async () => (await readClipboardText()) ?? '',
-        writeText: async (_selection, text) => {
-          await writeClipboardText(text)
-        }
-      }
-      term.loadAddon(new ClipboardAddon(undefined, provider))
+      loadTerminalClipboard(term, writeClipboardText)
     } catch {
       // clipboard unavailable — selection still works inside tmux
     }
