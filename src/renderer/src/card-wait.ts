@@ -1,4 +1,4 @@
-import { MKT_GATE, MKT_PAY, denialCopy, unknownDenialCopy } from '../../shared/marketplace-copy'
+import { MKT_GATE, MKT_PAY, denialCopyLenient } from '../../shared/marketplace-copy'
 import { CHECKOUT_MAX_LIFE_SECONDS } from '../../shared/stripe-checkout'
 import type { ServePhase } from './api'
 import type { PayFault } from './GateSheet'
@@ -83,13 +83,8 @@ function read(answer: SettleAnswer, vars: Readonly<Record<string, string | numbe
       // is the ordinary answer until the person finishes on Stripe's page.
       if (phase.reason === 'payment_invalid') return 'unpaid'
       if (phase.reason === 'payment_unverifiable') return 'uncheckable'
-      let copy: { title: string; body: string }
-      try {
-        copy = denialCopy(phase.reason, undefined, vars)
-      } catch {
-        // A sentence missing its facts must not throw inside a timer.
-        copy = unknownDenialCopy(undefined)
-      }
+      // Lenient: a sentence missing its facts must not throw inside a timer.
+      const copy = denialCopyLenient(phase.reason, undefined, vars)
       return { fault: apology(copy.title, copy.body) }
     }
     case 'gone':

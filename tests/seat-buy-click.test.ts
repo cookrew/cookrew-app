@@ -238,7 +238,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
     }
   }, 120_000)
 
-  it('a payment the door will not take is said on the pay step, in the accusing voice, and nothing is placed', async () => {
+  it('a payment the door will not take is said on the pay step, and the step stays alive: the card is paid instead', async () => {
     const guest = await world.registeredMachine('click-usdc', 'quin')
     const app = world.appOn(guest.accounts, { usdc: BAD_USDC })
     serve = app.ops
@@ -260,8 +260,22 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       // Still the pay step — the refusal is said where the money was asked for, not on a sheet of its own.
       expect(said).toContain('Terms — what the gate quoted')
       expect(said).not.toContain(MKT_GATE['mkt.gate.seat.done'])
+      // AND THE STEP IS NOT DEAD (M2): both rails are still there, the same
+      // one is still selected with its button live, and the card can be chosen instead.
+      expect(await page.evaluate<number>("document.querySelectorAll('.gk-chips button').length")).toBe(2)
+      await primaryReads(page, 'PAY 1 USDC')
+      expect(said).toContain('base-sepolia')
+      await click(page, '.gk-chips button:nth-of-type(1)')
+      await primaryReads(page, 'PAY 1.00 USD')
+      // Choosing another way to pay clears the accusation about the last one.
+      expect(await page.evaluate<number>("document.querySelectorAll('.gk-err').length")).toBe(0)
+      world.checkoutNext(PAID)
+      await click(page, PRIMARY)
+      await primaryReads(page, MKT_GATE['mkt.gate.open.action'], 30_000)
       expect(await left(page)).toEqual({ nodes: [], windows: [], placed: null, dismissed: false })
-      expect(world.callers.entitled(template.serviceId, 'acct-quin')).toBe(false)
+      // Seated by the card, after the wallet was refused: one payment, the one that verified.
+      expect(world.callers.entitled(template.serviceId, 'acct-quin')).toBe(true)
+      expect(app.signed).toHaveLength(1)
       expect(errors).toEqual([])
     } finally {
       world.quote(['stripe'])
@@ -453,6 +467,44 @@ describeWithChrome('BUY A SEAT, pressed', () => {
     } finally {
       world.usdcTerms({})
       world.quote(['stripe'])
+      page.close()
+    }
+  }, 120_000)
+
+  it('M2 — BUY AGAIN on a refunded seat sends the buy intent and lands on the pay step', async () => {
+    const guest = await world.registeredMachine('click-refund', 'yun')
+    const app = world.appOn(guest.accounts)
+    // A door whose seat for this account was refunded: that is what it says to a plain import.
+    serve = {
+      gate: async (link, intent) =>
+        intent === 'buy'
+          ? app.ops.gate(link, intent)
+          : {
+              ok: true,
+              door: 'install',
+              phase: { kind: 'denied', reason: 'refunded', retryable: false },
+              wallet: null,
+              team: DOOR,
+              owner: 'drej',
+              account: 'yun',
+              seat: null
+            },
+      checkout: (link) => app.ops.checkout(link),
+      settle: (link, rail, session) => app.ops.settle(link, rail, session)
+    }
+    const { page, errors } = await openGate()
+    try {
+      await sheetSays(page, MKT_DENIED_REASONS['mkt.denied.refunded.title'])
+      // The refusal's own button, in the refusal's footer.
+      const BUY_AGAIN = '.tf-foot .cr-btn:not(.ghost)'
+      expect(await text(page, BUY_AGAIN)).toBe(MKT_DENIED_REASONS['mkt.denied.refunded.action'])
+      expect(app.minted).toEqual([])
+      await click(page, BUY_AGAIN)
+      await primaryReads(page, 'PAY 1.00 USD')
+      expect(app.minted).toEqual([{ intent: 'buy' }])
+      expect(await left(page)).toEqual({ nodes: [], windows: [], placed: null, dismissed: false })
+      expect(errors).toEqual([])
+    } finally {
       page.close()
     }
   }, 120_000)

@@ -9,6 +9,7 @@ import {
   walkPricing
 } from '../src/renderer/src/import-gate-remedy'
 import { MKT_PAY } from '../src/shared/marketplace-copy'
+import { deniedBand } from '../src/renderer/src/gate-sheet-copy'
 import { onAccountSheetRequest, requestAccountSheet } from '../src/renderer/src/account/open-request'
 import { denialCopy, unknownDenialCopy } from '../src/shared/marketplace-copy'
 
@@ -44,9 +45,15 @@ describe('remedyFor — every 403 goes somewhere, and none of them leaves the ap
   })
 
   it('what only the author can change is asked again, not sent to a page that no longer exists', () => {
-    for (const reason of ['seat_limit', 'region', 'version_gate', 'balance_empty', 'refunded', 'revoked', 'nobody-shipped-this']) {
+    for (const reason of ['seat_limit', 'region', 'version_gate', 'balance_empty', 'revoked', 'scope', 'nobody-shipped-this']) {
       expect(remedyFor(reason, 'install'), reason).toEqual({ kind: 'retry' })
     }
+  })
+
+  it('a refunded seat is bought again the way a first one is: BUY AGAIN sends the intent', () => {
+    expect(remedyFor('refunded', 'install')).toEqual({ kind: 'buy' })
+    // No registry seats anybody at a dialled door, refunded or not.
+    expect(remedyFor('refunded', 'direct')).toEqual({ kind: 'retry' })
   })
 
   it('budget retries — and the sheet retries on its own in fifteen minutes', () => {
@@ -61,6 +68,68 @@ describe('remedyFor — every 403 goes somewhere, and none of them leaves the ap
   it('never answers with a dismiss', () => {
     for (const reason of ['no_seat', 'budget', 'scope', 'a-reason-nobody-shipped']) {
       expect(['buy', 'retry']).toContain(remedyFor(reason, 'install').kind)
+    }
+  })
+})
+
+describe('a refusal’s button says what it does (M2)', () => {
+  /**
+   * Every one of these used to name somewhere to go — the author's page, a
+   * contact, a top-up — and the page is gone and the others never existed in
+   * this sheet. The press asks the door again, so the label says so. Only the
+   * two that BUY keep a buying label, because buying is what they do.
+   */
+  const VARS = {
+    ...deniedVarsFor(FACE, { team: '@mira/research-crew', owner: 'mira', account: 'jkim' }),
+    n: 3, deviceList: 'a, b', from: 'v1', to: 'v2', wanted: 'v3',
+    date: '12 Aug', authorNote: 'n', amount: '0.00', asset: 'USDC'
+  }
+  const ASKS_AGAIN = ['seat_limit', 'version_gate', 'revoked', 'region', 'balance_empty', 'scope', 'budget', 'not_answering']
+
+  it('the label and the act agree, for every reason and on both walks', () => {
+    for (const reason of [...ASKS_AGAIN, 'no_seat', 'refunded', 'workspace', 'payment_unavailable', 'a-reason-nobody-shipped']) {
+      for (const door of ['install', 'direct'] as const) {
+        const label = deniedBand(reason, undefined, VARS).action
+        const buys = remedyFor(reason, door).kind === 'buy'
+        // A label that says BUY belongs to a press that buys — and on the
+        // walk where it cannot, the sheet never draws that band's button as a
+        // purchase (gate-walk draws no seat step on the direct door).
+        if (buys) expect(label, `${reason}/${door}`).toMatch(/^BUY /)
+        else if (door === 'install') expect(label, `${reason}/${door}`).not.toMatch(/^BUY /)
+      }
+    }
+  })
+
+  it('"ask the door again" is labelled TRY AGAIN — nothing promises a page, a contact or a top-up', () => {
+    for (const reason of ASKS_AGAIN) {
+      expect(deniedBand(reason, undefined, VARS).action, reason).toBe('TRY AGAIN')
+    }
+    expect(deniedBand('a-reason-nobody-shipped', undefined, VARS).action).toBe('TRY AGAIN')
+    expect(denialCopy('a-reason-nobody-shipped', 'https://example.test', VARS).action).toBe('TRY AGAIN')
+    const everything = [...ASKS_AGAIN, 'no_seat', 'refunded', 'a-reason-nobody-shipped']
+      .map((reason) => Object.values(deniedBand(reason, undefined, VARS)).join(' '))
+      .concat(Object.values(denialCopy('a-reason-nobody-shipped', 'https://example.test', VARS)))
+      .join(' ')
+    expect(everything).not.toMatch(/↗|’s page|'s page|AUTHOR'S PAGE|CONTACT|LEARN WHY|TOP UP|UPGRADE TO|COPY DETAILS|ASK @/)
+  })
+
+  it('the two that buy say so', () => {
+    expect(deniedBand('no_seat', undefined, VARS).action).toBe('BUY A SEAT · $4.00')
+    expect(deniedBand('refunded', undefined, VARS).action).toBe('BUY AGAIN')
+  })
+
+  it('a refusal a door sends without its facts still paints, with its own label — never a blank sheet', () => {
+    // A served door sends a reason and nothing else: no date, no counts.
+    const served = deniedVarsFor(FACE, { team: '@mira/research-crew', owner: 'mira', account: 'jkim' })
+    const refunded = deniedBand('refunded', undefined, served)
+    expect(refunded.said).toBe('This purchase was refunded')
+    expect(refunded.action).toBe('BUY AGAIN')
+    expect(refunded.why).not.toMatch(/\{|undefined/)
+    for (const reason of ['seat_limit', 'version_gate', 'revoked', 'balance_empty']) {
+      const band = deniedBand(reason, undefined, served)
+      expect(band.action, reason).toBe('TRY AGAIN')
+      expect(`${band.said} ${band.why}`, reason).not.toMatch(/\{|undefined/)
+      expect(band.said.length, reason).toBeGreaterThan(0)
     }
   })
 })

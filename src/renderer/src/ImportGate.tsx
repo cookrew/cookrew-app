@@ -80,6 +80,7 @@ function remaining(expiry: number, now: number): string | null {
 const shortAddress = (address: string): string =>
   `${address.slice(0, 6)}…${address.slice(-4)}`
 
+const EMPTY_RAILS: ServeRail[] = []
 const NO_FACTS: GateFacts = { door: 'install', team: null, owner: null, account: null, seat: null }
 
 export function ImportGate({
@@ -111,6 +112,8 @@ export function ImportGate({
     asset: string
     rail: 'x402' | 'stripe'
   } | null>(null)
+  /** The rails the door last quoted — what the pay step offers (see `rails` below). */
+  const [quotedRails, setQuotedRails] = useState<ServeRail[]>(EMPTY_RAILS)
   const [card, setCard] = useState<CardState | null>(null)
   /** The same card, readable from a timer without a stale closure. */
   const cardRef = useRef<CardState | null>(null)
@@ -134,6 +137,7 @@ export function ImportGate({
     setBusy(false)
     if (result.ok) {
       setPhase(result.phase)
+      setQuotedRails(result.phase.kind === 'pay' ? result.phase.rails : EMPTY_RAILS)
       setWallet(result.wallet)
       setFacts({
         door: result.door,
@@ -227,7 +231,15 @@ export function ImportGate({
     return () => window.clearInterval(timer)
   }, [])
 
-  const rails: ServeRail[] = phase?.kind === 'pay' ? phase.rails : []
+  // THE RAILS OUTLIVE A REFUSED PAYMENT. A payment the door would not take is
+  // shown ON the pay step — and that step used to lose its rails the moment
+  // the refusal arrived, leaving a sentence above a dead button. What the door
+  // last quoted stays offered, so the person can press again or pay another way.
+  const onPayStep =
+    phase?.kind === 'pay' ||
+    (phase?.kind === 'denied' &&
+      (phase.reason === 'payment_invalid' || phase.reason === 'payment_unverifiable'))
+  const rails: ServeRail[] = onPayStep ? quotedRails : EMPTY_RAILS
   const selected = useMemo(
     () => rails.find((rail) => rail.rail === railId) ?? rails[0] ?? null,
     [rails, railId]
@@ -250,6 +262,9 @@ export function ImportGate({
   const applyPhase = useCallback(
     (next: ServePhase): void => {
       setPhase(next)
+      // A settle can answer with a fresh quote (the door stopped taking USDC,
+      // say): that becomes what is offered. A refusal leaves the last one be.
+      if (next.kind === 'pay') setQuotedRails(next.rails)
       if (next.kind === 'denied') {
         if (next.reason === 'payment_invalid') {
           setFault({

@@ -35,17 +35,24 @@ export const BUDGET_RETRY_MS = 15 * 60 * 1000
  * intent said out loud, the door answers with its price and its rails, and
  * the person pays there or does not.
  *
- * It is offered on the INSTALL walk only. A direct door has no registry to
- * seat anybody (gate-walk.ts), so a `no_seat` from one is asked again like
+ * `refunded` is BUY too: its button reads BUY AGAIN, and a seat that ended
+ * with a refund is bought the way a first one is — the same intent, the same
+ * pay step.
+ *
+ * Both are offered on the INSTALL walk only. A direct door has no registry to
+ * seat anybody (gate-walk.ts), so either reason from one is asked again like
  * any other refusal.
  *
- * Everything else is asked again. The refusals only the author can lift (a
- * region, a version, a seat count, a refund) were sent to that same page to
- * read about it; with no page, the honest act left is the question itself —
- * the sentence on the band has already said who can change the answer.
+ * Everything else is asked again, and its button says TRY AGAIN
+ * (marketplace-copy.ts). The refusals only the author can lift (a region, a
+ * version, a seat count) were sent to that same page to read about it; with
+ * no page, the honest act left is the question itself — the sentence on the
+ * band has already said who can change the answer.
  */
+const BUYS: ReadonlySet<string> = new Set([SEAT_DENIAL, 'refunded'])
+
 export function remedyFor(reason: string, door: GateDoor): RemedyAct {
-  return reason === SEAT_DENIAL && door === 'install' ? { kind: 'buy' } : { kind: 'retry' }
+  return BUYS.has(reason) && door === 'install' ? { kind: 'buy' } : { kind: 'retry' }
 }
 
 /**

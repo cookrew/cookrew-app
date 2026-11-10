@@ -32,14 +32,20 @@ import type { ServedPaymentRail } from './served-payment-rails'
  * `ForbiddenBody.remedy` is OPTIONAL by shape and `scope` is the live case —
  * an old client meeting it would have pointed at an author who cannot fix a
  * disagreement between our client and our registry.
+ *
+ * THE BUTTON SAYS WHAT IT DOES (0.6.0). The author's page is gone, and nothing
+ * in the sheet ever copied details, opened a contact or topped anything up:
+ * the one forward act on these refusals is asking the door again, so that is
+ * the label. A button that names a destination it cannot reach was the G2
+ * defect, and a destination that no longer exists is the same defect.
  */
 export const MKT_DENIED = {
   'mkt.denied.unknown.title': "Your license doesn't cover this preset",
-  'mkt.denied.unknown.body': "{author}'s page has the details.",
-  'mkt.denied.unknown.action': "OPEN AUTHOR'S PAGE",
+  'mkt.denied.unknown.body': 'Only {author} can change that. Nothing was installed and nothing was charged.',
+  'mkt.denied.unknown.action': 'TRY AGAIN',
   'mkt.denied.unknown.noremedy.title': "Cookrew couldn't complete that",
   'mkt.denied.unknown.noremedy.body': 'Nothing was installed and nothing was charged.',
-  'mkt.denied.unknown.noremedy.action': 'COPY DETAILS'
+  'mkt.denied.unknown.noremedy.action': 'TRY AGAIN'
 } as const
 
 export type MktDeniedId = keyof typeof MKT_DENIED
@@ -323,7 +329,13 @@ export function headlineAndWhy(cell: string): { title: string; body: string } {
 const NO_SEAT = headlineAndWhy(V3_COPY['g2.no-seat'])
 const BUDGET = headlineAndWhy(V3_COPY['g2.budget'])
 
-/** 403 — six reasons, six next actions. One word for all of them was the bug. */
+/**
+ * 403 — each reason its own sentence. The ACTION is what the button does, and
+ * in the sheet that is one of two things: buy (a seat, or a refunded one
+ * again) or ask the door again. The sentence above it says who can change the
+ * answer; the button never promises a page, a contact or a top-up, because
+ * none of them exists behind it (import-gate-remedy.ts remedyFor).
+ */
 export const MKT_DENIED_REASONS = {
   /**
    * G2 — the registry's seat rung, the one 403 that stays on the rail. Both
@@ -337,12 +349,12 @@ export const MKT_DENIED_REASONS = {
 
   'mkt.denied.seat_limit.title': 'No seat available',
   'mkt.denied.seat_limit.body':
-    'All {n} seats on this licence are in use: {deviceList}. Manage them on {author}’s page.',
-  'mkt.denied.seat_limit.action': 'ASK {author} ↗',
+    'All {n} seats on this licence are in use: {deviceList}. Only {author} can free one.',
+  'mkt.denied.seat_limit.action': 'TRY AGAIN',
 
   'mkt.denied.version_gate.title': 'Your licence covers {from}–{to}',
   'mkt.denied.version_gate.body': 'This preset is {wanted}.',
-  'mkt.denied.version_gate.action': 'UPGRADE TO {wanted}',
+  'mkt.denied.version_gate.action': 'TRY AGAIN',
 
   'mkt.denied.refunded.title': 'This purchase was refunded',
   'mkt.denied.refunded.body': 'The licence ended on {date}.',
@@ -350,24 +362,24 @@ export const MKT_DENIED_REASONS = {
 
   'mkt.denied.revoked.title': '{author} revoked this licence',
   'mkt.denied.revoked.body': '{authorNote}',
-  'mkt.denied.revoked.action': 'CONTACT {author}',
+  'mkt.denied.revoked.action': 'TRY AGAIN',
 
   'mkt.denied.region.title': 'Not available in your region',
   'mkt.denied.region.body': "{author} hasn't published this preset where you are.",
-  'mkt.denied.region.action': 'LEARN WHY',
+  'mkt.denied.region.action': 'TRY AGAIN',
 
   /** R11/R12/R15 — the only 403 the buyer can clear, and the only one that may
    *  promise continuity. Past tense is true by R12, future by R13. */
   'mkt.denied.balance_empty.title': 'Out of credit',
   'mkt.denied.balance_empty.body':
     '{presetName} has {amount} {asset} left. Its last answer completed — nothing was lost. Topping up resumes the same conversation.',
-  'mkt.denied.balance_empty.action': 'TOP UP',
+  'mkt.denied.balance_empty.action': 'TRY AGAIN',
 
   /** R26 — retried silently once, then explained. Our defect, not their choice. */
   'mkt.denied.scope.title': "Cookrew couldn't get permission for that",
   'mkt.denied.scope.body':
     'It asked twice and was refused both times, so it stopped rather than keep asking. Nothing was installed and nothing was charged.',
-  'mkt.denied.scope.action': 'COPY DETAILS',
+  'mkt.denied.scope.action': 'TRY AGAIN',
 
   /**
    * ── A SERVED DOOR's refusals ──────────────────────────────────────────────
@@ -524,6 +536,34 @@ export function denialCopy(
   const at = (suffix: string): string =>
     fillCopy(MKT_DENIED_REASONS[`mkt.denied.${reason}.${suffix}` as MktDeniedReasonId], vars)
   return { title: at('title'), body: at('body'), action: at('action') }
+}
+
+/**
+ * `denialCopy` for a caller that may not hold every fact a sentence names.
+ *
+ * A served door sends a reason and nothing else — no date, no seat counts, no
+ * version range — and `fillCopy` throws on a brace nobody filled, which in a
+ * sheet is a refusal that paints nothing at all. Here each part is filled on
+ * its own, and a part missing its facts falls back to the plain statement of
+ * what did not happen. The ACTION keeps its own label whenever it can: a
+ * button must go on saying what it does even when the sentence above it had
+ * to be the general one.
+ */
+export function denialCopyLenient(
+  reason: string,
+  remedy: string | undefined,
+  vars: Readonly<Record<string, string | number>> = {}
+): { title: string; body: string; action: string } {
+  if (!(`mkt.denied.${reason}.title` in MKT_DENIED_REASONS)) return unknownDenialCopy(remedy)
+  const plain = unknownDenialCopy(undefined)
+  const part = (suffix: 'title' | 'body' | 'action'): string => {
+    try {
+      return fillCopy(MKT_DENIED_REASONS[`mkt.denied.${reason}.${suffix}` as MktDeniedReasonId], vars)
+    } catch {
+      return plain[suffix]
+    }
+  }
+  return { title: part('title'), body: part('body'), action: part('action') }
 }
 
 /** A verification refusal, resolved from the token the installer returned. */

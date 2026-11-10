@@ -135,13 +135,15 @@ describe('GateSheet — state D: refusals draw a band, not a rail', () => {
     expect(html).not.toContain('empty-credit')
   })
 
-  it('an empty balance wears amber and offers a top-up, not a stop', () => {
+  it('an empty balance wears amber, and its button says what it does: ask again', () => {
     const html = paint(
       { deniedVars: { presetName: 'Research Crew', amount: '0.00', asset: 'USDC' } },
       { phase: { kind: 'denied', reason: 'balance_empty', retryable: false } }
     )
     expect(html).toContain('gate-403 empty-credit')
-    expect(html).toMatch(/TOP UP/)
+    // There is no top-up in this sheet; a button that promised one only asked the door again.
+    expect(html).toMatch(/TRY AGAIN/)
+    expect(html).not.toMatch(/TOP UP/)
   })
 
   it('a 404 and an unusable answer both degrade to a closed refusal, never a served step', () => {
