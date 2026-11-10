@@ -196,20 +196,21 @@ describe('the badge sheet', () => {
     expect(html).toContain('Via cookrew.dev relay. It goes direct by itself when your Mac can be reached from here.')
   })
 
-  it('offers a way to another desktop, once the desktop has said where', () => {
+  it('offers the way to the account’s other machines where there is one: the console’s first level', () => {
     const html = paint({
-      origin: 'https://cookrew.dev',
+      origin: 'https://console.cookrew.dev',
       link: 'live',
-      registryOrigin: 'https://cookrew.dev'
+      relayed: true,
+      plane: 'RELAY',
+      machinesUrl: '/'
     })
-    // The account's machine list, not plain /me: that goes straight back into the machine this page is (machines.js).
-    expect(html).toContain('href="https://cookrew.dev/me/account"')
-    expect(html).toContain('Switch desktop')
+    expect(html).toContain('href="/"')
+    expect(html).toContain('Your machines')
   })
 
   it('offers NOTHING rather than a guessed address', () => {
     const html = paint({ origin: 'https://cookrew.dev', link: 'live' })
-    expect(html).not.toContain('Switch desktop')
+    expect(html).not.toContain('Your machines')
     expect([...html.matchAll(/href="([^"]*)"/g)]).toEqual([])
   })
 

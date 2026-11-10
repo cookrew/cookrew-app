@@ -211,8 +211,10 @@ describe('the streams are covered too', () => {
     const opener = readFileSync(path.join(RENDERER, 'rtc-plane.ts'), 'utf8')
     const start = opener.indexOf('export const openEventSource')
     const body = opener.slice(start, opener.indexOf('\n}\n', start))
-    expect(body).toMatch(/new RtcEventSource\(routed\.link, tokenParam\(routed\.path\)\)/)
-    expect(body).toMatch(/new RtcEventSource\(headerStream\(url\), url\)/)
+    // The direct link and every other origin: the token in a header, never in the address.
+    expect(body).toMatch(/new RtcEventSource\(linkStream\(routed\.link\), routed\.path\)/)
+    expect(body).toMatch(/if \(onRelay\(\) \|\| dataPlane\(\)\.origin !== ''\) return watchStream\(new RtcEventSource\(headerStream\(url\), url\)/)
+    // Only a page a machine serves itself, on its own origin, opens a stream the browser's way.
     expect(body).toMatch(/new EventSource\(tokenParam\(url\)\)/)
     // On the relay the stream goes by fetch: the machine's token and the account session, both in
     // headers, and the session judged by the address the stream is going to.

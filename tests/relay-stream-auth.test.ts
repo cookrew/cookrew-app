@@ -118,14 +118,21 @@ describe('an answer that is not a stream', () => {
   })
 })
 
-describe('on a direct plane, which never meets the ingress', () => {
-  it('keeps the native stream with the token it needs', () => {
+describe('on a direct plane, the machine’s own name', () => {
+  it('opens the stream by fetch with the token in a header: no credential is ever in an address', () => {
     data.setDataPlane({ origin: TAILNET, kind: 'tailnet' })
     plane.openEventSource(`${TAILNET}/api/events`).close()
-    expect(fetched).toEqual([])
-    expect(natives).toEqual([`${TAILNET}/api/events?token=${TOKEN}`])
-    // A machine is never handed the account's session, in a header or in an address.
-    expect(natives.join(' ')).not.toContain(SESSION)
+    expect(natives).toEqual([])
+    expect(fetched).toHaveLength(1)
+    expect(fetched[0].url).toBe(`${TAILNET}/api/events`)
+    expect(fetched[0].url).not.toContain(TOKEN)
+    const sent = new Headers(fetched[0].init.headers)
+    expect(sent.get('authorization')).toBe(`Bearer ${TOKEN}`)
+    // Another origin, no cookie; and a machine is never handed the account's session.
+    expect(fetched[0].init).toMatchObject({ mode: 'cors', credentials: 'omit' })
+    expect(sent.get('x-cookrew-session')).toBeNull()
+    // Only what a machine's cross-origin rule lets through: its allow-list is authorization and content-type.
+    expect([...sent.keys()].sort()).toEqual(['accept', 'authorization'])
   })
 
   it('sends a request straight to the machine with its own token and without the account session', async () => {

@@ -1,3 +1,5 @@
+import { CROSS_ORIGIN_NO_COOKIE } from '../data-plane'
+import { machineScope, type MachineScope } from '../machine-scope'
 import type { HelloClaim } from './plane-switch'
 
 /**
@@ -29,26 +31,34 @@ import type { HelloClaim } from './plane-switch'
 export const VERIFY_TIMEOUT_MS = 4000
 
 /**
- * ASK cookrew.dev WHETHER THAT REPLY CAME FROM MY MAC.
+ * ASK THE REGISTRY WHETHER THAT REPLY CAME FROM MY MACHINE.
  *
  * The page cannot check the signature itself — the device's public key is a
- * fact the registry holds — so it asks, over its OWN origin, with the account
- * session cookie. Root-relative on purpose and NOT through apiPath: apiPath
- * addresses the desktop (through the relay or directly), and this is the one
- * request in the client that is genuinely for cookrew.dev itself.
+ * fact the registry holds — so it asks. NOT through apiPath: apiPath addresses
+ * a machine (through the relay or directly), and this is the one request in
+ * the client that is for the registry itself.
+ *
+ *   ON A PAGE A MACHINE SERVES ITSELF the registry is asked at this page's own
+ *   origin, root-relative, as it always was.
+ *   ON THE CONSOLE the registry is another origin: its API host, with the
+ *   console's session as a bearer and no cookie (machine-scope.ts · relay).
+ *   Signed out there is nobody to ask, and nothing is asked.
  *
  * Anything but a clean `{ok:true}` is a no. A verification that cannot be
- * completed — offline, rate limited, signed out — must leave the phone on the
+ * completed — offline, rate limited, signed out — must leave the page on the
  * relay rather than on an unproven address.
  */
-export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_MS): Promise<boolean> => {
+export const verifyHello = async (claim: HelloClaim, timeoutMs = VERIFY_TIMEOUT_MS, scope: MachineScope = machineScope()): Promise<boolean> => {
+  const relay = scope.relay
+  const session = relay?.session() ?? null
+  if (relay !== null && (session === null || session === '')) return false
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), timeoutMs)
   try {
-    const response = await fetch('/v2/verify-hello', {
+    const response = await fetch(relay === null ? '/v2/verify-hello' : `${relay.origin}/v2/verify-hello`, {
       method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
+      ...(relay === null ? { credentials: 'same-origin' as const } : CROSS_ORIGIN_NO_COOKIE),
+      headers: { 'content-type': 'application/json', ...(relay === null ? {} : { authorization: `Bearer ${session}` }) },
       cache: 'no-store',
       signal: abort.signal,
       body: JSON.stringify(claim)

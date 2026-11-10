@@ -177,22 +177,12 @@ describe('the stream reports its own health', () => {
   })
 })
 
-describe('where "Switch desktop" points', () => {
-  it('is NOTHING until the desktop says where its account lives', () => {
-    // It was a hard-coded https://cookrew.dev/me, which is wrong for anyone
-    // self-hosting and wrong in every test environment. The companion cannot
-    // work it out: its own origin is the Mac, or the relay.
+describe('the way to another machine', () => {
+  it('is NOTHING on a page a machine serves itself, whatever it knows of the registry', () => {
+    // The account's machines are the console's first level (0.6.0). A machine's own page has no
+    // such level, and the registry serves no page for it: nothing is offered, not a guess.
     expect(currentPathBadge().switchDesktopUrl).toBeNull()
-  })
-
-  it('follows the origin /api/account reported', () => {
     setRegistryOrigin('https://reg.example.test/')
-    expect(currentPathBadge().switchDesktopUrl).toBe('https://reg.example.test/me/account')
-  })
-
-  it('goes back to nothing when the origin is withdrawn', () => {
-    setRegistryOrigin('https://reg.example.test')
-    setRegistryOrigin(null)
     expect(currentPathBadge().switchDesktopUrl).toBeNull()
   })
 

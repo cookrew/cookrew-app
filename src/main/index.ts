@@ -159,6 +159,7 @@ import { HARNESS_FACTS } from './route/setup'
 import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin, signWithDevice } from './account-v2'
+import { consoleOrigin } from './registry-origin'
 import { createMachineKeyStore, createRefusedMachines, enterMachines } from './machine-keys'
 import { parseAccountMachines } from '../shared/zoom-fleet'
 import { GRANT_PATHS } from '../shared/account-pair'
@@ -7008,11 +7009,11 @@ const browserCast = createBrowserCast({
   getInstance: (browserId) => browserManager.get(browserId),
   enabled: streamsCard,
   desktopToken: () => desktopBrowserStreamToken,
-  // REACH v2.1 — the companion at cookrew.dev keeps its address while its data
-  // plane moves onto this Mac's own name, so its Origin is the registry's.
-  // Same-host alone would refuse it and the browser card would never stream
-  // over the fast path. Exact origins only; see companion-cors.ts.
-  allowedOrigins: () => allowedCompanionOrigins(registryOrigin()),
+  // The console keeps its address while its data plane moves onto this Mac's
+  // own name, so the Origin of that socket is the console's. Same-host alone
+  // would refuse it and the browser card would never stream over the fast
+  // path. Exact origins only; see companion-cors.ts.
+  allowedOrigins: () => allowedCompanionOrigins(consoleOrigin()),
   // AND THE ORIGIN ONLY FILTERS — this is what authenticates the socket. The
   // global pairing token or an admitted phone's own companion token, compared
   // by the same code as every HTTP route (mobile-http.ts · tokenAccepted).

@@ -79,6 +79,7 @@ import { handleFleetRoutes } from './fleet/routes'
 import { fleetServiceFor, prewarmFleet, type FleetMountOptions } from './fleet/mount'
 import { readMachineDisplay } from './machine-display'
 import type { FleetService } from './fleet/service'
+import { consoleOrigin } from './registry-origin'
 
 /** What the fleet feed needs from this server: its app version, and the token to scrub by value. */
 const levelsOptions = (deps: MobileServerDeps): FleetMountOptions => ({
@@ -800,14 +801,18 @@ export function trustedOrigins(): string[] {
 /**
  * EVERY ORIGIN THIS SERVER ANSWERS CROSS-ORIGIN FOR — and no others.
  *
- * Two families, both exact strings rather than patterns: the registry from
- * config (`COOKREW_REGISTRY`, so a test deployment and a self-hosted one are
- * not hard-coded out), and this Mac's own origins — bare addresses and, once a
- * certificate is held, their trusted names. Nothing is loosened for anybody
- * else; a suffix match is how `notcookrew.dev` gets in.
+ * Two families, both exact strings rather than patterns: THE CONSOLE from
+ * config (`COOKREW_CONSOLE`, so a test deployment and a self-hosted one are
+ * not hard-coded out), which since 0.6.0 is the one page that reaches a
+ * machine from another origin (its direct path: this machine's own name on
+ * the LAN or the tailnet); and this Mac's own origins — bare addresses and,
+ * once a certificate is held, their trusted names. The registry's hosts are
+ * not in it: the intro site and the sign-in page have no business here, and
+ * the API host serves no page. Nothing is loosened for anybody else; a suffix
+ * match is how `notcookrew.dev` gets in.
  */
-export function allowedCompanionOrigins(registryOrigin: string): string[] {
-  return [registryOrigin, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
+export function allowedCompanionOrigins(console: string): string[] {
+  return [console, ...mobileSelfOrigins()].filter((origin) => origin.length > 0)
 }
 
 /**
@@ -1254,7 +1259,7 @@ export async function handle(
    * header names, identical for every path here, so answering it early
    * reveals nothing. See companion-cors.ts for the allow-list rule.
    */
-  if (applyCompanionCors(request, response, allowedCompanionOrigins(deps.identity?.registryOrigin() ?? ''))) {
+  if (applyCompanionCors(request, response, allowedCompanionOrigins(consoleOrigin()))) {
     return
   }
 
