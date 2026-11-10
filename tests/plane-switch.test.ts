@@ -16,7 +16,7 @@
 //   check no longer distinguishes the Mac from anything else under
 //   d.cookrew.dev. Only the registry can, and only with the signature.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   PLANE_PROBE_EVERY_MS,
   planeCandidates,
@@ -94,6 +94,8 @@ const race = async (
     adopt: over.adopt ?? ((plane) => void (adopted = plane)),
     nonce: over.nonce ?? ((): string => `nonce-${(nonces += 1)}`),
     ...(over.held ? { held: over.held } : {}),
+    ...(over.live ? { live: over.live } : {}),
+    ...(over.note ? { note: over.note } : {}),
     probing: over.probing ?? ((on) => void probes.push(on))
   }
   const outcome = await switchPlaneIfBetter(deps)
@@ -274,5 +276,44 @@ describe('one race', () => {
 describe('the schedule', () => {
   it('is slower than the navigating switcher, because it is not racing a page load', () => {
     expect(PLANE_PROBE_EVERY_MS).toBe(60_000)
+  })
+})
+
+describe('a race still running when its machine was left', () => {
+  it('adopts nothing and reports nothing: the name it proved is the last machine’s, not the one in scope', async () => {
+    let left = false
+    const note = vi.fn()
+    const run = await race({
+      live: () => !left,
+      note,
+      verify: async () => {
+        // Another machine was entered while the registry was proving this name.
+        left = true
+        return true
+      }
+    })
+    expect(run.outcome()).toBe('left')
+    expect(run.adopted()).toBeNull()
+    expect(note).not.toHaveBeenCalled()
+  })
+
+  it('stops before it tries anything when the machine was left while its card was read', async () => {
+    let left = false
+    const run = await race({
+      live: () => !left,
+      card: async () => {
+        left = true
+        return card()
+      }
+    })
+    expect(run.outcome()).toBe('left')
+    expect(run.asked()).toEqual([])
+    expect(run.adopted()).toBeNull()
+  })
+
+  it('changes nothing for a race whose machine stays', async () => {
+    const run = await race({ live: () => true })
+    expect(run.outcome()).toBe('switched')
+    expect(run.adopted()).toMatchObject({ origin: LAN, kind: 'lan' })
   })
 })

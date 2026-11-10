@@ -16,7 +16,9 @@
  * to prevent.
  */
 import { parseMachineGauges, type MachineGauges } from '../../shared/machine-gauges'
-import { desktopIdFromBase, tokenKeyForBase } from './pairing-scope'
+import { tokenKeyForBase } from './pairing-scope'
+import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
+import { machineBaseOf, relayHeadersFor, type MachineScope } from './machine-scope'
 
 export const GAUGES_API_PATH = '/api/fleet/gauges'
 /** Past this the exchange is given back: the next question is a few seconds away anyway. */
@@ -34,7 +36,12 @@ export function storedDesktopToken(key: string): string | null {
 }
 
 /** A reading, or null for every way of not getting one. */
-export async function fetchGauges(path: string, token: string | null, fetcher: FetchLike): Promise<MachineGauges | null> {
+export async function fetchGauges(
+  path: string,
+  token: string | null,
+  fetcher: FetchLike,
+  relay: Record<string, string> = {}
+): Promise<MachineGauges | null> {
   // A plain abort, NOT AbortSignal.timeout: its TimeoutError reads as a dead link
   // in plane-fetch.ts, and a Mac too swapped to answer in time must not flip the
   // phone's data plane. Giving up on a gauge is this caller's choice.
@@ -43,7 +50,7 @@ export async function fetchGauges(path: string, token: string | null, fetcher: F
   try {
     const response = await fetcher(path, {
       cache: 'no-store',
-      headers: token ? { authorization: `Bearer ${token}` } : {},
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...relay },
       signal: giveUp.signal
     })
     return response.ok ? parseMachineGauges(await response.json()) : null
@@ -54,21 +61,22 @@ export async function fetchGauges(path: string, token: string | null, fetcher: F
   }
 }
 
-/** The relay prefix of another desktop of this account; null when this page has no relay or the id is not one. */
-export function relayBaseOf(base: string, machineId: string): string | null {
-  if (desktopIdFromBase(base) === null) return null
-  const target = base.replace(/\/desktop\/[^/]+$/, () => `/desktop/${machineId}`)
-  return desktopIdFromBase(target) === machineId.toLowerCase() ? target : null
-}
 
+/**
+ * ANOTHER MACHINE'S GAUGES, from the console: at that machine's own address on
+ * the relay, with this browser's own token FOR THAT MACHINE and the account
+ * session the relay wants beside it. Never this machine's token: a token is
+ * for the machine that minted it. A page with no relay (a machine's own page)
+ * has nobody to ask through.
+ */
 export async function relayDesktopGauges(
-  base: string,
+  scope: MachineScope,
   machineId: string,
   storedToken: (key: string) => string | null,
-  fetcher: FetchLike = (input, init) => fetch(input, init)
+  fetcher: FetchLike = (input, init) => fetch(input, { ...init, ...CROSS_ORIGIN_NO_COOKIE })
 ): Promise<MachineGauges | null> {
-  const target = relayBaseOf(base, machineId)
+  const target = machineBaseOf(machineId, scope)
   if (target === null) return null
   const token = storedToken(tokenKeyForBase(target))
-  return token ? fetchGauges(`${target}${GAUGES_API_PATH}`, token, fetcher) : null
+  return token ? fetchGauges(`${target}${GAUGES_API_PATH}`, token, fetcher, relayHeadersFor(scope)) : null
 }

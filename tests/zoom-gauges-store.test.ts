@@ -350,42 +350,84 @@ describe('the phone asking its Mac', () => {
   })
 })
 
-describe('the phone asking another desktop, through the relay', () => {
+describe('the machine in scope becomes another one', () => {
+  it('ends a loop that asked "this machine", so the next machine’s numbers are never filed under the last one’s id', async () => {
+    const ask = vi.fn(async (_id: string, local: boolean) => reading(local ? 1 : 2))
+    const store = createGaugeStore({ ask })
+    store.watch('machine-a', true)
+    store.watch('machine-c', false)
+    await flush()
+    expect(store.get('machine-a')).toEqual(reading(1))
+    expect(store.get('machine-c')).toEqual(reading(2))
+    const told = vi.fn()
+    store.subscribe('machine-a', told)
+
+    store.turn()
+    expect(store.get('machine-a')).toBeUndefined()
+    expect(told).toHaveBeenCalled()
+    ask.mockClear()
+    await vi.advanceTimersByTimeAsync(GAUGE_POLL_MS * 4 + GAUGE_REMOTE_POLL_MS * 2)
+    // Asked by its own id, a machine is the same machine whoever is in scope: that loop goes on.
+    expect(ask.mock.calls.every(([id, local]) => id === 'machine-c' && local === false)).toBe(true)
+    expect(ask.mock.calls.length).toBeGreaterThan(0)
+    expect(store.get('machine-c')).toEqual(reading(2))
+  })
+
+  it('lets a leaf that held the ended loop go without taking its successor with it', async () => {
+    const ask = vi.fn(async () => reading(1))
+    const store = createGaugeStore({ ask })
+    const releaseOld = store.watch('machine-a', true)
+    await flush()
+    store.turn()
+    // The same machine, watched again from the new scope by its id.
+    store.watch('machine-a', false)
+    await flush()
+    expect(store.get('machine-a')).toEqual(reading(1))
+    releaseOld()
+    ask.mockClear()
+    await vi.advanceTimersByTimeAsync(GAUGE_REMOTE_POLL_MS * 2)
+    expect(ask).toHaveBeenCalled()
+    expect(store.get('machine-a')).toEqual(reading(1))
+  })
+})
+
+describe('the console asking another machine, through the relay', () => {
   const ME = '0f8f1c2e-1111-4222-8333-944445555666'
   const OTHER = '1a2b3c4d-aaaa-4bbb-8ccc-ddddeeeeffff'
-  const BASE = `/relay/@drej/desktop/${ME}`
+  const API = 'https://api.cookrew.dev'
+  const SCOPE = { machineId: ME, relay: { origin: API, session: () => 'account-session' as string | null }, slug: '' }
   const GOOD = reading(5)
   const okFetch = (): ReturnType<typeof vi.fn> => vi.fn(async () => new Response(JSON.stringify(GOOD), { status: 200 }))
 
-  it('asks that Mac’s own path with that Mac’s own token', async () => {
+  it('asks that machine’s own address with that machine’s own token, and the account session for the relay', async () => {
     const fetcher = okFetch()
     const tokens = vi.fn((key: string) => (key === `cr_token:${OTHER}` ? 'other-mac-token' : null))
-    expect(await relayDesktopGauges(BASE, OTHER, tokens, fetcher as never)).toEqual(GOOD)
+    expect(await relayDesktopGauges(SCOPE, OTHER, tokens, fetcher as never)).toEqual(GOOD)
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe(`/relay/@drej/desktop/${OTHER}/api/fleet/gauges`)
-    expect((init.headers as Record<string, string>).authorization).toBe('Bearer other-mac-token')
+    expect(url).toBe(`${API}/api/m/${OTHER}/api/fleet/gauges`)
+    expect(init.headers).toEqual({ authorization: 'Bearer other-mac-token', 'x-cookrew-session': 'account-session' })
   })
-  it('never sends this Mac’s token to another Mac', async () => {
+  it('never sends one machine’s token to another', async () => {
     const fetcher = okFetch()
-    expect(await relayDesktopGauges(BASE, OTHER, (key) => (key === `cr_token:${ME}` ? 'mine' : null), fetcher as never)).toBeNull()
+    expect(await relayDesktopGauges(SCOPE, OTHER, (key) => (key === `cr_token:${ME}` ? 'mine' : null), fetcher as never)).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
   })
   it('holding no token for it, asks nobody and says no reading', async () => {
     const fetcher = okFetch()
-    expect(await relayDesktopGauges(BASE, OTHER, () => null, fetcher as never)).toBeNull()
+    expect(await relayDesktopGauges(SCOPE, OTHER, () => null, fetcher as never)).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
   })
-  it('a page the Mac serves itself has no relay to ask through', async () => {
+  it('a page a machine serves itself has no relay to ask through', async () => {
     const fetcher = okFetch()
-    expect(await relayDesktopGauges('', OTHER, () => 'tok', fetcher as never)).toBeNull()
+    expect(await relayDesktopGauges({ machineId: null, relay: null, slug: '' }, OTHER, () => 'tok', fetcher as never)).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
   })
   it('an id that is not an id never reaches a path', async () => {
     const fetcher = okFetch()
-    expect(await relayDesktopGauges(BASE, '../../v2/me', () => 'tok', fetcher as never)).toBeNull()
+    expect(await relayDesktopGauges(SCOPE, '../../v2/me', () => 'tok', fetcher as never)).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
   })
   it('a desktop off its line is no reading', async () => {
-    expect(await relayDesktopGauges(BASE, OTHER, () => 'tok', (async () => new Response('{}', { status: 503 })) as never)).toBeNull()
+    expect(await relayDesktopGauges(SCOPE, OTHER, () => 'tok', (async () => new Response('{}', { status: 503 })) as never)).toBeNull()
   })
 })

@@ -26,9 +26,18 @@ export interface RtcAdoptDeps {
   readonly adopt: (plane: DataPlane) => void
   readonly fallBack: () => void
   readonly setLink: (link: RtcLink | null) => void
+  /** The link the page holds now. Absent, an adopted link is taken to be it until it closes. */
+  readonly current?: () => RtcLink | null
   readonly classify: (address: string) => 'lan' | 'tailnet' | 'other'
   /** How an adopted link ended, as a row for the next report: the evidence for a flapping badge. */
   readonly ended?: (row: RtcRow) => void
+  /**
+   * Is the machine this link is opened to still the one the page talks to.
+   * A link takes a second or two to open, and on the console another machine
+   * can be entered meanwhile: the link is then the last machine's, and adopted
+   * it would carry everything meant for the next one. Absent, always.
+   */
+  readonly live?: () => boolean
   readonly now?: () => number
 }
 
@@ -42,8 +51,13 @@ export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
     outcome,
     ms: Math.round(now() - started)
   })
+  const live = (): boolean => deps.live?.() !== false
   const link = await deps.connect().catch(() => null)
   if (!link) return row('timeout', 'webrtc')
+  if (!live()) {
+    link.close()
+    return row('closed', link.via)
+  }
   const network = deps.classify(link.via)
   // Whatever moved while the link was opening (a name that answered first)
   // wins: this is the way in when nothing else is.
@@ -54,10 +68,14 @@ export const adoptRtcLink = async (deps: RtcAdoptDeps): Promise<RtcRow> => {
   deps.setLink(link)
   link.onClose(() => {
     const end = link.ended()
-    if (end) {
+    // How it ended is evidence for the machine it was opened to, and for no other.
+    if (end && live()) {
       const rtt = end.rtt ? ` (pong ${end.rtt.p50}/${end.rtt.max} ms)` : ''
       deps.ended?.({ kind: 'rtc', name: `${link.via} closed: ${end.reason}${rtt}`, outcome: 'closed', ms: end.afterMs })
     }
+    // A link the page no longer holds takes nothing with it: the one held
+    // now, and the plane riding it, may be another machine's.
+    if (deps.current && deps.current() !== link) return
     deps.setLink(null)
     if (deps.plane().transport === 'rtc') deps.fallBack()
   })

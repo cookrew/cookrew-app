@@ -151,8 +151,11 @@ function useUnlockWay(attempt: number): Way {
     let alive = true
     let client: SealClient | null = null
     setWay({ kind: 'opening' })
-    // The relay's prefix and nothing else: this must not follow a direct plane or a slug.
-    openSeal({ url: (path) => `${clientBase()}${path}`, code })
+    // The relay's prefix and nothing else: this must not follow a direct plane
+    // or a slug. Read once: the session is with the machine it was opened to,
+    // and stays there if another is entered before the sheet is gone.
+    const base = clientBase()
+    openSeal({ url: (path) => `${base}${path}`, code })
       .then((opened) => {
         client = opened
         if (!alive) return opened.close()

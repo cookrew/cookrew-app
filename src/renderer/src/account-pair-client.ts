@@ -9,6 +9,8 @@ import {
   type PairOffer
 } from '../../shared/account-pair'
 import type { AccountDevice } from './account-device'
+import { CROSS_ORIGIN_NO_COOKIE, isAbsolute } from './data-plane'
+import { machineScope, relayHeadersForUrl, type MachineScope } from './machine-scope'
 
 /**
  * THE PHONE'S HALF OF ENTERING WITH THE ACCOUNT (shared/account-pair.ts).
@@ -283,22 +285,40 @@ const reader = async (response: Response): Promise<{ status: number; body: unkno
   return { status: response.status, body }
 }
 
-const httpAt = (base: string): Http => ({
-  get: async (path) => reader(await fetch(`${base}${path}`, { cache: 'no-store', credentials: 'same-origin' })),
-  post: async (path, body) =>
-    reader(
-      await fetch(`${base}${path}`, {
-        method: 'POST',
-        cache: 'no-store',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body)
-      })
-    )
-})
+/**
+ * HTTP at one base. Same-origin when the base is a path on this page's origin
+ * (a machine's own page); another origin with no cookie when it is the relay
+ * or the registry's API (the console), where what admits a call is a header
+ * read at each request (`headers`), never a cookie.
+ */
+const httpAt = (base: string, headers: () => Record<string, string> = () => ({})): Http => {
+  const mode: Pick<RequestInit, 'mode' | 'credentials'> = isAbsolute(base) ? CROSS_ORIGIN_NO_COOKIE : { credentials: 'same-origin' }
+  return {
+    get: async (path) => reader(await fetch(`${base}${path}`, { cache: 'no-store', ...mode, headers: headers() })),
+    post: async (path, body) =>
+      reader(
+        await fetch(`${base}${path}`, {
+          method: 'POST',
+          cache: 'no-store',
+          ...mode,
+          headers: { 'content-type': 'application/json', ...headers() },
+          body: JSON.stringify(body)
+        })
+      )
+  }
+}
 
-/** The browser's own wiring. */
-export function browserPairDeps(base: string, device: () => Promise<AccountDevice | null>): PairClientDeps {
+/**
+ * The browser's own wiring. `base` is the machine's: '' on its own page, its address on the relay from
+ * the console. On the console the machine's door is reached with the account
+ * session in the relay's header, and the registry (the device pass) at its API
+ * origin with the session as a bearer.
+ */
+export function browserPairDeps(
+  base: string,
+  device: () => Promise<AccountDevice | null>,
+  scope: MachineScope = machineScope()
+): PairClientDeps {
   const credentials = typeof navigator !== 'undefined' ? navigator.credentials : undefined
   let storage: Storage | null = null
   try {
@@ -307,8 +327,15 @@ export function browserPairDeps(base: string, device: () => Promise<AccountDevic
     storage = null
   }
   return {
-    machine: httpAt(base),
-    registry: httpAt(''),
+    // The account session rides only an address under the relay's machine prefix (machine-scope.ts).
+    machine: httpAt(base, () => relayHeadersForUrl(`${base}/`, scope)),
+    registry:
+      scope.relay === null
+        ? httpAt('')
+        : httpAt(scope.relay.origin, (): Record<string, string> => {
+            const session = scope.relay?.session() ?? null
+            return session ? { authorization: `Bearer ${session}` } : {}
+          }),
     device,
     passkey: credentials && typeof globalThis.PublicKeyCredential === 'function' ? (options) => credentials.get(options) : null,
     grants: storageGrants(storage)

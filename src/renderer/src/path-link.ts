@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
 import {
@@ -102,6 +103,14 @@ export const subscribePathLink = (listener: (next: PathLinkState) => void): (() 
   return () => void listeners.delete(listener)
 }
 
+// The badge's facts are ONE machine's: whether its stream is up, how long it
+// takes to answer, what it is called. Whoever draws the badge keeps listening.
+registerScopeState('path link', () => {
+  state = IDLE
+  registryOrigin = null
+  announce()
+})
+
 /** Test seam: the module is a singleton, and a test needs a clean one. */
 export const resetPathLink = (): void => {
   state = IDLE
@@ -144,9 +153,9 @@ const registryOf = (): string | undefined => {
 /**
  * SERVED THROUGH THE RELAY, as a fact about the PREFIX and not the hostname.
  *
- * `clientBase()` is non-empty only when the bundle was served under
- * `/relay/@user/desktop/<id>/`, which is exactly the case where every request
- * this client makes goes through cookrew.dev. Reading it off the origin would
+ * `clientBase()` is non-empty only on the console with a machine in scope,
+ * where it is that machine's relay address: exactly the case where every
+ * request this client makes goes through the registry. Reading it off the origin would
  * be wrong twice over in Reach v2.1: a Mac's own certificates now carry names
  * under `d.cookrew.dev`, and a relay may be fronted by any host at all.
  */

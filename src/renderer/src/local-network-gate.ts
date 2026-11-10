@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import type { LocalNetworkState } from './local-network'
 
 /**
@@ -125,6 +126,15 @@ export const subscribeLocalNetwork = (
   listeners.add(listener)
   return () => void listeners.delete(listener)
 }
+
+// The ALLOW row's handler is aimed at ONE machine's local name. The browser's
+// permission, and whether this person has pressed ALLOW before, are the
+// browser's and stay.
+registerScopeState('local network ask', () => {
+  if (ask === null) return
+  ask = null
+  tell()
+})
 
 /** Test seam: the module is a singleton and a test needs a clean one. */
 export const resetLocalNetworkGate = (): void => {

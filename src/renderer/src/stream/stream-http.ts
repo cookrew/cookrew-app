@@ -12,6 +12,7 @@
 // credential raises the re-pair screen here too rather than looking like an
 // agent with no history.
 
+import { heldScope, machineLeft } from '../machine-scope'
 import { AuthError, authStore } from '../auth-gate'
 import { apiPath } from '../api-base'
 import { planeFetch } from '../plane-fetch'
@@ -42,10 +43,13 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   const token = authStore().token()
   const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) }
   if (token) headers.authorization = `Bearer ${token}`
+  // The body is read after the head: another machine entered in between is not told what this one said.
+  const sameMachine = heldScope()
   const response = await planeFetch(path, { ...init, headers })
   if (response.status === 404) throw new StreamRouteAbsent(path)
   if (!response.ok) {
     const detail = (await response.json().catch(() => ({}))) as { error?: string }
+    if (!sameMachine()) throw machineLeft()
     const message = detail.error ?? `HTTP ${response.status}`
     if (response.status === 401) {
       const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
@@ -55,6 +59,7 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message)
   }
   const text = await response.text()
+  if (!sameMachine()) throw machineLeft()
   return (text ? JSON.parse(text) : undefined) as T
 }
 

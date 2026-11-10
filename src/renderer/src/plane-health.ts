@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import { RELAY_PLANE, dataPlane, setDataPlane } from './data-plane'
 
 /**
@@ -253,6 +254,14 @@ export const planeHealth = (): PlaneHealth => {
   if (!singleton) singleton = createPlaneHealth()
   return singleton
 }
+
+// The health of a direct plane is ONE machine's: its failures, its hold-off,
+// and the question "is the link alive" put to that machine's own link. A hold
+// earned by the last machine would keep the next from ever trying its own.
+registerScopeState('plane health', () => {
+  singleton?.reset()
+  liveProbe = null
+})
 
 /** Test seam: the module is a singleton and a test needs a clean one. */
 export const resetPlaneHealth = (): void => {

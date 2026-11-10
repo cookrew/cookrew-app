@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 
 /**
@@ -24,6 +25,11 @@ export const openSourcePicker = (options: { card?: string; remoteDesktop?: boole
   set({ card: options.card ?? null, remoteDesktop: options.remoteDesktop === true })
 export const closeSourcePicker = (): void => set(null)
 export const currentSourceAsk = (): SourceAsk | null => ask
+
+// The picker was opened for a card, or the screens, of ONE machine.
+registerScopeState('source picker', () => {
+  if (ask !== null) set(null)
+})
 
 const subscribe = (listener: () => void): (() => void) => {
   listeners.add(listener)

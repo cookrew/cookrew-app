@@ -1,3 +1,4 @@
+import { heldScope } from './machine-scope'
 import { useCallback, useEffect, useState } from 'react'
 import type { GrantOptions, PairOffer } from '../../shared/account-pair'
 import { REAUTH_COPY, machineSentence } from './auth-gate'
@@ -49,7 +50,11 @@ export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAcc
   /** Enter with the held pass; without one, ask how this account proves itself. */
   const enter = useCallback(async (): Promise<void> => {
     if (offer.desktopId === null) return
+    // The token this door hands out is for the machine in scope now: if
+    // another was entered while the door answered, it is offered to nobody.
+    const sameMachine = heldScope()
     const result = await enterWithGrant(deps, offer.desktopId)
+    if (!sameMachine()) return
     if (result.kind === 'entered') {
       if (!(await onEntered(result.token))) setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterKept) })
       return
@@ -70,9 +75,12 @@ export function ReauthAccountEntry({ offer, deps, handle, onEntered }: ReauthAcc
     async (typed: string | null, options: GrantOptions): Promise<void> => {
       setBusy(true)
       setLine(null)
+      // The door entered after the proof is the machine's that was in scope when it was asked for.
+      const sameMachine = heldScope()
       try {
         const result: ProveResult = await proveForGrant(deps, typed, options)
         setPassword('')
+        if (!sameMachine()) return
         if (result.kind === 'granted') return await enter().catch(() => setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterUnreachable) }))
         if (result.kind === 'needs-password') return setPhase({ kind: 'said', sentence: say(REAUTH_COPY.enterSetPassword) })
         if (result.kind === 'refused' || result.kind === 'failed') setLine(refusalLine(result))

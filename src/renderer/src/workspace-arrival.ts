@@ -7,6 +7,8 @@
  * hears the plain events, because it did not ask and is not standing there.
  */
 
+import { registerScopeState } from './machine-scope'
+
 /** Long enough to cover the burst of a slow create, short enough to forget it. */
 const HOLD_MS = 4000
 
@@ -20,6 +22,12 @@ export interface Announcement {
 
 let holdingUntil = 0
 const listeners = new Set<(said: Announcement) => void>()
+
+// The burst being held is one machine's: entered within it, the next
+// machine's own events would be swallowed. The listeners are the page's.
+registerScopeState('workspace arrival', () => {
+  holdingUntil = 0
+})
 
 /** This device is about to make a workspace. */
 export function beginArrival(now = Date.now()): void {

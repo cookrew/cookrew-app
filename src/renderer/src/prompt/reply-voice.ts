@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { cookrew } from '../api'
 import { hasCjk, speakableText, speechChunks } from '../../../shared/speakable'
 
@@ -123,6 +124,11 @@ export function announce(line: string): void {
   if (queued.includes(line) || queued.length >= QUEUE_MAX) return
   queued = [...queued, line]
 }
+
+// A reply being read aloud is ONE machine's agent's, in that machine's voice:
+// it stops, and what it had asked that machine for is cancelled, before the
+// next machine is in scope.
+registerScopeState('reply voice', () => stopReading(), 'stop')
 
 /** Stop reading now, and drop the announcements waiting. Spoken replies stay on; the next reply is read. */
 export function stopReading(): void {

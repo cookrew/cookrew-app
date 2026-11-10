@@ -2,7 +2,7 @@
 //
 // The Mac prints exactly one thing now:
 //
-//   https://cookrew.dev/relay/@drej/desktop/<uuid>/#pair=<token>
+//   https://192-168-2-40.<uuid>.d.cookrew.dev:8643/#pair=<token>   (a machine's own page)
 //
 // The token sits in the FRAGMENT for a reason a reviewer should not have to
 // take on trust: a fragment is never sent to the server, so cookrew.dev —
@@ -37,7 +37,8 @@ import {
 } from '../src/renderer/src/pairing-scope'
 
 const DEVICE = '11111111-2222-3333-4444-555555555555'
-const BASE = `/relay/@owner/desktop/${DEVICE}`
+/** A machine's address on the relay, as the console reaches it. */
+const BASE = `https://api.cookrew.dev/api/m/${DEVICE}`
 /** 24 random bytes, base64url — exactly what `loadOrCreatePairingToken` mints. */
 const TOKEN = 'Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MEFC'
 
@@ -102,9 +103,10 @@ describe('stripPairFragment', () => {
 })
 
 describe('scrubPairingFromUrl — the credential must not survive the boot', () => {
-  it('takes the fragment off the canonical relay URL', () => {
-    const href = `https://cookrew.dev${BASE}/#pair=${TOKEN}`
-    expect(scrubPairingFromUrl(href)).toBe(`https://cookrew.dev${BASE}/`)
+  it('takes the fragment off a machine’s own pairing link', () => {
+    // A pairing link is to a machine's own page now: the console carries no credential in its address.
+    const href = `https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643/#pair=${TOKEN}`
+    expect(scrubPairingFromUrl(href)).toBe(`https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643/`)
   })
 
   it('takes ?token= off the direct LAN URL, as it always did', () => {
@@ -114,16 +116,18 @@ describe('scrubPairingFromUrl — the credential must not survive the boot', () 
   })
 
   it('answers null when there is nothing to scrub, so no history entry is written', () => {
-    expect(scrubPairingFromUrl('https://cookrew.dev/relay/@owner/desktop/x/')).toBeNull()
+    expect(scrubPairingFromUrl('https://console.cookrew.dev/d/x')).toBeNull()
     expect(scrubPairingFromUrl('not a url')).toBeNull()
   })
 })
 
 describe('desktopIdFromBase / tokenKeyForBase — one origin, many Macs', () => {
-  it('lifts the desktop id out of the relay prefix', () => {
+  it('lifts the machine id out of its relay address', () => {
     expect(desktopIdFromBase(BASE)).toBe(DEVICE)
     expect(desktopIdFromBase(`${BASE}/`)).toBe(DEVICE)
-    expect(desktopIdFromBase(`${BASE}/playground`)).toBe(DEVICE)
+    expect(desktopIdFromBase(`/api/m/${DEVICE}`)).toBe(DEVICE)
+    // The address ENDS with the id: a longer path is a route on that machine, not its address.
+    expect(desktopIdFromBase(`${BASE}/api/fleet`)).toBeNull()
   })
 
   it('lower-cases the id, so one Mac never gets two keys', () => {
@@ -132,7 +136,9 @@ describe('desktopIdFromBase / tokenKeyForBase — one origin, many Macs', () => 
 
   it('has no id for a base that is not a relay prefix', () => {
     expect(desktopIdFromBase('')).toBeNull()
-    expect(desktopIdFromBase('/relay/@owner/desktop/not-a-uuid')).toBeNull()
+    expect(desktopIdFromBase('https://api.cookrew.dev/api/m/not-a-uuid')).toBeNull()
+    // The address a machine's page had before 0.6.0 names nobody now.
+    expect(desktopIdFromBase(`/relay/@owner/desktop/${DEVICE}`)).toBeNull()
     expect(desktopIdFromBase('/some/other/prefix')).toBeNull()
   })
 
@@ -149,7 +155,7 @@ describe('desktopIdFromBase / tokenKeyForBase — one origin, many Macs', () => 
   it('never falls back to the ROOT key for an unrecognised base', () => {
     // A base we cannot read is still not the root: reusing the root key there
     // would hand this Mac whichever token the last direct pairing left behind.
-    const key = tokenKeyForBase('/relay/@owner/desktop/not-a-uuid')
+    const key = tokenKeyForBase('https://api.cookrew.dev/api/m/not-a-uuid')
     expect(key).not.toBe(ROOT_TOKEN_KEY)
     expect(key.startsWith(DESKTOP_TOKEN_PREFIX)).toBe(true)
   })
@@ -172,8 +178,8 @@ describe('the connect code', () => {
   it('leaves the address bar with the token', () => {
     expect(stripPairFragment(`#pair=${TOKEN}&code=${CODE}`)).toBe('')
     expect(stripPairFragment(`#code=${CODE}&x=1`)).toBe('#x=1')
-    const clean = scrubPairingFromUrl(`https://cookrew.dev${BASE}/#pair=${TOKEN}&code=${CODE}`)
-    expect(clean).toBe(`https://cookrew.dev${BASE}/`)
+    const clean = scrubPairingFromUrl(`https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643/#pair=${TOKEN}&code=${CODE}`)
+    expect(clean).toBe(`https://192-168-2-40.${DEVICE}.d.cookrew.dev:8643/`)
   })
 
   it('is kept per desktop: one origin hosts many Macs', () => {

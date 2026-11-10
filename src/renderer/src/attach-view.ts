@@ -5,6 +5,7 @@
 // keeps hosting the browser's one page and simply renders it at that slot. The
 // page is never moved or reloaded — the same webview (or stream) the canvas
 // card uses, so its session and login come along.
+import { registerScopeState } from './machine-scope'
 import { useSyncExternalStore } from 'react'
 import type { ScreenRect } from './zoom-lod'
 
@@ -29,6 +30,9 @@ function set(next: AttachView | null): void {
 
 const sameRect = (a: ScreenRect | null, b: ScreenRect | null): boolean =>
   a === b || (a !== null && b !== null && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height)
+
+// The open attached item belongs to a terminal of ONE machine.
+registerScopeState('attached item', () => attachView.close())
 
 export const attachView = {
   get: (): AttachView | null => view,

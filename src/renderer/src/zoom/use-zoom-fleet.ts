@@ -18,6 +18,7 @@
  * feed closes (an open stream holds the board's sampler on main) and the
  * account is not asked; in sight again, both come back.
  */
+import { registerScopeState, scopeNeedsMachine, subscribeMachineScope } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import type { WorkspaceList } from '../../../shared/model'
 import type { FleetAgent, FleetAttachment, FleetEvent, FleetSnapshot, FleetWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/fleet'
@@ -293,6 +294,15 @@ export interface FleetStoreOptions {
 export interface ZoomFleetStore {
   subscribe: (listener: () => void) => () => void
   get: () => ZoomFleet
+  /**
+   * The machine this page talks to is another one now (machine-scope.ts).
+   * What was read through the last one is let go of (its feed, its workspace
+   * list, its name, and the account's list as it answered it, which says
+   * which row is "this one"), the feed is closed, and answers still on their
+   * way are dropped; `resume` reads the one now in scope.
+   */
+  turn: () => void
+  resume: () => void
 }
 
 interface State extends FleetParts {
@@ -322,6 +332,12 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   let readingRemote = false
   let unwatch: (() => void) | null = null
   let asking = false
+  /**
+   * Which machine's turn this is. Every question below is put to "this
+   * machine" or names which row is it; an answer that comes back after the
+   * machine changed (`turn`) belongs to the last one and is dropped.
+   */
+  let turns = 0
 
   const derive = (s: State): ZoomFleet => {
     const hasAccount = typeof api().zoomFleetMachines === 'function'
@@ -408,17 +424,19 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   const askAccount = async (): Promise<void> => {
     const ask = api().zoomFleetMachines
     if (!ask || asking) return
+    const mine = turns
     asking = true
     let answer: AccountMachines
     try {
       const raw: unknown = await ask()
       answer = isAnswer(raw) ? raw : { ok: false, reason: 'malformed' }
     } catch (error) {
-      console.error('The account’s desktops could not be asked for:', error)
+      if (mine === turns) console.error('The account’s desktops could not be asked for:', error)
       answer = { ok: false, reason: 'failed' }
     } finally {
-      asking = false
+      if (mine === turns) asking = false
     }
+    if (mine !== turns) return
     // Asked again on a clock: an unchanged answer is no change, so readers keep the same fleet.
     const key = JSON.stringify(answer)
     if (key === accountKey) return
@@ -433,25 +451,30 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     const read = api().machineFleetOf
     const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online) : []
     if (!read || readingRemote || rows.length === 0) return
+    const mine = turns
     readingRemote = true
     try {
       const answers = await Promise.all(rows.map(async (row) => [row.id, snapshotOf(await read(row.id).catch(() => null))] as const))
+      // Read through the last machine's keys, of the rows that were "the others" then.
+      if (mine !== turns) return
       const remote = Object.fromEntries(answers.filter((pair): pair is readonly [string, FleetSnapshot] => pair[1] !== null))
       const key = JSON.stringify(remote)
       if (key === remoteKey) return
       remoteKey = key
       set({ remote })
     } finally {
-      readingRemote = false
+      if (mine === turns) readingRemote = false
     }
   }
 
   const askLocal = async (): Promise<void> => {
     const { listWorkspaces, machineName } = api()
+    const mine = turns
     const [list, name] = await Promise.all([
       listWorkspaces ? listWorkspaces().then((value) => value, () => null) : Promise.resolve(null),
       machineName ? machineName().then((value) => value, () => null) : Promise.resolve(null)
     ])
+    if (mine !== turns) return
     set({ list: list ?? state.list, listFailed: list === null && state.list === null, name: name ?? state.name })
   }
 
@@ -482,18 +505,24 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     else wake()
   }
 
-  const start = (): void => {
-    if (stopTimer !== null) clearTimeout(stopTimer)
-    stopTimer = null
-    if (running) return
-    running = true
-    if (sight) unwatch = sight.watch(onSight)
+  /** How long a machine may take to say anything before the view stops saying it is loading. */
+  const startGrace = (): void => {
+    if (graceTimer !== null) clearTimeout(graceTimer)
     graceTimer = setTimeout(() => {
       graceTimer = null
       // Already loaded: the grace changes nothing a reader sees, so nobody is told.
       if (fleet.loading) set({ graceOver: true })
       else state = { ...state, graceOver: true }
     }, graceMs)
+  }
+
+  const start = (): void => {
+    if (stopTimer !== null) clearTimeout(stopTimer)
+    stopTimer = null
+    if (running) return
+    running = true
+    if (sight) unwatch = sight.watch(onSight)
+    startGrace()
     void askLocal()
     if (!sight?.hidden()) wake()
   }
@@ -520,7 +549,37 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
         if (listeners.size === 0) stop()
       }
     },
-    get: () => fleet
+    get: () => fleet,
+    turn: () => {
+      closeFeed()
+      retries = 0
+      // Questions still out were put to the last machine: their answers are dropped, and the next may ask at once.
+      turns += 1
+      asking = false
+      readingRemote = false
+      // The account is asked again, and its last answer let go of: it says
+      // which row is "this one", and kept, the next machine's own feed would
+      // be drawn under the last machine's id until the next answer.
+      accountKey = ''
+      remoteKey = ''
+      // Loading again, for a grace of its own, which ends whether or not anything is read next
+      // (with no machine in scope nothing is, and "loading" must still end).
+      state = { ...state, graceOver: false }
+      if (running) startGrace()
+      else if (graceTimer !== null) {
+        clearTimeout(graceTimer)
+        graceTimer = null
+      }
+      set({ snapshot: null, link: 'connecting', list: null, name: null, listFailed: false, account: null, remote: undefined })
+    },
+    resume: () => {
+      if (!running) return
+      void askLocal()
+      if (!sight?.hidden()) {
+        openFeed()
+        refresh()
+      }
+    }
   }
 }
 
@@ -535,12 +594,20 @@ export const documentSight: Sight = {
 }
 
 let shared: ZoomFleetStore | null = null
-const fleetStore = (): ZoomFleetStore => {
+// Let go of while the old machine is in scope; read again once the new one
+// is. It closes a feed and tells its readers, so it goes with what stops.
+registerScopeState('zoom fleet', () => shared?.turn(), 'stop')
+// On the console with no machine in scope there is no "this machine" to read.
+subscribeMachineScope((scope) => {
+  if (!scopeNeedsMachine(scope) || scope.machineId !== null) shared?.resume()
+})
+/** The page's one fleet store, made when somebody first reads it. */
+export const sharedZoomFleet = (): ZoomFleetStore => {
   shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight })
   return shared
 }
-const subscribe = (listener: () => void): (() => void) => fleetStore().subscribe(listener)
-const getFleet = (): ZoomFleet => fleetStore().get()
+const subscribe = (listener: () => void): (() => void) => sharedZoomFleet().subscribe(listener)
+const getFleet = (): ZoomFleet => sharedZoomFleet().get()
 
 /** Every device of the owner, this one first and seated live; the same object until something changes. */
 export function useZoomFleet(): ZoomFleet {
