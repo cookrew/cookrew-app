@@ -78,7 +78,7 @@ struct MachineTests {
 
   @Test("the Mac this watch is paired with is the one its relay road names")
   func current() {
-    let bases = [Base(kind: "lan", url: "http://192.168.2.13:8639"), Base(kind: "relay", url: "https://cookrew.dev/relay/@anvztor/desktop/135928F2-0000-4000-8000-000000000001")]
+    let bases = [Base(kind: "lan", url: "http://192.168.2.13:8639"), Base(kind: "relay", url: "https://cookrew.dev/api/m/135928F2-0000-4000-8000-000000000001")]
     #expect(pairedMachineId(bases) == "135928f2-0000-4000-8000-000000000001")
     #expect(pairedMachineId([Base(kind: "typed", url: "http://192.168.2.13:8639")]) == nil)
   }

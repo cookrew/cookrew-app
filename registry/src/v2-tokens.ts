@@ -50,6 +50,11 @@ export interface V2Claims {
   jkt?: string
   /** The sitting a device pass was minted under: its end (sign-out, a password change, "Not me") ends the pass. */
   sid?: string
+  /**
+   * A SESSION OPENED BY THE CONSOLE'S PAGE (console-scope.ts): short, and good
+   * for the console's few routes and nothing else. Absent on every other token.
+   */
+  via?: 'console'
 }
 
 /**
@@ -80,6 +85,15 @@ export interface Minted {
 
 /** Thirty days: a session follows a person across a month of ordinary use. */
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/**
+ * A CONSOLE SESSION'S TOKEN LIVES FIFTEEN MINUTES. The console is a page on
+ * its own origin and keeps its token where a script can read it (no cookie
+ * crosses to the API host), so a token that was read is one that stops
+ * working soon; the page renews it with its device key, which a script can
+ * use but cannot carry off (v2-renew.ts). The sign-in itself lives as long as
+ * any other: this is the lifetime of one token, not of the session.
+ */
+export const CONSOLE_SESSION_TTL_MS = 15 * 60 * 1000
 /** Ten minutes: a call token is carried to one door and spent. */
 export const CALL_TTL_MS = 10 * 60 * 1000
 /** Ten minutes: a canvas token is carried to one desktop and spent, the same way. */
@@ -127,9 +141,9 @@ export class V2Tokens {
   }
 
   /** `expAt` caps the token at the sitting's thirtieth day (v2-session-age.ts · tokenExpiry). */
-  mintSession(sub: string, dev: string, jti: string = randomUUID(), expAt?: number): Minted {
-    const exp = Math.min(this.now() + SESSION_TTL_MS, expAt ?? Infinity)
-    return { token: this.mint({ sub, dev, scope: 'session', exp, jti }), exp, jti }
+  mintSession(sub: string, dev: string, jti: string = randomUUID(), expAt?: number, via?: 'console'): Minted {
+    const exp = Math.min(this.now() + (via === 'console' ? CONSOLE_SESSION_TTL_MS : SESSION_TTL_MS), expAt ?? Infinity)
+    return { token: this.mint({ sub, dev, scope: 'session', exp, jti, ...(via === undefined ? {} : { via }) }), exp, jti }
   }
 
   /**
@@ -230,6 +244,8 @@ export class V2Tokens {
       // A seat claim is an id or it is not there; anything else is a token
       // somebody shaped by hand and a door must not read it as a seat.
       if (claims.seat !== undefined && (typeof claims.seat !== 'string' || claims.seat === '')) return null
+      // Only a session says where it was opened, and only one place is ever said.
+      if (claims.via !== undefined && (claims.via !== 'console' || claims.scope !== 'session')) return null
       const revoked = this.revoked()
       if (revoked.has(claims.dev) || revoked.has(claims.jti)) return null
       return claims

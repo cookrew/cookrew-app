@@ -11,7 +11,7 @@
 // ~/.cookrew is touched. No password or token value is ever asserted on.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Accounts, loadAccount, writeAccount } from '../src/main/account-v2'
+import { Accounts, loadAccount, sameRegistry, writeAccount } from '../src/main/account-v2'
 import { accountStatus } from '../src/main/account-ipc'
 import { IdleLock } from '../src/main/lock'
 import { Requests } from '../src/main/requests'
@@ -367,6 +367,16 @@ describe('a 401 from another registry is not this session ending', () => {
       factors: null,
     } as unknown as Parameters<typeof accountStatus>[0]
     expect(accountStatus(deps).registryMismatch).toBeNull()
+  })
+
+  it('knows the home registry by the name it had and the name it has', () => {
+    // 0.6.0 moved the registry's API to a host of its own: an account file from before names cookrew.dev.
+    expect(sameRegistry('https://cookrew.dev', 'https://api.cookrew.dev')).toBe(true)
+    expect(sameRegistry('https://COOKREW.dev/', 'https://api.cookrew.dev')).toBe(true)
+    expect(sameRegistry('https://api.cookrew.dev', 'https://api.cookrew.dev/')).toBe(true)
+    expect(sameRegistry('https://cookrew.dev', 'http://localhost:8797')).toBe(false)
+    expect(sameRegistry('https://cookrew.dev.evil.example', 'https://api.cookrew.dev')).toBe(false)
+    expect(sameRegistry('https://staging.example', 'https://api.cookrew.dev')).toBe(false)
   })
 
   it('compares origins, not spellings — a trailing slash is the same door', async () => {

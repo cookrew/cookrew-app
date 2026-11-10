@@ -168,7 +168,7 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
   }
 
   /** One road, one try. The relay wants the session as well as the Mac's token. */
-  private func request(_ url: URL, _ method: String, payload: Data?, tag: String?, cookie: String?) -> URLRequest {
+  private func request(_ url: URL, _ method: String, payload: Data?, tag: String?, relaySession: String?) -> URLRequest {
     let read = method == "GET"
     // A write can wake an agent, and that takes a while. A read on the home
     // network is quick or it is not there: away from home it must not hold up the relay.
@@ -181,9 +181,9 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
       request.setValue("application/json", forHTTPHeaderField: "content-type")
       request.httpBody = payload
     }
-    if let cookie {
+    if let relaySession {
       request.httpShouldHandleCookies = false
-      request.setValue("\(sessionCookie)=\(cookie)", forHTTPHeaderField: "cookie")
+      request.setValue(relaySession, forHTTPHeaderField: relaySessionHeader)
     }
     return request
   }
@@ -280,13 +280,13 @@ public final class HTTPWatchAPI: WatchAPI, @unchecked Sendable {
       if !query.isEmpty { url.append(queryItems: query) }
       let relayed = onRelay(url)
       do {
-        let cookie = relayed ? await relay?.token() : nil
-        guard var answer = try await exchange(request(url, method, payload: payload, tag: tag, cookie: cookie)) else { continue }
-        if let cookie, sessionRefused(answer) {
+        let relaySession = relayed ? await relay?.token() : nil
+        guard var answer = try await exchange(request(url, method, payload: payload, tag: tag, relaySession: relaySession)) else { continue }
+        if let relaySession, sessionRefused(answer) {
           // Nothing reached the Mac, so even a write may go again, on a token
           // that has replaced this one. With none, the session is over.
-          guard let next = await relay?.newer(than: cookie),
-            let again = try await exchange(request(url, method, payload: payload, tag: tag, cookie: next)),
+          guard let next = await relay?.newer(than: relaySession),
+            let again = try await exchange(request(url, method, payload: payload, tag: tag, relaySession: next)),
             !sessionRefused(again)
           else {
             signedOut = true

@@ -94,9 +94,13 @@ public func dashedCode(_ typed: String) -> String {
   return "\(plain.prefix(4))-\(plain.dropFirst(4))"
 }
 
-/** Where a Mac answers on the relay. */
-public func relayBase(registry: String, username: String, desktop: String) -> URL? {
-  URL(string: "\(registry)/relay/@\(username)/desktop/\(desktop)")
+/**
+ Where a Mac answers on the relay: the one path every client uses. The account
+ is named by the session sent with each call (`relaySessionHeader`), never by
+ the address.
+ */
+public func relayBase(registry: String, desktop: String) -> URL? {
+  URL(string: "\(registry)/api/m/\(desktop.lowercased())")
 }
 
 /** Milliseconds, as the registry counts. */

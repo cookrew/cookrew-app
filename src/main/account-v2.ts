@@ -13,6 +13,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync }
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { registryOrigin } from './registry-origin'
+import { RELAY_SESSION_HEADER, machineRelayPath } from '../shared/machine-relay'
 import {
   DEFAULT_LOCK_AFTER_MS,
   MIN_PASSCODE,
@@ -413,6 +414,23 @@ export interface AccountsDeps {
 function sessionFrom(body: Record<string, unknown>): AccountSession | null {
   if (typeof body.token !== 'string' || typeof body.exp !== 'number') return null
   return { token: body.token, exp: body.exp }
+}
+
+/**
+ * IS THIS THE SAME REGISTRY, by origin. The home registry's API moved to a host
+ * of its own in 0.6.0 (api.cookrew.dev). An account file written before that
+ * names cookrew.dev, and it is the same registry: the same accounts, the same
+ * token key. Said here, once, so a machine that was signed in stays signed in
+ * and is not told it is pointed somewhere else.
+ */
+const HOME_REGISTRY = 'https://api.cookrew.dev'
+const HOME_REGISTRY_WAS = 'https://cookrew.dev'
+export function sameRegistry(a: string, b: string): boolean {
+  const named = (origin: string): string => {
+    const plain = origin.toLowerCase().replace(/\/+$/, '')
+    return plain === HOME_REGISTRY_WAS ? HOME_REGISTRY : plain
+  }
+  return named(a) === named(b)
 }
 
 /**
@@ -915,8 +933,7 @@ export class Accounts {
   registryMismatch(): { signedInAt: string; pointedAt: string } | null {
     const pinned = this.cached?.registry
     if (typeof pinned !== 'string' || pinned.length === 0) return null
-    const same = (origin: string): string => origin.toLowerCase().replace(/\/+$/, '')
-    if (same(pinned) === same(this.origin)) return null
+    if (sameRegistry(pinned, this.origin)) return null
     return { signedInAt: pinned, pointedAt: this.origin }
   }
 
@@ -1739,10 +1756,11 @@ export class Accounts {
   /**
    * ONE CALL TO ANOTHER MACHINE OF THE ACCOUNT, DOWN THE RELAY.
    *
-   * The relay opens only for the session cookie (registry v2-http.ts ·
-   * SESSION_COOKIE), so this sends it as one; what the other machine sees is
-   * its own key, if one is passed as `Authorization`, and the bridge's word
-   * for which device asked. The session still never leaves this class.
+   * The one relay path every client uses (shared/machine-relay.ts): the
+   * account is named by this session, sent in the relay's own header, and what
+   * the other machine sees is its own key, if one is passed as
+   * `Authorization`, and the relay's word for which device asked. The session
+   * still never leaves this class, and never reaches the other machine.
    */
   async relayed(
     desktopId: string,
@@ -1752,16 +1770,17 @@ export class Accounts {
     const account = this.cached
     if (!account) return { ok: false, reason: 'no_account' }
     if (!this.sessionLive()) return { ok: false, reason: 'session-expired' }
-    if (!/^[0-9a-f-]{36}$/i.test(desktopId)) return { ok: false, reason: 'unknown' }
+    const path = machineRelayPath(desktopId, route)
+    if (path === null) return { ok: false, reason: 'unknown' }
     const token = account.session?.token ?? ''
-    const url = `${this.origin}/relay/@${account.username}/desktop/${desktopId.toLowerCase()}/${route.replace(/^\/+/, '')}`
     try {
-      const response = await this.http(url, {
+      const response = await this.http(`${this.origin}${path}`, {
         ...init,
         headers: {
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
           ...(init.headers as Record<string, string> | undefined),
-          cookie: `__Host-cr_session=${token}`,
+          // LAST: nothing a caller passed may stand in for the session.
+          [RELAY_SESSION_HEADER]: token,
         },
       })
       return { ok: true, response }
@@ -1941,7 +1960,7 @@ export class Accounts {
   async forgetIfDeleted(): Promise<boolean> {
     const account = this.cached
     // A 410 from another registry says nothing about the account in this file.
-    if (account === null || account.registry !== this.origin) return false
+    if (account === null || !sameRegistry(account.registry ?? '', this.origin)) return false
     try {
       const asked = await this.http(`${this.origin}/v2/accounts/${encodeURIComponent(account.username)}`)
       if (asked.status !== 410) return false

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cookrewRegistry, parseAccountAddress, parseServeAddress } from '../src/main/import-session'
 import { parseDeepLink } from '../src/main/deep-link'
-import { registryOrigin } from '../src/main/registry-origin'
+import { consoleOrigin, registryOrigin, siteOrigin } from '../src/main/registry-origin'
 
 /**
  * THE REGISTRY IS A SETTING, AND A BARE NAME IS RESOLVED AT IT.
@@ -42,8 +42,9 @@ describe('a bare @handle/team is resolved at the CONFIGURED registry', () => {
 
   it('still answers production when nothing is configured', () => {
     delete process.env.COOKREW_REGISTRY
-    expect(parseServeAddress('@drej/alpha')?.origin).toBe('https://cookrew.dev')
-    expect(parseAccountAddress('@drej')?.origin).toBe('https://cookrew.dev')
+    // The registry's API is a host of its own (0.6.0); cookrew.dev is a static site.
+    expect(parseServeAddress('@drej/alpha')?.origin).toBe('https://api.cookrew.dev')
+    expect(parseAccountAddress('@drej')?.origin).toBe('https://api.cookrew.dev')
   })
 
   it('reads a configured registry’s own page, and refuses production’s', () => {
@@ -96,5 +97,51 @@ describe('a bare @handle/team is resolved at the CONFIGURED registry', () => {
       origin: 'http://192.168.1.20:8639',
       slug: 'research-crew'
     })
+  })
+})
+
+describe('the console this app points a phone at', () => {
+  it('is console.cookrew.dev, and moves with its own setting', () => {
+    const before = process.env.COOKREW_CONSOLE
+    delete process.env.COOKREW_CONSOLE
+    expect(consoleOrigin()).toBe('https://console.cookrew.dev')
+    process.env.COOKREW_CONSOLE = 'http://console.localhost:8797'
+    expect(consoleOrigin()).toBe('http://console.localhost:8797')
+    if (before === undefined) delete process.env.COOKREW_CONSOLE
+    else process.env.COOKREW_CONSOLE = before
+  })
+})
+
+describe('the site whose shared links this app reads', () => {
+  const keep = { registry: process.env.COOKREW_REGISTRY, site: process.env.COOKREW_SITE }
+  const restore = (): void => {
+    if (keep.registry === undefined) delete process.env.COOKREW_REGISTRY
+    else process.env.COOKREW_REGISTRY = keep.registry
+    if (keep.site === undefined) delete process.env.COOKREW_SITE
+    else process.env.COOKREW_SITE = keep.site
+  }
+
+  it('is cookrew.dev, whose links are names resolved at the API host', () => {
+    delete process.env.COOKREW_REGISTRY
+    delete process.env.COOKREW_SITE
+    expect(siteOrigin()).toBe('https://cookrew.dev')
+    expect(parseServeAddress('https://cookrew.dev/@drej/alpha')).toEqual({ origin: 'https://api.cookrew.dev', slug: 'alpha', door: '@drej/alpha' })
+    expect(parseServeAddress('https://cookrew.dev/drej/alpha')).toEqual({ origin: 'https://api.cookrew.dev', slug: 'alpha', door: '@drej/alpha' })
+    expect(parseAccountAddress('https://cookrew.dev/drej')).toEqual({ origin: 'https://api.cookrew.dev', handle: 'drej' })
+    // The API host's own address is read the same way; nothing is ever dialled as a door there.
+    expect(parseServeAddress('https://api.cookrew.dev/@drej/alpha')?.origin).toBe('https://api.cookrew.dev')
+    expect(parseServeAddress('https://cookrew.dev/alpha')).toBeNull()
+    restore()
+  })
+
+  it('follows a moved registry, so a test instance never reads production’s pages as its own', () => {
+    process.env.COOKREW_REGISTRY = 'http://localhost:8797'
+    delete process.env.COOKREW_SITE
+    expect(siteOrigin()).toBe('http://localhost:8797')
+    expect(parseAccountAddress('https://cookrew.dev/drej')).toBeNull()
+    process.env.COOKREW_SITE = 'http://site.localhost:8797'
+    expect(siteOrigin()).toBe('http://site.localhost:8797')
+    expect(parseServeAddress('http://site.localhost:8797/drej/alpha')).toEqual({ origin: 'http://localhost:8797', slug: 'alpha', door: '@drej/alpha' })
+    restore()
   })
 })

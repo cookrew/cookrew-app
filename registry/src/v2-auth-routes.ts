@@ -17,7 +17,9 @@ import {
 import { PROVIDER_LABEL, isProviderId, type OAuthBack, type ProviderId } from '../../src/shared/oauth'
 import { readJsonBody } from './http'
 import type { AuthOpener, AuthRequest } from './auth-requests'
-import { handoffFor, productOrigin } from './auth-finish'
+import { handoffFor, productOrigin, webOrigin } from './auth-finish'
+import { jwkThumbprint } from '../../src/shared/jwk-thumbprint'
+import { grantOnPage, openerForGrant, spendGrant } from './auth-grant'
 import { cookie, refuse, signedIn, v2Json, asking, type V2Context, type V2Identity } from './v2-http'
 import { deviceShape } from './v2-factor-http'
 import { factorError } from './v2-factor-copy'
@@ -91,8 +93,14 @@ function readBack(value: unknown): OAuthBack | null {
 
 /** The kinds of device each client may bind. A terminal is the machine it runs on. */
 function kindFits(client: AuthClient, kind: string): boolean {
-  return client === 'web' ? kind === 'browser' || kind === 'phone' : kind === 'desktop'
+  return client === 'web' || client === 'console' ? kind === 'browser' || kind === 'phone' : kind === 'desktop'
 }
+
+/** The web client's own page: the account page, wherever this registry keeps it. */
+const webHome = (v2: V2Identity): string => (v2.apiOrigin !== null ? '/account' : '/me')
+
+/** What the console's page may open a request for: a way in, and nothing a signed-in client does. */
+const CONSOLE_INTENTS: readonly AuthRequest['intent'][] = ['sign-in', 'create', 'github', 'google', 'grant']
 
 // ── the product origin ──────────────────────────────────────────────────────
 
@@ -144,6 +152,24 @@ function parse(ctx: V2Context, body: Record<string, unknown>): Parsed | null {
   const client = body.client
   const intent = body.intent === undefined ? 'sign-in' : body.intent
   if (!isAuthClient(client) || !isAuthIntent(intent)) {
+    refuseAuth(ctx.response, 400, 'bad_flow')
+    return null
+  }
+  // THE CONSOLE needs somewhere to come back to (its configured origin), and
+  // opens only a sign-in: linking, passkeys and step-ups belong to the auth host.
+  if (client === 'console' && (ctx.v2.consoleOrigin === null || !CONSOLE_INTENTS.includes(intent))) {
+    refuseAuth(ctx.response, 400, 'bad_flow')
+    return null
+  }
+  // THE WEB CLIENT'S VERIFIER IS A COOKIE, so it is opened where a cookie is
+  // set: never on the API host, which sets none.
+  if (client === 'web' && ctx.via === 'api') {
+    refuseAuth(ctx.response, 400, 'bad_flow')
+    return null
+  }
+  // The device pass by password is the console's alone (auth-grant.ts): every
+  // other client proves itself where it stands.
+  if (intent === 'grant' && client !== 'console') {
     refuseAuth(ctx.response, 400, 'bad_flow')
     return null
   }
@@ -229,6 +255,15 @@ async function openRequest(ctx: V2Context): Promise<void> {
       }
       clientState = body.state
     }
+    // The console's page keeps its own verifier and state, as the app does; its
+    // way back is fixed (auth-finish.ts · handoffFor), so it names none.
+    if (client === 'console') {
+      if (typeof body.state !== 'string' || !CLIENT_STATE.test(body.state)) {
+        refuseAuth(response, 400, 'bad_flow')
+        return
+      }
+      clientState = body.state
+    }
   }
 
   // A LINK IS A SIGNED-IN ACT, proven before the trip like the app's own link:
@@ -288,6 +323,28 @@ async function openRequest(ctx: V2Context): Promise<void> {
     if (opener === null) return
   }
 
+  // The pass by password: the console's own session asks, for its own device.
+  if (parsed.intent === 'grant') {
+    opener = openerForGrant(ctx, signedIn(ctx.request, v2, 'bearer', { console: true }), shapeId(parsed.device))
+    if (opener === null) return
+  }
+
+  /**
+   * A SIGNED-IN REQUEST IS OPENED WITH THE DEVICE'S OWN KEY. The checks above
+   * matched the device's id; the key in the body is what the proof and the
+   * page will then be bound to, so it must be the key this device signed in
+   * with. Without this a stolen session could open a request under its
+   * device's id with a key of the thief's, and prove it.
+   */
+  if (opener !== null) {
+    const stored = v2.accounts.get(opener.username)?.devices.find((device) => device.id === opener?.device)
+    const asked = jwkThumbprint(parsed.device.jwk as Record<string, unknown>)
+    if (stored === undefined || asked === null || asked !== jwkThumbprint(stored.jwk)) {
+      refuse(response, 403, 'not_this_device')
+      return
+    }
+  }
+
   const hint = typeof body.username === 'string' ? body.username.trim().toLowerCase() : ''
   const opened = auth.requests.open({
     client,
@@ -297,7 +354,7 @@ async function openRequest(ctx: V2Context): Promise<void> {
     challenge,
     clientState,
     back,
-    returnPath: client === 'web' ? (safeReturnPath(body.return) ?? '/me') : null,
+    returnPath: client === 'web' ? (safeReturnPath(body.return) ?? webHome(v2)) : null,
     usernameHint: opener?.username ?? (USERNAME.test(hint) ? hint : null),
     opener,
     act: parsed.act,
@@ -382,13 +439,17 @@ async function spend(ctx: V2Context): Promise<void> {
       refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
       return
     }
-    const spent = auth.requests.redeem(body.code, 'desktop', body.verifier)
+    const spent = auth.requests.redeem(body.code, ['desktop', 'console'], body.verifier)
     if (spent === null) {
       refuse(response, 401, 'bad_credentials')
       return
     }
     if (spent.request.intent === 'link') {
       spendLink(ctx, spent.request)
+      return
+    }
+    if (spent.request.intent === 'grant') {
+      spendGrant(ctx, spent.request)
       return
     }
     if (spent.request.intent === 'passkey') {
@@ -502,7 +563,7 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
       failPage(response, cleared, written.body.message)
       return
     }
-    const back = spent.request.returnPath ?? '/me'
+    const back = spent.request.returnPath ?? webHome(v2)
     response.writeHead(303, {
       location: `${back}?passkey=added#security`,
       'cache-control': 'private, no-store',
@@ -537,7 +598,7 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
   }
   const sessionToken = String(spent.result.body.token)
   response.writeHead(303, {
-    location: spent.request.returnPath ?? '/me',
+    location: spent.request.returnPath ?? webHome(v2),
     'cache-control': 'private, no-store',
     'referrer-policy': 'no-referrer',
     'content-length': '0',
@@ -581,7 +642,12 @@ export function summaryOf(v2: V2Identity, request: AuthRequest): AuthRequestSumm
     provider: request.provider,
     username: request.usernameHint,
     userCode: request.userCode,
-    returnHost: request.client === 'web' ? new URL(productOrigin(v2)).host : null,
+    returnHost:
+      request.client === 'web'
+        ? new URL(webOrigin(v2)).host
+        : request.client === 'console' && v2.consoleOrigin !== null
+          ? new URL(v2.consoleOrigin).host
+          : null,
     createdAt: request.createdAt,
     expiresAt: request.expiresAt,
     providers: [...v2.oauth.providers.values()].map((p) => ({ id: p.id, label: PROVIDER_LABEL[p.id] })),
@@ -642,7 +708,7 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
     if (request !== null) v2Json(response, 200, summaryOf(v2, request))
     return true
   }
-  if (method !== 'POST' || !['claim', 'device', 'continue', 'cancel', 'passkey/options', 'passkey', 'step-up'].includes(name)) {
+  if (method !== 'POST' || !['claim', 'device', 'continue', 'cancel', 'passkey/options', 'passkey', 'step-up', 'grant'].includes(name)) {
     refuse(response, 404, 'not_found')
     return true
   }
@@ -653,7 +719,8 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   // The ceremony reads its own body: an attestation is larger than a page call.
   if (name === 'passkey') {
     const request = boundRequest(ctx)
-    if (request !== null) await passkeyOnPage({ ...ctx, auth: { request } }, request)
+    if (request !== null && request.intent === 'grant') refuse(response, 404, 'not_found')
+    else if (request !== null) await passkeyOnPage({ ...ctx, auth: { request } }, request)
     return true
   }
   const read = await readJsonBody(ctx.request, SMALL_BODY)
@@ -686,6 +753,12 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   }
   const request = boundRequest(ctx)
   if (request === null) return true
+  // A device pass by password takes the password and a cancel, and no other
+  // page call: nothing a provider or a ladder says may finish it.
+  if (request.intent === 'grant' && name !== 'grant' && name !== 'cancel') {
+    refuse(response, 404, 'not_found')
+    return true
+  }
   if (name === 'continue') {
     continueRequest({ ...ctx, auth: { request } }, request)
     return true
@@ -696,6 +769,10 @@ export async function handleAuthApi(ctx: V2Context, path: string): Promise<boole
   }
   if (name === 'step-up') {
     startLadder({ ...ctx, auth: { request } }, request)
+    return true
+  }
+  if (name === 'grant') {
+    await grantOnPage({ ...ctx, auth: { request } }, request, read.value)
     return true
   }
   // Over is over: a finished request keeps its code, a cancelled one is not

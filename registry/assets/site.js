@@ -17,6 +17,8 @@
    * bar for who they now are, and line.js resumes a buy or a paid return it
    * kept in sessionStorage. Everywhere else the account page is the answer.
    */
+  /** Where this page goes when it has nowhere else to: the site's root, or the page itself when it stands alone on the auth host. */
+  const HOME = document.body?.dataset?.home || '/'
   const afterSignIn = () => {
     // A page rendered for the reader — a team's page, the market — is reloaded
     // for who they now are; anywhere else, the account page is the answer.
@@ -922,7 +924,7 @@
         // This browser's key named a device that stays revoked for a month,
         // so a new account here must not sign in with it.
         const dropped = indexedDB.deleteDatabase('cookrew-device')
-        dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign('/')
+        dropped.onsuccess = dropped.onerror = dropped.onblocked = () => location.assign(HOME)
       })
     const deleteAccount = async () => {
       const confirmName = $('me-delete-name').value
@@ -946,7 +948,7 @@
       const send = (more) => v2('DELETE', `/v2/me/devices/${encodeURIComponent(id)}`, { ...(proof ? { stepUp: proof } : {}), ...more })
       const out = proof ? await send({}) : await proven('revoke-device', send, { kind: 'revoke', id, own }, true)
       if (out === null) return
-      if (out.status === 204) return own ? location.assign('/') : refresh()
+      if (out.status === 204) return own ? location.assign(HOME) : refresh()
       toast(out.body?.message ?? 'That device could not be revoked.', 6000)
     }
     const showCodes = async (proof) => {
@@ -994,7 +996,7 @@
         if (!confirm(question)) return
         void revoke(el.dataset.revoke, own, null)
       } else if (el.dataset.signout !== undefined) {
-        void v2('POST', '/v2/sessions/current').then(() => location.assign('/'))
+        void v2('POST', '/v2/sessions/current').then(() => location.assign(HOME))
       } else if (el.dataset.recovery !== undefined) {
         if (!confirm('A new set of eight codes replaces any you already have. Show them?')) return
         void showCodes(null)

@@ -51,7 +51,8 @@ const SAID = {
   wrongPassword: 'That is not the account password.',
   wrongPasskey: 'That passkey did not answer for this account.',
   proof: 'Prove it is you: the account password or a passkey.',
-  badDevice: 'This device’s key cannot be named. Sign in again on this browser.'
+  badDevice: 'This device’s key cannot be named. Sign in again on this browser.',
+  passwordElsewhere: 'The account password is typed at auth.cookrew.dev, never on this page. Use a passkey here, or go there to type it.'
 } as const
 
 type Rest = { wrong: number; until: number }
@@ -62,7 +63,9 @@ const rests = new Map<string, Rest>()
  * must not lock the owner's phone out, and each device needs a full two-step
  * sign-in of its own to guess at all.
  */
-const restKey = (signed: Signed): string => `${signed.account.username}|${signed.device.id}`
+/** Tries are counted for an account on a device, wherever the password was typed. */
+const restKeyOf = (username: string, deviceId: string): string => `${username}|${deviceId}`
+const restKey = (signed: Signed): string => restKeyOf(signed.account.username, signed.device.id)
 const restingFor = (key: string, now: number): number => Math.max(0, (rests.get(key)?.until ?? 0) - now)
 
 function sweep(now: number): void {
@@ -102,6 +105,8 @@ export function grantOptions(ctx: V2Context, signed: Signed): void {
   const { rpId } = relyingParty(ctx)
   v2Json(ctx.response, 200, {
     methods: { password, passkey: passkeys.length > 0 },
+    // The console's page never takes the password itself (issueGrant): it sends the person to the auth host.
+    ...(signed.claims.via === 'console' ? { passwordAt: 'auth' } : {}),
     needsPassword: !password && passkeys.length === 0,
     passkey:
       passkeys.length === 0
@@ -152,14 +157,12 @@ async function provenNow(ctx: V2Context, signed: Signed, value: Record<string, u
     return 'passkey'
   }
   if (typeof value.password === 'string' && value.password !== '') {
-    const right = account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(account.username, value.password))
-    if (!right) {
-      const left = missed(key, now)
-      if (left === 0) said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
-      else said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
+    const tried = await tryGrantPassword(ctx, account.username, signed.device.id, value.password)
+    if (!tried.ok) {
+      if (tried.resting) said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: tried.retryAfterMs })
+      else said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: tried.triesLeft })
       return null
     }
-    rests.delete(key)
     return 'password'
   }
   // ALWAYS A PROOF MADE NOW. A session that verified a minute ago is not
@@ -170,12 +173,45 @@ async function provenNow(ctx: V2Context, signed: Signed, value: Record<string, u
   return null
 }
 
+export type PasswordTry =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly resting: true; readonly retryAfterMs: number }
+  | { readonly ok: false; readonly resting: false; readonly triesLeft: number }
+
+/**
+ * ONE TRY AT THE ACCOUNT PASSWORD FOR A DEVICE PASS, under the one rule: three
+ * wrong for an account on a device, then a minute's rest, wherever the
+ * password was typed (here, or on the auth origin for the console:
+ * auth-grant.ts). A try while resting is not looked at.
+ */
+export async function tryGrantPassword(ctx: Pick<V2Context, 'v2'>, username: string, deviceId: string, password: string): Promise<PasswordTry> {
+  const now = ctx.v2.now()
+  const key = restKeyOf(username, deviceId)
+  const rest = restingFor(key, now)
+  if (rest > 0) return { ok: false, resting: true, retryAfterMs: rest }
+  const account = ctx.v2.accounts.get(username)
+  const right = account !== null && account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(username, password))
+  if (right) {
+    rests.delete(key)
+    return { ok: true }
+  }
+  const left = missed(key, now)
+  return left === 0 ? { ok: false, resting: true, retryAfterMs: GRANT_REST_MS } : { ok: false, resting: false, triesLeft: left }
+}
+
 export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> {
   const { account, claims, device } = signed
   const now = ctx.v2.now()
   const body = await readJsonBody(ctx.request, BODY_MAX)
   const value: Record<string, unknown> = body.ok ? body.value : {}
   if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
+  // THE CONSOLE'S PAGE NEVER HANDLES THE PASSWORD (owner 2026-11-10): it is the
+  // page that draws what machines send and keeps its tokens where a script
+  // could read them, so a password typed there is one an injected script takes
+  // for good. Refused before it is looked at: right or wrong, it costs no try
+  // and opens nothing. A passkey is touched in place; the password is typed on
+  // the auth host and comes back as a code (auth-grant.ts).
+  if (claims.via === 'console' && value.password !== undefined) return said(ctx, 403, 'password_elsewhere', SAID.passwordElsewhere)
   const passkeys = passkeysOf(ctx, account.username)
   if (account.passwordless === true && passkeys.length === 0) return said(ctx, 409, 'password_required', SAID.needsPassword)
   const key = restKey(signed)

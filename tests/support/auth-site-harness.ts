@@ -27,6 +27,9 @@ export const PASSWORD = 'correct horse battery staple'
 export interface AuthSite {
   P: string
   A: string
+  /** The API origin and the console's origin, on a split registry (0.6.0); '' otherwise. */
+  API: string
+  C: string
   port: number
   fake: FakeOAuth
   v2: V2Identity
@@ -44,12 +47,17 @@ const freePort = (): Promise<number> =>
     })
   })
 
-export async function bootAuthSite(options: { auth?: boolean; secondStep?: 'required' | 'legacy'; freshWindowMs?: number } = {}): Promise<AuthSite> {
+export async function bootAuthSite(
+  options: { auth?: boolean; secondStep?: 'required' | 'legacy'; freshWindowMs?: number; split?: boolean; now?: () => number } = {}
+): Promise<AuthSite> {
   const dir = mkdtempSync(path.join(tmpdir(), 'auth-site-'))
   const fake = await fakeOAuth()
   const port = await freePort()
   const P = `http://localhost:${port}`
   const A = `http://auth.localhost:${port}`
+  // A SPLIT REGISTRY (0.6.0): the API on its own host, and the console's origin, which this process only names.
+  const API = options.split === true ? `http://api.localhost:${port}` : ''
+  const C = options.split === true ? `http://console.localhost:${port}` : ''
   const logged: string[] = []
   const v2 = createV2(dir, {
     log: (message) => logged.push(message),
@@ -60,7 +68,9 @@ export async function bootAuthSite(options: { auth?: boolean; secondStep?: 'requ
     // a Gate 1 suite passes 'required'.
     secondStep: options.secondStep ?? 'legacy',
     ...(options.freshWindowMs === undefined ? {} : { freshWindowMs: options.freshWindowMs }),
-    ...(options.auth === false ? {} : { authOrigin: A })
+    ...(options.auth === false ? {} : { authOrigin: A }),
+    ...(options.split === true ? { apiOrigin: API, consoleOrigin: C } : {}),
+    ...(options.now === undefined ? {} : { now: options.now })
   })
   const server: Server = createRegistry({
     store: new RegistryStore(dir),
@@ -80,7 +90,7 @@ export async function bootAuthSite(options: { auth?: boolean; secondStep?: 'requ
     await fake.close()
     rmSync(dir, { recursive: true, force: true })
   }
-  return { P, A, port, fake, v2, logged, close }
+  return { P, A, API, C, port, fake, v2, logged, close }
 }
 
 export interface Answer {
@@ -149,6 +159,16 @@ export class Client {
       origin: this.site.A,
       ...(request === null ? {} : { 'x-cookrew-auth-request': request })
     })
+  }
+
+  /** A call on the API host as an app makes it: no Origin, no cookie jar of its own to speak of. */
+  api(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): Promise<Answer> {
+    return this.call(this.site.API, method, url, body, headers)
+  }
+
+  /** A call on the API host as the console's page makes it: cross-origin, with its Origin. */
+  console(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): Promise<Answer> {
+    return this.call(this.site.API, method, url, body, { origin: this.site.C, ...headers })
   }
 
   /** A write on the product origin, as one of its own pages makes it. */
