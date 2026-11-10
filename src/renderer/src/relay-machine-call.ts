@@ -2,7 +2,7 @@ import { remoteMachineCall, type RemoteMachineAnswer } from '../../shared/remote
 import type { EnterResult } from './account-pair-client'
 import { tokenKeyForBase } from './pairing-scope'
 import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
-import { RELAY_UNAUTHENTICATED } from '../../shared/machine-relay'
+import { RELAY_NO_LINK, RELAY_UNAUTHENTICATED } from '../../shared/machine-relay'
 
 /**
  * EVERY MACHINE OF THE ACCOUNT, FROM THE CONSOLE, WHICHEVER ONE IS IN SCOPE
@@ -86,15 +86,18 @@ async function answerOf(binary: boolean, response: Response): Promise<RemoteMach
   }
 }
 
-/** cookrew.dev's own refusal of a session that has ended, as against a machine's of its key. */
-async function signedOut(response: Response): Promise<boolean> {
+/** Is this answer the relay's own, by the one word it says (shared/machine-relay.ts), and not the machine's. */
+async function relaySaid(response: Response, word: string): Promise<boolean> {
   try {
     const body = (await response.clone().json()) as { error?: unknown } | null
-    return body?.error === RELAY_UNAUTHENTICATED
+    return body?.error === word
   } catch {
     return false
   }
 }
+
+/** cookrew.dev's own refusal of a session that has ended, as against a machine's of its key. */
+const signedOut = (response: Response): Promise<boolean> => relaySaid(response, RELAY_UNAUTHENTICATED)
 
 const blockOf = (entered: EnterResult): MachineBlock => {
   switch (entered.kind) {
@@ -162,6 +165,13 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
         token = await enter(target, id.toLowerCase())
         if (token === null) return NOTHING
         response = await go(token)
+      }
+      // THE RELAY SAYS THE MACHINE HOLDS NO LINE: nothing was answered by the machine, and it is
+      // not said to have answered. Kept as what stood in the way, so the view says so at once
+      // (a tile left "reading" until the account's list was next asked for said nothing for a minute).
+      if (response.status === 503 && (await relaySaid(response, RELAY_NO_LINK))) {
+        blocks.set(id.toLowerCase(), { kind: 'offline' })
+        return NOTHING
       }
       blocks.delete(id.toLowerCase())
       return await answerOf(binary, response)

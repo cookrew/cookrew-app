@@ -315,6 +315,46 @@ describe('a machine that cannot be read says the one thing to do', () => {
     expect(standingOf(row(A, 'Old Mini', { online: false, appVersion: '0.5.0' }), { open: false, read: false, block: null }).standing).toBe('offline')
   })
 
+  // In a real browser, 2026-11-11: the list is asked for once a minute, so a machine closed meanwhile read "online …" until then.
+  it('off its line since the list was read: the registry is asked again at once, not at the next minute, and the tile says to open Cookrew on it', async () => {
+    const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
+    let accountAsks = 0
+    const store = createConsoleDevices({ ...w.deps, account: () => ((accountAsks += 1), w.deps.account()) })
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines[0]).toMatchObject({ standing: 'live' })
+    expect(accountAsks).toBe(1)
+    // Cookrew is closed on it: the relay says it holds no line, and the registry already lists it offline.
+    w.set({ snapshots: {}, blocks: { [A]: { kind: 'offline' } }, account: { ok: true, machines: [row(A, 'Studio Mac', { online: false })] } })
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(accountAsks).toBe(2)
+    expect(store.get().machines[0]).toMatchObject({ standing: 'offline', say: 'Open Cookrew on Studio Mac.', online: false })
+    stop()
+  })
+
+  it('a machine the relay cannot reach while the registry still lists it online is asked about once, not in a loop', async () => {
+    const w = world({ open: true, blocks: { [A]: { kind: 'offline' } }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
+    let accountAsks = 0
+    const store = createConsoleDevices({ ...w.deps, account: () => ((accountAsks += 1), w.deps.account()) })
+    const stop = shown(store)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(20_000)
+    // The first ask, and one more for the line that was lost: the minute's clock does the rest.
+    expect(accountAsks).toBe(2)
+    expect(store.get().machines[0]).toMatchObject({ standing: 'blocked', say: 'Studio Mac is not answering.' })
+    // It answers again, then lets go again: that is a new loss, and is asked about once more.
+    w.set({ snapshots: { [A]: snapshot('Studio Mac') }, blocks: {} })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(store.get().machines[0]).toMatchObject({ standing: 'live' })
+    w.set({ snapshots: {}, blocks: { [A]: { kind: 'offline' } } })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(accountAsks).toBe(3)
+    stop()
+  })
+
   it('it refused this browser: its own words, said as its own and cut to a sentence’s length', () => {
     expect(standingOf(row(A, 'Studio Mac'), { open: true, read: false, block: { kind: 'refused', message: 'Remote access is off on this Mac.' } })).toEqual({
       standing: 'blocked',

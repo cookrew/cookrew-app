@@ -153,6 +153,8 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   let reproofAsked = false
   /** Machines that did not take the pass: not asked again until there is a new proof to show them. */
   let passRefused: ReadonlySet<string> = new Set()
+  /** Machines the list calls online that did not answer, for which the list was asked again: once per loss. */
+  let lineLost: ReadonlySet<string> = new Set()
   let gateWasOpen = false
   /** Bumped when a SUMMARY read must not be filed any more (the gate closed, the level left the screen). */
   let era = 0
@@ -227,6 +229,15 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       if (mine !== era) return
       if (read !== null) snapshots = { ...snapshots, [id]: read }
       else if (snapshots[id] !== undefined) snapshots = Object.fromEntries(Object.entries(snapshots).filter(([held]) => held !== id))
+      // OFF ITS LINE SINCE THE LIST WAS READ. The list is asked for once a minute, and a machine
+      // closed meanwhile would be drawn as online, and silent, until then. The registry knows
+      // already: it is asked now. Once per loss, so a machine the relay cannot reach while the
+      // registry still lists it online is not asked about as fast as the two can answer.
+      if (read !== null && lineLost.has(id)) lineLost = new Set([...lineLost].filter((held) => held !== id))
+      if (read === null && deps.why(id)?.kind === 'offline' && !lineLost.has(id)) {
+        lineLost = new Set([...lineLost, id])
+        void askAccount()
+      }
       if (read === null && deps.why(id)?.kind === 'needs-proof') {
         // Not asked again with the same pass: each ask is its door, through the relay.
         passRefused = new Set([...passRefused, id])
@@ -284,6 +295,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         error = null
         snapshots = {}
         passRefused = new Set()
+        lineLost = new Set()
         reproofAsked = false
         compose()
       }

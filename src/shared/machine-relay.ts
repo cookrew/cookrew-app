@@ -28,6 +28,13 @@ export const RELAY_SESSION_HEADER = 'x-cookrew-session'
  */
 export const RELAY_UNAUTHENTICATED = 'unauthenticated'
 
+/**
+ * What the relay answers, with a 503, for a machine of the account that holds
+ * no line to it just now (registry/src/v2-canvas-relay.ts): Cookrew is closed
+ * on it, or it lost its network. The machine said nothing; the relay did.
+ */
+export const RELAY_NO_LINK = 'no_link'
+
 /** The path prefix every relayed machine call begins with. */
 export const MACHINE_RELAY_PREFIX = '/api/m'
 
