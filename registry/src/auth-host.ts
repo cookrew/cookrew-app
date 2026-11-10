@@ -21,7 +21,7 @@ import { SIGNED_IN_INTENTS } from '../../src/shared/auth-site'
  * suffix, never a forwarded header.
  */
 
-const ASSETS = new Set(['auth-kit.js', 'auth-enrol.js', 'auth-step.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
+const ASSETS = new Set(['auth-kit.js', 'auth-enrol.js', 'auth-step.js', 'auth-grant.js', 'auth.js', 'inter.woff2', 'jetbrains-mono.woff2'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
 /** The ladder's routes a page may reach, by method. A link request reaches only the provider trip. */
@@ -144,6 +144,13 @@ export function handleAuthHost(
   const ctx = contextOf(parts)
   const bound = boundRequest(ctx)
   if (bound === null) return
+  // A device pass by password is finished by the password typed on this page
+  // and by nothing else (auth-grant.ts): no ladder, and no provider trip, which
+  // would let a provider's word stand in for the password.
+  if (bound.intent === 'grant') {
+    refuse(response, 404, 'not_found')
+    return
+  }
   // A link, a passkey or a step-up is a signed-in act for the account that
   // opened it: there is nobody to sign in here, so the ladder's routes are not
   // reachable — but a step-up climbs the rungs of its own act's ladder.

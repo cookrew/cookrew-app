@@ -155,14 +155,12 @@ async function provenNow(ctx: V2Context, signed: Signed, value: Record<string, u
     return 'passkey'
   }
   if (typeof value.password === 'string' && value.password !== '') {
-    const right = account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(account.username, value.password))
-    if (!right) {
-      const left = missed(key, now)
-      if (left === 0) said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: GRANT_REST_MS })
-      else said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: left })
+    const tried = await tryGrantPassword(ctx, account.username, signed.device.id, value.password)
+    if (!tried.ok) {
+      if (tried.resting) said(ctx, 429, 'resting', SAID.resting, { retryAfterMs: tried.retryAfterMs })
+      else said(ctx, 401, 'wrong', SAID.wrongPassword, { triesLeft: tried.triesLeft })
       return null
     }
-    rests.delete(key)
     return 'password'
   }
   // ALWAYS A PROOF MADE NOW. A session that verified a minute ago is not
@@ -171,6 +169,32 @@ async function provenNow(ctx: V2Context, signed: Signed, value: Record<string, u
   // take a pass without the person touching a passkey or typing (review, 11-09).
   said(ctx, 401, 'proof_required', SAID.proof)
   return null
+}
+
+export type PasswordTry =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly resting: true; readonly retryAfterMs: number }
+  | { readonly ok: false; readonly resting: false; readonly triesLeft: number }
+
+/**
+ * ONE TRY AT THE ACCOUNT PASSWORD FOR A DEVICE PASS, under the one rule: three
+ * wrong for an account on a device, then a minute's rest, wherever the
+ * password was typed (here, or on the auth origin for the console:
+ * auth-grant.ts). A try while resting is not looked at.
+ */
+export async function tryGrantPassword(ctx: Pick<V2Context, 'v2'>, username: string, deviceId: string, password: string): Promise<PasswordTry> {
+  const now = ctx.v2.now()
+  const key = `${username}|${deviceId}`
+  const rest = restingFor(key, now)
+  if (rest > 0) return { ok: false, resting: true, retryAfterMs: rest }
+  const account = ctx.v2.accounts.get(username)
+  const right = account !== null && account.passwordless !== true && (await ctx.v2.accounts.verifyPassword(username, password))
+  if (right) {
+    rests.delete(key)
+    return { ok: true }
+  }
+  const left = missed(key, now)
+  return left === 0 ? { ok: false, resting: true, retryAfterMs: GRANT_REST_MS } : { ok: false, resting: false, triesLeft: left }
 }
 
 export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> {

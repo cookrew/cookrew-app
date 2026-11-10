@@ -54,12 +54,12 @@ export const isAuthClient = (value: unknown): value is AuthClient =>
  * account that opened it, after the account's own step-up on the page;
  * `step-up` is that proof on its own, for one act cookrew.dev/me is about to do.
  */
-export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey' | 'step-up'
+export type AuthIntent = 'sign-in' | 'create' | 'github' | 'google' | 'link' | 'passkey' | 'step-up' | 'grant'
 
-export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey', 'step-up']
+export const AUTH_INTENTS: readonly AuthIntent[] = ['sign-in', 'create', 'github', 'google', 'link', 'passkey', 'step-up', 'grant']
 
 /** The intents a signed-in client opens for its own account; nobody signs in on them. */
-export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey', 'step-up']
+export const SIGNED_IN_INTENTS: readonly AuthIntent[] = ['link', 'passkey', 'step-up', 'grant']
 
 /**
  * THE ACTS cookrew.dev/me MAY ASK THE PAGE TO PROVE, and no others: each is a
