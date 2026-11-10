@@ -5,6 +5,7 @@ import {
   CARD_POLL_MS,
   CARD_SESSION_LIFE_MS,
   cardCheckStep,
+  cardHeldFault,
   cardPollStep,
   type CardWait,
   type SettleAnswer
@@ -83,19 +84,20 @@ describe('cardPollStep — one look at the door while waiting', () => {
     }
   })
 
-  it('a refusal that is not about the payment stops the wait and is spoken in its own words', () => {
+  it('a refusal that is not about the payment stops the wait: its own headline, and an honest word about the card', () => {
+    const honest = MKT_PAY['mkt.pay.card.unconfirmed.body']
     const budget = cardPollStep({ ok: true, phase: { kind: 'denied', reason: 'budget', retryable: false } }, WAIT, alive, VARS)
     expect(budget).toEqual({
       kind: 'stopped',
-      fault: { voice: 'apolog', title: denialCopy('budget', undefined, VARS).title, body: denialCopy('budget', undefined, VARS).body }
+      fault: { voice: 'apolog', title: denialCopy('budget', undefined, VARS).title, body: honest }
     })
     expect(cardPollStep({ ok: true, phase: { kind: 'gone' } }, WAIT, alive, VARS)).toEqual({
       kind: 'stopped',
-      fault: { voice: 'apolog', title: MKT_GATE['mkt.gate.gone.title'], body: MKT_GATE['mkt.gate.gone.why'] }
+      fault: { voice: 'apolog', title: MKT_GATE['mkt.gate.gone.title'], body: honest }
     })
     expect(cardPollStep({ ok: true, phase: { kind: 'error', status: 500 } }, WAIT, alive, VARS)).toEqual({
       kind: 'stopped',
-      fault: { voice: 'apolog', title: MKT_GATE['mkt.gate.error.title'], body: MKT_GATE['mkt.gate.error.why'] }
+      fault: { voice: 'apolog', title: MKT_GATE['mkt.gate.error.title'], body: honest }
     })
     // Main holds no Bearer any more — the account changed, the app restarted.
     expect(cardPollStep({ ok: false, reason: 'not-signed-in' }, WAIT, alive, VARS)).toMatchObject({
@@ -174,11 +176,100 @@ describe('cardCheckStep — CHECK AGAIN, one press, the same session', () => {
   })
 })
 
+/**
+ * ONCE A CARD PAGE EXISTS, NOBODY HERE KNOWS THE CARD WAS NOT CHARGED (F).
+ *
+ * The refusals a door gives were written for a person who has not paid: "this
+ * team is out of sessions. Nothing was charged." Said during or after a card
+ * wait, that sentence may be false — the card page was open the whole time.
+ * And the door's "not paid" (`payment_invalid`) is one answer for several
+ * facts: unpaid, yes, but also a session already used, or one whose amount or
+ * buyer did not match what the door expected (stripe-rail.ts stripeSettle
+ * returns the same `refused` for all of them). So no sentence spoken about a
+ * card session claims nothing was charged, and each says what to do if it was.
+ */
+describe('no sentence about a card session claims nothing was charged (F)', () => {
+  const honest = MKT_PAY['mkt.pay.card.unconfirmed.body']
+  const REFUSALS: SettleAnswer[] = [
+    ...['budget', 'workspace', 'payment_unavailable', 'not_answering', 'no_seat', 'scope', 'region', 'seat_limit', 'refunded', 'a-reason-nobody-shipped'].map(
+      (reason): SettleAnswer => ({ ok: true, phase: { kind: 'denied', reason, retryable: false } })
+    ),
+    { ok: true, phase: { kind: 'gone' } },
+    { ok: true, phase: { kind: 'error', status: 500 } },
+    { ok: true, phase: { kind: 'error', status: 401 } },
+    { ok: true, phase: { kind: 'identify' } },
+    { ok: true, phase: { kind: 'pay', rails: [] } }
+  ]
+  const EVERYTHING: SettleAnswer[] = [
+    ...REFUSALS,
+    unpaid,
+    uncheckable,
+    { ...unpaid, standing: true } as SettleAnswer,
+    { ...unpaid, standing: false } as SettleAnswer,
+    { ok: false, reason: 'not-signed-in' },
+    { ok: false, reason: 'refused' }
+  ]
+
+  it('says the door did not confirm the payment, and what to do if the card was charged', () => {
+    expect(honest).toBe(
+      'This door did not confirm the card payment. If your card was charged, press CHECK AGAIN; the payment is tied to your account at this door.'
+    )
+  })
+
+  it.each(REFUSALS.map((answer) => [JSON.stringify(answer.ok ? answer.phase : answer), answer] as const))(
+    'a refusal during or after the wait (%s) keeps its headline and says the honest thing under it',
+    (_what, answer) => {
+      for (const decide of [cardPollStep, cardCheckStep]) {
+        for (const at of [alive, over]) {
+          const step = decide(answer, WAIT, at, VARS)
+          expect(step.kind).toBe('stopped')
+          if (step.kind === 'stopped') {
+            expect(step.fault.body).toBe(honest)
+            expect(step.fault.title.length).toBeGreaterThan(0)
+          }
+        }
+      }
+    }
+  )
+
+  it('nothing either function can say claims the card was not charged, or that nothing happened', () => {
+    for (const answer of EVERYTHING) {
+      for (const decide of [cardPollStep, cardCheckStep]) {
+        for (const at of [T0 + 1, alive, over, over + 3_600_000]) {
+          const said = JSON.stringify(decide(answer, WAIT, at, VARS))
+          expect(said, said).not.toMatch(/nothing was charged|nothing was installed|not charged|no charge|ended unpaid|went unpaid/i)
+        }
+      }
+    }
+  })
+
+  it('when a new payment is freed, the sentence still does not say the first one took nothing', () => {
+    const step = cardCheckStep({ ...unpaid, standing: false } as SettleAnswer, WAIT, over, VARS)
+    expect(step.kind).toBe('expired')
+    const body = MKT_PAY['mkt.pay.card.expired.body']
+    expect(body).toMatch(/did not confirm a payment/)
+    expect(body).toMatch(/If your card was charged/)
+    expect(body).toMatch(/before paying again/)
+    expect(MKT_PAY['mkt.pay.card.expired.title']).not.toMatch(/unpaid/i)
+  })
+
+  it('a sheet OPENED on a payment in flight that the door refuses says the same honest thing, not the refusal band', () => {
+    expect(cardHeldFault({ kind: 'pay', rails: [] }, VARS)).toBeNull()
+    expect(cardHeldFault({ kind: 'open' }, VARS)).toBeNull()
+    const budget = cardHeldFault({ kind: 'denied', reason: 'budget', retryable: false }, VARS)
+    expect(budget).toEqual({ voice: 'apolog', title: denialCopy('budget', undefined, VARS).title, body: honest })
+    expect(cardHeldFault({ kind: 'gone' }, VARS)?.body).toBe(honest)
+    // And the sheet stays on the pay step for it: the band that says "Nothing was charged" is never drawn over a card in flight.
+    const gate = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'ImportGate.tsx'), 'utf8')
+    expect(gate).toContain('cardHeldFault(result.phase, deniedVarsRef.current)')
+    expect(gate).toMatch(/card !== null\s*\?\s*\{ kind: 'pay' \}/)
+  })
+})
+
 describe('the words', () => {
-  it('ending the wait promises the same payment, never a new one; expiry says nothing was charged', () => {
+  it('ending the wait promises the same payment, never a new one', () => {
     expect(MKT_PAY['mkt.pay.card.ended.body']).toMatch(/same payment/)
     expect(MKT_PAY['mkt.pay.card.ended.body']).toMatch(/never starts a new one/)
-    expect(MKT_PAY['mkt.pay.card.expired.body']).toMatch(/nothing was charged/i)
     expect(MKT_PAY['mkt.pay.card.check']).toBe('CHECK AGAIN')
   })
 })

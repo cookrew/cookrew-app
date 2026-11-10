@@ -27,6 +27,14 @@ import { settleRefusalFault } from './import-gate-remedy'
  * offers CHECK AGAIN, which asks about THE SAME session and never starts
  * another; and a fresh PAY exists only after the door has said that session
  * is unpaid once its life is over.
+ *
+ * AND NOTHING SAID HERE CLAIMS THE CARD WAS NOT CHARGED. Every sentence in
+ * this module is spoken while a card page exists for the purchase. The door's
+ * ordinary refusals end "nothing was charged" — written for somebody who has
+ * not paid — and its "not paid" is one answer for several facts (unpaid; a
+ * session already used; an amount or a buyer that did not match). So a
+ * refusal keeps its own headline and gets one honest body under it: the door
+ * did not confirm the payment, and what to do if the card was charged.
  */
 
 /** How often the door is asked. */
@@ -62,6 +70,9 @@ export type CardStep =
 
 const apology = (title: string, body: string): PayFault => ({ voice: 'apolog', title, body })
 
+/** A refusal's own headline over the one body that is true while a card page exists. */
+const unconfirmed = (title: string): PayFault => apology(title, MKT_PAY['mkt.pay.card.unconfirmed.body'])
+
 const UNCHECKABLE = apology(
   MKT_PAY['mkt.pay.error.unverifiable.title'],
   MKT_PAY['mkt.pay.error.unverifiable.body']
@@ -84,16 +95,33 @@ function read(answer: SettleAnswer, vars: Readonly<Record<string, string | numbe
       if (phase.reason === 'payment_invalid') return 'unpaid'
       if (phase.reason === 'payment_unverifiable') return 'uncheckable'
       // Lenient: a sentence missing its facts must not throw inside a timer.
-      const copy = denialCopyLenient(phase.reason, undefined, vars)
-      return { fault: apology(copy.title, copy.body) }
+      // The HEADLINE only — the refusal's body is the one that says "nothing
+      // was charged", which nobody here can know.
+      return { fault: unconfirmed(denialCopyLenient(phase.reason, undefined, vars).title) }
     }
     case 'gone':
-      return { fault: apology(MKT_GATE['mkt.gate.gone.title'], MKT_GATE['mkt.gate.gone.why']) }
+      return { fault: unconfirmed(MKT_GATE['mkt.gate.gone.title']) }
     default:
       // An error, a door asking who we are, a door quoting again: none of
       // them is "paid", and none of them is a reason to start a new payment.
-      return { fault: apology(MKT_GATE['mkt.gate.error.title'], MKT_GATE['mkt.gate.error.why']) }
+      return { fault: unconfirmed(MKT_GATE['mkt.gate.error.title']) }
   }
+}
+
+/**
+ * A SHEET OPENED ON A PAYMENT IN FLIGHT, and the door's answer to the gate is
+ * a refusal. The refusal's band would say "nothing was charged" over a card
+ * page that may have been paid; this is what is said instead, on the pay
+ * step, with CHECK AGAIN under it. Null when the door is simply quoting (or
+ * open): there is nothing to correct.
+ */
+export function cardHeldFault(
+  phase: ServePhase,
+  vars: Readonly<Record<string, string | number>>
+): PayFault | null {
+  if (phase.kind === 'pay' || phase.kind === 'open') return null
+  const reading = read({ ok: true, phase }, vars)
+  return typeof reading === 'object' ? reading.fault : null
 }
 
 /** One look at the door while the sheet is waiting by itself. */

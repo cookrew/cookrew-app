@@ -7,6 +7,7 @@ import { requestAccountSheet } from './account/open-request'
 import {
   CARD_POLL_MS,
   cardCheckStep,
+  cardHeldFault,
   cardPollStep,
   type CardStep,
   type CardWait,
@@ -144,6 +145,11 @@ export function ImportGate({
     setCard(next)
   }, [])
 
+  /** The facts a refusal's sentence may name, readable from a timer or a late answer. */
+  const deniedVars = deniedVarsFor(face, facts)
+  const deniedVarsRef = useRef(deniedVars)
+  deniedVarsRef.current = deniedVars
+
   /** Paint what main said about the door: the phase, the wallet, the facts its sentences name. */
   const applyGate = useCallback((result: Awaited<ReturnType<ReturnType<typeof cookrew>['serveGate']>>): void => {
     setBusy(false)
@@ -163,12 +169,17 @@ export function ImportGate({
           holdCard(null)
         }
       } else if (holding === null || holding.wait.session !== flying.session) {
+        // The door may have answered this ask with a refusal (out of sessions,
+        // gone). Its band would say "nothing was charged" over a card page
+        // that may have been paid — so it is said on the pay step instead, in
+        // the words that are true of a payment in flight (card-wait.ts).
+        const refused = cardHeldFault(result.phase, deniedVarsRef.current)
         holdCard({
           wait: { session: flying.session, startedAt: flying.startedAt },
           paid: { price: flying.price, asset: 'USD' },
-          mode: 'resume'
+          mode: refused === null ? 'resume' : 'check'
         })
-        setFault(RESUME_FAULT)
+        setFault(refused ?? RESUME_FAULT)
       }
       setWallet(result.wallet)
       setFacts({
@@ -315,11 +326,6 @@ export function ImportGate({
     },
     []
   )
-
-  /** The facts a refusal's sentence may name, readable from the wait's timer. */
-  const deniedVars = deniedVarsFor(face, facts)
-  const deniedVarsRef = useRef(deniedVars)
-  deniedVarsRef.current = deniedVars
 
   /** Carry out what one look at the door decided (card-wait.ts). */
   const actOnCard = useCallback(
@@ -529,13 +535,15 @@ export function ImportGate({
       case 'denied':
         // A payment fault is shown ON the pay step, in its own voice — the
         // walk only leaves the rail for refusals the caller cannot answer.
-        return phase.reason === 'payment_invalid' || phase.reason === 'payment_unverifiable'
-          ? { kind: 'pay' }
-          : { kind: 'denied', reason: phase.reason, retryable: phase.retryable }
+        if (phase.reason === 'payment_invalid' || phase.reason === 'payment_unverifiable') return { kind: 'pay' }
+        // WHILE A CARD PAYMENT IS IN FLIGHT the sheet stays on the pay step
+        // whatever the door says: the refusal bands end "nothing was charged",
+        // and with a card page open that is not this sheet's to claim.
+        return card !== null ? { kind: 'pay' } : { kind: 'denied', reason: phase.reason, retryable: phase.retryable }
       case 'gone':
-        return { kind: 'gone' }
+        return card !== null ? { kind: 'pay' } : { kind: 'gone' }
       case 'error':
-        return { kind: 'error', status: phase.status }
+        return card !== null ? { kind: 'pay' } : { kind: 'error', status: phase.status }
     }
   })()
 
@@ -582,7 +590,8 @@ export function ImportGate({
       onIdentify={identify}
       onSelectWallet={(id) => {
         setRailId(id)
-        setFault(null)
+        // A card in flight keeps its sentence: choosing a chip does not answer it.
+        if (cardRef.current === null) setFault(null)
       }}
       onPay={pay}
       // Only a rail we actually SETTLED on counts as paid. Arriving at `open`

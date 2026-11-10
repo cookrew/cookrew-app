@@ -277,10 +277,26 @@ export const MKT_PAY = {
   'mkt.pay.card.resume.body':
     'You started it earlier and its card page can still be paid. Reopen that page to finish — a second payment is never started while this one is open.',
   'mkt.pay.card.reopen': 'REOPEN CARD PAGE',
-  /** The door looked at that session after its time was up: nothing on it. */
-  'mkt.pay.card.expired.title': 'That card page ended unpaid',
+  /**
+   * A REFUSAL WHILE A CARD PAGE EXISTS. The door's ordinary refusals end
+   * "nothing was charged", which is true of a person who has not paid and not
+   * known of one whose card page has been open. This goes under the refusal's
+   * own headline instead: what the door did NOT do, and the way on if the
+   * card was charged. A card payment is checked against the buyer's own
+   * sign-in at this door, which is why asking again is the right move.
+   */
+  'mkt.pay.card.unconfirmed.body':
+    'This door did not confirm the card payment. If your card was charged, press CHECK AGAIN; the payment is tied to your account at this door.',
+  /**
+   * The card page's time is up and the door still does not confirm a payment
+   * on it — a new one may be started. It does NOT say the first took nothing:
+   * the door gives one answer for "unpaid" and for a payment it would not
+   * accept (already used, a different amount, a different buyer), and this
+   * sheet cannot tell them apart.
+   */
+  'mkt.pay.card.expired.title': 'That card payment was not confirmed',
   'mkt.pay.card.expired.body':
-    'The door found no payment on it, so nothing was charged. You can pay again.',
+    'The card page has run out of time and this door did not confirm a payment on it. If your card was charged, the payment is tied to your account at this door: ask its owner before paying again. Otherwise you can pay again.',
   /** A settle the door refused: the accusation voice, per R-two-voices. */
   'mkt.pay.error.invalid.title': "That payment didn't verify",
   'mkt.pay.error.invalid.body':

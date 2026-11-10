@@ -367,6 +367,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await click(page, PRIMARY)
       const expired = await sheetSays(page, MKT_PAY['mkt.pay.card.expired.title'])
       expect(expired).toContain(MKT_PAY['mkt.pay.card.expired.body'])
+      expect(expired).not.toMatch(/nothing was charged/i)
       expect(seen.presented.length).toBe(asked + 1)
       expect(new Set(seen.presented)).toEqual(new Set([UNPAID]))
       expect(seen.checkouts).toBe(1)
@@ -398,7 +399,9 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       world.budget(false)
       await click(page, PRIMARY)
       const said = await sheetSays(page, MKT_DENIED_REASONS['mkt.denied.budget.title'])
-      expect(said).toContain('Nothing was charged')
+      // A card page is open for this purchase: the sheet does not claim the card was not charged.
+      expect(said).toContain(MKT_PAY['mkt.pay.card.unconfirmed.body'])
+      expect(said).not.toMatch(/Nothing was charged/i)
       await primaryReads(page, MKT_PAY['mkt.pay.card.check'])
       expect(world.openedBy).not.toContain('acct-una')
 
