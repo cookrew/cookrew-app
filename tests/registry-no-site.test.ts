@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
+import { request as httpRequest } from 'node:http'
 import { createRegistry } from '../registry/src/server'
 import { RegistryStore } from '../registry/src/store'
 import { TransparencyLog } from '../registry/src/log'
@@ -151,6 +152,49 @@ describe('a registry on one host serves no page', () => {
     const response = await fetch(`${origin}${address}`, { method: 'HEAD', redirect: 'manual' })
     expect(response.status).toBe(404)
     expect(response.headers.get('set-cookie')).toBeNull()
+  })
+
+  /** The path as written, which fetch would tidy first, and any method. */
+  const raw = (method: string, address: string, headers: Record<string, string> = {}): Promise<{ status: number; type: string; cookie: unknown; location: unknown; body: string }> =>
+    new Promise((resolve, reject) => {
+      const { hostname, port } = new URL(origin)
+      const asked = httpRequest({ hostname, port, method, path: address, headers }, (response) => {
+        const parts: Buffer[] = []
+        response.on('data', (part: Buffer) => parts.push(part))
+        response.on('end', () =>
+          resolve({ status: response.statusCode ?? 0, type: String(response.headers['content-type'] ?? ''), cookie: response.headers['set-cookie'], location: response.headers.location, body: Buffer.concat(parts).toString('utf8') })
+        )
+      })
+      asked.on('error', reject)
+      asked.end()
+    })
+
+  it.each([
+    ['POST', '/'],
+    ['POST', '/me'],
+    ['POST', '/join'],
+    ['PUT', '/market'],
+    ['DELETE', '/@someone/team'],
+    ['HEAD', '/me'],
+    ['GET', '/@x'],
+    ['GET', '/account'],
+    ['GET', '/%2e%2e/'],
+    ['GET', '/%2e%2e/me'],
+    ['GET', '/assets/toString'],
+    ['GET', '/assets/__proto__'],
+    ['GET', '/assets/%2e%2e%2fpackage.json'],
+    ['GET', '//'],
+    ['GET', '//evil.example/x']
+  ])('%s %s is no page either: data or nothing, no cookie, no way on', async (method, address) => {
+    for (const headers of [{}, { cookie: `__Host-cr_session=${session}; cr_account=someone` }, { authorization: `Bearer ${session}` }]) {
+      const answer = await raw(method, address, headers)
+      // A path the server cannot read at all is a 400; everything else here is the 404.
+      expect([400, 404], `${method} ${address}`).toContain(answer.status)
+      expect(answer.type).toBe('application/json; charset=utf-8')
+      expect(answer.body).not.toMatch(/<html|<!doctype/i)
+      expect(answer.cookie).toBeUndefined()
+      expect(answer.location).toBeUndefined()
+    }
   })
 
   it('still answers the API beside them: the cut took pages, never data', async () => {

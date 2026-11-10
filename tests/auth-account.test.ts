@@ -106,6 +106,14 @@ describe('the account page, signed out', () => {
       expect((await new Client(site).call(site.A, 'GET', `/assets/${name}`)).status, name).toBe(404)
     }
   })
+
+  it('serves an asset by its exact name and nothing reached by walking: not a path, not a property of the list', async () => {
+    for (const name of ['../package.json', '%2e%2e%2fpackage.json', '..%2f..%2fpackage.json', 'toString', '__proto__', 'constructor', 'hasOwnProperty', 'site.js%00.png', '']) {
+      const res = await new Client(site).call(site.A, 'GET', `/assets/${name}`)
+      expect(res.status, name).toBe(404)
+      expect(res.headers['set-cookie'], name).toBeUndefined()
+    }
+  })
 })
 
 describe('the account page, signed in', () => {
