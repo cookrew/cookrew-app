@@ -219,18 +219,31 @@ describe('the pairing URL', () => {
     expect(text).toContain('from any network')
   })
 
-  it('with --token still prints the direct URLs, for a phone with no account or no internet', () => {
+  it('with --token prints no token link on a machine of an account, and says why', () => {
+    // Owner 2026-11-11: this machine's own address answers a browser with the way to the
+    // console, so a token link would land there and open nothing.
     const text = renderMobileHelp({
       endpoints: withTailnet,
       secure: true,
       uncovered: [],
       tailnet: true,
       pairing: RELAY,
-      // The token links are what --token asks for (owner 2026-11-09).
       showToken: true
     })
-    expect(text).toContain('https://192.168.2.13:8643/?token=tok')
-    expect(text).toContain(machineCopy('Same Wi-Fi as this Mac', process.platform))
+    expect(text).not.toContain('?token=')
+    expect(text.match(/https?:\/\/\S+/g)).toEqual([RELAY_URL])
+    expect(text).toMatch(/--token/)
+    expect(text).toMatch(/signed in/)
+  })
+
+  it('a rotation on a machine of an account prints no link, and says who has to come back and how', () => {
+    const text = renderRotated(withTailnet, RELAY)
+    expect(text).not.toMatch(/https?:\/\//)
+    expect(text).not.toContain('?token=')
+    expect(text).toMatch(/watch/i)
+    // The connect code goes with the token: a phone that unlocked this screen scans again.
+    expect(text).toMatch(/scan/i)
+    expect(text).toMatch(/console/i)
   })
 
   it('is absent entirely when this Mac has no account', () => {

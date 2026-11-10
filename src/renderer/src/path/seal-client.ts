@@ -1,4 +1,4 @@
-import { concat, startHandshake, type SealRecord, type SealSession } from '../../../shared/canvas-seal'
+import { checkReplaced, concat, startHandshake, type SealRecord, type SealSession } from '../../../shared/canvas-seal'
 import { createInbox, createRecordReader, decodeFrame, encodeFrame, encodeRecord, type Inbox, type SealFrame } from '../../../shared/canvas-seal-wire'
 
 /**
@@ -20,12 +20,19 @@ const UP_MS = 20_000
 /** A down stream that keeps refusing is a session that has ended. */
 const DOWN_TRIES = 8
 
-export type SealRefusal = 'code' | 'proof'
+export type SealRefusal = 'code' | 'replaced' | 'proof'
 
-/** The code is wrong or old, or the far end could not prove it. Nothing was sent. */
+const REFUSED: Record<SealRefusal, string> = {
+  code: 'This Mac no longer knows that connect code.',
+  // Said only when the Mac PROVED it with the old code (canvas-seal.ts · checkReplaced): its word, not a relay's.
+  replaced: 'That machine’s connect code was changed. Scan the code on its screen again.',
+  proof: 'The other end could not prove the connect code.'
+}
+
+/** The code is wrong, old or replaced, or the far end could not prove it. Nothing was sent. */
 export class SealRefusedError extends Error {
   constructor(readonly why: SealRefusal) {
-    super(why === 'code' ? 'This Mac no longer knows that connect code.' : 'The other end could not prove the connect code.')
+    super(REFUSED[why])
   }
 }
 
@@ -76,7 +83,11 @@ async function shakeHands(deps: SealClientDeps, fetchFn: typeof fetch): Promise<
   const post = (path: string, body: unknown): Promise<Response> => fetchFn(deps.url(path), { method: 'POST', body: JSON.stringify(body) })
   const started = await startHandshake(codeBytes(deps.code))
   const hello = await post('/~seal/hello', started.hello)
-  if (hello.status === 403) throw new SealRefusedError('code')
+  if (hello.status === 403) {
+    const said = (await hello.json().catch(() => null)) as { replaced?: unknown } | null
+    const replaced = said !== null && typeof said === 'object' && (await checkReplaced(codeBytes(deps.code), started.hello, said.replaced).catch(() => false))
+    throw new SealRefusedError(replaced ? 'replaced' : 'code')
+  }
   if (!hello.ok) throw new Error(`The sealed session did not open (${hello.status}).`)
   const answer = (await hello.json()) as { session: string; accept: { e: string; proof: string } }
   const done = await started.finish(answer.accept).catch(() => null)

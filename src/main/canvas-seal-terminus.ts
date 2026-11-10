@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { acceptHandshake, type AcceptedHandshake, type SealHello, type SealSession } from '../shared/canvas-seal'
+import { acceptHandshake, type AcceptedHandshake, type SealHello, type SealSession, proveReplaced } from '../shared/canvas-seal'
 import { createInbox, createRecordReader, decodeFrame, encodeFrame, encodeRecord, SEAL_DATA_MAX, type InboxAnswer, type SealFrame } from '../shared/canvas-seal-wire'
 import { FixedWindowLimiter } from '../shared/fixed-window-limiter'
 import { BRIDGE_BODY_MAX, loggedPath, RELAY_MARKER, type BridgeCall, type BridgeDialer, type BridgeResponse } from './canvas-bridge'
@@ -65,6 +65,8 @@ export interface SealOuter {
 export interface SealTerminusDeps {
   /** The connect code with this id; null when there is none. */
   codeFor(id: string): Uint8Array | null
+  /** For a code this Mac replaced: the key that proves so (connect-code.ts). Absent = it only ever says no. */
+  replacedKeyFor?(id: string): Uint8Array | null
   readonly dial: BridgeDialer
   readonly handshakesPerMinute?: number
   /**
@@ -470,7 +472,13 @@ export function createSealTerminus(deps: SealTerminusDeps): SealTerminus {
     const allowed = [ceiling.take('all'), limiter.take(outer.device ?? 'no-device')].every(Boolean)
     if (!allowed) return reply(response, 429, { error: 'too many handshakes' })
     const code = typeof body.id === 'string' ? deps.codeFor(body.id) : null
-    if (code === null) return reply(response, 403, { error: 'no such code' })
+    if (code === null) {
+      // A code this Mac replaced is told so, with a proof its holder can check: "the code was changed, pair
+      // again" is then the Mac's word and not a relay's. Any other code is told no and nothing more.
+      const was = typeof body.id === 'string' && typeof body.e === 'string' ? (deps.replacedKeyFor?.(body.id) ?? null) : null
+      if (was === null) return reply(response, 403, { error: 'no such code' })
+      return reply(response, 403, { error: 'code replaced', replaced: await proveReplaced(was, { id: body.id as string, e: body.e as string }) })
+    }
     const accepted = await acceptHandshake(code, body as unknown as SealHello)
     if (accepted === null) return reply(response, 400, { error: 'not a hello' })
     // A rotation during that await has already cleared `pending`, so this hello would outlive it.

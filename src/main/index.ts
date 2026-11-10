@@ -1569,6 +1569,7 @@ const canvasLink = canvasRelay.link
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
+  replacedKeyFor: (id) => connectCodes.replacedKeyFor(id),
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
   // What the paced uplink still holds counts too: since relay-uplink.ts, an
   // answer waits there rather than in Node's socket buffer.

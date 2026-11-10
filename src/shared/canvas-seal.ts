@@ -126,6 +126,32 @@ const idBytes = (code: Bytes): Promise<Bytes> => hkdf(code, new Uint8Array(0), `
 
 export const connectCodeId = async (code: Uint8Array): Promise<string> => toBase64Url(await idBytes(checkedCode(code)))
 
+/**
+ * "THE CODE WAS CHANGED, PAIR AGAIN." A phone holding a code its Mac replaced
+ * is refused, and a bare refusal reads the same as a wrong address or a relay
+ * saying no. So the Mac keeps one thing from a replaced code, this key, and
+ * answers that code's hello with a proof under it over that very hello. Only
+ * the Mac that held the code can make it, only for this hello (its fresh key
+ * is in it, so an old answer cannot be played back), and the phone checks it
+ * with the code it still holds. The key is one-way from the code and is no
+ * input to any session key: holding it opens nothing.
+ */
+export const replacedKeyOf = (code: Uint8Array): Promise<Bytes> => hkdf(checkedCode(code), new Uint8Array(0), `${SEAL_LABEL} replaced`, KEY_BYTES)
+
+const replacedMessage = (hello: Pick<SealHello, 'id' | 'e'>): Bytes => encoder.encode(`${SEAL_LABEL} replaced\n${hello.id}\n${hello.e}`)
+const replacedHmac = (key: Uint8Array, usage: KeyUsage): Promise<CryptoKey> => crypto.subtle.importKey('raw', key as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, [usage])
+
+export async function proveReplaced(key: Uint8Array, hello: Pick<SealHello, 'id' | 'e'>): Promise<string> {
+  return toBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', await replacedHmac(key, 'sign'), replacedMessage(hello))))
+}
+
+/** True only for a proof made from this code's key over this hello. Anything else, of any shape, is false. */
+export async function checkReplaced(code: Uint8Array, hello: Pick<SealHello, 'id' | 'e'>, proof: unknown): Promise<boolean> {
+  const raw = typeof proof === 'string' ? fromBase64Url(proof) : null
+  if (raw === null || raw.length !== KEY_BYTES) return false
+  return crypto.subtle.verify('HMAC', await replacedHmac(await replacedKeyOf(code), 'verify'), raw, replacedMessage(hello))
+}
+
 interface Ephemeral {
   readonly key: CryptoKey
   readonly raw: Bytes

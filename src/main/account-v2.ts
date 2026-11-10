@@ -13,7 +13,8 @@ import {
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { registryOrigin } from './registry-origin'
+import { registryOrigin, siteOrigin } from './registry-origin'
+import { joinLink } from '../shared/join-code'
 import { RELAY_SESSION_HEADER, machineRelayPath } from '../shared/machine-relay'
 import {
   DEFAULT_LOCK_AFTER_MS,
@@ -377,6 +378,8 @@ export interface AccountsDeps {
   fetch?: FetchLike
   now?: () => number
   origin?: string
+  /** Where the site's pages are (the /join link a code is shown with). Default: registry-origin.ts · siteOrigin. */
+  site?: string
   /** This Mac's name, for the Devices tab. */
   deviceName?: string
   /** `process.platform`, for the sentences that name this machine. */
@@ -460,6 +463,7 @@ export class Accounts {
   private readonly http: FetchLike
   private readonly now: () => number
   private readonly origin: string
+  private readonly site: string
   private readonly deviceName: string
   private readonly platform: string
   private cached: AccountFile | null
@@ -503,6 +507,7 @@ export class Accounts {
     this.http = deps.fetch ?? ((input, init) => fetch(input, init))
     this.now = deps.now ?? (() => Date.now())
     this.origin = deps.origin ?? registryOrigin()
+    this.site = deps.site ?? siteOrigin()
     this.platform = deps.platform ?? process.platform
     this.deviceName = deps.deviceName ?? machineCopy('This Mac', this.platform)
     // NOTHING IS WRITTEN HERE. Building this must never be able to stop a boot (a folder that
@@ -1285,8 +1290,9 @@ export class Accounts {
    *
    * The password rides in the body because the registry asks for it again on
    * this route — a session alone must not widen what the account opens from.
-   * The answer is the code, when it dies, and the link the site's /join page
-   * turns into `cookrew://join#<code>`.
+   * The answer is the code, when it dies, and the link it is shown with: the
+   * site's /join page, which says the code is typed into the app (join-code.ts
+   * · joinLink). Never the registry's address: that is the API host.
    */
   async mintJoinCode(
     proof: StepUpProof,
@@ -1301,7 +1307,7 @@ export class Accounts {
     if (typeof code !== 'string' || typeof expiresAt !== 'number') {
       return { ok: false, reason: 'unknown' }
     }
-    return { ok: true, value: { code, expiresAt, url: `${this.origin}/join#${code}` } }
+    return { ok: true, value: { code, expiresAt, url: joinLink(this.site, code) } }
   }
 
   /**

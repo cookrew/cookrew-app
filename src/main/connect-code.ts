@@ -30,6 +30,46 @@ export interface ConnectCodes {
   codeFor(id: string): Uint8Array | null
   /** The old code is dead for this run either way; throws if the new one could not be saved. */
   rotate(): void
+  /**
+   * For a code this Mac REPLACED: the key that proves so to a phone still
+   * holding it (shared/canvas-seal.ts · replacedKeyOf). Null for the code in
+   * use and for one never held. The last few are remembered, in a file beside
+   * the code that holds no code: an id and that one-way key each.
+   */
+  replacedKeyFor(id: string): Uint8Array | null
+}
+
+/** How many replaced codes are answered "changed". A phone further behind than that is told only no. */
+const REPLACED_KEPT = 4
+
+interface Replaced {
+  readonly id: string
+  readonly key: string
+}
+
+const replacedKeyOf = (code: Buffer): string => Buffer.from(hkdfSync('sha256', code, Buffer.alloc(0), `${SEAL_LABEL} replaced`, 32)).toString('base64url')
+
+function loadReplaced(file: string): Replaced[] {
+  try {
+    const held: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    if (!Array.isArray(held)) return []
+    return held
+      .filter((entry): entry is Replaced => typeof entry?.id === 'string' && typeof entry?.key === 'string')
+      .map(({ id, key }) => ({ id, key }))
+      .slice(0, REPLACED_KEPT)
+  } catch {
+    return []
+  }
+}
+
+function persistReplaced(file: string, replaced: readonly Replaced[]): void {
+  try {
+    writeFileAtomic(file, `${JSON.stringify(replaced)}\n`)
+    chmodSync(file, 0o600)
+  } catch (error) {
+    // Kept for this run: after a restart an old phone is told no, without the reason.
+    console.error('Failed to persist what replaced connect codes leave behind:', error)
+  }
 }
 
 const idOf = (code: Buffer): string => Buffer.from(hkdfSync('sha256', code, Buffer.alloc(0), `${SEAL_LABEL} id`, 16)).toString('base64url')
@@ -62,12 +102,20 @@ function loadOrMint(file: string): Buffer {
 }
 
 export function createConnectCodes(file: string): ConnectCodes {
+  const wasFile = `${file}.was`
   let code = loadOrMint(file)
   let id = idOf(code)
+  let replaced: readonly Replaced[] = loadReplaced(wasFile)
   return {
     encoded: () => code.toString('base64url'),
     codeFor: (asked) => (asked === id ? new Uint8Array(code) : null),
+    replacedKeyFor(asked) {
+      const found = asked === id ? undefined : replaced.find((entry) => entry.id === asked)
+      return found === undefined ? null : new Uint8Array(Buffer.from(found.key, 'base64url'))
+    },
     rotate() {
+      replaced = [{ id, key: replacedKeyOf(code) }, ...replaced].slice(0, REPLACED_KEPT)
+      persistReplaced(wasFile, replaced)
       code = randomBytes(SEAL_CODE_BYTES)
       id = idOf(code)
       try {

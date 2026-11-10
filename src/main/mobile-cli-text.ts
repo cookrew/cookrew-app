@@ -15,17 +15,30 @@ const accountLines = (pairing: PairingHandout): string[] => [
   `    ${pairing.url.split('#')[0]}`,
   '    Open it on a phone or any browser and sign in. Prove it’s you once (a',
   '    passkey, or the account password) and for twelve hours every machine of',
-  '    the account opens with no question.',
+  '    the account opens with no question.'
+]
+
+/**
+ * `--token` ON A MACHINE OF AN ACCOUNT PRINTS NO TOKEN (owner 2026-11-11). Its
+ * own address answers a browser with the way to the console
+ * (console-pointer.ts), so a link carrying the token would land there and
+ * open nothing; printing it would only put a secret on a screen. The token is
+ * still what the console's direct path and the watch present; neither reads it
+ * from here.
+ */
+const tokenAskedLines = (): string[] => [
   '',
-  '  Without an account: `cookrew mobile --token` prints links that carry',
-  '  this machine’s pairing token. Treat them like a password.'
+  '  --token: this machine is signed in, so it prints no token links. Its own',
+  '  address shows a browser the way to the console, and a token link would',
+  '  open nothing. The console and the watch carry the token themselves.'
 ]
 
 export interface MobileHelpInput {
   endpoints: MobileEndpoint[]
   /**
-   * `cookrew mobile --token`: print the token links even on a machine of an
-   * account. Absent or false there = the account's way only.
+   * `cookrew mobile --token`: asked to see the token links. A machine with no
+   * account prints them anyway; a machine of an account prints none and says
+   * why (tokenAskedLines).
    */
   showToken?: boolean
   /**
@@ -91,8 +104,8 @@ const mixed = (endpoints: readonly MobileEndpoint[]): boolean =>
   anyTrusted(endpoints) && endpoints.some((endpoint) => !isTrusted(endpoint))
 
 export function renderMobileHelp(input: MobileHelpInput): string {
-  if (input.pairing?.via === 'console' && input.showToken !== true) {
-    return ['Cookrew Mobile — open on your phone:', '', ...accountLines(input.pairing)].join('\n')
+  if (input.pairing?.via === 'console') {
+    return ['Cookrew Mobile — open on your phone:', '', ...accountLines(input.pairing), ...(input.showToken === true ? tokenAskedLines() : [])].join('\n')
   }
   const lines: string[] = [
     'Cookrew Mobile — open on your phone:',
@@ -172,8 +185,23 @@ export function renderMobileHelp(input: MobileHelpInput): string {
  * Confirmation text after a rotation, with the fresh URLs: the links that
  * carry the token that just changed. The console link carries none and is not
  * one of them.
+ *
+ * On a machine of an account there is no link to print (tokenAskedLines), so
+ * it says who was shut out and how each comes back. The connect code goes
+ * with the token (connect-code.ts): a phone that unlocked this screen holds
+ * the old one, is told the code was changed, and scans again.
  */
-export function renderRotated(endpoints: MobileEndpoint[]): string {
+export function renderRotated(endpoints: MobileEndpoint[], pairing?: PairingHandout | null): string {
+  if (pairing?.via === 'console') {
+    return [
+      'Pairing token and connect code rotated.',
+      '',
+      '  The watch is unpaired: pair it again from this machine.',
+      '  A phone that unlocked this machine’s screen is told the code was changed:',
+      '  scan the code on this machine’s screen again.',
+      '  Opening this machine from the console is not affected.'
+    ].join('\n')
+  }
   return [
     'Pairing token rotated. Every previously paired device is now unpaired',
     'and will ask to re-pair.',
