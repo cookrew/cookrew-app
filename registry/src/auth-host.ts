@@ -49,6 +49,8 @@ const PROVIDER_ROUTES: readonly [string, RegExp][] = [
   ['POST', /^\/v2\/oauth\/(github|google)\/start$/]
 ]
 
+const PROVIDER_CALLBACK = /^\/v2\/oauth\/(github|google)\/callback$/
+
 const allowed = (routes: readonly [string, RegExp][], method: string, path: string): boolean =>
   routes.some(([m, pattern]) => m === method && pattern.test(path))
 
@@ -109,6 +111,14 @@ export function handleAuthHost(
     const payload = Buffer.from(FAVICON_SVG, 'utf8')
     response.writeHead(200, { 'content-type': 'image/svg+xml', 'content-length': String(payload.byteLength), 'cache-control': 'public, max-age=86400' })
     response.end(method === 'HEAD' ? undefined : payload)
+    return
+  }
+  // WHERE A PROVIDER COMES BACK TO, on a registry that splits its hosts: a
+  // navigation, so it carries no Origin of ours and no request header. It
+  // opens nothing by itself: the state it carries is taken first, and the
+  // browser is sent back to the page (v2-oauth-routes.ts · callback).
+  if (v2.apiOrigin !== null && method === 'GET' && PROVIDER_CALLBACK.test(path)) {
+    handleV2Route({ ...contextOf(parts), via: 'auth' })
     return
   }
   if (!ownOrigin(request, v2)) {

@@ -103,11 +103,17 @@ function readBack(value: unknown): OAuthBack | null {
 }
 
 /**
- * The callback the provider app registered. On the auth origin it is still the
- * product origin's: the provider apps and their callbacks do not change.
+ * The callback the provider app registered. On a registry that is one host it
+ * is the product origin's, whichever origin the trip began on. On one that
+ * splits its hosts (0.6.0) the product origin is a static site that answers
+ * nothing here, so the provider comes back to the auth origin: a browser
+ * navigation belongs there, and the API host serves none.
  */
-const callbackUrl = (ctx: V2Context, provider: OAuthProvider): string =>
-  `${ctx.auth === undefined ? relyingParty(ctx).origin : productOrigin(ctx.v2)}/v2/oauth/${provider.id}/callback`
+export const callbackOrigin = (ctx: V2Context): string => {
+  if (ctx.v2.apiOrigin !== null && ctx.v2.auth !== null) return ctx.v2.auth.origin
+  return ctx.auth === undefined ? relyingParty(ctx).origin : productOrigin(ctx.v2)
+}
+const callbackUrl = (ctx: V2Context, provider: OAuthProvider): string => `${callbackOrigin(ctx)}/v2/oauth/${provider.id}/callback`
 
 /**
  * POST /v2/oauth/:provider/start ON THE AUTH ORIGIN. The request says what the
@@ -662,7 +668,10 @@ export function handleOAuthRoute(ctx: V2Context, rest: readonly string[]): boole
     return true
   }
   if (rest[2] === 'callback' && method === 'GET') {
-    void callback(ctx, provider)
+    // A provider's way back is a navigation, and its answer a page: never on
+    // the API host, which serves none (the auth host takes it: auth-host.ts).
+    if (ctx.via === 'api') refuse(ctx.response, 404, 'not_found')
+    else void callback(ctx, provider)
     return true
   }
   if (rest[2] === 'device' && method === 'POST' && provider.deviceStart !== undefined) {

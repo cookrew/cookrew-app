@@ -5,7 +5,7 @@ import {
   head,
   noContent,
   refuse,
-  sameOrigin,
+  writeOriginOk,
   signedIn,
   v2Json,
   asking,
@@ -83,7 +83,7 @@ export function handleV2Route(ctx: V2Context): boolean {
   if (ctx.parts[0] !== 'v2') return false
   const { method, parts, response } = ctx
   const writes = method !== 'GET' && method !== 'HEAD'
-  if (writes && !sameOrigin(ctx.request)) {
+  if (writes && !writeOriginOk(ctx)) {
     refuse(response, 403, 'bad_origin')
     return true
   }

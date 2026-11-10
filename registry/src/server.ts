@@ -31,6 +31,7 @@ import { mePage } from './site-account'
 import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
 import { authHostOf, handleAuthHost } from './auth-host'
+import { apiHostOf, enterApiHost } from './api-host'
 import { completeWeb } from './v2-auth-routes'
 import type { V2Context } from './v2-http'
 
@@ -373,6 +374,8 @@ export function createRegistry(deps: RegistryDeps): Server {
 
   // The auth origin's exact host, when this registry serves the sign-in page.
   const authHost = authHostOf(deps.v2)
+  // The API origin's exact host, when this registry splits its hosts (0.6.0).
+  const apiHost = apiHostOf(deps.v2)
 
   return createServer({ requestTimeout: 0, headersTimeout: 60_000 }, (request, response) => {
     try {
@@ -402,6 +405,9 @@ export function createRegistry(deps: RegistryDeps): Server {
       // which says nothing behind a terminator.
       secure: request.headers['x-forwarded-proto'] === 'https' || (deps.origin?.startsWith('https://') ?? false),
       decode,
+      // Which of its two names a split registry was asked on. The auth host
+      // builds its own contexts (auth-host.ts); everything else here is the API.
+      ...(apiHost !== null && (request.headers.host ?? '').toLowerCase() === apiHost ? { via: 'api' as const } : {}),
       // The directory, for the seat routes: a seat is held at a TEAM, and
       // the team's own terms (free or priced, and on which rails) are the
       // door's to state, never the seat's.
@@ -426,10 +432,26 @@ export function createRegistry(deps: RegistryDeps): Server {
     //
     // The exact configured host answers the sign-in page and nothing else:
     // no relay, no door, no profile is reachable through it.
-    if (authHost !== null && deps.v2 && (request.headers.host ?? '').toLowerCase() === authHost) {
+    const host = (request.headers.host ?? '').toLowerCase()
+    if (authHost !== null && deps.v2 && host === authHost) {
       const v2 = deps.v2
       handleAuthHost(v2, request, response, url, (p) => v2Context(request, response, p) as V2Context)
       return
+    }
+
+    // ── API.COOKREW.DEV, and no other name ────────────────────────────────
+    //
+    // A registry that splits its hosts answers the auth host above and the API
+    // host here. Every other name is a static site hosted elsewhere, or
+    // nobody's: nothing is served on it. On the API host no cookie is read or
+    // set, no page is served, and the console's is the one page that may call
+    // (api-host.ts states and enforces all four before any route runs).
+    if (apiHost !== null && deps.v2) {
+      if (host !== apiHost) {
+        json(response, 404, { error: 'not_found' })
+        return
+      }
+      if (enterApiHost(deps.v2, request, response, url)) return
     }
 
     // ── THE RELAY, first ──────────────────────────────────────────────────

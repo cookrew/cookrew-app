@@ -75,7 +75,7 @@ export async function bootClockedSite(): Promise<ClockedSite> {
     await fake.close()
     rmSync(dir, { recursive: true, force: true })
   }
-  return { P, A, port, fake, v2, logged, close, now, advance: (ms) => (clock += ms) }
+  return { P, A, API: '', C: '', port, fake, v2, logged, close, now, advance: (ms) => (clock += ms) }
 }
 
 /** Turn an authenticator on for the browser's account; answers the secret. */
