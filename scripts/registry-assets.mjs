@@ -1,14 +1,15 @@
-// Generates registry/src/assets-bundle.ts from registry/assets/{vendor,*.js,*.css}.
+// Generates registry/src/assets-bundle.ts from registry/assets/{*.js,fonts}.
 //
 // The registry ships as ONE esbuild bundle (a ConfigMap on the cluster, a
 // single file under systemd), so anything it serves as a static asset has to
-// travel inside that bundle. This turns the vendored xterm.js, the site's own
-// scripts and their stylesheets into string constants; the bundle build runs
-// it first (`npm run registry:build`), and the generated file is committed so
-// tests and type-checks see the same bytes production serves.
+// travel inside that bundle. This turns the scripts of the pages it still
+// serves (the sign-in page and the account page, both on the auth host) and
+// the two fonts into string constants; the bundle build runs it first
+// (`npm run registry:build`), and the generated file is committed so tests and
+// type-checks see the same bytes production serves. The static site takes its
+// fonts, and the version it names them by, from the same file (site-static.ts).
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { gzipSync } from 'node:zlib'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'acorn'
@@ -18,8 +19,8 @@ const assets = path.join(root, 'registry', 'assets')
 
 
 /**
- * The site's own scripts lose their comments on the way in: half of each file
- * is explanation, and the whole bundle has to fit one ConfigMap. Only comments
+ * The scripts lose their comments on the way in: half of each file is
+ * explanation, and the whole bundle has to fit one ConfigMap. Only comments
  * are cut, found by a real parser, so every line of code ships byte for byte.
  */
 function shipped(source, file) {
@@ -32,20 +33,12 @@ function shipped(source, file) {
 
 /** name on the wire → source file, content type. */
 const FILES = [
-  // GZIPPED IN THE BUNDLE, served as the same bytes: the vendored terminal is
-  // over a quarter of the ConfigMap, and it is the one asset never read as text.
-  ['xterm.js', 'vendor/xterm.js.txt', 'text/javascript; charset=utf-8', 'gzip'],
-  ['xterm.css', 'vendor/xterm.css.txt', 'text/css; charset=utf-8'],
-  ['addon-fit.js', 'vendor/addon-fit.js.txt', 'text/javascript; charset=utf-8'],
+  // The account page (auth-host.ts · ACCOUNT_ASSETS).
   ['device-id.js', 'device-id.js', 'text/javascript; charset=utf-8'],
   ['site.js', 'site.js', 'text/javascript; charset=utf-8'],
-  ['device-seal.js', 'device-seal.js', 'text/javascript; charset=utf-8'],
-  ['reach.js', 'reach.js', 'text/javascript; charset=utf-8'],
-  ['machines.js', 'machines.js', 'text/javascript; charset=utf-8'],
   ['factors.js', 'factors.js', 'text/javascript; charset=utf-8'],
   ['step-up.js', 'step-up.js', 'text/javascript; charset=utf-8'],
-  ['seal.js', 'seal.js', 'text/javascript; charset=utf-8'],
-  ['line.js', 'line.js', 'text/javascript; charset=utf-8'],
+  // The sign-in page (auth-host.ts · ASSETS).
   ['auth-kit.js', 'auth-kit.js', 'text/javascript; charset=utf-8'],
   ['auth-enrol.js', 'auth-enrol.js', 'text/javascript; charset=utf-8'],
   ['auth-step.js', 'auth-step.js', 'text/javascript; charset=utf-8'],
@@ -57,12 +50,7 @@ const FILES = [
 
 const entries = FILES.map(([name, file, type, encoding]) => {
   const raw = readFileSync(path.join(assets, file))
-  const body =
-    encoding === 'base64'
-      ? raw.toString('base64')
-      : encoding === 'gzip'
-        ? gzipSync(raw, { level: 9 }).toString('base64')
-        : shipped(raw.toString('utf8'), file)
+  const body = encoding === 'base64' ? raw.toString('base64') : shipped(raw.toString('utf8'), file)
   return `  ${JSON.stringify(name)}: { type: ${JSON.stringify(type)}, body: ${JSON.stringify(body)}${encoding === undefined ? '' : `, encoding: '${encoding}'`} }`
 })
 
@@ -74,8 +62,8 @@ export const ASSET_VERSION = ${JSON.stringify(version)}
 export interface BundledAsset {
   type: string
   body: string
-  /** Binary assets travel as base64, the vendored terminal as gzip in base64; text ones as they are. */
-  encoding?: 'base64' | 'gzip'
+  /** Binary assets travel as base64; text ones as they are. */
+  encoding?: 'base64'
 }
 
 export const ASSETS: Readonly<Record<string, BundledAsset>> = {
