@@ -13,6 +13,8 @@ import { applyColorScheme, applyTheme, storedTheme } from './color-scheme'
 import { ConsoleShell } from './console/ConsoleShell'
 import './console/console.css'
 import { registerConsoleWorker } from './console/register-worker'
+import { browserVersionWatch } from './console/console-version'
+import { NewerBuild } from './console/NewerBuild'
 
 /**
  * console.cookrew.dev: one static page for every machine of the account
@@ -31,9 +33,12 @@ if (consoleParts === null) {
   // Built without the hosts it talks to: it asks nobody anything.
   root.render(<p className="cd-page">This page was not built to reach Cookrew. Open console.cookrew.dev.</p>)
 } else {
+  // One watch for the page: whether the host serves a newer build than this one.
+  const version = browserVersionWatch()
   root.render(
     <React.StrictMode>
       <ConsoleShell parts={consoleParts} />
+      <NewerBuild watch={version} />
     </React.StrictMode>
   )
   void consoleParts.runtime.boot()

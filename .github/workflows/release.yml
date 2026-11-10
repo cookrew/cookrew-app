@@ -213,3 +213,105 @@ jobs:
           else
             gh release edit "$GITHUB_REF_NAME" --draft=false --latest
           fi
+
+  # THE TWO STATIC SITES, from the same tag as the apps: the console
+  # (console.cookrew.dev) and the site (cookrew.dev). After `publish`, because
+  # the site names this release's builds and stops if its Mac build is not
+  # there to be named. This job runs the repository's code and its
+  # dependencies, so it may read the repository and holds no key to the host.
+  web:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # No install scripts: neither site needs the app's native parts, and no
+      # package gets to run code of its own in this job.
+      - run: npm ci --ignore-scripts
+
+      - name: Build the console, and hold its first load to the size gate
+        run: |
+          COOKREW_CONSOLE_VERSION="${GITHUB_REF_NAME#v}" npm run console:build
+          npm run console:size
+
+      - name: Build the site for this release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COOKREW_SITE_RELEASE: ${{ github.ref_name }}
+          COOKREW_SITE_REQUIRE_RELEASE: '1'
+        run: npm run site:build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-console
+          path: out/console
+          include-hidden-files: true
+          if-no-files-found: error
+          # A re-run of this job replaces what the first run handed on.
+          overwrite: true
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-site
+          path: out/site
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  # UPLOADING THEM IS SHIPPING THEM, so it is off until the owner switches it
+  # on (repository variable COOKREW_PAGES_DEPLOY = true, with the two project
+  # names and the host's token and account id). A prerelease builds both and
+  # uploads neither. This job holds the key and runs none of the repository's
+  # code: it downloads what `web` built and hands it to the host's own tool.
+  # The console goes first: the site's "Open console" must have somewhere to go.
+  #
+  # THE KEY IS THE ENVIRONMENT'S, not the repository's: `web-release` is to be
+  # set up to admit only `v*` tags, so a pull request that edits this file
+  # cannot read it. The host's tool is one exact version, never "the latest".
+  # One upload at a time, in the order the tags were pushed.
+  web-deploy:
+    needs: web
+    if: startsWith(github.ref, 'refs/tags/') && vars.COOKREW_PAGES_DEPLOY == 'true' && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions: {}
+    environment: web-release
+    concurrency:
+      group: web-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-console
+          path: console
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-site
+          path: site
+
+      - name: Upload to the static host
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CONSOLE_PROJECT: ${{ vars.COOKREW_PAGES_CONSOLE }}
+          SITE_PROJECT: ${{ vars.COOKREW_PAGES_SITE }}
+        run: |
+          test -n "$CONSOLE_PROJECT" && test -n "$SITE_PROJECT"
+          test -f console/_headers && test -f console/index.html && test ! -e console/404.html
+          test -f site/_headers && test -f site/_redirects && test -f site/404.html
+          # Files only: nothing that the host would run as code of its own.
+          for dir in console site; do
+            test ! -e "$dir/_worker.js" && test ! -e "$dir/_routes.json" && test ! -e "$dir/functions"
+          done
+          npx --yes wrangler@4.160.0 pages deploy console --project-name="$CONSOLE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA"
+          npx --yes wrangler@4.160.0 pages deploy site --project-name="$SITE_PROJECT" --branch=main --commit-hash="$GITHUB_SHA"
