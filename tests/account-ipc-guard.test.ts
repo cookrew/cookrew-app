@@ -371,7 +371,6 @@ describe('the seat channels', () => {
       seats: {
         door: null,
         serving: () => [],
-        origin: 'https://registry.test',
         ...over,
       },
     })

@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useMachineScopeEpoch } from './use-machine-scope'
 import { attachmentIndex, sameAttachmentIndex, TerminalAttachmentsContext, type AttachmentIndex } from './terminal-attachments'
 import { requestJoin } from './account/open-request'
+import { onImportRequest } from './import-request'
 import {
   Background,
   BackgroundVariant,
@@ -647,6 +648,18 @@ function Canvas(): React.JSX.Element {
         }
         // 'serve' would open the share sheet for a saved template; that sheet
         // exists only on a selection today, so the link is set aside.
+      }),
+    []
+  )
+
+  // The same arrival for a team opened from INSIDE the app (import-request.ts):
+  // the Seats tab's OPEN lands on the import sheet with the team's address in
+  // its field, exactly as a `cookrew://import/…` link does.
+  useEffect(
+    () =>
+      onImportRequest((address) => {
+        setImportPrefill(address)
+        setImportServedOpen(true)
       }),
     []
   )

@@ -7,6 +7,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   CALLER_AVATAR_LIMIT,
   callerSentence,
@@ -14,13 +16,14 @@ import {
   noSeatSentence,
   seatSentence,
   servingSummary,
-  teamPageUrl,
   type SeatFace,
   type SeatedCaller,
   type ServedCallersRow,
   type ServingSeatsRow
 } from '../src/shared/seats'
+import { onImportRequest, requestImport } from '../src/renderer/src/import-request'
 import {
+  OpenTeam,
   SeatsTab,
   UNPUBLISHED,
   activeSeats,
@@ -117,13 +120,42 @@ describe('the words a seat is described in', () => {
     expect(endSessionSentence(caller())).toContain('The seat stays.')
   })
 
-  it('OPEN goes to the team page at cookrew.dev, with no double slash', () => {
-    expect(teamPageUrl('https://cookrew.dev', '@mira/review-bench')).toBe(
-      'https://cookrew.dev/@mira/review-bench'
-    )
-    expect(teamPageUrl('https://cookrew.dev/', '@mira/review-bench')).toBe(
-      'https://cookrew.dev/@mira/review-bench'
-    )
+  it('OPEN asks the app for the team by its address, and says so when nothing can open it', () => {
+    // 0.6.0: the team's page at cookrew.dev is gone. The way into a team is
+    // the import sheet, prefilled with the address the seat names.
+    expect(requestImport('@mira/review-bench')).toBe(false)
+    const asked: string[] = []
+    const off = onImportRequest((address) => void asked.push(address))
+    expect(requestImport('@mira/review-bench')).toBe(true)
+    expect(asked).toEqual(['@mira/review-bench'])
+    off()
+    expect(requestImport('@mira/review-bench')).toBe(false)
+  })
+
+  it('OPEN is a button with nothing to follow: no link, no page, no site address', () => {
+    const off = onImportRequest(() => undefined)
+    const html = renderToStaticMarkup(<OpenTeam team="@mira/review-bench" />)
+    off()
+    expect(html).toMatch(/^<button[^>]*>OPEN<\/button>$/)
+    expect(html).not.toMatch(/href|https?:|cookrew\.dev/)
+  })
+
+  it('where no import sheet can open — a phone, a bare page — OPEN is not offered at all', () => {
+    expect(renderToStaticMarkup(<OpenTeam team="@mira/review-bench" />)).toBe('')
+  })
+
+  it('the wiring, as source: the tab asks, the app opens the sheet prefilled, the account sheet steps aside', () => {
+    const src = (file: string): string =>
+      readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', file), 'utf8')
+    const tab = src('account/SeatsTab.tsx')
+    expect(tab).toContain('requestImport(team)')
+    expect(tab).not.toMatch(/openExternal|href=|https?:\/\//)
+    const app = src('App.tsx')
+    expect(app).toContain('onImportRequest((address) => {')
+    expect(app).toMatch(/onImportRequest\(\(address\) => \{\s*setImportPrefill\(address\)\s*setImportServedOpen\(true\)/)
+    expect(src('account/AccountSurface.tsx')).toContain("onImportRequest(() => setSheet('none'))")
+    // And nothing in the shared seat vocabulary can build a page address any more.
+    expect(readFileSync(path.join(__dirname, '..', 'src', 'shared', 'seats.ts'), 'utf8')).not.toMatch(/teamPageUrl|url: string/)
   })
 
   it('a grant refused for a name nobody holds says so in a person\'s words', () => {
@@ -156,7 +188,7 @@ describe('the SEATS & TEAMS tab', () => {
 
   it('a SEAT row names the team and how the seat was come by', () => {
     expect(
-      heldLine({ seat: seat({ team: '@mira/review-bench', by: 'mira' }), url: 'x' })
+      heldLine({ seat: seat({ team: '@mira/review-bench', by: 'mira' }) })
     ).toMatch(/^@mira\/review-bench · granted by @mira /)
   })
 

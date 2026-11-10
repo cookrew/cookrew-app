@@ -55,9 +55,8 @@ export interface ServingSeatsRow {
 
 /** A seat this account holds at somebody ELSE's door. */
 export interface HeldSeatRow {
+  /** `seat.team` is also where OPEN goes: the address the import sheet is opened on. */
   seat: SeatFace
-  /** Where OPEN goes: the team's page at cookrew.dev. */
-  url: string
 }
 
 /** Everything the SEATS & TEAMS tab draws, in one answer. */
@@ -137,9 +136,4 @@ export function servingSummary(row: ServingSeatsRow): string {
   const price = row.access === 'paid' ? `paid $${row.priceUsd ?? '0'}` : 'free'
   const taken = row.seats.length
   return `${price} · ${taken} ${taken === 1 ? 'seat' : 'seats'} taken`
-}
-
-/** Where a held seat's OPEN goes. `team` is `@owner/name`. */
-export function teamPageUrl(origin: string, team: string): string {
-  return `${origin.replace(/\/$/, '')}/${team}`
 }

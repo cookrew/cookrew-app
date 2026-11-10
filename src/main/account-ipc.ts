@@ -140,8 +140,6 @@ export interface SeatsIpcDeps {
   door: DoorSeats | null
   /** The teams this desktop is serving right now. */
   serving: () => readonly ServedTeamRef[]
-  /** Where a held seat's OPEN goes — the registry origin. */
-  origin: string
 }
 
 /** An IPC handler as this module writes them: args in, a value or promise out. */
@@ -794,7 +792,7 @@ async function seats(deps: AccountIpcDeps): Promise<AccountResult<SeatsSurface>>
   if (wired === null) return { ok: false, reason: 'no_account' }
   return {
     ok: true,
-    value: await seatsSurface({ seats: wired.door, serving: wired.serving, origin: wired.origin }),
+    value: await seatsSurface({ seats: wired.door, serving: wired.serving }),
   }
 }
 

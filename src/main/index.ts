@@ -8471,7 +8471,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     },
     // Seats & Teams (phase 5). The door is wired even with no account on this
     // Mac — `Accounts.authed` answers `no_account` and the tab says so.
-    seats: { door: doorSeats, serving: servedTeamRefs, origin: registryOrigin() }
+    seats: { door: doorSeats, serving: servedTeamRefs }
   })
 
   ipcMain.handle(

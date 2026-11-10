@@ -327,13 +327,12 @@ describe('the whole SEATS & TEAMS surface, in one ask', () => {
     })
     const surface = await seatsSurface({
       seats: new DoorSeats(seam),
-      serving: () => [team],
-      origin: 'https://cookrew.dev'
+      serving: () => [team]
     })
     expect(surface.serving).toEqual([{ ...team, seats: [seat()] }])
-    expect(surface.held).toEqual([
-      { seat: seat({ id: 's9', team: '@mira/bench' }), url: 'https://cookrew.dev/@mira/bench' }
-    ])
+    // A held row is the seat and nothing else: the team's address IS how it is
+    // opened (the import sheet), and no page address is built for it any more.
+    expect(surface.held).toEqual([{ seat: seat({ id: 's9', team: '@mira/bench' }) }])
   })
 
   it('KEEPS THE ROW when the registry will not answer, and carries the reason', async () => {
@@ -343,8 +342,7 @@ describe('the whole SEATS & TEAMS surface, in one ask', () => {
     })
     const surface = await seatsSurface({
       seats: new DoorSeats(seam),
-      serving: () => [team],
-      origin: 'https://cookrew.dev'
+      serving: () => [team]
     })
     expect(surface.serving).toEqual([{ ...team, seats: [], error: 'offline' }])
     expect(surface.held).toEqual([])
@@ -354,8 +352,7 @@ describe('the whole SEATS & TEAMS surface, in one ask', () => {
     const { api: seam, calls } = api()
     const surface = await seatsSurface({
       seats: new DoorSeats(seam),
-      serving: () => [{ ...team, team: null }],
-      origin: 'https://cookrew.dev'
+      serving: () => [{ ...team, team: null }]
     })
     expect(surface.serving[0].seats).toEqual([])
     expect(calls.map((c) => c.pathname)).toEqual(['/v2/me/seats'])
@@ -370,8 +367,7 @@ describe('the whole SEATS & TEAMS surface, in one ask', () => {
     })
     const surface = await seatsSurface({
       seats: new DoorSeats(seam),
-      serving: () => [],
-      origin: 'https://cookrew.dev'
+      serving: () => []
     })
     expect(surface.held.map((row) => row.seat.id)).toEqual(['s2'])
   })
@@ -379,8 +375,7 @@ describe('the whole SEATS & TEAMS surface, in one ask', () => {
   it('a desktop with no account still lists what it is serving', async () => {
     const surface = await seatsSurface({
       seats: null,
-      serving: () => [team],
-      origin: 'https://cookrew.dev'
+      serving: () => [team]
     })
     expect(surface.serving).toEqual([{ ...team, seats: [] }])
     expect(surface.held).toEqual([])
