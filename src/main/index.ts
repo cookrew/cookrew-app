@@ -1517,7 +1517,8 @@ const currentPairingHandout = (): PairingHandout | null =>
     },
     consoleOrigin: () => consoleOrigin(),
     endpoints: () => mobileEndpointList(),
-    pairingToken: () => activePairingTokenValue() ?? pairingToken
+    pairingToken: () => activePairingTokenValue() ?? pairingToken,
+    connectCode: () => connectCodes.encoded()
   })
 let reachPublisher: ReachPublisher | null = null
 

@@ -23,7 +23,8 @@ import type { PairingHandout } from '../shared/account-v2'
  */
 const accountLines = (pairing: PairingHandout): string[] => [
   '  With your account, from any network',
-  `    ${pairing.url}`,
+  // The address alone: what rides after the # is for this machine's own screen, never for a pane.
+  `    ${pairing.url.split('#')[0]}`,
   '    Open it on a phone or any browser and sign in. Prove it’s you once (a',
   '    passkey, or the account password) and for twelve hours every machine of',
   '    the account opens with no question.',

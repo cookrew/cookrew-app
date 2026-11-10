@@ -38,7 +38,7 @@ export const PAIRING_COPY = {
   ROTATE:
     'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.',
   /** Under the console's QR: it is an address and nothing more. */
-  ADDRESS_ONLY: 'This QR is only an address. It carries no key: whoever scans it signs in and proves it is them.'
+  ADDRESS_ONLY: 'This QR lets nobody in by itself. It carries no key: whoever scans it signs in and proves it is them.'
 } as const
 
 export type PairingPopoutView = {

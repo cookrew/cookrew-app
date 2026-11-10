@@ -1,6 +1,6 @@
 import { machineCopy } from '../shared/machine-words'
 import type { PairingHandout } from '../shared/account-v2'
-import { originOf } from '../shared/pairing-url'
+import { CODE_FRAGMENT, originOf } from '../shared/pairing-url'
 import { isMachineId } from '../shared/machine-relay'
 
 /**
@@ -53,6 +53,11 @@ export type PairingHandoutDeps = {
   readonly endpoints: () => readonly PairingEndpoint[]
   /** The persisted pairing token; null before the mobile server has started. */
   readonly pairingToken: () => string | null
+  /**
+   * The sealed session's code (connect-code.ts), for the console link this machine draws on its
+   * OWN screen: in the fragment, which no server is sent. A direct address needs none.
+   */
+  readonly connectCode?: () => string | null
 }
 
 /** The first address a phone could actually dial, spelled its best way. */
@@ -73,12 +78,18 @@ export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null 
   if (account) {
     // A MACHINE OF AN ACCOUNT HANDS OUT AN ADDRESS, NOT A KEY (0.6.0): its own level on the
     // console. Whoever opens it signs in to the account and proves it is them there; the link
-    // itself opens nothing, so it can be photographed, pasted and left on a screen.
+    // itself lets nobody in. After the # it carries the code of the sealed session (unlocking
+    // this machine's screen from afar without the relay reading the password): that opens
+    // nothing either, and is why this link is drawn on this screen and printed nowhere.
     const console = originOf(deps.consoleOrigin())
     const id = account.deviceId.toLowerCase()
     // A console address this app would not send a phone to, or an id that is not a machine's,
     // falls through to the direct address rather than showing nothing.
-    if (console !== null && isMachineId(id)) return { url: `${console}/d/${id}`, via: 'console', desktopName, deviceId: account.deviceId }
+    if (console !== null && isMachineId(id)) {
+      const code = deps.connectCode?.() ?? null
+      const fragment = code ? `#${CODE_FRAGMENT}=${encodeURIComponent(code)}` : ''
+      return { url: `${console}/d/${id}${fragment}`, via: 'console', desktopName, deviceId: account.deviceId }
+    }
   }
 
   const direct = bestDirect(deps.endpoints())
