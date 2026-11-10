@@ -271,7 +271,8 @@ suite.each([
     await tab.clickAt((oldBox?.x ?? 0) + 8, (oldBox?.y ?? 0) + 8)
     await sleep(500)
     expect(await tab.url()).toBe(`${origin()}/`)
-    await fits(tab, 'Devices', ['.cd-tile[data-standing=live] .cd-open'])
+    // The two quiet links in the head are controls too: the way to the account, and the way out.
+    await fits(tab, 'Devices', ['.cd-tile[data-standing=live] .cd-open', '.cd-head a.cd-quiet', '.cd-head button.cd-quiet'])
     await shot(tab, '2c-devices')
 
     // A machine that lets go of its line while the page is up says so within a few seconds, by itself:
@@ -532,5 +533,10 @@ suite.each([
     expect(stage.studio.unanswered).toEqual([])
     expect(stage.laptop.unanswered).toEqual([])
     expect(stage.old.unanswered).toEqual([])
+  })
+
+  it('and the machine too old for the console was asked nothing at all, from Devices or from inside another machine', () => {
+    needs(3)
+    expect(stage.old.requests.map((request) => `${request.method} ${request.path.split('?')[0]}`)).toEqual([])
   })
 })

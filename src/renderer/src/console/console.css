@@ -42,6 +42,10 @@
 
 .cd-quiet {
   appearance: none;
+  /* A finger's height, though it reads as a line of text. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
   padding: 0;
   border: 0;
   background: none;
