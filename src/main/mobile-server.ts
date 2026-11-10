@@ -80,6 +80,8 @@ import { fleetServiceFor, prewarmFleet, type FleetMountOptions } from './fleet/m
 import { readMachineDisplay } from './machine-display'
 import type { FleetService } from './fleet/service'
 import { consoleOrigin } from './registry-origin'
+import { CONSOLE_POINTER_CSP, consolePointerFor } from './console-pointer'
+import { machineCopy } from '../shared/machine-words'
 
 /** What the fleet feed needs from this server: its app version, and the token to scrub by value. */
 const levelsOptions = (deps: MobileServerDeps): FleetMountOptions => ({
@@ -1403,6 +1405,26 @@ export async function handle(
   }
 
   if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+    // A machine of an account points at the console instead of handing out its app (console-pointer.ts).
+    const account = deps.identity?.account() ?? null
+    const pointer = consolePointerFor({
+      signedIn: account !== null,
+      remoteAddress: request.socket.remoteAddress,
+      viaRelay: request.headers[RELAY_MARKER] === '1',
+      consoleOrigin: consoleOrigin(),
+      machineId: account?.deviceId ?? null,
+      machineName: account?.name ?? machineCopy('This Mac', process.platform)
+    })
+    if (pointer !== null) {
+      sendBody(
+        response,
+        200,
+        { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': CONSOLE_POINTER_CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' },
+        Buffer.from(pointer, 'utf8'),
+        request.headers['accept-encoding']
+      )
+      return
+    }
     // Loopback (and ?renderer=dev) uses Vite's current transforms; every
     // other client gets the build — see rendererSource.
     if (rendererSource(request, deps, url) === 'dev') {
