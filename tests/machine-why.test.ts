@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { machineSays } from '../src/renderer/src/zoom/machine-why'
 import { machineWhyShows, machineWhyWords } from '../src/renderer/src/zoom/machine-why'
 
 /**
@@ -21,8 +22,8 @@ describe('machineWhyWords', () => {
   })
 
   it('a browser with no pass, or no account key: where to prove it once', () => {
-    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'needs-proof' } })).toBe('Prove it’s you once at cookrew.dev/me (password or passkey), and Solis-Core opens here.')
-    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'no-device' } })).toBe('Sign this browser in at cookrew.dev/me, and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'needs-proof' } })).toBe('Prove it’s you once on the console (a passkey, or the account password), and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'no-device' } })).toBe('Sign this browser in on the console, and Solis-Core opens here.')
   })
 
   it('the machine’s own words when it turned this one away; a quiet one is asked again', () => {
@@ -32,7 +33,7 @@ describe('machineWhyWords', () => {
   })
 
   it('a page with no way to other machines (a machine reached by its address): where it can be', () => {
-    expect(machineWhyWords(solis, { surface: 'none', trusted: null, block: null })).toBe('Open cookrew.dev/me to go into Solis-Core from here.')
+    expect(machineWhyWords(solis, { surface: 'none', trusted: null, block: null })).toBe('Open console.cookrew.dev to go into Solis-Core from here.')
   })
 
   it('never sends anyone to the other machine', () => {
@@ -62,3 +63,19 @@ describe('machineWhyShows', () => {
     for (const v of [-1.5, -1, 0, 1, 2, 3]) expect(machineWhyShows(v, false)).toBe(false)
   })
 })
+
+describe('under a machine’s name on the devices stop', () => {
+  const m = (over: object = {}) => ({ name: 'Solis-Core', online: true, detail: 'listed' as const, ...over })
+  it('says nothing for a machine that is read', () => {
+    expect(machineSays(m({ detail: 'live' }), { surface: 'desktop', trusted: true })).toBeNull()
+  })
+  it('says the one thing to do for one that is not', () => {
+    expect(machineSays(m({ online: false }), { surface: 'desktop', trusted: true })).toBe('Open Cookrew on Solis-Core.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'darwin' })).toBe('Sign this Mac in again, above, to read it.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'linux' })).toBe('Sign this machine in again, above, to read it.')
+    expect(machineSays(m(), { surface: 'none', trusted: null })).toBe('Open console.cookrew.dev to read it.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: true })).toBe('Not answering yet.')
+    expect(machineSays(m({ detail: 'connecting' }), { surface: 'desktop', trusted: true })).toBe('Reading…')
+  })
+})
+

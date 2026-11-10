@@ -280,35 +280,38 @@ export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: st
 }
 
 /**
- * Another machine on the devices stop, from the real fleet: its frame, the
- * workspaces its feed seats (a ring and a name each; a listed-only desktop
- * shows names alone), and its own line. A machine that cannot be read says
- * "listed" rather than showing zeros it does not know.
+ * Another machine of the account on the devices stop, DRAWN AS A MACHINE, the
+ * way this one is (0.6.0): a frame, a screen, a base, its name under it. Its
+ * screen shows the workspaces its own summary seats (a ring and a name each).
+ * One that cannot be read has a dark screen and says the one thing to do
+ * (`say`, machine-why.ts · machineSays): never "listed only", never a zero it
+ * does not know.
  */
-export function MachineNode({ machine, bind, onOpen }: { machine: MachineView; bind: Bind; onOpen: () => void }): React.JSX.Element {
-  const known = machine.agents !== null
+export function MachineNode({ machine, say, bind, onOpen }: { machine: MachineView; say: string | null; bind: Bind; onOpen: () => void }): React.JSX.Element {
+  const read = say === null && machine.agents !== null
+  const counts = `${countOf(machine.workspaces.length, 'workspace')}${machine.agents !== null ? ` · ${countOf(machine.agents, 'agent')}` : ''}${machine.waiting ? ` · ${machine.waiting} waiting` : ''}`
+  const line = say ?? counts
   return (
-    <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machinecard${machine.online ? '' : ' off'}`}
-      title={`${machine.name} · ${machine.workspaces.length} workspaces${known ? ` · ${machine.agents} agents` : ' · listed only'}`}
-      {...press(onOpen, `${machine.name}, ${machine.workspaces.length} workspaces`)}>
+    <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machinecard${machine.online ? '' : ' off'}`} data-read={read} data-machine={machine.id}
+      title={`${machine.name} · ${line}`}
+      {...press(onOpen, `${machine.name}, ${line}`)}>
       <div className="zv-machinecard-screen">
-        {machine.workspaces.slice(0, 6).map((w) => (
+        {read && machine.workspaces.slice(0, 6).map((w) => (
           <div key={w.id} className="zv-mws">
             <div className="zv-mws-ring"><InkRing seed={3 + w.name.length} /></div>
             <span>{w.name}</span>
             {w.waiting && <i className="zv-mws-dot" />}
           </div>
         ))}
-        {machine.workspaces.length === 0 && <span className="zv-none">no workspaces listed</span>}
+        {read && machine.workspaces.length === 0 && <span className="zv-none">no workspaces</span>}
       </div>
+      <span className="zv-machinecard-deck" />
       <div className="zv-machinecard-label">
         <b>{machine.name}</b>
-        <small>
-          {machine.local ? 'this desktop' : machine.detail} · {machine.workspaces.length} workspaces
-          {known ? ` · ${machine.agents} agents` : ' · listed only'}
-          {machine.waiting ? ` · ${machine.waiting} waiting` : ''}
-        </small>
+        <small>{line}</small>
       </div>
     </div>
   )
 }
+
+const countOf = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`
