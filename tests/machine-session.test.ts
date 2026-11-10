@@ -93,10 +93,13 @@ describe('on the console', () => {
 
 describe('the console’s machine view (console/ConsoleMachine.tsx)', () => {
   // The view is the whole app; what is under test here is only what loading its chunk starts.
+  // Named in a variable: this file is typechecked with the main process's sources, which must not
+  // be made to follow the import into the app's own components (they are the web project's).
+  const VIEW = '../src/renderer/src/console/ConsoleMachine'
   const loadView = async (): Promise<unknown> => {
     vi.doMock('../src/renderer/src/App', () => ({ default: () => null }))
     try {
-      return await import('../src/renderer/src/console/ConsoleMachine')
+      return await import(/* @vite-ignore */ VIEW)
     } finally {
       vi.doUnmock('../src/renderer/src/App')
     }
