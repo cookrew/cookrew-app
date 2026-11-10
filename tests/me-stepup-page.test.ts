@@ -37,6 +37,8 @@ const account = (passwordless: boolean): V2Account => ({
   revoked: []
 } as unknown as V2Account)
 
+/** The page lives on the auth host only (0.6.0): it is always drawn standalone. */
+const STANDALONE = { site: 'https://cookrew.dev', console: 'https://console.cookrew.dev', home: '/account' }
 type Answer = { status: number; body?: unknown }
 type Route = (method: string, url: string, body: Record<string, unknown>) => Answer | undefined
 
@@ -70,8 +72,8 @@ function openMe(options: {
   trip?: boolean | 'refused'
 }): Page {
   const doc = new MiniDocument()
-  const rendered = mePage({ account: account(options.passwordless ?? true), currentDeviceId: '11111111-2222-4333-8444-555555555555' })
-  const body = /<body>([\s\S]*)<\/body>/.exec(rendered.body)?.[1] ?? ''
+  const rendered = mePage({ account: account(options.passwordless ?? true), currentDeviceId: '11111111-2222-4333-8444-555555555555' }, STANDALONE)
+  const body = /<body[^>]*>([\s\S]*)<\/body>/.exec(rendered.body)?.[1] ?? ''
   for (const node of parseHtml(body, doc)) doc.body.append(node)
   const calls: Page['calls'] = []
   const trips: Page['trips'] = []
@@ -366,10 +368,12 @@ describe('the other acts, for an account with no password', () => {
 
   it('adding a machine: the trip, then the join code on the way back', async () => {
     const page = openMe({ route: (m, u) => (u === '/v2/me/join-codes' ? STEP_UP : undefined) })
-    page.find('[data-add-device]').find((b) => b.dataset.addDevice === 'phone')?.dispatch('click')
+    // The account page offers one ADD button, for a machine: the phone's went with the registry's /me.
+    expect(page.find('[data-add-device]').map((b) => b.dataset.addDevice)).toEqual(['desktop'])
+    page.find('[data-add-device]')[0].dispatch('click')
     await page.settle()
     expect(page.prompts).toEqual([])
-    expect(saved(page)).toMatchObject({ act: 'mint-join-code', resume: { kind: 'join', device: 'phone' } })
+    expect(saved(page)).toMatchObject({ act: 'mint-join-code', resume: { kind: 'join', device: 'desktop' } })
     const back = openMe({
       search: '?stepped=mint-join-code',
       hash: `#stepup=${PROOF}`,

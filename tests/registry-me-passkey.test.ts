@@ -37,10 +37,12 @@ const account = (): V2Account => ({
 
 type Answer = { status: number; body?: unknown }
 
+/** The page lives on the auth host only (0.6.0): it is always drawn standalone. */
+const STANDALONE = { site: 'https://cookrew.dev', console: 'https://console.cookrew.dev', home: '/account' }
 function openMe(options: { through: ((intent: string) => Promise<boolean>) | null; search?: string; route?: (method: string, url: string) => Answer }) {
   const doc = new MiniDocument()
-  const rendered = mePage({ account: account(), currentDeviceId: '11111111-2222-4333-8444-555555555555', factors: { passkeys: [], totp: false } })
-  const body = /<body>([\s\S]*)<\/body>/.exec(rendered.body)?.[1] ?? ''
+  const rendered = mePage({ account: account(), currentDeviceId: '11111111-2222-4333-8444-555555555555', factors: { passkeys: [], totp: false } }, STANDALONE)
+  const body = /<body[^>]*>([\s\S]*)<\/body>/.exec(rendered.body)?.[1] ?? ''
   for (const node of parseHtml(body, doc)) doc.body.append(node)
   if (doc.getElementById('toast') === null) for (const node of parseHtml('<div id="toast" hidden></div>', doc)) doc.body.append(node)
   const calls: string[] = []

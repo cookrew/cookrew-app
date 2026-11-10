@@ -12,34 +12,13 @@ import { join } from 'node:path'
  * web. A key-holder can never be the person a seat names, so a browser that
  * enrolled its way in could be charged again for a seat its account already
  * holds, and the room would list a stranger.
+ *
+ * The line itself (line.js) left with the team page in 0.6.0; what is pinned
+ * here is the script that stays, site.js, which the account page loads.
  */
 
 const asset = (name: string): string =>
   readFileSync(join(__dirname, '..', 'registry', 'assets', name), 'utf8')
-
-describe('the line signs in as the account', () => {
-  const line = asset('line.js')
-
-  it('presents the v2 call token and never a v1 registry token', () => {
-    expect(line).toContain('{ v2Token: seated.token }')
-    expect(line).not.toContain('registryToken')
-  })
-
-  it('has no key ceremony left — no challenge signed with a browser key', () => {
-    expect(line).not.toContain('cookrew-call/1')
-    expect(line).not.toContain('acct.doorKey()')
-    // The seal key stays: that is the door's encryption, not a caller identity.
-    expect(line).toContain("root.dataset.sealKey")
-  })
-
-  it('does not decide who is reading from an enrolled handle', () => {
-    expect(line).not.toContain('await acct?.handle()')
-  })
-
-  it('a door too old to take an account says so, rather than being met with a key', () => {
-    expect(line).toContain("this door does not take cookrew.dev accounts yet")
-  })
-})
 
 describe('nothing the line can reach opens the enrolment modal', () => {
   const site = asset('site.js')
@@ -56,8 +35,8 @@ describe('nothing the line can reach opens the enrolment modal', () => {
 
   it('the enrolment flow is gone — stars were its last caller, and they act as the account now', () => {
     // If either of these comes back, a surface has started enrolling a handle
-    // again and should be read before it ships: the market binds everything
-    // to the username (market-shelf.ts).
+    // again and should be read before it ships: everything is bound to the
+    // username.
     expect(site).not.toContain('signInFlow')
     expect(site).not.toContain('/v1/identity/register')
   })

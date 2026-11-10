@@ -10,20 +10,27 @@ import { TransparencyLog } from '../registry/src/log'
 import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
-import { createV2 } from '../registry/src/v2-routes'
+import { createV2, type V2Identity } from '../registry/src/v2-routes'
 import { ASSETS } from '../registry/src/assets-bundle'
 import { WEB_V3_COPY } from '../registry/src/v3-copy'
 import { machineCopy } from '../src/shared/machine-words'
-import { esc } from '../registry/src/site-shell'
+import { esc, withStaticSite } from '../registry/src/site-shell'
+import { staticHomePage } from '../registry/src/site-home'
+import { accountPageOf, signedOutAccountPage } from './support/account-page'
 
 /**
- * IDENTITY v2 ON THE SITE — the sheet's markup, the CSP that keeps it inert,
- * and /me.
+ * IDENTITY v2 ON THE ACCOUNT PAGE — the sheet's markup, the CSP that keeps it
+ * inert, and the page itself.
  *
  * The point of asserting the MARKUP is that it is ours: the CSP forbids an
  * inline script, so a sheet assembled by a script at load is a sheet a reader
- * cannot see in the page they were served. And /me is rendered for one reader
- * — signed out it must be a page with a way in, never a JSON body.
+ * cannot see in the page they were served. And the page is rendered for one
+ * reader — signed out it must be a page with a way in, never a JSON body.
+ *
+ * Since 0.6.0 the page is served on the auth host only (tests/auth-account
+ * .test.ts drives it there over HTTP), and the registry's own /me and market
+ * are gone. So the account is made through a real registry's API, and the
+ * page is drawn from that record the way the auth host draws it.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -38,10 +45,12 @@ let dir = ''
 let origin = ''
 let close: () => Promise<void> = async () => undefined
 let session = ''
+let v2: V2Identity
+let mineId = ''
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'v2-site-'))
-  const v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
+  v2 = createV2(dir, { secondStep: 'legacy', limits: { accountsPerMinute: 1000, sessionsPerMinute: 1000 } })
   const server = createRegistry({
     store: new RegistryStore(dir),
     log: new TransparencyLog(dir),
@@ -63,6 +72,7 @@ beforeAll(async () => {
     })
 
   const mine = device('This Mac')
+  mineId = mine.id
   const made = await fetch(`${origin}/v2/accounts`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -80,12 +90,16 @@ afterAll(async () => {
   await close()
 })
 
-const get = (p: string, headers: Record<string, string> = {}): Promise<Response> =>
-  fetch(`${origin}${p}`, { headers, redirect: 'manual' })
+/** A page of the static site: a document, which is what the sheet must never be on. */
+const documentPage = () =>
+  withStaticSite({ console: 'https://console.cookrew.dev', auth: 'https://auth.cookrew.dev' }, () =>
+    staticHomePage({ release: null, commits: null, console: 'https://console.cookrew.dev' })
+  )
+const mine = () => accountPageOf(v2, 'drej', mineId)
 
 describe('the sign-in sheet (W1)', () => {
-  it('is in the markup of an app page, with both tabs and a confirmation field', async () => {
-    const body = await (await get('/market')).text()
+  it('is in the markup of an app page, with both tabs and a confirmation field', () => {
+    const body = signedOutAccountPage().body
     expect(body).toContain('id="account-sheet"')
     expect(body).toContain('data-acct-tab="signin"')
     expect(body).toContain('data-acct-tab="register"')
@@ -98,22 +112,20 @@ describe('the sign-in sheet (W1)', () => {
     expect(body).toMatch(/id="acct-confirm-row"[^>]*hidden/)
   })
 
-  it('is not on a document page, which has no script to work it', async () => {
-    const body = await (await get('/')).text()
+  it('is not on a document page, which has no script to work it', () => {
+    const body = documentPage().body
     expect(body).not.toContain('id="account-sheet"')
   })
 
-  it('leaves the CSP as it was — one script, from this origin only', async () => {
-    const app = await get('/market')
-    const csp = app.headers.get('content-security-policy') ?? ''
+  it('leaves the CSP as it was — one script, from this origin only', () => {
+    const csp = signedOutAccountPage().headers['content-security-policy'] ?? ''
     expect(csp).toContain("script-src 'self'")
     expect(csp).toContain("connect-src 'self'")
     expect(csp).not.toContain("script-src 'unsafe-inline'")
     expect(csp).toContain("base-uri 'none'")
     expect(csp).toContain("frame-ancestors 'none'")
 
-    const doc = await get('/')
-    expect(doc.headers.get('content-security-policy')).toContain("script-src 'none'")
+    expect(documentPage().headers['content-security-policy']).toContain("script-src 'none'")
   })
 
   it('ships in the bundle the registry actually serves', () => {
@@ -124,13 +136,13 @@ describe('the sign-in sheet (W1)', () => {
   })
 })
 
-describe('/me', () => {
-  it('is a page with a way in when nobody is signed in', async () => {
-    const res = await get('/me')
+describe('the account page', () => {
+  it('is a page with a way in when nobody is signed in', () => {
+    const res = signedOutAccountPage()
     expect(res.status).toBe(401)
-    expect(res.headers.get('content-type')).toContain('text/html')
-    expect(res.headers.get('cache-control')).toBe('private, no-store')
-    const body = await res.text()
+    expect(res.headers['content-type']).toContain('text/html')
+    expect(res.headers['cache-control']).toBe('private, no-store')
+    const body = res.body
     expect(body).toContain('data-signin')
     // The lede is the shared D1 sentence (v3), not a line written here: the
     // same words the avatar hovers on the Mac. Asserted BY THE TABLE so the
@@ -139,21 +151,21 @@ describe('/me', () => {
     expect(body).toContain('noindex')
   })
 
-  it('renders the reader’s own account with the cookie', async () => {
-    const res = await get('/me', { cookie: `__Host-cr_session=${session}` })
+  it('renders the reader’s own account', () => {
+    const res = mine()
     expect(res.status).toBe(200)
-    const body = await res.text()
+    const body = res.body
     expect(body).toContain('@drej')
     expect(body).toContain('This Mac')
     expect(body).toContain('This device')
-    expect(body).toContain('MacBook Pro')
-    // A count, never the workspaces' names, before the twelve-hour gate (owner 2026-11-10).
+    // Nothing of any machine: not the desktop the account filed, not a workspace's name. Those are the console's.
+    expect(body).not.toContain('MacBook Pro')
     expect(body).not.toContain('Cookrew Dev')
-    expect(res.headers.get('cache-control')).toBe('private, no-store')
+    expect(res.headers['cache-control']).toBe('private, no-store')
   })
 
-  it('offers a passkey, an authenticator and the requests waiting to be answered', async () => {
-    const body = await (await get('/me', { cookie: `__Host-cr_session=${session}` })).text()
+  it('offers a passkey, an authenticator and the requests waiting to be answered', () => {
+    const body = mine().body
     // Phase 4: these are verbs now, not a row that says "coming".
     expect(body).toContain('Passkey (Touch ID / Face ID)')
     expect(body).toContain('data-add-passkey')
@@ -165,28 +177,17 @@ describe('/me', () => {
     expect(body).not.toContain('coming in a later release')
   })
 
-  it('loads the ladder’s screens beside the account sheet', async () => {
-    const res = await get('/me', { cookie: `__Host-cr_session=${session}` })
-    expect(await res.text()).toContain('/assets/factors.js')
+  it('loads the ladder’s screens beside the account sheet', () => {
+    const res = mine()
+    expect(res.body).toContain('/assets/factors.js')
     // Still one origin and no inline script: the CSP has not been widened.
-    expect(res.headers.get('content-security-policy')).toContain("script-src 'self'")
+    expect(res.headers['content-security-policy']).toContain("script-src 'self'")
+    expect(res.body).not.toMatch(/<script(?![^>]*\ssrc=)[^>]*>/)
   })
 
-  it('escapes what a person typed into their own profile', async () => {
-    const body = await (await get('/me', { cookie: `__Host-cr_session=${session}` })).text()
+  it('escapes what a person typed into their own profile', () => {
+    const body = mine().body
     expect(body).toContain('Drej &lt;script&gt;')
     expect(body).not.toContain('Drej <script>')
-  })
-
-  it('refuses a cookie that is not a live session', async () => {
-    expect((await get('/me', { cookie: '__Host-cr_session=rubbish.rubbish' })).status).toBe(401)
-    // A v1 account cookie is not a v2 session and must not open this page.
-    expect((await get('/me', { cookie: 'cr_account=rubbish.rubbish' })).status).toBe(401)
-  })
-
-  it('cannot be taken as a handle', async () => {
-    // /me is reserved: an owner called "me" must never shadow this page.
-    const body = await (await get('/me', { cookie: `__Host-cr_session=${session}` })).text()
-    expect(body).toContain('id="me"')
   })
 })
