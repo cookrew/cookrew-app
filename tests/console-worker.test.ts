@@ -13,6 +13,7 @@ interface Handlers {
   install?: (event: { waitUntil: (work: Promise<unknown>) => void }) => void
   activate?: (event: { waitUntil: (work: Promise<unknown>) => void }) => void
   fetch?: (event: { request: Request & { mode?: string }; respondWith: (answer: Promise<Response>) => void }) => void
+  message?: (event: { data: unknown }) => void
 }
 
 function browser(source: string, existing: string[] = []) {
@@ -63,7 +64,8 @@ function browser(source: string, existing: string[] = []) {
     handlers.fetch?.({ request, respondWith: (given) => void (answer = given) })
     return answer === null ? null : (await (answer as Promise<Response>)).text()
   }
-  return { stores, state, fetched, reloads, run, ask }
+  const tell = (data: unknown): void => handlers.message?.({ data })
+  return { stores, state, fetched, reloads, run, ask, tell }
 }
 
 const source = (): string => consoleWorkerSource({ version: '0.6.0-abc1234', assets: ['/assets/console-main-AAAA.js', '/assets/App-BBBB.js', '/assets/index-CCCC.css', '/favicon.svg', '/sw.js', '/assets/App-BBBB.js'] })
@@ -129,6 +131,18 @@ describe('the worker', () => {
   it('goes to the network for the page when its cache was taken away', async () => {
     const page = browser(source())
     expect(await page.ask(`${ORIGIN}/`, { mode: 'navigate' })).toBe('from the network')
+  })
+})
+
+describe('a newer worker waits, until the page itself asks it in', () => {
+  it('does not take over at install, and does when the page says so and for nothing else it is told', async () => {
+    const page = browser(source())
+    await page.run('install')
+    expect(page.state.skipped).toBe(0)
+    for (const other of [undefined, null, 'hello', { type: 'take-over' }, 'TAKE-OVER']) page.tell(other)
+    expect(page.state.skipped).toBe(0)
+    page.tell('take-over')
+    expect(page.state.skipped).toBe(1)
   })
 })
 

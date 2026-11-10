@@ -45,6 +45,12 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+// A newer worker waits beside the old one. It comes in early only when the page asks, which the page does
+// only when its person pressed for the new build (console/console-version.ts).
+self.addEventListener('message', (event) => {
+  if (event.data === 'take-over') self.skipWaiting()
+})
+
 const held = (key, request) => caches.open(CACHE).then((cache) => cache.match(key)).then((hit) => hit || fetch(request))
 
 self.addEventListener('fetch', (event) => {

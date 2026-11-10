@@ -323,3 +323,33 @@
     transition: opacity 160ms ease;
   }
 }
+
+/* A newer build is out (NewerBuild.tsx): one line over whatever is on screen, out of the way of the thumb's row. */
+.cd-newer {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 6px 8px 6px 12px;
+  max-width: calc(100vw - 24px);
+  border: 1px solid var(--sumi-line, currentColor);
+  border-radius: 999px;
+  background: var(--sumi-paper, Canvas);
+  color: var(--sumi-ink, CanvasText);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.cd-newer-go {
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
