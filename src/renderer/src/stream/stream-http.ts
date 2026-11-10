@@ -12,7 +12,7 @@
 // credential raises the re-pair screen here too rather than looking like an
 // agent with no history.
 
-import { heldScope, machineLeft } from '../machine-scope'
+import { heldScope, machineLeft, relayRefusedSession } from '../machine-scope'
 import { AuthError, authStore } from '../auth-gate'
 import { apiPath } from '../api-base'
 import { planeFetch } from '../plane-fetch'
@@ -51,6 +51,7 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
     const detail = (await response.json().catch(() => ({}))) as { error?: string }
     if (!sameMachine()) throw machineLeft()
     const message = detail.error ?? `HTTP ${response.status}`
+    if (relayRefusedSession(response.status, detail.error)) throw new Error(message)
     if (response.status === 401) {
       const failure = new AuthError(message, /read-only/i.test(message) ? 'read-only' : 'none')
       authStore().report(failure)

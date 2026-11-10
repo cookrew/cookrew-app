@@ -12,6 +12,7 @@ import type { TurnViewModel } from '../turn-view-model'
 import { activeBrowserTab, type CanvasNode, type Connection, type WorkspaceMeta } from '../../../shared/model'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { hostOf, screenAspectOf, tintOf } from './zoom-layout'
+import { DECK_SHOWN } from './fleet-compose'
 import type { FrameModel, LinkModel, TieModel } from './zoom-frame'
 import { inkStatusOfRow, statusWord, type InkStatus } from './ink-status'
 import type { LaunchFailure } from '../../../shared/launch-failure'
@@ -217,7 +218,7 @@ export interface DeckSource {
   host?: string | null
 }
 /** How many things a tile's deck shows by name; the rest is its depth. */
-export const DECK_SHOWN = 3
+export { DECK_SHOWN }
 const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
 
 /** The word over a card that is not resting but stuck. */

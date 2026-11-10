@@ -80,3 +80,27 @@ describe('the Not paired card', () => {
     expect(markup).toContain('Continue read-only')
   })
 })
+
+describe('on the console', () => {
+  const consoleCard = async (scope: 'none' | 'read-only'): Promise<string> => {
+    stubPhone()
+    vi.resetModules()
+    const machines = await import('../src/renderer/src/machine-scope')
+    machines.configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session' } })
+    machines.enterMachine('11111111-1111-4111-8111-111111111111')
+    const gate = await import('../src/renderer/src/auth-gate')
+    const { ReauthOverlay } = await import('../src/renderer/src/ReauthOverlay')
+    gate.authStore().report(new gate.AuthError('refused', scope))
+    return renderToStaticMarkup(<ReauthOverlay />)
+  }
+
+  it('never asks for a token or a password: a machine that refuses this browser’s key is the console’s to re-enter', async () => {
+    const markup = await consoleCard('none')
+    expect(markup).toBe('')
+  })
+
+  it('still says a read-only device is read-only', async () => {
+    expect(await consoleCard('read-only')).not.toBe('')
+  })
+})
+

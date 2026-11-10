@@ -1141,7 +1141,11 @@ export type AccessSaveAnswer = { ok: true; state: AccessState; moved?: boolean }
 
 import { createDemoApi } from "./demo-api";
 import { createRemoteApi } from "./remote-api";
-import { registerScopeState, scopeEpoch } from "./machine-scope";
+import {
+  registerScopeState,
+  scopeEpoch,
+  scopeNeedsMachine,
+} from "./machine-scope";
 
 let demoApi: CookrewApi | null = null;
 let remoteApi: { readonly api: CookrewApi; readonly epoch: number } | null =
@@ -1181,9 +1185,12 @@ export function cookrew(): CookrewApi {
 
 /** Phone browser talking to the desktop app through the mobile server. */
 export function isRemoteMode(): boolean {
+  // A machine's own page is marked by the machine that serves it; the console
+  // is a static page that says so itself (machine-scope.ts).
   return (
     !bridge() &&
-    (window as unknown as { COOKREW_MOBILE?: number }).COOKREW_MOBILE === 1
+    ((window as unknown as { COOKREW_MOBILE?: number }).COOKREW_MOBILE === 1 ||
+      scopeNeedsMachine())
   );
 }
 

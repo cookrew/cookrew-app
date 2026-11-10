@@ -322,6 +322,21 @@ describe('the zoom fleet store', () => {
     expect(store.get().loading).toBe(false)
   })
 
+  it('an api that refuses to be asked (nobody in scope) is no answer, and nothing is thrown at the page', async () => {
+    const refusing = (): never => {
+      throw new Error('no machine is in scope')
+    }
+    const api: FleetApi = { subscribeZoomFleet: refusing, listWorkspaces: refusing, machineName: refusing, zoomFleetMachines: async () => ({ ok: true, machines: [] }) }
+    const store = createZoomFleetStore(() => api)
+    const rejected = vi.fn()
+    process.on('unhandledRejection', rejected)
+    expect(() => store.subscribe(() => undefined)).not.toThrow()
+    await vi.advanceTimersByTimeAsync(3_000)
+    process.off('unhandledRejection', rejected)
+    expect(rejected).not.toHaveBeenCalled()
+    expect(store.get().loading).toBe(false)
+  })
+
   it('reads nothing on resume while nobody is looking', async () => {
     const { api, feed } = fakeApi()
     const store = createZoomFleetStore(() => api)

@@ -20,6 +20,14 @@
 /** The header the account session travels in on the relay path. */
 export const RELAY_SESSION_HEADER = 'x-cookrew-session'
 
+/**
+ * What the relay itself answers, with a 401, when it does not take the account
+ * session (registry/src/v2-canvas-relay.ts). A machine's own 401 is a sentence
+ * about its token, so the two are told apart by this word: one means "sign in
+ * again", the other "this machine no longer takes this browser's key".
+ */
+export const RELAY_UNAUTHENTICATED = 'unauthenticated'
+
 /** The path prefix every relayed machine call begins with. */
 export const MACHINE_RELAY_PREFIX = '/api/m'
 

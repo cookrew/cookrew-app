@@ -23,7 +23,7 @@ import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
 import { apiPath } from './api-base'
-import { machineScope, registerScopeState, scopeNeedsMachine, heldScope, machineLeft } from './machine-scope'
+import { machineScope, registerScopeState, scopeNeedsMachine, heldScope, machineLeft, relayRefusedSession } from './machine-scope'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import type { SetupLineNow, SetupLineRun, SetupStart } from '../../shared/setup-line'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
@@ -100,6 +100,8 @@ async function parse<T>(response: Response, options: ParseOptions = {}): Promise
     // Before the refusal is reported or a seat settled: both would land on the next machine.
     if (!sameMachine()) throw machineLeft()
     const message = (detail as { error?: string }).error ?? `HTTP ${response.status}`
+    // The relay's own no to the account session: the machine said nothing, and is not unpaired.
+    if (relayRefusedSession(response.status, (detail as { error?: unknown }).error)) throw new HttpStatusError(message, response.status, detail)
     if (response.status === 401) {
       // A stale credential is the most likely error this client will ever
       // see. Raise it as its own type so it reaches the re-pair screen

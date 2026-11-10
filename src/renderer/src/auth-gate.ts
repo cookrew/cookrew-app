@@ -1,4 +1,4 @@
-import { registerScopeState, scopeEpoch } from './machine-scope'
+import { registerScopeState, scopeEpoch, scopeNeedsMachine } from './machine-scope'
 import { V3_COPY, accountCopy } from '../../shared/account-copy'
 import { machineCopy } from '../../shared/machine-words'
 // Pairing credential + what happens when it stops working.
@@ -308,11 +308,15 @@ function browserStore(): AuthStore {
       return missing
     }
   }
+  // ON THE CONSOLE NO CREDENTIAL COMES FROM THE ADDRESS. A machine's key gets there through its
+  // door (console/console-wiring.ts); a `?token=` or `#pair=` on a console link is somebody
+  // else's idea of what this browser should hold for a machine, and is not taken.
+  const fromAddress = !scopeNeedsMachine()
   const store = createAuthStore({
     local: safe(() => window.localStorage),
     session: safe(() => window.sessionStorage),
-    search: window.location.search,
-    hash: window.location.hash
+    search: fromAddress ? window.location.search : '',
+    hash: fromAddress ? window.location.hash : ''
   })
   // THE CREDENTIAL MUST NOT SURVIVE THE BOOT. It is read above — before the
   // first authenticated request — and taken off the URL here, so it is in no
@@ -321,7 +325,7 @@ function browserStore(): AuthStore {
   // cookrew.dev never receives the token, and a fragment left in place would
   // hand it to the next person the page is shown to.
   try {
-    const clean = scrubPairingFromUrl(window.location.href)
+    const clean = fromAddress ? scrubPairingFromUrl(window.location.href) : null
     if (clean) window.history.replaceState(null, '', clean)
   } catch {
     // A history API that refuses is not worth failing the boot over.

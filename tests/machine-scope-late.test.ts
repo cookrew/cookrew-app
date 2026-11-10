@@ -302,3 +302,53 @@ describe('an answer whose head arrived for the last machine and whose body is re
     expect(gate.authStore().blocked()).toBeNull()
   })
 })
+
+describe('the relay saying the account session is over', () => {
+  it('is not taken for the machine refusing this browser: no re-pair screen, and the session is told', async () => {
+    vi.resetModules()
+    const refused = vi.fn()
+    const scope = await import('../src/renderer/src/machine-scope')
+    scope.configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session', refused } })
+    scope.enterMachine(A)
+    const api = await import('../src/renderer/src/api')
+    const gate = await import('../src/renderer/src/auth-gate')
+    const reading = api.cookrew().getWorkspace()
+    const failed = expect(reading).rejects.toMatchObject({ status: 401 })
+    await tick()
+    // The registry's own words for a session it no longer takes (v2-canvas-relay.ts).
+    to(BASE_A, '/api/workspace')[0].answer(json({ error: 'unauthenticated' }, 401))
+    await failed
+    expect(gate.authStore().blocked()).toBeNull()
+    expect(refused).toHaveBeenCalledTimes(1)
+  })
+
+  it('a machine’s own refusal still is: that is the token it no longer takes', async () => {
+    vi.resetModules()
+    const refused = vi.fn()
+    const scope = await import('../src/renderer/src/machine-scope')
+    scope.configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session', refused } })
+    scope.enterMachine(A)
+    const api = await import('../src/renderer/src/api')
+    const gate = await import('../src/renderer/src/auth-gate')
+    const reading = api.cookrew().getWorkspace()
+    const failed = expect(reading).rejects.toMatchObject({ name: 'AuthError' })
+    await tick()
+    to(BASE_A, '/api/workspace')[0].answer(json({ error: 'Unauthorized — pair this device first.' }, 401))
+    await failed
+    expect(gate.authStore().blocked()).not.toBeNull()
+    expect(refused).not.toHaveBeenCalled()
+  })
+})
+
+describe('a credential in the console’s address', () => {
+  it('is not taken: a machine’s key comes through its door, never from a link', async () => {
+    vi.resetModules()
+    const page = bareWindow(`https://console.cookrew.dev/d/${A}?token=planted-token#pair=planted-too`)
+    vi.stubGlobal('window', { ...page, COOKREW_MOBILE: 1 })
+    vi.stubGlobal('localStorage', page.localStorage)
+    await inConsole(A)
+    const gate = await import('../src/renderer/src/auth-gate')
+    expect(gate.authStore().token()).toBeNull()
+    expect((page.localStorage as Storage).getItem(`cr_token:${A}`)).toBeNull()
+  })
+})
