@@ -41,9 +41,13 @@ export function registryOrigin(): string {
  * so a test instance never treats production's pages as its own.
  */
 export function siteOrigin(): string {
+  return siteOriginOf(registryOrigin())
+}
+
+/** The site that goes with a registry: the same rule, for a caller that was handed its registry. */
+export function siteOriginOf(registry: string): string {
   if (process.env.COOKREW_SITE) return process.env.COOKREW_SITE
-  // A registry of one's own serves its own pages; the home registry's pages are the site's, not the API host's.
-  const registry = registryOrigin()
+  // A registry of one's own is named as its own site; the home registry's pages are the site's, not the API host's.
   return registry === DEFAULT_REGISTRY ? 'https://cookrew.dev' : registry
 }
 

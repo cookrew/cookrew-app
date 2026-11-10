@@ -13,7 +13,7 @@ import {
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { registryOrigin, siteOrigin } from './registry-origin'
+import { registryOrigin, siteOriginOf } from './registry-origin'
 import { joinLink } from '../shared/join-code'
 import { RELAY_SESSION_HEADER, machineRelayPath } from '../shared/machine-relay'
 import {
@@ -378,7 +378,7 @@ export interface AccountsDeps {
   fetch?: FetchLike
   now?: () => number
   origin?: string
-  /** Where the site's pages are (the /join link a code is shown with). Default: registry-origin.ts · siteOrigin. */
+  /** Where the site's pages are (the /join link a code is shown with). Default: registry-origin.ts · siteOriginOf. */
   site?: string
   /** This Mac's name, for the Devices tab. */
   deviceName?: string
@@ -507,7 +507,7 @@ export class Accounts {
     this.http = deps.fetch ?? ((input, init) => fetch(input, init))
     this.now = deps.now ?? (() => Date.now())
     this.origin = deps.origin ?? registryOrigin()
-    this.site = deps.site ?? siteOrigin()
+    this.site = deps.site ?? siteOriginOf(this.origin)
     this.platform = deps.platform ?? process.platform
     this.deviceName = deps.deviceName ?? machineCopy('This Mac', this.platform)
     // NOTHING IS WRITTEN HERE. Building this must never be able to stop a boot (a folder that
