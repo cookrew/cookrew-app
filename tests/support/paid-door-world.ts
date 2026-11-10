@@ -123,6 +123,10 @@ export interface PaidDoorWorld {
   checkoutsMade(): number
   /** Every Checkout session id the door was asked to settle, in order. */
   presented: string[]
+  /** Every X-PAYMENT the door's line was HANDED, settled or not: a Checkout session id, or a wallet header as sent. */
+  linePayments: string[]
+  /** What the door says of a wallet payment that would verify. `ok`, until told otherwise. */
+  walletVerdict(verdict: 'ok' | 'refused' | 'unverifiable'): void
   /** Move the DOOR's clock forward: its Bearers are an hour long by that clock. */
   doorClockForward(ms: number): void
   /** A slow registry: the door's seat report waits until the returned release is called. */
@@ -161,6 +165,8 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
   let checkoutsMade = 0
   const paidSessions = new Set<string>([PAID])
   const presented: string[] = []
+  const linePayments: string[] = []
+  let walletVerdict: 'ok' | 'refused' | 'unverifiable' = 'ok'
   const issuer = new CallCredentialService({ base: doorDir, now: () => Date.now() + doorSkew })
   const callers = new DoorCallers()
   const sessions = new Set<string>()
@@ -263,7 +269,8 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     },
     // THE RAILS, the one stand-in: a payment is good, bad, or cannot be asked about.
     settle: async (payment) => {
-      if (payment === GOOD_USDC) return 'ok'
+      // A wallet header is the envelope plus which signature it was (appOn below).
+      if (payment.startsWith(GOOD_USDC)) return walletVerdict
       const session = stripeSessionOf(payment)
       if (session !== null) presented.push(session)
       if (session !== null && paidSessions.has(session)) return 'ok'
@@ -306,6 +313,8 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
         }
         const headers = request.headers as Record<string, string | undefined>
         if (rest === '/line') {
+          const handed = headers['x-payment']
+          if (typeof handed === 'string' && handed.length > 0) linePayments.push(stripeSessionOf(handed) ?? handed)
           const gate = await gateCaller(deps, template, headers)
           if (!gate.ok) {
             response.writeHead(gate.response.status, { 'content-type': 'application/json' })
@@ -376,7 +385,11 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
       wallet: () => (usdc === undefined ? null : { address: WALLET }),
       buildX402Payment: (requirements) => {
         signed.push(requirements)
-        return usdc === undefined ? Promise.reject(new Error('this Mac has no wallet')) : Promise.resolve(usdc)
+        // Every signature is its own header (a real one carries a fresh nonce):
+        // two presses that send the SAME header signed once.
+        return usdc === undefined
+          ? Promise.reject(new Error('this Mac has no wallet'))
+          : Promise.resolve(`${usdc}#${signed.length}`)
       }
     })
     const ops: ServeGate = {
@@ -416,6 +429,10 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     },
     checkoutsMade: () => checkoutsMade,
     presented,
+    linePayments,
+    walletVerdict: (verdict) => {
+      walletVerdict = verdict
+    },
     doorClockForward: (ms) => {
       doorSkew += Math.max(0, ms)
     },

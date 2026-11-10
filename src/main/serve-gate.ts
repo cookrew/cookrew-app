@@ -1,6 +1,10 @@
 import { gateDoorFor, type GateDoor } from '../shared/gate-walk'
 import { MKT_PAY } from '../shared/marketplace-copy'
-import { CHECKOUT_MAX_LIFE_SECONDS, isStripeCheckoutUrl } from '../shared/stripe-checkout'
+import {
+  CHECKOUT_MAX_LIFE_SECONDS,
+  PENDING_CHECKOUT_MAX_AGE_SECONDS,
+  isStripeCheckoutUrl
+} from '../shared/stripe-checkout'
 import { withPaidBearer } from './door-bearer'
 import type { ServeTarget } from './import-session'
 import { memoryPendingCheckouts, type PendingCheckout, type PendingCheckoutStore } from './pending-checkout'
@@ -123,9 +127,33 @@ interface Held {
   intent?: 'buy'
 }
 
+/** How many times one wait may sign in again at a door that keeps forgetting its Bearer. */
+export const MAX_RENEWALS = 3
+
+/** Added to a signed authorisation's life here, so it is never thought dead while it can still be collected. */
+const SIGNED_SLACK_MS = 5000
+
 export function createServeGate(deps: ServeGateDeps) {
   const now = (): number => deps.now?.() ?? Date.now()
   const pending: PendingCheckoutStore = deps.pending ?? memoryPendingCheckouts()
+
+  /**
+   * The card payment in flight for this account at this door, or null.
+   *
+   * AN ENTRY CANNOT STAND FOR EVER. The door's "not paid" after the session's
+   * life is the ordinary end (afterCardAnswer) — but a door may never say it,
+   * or be gone, and the entry would then block both rails there and be asked
+   * about at every start. Past the longest any Checkout session can live, by
+   * THIS machine's clock from the moment it was handed out, it is dropped
+   * without asking anybody. Nothing a door sends can extend that.
+   */
+  const pendingFor = (account: string, door: string): PendingCheckout | null => {
+    const waiting = pending.get(account, door)
+    if (waiting === null) return null
+    if (now() - waiting.startedAt < PENDING_CHECKOUT_MAX_AGE_SECONDS * 1000) return waiting
+    pending.drop(waiting.account, waiting.door, waiting.session)
+    return null
+  }
 
   /**
    * WHO IS AT THIS MAC, as half of every key below.
@@ -172,6 +200,28 @@ export function createServeGate(deps: ServeGateDeps) {
    * mints, extends or widens one.
    */
   const standIns = new Map<string, { token: string; at: number }>()
+
+  /**
+   * THE WALLET PAYMENT ALREADY SIGNED, by account and door, while it can
+   * still be collected.
+   *
+   * Every signature is a new authorisation with a new nonce, and each one is
+   * good for as long as the quote said. A door that answers a press "we could
+   * not check — try again" and is pressed again would hold TWO live transfers,
+   * and the sheet's "trying again will not charge you twice" would be false.
+   * So the signed header is kept until it lapses and a retry for the same
+   * terms sends THAT header again: one nonce, so at most one transfer can
+   * ever land. Different terms inside that time are refused rather than
+   * signed beside it. In memory only — a restart signs afresh, which is the
+   * same exposure a second device would be.
+   */
+  const signedPayments = new Map<string, { terms: string; header: string; until: number }>()
+
+  /** Renewed sign-ins spent per account and door since the last deliberate ask (`gate`). */
+  const renewals = new Map<string, number>()
+
+  /** A card page being asked for right now, per account and door: a second asker waits for the first. */
+  const checkoutsInFlight = new Map<string, Promise<unknown>>()
 
   /** What a `pay` phase showed for one rail. */
   const railOf = <R extends 'x402' | 'stripe'>(phase: AdmissionPhase, rail: R) =>
@@ -226,7 +276,8 @@ export function createServeGate(deps: ServeGateDeps) {
   /**
    * Open the line as the held caller — and if the door no longer knows the
    * Bearer, renew it ONCE and ask the same thing again. Only a second 401 is
-   * an answer; the first is a clock.
+   * an answer; the first is a clock. At most MAX_RENEWALS times between two
+   * deliberate asks.
    */
   const ask = async (
     key: string,
@@ -237,6 +288,13 @@ export function createServeGate(deps: ServeGateDeps) {
   ): Promise<{ phase: AdmissionPhase; entry: Held }> => {
     const first = await openAdmission(at, entry.token, payment)
     if (first.kind !== 'error' || first.status !== 401) return { phase: first, entry }
+    // A BUDGET, because a wait asks every few seconds: a door that forgets
+    // every Bearer it issues would otherwise cost a sign-in — at a listed
+    // door, a mint at cookrew.dev — per tick, for an hour. After a few, its
+    // refusal is simply the answer.
+    const spent = renewals.get(key) ?? 0
+    if (spent >= MAX_RENEWALS) return { phase: first, entry }
+    renewals.set(key, spent + 1)
     const token = await renew(target, at, entry).catch(() => null)
     if (token === null) return { phase: first, entry }
     const renewed: Held = { ...entry, token }
@@ -269,7 +327,19 @@ export function createServeGate(deps: ServeGateDeps) {
     price: waiting.price
   })
 
-  const gate = async (link: string, intent?: 'buy') => {
+  /** The session is handed to the door one last time, whatever comes back, and then let go. */
+  const presentAndForget = async (
+    key: string,
+    target: ServeTarget,
+    at: ServeTarget,
+    entry: Held,
+    waiting: PendingCheckout
+  ): Promise<void> => {
+    await ask(key, target, at, entry, stripePaymentHeader(waiting.session)).catch(() => undefined)
+    pending.drop(waiting.account, waiting.door, waiting.session)
+  }
+
+  const walkGate = async (link: string, intent?: 'buy') => {
     const target = deps.parse(link)
     if (!target) return { ok: false as const, reason: 'bad-address' as const }
     const door = targetKey(target)
@@ -289,7 +359,8 @@ export function createServeGate(deps: ServeGateDeps) {
         const phase = await openAdmission(at, token)
         let entry = heldFrom(token, walk, phase)
         held.set(key, entry)
-        const waiting = pending.get(who(), door)
+        renewals.delete(key)
+        const waiting = pendingFor(who(), door)
         if (waiting && phase.kind !== 'open') {
           const presented = await ask(key, target, at, entry, stripePaymentHeader(waiting.session))
           entry = presented.entry
@@ -307,7 +378,7 @@ export function createServeGate(deps: ServeGateDeps) {
             return { ok: true as const, door: walk, phase, wallet: deps.wallet(), card: cardOf(waiting) }
           }
         } else if (waiting) {
-          pending.drop(waiting.account, waiting.door, waiting.session)
+          await presentAndForget(key, target, at, entry, waiting)
         }
         return { ok: true as const, door: walk, phase, wallet: deps.wallet() }
       }
@@ -322,7 +393,7 @@ export function createServeGate(deps: ServeGateDeps) {
       const account = admitted.account ?? who()
       const key = fileKey(account, door)
       const plain = admitted
-      const waiting = pending.get(account, door)
+      const waiting = pendingFor(account, door)
 
       // A CARD PAYMENT IS IN FLIGHT HERE and the plain ask got no Bearer (the
       // registry has no seat for this account yet — which is exactly what a
@@ -352,14 +423,19 @@ export function createServeGate(deps: ServeGateDeps) {
 
       let entry = heldFrom(admitted.token, walk, admitted.phase, asked)
       held.set(key, entry)
+      renewals.delete(key)
       // Admitted with no payment on a token that carried no seat: the door
       // itself says this account already paid here (a purchase cookrew.dev
       // has not recorded yet). The card that follows opens the same way.
       if (asked === 'buy') remember(key, entry, admitted.phase)
 
       if (waiting && admitted.phase.kind === 'open') {
-        // Seated already — granted, or the payment was recorded elsewhere.
-        pending.drop(waiting.account, waiting.door, waiting.session)
+        // Seated already — granted, or bought another way. The remembered
+        // session is still handed to the door once before it is forgotten:
+        // if the door has a use for it (a payment to record as spent), it
+        // gets the chance. Today's door admits a seated caller BEFORE its
+        // money rung and does not look at the payment at all.
+        await presentAndForget(key, target, at, entry, waiting)
       } else if (waiting) {
         // PRESENTED FIRST, before any pay step is shown.
         const presented = await ask(key, target, at, entry, stripePaymentHeader(waiting.session))
@@ -384,6 +460,79 @@ export function createServeGate(deps: ServeGateDeps) {
       return {
         ok: false as const,
         reason: 'sign-in' as const,
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  /**
+   * EVERY ANSWER CARRIES THE CARD WHILE ONE STANDS — whatever its phase, and
+   * even when there is no phase at all (a door that cannot be reached). The
+   * walk above presents a remembered session when it gets as far as holding a
+   * Bearer; a refusal before that (no live account session, a door that turns
+   * the sign-in away, a registry that does not know the team) presented
+   * nothing, and a surface told only "refused" would drop its wait and say
+   * nothing was charged over a card page that may have been paid.
+   */
+  const gate = async (link: string, intent?: 'buy') => {
+    const answer = await walkGate(link, intent)
+    const target = deps.parse(link)
+    if (!target) return answer
+    const named = answer.ok && 'account' in answer && typeof answer.account === 'string' ? answer.account : null
+    const waiting = pendingFor(named ?? who(), targetKey(target))
+    return waiting === null ? answer : { ...answer, card: cardOf(waiting) }
+  }
+
+  /** `checkout`, once the single-flight guard has let one asker through. */
+  const startCheckout = async (
+    link: string,
+    target: ServeTarget,
+    account: string,
+    door: string,
+    key: string,
+    found: Held
+  ) => {
+    let entry = found
+    try {
+      const reached = await deps.reachable(target)
+      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
+      const waiting = pendingFor(account, door)
+      if (waiting) {
+        const standing = {
+          ok: true as const,
+          session: waiting.session,
+          url: waiting.url,
+          startedAt: waiting.startedAt,
+          resumed: true as const
+        }
+        if (!lifeOver(waiting)) return standing
+        // It can no longer be paid. One question to the door settles what
+        // it was: paid (hand it back; the wait opens on it), or unpaid for
+        // good (forgotten here, and only then is a new one made).
+        const presented = await ask(key, target, reached.at, entry, stripePaymentHeader(waiting.session))
+        entry = presented.entry
+        if (afterCardAnswer(waiting, presented.phase) !== 'gone') return standing
+      }
+      const checkout = await startStripeCheckout(reached.at, entry.token)
+      const startedAt = now()
+      pending.put({
+        account,
+        door,
+        link,
+        session: checkout.session,
+        url: checkout.url,
+        price: entry.cardPrice,
+        startedAt
+      })
+      // The URL comes back too: a hand-off that silently failed to raise a
+      // browser would otherwise leave the person waiting on a page they never
+      // saw, with no way to reach it. It is a capability — the sheet keeps it
+      // to re-open, and never prints it.
+      return { ok: true as const, session: checkout.session, url: checkout.url, startedAt }
+    } catch (error) {
+      return {
+        ok: false as const,
+        reason: 'unavailable' as const,
         detail: error instanceof Error ? error.message : String(error)
       }
     }
@@ -417,50 +566,17 @@ export function createServeGate(deps: ServeGateDeps) {
       const key = fileKey(account, door)
       const found = target ? held.get(key) : undefined
       if (!target || !found) return { ok: false as const, reason: 'not-signed-in' as const }
-      let entry = found
-      try {
-        const reached = await deps.reachable(target)
-        if (!reached) return { ok: false as const, reason: 'unavailable' as const }
-        const waiting = pending.get(account, door)
-        if (waiting) {
-          const standing = {
-            ok: true as const,
-            session: waiting.session,
-            url: waiting.url,
-            startedAt: waiting.startedAt,
-            resumed: true as const
-          }
-          if (!lifeOver(waiting)) return standing
-          // It can no longer be paid. One question to the door settles what
-          // it was: paid (hand it back; the wait opens on it), or unpaid for
-          // good (forgotten here, and only then is a new one made).
-          const presented = await ask(key, target, reached.at, entry, stripePaymentHeader(waiting.session))
-          entry = presented.entry
-          if (afterCardAnswer(waiting, presented.phase) !== 'gone') return standing
-        }
-        const checkout = await startStripeCheckout(reached.at, entry.token)
-        const startedAt = now()
-        pending.put({
-          account,
-          door,
-          link,
-          session: checkout.session,
-          url: checkout.url,
-          price: entry.cardPrice,
-          startedAt
-        })
-        // The URL comes back too: a hand-off that silently failed to raise a
-        // browser would otherwise leave the person waiting on a page they never
-        // saw, with no way to reach it. It is a capability — the sheet keeps it
-        // to re-open, and never prints it.
-        return { ok: true as const, session: checkout.session, url: checkout.url, startedAt }
-      } catch (error) {
-        return {
-          ok: false as const,
-          reason: 'unavailable' as const,
-          detail: error instanceof Error ? error.message : String(error)
-        }
-      }
+      // ONE ASKER AT A TIME per account and door. Between reading "nothing
+      // in flight" and writing the new session down the door is being asked,
+      // and a second surface pressing PAY in that gap would ask it too: two
+      // pages. The second asker waits and is handed the first one's answer.
+      const flying = checkoutsInFlight.get(key) as ReturnType<typeof startCheckout> | undefined
+      if (flying) return flying
+      const asking = startCheckout(link, target, account, door, key, found).finally(() => {
+        checkoutsInFlight.delete(key)
+      })
+      checkoutsInFlight.set(key, asking)
+      return asking
     },
 
     /**
@@ -485,7 +601,7 @@ export function createServeGate(deps: ServeGateDeps) {
         if (rail === 'stripe') {
           if (!session) return { ok: false as const, reason: 'no-session' as const }
           const presented = await ask(key, target, at, entry, stripePaymentHeader(session))
-          const waiting = pending.get(account, door)
+          const waiting = pendingFor(account, door)
           if (waiting && waiting.session === session) afterCardAnswer(waiting, presented.phase)
           return {
             ok: true as const,
@@ -493,7 +609,22 @@ export function createServeGate(deps: ServeGateDeps) {
             // Whether a card payment is STILL held in flight here after this
             // answer. A surface offers a new PAY only once this is false: main
             // lets go on the door's word and its own clock, never a surface's.
-            standing: pending.get(account, door) !== null
+            standing: pendingFor(account, door) !== null
+          }
+        }
+
+        // NO WALLET PAYMENT WHILE A CARD PAYMENT STANDS. A sheet that does not
+        // know about the card page (the phone's, opened before the desktop
+        // started one) would otherwise be signed for here, and the card page
+        // — still open, still payable — would take a second payment nobody
+        // presents. Refused before the door is even asked for a quote.
+        const cardStanding = pendingFor(account, door)
+        if (cardStanding) {
+          return {
+            ok: false as const,
+            reason: 'card-in-flight' as const,
+            detail: MKT_PAY['mkt.pay.card.unconfirmed.body'],
+            card: cardOf(cardStanding)
           }
         }
 
@@ -519,8 +650,25 @@ export function createServeGate(deps: ServeGateDeps) {
         // carries a screen that has since been replaced, is refused.
         if (typeof shown !== 'string' || shown.length === 0) return changed
         if (entry.shown === null || shown !== entry.shown || terms.shown !== shown) return changed
-        const payment = await deps.buildX402Payment(terms.requirements)
+        // ONE LIVE AUTHORISATION (signedPayments). While the last one signed
+        // here can still be collected, the same terms send IT again and
+        // different terms are refused — never a second one signed beside it.
+        const live = signedPayments.get(key)
+        let payment: string
+        if (live !== undefined && now() < live.until) {
+          if (live.terms !== terms.shown) return changed
+          payment = live.header
+        } else {
+          payment = await deps.buildX402Payment(terms.requirements)
+          signedPayments.set(key, {
+            terms: terms.shown,
+            header: payment,
+            until: now() + terms.requirements.maxTimeoutSeconds * 1000 + SIGNED_SLACK_MS
+          })
+        }
         const presented = await ask(key, target, at, entry, payment)
+        // Collected: it is spent, and there is nothing left to send again.
+        if (presented.phase.kind === 'open') signedPayments.delete(key)
         return { ok: true as const, phase: remember(key, presented.entry, presented.phase) }
       } catch (error) {
         return {
@@ -539,7 +687,10 @@ export function createServeGate(deps: ServeGateDeps) {
      */
     resumePending: async (): Promise<number> => {
       let landed = 0
-      for (const waiting of pending.all(who())) {
+      for (const remembered of pending.all(who())) {
+        // Too old for any card to be charged on it: let go of, not asked about.
+        const waiting = pendingFor(remembered.account, remembered.door)
+        if (waiting === null) continue
         const answer = await gate(waiting.link)
         if (answer.ok && 'settled' in answer && answer.settled !== undefined) landed += 1
       }
@@ -590,6 +741,8 @@ export function createServeGate(deps: ServeGateDeps) {
       seenAs = as
       held.clear()
       standIns.clear()
+      signedPayments.clear()
+      renewals.clear()
       return true
     }
   }

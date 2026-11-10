@@ -47,11 +47,21 @@ export interface X402Terms {
   version: string
 }
 
+/**
+ * The most a rail is ever offered for: a million USDC. A seat does not cost
+ * more, and a quote that says it does is not one to put a PAY button under.
+ */
+export const X402_MAX_ATOMIC = 10n ** 12n
+
 /** Plain decimal digits, no sign, no leading zero, no more than thirty of them. */
 const AMOUNT = /^[1-9]\d{0,29}$/
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
-/** Printable ASCII, one to thirty-two characters: a token's name, not a payload. */
-const DOMAIN_TEXT = /^[\x20-\x7E]{1,32}$/
+/**
+ * Printable ASCII, one to thirty-two characters: a token's name, not a
+ * payload. NOT `|` — it is the separator `x402TermsKey` joins its fields
+ * with, and a name carrying one could make two different quotes share a key.
+ */
+const DOMAIN_TEXT = /^[\x20-\x7B\x7D\x7E]{1,32}$/
 
 const isAddress = (value: unknown): value is `0x${string}` =>
   typeof value === 'string' && ADDRESS.test(value)
@@ -68,6 +78,7 @@ export function parseX402Terms(raw: unknown): X402Terms | null {
 
   const amount = quote.maxAmountRequired
   if (typeof amount !== 'string' || !AMOUNT.test(amount)) return null
+  if (BigInt(amount) > X402_MAX_ATOMIC) return null
 
   if (!isAddress(quote.payTo) || !isAddress(quote.asset)) return null
   // THE TOKEN IS PINNED. The sheet says USDC and counts six decimals.

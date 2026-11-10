@@ -23,6 +23,14 @@ export const CHECKOUT_TTL_SECONDS = 30 * 60
  */
 export const CHECKOUT_MAX_LIFE_SECONDS = 2 * CHECKOUT_TTL_SECONDS
 
+/**
+ * How long a remembered card payment may stand at all: the longest any
+ * Checkout session can live at Stripe (24 hours) plus an hour of slack. Past
+ * this no card can be charged on it, whatever a door says or does not say, so
+ * whoever remembers it lets go without asking.
+ */
+export const PENDING_CHECKOUT_MAX_AGE_SECONDS = 24 * 60 * 60 + 60 * 60
+
 const CHECKOUT_HOST = 'checkout.stripe.com'
 
 /**

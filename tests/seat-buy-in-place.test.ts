@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Accounts } from '../src/main/account-v2'
 import { doorBearer } from '../src/main/door-bearer'
-import { PendingCheckouts } from '../src/main/pending-checkout'
+import { PendingCheckouts, memoryPendingCheckouts } from '../src/main/pending-checkout'
 import { CHECKOUT_MAX_LIFE_SECONDS, CHECKOUT_TTL_SECONDS } from '../src/shared/stripe-checkout'
 import { STAND_IN_TTL_MS, createServeGate } from '../src/main/serve-gate'
 import { signInToDoor, type AdmissionPhase } from '../src/main/served-admission'
@@ -742,6 +742,287 @@ describe('a Bearer that ran out while the card page was open (E)', () => {
     expect(((await dead.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
     // Every later request meets a 404 — not a 401 — so nothing is renewed and it is said as it is.
     expect(await dead.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'gone' }, standing: false })
+  }, SLOW)
+})
+
+describe('round 3 — one payment per purchase, whatever is pressed', () => {
+  type Carded = Gated & { card?: { session: string }; settled?: unknown }
+  const HOUR = 60 * 60 * 1000
+
+  it('a wallet press while a card payment stands is refused by MAIN, and nothing is signed (1)', async () => {
+    const guest = await world.registeredMachine('r3-wallet', 'rwa')
+    world.quote(['stripe', 'x402'])
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+      // The phone's sheet opened first and shows both rails.
+      await app.ops.gate(DOOR, 'buy')
+      const phone = app.shown()
+      // The desktop starts a Checkout. The phone's sheet knows nothing of it.
+      world.checkoutNext(UNPAID)
+      await app.ops.checkout(DOOR)
+      const answer = await app.ops.settle(DOOR, 'x402', undefined, phone)
+      expect(answer).toMatchObject({ ok: false, reason: 'card-in-flight', card: { session: UNPAID } })
+      expect(app.signed).toEqual([])
+      expect(world.openedBy).not.toContain('acct-rwa')
+    } finally {
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
+  it('a gate that finds the door OPEN while a card session is remembered presents it once, then forgets it (1)', async () => {
+    const guest = await world.registeredMachine('r3-seated', 'rse')
+    const pending = memoryPendingCheckouts()
+    const app = world.appOn(guest.accounts, { pending })
+    const session = 'cs_test_seatedmeanwhile'
+    world.checkoutNext(session)
+    await app.ops.gate(DOOR, 'buy')
+    await app.ops.checkout(DOOR)
+    // The owner grants a seat while the card page is still open.
+    const granted = await fetch(`${world.origin}/v2/teams/${DOOR}/seats`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${world.sessionToken(world.owner.base)}` },
+      body: JSON.stringify({ username: 'rse' })
+    })
+    expect(granted.status).toBe(201)
+    const handed = world.linePayments.length
+    const opened = (await app.ops.gate(DOOR)) as Carded
+    expect(opened.phase).toEqual({ kind: 'open' })
+    expect(opened.card).toBeUndefined()
+    // Presented to the door exactly once, and only then forgotten.
+    expect(world.linePayments.slice(handed)).toEqual([session])
+    expect(pending.all('rse')).toEqual([])
+    // WHAT THE DOOR DOES WITH IT: a seated caller is admitted before the money
+    // rung, so the payment is not looked at and the session is not spent.
+    expect(world.presented).not.toContain(session)
+  }, SLOW)
+
+  it('every gate answer carries the card while one stands: denied, identify, an error, a door that cannot be reached (2)', async () => {
+    const guest = await world.registeredMachine('r3-phases', 'rph')
+    const waiting = {
+      account: 'rph',
+      link: DOOR,
+      session: 'cs_test_standing1',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_standing1',
+      price: '1.00',
+      startedAt: Date.now()
+    }
+    const never = {
+      signInWithKey: () => Promise.reject(new Error('no key')),
+      wallet: () => null,
+      buildX402Payment: () => Promise.reject(new Error('no wallet'))
+    }
+    // A door that refuses the sign-in itself: its own 403 at the assert.
+    const refusing = createServer((request, response) => {
+      request.resume()
+      request.on('end', () => response.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ reason: 'workspace' })))
+    })
+    await new Promise<void>((resolve) => refusing.listen(0, '127.0.0.1', resolve))
+    try {
+      const at = `http://127.0.0.1:${(refusing.address() as AddressInfo).port}`
+      const pendingAt = (door: string) => {
+        const store = memoryPendingCheckouts()
+        store.put({ ...waiting, door })
+        return store
+      }
+      const denied = (await createServeGate({
+        ...never,
+        parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+        reachable: async () => ({ at: { origin: at, slug: DOOR, door: DOOR }, listed: true, live: true }),
+        accounts: guest.accounts,
+        pending: pendingAt(DOOR)
+      }).gate(DOOR)) as Carded
+      expect(denied.phase).toMatchObject({ kind: 'denied', reason: 'workspace' })
+      expect(denied.card?.session).toBe(waiting.session)
+
+      // This Mac knows who it is, and cookrew.dev will not take its session any more.
+      const identify = (await createServeGate({
+        ...never,
+        parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+        reachable: async () => ({ at: { origin: world.planeOrigin, slug: DOOR, door: DOOR }, listed: true, live: true }),
+        accounts: { account: () => ({ username: 'rph' }), authedResponse: async () => ({ ok: false, reason: 'session-expired' }) },
+        pending: pendingAt(DOOR)
+      }).gate(DOOR)) as Carded
+      expect(identify.phase).toEqual({ kind: 'identify' })
+      expect(identify.card?.session).toBe(waiting.session)
+
+      // cookrew.dev does not know the team (any more).
+      const nowhere = '@drej/nowhere'
+      const error = (await createServeGate({
+        ...never,
+        parse: () => ({ origin: world.origin, slug: 'nowhere', door: nowhere }),
+        reachable: async () => ({ at: { origin: world.planeOrigin, slug: nowhere, door: nowhere }, listed: true, live: true }),
+        accounts: guest.accounts,
+        pending: pendingAt(nowhere)
+      }).gate(nowhere)) as Carded
+      expect(error.phase).toEqual({ kind: 'error', status: 404 })
+      expect(error.card?.session).toBe(waiting.session)
+
+      // The door cannot be found at all: not even a phase, and still the card.
+      const dark = await createServeGate({
+        ...never,
+        parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+        reachable: async () => null,
+        accounts: guest.accounts,
+        pending: pendingAt(DOOR)
+      }).gate(DOOR)
+      expect(dark).toMatchObject({ ok: false, reason: 'sign-in', card: { session: waiting.session } })
+    } finally {
+      refusing.closeAllConnections()
+      await new Promise<void>((resolve) => refusing.close(() => resolve()))
+    }
+  }, SLOW)
+
+  it('"trying again will not charge you twice" is true: a retried wallet press re-sends the SAME signed payment (3)', async () => {
+    const guest = await world.registeredMachine('r3-retry', 'rre')
+    world.quote(['x402'])
+    world.walletVerdict('unverifiable')
+    let clock = 1_700_000_000_000
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC, now: () => clock })
+      await app.ops.gate(DOOR, 'buy')
+      const handed = world.linePayments.length
+      const unsure = { ok: true, phase: { kind: 'denied', reason: 'payment_unverifiable', retryable: true } }
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual(unsure)
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual(unsure)
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual(unsure)
+      // Three presses, ONE signature — and the door was handed one and the same header each time.
+      expect(app.signed).toHaveLength(1)
+      const sent = world.linePayments.slice(handed)
+      expect(sent).toHaveLength(3)
+      expect(new Set(sent).size).toBe(1)
+
+      // A different quote while that authorisation can still be collected: refused, nothing new signed.
+      world.usdcTerms({ maxAmountRequired: '2000000' })
+      await app.ops.gate(DOOR, 'buy')
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toHaveLength(1)
+      world.usdcTerms({})
+      await app.ops.gate(DOOR, 'buy')
+
+      // One second before it lapses: still the same header.
+      clock += 300_000 - 1000
+      await app.ops.settle(DOOR, 'x402', undefined, app.shown())
+      expect(app.signed).toHaveLength(1)
+      // Once it can no longer be collected, a new one may be signed.
+      clock += 60_000
+      world.walletVerdict('ok')
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(app.signed).toHaveLength(2)
+      expect(world.linePayments.at(-1)).not.toBe(sent[0])
+    } finally {
+      world.walletVerdict('ok')
+      world.usdcTerms({})
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
+  it('a signed wallet payment is one person’s: a change of hands forgets it (3)', async () => {
+    const a = await world.registeredMachine('r3-hands-a', 'rha')
+    const b = await world.registeredMachine('r3-hands-b', 'rhb')
+    world.quote(['x402'])
+    world.walletVerdict('unverifiable')
+    try {
+      let signedIn: Accounts = a.accounts
+      const app = world.appOn(() => signedIn, { usdc: GOOD_USDC })
+      await app.ops.gate(DOOR, 'buy')
+      await app.ops.settle(DOOR, 'x402', undefined, app.shown())
+      signedIn = b.accounts
+      app.ops.accountChanged()
+      await app.ops.gate(DOOR, 'buy')
+      await app.ops.settle(DOOR, 'x402', undefined, app.shown())
+      // B's press was B's own signature, not A's header sent again.
+      expect(app.signed).toHaveLength(2)
+      expect(new Set(world.linePayments.slice(-2)).size).toBe(2)
+    } finally {
+      world.walletVerdict('ok')
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
+  it('a card session older than any Checkout can live is forgotten without asking anybody (4)', async () => {
+    const guest = await world.registeredMachine('r3-old', 'rol')
+    const pending = memoryPendingCheckouts()
+    let clock = 1_700_000_000_000
+    const app = world.appOn(guest.accounts, { now: () => clock, pending })
+    // A door that never says "not paid": it cannot check, for ever.
+    world.checkoutNext(UNCHECKABLE)
+    await app.ops.gate(DOOR, 'buy')
+    await app.ops.checkout(DOOR)
+    clock += 25 * HOUR - 1
+    expect(((await app.ops.gate(DOOR)) as Carded).card?.session).toBe(UNCHECKABLE)
+    expect(pending.all('rol')).toHaveLength(1)
+
+    clock += 1
+    const asked = world.linePayments.length
+    expect(await app.ops.resumePending()).toBe(0)
+    expect(pending.all('rol')).toEqual([])
+    // Nobody was asked about it: its age alone ended it.
+    expect(world.linePayments.length).toBe(asked)
+    const fresh = (await app.ops.gate(DOOR)) as Carded
+    expect(fresh.card).toBeUndefined()
+    expect(fresh.phase).toMatchObject({ kind: 'denied', reason: 'no_seat' })
+  }, SLOW)
+
+  it('two surfaces asking for a card page at the same moment get one page: the door is asked once (5)', async () => {
+    const guest = await world.registeredMachine('r3-twin', 'rtw')
+    const app = world.appOn(guest.accounts)
+    world.checkoutNext('cs_test_twins0001')
+    await app.ops.gate(DOOR, 'buy')
+    const made = world.checkoutsMade()
+    const [one, two] = await Promise.all([app.ops.checkout(DOOR), app.ops.checkout(DOOR)])
+    expect(world.checkoutsMade()).toBe(made + 1)
+    expect(one).toMatchObject({ ok: true, session: 'cs_test_twins0001' })
+    expect(two).toMatchObject({ ok: true, session: 'cs_test_twins0001' })
+  }, SLOW)
+
+  it('a door that forgets every Bearer costs three renewals per wait, not one per tick (6)', async () => {
+    const guest = await world.registeredMachine('r3-budget', 'rbu')
+    let mints = 0
+    const uses = new Map<string, number>()
+    let issued = 0
+    // Signs anybody in; says "not paid" to a Bearer's first payment and has forgotten that Bearer by the next:
+    // every tick of a wait meets a 401, renews, and is told "not paid" on the new one.
+    const forgetful = createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        const json = (status: number, body: unknown): void =>
+          void response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+        if (request.url?.endsWith('/api/call/assert')) return json(200, { ok: true, token: `bearer-${(issued += 1)}` })
+        const bearer = String(request.headers.authorization)
+        if (request.headers['x-payment'] === undefined) return json(402, { terms: { x402Version: 1, accepts: [{ scheme: 'stripe-checkout', amountUsd: '1.00' }] } })
+        const used = (uses.get(bearer) ?? 0) + 1
+        uses.set(bearer, used)
+        return used === 1 ? json(402, { reason: 'invalid', retryable: false }) : json(401, {})
+      })
+    })
+    await new Promise<void>((resolve) => forgetful.listen(0, '127.0.0.1', resolve))
+    try {
+      const at = `http://127.0.0.1:${(forgetful.address() as AddressInfo).port}`
+      const gate = createServeGate({
+        parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+        reachable: async () => ({ at: { origin: at, slug: DOOR, door: DOOR }, listed: true, live: true }),
+        accounts: {
+          account: () => guest.accounts.account(),
+          authedResponse: (pathname, init) => {
+            if (pathname.endsWith('/call-token')) mints += 1
+            return guest.accounts.authedResponse(pathname, init)
+          }
+        },
+        signInWithKey: () => Promise.reject(new Error('no key')),
+        wallet: () => null,
+        buildX402Payment: () => Promise.reject(new Error('no wallet'))
+      })
+      expect(((await gate.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
+      const after = mints
+      const answers: unknown[] = []
+      for (let tick = 0; tick < 12; tick += 1) answers.push(await gate.settle(DOOR, 'stripe', PAID))
+      // Twelve ticks of a card wait: three sign-ins, then the door's refusal is simply said.
+      expect(mints - after).toBe(3)
+      expect(answers.at(-1)).toMatchObject({ ok: true, phase: { kind: 'error', status: 401 } })
+    } finally {
+      forgetful.closeAllConnections()
+      await new Promise<void>((resolve) => forgetful.close(() => resolve()))
+    }
   }, SLOW)
 })
 

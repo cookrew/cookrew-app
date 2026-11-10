@@ -7,6 +7,7 @@ import { railsFromTerms } from '../src/main/served-admission'
 import { buildX402Payment, readX402Quote } from '../src/main/x402-caller'
 import { BASE_SEPOLIA } from '../src/main/x402-rail'
 import {
+  X402_MAX_ATOMIC,
   X402_NETWORKS,
   parseX402Terms,
   x402TermsKey,
@@ -87,7 +88,13 @@ const HOSTILE_FIELDS: ReadonlyArray<[string, Record<string, unknown>]> = [
   ['a domain name that is not text', { extra: { name: 7, version: '2' } }],
   ['a domain name with a newline', { extra: { name: 'USDC\nextra', version: '2' } }],
   ['a domain name of two hundred letters', { extra: { name: 'U'.repeat(200), version: '2' } }],
-  ['an empty domain version', { extra: { name: 'USDC', version: '' } }]
+  ['an empty domain version', { extra: { name: 'USDC', version: '' } }],
+  // The key joins its fields with `|`: a name that contains one could make two different quotes share a key.
+  ['a domain name with the key’s own separator', { extra: { name: 'USDC|2', version: '2' } }],
+  ['a domain version with the key’s own separator', { extra: { name: 'USDC', version: '2|x' } }],
+  // More than a million USDC is not a seat's price: not offered, not signed.
+  ['an amount above the ceiling', { maxAmountRequired: '1000000000001' }],
+  ['an amount far above the ceiling', { maxAmountRequired: '9'.repeat(30) }]
 ]
 
 describe('parseX402Terms', () => {
@@ -135,7 +142,9 @@ describe('the label and the key come from the parsed terms', () => {
     expect(price('2500000')).toBe('2.5')
     expect(price('1')).toBe('0.000001')
     expect(price('1000000000')).toBe('1000')
-    expect(price('123456789012345678901234567890')).toBe('123456789012345678901234.56789')
+    // The most a rail is ever offered for: a million USDC, exactly.
+    expect(X402_MAX_ATOMIC).toBe(10n ** 12n)
+    expect(price('1000000000000')).toBe('1000000')
   })
 
   it('the key names every signed field, and nothing that is not signed', () => {
