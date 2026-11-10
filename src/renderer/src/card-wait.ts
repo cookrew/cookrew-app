@@ -120,6 +120,11 @@ export function cardHeldFault(
   vars: Readonly<Record<string, string | number>>
 ): PayFault | null {
   if (phase.kind === 'pay' || phase.kind === 'open') return null
+  // No live account session: the door cannot be asked anything until the
+  // person signs in, so that is what the sentence sends them to do.
+  if (phase.kind === 'identify') {
+    return apology(MKT_PAY['mkt.pay.card.resume.title'], MKT_PAY['mkt.pay.card.signin.body'])
+  }
   const reading = read({ ok: true, phase }, vars)
   return typeof reading === 'object' ? reading.fault : null
 }

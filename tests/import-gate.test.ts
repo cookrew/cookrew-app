@@ -208,6 +208,16 @@ describe('settleRefusalFault — a settle that main refused, in the sheet’s tw
     expect(fault.body).toContain('Cancel and import again to see the current terms.')
   })
 
+  it('a wallet press main refused because a card payment stands says so, and never that nothing was charged', () => {
+    const fault = settleRefusalFault({ reason: 'card-in-flight', detail: 'whatever main said' })
+    expect(fault).toEqual({
+      voice: 'apolog',
+      title: MKT_PAY['mkt.pay.card.resume.title'],
+      body: MKT_PAY['mkt.pay.card.unconfirmed.body']
+    })
+    expect(`${fault.title} ${fault.body}`).not.toMatch(/nothing was charged/i)
+  })
+
   it('anything else is the apology, with what main could say about it', () => {
     expect(settleRefusalFault({ reason: 'refused', detail: 'the door hung up' })).toEqual({
       voice: 'apolog',

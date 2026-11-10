@@ -598,4 +598,74 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       page.close()
     }
   }, 120_000)
+
+  it('round 3 — while a card stands, no answer of the gate makes the sheet say nothing was charged or offer a new PAY (2)', async () => {
+    const card = { session: 'cs_test_standing9', url: 'https://checkout.stripe.com/c/pay/cs_test_standing9', startedAt: Date.now(), price: '1.00' }
+    const facts = { ok: true as const, door: 'install' as const, wallet: null, team: DOOR, owner: 'drej', account: 'kit', seat: null }
+    const ANSWERS: ReadonlyArray<[string, unknown, string, string]> = [
+      ['the door refuses the sign-in', { ...facts, phase: { kind: 'denied', reason: 'workspace', retryable: false }, card }, MKT_DENIED_REASONS['mkt.denied.workspace.title'], MKT_PAY['mkt.pay.card.check']],
+      ['a reason nobody shipped', { ...facts, phase: { kind: 'denied', reason: 'a-reason-nobody-shipped', retryable: false }, card }, "Cookrew couldn't complete that", MKT_PAY['mkt.pay.card.check']],
+      ['an error from the registry', { ...facts, phase: { kind: 'error', status: 404 }, card }, MKT_GATE['mkt.gate.error.title'], MKT_PAY['mkt.pay.card.check']],
+      ['a door that cannot be reached', { ok: false, reason: 'sign-in', detail: 'not serving', card }, MKT_GATE['mkt.gate.error.title'], MKT_PAY['mkt.pay.card.check']],
+      ['this Mac has to sign in again', { ...facts, phase: { kind: 'identify' }, card }, MKT_PAY['mkt.pay.card.resume.title'], 'SIGN IN']
+    ]
+    for (const [what, answer, headline, button] of ANSWERS) {
+      let gates = 0
+      const settles: unknown[] = []
+      serve = {
+        gate: async () => ((gates += 1), answer),
+        checkout: async () => {
+          throw new Error(`${what}: the sheet asked for a card page`)
+        },
+        settle: async (...args) => (settles.push(args), { ok: false, reason: 'not-signed-in' })
+      }
+      const { page, errors } = await openGate()
+      try {
+        const said = await sheetSays(page, headline)
+        expect(said, what).not.toMatch(/nothing was (installed|charged)|Nothing was installed/i)
+        expect(said, what).toContain(what.startsWith('this Mac') ? MKT_PAY['mkt.pay.card.signin.body'] : MKT_PAY['mkt.pay.card.unconfirmed.body'])
+        await primaryReads(page, button)
+        expect(said, what).not.toMatch(/PAY 1\.00 USD|BUY A SEAT/)
+        if (button === MKT_PAY['mkt.pay.card.check']) {
+          // Off the pay step main holds no Bearer to settle on: CHECK AGAIN asks the GATE, which presents the session first.
+          const before = gates
+          await click(page, PRIMARY)
+          await sleep(400)
+          expect(gates, what).toBe(before + 1)
+          expect(settles, what).toEqual([])
+        }
+        expect(errors, what).toEqual([])
+      } finally {
+        page.close()
+      }
+    }
+  }, 120_000)
+
+  it('round 3 — a wallet PAY pressed on a sheet that does not know a card page was started is refused, said, and turned into CHECK AGAIN (1)', async () => {
+    const guest = await world.registeredMachine('click-r3', 'kit')
+    const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+    serve = app.ops
+    world.quote(['stripe', 'x402'])
+    world.checkoutNext('cs_test_elsewhere1')
+    const { page, errors } = await openGate()
+    try {
+      await primaryReads(page, 'BUY A SEAT · $1.00')
+      await click(page, PRIMARY)
+      await primaryReads(page, 'PAY 1.00 USD')
+      // Another surface of this Mac starts a card page. This sheet is not told.
+      await app.ops.checkout(DOOR)
+      await click(page, '.gk-chips button:nth-of-type(2)')
+      await primaryReads(page, 'PAY 1 USDC')
+      await click(page, PRIMARY)
+      const said = await sheetSays(page, MKT_PAY['mkt.pay.card.resume.title'])
+      expect(said).toContain(MKT_PAY['mkt.pay.card.unconfirmed.body'])
+      await primaryReads(page, MKT_PAY['mkt.pay.card.check'])
+      expect(app.signed).toEqual([])
+      expect(world.openedBy).not.toContain('acct-kit')
+      expect(errors).toEqual([])
+    } finally {
+      world.quote(['stripe'])
+      page.close()
+    }
+  }, 120_000)
 })

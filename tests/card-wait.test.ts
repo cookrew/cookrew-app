@@ -253,6 +253,35 @@ describe('no sentence about a card session claims nothing was charged (F)', () =
     expect(MKT_PAY['mkt.pay.card.expired.title']).not.toMatch(/unpaid/i)
   })
 
+  it('a gate that answers "sign in" while a card stands says so, and that the payment is still the account’s', () => {
+    // Nothing can be asked of the door until this Mac has a live session
+    // again, so the way on is SIGN IN — and the sentence does not pretend a
+    // CHECK AGAIN that could not work.
+    const fault = cardHeldFault({ kind: 'identify' }, VARS)
+    expect(fault).toEqual({
+      voice: 'apolog',
+      title: MKT_PAY['mkt.pay.card.resume.title'],
+      body: MKT_PAY['mkt.pay.card.signin.body']
+    })
+    expect(fault?.body).toMatch(/Sign in/)
+    expect(fault?.body).not.toMatch(/CHECK AGAIN|nothing was charged/i)
+    // A door that could not be reached at all (no phase from main: the sheet calls it an error).
+    expect(cardHeldFault({ kind: 'error', status: 0 }, VARS)).toEqual({
+      voice: 'apolog',
+      title: MKT_GATE['mkt.gate.error.title'],
+      body: honest
+    })
+  })
+
+  it('the sheet takes the card from EVERY gate answer, refused or not, and CHECK AGAIN re-asks the gate off the pay step', () => {
+    const gate = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'ImportGate.tsx'), 'utf8')
+    // One reading of `card`, for an answer with a phase and for one without.
+    expect(gate).toContain("const phase: ServePhase = result.ok ? result.phase : { kind: 'error', status: 0 }")
+    expect(gate).toContain('cardHeldFault(phase, deniedVarsRef.current)')
+    // Off the pay step main holds no Bearer to settle on: the gate is asked, and it presents the session first.
+    expect(gate).toMatch(/if \(!onPayStep\) \{\s*runGate\(\)/)
+  })
+
   it('a sheet OPENED on a payment in flight that the door refuses says the same honest thing, not the refusal band', () => {
     expect(cardHeldFault({ kind: 'pay', rails: [] }, VARS)).toBeNull()
     expect(cardHeldFault({ kind: 'open' }, VARS)).toBeNull()
@@ -261,7 +290,6 @@ describe('no sentence about a card session claims nothing was charged (F)', () =
     expect(cardHeldFault({ kind: 'gone' }, VARS)?.body).toBe(honest)
     // And the sheet stays on the pay step for it: the band that says "Nothing was charged" is never drawn over a card in flight.
     const gate = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'ImportGate.tsx'), 'utf8')
-    expect(gate).toContain('cardHeldFault(result.phase, deniedVarsRef.current)')
     expect(gate).toMatch(/card !== null\s*\?\s*\{ kind: 'pay' \}/)
   })
 })

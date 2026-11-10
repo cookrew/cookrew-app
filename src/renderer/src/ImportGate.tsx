@@ -153,34 +153,13 @@ export function ImportGate({
   /** Paint what main said about the door: the phase, the wallet, the facts its sentences name. */
   const applyGate = useCallback((result: Awaited<ReturnType<ReturnType<typeof cookrew>['serveGate']>>): void => {
     setBusy(false)
+    // An answer with no phase at all (the door could not be reached) is drawn as an error.
+    const phase: ServePhase = result.ok ? result.phase : { kind: 'error', status: 0 }
+    setPhase(phase)
     if (result.ok) {
-      setPhase(result.phase)
       setQuotedRails(result.phase.kind === 'pay' ? result.phase.rails : EMPTY_RAILS)
-      // A CARD PAYMENT MADE EARLIER (main remembers it, on disk). Landed: this
-      // is its receipt, and the phase is already `open`. Still payable: the
-      // sheet takes up THAT session — main's word on which, never this
-      // sheet's memory — and offers its page again instead of a new payment.
+      // A card payment made earlier had landed: this is its receipt, and the phase is already `open`.
       if (result.settled) setSettledOn(result.settled)
-      const flying = result.card
-      const holding = cardRef.current
-      if (flying === undefined) {
-        if (holding !== null) {
-          stopPolling()
-          holdCard(null)
-        }
-      } else if (holding === null || holding.wait.session !== flying.session) {
-        // The door may have answered this ask with a refusal (out of sessions,
-        // gone). Its band would say "nothing was charged" over a card page
-        // that may have been paid — so it is said on the pay step instead, in
-        // the words that are true of a payment in flight (card-wait.ts).
-        const refused = cardHeldFault(result.phase, deniedVarsRef.current)
-        holdCard({
-          wait: { session: flying.session, startedAt: flying.startedAt },
-          paid: { price: flying.price, asset: 'USD' },
-          mode: refused === null ? 'resume' : 'check'
-        })
-        setFault(refused ?? RESUME_FAULT)
-      }
       setWallet(result.wallet)
       setFacts({
         door: result.door,
@@ -189,14 +168,44 @@ export function ImportGate({
         account: result.account ?? null,
         seat: result.seat ?? null
       })
-    } else {
-      setPhase({ kind: 'error', status: 0 })
-      setFault({
-        voice: 'apolog',
-        title: MKT_PAY['mkt.pay.error.unverifiable.title'],
-        body: result.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
-      })
     }
+    // A CARD PAYMENT IN FLIGHT (main remembers it, on disk) rides on EVERY
+    // answer, whatever its phase — refused, signed out, unreachable. The sheet
+    // takes up THAT session on main's word, never its own memory, and from
+    // then on speaks only the sentences that are true of a payment in flight.
+    const flying = result.card
+    const holding = cardRef.current
+    if (flying === undefined) {
+      if (holding !== null) {
+        stopPolling()
+        holdCard(null)
+      }
+      if (!result.ok) {
+        setFault({
+          voice: 'apolog',
+          title: MKT_PAY['mkt.pay.error.unverifiable.title'],
+          body: result.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
+        })
+      }
+      return
+    }
+    const same = holding !== null && holding.wait.session === flying.session
+    if (same && holding.mode === 'waiting') {
+      // The sheet is already waiting on it by itself: nothing changes, the button stays held.
+      setBusy(true)
+      return
+    }
+    // The door may have answered this ask with a refusal (out of sessions,
+    // gone, sign in again). Its band would say "nothing was charged" over a
+    // card page that may have been paid — so it is said in the words that are
+    // true of a payment in flight (card-wait.ts cardHeldFault).
+    const refused = cardHeldFault(phase, deniedVarsRef.current)
+    holdCard({
+      wait: same ? holding.wait : { session: flying.session, startedAt: flying.startedAt },
+      paid: { price: flying.price, asset: 'USD' },
+      mode: refused === null ? 'resume' : 'check'
+    })
+    setFault(refused ?? RESUME_FAULT)
   }, [holdCard, stopPolling])
 
   // Ask the door what it wants. Main signs in as the account the card will
@@ -248,10 +257,16 @@ export function ImportGate({
         .serveGate(link)
         .then((result) => {
           if (!alive.current) return
-          if (result.ok && (result.account ?? null) === facts.account) return
-          stopPolling()
-          holdCard(null)
-          setFault(null)
+          const samePerson = result.ok && (result.account ?? null) === facts.account
+          // The same person, and the sheet is waiting on their card by itself: leave it be.
+          if (samePerson && cardRef.current?.mode === 'waiting') return
+          if (!samePerson) {
+            stopPolling()
+            holdCard(null)
+            setFault(null)
+          }
+          // Otherwise the answer is painted — after signing in again, this is
+          // where a card held behind the sign-in step gets presented.
           applyGate(result)
         })
         .catch(() => undefined)
@@ -408,6 +423,13 @@ export function ImportGate({
   /** CHECK AGAIN: one question about the session already made. Never a new Checkout. */
   const checkAgain = useCallback((): void => {
     if (cardRef.current === null) return
+    // OFF THE PAY STEP main holds no Bearer to present anything on — the door
+    // refused the sign-in, or could not be reached. The gate is asked again:
+    // it signs in afresh and presents the remembered session FIRST.
+    if (!onPayStep) {
+      runGate()
+      return
+    }
     setBusy(true)
     setFault(null)
     lookAtCard(cardCheckStep, () => {
@@ -418,7 +440,7 @@ export function ImportGate({
         body: MKT_PAY['mkt.pay.error.unverifiable.body']
       })
     })
-  }, [lookAtCard])
+  }, [lookAtCard, onPayStep, runGate])
 
   /**
    * Ask main for the card page and wait on it. Main decides WHICH page: while
@@ -495,6 +517,16 @@ export function ImportGate({
           }
           applyPhase(result.phase)
         } else {
+          // Main refused the wallet because a card payment for this seat is in
+          // flight — started on another surface, perhaps. This sheet takes it
+          // up: the button becomes CHECK AGAIN on that session.
+          if (result.card) {
+            holdCard({
+              wait: { session: result.card.session, startedAt: result.card.startedAt },
+              paid: { price: result.card.price, asset: 'USD' },
+              mode: 'check'
+            })
+          }
           setFault(settleRefusalFault(result))
         }
       })

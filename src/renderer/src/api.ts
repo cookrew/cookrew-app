@@ -323,7 +323,13 @@ export interface CookrewApi {
         /** A card payment started earlier had landed: the phase is `open`, and this is its receipt. */
         settled?: { price: string; asset: string; rail: 'x402' | 'stripe' };
       }
-    | { ok: false; reason: string; detail?: string }
+    | {
+        ok: false;
+        reason: string;
+        detail?: string;
+        /** A card payment stands even though the door could not be asked: the sheet keeps to it. */
+        card?: { session: string; url: string; startedAt: number; price: string };
+      }
   >;
   /**
    * Start a card payment: opens hosted Checkout in the real browser. While a
@@ -354,7 +360,13 @@ export interface CookrewApi {
         /** Card rail: whether main still holds a payment in flight for this door after this answer. */
         standing?: boolean;
       }
-    | { ok: false; reason: string; detail?: string }
+    | {
+        ok: false;
+        reason: string;
+        detail?: string;
+        /** Wallet rail refused because this card payment is in flight (`card-in-flight`). */
+        card?: { session: string; url: string; startedAt: number; price: string };
+      }
   >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   /** Photograph the canvas as it is now (the screen wall). */

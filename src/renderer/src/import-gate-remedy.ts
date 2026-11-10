@@ -73,6 +73,15 @@ export function settleRefusalFault(refusal: { reason: string; detail?: string })
       body: MKT_PAY['mkt.pay.error.changed.body']
     }
   }
+  // A wallet press main refused because a card payment for this seat is
+  // still in flight (serve-gate.ts settle): two payments are two charges.
+  if (refusal.reason === 'card-in-flight') {
+    return {
+      voice: 'apolog',
+      title: MKT_PAY['mkt.pay.card.resume.title'],
+      body: MKT_PAY['mkt.pay.card.unconfirmed.body']
+    }
+  }
   return {
     voice: 'apolog',
     title: MKT_PAY['mkt.pay.error.unverifiable.title'],

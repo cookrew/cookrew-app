@@ -288,6 +288,13 @@ export const MKT_PAY = {
   'mkt.pay.card.unconfirmed.body':
     'This door did not confirm the card payment. If your card was charged, press CHECK AGAIN; the payment is tied to your account at this door.',
   /**
+   * A card payment stands and this Mac's session at cookrew.dev is not live:
+   * nothing can be asked of the door until it is. Said under the sign-in
+   * step — whose button is the one that leads anywhere.
+   */
+  'mkt.pay.card.signin.body':
+    'Sign in again to check on it. If your card was charged, the payment is tied to your account at this door.',
+  /**
    * The card page's time is up and the door still does not confirm a payment
    * on it — a new one may be started. It does NOT say the first took nothing:
    * the door gives one answer for "unpaid" and for a payment it would not
