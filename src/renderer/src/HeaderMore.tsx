@@ -6,7 +6,7 @@
 // A row closes the menu from the menu's own React onClick, which runs after
 // the row's: closing from a native listener instead unmounts the menu before
 // React sees a trusted click, and the row would never act.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CrIcon } from './icons'
 import { registerZoomMenuClose, setZoomMenuSlot } from './zoom-bar'
 import { StatusCoin } from './nodes/AgentAvatar'
@@ -22,8 +22,7 @@ import { WatchPairRow } from './WatchPairRow'
 import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
 import { isRemoteMode } from './api'
-import { clientBase } from './api-base'
-import { desktopIdFromBase } from './pairing-scope'
+import { accountPageOf, readConsoleConfig } from './console/console-config'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -65,8 +64,8 @@ export function HeaderMore({
   // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
   const offerFullscreen =
     isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document) && !installedFullscreen(document, pageMedia)
-  // A page cookrew.dev serves through the relay: the account's own page is same-origin, one row away.
-  const onAccountPage = isRemoteMode() && desktopIdFromBase(clientBase()) !== null
+  // On the console the account's own page is one row away, on the auth host; nowhere else is there such a row.
+  const accountPage = useMemo(() => (typeof document === 'undefined' ? null : accountPageOf(readConsoleConfig(document))), [])
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
@@ -158,10 +157,10 @@ export function HeaderMore({
               in the wall's footer, three clicks away, behind a screen that is
               not what someone opening their history came for. The wall keeps it
               too, for whoever is already there. */}
-          {/* ACCOUNT AND SECURITY FROM THE DEVICES VIEW (owner 2026-11-10): on a page cookrew.dev
-              serves through the relay, the account's own page is a row here, not a second home. */}
-          {onAccountPage && (
-            <a className="cr-more-item" href="/me/account">
+          {/* ACCOUNT AND SECURITY FROM THE DEVICES VIEW (owner 2026-11-10): on the console the
+              account's own page is a row here, not a second home. It is the auth host's page. */}
+          {accountPage !== null && (
+            <a className="cr-more-item" href={accountPage}>
               <CrIcon name="lock" />
               <span className="cr-more-label">Account &amp; security</span>
             </a>

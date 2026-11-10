@@ -14,13 +14,7 @@ import {
 } from './v2-http'
 import { handleCertRoute } from './v2-cert-routes'
 import { handleSeatRoute, mySeats } from './v2-seat-routes'
-import {
-  decideRequest,
-  getRequest,
-  listEvents,
-  listRequests,
-  openReachRequest
-} from './v2-requests'
+import { decideRequest, listEvents, listRequests } from './v2-requests'
 import { handleMigrateRoute, legacyHolds, refuseIfLegacy } from './v2-migrate-routes'
 import type { V2Account, V2Desktop } from './v2-accounts'
 import { readReach } from './v2-reach'
@@ -595,12 +589,12 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     return
   }
 
-  // ── the one queue (identity v3, R1/R2) ─────────────────────────────────
+  // ── the one queue (identity v3, R1) ────────────────────────────────────
   //
-  // GET /v2/me/requests is the VIEW over join (approvals), seat and reach; the
-  // seat and reach stores are new, the join rows are read live so nothing is
-  // stored twice. The bodies of these live in v2-requests.ts; here are the
-  // mount points, kept small so V3-10's join-code routes merge beside them.
+  // GET /v2/me/requests is the VIEW over join (approvals) and seat; the seat
+  // store is its own, the join rows are read live so nothing is stored twice.
+  // The bodies of these live in v2-requests.ts; here are the mount points,
+  // kept small so V3-10's join-code routes merge beside them.
   if (rest.length === 1 && rest[0] === 'requests' && method === 'GET') {
     listRequests(ctx, signed)
     return
@@ -610,15 +604,6 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     listEvents(ctx, signed, since)
     return
   }
-  if (rest.length === 2 && rest[0] === 'requests' && method === 'GET') {
-    const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!REQUEST_UUID.test(id)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    getRequest(ctx, signed, id)
-    return
-  }
   if (rest.length === 2 && rest[0] === 'requests' && method === 'POST') {
     const id = (ctx.decode(rest[1]) ?? '').toLowerCase()
     if (!REQUEST_UUID.test(id)) {
@@ -626,15 +611,6 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       return
     }
     await decideRequest(ctx, signed, id)
-    return
-  }
-  if (rest.length === 3 && rest[0] === 'desktops' && rest[2] === 'reach-requests' && method === 'POST') {
-    const target = (ctx.decode(rest[1]) ?? '').toLowerCase()
-    if (!REQUEST_UUID.test(target)) {
-      refuse(response, 404, 'not_found')
-      return
-    }
-    openReachRequest(ctx, signed, target)
     return
   }
   if (rest.length === 1 && rest[0] === 'devices' && method === 'GET') {
@@ -661,10 +637,7 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
       refuse(response, out.reason === 'last_device' ? 409 : 404, out.reason)
       return
     }
-    // §06: revoking a device voids its pending requests, and every device is
-    // told. The reach requests it made or was aimed at cannot be answered any
-    // more, so they go now rather than expiring quietly.
-    v2.requests.voidDevice(id)
+    // §06: every device is told.
     v2.events.append(account.username, { kind: 'revoked', ...(goneName === undefined ? {} : { device: goneName }) })
     // Revoking the device in your hand is allowed, and it ends this session —
     // so the browser is handed an empty cookie rather than one that no longer

@@ -1,31 +1,23 @@
 // THE ONE QUEUE, ON THE DESKTOP (D11) — the poll, the one notification, and
-// the three ways a row is answered.
+// the two ways a row is answered.
 //
 // What is worth a test here is restraint and honesty. The poll must be a poll
 // and not a stampede; a notification must fire ONCE per row, because an OS
 // toast repeating every twenty seconds is how a person learns to dismiss the
 // approval prompt without reading it; a registry that hiccups must not clear a
-// request the owner was about to answer; and ALLOW must hand out a token
-// minted for ONE phone, sealed to the key that asked, rather than the root
-// credential every phone used to share.
+// request the owner was about to answer; and a "use Wi-Fi" row, which nothing
+// raises since 0.6.0, must be nothing here: not listed, not counted, not
+// answerable, and never a reason to mint anybody a token.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateKeyPairSync } from 'node:crypto'
 import { Requests, REQUESTS_POLL_MS, answeredStoreIn } from '../src/main/requests'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { AccountResult } from '../src/shared/account-v2'
 import type { AnsweredRow, QueueRow } from '../src/shared/account-requests'
-import { reachSealInfo } from '../src/shared/account-requests'
-import { openAtDevice, type SealedToDevice } from '../src/shared/device-seal'
-import { deviceIdFor } from '../src/main/account-v2'
 
 const NOW = 1_757_000_000_000
-
-const askPair = generateKeyPairSync('ed25519')
-const ASK_PUB = askPair.publicKey.export({ format: 'jwk' }) as Record<string, string>
-const ASK_PRIV = askPair.privateKey.export({ format: 'jwk' }) as Record<string, string>
 
 const join = (over: Partial<QueueRow> = {}): QueueRow => ({
   id: 'req-1',
@@ -37,17 +29,18 @@ const join = (over: Partial<QueueRow> = {}): QueueRow => ({
   state: 'pending',
   ...over,
 })
-const reach = (over: Partial<QueueRow> = {}): QueueRow => ({
-  id: 'reach-1',
-  kind: 'reach',
-  device: 'iPhone',
-  address: 'iPhone',
-  at: NOW - 12_000,
-  expiresAt: NOW + 120_000,
-  state: 'pending',
-  askKey: ASK_PUB,
-  ...over,
-})
+/** The row an older registry sent for a phone asking for Wi-Fi: a kind this app no longer has. */
+const strayReach = (): QueueRow =>
+  ({
+    id: 'reach-1',
+    kind: 'reach',
+    device: 'iPhone',
+    address: 'iPhone',
+    at: NOW - 12_000,
+    expiresAt: NOW + 120_000,
+    state: 'pending',
+    askKey: { kty: 'OKP', crv: 'Ed25519', x: 'Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyYWE' },
+  }) as unknown as QueueRow
 const seat = (over: Partial<QueueRow> = {}): QueueRow => ({
   id: 'seat-1',
   kind: 'seat',
@@ -71,7 +64,6 @@ interface Harness {
   posts: Posted[]
   notes: { title: string; body: string; requestId: string | null }[]
   events: { kind: string; sentence: string }[]
-  minted: { deviceId: string; name?: string }[]
   answered: AnsweredRow[]
   changes: number
   setQueue: (rows: readonly QueueRow[]) => void
@@ -81,12 +73,11 @@ interface Harness {
   setApprovalAnswer: (status: number, body?: unknown) => void
 }
 
-function harness(over: { account?: boolean; sessionLive?: boolean; reach?: boolean } = {}): Harness {
+function harness(over: { account?: boolean; sessionLive?: boolean } = {}): Harness {
   const calls: Harness['calls'] = []
   const posts: Posted[] = []
   const notes: Harness['notes'] = []
   const events: Harness['events'] = []
-  const minted: Harness['minted'] = []
   const state = { changes: 0, answered: [] as AnsweredRow[], approval: { status: 204, body: undefined as unknown } }
   let queue: readonly QueueRow[] = []
   let feed: { events: readonly unknown[]; cursor: number } = { events: [], cursor: 0 }
@@ -127,17 +118,6 @@ function harness(over: { account?: boolean; sessionLive?: boolean; reach?: boole
         state.answered = [...rows]
       },
     },
-    ...(over.reach === false
-      ? {}
-      : {
-          reach: {
-            admit: (device) => {
-              minted.push(device)
-              return { token: `tok-${device.deviceId.slice(0, 4)}` }
-            },
-            pairingUrlFor: (token) => `https://cookrew.dev/relay/@drej/desktop/mac-1/#pair=${token}`,
-          },
-        }),
     now: () => NOW,
   })
 
@@ -147,7 +127,6 @@ function harness(over: { account?: boolean; sessionLive?: boolean; reach?: boole
     posts,
     notes,
     events,
-    minted,
     get answered() {
       return state.answered
     },
@@ -232,14 +211,14 @@ describe('the poll', () => {
 describe('the badge and the lock screen', () => {
   it('counts every kind, not only sign-ins', async () => {
     const h = harness()
-    h.setQueue([join(), reach(), seat()])
+    h.setQueue([join(), seat()])
     await h.requests.refresh()
-    expect(h.requests.count).toBe(3)
+    expect(h.requests.count).toBe(2)
   })
 
   it('names only the devices waiting to JOIN, which is what a lock can act on', async () => {
     const h = harness()
-    h.setQueue([join(), reach(), seat()])
+    h.setQueue([join(), seat()])
     await h.requests.refresh()
     expect(h.requests.joinRequests().map((r) => r.deviceName)).toEqual(['Mac Studio'])
   })
@@ -257,15 +236,14 @@ describe('the badge and the lock screen', () => {
 describe('what is announced', () => {
   it('says what kind of asking each new row is', async () => {
     const h = harness()
-    h.setQueue([join(), reach(), seat()])
+    h.setQueue([join(), seat()])
     await h.requests.refresh()
     expect(h.notes.map((n) => n.body)).toEqual([
       'Mac Studio wants to join @drej',
-      'iPhone wants to reach this Mac on Wi-Fi.',
       '@jkim asks for a seat at @drej/alpha.',
     ])
     // The notification carries the row it is about, so a click can land on it.
-    expect(h.notes.map((n) => n.requestId)).toEqual(['req-1', 'reach-1', 'seat-1'])
+    expect(h.notes.map((n) => n.requestId)).toEqual(['req-1', 'seat-1'])
   })
 
   it('does NOT fire again for a row that is still waiting', async () => {
@@ -354,64 +332,36 @@ describe('answering a sign-in (R3, the number)', () => {
   })
 })
 
-describe('ALLOW hands one phone one token (R2)', () => {
-  it('mints a token for the asking device and seals the pairing URL to its key', async () => {
+describe('a phone asking for Wi-Fi, which nothing raises any more (0.6.0)', () => {
+  it('is not a row here: not listed, not counted, not announced, not on the lock screen', async () => {
     const h = harness()
-    h.setQueue([reach()])
+    h.setQueue([join(), strayReach(), seat()])
     await h.requests.refresh()
-    expect(await h.requests.decide('reach-1', 'allow')).toEqual({ ok: true })
-
-    // The token is minted for the key's own thumbprint, which is how the token
-    // and the seal are guaranteed to name the same phone.
-    expect(h.minted).toEqual([{ deviceId: deviceIdFor(ASK_PUB), name: 'iPhone' }])
-
-    const post = h.posts.find((p) => p.path === '/v2/me/requests/reach-1')
-    expect(post?.body.decision).toBe('approve')
-    const sealed = post?.body.sealed as SealedToDevice
-    // Only the phone that asked can read it — the registry relays bytes it
-    // cannot open, and neither can anybody watching this post.
-    const opened = openAtDevice(ASK_PRIV, reachSealInfo('reach-1'), sealed)
-    expect(opened).toContain('#pair=')
-    expect(opened).not.toContain('root')
-    expect(JSON.stringify(post?.body)).not.toContain('#pair=')
-    // A SECOND device of the same account opens nothing.
-    const other = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }) as Record<string, string>
-    expect(openAtDevice(other, reachSealInfo('reach-1'), sealed)).toBeNull()
+    expect(h.requests.list().map((r) => r.id)).toEqual(['req-1', 'seat-1'])
+    expect(h.requests.count).toBe(2)
+    expect(h.notes.map((n) => n.requestId)).toEqual(['req-1', 'seat-1'])
+    expect(h.requests.joinRequests().map((r) => r.deviceName)).toEqual(['Mac Studio'])
   })
 
-  it('never hands out the root credential: the URL carries the minted token', async () => {
+  it('cannot be answered: no button of any row reaches it, and nothing is sent or kept', async () => {
     const h = harness()
-    h.setQueue([reach()])
+    h.setQueue([strayReach()])
     await h.requests.refresh()
-    await h.requests.decide('reach-1', 'allow')
-    const sealed = h.posts.find((p) => p.path === '/v2/me/requests/reach-1')?.body.sealed as SealedToDevice
-    expect(openAtDevice(ASK_PRIV, reachSealInfo('reach-1'), sealed)).toBe(
-      `https://cookrew.dev/relay/@drej/desktop/mac-1/#pair=tok-${deviceIdFor(ASK_PUB).slice(0, 4)}`,
-    )
-  })
-
-  it('NOT NOW declines and mints nothing', async () => {
-    const h = harness()
-    h.setQueue([reach()])
-    await h.requests.refresh()
-    await h.requests.decide('reach-1', 'not-now')
-    expect(h.posts[0].body).toEqual({ decision: 'decline' })
-    expect(h.minted).toEqual([])
-  })
-
-  it('refuses ALLOW on a row that carried no key, rather than sending the root', async () => {
-    const h = harness()
-    h.setQueue([reach({ askKey: undefined })])
-    await h.requests.refresh()
-    expect(await h.requests.decide('reach-1', 'allow')).toEqual({ ok: false, reason: 'no_key' })
+    expect(h.changes).toBe(0)
+    for (const action of ['approve', 'deny', 'not-me', 'seat-them', 'decline'] as const) {
+      expect(await h.requests.decide('reach-1', action, '42'), action).toEqual({ ok: false, reason: 'not_found' })
+    }
     expect(h.posts).toEqual([])
+    expect(h.answered).toEqual([])
   })
 
-  it('refuses ALLOW on a Mac with no mobile server wired', async () => {
-    const h = harness({ reach: false })
-    h.setQueue([reach()])
+  it('leaves the rows beside it answerable', async () => {
+    const h = harness()
+    h.setQueue([strayReach(), join(), seat()])
     await h.requests.refresh()
-    expect(await h.requests.decide('reach-1', 'allow')).toEqual({ ok: false, reason: 'not_wired' })
+    expect(await h.requests.decide('req-1', 'approve', '42')).toEqual({ ok: true })
+    expect(await h.requests.decide('seat-1', 'seat-them')).toEqual({ ok: true })
+    expect(h.posts.map((p) => p.path)).toEqual(['/v2/me/approvals/req-1', '/v2/me/requests/seat-1'])
   })
 })
 
@@ -428,16 +378,14 @@ describe('answering a seat (R1)', () => {
 })
 
 describe('what this Mac remembers', () => {
-  it('keeps a receipt for each of the four outcomes it can claim', async () => {
+  it('keeps a receipt for each outcome it can claim', async () => {
     const h = harness()
-    h.setQueue([join(), reach(), seat()])
+    h.setQueue([join(), seat()])
     await h.requests.refresh()
     await h.requests.decide('req-1', 'approve', '42')
-    await h.requests.decide('reach-1', 'allow')
     await h.requests.decide('seat-1', 'seat-them')
     expect(h.answered.map((r) => [r.kind, r.outcome, r.subject])).toEqual([
       ['seat', 'seated', 'jkim'],
-      ['reach', 'allowed', 'iPhone'],
       ['join', 'joined', 'Mac Studio'],
     ])
     expect(h.answered.find((r) => r.kind === 'seat')?.team).toBe('@drej/alpha')
@@ -450,8 +398,8 @@ describe('what this Mac remembers', () => {
     await h.requests.decide('req-1', 'deny')
     expect(h.answered.map((r) => r.outcome)).toEqual(['denied'])
     await h.requests.decide('seat-1', 'decline')
-    // A seat this owner declined is simply gone; the four over-states the
-    // design names are the four this Mac may claim.
+    // A seat this owner declined is simply gone; the over-states the design
+    // names are the ones this Mac may claim.
     expect(h.answered.map((r) => r.outcome)).toEqual(['denied'])
   })
 
@@ -469,7 +417,12 @@ describe('what this Mac remembers', () => {
       const store = answeredStoreIn(base)
       expect(store.read()).toEqual([])
       const row: AnsweredRow = { id: 'a', kind: 'join', outcome: 'joined', subject: 'Mac Studio', at: NOW }
-      store.write([row, { ...row, id: 'b', outcome: 'gossip' } as unknown as AnsweredRow])
+      store.write([
+        row,
+        { ...row, id: 'b', outcome: 'gossip' } as unknown as AnsweredRow,
+        // A receipt an earlier build kept for a phone it let in on Wi-Fi.
+        { ...row, id: 'c', kind: 'reach', outcome: 'allowed', subject: 'iPhone' } as unknown as AnsweredRow,
+      ])
       // What comes back is only what this app knows how to draw.
       expect(store.read()).toEqual([row])
     } finally {

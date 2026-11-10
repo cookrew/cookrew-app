@@ -207,7 +207,7 @@ export function RequestsTab({
         </ul>
       )}
       {/* WHAT EACH BUTTON ACTUALLY DOES, under the list rather than in a
-          tooltip: ALLOW hands over a keyboard and NOT ME signs every other
+          tooltip: SEAT THEM seats a guest and NOT ME signs every other
           device out, and neither is a thing to learn by pressing it. */}
       <p className="gs-foot-note">{queueFooter()}</p>
     </section>

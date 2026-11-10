@@ -19,10 +19,8 @@ import { tempBase } from './support/idv2'
  * The relay knows the caller's account session, so it can name the phone; the
  * Mac cannot, because down the bridge every request arrives from 127.0.0.1
  * with no identity of its own. So the registry sets two headers and the Mac
- * believes them ONLY under the two conditions relay-base already uses for
- * x-cookrew-base — the bridge's marker, and a loopback peer. Neither can be
- * arranged from the network, and both together are the same trust the prefix
- * already rides on.
+ * believes them ONLY under two conditions: the bridge's marker, and a
+ * loopback peer (relay-base.ts). Neither can be arranged from the network.
  *
  * THEY GRANT NOTHING. Authorisation is the pairing token, on every path; these
  * headers only decide what the admitted-devices row is CALLED.

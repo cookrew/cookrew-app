@@ -48,7 +48,6 @@ export async function deleteAccount(ctx: V2Context, signed: Signed): Promise<voi
     // Every id this account ever held: a Mac signed out earlier keeps its
     // certificate record until now, and `revoked` is the only list of those.
     for (const id of [...account.devices.map((d) => d.id), ...(account.revoked ?? []).map((r) => r.id)]) {
-      v2.requests.voidDevice(id)
       ctx.names?.forget(id)
     }
     v2.requests.emptyFor(username)

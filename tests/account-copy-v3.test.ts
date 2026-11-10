@@ -24,7 +24,6 @@ const TABLE_KEYS: V3CopyId[] = [
   'd10.asked.honest',
   'd10.mismatch',
   'd11.join-row',
-  'd11.wifi-row',
   'd11.seat-row',
   'd11.footer',
   'joined.event',
@@ -36,8 +35,6 @@ const TABLE_KEYS: V3CopyId[] = [
   'd14.expiring',
   'd14.held',
   'd14.moved',
-  'm5.asked',
-  'm5.allowed',
   'g1.identify',
   'g1.seat',
   'g2.no-seat',
@@ -52,7 +49,7 @@ describe('the copy table is here, in full', () => {
       expect(V3_COPY[key], key).toBeTypeOf('string')
       expect(V3_COPY[key].length, key).toBeGreaterThan(0)
     }
-    expect(TABLE_KEYS).toHaveLength(30)
+    expect(TABLE_KEYS).toHaveLength(27)
   })
 
   it('holds no sentence twice under two keys', () => {
@@ -153,7 +150,7 @@ describe('filling', () => {
   })
 
   it('throws rather than put a brace on screen', () => {
-    expect(() => fillCopy(V3_COPY['d11.wifi-row'], {})).toThrow()
+    expect(() => fillCopy(V3_COPY['d11.seat-row'], {})).toThrow()
   })
 
   it('names the device in the revoke confirmation', () => {

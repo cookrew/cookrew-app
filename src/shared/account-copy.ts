@@ -98,9 +98,6 @@ export const V3_COPY = machineTable({
 
   /** D11, the join request, as the approver reads it. */
   'd11.join-row': 'What number is on that Mac?',
-  /** D11, a phone asking for this Mac's keyboard. Says what ALLOW hands over. */
-  'd11.wifi-row':
-    '{device} wants to reach this Mac on Wi-Fi. ALLOW gives it the keyboard until you revoke.',
   /** D11, someone asking for a seat. Replaces "Copy link to ask @owner". */
   'd11.seat-row': '@{handle} asks for a seat at {team}.',
   /**
@@ -111,8 +108,6 @@ export const V3_COPY = machineTable({
   'd11.join-lead': '{device} wants to join @{handle}',
   /** D11 over-state, a device that is on the account now. */
   'd11.join-done': '{device} joined @{handle}',
-  /** D11 over-state, a phone that has this Mac's keyboard until it is revoked. */
-  'd11.wifi-done': '{device} can reach this Mac on Wi-Fi',
   /** D11 over-state, a guest who is in the room. */
   'd11.seat-done': '@{handle} is seated at {team}',
   /**
@@ -122,10 +117,10 @@ export const V3_COPY = machineTable({
    */
   'd11.denied': 'A sign-in as @{handle} was denied on {device}',
   /** D11, an empty queue. The ordinary state, and it says what would land here. */
-  'd11.empty': 'Nothing is waiting. Devices asking to join, phones asking for Wi-Fi and guests asking for a seat all land here.',
+  'd11.empty': 'Nothing is waiting. Devices asking to join and guests asking for a seat land here.',
   /** D11, what each button in the queue actually does — including NOT ME. */
   'd11.footer':
-    "APPROVE needs the number. ALLOW gives the phone this Mac's keyboard until you revoke it. SEAT THEM grants by username. NOT ME signs every other device out and locks the password until you change it.",
+    'APPROVE needs the number. SEAT THEM grants by username. NOT ME signs every other device out and locks the password until you change it.',
 
   /** The event every device is told about, with the way to disown it. */
   'joined.event': '{device} joined @{handle} from {place} · {ago} — NOT YOU?',
@@ -196,35 +191,6 @@ export const V3_COPY = machineTable({
   /** D14, the door moved away from here. */
   'd14.moved': '{door} moved to {device}. This Mac stopped serving it.',
 
-  /** M5, the phone asked for LAN. The fallback that already works is named. */
-  'm5.asked':
-    'Tap ALLOW on that Mac. Until then this phone reaches it through cookrew.dev, which already works.',
-  /** M5, allowed. */
-  'm5.allowed': '{device} let this phone in on Wi-Fi. No prompt next time.',
-  /**
-   * M5, the Mac said no. A decline is not an error and not a dead end: OPEN
-   * still works, because the relay was never the fallback — it is the path
-   * this page was already using.
-   */
-  'm5.declined': '{device} said no. OPEN still reaches it through cookrew.dev.',
-  /**
-   * M5, the door that has nothing to do with accounts.
-   *
-   * A Mac nobody has signed in on cannot be asked for anything — there is no
-   * account to carry the request. That Mac keeps the ceremony it always had,
-   * and the sentence names BOTH ways in rather than only the camera: a phone
-   * standing in front of the screen it would scan is the one case where a
-   * scan is impossible.
-   */
-  'm5.no-account':
-    'A Mac with no account keeps today’s door: scan its QR, or paste what `cookrew mobile` printed.',
-  /**
-   * M5, a browser whose device key cannot receive a sealed token.
-   *
-   * Sealing is a Diffie-Hellman against this device's own key, and a key minted
-   * before M5 is an Ed25519 signing key a browser cannot derive from. Rather
-   * than a silent failure the row says which door is still open.
-   */
   /**
    * M5, the companion's Not paired card, when the account cannot be used here.
    *
@@ -263,8 +229,6 @@ export const V3_COPY = machineTable({
   'm5.enter.kept': 'This Mac let this browser in but then refused it. Try again.',
   /** M5, the token, kept for a machine with no account, folded away below the account. */
   'm5.enter.token': 'Pair with a token instead',
-  'm5.no-seal':
-    'This browser joined before Wi-Fi sharing and cannot receive the token. OPEN works; to use Wi-Fi, add this browser again.',
 
   /**
    * G1 identify — replaces the passkey sentence.
@@ -343,11 +307,10 @@ export const V3_COPY = machineTable({
   /**
    * M6, a reach row seen somewhere that cannot answer it.
    *
-   * NOT `d11.wifi-row`, which says "ALLOW gives it the keyboard until you
-   * revoke" — that sentence describes a button, and this view has none.
-   * Allowing carries the pairing URL already sealed to the asking device and
-   * only the Mac being asked for holds that token, so the one useful thing to
-   * say here is where the answer lives.
+   * NO SUCH ROW ARRIVES ANY MORE (0.6.0): the registry opens none. The
+   * sentence stays because the account page still hands it to its script
+   * (registry/src/site-account.ts, `data-wifi-row`), which keeps a branch for
+   * a row of that kind.
    */
   'w5.reach-elsewhere': '{device} asked to reach that Mac on Wi-Fi. Answer it on the Mac itself.',
   /** W5, the two ADD buttons. Where the code is typed, and how long it lives. */
@@ -357,11 +320,11 @@ export const V3_COPY = machineTable({
    * W5, under the Requests heading — the web's queue while it is still only
    * sign-ins.
    *
-   * NOT `d11.footer`, and that is the point. D11 names ALLOW and SEAT THEM,
-   * which the unified queue (V3-11) will put on this page and which are not
-   * on it yet. A footer describing buttons a reader cannot see teaches them
-   * to stop reading footers. This one swaps for d11.footer the day the other
-   * two kinds arrive here.
+   * NOT `d11.footer`, and that is the point. D11 names SEAT THEM, which the
+   * unified queue (V3-11) will put on this page and which is not on it yet.
+   * A footer describing buttons a reader cannot see teaches them to stop
+   * reading footers. This one swaps for d11.footer the day the other kind
+   * arrives here.
    */
   'w5.requests-footer':
     'A device asking to sign in as @{handle}, or somebody asking for a seat. APPROVE needs the number showing on that device; SEAT THEM grants by username; NOT ME signs every other device out and locks the password until you change it.',
