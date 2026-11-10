@@ -64,7 +64,11 @@ export function featurePage(slug: string): Page | null {
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<p class="row"><a class="btn primary" href="/download">Get Cookrew</a><a class="btn" href="/start">Get started</a>${f.slug === 'marketplace' && staticSiteNow() === null ? '<a class="btn" href="/market">Explore teams</a>' : ''}</p>
+<p class="row">${
+      staticSiteNow() === null
+        ? `<a class="btn primary" href="/download">Get Cookrew</a><a class="btn" href="/start">Get started</a>${f.slug === 'marketplace' ? '<a class="btn" href="/market">Explore teams</a>' : ''}`
+        : '<a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a>'
+    }</p>
 </div>
 <section><div class="wrap"><p class="kicker"><span class="no">RECORDED</span>${steps.length > 0 ? `${steps.length} steps, captured from the running app` : 'captured from the running app'}</p>
 <h2>How it looks</h2>${visual}</div></section>

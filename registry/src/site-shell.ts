@@ -205,6 +205,7 @@ let staticSite: StaticSite | null = null
 
 export const staticSiteNow = (): StaticSite | null => staticSite
 
+/** `render` is finished when it returns: a page drawn after an await would be drawn for the registry. */
 export function withStaticSite<T>(site: StaticSite, render: () => T): T {
   const was = staticSite
   staticSite = site
@@ -345,8 +346,8 @@ function shell(options: ShellOptions, main: string): string {
 </div></header>
 ${main}
 <footer><div class="wrap">
-<nav class="row" aria-label="Site"><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${esc(staticSite.console)}/">Console</a><a href="${esc(staticSite.auth)}/account">Account</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a></nav>
-<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This site is static: it runs no script and sets no cookie. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.</p>
+<nav class="row" aria-label="Site"><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${esc(staticSite.console)}/">Console</a><a href="${esc(staticSite.auth)}/account">Account</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a>${LEGAL_PUBLISHED ? '<a href="/privacy">Privacy</a><a href="/terms">Terms</a>' : ''}</nav>
+<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This site is static: no script runs on it and nothing here signs you in. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.</p>
 </div></footer>
 </body></html>`
   }

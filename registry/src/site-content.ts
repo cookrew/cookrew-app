@@ -77,7 +77,7 @@ export const FAQ: Faq[] = [
   },
   {
     q: 'Can I reach my agents from a browser or from my phone?',
-    a: 'Yes. Sign in to the console and every machine of your account is there with its workspaces, agents and transcripts, in any browser and on a phone. It takes the local network or Tailscale when it can and the relay when it cannot. A served team of someone else’s opens in the Cookrew app.'
+    a: 'Yes. Sign in to the console and every machine of your account is there with its workspaces, agents and transcripts, in any browser and on a phone. It takes the local network or Tailscale when it can and the relay when it cannot; through the relay the traffic is encrypted in transit and not end-to-end sealed yet. A served team of someone else’s opens in the Cookrew app.'
   },
   { q: 'What is a checkpoint?', a: CHECKPOINT_DEFINITION },
   {

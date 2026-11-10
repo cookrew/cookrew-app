@@ -18,10 +18,10 @@ const root = path.resolve(__dirname, '..')
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'cookrew-site-build-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
 
-function run(out: string, env: Record<string, string> = {}): { status: number | null; said: string } {
+function run(out: string, env: Record<string, string> = {}, cwd: string = root): { status: number | null; said: string } {
   const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('COOKREW_')))
   const done = spawnSync(process.execPath, [path.join(root, 'scripts/site-build.mjs'), '--out', out], {
-    cwd: root,
+    cwd,
     env: { ...clean, COOKREW_SITE_OFFLINE: '1', ...env },
     encoding: 'utf8',
     timeout: 60_000
@@ -84,9 +84,54 @@ describe('the site, written to a directory', () => {
     expect(readFileSync(path.join(theirs, 'notes.txt'), 'utf8')).toBe('not a build')
   })
 
-  it('stops when a release is required and none can be read', () => {
-    const required = run(path.join(scratch, 'required'), { COOKREW_SITE_REQUIRE_RELEASE: '1' })
+  it('does not take another static site for its own: the two file names every such site has are not proof', () => {
+    const other = path.join(scratch, 'another-site')
+    mkdirSync(other)
+    writeFileSync(path.join(other, '_headers'), '/*\n  X-Frame-Options: DENY\n')
+    writeFileSync(path.join(other, 'index.html'), '<h1>somebody else</h1>')
+    expect(run(other).status).not.toBe(0)
+    expect(readFileSync(path.join(other, 'index.html'), 'utf8')).toBe('<h1>somebody else</h1>')
+  })
+
+  it('leaves no half-made directory and no build beside it', () => {
+    expect(readdirSync(scratch).filter((name) => name.includes('.building'))).toEqual([])
+  })
+
+  it('writes --out where the caller stands, not where the script lives', () => {
+    const stand = path.join(scratch, 'stand')
+    mkdirSync(stand)
+    expect(run('made-here', {}, stand).status).toBe(0)
+    expect(existsSync(path.join(stand, 'made-here', 'index.html'))).toBe(true)
+  })
+
+  it('stops when a release is required and none can be read, and the last good build stays', () => {
+    const required = run(out, { COOKREW_SITE_REQUIRE_RELEASE: '1' })
     expect(required.status).not.toBe(0)
     expect(required.said).toMatch(/release/i)
+    expect(existsSync(path.join(out, 'index.html'))).toBe(true)
+  })
+
+  it('takes a switch as 1 or 0 and stops on anything else, so a gate cannot be left off by a spelling', () => {
+    const spelled = run(path.join(scratch, 'spelled'), { COOKREW_SITE_REQUIRE_RELEASE: 'true' })
+    expect(spelled.status).not.toBe(0)
+    expect(spelled.said).toContain('COOKREW_SITE_REQUIRE_RELEASE')
+    expect(run(path.join(scratch, 'zero'), { COOKREW_SITE_REQUIRE_RELEASE: '0' }).status).toBe(0)
+  })
+
+  it('stops for a release that is named and is not a tag, and for one that is named and cannot be read', () => {
+    const odd = run(path.join(scratch, 'odd'), { COOKREW_SITE_RELEASE: 'latest' })
+    expect(odd.status).not.toBe(0)
+    expect(odd.said).toContain('COOKREW_SITE_RELEASE')
+    // Offline nothing can be read: a release that was asked for by name is not quietly left out.
+    const named = run(path.join(scratch, 'named'), { COOKREW_SITE_RELEASE: 'v0.6.0' })
+    expect(named.status).not.toBe(0)
+    expect(named.said).toContain('v0.6.0')
+  })
+
+  it('stops when the commit the pictures are read at does not hold them', () => {
+    const nowhere = run(path.join(scratch, 'nowhere'), { COOKREW_SITE_REF: '0'.repeat(40) })
+    expect(nowhere.status).not.toBe(0)
+    expect(nowhere.said).toMatch(/commit/i)
+    expect(existsSync(path.join(scratch, 'nowhere'))).toBe(false)
   })
 })

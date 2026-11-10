@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { buildStaticSite, type StaticSiteInput } from '../registry/src/site-static'
 import { FEATURES } from '../registry/src/site-content'
+import { featurePage } from '../registry/src/site-features'
+import type { Commit } from '../registry/src/github-commits'
 import type { Release } from '../registry/src/releases'
 
 /**
@@ -65,6 +67,25 @@ describe('the files', () => {
     }
   })
 
+  it('point at no section that is not on the page, with a commit list and without one', () => {
+    const commits: Commit[] = [{ sha: 'abc1234', title: 'feat: a thing', date: '2026-11-10', url: 'https://github.com/cookrew/cookrew-app/commit/abc1234' }]
+    for (const built of [files, buildStaticSite(input({ commits }))]) {
+      const home = text(built, 'index.html')
+      for (const [, id] of home.matchAll(/\shref="#([^"]+)"/g)) expect(home, `#${id}`).toContain(`id="${id}"`)
+      for (const [path, html] of pages(built)) {
+        for (const [, id] of html.matchAll(/\shref="\/#([^"]+)"/g)) expect(home, `${path} links /#${id}`).toContain(`id="${id}"`)
+      }
+    }
+    expect(text(buildStaticSite(input({ commits })), 'index.html')).toContain('href="#built"')
+  })
+
+  it('leave the registry’s own pages as they were once the build is over, also when it stops halfway', () => {
+    expect(() => buildStaticSite(input({ fonts: {} }))).toThrow()
+    buildStaticSite(input())
+    // Outside a build the marketplace feature still offers the registry's marketplace.
+    expect(featurePage('marketplace')?.body).toContain('href="/market"')
+  })
+
   it('carry the fonts their pages name and no other; a named font that was not handed in stops the build', () => {
     const more = buildStaticSite(input({ fonts: { ...input().fonts, 'unused.woff2': new Uint8Array([9]) } }))
     expect(more.has('assets/unused.woff2')).toBe(false)
@@ -84,8 +105,8 @@ describe('the files', () => {
     expect(home).toContain('href="https://console.cookrew.dev/"')
     expect(home).toContain('Open console')
     for (const [path, html] of pages(files)) {
-      expect(html, path).not.toMatch(/href="\/market[^"]*"/)
-      expect(html, path).not.toMatch(/href="\/me[^"]*"/)
+      expect(html, path).not.toMatch(/href="(?:https:\/\/cookrew\.dev)?\/market[^"]*"/)
+      expect(html, path).not.toMatch(/href="(?:https:\/\/cookrew\.dev)?\/me(?:[\/#?][^"]*)?"/)
       expect(html, path).not.toMatch(/>\s*(Sign in|Create account)\s*</)
     }
   })
@@ -96,24 +117,49 @@ describe('the files', () => {
     expect(home).toContain('v0.6.0')
   })
 
-  it('are built without a release too: the download points at the releases page', () => {
-    const bare = buildStaticSite(input({ release: null }))
-    expect(text(bare, 'index.html')).toContain('Download for Mac')
-    expect(text(bare, '_redirects')).toContain('/download https://github.com/cookrew/cookrew-app/releases/latest 302')
+  it('are built without a release too: the button points at the list of releases', () => {
+    const bare = text(buildStaticSite(input({ release: null })), 'index.html')
+    expect(bare).toMatch(/<a class="btn primary lg" href="https:\/\/github\.com\/cookrew\/cookrew-app\/releases\/latest">[^<]*(<svg.*?<\/svg>)?\s*Download for Mac/s)
   })
 
-  it('write no address of a release into a rule unless it is one address on github.com', () => {
+  it('send /download to the place on the front page where both builds are offered', () => {
+    // A static host cannot read which machine is asking, so the address that used to
+    // pick a build picks nothing: it lands where the reader picks.
+    for (const built of [files, buildStaticSite(input({ release: null }))]) {
+      expect(text(built, '_redirects')).toContain('/download /#download 302')
+      expect(text(built, 'index.html')).toContain('id="download"')
+    }
+    expect(text(files, 'features/canvas.html')).toMatch(/href="\/#download">Get Cookrew/)
+  })
+
+  it('believe no address of a release unless it is one address under this project’s releases on github.com', () => {
     const elsewhere = (url: string): Release => ({ ...RELEASE, assets: [{ name: 'Cookrew-0.6.0-arm64.dmg', url, bytes: 1 }] })
     for (const url of [
       'https://evil.example/Cookrew.dmg',
+      'https://github.com/someone-else/fork/releases/download/v0.6.0/Cookrew.dmg',
       'https://github.com/cookrew/cookrew-app/releases/download/v0.6.0/Cookrew.dmg\n/* https://evil.example/ 302',
       'https://github.com/cookrew/cookrew-app/releases/download/v0.6.0/Cookrew 0.6.0.dmg https://evil.example/'
     ]) {
-      const rules = text(buildStaticSite(input({ release: elsewhere(url) })), '_redirects')
-      expect(rules, url).toContain(`/download ${RELEASE.url} 302`)
-      expect(rules, url).not.toContain('evil.example')
-      expect(text(buildStaticSite(input({ release: elsewhere(url) })), 'index.html'), url).not.toContain('evil.example')
+      const built = buildStaticSite(input({ release: elsewhere(url) }))
+      for (const [path, body] of built) {
+        if (typeof body !== 'string') continue
+        expect(body, `${path} · ${url}`).not.toContain('evil.example')
+        expect(body, `${path} · ${url}`).not.toContain('someone-else')
+      }
+      // The Mac build was not believed, so the button falls back to the release's own page.
+      expect(text(built, 'index.html')).toContain(`href="${RELEASE.url}"`)
     }
+  })
+
+  it('link a commit only at this project on github.com', () => {
+    const commits: Commit[] = [
+      { sha: 'abc1234', title: 'feat: a thing', date: '2026-11-10', url: 'https://evil.example/commit/abc1234' },
+      { sha: 'def5678', title: 'fix: another', date: '2026-11-09', url: 'https://github.com/cookrew/cookrew-app/commit/def5678' }
+    ]
+    const home = text(buildStaticSite(input({ commits })), 'index.html')
+    expect(home).not.toContain('evil.example')
+    expect(home).toContain('feat: a thing')
+    expect(home).toContain('https://github.com/cookrew/cookrew-app/commit/def5678')
   })
 })
 
@@ -130,7 +176,7 @@ describe('what moved, and where an old link goes', () => {
   it('the old section addresses still land on their sections, and /download on the build', () => {
     expect(redirects).toContain('/features /#features 301')
     expect(redirects).toContain('/start /#start 301')
-    expect(redirects).toContain(`/download ${RELEASE.assets[0].url} 302`)
+    expect(redirects).toContain('/download /#download 302')
   })
 
   it('names only this site, the console and the auth host, each as a whole origin', () => {
@@ -138,7 +184,7 @@ describe('what moved, and where an old link goes', () => {
       const [from, to, status] = line.split(' ')
       expect(from.startsWith('/'), line).toBe(true)
       expect(['301', '302']).toContain(status)
-      if (!to.startsWith('/')) expect(['https://console.cookrew.dev', 'https://auth.cookrew.dev', 'https://github.com'], line).toContain(new URL(to).origin)
+      if (!to.startsWith('/')) expect(['https://console.cookrew.dev', 'https://auth.cookrew.dev'], line).toContain(new URL(to).origin)
     }
   })
 
@@ -169,6 +215,9 @@ describe('what moved, and where an old link goes', () => {
     expect(() => buildStaticSite(input({ console: 'javascript:alert(1)' }))).toThrow()
     expect(() => buildStaticSite(input({ auth: 'https://auth.cookrew.dev/path' }))).toThrow()
     expect(() => buildStaticSite(input({ console: 'http://console.cookrew.dev' }))).toThrow()
+    // A host is letters, digits, dots and hyphens: nothing that could end an attribute or a rule's field.
+    expect(() => buildStaticSite(input({ console: 'https://a"b.example' }))).toThrow()
+    expect(() => buildStaticSite(input({ auth: 'https://auth.cookrew.dev{x}' }))).toThrow()
   })
 })
 

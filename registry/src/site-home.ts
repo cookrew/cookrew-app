@@ -362,7 +362,7 @@ function staticHeroButtons(release: Release | null, console: string): string {
   const mac = release ? pickAsset(release, 'mac') : null
   const win = release ? pickAsset(release, 'windows') : null
   const date = release?.publishedAt ? release.publishedAt.slice(0, 10) : ''
-  return `<p class="row" id="download"><a class="btn primary lg" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Download for Mac</a><a class="btn lg" href="${esc(console)}/">${icon('mac')} Open console</a></p>
+  return `<p class="row" id="download"><a class="btn primary lg" href="${esc(mac?.url ?? release?.url ?? RELEASES_PAGE)}">${icon('download')} Download for Mac</a><a class="btn lg" href="${esc(console)}/">${icon('mac')} Open console</a></p>
 <p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows preview</a>` : ', Windows preview'}</p>`
 }
 
@@ -374,9 +374,8 @@ function staticDock(console: string): string {
 </nav>`
 }
 
-function staticCatalog(release: Release | null, console: string): string {
-  const mac = release ? pickAsset(release, 'mac') : null
-  const items: [string, string, boolean][] = [
+function staticCatalog(console: string, built: boolean): string {
+  const listed: [string, string, boolean][] = [
     ['#start', 'Get started', false],
     ['#serve', 'Save and serve a team', true],
     ['#build', 'What your orch runs', true],
@@ -386,8 +385,10 @@ function staticCatalog(release: Release | null, console: string): string {
     ['#faq', 'Questions', true],
     ['#built', 'What landed on dev', true]
   ]
+  // The list of commits is on the page only when GitHub was read at build time.
+  const items = listed.filter(([href]) => built || href !== '#built')
   return `<aside class="toc" aria-label="On this page">
-<div class="jump"><a class="btn sm primary" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Get the app</a><a class="btn sm" href="${esc(console)}/">${icon('mac')} Open console</a></div>
+<div class="jump"><a class="btn sm primary" href="#download">${icon('download')} Get the app</a><a class="btn sm" href="${esc(console)}/">${icon('mac')} Open console</a></div>
 <p class="kicker"><span class="no">ON THIS PAGE</span></p><ol>${items
     .map(([href, label, sub]) => `<li${sub ? ' class="sub"' : ''}><a href="${href}">${esc(label)}</a></li>`)
     .join('')}</ol></aside>`
@@ -432,7 +433,7 @@ ${startSection()}
 
 ${featuresSection(input.commits ?? null)}
 </div>
-${staticCatalog(input.release, input.console)}
+${staticCatalog(input.console, (input.commits?.length ?? 0) > 0)}
 </div>`
   )
 }
