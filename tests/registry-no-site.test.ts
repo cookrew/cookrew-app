@@ -186,7 +186,8 @@ describe('a registry on one host serves no page', () => {
     ['GET', '//'],
     ['GET', '//evil.example/x']
   ])('%s %s is no page either: data or nothing, no cookie, no way on', async (method, address) => {
-    for (const headers of [{}, { cookie: `__Host-cr_session=${session}; cr_account=someone` }, { authorization: `Bearer ${session}` }]) {
+    const credentials: Record<string, string>[] = [{}, { cookie: `__Host-cr_session=${session}; cr_account=someone` }, { authorization: `Bearer ${session}` }]
+    for (const headers of credentials) {
       const answer = await raw(method, address, headers)
       // A path the server cannot read at all is a 400; everything else here is the 404.
       expect([400, 404], `${method} ${address}`).toContain(answer.status)
