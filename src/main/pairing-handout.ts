@@ -1,6 +1,7 @@
 import { machineCopy } from '../shared/machine-words'
 import type { PairingHandout } from '../shared/account-v2'
-import { pairingUrl } from '../shared/pairing-url'
+import { originOf } from '../shared/pairing-url'
+import { isMachineId } from '../shared/machine-relay'
 
 /**
  * WHAT `cookrew mobile` AND THE POPOUT BOTH SHOW.
@@ -46,13 +47,12 @@ export type PairingEndpoint = {
 
 export type PairingHandoutDeps = {
   readonly account: () => PairingHandoutAccount | null
-  readonly registryOrigin: () => string
+  /** Where the console is (registry-origin.ts · consoleOrigin). */
+  readonly consoleOrigin: () => string
   /** mobileEndpointList(): most reachable first, `?token=` already on them. */
   readonly endpoints: () => readonly PairingEndpoint[]
   /** The persisted pairing token; null before the mobile server has started. */
   readonly pairingToken: () => string | null
-  /** The sealed session's code, for the relay link only: a direct address needs none. */
-  readonly connectCode?: () => string | null
 }
 
 /** The first address a phone could actually dial, spelled its best way. */
@@ -71,18 +71,14 @@ export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null 
   const desktopName = account?.name ?? machineCopy('This Mac', process.platform)
 
   if (account) {
-    const url = pairingUrl({
-      registryOrigin: deps.registryOrigin(),
-      username: account.username,
-      deviceId: account.deviceId,
-      pairingToken: token,
-      connectCode: deps.connectCode?.() ?? null
-    })
-    // A malformed handle or a registry origin we would not send a phone to
-    // falls through to the direct address rather than showing nothing: the
-    // Mac is still reachable on this Wi-Fi, and saying so is more use than
-    // an empty sheet.
-    if (url) return { url, via: 'relay', desktopName, deviceId: account.deviceId }
+    // A MACHINE OF AN ACCOUNT HANDS OUT AN ADDRESS, NOT A KEY (0.6.0): its own level on the
+    // console. Whoever opens it signs in to the account and proves it is them there; the link
+    // itself opens nothing, so it can be photographed, pasted and left on a screen.
+    const console = originOf(deps.consoleOrigin())
+    const id = account.deviceId.toLowerCase()
+    // A console address this app would not send a phone to, or an id that is not a machine's,
+    // falls through to the direct address rather than showing nothing.
+    if (console !== null && isMachineId(id)) return { url: `${console}/d/${id}`, via: 'console', desktopName, deviceId: account.deviceId }
   }
 
   const direct = bestDirect(deps.endpoints())

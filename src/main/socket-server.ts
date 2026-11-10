@@ -2022,7 +2022,7 @@ export function cmdMobile(request: CliRequest, deps: SocketServerDeps): string {
   if (request.flags.rotate === true) {
     deps.rotatePairingToken()
     // AFTER the rotation, so the URL carries the token that now works.
-    return renderRotated(deps.mobileEndpoints(), deps.pairingHandout())
+    return renderRotated(deps.mobileEndpoints())
   }
   const endpoints = deps.mobileEndpoints()
   const tailnetHosts = endpoints

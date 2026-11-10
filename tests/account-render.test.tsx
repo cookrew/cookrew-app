@@ -617,7 +617,7 @@ describe('account moved later: the sheet keeps the way in for a person with a co
 })
 
 describe('account moved later: the phone asks only past this Wi-Fi', () => {
-  const body = (mode: 'relay' | 'direct', onAnywhere?: () => void): string =>
+  const body = (mode: 'console' | 'direct', onAnywhere?: () => void): string =>
     renderToStaticMarkup(
       <PairBody
         onAnywhere={onAnywhere}
@@ -629,8 +629,8 @@ describe('account moved later: the phone asks only past this Wi-Fi', () => {
     expect(body('direct', () => undefined)).toContain(PAIRING_COPY.ANYWHERE)
   })
 
-  it('has nothing to ask for on the relay QR', () => {
-    expect(body('relay', () => undefined)).not.toContain(PAIRING_COPY.ANYWHERE)
+  it('has nothing to ask for on the console’s QR', () => {
+    expect(body('console', () => undefined)).not.toContain(PAIRING_COPY.ANYWHERE)
   })
 
   it('offers nothing with no account surface to answer it', () => {

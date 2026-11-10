@@ -469,9 +469,15 @@ export interface ApprovalAsked {
  */
 export interface PairingHandout {
   url: string
-  via: 'relay' | 'direct'
+  /**
+   * `console`: this machine's address on the console (`<console>/d/<machine id>`), for a machine
+   * of an account. It carries NO credential: whoever opens it signs in and proves it is them.
+   * `direct`: this machine's own address on the network, with its pairing token, for a machine
+   * with no account.
+   */
+  via: 'console' | 'direct'
   desktopName: string
-  /** Present only on the relay URL — a Mac with no account has no device id. */
+  /** Present only on the console link: a machine with no account has no device id. */
   deviceId?: string
 }
 

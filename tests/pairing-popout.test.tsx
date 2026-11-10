@@ -15,11 +15,11 @@ import type { PairingHandout } from '../src/shared/account-v2'
 import { PAIRING_COPY, deviceIdPrefix, pairingPopoutView } from '../src/shared/pairing-qr'
 
 const DEVICE = '2c9417fd-3b1a-8c4e-9f2d-70a1b3c5d7e9'
-const RELAY_URL = `https://cookrew.dev/relay/@drej/desktop/${DEVICE}/#pair=a-pairing-token`
+const RELAY_URL = `https://console.cookrew.dev/d/${DEVICE}`
 
 const RELAY: PairingHandout = {
   url: RELAY_URL,
-  via: 'relay',
+  via: 'console',
   desktopName: 'MacBook Pro',
   deviceId: DEVICE
 }
@@ -41,11 +41,14 @@ const stubBridge = (handout: unknown): void => {
 }
 
 describe('the popout view model', () => {
-  it('is the relay URL, verbatim, when this Mac has an account', () => {
+  it('is this machine’s address on the console, verbatim, when it has an account: an address and no key', () => {
     const view = pairingPopoutView(RELAY)
-    expect(view.mode).toBe('relay')
+    expect(view.mode).toBe('console')
     expect(view.qr).toBe(RELAY_URL)
-    expect(view.sentence).toBe(PAIRING_COPY.RELAY)
+    expect(view.qr).not.toMatch(/token|pair=|code=/)
+    expect(view.sentence).toBe(PAIRING_COPY.CONSOLE)
+    // And it does not warn about a token it does not carry.
+    expect(view.rotateNote).toBe(PAIRING_COPY.ADDRESS_ONLY)
     expect(view.deviceIdPrefix).toBe(deviceIdPrefix(DEVICE))
   })
 
@@ -65,11 +68,14 @@ describe('the popout view model', () => {
     expect(view.sentence).toBe(PAIRING_COPY.NONE)
   })
 
-  it('carries the rotate note in every shape — one credential, one revocation', () => {
-    for (const view of [pairingPopoutView(RELAY), pairingPopoutView(DIRECT), pairingPopoutView(null)]) {
+  it('carries the rotate note wherever the QR carries the token — one credential, one revocation', () => {
+    for (const view of [pairingPopoutView(DIRECT), pairingPopoutView(null)]) {
       expect(view.rotateNote).toContain('--rotate')
       expect(view.rotateNote).toContain('unpairs every phone')
     }
+    // The console's QR carries none, and says so instead.
+    expect(pairingPopoutView(RELAY).rotateNote).not.toContain('--rotate')
+    expect(pairingPopoutView(RELAY).rotateNote).toContain('no key')
   })
 
   it('shows enough of the device id to tell two Macs apart', () => {
@@ -93,7 +99,7 @@ describe('the popout renders', () => {
     expect(html).toContain('<path d="M')
     expect(html).toContain('MacBook Pro')
     expect(html).toContain('2c9417fd…')
-    expect(html).toContain('--rotate')
+    expect(html).toContain('It carries no key')
   })
 
   it('SHOWS NO SIX-CHARACTER KEY AND NO COUNTDOWN — both are retired', () => {

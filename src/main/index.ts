@@ -172,7 +172,6 @@ import { republishDoors, servingChange } from './serving-identity'
 import { createAdmittedDeviceStore } from './admitted-devices'
 import { createAccountPairDoor } from './account-pair'
 import { pairingHandout } from './pairing-handout'
-import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createNetworkWatch } from './network-watch'
@@ -1516,10 +1515,9 @@ const currentPairingHandout = (): PairingHandout | null =>
         ? { username: account.username, deviceId: account.deviceId, name: account.name }
         : null
     },
-    registryOrigin: () => registryOrigin(),
+    consoleOrigin: () => consoleOrigin(),
     endpoints: () => mobileEndpointList(),
-    pairingToken: () => activePairingTokenValue() ?? pairingToken,
-    connectCode: () => connectCodes.encoded()
+    pairingToken: () => activePairingTokenValue() ?? pairingToken
   })
 let reachPublisher: ReachPublisher | null = null
 
@@ -1656,16 +1654,11 @@ const requests = new Requests({
   // registry and the owner has nothing to compare it with (connect-code.ts).
   reach: {
     admit: (device) => admittedDevices.admit(device),
-    pairingUrlFor: (token) => {
-      const account = accounts.account()
-      if (!account) return null
-      return pairingUrl({
-        registryOrigin: registryOrigin(),
-        username: account.username,
-        deviceId: account.deviceId,
-        pairingToken: token
-      })
-    }
+    // The relay's own page for one machine is gone with 0.6.0, and with it the link a
+    // "USE WI-FI" request was answered with: there is no address to seal a token into. ALLOW
+    // answers "no pairing link" until the request flow itself is removed with the page that
+    // raised it.
+    pairingUrlFor: () => null
   }
 })
 const factors = new Factors({ accounts, registry: registryOrigin() })
