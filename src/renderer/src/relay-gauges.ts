@@ -55,7 +55,7 @@ export async function fetchGauges(path: string, token: string | null, fetcher: F
 }
 
 /** The relay prefix of another desktop of this account; null when this page has no relay or the id is not one. */
-function relayBaseOf(base: string, machineId: string): string | null {
+export function relayBaseOf(base: string, machineId: string): string | null {
   if (desktopIdFromBase(base) === null) return null
   const target = base.replace(/\/desktop\/[^/]+$/, () => `/desktop/${machineId}`)
   return desktopIdFromBase(target) === machineId.toLowerCase() ? target : null

@@ -22,6 +22,8 @@ import { WatchPairRow } from './WatchPairRow'
 import { RemoteSwitchRow } from './use/RemoteSwitch'
 import { WatchPairSheet } from './WatchPairSheet'
 import { isRemoteMode } from './api'
+import { clientBase } from './api-base'
+import { desktopIdFromBase } from './pairing-scope'
 import type { RouteStatus } from '../../shared/route'
 import type { PathBadgeView } from '../../shared/path-badge'
 
@@ -63,6 +65,8 @@ export function HeaderMore({
   // The phone only: Chrome on Android hides its bars this way; the desktop app has its own window.
   const offerFullscreen =
     isRemoteMode() && typeof document !== 'undefined' && canFullscreen(document) && !installedFullscreen(document, pageMedia)
+  // A page cookrew.dev serves through the relay: the account's own page is same-origin, one row away.
+  const onAccountPage = isRemoteMode() && desktopIdFromBase(clientBase()) !== null
   const root = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   // The zoomed card's rows live in a portal, so they close the menu through here.
@@ -154,6 +158,14 @@ export function HeaderMore({
               in the wall's footer, three clicks away, behind a screen that is
               not what someone opening their history came for. The wall keeps it
               too, for whoever is already there. */}
+          {/* ACCOUNT AND SECURITY FROM THE DEVICES VIEW (owner 2026-11-10): on a page cookrew.dev
+              serves through the relay, the account's own page is a row here, not a second home. */}
+          {onAccountPage && (
+            <a className="cr-more-item" href="/me/account">
+              <CrIcon name="lock" />
+              <span className="cr-more-label">Account &amp; security</span>
+            </a>
+          )}
           <button type="button" className="cr-more-item" title="Activity and history" onClick={onActivity} aria-haspopup="dialog">
             <CrIcon name="summary" />
             <span className="cr-more-label">Activity…</span>

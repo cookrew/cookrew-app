@@ -5,7 +5,6 @@
  * (terminal-attachments.ts); terminal↔terminal cables are its ties; the
  * workspace list and the roster give the other workspaces' marks.
  */
-import { machineWord } from '../../../shared/machine-words'
 import { REFUSED_COPY } from '../../../shared/first-run-copy'
 import { refusalKind } from '../../../shared/turn-failure'
 import type { AgentPhase, AgentRow } from '../agent-rows'
@@ -364,18 +363,4 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
     hiddenItems: Math.max(0, totalCount - items.length),
     deviceAgents: agents.length + marks.reduce((n, m) => n + m.presets.length, 0)
   }
-}
-
-/**
- * A machine of the account this one cannot read, said by what it is: Cookrew
- * runs on a Mac, a PC or a Linux machine (shared/machine-words.ts), and one that
- * publishes no profile is a computer.
- */
-export function listedOnly(machine: Pick<MachineView, 'name' | 'os'> & Partial<Pick<MachineView, 'detail' | 'agents' | 'waiting'>>): string {
-  const word = machine.os ? machineWord(machine.os) : 'computer'
-  if (machine.detail === 'live' && machine.agents !== null && machine.agents !== undefined) {
-    const waiting = machine.waiting ? `, ${machine.waiting} need${machine.waiting === 1 ? 's' : ''} you` : ''
-    return `${machine.name} · ${machine.agents} agent${machine.agents === 1 ? '' : 's'}${waiting}. Work in it on that ${word} for now.`
-  }
-  return `${machine.name} is listed, not readable from here: open it on that ${word}.`
 }

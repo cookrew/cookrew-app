@@ -11,7 +11,9 @@ import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
-import { buildZoomModel, itemViewOf, listedOnly } from './zoom-model'
+import { buildZoomModel, itemViewOf, type MachineView } from './zoom-model'
+import { machineWhyWords } from './machine-why'
+import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
@@ -666,11 +668,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               machine={m}
               bind={bind}
               onOpen={() => {
-                // A machine this desktop holds a key for is gone into, here (RemoteMachineView.tsx); one it cannot read says why.
-                if (m.online && m.detail !== 'listed' && canEnterMachines()) {
+                // A machine this one can read is gone into, here (RemoteMachineView.tsx); one it cannot says the one thing to do.
+                const enter = (): void => {
                   setError(null)
                   remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null })
-                } else setError(listedOnly(m))
+                }
+                if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
+                else void whyNot(m).then((words) => (words === null ? enter() : setError(words)))
               }}
             />
           ))}
@@ -805,6 +809,19 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>
   )
+}
+
+/**
+ * What stands between this view and another machine, as the one thing to do
+ * (machine-why.ts); null when asking it now found it answers, and it can be gone into.
+ */
+async function whyNot(m: MachineView): Promise<string | null> {
+  const api = cookrew()
+  const surface = !canEnterMachines() ? 'none' : isRemoteMode() ? 'page' : 'desktop'
+  // Not read yet (a page just opened, a key just made): asked now, so a tap is not a wait for the next round.
+  if (surface !== 'none' && m.online && (await api.machineFleetOf?.(m.id).catch(() => null)) != null) return null
+  const trusted = surface === 'desktop' ? ((await api.machineTrust?.().catch(() => null)) ?? null)?.trusted ?? null : null
+  return machineWhyWords(m, { surface, trusted, block: api.machineWhy?.(m.id) ?? null, platform: hostPlatform() })
 }
 
 /** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */

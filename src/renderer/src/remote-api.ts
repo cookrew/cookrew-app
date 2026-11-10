@@ -38,7 +38,9 @@ import { seated, settleSeat, takeSeat } from './device-seat'
 import { SEAT_GONE, type WorkspaceCheck, type WorkspaceRemovePlan } from '../../shared/workspace-door'
 import type { SousCommandResult } from '../../main/sous-control'
 import type { WorkspaceMeta } from '../../shared/model'
-import { fetchGauges, relayDesktopGauges, storedDesktopToken } from './relay-gauges'
+import { fetchGauges } from './relay-gauges'
+import { relayMachines, relayMachineWhy } from './relay-machine-call'
+import { parseMachineGauges } from '../../shared/machine-gauges'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -817,7 +819,12 @@ export function createRemoteApi(): CookrewApi {
     zoomFleetMachines: () => relayAccountMachines(clientBase()),
     // Off `req`: a refused gauge must not reach the re-pair screen (relay-gauges.ts).
     machineGauges: () => fetchGauges(apiPath('/api/fleet/gauges'), authStore().token(), planeFetch),
-    machineGaugesOf: (machineId) => relayDesktopGauges(clientBase(), machineId, storedDesktopToken),
+    // EVERY MACHINE OF THE ACCOUNT, FROM HERE (relay-machine-call.ts): with this browser's own key for each,
+    // entering a door with the account pass when it holds none. Not `req`: no machine's no is this page's re-pair.
+    machineGaugesOf: async (machineId) => parseMachineGauges(await (await relayMachines()).gaugesOf(machineId)),
+    machineFleetOf: async (machineId) => (await relayMachines()).fleetOf(machineId),
+    callMachine: async (machineId, method, route, body) => (await relayMachines()).call(machineId, method, route, body),
+    machineWhy: (machineId) => relayMachineWhy(machineId),
     recoverAgent: (id) => req(apiPath(`/api/agents/${id}/recover`), 'POST'),
     restoreCheckpoint: (id, checkpointIndex, targetSessionId) =>
       req(apiPath(`/api/agents/${id}/restore`), 'POST', {

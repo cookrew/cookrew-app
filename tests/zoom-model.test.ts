@@ -3,7 +3,7 @@
 // browsers and notes they carry through the wiring, which are shared, and the
 // newest browser that stands beside the stack at group zoom. Pure, so pinned here.
 import { describe, expect, it } from 'vitest'
-import { buildZoomModel, COINS_PER_AGENT, ITEMS_SHOWN, itemViewOf, lineOf, listedOnly } from '../src/renderer/src/zoom/zoom-model'
+import { buildZoomModel, COINS_PER_AGENT, ITEMS_SHOWN, itemViewOf, lineOf } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
 import { crewOf, type AgentRow } from '../src/renderer/src/agent-rows'
 import type { BrowserNodeData, CanvasNode, Connection, NoteNodeData, TerminalNodeData, WorkspaceMeta } from '../src/shared/model'
@@ -117,21 +117,6 @@ describe('the device', () => {
     expect(m.machines[1]).toMatchObject({ agents: null, waiting: null })
   })
 
-  it('says a listed machine is a Mac, a PC or a machine by what it is, never a Mac it is not', () => {
-    const listed = (os: string | null) => ({ id: 'x', name: 'Solis-Core', local: false, online: true, detail: 'listed' as const, os, workspaces: [] })
-    const m = buildZoomModel({
-      nodes: [], connections: [], rows: [], crew: [], attachIndex: new Map(), workspaces: [ws('w1', 'Dev')], activeId: 'w1', name: 'Dev',
-      machines: [listed('linux'), listed('win32'), listed('darwin'), listed(null)]
-    })
-    // Read live through this desktop's key, it says what it holds instead.
-    expect(listedOnly({ name: 'Solis-Core', os: 'linux', detail: 'live', agents: 23, waiting: 2 })).toBe('Solis-Core · 23 agents, 2 need you. Work in it on that machine for now.')
-    expect(m.machines.map(listedOnly)).toEqual([
-      'Solis-Core is listed, not readable from here: open it on that machine.',
-      'Solis-Core is listed, not readable from here: open it on that PC.',
-      'Solis-Core is listed, not readable from here: open it on that Mac.',
-      'Solis-Core is listed, not readable from here: open it on that computer.'
-    ])
-  })
 })
 
 describe('a workspace with hundreds of browsers and notes', () => {

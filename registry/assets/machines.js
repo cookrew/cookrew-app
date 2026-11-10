@@ -1,21 +1,21 @@
 /*
- * cookrew.dev/me AS THE CONSOLE — the browser's half (registry/src/site-machines.ts).
+ * cookrew.dev/me: THE WAY INTO THE DEVICES VIEW — the browser's half
+ * (registry/src/site-machines.ts; owner 2026-11-10: "the /me web page must be
+ * the desktop Devices view, the same page").
  *
- * The server draws every machine of the account as what it is, with an empty
- * screen. This fills the screens, and only past the gate: the account's
- * twelve-hour pass (owner, 2026-11-09), proved here once with the password or
- * a passkey and kept where the phone's page keeps it (`cr_grant`), so a machine
- * opened from here, or from the phone's own page, asks nothing more.
+ * Behind the gate (the account's twelve-hour pass, proved here once with the
+ * password or a passkey and kept where every page of cookrew.dev keeps it,
+ * `cr_grant`), plain /me goes on into the app's own Devices view, served by one
+ * of the account's machines through the relay: the one this browser last
+ * opened, else the first that is online. This browser enters that machine's
+ * door first (its key, `cr_token:<id>`, is what that page is paired with), and
+ * that page reads every other machine the same way, with this browser's own key
+ * for each (renderer relay-machine-call.ts).
  *
- * Past the gate, for each online machine, one at a time: a key at its door
- * (account-pair.ts: the pass, its challenge, this browser's own key over it),
- * kept as `cr_token:<id>` like every other key this browser holds; then its own
- * summary (/api/fleet) through the relay, drawn as workspace names and a face
- * per agent, the ones that need the owner in red. Every 15 s while the page is
- * in front. A machine that no longer takes the key is asked again next round.
- *
- * Before the gate nothing is read from any machine: no names of workspaces, no
- * faces, nothing (owner: hide workspace names too).
+ * It stays here, on the account page, when the address carries a section or a
+ * return (#security, ?stepped=…), when a request is waiting to be answered, or
+ * when no machine lets this browser in; "Open" on a machine goes to its view.
+ * Before the gate nothing is read from any machine.
  */
 ;(() => {
   'use strict'
@@ -26,11 +26,9 @@
   const gateButton = gate?.querySelector('[data-gate]')
   const gatePassword = document.getElementById('me-gate-password')
   const gateNote = document.getElementById('me-gate-note')
-  const EVERY_MS = 15_000
   const GRANT_KEY = 'cr_grant'
   const TOKEN_PREFIX = 'cr_token:'
   const GRANT_MARGIN_MS = 60_000
-  const SVG = 'http://www.w3.org/2000/svg'
 
   const store = {
     get: (key) => {
@@ -132,11 +130,14 @@
     }
   }
 
+  /** A proof made on this page: the session is fresh now, so no machine's page opens without a click (security review M1). */
+  let provedHere = false
   const keepGrant = (answer) => {
+    provedHere = true
     store.set(GRANT_KEY, JSON.stringify({ grant: answer.grant, exp: answer.exp, deviceId: answer.deviceId }))
     if (gate) gate.hidden = true
     say('')
-    void round()
+    void onward()
   }
 
   const prove = async () => {
@@ -195,80 +196,88 @@
     return answer.token
   }
 
-  const el = (name, attrs, text) => {
-    const node = document.createElementNS(SVG, name)
-    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value))
-    if (text !== undefined) node.textContent = text
-    return node
+  const FRONT_KEY = 'cr_front_machine'
+  const ZOOM_KEY = 'cookrew.zoom'
+  const root = document.getElementById('me')
+  /** The end of the session's fresh window, on this browser's clock: from when the page arrived. */
+  const freshUntil = root?.dataset.freshMs ? performance.now() + Number(root.dataset.freshMs) : 0
+  const opening = document.getElementById('me-opening')
+  const rows = () => [...grid.querySelectorAll('[data-machine][data-online="1"]')]
+  /** A line over the machines, past the gate (the gate's own line is hidden once a pass is held). */
+  const tell = (text) => {
+    if (!opening) return
+    opening.textContent = text
+    opening.hidden = text === ''
   }
 
-  /** A machine's screen, drawn from its own summary: workspace names, a face per agent, the waiting ones red. */
-  const draw = (tile, snapshot) => {
-    const screen = tile.querySelector('[data-screen]')
-    if (!screen) return
-    const [x, y, w, h] = String(screen.dataset.screen).split(' ').map(Number)
-    const workspaces = Array.isArray(snapshot?.workspaces) ? snapshot.workspaces.filter((ws) => Array.isArray(ws?.agents)) : []
-    const shown = workspaces.slice(0, 3)
-    const row = Math.max(14, Math.floor(h / Math.max(shown.length, 1)))
-    const per = Math.max(1, Math.floor(w / 11))
-    screen.replaceChildren()
-    shown.forEach((ws, i) => {
-      screen.append(el('text', { class: 'ms-ws', x, y: y + i * row + 8 }, String(ws.name ?? '').toUpperCase().slice(0, 18)))
-      ws.agents.slice(0, per).forEach((agent, j) => {
-        screen.append(el('circle', { class: agent?.phase === 'waiting' ? 'ms-face w' : 'ms-face', cx: x + 5 + j * 11, cy: y + i * row + 14, r: 4 }))
-      })
-    })
-    const waiting = workspaces.reduce((n, ws) => n + ws.agents.filter((a) => a?.phase === 'waiting').length, 0)
-    const need = tile.querySelector('[data-need]')
-    if (need) {
-      need.textContent = waiting > 0 ? `${waiting} need${waiting === 1 ? 's' : ''} you` : ''
-      need.hidden = waiting === 0
+  /** Into a machine's Devices view: the zoom at its devices stop, this page left out of the way back. */
+  const go = (id) => {
+    store.set(ZOOM_KEY, JSON.stringify({ dir: 'agents', v: -2 }))
+    store.set(FRONT_KEY, String(id).toLowerCase())
+    location.replace(relay(id))
+  }
+
+  /** This browser's key at that machine, entering its door with the pass when it holds none. */
+  const keyFor = async (id, grant) => store.get(tokenKey(id)) ?? (await enter(id, grant))
+
+  let pending = null
+  const open = async (id) => {
+    const grant = await heldGrant()
+    if (!grant) {
+      pending = id
+      if (gate) gate.hidden = false
+      gatePassword?.focus()
+      return say('Prove it’s you once, and it opens.')
     }
+    if (await keyFor(id, grant)) return go(id)
+    tell('That machine did not let this browser in. Try again, or open another of your machines.')
   }
 
-  const readOne = async (tile, grant) => {
-    const id = tile.dataset.machine
-    let token = store.get(tokenKey(id)) ?? (await enter(id, grant))
-    if (!token) return
-    let read = await call('GET', `${relay(id)}api/fleet`, undefined, { authorization: `Bearer ${token}` })
-    if (read.status === 401) {
-      // That machine no longer takes this key: ask at its door again.
-      store.drop(tokenKey(id))
-      token = await enter(id, grant)
-      if (!token) return
-      read = await call('GET', `${relay(id)}api/fleet`, undefined, { authorization: `Bearer ${token}` })
+  /** The machine to open: the one last opened, if it is online, else the first online one. */
+  const candidates = () => {
+    const ids = rows().map((tile) => tile.dataset.machine)
+    const front = store.get(FRONT_KEY)
+    return front && ids.includes(front) ? [front, ...ids.filter((id) => id !== front)] : ids
+  }
+
+  /** Something on this page is waiting for the reader: a device or a guest asking. */
+  const waiting = async () => {
+    const out = await call('GET', '/v2/me/requests')
+    return out.status === 200 && Array.isArray(out.body) && out.body.length > 0
+  }
+
+  const onward = async () => {
+    const grant = await heldGrant()
+    if (!grant) {
+      if (gate) gate.hidden = false
+      return
     }
-    if (read.status === 200) draw(tile, read.body)
-  }
-
-  let reading = false
-  const round = async () => {
-    if (reading || document.hidden) return
-    reading = true
-    try {
-      const grant = await heldGrant()
-      if (!grant) {
-        if (gate) gate.hidden = false
-        return
+    if (gate) gate.hidden = true
+    if (pending) return open(pending)
+    // Only plain /me goes on: a section, a return or a waiting request keeps the account page.
+    if (root?.dataset.go !== 'devices' || location.hash !== '' || location.search !== '') return
+    if (rows().length === 0 || (await waiting())) return
+    // A session that just proved itself may add a factor or delete the account for a few minutes:
+    // a machine's page is not opened in that window unless the owner chooses which (security review M1).
+    if (provedHere || performance.now() < freshUntil) return tell('Choose a machine to open.')
+    tell('Opening your machines…')
+    for (const id of candidates()) {
+      try {
+        if (await keyFor(id, grant)) return go(id)
+      } catch {
+        /* the next one */
       }
-      if (gate) gate.hidden = true
-      // One machine at a time: a page with many machines must not flood the relay.
-      for (const tile of grid.querySelectorAll('[data-machine][data-online="1"]')) {
-        // One machine that answers in a shape this page cannot use does not stop the others.
-        try {
-          await readOne(tile, grant)
-        } catch {
-          /* its screen stays as it was; asked again next round */
-        }
-      }
-    } finally {
-      reading = false
     }
+    tell('None of your machines let this browser in right now. Open one below to try again.')
   }
 
-  void round()
-  setInterval(() => void round(), EVERY_MS)
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) void round()
+  grid.addEventListener('click', (event) => {
+    const link = event.target instanceof Element ? event.target.closest('[data-open-machine]') : null
+    const row = link?.closest('[data-machine]')
+    if (!link || !row) return
+    event.preventDefault()
+    void open(row.dataset.machine)
   })
+
+  void onward()
 })()

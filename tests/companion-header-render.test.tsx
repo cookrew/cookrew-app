@@ -202,7 +202,8 @@ describe('the badge sheet', () => {
       link: 'live',
       registryOrigin: 'https://cookrew.dev'
     })
-    expect(html).toContain('href="https://cookrew.dev/me"')
+    // The account's machine list, not plain /me: that goes straight back into the machine this page is (machines.js).
+    expect(html).toContain('href="https://cookrew.dev/me/account"')
     expect(html).toContain('Switch desktop')
   })
 

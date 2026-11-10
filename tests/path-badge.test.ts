@@ -107,9 +107,9 @@ describe('path badge view model', () => {
     // a guess sends a self-hosting owner to a site that never heard of them.
     expect(pathBadgeView(live).switchDesktopUrl).toBeNull()
     expect(pathBadgeView({ ...live, registryOrigin: 'https://reg.test/' }).switchDesktopUrl)
-      .toBe('https://reg.test/me')
+      .toBe('https://reg.test/me/account')
     expect(pathBadgeView({ ...live, registryOrigin: 'https://cookrew.dev' }).switchDesktopUrl)
-      .toBe('https://cookrew.dev/me')
+      .toBe('https://cookrew.dev/me/account')
   })
 
   it('reports no latency as null rather than zero', () => {
