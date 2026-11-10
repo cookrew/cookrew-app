@@ -6,23 +6,36 @@ import SwiftUI
 
 public struct CrewGrid: View {
   let store: WatchStore
+  /** The page the wrist just stepped out of: its face is brought into view. Nil coming in from above. */
+  let left: String?
   let onNewAgent: (() -> Void)?
   let onPick: (String) -> Void
   @Environment(\.ink) private var ink
 
-  public init(store: WatchStore, onNewAgent: (() -> Void)? = nil, onPick: @escaping (String) -> Void) {
+  public init(store: WatchStore, left: String? = nil, onNewAgent: (() -> Void)? = nil, onPick: @escaping (String) -> Void) {
     self.store = store
+    self.left = left
     self.onNewAgent = onNewAgent
     self.onPick = onPick
   }
 
   /** Waiting first, then the rest as the Mac ordered them. */
-  private var crew: [Card] {
-    let cards = store.visibleCards
-    return cards.filter { $0.status == .waiting } + cards.filter { $0.status != .waiting }
-  }
+  private var crew: [Card] { crewOrder(store.visibleCards) }
 
   public var body: some View {
+    ScrollViewReader { reader in
+      grid
+        // Back out of a card: its face is in view, however far down the crew it sits.
+        // Coming in from the workspaces it stays at the top, where the waiting ones are.
+        .onAppear {
+          guard let face = faceInView(page: left, crew: crew) else { return }
+          reader.scrollTo(face, anchor: .center)
+        }
+    }
+    .background(ink.paper)
+  }
+
+  private var grid: some View {
     CardScroll {
       VStack(alignment: .leading, spacing: 8) {
         if crew.isEmpty {
@@ -34,17 +47,16 @@ public struct CrewGrid: View {
         }
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 8) {
           ForEach(crew) { card in
-            Button { onPick(card.id) } label: { seat(card) }.buttonStyle(.plain)
+            Button { onPick(card.id) } label: { seat(card) }.buttonStyle(.plain).id(card.id)
           }
           if let onNewAgent {
-            Button(action: onNewAgent) { newSeat }.buttonStyle(.plain)
+            Button(action: onNewAgent) { newSeat }.buttonStyle(.plain).id(newAgentPage)
           }
         }
       }
       .padding(.horizontal, 10)
       .padding(.bottom, 10)
     }
-    .background(ink.paper)
   }
 
   private func seat(_ card: Card) -> some View {

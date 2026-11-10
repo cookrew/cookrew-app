@@ -93,3 +93,24 @@ public func deviceRows(_ machines: [WatchMachine], pairedId: String?, desktop: S
 public func isSwipeOut(dx: Double, dy: Double) -> Bool {
   dx > 50 && abs(dy) < dx * 0.6
 }
+
+/** The agents stop's order: the ones waiting on the owner first, the rest as the Mac ordered them. */
+public func crewOrder(_ cards: [Card]) -> [Card] {
+  cards.filter { $0.status == .waiting } + cards.filter { $0.status != .waiting }
+}
+
+/**
+ * Out of a card, back on its crew: the face to keep in view is the card the
+ * wrist was on, if it is still there; out of the new-agent page, its seat.
+ */
+public func faceInView(page: String?, crew: [Card]) -> String? {
+  guard let page else { return nil }
+  if page == newAgentPage { return page }
+  return crew.contains(where: { $0.id == page }) ? page : nil
+}
+
+/** A reply longer than a card's face holds: about this much, or more than one line. */
+public func foldsLong(_ whole: String?) -> Bool {
+  guard let whole else { return false }
+  return whole.count > 110 || whole.contains("\n")
+}
