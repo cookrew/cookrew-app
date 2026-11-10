@@ -21,7 +21,22 @@
  * pairing-url.ts, which takes the origin rather than naming one).
  */
 
-/** Where cookrew.dev — or whatever stands in for it — is. */
+/**
+ * Where the registry's API is: the account calls, the directory, the relay
+ * path, this machine's own line. In 0.6.0 that is a host of its own
+ * (api.cookrew.dev): cookrew.dev itself is a static site and answers none of
+ * it. `COOKREW_REGISTRY` moves it, for a test deployment or a self-hosted one.
+ */
 export function registryOrigin(): string {
-  return process.env.COOKREW_REGISTRY || 'https://cookrew.dev'
+  return process.env.COOKREW_REGISTRY || 'https://api.cookrew.dev'
+}
+
+/**
+ * Where the console is: the one web page that reaches the account's machines.
+ * Links and QR codes handed to a phone point here, and it is the one origin a
+ * machine lets call its API from a page. `COOKREW_CONSOLE` moves it, beside
+ * `COOKREW_REGISTRY`.
+ */
+export function consoleOrigin(): string {
+  return process.env.COOKREW_CONSOLE || 'https://console.cookrew.dev'
 }

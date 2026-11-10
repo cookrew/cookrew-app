@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cookrewRegistry, parseAccountAddress, parseServeAddress } from '../src/main/import-session'
 import { parseDeepLink } from '../src/main/deep-link'
-import { registryOrigin } from '../src/main/registry-origin'
+import { consoleOrigin, registryOrigin } from '../src/main/registry-origin'
 
 /**
  * THE REGISTRY IS A SETTING, AND A BARE NAME IS RESOLVED AT IT.
@@ -42,8 +42,9 @@ describe('a bare @handle/team is resolved at the CONFIGURED registry', () => {
 
   it('still answers production when nothing is configured', () => {
     delete process.env.COOKREW_REGISTRY
-    expect(parseServeAddress('@drej/alpha')?.origin).toBe('https://cookrew.dev')
-    expect(parseAccountAddress('@drej')?.origin).toBe('https://cookrew.dev')
+    // The registry's API is a host of its own (0.6.0); cookrew.dev is a static site.
+    expect(parseServeAddress('@drej/alpha')?.origin).toBe('https://api.cookrew.dev')
+    expect(parseAccountAddress('@drej')?.origin).toBe('https://api.cookrew.dev')
   })
 
   it('reads a configured registry’s own page, and refuses production’s', () => {
@@ -96,5 +97,17 @@ describe('a bare @handle/team is resolved at the CONFIGURED registry', () => {
       origin: 'http://192.168.1.20:8639',
       slug: 'research-crew'
     })
+  })
+})
+
+describe('the console this app points a phone at', () => {
+  it('is console.cookrew.dev, and moves with its own setting', () => {
+    const before = process.env.COOKREW_CONSOLE
+    delete process.env.COOKREW_CONSOLE
+    expect(consoleOrigin()).toBe('https://console.cookrew.dev')
+    process.env.COOKREW_CONSOLE = 'http://console.localhost:8797'
+    expect(consoleOrigin()).toBe('http://console.localhost:8797')
+    if (before === undefined) delete process.env.COOKREW_CONSOLE
+    else process.env.COOKREW_CONSOLE = before
   })
 })

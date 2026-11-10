@@ -498,7 +498,7 @@ public struct WatchRoot: View {
   @Environment(\.isLuminanceReduced) private var dim
   @Environment(\.scenePhase) private var phase
 
-  public init(address: String, registry: String = "https://cookrew.dev") {
+  public init(address: String, registry: String = "https://api.cookrew.dev") {
     _app = State(initialValue: WatchApp(address: address, registry: registry))
   }
 
