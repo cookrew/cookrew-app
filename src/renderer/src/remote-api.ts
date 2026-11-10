@@ -42,6 +42,7 @@ import type { WorkspaceMeta } from '../../shared/model'
 import { fetchGauges } from './relay-gauges'
 import { relayMachines, relayMachineWhy } from './relay-machine-call'
 import { parseMachineGauges } from '../../shared/machine-gauges'
+import { isStripeCheckoutUrl } from '../../shared/stripe-checkout'
 
 /**
  * CookrewApi over HTTP + Server-Sent-Events, used when the renderer bundle is
@@ -1080,9 +1081,15 @@ export function createRemoteApi(): CookrewApi {
       const checkout = await req<
         { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
       >(apiPath('/api/serve/checkout'), 'POST', { link })
+      if (!checkout.ok) return checkout
+      // The address came from a door, by way of the desktop. Checked again
+      // here, where it is opened: Stripe's hosted Checkout or nothing.
+      if (!isStripeCheckoutUrl(checkout.url)) {
+        return { ok: false, reason: 'unavailable', detail: 'the door returned an unusable checkout link' }
+      }
       // The hosted page opens HERE, on the phone — the desktop must not raise
       // a browser on a machine the person is not sitting at.
-      if (checkout.ok) window.open(checkout.url, '_blank', 'noopener')
+      window.open(checkout.url, '_blank', 'noopener')
       return checkout
     },
     serveSettle: (link, rail, session) =>

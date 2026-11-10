@@ -10,6 +10,7 @@ import {
 } from './caller-identity'
 import type { PaymentRequirements } from './x402-rail'
 import { teamPath } from './door-seats'
+import { checkoutSessionOf, isStripeCheckoutUrl } from '../shared/stripe-checkout'
 
 /**
  * THE CALLER'S SIDE OF THE GATE — what the import sheet asks a door.
@@ -275,6 +276,12 @@ export async function openAdmission(
  * Ask the door for a hosted Checkout page. Returns the URL and the session id
  * inside it — the id is what a settled card payment is presented as, and the
  * URL is the only place it exists (the door hands back a URL, not an id).
+ *
+ * THE URL IS THE DOOR'S WORD, AND THE APP GOES ON TO OPEN IT. So it is held to
+ * the one rule (shared/stripe-checkout.ts): https, Stripe's Checkout host
+ * exactly, the session id in its path. Anything else — a scheme the OS would
+ * launch, a look-alike host, an id smuggled into a fragment — is refused here
+ * and never reaches a browser.
  */
 export async function startStripeCheckout(
   target: ServeTargetRef,
@@ -288,9 +295,11 @@ export async function startStripeCheckout(
         : `the door refused to start a card payment (${res.status})`
     )
   }
-  const url = (res.body as { url?: string } | null)?.url ?? ''
-  const session = /\/(cs_[A-Za-z0-9_]+)/.exec(url)?.[1] ?? ''
-  if (!url || !session) throw new Error('the door returned an unusable checkout link')
+  const url: unknown = (res.body as { url?: unknown } | null)?.url
+  const session = checkoutSessionOf(url)
+  if (!isStripeCheckoutUrl(url) || session === null) {
+    throw new Error('the door returned an unusable checkout link')
+  }
   return { url, session }
 }
 

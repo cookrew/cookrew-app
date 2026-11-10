@@ -1,4 +1,5 @@
 import { gateDoorFor } from '../shared/gate-walk'
+import { isStripeCheckoutUrl } from '../shared/stripe-checkout'
 import { withPaidBearer } from './door-bearer'
 import type { ServeTarget } from './import-session'
 import {
@@ -56,6 +57,29 @@ export interface ServeGateDeps {
 }
 
 export type ServeGate = ReturnType<typeof createServeGate>
+
+/**
+ * THE DESKTOP'S OPENER, with the check made again where the page is opened.
+ *
+ * `startStripeCheckout` already refuses anything that is not Stripe's hosted
+ * Checkout. This is the same rule a second time, at the one call that hands an
+ * address to the operating system — `shell.openExternal` launches whatever
+ * handles the scheme — so no other path to this line can carry a different
+ * one. A refusal is the card rail's ordinary "unavailable"; the address that
+ * was refused is not repeated to the sheet.
+ */
+export async function handOffCheckout<T extends { ok: boolean }>(
+  checkout: T,
+  open: (url: string) => Promise<void>
+): Promise<T | { ok: false; reason: 'unavailable'; detail: string }> {
+  if (!checkout.ok) return checkout
+  const url: unknown = (checkout as { url?: unknown }).url
+  if (!isStripeCheckoutUrl(url)) {
+    return { ok: false, reason: 'unavailable', detail: 'the door returned an unusable checkout link' }
+  }
+  await open(url)
+  return checkout
+}
 
 /**
  * One key per door, and NOT its wire address.

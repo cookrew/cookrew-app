@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { CHECKOUT_TTL_SECONDS, isStripeCheckoutUrl } from '../shared/stripe-checkout'
 import type { Settle } from './x402-rail'
 
 const STRIPE_API = 'https://api.stripe.com/v1'
@@ -29,7 +30,6 @@ const AI_SERVICE_TAX_CODE = 'txcd_10105002'
  * 7-character prefix (COOKREW) that leaves 13; this is 10.
  */
 const STATEMENT_SUFFIX = 'AI SESSION'
-const CHECKOUT_TTL_SECONDS = 30 * 60
 const HTTP_TIMEOUT_MS = 10_000
 
 export interface StripeConfig {
@@ -284,14 +284,8 @@ function validHttpUrl(raw: string): boolean {
   return withPaymentReceived(raw) !== null
 }
 
-function validCheckoutUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw)
-    return url.protocol === 'https:' && url.hostname === 'checkout.stripe.com'
-  } catch {
-    return false
-  }
-}
+/** The one rule for a Checkout address, shared with whoever opens it (shared/stripe-checkout.ts). */
+const validCheckoutUrl = (raw: string): boolean => isStripeCheckoutUrl(raw)
 
 export interface StripePaymentEnvelope {
   rail: 'stripe'

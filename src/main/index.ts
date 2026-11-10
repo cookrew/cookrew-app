@@ -392,7 +392,7 @@ import {
   type ServeTarget
 } from './import-session'
 import { signInToDoor } from './served-admission'
-import { createServeGate } from './serve-gate'
+import { createServeGate, handOffCheckout } from './serve-gate'
 import { doorBearer, type DoorBearerPort } from './door-bearer'
 import { expiryWarningDue } from '../shared/session-renew'
 import { buildX402Payment, deviceWallet } from './x402-caller'
@@ -8728,13 +8728,12 @@ function registerIpc(handlers: RestoreHandlers): void {
    * embedded page has no wallet and no autofill — and a hosted page is where
    * Stripe wants the card, so the hand-off is the honest move.
    */
-  ipcMain.handle('serve:checkout', async (_e, link: string) => {
-    const checkout = await serveOps.checkout(link)
+  ipcMain.handle('serve:checkout', async (_e, link: string) =>
     // The desktop opens the hosted page in the user's REAL browser itself; a
-    // phone opens the URL it is handed, in its own.
-    if (checkout.ok) await shell.openExternal(checkout.url)
-    return checkout
-  })
+    // phone opens the URL it is handed, in its own. Only Stripe's Checkout is
+    // ever opened — the address is a door's word (serve-gate.ts handOffCheckout).
+    handOffCheckout(await serveOps.checkout(link), (url) => shell.openExternal(url))
+  )
 
   /**
    * Present a payment and be admitted. For a card that is the Checkout session

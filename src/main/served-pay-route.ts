@@ -1,3 +1,4 @@
+import { isStripeCheckoutUrl } from '../shared/stripe-checkout'
 import type { ServedResponse } from './served-endpoints'
 import type { ServedTemplate } from './session-served'
 
@@ -27,14 +28,9 @@ export interface ServedPayRouteDeps {
 const json = (status: number, body: unknown, headers?: Record<string, string>): ServedResponse =>
   headers ? { status, headers, body } : { status, body }
 
+/** Only Stripe's hosted Checkout leaves this door as a link (shared/stripe-checkout.ts). */
 function checkoutUrl(value: string | null): string | null {
-  if (value === null) return null
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && url.hostname === 'checkout.stripe.com' ? url.toString() : null
-  } catch {
-    return null
-  }
+  return isStripeCheckoutUrl(value) ? new URL(value).toString() : null
 }
 
 /**
