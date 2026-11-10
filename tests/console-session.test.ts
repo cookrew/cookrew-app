@@ -306,6 +306,14 @@ describe('what a console session may do', () => {
     expect(signedIn({ headers: { authorization: `Bearer ${desktop.token}` } } as never, site.v2)?.account.username).toBe(username)
   })
 
+  it('may check a machine’s hello, which is how it comes to trust a direct path', async () => {
+    // Reached and read as this account's: an empty hello is answered (it verifies nothing), not refused for who asks.
+    const res = await signed.page.console('POST', '/v2/verify-hello', {}, bearer(signed.token))
+    expect(res.status).toBe(200)
+    expect(res.body.error).toBeUndefined()
+    expect((await new Client(site).console('POST', '/v2/verify-hello', {})).status).toBe(401)
+  })
+
   it('does not narrow a machine’s own session', async () => {
     const res = await new Client(site).api('GET', '/v2/me/seats', undefined, bearer(desktop.token))
     expect(res.status).toBe(200)

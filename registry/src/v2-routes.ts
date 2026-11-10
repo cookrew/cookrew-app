@@ -413,7 +413,8 @@ async function checkHello(ctx: V2Context): Promise<void> {
     refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
     return
   }
-  const signed = signedIn(ctx.request, v2)
+  // The console checks a machine's hello before it trusts a direct path to it: its kind of session asks this.
+  const signed = signedIn(ctx.request, v2, 'any', { console: ctx.via !== 'auth' })
   if (signed === null) {
     refuse(response, 401, 'unauthenticated')
     return

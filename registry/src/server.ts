@@ -453,7 +453,7 @@ export function createRegistry(deps: RegistryDeps): Server {
       // its address, with no name of ours in Host. It is answered as on the
       // API host (no cookie read, none set) and says nothing but that the
       // process is up.
-      const probe = url.pathname === '/v1/health' && (method === 'GET' || method === 'HEAD')
+      const probe = url.pathname === '/v1/health' && method === 'GET'
       if (host !== apiHost && !probe) {
         json(response, 404, { error: 'not_found' })
         return

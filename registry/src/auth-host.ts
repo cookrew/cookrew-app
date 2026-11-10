@@ -114,8 +114,11 @@ export function handleAuthHost(
   request: IncomingMessage,
   response: ServerResponse,
   url: URL,
-  contextOf: (parts: string[]) => V2Context
+  contextFor: (parts: string[]) => V2Context
 ): void {
+  // Every route reached from here knows which host it is on: a console session
+  // is never asked for by kind on this one (v2-routes.ts), whichever branch runs.
+  const contextOf = (segments: string[]): V2Context => ({ ...contextFor(segments), via: 'auth' })
   const method = request.method ?? 'GET'
   const path = url.pathname
   const parts = path.split('/').filter(Boolean)
@@ -190,7 +193,7 @@ export function handleAuthHost(
   // opens nothing by itself: the state it carries is taken first, and the
   // browser is sent back to the page (v2-oauth-routes.ts · callback).
   if (v2.apiOrigin !== null && method === 'GET' && PROVIDER_CALLBACK.test(path)) {
-    handleV2Route({ ...contextOf(parts), via: 'auth' })
+    handleV2Route(contextOf(parts))
     return
   }
   if (!ownOrigin(request, v2)) {
@@ -212,7 +215,7 @@ export function handleAuthHost(
   // are this browser's session asking about its own account. Told apart by
   // that header, so a route both could name (none today) is never guessed at.
   if (split && request.headers[AUTH_REQUEST_HEADER] === undefined && isAccountRoute(path)) {
-    handleV2Route({ ...contextOf(parts), via: 'auth' })
+    handleV2Route(contextOf(parts))
     return
   }
   const signIn = allowed(SIGN_IN_ROUTES, method, path)
