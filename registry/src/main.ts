@@ -9,7 +9,6 @@
 //           non-empty store rather than duplicating or overwriting.
 //
 // Routes (spec §2; codes are the protocol, never chrome — R14):
-//   GET  /install/:presetId          the shared link — a plain page, no app needed (R21)
 //   GET  /v1/presets?q=              browse / search
 //   GET  /v1/presets/:id/manifest    the gate
 //   HEAD /v1/presets/:id/manifest    update check, x-cookrew-preset-version (R3)
@@ -20,7 +19,7 @@
 //   POST /v2/accounts                claim a username with a password (identity v2)
 //   POST /v2/sessions                sign in; the server sets __Host-cr_session HttpOnly
 //   GET  /v2/me                      the reader's devices, desktops and security
-//   GET  /me                         the same, as a page
+//   GET  /account (auth host)        the same, as a page: the only page this process draws besides sign-in
 //   POST /v2/me/desktops/:id/cert    a Mac's own certificate, by ACME dns-01
 //   GET  /v2/me/desktops/:id/cert    pending / issued / failed
 //   POST /v1/funnel                  one onboarding event, into daily sums

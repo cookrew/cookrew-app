@@ -48,7 +48,7 @@ const SENTENCES: Record<FactorError, string> = {
   second_step_setup:
     'This account needs a second step before it can sign in: a passkey (Touch ID or Face ID) or an authenticator app. Finish signing in at auth.cookrew.dev to set one up, or update Cookrew.',
   second_step_elsewhere:
-    'This account has no second step yet, and one can only be added from a device already signed in to it. Open cookrew.dev/me there, add a passkey or an authenticator under Security, then sign in here.',
+    'This account has no second step yet, and one can only be added from a device already signed in to it. Open auth.cookrew.dev/account there, add a passkey or an authenticator under Security, then sign in here.',
   setup_unfinished: 'Set up a passkey or an authenticator and save your recovery codes first.',
   step_up_fresh: 'It has been more than five minutes since you last proved it is you. Prove it again to do this.',
   password_change_required:
