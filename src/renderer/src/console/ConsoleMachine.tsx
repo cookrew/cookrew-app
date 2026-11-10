@@ -3,6 +3,7 @@ import App from '../App'
 import { cookrew } from '../api'
 import { authStore } from '../auth-gate'
 import { deviceSeat } from '../device-seat'
+import { startMachineSession } from '../machine-session'
 import { zoomStore } from '../zoom/zoom-store'
 import type { ConsoleParts } from './console-wiring'
 import { applyRouteToZoom, followZoom, type ZoomSyncDeps } from './zoom-sync'
@@ -15,7 +16,16 @@ import { applyRouteToZoom, followZoom, type ZoomSyncDeps } from './zoom-sync'
  * What the console adds around it: the address and the zoom are kept in step
  * (zoom-sync.ts), and a machine that stops taking this browser's key is
  * handed back to the console, which asks its door again (console-runtime.ts).
+ *
+ * WHAT RUNS FOR THE MACHINE IN SCOPE STARTS WITH THIS CHUNK (machine-session.ts):
+ * the search for a nearer way to it than the relay. Imported here and not by
+ * the console's entry, so the Devices level loads without it. The module
+ * restarts itself at every change of machine from then on and stops when one
+ * is left; the one call below is for a machine entered BEFORE this chunk
+ * arrived (a cold link straight into a machine), which nobody was listening
+ * for. With no machine in scope it starts nothing.
  */
+startMachineSession()
 
 /** Which of this machine's workspaces the view is on, as the machine says it. */
 function workspaceWatch(): ZoomSyncDeps['workspace'] & { start(): () => void } {
