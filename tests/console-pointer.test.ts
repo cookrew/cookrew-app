@@ -81,11 +81,11 @@ describe('the server', () => {
     expect(refusal).toBeLessThan(assets.indexOf('sendBody('))
   })
 
-  it('wires no half that could admit a device nobody can use: a stray "use Wi-Fi" request is answered as not wired', () => {
+  it('has no half that could admit a device nobody can use: a "use Wi-Fi" request is answered by nothing', () => {
     const main = readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
     expect(main).not.toMatch(/\n  reach: \{/)
+    // The queue mints nobody a token: it answers a sign-in and a seat, and holds no way to admit a device.
     const requests = readFileSync(path.join(__dirname, '..', 'src', 'main', 'requests.ts'), 'utf8')
-    // Refused before anything is minted.
-    expect(requests.indexOf("if (reach === undefined) return { ok: false, reason: 'not_wired' }")).toBeLessThan(requests.indexOf('reach.admit('))
+    expect(requests).not.toMatch(/admit\(|pairingUrlFor|sealToDevice|not_wired/)
   })
 })

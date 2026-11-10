@@ -116,7 +116,7 @@ export interface V2Identity {
   trustedProxies: readonly string[]
   /** Phase 4: passkeys, authenticators, pending sign-ins and approvals. */
   factors: FactorState
-  /** Identity v3: the one queue — seat and reach requests over three stores. */
+  /** Identity v3: the one queue — the seat requests; the join rows are read live from the pending sign-ins. */
   requests: V2Requests
   /** Identity v3: account:changed, the roster's own feed. */
   events: V2Events

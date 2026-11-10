@@ -39,10 +39,10 @@ import { handleAccountPairRoutes } from './account-pair-routes'
  *   holding it means somebody with the Mac in front of them handed it over.
  *   A dialog on top of that asks the owner to confirm a thing they just did.
  *
- *   FROM ANYWHERE ELSE the consent is the ALLOW row — the reach request the
- *   registry queues and the owner answers on the Mac (V3-11's route, V3-12's
- *   card). That ceremony exists, it is the one the design draws (D11/M5), and
- *   it is where a device the owner has NOT met asks for this Mac's keyboard.
+ *   FROM ANYWHERE ELSE the consent was the ALLOW row: a request the
+ *   registry queued and the owner answered on the Mac (D11/M5). That ceremony
+ *   is gone (0.6.0: the page that asked was the relay's). A device that is
+ *   not at this Mac now proves the account instead (account-pair.ts).
  *
  * So this route is the mechanism both of those end in, not a third door, and
  * the ceiling below is what a mechanism gets instead of a prompt.

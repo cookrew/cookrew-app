@@ -1,24 +1,28 @@
 /**
- * WHICH MAC THIS CREDENTIAL IS FOR, AND HOW IT ARRIVED.
+ * WHICH MACHINE THIS CREDENTIAL IS FOR, AND HOW IT ARRIVED.
  *
- * Reach v2.1 collapsed pairing to ONE credential: the token the Mac mints,
- * persists and rotates with `cookrew mobile --rotate`. Two consequences land
- * on the companion, and both are storage questions rather than UI ones.
+ * A machine takes ONE credential from a browser: the token it mints, persists
+ * and rotates with `cookrew mobile --rotate` (or the per-device token it mints
+ * for one admitted browser). Two consequences land on the page, and both are
+ * storage questions rather than UI ones.
  *
- * THE TOKEN ARRIVES IN A FRAGMENT. The printed URL is
- * `https://cookrew.dev/relay/@user/desktop/<id>/#pair=<token>`. A fragment is
- * never put on the wire, so cookrew.dev — which serves this bundle and relays
- * the line to the Mac — never sees the credential that authorises the phone at
- * the Mac. That property is only worth something if the fragment does not
- * survive the boot: a token left in the address bar is in every screenshot,
- * every share sheet, every `document.referrer` and every reload.
+ * A CREDENTIAL IN A LINK ARRIVES IN A FRAGMENT. `#pair=<token>` on a link
+ * `cookrew mobile --token` printed, pasted on a machine's own page; `#code=`
+ * on the console link a machine draws on its own screen
+ * (console/handed-code.ts). A fragment is never put on the wire, so no host
+ * that serves the page sees it. That property is only worth something if the
+ * fragment does not survive the boot: a token left in the address bar is in
+ * every screenshot, every share sheet, every `document.referrer` and every
+ * reload.
  *
- * ONE ORIGIN NOW HOSTS MANY MACS. Direct, the origin WAS the desktop, so a
- * single `cookrew-pairing-token` key could not be ambiguous. Under
- * cookrew.dev every desktop the owner has shares an origin and therefore a
- * localStorage — so one key would hand Mac B the token minted for Mac A. That
- * is not merely a 401 that reads as "randomly unpaired"; it is a credential
- * sent to a machine it was never minted for.
+ * ONE ORIGIN CAN HOST MANY MACHINES. On a machine's own page the origin IS
+ * the machine, so a single `cookrew-pairing-token` key cannot be ambiguous,
+ * and the base is ''. The console is one origin for every machine of the
+ * account and therefore one localStorage, and its base is the machine's relay
+ * address, `<api origin>/api/m/<machine id>` (machine-scope.ts): one key
+ * would hand machine B the token minted for machine A. That is not merely a
+ * 401 that reads as "randomly unpaired"; it is a credential sent to a machine
+ * it was never minted for. So there the key carries the machine's id.
  *
  * Everything here is pure, because both rules are get-them-wrong-quietly rules
  * and a rule that needs a browser to test is a rule that gets tested once.
@@ -46,7 +50,7 @@ export const isPairingToken = (value: string): boolean => PAIRING_TOKEN_SHAPE.te
 export const ROOT_TOKEN_KEY = 'cookrew-pairing-token'
 
 /**
- * `cr_token:<desktop id>` — one Mac, one key, under the shared origin.
+ * `cr_token:<machine id>`: one machine, one key, under the console's one origin.
  *
  * TODO(V3-14): THE SEAM FOR THE PER-DEVICE TOKEN. The Mac half (V3-21) is in
  * place: the token stored here is about to stop being the root pairing token
@@ -75,7 +79,8 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const DESKTOP_IN_BASE = new RegExp(`${MACHINE_RELAY_PREFIX}/(${UUID})/?$`, 'i')
 
 /**
- * The desktop id inside a relay prefix, or null when the base is not one.
+ * The machine's id inside its relay address, or null when the base is not one
+ * ('' on a machine's own page, and anything that is not `…/api/m/<id>`).
  *
  * Read from the machine's relay address (api-base.ts · clientBase), never
  * from `location.pathname`: the address is built from the machine in scope,
@@ -89,11 +94,11 @@ export const desktopIdFromBase = (base: string): string | null => {
 /**
  * Where this client's token lives.
  *
- * At the root: today's key, so nothing about an existing LAN pairing changes.
- * Under a relay prefix: keyed by desktop. And when the prefix is one we cannot
- * read, keyed by the prefix itself — an unreadable base is still not the root,
- * and falling back to the root key there would serve this Mac whichever token
- * the last direct pairing left behind.
+ * On a machine's own page (base ''): the root key, so nothing about an
+ * existing LAN pairing changes. On the console: keyed by the machine's id.
+ * And when the base is one we cannot read, keyed by the base itself: an
+ * unreadable base is still not the root, and falling back to the root key
+ * there would hand that machine whichever token a direct pairing left behind.
  */
 export const tokenKeyForBase = (base: string): string => {
   const trimmed = base.replace(/\/+$/, '')
@@ -104,7 +109,7 @@ export const tokenKeyForBase = (base: string): string => {
 /** The query parameter a DIRECT pairing URL carries: `?token=`. */
 export const TOKEN_PARAM = 'token'
 
-/** The fragment parameter the canonical relay URL carries: `#pair=`. */
+/** The fragment parameter a pasted pairing link carries: `#pair=`. */
 export const PAIR_PARAM = 'pair'
 
 /** The sealed session's connect code, beside the token in the same fragment. */
@@ -113,7 +118,7 @@ export const CODE_PARAM = 'code'
 /** 32 bytes, base64url, as main/connect-code.ts writes it. */
 const CONNECT_CODE_SHAPE = /^[A-Za-z0-9_-]{43}$/
 
-/** `cr_code:<desktop id>`: one origin hosts many Macs, as for the token. */
+/** `cr_code:<machine id>` on the console, `cr_code` on a machine's own page: as for the token. */
 export const codeKeyForBase = (base: string): string => {
   const trimmed = base.replace(/\/+$/, '')
   return trimmed.length === 0 ? 'cr_code' : `cr_code:${desktopIdFromBase(trimmed) ?? trimmed}`

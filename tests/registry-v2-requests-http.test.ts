@@ -11,16 +11,17 @@ import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
 import { createV2 } from '../registry/src/v2-routes'
-import { openAtDevice, type SealedToDevice } from '../registry/src/v2-device-seal'
 
 /**
  * IDENTITY v3 — THE ONE QUEUE, over HTTP (V3-11).
  *
- * The three kinds through the same list, the two rulings' new routes, and the
- * two lines from the revocation table: a revoke voids, "not me" empties. The
- * one property the reach handoff rests on is proved end to end — the Mac seals
- * the pairing URL to the asking device and the registry relays ciphertext it
- * cannot read, so only that device opens it.
+ * The two kinds through the same list (a sign-in waiting for a nod, a guest
+ * asking for a seat), the seat ruling's route, and the revocation table: a
+ * revoke is told to every device, "not me" empties the queue.
+ *
+ * A THIRD KIND IS GONE (0.6.0): a device asking one Mac for Wi-Fi. Its route
+ * answers as any route the registry never had, and nothing it once opened can
+ * be listed, polled or answered.
  */
 
 const PASSWORD = 'correct horse battery staple'
@@ -132,7 +133,7 @@ beforeAll(async () => {
   miraToken = await claim('mira', mira)
   drejMac2Token = await attach('drej', drejMac2, drejToken, 'desktop')
   drejPhoneToken = await attach('drej', drejPhone, drejToken, 'phone')
-  // Both Macs register themselves as desktops, so a reach can name them.
+  // Both Macs register themselves as desktops of the account.
   for (const [id, token] of [[drejMac.id, drejToken], [drejMac2.id, drejMac2Token]] as const) {
     await call('PUT', `/v2/me/desktops/${id}`, { name: 'A Mac', workspaces: [] }, as(token))
   }
@@ -270,117 +271,120 @@ describe('POST /v2/teams/@o/t/seat-requests (R1)', () => {
   })
 })
 
-// ── R2: reach requests, and the sealed pairing URL ──────────────────────────
+// ── a phone asking for Wi-Fi: gone with the relay's page (0.6.0) ────────────
 
-describe('POST /v2/me/desktops/:id/reach-requests (R2)', () => {
-  const PAIRING_URL = 'https://192.168.1.20:8643/#pair=super-secret-token'
-  const info = (id: string): string => `reach:${id}`
+describe('POST /v2/me/desktops/:id/reach-requests, which the registry no longer takes', () => {
+  /** A route under /v2/me this registry has never had: how it answers one. */
+  const unknown = (id: string, token?: string): Promise<Response> =>
+    call('POST', `/v2/me/desktops/${id}/no-such-thing`, {}, token === undefined ? {} : as(token))
+  const queueOf = async (token: string): Promise<{ id: string; kind: string }[]> =>
+    bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(token)))
+  const requestEvents = async (): Promise<number> =>
+    (await bodyOf<{ events: { kind: string }[] }>(await call('GET', '/v2/me/events?since=0', undefined, as(drejToken)))).events.filter(
+      (e) => e.kind === 'request'
+    ).length
 
-  it('a device asks to reach one Mac; it lands in THAT Mac’s queue only', async () => {
-    const asked = await bodyOf<{ id: string; kind: string; state: string }>(
-      await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejPhoneToken))
-    )
-    expect(asked).toMatchObject({ kind: 'reach', state: 'pending' })
-    // The target Mac sees it, with the asking device's key to seal to.
-    const mac = await bodyOf<{ id: string; kind: string; device: string; askKey?: Record<string, string> }[]>(
-      await call('GET', '/v2/me/requests', undefined, as(drejToken))
-    )
-    const reach = mac.find((r) => r.kind === 'reach')
-    expect(reach?.id).toBe(asked.id)
-    expect(reach?.askKey).toEqual(drejPhone.pub)
-    // The OTHER Mac of the same account does not — a reach is one Mac's to answer.
-    const other = await bodyOf<{ kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejMac2Token)))
-    expect(other.some((r) => r.kind === 'reach')).toBe(false)
+  it('answers as any unknown route does, whoever asks and whichever machine is named', async () => {
+    const asks: readonly [string, string | undefined][] = [
+      // A phone of the account naming one of its Macs: the ask that once opened a row.
+      [drejMac.id, drejPhoneToken],
+      // A Mac naming itself, a machine that is nobody's, and somebody else's account.
+      [drejMac.id, drejToken],
+      [randomUUID(), drejPhoneToken],
+      [drejMac.id, miraToken],
+      // And nobody at all.
+      [drejMac.id, undefined]
+    ]
+    for (const [id, token] of asks) {
+      const res = await call('POST', `/v2/me/desktops/${id}/reach-requests`, {}, token === undefined ? {} : as(token))
+      const never = await unknown(id, token)
+      expect(res.status).toBe(never.status)
+      expect(await res.text()).toBe(await never.text())
+      expect(res.status).toBe(token === undefined ? 401 : 404)
+    }
   })
 
-  it('ALLOW relays a sealed URL the asking device — and only it — can open', async () => {
-    const asked = await bodyOf<{ id: string }>(
-      await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejPhoneToken))
-    )
-    // The Mac reads the asking key off its queue and seals the URL to it. The
-    // seal is the app's (V3-13); here it is the same construction, run inline.
-    const { sealToDevice } = await import('../registry/src/v2-device-seal')
-    const sealed = sealToDevice(drejPhone.pub, info(asked.id), PAIRING_URL)
-    expect((await call('POST', `/v2/me/requests/${asked.id}`, { decision: 'approve', sealed }, as(drejToken))).status).toBe(204)
-
-    // The asking device polls and gets the sealed blob; nobody else can read it.
-    const got = await bodyOf<{ state: string; sealed: SealedToDevice }>(
-      await call('GET', `/v2/me/requests/${asked.id}`, undefined, as(drejPhoneToken))
-    )
-    expect(got.state).toBe('allowed')
-    expect(openAtDevice(drejPhone.priv, info(asked.id), got.sealed)).toBe(PAIRING_URL)
-    // A SECOND DEVICE'S KEY opens nothing — the Done-when's own check.
-    expect(openAtDevice(drejMac2.priv, info(asked.id), got.sealed)).toBeNull()
-    // And the registry never carried the URL in the clear on the wire.
-    expect(JSON.stringify(got)).not.toContain('super-secret-token')
-
-    // Handed over ONCE: the next poll is 'delivered' with no seal to re-read.
-    const again = await bodyOf<{ state: string; sealed?: unknown }>(
-      await call('GET', `/v2/me/requests/${asked.id}`, undefined, as(drejPhoneToken))
-    )
-    expect(again.state).toBe('delivered')
-    expect(again.sealed).toBeUndefined()
+  it('opens nothing: no row in any device’s queue, and nothing said on the feed', async () => {
+    const before = { mac: await queueOf(drejToken), mac2: await queueOf(drejMac2Token), phone: await queueOf(drejPhoneToken), said: await requestEvents() }
+    expect((await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejPhoneToken))).status).toBe(404)
+    expect(await queueOf(drejToken)).toEqual(before.mac)
+    expect(await queueOf(drejMac2Token)).toEqual(before.mac2)
+    expect(await queueOf(drejPhoneToken)).toEqual(before.phone)
+    expect(await requestEvents()).toBe(before.said)
+    for (const token of [drejToken, drejMac2Token, drejPhoneToken]) {
+      expect((await queueOf(token)).every((row) => row.kind === 'join' || row.kind === 'seat')).toBe(true)
+    }
   })
 
-  it('a device that is not the asker cannot even see the reach request exists', async () => {
-    const asked = await bodyOf<{ id: string }>(
-      await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejPhoneToken))
-    )
-    // drejMac2 is the same account but not the asker: 404, never a status leak.
-    expect((await call('GET', `/v2/me/requests/${asked.id}`, undefined, as(drejMac2Token))).status).toBe(404)
+  it('has no answer to poll for: a request’s id is not a page of its own', async () => {
+    // A seat request is real, and it was never read here either: its answer is GET …/seat.
+    const seat = await bodyOf<{ id: string }>(await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken)))
+    for (const [id, token] of [[seat.id, miraToken], [seat.id, drejToken], [randomUUID(), drejPhoneToken]] as const) {
+      const res = await call('GET', `/v2/me/requests/${id}`, undefined, as(token))
+      expect(res.status).toBe(404)
+      expect(await bodyOf<{ error: string }>(res)).toMatchObject({ error: 'not_found' })
+    }
   })
 
-  it('only the named Mac may answer, and ALLOW without a sealed URL is refused', async () => {
-    const asked = await bodyOf<{ id: string }>(
-      await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejPhoneToken))
-    )
-    // The other Mac is not the target.
-    expect((await call('POST', `/v2/me/requests/${asked.id}`, { decision: 'approve', sealed: { alg: 'x25519', e: 'a', sealed: 'b' } }, as(drejMac2Token))).status).toBe(404)
-    // The target Mac, but no sealed URL: an ALLOW with nothing to hand over.
-    expect((await call('POST', `/v2/me/requests/${asked.id}`, { decision: 'approve' }, as(drejToken))).status).toBe(400)
+  it('takes no sealed answer: the queue’s own route answers a seat and nothing else', async () => {
+    const sealed = { alg: 'x25519', e: 'a', sealed: 'b' }
+    expect((await call('POST', `/v2/me/requests/${randomUUID()}`, { decision: 'approve', sealed }, as(drejToken))).status).toBe(404)
+    // A seat request is still answered there, by its owner, as before.
+    const asked = await bodyOf<{ id: string }>(await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(miraToken)))
+    expect((await call('POST', `/v2/me/requests/${asked.id}`, { decision: 'decline', sealed }, as(drejToken))).status).toBe(204)
   })
 
-  it('refuses reaching a device that is not a desktop of the account, or oneself', async () => {
-    expect((await call('POST', `/v2/me/desktops/${randomUUID()}/reach-requests`, {}, as(drejPhoneToken))).status).toBe(404)
-    expect((await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(drejToken))).status).toBe(400)
+  it('leaves a sign-in waiting for a nod exactly where it was: listed as a join row, and answered', async () => {
+    const browser = newDevice()
+    const started = await call('POST', '/v2/sessions', {
+      username: 'drej',
+      password: PASSWORD,
+      device: { id: browser.id, kind: 'browser', name: 'A new browser', jwk: browser.pub }
+    })
+    expect(started.status).toBe(401)
+    const asked = await bodyOf<{ pending: string; match: string }>(started)
+    const { approval } = await bodyOf<{ approval: string }>(await call('POST', `/v2/sessions/${asked.pending}/approve`))
+    const row = (await bodyOf<{ id: string; kind: string; device?: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejToken)))).find(
+      (r) => r.id === approval
+    )
+    expect(row).toMatchObject({ kind: 'join', device: 'A new browser' })
+    // The wrong number is still refused, and the right one still lets the device in.
+    const wrong = asked.match === '11' ? '12' : '11'
+    expect((await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve', match: wrong }, as(drejToken))).status).toBe(400)
+    expect((await call('POST', `/v2/me/approvals/${approval}`, { decision: 'approve', match: asked.match }, as(drejToken))).status).toBe(204)
+    expect((await call('GET', `/v2/sessions/${asked.pending}`)).status).toBe(201)
+    expect((await queueOf(drejToken)).some((r) => r.id === approval)).toBe(false)
   })
 })
 
-// ── §06: a revoke voids, not-me empties ─────────────────────────────────────
+// ── §06: a revoke is told, not-me empties ───────────────────────────────────
 
 describe('the revocation table (§06)', () => {
-  it('revoking a device voids the reach requests it made, and tells every device', async () => {
-    // A throwaway phone asks to reach the Mac, then is revoked.
+  it('revoking a device tells every device', async () => {
     const phone = newDevice()
-    const token = await attach('drej', phone, drejToken, 'phone')
-    const asked = await bodyOf<{ id: string }>(
-      await call('POST', `/v2/me/desktops/${drejMac.id}/reach-requests`, {}, as(token))
-    )
-    // The Mac can see it before the revoke.
-    let mac = await bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejToken)))
-    expect(mac.some((r) => r.id === asked.id)).toBe(true)
-    // Revoke the asking phone.
+    await attach('drej', phone, drejToken, 'phone')
+    const said = async (): Promise<number> =>
+      (await bodyOf<{ events: { kind: string }[] }>(await call('GET', '/v2/me/events?since=0', undefined, as(drejToken)))).events.filter(
+        (e) => e.kind === 'revoked'
+      ).length
+    const before = await said()
     expect((await call('DELETE', `/v2/me/devices/${phone.id}`, { current: PASSWORD }, as(drejToken))).status).toBe(204)
-    // Its request is gone from the Mac's queue.
-    mac = await bodyOf<{ id: string; kind: string }[]>(await call('GET', '/v2/me/requests', undefined, as(drejToken)))
-    expect(mac.some((r) => r.id === asked.id)).toBe(false)
-    // And a 'revoked' event names the device.
+    // A 'revoked' event names the device.
     const feed = await bodyOf<{ events: { kind: string; device?: string }[] }>(
       await call('GET', '/v2/me/events?since=0', undefined, as(drejToken))
     )
     expect(feed.events.some((e) => e.kind === 'revoked')).toBe(true)
+    expect(await said()).toBe(before + 1)
+    expect(feed.events.filter((e) => e.kind === 'revoked').at(-1)?.device).toBe("drej's phone")
   })
 
   it('“not me” empties the queue', async () => {
     // A fresh account so the count is its own.
     const mac = newDevice()
-    const phone = newDevice()
     const token = await claim('rae', mac)
-    const phoneToken = await attach('rae', phone, token, 'phone')
     await call('PUT', `/v2/me/desktops/${mac.id}`, { name: 'A Mac', workspaces: [] }, as(token))
-    // A seat request rae is asking for, and a reach between rae's own devices.
+    // A seat request rae is asking for.
     await call('POST', '/v2/teams/@drej/alpha/seat-requests', {}, as(token))
-    await call('POST', `/v2/me/desktops/${mac.id}/reach-requests`, {}, as(phoneToken))
     // rae presses "not me" on a fresh sign-in ladder.
     const stranger = newDevice()
     const laddered = await call('POST', '/v2/sessions', {

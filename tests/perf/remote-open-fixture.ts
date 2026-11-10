@@ -92,7 +92,6 @@ const MIME: Record<string, string> = {
 /** The marker mobile-server injects (remoteBoot), minus the viewport tweak. */
 const BOOT = `<script>
 window.COOKREW_SLUG = ""
-window.COOKREW_BASE = ""
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => { document.body.classList.add('cookrew-mobile') })
 </script>`
