@@ -345,6 +345,98 @@ ${presets.length > 0 ? `<h3 class="mkt-h" style="margin-top:26px">Presets to dow
 </div></section>`
 }
 
+/**
+ * THE FRONT PAGE OF THE STATIC SITE (0.6.0, site-static.ts). The same hero,
+ * the same get-started and feature sections, and no marketplace: nothing here
+ * is served by a registry any more, so nothing here lists what one is serving.
+ * The way to "your machines" is the console.
+ */
+export interface StaticHomeInput {
+  release: Release | null
+  commits?: readonly Commit[] | null
+  /** The console's origin. */
+  console: string
+}
+
+function staticHeroButtons(release: Release | null, console: string): string {
+  const mac = release ? pickAsset(release, 'mac') : null
+  const win = release ? pickAsset(release, 'windows') : null
+  const date = release?.publishedAt ? release.publishedAt.slice(0, 10) : ''
+  return `<p class="row" id="download"><a class="btn primary lg" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Download for Mac</a><a class="btn lg" href="${esc(console)}/">${icon('mac')} Open console</a></p>
+<p class="meta">${release ? `v${esc(release.version)}${date ? ` · ${esc(date)}` : ''}` : `<a href="${RELEASES_PAGE}">latest release</a>`} · ${FACTS.license} · Apple Silicon${win ? ` · <a href="${esc(win.url)}">Windows preview</a>` : ', Windows preview'}</p>`
+}
+
+function staticDock(console: string): string {
+  return `<nav class="dock compact" aria-label="Where to go first">
+<a href="/features/canvas"><span class="ico">${icon('canvas')}</span><span><span class="t">See the canvas</span><span class="d">Terminals, notes and browsers on one board, wired together.</span></span></a>
+<a href="${esc(console)}/"><span class="ico">${icon('mac')}</span><span><span class="t">Your machines</span><span class="d">Every machine of your account and its agents, from any browser.</span></span></a>
+<a href="#start"><span class="ico">${icon('play')}</span><span><span class="t">Get started</span><span class="d">Place an agent and let it run your team.</span></span></a>
+</nav>`
+}
+
+function staticCatalog(release: Release | null, console: string): string {
+  const mac = release ? pickAsset(release, 'mac') : null
+  const items: [string, string, boolean][] = [
+    ['#start', 'Get started', false],
+    ['#serve', 'Save and serve a team', true],
+    ['#build', 'What your orch runs', true],
+    ['#features', 'Features', false],
+    ['#zoom', 'The zoom, recorded', true],
+    ['#compare', 'Chat tab, one agent, or a team', true],
+    ['#faq', 'Questions', true],
+    ['#built', 'What landed on dev', true]
+  ]
+  return `<aside class="toc" aria-label="On this page">
+<div class="jump"><a class="btn sm primary" href="${mac ? esc(mac.url) : '/download'}">${icon('download')} Get the app</a><a class="btn sm" href="${esc(console)}/">${icon('mac')} Open console</a></div>
+<p class="kicker"><span class="no">ON THIS PAGE</span></p><ol>${items
+    .map(([href, label, sub]) => `<li${sub ? ' class="sub"' : ''}><a href="${href}">${esc(label)}</a></li>`)
+    .join('')}</ol></aside>`
+}
+
+export function staticHomePage(input: StaticHomeInput): Page {
+  return page(
+    {
+      title: 'Cookrew — run a team of AI coding agents on one canvas',
+      kind: 'document',
+      active: 'home',
+      description: DESCRIPTION,
+      path: '/',
+      preload: [`${SITE_FRAMES}promo-poster.jpg`],
+      jsonLd: [
+        organization(),
+        softwareApplication(input.release),
+        webPage({ path: '/', name: 'Cookrew', description: DEFINITION }),
+        {
+          '@type': 'HowTo',
+          name: 'Get started with Cookrew',
+          description: 'Place an agent and let it orchestrate your workflow; save the team as a preset and choose to publish it.',
+          step: HOWTO.map((s, i) => ({ '@type': 'HowToStep', position: i + 1, name: s.name, text: s.text }))
+        },
+        faqPage([...START_FAQ, ...FAQ])
+      ]
+    },
+    `<div class="wrap home">
+<div class="home-body">
+<style>${BRAND_LOCKUP_CSS}</style>
+<div class="hero"><div class="wrap">
+<div>${BRAND_LOCKUP_HTML}<span class="tagline">OPEN SOURCE · ${FACTS.harnesses.slice(0, 4).join(' · ').toUpperCase()}</span>
+<h1>${esc(HEADLINE)}</h1>
+<p class="lede">${esc(ONE_LINE)} Every turn is a checkpoint.</p>
+${staticHeroButtons(input.release, input.console)}</div>
+<div>${promo()}</div>
+</div></div>
+
+<div class="wrap" style="padding:0">${staticDock(input.console)}</div>
+
+${startSection()}
+
+${featuresSection(input.commits ?? null)}
+</div>
+${staticCatalog(input.release, input.console)}
+</div>`
+  )
+}
+
 export function homePage(input: HomeInput): Page {
   const live = input.doors.find((d) => d.live !== false) ?? null
   return page(

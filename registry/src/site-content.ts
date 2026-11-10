@@ -19,7 +19,7 @@ export const GITHUB_REPO = 'https://github.com/cookrew/cookrew-app'
 
 /** The one-sentence entity definition. Meta description, JSON-LD, llms.txt, the hero. */
 export const DEFINITION =
-  'Cookrew is an open-source desktop workspace for running a team of AI coding agents on one canvas. It runs Claude Code, Codex, OpenCode and Pi side by side, records every agent turn as a checkpoint, and can serve a saved team at a cookrew.dev address where anyone can open a live session from a browser or from the Cookrew app.'
+  'Cookrew is an open-source desktop workspace for running a team of AI coding agents on one canvas. It runs Claude Code, Codex, OpenCode and Pi side by side, records every agent turn as a checkpoint, and can serve a saved team at a cookrew.dev address where anyone can open a live session from the Cookrew app.'
 
 export const HEADLINE = 'Run a team of AI coding agents on one canvas — or rent someone’s.'
 
@@ -73,16 +73,16 @@ export const FAQ: Faq[] = [
   },
   {
     q: 'Is my code sent to cookrew.dev?',
-    a: `cookrew.dev does not store your code. A served session runs on the author’s machine inside a sandbox. A call carried by the relay is sealed in the caller’s browser or app (${FACTS.relayCipher}) to the door’s key, so the relay moves ciphertext it cannot read. Your own canvas stays on your machine unless you serve a team, publish a preset, or open your Mac through the relay, a path that is not end-to-end sealed yet${LEGAL_PUBLISHED ? ` (see ${SITE_ORIGIN}/privacy)` : ''}.`
+    a: `cookrew.dev does not store your code. A served session runs on the author’s machine inside a sandbox. A call carried by the relay is sealed in the caller’s app (${FACTS.relayCipher}) to the door’s key, so the relay moves ciphertext it cannot read. Your own canvas stays on your machine unless you serve a team, publish a preset, or reach your own machine through the relay, a path that is not end-to-end sealed yet${LEGAL_PUBLISHED ? ` (see ${SITE_ORIGIN}/privacy)` : ''}.`
   },
   {
-    q: 'Can I use a team from a browser or from my phone?',
-    a: 'Yes. Every team page on cookrew.dev carries the team’s own terminal, the same PTY a placed card gets, drawn in the browser. The Cookrew phone companion shows your own crew, cards and transcripts on a phone over Wi-Fi or Tailscale.'
+    q: 'Can I reach my agents from a browser or from my phone?',
+    a: 'Yes. Sign in to the console and every machine of your account is there with its workspaces, agents and transcripts, in any browser and on a phone. It takes the local network or Tailscale when it can and the relay when it cannot. A served team of someone else’s opens in the Cookrew app.'
   },
   { q: 'What is a checkpoint?', a: CHECKPOINT_DEFINITION },
   {
     q: 'How do I install a team from a link?',
-    a: 'Click “Open in Cookrew” on a team page, or paste the address into Cookrew → Import a team. The app shows the team’s face first and asks before placing anything; a link on its own never installs.'
+    a: 'Paste the team’s address into Cookrew → Import a team. The app shows the team’s face first and asks before placing anything; a link on its own never installs.'
   }
 ]
 
@@ -204,14 +204,14 @@ export const FEATURES: FeatureSpec[] = [
   },
   {
     slug: 'marketplace',
-    title: 'The agent team marketplace: open someone’s crew from a browser',
+    title: 'The agent team marketplace: open someone’s crew from the app',
     short: 'The marketplace lists doors, not copies. A team stays on its author’s machine; you sign in, buy a seat once if it is priced, and get a live sandboxed session of your own.',
     definition: MARKET_DEFINITION,
-    pts: ['One cookrew.dev link: served on the author’s side, opened on yours', 'The relay carries bytes it cannot read; the author can end a session any time', '200 signed delivery · 401 sign in · 402 pay · 403 not covered — money goes straight to the author', 'Each team page carries the team’s own terminal, the same PTY the placed card gets'],
+    pts: ['One cookrew.dev link: served on the author’s side, opened on yours', 'The relay carries bytes it cannot read; the author can end a session any time', '200 signed delivery · 401 sign in · 402 pay · 403 not covered — money goes straight to the author', 'The placed card is the team’s own terminal, the same PTY its author sees'],
     frames: ['market'],
     faq: [
       { q: 'Can the team’s author see what I type?', a: 'Yes. The session runs on their machine, so the author can see what you send and what their agents do with it, and can end the session. The relay in between cannot read it.' },
-      { q: 'What can a served team access on my computer?', a: 'Nothing. It runs on the author’s machine in a sandbox; your browser or app only carries keystrokes and screen bytes.' }
+      { q: 'What can a served team access on my computer?', a: 'Nothing. It runs on the author’s machine in a sandbox; the app only carries keystrokes and screen bytes.' }
     ],
     related: ['harnesses', 'checkpoints', 'workspaces']
   }
@@ -230,7 +230,7 @@ export const START_HOWTO: { name: string; text: string; detail: string[] }[] = [
   },
   {
     name: 'Save the team as a preset, and choose to publish it',
-    text: 'Select the cards and save the team: nodes, wires and turn histories in one file, the original session untouched. Keep it as a preset for your next workspace, or press SERVE to publish it at cookrew.dev/@you/team — free or priced, with a one-sentence summary and tags — where anyone can open a sandboxed session from a browser or the app.',
+    text: 'Select the cards and save the team: nodes, wires and turn histories in one file, the original session untouched. Keep it as a preset for your next workspace, or press SERVE to publish it at cookrew.dev/@you/team — free or priced, with a one-sentence summary and tags — where anyone can open a sandboxed session from the Cookrew app.',
     detail: [
       'cookrew team save "MY CREW" · cookrew workspace create "Next project" --team "MY CREW"',
       'SERVE: your cookrew.dev account signs the listing; it is live while your relay connection is up',
@@ -241,7 +241,7 @@ export const START_HOWTO: { name: string; text: string; detail: string[] }[] = [
 
 export const START_FAQ: Faq[] = [
   { q: 'What do I need before installing Cookrew?', a: 'A Mac with Apple Silicon or Windows (preview), Node 20+ if you build from source, tmux or herdr to host terminals, and the agent CLIs you want to run (Claude Code, Codex, OpenCode, Pi) with their own logins.' },
-  { q: 'Do I need an account to use Cookrew?', a: 'No. The app runs entirely on your machine. A cookrew.dev account is needed only to serve a team on the marketplace or to open someone else’s.' }
+  { q: 'Do I need an account to use Cookrew?', a: 'No. The app runs entirely on your machine. A cookrew.dev account is needed only to reach your machines from the console, to serve a team on the marketplace, or to open someone else’s.' }
 ]
 
 /** Everything a crawler or a model needs, as plain text: /llms.txt. */

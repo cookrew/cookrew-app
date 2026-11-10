@@ -151,12 +151,12 @@ export interface SitemapEntry {
 /** A sitemap file holds at most 50,000 URLs; this one stops well short. */
 const SITEMAP_MAX = 5000
 
-export function sitemapXml(allDoors: readonly ListedDoor[]): string {
+export function sitemapXml(allDoors: readonly ListedDoor[], options: { market: boolean } = { market: true }): string {
   const doors = allDoors.slice(0, SITEMAP_MAX)
   const handles = [...new Set(doors.map((d) => d.handle))]
   const entries: SitemapEntry[] = [
     { path: '/', priority: 1 },
-    { path: '/market', priority: 0.9 },
+    ...(options.market ? [{ path: '/market', priority: 0.9 }] : []),
     // /start and /features are anchors on the homepage now; a fragment is not
     // a sitemap URL, and the redirects cover old links.
     ...FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),

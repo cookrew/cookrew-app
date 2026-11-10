@@ -187,6 +187,34 @@ export interface ShellOptions {
   standalone?: { site: string; console: string | null; home: string }
 }
 
+/**
+ * THE STATIC SITE (0.6.0). cookrew.dev is built into files (site-static.ts)
+ * and served by a static host: it has no account, no marketplace and no page
+ * for a person. While its pages are being rendered the shell draws the header
+ * and footer of that site: HOME, the app, and the way to the console, where
+ * the reader's machines are. Set for the length of one build and no longer.
+ */
+export interface StaticSite {
+  /** The console's origin: where "your machines" are. */
+  readonly console: string
+  /** The auth host's origin: where the account is. */
+  readonly auth: string
+}
+
+let staticSite: StaticSite | null = null
+
+export const staticSiteNow = (): StaticSite | null => staticSite
+
+export function withStaticSite<T>(site: StaticSite, render: () => T): T {
+  const was = staticSite
+  staticSite = site
+  try {
+    return render()
+  } finally {
+    staticSite = was
+  }
+}
+
 export function page(options: ShellOptions, main: string): Page {
   return {
     status: options.status ?? 200,
@@ -300,6 +328,28 @@ function shell(options: ShellOptions, main: string): string {
   const styles = (options.kind === 'app' ? options.styles ?? [] : [])
     .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
     .join('')
+  if (staticSite !== null) {
+    const top = [
+      ['/', 'Home', 'home'],
+      ['/#download', 'Get the app', 'download']
+    ]
+      .map(([href, label, key]) => `<a class="btn sm${options.active === key ? ' primary' : ''}" href="${href}">${label}</a>`)
+      .join('')
+    return `<!doctype html>
+<html lang="en"><head>${head(options)}<style>${FONT_FACES}${SITE_STYLE}</style></head>
+<body>
+<header class="hdr"><div class="wrap">
+<a class="mark" href="/" aria-label="Cookrew home">${LOGO}</a>
+<span class="chip">an open-source spatial workspace for AI agents</span>
+<nav class="top">${top}<a class="btn sm" href="${esc(staticSite.console)}/">${icon('mac')} Open console</a></nav>
+</div></header>
+${main}
+<footer><div class="wrap">
+<nav class="row" aria-label="Site"><a href="/#features">Features</a><a href="/#start">Get started</a><a href="/#download">Download</a><a href="${esc(staticSite.console)}/">Console</a><a href="${esc(staticSite.auth)}/account">Account</a><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a></nav>
+<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This site is static: it runs no script and sets no cookie. Your machines are in the console; your account is at ${esc(new URL(staticSite.auth).host)}.</p>
+</div></footer>
+</body></html>`
+  }
   if (options.standalone) {
     const { site, console: consoleOrigin, home } = options.standalone
     const out = [

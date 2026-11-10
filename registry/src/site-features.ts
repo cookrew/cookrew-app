@@ -1,5 +1,5 @@
 import { FRAMES, frameImg, type Frame } from './site-frames'
-import { esc, page, type Page } from './site-shell'
+import { esc, page, type Page, staticSiteNow } from './site-shell'
 import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, type FeatureSpec } from './site-content'
 import type { Commit } from './github-commits'
 import { SEQUENCES, type Step } from './site-sequences'
@@ -64,7 +64,7 @@ export function featurePage(slug: string): Page | null {
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<p class="row"><a class="btn primary" href="/download">Get Cookrew</a><a class="btn" href="/start">Get started</a>${f.slug === 'marketplace' ? '<a class="btn" href="/market">Explore teams</a>' : ''}</p>
+<p class="row"><a class="btn primary" href="/download">Get Cookrew</a><a class="btn" href="/start">Get started</a>${f.slug === 'marketplace' && staticSiteNow() === null ? '<a class="btn" href="/market">Explore teams</a>' : ''}</p>
 </div>
 <section><div class="wrap"><p class="kicker"><span class="no">RECORDED</span>${steps.length > 0 ? `${steps.length} steps, captured from the running app` : 'captured from the running app'}</p>
 <h2>How it looks</h2>${visual}</div></section>
