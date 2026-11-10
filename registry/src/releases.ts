@@ -86,7 +86,8 @@ export class ReleaseCache {
   }
 }
 
-function parseRelease(body: unknown): Release | null {
+/** GitHub's answer for one release, read as far as it is one. Also the static site's build (scripts/site-build.mjs). */
+export function parseRelease(body: unknown): Release | null {
   if (typeof body !== 'object' || body === null) return null
   const raw = body as {
     tag_name?: unknown
