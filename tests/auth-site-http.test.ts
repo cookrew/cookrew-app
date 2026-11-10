@@ -248,8 +248,8 @@ describe('the auth origin', () => {
     expect((await browser.call(A, 'GET', '/v2/me')).status).toBe(404)
     expect((await browser.call(A, 'GET', '/assets/site.js')).status).toBe(404)
     expect((await browser.call(A, 'GET', '/assets/auth.js')).status).toBe(200)
-    // The product origin still answers its own site.
-    expect((await browser.call(P, 'GET', '/market')).status).toBe(200)
+    // The product origin still answers its own routes: the directory the auth host refused, as data.
+    expect((await browser.call(P, 'GET', '/v1/doors')).status).toBe(200)
   })
 
   it('refuses a page write without its own Origin', async () => {

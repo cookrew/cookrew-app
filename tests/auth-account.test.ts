@@ -84,6 +84,17 @@ describe('the account page, signed out', () => {
     expect(res.headers['cache-control']).toBe('private, no-store')
   })
 
+  it('refuses a cookie that is not a live session: the same page with a way in, never the account', async () => {
+    // A made-up session, and a v1 account cookie, which is not a v2 session and must not open this page.
+    for (const cookie of ['__Host-cr_session=rubbish.rubbish', 'cr_account=rubbish.rubbish']) {
+      const res = await new Client(site).call(site.A, 'GET', '/account', undefined, { accept: 'text/html', cookie })
+      expect(res.status, cookie).toBe(401)
+      expect(res.text, cookie).toContain('data-signin')
+      expect(res.text, cookie).not.toContain(`@${username}`)
+      expect(res.headers['cache-control'], cookie).toBe('private, no-store')
+    }
+  })
+
   it('is given its scripts by this host', async () => {
     for (const name of ['site.js', 'factors.js', 'step-up.js', 'device-id.js']) {
       const res = await new Client(site).call(site.A, 'GET', `/assets/${name}`)
@@ -93,6 +104,14 @@ describe('the account page, signed out', () => {
     // And none of the machine scripts: nothing here reaches a machine.
     for (const name of ['machines.js', 'reach.js', 'line.js', 'xterm.js']) {
       expect((await new Client(site).call(site.A, 'GET', `/assets/${name}`)).status, name).toBe(404)
+    }
+  })
+
+  it('serves an asset by its exact name and nothing reached by walking: not a path, not a property of the list', async () => {
+    for (const name of ['../package.json', '%2e%2e%2fpackage.json', '..%2f..%2fpackage.json', 'toString', '__proto__', 'constructor', 'hasOwnProperty', 'site.js%00.png', '']) {
+      const res = await new Client(site).call(site.A, 'GET', `/assets/${name}`)
+      expect(res.status, name).toBe(404)
+      expect(res.headers['set-cookie'], name).toBeUndefined()
     }
   })
 })

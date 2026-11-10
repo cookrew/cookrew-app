@@ -46,7 +46,7 @@ const BODY_MAX = 16 * 1024
 const SAID = {
   needsPassword:
     'Set an account password first: this account signs in with a provider and has no password or passkey to enter a machine with.',
-  locked: 'This account is locked down after “Not me”. Change the password at cookrew.dev/me first.',
+  locked: 'This account is locked down after “Not me”. Change the password at auth.cookrew.dev/account first.',
   resting: 'Too many wrong tries. Try again in a minute.',
   wrongPassword: 'That is not the account password.',
   wrongPasskey: 'That passkey did not answer for this account.',

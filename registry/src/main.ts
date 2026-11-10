@@ -9,7 +9,6 @@
 //           non-empty store rather than duplicating or overwriting.
 //
 // Routes (spec §2; codes are the protocol, never chrome — R14):
-//   GET  /install/:presetId          the shared link — a plain page, no app needed (R21)
 //   GET  /v1/presets?q=              browse / search
 //   GET  /v1/presets/:id/manifest    the gate
 //   HEAD /v1/presets/:id/manifest    update check, x-cookrew-preset-version (R3)
@@ -20,7 +19,7 @@
 //   POST /v2/accounts                claim a username with a password (identity v2)
 //   POST /v2/sessions                sign in; the server sets __Host-cr_session HttpOnly
 //   GET  /v2/me                      the reader's devices, desktops and security
-//   GET  /me                         the same, as a page
+//   GET  /account (auth host)        the same, as a page: the only page this process draws besides sign-in
 //   POST /v2/me/desktops/:id/cert    a Mac's own certificate, by ACME dns-01
 //   GET  /v2/me/desktops/:id/cert    pending / issued / failed
 //   POST /v1/funnel                  one onboarding event, into daily sums
@@ -59,8 +58,6 @@ import { facilitatorFor } from './facilitator-boot'
 import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
 import { StarStore } from './stars'
-import { ReleaseCache } from './releases'
-import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
 import { FunnelCounts } from './funnel-counts'
 import { createV2 } from './v2-routes'
@@ -344,14 +341,10 @@ createRegistry({
   // refuses because "anyone with the link" would not be true of them.
   doors: new DoorStore(DATA, { allowPrivate: DEV }),
   relay: true,
-  // The address printed on a team's page is something a person copies, so it
-  // is the configured origin rather than whatever Host a caller sent.
+  // The configured origin rather than whatever Host a caller sent.
   origin: resolved.config.origin,
-  // The market's sort key and the homepage's download buttons — both real:
-  // stars are a file beside the doors, the build is whatever GitHub says.
+  // The directory's sort key and today's counts per door: files beside the doors.
   stars: new StarStore(DATA),
-  releases: new ReleaseCache(),
-  commits: new CommitsCache(),
   pulse: new Pulse(DATA),
   // The onboarding funnel. The registry has no site-wide owner role, so who may
   // read the totals is named at boot. No flag and no env: nobody can.

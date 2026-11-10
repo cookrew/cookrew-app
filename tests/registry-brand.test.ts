@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { BRAND_LOCKUP_CSS, BRAND_LOCKUP_HTML, BRAND_MARK_SVG, FAVICON_SVG } from '../registry/src/site-brand'
 import { ASSETS } from '../registry/src/assets-bundle'
-import { homePage, marketPage, marketQuery } from '../registry/src/site'
+import { staticHomePage } from '../registry/src/site-home'
+import { mePage } from '../registry/src/site-account'
+import { withStaticSite } from '../registry/src/site-shell'
 
-const input = { doors: [], presets: [], release: null, stars: () => 0, pulse: () => ({ opens: 0, lines: 0, callers: 0 }) as never, linesToday: 0, commits: null }
+// The two pages that are still drawn (0.6.0): the static site's front page, and the account page on the auth host.
+const CONSOLE = 'https://console.cookrew.dev'
+const homeBody = (): string => withStaticSite({ console: CONSOLE, auth: 'https://auth.cookrew.dev' }, () => staticHomePage({ release: null, commits: null, console: CONSOLE })).body
+const accountBody = (): string => mePage(null, { site: 'https://cookrew.dev', console: CONSOLE, home: '/account' }).body
 
 describe('the brand: COOkrew in ink, one brush C round the first lens', () => {
   it('ships the lockup as static brush paths — no bitmap, no font, no data uri in the page', () => {
@@ -23,12 +28,12 @@ describe('the brand: COOkrew in ink, one brush C round the first lens', () => {
     expect(BRAND_LOCKUP_CSS).toContain('prefers-reduced-motion')
   })
 
-  it('the home page carries the lockup and no script; the market page does not carry it', () => {
-    const home = homePage(input).body
+  it('the home page carries the lockup and no script; the account page does not carry it', () => {
+    const home = homeBody()
     expect(home).toContain('class="brand"')
     expect(home).toContain(BRAND_LOCKUP_HTML)
     expect(home).not.toMatch(/<script(?![^>]*application\/ld\+json)/)
-    expect(marketPage({ ...input, query: marketQuery(new URLSearchParams()), starredTeams: [] } as never).body).not.toContain('class="brand"')
+    expect(accountBody()).not.toContain('class="brand"')
   })
 
   // Scheme 7 of the logo sheet (owner 2026-11-05): the small marks are the C round one lens.
@@ -43,12 +48,12 @@ describe('the brand: COOkrew in ink, one brush C round the first lens', () => {
   })
 
   it('the header mark is still, in the ink colour, on every page', () => {
-    const home = homePage(input).body
+    const home = homeBody()
     expect(BRAND_MARK_SVG).toContain('class="mark-coo"')
     expect(BRAND_MARK_SVG).toContain('fill="currentColor"')
     expect(BRAND_MARK_SVG).not.toContain('ink-draw')
     expect(home).toContain(`<a class="mark" href="/" aria-label="Cookrew home">${BRAND_MARK_SVG}</a>`)
-    expect(marketPage({ ...input, query: marketQuery(new URLSearchParams()), starredTeams: [] } as never).body).toContain(BRAND_MARK_SVG)
+    expect(accountBody()).toContain(`<a class="mark" href="https://cookrew.dev/" aria-label="Cookrew home">${BRAND_MARK_SVG}</a>`)
   })
 
   it('the favicon stands alone: the C round one lens on a paper tile', () => {

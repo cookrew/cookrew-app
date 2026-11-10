@@ -468,7 +468,7 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
     expect((detail.json as { cancel_url: string }).cancel_url).toBe(`${registry}/${OWNER}/${TEAM}`)
   }, 30_000)
 
-  it('is paid with the 4242 card in a real browser, which lands back on the team page with the session', async () => {
+  it('is paid with the 4242 card in a real browser, which is sent back to the team’s address with the session', async () => {
     chrome = await launchChrome({ width: 1280, height: 1000 })
     const page = await connectPage(chrome.port)
     await page.send('Page.enable')
@@ -478,9 +478,7 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
     await page.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 1700, deviceScaleFactor: 1, mobile: false })
     await page.send('Network.enable')
     await page.send('Runtime.enable')
-    // The buyer is signed in at cookrew.dev in this browser, and this tab is
-    // the one that left for the card page — which is what makes the ?paid=
-    // on the way back count (line.js PAYING_KEY).
+    // The buyer is signed in at cookrew.dev in this browser.
     await page.send('Network.setCookie', { name: 'cr_session', value: people.buyer.token, url: registry })
     const navigations: string[] = []
     const wire: string[] = []
@@ -512,10 +510,10 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
       await page.send('Page.navigate', { url })
       await loaded
     }
-    await goTo(`${registry}/${OWNER}/${TEAM}`)
-    expect(await page.evaluate('document.querySelector("#team") !== null')).toBe(true)
-    await page.evaluate(`sessionStorage.setItem(${JSON.stringify(`cr_paying:${DOOR}`)}, JSON.stringify({ team: ${JSON.stringify(DOOR)}, at: Date.now() }))`)
-
+    // The team page that used to start this walk, and spend the return, is
+    // gone (0.6.0: the registry serves no page). What is still the door's and
+    // Stripe's is driven here: the card page, and the address it sends the
+    // browser back to. Nothing at that address answers as a page any more.
     await goTo(checkoutUrl)
     // Only what happens AFTER the card page counts as the way back.
     navigations.length = 0
@@ -627,13 +625,6 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
       writeFileSync('/tmp/stripe-e2e-stuck.png', Buffer.from(shot.data, 'base64'))
     }
     expect(landed, `navigations: ${navigations.join(' | ')} · pressed: ${clicked} · after: ${JSON.stringify(afterPress)} · wire: ${wire.join(' ; ')} · console: ${logs.slice(0, 12).join(' ; ')} · stripe: ${seen.slice(0, 2).join(', ')} · said: ${landed ? '' : await said()}`).toBe(`${registry}/${OWNER}/${TEAM}?paid=${session}`)
-
-    // The page spends the return: the URL is scrubbed, the session is held
-    // for the line, the gate says so, and the buying token is asked for.
-    await sleep(2500)
-    expect(await page.evaluate('location.search')).toBe('')
-    expect(await page.evaluate(`sessionStorage.getItem(${JSON.stringify(`cr_paid:${DOOR}`)})`)).toBe(session)
-    expect(await page.evaluate('document.getElementById("gate-h").textContent')).toBe('Payment received')
     page.close()
   }, 200_000)
 

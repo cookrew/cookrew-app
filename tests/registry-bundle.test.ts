@@ -12,7 +12,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 // THE DEPLOYED BUNDLE, not the source: `npm run registry:build`'s own esbuild
 // command, built into a temp dir and booted as `node <bundle>`, the way the
 // cluster runs it. Full --minify renames identifiers, so this is what proves
-// the renamed bundle still serves /me, /me/account, presence and desktops.
+// the renamed bundle still serves the account, presence and desktops, and
+// (0.6.0) no page of a site.
 // Every account and machine is invented; nothing is written outside the temp dir.
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -119,14 +120,8 @@ async function signUp(origin: string): Promise<Signed> {
 
 const bearer = (who: Signed): Record<string, string> => ({ authorization: `Bearer ${who.token}` })
 
-/** What every mode serves the same: the account page, presence, desktops, the classic canvas prefix. */
+/** What every mode serves the same: presence, desktops, the one relay path. */
 function sharedRoutes(up: () => Booted, who: () => Signed): void {
-  it('serves /me/account as the account page', async () => {
-    const res = await fetch(`${up().origin}/me/account`, { headers: bearer(who()) })
-    expect(res.status).toBe(200)
-    expect(await res.text()).toContain('id="me-desktops"')
-  })
-
   it('lists the desktop as a FleetMachine row, and presence says the same in one batch', async () => {
     const list = await fetch(`${up().origin}/v2/me/desktops`, { headers: bearer(who()) })
     expect(list.status).toBe(200)
@@ -145,11 +140,6 @@ function sharedRoutes(up: () => Booted, who: () => Signed): void {
       headers: { 'x-cookrew-session': who().token, accept: 'application/json' }
     })
     expect(res.status).toBe(503)
-  })
-
-  // Home is left out: it asks GitHub for the latest release, and a test stays off the network.
-  it('sends a signed-out /me to sign in', async () => {
-    expect((await fetch(`${up().origin}/me`)).status).toBe(401)
   })
 }
 
@@ -186,12 +176,15 @@ describe('the minified bundle', () => {
   }, 30_000)
   afterAll(() => up?.stop())
 
-  it('keeps /me the account page and the front page where it is', async () => {
-    const res = await fetch(`${up.origin}/me`, { headers: bearer(who) })
-    expect(res.status).toBe(200)
-    expect(await res.text()).toContain('id="me-desktops"')
-    expect((await fetch(`${up.origin}/`, { headers: bearer(who), redirect: 'manual' })).status).toBe(200)
-    // The front page reads GitHub before it answers, so this waits on the network.
+  it('answers the account as data, and no page: /me and the front page are nothing here', async () => {
+    const me = await fetch(`${up.origin}/v2/me`, { headers: bearer(who) })
+    expect(me.status).toBe(200)
+    expect(((await me.json()) as { username: string }).username).toBe(who.username)
+    for (const address of ['/me', '/me/account', '/']) {
+      const res = await fetch(`${up.origin}${address}`, { headers: bearer(who), redirect: 'manual' })
+      expect(res.status, address).toBe(404)
+      expect(await res.json(), address).toEqual({ error: 'not_found' })
+    }
   }, 30_000)
 
   sharedRoutes(() => up, () => who)
@@ -209,7 +202,7 @@ describe('the minified bundle under the old deployment arguments', () => {
   afterAll(() => up?.stop())
 
   it('boots, ignores them, and serves no shell', async () => {
-    expect((await fetch(`${up.origin}/me`, { headers: bearer(who) })).status).toBe(200)
+    expect((await fetch(`${up.origin}/v2/me`, { headers: bearer(who) })).status).toBe(200)
     expect((await fetch(`${up.origin}/strata/assets/index-abc123.js`)).status).toBe(404)
   })
 })

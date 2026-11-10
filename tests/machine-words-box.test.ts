@@ -15,7 +15,6 @@ import {
   registryWord
 } from '../src/shared/machine-words'
 import { mePage } from '../registry/src/site-account'
-import { desktopsSection } from '../registry/src/site-reach'
 import { ASSETS } from '../registry/src/assets-bundle'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -120,18 +119,10 @@ describe('the desktop’s own words', () => {
   })
 })
 
-describe('the /me page, which cannot know what a desktop runs', () => {
+describe('the account page, which cannot know what a desktop runs', () => {
   const desktop = { deviceId: '11111111-1111-4111-8111-111111111111', name: 'Linux · box', workspaces: [], addresses: [] }
-  const page = desktopsSection('mira', [desktop as never])
-
-  it('calls a desktop a machine', () => {
-    expect(page).not.toMatch(/\bMac\b/)
-    expect(page).toContain('<span class="chip">Machine</span>')
-  })
-
-  it('keeps a Mac’s own name when a Mac filed one', () => {
-    expect(desktopsSection('mira', [{ ...desktop, name: 'Mac mini' } as never])).toContain('Mac mini')
-  })
+  // The page lives on the auth host only (0.6.0); its machines section went with the registry's /me.
+  const standalone = { site: 'https://cookrew.dev', console: 'https://console.cookrew.dev', home: '/account' }
 
   it('says machine across the whole page, and keeps a device’s own name', () => {
     const account = {
@@ -139,7 +130,8 @@ describe('the /me page, which cannot know what a desktop runs', () => {
       devices: [{ id: 'one', kind: 'desktop', name: 'Mac mini', lastSeenAt: 0 }],
       desktops: [{ ...desktop, name: 'Linux · box' }]
     }
-    const { body } = mePage({ account: account as never, currentDeviceId: 'one' }) as unknown as { body: string }
+    const { body } = mePage({ account: account as never, currentDeviceId: 'one' }, standalone) as unknown as { body: string }
+    expect(body).toContain('Mac mini')
     const words = body.replaceAll('Mac mini', '')
     expect(words.match(/.{30}\bMac\b.{20}/g) ?? []).toEqual([])
   })

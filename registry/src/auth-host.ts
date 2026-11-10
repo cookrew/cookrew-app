@@ -163,7 +163,7 @@ export function handleAuthHost(
       mePage(
         signed === null
           ? null
-          : { view: 'account', account: signed.account, currentDeviceId: signed.claims.dev, factors: v2.factors.store.summary(signed.account.username) },
+          : { account: signed.account, currentDeviceId: signed.claims.dev, factors: v2.factors.store.summary(signed.account.username) },
         standalone
       )
     )

@@ -253,7 +253,6 @@ export function llmsText(): string {
     '',
     `- Website: ${SITE_ORIGIN}`,
     `- Source: ${GITHUB_REPO} (${FACTS.license})`,
-    `- Marketplace of served agent teams: ${SITE_ORIGIN}/market`,
     `- Getting started: ${SITE_ORIGIN}/start`,
     `- Features: ${FEATURES.map((f) => `${SITE_ORIGIN}/features/${f.slug}`).join(', ')}`,
     '',

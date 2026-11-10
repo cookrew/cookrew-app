@@ -10,15 +10,15 @@ import { TransparencyLog } from '../registry/src/log'
 import { IdentityService } from '../registry/src/identity'
 import { DoorStore } from '../registry/src/doors'
 import { StarStore } from '../registry/src/stars'
-import { ReleaseCache } from '../registry/src/releases'
 import { Pulse } from '../registry/src/pulse'
-import { CommitsCache } from '../registry/src/github-commits'
 
 /**
- * THE SITE OVER HTTP — pages, stars, the token key, the download redirect,
- * the bundled assets. Driven the way a browser drives it: the account signs
- * the registry's own ceremony and keeps its token in the `cr_account` cookie
- * for pages and as a Bearer for JSON.
+ * WHAT THE SITE USED TO ASK THE REGISTRY, OVER HTTP — stars, the token key,
+ * who a token names, a door's face and today's counts. The pages that asked
+ * are gone (0.6.0; tests/registry-no-site.test.ts holds that); the routes
+ * stay, driven the way a client drives them: the account signs the registry's
+ * own ceremony and presents its token as a Bearer, or in the older
+ * `cr_account` cookie where a read still takes it.
  */
 
 const CONFIG = { rpId: 'localhost', origin: 'http://localhost:8790', tokenTtlMs: 600_000, challengeTtlMs: 90_000 }
@@ -40,16 +40,6 @@ let close: () => Promise<void> = async () => undefined
 let identity: IdentityService
 let doors: DoorStore
 
-const RELEASE = {
-  tag_name: 'v0.1.2',
-  published_at: '2026-08-28T14:05:26Z',
-  html_url: 'https://github.com/cookrew/cookrew-app/releases/tag/v0.1.2',
-  assets: [
-    { name: 'Cookrew-0.1.2-arm64.dmg', browser_download_url: 'https://dl.example/dmg', size: 1 },
-    { name: 'Cookrew-0.1.2-windows-preview-x64.exe', browser_download_url: 'https://dl.example/exe', size: 2 }
-  ]
-}
-
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'site-routes-'))
   identity = new IdentityService(dir, CONFIG)
@@ -62,9 +52,7 @@ beforeAll(async () => {
     relay: true,
     origin: 'https://cookrew.dev',
     stars: new StarStore(dir),
-    releases: new ReleaseCache({ fetch: async () => new Response(JSON.stringify(RELEASE), { status: 200 }), ttlMs: 60_000 }),
-    pulse: new Pulse(dir),
-    commits: new CommitsCache({ fetch: async () => new Response('[]', { status: 200 }), ttlMs: 60_000 })
+    pulse: new Pulse(dir)
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -108,96 +96,10 @@ async function signIn(handle: string, scope = 'download', aud?: string): Promise
   return ((await asserted.json()) as { token: string }).token
 }
 
-describe('the pages', () => {
-  it('serves the homepage as a document with the real build and the directory', async () => {
-    const res = await get('/')
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-security-policy')).toContain("script-src 'none'")
-    const body = await res.text()
-    expect(body).toContain('Run a team of AI coding agents on one canvas')
-    expect(body).toContain('https://dl.example/dmg')
-    expect(body).toContain('COOKREW Alpha')
-  })
-
-  it('serves the market and a team page as app pages with their scripts', async () => {
-    const market = await get('/market?q=pilot')
-    expect(market.status).toBe(200)
-    expect(market.headers.get('content-security-policy')).toContain("script-src 'self'")
-    expect(await market.text()).toContain('COOKREW Alpha')
-
-    const team = await get('/@drej/cookrew-alpha')
-    expect(team.status).toBe(200)
-    const body = await team.text()
-    expect(body).toContain('data-door="@drej/cookrew-alpha"')
-    expect(body).toContain('https://cookrew.dev/drej/cookrew-alpha')
-    for (const asset of ['xterm.js', 'xterm.css', 'addon-fit.js', 'site.js', 'factors.js', 'seal.js', 'line.js', 'inter.woff2']) {
-      const got = await get(`/assets/${asset}`)
-      expect(got.status, asset).toBe(200)
-      expect(got.headers.get('content-type')).toContain(asset.endsWith('.css') ? 'text/css' : asset.endsWith('.woff2') ? 'font/woff2' : 'text/javascript')
-    }
-    const font = await get('/assets/inter.woff2')
-    expect(new Uint8Array(await font.arrayBuffer()).slice(0, 4)).toEqual(new Uint8Array([0x77, 0x4f, 0x46, 0x32]))
-    expect((await get('/assets/nope.js')).status).toBe(404)
-    // the pixel lockup's fonts left with it: the ink brand is drawn, not set
-    expect((await get('/assets/silkscreen-700.woff2')).status).toBe(404)
-    expect((await get('/assets/../package.json')).status).toBe(404)
-  })
-
-  it('a reserved name is a route, never a handle', async () => {
-    expect((await get('/market')).status).toBe(200)
-    expect((await get('/download')).status).toBe(302)
-  })
-})
-
-describe('the crawl files and the long tail', () => {
-  it('serves robots, sitemap, llms.txt, the favicon and the manifest', async () => {
-    expect(await (await get('/robots.txt')).text()).toContain('Sitemap: https://cookrew.dev/sitemap.xml')
-    const sitemap = await get('/sitemap.xml')
-    expect(sitemap.headers.get('content-type')).toContain('application/xml')
-    expect(await sitemap.text()).toContain('<loc>https://cookrew.dev/drej/cookrew-alpha</loc>')
-    expect(await (await get('/llms.txt')).text()).toContain('# Cookrew')
-    expect((await get('/favicon.svg')).headers.get('content-type')).toContain('image/svg+xml')
-    expect((await get('/favicon.ico')).status).toBe(302)
-    expect((await get('/site.webmanifest')).headers.get('content-type')).toContain('manifest')
-  })
-
-  it('serves every feature page, and sends the old index and start addresses into the homepage', async () => {
-    // Three pages became one (2026-09-06): the addresses redirect to the
-    // section, permanently, so every link already out there still lands.
-    for (const [path, anchor] of [['/features', '#features'], ['/start', '#start']]) {
-      const gone = await get(path)
-      expect(gone.status, path).toBe(301)
-      expect(gone.headers.get('location')).toBe(`/${anchor}`)
-    }
-    const homepage = await get('/')
-    expect(homepage.status).toBe(200)
-    expect(await homepage.text()).toContain('id="crew-commands"')
-    const canvas = await get('/features/canvas')
-    expect(canvas.status).toBe(200)
-    expect(await canvas.text()).toContain('"@type":"BreadcrumbList"')
-    const missing = await get('/features/nope')
-    expect(missing.status).toBe(404)
-    expect(missing.headers.get('content-type')).toContain('text/html')
-    expect(await missing.text()).toContain('noindex')
-    expect((await get('/features/%E0%A4%A')).status).toBe(404)
-    const head = await fetch(`${origin}/robots.txt`, { method: 'HEAD' })
-    expect(head.status).toBe(200)
-    expect(head.headers.get('content-type')).toContain('text/plain')
-  })
-
+describe('the directory, as data', () => {
   it('a door on the wire carries today’s counts', async () => {
     const one = (await (await get('/v1/doors/@drej/cookrew-alpha')).json()) as { today: { lines: number; calls: number } }
     expect(one.today).toEqual({ lines: 0, calls: 0 })
-  })
-})
-
-describe('/download', () => {
-  it('sends a Mac to the dmg, Windows to the exe, anyone else to the release page', async () => {
-    const mac = await get('/download', { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5)' })
-    expect(mac.status).toBe(302)
-    expect(mac.headers.get('location')).toBe('https://dl.example/dmg')
-    expect((await get('/download?platform=windows')).headers.get('location')).toBe('https://dl.example/exe')
-    expect((await get('/download', { 'user-agent': 'curl/8' })).headers.get('location')).toBe(RELEASE.html_url)
   })
 })
 
@@ -236,7 +138,7 @@ describe('identity for the site', () => {
 })
 
 describe('stars', () => {
-  it('toggle per account, count for everyone, and render on the pages', async () => {
+  it('toggle per account, and count for everyone', async () => {
     const token = await signIn('sasha')
     expect((await post('/v1/doors/@drej/cookrew-alpha/star', {})).status).toBe(401)
     const on = await post('/v1/doors/@drej/cookrew-alpha/star', {}, { authorization: `Bearer ${token}` })
@@ -248,11 +150,6 @@ describe('stars', () => {
 
     const listed = (await (await get('/v1/doors')).json()) as { doors: { name: string; stars: number }[] }
     expect(listed.doors.find((d) => d.name === 'cookrew-alpha')?.stars).toBe(1)
-
-    const page = await (await get('/@drej/cookrew-alpha', { cookie: `cr_account=${token}` })).text()
-    expect(page).toContain('class="star on"')
-    const mine = await (await get('/market?tab=starred', { cookie: `cr_account=${token}` })).text()
-    expect(mine).toContain('COOKREW Alpha')
 
     const off = await post('/v1/doors/@drej/cookrew-alpha/star', {}, { authorization: `Bearer ${token}` })
     expect(await off.json()).toEqual({ stars: 0, starred: false })

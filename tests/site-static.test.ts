@@ -79,11 +79,11 @@ describe('the files', () => {
     expect(text(buildStaticSite(input({ commits })), 'index.html')).toContain('href="#built"')
   })
 
-  it('leave the registry’s own pages as they were once the build is over, also when it stops halfway', () => {
+  it('leave no static mode behind once the build is over, also when it stops halfway', () => {
     expect(() => buildStaticSite(input({ fonts: {} }))).toThrow()
     buildStaticSite(input())
-    // Outside a build the marketplace feature still offers the registry's marketplace.
-    expect(featurePage('marketplace')?.body).toContain('href="/market"')
+    // Outside a build there is no site to draw a page for (the registry serves none), so the shell refuses.
+    expect(() => featurePage('marketplace')).toThrow(/outside both modes/)
   })
 
   it('carry the fonts their pages name and no other; a named font that was not handed in stops the build', () => {

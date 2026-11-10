@@ -1,5 +1,5 @@
 import { FRAMES, frameImg, type Frame } from './site-frames'
-import { esc, page, type Page, staticSiteNow } from './site-shell'
+import { esc, page, type Page } from './site-shell'
 import { COMPARE, DEFINITION, FEATURES, GITHUB_REPO, type FeatureSpec } from './site-content'
 import type { Commit } from './github-commits'
 import { SEQUENCES, type Step } from './site-sequences'
@@ -8,9 +8,9 @@ import { breadcrumbs, faqPage, organization, webPage } from './site-seo'
 /**
  * FEATURE PAGES — one page per question people ask about the product.
  *
- * The homepage owns the brand and, since 2026-09-06, the features overview
- * too (site-home.ts renders the grid, the comparison and the commits from
- * here); these own the long tail: "run claude code and codex together", "ai
+ * The homepage owns the brand and the features overview (site-home.ts renders
+ * the grid, the comparison and the commits from here); these own the long
+ * tail: "run claude code and codex together", "ai
  * agent checkpoints", "agent team marketplace". Each page is the same shape
  * — an intent-shaped H1, the definition in one paragraph, the recorded step
  * sequence QA captured (a picture per step, with what was done in the past
@@ -64,11 +64,7 @@ export function featurePage(slug: string): Page | null {
 <h1>${esc(f.title)}</h1>
 <p class="lede">${esc(f.definition)}</p>
 <ul class="pts">${f.pts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-<p class="row">${
-      staticSiteNow() === null
-        ? `<a class="btn primary" href="/download">Get Cookrew</a><a class="btn" href="/start">Get started</a>${f.slug === 'marketplace' ? '<a class="btn" href="/market">Explore teams</a>' : ''}`
-        : '<a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a>'
-    }</p>
+<p class="row"><a class="btn primary" href="/#download">Get Cookrew</a><a class="btn" href="/#start">Get started</a></p>
 </div>
 <section><div class="wrap"><p class="kicker"><span class="no">RECORDED</span>${steps.length > 0 ? `${steps.length} steps, captured from the running app` : 'captured from the running app'}</p>
 <h2>How it looks</h2>${visual}</div></section>

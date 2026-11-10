@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 /**
- * The three ways this registry answers. Shared by the routes in server.ts and
+ * How this registry answers, and how it reads a body. Shared by the routes in server.ts and
  * the write handlers in publish-routes.ts — one definition, because a second
  * `json` that forgot a header is exactly the kind of drift nobody notices until
  * a response is missing a content-length.
@@ -18,27 +18,6 @@ export function json(
     'content-type': 'application/json; charset=utf-8',
     'content-length': String(payload.byteLength),
     ...headers
-  })
-  response.end(payload)
-}
-
-/**
- * The install page's answer. Sent with headers that make the document inert
- * even if a future edit puts something executable in it: no script, no frame,
- * no sniffing, no referrer leaking a shared preset link onward.
- */
-export function html(response: ServerResponse, code: number, body: string): void {
-  const payload = Buffer.from(body, 'utf8')
-  response.writeHead(code, {
-    'content-type': 'text/html; charset=utf-8',
-    'content-length': String(payload.byteLength),
-    'content-security-policy':
-      "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
-    'x-content-type-options': 'nosniff',
-    'referrer-policy': 'no-referrer',
-    // A preset can be republished under a new address and an old one removed,
-    // so this is a page about mutable state — brief caching only.
-    'cache-control': 'public, max-age=60'
   })
   response.end(payload)
 }

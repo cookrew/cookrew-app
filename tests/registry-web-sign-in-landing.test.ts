@@ -11,6 +11,9 @@ import { ASSETS } from '../registry/src/assets-bundle'
  * started was never resumed. Both sign-in paths (the sheet in site.js and the
  * second-factor ladder in factors.js) now ask one rule: a team page reloads
  * itself, anywhere else goes to /me.
+ *
+ * (0.6.0 removed the team page and line.js with it; the rule is still what the
+ * two scripts that stay carry, and on the auth host /me is the account page.)
  */
 describe('a sign-in on a team page reloads the page instead of leaving for /me', () => {
   const site = ASSETS['site.js'].body
@@ -35,12 +38,5 @@ describe('the site enrols no handle', () => {
     expect(site).not.toContain('signInFlow')
     expect(site).not.toContain('/v1/identity/register')
     expect(site).toContain("v2('POST', `/v1/doors/@${handle}/${name}/star`)")
-  })
-})
-
-describe('a door nobody is serving is not a sign-in problem', () => {
-  it('line.js answers the relay’s not-serving with OFFLINE on both sign-in paths, never SIGNED OUT', () => {
-    const line = ASSETS['line.js'].body
-    expect(line.match(/if \(error instanceof LineError && error\.kind === 'not-serving'\) return offline\(\)/g)).toHaveLength(2)
   })
 })
