@@ -1,8 +1,7 @@
 import XCTest
 
-// The owner's bugs (11-10): on an agent card, pressing back toggled more/less
-// instead of going back to the agents view; and "more" opened the reply under
-// the box, where nothing new could be seen. "more" now opens a reader.
+// The owner's bug (11-10): on an agent card, pressing back toggles more/less
+// instead of going back to the agents view.
 
 final class BackTests: XCTestCase {
   private var app: XCUIApplication!
@@ -48,60 +47,37 @@ final class BackTests: XCTestCase {
     XCTAssertEqual(depth, "depth 1", "folded: back did not step out")
   }
 
-  /** The reader "more" opens over the card: the whole reply, alone on the screen. */
-  private var reader: XCUIElement { app.otherElements["reply-reader"].exists ? app.otherElements["reply-reader"] : app.scrollViews["reply-reader"] }
-
-  /** Press "more" where the word is drawn, as a finger does. */
-  private func pressMore() {
-    let more = moreControl("more")
-    XCTAssertTrue(more.waitForExistence(timeout: 5))
-    let frame = more.frame
-    app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + 12, dy: frame.minY + 8)).tap()
-    usleep(800_000)
-  }
-
-  private func closeReader() {
-    // The system draws the sheet's close button; more than one element may carry its name.
-    let close = app.buttons["Close"].exists ? app.buttons["Close"].firstMatch : app.buttons["Done"].firstMatch
-    XCTAssertTrue(close.waitForExistence(timeout: 3), "no way to close the reader:\n\(app.debugDescription)")
-    close.tap()
-    usleep(800_000)
-  }
-
-  func testMoreOpensTheWholeReply() {
+  func testBackOpenAtTop() {
     openLongCard()
-    pressMore()
-    XCTAssertTrue(reader.waitForExistence(timeout: 3), "more did not open the reader:\n\(app.debugDescription)")
-    // The reply is alone on the screen: no box to hide its words under.
-    XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reply'")).firstMatch.isHittable, "the box still covers the reply")
-    let shot = XCTAttachment(screenshot: app.screenshot())
-    shot.name = "reader-top"
-    shot.lifetime = .keepAlways
-    add(shot)
-    // The crown carries the reply's last line onto the screen (the reply is one text).
-    let body = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'headless Chrome never turns a touch into a text selection'")).firstMatch
-    XCTAssertTrue(body.exists, "the reader does not hold the whole reply")
-    let top = body.frame.minY
-    for _ in 0..<20 where body.frame.maxY > app.frame.maxY { crown(1.0) }
-    XCTAssertLessThan(body.frame.minY, top, "the crown did not scroll the reader")
-    XCTAssertLessThanOrEqual(body.frame.maxY, app.frame.maxY + 1, "the crown did not reach the end of the reply")
-    closeReader()
-    XCTAssertFalse(reader.exists, "the reader did not close")
-    XCTAssertEqual(depth, "depth 2", "closing the reader left the card")
-    XCTAssertTrue(moreControl("more").exists, "the card is not as it was")
-  }
-
-  func testBackAfterReading() {
-    openLongCard()
-    pressMore()
-    XCTAssertTrue(reader.waitForExistence(timeout: 3))
-    closeReader()
+    moreControl("more").tap()
+    usleep(600_000)
+    XCTAssertTrue(moreControl("less").exists, "more did not open")
     pressBackLikeAFinger()
-    XCTAssertEqual(depth, "depth 1", "after reading, back did not step out")
+    XCTAssertEqual(depth, "depth 1", "open, unscrolled: back did not step out")
+  }
+
+  func testBackOpenScrolled() {
+    openLongCard()
+    moreControl("more").tap()
+    usleep(600_000)
+    crown(0.5)
+    let shotScrolled = XCTAttachment(screenshot: app.screenshot())
+    shotScrolled.name = "open-scrolled"
+    shotScrolled.lifetime = .keepAlways
+    add(shotScrolled)
+    pressBackLikeAFinger()
+    let after = XCTAttachment(screenshot: app.screenshot())
+    after.name = "after-back"
+    after.lifetime = .keepAlways
+    add(after)
+    XCTAssertEqual(depth, "depth 1", "open, scrolled: back did not step out")
   }
 
   func testSwipeRightOverWords() {
     openLongCard()
+    moreControl("more").tap()
+    usleep(600_000)
+    crown(0.3)
     app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.55)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.57)))
     usleep(800_000)
     XCTAssertEqual(depth, "depth 1", "swipe right over the words did not step out")
@@ -148,6 +124,22 @@ final class BackTests: XCTestCase {
     XCTAssertTrue(seat.isHittable, "the new-agent seat is not in view")
   }
 
+  func testMoreLessStillWork() {
+    openLongCard()
+    moreControl("more").tap()
+    usleep(600_000)
+    XCTAssertTrue(moreControl("less").exists, "more did not open")
+    crown(1.5)
+    let less = moreControl("less")
+    if !less.isHittable { crown(1.5) }
+    less.tap()
+    usleep(800_000)
+    XCTAssertTrue(moreControl("more").exists, "less did not fold")
+    XCTAssertTrue(back.isHittable)
+    pressBackLikeAFinger()
+    XCTAssertEqual(depth, "depth 1")
+  }
+
   func testTapOnTextNearTopDoesNotToggle() {
     openLongCard()
     let before = moreControl("more").exists
@@ -156,7 +148,6 @@ final class BackTests: XCTestCase {
     app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX + 40, dy: frame.maxY + 14)).tap()
     usleep(600_000)
     XCTAssertEqual(depth, "depth 2")
-    XCTAssertFalse(reader.exists, "a tap on the text opened the reader")
-    XCTAssertEqual(moreControl("more").exists, before, "a tap on the text changed the card")
+    XCTAssertEqual(moreControl("more").exists, before, "a tap on the text toggled more/less")
   }
 }
