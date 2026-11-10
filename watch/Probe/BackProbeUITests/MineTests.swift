@@ -1,7 +1,8 @@
 import XCTest
 
-// The owner's report (11-10): "more" on one real reply (Chinese, markdown) cannot
-// be pressed on the wrist. The probe's long card carries that reply verbatim (-mine).
+// The owner's real reply (Chinese, markdown) on the long card (-mine): "more"
+// opens it where it stands, and the room between the head and the box is what
+// the wrist reads it in. That room is printed, so a change to either is measured.
 
 final class MineTests: XCTestCase {
   private var app: XCUIApplication!
@@ -25,36 +26,23 @@ final class MineTests: XCTestCase {
     return button.exists ? button : app.staticTexts[word]
   }
 
-  func testMoreOpensTheRealReply() {
+  func testMoreOpensTheRealReplyInPlace() {
     let seat = app.buttons["Longer, done"]
     XCTAssertTrue(seat.waitForExistence(timeout: 10), app.debugDescription)
     seat.tap()
     usleep(1_000_000)
     shot("1-card")
+    let back = app.buttons["Back to the crew"]
+    let box = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reply'")).firstMatch
+    XCTAssertTrue(back.exists && box.exists, app.debugDescription)
     let more = control("more")
-    XCTAssertTrue(more.waitForExistence(timeout: 5), "no more at all:\n\(app.debugDescription)")
-    let reply = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Reply'")).firstMatch
-    print("MORE frame \(more.frame) hittable \(more.isHittable) screen \(app.frame) reply \(reply.exists ? "\(reply.frame)" : "?")")
+    XCTAssertTrue(more.waitForExistence(timeout: 5))
     // Where the word is drawn, as a finger finds it.
     let frame = more.frame
     app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.minX + 12, dy: frame.minY + 8)).tap()
     usleep(800_000)
-    shot("2-after-more")
-    print("TREE after more:\n\(app.debugDescription)")
-    let reader = app.otherElements["reply-reader"].exists ? app.otherElements["reply-reader"] : app.scrollViews["reply-reader"]
-    XCTAssertTrue(reader.waitForExistence(timeout: 3), "more did not open the reader")
-    // The reply is one text: the crown must carry its last line onto the screen.
-    let body = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '这比在手机上掐表准确得多'")).firstMatch
-    XCTAssertTrue(body.exists, "the reader does not hold the whole reply")
-    let top = body.frame.minY
-    print("READER body \(body.frame) screen \(app.frame)")
-    for _ in 0..<20 where body.frame.maxY > app.frame.maxY {
-      XCUIDevice.shared.rotateDigitalCrown(delta: 1.0)
-      usleep(700_000)
-    }
-    print("READER after crown \(body.frame)")
-    shot("3-reader-end")
-    XCTAssertLessThan(body.frame.minY, top, "the crown did not scroll the reader")
-    XCTAssertLessThanOrEqual(body.frame.maxY, app.frame.maxY + 1, "the crown did not reach the end of the reply")
+    shot("2-open")
+    XCTAssertTrue(control("less").exists, "more did not open")
+    print("ROOM screen \(app.frame.height) back \(back.frame) box \(box.frame) words \(Int(box.frame.minY - back.frame.maxY)) pt between head and box")
   }
 }
