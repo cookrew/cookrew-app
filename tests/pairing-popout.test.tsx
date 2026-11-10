@@ -75,7 +75,9 @@ describe('the popout view model', () => {
     }
     // The console's QR carries none, and says so instead.
     expect(pairingPopoutView(RELAY).rotateNote).not.toContain('--rotate')
-    expect(pairingPopoutView(RELAY).rotateNote).toContain('no key')
+    expect(pairingPopoutView(RELAY).rotateNote).toContain('lets nobody in by itself')
+    // And it does not call itself harmless: it carries the unlock code.
+    expect(pairingPopoutView(RELAY).rotateNote).toContain('show it to your own phone only')
   })
 
   it('shows enough of the device id to tell two Macs apart', () => {
@@ -99,7 +101,7 @@ describe('the popout renders', () => {
     expect(html).toContain('<path d="M')
     expect(html).toContain('MacBook Pro')
     expect(html).toContain('2c9417fd…')
-    expect(html).toContain('It carries no key')
+    expect(html).toContain('show it to your own phone only')
   })
 
   it('SHOWS NO SIX-CHARACTER KEY AND NO COUNTDOWN — both are retired', () => {

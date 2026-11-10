@@ -39,9 +39,19 @@ describe('envSwitch', () => {
 })
 
 describe('with nothing set, the app launches the way the owner does', () => {
-  it('serves through cookrew.dev', () => {
-    expect(DEFAULT_REGISTRY).toBe('https://cookrew.dev')
-    expect(relayOrigin(none)).toBe('https://cookrew.dev')
+  it('serves through the registry’s API host', () => {
+    // 0.6.0: cookrew.dev is a static site. The registry (accounts, doors, the relay) answers at api.cookrew.dev.
+    expect(DEFAULT_REGISTRY).toBe('https://api.cookrew.dev')
+    expect(relayOrigin(none)).toBe('https://api.cookrew.dev')
+  })
+
+  it('a launch line or a saved choice that still names the old address is read as the new one: the old one is a static site now', () => {
+    expect(relayOrigin({ COOKREW_REGISTRY: 'https://cookrew.dev' })).toBe('https://api.cookrew.dev')
+    expect(relayOrigin({ COOKREW_REGISTRY: 'https://COOKREW.dev/' })).toBe('https://api.cookrew.dev')
+    // Anything else is what it says, and empty still means no relay.
+    expect(relayOrigin({ COOKREW_REGISTRY: 'https://registry.example' })).toBe('https://registry.example')
+    expect(relayOrigin({ COOKREW_REGISTRY: 'https://cookrew.dev.evil.example' })).toBe('https://cookrew.dev.evil.example')
+    expect(relayOrigin({ COOKREW_REGISTRY: '' })).toBe('')
   })
 
   it('holds every workspace live at once', () => {

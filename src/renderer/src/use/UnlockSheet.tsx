@@ -9,6 +9,7 @@ import { hostOutsideTheMac, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-u
 import { cookrew } from '../api'
 import { clientBase } from '../api-base'
 import { sealFetchFor } from './seal-fetch'
+import { codeKeyForBase, takeNextCode } from '../pairing-scope'
 import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
 import { seated } from '../device-seat'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
@@ -141,6 +142,7 @@ type Way =
 /** How this device reaches the door. `attempt` asks again, after a new code. */
 function useUnlockWay(attempt: number): Way {
   const [way, setWay] = useState<Way>({ kind: 'opening' })
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     if (onTheMacsOwnPage()) {
       const deps = directFlow()
@@ -165,13 +167,20 @@ function useUnlockWay(attempt: number): Way {
       .catch((failure: unknown) => {
         if (!alive) return
         const stale = failure instanceof SealRefusedError && failure.why === 'code'
+        // The machine does not know the code held. One that was handed since and waited beside it
+        // (pairing-scope.ts) is the machine's new one if anything is: it takes its place, and is tried.
+        const waited = stale ? takeNextCode(window.localStorage, codeKeyForBase(base)) : null
+        if (waited !== null) {
+          authStore().saveConnectCode(waited)
+          return setRetry((n) => n + 1)
+        }
         setWay(stale ? { kind: 'needs-code', stale } : { kind: 'failed', message: messageOf(failure) })
       })
     return () => {
       alive = false
       client?.close()
     }
-  }, [attempt])
+  }, [attempt, retry])
   return way
 }
 

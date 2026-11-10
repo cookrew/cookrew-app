@@ -37,8 +37,8 @@ export const PAIRING_COPY = {
   /** The same sentence `cookrew mobile` ends with, for the same reason. */
   ROTATE:
     'This QR carries the pairing token. `cookrew mobile --rotate` replaces it and unpairs every phone.',
-  /** Under the console's QR: it is an address and nothing more. */
-  ADDRESS_ONLY: 'This QR lets nobody in by itself. It carries no key: whoever scans it signs in and proves it is them.'
+  /** Under the console's QR: no way in, but not nothing: the unlock code rides its fragment (main/pairing-handout.ts). */
+  ADDRESS_ONLY: 'This QR lets nobody in by itself: whoever scans it signs in and proves it is them. It carries this Mac’s unlock code, so show it to your own phone only.'
 } as const
 
 export type PairingPopoutView = {

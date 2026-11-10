@@ -5,18 +5,6 @@ import type { EndpointKind, MobileEndpoint } from './mobile-endpoints'
 import type { PairingHandout } from '../shared/account-v2'
 
 /**
- * THE PAIRING URL, PRINTED FIRST — and the direct ones underneath, unchanged.
- *
- * The relay URL is the only address that reaches this Mac from a phone that is
- * not on this Wi-Fi, so it leads. The `?token=` URLs stay exactly where they
- * were, because two readers still need them: a phone that is not signed in to
- * cookrew.dev, and a Mac whose uplink is down.
- *
- * Only the RELAY handout is printed here. A `direct` handout is one of the
- * URLs already listed below it, and printing it twice under a heading that
- * says "from anywhere" would be a promise this Mac cannot keep.
- */
-/**
  * A MACHINE OF AN ACCOUNT PRINTS ONE LINK, AND IT IS NOT A KEY (0.6.0): its
  * own level on the console. Nothing in it opens anything: the phone signs in
  * to the account and proves it is the owner there.

@@ -17,7 +17,7 @@
  * at the moment that machine is entered, where the unlock sheet looks for it
  * (auth-gate.ts · connectCode).
  */
-import { connectCodeFromFragment } from '../pairing-scope'
+import { connectCodeFromFragment, nextCodeKey } from '../pairing-scope'
 import type { ConsoleRoute } from './console-route'
 import type { KeyValue } from './console-session'
 
@@ -48,9 +48,22 @@ export function landHandedCode(input: { machineId: string; pending: KeyValue; ke
   const key = input.keyFor(input.machineId)
   if (key === null) return
   try {
-    input.kept.setItem(key, held.code)
+    // NEVER IN PLACE OF ONE ALREADY HELD: a link is something anybody can make. The handed one
+    // waits beside it and is tried if the machine refuses the held one (pairing-scope.ts · takeNextCode).
+    const already = input.kept.getItem(key)
+    if (already === null) input.kept.setItem(key, held.code)
+    else if (already !== held.code) input.kept.setItem(nextCodeKey(key), held.code)
     input.pending.removeItem(HANDED_CODE_KEY)
   } catch {
     // Storage that refuses keeps nothing: the unlock sheet asks for the code.
+  }
+}
+
+/** Signed out: a code still waiting in this tab is nobody's. */
+export function forgetHandedCode(pending: KeyValue): void {
+  try {
+    pending.removeItem(HANDED_CODE_KEY)
+  } catch {
+    // Nothing held.
   }
 }

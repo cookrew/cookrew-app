@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { HANDED_CODE_KEY, landHandedCode, takeHandedCode } from '../src/renderer/src/console/handed-code'
+import { HANDED_CODE_KEY, forgetHandedCode, landHandedCode, takeHandedCode } from '../src/renderer/src/console/handed-code'
+import { nextCodeKey, takeNextCode } from '../src/renderer/src/pairing-scope'
 import { pairingHandout } from '../src/main/pairing-handout'
 import { renderMobileHelp } from '../src/main/mobile-cli-text'
 import { memory } from './support/console-client'
@@ -74,6 +75,37 @@ describe('the console, opened at that link', () => {
     landHandedCode({ machineId: M, pending, kept, keyFor })
     expect(kept.getItem(`cr_code:${M}`)).toBe(CODE)
     // Used: it does not wait in the tab for another machine.
+    expect(pending.getItem(HANDED_CODE_KEY)).toBeNull()
+  })
+
+  it('does not replace a code already held for that machine: it waits beside it, for when the held one is refused', () => {
+    // A link somebody else made (`…/d/<machine>#code=<theirs>`) must not be able to throw a good
+    // code away: remote unlock would be broken until the person is back at the machine to rescan.
+    const pending = memory()
+    const kept = memory()
+    kept.setItem(`cr_code:${M}`, 'the-code-that-works')
+    takeHandedCode({ hash: `#code=${CODE}`, route: machineRoute(M), pending })
+    landHandedCode({ machineId: M, pending, kept, keyFor })
+    expect(kept.getItem(`cr_code:${M}`)).toBe('the-code-that-works')
+    expect(kept.getItem(nextCodeKey(`cr_code:${M}`))).toBe(CODE)
+    // The machine refuses the held code (it rotated its own): the one that waited is tried, once.
+    expect(takeNextCode(kept, `cr_code:${M}`)).toBe(CODE)
+    expect(takeNextCode(kept, `cr_code:${M}`)).toBeNull()
+  })
+
+  it('the same code handed again changes nothing', () => {
+    const pending = memory()
+    const kept = memory()
+    kept.setItem(`cr_code:${M}`, CODE)
+    takeHandedCode({ hash: `#code=${CODE}`, route: machineRoute(M), pending })
+    landHandedCode({ machineId: M, pending, kept, keyFor })
+    expect(kept.getItem(nextCodeKey(`cr_code:${M}`))).toBeNull()
+  })
+
+  it('signing out forgets a code that was still waiting in the tab', () => {
+    const pending = memory()
+    takeHandedCode({ hash: `#code=${CODE}`, route: machineRoute(M), pending })
+    forgetHandedCode(pending)
     expect(pending.getItem(HANDED_CODE_KEY)).toBeNull()
   })
 

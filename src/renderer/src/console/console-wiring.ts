@@ -27,7 +27,7 @@ import { createConsoleDevices, type ConsoleDevices } from './console-devices'
 import { browserHistoryPort, createConsoleRouter, type ConsoleRouter } from './console-router'
 import { createConsoleRuntime, type ConsoleRuntime, type DoorAnswer } from './console-runtime'
 import { createMachinePaths, type MachinePaths } from './machine-paths'
-import { landHandedCode, takeHandedCode } from './handed-code'
+import { forgetHandedCode, landHandedCode, takeHandedCode } from './handed-code'
 
 export interface ConsoleParts {
   readonly config: ConsoleConfig
@@ -235,6 +235,7 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     takeSeat,
     forgetMachines: () => {
       paths.forget()
+      forgetHandedCode(pending)
       if (local === null) return
       try {
         const held = Array.from({ length: local.length }, (_, at) => local.key(at)).filter((key): key is string => key !== null)

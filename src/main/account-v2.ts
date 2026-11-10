@@ -1,3 +1,4 @@
+import { DEFAULT_REGISTRY, REGISTRY_WAS } from '../shared/launch-settings'
 import {
   createHash,
   createPrivateKey,
@@ -432,8 +433,8 @@ const sameRegistry = (a: string, b: string): boolean => plainOrigin(a) === plain
  * an alias: nothing signed in at the old name is treated as signed in at the
  * new one.
  */
-const HOME_REGISTRY = 'https://api.cookrew.dev'
-const HOME_REGISTRY_WAS = 'https://cookrew.dev'
+const HOME_REGISTRY = DEFAULT_REGISTRY
+const HOME_REGISTRY_WAS = REGISTRY_WAS
 
 /**
  * An account file from before the move, opened by an app pointed at the new
@@ -504,11 +505,11 @@ export class Accounts {
     this.origin = deps.origin ?? registryOrigin()
     this.platform = deps.platform ?? process.platform
     this.deviceName = deps.deviceName ?? machineCopy('This Mac', this.platform)
-    const held = loadAccount(deps.base)
-    const moved = signedOutByTheMove(held, this.origin, this.now())
-    // Written down at once, and told to nobody yet: nothing is listening while this is being built.
-    if (moved !== held && moved !== null) writeAccount(moved, deps.base)
-    this.cached = moved
+    // NOTHING IS WRITTEN HERE. Building this must never be able to stop a boot (a folder that
+    // cannot be written to), and a second process that opens the file on its way to quitting must
+    // not rewrite what the running one holds. The same file and the same address give the same
+    // answer every time, so a restart says it again; the next sign-in writes the new form.
+    this.cached = signedOutByTheMove(loadAccount(deps.base), this.origin, this.now())
     this.legacy = deps.legacy ?? ((): RegistryAccount | null => legacyKey(this.origin, this.base))
     this.changed = deps.onChange
     this.ladder = new LadderPasswords(this.now)
@@ -940,6 +941,12 @@ export class Accounts {
     return next
   }
 
+  /** Why this machine must sign in again, when it is more than an ordinary ended session. */
+  signInAgainBecause(): SignInAgainReason | null {
+    const session = this.cached?.session
+    return session?.endedAt !== undefined && session.endedWhy !== undefined ? session.endedWhy : null
+  }
+
   /**
    * WHERE THE ACCOUNT LIVES vs WHERE THE APP IS POINTED, when they differ.
    *
@@ -948,12 +955,6 @@ export class Accounts {
    * the file is old enough not to name one — there is nothing to disagree with
    * then, so everything behaves exactly as it did.
    */
-  /** Why this machine must sign in again, when it is more than an ordinary ended session. */
-  signInAgainBecause(): SignInAgainReason | null {
-    const session = this.cached?.session
-    return session?.endedAt !== undefined && session.endedWhy !== undefined ? session.endedWhy : null
-  }
-
   registryMismatch(): { signedInAt: string; pointedAt: string } | null {
     const pinned = this.cached?.registry
     if (typeof pinned !== 'string' || pinned.length === 0) return null

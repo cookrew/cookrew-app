@@ -1104,6 +1104,10 @@ function serveRendererAsset(
   const root = path.resolve(deps.rendererDir)
   const file = path.resolve(root, '.' + pathname)
   if (!file.startsWith(root + path.sep) || !existsSync(file)) return false
+  // A PAGE IS NEVER SERVED AS AN ASSET. The app's page goes out by the one branch that decides
+  // who gets it (a machine of an account points at the console instead, console-pointer.ts); a
+  // spelling of its path that slips past that branch must not find it here.
+  if (path.extname(file).toLowerCase() === '.html') return false
   const mime = STATIC_MIME[path.extname(file).toLowerCase()]
   if (!mime) return false
   // Bundle assets carry a content hash in the name, so the answer can never

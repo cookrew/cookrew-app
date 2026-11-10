@@ -1231,7 +1231,7 @@ const relayServing = RELAY_ORIGIN
             // The session, when this Mac holds a live one. It is what lets the
             // SECOND Mac of an account serve at all — the v1 registry key it
             // would otherwise prove the handle with cannot be enrolled twice.
-            ...(account.session === null ? {} : { session: account.session.token })
+            ...(account.session === null || !accounts.sessionLive() ? {} : { session: account.session.token })
           }
         },
         /**
@@ -1648,19 +1648,11 @@ const requests = new Requests({
     }
   },
   answered: answeredStoreIn(),
-  // ALLOW's own half (R2): this phone gets a token of its own, and the URL
-  // that carries it is sealed to the key the request arrived with. The root
-  // pairing credential never leaves this process for a device that asked
-  // through the queue. Nor does the connect code: that key came through the
-  // registry and the owner has nothing to compare it with (connect-code.ts).
-  reach: {
-    admit: (device) => admittedDevices.admit(device),
-    // The relay's own page for one machine is gone with 0.6.0, and with it the link a
-    // "USE WI-FI" request was answered with: there is no address to seal a token into. ALLOW
-    // answers "no pairing link" until the request flow itself is removed with the page that
-    // raised it.
-    pairingUrlFor: () => null
-  }
+  // NO `reach` HALF (0.6.0). A "use Wi-Fi" request was answered with a link to the relay's own
+  // page for this machine, sealed to the asker; that page is gone and nothing raises such a
+  // request any more. Left unwired, ALLOW on a stray one admits nobody (requests.ts answers
+  // `not_wired` before anything is minted), where a half that could build no link would have
+  // added a device nobody can use each time.
 })
 const factors = new Factors({ accounts, registry: registryOrigin() })
 

@@ -51,12 +51,12 @@ describe('what the desktop hands its two surfaces', () => {
     expect(handout?.url).not.toContain(TOKEN)
   })
 
-  it('falls back to the direct address when the console is nowhere this app would send a phone, or the id is not a machine’s', () => {
+  it('shows nothing, and never the token link, when the console is nowhere this app would send a phone or the id is not a machine’s', () => {
     const at = (consoleAt: string, deviceId: string): ReturnType<typeof pairingHandout> =>
       pairingHandout({ account: () => ({ username: 'drej', deviceId, name: 'This Mac' }), consoleOrigin: () => consoleAt, endpoints: () => endpoints, pairingToken: () => TOKEN })
-    expect(at('javascript:alert(1)', DEVICE)?.via).toBe('direct')
-    expect(at('', DEVICE)?.via).toBe('direct')
-    expect(at('https://console.cookrew.dev', '../../v2/me')?.via).toBe('direct')
+    expect(at('javascript:alert(1)', DEVICE)).toBeNull()
+    expect(at('', DEVICE)).toBeNull()
+    expect(at('https://console.cookrew.dev', '../../v2/me')).toBeNull()
     expect(at('https://console.cookrew.dev/', DEVICE.toUpperCase())?.url).toBe(`https://console.cookrew.dev/d/${DEVICE}`)
   })
 

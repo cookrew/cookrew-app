@@ -72,4 +72,20 @@ describe('the server', () => {
     expect(pointer).toBeLessThan(branch.indexOf('serveRendererDev('))
     expect(pointer).toBeLessThan(branch.indexOf('serveRendererIndex('))
   })
+
+  it('never serves a page as an asset: another spelling of the page’s path does not find it', () => {
+    const src = readFileSync(path.join(__dirname, '..', 'src', 'main', 'mobile-server.ts'), 'utf8')
+    const assets = src.slice(src.indexOf('function serveRendererAsset('))
+    const refusal = assets.indexOf("if (path.extname(file).toLowerCase() === '.html') return false")
+    expect(refusal).toBeGreaterThan(-1)
+    expect(refusal).toBeLessThan(assets.indexOf('sendBody('))
+  })
+
+  it('wires no half that could admit a device nobody can use: a stray "use Wi-Fi" request is answered as not wired', () => {
+    const main = readFileSync(path.join(__dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
+    expect(main).not.toMatch(/\n  reach: \{/)
+    const requests = readFileSync(path.join(__dirname, '..', 'src', 'main', 'requests.ts'), 'utf8')
+    // Refused before anything is minted.
+    expect(requests.indexOf("if (reach === undefined) return { ok: false, reason: 'not_wired' }")).toBeLessThan(requests.indexOf('reach.admit('))
+  })
 })

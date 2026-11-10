@@ -16,7 +16,7 @@
  * Main-only: the renderer has no environment (see registry-origin.ts).
  */
 
-import { DEFAULT_MULTIPLEXER, DEFAULT_REGISTRY, type LaunchValues } from '../shared/launch-settings'
+import { DEFAULT_MULTIPLEXER, DEFAULT_REGISTRY, registryNamed, type LaunchValues } from '../shared/launch-settings'
 
 export { DEFAULT_MULTIPLEXER, DEFAULT_REGISTRY }
 
@@ -39,14 +39,16 @@ export function envSwitch(value: string | undefined, fallback: boolean): boolean
 }
 
 /**
- * Where the relay serves this Mac's doors. Unset → cookrew.dev. Set but empty
- * (`COOKREW_REGISTRY=`) → no relay at all, the pre-0.4.0 default, kept as the
- * opt-out. Note registryOrigin() still answers cookrew.dev for account calls
- * in that case: turning the relay off is not pointing the app elsewhere.
+ * Where the relay serves this Mac's doors. Unset → the registry's API host
+ * (api.cookrew.dev). Set but empty (`COOKREW_REGISTRY=`) → no relay at all, the
+ * pre-0.4.0 default, kept as the opt-out. Note registryOrigin() still answers
+ * the API host for account calls in that case: turning the relay off is not
+ * pointing the app elsewhere. A value that still names the registry's old
+ * address is read as the new one (shared/launch-settings.ts · registryNamed).
  */
 export function relayOrigin(env: Env = process.env): string {
   const configured = env.COOKREW_REGISTRY
-  return configured === undefined ? DEFAULT_REGISTRY : configured.trim()
+  return configured === undefined ? DEFAULT_REGISTRY : registryNamed(configured)
 }
 
 /** Every workspace held live at once. Off: COOKREW_MULTI_INSTANCE=0. */

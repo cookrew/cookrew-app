@@ -12,8 +12,8 @@ import { isMachineId } from '../shared/machine-relay'
  * ceremonies that could disagree about which one was current. There is one
  * credential now, so there is one place that decides how it is spelled.
  *
- * WITH AN ACCOUNT it is the relay URL — the address that works from any
- * network, with the token in the fragment (shared/pairing-url.ts).
+ * WITH AN ACCOUNT it is this machine's address on the console, which works from
+ * any network and carries no key (0.6.0).
  *
  * WITHOUT ONE it is the most reachable DIRECT address, exactly as today: a Mac
  * with no username has nothing to publish and the phone has nothing to sign in
@@ -83,13 +83,14 @@ export const pairingHandout = (deps: PairingHandoutDeps): PairingHandout | null 
     // nothing either, and is why this link is drawn on this screen and printed nowhere.
     const console = originOf(deps.consoleOrigin())
     const id = account.deviceId.toLowerCase()
-    // A console address this app would not send a phone to, or an id that is not a machine's,
-    // falls through to the direct address rather than showing nothing.
     if (console !== null && isMachineId(id)) {
       const code = deps.connectCode?.() ?? null
       const fragment = code ? `#${CODE_FRAGMENT}=${encodeURIComponent(code)}` : ''
       return { url: `${console}/d/${id}${fragment}`, via: 'console', desktopName, deviceId: account.deviceId }
     }
+    // A console address this app would not send a phone to: nothing to show. Never the token
+    // link instead: a machine of an account does not hand its key out as a QR.
+    return null
   }
 
   const direct = bestDirect(deps.endpoints())

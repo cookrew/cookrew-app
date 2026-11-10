@@ -120,6 +120,26 @@ export const codeKeyForBase = (base: string): string => {
 }
 
 /**
+ * A CODE THAT WAITS BESIDE THE ONE HELD. A code handed in a link never replaces
+ * one already held for that machine (a link somebody else made must not be able
+ * to throw a good code away). It waits under this key, and is tried once if the
+ * machine refuses the held one, which is what happens when the machine really
+ * did mint a new code.
+ */
+export const nextCodeKey = (codeKey: string): string => `${codeKey}.next`
+
+/** The code that waited, taken (it is tried once), or null. */
+export function takeNextCode(storage: Pick<Storage, 'getItem' | 'removeItem'>, codeKey: string): string | null {
+  try {
+    const next = storage.getItem(nextCodeKey(codeKey))
+    if (next !== null) storage.removeItem(nextCodeKey(codeKey))
+    return next
+  } catch {
+    return null
+  }
+}
+
+/**
  * `?from=relay` — the marker the retired OPEN ON WI-FI button wrote. Nothing
  * writes it now, but links and bookmarks made with it still arrive, so it is
  * still scrubbed off the address bar. The VALUE is checked rather than the

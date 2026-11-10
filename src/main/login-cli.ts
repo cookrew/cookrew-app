@@ -117,7 +117,7 @@ export interface AccountWho {
   registry: string | null
   mismatch: { signedInAt: string; pointedAt: string } | null
   /** Why this machine must sign in again, when it is more than an ordinary ended session (0.6.0 moved the registry). */
-  signInAgainBecause?: SignInAgainReason | null
+  signInAgainBecause: SignInAgainReason | null
 }
 
 /** The sheet's own account functions (account-ipc.ts · accountDoor). */

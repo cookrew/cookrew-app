@@ -10,6 +10,7 @@
 // Temp dirs only; `fetch` is injected, so no socket is opened and no real
 // ~/.cookrew is touched. No password or token value is ever asserted on.
 
+import { chmodSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Accounts, loadAccount, writeAccount } from '../src/main/account-v2'
 import { accountStatus } from '../src/main/account-ipc'
@@ -403,7 +404,7 @@ describe('0.6.0: the registry moved, and this machine signs in again', () => {
   const HOME = 'https://api.cookrew.dev'
   const LIVE = { status: 201, body: { token: 'fresh-token', exp: Date.now() + 3_600_000, deviceId: 'd' } }
 
-  it('an account signed in at the old address is signed out here, at the new one, and that is written down', () => {
+  it('an account signed in at the old address is signed out here, at the new one, every time it is opened', () => {
     const base = claimed(WAS)
     const script = scripted([UNAUTHENTICATED])
     const it = new Accounts({ base, origin: HOME, fetch: script.fetch })
@@ -411,12 +412,13 @@ describe('0.6.0: the registry moved, and this machine signs in again', () => {
     expect(it.signInAgainBecause()).toBe('registry-moved')
     // Not "pointed somewhere else": this IS where the account lives now.
     expect(it.registryMismatch()).toBeNull()
-    const file = loadAccount(base)
-    expect(file?.registry).toBe(HOME)
-    expect(file?.session?.endedAt).toBeGreaterThan(0)
-    // The old token is not kept: nothing can use it, and nothing can find it still honoured.
-    expect(file?.session?.token).toBe('')
+    // The old token is not held: nothing can use it, and nothing can find it "still honoured".
+    expect(it.account()?.session?.token).toBe('')
+    expect(it.account()?.registry).toBe(HOME)
     expect(script.urls).toEqual([])
+    // OPENING THE FILE WRITES NOTHING: a folder that cannot be written to must not stop the app,
+    // and a second process on its way to quitting must not rewrite what the running one holds.
+    expect(loadAccount(base)?.registry).toBe(WAS)
     // A restart says the same.
     const again = new Accounts({ base, origin: HOME, fetch: script.fetch })
     expect(again.sessionLive()).toBe(false)
@@ -426,6 +428,17 @@ describe('0.6.0: the registry moved, and this machine signs in again', () => {
   it('is on the status the account surface reads, and in the words the CLI and the sheet say', () => {
     expect(signInAgainSentence('registry-moved', 'darwin')).toBe('Cookrew 0.6.0 moved its registry to api.cookrew.dev. Sign in again on this Mac.')
     expect(signInAgainSentence('registry-moved', 'linux')).not.toMatch(/\bMac\b/)
+  })
+
+  it('is told even when the folder cannot be written to: building it never throws', () => {
+    const base = claimed(WAS)
+    chmodSync(base, 0o500)
+    try {
+      const it = new Accounts({ base, origin: HOME, fetch: scripted([UNAUTHENTICATED]).fetch })
+      expect(it.signInAgainBecause()).toBe('registry-moved')
+    } finally {
+      chmodSync(base, 0o700)
+    }
   })
 
   it('signing in again brings the session back, and the reason is gone', async () => {
