@@ -248,6 +248,22 @@ describe('staying signed in', () => {
   })
 })
 
+describe('the relay refusing the session', () => {
+  it('renews it, and a burst of refusals is one renewal', async () => {
+    const one = browser()
+    await signedIn(one)
+    const page = openConsolePage(site, now, one)
+    await page.session.boot()
+    const before = page.session.token()
+    for (let i = 0; i < 5; i += 1) page.session.refused()
+    await expect.poll(() => page.session.token()).not.toBe(before)
+    expect(page.calls.filter((call) => call.path === '/v2/sessions/renew')).toHaveLength(1)
+    page.session.refused()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(page.calls.filter((call) => call.path === '/v2/sessions/renew')).toHaveLength(1)
+  })
+})
+
 describe('signing out', () => {
   it('ends the session at the registry and on the page', async () => {
     const one = browser()

@@ -99,6 +99,8 @@ export const PENDING_TTL_MS = 15 * 60 * 1000
 /** A token with less than this left is not sent: it would be dead on arrival. */
 const DEAD_ON_ARRIVAL_MS = 5_000
 const RETRY_RENEW_MS = 30_000
+/** A refusal renews at most this often. */
+export const REFUSED_EVERY_MS = 30_000
 export const RENEW_PREFIX = 'cookrew-renew/1'
 
 interface Held {
@@ -169,6 +171,7 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
   let state: SessionState = { status: 'starting' }
   let timer: unknown = null
   let renewing: Promise<string | null> | null = null
+  let refusedAt = Number.NEGATIVE_INFINITY
 
   const tell = (next: SessionState): void => {
     const same = next.status === state.status && (next.status !== 'signed-in' || (state.status === 'signed-in' && state.username === next.username))
@@ -332,7 +335,12 @@ export function createConsoleSession(deps: SessionDeps): ConsoleSession {
     },
     token: usable,
     fresh,
-    refused: () => void renew(),
+    refused: () => {
+      // Whoever answers through the relay can say this word; it buys one renewal per while, not one per answer.
+      if (now() - refusedAt < REFUSED_EVERY_MS) return
+      refusedAt = now()
+      void renew()
+    },
     boot: async () => {
       let kept: Held | null = null
       try {

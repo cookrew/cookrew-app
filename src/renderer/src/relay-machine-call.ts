@@ -2,6 +2,7 @@ import { remoteMachineCall, type RemoteMachineAnswer } from '../../shared/remote
 import type { EnterResult } from './account-pair-client'
 import { tokenKeyForBase } from './pairing-scope'
 import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
+import { RELAY_UNAUTHENTICATED } from '../../shared/machine-relay'
 
 /**
  * EVERY MACHINE OF THE ACCOUNT, FROM THE CONSOLE, WHICHEVER ONE IS IN SCOPE
@@ -89,7 +90,7 @@ async function answerOf(binary: boolean, response: Response): Promise<RemoteMach
 async function signedOut(response: Response): Promise<boolean> {
   try {
     const body = (await response.clone().json()) as { error?: unknown } | null
-    return body?.error === 'unauthenticated'
+    return body?.error === RELAY_UNAUTHENTICATED
   } catch {
     return false
   }

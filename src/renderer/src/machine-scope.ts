@@ -34,7 +34,7 @@
  * person's (theme, the account pass, the device key). Those are safe to share.
  */
 
-import { MACHINE_RELAY_PREFIX, RELAY_SESSION_HEADER, isMachineId } from '../../shared/machine-relay'
+import { MACHINE_RELAY_PREFIX, RELAY_SESSION_HEADER, RELAY_UNAUTHENTICATED, isMachineId } from '../../shared/machine-relay'
 
 /** How the console reaches the account's machines. */
 export interface RelayAccess {
@@ -42,6 +42,8 @@ export interface RelayAccess {
   readonly origin: string
   /** The account session, read at each request (it is renewed every few minutes). Null when signed out. */
   readonly session: () => string | null
+  /** The relay turned the session away: whoever keeps it renews it, or learns the sign-in is over. */
+  readonly refused?: () => void
 }
 
 export interface MachineScope {
@@ -130,6 +132,18 @@ export function relayHeadersForUrl(url: string, current: MachineScope = scope): 
 }
 
 /**
+ * WAS THIS REFUSAL THE RELAY'S, OF THE ACCOUNT SESSION, and not a machine's of
+ * its own token. On the console both arrive as a 401 from the same address;
+ * the relay's says `unauthenticated` and nothing else. True tells the caller
+ * not to treat the machine as unpaired, and the session's keeper has been told.
+ */
+export function relayRefusedSession(status: number, error: unknown, current: MachineScope = scope): boolean {
+  if (current.relay === null || status !== 401 || error !== RELAY_UNAUTHENTICATED) return false
+  current.relay.refused?.()
+  return true
+}
+
+/**
  * IS THE MACHINE THAT WAS IN SCOPE WHEN THIS WAS ASKED STILL THE ONE. Work
  * that waits (a request, a probe, a link being opened) takes this before it
  * waits and asks it before it writes down what it learned or sends anything
@@ -189,7 +203,7 @@ function change(next: MachineScope): void {
  * the order of the boot's lines cannot leave it running.
  */
 export function configureMachineScope(next: { relay: RelayAccess }): void {
-  change({ machineId: null, relay: { origin: trimmed(next.relay.origin), session: next.relay.session }, slug: '' })
+  change({ machineId: null, relay: { ...next.relay, origin: trimmed(next.relay.origin) }, slug: '' })
 }
 
 /**
