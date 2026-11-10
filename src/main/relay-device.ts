@@ -16,8 +16,8 @@ import { RELAY_MARKER, isLoopbackPeer } from './relay-base'
  * separation is the point: a header that could open a Mac would be a second
  * credential, and reach v2.1 exists to have exactly one.
  *
- * TRUSTED UNDER THE SAME TWO CONDITIONS AS x-cookrew-base, and for the same
- * reasons (relay-base.ts):
+ * TRUSTED UNDER TWO CONDITIONS, the ones every reader of the bridge's marker
+ * shares (relay-base.ts):
  *
  *   IT ARRIVED THROUGH THE BRIDGE. `x-cookrew-relay: 1` is written by
  *   canvas-bridge over whatever the caller sent.

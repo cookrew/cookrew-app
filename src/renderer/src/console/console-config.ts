@@ -34,6 +34,9 @@ function originOf(raw: string | null | undefined): string | null {
 
 const meta = (doc: Pick<Document, 'querySelector'>, name: string): string | null => doc.querySelector(`meta[name="${name}"]`)?.getAttribute('content') ?? null
 
+/** Where the account page is, from the console: the auth host's. Null on any page that is not the console. */
+export const accountPageOf = (config: ConsoleConfig | null): string | null => (config === null ? null : `${config.authOrigin}/account`)
+
 /** The console's configuration, or null on any page that is not the console. */
 export function readConsoleConfig(doc: Pick<Document, 'querySelector'>): ConsoleConfig | null {
   if (meta(doc, 'cookrew-mode') !== 'console') return null

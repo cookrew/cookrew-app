@@ -14,10 +14,11 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { consoleWorkerSource } from './scripts/console-sw.mjs'
+import { consoleHeaders, withIntegrity } from './scripts/console-host-files.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }
@@ -62,8 +63,27 @@ function consolePage(): Plugin {
       // itself is hashed in, so two builds that differ at all never share a cache.
       const pageSource = page && 'source' in page ? String(page.source) : ''
       const build = createHash('sha256').update([...assets].sort().join('\n')).update(pageSource).digest('hex').slice(0, 12)
+      // The page says which build it is, so it can tell when the host serves another (console/console-version.ts).
+      if (page && 'source' in page) page.source = pageSource.replace('</head>', `  <meta name="cookrew-build" content="${build}" />\n  </head>`)
       this.emitFile({ type: 'asset', fileName: 'sw.js', source: consoleWorkerSource({ version: `${version}-${build}`, assets }) })
       this.emitFile({ type: 'asset', fileName: 'version.json', source: `${JSON.stringify({ version, build })}\n` })
+      // What the host serves each answer with (scripts/console-host-files.mjs). Not a file of the page: the worker never holds it.
+      this.emitFile({ type: 'asset', fileName: '_headers', source: consoleHeaders({ api: origins.COOKREW_API_ORIGIN, local: process.env.COOKREW_CONSOLE_LOCAL === '1' }) })
+    },
+    // AFTER the files are on disk, from the bytes that were written: other plugins may still touch a chunk
+    // after generateBundle, and a pin over anything but the final bytes would refuse the page its own script.
+    writeBundle(options) {
+      const dir = options.dir
+      if (!dir) return
+      const file = path.join(dir, 'index.html')
+      const read = (name: string): Uint8Array | null => {
+        try {
+          return readFileSync(path.join(dir, name))
+        } catch {
+          return null
+        }
+      }
+      writeFileSync(file, withIntegrity(readFileSync(file, 'utf8'), read))
     }
   }
 }

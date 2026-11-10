@@ -60,9 +60,9 @@ export interface AccountIpcDeps {
    */
   onAccountPassword?: (password: string) => void
   /**
-   * THE ONE QUEUE (D11) — sign-ins, phones asking for Wi-Fi, guests asking for
-   * a seat. The producer of `status.requests`, which is now a count of all
-   * three rather than of sign-ins alone.
+   * THE ONE QUEUE (D11) — sign-ins and guests asking for a seat. The producer
+   * of `status.requests`, which is a count of both rather than of sign-ins
+   * alone.
    */
   requests: Requests
   /** The second-factor ladder (D3): passkeys, the authenticator app. */
@@ -254,7 +254,7 @@ const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 
 /**
- * Seven verbs and no eighth: a button this build has never heard of is
+ * Five verbs and no sixth: a button this build has never heard of is
  * refused, never guessed at. They are the row actions' own ids (D11), so what
  * arrives here is exactly what was pressed.
  */
@@ -262,8 +262,6 @@ const ROW_ACTIONS: readonly RowAction['id'][] = [
   'approve',
   'deny',
   'not-me',
-  'allow',
-  'not-now',
   'seat-them',
   'decline',
 ]

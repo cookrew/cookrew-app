@@ -66,7 +66,7 @@ import {
   type MobileIdentityDeps
 } from './mobile-identity-routes'
 import { companionAccount } from './companion-account'
-import { RELAY_BASE_HEADER, RELAY_MARKER, relayBaseOf } from './relay-base'
+import { RELAY_MARKER } from './relay-base'
 import { isSealPath, routeSeal, type SealTerminus } from './canvas-seal-terminus'
 import { takeRelayDevice, type RelayDevice } from './relay-device'
 import { certFingerprint, reachAnswer, reachCard, type PublishState } from './reach'
@@ -969,10 +969,15 @@ export function uncoveredCertHosts(): string[] {
  * The route splitter already allow-lists the minted slug shape, so this is the
  * second of two locks rather than the only one — but a lock that only works
  * because of the other lock is not a second lock.
+ *
+ * IT NAMES NO BASE, and nothing about the request decides what it says. A
+ * machine serves its page at its own root and nowhere else: the relay carries
+ * no page (shared/machine-relay.ts), and the console, which does reach a
+ * machine under a prefix, is another page that sets its own (renderer
+ * machine-scope.ts).
  */
-export const remoteBoot = (slug: string | null, base = ''): string => `<script>
+export const remoteBoot = (slug: string | null): string => `<script>
 window.COOKREW_SLUG = ${JSON.stringify(slug ?? '').replace(/</g, '\\u003c')}
-window.COOKREW_BASE = ${JSON.stringify(base).replace(/</g, '\\u003c')}
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => {
   document.body.classList.add('cookrew-mobile')
@@ -980,26 +985,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (viewport) viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-visual')
 })
 </script>`
-
-/**
- * The boot script for THIS request, base and all.
- *
- * The base is not a parameter of the route because it is not a decision the
- * route makes: it is a fact about where the request came from, and reading it
- * anywhere else would be a second place the trust rule could be got wrong.
- */
-export const remoteBootFor = (
-  request: http.IncomingMessage,
-  slug: string | null
-): string =>
-  remoteBoot(
-    slug,
-    relayBaseOf({
-      marker: request.headers[RELAY_MARKER],
-      base: request.headers[RELAY_BASE_HEADER],
-      remoteAddress: request.socket?.remoteAddress
-    })
-  )
 
 const STATIC_MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -1076,7 +1061,7 @@ function serveRendererIndex(
   if (!built) return false
   const html = readFileSync(built.index, 'utf8').replace(
     '<head>',
-    `<head>${remoteBootFor(request, slug)}${staleBanner(built.notice)}`
+    `<head>${remoteBoot(slug)}${staleBanner(built.notice)}`
   )
   // no-store, not no-cache: assets are hash-named, but iOS Safari's
   // crash-recovery reload ("因为出现问题,此网页已重新载入") reuses a cached
@@ -1149,7 +1134,7 @@ async function serveRendererDev(
   if (!resource) return false
   const body = injectRemoteBoot
     ? Buffer.from(
-        resource.body.toString('utf8').replace('<head>', `<head>${remoteBootFor(request, slug)}`)
+        resource.body.toString('utf8').replace('<head>', `<head>${remoteBoot(slug)}`)
       )
     : resource.body
   sendBody(
@@ -1269,7 +1254,7 @@ export async function handle(
     return
   }
 
-  // The sealed session reads the bridge's own device and base headers, so it goes
+  // The sealed session reads the bridge's own device headers, so it goes
   // first, and it answers nothing the bridge did not carry (canvas-seal-terminus.ts).
   if (isSealPath(url.pathname)) return routeSeal(request, response, deps.sealTerminus?.())
 

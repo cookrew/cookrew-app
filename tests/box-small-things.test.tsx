@@ -157,7 +157,7 @@ describe('a late pong after a delete', () => {
 describe('the avatar’s count and the notification', () => {
   it('a notification that cannot be shown costs the badge nothing', async () => {
     const onChange = vi.fn()
-    const row = { id: 'reach-1', kind: 'reach', device: 'Pixel', address: 'Pixel', at: 1, expiresAt: 9e12, state: 'pending' }
+    const row = { id: 'join-1', kind: 'join', device: 'Pixel', address: 'Pixel', at: 1, expiresAt: 9e12, state: 'pending' }
     const requests = new Requests({
       accounts: {
         account: () => ({ username: 'mira' }),

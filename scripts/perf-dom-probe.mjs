@@ -478,7 +478,6 @@ export async function waitForCanvas(page, timeoutMs = 150_000, settleMs = 2500) 
 
 const REMOTE_BOOT = `<script>
 window.COOKREW_SLUG = ''
-window.COOKREW_BASE = ''
 window.COOKREW_MOBILE = 1
 document.addEventListener('DOMContentLoaded', () => { document.body.classList.add('cookrew-mobile') })
 </script>`

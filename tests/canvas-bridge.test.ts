@@ -172,25 +172,25 @@ describe('one relayed exchange', () => {
     expect(echo.headers[RELAY_MARKER]).toBe('1')
   })
 
-  it('passes the relay base through to the companion unchanged', async () => {
-    // The registry says where the page is; the bridge must not have an
-    // opinion about it. It is read once, at the shell, under the loopback and
-    // marker rules in relay-base.ts.
-    const base = '/relay/@owner/desktop/11111111-2222-3333-4444-555555555555'
+  it('passes what the registry said about the caller through to the companion unchanged', async () => {
+    // The registry names the caller's device; the bridge must not have an
+    // opinion about it. It is read once, at the door, under the loopback and
+    // marker rules in relay-device.ts.
+    const device = '11111111-2222-3333-4444-555555555555'
     const bridge = standUp()
     bridge.frame({
       t: 'open',
-      id: 'base',
+      id: 'named',
       method: 'GET',
       path: '/',
-      headers: { 'x-cookrew-base': base }
+      headers: { 'x-cookrew-device': device }
     })
-    bridge.frame({ t: 'body', id: 'base', data: '', done: true })
-    await until(() => ended(bridge.of('base')), 'the shell')
-    const echo = JSON.parse(bodyOf(bridge.of('base')).toString('utf8')) as {
+    bridge.frame({ t: 'body', id: 'named', data: '', done: true })
+    await until(() => ended(bridge.of('named')), 'the shell')
+    const echo = JSON.parse(bodyOf(bridge.of('named')).toString('utf8')) as {
       headers: Record<string, string>
     }
-    expect(echo.headers['x-cookrew-base']).toBe(base)
+    expect(echo.headers['x-cookrew-device']).toBe(device)
     // And the marker is still the bridge's own word, written over whatever
     // the caller sent — that pair is the whole trust rule.
     expect(echo.headers[RELAY_MARKER]).toBe('1')

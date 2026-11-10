@@ -18,7 +18,7 @@ import { JOIN_CODE_TTL_MS } from '../registry/src/v2-join-codes'
 import { EXPIRED_RETENTION_MS } from '../registry/src/terms'
 import { REACH_TTL_MS as DNS_CARD_TTL_MS } from '../registry/src/dns-zone'
 import { SEATS_MAX } from '../registry/src/v2-seats'
-import { REACH_TTL_MS, SEAT_TTL_MS } from '../registry/src/v2-requests'
+import { SEAT_TTL_MS } from '../registry/src/v2-requests'
 import { PENDING_TTL_MS } from '../registry/src/v2-pending'
 import { SESSION_TTL_MS } from '../registry/src/v2-tokens'
 import { PER_ACCOUNT as EVENTS_KEPT } from '../registry/src/v2-events'
@@ -247,7 +247,8 @@ describe('the words match the code', () => {
     expect(retention).toContain(`${SESSION_TTL_MS / DAY_MS} days`)
     expect(retention).toContain(`${SEAT_TTL_MS / DAY_MS} days`)
     expect(retention).toContain(`${PENDING_TTL_MS / MINUTE_MS} minutes`)
-    expect(retention).toContain(`${REACH_TTL_MS / MINUTE_MS} minutes`)
+    // A phone asking a Mac for Wi-Fi is held by nobody any more (0.6.0), so the page keeps no line for it.
+    expect(retention).not.toMatch(/reach requests/i)
     expect(retention).toContain(`Join codes: ${JOIN_CODE_TTL_MS / MINUTE_MS} minutes`)
     expect(retention).toContain(`${EXPIRED_RETENTION_MS / HOUR_MS} hours after it expires`)
     expect(retention).toContain(`${DNS_CARD_TTL_MS / HOUR_MS} hours old`)

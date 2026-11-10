@@ -129,22 +129,18 @@ describe('M5 · USE WI-FI — a tap on the Mac, never a scan', () => {
     expect(ASSETS['site.js'].body).toContain('sealKey')
   })
 
-  it('a reach request reaches the Mac it named, carrying that device’s key', async () => {
-    const other = device('Second Mac')
-    const joined = await fetch(`${origin}/v2/sessions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username: 'drej', password: PASSWORD, device: other })
-    })
-    // A device the account has not met climbs a ladder; this test only needs
-    // the row, so it asks as the device that already holds a session.
-    expect([201, 401]).toContain(joined.status)
+  it('the ask itself is not taken any more: the registry has no such route (0.6.0)', async () => {
     const asked = await fetch(`${origin}/v2/me/desktops/${deviceId}/reach-requests`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...signedIn() }
     })
-    // Asking to reach the very device you are on is a no-op, not a queue row.
-    expect(asked.status).toBe(400)
+    const never = await fetch(`${origin}/v2/me/desktops/${deviceId}/no-such-thing`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...signedIn() }
+    })
+    expect(asked.status).toBe(404)
+    expect(asked.status).toBe(never.status)
+    expect(await asked.text()).toBe(await never.text())
   })
 })
 

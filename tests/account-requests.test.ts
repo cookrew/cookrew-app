@@ -13,7 +13,6 @@ import {
   queueEmpty,
   queueFooter,
   queueView,
-  reachSealInfo,
   rowInitials,
   rowNotice,
   type AccountEvent,
@@ -46,16 +45,6 @@ const join: QueueRow = {
   expiresAt: NOW + MINUTE,
   state: 'pending',
 }
-const reach: QueueRow = {
-  id: 'r1',
-  kind: 'reach',
-  device: 'iPhone',
-  address: 'iPhone',
-  at: AT,
-  expiresAt: NOW + MINUTE,
-  state: 'pending',
-  askKey: { kty: 'OKP', crv: 'Ed25519', x: 'abc' },
-}
 const seat: QueueRow = {
   id: 's1',
   kind: 'seat',
@@ -80,16 +69,11 @@ describe('a waiting row, by kind', () => {
     expect(view.chip).toBeNull()
   })
 
-  it('a reach is one tap, and reads the table sentence about what ALLOW hands over', () => {
-    const view = pendingRowView(reach, INPUT)
-    // The lead is the table's first sentence, filled: the second half of that
-    // entry explains what ALLOW hands over and is said once, in the footer.
-    expect(view.lead).toBe('iPhone wants to reach this Mac on Wi-Fi.')
-    expect(V3_COPY['d11.wifi-row'].startsWith('{device} wants to reach this Mac on Wi-Fi.')).toBe(true)
-    expect(view.actions.map((a) => a.id)).toEqual(['allow', 'not-now'])
-    expect(view.matchLabel).toBeNull()
-    // The clause that makes ALLOW considerable: this is not a stranger.
-    expect(view.detail).toContain(REQUEST_COPY.ON_ACCOUNT)
+  it('there is no third kind: nothing here offers ALLOW, or says a phone is asking for Wi-Fi', () => {
+    const offered = [join, seat].flatMap((row) => pendingRowView(row, INPUT).actions.map((a) => a.id))
+    expect(offered).toEqual(['approve', 'deny', 'not-me', 'seat-them', 'decline'])
+    const said = [...Object.values(REQUEST_COPY), queueFooter(), queueEmpty()].join(' ')
+    expect(said).not.toMatch(/\bALLOW\b|NOT NOW|Wi-Fi|\bLAN\b/)
   })
 
   it('a seat names both the guest and the room, and is answered by two buttons', () => {
@@ -100,7 +84,7 @@ describe('a waiting row, by kind', () => {
   })
 
   it('every row ends with how long it has been asking', () => {
-    for (const row of [join, reach, seat]) {
+    for (const row of [join, seat]) {
       expect(pendingRowView(row, INPUT).detail, row.kind).toMatch(/4 minutes ago$/)
     }
   })
@@ -127,7 +111,6 @@ describe('a row that is over', () => {
   it('wears the chip its outcome earned, and says so in the first person', () => {
     const cases: [AnsweredRow, string, string][] = [
       [answered({}), REQUEST_COPY.CHIP_DONE, REQUEST_COPY.OVER_APPROVED],
-      [answered({ kind: 'reach', outcome: 'allowed', subject: 'iPhone' }), REQUEST_COPY.CHIP_LAN, REQUEST_COPY.OVER_ALLOWED],
       [
         answered({ kind: 'seat', outcome: 'seated', subject: 'jkim', team: '@mira/research-crew' }),
         REQUEST_COPY.CHIP_SEATED,
@@ -145,11 +128,8 @@ describe('a row that is over', () => {
     }
   })
 
-  it('reads the table sentence for each of the four states', () => {
+  it('reads the table sentence for each of the three states', () => {
     expect(answeredRowView(answered({}), INPUT).lead).toBe('Mac Studio joined @drej')
-    expect(answeredRowView(answered({ kind: 'reach', outcome: 'allowed', subject: 'iPhone' }), INPUT).lead).toBe(
-      'iPhone can reach this Mac on Wi-Fi',
-    )
     expect(
       answeredRowView(answered({ kind: 'seat', outcome: 'seated', subject: 'jkim', team: 'RESEARCH CREW' }), INPUT).lead,
     ).toBe('@jkim is seated at RESEARCH CREW')
@@ -184,7 +164,7 @@ describe('the card as a whole', () => {
   })
 
   it('counts every kind on the badge, and no finished row', () => {
-    expect(badgeCount([join, reach, seat])).toBe(3)
+    expect(badgeCount([join, seat])).toBe(2)
     expect(badgeCount([])).toBe(0)
   })
 
@@ -262,11 +242,5 @@ describe('what a device is told', () => {
       pendingRowView(join, INPUT).lead,
     ].join(' ')
     expect(said).not.toMatch(/\berrors?\b|\binvalid\b|\b[45][0-9]{2}\b/i)
-  })
-})
-
-describe('the seal label', () => {
-  it('is the request id, so both sides derive it from the one fact they share', () => {
-    expect(reachSealInfo('r1')).toBe('reach:r1')
   })
 })

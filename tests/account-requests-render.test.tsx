@@ -76,17 +76,17 @@ const queue = (
 describe('the one queue (D11)', () => {
   const html = queue([
     pending(),
-    pending({ id: 'reach-1', kind: 'reach', device: 'iPhone', askKey: { kty: 'OKP' } }),
     pending({ id: 'seat-1', kind: 'seat', account: 'jkim', team: '@drej/alpha', device: undefined }),
   ])
 
   it('draws one row per kind, each with the buttons that kind has', () => {
     expect(html).toContain('Mac Studio wants to join @drej')
-    expect(html).toContain('iPhone wants to reach this Mac on Wi-Fi.')
     expect(html).toContain('@jkim asks for a seat at @drej/alpha.')
-    for (const label of ['>APPROVE<', '>DENY<', '>NOT ME<', '>ALLOW<', '>NOT NOW<', '>SEAT THEM<', '>DECLINE<']) {
+    for (const label of ['>APPROVE<', '>DENY<', '>NOT ME<', '>SEAT THEM<', '>DECLINE<']) {
       expect(html, label).toContain(label)
     }
+    // No third kind: nothing here lets a phone in on Wi-Fi (0.6.0).
+    for (const gone of ['>ALLOW<', '>NOT NOW<', 'Wi-Fi']) expect(html, gone).not.toContain(gone)
   })
 
   it('asks the join row for the number, and NOWHERE else', () => {
@@ -100,9 +100,9 @@ describe('the one queue (D11)', () => {
     // the other machine's screen, so it ships disabled and the field beside it
     // is the reason it will not move.
     expect(html).toMatch(/class="gs-primary"[^>]*disabled[^>]*>APPROVE/)
-    // ALLOW and SEAT THEM are one press: they need no number.
-    expect(html).toMatch(/class="gs-primary"[^>]*>ALLOW/)
-    expect(html).not.toMatch(/class="gs-primary"[^>]*disabled[^>]*>ALLOW/)
+    // SEAT THEM is one press: it needs no number.
+    expect(html).toMatch(/class="gs-primary"[^>]*>SEAT THEM/)
+    expect(html).not.toMatch(/class="gs-primary"[^>]*disabled[^>]*>SEAT THEM/)
   })
 
   it('weights the three answers to a sign-in: approve, deny, then the alarm', () => {
@@ -112,7 +112,7 @@ describe('the one queue (D11)', () => {
   })
 
   it('says what each button does, under the list', () => {
-    expect(html).toContain('ALLOW gives the phone this Mac')
+    expect(html).toContain('SEAT THEM grants by username')
     expect(html).toContain('NOT ME signs every other device out')
   })
 
@@ -121,14 +121,13 @@ describe('the one queue (D11)', () => {
       [],
       [
         { id: 'a1', kind: 'join', outcome: 'joined', subject: 'Mac Studio', at: NOW - 120_000 },
-        { id: 'a2', kind: 'reach', outcome: 'allowed', subject: 'iPhone', at: NOW - 240_000 },
         { id: 'a3', kind: 'seat', outcome: 'seated', subject: 'jkim', team: '@drej/alpha', at: NOW - 360_000 },
         { id: 'a4', kind: 'join', outcome: 'denied', subject: 'iPhone', at: NOW - 600_000 },
       ],
     )
     expect(over).toContain('Mac Studio joined @drej')
     expect(over).toContain('>DONE<')
-    expect(over).toContain('>LAN<')
+    expect(over).not.toContain('>LAN<')
     expect(over).toContain('>SEATED<')
     expect(over).toContain('A sign-in as @drej was denied on iPhone')
     expect(over).toContain('>NOT ME<')

@@ -1651,11 +1651,6 @@ const requests = new Requests({
     }
   },
   answered: answeredStoreIn(),
-  // NO `reach` HALF (0.6.0). A "use Wi-Fi" request was answered with a link to the relay's own
-  // page for this machine, sealed to the asker; that page is gone and nothing raises such a
-  // request any more. Left unwired, ALLOW on a stray one admits nobody (requests.ts answers
-  // `not_wired` before anything is minted), where a half that could build no link would have
-  // added a device nobody can use each time.
 })
 const factors = new Factors({ accounts, registry: registryOrigin() })
 

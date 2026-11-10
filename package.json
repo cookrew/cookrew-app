@@ -13,6 +13,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "console:build": "vite build -c vite.console.config.ts",
+    "console:size": "node scripts/console-size.mjs",
     "site:build": "node scripts/site-build.mjs",
     "registry:assets": "node scripts/registry-assets.mjs",
     "deeplink:doctor": "node scripts/dev-deeplink-doctor.mjs",
