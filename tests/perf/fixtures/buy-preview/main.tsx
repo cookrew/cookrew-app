@@ -60,7 +60,8 @@ const bridge: Partial<CookrewApi> = {
   },
   serveGate: (address, intent) => post('gate', { link: address, ...(intent === 'buy' ? { intent } : {}) }),
   serveCheckout: (address) => post('checkout', { link: address }),
-  serveSettle: (address, rail, session) => post('settle', { link: address, rail, session }),
+  serveSettle: (address, rail, session, shown) =>
+    post('settle', { link: address, rail, session, ...(shown === undefined ? {} : { shown }) }),
   addNode: async (node) => {
     left.nodes.push(node)
     return node

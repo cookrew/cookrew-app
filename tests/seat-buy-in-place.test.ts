@@ -60,6 +60,13 @@ const cardSignIn = (app: AppOn, door = DOOR): Promise<string> =>
     door
   )
 
+/** The wallet terms a pay step displayed, as the key the surface sends back with the press. */
+const walletKey = (gated: unknown): string | undefined => {
+  const phase = (gated as Gated).phase
+  const wallet = phase.kind === 'pay' ? phase.rails.find((rail) => rail.rail === 'x402') : undefined
+  return wallet?.rail === 'x402' ? wallet.shown : undefined
+}
+
 /** Buy a seat by card as whoever `app` is, with the door's report to cookrew.dev held back. */
 async function buyWithReportHeld(app: AppOn): Promise<() => void> {
   expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
@@ -164,7 +171,7 @@ describe('buying a seat at a listed paid team, in the app', () => {
           { rail: 'x402', price: '1', asset: 'USDC', chain: 'base-sepolia' }
         ]
       })
-      expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual({ ok: true, phase: { kind: 'open' } })
       // One signature, over exactly what the pay step showed.
       expect(app.signed).toHaveLength(1)
       expect(app.signed[0]).toMatchObject({ maxAmountRequired: '1000000', network: 'base-sepolia' })
@@ -326,13 +333,13 @@ describe('the wallet signs what the person was shown, or nothing (H2)', () => {
       expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
       const before = world.openedBy.length
       world.usdcTerms(patch)
-      const answer = await app.ops.settle(DOOR, 'x402')
+      const answer = await app.ops.settle(DOOR, 'x402', undefined, app.shown())
       expect(answer).toMatchObject({ ok: false, reason: 'terms-changed' })
       expect(app.signed).toEqual([])
       expect(world.openedBy).toHaveLength(before)
       // The door going back to what it showed is payable again: the shown terms were kept.
       world.usdcTerms({})
-      expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual({ ok: true, phase: { kind: 'open' } })
       expect(app.signed).toHaveLength(1)
     } finally {
       world.usdcTerms({})
@@ -356,7 +363,7 @@ describe('the wallet signs what the person was shown, or nothing (H2)', () => {
       // The card is there; the wallet quote the app will not read is not a rail at all.
       expect(quoted.phase).toMatchObject({ kind: 'pay', rails: [{ rail: 'stripe' }] })
       expect((quoted.phase as { rails: unknown[] }).rails).toHaveLength(1)
-      expect(await app.ops.settle(DOOR, 'x402')).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toMatchObject({ ok: false, reason: 'terms-changed' })
       expect(app.signed).toEqual([])
     } finally {
       world.usdcTerms({})
@@ -371,7 +378,7 @@ describe('the wallet signs what the person was shown, or nothing (H2)', () => {
     expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase).toMatchObject({ kind: 'pay', rails: [{ rail: 'stripe' }] })
     world.quote(['stripe', 'x402'])
     try {
-      expect(await app.ops.settle(DOOR, 'x402')).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toMatchObject({ ok: false, reason: 'terms-changed' })
       expect(app.signed).toEqual([])
     } finally {
       world.quote(['stripe'])
@@ -386,9 +393,68 @@ describe('the wallet signs what the person was shown, or nothing (H2)', () => {
       await app.ops.gate(DOOR, 'buy')
       world.usdcTerms({ description: 'a seat, described another way', payTo: '0xc8ee69bb8da2804b860be6e4afa9acccdb2053a5' })
       // Same payee, written in lower case: an address is the same address.
-      expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual({ ok: true, phase: { kind: 'open' } })
     } finally {
       world.usdcTerms({})
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+})
+
+describe('the press signs what THAT surface displayed (C)', () => {
+  /**
+   * Main remembers the terms the last gate answer showed — but the phone and
+   * the desktop share one gate, and so do a sheet and its own re-ask. The
+   * second ask replaces what main remembers while the first sheet is still
+   * showing the old price. So the press carries what its own surface
+   * displayed, and three things must agree before a wallet is asked: what the
+   * surface showed, what main remembers, and what the door quotes now.
+   */
+  it('the desktop shows 1 USDC, a phone’s gate replaces it with 1000, the desktop presses PAY: refused, nothing signed', async () => {
+    const guest = await world.registeredMachine('c-two', 'ctwo')
+    world.quote(['x402'])
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+      const desktop = walletKey(await app.ops.gate(DOOR, 'buy'))
+      expect(desktop).toEqual(expect.stringContaining('|1000000|'))
+
+      // The door raises its price, and another surface on this Mac asks it.
+      world.usdcTerms({ maxAmountRequired: '1000000000' })
+      const phone = walletKey(await app.ops.gate(DOOR, 'buy'))
+      expect(phone).toEqual(expect.stringContaining('|1000000000|'))
+      expect(phone).not.toBe(desktop)
+
+      // The desktop still shows 1 USDC and is pressed. Main remembers 1000 and
+      // the door quotes 1000 — they agree with each other, and not with the screen.
+      expect(await app.ops.settle(DOOR, 'x402', undefined, desktop)).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toEqual([])
+      expect(world.openedBy).not.toContain('acct-ctwo')
+
+      // A press that says nothing about what it showed is refused too.
+      expect(await app.ops.settle(DOOR, 'x402')).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(await app.ops.settle(DOOR, 'x402', undefined, '')).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toEqual([])
+
+      // The phone, which displayed 1000 and is pressed, pays 1000: that is what its person saw.
+      expect(await app.ops.settle(DOOR, 'x402', undefined, phone)).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(app.signed).toHaveLength(1)
+      expect(app.signed[0]).toMatchObject({ maxAmountRequired: '1000000000' })
+    } finally {
+      world.usdcTerms({})
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
+  it('a surface cannot talk main into terms the door is not asking: what it says it showed must be what main showed', async () => {
+    const guest = await world.registeredMachine('c-lie', 'clie')
+    world.quote(['x402'])
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+      const shown = walletKey(await app.ops.gate(DOOR, 'buy')) as string
+      const cheaper = shown.replace('|1000000|', '|1|')
+      expect(await app.ops.settle(DOOR, 'x402', undefined, cheaper)).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toEqual([])
+    } finally {
       world.quote(['stripe'])
     }
   }, SLOW)
@@ -417,7 +483,7 @@ describe('a refusal on the buy path is said, not swallowed', () => {
     try {
       const app = world.appOn(guest.accounts, { usdc: BAD_USDC })
       await app.ops.gate(DOOR, 'buy')
-      expect(await app.ops.settle(DOOR, 'x402')).toEqual({
+      expect(await app.ops.settle(DOOR, 'x402', undefined, app.shown())).toEqual({
         ok: true,
         phase: { kind: 'denied', reason: 'payment_invalid', retryable: false }
       })

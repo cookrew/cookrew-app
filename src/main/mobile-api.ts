@@ -248,7 +248,8 @@ export interface ServeOps {
   /** `intent` is the sheet's BUY A SEAT press; absent is a plain import. */
   gate(link: string, intent?: "buy"): Promise<unknown>;
   checkout(link: string): Promise<unknown>;
-  settle(link: string, rail: "x402" | "stripe", session?: string): Promise<unknown>;
+  /** `shown` is the wallet terms the pressed surface displayed (serve-gate.ts settle). */
+  settle(link: string, rail: "x402" | "stripe", session?: string, shown?: string): Promise<unknown>;
   import(
     link: string,
     position?: { x: number; y: number },
@@ -1285,6 +1286,7 @@ export async function handleMobileApi(
       rail?: unknown;
       session?: unknown;
       intent?: unknown;
+      shown?: unknown;
     }>(request);
     if (typeof body.link !== "string" || body.link.length === 0 || body.link.length > 2048) {
       respondJson(response, 400, { ok: false, reason: "bad-address" });
@@ -1306,7 +1308,10 @@ export async function handleMobileApi(
         respondJson(response, 400, { ok: false, reason: "bad-rail" });
         return true;
       }
-      answer = await deps.serve.settle(link, rail, session);
+      // What the phone displayed for the wallet rail: bounded text, or not said.
+      const shown =
+        typeof body.shown === "string" && body.shown.length <= 512 ? body.shown : undefined;
+      answer = await deps.serve.settle(link, rail, session, shown);
     } else answer = await deps.serve.import(link, position, paid);
     respondJson(response, 200, answer);
     return true;

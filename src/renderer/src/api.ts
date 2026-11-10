@@ -323,11 +323,16 @@ export interface CookrewApi {
   ) => Promise<
     { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
   >;
-  /** Present a payment on one rail and be admitted. */
+  /**
+   * Present a payment on one rail and be admitted. For the wallet rail,
+   * `shown` is the key of the terms THIS surface displayed (ServeRail.shown):
+   * main signs only if the door's quote at the press is still exactly that.
+   */
   serveSettle: (
     link: string,
     rail: 'x402' | 'stripe',
     session?: string,
+    shown?: string,
   ) => Promise<
     { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
   >;

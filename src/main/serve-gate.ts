@@ -256,7 +256,14 @@ export function createServeGate(deps: ServeGateDeps) {
       }
     },
 
-    settle: async (link: string, rail: 'x402' | 'stripe', session?: string) => {
+    /**
+     * Present a payment. `shown` is the wallet rail's: the key of the terms
+     * the SURFACE THAT WAS PRESSED displayed (AdmissionRail.shown, sent back
+     * with the press). Main remembers what the last gate answer showed, but
+     * the phone and the desktop share this gate and either can re-ask — so
+     * what main remembers is not necessarily what this person is looking at.
+     */
+    settle: async (link: string, rail: 'x402' | 'stripe', session?: string, shown?: string) => {
       const target = deps.parse(link)
       const key = target ? fileKey(who(), targetKey(target)) : ''
       const entry = target ? held.get(key) : undefined
@@ -286,9 +293,12 @@ export function createServeGate(deps: ServeGateDeps) {
             // Already open, or refused for another reason. Nothing to sign.
             return { ok: true as const, phase: remember(key, entry, quoted) }
           }
-          // SIGN WHAT WAS SHOWN, OR NOTHING. This quote is fresh from the door;
-          // the one the person approved is the one the pay step was built from.
-          if (entry.shown === null || terms.shown !== entry.shown) return changed
+          // SIGN WHAT WAS SHOWN, OR NOTHING. Three things must be the same
+          // terms: what the pressed surface displayed, what main last showed,
+          // and what the door quotes now. A press that carries nothing, or
+          // carries a screen that has since been replaced, is refused.
+          if (typeof shown !== 'string' || shown.length === 0) return changed
+          if (entry.shown === null || shown !== entry.shown || terms.shown !== shown) return changed
           payment = await deps.buildX402Payment(terms.requirements)
         }
         return {

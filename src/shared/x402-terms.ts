@@ -102,12 +102,17 @@ export function parseX402Terms(raw: unknown): X402Terms | null {
   }
 }
 
-/** The amount as the sheet prints it: decimal USDC, from the same bigint that is signed. */
-export function x402TermsPrice(terms: X402Terms): string {
-  const digits = terms.amount.toString().padStart(USDC_DECIMALS + 1, '0')
+/** Atomic units, as plain digits, to decimal USDC. No float touches it. */
+function decimalOf(atomic: string): string {
+  const digits = atomic.padStart(USDC_DECIMALS + 1, '0')
   const whole = digits.slice(0, digits.length - USDC_DECIMALS)
   const fraction = digits.slice(digits.length - USDC_DECIMALS).replace(/0+$/, '')
   return fraction.length > 0 ? `${whole}.${fraction}` : whole
+}
+
+/** The amount as the sheet prints it: decimal USDC, from the same bigint that is signed. */
+export function x402TermsPrice(terms: X402Terms): string {
+  return decimalOf(terms.amount.toString())
 }
 
 /**
@@ -120,9 +125,23 @@ export function x402TermsPrice(terms: X402Terms): string {
  * pay step showed, what the surface sends back with the PAY press, and what
  * the fresh quote at the press must equal.
  */
+const KEY_VERSION = 'x402-terms/1'
+
+/**
+ * The two things a key says that a pay step PRINTS: the amount, as the same
+ * decimal `x402TermsPrice` gives, and the network. Null for anything that is
+ * not a key this module wrote.
+ */
+export function x402KeySays(key: unknown): { price: string; network: string } | null {
+  if (typeof key !== 'string') return null
+  const parts = key.split('|')
+  if (parts.length !== 9 || parts[0] !== KEY_VERSION || !AMOUNT.test(parts[3])) return null
+  return { price: decimalOf(parts[3]), network: parts[1] }
+}
+
 export function x402TermsKey(terms: X402Terms): string {
   return [
-    'x402-terms/1',
+    KEY_VERSION,
     terms.network,
     String(terms.chainId),
     terms.amount.toString(),

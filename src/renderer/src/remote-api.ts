@@ -1092,8 +1092,8 @@ export function createRemoteApi(): CookrewApi {
       window.open(checkout.url, '_blank', 'noopener')
       return checkout
     },
-    serveSettle: (link, rail, session) =>
-      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session }),
+    serveSettle: (link, rail, session, shown) =>
+      req(apiPath('/api/serve/settle'), 'POST', { link, rail, session, ...(shown === undefined ? {} : { shown }) }),
     /**
      * THE PHONE READS THE MAC'S PICTURES, AND NEVER ASKS FOR ONE.
      *

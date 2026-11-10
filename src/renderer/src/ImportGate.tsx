@@ -15,6 +15,7 @@ import {
 import {
   BUDGET_RETRY_MS,
   deniedVarsFor,
+  displayedTermsKey,
   remedyFor,
   settleRefusalFault,
   walkPricing,
@@ -420,7 +421,9 @@ export function ImportGate({
       return
     }
     void cookrew()
-      .serveSettle(link, 'x402')
+      // The press vouches for the terms on THIS screen (displayedTermsKey):
+      // main signs only if the door's quote is still exactly those.
+      .serveSettle(link, 'x402', undefined, displayedTermsKey(selected))
       .then((result) => {
         setBusy(false)
         if (result.ok) {

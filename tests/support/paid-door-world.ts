@@ -88,6 +88,12 @@ export interface AppOn {
   minted: unknown[]
   /** Every quote this Mac's wallet was asked to sign, in order. */
   signed: unknown[]
+  /**
+   * What this Mac's sheet is displaying for the wallet rail: the key of the
+   * terms in the LAST gate answer it was handed — what a surface sends back
+   * with its PAY press. Undefined when that answer showed no wallet terms.
+   */
+  shown(): string | undefined
 }
 
 export interface PaidDoorWorld {
@@ -341,7 +347,8 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
       }
     }
     const usdc = options.usdc
-    const ops = createServeGate({
+    let lastShown: string | undefined
+    const gate = createServeGate({
       parse: (link) => (link.startsWith('@') ? { origin, slug: link.split('/')[1] ?? '', door: link } : null),
       reachable: async (target) =>
         target.door ? { at: { origin: planeOrigin, slug: target.door, door: target.door }, listed: true, live: true } : null,
@@ -354,7 +361,17 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
         return usdc === undefined ? Promise.reject(new Error('this Mac has no wallet')) : Promise.resolve(usdc)
       }
     })
-    return { ops, minted, signed }
+    const ops: ServeGate = {
+      ...gate,
+      gate: async (link, intent) => {
+        const answer = await gate.gate(link, intent)
+        const phase = answer.ok ? answer.phase : null
+        const wallet = phase?.kind === 'pay' ? phase.rails.find((rail) => rail.rail === 'x402') : undefined
+        lastShown = wallet?.rail === 'x402' ? wallet.shown : undefined
+        return answer
+      }
+    }
+    return { ops, minted, signed, shown: () => lastShown }
   }
 
   return {

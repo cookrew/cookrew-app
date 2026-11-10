@@ -1,5 +1,6 @@
 import { SEAT_DENIAL, type GateDoor, type WalkPricing } from '../../shared/gate-walk'
 import { MKT_PAY } from '../../shared/marketplace-copy'
+import { x402KeySays } from '../../shared/x402-terms'
 import type { ServeFacePreview, ServeRail } from './api'
 import type { PayFault } from './GateSheet'
 
@@ -58,15 +59,16 @@ export function remedyFor(reason: string, door: GateDoor): RemedyAct {
 /**
  * A settle main REFUSED TO MAKE, as the pay step says it.
  *
- * `terms-changed` is the door's doing — it quoted something at the press that
- * the sheet never showed, and main signed nothing — so it is said in the
- * accusing voice with its own sentence. Everything else is a failure on the
- * way (no Bearer, a door that hung up), which is ours to apologise for.
+ * `terms-changed` has its own sentence: the quote at the press was not the
+ * one on screen, and main signed nothing. Nobody is accused — the door may
+ * have changed its price, or another of this person's screens asked again and
+ * this one went stale. Everything else is a failure on the way (no Bearer, a
+ * door that hung up), which is ours to apologise for.
  */
 export function settleRefusalFault(refusal: { reason: string; detail?: string }): PayFault {
   if (refusal.reason === 'terms-changed') {
     return {
-      voice: 'accuse',
+      voice: 'apolog',
       title: MKT_PAY['mkt.pay.error.changed.title'],
       body: MKT_PAY['mkt.pay.error.changed.body']
     }
@@ -76,6 +78,21 @@ export function settleRefusalFault(refusal: { reason: string; detail?: string })
     title: MKT_PAY['mkt.pay.error.unverifiable.title'],
     body: refusal.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
   }
+}
+
+/**
+ * WHAT THE WALLET RAIL ON SCREEN SAYS, as the key sent back with the press.
+ *
+ * The sheet prints `rail.price` on `rail.chain`; main keyed every signed field
+ * of the same quote as `rail.shown`. The key goes back only if it says what
+ * was printed — its amount is this price, its network this chain — so the
+ * display and what the press vouches for cannot drift apart: change the rail
+ * and both change, and a rail whose two halves disagree vouches for nothing.
+ */
+export function displayedTermsKey(rail: ServeRail | null): string | undefined {
+  if (rail === null || rail.rail !== 'x402') return undefined
+  const said = x402KeySays(rail.shown)
+  return said !== null && said.price === rail.price && said.network === rail.chain ? rail.shown : undefined
 }
 
 /** The facts main returns beside the phase, on the install walk. */

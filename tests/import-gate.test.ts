@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   BUDGET_RETRY_MS,
   deniedVarsFor,
+  displayedTermsKey,
   remedyFor,
   settleRefusalFault,
   walkPricing
@@ -192,15 +193,19 @@ describe('deniedVarsFor — a 403 never throws for a brace nobody filled', () =>
 })
 
 describe('settleRefusalFault — a settle that main refused, in the sheet’s two voices', () => {
-  it('a door that changed its terms at the press is accused, in its own sentence — never "we could not check"', () => {
+  it('a price that is no longer the one asked has its own sentence, and blames nobody', () => {
     const fault = settleRefusalFault({ reason: 'terms-changed', detail: 'whatever main said' })
     expect(fault).toEqual({
-      voice: 'accuse',
+      voice: 'apolog',
       title: MKT_PAY['mkt.pay.error.changed.title'],
       body: MKT_PAY['mkt.pay.error.changed.body']
     })
     expect(fault.body).toMatch(/nothing was signed/)
     expect(fault.body).toMatch(/nothing was charged/)
+    // It also fires when ANOTHER SCREEN of the same person re-asked the door
+    // and this one went stale: the cause may be local, so the door is not accused.
+    expect(`${fault.title} ${fault.body}`).not.toMatch(/door changed|changed its/i)
+    expect(fault.body).toContain('Cancel and import again to see the current terms.')
   })
 
   it('anything else is the apology, with what main could say about it', () => {
@@ -210,6 +215,32 @@ describe('settleRefusalFault — a settle that main refused, in the sheet’s tw
       body: 'the door hung up'
     })
     expect(settleRefusalFault({ reason: 'not-signed-in' }).body).toBe(MKT_PAY['mkt.pay.error.unverifiable.body'])
+  })
+})
+
+describe('displayedTermsKey — the press vouches for what is on screen (C)', () => {
+  const KEY = 'x402-terms/1|base-sepolia|84532|2500000|0xpayee|0xasset|300|USDC|2'
+  const rail = { rail: 'x402' as const, price: '2.5', asset: 'USDC', chain: 'base-sepolia', payTo: '0xpayee', expiry: 0, shown: KEY }
+
+  it('sends back the key of the rail it printed', () => {
+    expect(displayedTermsKey(rail)).toBe(KEY)
+  })
+
+  it('vouches for nothing when the printed price or chain is not what the key says', () => {
+    expect(displayedTermsKey({ ...rail, price: '0' })).toBeUndefined()
+    expect(displayedTermsKey({ ...rail, price: '2.50' })).toBeUndefined()
+    expect(displayedTermsKey({ ...rail, chain: 'base' })).toBeUndefined()
+    expect(displayedTermsKey({ ...rail, shown: 'nonsense' })).toBeUndefined()
+    expect(displayedTermsKey({ ...rail, shown: KEY.replace('|2500000|', '|0x2625A0|') })).toBeUndefined()
+  })
+
+  it('a card rail and no rail show no wallet terms', () => {
+    expect(displayedTermsKey(null)).toBeUndefined()
+    expect(displayedTermsKey({ rail: 'stripe', price: '2.50', asset: 'USD', chain: 'Stripe', expiry: 0 })).toBeUndefined()
+  })
+
+  it('the sheet sends it with the press, from the SELECTED rail — the one whose terms are printed', () => {
+    expect(src('ImportGate.tsx')).toContain(".serveSettle(link, 'x402', undefined, displayedTermsKey(selected))")
   })
 })
 

@@ -6112,8 +6112,8 @@ const serveOps = {
    */
   gate: (link: string, intent?: 'buy') => serveGate.gate(link, intent),
   checkout: (link: string) => serveGate.checkout(link),
-  settle: (link: string, rail: 'x402' | 'stripe', session?: string) =>
-    serveGate.settle(link, rail, session),
+  settle: (link: string, rail: 'x402' | 'stripe', session?: string, shown?: string) =>
+    serveGate.settle(link, rail, session, shown),
   import: async (
     link: string,
     position?: { x: number; y: number },
@@ -8748,8 +8748,11 @@ function registerIpc(handlers: RestoreHandlers): void {
    * On success the session is open at the author's app, so the card placed
    * next opens its line into it and never meets the money.
    */
-  ipcMain.handle('serve:settle', (_e, link: string, rail: 'x402' | 'stripe', session?: string) =>
-    serveOps.settle(link, rail, session)
+  ipcMain.handle(
+    'serve:settle',
+    (_e, link: string, rail: 'x402' | 'stripe', session?: string, shown?: unknown) =>
+      // `shown` is what the sheet displayed for the wallet rail: text, or not said.
+      serveOps.settle(link, rail, session, typeof shown === 'string' ? shown : undefined)
   )
   /**
    * Place the imported team's interface: ONE orch card on the caller's own

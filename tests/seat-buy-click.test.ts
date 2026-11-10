@@ -86,7 +86,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
         import: never('import'),
         gate: (link, intent) => serve!.gate(link, intent),
         checkout: (link) => serve!.checkout(link),
-        settle: (link, rail, session) => serve!.settle(link, rail, session)
+        settle: (link, rail, session, shown) => serve!.settle(link, rail, session, shown)
       } satisfies ServeOps
     } as unknown as MobileApiDeps
     api = http.createServer((request, response) => {
@@ -298,7 +298,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
     serve = {
       gate: (link, intent) => (intent === 'buy' ? closed.gate(link, intent) : app.ops.gate(link)),
       checkout: (link) => closed.checkout(link),
-      settle: (link, rail, session) => closed.settle(link, rail, session)
+      settle: (link, rail, session, shown) => closed.settle(link, rail, session, shown)
     }
     const { page, errors } = await openGate()
     try {
@@ -322,9 +322,9 @@ describeWithChrome('BUY A SEAT, pressed', () => {
         seen.checkouts += 1
         return app.ops.checkout(link)
       },
-      settle: (link, rail, session) => {
+      settle: (link, rail, session, shown) => {
         seen.presented.push(session)
-        return app.ops.settle(link, rail, session)
+        return app.ops.settle(link, rail, session, shown)
       }
     }
     return seen
@@ -460,7 +460,8 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await click(page, PRIMARY)
       const said = await sheetSays(page, MKT_PAY['mkt.pay.error.changed.title'])
       expect(said).toContain(MKT_PAY['mkt.pay.error.changed.body'])
-      expect(await page.evaluate<number>("document.querySelectorAll('.gk-err.accuse[role=alert]').length")).toBe(1)
+      // Said in the apology voice: the price may have gone stale on this side.
+      expect(await page.evaluate<number>("document.querySelectorAll('.gk-err.apolog[role=alert]').length")).toBe(1)
       expect(app.signed).toEqual([])
       expect(world.openedBy).not.toContain('acct-xan')
       expect(errors).toEqual([])
@@ -490,7 +491,7 @@ describeWithChrome('BUY A SEAT, pressed', () => {
               seat: null
             },
       checkout: (link) => app.ops.checkout(link),
-      settle: (link, rail, session) => app.ops.settle(link, rail, session)
+      settle: (link, rail, session, shown) => app.ops.settle(link, rail, session, shown)
     }
     const { page, errors } = await openGate()
     try {
