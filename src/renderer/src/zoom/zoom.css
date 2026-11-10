@@ -1555,7 +1555,9 @@
   position: absolute;
   z-index: 45;
   left: 50%;
-  top: calc(14px + env(safe-area-inset-top, 0px));
+  /* Over the bar at the foot, never at the top: there it lay over the devices
+     stop's first gauge row and its machine's name (owner screenshot 2026-11-10). */
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   display: flex;
   align-items: center;

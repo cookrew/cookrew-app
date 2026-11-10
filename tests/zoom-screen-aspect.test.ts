@@ -4,7 +4,7 @@
 // display's aspect, the view centred in it, and the device stop still frames
 // the view alone.
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SCREEN_ASPECT, deviceOf, machinesAt, screenAspectOf, screenOf } from '../src/renderer/src/zoom/zoom-layout'
+import { DEFAULT_SCREEN_ASPECT, deviceOf, LABEL_ROOM, machinesAt, screenAspectOf, screenOf } from '../src/renderer/src/zoom/zoom-layout'
 import { layoutOf, type FrameModel } from '../src/renderer/src/zoom/zoom-frame'
 import { buildZoomModel } from '../src/renderer/src/zoom/zoom-model'
 import { attachmentIndex } from '../src/renderer/src/terminal-attachments'
@@ -90,7 +90,25 @@ describe('the devices stop', () => {
 
   it('stands the other machines under the screen', () => {
     const tall = deviceOf(ids(2), false, 0.5)
-    expect(machinesAt(1, tall.screen, false).at[0].y).toBe(tall.screen.h / 2 + 120)
+    // Under its name and its pill (LABEL_ROOM), which stood over the first machine at desk width too.
+    expect(machinesAt(1, tall.screen, false).at[0].y).toBe(tall.screen.h / 2 + 120 + LABEL_ROOM.desk)
+  })
+
+  // A PHONE AT 412 PX (owner screenshot 2026-11-10): three machines stood one per row, and
+  // the camera framed them three across, so everything was drawn at a quarter and the
+  // Mac's "Remote desktop" pill, kept at a thumb's size, lay over the first one.
+  it('on a phone, two machines a row, framed as wide as they stand, with room under the screen for its label and pill', () => {
+    const phone = deviceOf(ids(9), true, screenAspectOf(MBP16))
+    const three = machinesAt(3, phone.screen, true)
+    expect(three.rows).toBe(2)
+    expect(new Set(three.at.map((p) => p.y)).size).toBe(2)
+    expect(three.at[0].y).toBeGreaterThan(machinesAt(3, phone.screen, false).at[0].y)
+    const L = layoutOf(frame(screenAspectOf(MBP16), 3), true)
+    const desk = layoutOf(frame(screenAspectOf(MBP16), 3), false)
+    expect(L.devicesBox.w).toBeLessThan(desk.devicesBox.w)
+    // At 412 × 915 a machine's card was drawn 99 px across (framed three wide): now well over a quarter of the view.
+    const scale = Math.min((412 - 32) / L.devicesBox.w, (915 - 32) / L.devicesBox.h)
+    expect(380 * scale).toBeGreaterThan(412 / 4 + 10)
   })
 })
 

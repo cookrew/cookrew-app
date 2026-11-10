@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { FRESH_MS, freshlyVerified, type SessionAge } from './v2-session-age'
 import { standing } from './v2-fleet'
 import { PRESET_VERSION_HEADER, type PresetManifest } from '../../src/shared/preset-manifest'
 import { RegistryStore, isAddress } from './store'
@@ -917,12 +918,17 @@ export function createRegistry(deps: RegistryDeps): Server {
     // since somebody following a link deserves a sentence and a way in.
     if (deps.v2 && method === 'GET' && parts[0] === 'me' && parts.length <= 4) {
       const signed = signedIn(request, deps.v2)
+      // Plain /me goes on into the Devices view (machines.js); /me/account, and a /me that carries a
+      // return (a step-up's, a passkey added) or a section, is the account page and stays.
+      const plain = parts.length === 1 && url.search === ''
       respondPage(
         response,
         mePage(
           signed === null
             ? null
             : {
+                view: plain ? 'devices' : 'account',
+                freshForMs: freshForMsOf(deps.v2.accounts.session(signed.account.username, signed.claims.jti), deps.v2.now()),
                 account: signed.account,
                 currentDeviceId: signed.claims.dev,
                 // The console: each machine with whether it holds its line now (v2-fleet.ts · standing).
@@ -1131,4 +1137,12 @@ async function handleDoorRegistration(
     return
   }
   json(response, 200, { door: result.door, path: doorPath(result.door.handle, result.door.name) })
+}
+
+/**
+ * How much longer a session counts as just proved (v2-session-age.ts), in ms, or undefined when it does not
+ * now. A span, not a moment: the reader's clock is not cookrew.dev's.
+ */
+function freshForMsOf(session: SessionAge | null | undefined, now: number): number | undefined {
+  return session && freshlyVerified(session, now) && typeof session.verifiedAt === 'number' ? Math.max(0, session.verifiedAt + FRESH_MS - now) : undefined
 }

@@ -54,6 +54,7 @@ import type { FleetEvent } from "../../shared/fleet";
 import type { UnlockAnswer as MacUnlockAnswer, UnlockBegin } from "../../shared/remote-unlock";
 import type { AccountMachines } from "../../shared/zoom-fleet";
 import type { RemoteMachineAnswer } from "../../shared/remote-machine-calls";
+import type { MachineBlock } from "./relay-machine-call";
 import type { ServedPaymentRail } from "../../shared/served-payment-rails";
 import type { ServeTransport } from "../../shared/serve-transport";
 import type {
@@ -615,6 +616,12 @@ export interface CookrewApi {
     route: string,
     body?: Record<string, unknown>,
   ) => Promise<RemoteMachineAnswer>;
+  /**
+   * What stood in the way of reading another machine from this page, once
+   * asked (relay-machine-call.ts); null when nothing did, or this surface
+   * cannot say. Optional — feature-detect.
+   */
+  machineWhy?: (machineId: string) => MachineBlock | null;
   /** Is this machine trusted by the account's others; null where it cannot say. */
   machineTrust?: () => Promise<{ trusted: boolean } | null>;
   /** This machine's one proof to the account's others: signed in again on auth.cookrew.dev, as itself, second step and all. */

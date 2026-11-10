@@ -107,14 +107,15 @@ const mePage = async (): Promise<{ status: number; csp: string; html: string }> 
 }
 
 describe('the DESKTOPS section', () => {
-  it('lists the desktop, its workspaces and a probing badge', async () => {
+  it('lists the desktop and a probing badge, nothing from inside it (not even how many workspaces) before the gate', async () => {
     const { status, html } = await mePage()
     expect(status).toBe(200)
     expect(html).toContain('id="me-desktops"')
     expect(html).toContain(`data-desktop="${deviceId}"`)
     expect(html).toContain('MacBook Pro')
-    expect(html).toContain('Cookrew Dev')
-    expect(html).toContain('Playground')
+    expect(html).not.toContain('2 workspaces')
+    expect(html).not.toContain('Cookrew Dev')
+    expect(html).not.toContain('Playground')
     expect(html).toContain('PROBING')
   })
 

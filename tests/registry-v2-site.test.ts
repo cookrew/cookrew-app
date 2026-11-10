@@ -147,7 +147,8 @@ describe('/me', () => {
     expect(body).toContain('This Mac')
     expect(body).toContain('This device')
     expect(body).toContain('MacBook Pro')
-    expect(body).toContain('Cookrew Dev')
+    // A count, never the workspaces' names, before the twelve-hour gate (owner 2026-11-10).
+    expect(body).not.toContain('Cookrew Dev')
     expect(res.headers.get('cache-control')).toBe('private, no-store')
   })
 

@@ -187,7 +187,7 @@ describe('where "Switch desktop" points', () => {
 
   it('follows the origin /api/account reported', () => {
     setRegistryOrigin('https://reg.example.test/')
-    expect(currentPathBadge().switchDesktopUrl).toBe('https://reg.example.test/me')
+    expect(currentPathBadge().switchDesktopUrl).toBe('https://reg.example.test/me/account')
   })
 
   it('goes back to nothing when the origin is withdrawn', () => {

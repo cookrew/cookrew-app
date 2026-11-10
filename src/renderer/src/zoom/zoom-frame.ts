@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machinesAt, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { crewOf, deviceOf, fitScale, machinesAt, MACHINE_CARD, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -219,9 +219,8 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols)
   const screen = { w: device.screen.w * SDEV + 28, h: device.screen.h * SDEV + 28 }
   const machines = machinesAt(model.otherMachines, device.screen, narrow)
-  // The other machines are part of the devices stop: the camera must frame them too.
-  const mTop = device.screen.h / 2 + 120
-  const mBottom = machines.rows ? mTop + machines.rows * 260 : -Infinity
+  // The other machines are part of the devices stop: the camera must frame them too, as wide as they stand.
+  const mBottom = machines.rows ? machines.top + machines.rows * (MACHINE_CARD.h + MACHINE_CARD.gap) : -Infinity
   const half = Math.max(screen.h / 2 + 60, mBottom)
   return {
     stack: stackOf(model.agents),
@@ -229,7 +228,7 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
     cardBox: { ...crew.box, w: crew.box.w + 240, h: crew.box.h + 252, cy: crew.box.cy + 60 },
     thumbs: thumbsOf(model.items, model.agents, narrow),
     device,
-    devicesBox: { w: Math.max(screen.w + 200, machines.rows ? 3 * 420 + 200 : 0), h: half * 2 + 200, cy: 40 }
+    devicesBox: { w: Math.max(screen.w + 200, machines.rows ? machines.perRow * (MACHINE_CARD.w + MACHINE_CARD.gap) + 200 : 0), h: half * 2 + 200, cy: 40 }
   }
 }
 
