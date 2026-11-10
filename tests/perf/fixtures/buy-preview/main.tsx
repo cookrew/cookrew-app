@@ -39,7 +39,25 @@ const left: { nodes: unknown[]; windows: string[]; placed: unknown; dismissed: b
   dismissed: false
 }
 
+/** Whoever listens for "the account changed" — the sheet, once mounted. */
+const accountListeners = new Set<() => void>()
+
+/**
+ * THE PAGE'S CLOCK CAN BE MOVED FORWARD, and only forward. A card session
+ * lives for up to an hour; the test that watches the wait end cannot. Nothing
+ * else about time is faked — the poll's own timer still ticks for real.
+ */
+const realNow = Date.now.bind(Date)
+let skipped = 0
+Date.now = () => realNow() + skipped
+
 const bridge: Partial<CookrewApi> = {
+  onAccountChanged: (listener: () => void) => {
+    accountListeners.add(listener)
+    return () => {
+      accountListeners.delete(listener)
+    }
+  },
   serveGate: (address, intent) => post('gate', { link: address, ...(intent === 'buy' ? { intent } : {}) }),
   serveCheckout: (address) => post('checkout', { link: address }),
   serveSettle: (address, rail, session) => post('settle', { link: address, rail, session }),
@@ -70,7 +88,13 @@ Object.assign(window, {
     left.windows.push(String(url))
     return null
   },
-  __left: () => left
+  __left: () => left,
+  __skip: (ms: number) => {
+    skipped += Math.max(0, ms)
+  },
+  __accountChanged: () => {
+    for (const listener of accountListeners) listener()
+  }
 })
 
 createRoot(document.getElementById('root')!).render(

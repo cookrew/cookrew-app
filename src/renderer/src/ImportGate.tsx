@@ -5,6 +5,14 @@ import type { GatePhase } from '../../shared/gate-walk'
 import { MKT_PAY, fillCopy } from '../../shared/marketplace-copy'
 import { requestAccountSheet } from './account/open-request'
 import {
+  CARD_POLL_MS,
+  cardCheckStep,
+  cardPollStep,
+  type CardStep,
+  type CardWait,
+  type SettleAnswer
+} from './card-wait'
+import {
   BUDGET_RETRY_MS,
   deniedVarsFor,
   remedyFor,
@@ -32,6 +40,13 @@ import {
  * the main process holds the Bearer, signs the transfer authorization with the
  * wallet this device provisioned, and talks to Stripe. A key never crosses IPC.
  *
+ * A CARD IS WAITED ON FOR AS LONG AS IT CAN BE PAID (card-wait.ts). The
+ * sheet asks the door about ONE Checkout session until that session's life is
+ * over. If the wait ends, or the door refuses for a reason that is not the
+ * payment, the sheet says so and the button becomes CHECK AGAIN — the same
+ * session, asked about once more. A new card page is started only after the
+ * door has said the old one went unpaid, because two pages are two charges.
+ *
  * EVERY REFUSAL GOES SOMEWHERE (G2/G4). A 403's button used to close the sheet
  * while naming a destination. Now `remedyFor` says what it does — asking the
  * door again — and a 429 asks again on its own in fifteen minutes, as its
@@ -44,8 +59,14 @@ import {
  * the seat no longer exists.
  */
 
-const POLL_MS = 3000
-const POLL_LIMIT = 100 // ~5 minutes, the life of a Checkout session
+/** A card payment the sheet is waiting on, or holding until CHECK AGAIN is pressed. */
+interface CardState {
+  wait: CardWait
+  /** What that session was quoted at — the receipt, if it is paid. */
+  paid: { price: string; asset: string }
+  /** `waiting`: the sheet asks by itself. `check`: it stopped, and says so. */
+  mode: 'waiting' | 'check'
+}
 
 /** mm:ss until a quote expires, or null when it carries no clock. */
 function remaining(expiry: number, now: number): string | null {
@@ -90,8 +111,46 @@ export function ImportGate({
     asset: string
     rail: 'x402' | 'stripe'
   } | null>(null)
+  const [card, setCard] = useState<CardState | null>(null)
+  /** The same card, readable from a timer without a stale closure. */
+  const cardRef = useRef<CardState | null>(null)
   const polling = useRef<number | null>(null)
+  /** One look at the door at a time: a slow answer must not be overtaken by the next tick. */
+  const looking = useRef(false)
   const alive = useRef(true)
+
+  const stopPolling = useCallback((): void => {
+    if (polling.current !== null) window.clearInterval(polling.current)
+    polling.current = null
+  }, [])
+
+  const holdCard = useCallback((next: CardState | null): void => {
+    cardRef.current = next
+    setCard(next)
+  }, [])
+
+  /** Paint what main said about the door: the phase, the wallet, the facts its sentences name. */
+  const applyGate = useCallback((result: Awaited<ReturnType<ReturnType<typeof cookrew>['serveGate']>>): void => {
+    setBusy(false)
+    if (result.ok) {
+      setPhase(result.phase)
+      setWallet(result.wallet)
+      setFacts({
+        door: result.door,
+        team: result.team ?? null,
+        owner: result.owner ?? null,
+        account: result.account ?? null,
+        seat: result.seat ?? null
+      })
+    } else {
+      setPhase({ kind: 'error', status: 0 })
+      setFault({
+        voice: 'apolog',
+        title: MKT_PAY['mkt.pay.error.unverifiable.title'],
+        body: result.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
+      })
+    }
+  }, [])
 
   // Ask the door what it wants. Main signs in as the account the card will
   // use, so the session paid for here is the session it opens later. `intent`
@@ -103,26 +162,7 @@ export function ImportGate({
     void cookrew()
       .serveGate(link, intent)
       .then((result) => {
-        if (!alive.current) return
-        setBusy(false)
-        if (result.ok) {
-          setPhase(result.phase)
-          setWallet(result.wallet)
-          setFacts({
-            door: result.door,
-            team: result.team ?? null,
-            owner: result.owner ?? null,
-            account: result.account ?? null,
-            seat: result.seat ?? null
-          })
-        } else {
-          setPhase({ kind: 'error', status: 0 })
-          setFault({
-            voice: 'apolog',
-            title: MKT_PAY['mkt.pay.error.unverifiable.title'],
-            body: result.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
-          })
-        }
+        if (alive.current) applyGate(result)
       })
       .catch(() => {
         if (alive.current) {
@@ -130,26 +170,47 @@ export function ImportGate({
           setPhase({ kind: 'error', status: 0 })
         }
       })
-  }, [link])
+  }, [link, applyGate])
 
   useEffect(() => {
     alive.current = true
     runGate()
     return () => {
       alive.current = false
-      if (polling.current !== null) window.clearInterval(polling.current)
+      stopPolling()
     }
-  }, [runGate])
+  }, [runGate, stopPolling])
 
   // THE WALK RESUMES ON ITS OWN. The person signed in — here, in the header,
   // on the lock screen; main says the account changed — and a listed door is
   // asked again without the sheet ever having closed.
+  //
+  // WHILE A CARD IS BEING WAITED ON the event is weighed first. The account
+  // announces many things that are not a change of hands, and the wait must
+  // survive those: a paid session nobody presents is money for nothing. So
+  // the door is asked who this Mac is now, and only a DIFFERENT person stops
+  // the wait — their sheet must not go on presenting somebody else's payment.
   useEffect(() => {
     const off = cookrew().onAccountChanged?.(() => {
-      if (facts.door === 'install') runGate()
+      if (facts.door !== 'install') return
+      if (cardRef.current === null) {
+        runGate()
+        return
+      }
+      void cookrew()
+        .serveGate(link)
+        .then((result) => {
+          if (!alive.current) return
+          if (result.ok && (result.account ?? null) === facts.account) return
+          stopPolling()
+          holdCard(null)
+          setFault(null)
+          applyGate(result)
+        })
+        .catch(() => undefined)
     })
     return off
-  }, [facts.door, runGate])
+  }, [facts.door, facts.account, link, runGate, applyGate, stopPolling, holdCard])
 
   // A 429 is the owner's lending limit, which passes with time. The sentence
   // says the sheet will try again in fifteen minutes, so it does.
@@ -208,46 +269,117 @@ export function ImportGate({
     []
   )
 
-  /** Poll for a card payment landing. It unlocks itself; the user may leave. */
-  const waitForCard = useCallback(
-    (session: string): void => {
-      let attempts = 0
-      polling.current = window.setInterval(() => {
-        attempts += 1
-        if (attempts > POLL_LIMIT) {
-          if (polling.current !== null) window.clearInterval(polling.current)
+  /** The facts a refusal's sentence may name, readable from the wait's timer. */
+  const deniedVars = deniedVarsFor(face, facts)
+  const deniedVarsRef = useRef(deniedVars)
+  deniedVarsRef.current = deniedVars
+
+  /** Carry out what one look at the door decided (card-wait.ts). */
+  const actOnCard = useCallback(
+    (state: CardState, step: CardStep): void => {
+      switch (step.kind) {
+        case 'open':
+          stopPolling()
+          holdCard(null)
           setBusy(false)
+          setFault(null)
+          setSettledOn({ ...state.paid, rail: 'stripe' })
+          applyPhase({ kind: 'open' })
           return
-        }
-        void cookrew()
-          .serveSettle(link, 'stripe', session)
-          .then((result) => {
-            // A not-yet-paid session answers `invalid` every time we look. That
-            // is the poll working, not the caller being accused — only a
-            // finished poll speaks.
-            if (!result.ok || result.phase.kind !== 'open') return
-            if (polling.current !== null) window.clearInterval(polling.current)
-            setBusy(false)
-            setFault(null)
-            if (selected?.rail === 'stripe') {
-              setSettledOn({ price: selected.price, asset: selected.asset, rail: 'stripe' })
-            }
-            applyPhase(result.phase)
-          })
-          .catch(() => undefined)
-      }, POLL_MS)
+        case 'waiting':
+          // Stays busy on purpose: the card page is in charge now, and a live
+          // PAY button here is how a person pays twice.
+          setBusy(true)
+          setFault(step.fault)
+          if (state.mode !== 'waiting') holdCard({ ...state, mode: 'waiting' })
+          return
+        case 'ended':
+        case 'stopped':
+          // Said, never silent — and the button that follows asks about THIS
+          // session again rather than starting another.
+          stopPolling()
+          holdCard({ ...state, mode: 'check' })
+          setBusy(false)
+          setFault(step.fault)
+          return
+        case 'expired':
+          // The door looked after the session's life was over and found no
+          // payment. Only now is a new card page safe to start.
+          stopPolling()
+          holdCard(null)
+          setBusy(false)
+          setFault(step.fault)
+      }
     },
-    [link, applyPhase, selected]
+    [applyPhase, holdCard, stopPolling]
   )
 
+  /** Ask the door about the card session being held — the same one, every time. */
+  const lookAtCard = useCallback(
+    (decide: typeof cardPollStep, onUnreachable: () => void): void => {
+      const state = cardRef.current
+      if (state === null || looking.current) return
+      looking.current = true
+      void cookrew()
+        .serveSettle(link, 'stripe', state.wait.session)
+        .then((answer: SettleAnswer) => {
+          looking.current = false
+          // Answered for a wait that is no longer this sheet's: say nothing.
+          const held = cardRef.current
+          if (!alive.current || held === null || held.wait !== state.wait) return
+          actOnCard(held, decide(answer, state.wait, Date.now(), deniedVarsRef.current))
+        })
+        .catch(() => {
+          looking.current = false
+          if (alive.current && cardRef.current?.wait === state.wait) onUnreachable()
+        })
+    },
+    [link, actOnCard]
+  )
+
+  // THE TIMER FOLLOWS THE MODE. It runs while the sheet is waiting by itself
+  // and at no other time — it starts when a card page is handed out, stops
+  // when the wait ends or is refused, and starts again if CHECK AGAIN finds
+  // the page still open for payment.
+  const waiting = card?.mode === 'waiting'
+  useEffect(() => {
+    if (!waiting) return
+    // A look that could not be made at all is not an answer: the next tick asks again.
+    polling.current = window.setInterval(() => lookAtCard(cardPollStep, () => undefined), CARD_POLL_MS)
+    return stopPolling
+  }, [waiting, lookAtCard, stopPolling])
+
+  /** CHECK AGAIN: one question about the session already made. Never a new Checkout. */
+  const checkAgain = useCallback((): void => {
+    if (cardRef.current === null) return
+    setBusy(true)
+    setFault(null)
+    lookAtCard(cardCheckStep, () => {
+      setBusy(false)
+      setFault({
+        voice: 'apolog',
+        title: MKT_PAY['mkt.pay.error.unverifiable.title'],
+        body: MKT_PAY['mkt.pay.error.unverifiable.body']
+      })
+    })
+  }, [lookAtCard])
+
   const pay = useCallback((): void => {
+    // A card session is unresolved: whatever rail is selected, the only thing
+    // this button may do is ask about it. Two payments are two charges.
+    if (cardRef.current !== null) {
+      checkAgain()
+      return
+    }
     if (!selected) return
     setFault(null)
     setBusy(true)
     if (selected.rail === 'stripe') {
+      const paid = { price: selected.price, asset: selected.asset }
       void cookrew()
         .serveCheckout(link)
         .then((result) => {
+          if (!alive.current) return
           if (!result.ok) {
             setBusy(false)
             setFault({
@@ -257,9 +389,8 @@ export function ImportGate({
             })
             return
           }
-          // Stays busy on purpose: the wallet/card is in charge now, and a live
-          // PAY button here is how a person pays twice.
-          waitForCard(result.session)
+          // Stays busy on purpose: the card page is in charge now.
+          holdCard({ wait: { session: result.session, startedAt: Date.now() }, paid, mode: 'waiting' })
         })
         .catch(() => setBusy(false))
       return
@@ -287,7 +418,7 @@ export function ImportGate({
         }
       })
       .catch(() => setBusy(false))
-  }, [selected, link, wallet, waitForCard, applyPhase])
+  }, [selected, link, wallet, applyPhase, checkAgain, holdCard])
 
   /**
    * The identify step's primary. On the install walk it opens the account
@@ -362,7 +493,10 @@ export function ImportGate({
       quoteRemaining={selected ? remaining(selected.expiry, now) : null}
       busy={busy}
       fault={fault}
-      deniedVars={deniedVarsFor(face, facts)}
+      deniedVars={deniedVars}
+      // A card the sheet has stopped waiting on: the one thing to do is ask
+      // about it again. PAY comes back only when the door says it went unpaid.
+      payAction={card?.mode === 'check' ? { label: MKT_PAY['mkt.pay.card.check'], onClick: checkAgain } : null}
       onDismiss={onDismiss}
       onIdentify={identify}
       onSelectWallet={(id) => {

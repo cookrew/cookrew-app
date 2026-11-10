@@ -108,6 +108,8 @@ export interface PaidDoorWorld {
   usdcTerms(patch: Record<string, unknown>): void
   /** The Checkout session the door hands out next. */
   checkoutNext(session: string): void
+  /** Whether the owner's lending budget has a session left to give. It does, until told otherwise. */
+  budget(left: boolean): void
   /** A slow registry: the door's seat report waits until the returned release is called. */
   holdReports(): () => void
   /** The last seat report the door made, settled or not. */
@@ -150,6 +152,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
   const accepts = (): unknown[] =>
     quoted.map((rail) => (rail === 'stripe' ? CARD_TERMS : { ...USDC_TERMS, ...usdcPatch }))
   let nextCheckout = PAID
+  let budgetLeft = true
   let holdReport: Promise<void> | null = null
   let report: Promise<boolean> = Promise.resolve(false)
 
@@ -229,7 +232,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     admit: async () => ({ workspaceId: 'w', sessionId: 's', created: false }),
     hasOpenSession: (_serviceId, sub) => sessions.has(sub),
     endSession: () => false,
-    grantBudget: { allowsNewSession: () => true },
+    grantBudget: { allowsNewSession: () => budgetLeft },
     conductorFor: () => null,
     ask: async () => '',
     sessionForCaller: () => null,
@@ -369,6 +372,9 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     },
     checkoutNext: (session) => {
       nextCheckout = session
+    },
+    budget: (left) => {
+      budgetLeft = left
     },
     holdReports: () => {
       let release = (): void => undefined

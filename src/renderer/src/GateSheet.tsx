@@ -75,6 +75,12 @@ export interface GateSheetProps {
   onIdentify?: () => void
   onSelectWallet?: (id: string) => void
   onPay?: () => void
+  /**
+   * Replaces the pay step's primary when paying is not what the step needs —
+   * a card payment already made and not yet confirmed, where the only safe
+   * act is asking about it again (CHECK AGAIN), never a second payment.
+   */
+  payAction?: { label: string; onClick: () => void } | null
   /** Acknowledge the served state — DONE. */
   onServe?: () => void
   /** The one forward action on a 403 — including the seat rung's BUY, which leads to the pay step. */
@@ -226,6 +232,7 @@ function primaryFor(
         onClick: props.onRemedy ? () => props.onRemedy?.('no_seat') : undefined
       }
     case 'pay':
+      if (props.payAction) return props.payAction
       return pricing
         ? {
             label: props.selectedWallet

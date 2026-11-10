@@ -253,6 +253,19 @@ export const MKT_PAY = {
   'mkt.pay.card.waiting.title': 'Waiting for your card payment',
   'mkt.pay.card.waiting.body':
     'Finish on the Stripe page that just opened. This unlocks itself when it lands — you can leave it.',
+  /**
+   * The wait is over and nothing landed. The page took a card for as long as
+   * the sheet listened, so this is said only once it no longer can — and the
+   * way on asks about the SAME payment, because a second one is a second charge.
+   */
+  'mkt.pay.card.ended.title': 'We stopped waiting for that card payment',
+  'mkt.pay.card.ended.body':
+    'The card page has run out of time. If you paid on it, check again — that asks the door about the same payment and never starts a new one.',
+  'mkt.pay.card.check': 'CHECK AGAIN',
+  /** The door looked at that session after its time was up: nothing on it. */
+  'mkt.pay.card.expired.title': 'That card page ended unpaid',
+  'mkt.pay.card.expired.body':
+    'The door found no payment on it, so nothing was charged. You can pay again.',
   /** A settle the door refused: the accusation voice, per R-two-voices. */
   'mkt.pay.error.invalid.title': "That payment didn't verify",
   'mkt.pay.error.invalid.body':

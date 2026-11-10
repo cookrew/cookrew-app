@@ -10,12 +10,16 @@ import { connectPage, findChrome, launchChrome, serveBuild, type CdpPage, type S
 import { doorBearer } from '../src/main/door-bearer'
 import { handleMobileApi, type MobileApiDeps, type ServeOps } from '../src/main/mobile-api'
 import { createServeGate } from '../src/main/serve-gate'
-import { MKT_GATE, MKT_PAY } from '../src/shared/marketplace-copy'
+import type { Accounts } from '../src/main/account-v2'
+import { CARD_POLL_MS, CARD_SESSION_LIFE_MS } from '../src/renderer/src/card-wait'
+import { MKT_DENIED_REASONS, MKT_GATE, MKT_PAY } from '../src/shared/marketplace-copy'
 import {
   BAD_USDC,
   DOOR,
+  GOOD_USDC,
   PAID,
   TEAM,
+  UNPAID,
   startPaidDoorWorld,
   template,
   type AppOn,
@@ -291,6 +295,164 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       expect(await left(page)).toEqual({ nodes: [], windows: [], placed: null, dismissed: false })
       expect(errors).toEqual([])
     } finally {
+      page.close()
+    }
+  }, 120_000)
+
+  /** The gate verbs of one Mac, with every card page it asked for and every session it presented. */
+  function counted(app: AppOn): { checkouts: number; presented: Array<string | undefined> } {
+    const seen = { checkouts: 0, presented: [] as Array<string | undefined> }
+    serve = {
+      gate: (link, intent) => app.ops.gate(link, intent),
+      checkout: (link) => {
+        seen.checkouts += 1
+        return app.ops.checkout(link)
+      },
+      settle: (link, rail, session) => {
+        seen.presented.push(session)
+        return app.ops.settle(link, rail, session)
+      }
+    }
+    return seen
+  }
+
+  it('M3 — the wait ends out loud, CHECK AGAIN asks about the SAME session, and a new payment waits for the door’s word', async () => {
+    const guest = await world.registeredMachine('click-wait', 'tia')
+    const app = world.appOn(guest.accounts)
+    const seen = counted(app)
+    world.checkoutNext(UNPAID)
+    const { page, errors } = await openGate()
+    try {
+      await primaryReads(page, 'BUY A SEAT · $1.00')
+      await click(page, PRIMARY)
+      await primaryReads(page, 'PAY 1.00 USD')
+      await click(page, PRIMARY)
+      // The sheet is waiting: one look at the door, at least, and no live button.
+      await sleep(CARD_POLL_MS + 1000)
+      expect(seen.checkouts).toBe(1)
+      expect(seen.presented.length).toBeGreaterThanOrEqual(1)
+      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(PRIMARY)})?.disabled === true`)).toBe(true)
+
+      // ── an hour passes on the page: the session can no longer be paid ──
+      await page.evaluate(`window.__skip(${CARD_SESSION_LIFE_MS})`)
+      const ended = await sheetSays(page, MKT_PAY['mkt.pay.card.ended.title'])
+      expect(ended).toContain(MKT_PAY['mkt.pay.card.ended.body'])
+      // NOT a live PAY: the one thing offered asks about the payment already made.
+      await primaryReads(page, MKT_PAY['mkt.pay.card.check'])
+      expect(ended).not.toContain('PAY 1.00 USD')
+      // And the wait really has stopped asking.
+      const asked = seen.presented.length
+      await sleep(CARD_POLL_MS + 1000)
+      expect(seen.presented.length).toBe(asked)
+
+      // ── CHECK AGAIN: the same session, once, and no new card page ──
+      await click(page, PRIMARY)
+      const expired = await sheetSays(page, MKT_PAY['mkt.pay.card.expired.title'])
+      expect(expired).toContain(MKT_PAY['mkt.pay.card.expired.body'])
+      expect(seen.presented.length).toBe(asked + 1)
+      expect(new Set(seen.presented)).toEqual(new Set([UNPAID]))
+      expect(seen.checkouts).toBe(1)
+
+      // ── only now, the door having said that session went unpaid, is PAY offered again ──
+      await primaryReads(page, 'PAY 1.00 USD')
+      world.checkoutNext(PAID)
+      await click(page, PRIMARY)
+      await primaryReads(page, MKT_GATE['mkt.gate.open.action'], 30_000)
+      expect(seen.checkouts).toBe(2)
+      expect(seen.presented.at(-1)).toBe(PAID)
+      expect(errors).toEqual([])
+    } finally {
+      page.close()
+    }
+  }, 120_000)
+
+  it('M3 — a refusal that arrives while waiting is spoken, and CHECK AGAIN settles the session already paid', async () => {
+    const guest = await world.registeredMachine('click-budget', 'una')
+    const app = world.appOn(guest.accounts)
+    const seen = counted(app)
+    world.checkoutNext(PAID)
+    const { page, errors } = await openGate()
+    try {
+      await primaryReads(page, 'BUY A SEAT · $1.00')
+      await click(page, PRIMARY)
+      await primaryReads(page, 'PAY 1.00 USD')
+      // The owner's lending budget runs out while the buyer is at Stripe.
+      world.budget(false)
+      await click(page, PRIMARY)
+      const said = await sheetSays(page, MKT_DENIED_REASONS['mkt.denied.budget.title'])
+      expect(said).toContain('Nothing was charged')
+      await primaryReads(page, MKT_PAY['mkt.pay.card.check'])
+      expect(world.openedBy).not.toContain('acct-una')
+
+      // The owner raises it. The buyer does NOT pay again: the paid session is presented once more.
+      world.budget(true)
+      await click(page, PRIMARY)
+      await primaryReads(page, MKT_GATE['mkt.gate.open.action'], 30_000)
+      expect(seen.checkouts).toBe(1)
+      expect(new Set(seen.presented)).toEqual(new Set([PAID]))
+      await click(page, PRIMARY)
+      await sleep(200)
+      expect((await left(page)).placed).toEqual({ price: '1.00', asset: 'USD', rail: 'stripe' })
+      expect(errors).toEqual([])
+    } finally {
+      world.budget(true)
+      page.close()
+    }
+  }, 120_000)
+
+  it('M1 — another person signs in while a card is awaited: the wait stops, and the sheet is theirs', async () => {
+    const a = await world.registeredMachine('click-a', 'vera')
+    const b = await world.registeredMachine('click-b', 'wim')
+    let signedIn: Accounts | null = a.accounts
+    const app = world.appOn(() => signedIn)
+    const seen = counted(app)
+    world.checkoutNext(UNPAID)
+    const { page, errors } = await openGate()
+    try {
+      await primaryReads(page, 'BUY A SEAT · $1.00')
+      await click(page, PRIMARY)
+      await primaryReads(page, 'PAY 1.00 USD')
+      await click(page, PRIMARY)
+      await sleep(CARD_POLL_MS + 1000)
+      expect(seen.presented.length).toBeGreaterThanOrEqual(1)
+
+      // ── the Mac changes hands ──
+      signedIn = b.accounts
+      app.ops.accountChanged()
+      await page.evaluate('window.__accountChanged()')
+      await primaryReads(page, 'BUY A SEAT · $1.00')
+      expect(await text(page, '.gk-panel')).toContain('@wim has no seat at @drej/alpha.')
+      // Nothing more is presented on @vera's session, by anybody.
+      const asked = seen.presented.length
+      await sleep(CARD_POLL_MS * 2 + 500)
+      expect(seen.presented.length).toBe(asked)
+      expect(errors).toEqual([])
+    } finally {
+      page.close()
+    }
+  }, 120_000)
+
+  it('H2 — a door that raises its price at the press is named in the sheet, and the wallet is never asked', async () => {
+    const guest = await world.registeredMachine('click-h2', 'xan')
+    const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+    serve = app.ops
+    world.quote(['x402'])
+    const { page, errors } = await openGate()
+    try {
+      await primaryReads(page, 'BUY A SEAT · $1.00')
+      await click(page, PRIMARY)
+      await primaryReads(page, 'PAY 1 USDC')
+      world.usdcTerms({ maxAmountRequired: '1000000000' })
+      await click(page, PRIMARY)
+      const said = await sheetSays(page, MKT_PAY['mkt.pay.error.changed.title'])
+      expect(said).toContain(MKT_PAY['mkt.pay.error.changed.body'])
+      expect(await page.evaluate<number>("document.querySelectorAll('.gk-err.accuse[role=alert]').length")).toBe(1)
+      expect(app.signed).toEqual([])
+      expect(world.openedBy).not.toContain('acct-xan')
+      expect(errors).toEqual([])
+    } finally {
+      world.usdcTerms({})
+      world.quote(['stripe'])
       page.close()
     }
   }, 120_000)
