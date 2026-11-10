@@ -56,6 +56,18 @@ describe('handOffCheckout — the desktop’s opener', () => {
     expect(open).not.toHaveBeenCalled()
   })
 
+  it('opens the CANONICAL form of the address, not the string the door wrote', async () => {
+    // What is checked and what is opened must be one thing: the parsed URL,
+    // written back out. The door's own spelling is never handed to the OS.
+    const open = vi.fn(async () => undefined)
+    await handOffCheckout(ok('HTTPS://CHECKOUT.STRIPE.COM/c/pay/cs_test_1'), open)
+    await handOffCheckout(ok('https://checkout.stripe.com:443/c/../c/pay/cs_test_2'), open)
+    expect(open.mock.calls).toEqual([
+      ['https://checkout.stripe.com/c/pay/cs_test_1'],
+      ['https://checkout.stripe.com/c/pay/cs_test_2']
+    ])
+  })
+
   it('passes a refusal through without opening anything', async () => {
     const open = vi.fn(async () => undefined)
     const refused = { ok: false as const, reason: 'not-signed-in' as const }
@@ -71,6 +83,18 @@ describe('the wiring, as source', () => {
     const main = src('main/index.ts')
     expect(main).toContain('handOffCheckout(await serveOps.checkout(link), (url) => shell.openExternal(url))')
     expect(main).not.toMatch(/openExternal\(checkout\.url\)/)
+  })
+
+  it('a change of person at this Mac drops the door transcripts that hold the last person’s Bearer', () => {
+    const main = src('main/index.ts')
+    // The same hook that clears the gate, and only when it WAS a change of person.
+    expect(main).toMatch(/if \(serveGate\.accountChanged\(\)\) doorTranscripts\.clear\(\)/)
+  })
+
+  it('main keeps card payments in flight on disk, and asks about them at start', () => {
+    const main = src('main/index.ts')
+    expect(main).toContain('pending: new PendingCheckouts()')
+    expect(main).toContain('serveGate.resumePending()')
   })
 
   it('the door and the caller read one rule, not a copy each', () => {

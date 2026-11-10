@@ -14,6 +14,7 @@ import { Accounts, loadAccount } from '../../src/main/account-v2'
 import { CallCredentialService } from '../../src/main/call-credential'
 import { DoorCallers, DoorSeats, seatsApiOverAccounts } from '../../src/main/door-seats'
 import { SeatSettleQueue } from '../../src/main/seat-settle'
+import type { PendingCheckoutStore } from '../../src/main/pending-checkout'
 import { createServeGate, type ServeGate } from '../../src/main/serve-gate'
 import type { AccountForDoors } from '../../src/main/served-admission'
 import { ServedCallers } from '../../src/main/served-callers'
@@ -116,6 +117,14 @@ export interface PaidDoorWorld {
   checkoutNext(session: string): void
   /** Whether the owner's lending budget has a session left to give. It does, until told otherwise. */
   budget(left: boolean): void
+  /** The buyer finishes on Stripe's page: from now on Stripe calls this session paid. */
+  pays(session: string): void
+  /** How many Checkout sessions the door has been asked to CREATE, ever. */
+  checkoutsMade(): number
+  /** Every Checkout session id the door was asked to settle, in order. */
+  presented: string[]
+  /** Move the DOOR's clock forward: its Bearers are an hour long by that clock. */
+  doorClockForward(ms: number): void
   /** A slow registry: the door's seat report waits until the returned release is called. */
   holdReports(): () => void
   /** The last seat report the door made, settled or not. */
@@ -129,7 +138,7 @@ export interface PaidDoorWorld {
    */
   appOn(
     accounts: Accounts | null | (() => Accounts | null),
-    options?: { usdc?: string; now?: () => number }
+    options?: { usdc?: string; now?: () => number; pending?: PendingCheckoutStore }
   ): AppOn
   close(): Promise<void>
 }
@@ -148,7 +157,11 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
   const registryDir = mkdtempSync(path.join(tmpdir(), 'buy-registry-'))
   const doorDir = mkdtempSync(path.join(tmpdir(), 'buy-door-'))
   const bases: string[] = []
-  const issuer = new CallCredentialService({ base: doorDir })
+  let doorSkew = 0
+  let checkoutsMade = 0
+  const paidSessions = new Set<string>([PAID])
+  const presented: string[] = []
+  const issuer = new CallCredentialService({ base: doorDir, now: () => Date.now() + doorSkew })
   const callers = new DoorCallers()
   const sessions = new Set<string>()
   const openedBy: string[] = []
@@ -252,7 +265,8 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     settle: async (payment) => {
       if (payment === GOOD_USDC) return 'ok'
       const session = stripeSessionOf(payment)
-      if (session === PAID) return 'ok'
+      if (session !== null) presented.push(session)
+      if (session !== null && paidSessions.has(session)) return 'ok'
       return session === UNCHECKABLE ? 'unverifiable' : 'refused'
     },
     paymentTerms: () => ({ x402Version: 1, accepts: accepts() }),
@@ -307,7 +321,10 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
         const pay = await handleServedPayRoute(
           {
             issuer,
-            createCheckout: async () => `https://checkout.stripe.com/c/pay/${nextCheckout}`,
+            createCheckout: async () => {
+              checkoutsMade += 1
+              return `https://checkout.stripe.com/c/pay/${nextCheckout}`
+            },
             successUrl: (t) => `${planeOrigin}/${t.slug}?payment=received`,
             doorName: () => DOOR
           },
@@ -332,7 +349,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
 
   const appOn = (
     who: Accounts | null | (() => Accounts | null),
-    options: { usdc?: string; now?: () => number } = {}
+    options: { usdc?: string; now?: () => number; pending?: PendingCheckoutStore } = {}
   ): AppOn => {
     const minted: unknown[] = []
     const signed: unknown[] = []
@@ -354,6 +371,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
         target.door ? { at: { origin: planeOrigin, slug: target.door, door: target.door }, listed: true, live: true } : null,
       accounts: spied,
       ...(options.now ? { now: options.now } : {}),
+      ...(options.pending ? { pending: options.pending } : {}),
       signInWithKey: () => Promise.reject(new Error('a listed door is never entered with a key')),
       wallet: () => (usdc === undefined ? null : { address: WALLET }),
       buildX402Payment: (requirements) => {
@@ -392,6 +410,14 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     },
     budget: (left) => {
       budgetLeft = left
+    },
+    pays: (session) => {
+      paidSessions.add(session)
+    },
+    checkoutsMade: () => checkoutsMade,
+    presented,
+    doorClockForward: (ms) => {
+      doorSkew += Math.max(0, ms)
     },
     holdReports: () => {
       let release = (): void => undefined

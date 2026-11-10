@@ -45,7 +45,7 @@ export interface CardWait {
 
 /** What `serveSettle` answers. */
 export type SettleAnswer =
-  | { ok: true; phase: ServePhase }
+  | { ok: true; phase: ServePhase; standing?: boolean }
   | { ok: false; reason: string; detail?: string }
 
 export type CardStep =
@@ -127,7 +127,18 @@ export function cardCheckStep(
   if (typeof reading === 'object') return { kind: 'stopped', fault: reading.fault }
   // "We could not check" is a maybe, and a maybe never frees a new payment.
   if (reading === 'uncheckable') return { kind: 'stopped', fault: UNCHECKABLE }
-  if (!lifeOver(wait, now)) return { kind: 'waiting', fault: null }
+  // MAIN DECIDES WHEN THE SESSION IS OVER. It holds the payment on disk and
+  // lets go only when the door says unpaid after its own clock says the page
+  // can no longer be paid; `standing` is its word. This surface's clock is a
+  // fallback for a main that does not say (and it only governs the wording:
+  // main refuses a second Checkout while one stands, whatever is pressed).
+  const held = answer.ok ? answer.standing : undefined
+  const over = held === undefined ? lifeOver(wait, now) : !held
+  if (!over) {
+    return lifeOver(wait, now)
+      ? { kind: 'ended', fault: apology(MKT_PAY['mkt.pay.card.ended.title'], MKT_PAY['mkt.pay.card.ended.body']) }
+      : { kind: 'waiting', fault: null }
+  }
   return {
     kind: 'expired',
     fault: apology(MKT_PAY['mkt.pay.card.expired.title'], MKT_PAY['mkt.pay.card.expired.body'])

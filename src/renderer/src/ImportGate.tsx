@@ -65,8 +65,19 @@ interface CardState {
   wait: CardWait
   /** What that session was quoted at — the receipt, if it is paid. */
   paid: { price: string; asset: string }
-  /** `waiting`: the sheet asks by itself. `check`: it stopped, and says so. */
-  mode: 'waiting' | 'check'
+  /**
+   * `waiting`: the sheet asks by itself, button held. `check`: it stopped, and
+   * says so. `resume`: the sheet was OPENED on a payment already in flight —
+   * it asks by itself, and the button reopens that payment's own card page.
+   */
+  mode: 'waiting' | 'check' | 'resume'
+}
+
+/** Said when the sheet opens on a card payment made earlier and still payable. */
+const RESUME_FAULT: PayFault = {
+  voice: 'apolog',
+  title: MKT_PAY['mkt.pay.card.resume.title'],
+  body: MKT_PAY['mkt.pay.card.resume.body']
 }
 
 /** mm:ss until a quote expires, or null when it carries no clock. */
@@ -139,6 +150,26 @@ export function ImportGate({
     if (result.ok) {
       setPhase(result.phase)
       setQuotedRails(result.phase.kind === 'pay' ? result.phase.rails : EMPTY_RAILS)
+      // A CARD PAYMENT MADE EARLIER (main remembers it, on disk). Landed: this
+      // is its receipt, and the phase is already `open`. Still payable: the
+      // sheet takes up THAT session — main's word on which, never this
+      // sheet's memory — and offers its page again instead of a new payment.
+      if (result.settled) setSettledOn(result.settled)
+      const flying = result.card
+      const holding = cardRef.current
+      if (flying === undefined) {
+        if (holding !== null) {
+          stopPolling()
+          holdCard(null)
+        }
+      } else if (holding === null || holding.wait.session !== flying.session) {
+        holdCard({
+          wait: { session: flying.session, startedAt: flying.startedAt },
+          paid: { price: flying.price, asset: 'USD' },
+          mode: 'resume'
+        })
+        setFault(RESUME_FAULT)
+      }
       setWallet(result.wallet)
       setFacts({
         door: result.door,
@@ -155,7 +186,7 @@ export function ImportGate({
         body: result.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
       })
     }
-  }, [])
+  }, [holdCard, stopPolling])
 
   // Ask the door what it wants. Main signs in as the account the card will
   // use, so the session paid for here is the session it opens later. `intent`
@@ -303,6 +334,9 @@ export function ImportGate({
           applyPhase({ kind: 'open' })
           return
         case 'waiting':
+          // A sheet opened on an earlier payment keeps its sentence and its
+          // REOPEN button while it listens: nothing has changed to say.
+          if (state.mode === 'resume') return
           // Stays busy on purpose: the card page is in charge now, and a live
           // PAY button here is how a person pays twice.
           setBusy(true)
@@ -357,7 +391,7 @@ export function ImportGate({
   // and at no other time — it starts when a card page is handed out, stops
   // when the wait ends or is refused, and starts again if CHECK AGAIN finds
   // the page still open for payment.
-  const waiting = card?.mode === 'waiting'
+  const waiting = card?.mode === 'waiting' || card?.mode === 'resume'
   useEffect(() => {
     if (!waiting) return
     // A look that could not be made at all is not an answer: the next tick asks again.
@@ -380,18 +414,14 @@ export function ImportGate({
     })
   }, [lookAtCard])
 
-  const pay = useCallback((): void => {
-    // A card session is unresolved: whatever rail is selected, the only thing
-    // this button may do is ask about it. Two payments are two charges.
-    if (cardRef.current !== null) {
-      checkAgain()
-      return
-    }
-    if (!selected) return
-    setFault(null)
-    setBusy(true)
-    if (selected.rail === 'stripe') {
-      const paid = { price: selected.price, asset: selected.asset }
+  /**
+   * Ask main for the card page and wait on it. Main decides WHICH page: while
+   * a payment for this door is in flight it hands back that one — the same
+   * session, the same address — and makes a new one only when there is none.
+   */
+  const openCardPage = useCallback(
+    (paid: { price: string; asset: string }): void => {
+      setBusy(true)
       void cookrew()
         .serveCheckout(link)
         .then((result) => {
@@ -405,10 +435,37 @@ export function ImportGate({
             })
             return
           }
+          setFault(null)
           // Stays busy on purpose: the card page is in charge now.
-          holdCard({ wait: { session: result.session, startedAt: Date.now() }, paid, mode: 'waiting' })
+          holdCard({
+            wait: { session: result.session, startedAt: result.startedAt ?? Date.now() },
+            paid,
+            mode: 'waiting'
+          })
         })
         .catch(() => setBusy(false))
+    },
+    [link, holdCard]
+  )
+
+  /** REOPEN CARD PAGE: the page of the payment already in flight, never another. */
+  const reopenCard = useCallback((): void => {
+    const state = cardRef.current
+    if (state !== null) openCardPage(state.paid)
+  }, [openCardPage])
+
+  const pay = useCallback((): void => {
+    // A card session is unresolved: whatever rail is selected, the only thing
+    // this button may do is ask about it. Two payments are two charges.
+    if (cardRef.current !== null) {
+      checkAgain()
+      return
+    }
+    if (!selected) return
+    setFault(null)
+    setBusy(true)
+    if (selected.rail === 'stripe') {
+      openCardPage({ price: selected.price, asset: selected.asset })
       return
     }
     if (!wallet) {
@@ -436,7 +493,7 @@ export function ImportGate({
         }
       })
       .catch(() => setBusy(false))
-  }, [selected, link, wallet, applyPhase, checkAgain, holdCard])
+  }, [selected, link, wallet, applyPhase, checkAgain, openCardPage])
 
   /**
    * The identify step's primary. On the install walk it opens the account
@@ -514,7 +571,13 @@ export function ImportGate({
       deniedVars={deniedVars}
       // A card the sheet has stopped waiting on: the one thing to do is ask
       // about it again. PAY comes back only when the door says it went unpaid.
-      payAction={card?.mode === 'check' ? { label: MKT_PAY['mkt.pay.card.check'], onClick: checkAgain } : null}
+      payAction={
+        card?.mode === 'check'
+          ? { label: MKT_PAY['mkt.pay.card.check'], onClick: checkAgain }
+          : card?.mode === 'resume'
+            ? { label: MKT_PAY['mkt.pay.card.reopen'], onClick: reopenCard }
+            : null
+      }
       onDismiss={onDismiss}
       onIdentify={identify}
       onSelectWallet={(id) => {

@@ -139,6 +139,22 @@ describe('cardCheckStep — CHECK AGAIN, one press, the same session', () => {
     expect(cardCheckStep(unpaid, WAIT, alive, VARS)).toEqual({ kind: 'waiting', fault: null })
   })
 
+  it('MAIN decides when a new payment is safe: while it still holds the session, nothing here frees PAY', () => {
+    // Main remembers the session on disk and drops it only when the door says
+    // unpaid after ITS clock says the session's life is over. A phone whose
+    // clock runs fast must not conclude that by itself.
+    const stillHeld: SettleAnswer = { ...unpaid, standing: true } as SettleAnswer
+    expect(cardCheckStep(stillHeld, WAIT, over + 60_000, VARS)).toEqual({
+      kind: 'ended',
+      fault: { voice: 'apolog', title: MKT_PAY['mkt.pay.card.ended.title'], body: MKT_PAY['mkt.pay.card.ended.body'] }
+    })
+    expect(cardCheckStep(stillHeld, WAIT, alive, VARS)).toEqual({ kind: 'waiting', fault: null })
+    // Main let go of it: expired, whatever this surface's own clock thinks.
+    const letGo: SettleAnswer = { ...unpaid, standing: false } as SettleAnswer
+    expect(cardCheckStep(letGo, WAIT, alive, VARS).kind).toBe('expired')
+    expect(cardCheckStep(letGo, WAIT, over, VARS).kind).toBe('expired')
+  })
+
   it('a door that still cannot check keeps CHECK AGAIN and says why — never a fresh PAY on a maybe', () => {
     for (const at of [alive, over]) {
       expect(cardCheckStep(uncheckable, WAIT, at, VARS)).toEqual({

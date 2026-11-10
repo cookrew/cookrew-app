@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Accounts } from '../src/main/account-v2'
 import { doorBearer } from '../src/main/door-bearer'
+import { PendingCheckouts } from '../src/main/pending-checkout'
+import { CHECKOUT_MAX_LIFE_SECONDS, CHECKOUT_TTL_SECONDS } from '../src/shared/stripe-checkout'
 import { STAND_IN_TTL_MS, createServeGate } from '../src/main/serve-gate'
 import { signInToDoor, type AdmissionPhase } from '../src/main/served-admission'
 import {
@@ -73,7 +77,7 @@ async function buyWithReportHeld(app: AppOn): Promise<() => void> {
   world.checkoutNext(PAID)
   await app.ops.checkout(DOOR)
   const release = world.holdReports()
-  expect(await app.ops.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' } })
+  expect(await app.ops.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' }, standing: false })
   return release
 }
 
@@ -117,11 +121,16 @@ describe('buying a seat at a listed paid team, in the app', () => {
     // ── the card rail: the door's own Checkout, then the session presented back ──
     world.checkoutNext(PAID)
     const checkout = await app.ops.checkout(DOOR)
-    expect(checkout).toEqual({ ok: true, session: PAID, url: `https://checkout.stripe.com/c/pay/${PAID}` })
+    expect(checkout).toEqual({
+      ok: true,
+      session: PAID,
+      url: `https://checkout.stripe.com/c/pay/${PAID}`,
+      startedAt: expect.any(Number)
+    })
     // THE REGISTRY IS SLOW TODAY: the door's report is held until the card has opened.
     const release = world.holdReports()
     const settled = await app.ops.settle(DOOR, 'stripe', PAID)
-    expect(settled).toEqual({ ok: true, phase: { kind: 'open' } })
+    expect(settled).toEqual({ ok: true, phase: { kind: 'open' }, standing: false })
     expect(world.openedBy).toEqual(['acct-lin'])
     // The door knows at once; cookrew.dev does not yet.
     expect(world.callers.entitled(template.serviceId, 'acct-lin')).toBe(true)
@@ -240,6 +249,35 @@ describe('what a purchase leaves in memory belongs to one account at one team (M
     }
   }, SLOW)
 
+  it('a Bearer is filed under the account the mint was MADE FOR, not whoever was here when the ask began', async () => {
+    const a = await world.registeredMachine('h-switch-a', 'hswa')
+    const b = await world.registeredMachine('h-switch-b', 'hswb')
+    let signedIn: Accounts = a.accounts
+    const gate = createServeGate({
+      parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+      // The Mac changes hands WHILE the door is being looked up: A asked, B is here when the mint is made.
+      reachable: async () => {
+        signedIn = b.accounts
+        return { at: { origin: world.planeOrigin, slug: DOOR, door: DOOR }, listed: true, live: true }
+      },
+      accounts: {
+        account: () => signedIn.account(),
+        authedResponse: (pathname, init) => signedIn.authedResponse(pathname, init)
+      },
+      signInWithKey: () => Promise.reject(new Error('no key')),
+      wallet: () => null,
+      buildX402Payment: () => Promise.reject(new Error('no wallet'))
+    })
+    const answer = (await gate.gate(DOOR, 'buy')) as Gated
+    // The token is B's — that is who cookrew.dev minted for.
+    expect(answer).toMatchObject({ account: 'hswb', phase: { kind: 'pay' } })
+    // A, back at the Mac, holds nothing: B's Bearer was not filed under A.
+    signedIn = a.accounts
+    expect(await gate.settle(DOOR, 'stripe', PAID)).toMatchObject({ ok: false, reason: 'not-signed-in' })
+    expect(world.openedBy).not.toContain('acct-hswb')
+    expect(world.openedBy).not.toContain('acct-hswa')
+  }, SLOW)
+
   it('a purchase at one team stands in at that team only', async () => {
     const guest = await world.registeredMachine('m1-team', 'm1team')
     const app = world.appOn(guest.accounts)
@@ -291,7 +329,7 @@ describe('what a purchase leaves in memory belongs to one account at one team (M
       expect(await direct.gate(DOOR)).toMatchObject({ ok: true, door: 'direct', phase: { kind: 'pay' } })
       world.checkoutNext(PAID)
       await direct.checkout(DOOR)
-      expect(await direct.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(await direct.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' }, standing: false })
       // The key-holder paid. The ACCOUNT on this Mac holds no seat, and gets no Bearer.
       await expect(
         doorBearer(
@@ -460,6 +498,253 @@ describe('the press signs what THAT surface displayed (C)', () => {
   }, SLOW)
 })
 
+describe('a card payment in flight outlives the sheet that started it (D)', () => {
+  /**
+   * One Checkout session per purchase, whatever closes and reopens. The disk
+   * is real (a temp dir); the clock is the app's own, moved by hand.
+   */
+  const WINDOW_MS = CHECKOUT_TTL_SECONDS * 1000
+  const LIFE_MS = CHECKOUT_MAX_LIFE_SECONDS * 1000
+  const dirs: string[] = []
+  const disk = (): string => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'buy-pending-'))
+    dirs.push(dir)
+    return dir
+  }
+  afterAll(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+  })
+  type Resumed = Gated & {
+    card?: { session: string; url: string; startedAt: number; price: string }
+    settled?: { price: string; asset: string; rail: string }
+  }
+
+  it('pay started, sheet closed, the quote window rolls over, sheet reopened: the SAME session, and one Checkout in total', async () => {
+    const guest = await world.registeredMachine('d-reopen', 'dre')
+    const base = disk()
+    let clock = 1_700_000_000_000
+    const app = world.appOn(guest.accounts, { now: () => clock, pending: new PendingCheckouts({ base }) })
+    const made = world.checkoutsMade()
+    world.checkoutNext(UNPAID)
+    await app.ops.gate(DOOR, 'buy')
+    const first = (await app.ops.checkout(DOOR)) as { ok: true; session: string; url: string; startedAt: number }
+    expect(first).toMatchObject({ ok: true, session: UNPAID, startedAt: clock })
+    expect(new PendingCheckouts({ base }).get('dre', DOOR)).toMatchObject({ session: UNPAID, price: '1.00', link: DOOR })
+
+    // The sheet is closed. Thirty-one minutes pass: a NEW quote window at the
+    // door, where an identical request would no longer replay the old session.
+    clock += WINDOW_MS + 60_000
+    world.checkoutNext('cs_test_would_be_second')
+    const asked = world.presented.length
+
+    // Reopened — an ordinary import, nobody pressed BUY again.
+    const reopened = (await app.ops.gate(DOOR)) as Resumed
+    // THE SESSION WAS PRESENTED FIRST, before anything was shown.
+    expect(world.presented.slice(asked)).toEqual([UNPAID])
+    // Still unpaid and still payable: the sheet is handed THAT session to wait on.
+    expect(reopened.phase).toMatchObject({ kind: 'pay', rails: [{ rail: 'stripe' }] })
+    expect(reopened.card).toEqual({ session: UNPAID, url: first.url, startedAt: first.startedAt, price: '1.00' })
+
+    // PAY, from whichever surface: the same page, never a new Checkout.
+    expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: true, session: UNPAID, url: first.url, startedAt: first.startedAt, resumed: true })
+    expect(world.checkoutsMade()).toBe(made + 1)
+  }, SLOW)
+
+  it('paid while the app was closed: the next start presents it, and the seat is there with no second payment', async () => {
+    const guest = await world.registeredMachine('d-closed', 'dcl')
+    const base = disk()
+    const made = world.checkoutsMade()
+    world.checkoutNext(PAID)
+    const before = world.appOn(guest.accounts, { pending: new PendingCheckouts({ base }) })
+    await before.ops.gate(DOOR, 'buy')
+    await before.ops.checkout(DOOR)
+    // The app quits. The buyer pays on Stripe's page, still open in the browser.
+    // (PAID is a session Stripe calls paid — nobody has presented it yet.)
+    expect(world.openedBy).not.toContain('acct-dcl')
+
+    // A NEW process: nothing in memory, only the file.
+    const after = world.appOn(guest.accounts, { pending: new PendingCheckouts({ base }) })
+    expect(await after.ops.resumePending()).toBe(1)
+    expect(world.openedBy).toContain('acct-dcl')
+    expect(await world.lastReport()).toBe(true)
+    expect(new PendingCheckouts({ base }).all('dcl')).toEqual([])
+
+    // And the import that follows opens on the seat: plain mint, no pay step.
+    const opened = (await after.ops.gate(DOOR)) as Resumed
+    expect(opened.phase).toEqual({ kind: 'open' })
+    expect(opened.seat).toEqual(expect.any(String))
+    expect(world.checkoutsMade()).toBe(made + 1)
+  }, SLOW)
+
+  it('a gate that finds the payment landed completes the purchase with its receipt, as after a wait', async () => {
+    const guest = await world.registeredMachine('d-landed', 'dla')
+    const base = disk()
+    world.checkoutNext(PAID)
+    const app = world.appOn(guest.accounts, { pending: new PendingCheckouts({ base }) })
+    await app.ops.gate(DOOR, 'buy')
+    await app.ops.checkout(DOOR)
+    const release = world.holdReports()
+    try {
+      const reopened = (await app.ops.gate(DOOR)) as Resumed
+      expect(reopened.phase).toEqual({ kind: 'open' })
+      expect(reopened.settled).toEqual({ price: '1.00', asset: 'USD', rail: 'stripe' })
+      expect(reopened.card).toBeUndefined()
+      expect(new PendingCheckouts({ base }).all('dla')).toEqual([])
+      // The card placed next opens, registry report or not.
+      await expect(cardSignIn(app)).resolves.toEqual(expect.any(String))
+    } finally {
+      release()
+      await world.lastReport()
+    }
+  }, SLOW)
+
+  it('the phone and the desktop are one purchase: one session between them', async () => {
+    const guest = await world.registeredMachine('d-two', 'dtw')
+    const base = disk()
+    const made = world.checkoutsMade()
+    world.checkoutNext(UNPAID)
+    // Two surfaces, one main: the same gate verbs, called from each.
+    const app = world.appOn(guest.accounts, { pending: new PendingCheckouts({ base }) })
+    await app.ops.gate(DOOR, 'buy')
+    const desktop = (await app.ops.checkout(DOOR)) as { session: string }
+    world.checkoutNext('cs_test_would_be_second')
+    const phone = (await app.ops.gate(DOOR, 'buy')) as Resumed
+    expect(phone.card?.session).toBe(desktop.session)
+    expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: true, session: desktop.session, resumed: true })
+    expect(world.checkoutsMade()).toBe(made + 1)
+  }, SLOW)
+
+  it('a session the door calls unpaid after its life is over is forgotten, and only then is a new one made', async () => {
+    const guest = await world.registeredMachine('d-over', 'dov')
+    const base = disk()
+    let clock = 1_700_000_000_000
+    const app = world.appOn(guest.accounts, { now: () => clock, pending: new PendingCheckouts({ base }) })
+    const made = world.checkoutsMade()
+    world.checkoutNext(UNPAID)
+    await app.ops.gate(DOOR, 'buy')
+    await app.ops.checkout(DOOR)
+
+    // One millisecond short of its life: still remembered, still the only one.
+    clock += LIFE_MS - 1
+    expect(((await app.ops.gate(DOOR)) as Resumed).card?.session).toBe(UNPAID)
+    expect(new PendingCheckouts({ base }).all('dov')).toHaveLength(1)
+
+    // Its life is over and the door says unpaid: gone, and the answer is the plain one.
+    clock += 1
+    const fresh = (await app.ops.gate(DOOR)) as Resumed
+    expect(fresh.card).toBeUndefined()
+    expect(fresh.phase).toMatchObject({ kind: 'denied', reason: 'no_seat' })
+    expect(new PendingCheckouts({ base }).all('dov')).toEqual([])
+
+    world.checkoutNext(PAID)
+    await app.ops.gate(DOOR, 'buy')
+    expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: true, session: PAID })
+    expect(world.checkoutsMade()).toBe(made + 2)
+  }, SLOW)
+
+  it('a settle that the door answers "unpaid" before the life is over keeps the session; "open" drops it', async () => {
+    const guest = await world.registeredMachine('d-settle', 'dse')
+    const base = disk()
+    world.checkoutNext(UNPAID)
+    const app = world.appOn(guest.accounts, { pending: new PendingCheckouts({ base }) })
+    await app.ops.gate(DOOR, 'buy')
+    await app.ops.checkout(DOOR)
+    // The answer says whether main still holds a payment in flight here:
+    // that, not a surface's own clock, is what frees a new PAY.
+    expect(await app.ops.settle(DOOR, 'stripe', UNPAID)).toEqual({
+      ok: true,
+      phase: { kind: 'denied', reason: 'payment_invalid', retryable: false },
+      standing: true
+    })
+    expect(new PendingCheckouts({ base }).all('dse')).toHaveLength(1)
+    // Another person on this Mac is not handed it, and cannot start a second for the first.
+    const other = await world.registeredMachine('d-other', 'dot')
+    const theirs = world.appOn(other.accounts, { pending: new PendingCheckouts({ base }) })
+    expect(((await theirs.ops.gate(DOOR, 'buy')) as Resumed).card).toBeUndefined()
+  }, SLOW)
+})
+
+describe('a Bearer that ran out while the card page was open (E)', () => {
+  it('is renewed once and the SAME session presented again; only a second refusal is spoken', async () => {
+    const guest = await world.registeredMachine('e-bearer', 'ebe')
+    const app = world.appOn(guest.accounts)
+    world.checkoutNext(PAID)
+    await app.ops.gate(DOOR, 'buy')
+    await app.ops.checkout(DOOR)
+    expect(app.minted).toEqual([{ intent: 'buy' }])
+
+    // The door's Bearers live an hour by ITS clock; the card page lives as long.
+    world.doorClockForward(61 * 60 * 1000)
+    const asked = world.presented.length
+    expect(await app.ops.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' }, standing: false })
+    // Signed in again as the same buyer, and the same session went up.
+    expect(app.minted).toEqual([{ intent: 'buy' }, { intent: 'buy' }])
+    expect(world.presented.slice(asked)).toEqual([PAID])
+    expect(world.openedBy).toContain('acct-ebe')
+  }, SLOW)
+
+  it('a door that answers 401 again after the renewal is said — one renewal, never a loop', async () => {
+    const guest = await world.registeredMachine('e-loop', 'elo')
+    const seen = { asserts: 0, lines: 0 }
+    // A door that signs anybody in and then knows none of its own Bearers.
+    const amnesiac = createServer((request, response) => {
+      request.resume()
+      request.on('end', () => {
+        if (request.url?.endsWith('/api/call/assert')) {
+          seen.asserts += 1
+          response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, token: `bearer-${seen.asserts}` }))
+          return
+        }
+        seen.lines += 1
+        response.writeHead(401, { 'content-type': 'application/json' }).end('{}')
+      })
+    })
+    await new Promise<void>((resolve) => amnesiac.listen(0, '127.0.0.1', resolve))
+    try {
+      const at = `http://127.0.0.1:${(amnesiac.address() as AddressInfo).port}`
+      const gate = createServeGate({
+        parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+        reachable: async () => ({ at: { origin: at, slug: DOOR, door: DOOR }, listed: true, live: true }),
+        accounts: guest.accounts,
+        signInWithKey: () => Promise.reject(new Error('no key')),
+        wallet: () => null,
+        buildX402Payment: () => Promise.reject(new Error('no wallet'))
+      })
+      expect(((await gate.gate(DOOR, 'buy')) as Gated).phase).toEqual({ kind: 'error', status: 401 })
+      const before = { ...seen }
+      expect(await gate.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'error', status: 401 }, standing: false })
+      // Exactly one new sign-in. The line is asked three times and no more:
+      // the session presented, the sign-in's own look at the door, the
+      // session presented again on the new Bearer.
+      expect(seen.asserts - before.asserts).toBe(1)
+      expect(seen.lines - before.lines).toBe(3)
+    } finally {
+      amnesiac.closeAllConnections()
+      await new Promise<void>((resolve) => amnesiac.close(() => resolve()))
+    }
+  }, SLOW)
+
+  it('a door that refuses the renewed sign-in too is said, once, with its status', async () => {
+    const guest = await world.registeredMachine('e-dead', 'ede')
+    let tries = 0
+    const dead = createServeGate({
+      parse: () => ({ origin: world.origin, slug: TEAM, door: DOOR }),
+      // The first ask reaches the door; after that every request lands where nobody knows the Bearer.
+      reachable: async () => {
+        tries += 1
+        return { at: { origin: world.planeOrigin, slug: tries === 1 ? DOOR : '@drej/closed', door: DOOR }, listed: true, live: true }
+      },
+      accounts: guest.accounts,
+      signInWithKey: () => Promise.reject(new Error('no key')),
+      wallet: () => null,
+      buildX402Payment: () => Promise.reject(new Error('no wallet'))
+    })
+    expect(((await dead.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
+    // Every later request meets a 404 — not a 401 — so nothing is renewed and it is said as it is.
+    expect(await dead.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'gone' }, standing: false })
+  }, SLOW)
+})
+
 describe('a refusal on the buy path is said, not swallowed', () => {
   it('a card session Stripe says is unpaid is payment_invalid, and nothing is seated', async () => {
     const guest = await world.registeredMachine('unpaid', 'mo')
@@ -470,10 +755,17 @@ describe('a refusal on the buy path is said, not swallowed', () => {
     expect(checkout.session).toBe(UNPAID)
     expect(await app.ops.settle(DOOR, 'stripe', UNPAID)).toEqual({
       ok: true,
-      phase: { kind: 'denied', reason: 'payment_invalid', retryable: false }
+      phase: { kind: 'denied', reason: 'payment_invalid', retryable: false },
+      // The card page can still be paid: main goes on holding that session.
+      standing: true
     })
     expect(world.callers.entitled(template.serviceId, 'acct-mo')).toBe(false)
-    expect(((await app.ops.gate(DOOR)) as Gated).phase).toMatchObject({ kind: 'denied', reason: 'no_seat' })
+    // An import again while that card page can still be paid: the door is asked
+    // about THAT session first, and the sheet is handed it to wait on — no seat,
+    // no second Checkout.
+    const again = (await app.ops.gate(DOOR)) as Gated & { card?: { session: string } }
+    expect(again.phase.kind).toBe('pay')
+    expect(again.card?.session).toBe(UNPAID)
     await expect(cardSignIn(app)).rejects.toThrow('did not admit this account (denied)')
   }, SLOW)
 
@@ -499,7 +791,8 @@ describe('a refusal on the buy path is said, not swallowed', () => {
     await app.ops.gate(DOOR, 'buy')
     expect(await app.ops.settle(DOOR, 'stripe', UNCHECKABLE)).toEqual({
       ok: true,
-      phase: { kind: 'denied', reason: 'payment_unverifiable', retryable: true }
+      phase: { kind: 'denied', reason: 'payment_unverifiable', retryable: true },
+      standing: false
     })
   }, SLOW)
 

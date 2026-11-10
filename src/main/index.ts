@@ -393,6 +393,7 @@ import {
 } from './import-session'
 import { signInToDoor } from './served-admission'
 import { createServeGate, handOffCheckout } from './serve-gate'
+import { PendingCheckouts } from './pending-checkout'
 import { doorBearer, type DoorBearerPort } from './door-bearer'
 import { expiryWarningDue } from '../shared/session-renew'
 import { buildX402Payment, deviceWallet } from './x402-caller'
@@ -2559,9 +2560,11 @@ const serveGate = createServeGate({
   accounts,
   signInWithKey: (at) => signInToDoor(at),
   wallet: () => deviceWallet(),
-  buildX402Payment: (requirements) => buildX402Payment(requirements)
+  buildX402Payment: (requirements) => buildX402Payment(requirements),
+  // Card payments in flight, per account and door, on disk: a closed sheet or
+  // a restart must not forget a Checkout page that can still take a card.
+  pending: new PendingCheckouts()
 })
-gateAccountChanged = () => serveGate.accountChanged()
 
 /**
  * The port the two post-import calls are asked through. `accounts` is this
@@ -2575,6 +2578,14 @@ const doorPort: DoorBearerPort = {
 }
 
 const doorTranscripts = new Map<string, Promise<DoorTranscript | null>>()
+
+// A DIFFERENT PERSON AT THIS MAC finds none of the last one's door Bearers:
+// not the gate's (serve-gate.ts), and not the ones the cached transcripts
+// signed in with — a card on the canvas would otherwise go on reading its
+// door as the person who left, for as long as that Bearer lived.
+gateAccountChanged = () => {
+  if (serveGate.accountChanged()) doorTranscripts.clear()
+}
 
 function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
   const hit = store.nodeAcrossWorkspaces(terminalId)
@@ -7203,6 +7214,11 @@ app.whenReady().then(() => {
         if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
       })
       .catch(() => undefined)
+    // AND ANY CARD PAYMENT THIS ACCOUNT LEFT IN FLIGHT as a buyer. A Checkout
+    // page paid after the app was closed has charged a card and seated nobody:
+    // the door only learns of it when the session is presented, so it is
+    // presented now rather than whenever the sheet is next opened.
+    void serveGate.resumePending().catch(() => undefined)
     // Whatever the last run left queued for the funnel; off, it stays home.
     void resumeTelemetry()
   }, 5_000)

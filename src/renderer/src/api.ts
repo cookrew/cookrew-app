@@ -314,14 +314,28 @@ export interface CookrewApi {
         /** The username this Mac is signed in as, when known. */
         account?: string | null;
         seat?: string | null;
+        /**
+         * A card payment started earlier for this door is STILL OPEN: unpaid
+         * and still payable. The sheet resumes that one (main hands back the
+         * same page for it) and never starts another beside it.
+         */
+        card?: { session: string; url: string; startedAt: number; price: string };
+        /** A card payment started earlier had landed: the phase is `open`, and this is its receipt. */
+        settled?: { price: string; asset: string; rail: 'x402' | 'stripe' };
       }
     | { ok: false; reason: string; detail?: string }
   >;
-  /** Start a card payment: opens hosted Checkout in the real browser. */
+  /**
+   * Start a card payment: opens hosted Checkout in the real browser. While a
+   * payment for this door is already in flight, main hands back THAT session
+   * (`resumed`) instead of making a new one. `startedAt` is main's clock for
+   * when the door handed the session out.
+   */
   serveCheckout: (
     link: string,
   ) => Promise<
-    { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+    | { ok: true; session: string; url: string; startedAt?: number; resumed?: boolean }
+    | { ok: false; reason: string; detail?: string }
   >;
   /**
    * Present a payment on one rail and be admitted. For the wallet rail,
@@ -334,7 +348,13 @@ export interface CookrewApi {
     session?: string,
     shown?: string,
   ) => Promise<
-    { ok: true; phase: ServePhase } | { ok: false; reason: string; detail?: string }
+    | {
+        ok: true;
+        phase: ServePhase;
+        /** Card rail: whether main still holds a payment in flight for this door after this answer. */
+        standing?: boolean;
+      }
+    | { ok: false; reason: string; detail?: string }
   >;
   switchWorkspace: (id: string) => Promise<WorkspaceList>;
   /** Photograph the canvas as it is now (the screen wall). */

@@ -1079,7 +1079,8 @@ export function createRemoteApi(): CookrewApi {
       req(apiPath('/api/serve/gate'), 'POST', { link, ...(intent === 'buy' ? { intent } : {}) }),
     serveCheckout: async (link) => {
       const checkout = await req<
-        { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }
+        | { ok: true; session: string; url: string; startedAt?: number; resumed?: boolean }
+        | { ok: false; reason: string; detail?: string }
       >(apiPath('/api/serve/checkout'), 'POST', { link })
       if (!checkout.ok) return checkout
       // The address came from a door, by way of the desktop. Checked again
@@ -1089,7 +1090,8 @@ export function createRemoteApi(): CookrewApi {
       }
       // The hosted page opens HERE, on the phone — the desktop must not raise
       // a browser on a machine the person is not sitting at.
-      window.open(checkout.url, '_blank', 'noopener')
+      // The canonical form of what was just checked, not the string as it arrived.
+      window.open(new URL(checkout.url).href, '_blank', 'noopener')
       return checkout
     },
     serveSettle: (link, rail, session, shown) =>

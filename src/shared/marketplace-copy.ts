@@ -268,6 +268,15 @@ export const MKT_PAY = {
   'mkt.pay.card.ended.body':
     'The card page has run out of time. If you paid on it, check again — that asks the door about the same payment and never starts a new one.',
   'mkt.pay.card.check': 'CHECK AGAIN',
+  /**
+   * The sheet was opened on a purchase already in flight: a card page made
+   * earlier that can still be paid. The way on is THAT page — a second one
+   * would be a second charge — so the button reopens it.
+   */
+  'mkt.pay.card.resume.title': 'A card payment for this seat is still open',
+  'mkt.pay.card.resume.body':
+    'You started it earlier and its card page can still be paid. Reopen that page to finish — a second payment is never started while this one is open.',
+  'mkt.pay.card.reopen': 'REOPEN CARD PAGE',
   /** The door looked at that session after its time was up: nothing on it. */
   'mkt.pay.card.expired.title': 'That card page ended unpaid',
   'mkt.pay.card.expired.body':

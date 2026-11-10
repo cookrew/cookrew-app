@@ -68,6 +68,11 @@ describe('remote-api serveCheckout', () => {
     expect(opened).toEqual([[GOOD, '_blank', 'noopener']])
   })
 
+  it('opens the canonical form of the address, not the string that came over the wire', async () => {
+    await checkoutAnswering({ ok: true, session: 'cs_test_1', url: 'HTTPS://CHECKOUT.STRIPE.COM/c/pay/cs_test_1' })
+    expect(opened).toEqual([['https://checkout.stripe.com/c/pay/cs_test_1', '_blank', 'noopener']])
+  })
+
   it('opens nothing for any other address, and reports card payment unavailable', async () => {
     for (const url of HOSTILE) {
       vi.resetModules()

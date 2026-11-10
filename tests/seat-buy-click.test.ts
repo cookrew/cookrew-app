@@ -332,7 +332,10 @@ describeWithChrome('BUY A SEAT, pressed', () => {
 
   it('M3 — the wait ends out loud, CHECK AGAIN asks about the SAME session, and a new payment waits for the door’s word', async () => {
     const guest = await world.registeredMachine('click-wait', 'tia')
-    const app = world.appOn(guest.accounts)
+    // Main's clock moves with the page's: main, not the sheet, decides when a
+    // card session is over and a new one may be made.
+    let hourLater = 0
+    const app = world.appOn(guest.accounts, { now: () => Date.now() + hourLater })
     const seen = counted(app)
     world.checkoutNext(UNPAID)
     const { page, errors } = await openGate()
@@ -347,7 +350,8 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       expect(seen.presented.length).toBeGreaterThanOrEqual(1)
       expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(PRIMARY)})?.disabled === true`)).toBe(true)
 
-      // ── an hour passes on the page: the session can no longer be paid ──
+      // ── an hour passes, on the page and in main: the session can no longer be paid ──
+      hourLater = CARD_SESSION_LIFE_MS
       await page.evaluate(`window.__skip(${CARD_SESSION_LIFE_MS})`)
       const ended = await sheetSays(page, MKT_PAY['mkt.pay.card.ended.title'])
       expect(ended).toContain(MKT_PAY['mkt.pay.card.ended.body'])
@@ -504,6 +508,88 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await primaryReads(page, 'PAY 1.00 USD')
       expect(app.minted).toEqual([{ intent: 'buy' }])
       expect(await left(page)).toEqual({ nodes: [], windows: [], placed: null, dismissed: false })
+      expect(errors).toEqual([])
+    } finally {
+      page.close()
+    }
+  }, 120_000)
+
+  it('D — the sheet is closed with a card page still open and opened again: it resumes THAT payment, reopens the same page, and never makes a second', async () => {
+    const guest = await world.registeredMachine('click-reopen', 'zed')
+    const app = world.appOn(guest.accounts)
+    const seen = counted(app)
+    const made = world.checkoutsMade()
+    const session = 'cs_test_reopened1'
+    world.checkoutNext(session)
+    const first = await openGate()
+    try {
+      await primaryReads(first.page, 'BUY A SEAT · $1.00')
+      await click(first.page, PRIMARY)
+      await primaryReads(first.page, 'PAY 1.00 USD')
+      await click(first.page, PRIMARY)
+      await sleep(CARD_POLL_MS + 1000)
+      expect(world.checkoutsMade()).toBe(made + 1)
+    } finally {
+      // THE SHEET IS CLOSED. Everything it held in memory is gone.
+      first.page.close()
+    }
+
+    world.checkoutNext('cs_test_would_be_second')
+    const { page, errors } = await openGate()
+    try {
+      // No seat step and no fresh pay step: the payment in flight comes first.
+      const said = await sheetSays(page, MKT_PAY['mkt.pay.card.resume.title'])
+      expect(said).toContain(MKT_PAY['mkt.pay.card.resume.body'])
+      await primaryReads(page, MKT_PAY['mkt.pay.card.reopen'])
+      expect(said).not.toContain('BUY A SEAT')
+      expect(world.checkoutsMade()).toBe(made + 1)
+
+      // REOPEN asks main for the card page: the same session comes back, and the door makes nothing.
+      const asked = seen.checkouts
+      await click(page, PRIMARY)
+      await sleep(600)
+      expect(seen.checkouts).toBe(asked + 1)
+      expect(world.checkoutsMade()).toBe(made + 1)
+      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(PRIMARY)})?.disabled === true`)).toBe(true)
+
+      // The buyer pays on that page. The sheet opens by itself, on the one session there ever was.
+      world.pays(session)
+      await primaryReads(page, MKT_GATE['mkt.gate.open.action'], 30_000)
+      expect(new Set(seen.presented)).toEqual(new Set([session]))
+      await click(page, PRIMARY)
+      await sleep(200)
+      expect((await left(page)).placed).toEqual({ price: '1.00', asset: 'USD', rail: 'stripe' })
+      expect(errors).toEqual([])
+    } finally {
+      page.close()
+    }
+  }, 120_000)
+
+  it('D — paid after the sheet was closed: opening it again finds the seat, with its receipt and no pay step', async () => {
+    const guest = await world.registeredMachine('click-landed', 'abe')
+    const app = world.appOn(guest.accounts)
+    const seen = counted(app)
+    const session = 'cs_test_landed001'
+    world.checkoutNext(session)
+    const first = await openGate()
+    try {
+      await primaryReads(first.page, 'BUY A SEAT · $1.00')
+      await click(first.page, PRIMARY)
+      await primaryReads(first.page, 'PAY 1.00 USD')
+      await click(first.page, PRIMARY)
+      await sleep(500)
+    } finally {
+      first.page.close()
+    }
+    // Paid in the browser while no sheet was listening.
+    world.pays(session)
+    const { page, errors } = await openGate()
+    try {
+      await primaryReads(page, MKT_GATE['mkt.gate.open.action'], 30_000)
+      expect(seen.checkouts).toBe(1)
+      await click(page, PRIMARY)
+      await sleep(200)
+      expect((await left(page)).placed).toEqual({ price: '1.00', asset: 'USD', rail: 'stripe' })
       expect(errors).toEqual([])
     } finally {
       page.close()
