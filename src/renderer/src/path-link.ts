@@ -1,4 +1,4 @@
-import { registerScopeState } from './machine-scope'
+import { registerScopeState, scopeNeedsMachine } from './machine-scope'
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
 import {
@@ -189,7 +189,9 @@ export const currentPathBadge = (): PathBadgeView =>
         }
       : {}),
     ...(state.desktopName ? { desktopName: state.desktopName } : {}),
-    ...(registryOf() ? { registryOrigin: registryOf() as string } : {})
+    ...(registryOf() ? { registryOrigin: registryOf() as string } : {}),
+    // On the console the account's machines are one level out, at its root.
+    ...(scopeNeedsMachine() ? { machinesUrl: '/' } : {})
   })
 
 /**

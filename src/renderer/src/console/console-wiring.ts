@@ -12,7 +12,7 @@
  * makes nothing and `consoleParts` is null: the entry says so and asks nobody
  * anything.
  */
-import { CROSS_ORIGIN_NO_COOKIE } from '../data-plane'
+import { CROSS_ORIGIN_NO_COOKIE, RELAY_PLANE, subscribeDataPlane } from '../data-plane'
 import { configureMachineScope, enterMachine, machineBaseOf, machineScope } from '../machine-scope'
 import { browserPairDeps, enterWithGrant, type GrantStore } from '../account-pair-client'
 import { relayAccountMachines } from '../relay-machines'
@@ -26,6 +26,7 @@ import { createConsoleGate, type ConsoleGate } from './console-gate'
 import { createConsoleDevices, type ConsoleDevices } from './console-devices'
 import { browserHistoryPort, createConsoleRouter, type ConsoleRouter } from './console-router'
 import { createConsoleRuntime, type ConsoleRuntime, type DoorAnswer } from './console-runtime'
+import { createMachinePaths, type MachinePaths } from './machine-paths'
 
 export interface ConsoleParts {
   readonly config: ConsoleConfig
@@ -34,6 +35,7 @@ export interface ConsoleParts {
   readonly devices: ConsoleDevices
   readonly router: ConsoleRouter
   readonly runtime: ConsoleRuntime
+  readonly paths: MachinePaths
 }
 
 const TOKEN_PREFIX = 'cr_token:'
@@ -187,6 +189,27 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     return { kind: 'refused', from: entered.kind === 'refused' ? 'machine' : 'page', message: entered.message }
   }
 
+  // THE PATH EACH MACHINE'S SESSION SETTLED ON, for its tile. Noted while that machine is in
+  // scope and at no other moment: leaving a machine puts the plane back on the relay as part of
+  // letting go, and that is not news about the machine being left.
+  const paths = createMachinePaths()
+  let changingScope = false
+  subscribeDataPlane((plane) => {
+    const machineId = machineScope().machineId
+    if (!changingScope && machineId !== null) paths.note(machineId, plane)
+  })
+  const enterScope = (machineId: string | null): void => {
+    changingScope = true
+    try {
+      enterMachine(machineId)
+    } finally {
+      changingScope = false
+    }
+    // Entered: on the relay, as every machine is at first. What its tile said of an earlier
+    // visit is not true of this one until a nearer path is proved again.
+    if (machineId !== null) paths.note(machineId, RELAY_PLANE)
+  }
+
   const router = createConsoleRouter(browserHistoryPort(win))
   const runtime = createConsoleRuntime({
     session,
@@ -198,9 +221,10 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
       const target = machineBaseOf(machineId)
       if (target !== null) kept.removeItem(tokenKeyForBase(target))
     },
-    enterScope: enterMachine,
+    enterScope,
     takeSeat,
     forgetMachines: () => {
+      paths.forget()
       if (local === null) return
       try {
         const held = Array.from({ length: local.length }, (_, at) => local.key(at)).filter((key): key is string => key !== null)
@@ -225,7 +249,7 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     if (win.document.visibilityState === 'visible') void session.fresh()
   })
 
-  return { config, session, gate, devices, router, runtime }
+  return { config, session, gate, devices, router, runtime, paths }
 }
 
 const config = typeof document === 'undefined' ? null : readConsoleConfig(document)

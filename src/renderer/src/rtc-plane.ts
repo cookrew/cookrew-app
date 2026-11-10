@@ -159,17 +159,28 @@ const headerStream = (url: string): Pick<RtcLink, 'request'> => {
 }
 
 /**
- * An event stream at a scoped URL with no credential on it: this adds one in the
- * way the plane allows. The direct link and the direct origins never meet the
- * ingress, so they keep the query a native EventSource needs.
+ * An event stream at a scoped URL with no credential on it: this adds one, IN A
+ * HEADER, on every path that leaves this origin.
+ *
+ *   the direct link   the machine's token rides the request's headers on the data channel
+ *   the relay         by fetch: the token and the account session in headers (a URL through
+ *                     the registry reaches its ingress log)
+ *   a direct origin   by fetch too: the machine's own name on the LAN or the tailnet, with the
+ *                     token in a header and no cookie. `new EventSource` cannot set a header,
+ *                     and a token in a URL is in a history entry, a log and a screenshot.
+ *
+ * A page a machine serves itself (no relay, no direct plane) opens its own origin's stream the
+ * browser's way, as it always did.
  */
+const linkStream = (link: RtcLink): Pick<RtcLink, 'request'> => ({
+  request: (asked) => link.request({ ...asked, headers: { ...asked.headers, ...authHeaders() } })
+})
+
 export const openEventSource = (url: string): EventSource => {
   const routed = viaLink(url)
   // Watched every way: a stream on a path that died without a reset looks open
   // for ever (stream-watch.ts).
-  if (routed) {
-    return watchStream(new RtcEventSource(routed.link, tokenParam(routed.path)), { native: false }) as unknown as EventSource
-  }
-  if (onRelay()) return watchStream(new RtcEventSource(headerStream(url), url), { native: false }) as unknown as EventSource
+  if (routed) return watchStream(new RtcEventSource(linkStream(routed.link), routed.path), { native: false }) as unknown as EventSource
+  if (onRelay() || dataPlane().origin !== '') return watchStream(new RtcEventSource(headerStream(url), url), { native: false }) as unknown as EventSource
   return watchStream(new EventSource(tokenParam(url)), { native: true })
 }

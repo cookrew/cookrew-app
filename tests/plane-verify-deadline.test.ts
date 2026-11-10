@@ -25,7 +25,7 @@ afterEach(() => {
 })
 
 describe('verifying a hello', () => {
-  it('answers no when the registry never answers, rather than never answering', async () => {
+  it('ends when the registry never answers, rather than never ending: it could not ask, which is not a no', async () => {
     stubPhone()
     vi.stubGlobal(
       'fetch',
@@ -35,8 +35,9 @@ describe('verifying a hello', () => {
         })
     )
     const { verifyHello } = await import('../src/renderer/src/path/companion')
-    const answered = await verifyHello({ deviceId: 'a', nonce: 'b', sig: 'c', origin: 'https://mac.test', issuedAtMs: 1 }, 20)
-    expect(answered).toBe(false)
+    // The deadline is the point: the await ends. What it ends with is "could not ask", which a
+    // switch reads as "do not adopt" and a re-check as "leave the proved path alone".
+    await expect(verifyHello({ deviceId: 'a', nonce: 'b', sig: 'c', origin: 'https://mac.test', issuedAtMs: 1 }, 20)).rejects.toMatchObject({ name: 'VerifyUnasked' })
   })
 
   it('still answers yes on a clean ok', async () => {

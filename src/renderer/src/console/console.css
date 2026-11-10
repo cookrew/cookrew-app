@@ -264,6 +264,24 @@
   overflow-wrap: anywhere;
 }
 
+/* The path word beside a machine's name: quiet for the relay, the seal for a direct one. */
+.cd-path {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--sumi-hair-2);
+  border-radius: 999px;
+  color: var(--sumi-muted);
+  font: 500 10px/1.5 var(--font-serif);
+  letter-spacing: 0.06em;
+  vertical-align: 2px;
+}
+
+.cd-path[data-path='LAN'],
+.cd-path[data-path='TAILNET'] {
+  border-color: var(--sumi-seal);
+  color: var(--sumi-seal-text);
+}
+
 .cd-label small {
   color: var(--sumi-ink-soft);
   font-size: 12px;

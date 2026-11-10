@@ -80,9 +80,23 @@ export const planeCandidates = (
   const here = planeRank(current)
   const seen = new Set<string>()
   const candidates: PlaneCandidate[] = []
+  const owner = card.deviceId.toLowerCase()
   for (const origin of card.trusted ?? []) {
     if (typeof origin !== 'string') continue
-    const trimmed = origin.replace(/\/+$/, '')
+    // WHAT A MACHINE MAY NAME AS ITS OWN ADDRESS: a bare https origin whose name is
+    // `<address>.<its own id>.<zone>`. The list comes from the machine, and everything meant for
+    // it is sent to whatever is adopted from it, so it is not taken as written: no path or
+    // query (it would become the base of every request), no credentials, no plain http, and
+    // never a name under another machine's id.
+    let named: URL
+    try {
+      named = new URL(origin)
+    } catch {
+      continue
+    }
+    if (named.protocol !== 'https:' || named.username !== '' || named.password !== '' || named.pathname !== '/' || named.search !== '' || named.hash !== '') continue
+    if (named.hostname.split('.')[1] !== owner) continue
+    const trimmed = named.origin
     if (seen.has(trimmed)) continue
     const kind = trustedNetwork(trimmed)
     if (kind === null || planeRank(kind) <= here) continue
