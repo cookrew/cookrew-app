@@ -25,4 +25,5 @@ perf-results/
 # The watch app: built, generated (xcodegen) and per-Mac
 watch/.build/
 watch/*.xcodeproj/
+watch/Probe/*.xcodeproj/
 watch/Local.xcconfig

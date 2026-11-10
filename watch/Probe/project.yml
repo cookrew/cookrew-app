@@ -1,0 +1,54 @@
+# The card pager on a real watchOS runtime, pressed the way a finger presses it.
+# The renders (watch-shots) cannot show this: a watch's ScrollView neither clips
+# nor stops touches above itself, and only the simulator draws and hits like the wrist.
+#   xcodegen generate
+#   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild test -project BackProbe.xcodeproj \
+#     -scheme Probe -destination 'platform=watchOS Simulator,name=Apple Watch Series 12 (46mm)' -derivedDataPath /tmp/back-probe-dd
+name: BackProbe
+options:
+  bundleIdPrefix: dev.cookrew.probe
+  deploymentTarget:
+    watchOS: "10.0"
+packages:
+  CookrewWatch:
+    path: ..
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+targets:
+  Probe:
+    type: application
+    platform: watchOS
+    sources: [BackProbe]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cookrew.probe.app
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Probe
+        INFOPLIST_KEY_WKApplication: YES
+        INFOPLIST_KEY_WKWatchOnly: YES
+    dependencies:
+      - package: CookrewWatch
+        product: CookrewWatchUI
+  ProbeUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    sources: [BackProbeUITests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cookrew.probe.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Probe
+    dependencies:
+      - target: Probe
+schemes:
+  Probe:
+    build:
+      targets:
+        Probe: all
+        ProbeUITests: [test]
+    test:
+      targets: [ProbeUITests]
