@@ -23,6 +23,8 @@ import type { TerminalActivity } from '../shared/turn'
 import type { LatestCheckpoint } from '../renderer/src/turn-view-model'
 import { crewRows, itemsOfAgent, MAX_CREW, rowsOfWorkspace, watchCards, watchWorkspaces, type WatchCard, type WatchItem, type WatchWorkspace } from './watch-cards'
 import type { WatchPairing } from './watch-pairing'
+import type { ViewerWho } from '../shared/remote-access'
+import { createScreenLeases, type LeasedScreen } from './screen-lease'
 
 /** A frame as wide as the widest watch at 2x; a phone's is not needed on a wrist. */
 export const FRAME_WIDTH_DEFAULT = 416
@@ -100,6 +102,18 @@ export interface WatchHost {
 
 let host: WatchHost | null = null
 
+/** Screens another machine of the account is on, by its own name (screen-lease.ts). */
+const screenLeases = createScreenLeases()
+
+/** A screen this caller may be shown and may drive as itself: another machine of the account, never a wrist. */
+async function screenFor(ctx: WatchRequest, current: WatchHost, id: string): Promise<{ instance: BrowserInstance & LeasedScreen; who: ViewerWho } | null> {
+  if (!ctx.owner || !ctx.who) return null
+  const instance = await current.browser(id)
+  if (!instance?.needsViewer || !('frameListeners' in instance)) return null
+  const who = ctx.who()
+  return who ? { instance: instance as BrowserInstance & LeasedScreen, who } : null
+}
+
 export function setWatchHost(next: WatchHost | null): void {
   host = next
 }
@@ -166,6 +180,8 @@ export interface WatchRequest {
   checkpoint(terminalId: string): Promise<LatestCheckpoint | null>
   /** Still a member of the crew (the registry): a closed agent reads asleep. */
   active(agentId: string): boolean
+  /** Who this caller is to a screen it may drive (use-source-service.ts · whoIs); absent where nobody is asked. */
+  who?(): ViewerWho | null
 }
 
 /**
@@ -361,22 +377,32 @@ export function browserInputOf(body: Record<string, unknown>, viewport: { width:
 async function itemInput(ctx: WatchRequest, current: WatchHost, id: string): Promise<void> {
   const instance = await current.browser(id)
   if (!instance) return respondJson(ctx.response, 404, { error: 'That browser is not open.' })
-  // A computer's screen is taken from a device that watches it, never from a wrist.
-  if (instance.needsViewer) return respondJson(ctx.response, 409, { error: 'That screen is view only here.' })
+  // A computer's screen is never driven from a wrist. Another machine of the account
+  // (owner 2026-11-10, design B) drives it as itself, once it holds control there,
+  // exactly as a phone does (use-source-routes.ts · control); the screen asks again per gesture.
+  const who = instance.needsViewer ? (ctx.owner ? (ctx.who?.() ?? null) : null) : undefined
+  if (who === null) return respondJson(ctx.response, 409, { error: 'That screen is view only here.' })
+  if (who !== undefined && !(instance.mayDrive?.(who) ?? false)) return respondJson(ctx.response, 409, { error: 'Take control of that screen first.' })
+  // Driving it is being on it: the host lists who is, as for a phone's viewer.
+  if (who !== undefined && 'frameListeners' in instance && !screenLeases.touch(instance as BrowserInstance & LeasedScreen, id, who)) {
+    return respondJson(ctx.response, 409, { error: 'That screen is view only here.' })
+  }
+  const drive = (method: Parameters<BrowserInstance['dispatchInput']>[0], params: Parameters<BrowserInstance['dispatchInput']>[1]): Promise<void> | void =>
+    who === undefined ? instance.dispatchInput(method, params) : instance.dispatchInput(method, params, who)
   const state = instance.viewportState
   if (state.transitioning || state.agentHeld) return respondJson(ctx.response, 409, { error: 'An agent is driving that browser.' })
   const body = await readJson<Record<string, unknown>>(ctx.request)
   const pasted = body.t === 'text' ? sanitizePaste({ t: 'paste', text: body.text }) : null
   if (pasted !== null) {
-    if (instance.paste) await instance.paste(pasted)
-    else await instance.dispatchInput('Input.insertText', { text: pasted })
+    if (instance.paste && who === undefined) await instance.paste(pasted)
+    else await drive('Input.insertText', { text: pasted })
     current.moved?.(id)
     return respondJson(ctx.response, 200, { ok: true })
   }
   const message = browserInputOf(body, state)
   const commands = message && sanitizeInput(message, { displayScale: 1, viewportWidth: state.width, viewportHeight: state.height })
   if (!commands) return respondJson(ctx.response, 400, { error: 'Not an input a watch sends.' })
-  for (const command of commands) await instance.dispatchInput(command.method, command.params)
+  for (const command of commands) await drive(command.method, command.params)
   current.moved?.(id)
   respondJson(ctx.response, 200, { ok: true })
 }
@@ -488,6 +514,15 @@ export async function handleWatchRoutes(ctx: WatchRequest): Promise<boolean> {
     return true
   }
   if (method === 'GET' && item[2] === 'frame') {
+    // A computer's screen is never a thumbnail (index.ts · showsThisMachine): another machine watches it as a viewer.
+    const screen = ctx.url.searchParams.get('peek') === '1' ? null : await screenFor(ctx, current, id)
+    if (screen) {
+      const look = screenLeases.look(screen.instance, id, screen.who)
+      if (!look.ok) respondJson(response, 409, { error: look.message })
+      else if (look.jpeg === null) respondJson(response, 404, { error: 'No picture yet' })
+      else respondTagged(ctx, 'image/jpeg', Buffer.from(look.jpeg, 'base64'))
+      return true
+    }
     const asked = Number(ctx.url.searchParams.get('w'))
     const width = Number.isFinite(asked) && asked > 0 ? Math.min(FRAME_WIDTH_MAX, Math.max(FRAME_WIDTH_MIN, Math.round(asked))) : FRAME_WIDTH_DEFAULT
     const frame = await current.frame(id, width, ctx.url.searchParams.get('peek') === '1')

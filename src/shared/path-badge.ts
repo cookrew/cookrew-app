@@ -209,7 +209,7 @@ export const pathBadgeView = (input: PathBadgeInput): PathBadgeView => {
     desktopName: input.desktopName ?? null,
     latencyMs: typeof input.latencyMs === 'number' ? input.latencyMs : null,
     switchDesktopUrl: input.registryOrigin
-      ? `${input.registryOrigin.replace(/\/+$/, '')}/me`
+      ? `${input.registryOrigin.replace(/\/+$/, '')}/me/account`
       : null
   }
 }

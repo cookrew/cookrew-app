@@ -359,7 +359,7 @@ describe('dialling the line', () => {
 })
 
 describe('what the uplink has not sent', () => {
-  it('reads zero with no line, and the uplink’s own count with one', async () => {
+  it('against a registry from before receipts, is Node\u2019s own count from the start, holding nothing back', async () => {
     const lines: Array<(line: string) => void> = []
     const link = createCanvasLink({
       origin: () => 'http://relay.local',
@@ -369,12 +369,77 @@ describe('what the uplink has not sent', () => {
         up: () => ({ write: () => undefined, backlog: () => 4096, onEnd: () => undefined, close: () => undefined })
       }
     })
-    expect(link.backlog()).toBe(0)
     link.start()
     await new Promise((resolve) => setImmediate(resolve))
     lines[0]?.(encodeFrame({ t: 'ready', name: '@u/desktop/d' }))
-    await new Promise((resolve) => setImmediate(resolve))
+    link.send('abc')
+    expect(link.paced()).toBe(false)
     expect(link.backlog()).toBe(4096)
     link.stop()
+  })
+
+  it('reads zero with no line; with a promise of receipts, what was written and not confirmed, until the promise proves empty', async () => {
+    const lines: Array<(line: string) => void> = []
+    const link = createCanvasLink({
+      origin: () => 'http://relay.local',
+      credential: () => ({ token: 't', deviceId: 'd' }),
+      receiptGraceMs: 20,
+      transport: {
+        down: () => ({ onLine: (listener) => void lines.push(listener), onEnd: () => undefined, close: () => undefined }),
+        up: () => ({ write: () => undefined, backlog: () => 4096, onEnd: () => undefined, close: () => undefined })
+      }
+    })
+    expect(link.backlog()).toBe(0)
+    link.start()
+    await new Promise((resolve) => setImmediate(resolve))
+    lines[0]?.(encodeFrame({ t: 'ready', name: '@u/desktop/d', receipts: true }))
+    await new Promise((resolve) => setImmediate(resolve))
+    // It asked for receipts, so it is paced from its first byte: 'abc' and its newline.
+    expect(link.paced()).toBe(true)
+    link.send('abc')
+    expect(link.backlog()).toBe(4)
+    // A promise never kept: the uplink's own count again, as before receipts.
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(link.paced()).toBe(false)
+    expect(link.backlog()).toBe(4096)
+    // And a receipt that turns up after all puts the line back on receipts.
+    lines[0]?.(encodeFrame({ t: 'got', n: 4 }))
+    expect(link.paced()).toBe(true)
+    expect(link.backlog()).toBe(0)
+    link.stop()
+  })
+
+  it('counts every byte the way the relay does, and takes receipts off what is out there', async () => {
+    const lines: Array<(line: string) => void> = []
+    const link = createCanvasLink({
+      origin: () => 'http://relay.local',
+      credential: () => ({ token: 't', deviceId: 'd' }),
+      transport: {
+        down: () => ({ onLine: (listener) => void lines.push(listener), onEnd: () => undefined, close: () => undefined }),
+        up: () => ({ write: () => undefined, backlog: () => 0, onEnd: () => undefined, close: () => undefined })
+      }
+    })
+    const frames: string[] = []
+    link.onFrame((line) => frames.push(line))
+    const receipts: number[] = []
+    link.onReceipt((receipt) => receipts.push(receipt.inFlight))
+    link.start()
+    await new Promise((resolve) => setImmediate(resolve))
+    lines[0]?.(encodeFrame({ t: 'ready', name: '@u/desktop/d', receipts: true }))
+    lines[0]?.(encodeFrame({ t: 'got', n: 0 }))
+    link.send('é'.repeat(10))
+    link.send('abc')
+    // UTF-8 bytes plus the newline, as the relay reads the body: 21 + 4.
+    expect(link.backlog()).toBe(25)
+    lines[0]?.(encodeFrame({ t: 'got', n: 21 }))
+    expect(link.backlog()).toBe(4)
+    // A receipt beyond what was written is held to what was written.
+    lines[0]?.(encodeFrame({ t: 'got', n: 999 }))
+    expect(link.backlog()).toBe(0)
+    expect(receipts).toEqual([4, 0])
+    // Receipts are the link's own: none reached the bridge.
+    expect(frames).toEqual([])
+    link.stop()
+    expect(link.paced()).toBe(false)
   })
 })

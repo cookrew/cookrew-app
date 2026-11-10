@@ -57,6 +57,10 @@ const DEVICE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const HANDLE = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/
 
 /** `@user/desktop/<deviceId>` — one desktop's canvas, in the hub's namespace. */
+/** Did this uplink ask for receipts (`?acks=1`)? A desktop that did not is never sent one. */
+export const wantsReceipts = (request: IncomingMessage): boolean =>
+  new URL(request.url ?? '/', 'http://relay.invalid').searchParams.get('acks') === '1'
+
 export const canvasName = (username: string, deviceId: string): string =>
   `@${username}/desktop/${deviceId}`
 
@@ -108,6 +112,13 @@ export const HEAD_DEADLINE_MS = 30_000
  * chunk, and every chunk resets this.
  */
 export const IDLE_DEADLINE_MS = 120_000
+/**
+ * How often, at most, an uplink that asked is told how much of it has arrived
+ * (`got`, relay-frame.ts). Coalesced rather than per read: a fast line would
+ * otherwise get a receipt for every TCP segment. 40 ms keeps a slow line's
+ * picture fresh and a fast line's downlink quiet (~25 small frames a second).
+ */
+export const RECEIPT_EVERY_MS = 40
 /** Request bodies being buffered across the WHOLE relay at once. */
 export const BODY_BUDGET = 64 * 1024 * 1024
 
@@ -419,6 +430,8 @@ export interface CanvasRelayDeps {
   linksPerAccount?: number
   headDeadlineMs?: number
   idleDeadlineMs?: number
+  /** RECEIPT_EVERY_MS, shortened by tests. */
+  receiptMs?: number
   bodyBudget?: number
   /** Where line sightings persist (v2-line-seen.ts); absent = memory only. */
   seenFile?: string
@@ -490,6 +503,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
   const perAccount = deps.linksPerAccount ?? LINKS_PER_ACCOUNT
   const headMs = deps.headDeadlineMs ?? HEAD_DEADLINE_MS
   const idleMs = deps.idleDeadlineMs ?? IDLE_DEADLINE_MS
+  const receiptMs = deps.receiptMs ?? RECEIPT_EVERY_MS
   const budget = deps.bodyBudget ?? BODY_BUDGET
   /** Exchanges in flight per line, so one desktop cannot be made to hold many. */
   const exchanges = new Map<string, number>()
@@ -595,7 +609,8 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
         if (!response.writableEnded) response.end()
       }
     }
-    const opened = hub.openDoor(name, socket)
+    // `receipts`: this registry answers an uplink's `?acks=1` (sendReceipts).
+    const opened = hub.openDoor(name, socket, { receipts: true })
     if (!opened.ok) {
       // A line already held. Said in the stream rather than as a status,
       // because the head is already out — and a second claim is REFUSED
@@ -622,6 +637,42 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
     })
   }
 
+  /**
+   * RECEIPTS FOR AN UPLINK THAT ASKED: how many bytes of its body have arrived,
+   * on its own downlink, at most every RECEIPT_EVERY_MS. Counted from this
+   * uplink's first byte, so a redialled line starts again from zero, which is
+   * what the desktop's own count does too.
+   */
+  const sendReceipts = (request: IncomingMessage, current: () => boolean, socket: HubSocket): void => {
+    let got = 0
+    let told = 0
+    let timer: NodeJS.Timeout | null = null
+    const tell = (): void => {
+      timer = null
+      if (got === told || !current()) return
+      told = got
+      socket.send(encodeFrame({ t: 'got', n: got }))
+    }
+    request.on('data', (chunk: Buffer) => {
+      got += chunk.byteLength
+      if (timer !== null) return
+      timer = setTimeout(tell, receiptMs)
+      timer.unref?.()
+    })
+    const stop = (): void => {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+    }
+    // AT ONCE, before a byte has arrived: it is how the desktop learns this
+    // registry sends receipts, so its first answer is already paced rather
+    // than poured out ahead of the first receipt.
+    if (current()) socket.send(encodeFrame({ t: 'got', n: 0 }))
+    // Not request.on('close'): on a streaming request it fires at once (see
+    // the uplink below). A late timer is harmless anyway: it checks the line.
+    request.on('end', stop)
+    request.on('error', stop)
+  }
+
   /** THE DESKTOP'S UPLINK — one long chunked POST carrying answers back. */
   const uplink = (request: IncomingMessage, response: ServerResponse, raw: string): void => {
     const name = lineFor(request, response, raw)
@@ -631,6 +682,7 @@ export function createCanvasRelay(deps: CanvasRelayDeps): CanvasRelay {
       deny(response, 409, 'no_link', 'Open the downlink for this Mac before its uplink.')
       return
     }
+    if (wantsReceipts(request)) sendReceipts(request, () => live.socketOf(name) === socket, socket)
     readFrameLines(request, (line) => {
       // The pong is for the relay, not for any reader.
       if (line.startsWith('{"t":"pong"')) {

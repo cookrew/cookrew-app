@@ -363,4 +363,41 @@ struct SwipeOutTests {
     #expect(!isSwipeOut(dx: -80, dy: 0))
     #expect(!isSwipeOut(dx: 5, dy: 120))
   }
+
+  @Test("one step out of a card is its own workspace's crew")
+  func outward() {
+    #expect(ZoomLevel.cards("dev").outward == .agents("dev"))
+  }
+
+  @Test("back on the crew, the face of the card the wrist was on is kept in view")
+  func face() {
+    let crew = [card("a", .waiting, dev), card("b", .done, dev)]
+    #expect(faceInView(page: "b", crew: crew) == "b")
+    // Out of the new-agent page, its seat at the end of the crew.
+    #expect(faceInView(page: newAgentPage, crew: crew) == newAgentPage)
+    // A card that has gone since, or no card left at all: nothing to find.
+    #expect(faceInView(page: "gone", crew: crew) == nil)
+    #expect(faceInView(page: nil, crew: crew) == nil)
+  }
+
+  @Test("the crew puts the ones waiting first, the rest as the Mac ordered them")
+  func order() {
+    let crew = crewOrder([card("a", .done, dev), card("b", .waiting, dev), card("c", .working, dev), card("d", .waiting, dev)])
+    #expect(crew.map(\.id) == ["b", "d", "a", "c"])
+  }
+}
+
+@Suite("a reply's more and less")
+struct FoldTests {
+  @Test("a short reply has nothing more to show")
+  func short() {
+    #expect(!foldsLong("All 109 checks pass."))
+    #expect(!foldsLong(nil))
+  }
+
+  @Test("a long reply, or one of more than a line, folds")
+  func long() {
+    #expect(foldsLong(String(repeating: "word ", count: 30)))
+    #expect(foldsLong("Done.\nMerged into dev."))
+  }
 }

@@ -660,7 +660,8 @@ const api = {
   // Another machine of the account, with the key this one holds for it (machine-keys.ts).
   machineGaugesOf: (machineId: string) => ipcRenderer.invoke('zoom-fleet:gauges-of', machineId),
   machineFleetOf: (machineId: string) => ipcRenderer.invoke('zoom-fleet:fleet-of', machineId),
-  openMachine: (machineId: string) => ipcRenderer.invoke('zoom-fleet:open-machine', machineId),
+  callMachine: (machineId: string, method: 'GET' | 'POST', route: string, body?: Record<string, unknown>) =>
+    ipcRenderer.invoke('zoom-fleet:call', machineId, method, route, body),
   machineTrust: () => ipcRenderer.invoke('zoom-fleet:trust-state'),
   proveMachine: () => ipcRenderer.invoke('zoom-fleet:trust-prove'),
   recoverAgent: (id: string) => ipcRenderer.invoke('agent:recover', id),

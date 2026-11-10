@@ -1,23 +1,21 @@
 import type { MachineProfile } from '../../src/shared/fleet'
-import { machineCaption, machineShape, machineSvg } from '../../src/shared/machine-shape'
+import { machineCaption } from '../../src/shared/machine-shape'
 import { esc } from './site-shell'
 import { relayPrefix } from './site-reach'
 
 /**
- * cookrew.dev/me AS THE CONSOLE (owner, 2026-11-10).
+ * cookrew.dev/me: THE WAY INTO THE DEVICES VIEW (owner 2026-11-10: "the /me web
+ * page must be the desktop Devices view, the same page").
  *
- * The page opens on the account's machines, each drawn as what it is
- * (shared/machine-shape.ts): a MacBook, a Linux tower, a server in a cloud.
- * Click one to go into it — its own page, through the relay.
+ * The Devices view is the app's own, served by one of the account's machines
+ * through the relay; machines.js goes there as soon as this browser holds the
+ * account's twelve-hour pass, and that page reads every other machine with this
+ * browser's own key for each (renderer relay-machine-call.ts). What is here is
+ * only the door: the gate, and the machines as cookrew.dev itself knows them.
  *
  * NOTHING FROM INSIDE A MACHINE BEFORE ITS GATE (owner: hide workspace names
- * too). The server writes only what cookrew.dev itself knows: the name, the
- * platform the machine reported, and whether it holds its line. Each drawing's
- * screen is an empty group; machines.js fills it from the machine's own summary
- * after the reader has proved it is them (the twelve-hour pass), and not before.
- *
- * An offline machine opens nothing: no link, and a line that says when it was
- * last seen, so nobody is sent to a page that cannot answer.
+ * too): the name, the platform it reported, and whether it holds its line. An
+ * offline machine opens nothing, and says when it was last seen.
  */
 
 export interface ConsoleMachine {
@@ -42,32 +40,29 @@ export function sinceWords(at: number | null, now: number): string {
   return `${days} day${days === 1 ? '' : 's'} ago`
 }
 
-function tile(username: string, machine: ConsoleMachine, now: number): string {
-  const shape = machineShape(machine.profile)
-  const drawing = machineSvg(shape, shape === 'cloud' ? (machine.profile?.vendor ?? machine.profile?.label ?? null) : null)
-  const status = machine.online
-    ? '<span class="ms-status on">● online</span><span class="ms-need" data-need hidden></span>'
-    : `<span class="ms-status">○ last seen ${esc(sinceWords(machine.lastSeenAt, now))}</span>`
-  const inner = `${drawing}<b class="ms-name">${esc(machine.name)}</b><span class="ms-sub">${esc(machineCaption(machine.profile))}</span>${status}`
+function row(username: string, machine: ConsoleMachine, now: number): string {
+  const status = machine.online ? '<span class="ms-status on">● online</span>' : `<span class="ms-status">○ last seen ${esc(sinceWords(machine.lastSeenAt, now))}</span>`
+  const words = `<span class="ms-who"><b class="ms-name">${esc(machine.name)}</b><span class="ms-sub">${esc(machineCaption(machine.profile))}</span></span>${status}`
   const id = esc(machine.id)
   return machine.online
-    ? `<a class="ms-machine" href="${esc(relayPrefix(username, machine.id))}" data-machine="${id}" data-online="1">${inner}</a>`
-    : `<div class="ms-machine off" data-machine="${id}" data-online="0" aria-disabled="true">${inner}</div>`
+    ? `<li class="ms-machine" data-machine="${id}" data-online="1">${words}<a class="btn sm" href="${esc(relayPrefix(username, machine.id))}" data-open-machine>Open</a></li>`
+    : `<li class="ms-machine off" data-machine="${id}" data-online="0" aria-disabled="true">${words}</li>`
 }
 
-/** The console: the gate (shown by machines.js when this browser holds no pass), then every machine. */
+/** The door: the gate (shown by machines.js when this browser holds no pass), then every machine. */
 export function machinesConsole(username: string, machines: readonly ConsoleMachine[], now: number): string {
   const ordered = [...machines].sort((a, b) => Number(b.online) - Number(a.online) || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0))
-  const grid =
+  const list =
     ordered.length === 0
       ? '<p class="meta">No machine has signed in to this account yet. Sign in to Cookrew on a computer and it appears here.</p>'
-      : ordered.map((machine) => tile(username, machine, now)).join('')
+      : `<ul class="doors me-list ms-list">${ordered.map((machine) => row(username, machine, now)).join('')}</ul>`
   return `<section id="me-console" aria-label="Your machines">
 <h2 style="margin-top:22px">Your machines</h2>
-<div class="ms-gate" id="me-gate" hidden><span class="meta">Prove it’s you to see inside them: once, for all of them, for 12 hours.</span>
+<div class="ms-gate" id="me-gate" hidden><span class="meta">Prove it’s you once to open your machines here: one password or passkey, for all of them, for 12 hours.</span>
 <span class="row"><input id="me-gate-password" type="password" autocomplete="current-password" placeholder="Account password" aria-label="Account password" hidden>
 <button class="btn sm primary" data-gate>Password or passkey</button></span>
 <span class="meta" id="me-gate-note" role="status" hidden></span></div>
-<div class="ms-grid" id="me-machines" data-username="${esc(username)}">${grid}</div>
+<p class="meta" id="me-opening" role="status" hidden>Opening your machines…</p>
+<div id="me-machines" data-username="${esc(username)}">${list}</div>
 </section>`
 }

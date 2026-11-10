@@ -119,10 +119,16 @@ func marked(_ text: String) -> AttributedString {
   return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
 }
 
-/** The latest words: as many as a card's face holds, the rest a tap away. */
+/**
+ * The latest words: as many as a card's face holds, the rest behind their own
+ * "more". Only that word opens or folds them: a tap on the words themselves does
+ * nothing, so a finger reaching for the way out above can never fold them instead.
+ */
 struct CardWordsView: View {
   let card: Card
   let sent: String?
+  /** Folded again: the page goes back to the top of the words. */
+  var onFold: () -> Void = {}
   @Environment(\.ink) private var ink
   @State private var openOn: String?
 
@@ -130,8 +136,28 @@ struct CardWordsView: View {
 
   private var whole: String? { card.words?.whole }
   private var open: Bool { whole != nil && openOn == whole }
-  /** About this much reads as more than a card's face holds. */
-  private var long: Bool { (whole?.count ?? 0) > 110 || (whole?.contains("\n") ?? false) }
+  private var long: Bool { foldsLong(whole) }
+
+  private var moreOrLess: some View {
+    Button {
+      if open {
+        openOn = nil
+        onFold()
+      } else {
+        openOn = whole
+      }
+    } label: {
+      Text(open ? "less" : "more")
+        .font(InkType.word(11))
+        .foregroundStyle(ink.sealText)
+        // The word sits where it did; its target reaches down, not up into the words.
+        .padding(.top, 3)
+        .frame(minWidth: 64, minHeight: 34, alignment: .topLeading)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(open ? "less" : "more")
+  }
 
   var body: some View {
     if let sent {
@@ -148,21 +174,20 @@ struct CardWordsView: View {
           Text(words.text).font(InkType.words(13)).italic().foregroundStyle(ink.soft).lineLimit(2)
         }
       } else {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 0) {
           Text(marked(words.whole))
             .font(InkType.words())
             .foregroundStyle(ink.ink)
             .lineLimit(open ? nil : Self.folded)
             .fixedSize(horizontal: false, vertical: true)
-          if long {
-            Text(open ? "less" : "more")
-              .font(InkType.word(11))
-              .foregroundStyle(ink.sealText)
-          }
+          if long { moreOrLess }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-          if long { openOn = open ? nil : whole }
+        .onChange(of: whole) { was, _ in
+          // A new reply comes in folded: the page goes back to its top, as "less" does.
+          if was != nil, openOn == was {
+            openOn = nil
+            onFold()
+          }
         }
       }
     } else if let about = card.about {
@@ -407,36 +432,19 @@ public struct CardPage: View {
     let wait = store.waitView(card)
     let rowsOnly = boxTarget(for: card) == .rowsOnly
     VStack(spacing: 0) {
+      // The way out is always there: pinned above the words, drawn over them and
+      // touched before them. A watch's scroll view neither clips its content nor
+      // stops it catching touches above itself, and it comes later in this stack.
       CardHead(card: card, onFace: onFace)
         .padding(.top, 4)
-      CardScroll {
-        VStack(alignment: .leading, spacing: 8) {
-          if let wait {
-            WaitBlock(store: store, card: card, view: wait)
-          } else if card.choice != nil {
-            // The answer went: the agent takes it.
-            Text("Answered · the agent goes on").font(InkType.words(13)).italic().foregroundStyle(ink.soft)
-          } else {
-            CardWordsView(card: card, sent: store.sent(card.id))
-          }
-          if wait == nil, store.draft(card.id).isEmpty, !quickWords(for: card).isEmpty {
-            QuickWords(words: quickWords(for: card)) { store.setDraft($0, for: card.id) }
-          }
-          if let notice = store.notice, store.page == card.id {
-            Text(notice).font(InkType.words(12.5)).foregroundStyle(ink.wait)
-          }
-          if !card.items.isEmpty, wait == nil {
-            // Every artifact the agent has, three to a row as the card's strip draws them; the crown scrolls to the rest.
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-              ForEach(card.items) { item in
-                Button { onItem(item) } label: { ItemThumb(store: store, item: item, live: store.page == card.id) }.buttonStyle(.plain)
-              }
-            }
-          }
+        .background(ink.paper)
+        .zIndex(1)
+      ScrollViewReader { reader in
+        CardScroll {
+          scrolled(wait: wait) { reader.scrollTo(cardTop, anchor: .top) }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 7)
-        .padding(.bottom, 6)
+        .clipped()
+        .contentShape(Rectangle())
       }
       if !rowsOnly {
         PromptBox(store: store, card: card, page: card.id)
@@ -453,7 +461,42 @@ public struct CardPage: View {
       await store.read(card)
     }
   }
+
+  /** What scrolls under the head: the words or the menu, the quick words, the artifacts. */
+  private func scrolled(wait: WaitView?, onFold: @escaping () -> Void) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if let wait {
+        WaitBlock(store: store, card: card, view: wait)
+      } else if card.choice != nil {
+        // The answer went: the agent takes it.
+        Text("Answered · the agent goes on").font(InkType.words(13)).italic().foregroundStyle(ink.soft)
+      } else {
+        CardWordsView(card: card, sent: store.sent(card.id), onFold: onFold)
+      }
+      if wait == nil, store.draft(card.id).isEmpty, !quickWords(for: card).isEmpty {
+        QuickWords(words: quickWords(for: card)) { store.setDraft($0, for: card.id) }
+      }
+      if let notice = store.notice, store.page == card.id {
+        Text(notice).font(InkType.words(12.5)).foregroundStyle(ink.wait)
+      }
+      if !card.items.isEmpty, wait == nil {
+        // Every artifact the agent has, three to a row as the card's strip draws them; the crown scrolls to the rest.
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+          ForEach(card.items) { item in
+            Button { onItem(item) } label: { ItemThumb(store: store, item: item, live: store.page == card.id) }.buttonStyle(.plain)
+          }
+        }
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.top, 7)
+    .padding(.bottom, 6)
+    .id(cardTop)
+  }
 }
+
+/** The top of what a card scrolls: folding a long reply goes back to it. */
+private let cardTop = "card-top"
 
 /** The zoom's way out, one step: drawn wherever the system's back chevron is not. */
 struct OutChevron: View {

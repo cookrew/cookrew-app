@@ -75,12 +75,6 @@ function authenticatorRow(active: boolean): string {
     : `<li id="me-totp-row"><span class="chip">Factor</span><span><b>Authenticator app</b><br><span class="meta" id="me-totp-note">${TOTP_ADD_NOTE}</span></span><button class="btn sm" data-add-totp>Add</button></li>`
 }
 
-function desktopRow(name: string, workspaces: readonly { id: string; name: string }[]): string {
-  const list = workspaces.length === 0 ? 'No workspaces registered yet' : workspaces.map((w) => esc(w.name)).join(' · ')
-  return `<li><span class="chip">Machine</span><span><b>${esc(name)}</b><br><span class="meta">${list}</span></span>
-<span class="chip">Reachable</span></li>`
-}
-
 /**
  * /me — WHO YOU ARE, WHAT IS ATTACHED, AND HOW TO TAKE IT BACK.
  *
@@ -122,6 +116,16 @@ export function mePage(
     /** The account's machines with their standing (v2-fleet.ts · standing); the console draws them. */
     machines?: readonly ConsoleMachine[]
     now?: number
+    /**
+     * `devices` (plain /me): with a pass held, machines.js goes on into the Devices view.
+     * `account` (/me/account, and any /me that carries a return or a section): this page stays.
+     */
+    view?: 'devices' | 'account'
+    /**
+     * How much longer this session counts as just proved, in ms (v2-session-age.ts · freshlyVerified): a
+     * sensitive act needs no second proof. machines.js opens no machine's page by itself before then (security review M1).
+     */
+    freshForMs?: number
   } | null
 ): Page {
   if (input === null) {
@@ -164,16 +168,16 @@ export function mePage(
       // machines.js after site.js: it signs at each machine's door with this browser's key.
       scripts: ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js', 'machines.js']
     },
-    `<div class="wrap" style="padding-top:44px" id="me" data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}" data-step-up-acts="${WEB_STEP_UP_ACTS.join(' ')}">
+    `<div class="wrap" style="padding-top:44px" id="me"${input.view === 'account' ? '' : ' data-go="devices"'}${input.freshForMs !== undefined ? ` data-fresh-ms="${Math.round(input.freshForMs)}"` : ''} data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}" data-step-up-acts="${WEB_STEP_UP_ACTS.join(' ')}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
 <p class="meta" id="me-display">${esc(account.displayName || 'No display name yet')} · member since ${esc(day(account.claimedAt))}</p></div>
 <span class="sp" style="flex:1"></span>
 <button class="btn" data-edit-name>Edit</button>
 <button class="btn" data-signout>Sign out</button></div>
 
-<!-- THE CONSOLE (owner 2026-11-10): the machines first, each drawn as what it is; the rest below. -->
+${input.view === 'account' ? '<p class="row"><a class="btn sm" href="/me">‹ Your machines</a></p>' : ''}
+<!-- THE DOOR TO THE DEVICES VIEW (owner 2026-11-10): the machines first; account and security below, on this page. -->
 ${machinesConsole(account.username, input.machines ?? account.desktops.map((d) => ({ id: d.deviceId, name: d.name, online: false, lastSeenAt: d.updatedAt ?? null, profile: d.profile ?? null })), input.now ?? Date.now())}
-<nav class="row ms-tabs" aria-label="More on this page"><a class="btn sm" href="#me-requests">Requests</a><a class="btn sm" href="#me-devices-heading">Devices</a><a class="btn sm" href="#security">Security</a><a class="btn sm" href="#me-delete">Account</a></nav>
 
 <!-- W5 · REQUESTS SITS ABOVE DEVICES, and the whole section hides itself when
      the queue is empty. It is above because it is the only part of this page

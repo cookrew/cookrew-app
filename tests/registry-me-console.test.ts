@@ -15,11 +15,11 @@ const machines: ConsoleMachine[] = [
   { id: '7200b968-0000-4000-8000-000000000001', name: 'Solis-Core', online: false, lastSeenAt: NOW - 3 * 3600_000, profile: { ...mac, kind: 'desktop', os: 'linux', label: null, osVersion: 'Ubuntu 24.04' }, workspaces: ['Box Lab'] }
 ]
 
-describe('the machines on cookrew.dev/me', () => {
-  it('draws each as what it is, with its name and platform', () => {
+describe('the machines on cookrew.dev/me, before the Devices view', () => {
+  it('lists each by name and platform, drawn as nothing of its own (the Devices view is the drawing)', () => {
     const html = machinesConsole('anvztor', machines, NOW)
     expect(html).toContain('id="me-machines"')
-    expect(html.match(/<svg class="ms"/g)).toHaveLength(2)
+    expect(html).not.toContain('<svg')
     expect(html).toContain('MacBook Pro 16-inch')
     expect(html).toContain('Linux · Ubuntu 24.04')
     expect(html).toContain('Solis-Core')
@@ -31,7 +31,7 @@ describe('the machines on cookrew.dev/me', () => {
     expect(html).not.toContain('Box Lab')
   })
 
-  it('an online machine is a way in to its own page; an offline one says when it was last seen and opens nothing', () => {
+  it('an online machine opens its Devices view; an offline one says when it was last seen and opens nothing', () => {
     const html = machinesConsole('anvztor', machines, NOW)
     expect(html).toContain('href="/relay/@anvztor/desktop/135928f2-49c7-821e-8735-c5241315e81a/"')
     expect(html).not.toContain('href="/relay/@anvztor/desktop/7200b968')
@@ -46,8 +46,36 @@ describe('the machines on cookrew.dev/me', () => {
     expect(named).not.toContain('<img onerror')
   })
 
-  it('carries the gate, hidden until the page knows whether this browser holds a pass', () => {
-    expect(machinesConsole('anvztor', machines, NOW)).toMatch(/id="me-gate"[^>]*hidden/)
+  it('carries the gate, hidden until the page knows whether this browser holds a pass, and a word for while it opens', () => {
+    const html = machinesConsole('anvztor', machines, NOW)
+    expect(html).toMatch(/id="me-gate"[^>]*hidden/)
+    expect(html).toMatch(/id="me-opening"[^>]*hidden/)
+  })
+})
+
+describe('/me and /me/account', () => {
+  const account = { username: 'anvztor', avatar: null, displayName: '', claimedAt: NOW, devices: [], desktops: [], recovery: [], passwordless: false } as never
+
+  it('/me is the way into the Devices view: it says it goes there with a pass (machines.js reads data-go)', async () => {
+    const { mePage } = await import('../registry/src/site-account')
+    expect(mePage({ account, currentDeviceId: 'x', machines, now: NOW }).body).toContain('data-go="devices"')
+    expect(mePage({ account, currentDeviceId: 'x', machines, now: NOW, view: 'account' }).body).not.toContain('data-go="devices"')
+  })
+
+  // Security review 2026-11-10 (M1): a session that just proved itself may add a factor or delete the
+  // account for five minutes; a machine's page is not opened in that window without the owner's click.
+  it('says how much longer the session is fresh (a span: the reader’s clock is not ours), so machines.js waits for a click', async () => {
+    const { mePage } = await import('../registry/src/site-account')
+    expect(mePage({ account, currentDeviceId: 'x', machines, now: NOW, freshForMs: 240_000 }).body).toContain('data-fresh-ms="240000"')
+    expect(mePage({ account, currentDeviceId: 'x', machines, now: NOW }).body).not.toContain('data-fresh-ms')
+  })
+
+  it('account and security are on the same page, below the machines, and /me/account leads back to them', async () => {
+    const { mePage } = await import('../registry/src/site-account')
+    const html = mePage({ account, currentDeviceId: 'x', machines, now: NOW, view: 'account' }).body
+    expect(html).toContain('id="security"')
+    expect(html).toContain('href="/me"')
+    expect(html).not.toContain('ms-tabs')
   })
 })
 

@@ -69,7 +69,8 @@ import {
   tmuxProbeDeps
 } from './board-index'
 import { createBoardHolds } from './board-hold'
-import { registerZoomFleetIpc, type RemoteRead } from './zoom-fleet'
+import { answerOf, callMachine, NO_ANSWER, registerZoomFleetIpc, type RemoteAnswer, type RemoteRead } from './zoom-fleet'
+import type { RemoteMachineCall } from '../shared/remote-machine-calls'
 import { setShellObserver } from './multiplexer'
 import { createLoopHealth } from './loop-health'
 import { loadOrCreateReadOnlyToken } from './readonly-token'
@@ -159,7 +160,6 @@ import { AgentExportStore } from './agent-export'
 import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin, signWithDevice } from './account-v2'
 import { createMachineKeyStore, createRefusedMachines, enterMachines } from './machine-keys'
-import { allowedInMachineWindow, machineWindowPlan } from './machine-window'
 import { parseAccountMachines } from '../shared/zoom-fleet'
 import { GRANT_PATHS } from '../shared/account-pair'
 import { relayHandle } from './legacy-identity'
@@ -175,8 +175,8 @@ import { pairingUrl } from '../shared/pairing-url'
 import type { PairingHandout } from '../shared/account-v2'
 import { createReachPublisher, type ReachPublisher } from './reach'
 import { createNetworkWatch } from './network-watch'
-import { createCanvasLink } from './canvas-link'
-import { createCanvasBridge, loopbackDialer } from './canvas-bridge'
+import { createCanvasRelay } from './canvas-relay'
+import { loopbackDialer } from './canvas-bridge'
 import { createSealTerminus } from './canvas-seal-terminus'
 import { sealProofHeaders } from './seal-proof'
 import { sealedSwitchMemory } from './remote-switch-memory'
@@ -1414,6 +1414,27 @@ async function readAccountMachine(machineId: string, route: RemoteRead): Promise
 }
 
 /**
+ * ANOTHER MACHINE, WORKED FROM THIS ONE'S ZOOM VIEW (owner 2026-11-10, design
+ * B): one call it allows (shared/remote-machine-calls.ts, checked in
+ * zoom-fleet.ts · callMachine before this), with the key held for it.
+ */
+async function callAccountMachine(machineId: string, call: RemoteMachineCall, body: string | undefined): Promise<RemoteAnswer> {
+  const key = machineKeys.token(machineId)
+  if (key === null) {
+    void collectMachineKeys().catch(() => undefined)
+    return NO_ANSWER
+  }
+  const sent = await accounts.relayed(machineId, call.route, {
+    method: call.method,
+    headers: { authorization: `Bearer ${key}` },
+    ...(body !== undefined ? { body } : {})
+  })
+  if (!sent.ok) return NO_ANSWER
+  if (sent.response.status === 401) machineKeys.forget([machineId])
+  return answerOf(call, sent.response)
+}
+
+/**
  * THE ONE PROOF, FROM THE ZOOM VIEW: a machine signed in before machines
  * trusted each other (or unlocked by a passcode) proves itself as it does
  * before adding a machine to the account — the password, or a provider's trip
@@ -1428,57 +1449,6 @@ async function proveThisMachine(): Promise<boolean> {
   if (!signedIn.ok || ownerLock.locked) return false
   await collectMachineKeys().catch(() => undefined)
   return existsSync(MACHINE_TRUSTED_FILE)
-}
-
-/** One window per machine: opening it again brings it forward, back on that machine's page. */
-const machineWindows = new Map<string, { window: BrowserWindow; url: string; home: string }>()
-
-/**
- * ANOTHER MACHINE OF THE ACCOUNT, WORKED FROM HERE (machine-window.ts): its own
- * page in a window of its own, let in by the key this machine holds for it.
- * Sandboxed, no preload, and it goes nowhere but that machine's relay address.
- */
-async function openMachineWindow(machineId: string): Promise<boolean> {
-  const held = machineWindows.get(machineId)
-  if (held && !held.window.isDestroyed()) {
-    // Signing in left it on cookrew.dev's own pages: back to the machine, with its key.
-    if (!held.window.webContents.getURL().startsWith(held.home)) void held.window.loadURL(held.url)
-    held.window.show()
-    held.window.focus()
-    return true
-  }
-  // A full-control window onto another machine is an owner act: not behind a locked screen.
-  if (ownerLock.locked) return false
-  let key = machineKeys.token(machineId)
-  if (key === null) {
-    await collectMachineKeys().catch(() => undefined)
-    key = machineKeys.token(machineId)
-  }
-  const account = accounts.account()
-  if (key === null || account === null) return false
-  // The window signs in to cookrew.dev on its own, once, in its own store: never with this Mac's session.
-  const plan = machineWindowPlan({ registryOrigin: registryOrigin(), username: account.username, machineId, key })
-  if (plan === null) return false
-  const window = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    title: 'Cookrew',
-    webPreferences: { partition: plan.partition, sandbox: true, contextIsolation: true, nodeIntegration: false }
-  })
-  // That machine's page, and nothing else: anything outside it opens in the owner's browser.
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (!allowedInMachineWindow(plan, url) && /^https?:/i.test(url)) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  window.webContents.on('will-navigate', (event, url) => {
-    if (allowedInMachineWindow(plan, url)) return
-    event.preventDefault()
-    if (/^https?:/i.test(url)) void shell.openExternal(url)
-  })
-  window.on('closed', () => machineWindows.delete(machineId))
-  machineWindows.set(machineId, { window, url: plan.url, home: plan.home })
-  await window.loadURL(plan.url)
-  return true
 }
 
 setTimeout(() => {
@@ -1579,7 +1549,7 @@ export const rememberProfileFace = (face: {
  * expired session, or reachability switched off all mean the same thing: no
  * line. Both of the last two are the owner saying no, and neither is an error.
  */
-const canvasLink = createCanvasLink({
+const canvasRelay = createCanvasRelay({
   origin: () => registryOrigin(),
   credential: () => {
     const account = accounts.account()
@@ -1588,25 +1558,21 @@ const canvasLink = createCanvasLink({
     if (!session || session.exp <= Date.now()) return null
     return { token: session.token, deviceId: account.deviceId }
   },
-  log: (message) => console.error(`[cookrew] ${message}`)
-})
-const canvasBridge = createCanvasBridge({
-  send: (line) => canvasLink.send(line),
   dial: loopbackDialer(MOBILE_PORT),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
-canvasLink.onFrame(canvasBridge.frame)
-// A line that ended takes every exchange riding it with it; a local request
-// left running would be an event stream nobody will ever read again.
-canvasLink.onDrop(canvasBridge.reset)
+const canvasLink = canvasRelay.link
 
-// The sealed session (canvas-seal-terminus.ts). The bridge reads an answer as fast
-// as loopback gives it, so a slow phone only shows up on the relay line itself.
+// The sealed session (canvas-seal-terminus.ts). A slow line shows up as the link's
+// unconfirmed bytes, what the paced uplink still holds, and (once the bridge has
+// paused this stream) the loopback response's own buffer.
 const connectCodes = createConnectCodes(path.join(homedir(), '.cookrew', 'connect-code'))
 const sealTerminus = createSealTerminus({
   codeFor: (id) => connectCodes.codeFor(id),
   dial: loopbackDialer(MOBILE_PORT, undefined, sealProofHeaders()),
-  socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog(),
+  // What the paced uplink still holds counts too: since relay-uplink.ts, an
+  // answer waits there rather than in Node's socket buffer.
+  socketBacklog: (down) => (down?.writableLength ?? 0) + canvasLink.backlog() + canvasRelay.uplink.queued(),
   log: (message) => console.error(`[cookrew] ${message}`)
 })
 
@@ -9260,9 +9226,10 @@ function registerIpc(handlers: RestoreHandlers): void {
     deviceId: () => accounts.account()?.deviceId ?? null,
     readOf: readAccountMachine
   })
-  // Owner acts, gated as the account's are: open another machine to work in it, and this machine's one proof.
-  ipcMain.handle('zoom-fleet:open-machine', ownerOnly((machineId: unknown) =>
-    typeof machineId === 'string' && /^[0-9a-f-]{36}$/i.test(machineId) ? openMachineWindow(machineId) : false
+  // Owner acts, gated as the account's are: work in another machine from here, and this machine's one proof.
+  // Full control of another machine is never handed out behind a locked screen.
+  ipcMain.handle('zoom-fleet:call', ownerOnly((machineId: unknown, method: unknown, route: unknown, body: unknown) =>
+    ownerLock.locked ? NO_ANSWER : callMachine({ callOf: callAccountMachine }, machineId, method, route, body)
   ))
   ipcMain.handle('zoom-fleet:trust-state', ownerOnly(() => ({ trusted: existsSync(MACHINE_TRUSTED_FILE) })))
   ipcMain.handle('zoom-fleet:trust-prove', ownerOnly(() => proveThisMachine()))

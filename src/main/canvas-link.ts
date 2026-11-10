@@ -74,6 +74,22 @@ export interface CanvasCredential {
   readonly deviceId: string
 }
 
+/** What one receipt (`got`, relay-frame.ts) says about the uplink. */
+export interface LinkReceipt {
+  /** Bytes this receipt newly confirmed as arrived at the relay. */
+  readonly acked: number
+  /** Bytes written to the uplink and not yet confirmed: what is out there. */
+  readonly inFlight: number
+  /**
+   * From a write to hearing its FIRST byte arrived, for the newest write this
+   * receipt reached: the line's round trip plus the queue in front of it. The
+   * first byte, not the last, because a write's own crossing is not queue: on
+   * a 40 KB/s line a 22 KB frame takes half a second just to cross. Null when
+   * the receipt reached no write it had not already.
+   */
+  readonly rttMs: number | null
+}
+
 export interface CanvasLink {
   /** Begin dialling, and keep dialling. Idempotent. */
   readonly start: () => void
@@ -84,8 +100,21 @@ export interface CanvasLink {
   readonly name: () => string | null
   /** One frame up. Queued while the uplink is opening, dropped when there is no line. */
   readonly send: (line: string) => void
-  /** Bytes the uplink has not sent yet: the one place a slow relay shows up here. */
+  /**
+   * Bytes out there and not yet arrived. With receipts: written minus confirmed,
+   * which counts every buffer between here and the relay. Without them (a
+   * registry that predates receipts): only what Node has not handed on.
+   */
   readonly backlog: () => number
+  /**
+   * Is this line paced by receipts? From the uplink's first byte when the
+   * registry promised them in `ready`; never against a registry that did not
+   * (it predates them), which then runs exactly as before receipts. False
+   * again if a promised receipt never came (RECEIPT_GRACE_MS).
+   */
+  readonly paced: () => boolean
+  /** Every receipt, as it lands. */
+  readonly onReceipt: (listener: (receipt: LinkReceipt) => void) => () => void
   /** Every frame down that is not the link's own housekeeping. */
   readonly onFrame: (listener: (line: string) => void) => () => void
   /** Held changed. Reach republishes from this. */
@@ -114,6 +143,8 @@ export interface CanvasLinkDeps {
   readonly quietMs?: number
   /** How often the dial loop re-asks for a credential it did not have. */
   readonly idleMs?: number
+  /** RECEIPT_GRACE_MS, shortened by tests. */
+  readonly receiptGraceMs?: number
   readonly log?: (message: string) => void
 }
 
@@ -123,6 +154,14 @@ export const BACKOFF_MAX_MS = 60_000
 export const QUIET_MS = 75_000
 /** How often a desktop with no account looks again. */
 export const IDLE_MS = 30_000
+/**
+ * A registry that promised receipts (`ready{receipts}`) and has sent none this
+ * long after the first write is not keeping its word: go back to Node's own
+ * count rather than hold answers for a receipt that is not coming. It greets
+ * the uplink with `got{0}` the moment it sees it, so this is insurance, not a
+ * timing anyone should meet.
+ */
+export const RECEIPT_GRACE_MS = 10_000
 
 /**
  * How long to wait before attempt `n`, with jitter.
@@ -135,6 +174,9 @@ export const backoffFor = (attempt: number, random: () => number): number => {
   const base = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** Math.max(0, attempt - 1))
   return Math.round(base / 2 + random() * (base / 2))
 }
+
+/** Writes remembered for timing receipts; older ones are confirmed by then. */
+const MAX_MARKS = 4096
 
 /** `https://cookrew.dev/v2/canvas/link/<deviceId>` */
 export const linkUrl = (origin: string, deviceId: string): string =>
@@ -223,6 +265,10 @@ export const httpTransport = (): LinkTransport => ({
       }
     )
     request.on('error', (error) => finish(String(error)))
+    // The head now, not with the first frame: the registry can only greet an
+    // uplink it has seen (`got{0}`), and the first answer should not be the
+    // thing that opens it.
+    request.flushHeaders()
     return {
       write: (line) => {
         if (!request.writableEnded && !request.destroyed) request.write(`${line}\n`)
@@ -244,10 +290,13 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
   const log = deps.log ?? ((): void => undefined)
   const quietMs = deps.quietMs ?? QUIET_MS
   const idleMs = deps.idleMs ?? IDLE_MS
+  const now = deps.now ?? Date.now
+  const receiptGraceMs = deps.receiptGraceMs ?? RECEIPT_GRACE_MS
 
   const frameListeners = new Set<(line: string) => void>()
   const changeListeners = new Set<(held: boolean) => void>()
   const dropListeners = new Set<() => void>()
+  const receiptListeners = new Set<(receipt: LinkReceipt) => void>()
 
   let running = false
   let attempt = 0
@@ -259,6 +308,57 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
   let queued: readonly string[] = []
   let cancelRetry: (() => void) | null = null
   let cancelQuiet: (() => void) | null = null
+  /** This uplink's bytes, counted the way the relay counts them: from its first byte. */
+  let written = 0
+  let acked = 0
+  let receipts = false
+  /** `ready` said this registry sends receipts. */
+  let promised = false
+  /** No receipt came in time: this registry does not send them. */
+  let deaf = false
+  let cancelGrace: (() => void) | null = null
+  /** Where each write began, and when, for the delay a receipt reveals. Oldest first. */
+  let marks: { start: number; at: number }[] = []
+
+  /** Every write to the uplink goes through here, so the count matches the relay's. */
+  const write = (target: LinkUplink, line: string): void => {
+    target.write(line)
+    const start = written
+    written += Buffer.byteLength(line) + 1
+    if (promised && !receipts && !deaf && cancelGrace === null) {
+      cancelGrace = schedule(() => {
+        cancelGrace = null
+        if (receipts || up !== target) return
+        deaf = true
+        log('canvas link: the registry promised receipts and sent none; the uplink is paced by Node alone')
+      }, receiptGraceMs)
+    }
+    const at = now()
+    // Writes in the same millisecond share the first one's mark.
+    if (marks[marks.length - 1]?.at !== at) marks.push({ start, at })
+    if (marks.length > MAX_MARKS) marks = marks.slice(-MAX_MARKS)
+  }
+
+  /** `got{n}`: the relay has n bytes of this uplink. The first, `got{0}`, says it will keep count. */
+  const receive = (n: number): void => {
+    receipts = true
+    promised = true
+    deaf = false
+    cancelGrace?.()
+    cancelGrace = null
+    const fresh = Math.min(n, written) - acked
+    if (fresh <= 0) return
+    acked += fresh
+    let sentAt: number | null = null
+    let covered = 0
+    while (covered < marks.length && marks[covered].start < acked) {
+      sentAt = marks[covered].at
+      covered += 1
+    }
+    if (covered > 0) marks = marks.slice(covered)
+    const receipt: LinkReceipt = { acked: fresh, inFlight: written - acked, rttMs: sentAt === null ? null : now() - sentAt }
+    receiptListeners.forEach((listener) => listener(receipt))
+  }
 
   const setHeld = (next: boolean): void => {
     if (holding === next) return
@@ -286,6 +386,14 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
     up = null
     queued = []
     confirmed = null
+    written = 0
+    acked = 0
+    receipts = false
+    promised = false
+    deaf = false
+    cancelGrace?.()
+    cancelGrace = null
+    marks = []
     closingUp?.close()
     closingDown?.close()
     if (had) {
@@ -308,9 +416,11 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
 
   const openUplink = (credential: CanvasCredential, url: string): void => {
     if (up !== null) return
-    const opened = transport.up(url, credential.token)
+    // `acks=1` asks for receipts. A registry that predates them routes on the
+    // path alone and ignores the query, so asking is safe against either.
+    const opened = transport.up(`${url}?acks=1`, credential.token)
     up = opened
-    for (const line of queued) opened.write(line)
+    for (const line of queued) write(opened, line)
     queued = []
     opened.onEnd((why) => {
       // NO UPLINK MEANS NOT REACHABLE, and the line must stop claiming
@@ -344,10 +454,17 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
       if (!frame) return
       if (frame.t === 'ready') {
         confirmed = frame.name
+        promised = frame.receipts === true
         attempt = 0
         openUplink(credential, url)
         setHeld(true)
         log(`canvas link: holding ${frame.name}`)
+        return
+      }
+      if (frame.t === 'got') {
+        // The relay's receipt for this desktop's own uplink: housekeeping, never
+        // something for the bridge.
+        receive(frame.n)
         return
       }
       if (frame.t === 'ping') {
@@ -375,11 +492,16 @@ export const createCanvasLink = (deps: CanvasLinkDeps): CanvasLink => {
       if (queued.length < 256) queued = [...queued, line]
       return
     }
-    up.write(line)
+    write(up, line)
   }
 
   return {
-    backlog: () => up?.backlog?.() ?? 0,
+    backlog: () => (up !== null && promised && !deaf ? written - acked : (up?.backlog?.() ?? 0)),
+    paced: () => up !== null && promised && !deaf,
+    onReceipt: (listener) => {
+      receiptListeners.add(listener)
+      return () => void receiptListeners.delete(listener)
+    },
     start: () => {
       if (running) return
       running = true

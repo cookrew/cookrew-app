@@ -266,10 +266,13 @@ describe('the server-rendered row', () => {
     expect(html).toContain('OFFLINE')
   })
 
-  it('is name, workspaces, one badge and OPEN — nothing that pairs a phone', () => {
+  // Nothing from inside a machine before the twelve-hour gate (owner 2026-11-10): not even its workspaces' names.
+  it('is name, one badge and OPEN — no workspace names, nothing that pairs a phone', () => {
     const html = oneDesktop('11111111-2222-3333-4444-555555555555')
     expect(html).toContain('This Mac')
-    expect(html).toContain('Cookrew Dev')
+    expect(html).not.toContain('Cookrew Dev')
+    // Not even how many: the name, its badge and OPEN (owner: name, platform, online only).
+    expect(html).not.toMatch(/\d+ workspaces?/)
     for (const gone of ['SCAN QR', 'TYPE KEY', 'FORGET KEY', 'LINK', 'data-key-input', 'data-scan', 'NEEDS PAIRING']) {
       expect(html, gone).not.toContain(gone)
     }

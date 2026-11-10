@@ -392,13 +392,6 @@ private func level(of path: [Route]) -> ZoomLevel {
   return .devices
 }
 
-private extension View {
-  /** A card uses the whole of the glass: its head sits beside the system's clock, not under it. */
-  func wholeGlass() -> some View {
-    ignoresSafeArea(.container, edges: .top)
-  }
-}
-
 /** Where the zoom was left, across launches. */
 private let keptZoomKey = "cookrew.watch.zoom"
 
@@ -414,6 +407,8 @@ struct ZoomStack: View {
   @State private var path: [Route] = []
   @State private var opened = false
   @State private var items: [CardItem.ID: CardItem] = [:]
+  /** The page just stepped out of, for its crew to bring into view; gone once the wrist moves on. */
+  @State private var left: String?
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -440,6 +435,7 @@ struct ZoomStack: View {
     .onChange(of: path) { _, next in
       let now = level(of: next)
       kept = now.stored
+      if case .agents = now {} else { left = nil }
       Task { await store.enter(workspace: now.scope) }
     }
     .task { await app.readMachines() }
@@ -457,10 +453,13 @@ struct ZoomStack: View {
       }
       .navigationTitle(app.desktop)
     case .agents(let id):
-      CrewGrid(store: store, onNewAgent: { open(newAgentPage, in: id) }) { card in open(card, in: id) }
+      CrewGrid(store: store, left: left, onNewAgent: { open(newAgentPage, in: id) }) { card in open(card, in: id) }
         .navigationTitle(name(of: id))
-    case .cards(let id):
-      pages(in: id)
+    case .cards:
+      CardPager(store: store, onOut: stepOut, onItem: { item in
+        items[item.id] = item
+        path.append(.item(item.id))
+      }, onThisWatch: { path.append(.thisWatch) })
     case .thisWatch:
       ThisWatchPage(desktop: app.desktop, account: app.username, line: store.client.line, onCode: app.signInAgain, onForget: { Task { await app.forget() } }).wholeGlass()
     case .item(let id):
@@ -472,20 +471,16 @@ struct ZoomStack: View {
 
   /** Into one card: the crown walks its workspace's cards from there. */
   private func open(_ page: String, in workspace: String) {
+    left = nil
     store.page = page
     path.append(.cards(workspace))
   }
 
-  /** The card's face: one step out, to its crew. */
+  /** The card's head, or a swipe right: one step out, to its crew, its face kept in view there. */
   private func stepOut() {
-    if case .cards = path.last { path.removeLast() }
-  }
-
-  /** A swipe right across a card: one step out, as the system's back swipe is elsewhere. The pages go up and down, so sideways is free. */
-  private var swipeOut: some Gesture {
-    DragGesture(minimumDistance: 24).onEnded { drag in
-      if isSwipeOut(dx: drag.translation.width, dy: drag.translation.height) { stepOut() }
-    }
+    guard case .cards = path.last else { return }
+    left = store.page
+    path.removeLast()
   }
 
   @ViewBuilder private func itemPage(_ item: CardItem) -> some View {
@@ -495,25 +490,6 @@ struct ZoomStack: View {
     }
   }
 
-  /** The pages: every card in the workspace, then a new agent there. */
-  private func pages(in workspace: String) -> some View {
-    TabView(selection: $store.page) {
-      ForEach(store.visibleCards) { card in
-        CardPage(store: store, card: card, onFace: stepOut, onItem: { item in
-          items[item.id] = item
-          path.append(.item(item.id))
-        })
-        .wholeGlass()
-        .simultaneousGesture(swipeOut)
-        .tag(Optional(card.id))
-      }
-      NewAgentPage(store: store, onThisWatch: { path.append(.thisWatch) }, onOut: stepOut).wholeGlass().tag(Optional(newAgentPage))
-    }
-    #if os(watchOS)
-      .tabViewStyle(.verticalPage)
-      .toolbar(.hidden, for: .navigationBar)
-    #endif
-  }
 }
 
 /** The app: pairing, or the cards. */

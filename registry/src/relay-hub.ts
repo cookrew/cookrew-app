@@ -147,7 +147,7 @@ export class RelayHub {
   openDoor(
     name: string,
     socket: HubSocket,
-    options: { holder?: string; supersede?: Supersede } = {}
+    options: { holder?: string; supersede?: Supersede; receipts?: boolean } = {}
   ): { ok: true; door: HubDoor } | { ok: false; reason: HubRefusal } {
     if (!this.accepts(name)) return { ok: false, reason: 'bad-name' }
     const held = this.doors.get(name)
@@ -168,7 +168,7 @@ export class RelayHub {
       ...(options.holder === undefined ? {} : { holder: options.holder })
     }
     this.doors.set(name, door)
-    socket.send(encodeFrame({ t: 'ready', name }))
+    socket.send(encodeFrame({ t: 'ready', name, ...(options.receipts === true ? { receipts: true as const } : {}) }))
     return { ok: true, door }
   }
 
@@ -255,6 +255,7 @@ export class RelayHub {
       frame.t === 'open' ||
       frame.t === 'ping' ||
       frame.t === 'pong' ||
+      frame.t === 'got' ||
       frame.t === 'superseded'
     ) {
       return

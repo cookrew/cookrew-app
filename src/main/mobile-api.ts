@@ -906,6 +906,7 @@ export async function handleMobileApi(
       path: p,
       owner: ownerPairing,
       cleared: hasPairing,
+      who: () => ops?.useSources?.whoIs(presentedToken(request, url)) ?? null,
       sealed: () => sealedTransport(request),
       board: async (wide?: boolean) => {
         const board = deps.board as BoardSources;

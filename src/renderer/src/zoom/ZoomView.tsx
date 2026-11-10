@@ -11,7 +11,9 @@ import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
-import { buildZoomModel, itemViewOf, listedOnly } from './zoom-model'
+import { buildZoomModel, itemViewOf, type MachineView } from './zoom-model'
+import { machineWhyWords } from './machine-why'
+import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
@@ -31,6 +33,9 @@ import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
 import { GaugePanel } from './MachineGauges'
 import { RemoteDeskPanel } from './RemoteDeskPanel'
+import { RemoteMachineView } from './RemoteMachineView'
+import { remotePlace } from './remote-machine-store'
+import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
 import './full-views.css'
@@ -421,12 +426,25 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   // in, the background and the back button for out), plus the stops and Esc.
   /** One stop out; false at the outermost, where there is nowhere further. */
   const stepBack = useCallback((): boolean => {
+    // Inside another machine (RemoteMachineView.tsx): out of its stops first, one a press.
+    if (remotePlace.stepOut()) return true
     const z = zoomStore.get()
     const next = stepOut(z.dir, z.v)
     if (next === z.v) return false
     motion.go(next, z.dir)
     return true
   }, [motion.go])
+  // A zoom that moves on (a stop on the bar, a jump to an agent) leaves the other machine: the stage stood on the devices stop.
+  useEffect(() => {
+    let at = zoomStore.get()
+    return zoomStore.subscribe(() => {
+      const now = zoomStore.get()
+      const moved = now.v !== at.v || now.dir !== at.dir || now.full !== at.full
+      at = now
+      if (moved && remotePlace.get().machine) remotePlace.leave()
+    })
+  }, [])
+  useEffect(() => () => remotePlace.leave(), [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -650,10 +668,13 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               machine={m}
               bind={bind}
               onOpen={() => {
-                // A machine this desktop can reach opens in a window of its own, to work in; one it cannot says why.
-                const open = cookrew().openMachine
-                if (m.detail !== 'listed' && open) void open(m.id).then((opened) => (opened ? undefined : setError(listedOnly(m))), () => setError(listedOnly(m)))
-                else setError(listedOnly(m))
+                // A machine this one can read is gone into, here (RemoteMachineView.tsx); one it cannot says the one thing to do.
+                const enter = (): void => {
+                  setError(null)
+                  remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null })
+                }
+                if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
+                else void whyNot(m).then((words) => (words === null ? enter() : setError(words)))
               }}
             />
           ))}
@@ -784,9 +805,23 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           onClose={closeShelfCard}
         />
       )}
+      <RemoteMachineView />
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
     </div>
   )
+}
+
+/**
+ * What stands between this view and another machine, as the one thing to do
+ * (machine-why.ts); null when asking it now found it answers, and it can be gone into.
+ */
+async function whyNot(m: MachineView): Promise<string | null> {
+  const api = cookrew()
+  const surface = !canEnterMachines() ? 'none' : isRemoteMode() ? 'page' : 'desktop'
+  // Not read yet (a page just opened, a key just made): asked now, so a tap is not a wait for the next round.
+  if (surface !== 'none' && m.online && (await api.machineFleetOf?.(m.id).catch(() => null)) != null) return null
+  const trusted = surface === 'desktop' ? ((await api.machineTrust?.().catch(() => null)) ?? null)?.trusted ?? null : null
+  return machineWhyWords(m, { surface, trusted, block: api.machineWhy?.(m.id) ?? null, platform: hostPlatform() })
 }
 
 /** The device layers' words the painter keeps at one size on a phone (zoom-frame.ts · paintDeviceWords). */

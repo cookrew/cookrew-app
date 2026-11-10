@@ -208,7 +208,8 @@ export class RelayCaller {
   private receive(raw: string): void {
     const frame = decodeFrame(raw)
     if (!frame || frame.t === 'ready' || frame.t === 'open' || frame.t === 'body') return
-    if (frame.t === 'ping' || frame.t === 'pong') return
+    // A receipt is the relay talking to a desktop's own uplink, never to a caller.
+    if (frame.t === 'ping' || frame.t === 'pong' || frame.t === 'got') return
     // `superseded` is said to a DOOR losing its name; a caller has no name to
     // lose, so one arriving here belongs to no exchange and is not routed.
     if (frame.t === 'superseded') return

@@ -425,17 +425,27 @@ export function deviceOf(
 
 /** The account's other machines: a row (wrapping) under this Mac's screen (deviceOf · screen), inside the devices camera. */
 export const MACHINE_CARD = { w: 380, h: 220, gap: 40 }
-export function machinesAt(count: number, screen: Box, narrow: boolean): { at: Pos[]; rows: number } {
-  const perRow = narrow ? 1 : 3
+/**
+ * Room under the machine's screen, in scene units, before the other machines
+ * start: its name and its "Remote desktop" pill are drawn there at a thumb's
+ * size whatever the camera's scale (zoom-frame.ts · paintDeviceWords), and
+ * stood over the first machine without it, on a phone and on a desk alike
+ * (owner screenshot, 2026-11-10). A phone's camera draws smaller: more units.
+ */
+export const LABEL_ROOM = { narrow: 220, desk: 110 } as const
+
+/** The other machines under this one's screen: two a row on a phone, three on a desk. */
+export function machinesAt(count: number, screen: Box, narrow: boolean): { at: Pos[]; rows: number; perRow: number; top: number } {
+  const perRow = narrow ? 2 : 3
   const rows = Math.ceil(count / perRow)
-  const top = screen.h / 2 + 120
+  const top = screen.h / 2 + 120 + LABEL_ROOM[narrow ? 'narrow' : 'desk']
   const at: Pos[] = []
   for (let i = 0; i < count; i++) {
     const row = Math.floor(i / perRow)
     const inRow = Math.min(perRow, count - row * perRow)
     at.push({ x: ((i % perRow) - (inRow - 1) / 2) * (MACHINE_CARD.w + MACHINE_CARD.gap), y: top + row * (MACHINE_CARD.h + MACHINE_CARD.gap) })
   }
-  return { at, rows }
+  return { at, rows, perRow, top }
 }
 
 /** Fit a box into the view, never above natural size. */
