@@ -42,3 +42,24 @@ export async function doorBearer(
   if (admitted.token !== null) return admitted.token
   throw new Error(`${name} did not admit this account (${admitted.phase.kind})`)
 }
+
+/**
+ * THE SEAT COOKREW.DEV HAS NOT HEARD OF YET.
+ *
+ * A seat is bought at the door's 402 and reported to cookrew.dev afterwards,
+ * through a queue (seat-settle.ts). Between the payment and that report the
+ * registry answers no_seat to the very person who just paid, and a card placed
+ * in that gap would say it was refused. `held` is the Bearer the door admitted
+ * the purchase on (serve-gate.ts keeps it); it stands in for a no_seat answer
+ * and for nothing else — no account, a registry that is down and every other
+ * 403 stay the refusals they are, so this can never turn a card into a caller
+ * the door did not itself admit.
+ */
+export function withPaidBearer<T extends { token: string | null; phase: AdmissionPhase }>(
+  admitted: T,
+  held: string | null
+): T {
+  const unseated =
+    admitted.token === null && admitted.phase.kind === 'denied' && admitted.phase.reason === 'no_seat'
+  return unseated && held !== null ? { ...admitted, token: held } : admitted
+}

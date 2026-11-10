@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { doorBearer, type DoorBearerPort } from '../src/main/door-bearer'
+import { doorBearer, withPaidBearer, type DoorBearerPort } from '../src/main/door-bearer'
 import type { AdmissionPhase, ServeTargetRef } from '../src/main/served-admission'
 
 /**
@@ -49,5 +49,45 @@ describe('doorBearer', () => {
       const deps = port({ admit: vi.fn(async () => ({ token: null, phase: { kind, status: 0 } as AdmissionPhase })) })
       await expect(doorBearer(deps, target, '@mira/alpha')).rejects.toThrow(`(${kind})`)
     }
+  })
+})
+
+/**
+ * THE GAP AFTER A PURCHASE (0.6.0). The door admits a buyer the moment the 402
+ * is paid; cookrew.dev hears of the seat a round trip later. The card placed
+ * in between signs in with an ordinary mint and is told no_seat — so the
+ * Bearer the door itself admitted stands in, for that answer and no other.
+ */
+describe('withPaidBearer', () => {
+  const noSeat: AdmissionPhase = { kind: 'denied', reason: 'no_seat', retryable: false }
+
+  it('offers the Bearer a seat was bought on when cookrew.dev still says no_seat', () => {
+    expect(withPaidBearer({ token: null, phase: noSeat }, 'paid-bearer')).toEqual({
+      token: 'paid-bearer',
+      phase: noSeat
+    })
+  })
+
+  it('offers nothing where nothing was bought', () => {
+    const refused = { token: null, phase: noSeat }
+    expect(withPaidBearer(refused, null)).toBe(refused)
+  })
+
+  it('never stands in for any other refusal — no account, a dead registry, another 403', () => {
+    const others: AdmissionPhase[] = [
+      { kind: 'identify' },
+      { kind: 'error', status: 0 },
+      { kind: 'gone' },
+      { kind: 'denied', reason: 'workspace', retryable: false },
+      { kind: 'denied', reason: 'budget', retryable: false }
+    ]
+    for (const phase of others) {
+      expect(withPaidBearer({ token: null, phase }, 'paid-bearer').token, phase.kind).toBeNull()
+    }
+  })
+
+  it('leaves an admitted sign-in exactly as it was', () => {
+    const admitted = { token: 'account-bearer', phase: open }
+    expect(withPaidBearer(admitted, 'paid-bearer')).toBe(admitted)
   })
 })

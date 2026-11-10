@@ -1074,7 +1074,8 @@ export function createRemoteApi(): CookrewApi {
     serveBrowse: (link) => req(apiPath('/api/serve/browse'), 'POST', { link }),
     serveImport: (link, position, paid) =>
       req(apiPath('/api/serve/import'), 'POST', { link, position, paid }),
-    serveGate: (link) => req(apiPath('/api/serve/gate'), 'POST', { link }),
+    serveGate: (link, intent) =>
+      req(apiPath('/api/serve/gate'), 'POST', { link, ...(intent === 'buy' ? { intent } : {}) }),
     serveCheckout: async (link) => {
       const checkout = await req<
         { ok: true; session: string; url: string } | { ok: false; reason: string; detail?: string }

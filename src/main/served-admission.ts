@@ -308,10 +308,25 @@ export function stripePaymentHeader(session: string): string {
  * at a paid team) → the door's 402 at session start → open.
  *
  * The seat follows the ACCOUNT, so the token names the person: the door seats
- * `acct-<username>`, the same sub the web seated, and a session bought on the
- * web is the session this Mac opens. That is the whole reason the caller key
- * is not offered here.
+ * `acct-<username>`, and a seat bought on one device admits every device the
+ * account signs in on. That is the whole reason the caller key is not offered
+ * here.
+ *
+ * BUYING IS THIS WALK TOO (0.6.0). The team's page was the one place a seat
+ * could be bought, and it is gone. With `intent: 'buy'` cookrew.dev mints a
+ * token that carries NO seat; the door admits it as far as its 402 and no
+ * further, so the walk lands on the same pay phase a dialled paid door shows —
+ * the price and the rails, with nothing charged until the person pays there.
  */
+
+/** How a listed door is asked. Absent means "open": a seat, or the refusal. */
+export interface AdmitOptions {
+  /**
+   * The person pressed BUY A SEAT. Never a default: without it an account
+   * with no seat is told so, and an import is never quietly a purchase.
+   */
+  intent?: 'buy'
+}
 
 /** The account, as this module needs it — the one authed call, and who. */
 export interface AccountForDoors {
@@ -339,15 +354,19 @@ export type CallTokenAnswer =
  * POST /v2/teams/@owner/team/call-token — 201 with the seat that admits us, 403
  * no_seat for a paid team the account is not seated at. A refusal from the
  * session itself (no account, expired, 401) is `identify`: the next step is
- * the account sheet, not a retry.
+ * the account sheet, not a retry. With `intent: 'buy'` an unseated account is
+ * answered 201 too, with `seat: null` — a token to go and be quoted on.
  */
 export async function mintCallToken(
   account: AccountForDoors,
-  team: string
+  team: string,
+  options: AdmitOptions = {}
 ): Promise<CallTokenAnswer> {
   const sent = await account.authedResponse(`${teamPath(team)}/call-token`, {
     method: 'POST',
-    body: '{}'
+    // `{ intent: 'buy' }` and nothing else means it (v2-seat-routes.ts
+    // intendsToBuy); an empty body means open.
+    body: JSON.stringify(options.intent === 'buy' ? { intent: 'buy' } : {})
   })
   if (!sent.ok) {
     return sent.reason === 'offline' ? { kind: 'offline' } : { kind: 'identify' }
@@ -390,10 +409,11 @@ export interface AccountAdmission {
 export async function admitWithAccount(
   target: ServeTargetRef,
   team: string,
-  account: AccountForDoors
+  account: AccountForDoors,
+  options: AdmitOptions = {}
 ): Promise<AccountAdmission> {
   const username = account.account()?.username ?? null
-  const minted = await mintCallToken(account, team)
+  const minted = await mintCallToken(account, team, options)
   switch (minted.kind) {
     case 'identify':
       return { phase: { kind: 'identify' }, token: null, account: username, seat: null }

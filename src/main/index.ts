@@ -376,7 +376,6 @@ import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
 import {
-  doorOwnerOf,
   gateCaller,
   handleServedRoute,
   identifyCaller,
@@ -392,16 +391,10 @@ import {
   type ImportFace,
   type ServeTarget
 } from './import-session'
-import {
-  admitWithAccount,
-  openAdmission,
-  signInToDoor,
-  startStripeCheckout,
-  stripePaymentHeader
-} from './served-admission'
+import { signInToDoor } from './served-admission'
+import { createServeGate } from './serve-gate'
 import { doorBearer, type DoorBearerPort } from './door-bearer'
 import { expiryWarningDue } from '../shared/session-renew'
-import { gateDoorFor } from '../shared/gate-walk'
 import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
@@ -2555,11 +2548,27 @@ const streamIpcDeps: StreamIpcDeps = {
  * second card type; the owner reverted it. This is one seam and no new card.)
  */
 /**
+ * The import gate's verbs, and the Bearers they hold. MAIN-ONLY BY
+ * CONSTRUCTION: the gate sheet drives the ceremony over IPC by naming the
+ * door, never by holding its credential, so a renderer bug cannot leak one.
+ */
+const serveGate = createServeGate({
+  parse: (link) => parseServeAddress(link),
+  reachable: (target) => reachable(target),
+  accounts,
+  signInWithKey: (at) => signInToDoor(at),
+  wallet: () => deviceWallet(),
+  buildX402Payment: (requirements) => buildX402Payment(requirements)
+})
+
+/**
  * The port the two post-import calls are asked through. `accounts` is this
  * Mac's session on cookrew.dev; the key store is the door's own file.
  */
 const doorPort: DoorBearerPort = {
-  admit: (target, team) => admitWithAccount(target, team, accounts),
+  // An ordinary sign-in as the account — and, for the moment after a seat is
+  // bought here, the Bearer the door admitted the purchase on (serve-gate.ts).
+  admit: (target, team) => serveGate.admitCard(target, team),
   withKey: (target) => signInToDoor(target)
 }
 
@@ -6095,111 +6104,14 @@ const serveOps = {
     }
   },
   /**
-   * THE GATE — which walk, and what the door said (identity v3, G1/G3).
-   *
-   * One decision splits it, `gateDoorFor`: a LISTED team (a published name the
-   * directory answers for) is entered as the ACCOUNT — cookrew.dev mints a
-   * call token for this Mac's session and the door seats `acct-<username>`,
-   * the same person the web seated, so a seat bought there admits here with
-   * no second payment. With no account on this Mac the answer is the
-   * `identify` phase and the sheet opens the account sheet in place. The
-   * caller key is offered at UNLISTED doors only — the DIRECT walk — because
-   * a key-holder sub can never be the person a seat names. The phone's gate
-   * verb (mobile-api /api/serve/gate) runs this same function.
+   * THE GATE — which walk, what the door said, and the two verbs that pay
+   * (serve-gate.ts). `intent` is the sheet's BUY A SEAT press and nothing
+   * else; the phone's verbs (mobile-api /api/serve/*) run these same functions.
    */
-  gate: async (link: string) => {
-    const target = parseServeAddress(link)
-    if (!target) return { ok: false as const, reason: 'bad-address' as const }
-    try {
-      const reached = await reachable(target)
-      if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
-      const at = reached.at
-      const door = gateDoorFor(target, reached)
-      if (door === 'direct') {
-        const token = await signInToDoor(at)
-        callerTokens.set(targetKey(target), token)
-        const phase = await openAdmission(at, token)
-        return { ok: true as const, door, phase, wallet: deviceWallet() }
-      }
-      const team = target.door as string
-      const admitted = await admitWithAccount(at, team, accounts)
-      if (admitted.token !== null) callerTokens.set(targetKey(target), admitted.token)
-      return {
-        ok: true as const,
-        door,
-        phase: admitted.phase,
-        wallet: deviceWallet(),
-        // The facts the sheet's sentences name: the team, who can say yes,
-        // and who this Mac is (the usual cause of a no_seat is being signed
-        // in as somebody else).
-        team,
-        owner: doorOwnerOf(team),
-        account: admitted.account,
-        seat: admitted.seat
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        reason: 'sign-in' as const,
-        detail: error instanceof Error ? error.message : String(error)
-      }
-    }
-  },
-  checkout: async (link: string) => {
-    const target = parseServeAddress(link)
-    const token = target ? callerTokens.get(targetKey(target)) : undefined
-    if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
-    try {
-      const reached = await reachable(target)
-      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
-      const checkout = await startStripeCheckout(reached.at, token)
-      // The URL comes back too: a hand-off that silently failed to raise a
-      // browser would otherwise leave the person waiting on a page they never
-      // saw, with no way to reach it. It is a capability — the sheet keeps it
-      // to re-open, and never prints it.
-      return { ok: true as const, session: checkout.session, url: checkout.url }
-    } catch (error) {
-      return {
-        ok: false as const,
-        reason: 'unavailable' as const,
-        detail: error instanceof Error ? error.message : String(error)
-      }
-    }
-  },
-  settle: async (link: string, rail: 'x402' | 'stripe', session?: string) => {
-      const target = parseServeAddress(link)
-      const token = target ? callerTokens.get(targetKey(target)) : undefined
-      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
-      try {
-        const reached = await reachable(target)
-        if (!reached) return { ok: false as const, reason: 'refused' as const }
-        const at = reached.at
-        let payment: string
-        if (rail === 'stripe') {
-          if (!session) return { ok: false as const, reason: 'no-session' as const }
-          payment = stripePaymentHeader(session)
-        } else {
-          const quoted = await openAdmission(at, token)
-          const terms =
-            quoted.kind === 'pay'
-              ? quoted.rails.find((entry) => entry.rail === 'x402')
-              : undefined
-          if (!terms || terms.rail !== 'x402') {
-            // Already open, or this door stopped quoting USDC. Either way there
-            // is nothing to sign, and signing a stale quote is money gone.
-            return { ok: true as const, phase: quoted }
-          }
-          payment = await buildX402Payment(terms.requirements)
-        }
-        return { ok: true as const, phase: await openAdmission(at, token, payment) }
-      } catch (error) {
-        return {
-          ok: false as const,
-          reason: 'refused' as const,
-          detail: error instanceof Error ? error.message : String(error)
-        }
-      }
-  },
+  gate: (link: string, intent?: 'buy') => serveGate.gate(link, intent),
+  checkout: (link: string) => serveGate.checkout(link),
+  settle: (link: string, rail: 'x402' | 'stripe', session?: string) =>
+    serveGate.settle(link, rail, session),
   import: async (
     link: string,
     position?: { x: number; y: number },
@@ -6248,27 +6160,6 @@ function orchLineScript(): string {
 
 /** A public face is small; anything larger is not a face we should parse. */
 const MAX_FACE_BYTES = 64 * 1024
-
-/**
- * Bearers held for doors this app has signed in to, while an import is being
- * decided. MAIN-ONLY BY CONSTRUCTION: the gate sheet drives the ceremony over
- * IPC by naming the door, never by holding its credential, so a renderer bug
- * cannot leak one. Keyed by origin+slug; a token outlives the sheet only until
- * the app quits (they expire on their own at the door).
- */
-const callerTokens = new Map<string, string>()
-
-/**
- * One key per door, and NOT its wire address.
- *
- * A relayed door is reached through a loopback port that changes with every
- * restart, so keying a token by where it was reached would lose it the moment
- * the app came back. A published name is the durable identity; a dialled
- * door's address is its own.
- */
-function targetKey(target: ServeTarget): string {
-  return target.door ?? `${target.origin}/${target.slug}`
-}
 
 /** One team, as a directory listing describes it. Validated, like any face. */
 interface BrowsedTeam {
@@ -8829,7 +8720,10 @@ function registerIpc(handlers: RestoreHandlers): void {
    * The Bearer never leaves the main process — the renderer drives the sheet,
    * it does not hold the credential.
    */
-  ipcMain.handle('serve:gate', (_e, link: string) => serveOps.gate(link))
+  // BUY is the exact word or it is not said: an import is never quietly a purchase.
+  ipcMain.handle('serve:gate', (_e, link: string, intent?: unknown) =>
+    serveOps.gate(link, intent === 'buy' ? 'buy' : undefined)
+  )
 
   /**
    * Start a card payment: the door mints a hosted Checkout session and we open

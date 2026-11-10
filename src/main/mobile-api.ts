@@ -245,7 +245,8 @@ export interface MobileOps {
 export interface ServeOps {
   inspect(link: string): Promise<unknown>;
   browse(link: string): Promise<unknown>;
-  gate(link: string): Promise<unknown>;
+  /** `intent` is the sheet's BUY A SEAT press; absent is a plain import. */
+  gate(link: string, intent?: "buy"): Promise<unknown>;
   checkout(link: string): Promise<unknown>;
   settle(link: string, rail: "x402" | "stripe", session?: string): Promise<unknown>;
   import(
@@ -1283,6 +1284,7 @@ export async function handleMobileApi(
       paid?: unknown;
       rail?: unknown;
       session?: unknown;
+      intent?: unknown;
     }>(request);
     if (typeof body.link !== "string" || body.link.length === 0 || body.link.length > 2048) {
       respondJson(response, 400, { ok: false, reason: "bad-address" });
@@ -1296,7 +1298,8 @@ export async function handleMobileApi(
     let answer: unknown;
     if (verb === "inspect") answer = await deps.serve.inspect(link);
     else if (verb === "browse") answer = await deps.serve.browse(link);
-    else if (verb === "gate") answer = await deps.serve.gate(link);
+    // BUY is the exact word or it is not said: an import is never quietly a purchase.
+    else if (verb === "gate") answer = await deps.serve.gate(link, body.intent === "buy" ? "buy" : undefined);
     else if (verb === "checkout") answer = await deps.serve.checkout(link);
     else if (verb === "settle") {
       if (rail === null) {

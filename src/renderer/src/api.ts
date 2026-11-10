@@ -286,9 +286,15 @@ export interface CookrewApi {
    * walk main took: `install` (a listed team, entered as the account — the
    * team, its owner and this Mac's account come with it) or `direct` (an
    * unlisted door, this Mac's own key).
+   *
+   * `intent: 'buy'` is the seat step's BUY A SEAT press, and only that: the
+   * listed walk is taken with a token that carries no seat, so the door
+   * answers with its price and rails (the `pay` phase) instead of `no_seat`.
+   * Nothing is charged by asking.
    */
   serveGate: (
     link: string,
+    intent?: 'buy',
   ) => Promise<
     | {
         ok: true;

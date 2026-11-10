@@ -26,13 +26,17 @@ function registry(
   status: number,
   body: unknown,
   username: string | null = 'jkim'
-): AccountForDoors & { asked: string[] } {
+): AccountForDoors & { asked: string[]; bodies: unknown[] } {
   const asked: string[] = []
+  /** Every body the registry was sent, parsed — what the mint actually said. */
+  const bodies: unknown[] = []
   return {
     asked,
+    bodies,
     account: () => (username === null ? null : { username }),
     authedResponse: async (pathname, init) => {
       asked.push(`${init?.method ?? 'GET'} ${pathname}`)
+      bodies.push(init?.body === undefined ? undefined : JSON.parse(init.body))
       if (username === null) return { ok: false, reason: 'no_account' }
       return {
         ok: true,
@@ -78,6 +82,23 @@ describe('mintCallToken — what cookrew.dev said', () => {
       kind: 'refused',
       status: 404
     })
+  })
+
+  it('a plain import says nothing about buying: the body is {}', async () => {
+    const reg = registry(201, { token: 't.v2', account: 'jkim', seat: 'seat-7' })
+    await mintCallToken(reg, TEAM)
+    expect(reg.bodies).toEqual([{}])
+  })
+
+  it('BUY is said out loud, and only when asked: the body is { intent: "buy" }', async () => {
+    const reg = registry(201, { token: 't.unseated', account: 'jkim', seat: null, purpose: 'buy' })
+    expect(await mintCallToken(reg, TEAM, { intent: 'buy' })).toEqual({
+      kind: 'token',
+      token: 't.unseated',
+      account: 'jkim',
+      seat: null
+    })
+    expect(reg.bodies).toEqual([{ intent: 'buy' }])
   })
 })
 
@@ -170,6 +191,32 @@ describe('admitWithAccount — the account at a listed door', () => {
     expect(out.account).toBe('jkim')
     expect(out.token).toBeNull()
     expect(asserted).toEqual([])
+  })
+
+  it('with BUY the unseated token is asserted at the door, and the door’s 402 is the pay phase with its terms', async () => {
+    asserted.length = 0
+    assertAnswer = { status: 200, body: { ok: true, token: 'door-bearer', account: 'jkim', seat: null } }
+    line = {
+      status: 402,
+      body: { terms: { x402Version: 1, accepts: [{ scheme: 'stripe-checkout', amountUsd: '4.00' }] } }
+    }
+    const reg = registry(201, { token: 't.unseated', account: 'jkim', seat: null, purpose: 'buy' })
+    const out = await admitWithAccount(target(), TEAM, reg, { intent: 'buy' })
+    expect(reg.bodies).toEqual([{ intent: 'buy' }])
+    expect(asserted).toEqual([{ v2Token: 't.unseated' }])
+    expect(out.phase).toMatchObject({
+      kind: 'pay',
+      rails: [{ rail: 'stripe', price: '4.00', asset: 'USD', chain: 'Stripe' }]
+    })
+    // The Bearer the payment will be presented on, held by main.
+    expect(out.token).toBe('door-bearer')
+    expect(out.seat).toBeNull()
+  })
+
+  it('without BUY the same walk sends {} — an import is never quietly a purchase', async () => {
+    const reg = registry(403, { error: 'no_seat' })
+    await admitWithAccount(target(), TEAM, reg)
+    expect(reg.bodies).toEqual([{}])
   })
 
   it('the door’s own seat rung is read the same way', async () => {
