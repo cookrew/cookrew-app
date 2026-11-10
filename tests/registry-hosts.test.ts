@@ -137,9 +137,17 @@ describe('the auth host, beside it', () => {
     expect((await app.api('GET', '/', undefined, { accept: 'text/html' })).status).toBe(404)
   })
 
-  it('answers none of the API: a session opens nothing there', async () => {
-    const res = await app.call(site.A, 'GET', '/v2/me', undefined, bearer(token))
-    expect(res.status).toBe(404)
+  it('reads no bearer: a session token a client holds opens nothing there', async () => {
+    // The account page's session is this host's own cookie. A token presented
+    // any other way is not looked at, so a token taken from an app or from
+    // the console's page is worth nothing here.
+    const read = await app.call(site.A, 'GET', '/v2/me', undefined, bearer(token))
+    expect(read.status).toBe(401)
+    const write = await app.call(site.A, 'PATCH', '/v2/me', { displayName: 'Taken' }, { ...bearer(token), origin: site.A })
+    expect(write.status).toBe(401)
+    for (const path of ['/v2/keys/x', '/v1/health', `/v2/canvas/link/${desktopDevice().payload.id}`, '/v2/me/desktops']) {
+      expect((await app.call(site.A, 'GET', path, undefined, bearer(token))).status, path).toBe(404)
+    }
   })
 
   it('is where a provider comes back to, and nowhere else is', async () => {

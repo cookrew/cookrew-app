@@ -17,7 +17,7 @@ import {
 import { PROVIDER_LABEL, isProviderId, type OAuthBack, type ProviderId } from '../../src/shared/oauth'
 import { readJsonBody } from './http'
 import type { AuthOpener, AuthRequest } from './auth-requests'
-import { handoffFor, productOrigin } from './auth-finish'
+import { handoffFor, productOrigin, webOrigin } from './auth-finish'
 import { grantOnPage, openerForGrant, spendGrant } from './auth-grant'
 import { cookie, refuse, signedIn, v2Json, asking, type V2Context, type V2Identity } from './v2-http'
 import { deviceShape } from './v2-factor-http'
@@ -95,6 +95,9 @@ function kindFits(client: AuthClient, kind: string): boolean {
   return client === 'web' || client === 'console' ? kind === 'browser' || kind === 'phone' : kind === 'desktop'
 }
 
+/** The web client's own page: the account page, wherever this registry keeps it. */
+const webHome = (v2: V2Identity): string => (v2.apiOrigin !== null ? '/account' : '/me')
+
 /** What the console's page may open a request for: a way in, and nothing a signed-in client does. */
 const CONSOLE_INTENTS: readonly AuthRequest['intent'][] = ['sign-in', 'create', 'github', 'google', 'grant']
 
@@ -154,6 +157,12 @@ function parse(ctx: V2Context, body: Record<string, unknown>): Parsed | null {
   // THE CONSOLE needs somewhere to come back to (its configured origin), and
   // opens only a sign-in: linking, passkeys and step-ups belong to the auth host.
   if (client === 'console' && (ctx.v2.consoleOrigin === null || !CONSOLE_INTENTS.includes(intent))) {
+    refuseAuth(ctx.response, 400, 'bad_flow')
+    return null
+  }
+  // THE WEB CLIENT'S VERIFIER IS A COOKIE, so it is opened where a cookie is
+  // set: never on the API host, which sets none.
+  if (client === 'web' && ctx.via === 'api') {
     refuseAuth(ctx.response, 400, 'bad_flow')
     return null
   }
@@ -328,7 +337,7 @@ async function openRequest(ctx: V2Context): Promise<void> {
     challenge,
     clientState,
     back,
-    returnPath: client === 'web' ? (safeReturnPath(body.return) ?? '/me') : null,
+    returnPath: client === 'web' ? (safeReturnPath(body.return) ?? webHome(v2)) : null,
     usernameHint: opener?.username ?? (USERNAME.test(hint) ? hint : null),
     opener,
     act: parsed.act,
@@ -537,7 +546,7 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
       failPage(response, cleared, written.body.message)
       return
     }
-    const back = spent.request.returnPath ?? '/me'
+    const back = spent.request.returnPath ?? webHome(v2)
     response.writeHead(303, {
       location: `${back}?passkey=added#security`,
       'cache-control': 'private, no-store',
@@ -572,7 +581,7 @@ export function completeWeb(v2: V2Identity, request: IncomingMessage, response: 
   }
   const sessionToken = String(spent.result.body.token)
   response.writeHead(303, {
-    location: spent.request.returnPath ?? '/me',
+    location: spent.request.returnPath ?? webHome(v2),
     'cache-control': 'private, no-store',
     'referrer-policy': 'no-referrer',
     'content-length': '0',
@@ -618,7 +627,7 @@ export function summaryOf(v2: V2Identity, request: AuthRequest): AuthRequestSumm
     userCode: request.userCode,
     returnHost:
       request.client === 'web'
-        ? new URL(productOrigin(v2)).host
+        ? new URL(webOrigin(v2)).host
         : request.client === 'console' && v2.consoleOrigin !== null
           ? new URL(v2.consoleOrigin).host
           : null,

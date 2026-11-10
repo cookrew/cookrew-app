@@ -38,12 +38,21 @@ export function productOrigin(v2: V2Identity): string {
   return v2.origin.replace(/\/+$/, '')
 }
 
+/**
+ * Where the WEB client lives: the page whose session is a cookie. On a
+ * registry that splits its hosts (0.6.0) that is the account page on the auth
+ * origin, the one host with a cookie; on one host, the product origin.
+ */
+export function webOrigin(v2: V2Identity): string {
+  return v2.apiOrigin !== null && v2.auth !== null ? v2.auth.origin : productOrigin(v2)
+}
+
 /** The way back for this request, carrying the code or the error and nothing else. */
 export function handoffFor(v2: V2Identity, request: AuthRequest, outcome: { code: string } | { error: 'denied' | 'expired' }): AuthHandoff {
   if (request.client === 'cli') return { kind: 'cli' }
   if (request.client === 'web') {
     const params = new URLSearchParams({ ...outcome, state: request.clientState ?? '' })
-    return { kind: 'web', url: `${productOrigin(v2)}/auth/complete?${params.toString()}` }
+    return { kind: 'web', url: `${webOrigin(v2)}/auth/complete?${params.toString()}` }
   }
   // THE CONSOLE'S WAY BACK is its own fixed address, built from the configured
   // origin and never from anything the request said. The page there spends the

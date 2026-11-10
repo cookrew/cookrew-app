@@ -247,7 +247,7 @@ describe('what a console session may do', () => {
     const refused: [string, string, unknown?][] = [
       ['POST', '/v2/me/password', { next: 'another long password here' }],
       ['DELETE', '/v2/me'],
-      ['PUT', '/v2/me', { displayName: 'Someone Else' }],
+      ['PATCH', '/v2/me', { displayName: 'Someone Else' }],
       ['POST', '/v2/me/join-codes', {}],
       ['GET', '/v2/me/seats'],
       ['GET', '/v2/me/requests'],

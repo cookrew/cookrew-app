@@ -177,6 +177,14 @@ export interface ShellOptions {
    * with an account is rendered for one reader: its caller sets `cache: 0`.
    */
   account?: string | null
+  /**
+   * A PAGE THAT STANDS ALONE ON THE AUTH HOST (0.6.0: the account page). The
+   * site and the console are other origins from here, so every link to them
+   * is their whole address and none is a path on this host; the site's own
+   * navigation is left out. `home` is where this page's script goes when it
+   * has nowhere else to (after signing out).
+   */
+  standalone?: { site: string; console: string | null; home: string }
 }
 
 export function page(options: ShellOptions, main: string): Page {
@@ -244,8 +252,10 @@ function head(options: ShellOptions): string {
     description ? `<meta name="twitter:description" content="${esc(description)}">` : '',
     `<meta name="twitter:image" content="${esc(image)}">`,
     `<meta name="theme-color" content="#f4efe4" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#15130f" media="(prefers-color-scheme: dark)">`,
-    `<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/site.webmanifest">`,
-    `<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">`,
+    options.standalone
+      ? `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`
+      : `<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="manifest" href="/site.webmanifest">`,
+    options.standalone ? '' : `<link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt">`,
     PRECONNECT,
     (options.preload ?? []).map((href) => `<link rel="preload" as="image" href="${esc(href)}">`).join(''),
     options.jsonLd && options.jsonLd.length > 0 ? jsonLd(options.jsonLd) : ''
@@ -290,6 +300,31 @@ function shell(options: ShellOptions, main: string): string {
   const styles = (options.kind === 'app' ? options.styles ?? [] : [])
     .map((s) => `<link rel="stylesheet" href="/assets/${esc(s)}?v=${ASSET_VERSION}">`)
     .join('')
+  if (options.standalone) {
+    const { site, console: consoleOrigin, home } = options.standalone
+    const out = [
+      ...(consoleOrigin === null ? [] : [[`${consoleOrigin}/`, 'Console']]),
+      [`${site}/`, 'cookrew.dev']
+    ]
+      .map(([href, label]) => `<a class="btn sm" href="${esc(href)}">${label}</a>`)
+      .join('')
+    return `<!doctype html>
+<html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
+<body data-home="${esc(home)}">
+<header class="hdr"><div class="wrap">
+<a class="mark" href="${esc(site)}/" aria-label="Cookrew home">${LOGO}</a>
+<span class="chip">account &amp; security</span>
+<nav class="top">${out}${account}</nav>
+</div></header>
+${main}
+<footer><div class="wrap">
+<nav class="row" aria-label="Cookrew"><a href="${GITHUB_REPO}">Source</a><a href="${GITHUB_REPO}/releases">Releases</a></nav>
+<p class="meta" style="margin-top:12px">Cookrew is open source under the MIT license. This page is your account: it reaches none of your machines. Those are in the console.</p>
+</div></footer>
+<div class="toast" id="toast" hidden></div>
+${options.kind === 'app' ? ACCOUNT_SHEET : ''}
+</body></html>`
+  }
   return `<!doctype html>
 <html lang="en"><head>${head(options)}${styles}<style>${FONT_FACES}${SITE_STYLE}${ACCOUNT_STYLE}</style>${scripts}</head>
 <body>

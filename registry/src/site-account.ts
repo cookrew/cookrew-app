@@ -126,7 +126,13 @@ export function mePage(
      * sensitive act needs no second proof. machines.js opens no machine's page by itself before then (security review M1).
      */
     freshForMs?: number
-  } | null
+  } | null,
+  /**
+   * ON THE AUTH HOST (0.6.0), where this page lives when the registry splits
+   * its hosts: the account, its devices and its security, and nothing of any
+   * machine. The machines are the console's, on another origin.
+   */
+  standalone?: { site: string; console: string | null; home: string }
 ): Page {
   if (input === null) {
     return page(
@@ -136,11 +142,12 @@ export function mePage(
         cache: 0,
         status: 401,
         noindex: true,
-        scripts: ['device-id.js', 'site.js']
+        scripts: ['device-id.js', 'site.js'],
+        ...(standalone ? { standalone } : {})
       },
       `<div class="wrap" style="padding-top:44px"><h1>Your account</h1>
 <p class="lede">${esc(meCopy('avatar.no-account'))}</p>
-<p class="row"><button class="btn primary lg" data-signin>Sign in or register</button><a class="btn lg" href="/market">Marketplace</a></p></div>`
+<p class="row"><button class="btn primary lg" data-signin>Sign in or register</button>${standalone ? '' : '<a class="btn lg" href="/market">Marketplace</a>'}</p></div>`
     )
   }
   const { account, currentDeviceId } = input
@@ -154,6 +161,14 @@ export function mePage(
     .map((d) => deviceRow(d, d.id === currentDeviceId))
     .join('')
   const codes = account.recovery.length
+  // The machines' part of this page: drawn on the single-host site, never on the auth host.
+  const MACHINES = `${input.view === 'account' ? '<p class="row"><a class="btn sm" href="/me">‹ Your machines</a></p>' : ''}
+<!-- THE DOOR TO THE DEVICES VIEW (owner 2026-11-10): the machines first; account and security below, on this page. -->
+${machinesConsole(account.username, input.machines ?? account.desktops.map((d) => ({ id: d.deviceId, name: d.name, online: false, lastSeenAt: d.updatedAt ?? null, profile: d.profile ?? null })), input.now ?? Date.now())}`
+  const REACH = `<!-- The machines' addresses and the Wi-Fi ask (M5): kept, folded under the console. -->
+<details style="margin-top:30px" id="me-reach"><summary>Machine addresses and Wi-Fi</summary>
+${desktopsSection(account.username, account.desktops)}
+</details>`
   return page(
     {
       title: `@${account.username} — Cookrew`,
@@ -166,7 +181,8 @@ export function mePage(
       // step-up.js before site.js: the sensitive acts both scripts own prove
       // themselves through it, and it finishes them on the way back.
       // machines.js after site.js: it signs at each machine's door with this browser's key.
-      scripts: ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js', 'machines.js']
+      scripts: standalone ? ['device-id.js', 'step-up.js', 'site.js'] : ['device-id.js', 'step-up.js', 'site.js', 'device-seal.js', 'reach.js', 'machines.js'],
+      ...(standalone ? { standalone } : {})
     },
     `<div class="wrap" style="padding-top:44px" id="me"${input.view === 'account' ? '' : ' data-go="devices"'}${input.freshForMs !== undefined ? ` data-fresh-ms="${Math.round(input.freshForMs)}"` : ''} data-username="${esc(account.username)}" data-has-password="${account.passwordless === true ? '0' : '1'}" data-step-up-acts="${WEB_STEP_UP_ACTS.join(' ')}">
 <div class="me-head">${face}<div><h1 style="margin:0">@${esc(account.username)}</h1>
@@ -175,9 +191,7 @@ export function mePage(
 <button class="btn" data-edit-name>Edit</button>
 <button class="btn" data-signout>Sign out</button></div>
 
-${input.view === 'account' ? '<p class="row"><a class="btn sm" href="/me">‹ Your machines</a></p>' : ''}
-<!-- THE DOOR TO THE DEVICES VIEW (owner 2026-11-10): the machines first; account and security below, on this page. -->
-${machinesConsole(account.username, input.machines ?? account.desktops.map((d) => ({ id: d.deviceId, name: d.name, online: false, lastSeenAt: d.updatedAt ?? null, profile: d.profile ?? null })), input.now ?? Date.now())}
+${standalone ? (standalone.console === null ? '' : `<p class="row"><a class="btn sm" href="${esc(standalone.console)}/">‹ Your machines, in the console</a></p>`) : MACHINES}
 
 <!-- W5 · REQUESTS SITS ABOVE DEVICES, and the whole section hides itself when
      the queue is empty. It is above because it is the only part of this page
@@ -193,10 +207,7 @@ ${machinesConsole(account.username, input.machines ?? account.desktops.map((d) =
  data-wifi-row="${esc(meCopy('w5.reach-elsewhere', { device: '{device}' }))}"></ul>
 </section>
 
-<!-- The machines' addresses and the Wi-Fi ask (M5): kept, folded under the console. -->
-<details style="margin-top:30px" id="me-reach"><summary>Machine addresses and Wi-Fi</summary>
-${desktopsSection(account.username, account.desktops)}
-</details>
+${standalone ? '' : REACH}
 
 <h2 style="margin-top:30px" id="me-devices-heading">Devices</h2>
 <p class="meta">Every device attached to @${esc(account.username)}. ${esc(meCopy('d12.revoke', { device: 'device' }))} ${esc(meCopy('d12.last-device', { handle: account.username }))}</p>
@@ -205,7 +216,7 @@ ${desktopsSection(account.username, account.desktops)}
      because what a person is holding differs, and "add a phone" is the
      sentence somebody standing with a phone is looking for. -->
 <p class="row"><button class="btn" data-add-device="desktop">Add a machine</button>
-<button class="btn" data-add-device="phone">Add a phone</button></p>
+${standalone ? '' : '<button class="btn" data-add-device="phone">Add a phone</button>'}</p>
 <div class="totp-panel" id="me-join-code" data-add-lede="${esc(meCopy('w5.add-lede'))}" hidden></div>
 
 <h2 style="margin-top:30px" id="security">Security</h2>

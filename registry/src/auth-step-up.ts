@@ -316,7 +316,7 @@ export function spendStepUp(v2: V2Identity, request: AuthRequest, signed: Signed
   // the alarm) and no five minutes for anything else (security review, 11-09).
   if (!v2.factors.store.mustChangePassword(username)) v2.accounts.markVerified(username, opener.jti, stepBy)
   log(`proven act=${act} by=${stepBy}`)
-  const back = request.returnPath ?? '/me'
+  const back = request.returnPath ?? (v2.apiOrigin !== null ? '/account' : '/me')
   const query = new URLSearchParams({ [STEP_UP_LANDING_PARAM]: act }).toString()
   const fragment = new URLSearchParams({ [STEP_UP_LANDING_HASH]: pending.id }).toString()
   return { ok: true, location: `${back}?${query}#${fragment}` }
