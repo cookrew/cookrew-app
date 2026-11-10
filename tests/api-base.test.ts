@@ -214,8 +214,9 @@ describe('the streams are covered too', () => {
     expect(body).toMatch(/new RtcEventSource\(routed\.link, tokenParam\(routed\.path\)\)/)
     expect(body).toMatch(/new RtcEventSource\(headerStream\(url\), url\)/)
     expect(body).toMatch(/new EventSource\(tokenParam\(url\)\)/)
-    // On the relay the stream goes by fetch: the machine's token and the account session, both in headers.
-    expect(opener).toMatch(/headers: \{ \.\.\.headers, \.\.\.authHeaders\(\), \.\.\.relayHeadersFor\(\) \}/)
+    // On the relay the stream goes by fetch: the machine's token and the account session, both in
+    // headers, and the session judged by the address the stream is going to.
+    expect(opener).toMatch(/headers: \{ \.\.\.headers, \.\.\.authHeaders\(\), \.\.\.relayHeadersForUrl\(url\) \}/)
 
     const carrying: string[] = []
     const walk = (dir: string): void => {

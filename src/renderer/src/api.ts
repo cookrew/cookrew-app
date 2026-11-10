@@ -1141,14 +1141,17 @@ export type AccessSaveAnswer = { ok: true; state: AccessState; moved?: boolean }
 
 import { createDemoApi } from "./demo-api";
 import { createRemoteApi } from "./remote-api";
-import { registerScopeState } from "./machine-scope";
+import { registerScopeState, scopeEpoch } from "./machine-scope";
 
 let demoApi: CookrewApi | null = null;
-let remoteApi: CookrewApi | null = null;
+let remoteApi: { readonly api: CookrewApi; readonly epoch: number } | null =
+  null;
 
 // The remote api is made for the machine in scope: making it asks that machine
-// whether this browser is paired. Entering another machine drops it, so the
-// next one asked for is made, and asks, for the new machine.
+// whether this browser is paired. It is good for the visit it was made in and
+// no longer (as the token store is, auth-gate.ts): one made while a machine
+// was being left is never handed out for the next. Dropped when the machine
+// is left, so nothing of it is held past the change.
 registerScopeState("remote api", () => {
   remoteApi = null;
 });
@@ -1167,8 +1170,10 @@ export function cookrew(): CookrewApi {
   const ipc = bridge();
   if (ipc) return ipc;
   if (isRemoteMode()) {
-    if (!remoteApi) remoteApi = createRemoteApi();
-    return remoteApi;
+    const epoch = scopeEpoch();
+    if (remoteApi === null || remoteApi.epoch !== epoch)
+      remoteApi = { api: createRemoteApi(), epoch };
+    return remoteApi.api;
   }
   if (!demoApi) demoApi = createDemoApi();
   return demoApi;

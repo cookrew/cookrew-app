@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { machineScope, scopeEpoch, subscribeMachineScope, type MachineScope } from './machine-scope'
+import { scopeEpoch, subscribeMachineScope } from './machine-scope'
 
 const subscribe = (listener: () => void): (() => void) => subscribeMachineScope(() => listener())
 
@@ -10,6 +10,3 @@ const subscribe = (listener: () => void): (() => void) => subscribeMachineScope(
  * starts clean. Constant on the desktop and on a machine's own page.
  */
 export const useMachineScopeEpoch = (): number => useSyncExternalStore(subscribe, scopeEpoch, scopeEpoch)
-
-/** The machine in scope, for a view that draws by it. */
-export const useMachineScope = (): MachineScope => useSyncExternalStore(subscribe, machineScope, machineScope)

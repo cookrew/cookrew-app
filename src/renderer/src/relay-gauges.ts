@@ -17,6 +17,7 @@
  */
 import { parseMachineGauges, type MachineGauges } from '../../shared/machine-gauges'
 import { tokenKeyForBase } from './pairing-scope'
+import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
 import { machineBaseOf, relayHeadersFor, type MachineScope } from './machine-scope'
 
 export const GAUGES_API_PATH = '/api/fleet/gauges'
@@ -60,8 +61,6 @@ export async function fetchGauges(
   }
 }
 
-/** A request to the relay from the console: another origin, no cookie. */
-export const RELAY_REQUEST: Pick<RequestInit, 'mode' | 'credentials'> = { mode: 'cors', credentials: 'omit' }
 
 /**
  * ANOTHER MACHINE'S GAUGES, from the console: at that machine's own address on
@@ -74,7 +73,7 @@ export async function relayDesktopGauges(
   scope: MachineScope,
   machineId: string,
   storedToken: (key: string) => string | null,
-  fetcher: FetchLike = (input, init) => fetch(input, { ...init, ...RELAY_REQUEST })
+  fetcher: FetchLike = (input, init) => fetch(input, { ...init, ...CROSS_ORIGIN_NO_COOKIE })
 ): Promise<MachineGauges | null> {
   const target = machineBaseOf(machineId, scope)
   if (target === null) return null

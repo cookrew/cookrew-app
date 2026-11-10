@@ -47,6 +47,7 @@ const REGISTERED: Record<string, readonly string[]> = {
   'use-cursors.ts': ['use cursors'],
   'use/source-picker-store.ts': ['source picker'],
   'use/unlock-sheet-store.ts': ['unlock sheet'],
+  'workspace-arrival.ts': ['workspace arrival'],
   'zoom/bar-pick.ts': ['bar card'],
   'zoom/gauge-store.ts': ['machine gauges'],
   'zoom/remote-machine-store.ts': ['inside another machine'],
@@ -55,8 +56,14 @@ const REGISTERED: Record<string, readonly string[]> = {
   'zoom/zoom-store.ts': ['zoom focus']
 }
 
-/** What stops before anything is cleared: the things that talk. */
-const STOPPED_FIRST = ['machine api', 'machine session', 'reply voice', 'rtc link']
+/**
+ * What stops before anything is cleared: the things that talk (a stream, a
+ * loop, a link), and the things that tell listeners when they let go. A
+ * listener may ask for the api or the token store; told while those still
+ * stand, it gets the ones it always had, not ones made anew for a machine
+ * that is being left.
+ */
+const STOPPED_FIRST = ['data plane', 'machine api', 'machine gauges', 'machine session', 'reply voice', 'rtc link', 'zoom fleet']
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -100,18 +107,26 @@ describe('the list of what belongs to a machine', () => {
 
   it('stops what talks before it clears what holds', async () => {
     for (const file of Object.keys(REGISTERED)) await import(`../src/renderer/src/${file.replace(/\.tsx?$/, '')}`)
-    const source = (name: string): string => {
-      const file = Object.entries(REGISTERED).find(([, names]) => names.includes(name))?.[0] ?? ''
-      return readFileSync(path.join(RENDERER, file), 'utf8')
-    }
-    for (const name of Object.values(REGISTERED).flat()) {
-      const text = source(name)
-      const at = text.search(new RegExp(`registerScopeState\\(\\s*['"]${name}['"]`))
-      expect(at, name).toBeGreaterThan(-1)
-      // The call, to its closing: a 'stop' as its last argument, or not.
-      const call = text.slice(at, at + 400)
-      const stops = /,\s*'stop'\s*\)/.test(call.slice(0, call.indexOf('\n)') === -1 ? call.indexOf(')\n') + 1 : call.indexOf('\n)') + 2))
-      expect(stops, name).toBe(STOPPED_FIRST.includes(name))
+    const phases = scope.scopePhases()
+    const stopped = Object.keys(phases).filter((name) => phases[name] === 'stop').sort()
+    expect(stopped).toEqual([...STOPPED_FIRST].sort())
+    // And in that order when a machine is left, whatever order the modules loaded in.
+    const order: string[] = []
+    scope.registerScopeState('a late holder', () => order.push('clear'))
+    scope.registerScopeState('a late talker', () => order.push('stop'), 'stop')
+    scope.enterMachine(B)
+    expect(order).toEqual(['stop', 'clear'])
+  })
+
+  it('is registered under the one name the sweep looks for: no alias, no wrapper', () => {
+    for (const file of sourceFiles(RENDERER)) {
+      if (file.endsWith('machine-scope.ts')) continue
+      const text = readFileSync(file, 'utf8')
+      expect(/registerScopeState\s+as\s/.test(text), file).toBe(false)
+      // Used only as a call at module level: never passed on or kept under another name.
+      const uses = text.match(/registerScopeState(?!\()/g) ?? []
+      const imports = text.match(/import\s*\{[^}]*registerScopeState[^}]*\}\s*from/g) ?? []
+      expect(uses.length, file).toBe(imports.length)
     }
   })
 })
@@ -241,6 +256,14 @@ describe('entering another machine lets go of', () => {
     expect(inside.remotePlace.get().machine).toBeNull()
     // Kept by that machine's own id, whichever machine is in scope.
     expect(inside.remoteDraft(B, 'agent-9')).toBe('words for a machine, kept by its own id')
+  })
+
+  it('the hush after a workspace was made here: the next machine’s events are not swallowed by it', async () => {
+    const arrival = await import('../src/renderer/src/workspace-arrival')
+    arrival.beginArrival(1_000)
+    expect(arrival.heldForArrival({ type: 'workspace.created' }, 1_001)).toBe(true)
+    scope.enterMachine(B)
+    expect(arrival.heldForArrival({ type: 'workspace.created' }, 1_001)).toBe(false)
   })
 
   it('a fix in progress, the presets asked for and the pictures read', async () => {

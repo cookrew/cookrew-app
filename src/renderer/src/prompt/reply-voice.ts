@@ -125,12 +125,12 @@ export function announce(line: string): void {
   queued = [...queued, line]
 }
 
-/** Stop reading now, and drop the announcements waiting. Spoken replies stay on; the next reply is read. */
 // A reply being read aloud is ONE machine's agent's, in that machine's voice:
 // it stops, and what it had asked that machine for is cancelled, before the
 // next machine is in scope.
 registerScopeState('reply voice', () => stopReading(), 'stop')
 
+/** Stop reading now, and drop the announcements waiting. Spoken replies stay on; the next reply is read. */
 export function stopReading(): void {
   queued = []
   generation += 1

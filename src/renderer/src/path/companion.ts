@@ -1,4 +1,4 @@
-import { registerScopeState } from '../machine-scope'
+import { heldScope, registerScopeState } from '../machine-scope'
 import { apiPath, clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
@@ -87,6 +87,7 @@ export const cardDeviceId = (): string | null => lastDeviceId
 
 /** The desktop's own reach card, over whatever plane is already working. */
 const fetchCard = async (): Promise<ReachCardLite | null> => {
+  const sameMachine = heldScope()
   try {
     const response = await planeFetch(apiPath('/api/reach'), {
       headers: authHeaders(),
@@ -94,6 +95,8 @@ const fetchCard = async (): Promise<ReachCardLite | null> => {
     })
     if (!response.ok) return null
     const body = (await response.json()) as Partial<ReachCardLite>
+    // A card read to its end after its machine was left is not this machine's card.
+    if (!sameMachine()) return null
     if (typeof body.deviceId !== 'string' || !Array.isArray(body.lan)) return null
     // `trusted` is Reach v2.1's addition and an OLDER MAC WILL NOT HAVE IT.
     // Absent reads as empty, which reads as "no live switch today" — the
@@ -275,7 +278,7 @@ registerScopeState('path switch memory', () => {
  * plane is LAN or TAILNET by the Mac's word and the data moves onto it; its
  * row rides the path report. `onEnd` hears when an adopted link ends.
  */
-const rtcKnock = async (onEnd: () => void): Promise<RtcRow[]> => {
+const rtcKnock = async (onEnd: () => void, live: () => boolean): Promise<RtcRow[]> => {
   if (typeof RTCPeerConnection !== 'function' || dataPlane().kind !== 'relay') return []
   const at = Date.now()
   if (at - lastRtcAt < RTC_EVERY_MS) return []
@@ -294,6 +297,8 @@ const rtcKnock = async (onEnd: () => void): Promise<RtcRow[]> => {
   })
   const probe = await adoptRtcLink({
     connect,
+    live,
+    current: rtcLink,
     plane: dataPlane,
     adopt: setDataPlane,
     fallBack: fallBackToRelay,
@@ -358,6 +363,13 @@ const startPlaneSwitch = (): (() => void) => {
   let racing = false
   let again = false
   let stopped = false
+  // THIS SWITCHER IS FOR ONE MACHINE, the one in scope when it started. A race
+  // waits on the network for seconds; one that comes back after the switcher
+  // was stopped, or after another machine was entered, has learned something
+  // about a machine the page no longer talks to. It adopts nothing, reports
+  // nothing and remembers nothing.
+  const sameMachine = heldScope()
+  const live = (): boolean => !stopped && sameMachine()
   const raceSoon = (): void => {
     if (stopped || document.visibilityState !== 'visible' || soon !== null) return
     soon = setTimeout(() => {
@@ -401,9 +413,11 @@ const startPlaneSwitch = (): (() => void) => {
     // and on the owner's phone the names never answer (each race spent
     // 2.5-6 s timing them out before the link was even tried). A hold
     // means the plane just failed; the race after the hold knocks.
-    const knocked = health.held() ? [] : await rtcKnock(raceSoon)
+    const knocked = health.held() ? [] : await rtcKnock(raceSoon, live)
+    if (!live()) return
     let noted = false
     await switchPlaneIfBetter({
+      live,
       plane: dataPlane,
       card: fetchCard,
       // The origin is sent so the Mac answers version 2 — a proof bound
@@ -414,7 +428,9 @@ const startPlaneSwitch = (): (() => void) => {
       // the rows say "not published" where that is the fact and never
       // "refused by the browser" where it is not (path/name-oracle.ts).
       named: (origin) => nameLive(origin),
-      adopt: (plane: DataPlane) => setDataPlane(plane),
+      adopt: (plane: DataPlane) => {
+        if (live()) setDataPlane(plane)
+      },
       // A tailnet must beat the relay on a warm connection, not just
       // answer once (path/plane-quality.ts). The LAN is the same Wi-Fi.
       worthIt: async (origin, kind) => {
@@ -430,6 +446,7 @@ const startPlaneSwitch = (): (() => void) => {
       probing: setProbing,
       note: (rows) => {
         noted = true
+        if (!live()) return
         const settled = settledPlane()
         // The two shapes are the same fact and are kept apart on purpose:
         // plane-switch.ts must not import a renderer store, or the rule
@@ -459,7 +476,7 @@ const startPlaneSwitch = (): (() => void) => {
     })
     // Skipped (the link already made this LAN), held, or no trusted
     // names: the link's own rows still reach the Mac.
-    if (!noted) reportLinkRows(knocked)
+    if (!noted && live()) reportLinkRows(knocked)
   }
 
   const offs: (() => void)[] = [

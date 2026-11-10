@@ -1,23 +1,23 @@
 /**
  * WHERE THIS PAGE'S REQUESTS GO, WHICH IS NOT WHERE THE PAGE CAME FROM.
  *
- * Reach v2.1's second principle is ONE URL: a phone lives at
- * `https://cookrew.dev/relay/@user/desktop/<id>/` for the life of the session,
- * and the transport underneath moves. Before this, `API_BASE` was a constant
+ * Reach v2.1's second principle is ONE URL: the page stays at one address
+ * for the life of the session (the console's, since 0.6.0), and the transport
+ * underneath moves. Before this, the base of every request was a constant
  * read once at module load and every request went wherever the page was served
  * from — so the only way to reach the Mac faster was to NAVIGATE to it, which
  * is exactly what put the owner's phone on ERR_CERT_AUTHORITY_INVALID with the
  * pairing token in the address bar (companion-relay-no-jump.test.ts).
  *
- * So the data plane is separated from the page's base and made mutable:
+ * So the data plane is separated from the machine's address and made mutable:
  *
- *   THE PAGE'S BASE IS A FACT AND STAYS A CONSTANT. `COOKREW_BASE` and
- *   `COOKREW_SLUG` are still read once, still cannot be re-pointed by mutating
- *   a global. Nothing about which workspace this client is for is negotiable.
+ *   WHICH MACHINE, AND WHICH OF ITS WORKSPACES, IS A FACT (machine-scope.ts):
+ *   the machine in scope and the slug the page was served for. It cannot be
+ *   re-pointed by mutating a global.
  *
  *   THE PLANE IS A DECISION AND IS THEREFORE A STORE. It starts on the relay —
- *   the path that is already working, because the shell arrived over it — and
- *   only ever moves to an origin that has PROVED it is this Mac
+ *   the path that is known to work — and only ever moves to an origin that
+ *   has PROVED it is this Mac
  *   (path/plane-switch.ts). A wrong value here is not a crash; it is a phone
  *   quietly talking to something that is not the Mac, which is why nothing
  *   sets it except that one verified path.
@@ -114,9 +114,10 @@ export const resetDataPlane = (): void => {
 
 // A direct origin was proved to be ONE machine. Entering another starts on the
 // relay again, the path that is known to work, and says so to whoever follows
-// the plane (their streams restart on it). The listeners are the page's wiring
+// the plane (a request sent on the direct one is abandoned). It tells its
+// listeners, so it goes with what stops. The listeners are the page's wiring
 // and stay.
-registerScopeState('data plane', () => setDataPlane(RELAY_PLANE))
+registerScopeState('data plane', () => setDataPlane(RELAY_PLANE), 'stop')
 
 /**
  * HOW A REQUEST URL IS COMPOSED, as one pure rule with the two planes side by
@@ -154,11 +155,11 @@ export const planePath = (
 /**
  * The fetch options a plane needs, which differ in the ways that matter.
  *
- * RELAY: same origin, and the relay prefix is gated by the ACCOUNT SESSION
- * cookie — omitting credentials there would 401 every request the companion
- * makes. It is NOT annotated for the local network: cookrew.dev is a public
- * host on a public network, and claiming otherwise would ask a browser for a
- * permission over a path that never needed one.
+ * RELAY: on a machine's own page it is the page's own origin, same-origin.
+ * On the console it is the registry's API host, another origin with no cookie
+ * (see below). It is NOT annotated for the local network: a public host on a
+ * public network, and claiming otherwise would ask a browser for a permission
+ * over a path that never needed one.
  *
  * DIRECT: a different origin entirely. Cookies must not travel (the Mac
  * authorises by the pairing token in an Authorization header and nothing
@@ -189,13 +190,16 @@ const planeAddressSpace = (
 ): { readonly targetAddressSpace?: AddressSpace } =>
   current.hint === 'none' ? {} : addressSpaceInitFor(current.origin)
 
+/** A request to another origin that carries no cookie: the relay from the console, and any direct path. */
+export const CROSS_ORIGIN_NO_COOKIE: Pick<RequestInit, 'mode' | 'credentials'> = { mode: 'cors', credentials: 'omit' }
+
 export const planeRequestInit = (current: DataPlane, base = ''): PlaneRequestInit => {
   // THE RELAY, ON THE CONSOLE, IS ANOTHER ORIGIN (the registry's API host): a
   // cross-origin request that carries no cookie, because none admits anyone
   // there. The account session goes in a header (plane-fetch.ts). It is a
   // public host, so it is never annotated for the local network.
-  if (current.origin === '') return isAbsolute(base) ? { mode: 'cors', credentials: 'omit' } : { credentials: 'same-origin' }
-  return { mode: 'cors', credentials: 'omit', ...planeAddressSpace(current) }
+  if (current.origin === '') return isAbsolute(base) ? CROSS_ORIGIN_NO_COOKIE : { credentials: 'same-origin' }
+  return { ...CROSS_ORIGIN_NO_COOKIE, ...planeAddressSpace(current) }
 }
 
 /** Is this base another origin (the console's relay address) rather than a path on this one. */

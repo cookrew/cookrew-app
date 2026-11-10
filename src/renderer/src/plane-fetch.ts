@@ -3,7 +3,7 @@ import { dataPlane, subscribeDataPlane, type DataPlane } from './data-plane'
 import { planeHealth } from './plane-health'
 import { linkBody, linkHeaders, viaLink } from './rtc-plane'
 import { reviveStreams } from './plane-streams'
-import { relayHeadersFor } from './machine-scope'
+import { heldScope, machineLeft, relayHeadersForUrl } from './machine-scope'
 
 /**
  * ONE FETCH, ON WHICHEVER PLANE IS CARRYING THE SESSION.
@@ -11,10 +11,12 @@ import { relayHeadersFor } from './machine-scope'
  * Two things every request the companion makes needs, and neither belongs at a
  * call site:
  *
- *   THE RIGHT CREDENTIAL MODE. Relay requests are same-origin and are gated by
- *   the account session cookie; direct requests are cross-origin and must send
- *   no cookies at all, only the pairing token in the Authorization header. Get
- *   that backwards in either direction and every request 401s.
+ *   THE RIGHT CREDENTIAL MODE. On a machine's own page a relay-plane request
+ *   is same-origin. Everything else is cross-origin and sends no cookie at
+ *   all: a direct request carries only the pairing token in the Authorization
+ *   header, and the console's relay request carries that and the account
+ *   session in a header of its own (below). Get it backwards and every
+ *   request 401s.
  *
  *   A REPORT TO plane-health. A direct plane dies without saying so, and the
  *   only witness is the requests that stop arriving. Counting them here means
@@ -65,14 +67,14 @@ const transportFailed = (error: unknown): boolean => (error as Error | undefined
 /**
  * THE ACCOUNT SESSION, FOR THE RELAY AND FOR NOTHING ELSE. On the console the
  * relay wants it beside the machine's own token, in a header of its own
- * (machine-scope.ts). It is added HERE, at the one place a request leaves on
- * the relay plane, and judged by the plane at that moment: a request going
- * straight to a machine (a LAN name, the direct link) never carries it. A
- * machine has no business holding the account's session.
+ * (machine-scope.ts). It is added HERE, at the one place a request leaves by
+ * fetch, and judged by the address the request is going to: only a URL under
+ * the relay's machine prefix carries it. An address built for a direct path
+ * and sent later, when the page is back on the relay, is still a machine's
+ * address, and a machine has no business holding the account's session.
  */
-const relaySession = (headers: HeadersInit | undefined): { headers?: Record<string, string> } => {
-  if (dataPlane().origin !== '') return {}
-  const session = relayHeadersFor()
+const relaySession = (url: string, headers: HeadersInit | undefined): { headers?: Record<string, string> } => {
+  const session = relayHeadersForUrl(url)
   if (Object.keys(session).length === 0) return {}
   const own: Record<string, string> = {}
   new Headers(headers).forEach((value, key) => void (own[key] = value))
@@ -89,7 +91,15 @@ export async function planeFetch(url: string, init: RequestInit = {}): Promise<R
   }
 }
 
+/**
+ * AN ANSWER FOR A MACHINE THAT WAS LEFT WHILE IT WAS ON ITS WAY IS NOBODY'S.
+ * Whoever asked is that machine's view and is gone; handed on, its 401 would
+ * put the next machine behind the re-pair screen and its seat or its numbers
+ * would be filed as the next machine's. It ends as an abort, and says nothing
+ * about the path either way: the path is the next machine's now.
+ */
 async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
+  const sameMachine = heldScope()
   // THE DIRECT LINK (rtc-plane.ts): the same URL, carried on the data
   // channel. A body only a real fetch can send (a FormData upload) takes the
   // relay, which is still there underneath.
@@ -104,20 +114,24 @@ async function fetchOnPlane(url: string, init: RequestInit): Promise<Response> {
         body,
         ...(init.signal ? { signal: init.signal } : {})
       })
+      if (!sameMachine()) throw machineLeft()
       planeHealth().note(true)
       reviveStreams()
       return response
     } catch (error) {
+      if (!sameMachine()) throw machineLeft()
       if (transportFailed(error)) planeHealth().note(false)
       throw error
     }
   }
   try {
-    const response = await fetch(url, { ...init, ...apiRequestInit(), ...relaySession(init.headers) })
+    const response = await fetch(url, { ...init, ...apiRequestInit(), ...relaySession(url, init.headers) })
+    if (!sameMachine()) throw machineLeft()
     planeHealth().note(true)
     reviveStreams()
     return response
   } catch (error) {
+    if (!sameMachine()) throw machineLeft()
     if (transportFailed(error)) planeHealth().note(false)
     throw error
   }

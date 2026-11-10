@@ -3,10 +3,13 @@ import {
   SCOPE_PHASES,
   configureMachineScope,
   enterMachine,
+  heldScope,
   machineBaseOf,
+  machineLeft,
   machineScope,
   registerScopeState,
   relayHeadersFor,
+  relayHeadersForUrl,
   resetMachineScopeForTests,
   scopeBase,
   scopeEpoch,
@@ -152,5 +155,73 @@ describe('entering another machine', () => {
 
   it('has two phases and no other', () => {
     expect(SCOPE_PHASES).toEqual(['stop', 'clear'])
+  })
+})
+
+describe('work that waits while the machine changes', () => {
+  const console_ = (): void => configureMachineScope({ relay: { origin: API, session: () => 'account-session' } })
+
+  it('holds for as long as the machine it was started for is in scope, and never again after', () => {
+    console_()
+    enterMachine(A)
+    const stillA = heldScope()
+    expect(stillA()).toBe(true)
+    enterMachine(B)
+    expect(stillA()).toBe(false)
+    // Back on A is another visit: what waited since the first one is not owed an answer.
+    enterMachine(A)
+    expect(stillA()).toBe(false)
+    expect(heldScope()()).toBe(true)
+  })
+
+  it('ends as an abort, which nothing counts against the path', () => {
+    expect(machineLeft().name).toBe('AbortError')
+  })
+})
+
+describe('the account session, judged by where a request goes', () => {
+  const session = { 'x-cookrew-session': 'account-session' }
+  beforeEach(() => {
+    configureMachineScope({ relay: { origin: `${API}/`, session: () => 'account-session' } })
+    enterMachine(A)
+  })
+
+  it('rides a URL under the relay’s machine prefix, for any machine of the account', () => {
+    expect(relayHeadersForUrl(`${API}/api/m/${A}/api/workspaces`)).toEqual(session)
+    expect(relayHeadersForUrl(`${API}/api/m/${B}/api/fleet`)).toEqual(session)
+  })
+
+  it('never rides anything else: a direct name, a look-alike host, another path of the API host, a relative path', () => {
+    for (const url of [
+      `https://192-168-1-7.${A}.d.cookrew.dev:8643/api/workspaces`,
+      `${API}.evil.example/api/m/${A}/api/workspaces`,
+      `https://evil.example/?${API}/api/m/${A}/`,
+      `${API}/v2/me/desktops`,
+      `${API}/api/mx/${A}/api/workspaces`,
+      '/api/workspaces'
+    ]) {
+      expect(relayHeadersForUrl(url), url).toEqual({})
+    }
+  })
+
+  it('is nothing on a page a machine serves itself', () => {
+    resetMachineScopeForTests()
+    expect(relayHeadersForUrl(`${API}/api/m/${A}/api/workspaces`)).toEqual({})
+  })
+})
+
+describe('saying the page is the console', () => {
+  it('is a change like any other: what was held is let go of, and whoever follows the scope is told', () => {
+    const order: string[] = []
+    registerScopeState('a stream', () => order.push('stop'), 'stop')
+    registerScopeState('a store', () => order.push('clear'))
+    const heard: (string | null)[] = []
+    subscribeMachineScope((next) => heard.push(next.relay?.origin ?? null))
+    const before = scopeEpoch()
+    configureMachineScope({ relay: { origin: API, session: () => null } })
+    expect(order).toEqual(['stop', 'clear'])
+    expect(heard).toEqual([API])
+    expect(scopeEpoch()).toBe(before + 1)
+    expect(scopeNeedsMachine()).toBe(true)
   })
 })

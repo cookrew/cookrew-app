@@ -1746,10 +1746,11 @@ export default function App(): React.JSX.Element {
   // The whole view is one machine's. Entering another (the console) remounts
   // it: every subscription below is made again on the next machine's stream,
   // and nothing drawn for the last one is carried over (machine-scope.ts).
+  // The crash screen too: one machine's view failing says nothing of the next.
   const machine = useMachineScopeEpoch()
   return (
-    <ErrorBoundary>
-      <ReactFlowProvider key={machine}>
+    <ErrorBoundary key={machine}>
+      <ReactFlowProvider>
         <Canvas />
       </ReactFlowProvider>
     </ErrorBoundary>

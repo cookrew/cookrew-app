@@ -55,6 +55,16 @@ describe('on a machine’s own page', () => {
 })
 
 describe('on the console', () => {
+  it('stops what had started as if the page were a machine’s own, whenever the page says it is the console', async () => {
+    const session = await import('../src/renderer/src/machine-session')
+    // The boot's lines in the wrong order: the session first, the console said after.
+    session.startMachineSession()
+    expect(path).toEqual({ started: 1, stopped: 0 })
+    await inConsole(null)
+    expect(path).toEqual({ started: 1, stopped: 1 })
+    expect(builds).toEqual({ watched: 1, stopped: 1 })
+  })
+
   it('runs nothing until a machine is entered', async () => {
     await inConsole(null)
     const session = await import('../src/renderer/src/machine-session')

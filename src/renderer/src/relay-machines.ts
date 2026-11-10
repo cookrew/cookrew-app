@@ -11,7 +11,7 @@
  */
 import { parseAccountMachines, type AccountMachines } from '../../shared/zoom-fleet'
 import type { MachineScope } from './machine-scope'
-import { RELAY_REQUEST } from './relay-gauges'
+import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 
@@ -22,7 +22,7 @@ export async function relayAccountMachines(scope: MachineScope, fetchImpl: Fetch
   if (session === null || session === '') return { ok: false, reason: 'signed-out' }
   let response: Response
   try {
-    response = await fetchImpl(`${relay.origin}/v2/me/desktops`, { ...RELAY_REQUEST, cache: 'no-store', headers: { authorization: `Bearer ${session}` } })
+    response = await fetchImpl(`${relay.origin}/v2/me/desktops`, { ...CROSS_ORIGIN_NO_COOKIE, cache: 'no-store', headers: { authorization: `Bearer ${session}` } })
   } catch {
     return { ok: false, reason: 'offline' }
   }

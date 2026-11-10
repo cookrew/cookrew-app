@@ -77,10 +77,9 @@ const DESKTOP_IN_BASE = new RegExp(`${MACHINE_RELAY_PREFIX}/(${UUID})/?$`, 'i')
 /**
  * The desktop id inside a relay prefix, or null when the base is not one.
  *
- * Read from the BASE the server injected (`COOKREW_BASE`), never from
- * `location.pathname` — the base is the prefix this bundle was served under
- * and came down the bridge; the pathname is whatever the page has navigated
- * to since.
+ * Read from the machine's relay address (api-base.ts · clientBase), never
+ * from `location.pathname`: the address is built from the machine in scope,
+ * and the pathname is whatever the page has navigated to since.
  */
 export const desktopIdFromBase = (base: string): string | null => {
   const match = DESKTOP_IN_BASE.exec(base)

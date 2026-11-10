@@ -1,7 +1,7 @@
 import { remoteMachineCall, type RemoteMachineAnswer } from '../../shared/remote-machine-calls'
 import type { EnterResult } from './account-pair-client'
 import { tokenKeyForBase } from './pairing-scope'
-import { RELAY_REQUEST } from './relay-gauges'
+import { CROSS_ORIGIN_NO_COOKIE } from './data-plane'
 
 /**
  * EVERY MACHINE OF THE ACCOUNT, FROM THE CONSOLE, WHICHEVER ONE IS IN SCOPE
@@ -147,7 +147,7 @@ export function createRelayMachines(deps: RelayMachineDeps): RelayMachines {
       deps.fetch(`${target}/${route}`, {
         method,
         cache: 'no-store',
-        ...RELAY_REQUEST,
+        ...CROSS_ORIGIN_NO_COOKIE,
         headers: { authorization: `Bearer ${bearer}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...deps.relayHeaders() },
         ...(body !== undefined ? { body } : {})
       })

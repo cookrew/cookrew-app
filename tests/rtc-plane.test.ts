@@ -170,4 +170,40 @@ describe('adopting the link', () => {
     expect(row.outcome).toBe('timeout')
     expect(dataPlane().kind).toBe('relay')
   })
+
+  it('adopts nothing when the machine it was opening to was left meanwhile, and lets the link go', async () => {
+    const link = fakeLink()
+    const setLink = vi.fn()
+    let left = false
+    const row = await adoptRtcLink({
+      ...deps(link),
+      setLink,
+      live: () => !left,
+      connect: async () => {
+        // Another machine was entered while this one's link was opening.
+        left = true
+        return link
+      }
+    })
+    expect(row.outcome).toBe('closed')
+    expect(link.closed).toBe(true)
+    expect(setLink).not.toHaveBeenCalled()
+    expect(dataPlane()).toEqual({ origin: '', kind: 'relay' })
+  })
+
+  it('a link of the machine that was left, closing late, takes nothing from the next machine', async () => {
+    const old = fakeLink()
+    let left = false
+    const ended = vi.fn()
+    await adoptRtcLink({ ...deps(old), live: () => !left, current: rtcLink, ended })
+    // The next machine is in scope, on a link of its own.
+    left = true
+    const next = fakeLink('192.168.2.41')
+    setRtcLink(next)
+    setDataPlane({ origin: '', kind: 'lan', transport: 'rtc' })
+    old.fireClose()
+    expect(rtcLink()).toBe(next)
+    expect(dataPlane()).toEqual({ origin: '', kind: 'lan', transport: 'rtc' })
+    expect(ended).not.toHaveBeenCalled()
+  })
 })

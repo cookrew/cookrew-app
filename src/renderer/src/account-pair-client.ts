@@ -9,8 +9,8 @@ import {
   type PairOffer
 } from '../../shared/account-pair'
 import type { AccountDevice } from './account-device'
-import { isAbsolute } from './data-plane'
-import { machineScope, relayHeadersFor, type MachineScope } from './machine-scope'
+import { CROSS_ORIGIN_NO_COOKIE, isAbsolute } from './data-plane'
+import { machineScope, relayHeadersForUrl, type MachineScope } from './machine-scope'
 
 /**
  * THE PHONE'S HALF OF ENTERING WITH THE ACCOUNT (shared/account-pair.ts).
@@ -292,7 +292,7 @@ const reader = async (response: Response): Promise<{ status: number; body: unkno
  * read at each request (`headers`), never a cookie.
  */
 const httpAt = (base: string, headers: () => Record<string, string> = () => ({})): Http => {
-  const mode: Pick<RequestInit, 'mode' | 'credentials'> = isAbsolute(base) ? { mode: 'cors', credentials: 'omit' } : { credentials: 'same-origin' }
+  const mode: Pick<RequestInit, 'mode' | 'credentials'> = isAbsolute(base) ? CROSS_ORIGIN_NO_COOKIE : { credentials: 'same-origin' }
   return {
     get: async (path) => reader(await fetch(`${base}${path}`, { cache: 'no-store', ...mode, headers: headers() })),
     post: async (path, body) =>
@@ -308,9 +308,8 @@ const httpAt = (base: string, headers: () => Record<string, string> = () => ({})
   }
 }
 
-/** The browser's own wiring. */
 /**
- * `base` is the machine's: '' on its own page, its address on the relay from
+ * The browser's own wiring. `base` is the machine's: '' on its own page, its address on the relay from
  * the console. On the console the machine's door is reached with the account
  * session in the relay's header, and the registry (the device pass) at its API
  * origin with the session as a bearer.
@@ -328,7 +327,8 @@ export function browserPairDeps(
     storage = null
   }
   return {
-    machine: httpAt(base, () => (isAbsolute(base) ? relayHeadersFor(scope) : {})),
+    // The account session rides only an address under the relay's machine prefix (machine-scope.ts).
+    machine: httpAt(base, () => relayHeadersForUrl(`${base}/`, scope)),
     registry:
       scope.relay === null
         ? httpAt('')

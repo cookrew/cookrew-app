@@ -153,9 +153,9 @@ const registryOf = (): string | undefined => {
 /**
  * SERVED THROUGH THE RELAY, as a fact about the PREFIX and not the hostname.
  *
- * `clientBase()` is non-empty only when the bundle was served under
- * `/relay/@user/desktop/<id>/`, which is exactly the case where every request
- * this client makes goes through cookrew.dev. Reading it off the origin would
+ * `clientBase()` is non-empty only on the console with a machine in scope,
+ * where it is that machine's relay address: exactly the case where every
+ * request this client makes goes through the registry. Reading it off the origin would
  * be wrong twice over in Reach v2.1: a Mac's own certificates now carry names
  * under `d.cookrew.dev`, and a relay may be fronted by any host at all.
  */

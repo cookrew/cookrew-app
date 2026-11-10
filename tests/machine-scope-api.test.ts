@@ -123,19 +123,21 @@ describe('entering another machine', () => {
     expect(heard).toEqual([])
   })
 
-  it('does not hand a read for the last machine to a reader of the next', async () => {
+  it('answers a reader of the next machine from the next machine, and ends a read of the last one unanswered', async () => {
     const { scope, api } = await consoleAt(A)
     const fromA = api.cookrew().getWorkspace()
+    const ended = expect(fromA).rejects.toMatchObject({ name: 'AbortError' })
     await tick()
     expect(to(BASE_A, '/api/workspace')).toHaveLength(1)
     scope.enterMachine(B)
     const fromB = api.cookrew().getWorkspace()
     await tick()
     expect(to(BASE_B, '/api/workspace')).toHaveLength(1)
-    to(BASE_B, '/api/workspace')[0].answer(json({ id: 'workspace-of-b', nodes: [] }))
+    // The last machine answers late: whoever asked is its view, and is gone.
     to(BASE_A, '/api/workspace')[0].answer(json({ id: 'workspace-of-a', nodes: [] }))
+    await ended
+    to(BASE_B, '/api/workspace')[0].answer(json({ id: 'workspace-of-b', nodes: [] }))
     expect(((await fromB) as unknown as { id: string }).id).toBe('workspace-of-b')
-    expect(((await fromA) as unknown as { id: string }).id).toBe('workspace-of-a')
   })
 
   it('never types into the next machine what was typed for the last', async () => {

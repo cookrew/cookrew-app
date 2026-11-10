@@ -118,6 +118,33 @@ export function relayHeadersFor(current: MachineScope = scope): Record<string, s
 }
 
 /**
+ * The same, for one request, JUDGED BY WHERE THE REQUEST GOES and not by what
+ * the page believes about its path at that moment: the session rides only a
+ * URL under the relay's own machine prefix. A URL built for a direct origin
+ * and sent later (a retry, a queue) can then never carry it, whatever the
+ * plane has become in between.
+ */
+export function relayHeadersForUrl(url: string, current: MachineScope = scope): Record<string, string> {
+  if (current.relay === null) return {}
+  return url.startsWith(`${trimmed(current.relay.origin)}${MACHINE_RELAY_PREFIX}/`) ? relayHeadersFor(current) : {}
+}
+
+/**
+ * IS THE MACHINE THAT WAS IN SCOPE WHEN THIS WAS ASKED STILL THE ONE. Work
+ * that waits (a request, a probe, a link being opened) takes this before it
+ * waits and asks it before it writes down what it learned or sends anything
+ * more: an answer about the last machine must never be filed under the next
+ * one, and a credential read after the wait is the next machine's.
+ */
+export function heldScope(): () => boolean {
+  const at = epoch
+  return () => epoch === at
+}
+
+/** What work that outlived its machine ends with: an abort, never a failure of the path. */
+export const machineLeft = (): DOMException => new DOMException('the machine this was asked of was left', 'AbortError')
+
+/**
  * A piece of state that belongs to the machine in scope, and how to let go of
  * it. Registered once, by name, at module load. `stop` for what talks (a
  * stream, a timer, a link), `clear` for what holds.
@@ -129,26 +156,17 @@ export function registerScopeState(name: string, reset: () => void, phase: Scope
 /** Every registered state, by name (tests hold this list to what the page really keeps). */
 export const scopeStates = (): readonly string[] => [...states.keys()]
 
-/**
- * This page is the console: it reaches machines through the relay. Said once,
- * at boot, before anything is asked of a machine; it lets go of nothing,
- * because nothing is held yet.
- */
-export function configureMachineScope(next: { relay: RelayAccess }): void {
-  scope = { machineId: null, relay: { origin: trimmed(next.relay.origin), session: next.relay.session }, slug: '' }
-}
+/** The phase each registered state is let go of in, by name. */
+export const scopePhases = (): Readonly<Record<string, ScopePhase>> =>
+  Object.fromEntries([...states].map(([name, state]) => [name, state.phase]))
 
 /**
- * Enter a machine of the account, or none. Everything held for the machine
- * being left is let go first; a state that fails to let go does not stop the
- * others or the change (a page stuck between two machines is the worse
- * outcome). The machine's own page has one machine and never calls this.
+ * The one way the scope changes. Everything held for what is being left is
+ * let go first, while it is still in scope: what talks is stopped, then what
+ * holds is cleared. A state that fails to let go does not stop the others or
+ * the change (a page stuck between two machines is the worse outcome).
  */
-export function enterMachine(machineId: string | null): void {
-  const id = machineId === null ? null : machineId.toLowerCase()
-  if (id !== null && !isMachineId(id)) throw new Error('not a machine id')
-  if (id !== null && scope.relay === null) throw new Error('this page reaches one machine only: the one that served it')
-  if (id === scope.machineId) return
+function change(next: MachineScope): void {
   for (const phase of SCOPE_PHASES) {
     for (const state of states.values()) {
       if (state.phase !== phase) continue
@@ -159,9 +177,31 @@ export function enterMachine(machineId: string | null): void {
       }
     }
   }
-  scope = { ...scope, machineId: id }
+  scope = next
   epoch += 1
   for (const listener of listeners) listener(scope)
+}
+
+/**
+ * This page is the console: it reaches machines through the relay, and has
+ * none in scope until one is entered. Said at boot. Whatever already started
+ * as if this were a machine's own page is let go of like any other change, so
+ * the order of the boot's lines cannot leave it running.
+ */
+export function configureMachineScope(next: { relay: RelayAccess }): void {
+  change({ machineId: null, relay: { origin: trimmed(next.relay.origin), session: next.relay.session }, slug: '' })
+}
+
+/**
+ * Enter a machine of the account, or none. The machine's own page has one
+ * machine and never calls this.
+ */
+export function enterMachine(machineId: string | null): void {
+  const id = machineId === null ? null : machineId.toLowerCase()
+  if (id !== null && !isMachineId(id)) throw new Error('not a machine id')
+  if (id !== null && scope.relay === null) throw new Error('this page reaches one machine only: the one that served it')
+  if (id === scope.machineId) return
+  change({ ...scope, machineId: id })
 }
 
 /** Test seam: a machine's own page again, with nothing registered and nobody listening. */

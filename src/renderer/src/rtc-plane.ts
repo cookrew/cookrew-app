@@ -2,7 +2,7 @@
  * WHICH REQUESTS RIDE THE DIRECT LINK (path/rtc-link.ts).
  *
  * The WebRTC plane keeps the relay's URLs: the page still composes
- * `/relay/@user/desktop/<id>/api/...`, and images, links and anything else
+ * `<relay address of the machine>/api/...`, and images, links and anything else
  * that is not a request this module carries keep loading over the relay. The
  * two openers that matter — the plane-aware fetch and the event streams —
  * ask here first, and when the plane is the link they strip the base and
@@ -10,7 +10,7 @@
  */
 
 import { apiPath, apiRequestInit, clientBase } from './api-base'
-import { registerScopeState, relayHeadersFor } from './machine-scope'
+import { heldScope, machineLeft, registerScopeState, relayHeadersForUrl } from './machine-scope'
 import { authHeaders, tokenParam } from './auth-gate'
 import { BridgeWebSocket } from './path/bridge-socket'
 import { planeFetch } from './plane-fetch'
@@ -140,15 +140,21 @@ const watchNetwork = (changed: () => void): (() => void) => {
  * header, and a URL through cookrew.dev reaches the ingress log, so here the
  * pairing token goes as a header and the reader is the one the link already has.
  */
-const headerStream = (url: string): Pick<RtcLink, 'request'> => ({
-  request: async ({ method, headers, signal }) => {
-    // The relay's own stream: the same request options and the same account session as any relayed call.
-    const response = await fetch(url, { method, signal, ...apiRequestInit(), headers: { ...headers, ...authHeaders(), ...relayHeadersFor() } })
-    // A page where a stream was due is a failed connect, as EventSource holds it.
-    const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
-    return stream || !response.ok ? response : new Response(null, { status: 502 })
+const headerStream = (url: string): Pick<RtcLink, 'request'> => {
+  // The address names one machine and the token is read at each connect: a
+  // stream that redials after another machine was entered is not redialled.
+  const sameMachine = heldScope()
+  return {
+    request: async ({ method, headers, signal }) => {
+      if (!sameMachine()) throw machineLeft()
+      // The relay's own stream: the same request options as any relayed call, and the account session judged by its address.
+      const response = await fetch(url, { method, signal, ...apiRequestInit(), headers: { ...headers, ...authHeaders(), ...relayHeadersForUrl(url) } })
+      // A page where a stream was due is a failed connect, as EventSource holds it.
+      const stream = response.headers.get('content-type')?.includes('text/event-stream') === true
+      return stream || !response.ok ? response : new Response(null, { status: 502 })
+    }
   }
-})
+}
 
 /**
  * An event stream at a scoped URL with no credential on it: this adds one in the

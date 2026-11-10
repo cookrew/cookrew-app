@@ -210,7 +210,8 @@ const askCookrew: GaugeAsk = async (machineId, local) => {
 
 let shared: GaugeStore | null = null
 
-registerScopeState('machine gauges', () => shared?.turn())
+// It ends loops and tells the leaves that drew their numbers, so it goes with what stops.
+registerScopeState('machine gauges', () => shared?.turn(), 'stop')
 
 /** The page's one store. */
 export const gaugeStore = (): GaugeStore => {

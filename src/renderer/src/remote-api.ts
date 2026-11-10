@@ -23,7 +23,7 @@ import type { RenameOutcome } from '../../shared/rename-plan'
 import type { FleetEvent } from '../../shared/fleet'
 import type { UnlockAnswer, UnlockBegin } from '../../shared/remote-unlock'
 import { apiPath } from './api-base'
-import { machineScope, registerScopeState, scopeNeedsMachine } from './machine-scope'
+import { machineScope, registerScopeState, scopeNeedsMachine, heldScope, machineLeft } from './machine-scope'
 import { USE_SOURCES_PATH, type UseSourceList, type UseSourceOpened, type UseSourceSettings } from '../../shared/use-sources'
 import type { SetupLineNow, SetupLineRun, SetupStart } from '../../shared/setup-line'
 import { parseRemoteState, type RemoteAccess, type RemoteAnswer } from '../../shared/remote-access'
@@ -174,7 +174,11 @@ async function req<T>(route: string, method = 'GET', body?: unknown, parseOption
  * own signal, which keeps its own deadline and its own retries.
  */
 async function reqOnce<T>(path: string, method: string, body: unknown, parseOptions: ParseOptions): Promise<T> {
-  const attempt = (): Promise<T> => reqAttempt<T>(path, method, body, parseOptions)
+  // THE PATH NAMES ONE MACHINE AND THE TOKEN IS READ AT EACH TRY. A try made
+  // after another machine was entered would send that machine's token to this
+  // path's address, so there is none: the read ends where its machine did.
+  const sameMachine = heldScope()
+  const attempt = (): Promise<T> => (sameMachine() ? reqAttempt<T>(path, method, body, parseOptions) : Promise.reject(machineLeft()))
   try {
     return await (method === 'GET' && !parseOptions.signal ? waitOutRelayFull(attempt) : attempt())
   } catch (error) {
@@ -197,7 +201,7 @@ async function reqAttempt<T>(path: string, method: string, body: unknown, parseO
   const started = Date.now()
   try {
     // planeFetch, not fetch: it supplies the credential mode the current data
-    // plane needs (cookies same-origin through the relay, none at all
+    // plane needs (same-origin on a machine's own page, no cookie at all
     // cross-origin to the Mac) and reports the transport failures that are the
     // only evidence a direct plane has died.
     return parse<T>(await planeFetch(path, options), parseOptions)

@@ -227,6 +227,90 @@ describe('the zoom fleet store', () => {
     expect(store.get().machines.slice(1).map((m) => [m.id, m.local])).toEqual([[ME, false]])
   })
 
+  it('does not take an account answer that was asked for the last machine and landed after the turn', async () => {
+    const answers: ((answer: AccountMachines) => void)[] = []
+    const { api, feed } = fakeApi({ machines: () => new Promise<AccountMachines>((resolve) => void answers.push(resolve)) })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(answers).toHaveLength(1)
+
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    // The next machine's question is put at once, not held behind the last one's.
+    expect(answers).toHaveLength(2)
+    // The last machine's answer names itself as "this one": late, it is nobody's.
+    answers[0]({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines.map((m) => m.id)).toEqual([LOCAL_MACHINE_ID])
+    answers[1]({ ok: true, machines: [machine(ME, 'Studio', false), machine(OTHER, 'Laptop', true)] })
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    expect(store.get().machines.map((m) => [m.id, m.local])).toEqual([[OTHER, true], [ME, false]])
+  })
+
+  it('keeps no row saying which machine is "this one" across the turn: the next machine’s feed is never filed under the last one’s id', async () => {
+    let asked = 0
+    const later: ((answer: AccountMachines) => void)[] = []
+    const { api, feed } = fakeApi({
+      machines: () => {
+        asked += 1
+        if (asked === 1) return Promise.resolve({ ok: true, machines: [machine(ME, 'Studio', true), machine(OTHER, 'Laptop', false)] })
+        return new Promise<AccountMachines>((resolve) => void later.push(resolve))
+      }
+    })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    expect(store.get().machines[0]).toMatchObject({ id: ME, local: true })
+
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    // The next machine's feed answers before the account does.
+    const first = snapshot(1)
+    feed.cb?.({ type: 'snapshot', snapshot: { ...first, machine: { ...first.machine, name: 'Laptop' } } })
+    const local = store.get().machines[0]
+    expect(local).toMatchObject({ name: 'Laptop', local: true })
+    expect(local.id).not.toBe(ME)
+  })
+
+  it('does not file a list or a name read of the last machine as the next one’s', async () => {
+    const lists: ((list: WorkspaceList) => void)[] = []
+    const { api } = fakeApi({ feed: false, list: () => new Promise<WorkspaceList>((resolve) => void lists.push(resolve)) })
+    const store = createZoomFleetStore(() => api)
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lists.length).toBeGreaterThan(0)
+    const asked = lists.length
+
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    for (const answer of lists.slice(0, asked)) answer({ workspaces: [{ id: 'w-of-last', name: 'Last machine’s work' } as never], activeId: 'w-of-last' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.get().machines[0].workspaces).toEqual([])
+    expect(lists.length).toBeGreaterThan(asked)
+  })
+
+  it('is loading again for the next machine, for its own grace', async () => {
+    const { api, feed } = fakeApi({ machines: () => new Promise(() => undefined) })
+    const store = createZoomFleetStore(() => api, { graceMs: 2_500 })
+    store.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(store.get().loading).toBe(false)
+    store.turn()
+    store.resume()
+    expect(store.get().loading).toBe(true)
+    await vi.advanceTimersByTimeAsync(2_499)
+    expect(store.get().loading).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(store.get().loading).toBe(false)
+    void feed
+  })
+
   it('reads nothing on resume while nobody is looking', async () => {
     const { api, feed } = fakeApi()
     const store = createZoomFleetStore(() => api)
