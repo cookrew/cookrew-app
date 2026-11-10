@@ -152,6 +152,12 @@ export type ServeRail =
       chain: string;
       payTo: string;
       expiry: number;
+      /**
+       * Every signed field of this quote, as main keyed it (shared/x402-terms.ts).
+       * The sheet sends it back with the PAY press: the wallet signs only the
+       * terms the surface that was pressed actually displayed.
+       */
+      shown: string;
     }
   | { rail: 'stripe'; price: string; asset: 'USD'; chain: 'Stripe'; expiry: number };
 

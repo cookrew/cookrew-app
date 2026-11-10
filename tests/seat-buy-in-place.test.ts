@@ -340,6 +340,30 @@ describe('the wallet signs what the person was shown, or nothing (H2)', () => {
     }
   }, SLOW)
 
+  it.each([
+    ['an amount BigInt would read as a thousand dollars', { maxAmountRequired: '0x3B9ACA00' }],
+    ['an amount with a leading space', { maxAmountRequired: ' 1000000000' }],
+    ['an amount with a plus sign', { maxAmountRequired: '+1000000000' }],
+    ['a token that is not USDC', { asset: '0x4200000000000000000000000000000000000006' }],
+    ['a network this app cannot name', { network: 'ethereum' }]
+  ])('%s is not offered at the pay step, and a settle pressed anyway signs nothing', async (what, patch) => {
+    const guest = await world.registeredMachine('ab', `ab${what.length}${Object.keys(patch)[0].length}${String(Object.values(patch)[0]).length}`)
+    world.quote(['stripe', 'x402'])
+    world.usdcTerms(patch)
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+      const quoted = (await app.ops.gate(DOOR, 'buy')) as Gated
+      // The card is there; the wallet quote the app will not read is not a rail at all.
+      expect(quoted.phase).toMatchObject({ kind: 'pay', rails: [{ rail: 'stripe' }] })
+      expect((quoted.phase as { rails: unknown[] }).rails).toHaveLength(1)
+      expect(await app.ops.settle(DOOR, 'x402')).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toEqual([])
+    } finally {
+      world.usdcTerms({})
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
   it('a rail the pay step never showed is not signed: no remembered terms, no signature', async () => {
     const guest = await world.registeredMachine('h2-none', 'h2none')
     const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
@@ -360,7 +384,7 @@ describe('the wallet signs what the person was shown, or nothing (H2)', () => {
     try {
       const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
       await app.ops.gate(DOOR, 'buy')
-      world.usdcTerms({ description: 'a seat, described another way', payTo: '0xa1b2c3d4e5f6789012345678901234567890abcd' })
+      world.usdcTerms({ description: 'a seat, described another way', payTo: '0xc8ee69bb8da2804b860be6e4afa9acccdb2053a5' })
       // Same payee, written in lower case: an address is the same address.
       expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
     } finally {

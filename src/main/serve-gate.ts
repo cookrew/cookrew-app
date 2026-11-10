@@ -85,30 +85,6 @@ export async function handOffCheckout<T extends { ok: boolean }>(
 }
 
 /**
- * ARE THESE THE SAME TERMS, in every field a signature covers?
- *
- * `buildX402Payment` signs a transfer of `maxAmountRequired` to `payTo`, valid
- * for `maxTimeoutSeconds`, under the EIP-712 domain of `asset` on `network`
- * named by `extra`. Those are compared and nothing else is: a door may reword
- * its description without changing what is paid. Addresses are compared
- * without case — a checksummed address and its lower-case spelling are one
- * account.
- */
-export function sameSignedTerms(shown: PaymentRequirements, fresh: PaymentRequirements): boolean {
-  const address = (value: unknown): string => (typeof value === 'string' ? value.toLowerCase() : '')
-  return (
-    shown.scheme === fresh.scheme &&
-    shown.network === fresh.network &&
-    shown.maxAmountRequired === fresh.maxAmountRequired &&
-    shown.maxTimeoutSeconds === fresh.maxTimeoutSeconds &&
-    address(shown.payTo) === address(fresh.payTo) &&
-    address(shown.asset) === address(fresh.asset) &&
-    shown.extra?.name === fresh.extra?.name &&
-    shown.extra?.version === fresh.extra?.version
-  )
-}
-
-/**
  * One key per door, and NOT its wire address.
  *
  * A relayed door is reached through a loopback port that changes with every
@@ -134,8 +110,8 @@ interface Held {
   token: string
   /** Which walk it was got on — a seat can only follow the INSTALL walk. */
   walk: GateDoor
-  /** The wallet terms the pay step showed, or null when it showed none. */
-  shown: PaymentRequirements | null
+  /** The wallet terms the pay step showed, as their key (x402TermsKey), or null when it showed none. */
+  shown: string | null
 }
 
 export function createServeGate(deps: ServeGateDeps) {
@@ -166,7 +142,7 @@ export function createServeGate(deps: ServeGateDeps) {
    * ask for a quote again when PAY is pressed (a quote expires), and what
    * comes back is the DOOR's word a second time: 1 USDC on the sheet and 1000
    * at the press is one hostile line of code. The press signs only a quote
-   * that matches what was shown in every signed field (`sameSignedTerms`).
+   * whose key — every signed field, shared/x402-terms.ts — is the one shown.
    */
   const held = new Map<string, Held>()
 
@@ -188,10 +164,10 @@ export function createServeGate(deps: ServeGateDeps) {
   const standIns = new Map<string, { token: string; at: number }>()
 
   /** What a `pay` phase showed for the wallet rail; any other answer shows nothing. */
-  const shownBy = (phase: AdmissionPhase): PaymentRequirements | null => {
+  const shownBy = (phase: AdmissionPhase): string | null => {
     if (phase.kind !== 'pay') return null
     const wallet = phase.rails.find((entry) => entry.rail === 'x402')
-    return wallet?.rail === 'x402' ? wallet.requirements : null
+    return wallet?.rail === 'x402' ? wallet.shown : null
   }
 
   /**
@@ -298,20 +274,21 @@ export function createServeGate(deps: ServeGateDeps) {
           const quoted = await openAdmission(at, token)
           const terms =
             quoted.kind === 'pay' ? quoted.rails.find((item) => item.rail === 'x402') : undefined
+          const changed = {
+            ok: false as const,
+            reason: 'terms-changed' as const,
+            detail: MKT_PAY['mkt.pay.error.changed.body']
+          }
           if (!terms || terms.rail !== 'x402') {
-            // Already open, or this door stopped quoting USDC. Either way there
-            // is nothing to sign, and signing a stale quote is money gone.
+            // Still asking for money, but with no wallet quote this app can
+            // read: whatever was on screen is not what the door asks now.
+            if (quoted.kind === 'pay') return changed
+            // Already open, or refused for another reason. Nothing to sign.
             return { ok: true as const, phase: remember(key, entry, quoted) }
           }
           // SIGN WHAT WAS SHOWN, OR NOTHING. This quote is fresh from the door;
           // the one the person approved is the one the pay step was built from.
-          if (entry.shown === null || !sameSignedTerms(entry.shown, terms.requirements)) {
-            return {
-              ok: false as const,
-              reason: 'terms-changed' as const,
-              detail: MKT_PAY['mkt.pay.error.changed.body']
-            }
-          }
+          if (entry.shown === null || terms.shown !== entry.shown) return changed
           payment = await deps.buildX402Payment(terms.requirements)
         }
         return {

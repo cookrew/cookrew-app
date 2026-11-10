@@ -71,7 +71,7 @@ const USDC_TERMS = {
   resource: `https://door.example/${TEAM}`,
   description: 'one seat',
   mimeType: 'application/json',
-  payTo: '0xA1b2C3d4E5f6789012345678901234567890aBcD',
+  payTo: '0xc8eE69Bb8da2804B860bE6E4AFa9ACCCDb2053A5',
   maxTimeoutSeconds: 300,
   asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
   extra: { name: 'USDC', version: '2' }

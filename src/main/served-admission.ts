@@ -11,6 +11,8 @@ import {
 import type { PaymentRequirements } from './x402-rail'
 import { teamPath } from './door-seats'
 import { checkoutSessionOf, isStripeCheckoutUrl } from '../shared/stripe-checkout'
+import { x402TermsKey, x402TermsPrice } from '../shared/x402-terms'
+import { readX402Quote } from './x402-caller'
 
 /**
  * THE CALLER'S SIDE OF THE GATE — what the import sheet asks a door.
@@ -55,19 +57,16 @@ export type AdmissionRail =
       /** Epoch ms this quote stops being valid. */
       expiry: number
       requirements: PaymentRequirements
+      /**
+       * Every signed field of this quote as one line (shared/x402-terms.ts
+       * x402TermsKey). The surface that displays this rail sends it back with
+       * the PAY press, and the press signs only a quote that still has it.
+       */
+      shown: string
     }
   | { rail: 'stripe'; price: string; asset: 'USD'; chain: 'Stripe'; expiry: number }
 
 const TIMEOUT_MS = 8000
-
-/** Atomic USDC → decimal, the inverse of x402-rail's usdToAtomic. */
-export function atomicToUsd(atomic: string, decimals = 6): string {
-  if (!/^\d+$/.test(atomic)) return '0'
-  const padded = atomic.padStart(decimals + 1, '0')
-  const whole = padded.slice(0, padded.length - decimals)
-  const fraction = padded.slice(padded.length - decimals).replace(/0+$/, '')
-  return fraction.length > 0 ? `${whole}.${fraction}` : whole
-}
 
 async function api(
   target: ServeTargetRef,
@@ -176,22 +175,28 @@ export async function signInToDoor(
 }
 
 /** Read the rails out of a 402 body, newest terms first. */
-function railsFromTerms(terms: unknown, priceUsdHint: string | null): AdmissionRail[] {
+export function railsFromTerms(terms: unknown, priceUsdHint: string | null): AdmissionRail[] {
   const accepts = (terms as { accepts?: unknown[] } | null)?.accepts
   if (!Array.isArray(accepts)) return []
   const rails: AdmissionRail[] = []
   for (const entry of accepts) {
     const item = entry as Record<string, unknown>
-    if (item.scheme === 'exact' && typeof item.maxAmountRequired === 'string') {
-      const requirements = item as unknown as PaymentRequirements
+    if (item.scheme === 'exact') {
+      // ONE READING (x402-caller.ts readX402Quote). The label below and the signature
+      // later are both made from `terms`; a quote the reader refuses — an
+      // amount that is not plain digits, a token that is not USDC, a network
+      // this app cannot name — is not a rail, so there is no chip to press.
+      const terms = readX402Quote(item)
+      if (terms === null) continue
       rails.push({
         rail: 'x402',
-        price: atomicToUsd(requirements.maxAmountRequired),
+        price: x402TermsPrice(terms),
         asset: 'USDC',
-        chain: String(requirements.network),
-        payTo: String(requirements.payTo),
-        expiry: Date.now() + Math.max(0, Number(requirements.maxTimeoutSeconds ?? 0)) * 1000,
-        requirements
+        chain: terms.network,
+        payTo: terms.payTo,
+        expiry: Date.now() + terms.maxTimeoutSeconds * 1000,
+        requirements: item as unknown as PaymentRequirements,
+        shown: x402TermsKey(terms)
       })
     } else if (item.scheme === 'stripe-checkout') {
       rails.push({

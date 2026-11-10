@@ -6,7 +6,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
-  atomicToUsd,
   openAdmission,
   signInToDoor,
   startStripeCheckout,
@@ -105,16 +104,6 @@ let open: Door | null = null
 afterEach(async () => {
   await open?.close()
   open = null
-})
-
-describe('atomic USDC → decimal', () => {
-  it('is the inverse of the quote builder', () => {
-    expect(atomicToUsd('2500000')).toBe('2.5')
-    expect(atomicToUsd('1000000')).toBe('1')
-    expect(atomicToUsd('1')).toBe('0.000001')
-    expect(atomicToUsd('0')).toBe('0')
-    expect(atomicToUsd('not-a-number')).toBe('0')
-  })
 })
 
 describe('opening admission', () => {
