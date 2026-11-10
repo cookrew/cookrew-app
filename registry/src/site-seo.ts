@@ -1,4 +1,3 @@
-import type { ListedDoor } from './site'
 import type { Release } from './releases'
 import { LEGAL_PUBLISHED } from './site-legal-entity'
 import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type Faq } from './site-content'
@@ -7,7 +6,7 @@ import { DEFINITION, FACTS, FEATURES, GITHUB_REPO, SITE_NAME, SITE_ORIGIN, type 
  * WHAT A MACHINE READS — structured data and the crawl files.
  *
  * Every JSON-LD block here says, in schema.org's vocabulary, exactly what the
- * page says in prose: the same definition, the same price, the same stars.
+ * page says in prose: the same definition, the same price.
  * One `@id` per entity, on every page, so an engine that reads three pages
  * sees one Cookrew and not three. Nothing is claimed here that the page does
  * not show.
@@ -86,49 +85,6 @@ export function webPage(input: { path: string; name: string; description: string
   }
 }
 
-/** A served team as a Product with one Offer: the price buys a seat, the seller is its author. */
-export function teamProduct(door: ListedDoor, stars: number): Record<string, unknown> {
-  const url = `${SITE_ORIGIN}/${door.handle}/${door.name}`
-  return {
-    '@type': 'Product',
-    '@id': `${url}#team`,
-    name: door.title,
-    url,
-    description:
-      door.summary ??
-      `${door.title} is a team of ${door.agents} AI agent${door.agents === 1 ? '' : 's'} served by @${door.handle} on Cookrew; ${door.door} answers on its behalf.`,
-    category: 'AI agent team',
-    brand: { '@type': 'Brand', name: `@${door.handle}` },
-    ...(door.harnesses && door.harnesses.length > 0 ? { keywords: door.harnesses.join(', ') } : {}),
-    offers: {
-      '@type': 'Offer',
-      url,
-      price: door.access === 'paid' && door.priceUsd ? door.priceUsd : '0',
-      priceCurrency: 'USD',
-      availability: door.live === false ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
-      seller: { '@type': 'Person', name: `@${door.handle}`, url: `${SITE_ORIGIN}/${door.handle}` }
-    },
-    // Stars are a count of likes, said as one — never a rating nobody gave.
-    ...(stars > 0
-      ? { interactionStatistic: { '@type': 'InteractionCounter', interactionType: 'https://schema.org/LikeAction', userInteractionCount: stars } }
-      : {})
-  }
-}
-
-export function teamList(doors: readonly ListedDoor[]): Record<string, unknown> {
-  return {
-    '@type': 'ItemList',
-    name: 'Served agent teams on Cookrew',
-    numberOfItems: doors.length,
-    itemListElement: doors.map((d, i) => ({
-      '@type': 'ListItem',
-      position: i + 1,
-      url: `${SITE_ORIGIN}/${d.handle}/${d.name}`,
-      name: d.title
-    }))
-  }
-}
-
 /** One <script type="application/ld+json"> with a graph of the blocks given. */
 export function jsonLd(blocks: readonly Record<string, unknown>[]): string {
   const graph = { '@context': 'https://schema.org', '@graph': blocks }
@@ -142,43 +98,25 @@ export function robotsTxt(): string {
   return ['User-agent: *', 'Allow: /', 'Disallow: /v1/', `Sitemap: ${SITE_ORIGIN}/sitemap.xml`, ''].join('\n')
 }
 
-export interface SitemapEntry {
-  path: string
-  lastmod?: string
-  priority?: number
-}
-
-/** A sitemap file holds at most 50,000 URLs; this one stops well short. */
-const SITEMAP_MAX = 5000
-
-export function sitemapXml(allDoors: readonly ListedDoor[], options: { market: boolean } = { market: true }): string {
-  const doors = allDoors.slice(0, SITEMAP_MAX)
-  const handles = [...new Set(doors.map((d) => d.handle))]
-  const entries: SitemapEntry[] = [
+/** Every page of the static site that an engine should read: the front page, a page per feature, the legal pages when published. */
+export function sitemapXml(): string {
+  const entries: { path: string; priority: number }[] = [
     { path: '/', priority: 1 },
-    ...(options.market ? [{ path: '/market', priority: 0.9 }] : []),
-    // /start and /features are anchors on the homepage now; a fragment is not
-    // a sitemap URL, and the redirects cover old links.
+    // /start and /features are anchors on the homepage; a fragment is not a
+    // sitemap URL, and the redirects cover old links.
     ...FEATURES.map((f) => ({ path: `/features/${f.slug}`, priority: 0.7 })),
     ...(LEGAL_PUBLISHED
       ? [
           { path: '/privacy', priority: 0.3 },
           { path: '/terms', priority: 0.3 }
         ]
-      : []),
-    ...handles.map((h) => ({ path: `/${h}`, priority: 0.5 })),
-    // No lastmod on a team: its heartbeat is not a change, and a date that
-    // moves every minute tells a crawler nothing.
-    ...doors.map((d) => ({ path: `/${d.handle}/${d.name}`, priority: 0.8 }))
+      : [])
   ]
   const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-    ...entries.map(
-      (e) =>
-        `<url><loc>${esc(SITE_ORIGIN + e.path)}</loc>${e.lastmod ? `<lastmod>${e.lastmod}</lastmod>` : ''}${e.priority !== undefined ? `<priority>${e.priority}</priority>` : ''}</url>`
-    ),
+    ...entries.map((e) => `<url><loc>${esc(SITE_ORIGIN + e.path)}</loc><priority>${e.priority}</priority></url>`),
     '</urlset>',
     ''
   ].join('\n')

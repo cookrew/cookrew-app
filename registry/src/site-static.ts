@@ -228,15 +228,8 @@ export function buildStaticSite(input: StaticSiteInput): Map<string, string | Ui
   }
 
   files.set('robots.txt', robotsTxt())
-  files.set('sitemap.xml', sitemapXml([], { market: false }))
-  // The marketplace has no page on this site: its line goes, its definition (it is in the app) stays.
-  files.set(
-    'llms.txt',
-    llmsText()
-      .split('\n')
-      .filter((line) => !/cookrew\.dev\/market\b/.test(line))
-      .join('\n')
-  )
+  files.set('sitemap.xml', sitemapXml())
+  files.set('llms.txt', llmsText())
   files.set('favicon.svg', FAVICON_SVG)
   files.set('site.webmanifest', webManifest())
   files.set(

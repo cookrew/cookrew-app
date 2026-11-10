@@ -59,8 +59,6 @@ import { facilitatorFor } from './facilitator-boot'
 import { ReceiptStore } from './receipts'
 import { DoorStore } from './doors'
 import { StarStore } from './stars'
-import { ReleaseCache } from './releases'
-import { CommitsCache } from './github-commits'
 import { Pulse } from './pulse'
 import { FunnelCounts } from './funnel-counts'
 import { createV2 } from './v2-routes'
@@ -344,14 +342,10 @@ createRegistry({
   // refuses because "anyone with the link" would not be true of them.
   doors: new DoorStore(DATA, { allowPrivate: DEV }),
   relay: true,
-  // The address printed on a team's page is something a person copies, so it
-  // is the configured origin rather than whatever Host a caller sent.
+  // The configured origin rather than whatever Host a caller sent.
   origin: resolved.config.origin,
-  // The market's sort key and the homepage's download buttons — both real:
-  // stars are a file beside the doors, the build is whatever GitHub says.
+  // The directory's sort key and today's counts per door: files beside the doors.
   stars: new StarStore(DATA),
-  releases: new ReleaseCache(),
-  commits: new CommitsCache(),
   pulse: new Pulse(DATA),
   // The onboarding funnel. The registry has no site-wide owner role, so who may
   // read the totals is named at boot. No flag and no env: nobody can.

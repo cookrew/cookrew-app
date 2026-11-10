@@ -302,7 +302,7 @@ export function stripePaymentHeader(session: string): string {
 /**
  * ── THE INSTALL WALK: the account at a listed door (identity v3, G1) ─────────
  *
- * What the web's line.js already does, done here for the desktop: ask
+ * What the web's line.js did until 0.6.0 removed it, done here for the desktop: ask
  * cookrew.dev for a CALL TOKEN with this Mac's session, present it at the door
  * as `{v2Token}`, and read the ladder — 401 (no account here) → 403 (no seat
  * at a paid team) → the door's 402 at session start → open.
