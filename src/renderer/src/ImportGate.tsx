@@ -8,6 +8,7 @@ import {
   BUDGET_RETRY_MS,
   deniedVarsFor,
   remedyFor,
+  settleRefusalFault,
   walkPricing,
   type GateFacts
 } from './import-gate-remedy'
@@ -282,11 +283,7 @@ export function ImportGate({
           }
           applyPhase(result.phase)
         } else {
-          setFault({
-            voice: 'apolog',
-            title: MKT_PAY['mkt.pay.error.unverifiable.title'],
-            body: result.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
-          })
+          setFault(settleRefusalFault(result))
         }
       })
       .catch(() => setBusy(false))

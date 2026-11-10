@@ -1,4 +1,5 @@
 import { gateDoorFor } from '../shared/gate-walk'
+import { MKT_PAY } from '../shared/marketplace-copy'
 import { isStripeCheckoutUrl } from '../shared/stripe-checkout'
 import { withPaidBearer } from './door-bearer'
 import type { ServeTarget } from './import-session'
@@ -82,6 +83,30 @@ export async function handOffCheckout<T extends { ok: boolean }>(
 }
 
 /**
+ * ARE THESE THE SAME TERMS, in every field a signature covers?
+ *
+ * `buildX402Payment` signs a transfer of `maxAmountRequired` to `payTo`, valid
+ * for `maxTimeoutSeconds`, under the EIP-712 domain of `asset` on `network`
+ * named by `extra`. Those are compared and nothing else is: a door may reword
+ * its description without changing what is paid. Addresses are compared
+ * without case — a checksummed address and its lower-case spelling are one
+ * account.
+ */
+export function sameSignedTerms(shown: PaymentRequirements, fresh: PaymentRequirements): boolean {
+  const address = (value: unknown): string => (typeof value === 'string' ? value.toLowerCase() : '')
+  return (
+    shown.scheme === fresh.scheme &&
+    shown.network === fresh.network &&
+    shown.maxAmountRequired === fresh.maxAmountRequired &&
+    shown.maxTimeoutSeconds === fresh.maxTimeoutSeconds &&
+    address(shown.payTo) === address(fresh.payTo) &&
+    address(shown.asset) === address(fresh.asset) &&
+    shown.extra?.name === fresh.extra?.name &&
+    shown.extra?.version === fresh.extra?.version
+  )
+}
+
+/**
  * One key per door, and NOT its wire address.
  *
  * A relayed door is reached through a loopback port that changes with every
@@ -116,6 +141,28 @@ export function createServeGate(deps: ServeGateDeps) {
    */
   const boughtBearers = new Map<string, string>()
 
+  /**
+   * THE WALLET TERMS THE PAY STEP SHOWED, by door — or null when it showed
+   * none. The x402 rail has to ask for a quote again at the press (a quote
+   * expires), and what comes back is the DOOR's word a second time: 1 USDC on
+   * the sheet and 1000 at the press is one hostile line of code. So the terms
+   * the person actually looked at are kept here, in main, and the press signs
+   * only a quote that matches them in every signed field (`sameSignedTerms`).
+   */
+  const shownTerms = new Map<string, PaymentRequirements | null>()
+
+  /** Keep what a `pay` phase showed; any other answer shows no terms at all. */
+  const show = (target: ServeTarget, phase: AdmissionPhase): AdmissionPhase => {
+    const key = targetKey(target)
+    if (phase.kind !== 'pay') {
+      shownTerms.delete(key)
+      return phase
+    }
+    const wallet = phase.rails.find((entry) => entry.rail === 'x402')
+    shownTerms.set(key, wallet?.rail === 'x402' ? wallet.requirements : null)
+    return phase
+  }
+
   /** The door opened a line on this Bearer: at a listed team, the card may need it. */
   const remember = (target: ServeTarget, token: string, phase: AdmissionPhase): AdmissionPhase => {
     if (phase.kind === 'open' && typeof target.door === 'string') boughtBearers.set(target.door, token)
@@ -137,7 +184,7 @@ export function createServeGate(deps: ServeGateDeps) {
           // to buy before its 402: the intent is not read on this walk.
           const token = await deps.signInWithKey(at)
           callerTokens.set(targetKey(target), token)
-          const phase = await openAdmission(at, token)
+          const phase = show(target, await openAdmission(at, token))
           return { ok: true as const, door, phase, wallet: deps.wallet() }
         }
         const team = target.door as string
@@ -152,7 +199,7 @@ export function createServeGate(deps: ServeGateDeps) {
         return {
           ok: true as const,
           door,
-          phase: admitted.phase,
+          phase: show(target, admitted.phase),
           wallet: deps.wallet(),
           // The facts the sheet's sentences name: the team, who can say yes,
           // and who this Mac is (the usual cause of a no_seat is being signed
@@ -213,6 +260,16 @@ export function createServeGate(deps: ServeGateDeps) {
             // Already open, or this door stopped quoting USDC. Either way there
             // is nothing to sign, and signing a stale quote is money gone.
             return { ok: true as const, phase: remember(target, token, quoted) }
+          }
+          // SIGN WHAT WAS SHOWN, OR NOTHING. This quote is fresh from the door;
+          // the one the person approved is the one the pay step was built from.
+          const shown = shownTerms.get(targetKey(target)) ?? null
+          if (shown === null || !sameSignedTerms(shown, terms.requirements)) {
+            return {
+              ok: false as const,
+              reason: 'terms-changed' as const,
+              detail: MKT_PAY['mkt.pay.error.changed.body']
+            }
           }
           payment = await deps.buildX402Payment(terms.requirements)
         }

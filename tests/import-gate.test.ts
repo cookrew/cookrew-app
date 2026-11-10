@@ -5,8 +5,10 @@ import {
   BUDGET_RETRY_MS,
   deniedVarsFor,
   remedyFor,
+  settleRefusalFault,
   walkPricing
 } from '../src/renderer/src/import-gate-remedy'
+import { MKT_PAY } from '../src/shared/marketplace-copy'
 import { onAccountSheetRequest, requestAccountSheet } from '../src/renderer/src/account/open-request'
 import { denialCopy, unknownDenialCopy } from '../src/shared/marketplace-copy'
 
@@ -117,6 +119,28 @@ describe('deniedVarsFor — a 403 never throws for a brace nobody filled', () =>
         expect(() => denialCopy(reason, undefined, vars), reason).not.toThrow()
       }
     }
+  })
+})
+
+describe('settleRefusalFault — a settle that main refused, in the sheet’s two voices', () => {
+  it('a door that changed its terms at the press is accused, in its own sentence — never "we could not check"', () => {
+    const fault = settleRefusalFault({ reason: 'terms-changed', detail: 'whatever main said' })
+    expect(fault).toEqual({
+      voice: 'accuse',
+      title: MKT_PAY['mkt.pay.error.changed.title'],
+      body: MKT_PAY['mkt.pay.error.changed.body']
+    })
+    expect(fault.body).toMatch(/nothing was signed/)
+    expect(fault.body).toMatch(/nothing was charged/)
+  })
+
+  it('anything else is the apology, with what main could say about it', () => {
+    expect(settleRefusalFault({ reason: 'refused', detail: 'the door hung up' })).toEqual({
+      voice: 'apolog',
+      title: MKT_PAY['mkt.pay.error.unverifiable.title'],
+      body: 'the door hung up'
+    })
+    expect(settleRefusalFault({ reason: 'not-signed-in' }).body).toBe(MKT_PAY['mkt.pay.error.unverifiable.body'])
   })
 })
 

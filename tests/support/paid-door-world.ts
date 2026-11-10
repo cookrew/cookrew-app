@@ -71,7 +71,8 @@ const USDC_TERMS = {
   mimeType: 'application/json',
   payTo: '0xA1b2C3d4E5f6789012345678901234567890aBcD',
   maxTimeoutSeconds: 300,
-  asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+  asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  extra: { name: 'USDC', version: '2' }
 }
 
 export interface Mac {
@@ -83,6 +84,8 @@ export interface Mac {
 export interface AppOn {
   ops: ServeGate
   minted: unknown[]
+  /** Every quote this Mac's wallet was asked to sign, in order. */
+  signed: unknown[]
 }
 
 export interface PaidDoorWorld {
@@ -99,6 +102,8 @@ export interface PaidDoorWorld {
   sessions: Set<string>
   /** Which rails the door quotes at its 402. Card only, until told otherwise. */
   quote(rails: readonly ('stripe' | 'x402')[]): void
+  /** A door that changes what its USDC quote says from now on. `{}` puts it back. */
+  usdcTerms(patch: Record<string, unknown>): void
   /** The Checkout session the door hands out next. */
   checkoutNext(session: string): void
   /** A slow registry: the door's seat report waits until the returned release is called. */
@@ -130,7 +135,11 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
   const callers = new DoorCallers()
   const sessions = new Set<string>()
   const openedBy: string[] = []
-  let accepts: unknown[] = [CARD_TERMS]
+  let quoted: readonly ('stripe' | 'x402')[] = ['stripe']
+  let usdcPatch: Record<string, unknown> = {}
+  /** Built at the moment of asking, so a door can change its mind between two asks. */
+  const accepts = (): unknown[] =>
+    quoted.map((rail) => (rail === 'stripe' ? CARD_TERMS : { ...USDC_TERMS, ...usdcPatch }))
   let nextCheckout = PAID
   let holdReport: Promise<void> | null = null
   let report: Promise<boolean> = Promise.resolve(false)
@@ -215,7 +224,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
       if (session === PAID) return 'ok'
       return session === UNCHECKABLE ? 'unverifiable' : 'refused'
     },
-    paymentTerms: () => ({ x402Version: 1, accepts }),
+    paymentTerms: () => ({ x402Version: 1, accepts: accepts() }),
     crewFace: (t) => ({
       name: 'COOKREW Alpha',
       serviceId: t.serviceId,
@@ -292,6 +301,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
 
   const appOn = (accounts: Accounts | null, options: { usdc?: string } = {}): AppOn => {
     const minted: unknown[] = []
+    const signed: unknown[] = []
     const spied: AccountForDoors = {
       account: () => accounts?.account() ?? null,
       authedResponse: async (pathname, init) => {
@@ -308,10 +318,12 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
       accounts: spied,
       signInWithKey: () => Promise.reject(new Error('a listed door is never entered with a key')),
       wallet: () => (usdc === undefined ? null : { address: WALLET }),
-      buildX402Payment: () =>
-        usdc === undefined ? Promise.reject(new Error('this Mac has no wallet')) : Promise.resolve(usdc)
+      buildX402Payment: (requirements) => {
+        signed.push(requirements)
+        return usdc === undefined ? Promise.reject(new Error('this Mac has no wallet')) : Promise.resolve(usdc)
+      }
     })
-    return { ops, minted }
+    return { ops, minted, signed }
   }
 
   return {
@@ -322,7 +334,10 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     openedBy,
     sessions,
     quote: (rails) => {
-      accepts = rails.map((rail) => (rail === 'stripe' ? CARD_TERMS : USDC_TERMS))
+      quoted = rails
+    },
+    usdcTerms: (patch) => {
+      usdcPatch = patch
     },
     checkoutNext: (session) => {
       nextCheckout = session

@@ -1,5 +1,7 @@
 import { SEAT_DENIAL, type GateDoor, type WalkPricing } from '../../shared/gate-walk'
+import { MKT_PAY } from '../../shared/marketplace-copy'
 import type { ServeFacePreview, ServeRail } from './api'
+import type { PayFault } from './GateSheet'
 
 /**
  * THE IMPORT GATE's decisions, pure — so a test can hold them without a DOM.
@@ -44,6 +46,29 @@ export const BUDGET_RETRY_MS = 15 * 60 * 1000
  */
 export function remedyFor(reason: string, door: GateDoor): RemedyAct {
   return reason === SEAT_DENIAL && door === 'install' ? { kind: 'buy' } : { kind: 'retry' }
+}
+
+/**
+ * A settle main REFUSED TO MAKE, as the pay step says it.
+ *
+ * `terms-changed` is the door's doing — it quoted something at the press that
+ * the sheet never showed, and main signed nothing — so it is said in the
+ * accusing voice with its own sentence. Everything else is a failure on the
+ * way (no Bearer, a door that hung up), which is ours to apologise for.
+ */
+export function settleRefusalFault(refusal: { reason: string; detail?: string }): PayFault {
+  if (refusal.reason === 'terms-changed') {
+    return {
+      voice: 'accuse',
+      title: MKT_PAY['mkt.pay.error.changed.title'],
+      body: MKT_PAY['mkt.pay.error.changed.body']
+    }
+  }
+  return {
+    voice: 'apolog',
+    title: MKT_PAY['mkt.pay.error.unverifiable.title'],
+    body: refusal.detail ?? MKT_PAY['mkt.pay.error.unverifiable.body']
+  }
 }
 
 /** The facts main returns beside the phase, on the install walk. */

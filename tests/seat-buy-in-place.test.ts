@@ -150,6 +150,9 @@ describe('buying a seat at a listed paid team, in the app', () => {
         ]
       })
       expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
+      // One signature, over exactly what the pay step showed.
+      expect(app.signed).toHaveLength(1)
+      expect(app.signed[0]).toMatchObject({ maxAmountRequired: '1000000', network: 'base-sepolia' })
       expect(await world.lastReport()).toBe(true)
       expect(((await app.ops.gate(DOOR)) as Gated).seat).toEqual(expect.any(String))
     } finally {
@@ -163,6 +166,77 @@ describe('buying a seat at a listed paid team, in the app', () => {
     expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
     // The gate holds a Bearer for the pay sheet; the card may not borrow it.
     await expect(cardSignIn(app)).rejects.toThrow(`${DOOR} did not admit this account (denied)`)
+  }, SLOW)
+})
+
+describe('the wallet signs what the person was shown, or nothing (H2)', () => {
+  /**
+   * The x402 rail asks the door for a quote again at the press — a quote can
+   * expire — and signs THAT one. So a door could show 1 USDC on the pay step
+   * and quote 1000 when PAY is pressed. Every field the signature covers is
+   * compared with what the pay step was built from; one difference and the
+   * wallet is never asked.
+   */
+  const CHANGES: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ['a higher amount', { maxAmountRequired: '1000000000' }],
+    ['a lower amount, even', { maxAmountRequired: '1' }],
+    ['a different payee', { payTo: '0x000000000000000000000000000000000000dEaD' }],
+    ['a different asset', { asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' }],
+    ['a different network', { network: 'base' }],
+    ['a longer validity', { maxTimeoutSeconds: 86_400 }],
+    ['a different signing domain name', { extra: { name: 'USD Coin', version: '2' } }],
+    ['a different signing domain version', { extra: { name: 'USDC', version: '1' } }]
+  ]
+
+  it.each(CHANGES)('%s at the press is refused, and nothing is signed', async (_what, patch) => {
+    const guest = await world.registeredMachine('h2', `h2${CHANGES.findIndex(([, p]) => p === patch)}`)
+    world.quote(['x402'])
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+      expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
+      const before = world.openedBy.length
+      world.usdcTerms(patch)
+      const answer = await app.ops.settle(DOOR, 'x402')
+      expect(answer).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toEqual([])
+      expect(world.openedBy).toHaveLength(before)
+      // The door going back to what it showed is payable again: the shown terms were kept.
+      world.usdcTerms({})
+      expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
+      expect(app.signed).toHaveLength(1)
+    } finally {
+      world.usdcTerms({})
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
+  it('a rail the pay step never showed is not signed: no remembered terms, no signature', async () => {
+    const guest = await world.registeredMachine('h2-none', 'h2none')
+    const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+    // The pay step showed a card and nothing else.
+    expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase).toMatchObject({ kind: 'pay', rails: [{ rail: 'stripe' }] })
+    world.quote(['stripe', 'x402'])
+    try {
+      expect(await app.ops.settle(DOOR, 'x402')).toMatchObject({ ok: false, reason: 'terms-changed' })
+      expect(app.signed).toEqual([])
+    } finally {
+      world.quote(['stripe'])
+    }
+  }, SLOW)
+
+  it('what is not signed may differ: a reworded description is the same quote', async () => {
+    const guest = await world.registeredMachine('h2-words', 'h2words')
+    world.quote(['x402'])
+    try {
+      const app = world.appOn(guest.accounts, { usdc: GOOD_USDC })
+      await app.ops.gate(DOOR, 'buy')
+      world.usdcTerms({ description: 'a seat, described another way', payTo: '0xa1b2c3d4e5f6789012345678901234567890abcd' })
+      // Same payee, written in lower case: an address is the same address.
+      expect(await app.ops.settle(DOOR, 'x402')).toEqual({ ok: true, phase: { kind: 'open' } })
+    } finally {
+      world.usdcTerms({})
+      world.quote(['stripe'])
+    }
   }, SLOW)
 })
 

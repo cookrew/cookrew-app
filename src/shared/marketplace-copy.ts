@@ -261,6 +261,13 @@ export const MKT_PAY = {
   'mkt.pay.error.unverifiable.title': "We couldn't check that payment",
   'mkt.pay.error.unverifiable.body':
     'Your payment may be perfectly fine — our checker could not reach a verdict. Trying again will not charge you twice.',
+  /**
+   * The door's quote at the press is not the one this sheet showed. Nothing
+   * was signed: the wallet is only ever asked about terms a person looked at.
+   */
+  'mkt.pay.error.changed.title': 'This door changed its terms',
+  'mkt.pay.error.changed.body':
+    'What it asks for now is not what this sheet showed you, so nothing was signed and nothing was charged. Cancel and import it again to see what it asks.',
   /** No wallet provisioned on this device. Not a refusal — a missing tool. */
   'mkt.pay.error.nowallet.title': 'No wallet on this device',
   'mkt.pay.error.nowallet.body':
