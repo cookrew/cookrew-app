@@ -86,7 +86,11 @@ export function ReauthOverlay(): React.JSX.Element | null {
     }
   }, [])
 
-  const unpaired = blocked !== null && blocked.scope !== 'read-only'
+  // ON THE CONSOLE this card is never the way back in: no token is pasted there and no password typed
+  // (decision F5). A machine that refuses this browser's key has its door asked again with the device
+  // pass (console/console-runtime.ts · keyRefused), or the person is told at the machines.
+  const onConsole = scopeNeedsMachine()
+  const unpaired = blocked !== null && blocked.scope !== 'read-only' && !onConsole
   useEffect(() => {
     if (!unpaired) return
     setAccount({ kind: 'asking' })
@@ -132,6 +136,7 @@ export function ReauthOverlay(): React.JSX.Element | null {
   }, [pasted, keep, platform])
 
   if (!blocked || dismissed) return null
+  if (onConsole && blocked.scope !== 'read-only') return null
   const readOnly = blocked.scope === 'read-only'
   const leadsWithAccount = !readOnly && account.kind !== 'asking' && account.kind !== 'token-only'
 

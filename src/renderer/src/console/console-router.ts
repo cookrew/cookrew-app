@@ -75,6 +75,9 @@ export function createConsoleRouter(port: HistoryPort): ConsoleRouter {
   }
 }
 
+/** The zoom's outermost stop (zoom/zoom-path.ts): every machine of the account. */
+const DEVICES_STOP = -2
+
 /** Where a view stands, as the zoom says it (zoom/zoom-store.ts). */
 export interface ZoomPlace {
   readonly dir: ConsoleSide
@@ -89,7 +92,8 @@ export interface ZoomPlace {
  * which one the view is on.
  */
 export function routeOfZoom(zoom: ZoomPlace, machine: string, workspace: string | null): ConsoleRoute {
-  if (zoom.v < -1.5) return DEVICES_ROUTE
+  // Left only on arrival at the devices stop: a pinch on its way there has not left the machine.
+  if (zoom.v <= DEVICES_STOP + 0.001) return DEVICES_ROUTE
   const root: MachineRoute = { kind: 'machine', machine, workspace: null, agent: null, side: 'agents' }
   if (workspace === null) return root
   if (zoom.dir === 'items') return zoom.v < -0.5 ? root : { ...root, workspace, side: 'items' }

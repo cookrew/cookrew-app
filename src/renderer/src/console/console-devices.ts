@@ -9,7 +9,9 @@
  * (`/api/fleet`), at its own address on the relay, with this browser's own
  * key for that machine (relay-machine-call.ts enters its door with the pass
  * when it holds none). One question out per machine, asked again every few
- * seconds while the level is on screen.
+ * seconds WHILE THE LEVEL IS ON SCREEN and at no other time: each question is
+ * an exchange through the relay, and a page inside one machine has no use for
+ * the others' summaries.
  *
  * A MACHINE THAT CANNOT BE READ SAYS THE ONE THING TO DO, and is not entered:
  * off its line, on a build older than this console speaks to, or refusing
@@ -88,8 +90,10 @@ export interface DevicesDeps {
 export interface ConsoleDevices {
   get(): ConsoleDevicesState
   subscribe(listener: () => void): () => void
-  /** The level is on screen: read, and keep reading. Returns its stop. */
+  /** Signed in: know the account's machines, and keep knowing. Returns its stop. */
   start(): () => void
+  /** The level is on screen: read each machine's own summary, and keep reading. Returns its stop. */
+  watch(): () => void
   /** The gate opened or closed. */
   gateChanged(): void
   /** Can this machine be entered right now. */
@@ -119,6 +123,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   let snapshots: Readonly<Record<string, FleetSnapshot>> = {}
   let state: ConsoleDevicesState = { status: 'loading', machines: [], error: null }
   let running = 0
+  let watching = 0
   let accountTimer: ReturnType<typeof setInterval> | null = null
   let summaryTimer: ReturnType<typeof setInterval> | null = null
   const asking = new Set<string>()
@@ -195,7 +200,7 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
   }
 
   const askSummaries = async (): Promise<void> => {
-    if (running === 0 || !deps.gateOpen()) return
+    if (running === 0 || watching === 0 || !deps.gateOpen()) return
     await Promise.all(rows.filter(readable).map((row) => askOne(row.id)))
   }
 
@@ -216,7 +221,6 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
       if (running === 1) {
         void askAccount()
         accountTimer = setInterval(() => void askAccount(), ACCOUNT_EVERY_MS)
-        summaryTimer = setInterval(() => void askSummaries(), SUMMARY_EVERY_MS)
       }
       let stopped = false
       return () => {
@@ -225,8 +229,25 @@ export function createConsoleDevices(deps: DevicesDeps): ConsoleDevices {
         running -= 1
         if (running > 0) return
         if (accountTimer !== null) clearInterval(accountTimer)
+        accountTimer = null
+        era += 1
+        asking.clear()
+      }
+    },
+    watch: () => {
+      watching += 1
+      if (watching === 1) {
+        void askSummaries()
+        summaryTimer = setInterval(() => void askSummaries(), SUMMARY_EVERY_MS)
+      }
+      let stopped = false
+      return () => {
+        if (stopped) return
+        stopped = true
+        watching -= 1
+        if (watching > 0) return
         if (summaryTimer !== null) clearInterval(summaryTimer)
-        accountTimer = summaryTimer = null
+        summaryTimer = null
         // Answers still out belong to a level nobody is looking at.
         era += 1
         asking.clear()

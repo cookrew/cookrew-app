@@ -106,7 +106,8 @@ describe('the level a view stands at, as an address', () => {
   it('on the way between two stops it is the stop it is nearer to, never an address of its own', () => {
     expect(routeOfZoom(at('agents', -0.2), M, W).kind === 'machine' && routeOfZoom(at('agents', -0.2), M, W)).toMatchObject({ workspace: null })
     expect(routeOfZoom(at('agents', 0.6), M, W)).toMatchObject({ workspace: W, agent: null })
-    expect(routeOfZoom(at('agents', -1.6), M, W)).toEqual({ kind: 'devices' })
+    // On its way out it has not left: the machine is left on arrival at the devices stop.
+    expect(routeOfZoom(at('agents', -1.6), M, W)).toMatchObject({ kind: 'machine', workspace: null })
   })
 
   it('names no workspace before it knows which one the view is on, and no card without an agent in focus', () => {

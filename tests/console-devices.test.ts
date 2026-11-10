@@ -90,6 +90,16 @@ const world = (start: { account?: AccountMachines; open?: boolean; snapshots?: R
   return w
 }
 
+/** Signed in, with the Devices level on screen. */
+const shown = (store: ReturnType<typeof createConsoleDevices>): (() => void) => {
+  const stopKnowing = store.start()
+  const stopWatching = store.watch()
+  return () => {
+    stopWatching()
+    stopKnowing()
+  }
+}
+
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 
@@ -98,7 +108,7 @@ describe('before the gate', () => {
     const w = world()
     const store = createConsoleDevices(w.deps)
     expect(store.get()).toMatchObject({ status: 'loading', machines: [] })
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     const { status, machines } = store.get()
     expect(status).toBe('ready')
@@ -117,7 +127,7 @@ describe('before the gate', () => {
   it('does not show even the workspace names an old registry answer might carry', async () => {
     const w = world({ account: { ok: true, machines: [row(A, 'Studio Mac', { workspaces: [{ id: 'w1', name: 'Secret Plans' }] })] } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     expect(JSON.stringify(store.get())).not.toContain('Secret Plans')
     stop()
@@ -128,7 +138,7 @@ describe('past the gate', () => {
   it('asks each machine that can be read for its own summary, and lights its screen with it', async () => {
     const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
     const [studio, solis, old] = store.get().machines
@@ -146,7 +156,7 @@ describe('past the gate', () => {
   it('reads again every few seconds while it is shown, and stops when it is not', async () => {
     const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
     const once = w.asked.length
@@ -161,7 +171,7 @@ describe('past the gate', () => {
   it('never has two questions out to one machine', async () => {
     const w = world({ open: true, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
     const store = createConsoleDevices({ ...w.deps, fleetOf: (id) => (w.asked.push(id), new Promise(() => undefined)) })
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(30_000)
     expect(w.asked).toEqual([A])
     stop()
@@ -170,7 +180,7 @@ describe('past the gate', () => {
   it('opening the gate while the page is up reads the machines at once', async () => {
     const w = world({ snapshots: { [A]: snapshot('Studio Mac') } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     expect(store.get().machines[0].standing).toBe('locked')
     w.set({ open: true })
@@ -184,7 +194,7 @@ describe('past the gate', () => {
   it('closing it forgets what was read: nothing from inside a machine stays on a page that may no longer see it', async () => {
     const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
     expect(store.get().machines[0].standing).toBe('live')
@@ -192,6 +202,28 @@ describe('past the gate', () => {
     store.gateChanged()
     expect(store.get().machines[0]).toMatchObject({ standing: 'locked', workspaces: [], counts: null })
     stop()
+  })
+})
+
+describe('inside a machine, with the Devices level off screen', () => {
+  it('goes on knowing the account’s machines and asks none of them for a summary', async () => {
+    const w = world({ open: true, snapshots: { [A]: snapshot('Studio Mac') } })
+    const store = createConsoleDevices(w.deps)
+    const stop = store.start()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(store.get().status).toBe('ready')
+    expect(store.get().machines).toHaveLength(3)
+    expect(w.asked).toEqual([])
+    // On screen again: read at once.
+    const off = store.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(w.asked.sort()).toEqual([A, B].sort())
+    off()
+    const asked = w.asked.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(w.asked.length).toBe(asked)
+    stop()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
@@ -220,7 +252,7 @@ describe('a machine that cannot be read says the one thing to do', () => {
   it('a machine that wants a new proof closes the gate, once', async () => {
     const w = world({ open: true, blocks: { [A]: { kind: 'needs-proof' } }, account: { ok: true, machines: [row(A, 'Studio Mac')] } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(5_000)
@@ -233,7 +265,7 @@ describe('the registry', () => {
   it('saying the session is over signs the page out', async () => {
     const w = world({ account: { ok: false, reason: 'signed-out' } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     expect(w.signedOut).toBe(1)
     stop()
@@ -242,7 +274,7 @@ describe('the registry', () => {
   it('not answering keeps what was shown and says so; answering again clears it', async () => {
     const w = world()
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     w.set({ account: { ok: false, reason: 'offline' } })
     await vi.advanceTimersByTimeAsync(60_000)
@@ -258,7 +290,7 @@ describe('the registry', () => {
   it('not answering the first time is a failure the page can show, not an endless wait', async () => {
     const w = world({ account: { ok: false, reason: 'offline' } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     expect(store.get()).toMatchObject({ status: 'failed', error: DEVICES_COPY.unreachable, machines: [] })
     stop()
@@ -267,7 +299,7 @@ describe('the registry', () => {
   it('an account with no machines is ready, with none', async () => {
     const w = world({ account: { ok: true, machines: [] } })
     const store = createConsoleDevices(w.deps)
-    const stop = store.start()
+    const stop = shown(store)
     await vi.advanceTimersByTimeAsync(0)
     expect(store.get()).toMatchObject({ status: 'ready', machines: [], error: null })
     stop()
