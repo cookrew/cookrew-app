@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { hostOutsideTheMac, UNLOCK_PASSWORD_MAX } from '../../../shared/remote-unlock'
 import { cookrew } from '../api'
 import { clientBase } from '../api-base'
+import { sealFetchFor } from './seal-fetch'
 import { authHeaders, authStore, connectCodeFromInput } from '../auth-gate'
 import { seated } from '../device-seat'
 import { openSeal, SealRefusedError, type SealClient } from '../path/seal-client'
@@ -155,7 +156,7 @@ function useUnlockWay(attempt: number): Way {
     // or a slug. Read once: the session is with the machine it was opened to,
     // and stays there if another is entered before the sheet is gone.
     const base = clientBase()
-    openSeal({ url: (path) => `${base}${path}`, code })
+    openSeal({ url: (path) => `${base}${path}`, code, fetchFn: sealFetchFor(base) })
       .then((opened) => {
         client = opened
         if (!alive) return opened.close()

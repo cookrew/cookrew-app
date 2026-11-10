@@ -172,20 +172,27 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
     }
     const mine = ++generation
     let refusedEarly = false
-    const opened = subscribe(
-      (event) => {
-        if (mine === generation) onEvent(event)
-      },
-      () => {
-        if (mine !== generation) return
-        if (release === null) {
-          refusedEarly = true
-          return
+    let opened: () => void
+    try {
+      opened = subscribe(
+        (event) => {
+          if (mine === generation) onEvent(event)
+        },
+        () => {
+          if (mine !== generation) return
+          if (release === null) {
+            refusedEarly = true
+            return
+          }
+          closeFeed()
+          retry()
         }
-        closeFeed()
-        retry()
-      }
-    )
+      )
+    } catch {
+      // Nobody to ask (the console, between machines): as a surface with no feed.
+      if (state.link !== 'none') set({ link: 'none' })
+      return
+    }
     if (refusedEarly) {
       opened()
       retry()
@@ -244,10 +251,15 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   const askLocal = async (): Promise<void> => {
     const { listWorkspaces, machineName } = api()
     const mine = turns
-    const [list, name] = await Promise.all([
-      listWorkspaces ? listWorkspaces().then((value) => value, () => null) : Promise.resolve(null),
-      machineName ? machineName().then((value) => value, () => null) : Promise.resolve(null)
-    ])
+    // An api that refuses to be asked at all (nobody in scope) is no answer, like one that fails.
+    const asked = <T,>(ask: (() => Promise<T>) | undefined): Promise<T | null> => {
+      try {
+        return ask ? ask().then((value) => value, () => null) : Promise.resolve(null)
+      } catch {
+        return Promise.resolve(null)
+      }
+    }
+    const [list, name] = await Promise.all([asked(listWorkspaces), asked(machineName)])
     if (mine !== turns) return
     set({ list: list ?? state.list, listFailed: list === null && state.list === null, name: name ?? state.name })
   }

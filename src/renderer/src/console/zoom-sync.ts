@@ -26,13 +26,17 @@ export interface ZoomSyncDeps {
   readonly workspace: { current(): string | null; subscribe(listener: () => void): () => void }
 }
 
-export function startZoomSync(deps: ZoomSyncDeps): () => void {
+/** Put the view on the level the address names. Done before the app first draws. */
+export function applyRouteToZoom(deps: ZoomSyncDeps): void {
   const route = deps.router.get()
-  if (route.kind === 'machine' && route.machine === deps.machine) {
-    const place = zoomOfRoute(route)
-    deps.zoom.go(place.v, place.dir)
-    deps.zoom.focusAgent(place.agent)
-  }
+  if (route.kind !== 'machine' || route.machine !== deps.machine) return
+  const place = zoomOfRoute(route)
+  deps.zoom.go(place.v, place.dir)
+  deps.zoom.focusAgent(place.agent)
+}
+
+/** Write every step the view takes back into the address. Returns its stop. */
+export function followZoom(deps: ZoomSyncDeps): () => void {
   const write = (): void => {
     const workspace = deps.workspace.current()
     const zoom = deps.zoom.get()
@@ -47,4 +51,9 @@ export function startZoomSync(deps: ZoomSyncDeps): () => void {
     offZoom()
     offWorkspace()
   }
+}
+
+export function startZoomSync(deps: ZoomSyncDeps): () => void {
+  applyRouteToZoom(deps)
+  return followZoom(deps)
 }
