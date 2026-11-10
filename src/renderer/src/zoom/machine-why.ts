@@ -22,6 +22,16 @@ export interface WhyContext {
   readonly platform?: string
 }
 
+/**
+ * Is the view resting on the devices stop (zoom-path.ts · v −2), where the
+ * machines and the button the sentence points "above" at are? Past the midway
+ * to the workspaces stop, or in a full view, the sentence is not said
+ * (owner screenshot 2026-11-10: it followed into an agent's chat).
+ */
+export function machineWhyShows(v: number, full: boolean): boolean {
+  return !full && v < -1.5
+}
+
 export function machineWhyWords(machine: { readonly name: string; readonly online: boolean }, ctx: WhyContext): string {
   const { name } = machine
   if (!machine.online) return `${name} is offline. It opens here once it is back.`
