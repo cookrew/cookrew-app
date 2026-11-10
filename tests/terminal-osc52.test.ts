@@ -32,7 +32,7 @@ describe('a terminal’s output and the clipboard', async () => {
     expect(typed.join('')).toContain(Buffer.from('a secret').toString('base64'))
   })
 
-  it('a query is swallowed: nothing is read, nothing is typed into the pane', async () => {
+  it('a query is swallowed: nothing is typed into the pane and nothing is written', async () => {
     const term = terminal()
     const typed: string[] = []
     const write = vi.fn(async () => true)
@@ -40,6 +40,11 @@ describe('a terminal’s output and the clipboard', async () => {
     loadTerminalClipboard(term as unknown as Guarded, write)
     await written(term, QUERY)
     await written(term, '\x1b]52;p;?\x1b\\')
+    await written(term, '\x1b]52;c;?;x\x07')
+    // Cut across three writes, as a stream cuts it.
+    await written(term, '\x1b]5')
+    await written(term, '2;c;')
+    await written(term, '?\x07')
     expect(typed).toEqual([])
     expect(write).not.toHaveBeenCalled()
   })
@@ -50,6 +55,20 @@ describe('a terminal’s output and the clipboard', async () => {
     loadTerminalClipboard(term as unknown as Guarded, write)
     await written(term, SET_HELLO)
     expect(write).toHaveBeenCalledWith('hello')
+    // What tmux sends for a drag: no selection named.
+    await written(term, '\x1b]52;;d29ybGQ=\x07')
+    expect(write).toHaveBeenLastCalledWith('world')
+  })
+
+  it('a set that is no copy changes nothing: not another selection, not an emptying', async () => {
+    const term = terminal()
+    const write = vi.fn(async () => true)
+    loadTerminalClipboard(term as unknown as Guarded, write)
+    await written(term, '\x1b]52;p;aGVsbG8=\x07')
+    await written(term, '\x1b]52;c;!!!\x07')
+    await written(term, '\x1b]52;c; ?\x07')
+    await written(term, '\x1b]52;c;\x07')
+    expect(write).not.toHaveBeenCalled()
   })
 
   it('tells a query from a copy by its second field alone', () => {

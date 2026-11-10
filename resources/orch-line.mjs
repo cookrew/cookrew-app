@@ -27,6 +27,7 @@ import { homedir, userInfo } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
+import { clipboardGuard } from './line-guard.mjs'
 
 const arg = (name, fallback = undefined) => {
   const at = process.argv.indexOf(`--${name}`)
@@ -402,6 +403,9 @@ function authHeaders() {
   return { authorization: `Bearer ${token}` }
 }
 
+/** One guard for the pane, kept across reconnects: its state is the pane's. */
+const shown = clipboardGuard()
+
 function connectLine() {
   const req = transport.request(
     {
@@ -459,7 +463,8 @@ function connectLine() {
           // inside the socket handler and kill the card — a one-line remote
           // DoS on the caller. Render only what a terminal can render.
           if (event === 'data') {
-            if (typeof payload === 'string') process.stdout.write(payload)
+            // Through the guard: the door's bytes may set this pane's clipboard, never ask for it (line-guard.mjs).
+            if (typeof payload === 'string') process.stdout.write(shown(payload))
           } else if (event === 'hello') void post('/line/resize', { cols: cols(), rows: rows() })
           else if (event === 'exit') process.stdout.write(dim('— the orch process exited —'))
         }

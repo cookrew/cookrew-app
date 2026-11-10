@@ -20,6 +20,15 @@
  * says nothing. xterm asks the handler registered LAST first, and a handler
  * that answers true ends the matter; the order below is the guard.
  *
+ * A SET IS TAKEN ONLY AS A COPY. The clipboard selection (`c`, or none named,
+ * which is what tmux sends) and some text: a string that names another
+ * selection, or decodes to nothing, would otherwise overwrite or EMPTY the
+ * clipboard, and no copy does that.
+ *
+ * THIS IS THE PAGE'S HALF. The pane's own terminal reads the same bytes first,
+ * and tmux answers a query by itself; on an imported card that half is
+ * resources/line-guard.mjs, in front of the pane.
+ *
  * Pasting is not this: it is asked for by a key or a tap, on this side
  * (terminal-clipboard.ts), and reads the clipboard in that gesture.
  */
@@ -33,7 +42,10 @@ export function loadTerminalClipboard(term: Pick<Terminal, 'loadAddon' | 'parser
   const provider: IClipboardProvider = {
     // Never reached while the guard below stands, and empty if it ever is.
     readText: async () => '',
-    writeText: async (_selection, text) => {
+    writeText: async (selection, text) => {
+      // The type lists the letters; the wire may name none, or several.
+      const named: string = selection
+      if (text === '' || !(named === '' || named.includes('c'))) return
       await write(text)
     }
   }
