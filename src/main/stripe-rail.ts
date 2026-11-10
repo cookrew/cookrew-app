@@ -399,7 +399,7 @@ export async function stripeSettle(
   if (
     session.id !== payment.session ||
     session.payment_status !== 'paid' ||
-    session.amount_total !== amount ||
+    !paidOurPrice(session, amount) ||
     session.currency !== 'usd' ||
     !isRecord(metadata) ||
     metadata.serviceId !== expected.serviceId ||
@@ -413,6 +413,39 @@ export async function stripeSettle(
   } catch {
     return 'unverifiable'
   }
+}
+
+/**
+ * DID THIS SESSION CHARGE OUR PRICE?
+ *
+ * Checkout is created with automatic tax on (see `automatic_tax` above), so
+ * Stripe may add tax to what the buyer pays. On the session, `amount_subtotal`
+ * is the items before discounts and taxes and `amount_total` is after — and
+ * the rule here used to be `amount_total === price`, which is true only when
+ * no tax was added. Every buyer who owed tax on a tax-exclusive price was
+ * charged, then refused, and told nothing had been charged.
+ *
+ * Two shapes are accepted, and nothing else:
+ *   • the total IS the price — no tax, or tax the owner included in it;
+ *   • the SUBTOTAL is the price and the total is exactly that plus Stripe's
+ *     own tax figure, with no discount — the buyer paid our price and the tax
+ *     on top of it.
+ * A session that adds up to anything else was not sold at this price.
+ */
+function paidOurPrice(session: Record<string, unknown>, amount: number): boolean {
+  if (session.amount_total === amount) return true
+  const details = session.total_details
+  if (!isRecord(details)) return false
+  const tax = details.amount_tax
+  const discount = details.amount_discount
+  return (
+    session.amount_subtotal === amount &&
+    typeof tax === 'number' &&
+    Number.isInteger(tax) &&
+    tax > 0 &&
+    (discount === 0 || discount === undefined || discount === null) &&
+    session.amount_total === amount + tax
+  )
 }
 
 function stripeHeaders(

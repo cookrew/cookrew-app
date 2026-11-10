@@ -308,6 +308,77 @@ describe('settlement', () => {
     expect(createStripeRedemptionStore(file).has(SESSION)).toBe(false)
   })
 
+  /**
+   * THE BUYER WHO OWES TAX (G). Checkout is created with automatic tax on, and
+   * where the owner's prices are tax-EXCLUSIVE Stripe adds the tax on top: the
+   * session's `amount_total` is "after discounts and taxes", `amount_subtotal`
+   * is before. The door compared the TOTAL with its own price, so every taxed
+   * buyer was charged and then refused. The price is the subtotal; the tax is
+   * Stripe's own figure on the same session, and the three must add up.
+   */
+  const taxed = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+    paidSession({
+      amount_subtotal: 250,
+      amount_total: 300,
+      total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 50 },
+      ...over
+    })
+
+  it('accepts a buyer charged the price PLUS tax, once', async () => {
+    const file = ledger()
+    const get: StripeGet = async () => ({ ok: true, status: 200, json: taxed() })
+    await expect(run(get, file)).resolves.toBe('ok')
+    await expect(run(get, file)).resolves.toBe('refused')
+  })
+
+  it('still accepts the untaxed session Stripe reports in full', async () => {
+    const get: StripeGet = async () => ({
+      ok: true,
+      status: 200,
+      json: paidSession({
+        amount_subtotal: 250,
+        amount_total: 250,
+        total_details: { amount_discount: 0, amount_shipping: 0, amount_tax: 0 }
+      })
+    })
+    await expect(run(get)).resolves.toBe('ok')
+  })
+
+  it('a total that IS the price is accepted as before — untaxed, or tax the owner included in it', async () => {
+    // Nothing that settled yesterday is refused today: the old rule stands,
+    // and the taxed case is added beside it.
+    for (const over of [
+      { amount_subtotal: 250, amount_total: 250, total_details: { amount_discount: 0, amount_tax: 42 } },
+      { amount_subtotal: undefined, total_details: undefined, amount_total: 250 }
+    ]) {
+      const get: StripeGet = async () => ({ ok: true, status: 200, json: taxed(over) })
+      await expect(run(get)).resolves.toBe('ok')
+    }
+  })
+
+  it.each([
+    ['a subtotal below the price with tax on top of it', { amount_subtotal: 200, amount_total: 240, total_details: { amount_discount: 0, amount_tax: 40 } }],
+    ['a subtotal above the price', { amount_subtotal: 300, amount_total: 350 }],
+    ['a total that is not price plus tax', { amount_total: 310 }],
+    ['a total below the price', { amount_total: 240, total_details: { amount_discount: 0, amount_tax: 50 } }],
+    ['a discount beside the tax', { amount_total: 280, total_details: { amount_discount: 20, amount_tax: 50 } }],
+    ['any discount at all', { total_details: { amount_discount: 1, amount_tax: 50 }, amount_total: 299 }],
+    ['negative tax', { amount_total: 200, total_details: { amount_discount: 0, amount_tax: -50 } }],
+    ['tax that is not a whole number', { amount_total: 300.5, total_details: { amount_discount: 0, amount_tax: 50.5 } }],
+    ['tax written as text', { total_details: { amount_discount: 0, amount_tax: '50' } }],
+    ['no tax breakdown to add up', { total_details: null }],
+    ['no subtotal to compare', { amount_subtotal: null }],
+    ['an unpaid taxed session', { payment_status: 'unpaid' }],
+    ['a taxed session in another currency', { currency: 'eur' }],
+    ['a taxed session for another account', { metadata: { serviceId: 'svc-1', sub: 'ben' } }],
+    ['a taxed session for another service', { metadata: { serviceId: 'svc-2', sub: 'ana' } }]
+  ])('refuses %s and leaves the id unburned', async (_name, over) => {
+    const file = ledger()
+    const get: StripeGet = async () => ({ ok: true, status: 200, json: taxed(over) })
+    await expect(run(get, file)).resolves.toBe('refused')
+    expect(createStripeRedemptionStore(file).has(SESSION)).toBe(false)
+  })
+
   it('refuses malformed headers locally and Stripe 404 verdicts', async () => {
     const get = vi.fn<StripeGet>().mockResolvedValue({ ok: false, status: 404, json: { error: {} } })
     await expect(run(get, ledger(), 'junk')).resolves.toBe('refused')
