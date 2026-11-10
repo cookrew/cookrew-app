@@ -1710,34 +1710,78 @@
   }
 }
 
-/* ── the account's other machines (MachineNode): a small frame under this one ──
-   Each is only what the fleet could read: a ring and a name per workspace, the
-   machine's own line. A listed-only desktop says so instead of showing zeros. */
+/* ── the account's other machines (MachineNode): drawn as this one is ──
+   A bezel, the screen inside it, the base under it, its name on the screen's
+   foot. The screen shows what its own summary seats; one that cannot be read
+   is dark, and its line says the one thing to do. */
 .zv-machinecard {
   position: absolute;
   left: 0;
   top: 0;
   width: 380px;
   height: 220px;
-  padding: 22px 20px 64px;
+  padding: 10px;
   border: 2px solid var(--zv-ink);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--zv-paper-2);
-  box-shadow: 0 8px 24px var(--zv-shadow);
-  cursor: pointer;
+  box-shadow: 0 10px 30px var(--zv-shadow);
+  cursor: zoom-in;
 }
 
 .zv-machinecard.off {
-  border-style: dashed;
-  opacity: 0.6;
+  opacity: 0.55;
 }
 
+/* The screen inside the bezel. */
 .zv-machinecard-screen {
+  box-sizing: border-box;
   height: 100%;
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
   gap: 12px 18px;
+  padding: 14px 14px 58px;
+  border-radius: 6px;
+  background: var(--zv-paper);
+  box-shadow: inset 0 0 0 1px var(--zv-hair);
+  overflow: hidden;
+}
+
+/* Nothing of it is known: a lid closed, not an empty desk. */
+.zv-machinecard[data-read='false'] .zv-machinecard-screen {
+  background: color-mix(in srgb, var(--zv-ink) 14%, var(--zv-paper-2));
+}
+
+.zv-machinecard[data-read='false'] {
+  cursor: pointer;
+}
+
+/* The base, as this machine's (.zv-machine-deck). */
+.zv-machinecard-deck {
+  position: absolute;
+  /* A little wider than the frame, and no wider than half the gap to the next one (MACHINE_CARD.gap). */
+  left: -4%;
+  right: -4%;
+  bottom: -22px;
+  height: 14px;
+  border: 2px solid var(--zv-ink);
+  border-radius: 3px 3px 11px 11px;
+  background: var(--zv-paper);
+  pointer-events: none;
+}
+
+.zv-machinecard-deck::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: 16%;
+  height: 5px;
+  transform: translateX(-50%);
+  border: 2px solid var(--zv-ink);
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  background: var(--zv-paper-2);
 }
 
 .zv-mws {
@@ -1772,14 +1816,17 @@
   height: 9px;
   border-radius: 50%;
   background: var(--zv-wait);
-  box-shadow: 0 0 0 2px var(--zv-paper-2);
+  box-shadow: 0 0 0 2px var(--zv-paper);
 }
 
+/* Its name, on the foot of its own screen: the painter keeps these words at one size on screen
+   (machineWords), and on a phone that size is several times the frame's scale, so they stand
+   inside the frame, where there is room for them, and not under it, where the next row is. */
 .zv-machinecard-label {
   position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: 16px;
+  left: 24px;
+  right: 24px;
+  bottom: 22px;
   display: grid;
   gap: 4px;
 }
@@ -1792,6 +1839,11 @@
 .zv-machinecard-label small {
   font: 10.5px/1.3 var(--zv-mono);
   color: var(--zv-muted);
+}
+
+/* The one thing to do reads as something to do. */
+.zv-machinecard[data-read='false'] .zv-machinecard-label small {
+  color: var(--zv-seal-text);
 }
 
 .zv-machinecard:focus-visible {
@@ -2090,7 +2142,21 @@
   }
 }
 
-/* ── this machine's one proof to the account's others (MachineTrustRow) ── */
+/* ── this machine's one proof to the account's others (MachineTrustRow) ──
+   At the foot of the devices stop, over the bar and over the stop's own sentence (.zv-error),
+   outside the camera: a control keeps a thumb's size and stays where a thumb can reach it. */
+.zv-trust-bar {
+  position: absolute;
+  z-index: 44;
+  left: 50%;
+  bottom: calc(132px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+}
+.zv-trust-bar:empty {
+  display: none;
+}
+
 .zv-trust {
   margin: 6px 0;
   font: 500 12px/1.4 var(--zv-mono, ui-monospace, monospace);

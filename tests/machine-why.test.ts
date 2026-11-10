@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { machineWhyShows, machineWhyWords } from '../src/renderer/src/zoom/machine-why'
+import { machineWhyShows, machineWhyWords, machineSays } from '../src/renderer/src/zoom/machine-why'
 
 /**
  * A MACHINE THE VIEW CANNOT GO INTO SAYS THE ONE THING TO DO (owner 2026-11-10,
@@ -16,13 +16,13 @@ describe('machineWhyWords', () => {
   })
 
   it('a desktop that has not proved itself: the one button', () => {
-    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'darwin' })).toBe('Press “Sign this Mac in again to see your other machines” above, and Solis-Core opens here.')
-    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'linux' })).toBe('Press “Sign this machine in again to see your other machines” above, and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'darwin' })).toBe('Press “Sign this Mac in again to see your other machines” below, and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'desktop', trusted: false, block: null, platform: 'linux' })).toBe('Press “Sign this machine in again to see your other machines” below, and Solis-Core opens here.')
   })
 
   it('a browser with no pass, or no account key: where to prove it once', () => {
-    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'needs-proof' } })).toBe('Prove it’s you once at cookrew.dev/me (password or passkey), and Solis-Core opens here.')
-    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'no-device' } })).toBe('Sign this browser in at cookrew.dev/me, and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'needs-proof' } })).toBe('Prove it’s you once on the console (a passkey, or the account password), and Solis-Core opens here.')
+    expect(machineWhyWords(solis, { surface: 'page', trusted: null, block: { kind: 'no-device' } })).toBe('Sign this browser in on the console, and Solis-Core opens here.')
   })
 
   it('the machine’s own words when it turned this one away; a quiet one is asked again', () => {
@@ -32,7 +32,7 @@ describe('machineWhyWords', () => {
   })
 
   it('a page with no way to other machines (a machine reached by its address): where it can be', () => {
-    expect(machineWhyWords(solis, { surface: 'none', trusted: null, block: null })).toBe('Open cookrew.dev/me to go into Solis-Core from here.')
+    expect(machineWhyWords(solis, { surface: 'none', trusted: null, block: null })).toBe('Open console.cookrew.dev to go into Solis-Core from here.')
   })
 
   it('never sends anyone to the other machine', () => {
@@ -60,5 +60,26 @@ describe('machineWhyShows', () => {
 
   it('on any other stop or passage: not said', () => {
     for (const v of [-1.5, -1, 0, 1, 2, 3]) expect(machineWhyShows(v, false)).toBe(false)
+  })
+})
+
+describe('under a machine’s name on the devices stop', () => {
+  const m = (over: object = {}) => ({ name: 'Solis-Core', online: true, detail: 'listed' as const, ...over })
+  it('says nothing for a machine that is read', () => {
+    expect(machineSays(m({ detail: 'live' }), { surface: 'desktop', trusted: true })).toBeNull()
+  })
+  it('says the one thing to do for one that is not', () => {
+    expect(machineSays(m({ online: false }), { surface: 'desktop', trusted: true })).toBe('Open Cookrew on Solis-Core.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'darwin' })).toBe('Sign this Mac in again, below, to read it.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: false, platform: 'linux' })).toBe('Sign this machine in again, below, to read it.')
+    expect(machineSays(m(), { surface: 'none', trusted: null })).toBe('Open console.cookrew.dev to read it.')
+    expect(machineSays(m(), { surface: 'desktop', trusted: true })).toBe('Not answering yet.')
+    expect(machineSays(m({ detail: 'connecting' }), { surface: 'desktop', trusted: true })).toBe('Reading…')
+  })
+  it('on a page that enters machines with the account’s pass, says what stood in the way the last time it asked', () => {
+    expect(machineSays(m(), { surface: 'page', trusted: null, block: { kind: 'needs-proof' } })).toBe('Prove it’s you on the console to read it.')
+    expect(machineSays(m(), { surface: 'page', trusted: null, block: { kind: 'no-device' } })).toBe('Sign this browser in on the console to read it.')
+    expect(machineSays(m(), { surface: 'page', trusted: null, block: { kind: 'refused', message: 'Remote access is off on this Mac.' } })).toBe('Solis-Core says: Remote access is off on this Mac.')
+    expect(machineSays(m(), { surface: 'page', trusted: null, block: { kind: 'offline' } })).toBe('Not answering yet.')
   })
 })

@@ -424,7 +424,8 @@ export function deviceOf(
 }
 
 /** The account's other machines: a row (wrapping) under this Mac's screen (deviceOf · screen), inside the devices camera. */
-export const MACHINE_CARD = { w: 380, h: 220, gap: 40 }
+/** `rowGap`: under each frame stands its base, so rows stand a little further apart than columns. */
+export const MACHINE_CARD = { w: 380, h: 220, gap: 40, rowGap: 56 }
 /**
  * Room under the machine's screen, in scene units, before the other machines
  * start: its name and its "Remote desktop" pill are drawn there at a thumb's
@@ -443,7 +444,7 @@ export function machinesAt(count: number, screen: Box, narrow: boolean): { at: P
   for (let i = 0; i < count; i++) {
     const row = Math.floor(i / perRow)
     const inRow = Math.min(perRow, count - row * perRow)
-    at.push({ x: ((i % perRow) - (inRow - 1) / 2) * (MACHINE_CARD.w + MACHINE_CARD.gap), y: top + row * (MACHINE_CARD.h + MACHINE_CARD.gap) })
+    at.push({ x: ((i % perRow) - (inRow - 1) / 2) * (MACHINE_CARD.w + MACHINE_CARD.gap), y: top + row * (MACHINE_CARD.h + MACHINE_CARD.rowGap) })
   }
   return { at, rows, perRow, top }
 }

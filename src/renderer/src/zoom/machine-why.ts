@@ -35,20 +35,49 @@ export function machineWhyShows(v: number, full: boolean): boolean {
 export function machineWhyWords(machine: { readonly name: string; readonly online: boolean }, ctx: WhyContext): string {
   const { name } = machine
   if (!machine.online) return `${name} is offline. It opens here once it is back.`
-  if (ctx.surface === 'none') return `Open cookrew.dev/me to go into ${name} from here.`
+  if (ctx.surface === 'none') return `Open console.cookrew.dev to go into ${name} from here.`
   if (ctx.surface === 'desktop' && ctx.trusted === false) {
-    return `Press “${machineCopy('Sign this Mac in again to see your other machines', ctx.platform ?? 'darwin')}” above, and ${name} opens here.`
+    return `Press “${machineCopy('Sign this Mac in again to see your other machines', ctx.platform ?? 'darwin')}” below, and ${name} opens here.`
   }
   switch (ctx.block?.kind) {
     case 'needs-proof':
-      return `Prove it’s you once at cookrew.dev/me (password or passkey), and ${name} opens here.`
+      return `Prove it’s you once on the console (a passkey, or the account password), and ${name} opens here.`
     case 'no-device':
-      return `Sign this browser in at cookrew.dev/me, and ${name} opens here.`
+      return `Sign this browser in on the console, and ${name} opens here.`
     case 'refused':
       return `${name}: ${ctx.block.message}`
     case 'offline':
       return `${name} isn’t answering right now. Try again in a moment.`
     default:
       return `${name} isn’t answering yet. It opens as soon as it does.`
+  }
+}
+
+/**
+ * UNDER A MACHINE'S NAME ON THE DEVICES STOP, when it cannot be read: the one
+ * thing to do, in a few words (0.6.0: no machine is ever "listed only"). Null
+ * for a machine that is read; its counts stand there instead. The full
+ * sentence, with what a press would find, is `machineWhyWords`.
+ */
+export function machineSays(
+  machine: { readonly name: string; readonly online: boolean; readonly detail: 'live' | 'connecting' | 'listed' },
+  ctx: Pick<WhyContext, 'surface' | 'trusted' | 'platform'> & { readonly block?: MachineBlock | null }
+): string | null {
+  if (!machine.online) return `Open Cookrew on ${machine.name}.`
+  if (machine.detail === 'live') return null
+  if (machine.detail === 'connecting') return 'Reading…'
+  // The button is at the foot of the view (ZoomView · zv-trust-bar), under the machines.
+  if (ctx.surface === 'desktop' && ctx.trusted === false) return machineCopy('Sign this Mac in again, below, to read it.', ctx.platform ?? 'darwin')
+  if (ctx.surface === 'none') return 'Open console.cookrew.dev to read it.'
+  // A page that enters machines with the account's pass knows what stood in the way the last time it asked.
+  switch (ctx.block?.kind) {
+    case 'needs-proof':
+      return 'Prove it’s you on the console to read it.'
+    case 'no-device':
+      return 'Sign this browser in on the console to read it.'
+    case 'refused':
+      return `${machine.name} says: ${ctx.block.message.slice(0, 120)}`
+    default:
+      return 'Not answering yet.'
   }
 }

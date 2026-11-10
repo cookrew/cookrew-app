@@ -1,3 +1,4 @@
+import type { ScreenBox } from './remote-entry'
 import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 
@@ -15,6 +16,8 @@ export interface RemoteMachineRef {
   readonly id: string
   readonly name: string
   readonly os: string | null
+  /** Where its frame stood on the devices stop when it was entered: its view opens from there (remote-entry.ts). */
+  readonly from?: ScreenBox
 }
 
 export interface RemoteItemRef {

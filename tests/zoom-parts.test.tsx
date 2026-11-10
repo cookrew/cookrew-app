@@ -142,14 +142,44 @@ describe('a link and an item', () => {
 })
 
 // A workspace's tile: zoom-workspace-tile.test.tsx.
-describe('a machine', () => {
-  it('shows a machine’s workspaces, and says “listed only” when it cannot be read', () => {
-    const machine: MachineView = { id: 'm2', name: 'Mac mini', local: false, online: true, detail: 'listed', workspaces: [{ id: 'z', name: 'Home lab', presets: [], waiting: false }], agents: null, waiting: null }
-    const html = renderToStaticMarkup(<MachineNode machine={machine} bind={bind} onOpen={() => undefined} />)
+describe('another machine of the account, on the devices stop', () => {
+  const live: MachineView = { id: 'm2', name: 'Mac mini', local: false, online: true, detail: 'live', workspaces: [{ id: 'z', name: 'Home lab', presets: [], waiting: true }], agents: 3, waiting: 1 }
+
+  it('is drawn as a machine, the way this one is: a frame, a screen with its workspaces on it, a base, its name under it', () => {
+    const html = renderToStaticMarkup(<MachineNode machine={live} say={null} bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('zv-machinecard-screen')
+    expect(html).toContain('zv-machinecard-deck')
     expect(html).toContain('Mac mini')
     expect(html).toContain('Home lab')
-    expect(html).toContain('listed only')
+    expect(html).toContain('1 workspace · 3 agents · 1 waiting')
+    expect(html).toContain('data-read="true"')
+  })
+
+  it('one that is read and has no workspaces is still read: a lit, empty screen, not a dark one with nothing to do', () => {
+    const empty: MachineView = { ...live, workspaces: [], agents: null, waiting: null }
+    const html = renderToStaticMarkup(<MachineNode machine={empty} say={null} bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('data-read="true"')
+    expect(html).toContain('no workspaces')
+    expect(html).toContain('0 workspaces')
+  })
+
+  it('one that cannot be read says the one thing to do, and never “listed only” or a zero it does not know', () => {
+    const unread: MachineView = { ...live, detail: 'listed', agents: null, waiting: null }
+    const html = renderToStaticMarkup(<MachineNode machine={unread} say="Sign this Mac in again, below, to read it." bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('Sign this Mac in again, below, to read it.')
+    expect(html).not.toContain('listed only')
     expect(html).not.toContain('0 agents')
+    expect(html).not.toContain('listed')
+    // Its screen is dark: nothing of it is known to draw, not even what the registry last listed.
+    expect(html).toContain('data-read="false"')
+    expect(html).not.toContain('Home lab')
+  })
+
+  it('an offline one is dimmed and says so', () => {
+    const off: MachineView = { ...live, online: false, detail: 'listed', agents: null, waiting: null }
+    const html = renderToStaticMarkup(<MachineNode machine={off} say="Open Cookrew on Mac mini." bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('zv-machinecard off')
+    expect(html).toContain('Open Cookrew on Mac mini.')
   })
 })
 
