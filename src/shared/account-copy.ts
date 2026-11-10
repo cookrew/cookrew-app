@@ -249,13 +249,13 @@ export const V3_COPY = machineTable({
   'm5.enter.go': 'Enter',
   /** M5, a browser with no cookrew.dev device key: the account cannot vouch for it yet. */
   'm5.enter.signin':
-    'This browser is not signed in to cookrew.dev. Sign in at cookrew.dev/me, then open this Mac again from there.',
+    'This browser is not signed in to your account. Open this Mac from console.cookrew.dev: you sign in there.',
   /** M5, a machine of the account reached on a page that cannot use the account (a direct address). */
   'm5.enter.elsewhere':
-    'Open this Mac from cookrew.dev/me in a browser signed in to your account, then enter with a passkey or the account password.',
+    'Open this Mac from console.cookrew.dev: you sign in there and prove it’s you once, with a passkey or the account password.',
   /** M5, ruling 3: a provider-only account with no passkey sets an account password first. */
   'm5.enter.setpassword':
-    'Set an account password first: this account signs in with Google or GitHub and has no password or passkey yet. Set one at cookrew.dev/me, then come back.',
+    'Set an account password first: this account signs in with Google or GitHub and has no password or passkey yet. Set one at auth.cookrew.dev/account, then come back.',
   /** M5, cookrew.dev could not be asked for the pass. */
   'm5.enter.unreachable':
     'cookrew.dev cannot be reached just now. Try again in a minute, or pair with a token instead.',
@@ -449,7 +449,7 @@ export const CLI_COPY = {
   'said.lock-off':
     'No password was typed here, so Cookrew will not lock itself on this Mac until the account password is typed on it once (Security → Lock).',
   'said.lock-off-no-password':
-    '@{handle} has no password yet, so Cookrew will not lock itself on this Mac. Set one at cookrew.dev/me, then type it here once (Security → Lock).',
+    '@{handle} has no password yet, so Cookrew will not lock itself on this Mac. Set one at auth.cookrew.dev/account, then type it here once (Security → Lock).',
   'said.no-password': '@{handle} has no password. Run cookrew login --github, or sign in from the app.',
   'said.logout-no-password':
     '@{handle} has no password, so leaving needs a browser. Sign this Mac out from the app, or revoke it from another device.',

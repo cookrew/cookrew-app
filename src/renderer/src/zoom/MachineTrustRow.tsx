@@ -3,7 +3,6 @@ import { hostPlatform } from '../../../shared/machine-words'
 import { cookrew } from '../api'
 import { machineTrustLine, type MachineTrustState } from './machine-trust'
 
-/** Under the account's other machines while this one cannot read them yet: its one proof, or how to give it. */
 /**
  * Has this machine given its one proof. Asked once and again now and then, and
  * shared by the row that offers the proof and by the machines under it, which
@@ -16,7 +15,8 @@ export function useMachineTrust(): readonly [MachineTrustState | null, (next: Ma
     const ask = (): void => {
       void (cookrew().machineTrust?.() ?? Promise.resolve(null)).then(
         (next) => {
-          if (live) setState(next)
+          // The same answer is the same state: asked every half minute, it must not redraw the whole view each time.
+          if (live) setState((held) => (held?.trusted === next?.trusted ? held : next))
         },
         () => undefined
       )
@@ -32,6 +32,7 @@ export function useMachineTrust(): readonly [MachineTrustState | null, (next: Ma
   return [state, setState]
 }
 
+/** At the foot of the devices stop while this machine cannot read the account's others yet: its one proof, or how to give it. */
 export function MachineTrustRow({ others, trust }: { others: number; trust: ReturnType<typeof useMachineTrust> }): React.JSX.Element | null {
   const [state, setState] = trust
   const [busy, setBusy] = useState(false)

@@ -1749,7 +1749,7 @@
 
 /* Nothing of it is known: a lid closed, not an empty desk. */
 .zv-machinecard[data-read='false'] .zv-machinecard-screen {
-  background: var(--zv-paper-3, var(--zv-paper-2));
+  background: color-mix(in srgb, var(--zv-ink) 14%, var(--zv-paper-2));
 }
 
 .zv-machinecard[data-read='false'] {
@@ -1759,8 +1759,9 @@
 /* The base, as this machine's (.zv-machine-deck). */
 .zv-machinecard-deck {
   position: absolute;
-  left: -7%;
-  right: -7%;
+  /* A little wider than the frame, and no wider than half the gap to the next one (MACHINE_CARD.gap). */
+  left: -4%;
+  right: -4%;
   bottom: -22px;
   height: 14px;
   border: 2px solid var(--zv-ink);
@@ -2141,7 +2142,21 @@
   }
 }
 
-/* ── this machine's one proof to the account's others (MachineTrustRow) ── */
+/* ── this machine's one proof to the account's others (MachineTrustRow) ──
+   At the foot of the devices stop, over the bar and over the stop's own sentence (.zv-error),
+   outside the camera: a control keeps a thumb's size and stays where a thumb can reach it. */
+.zv-trust-bar {
+  position: absolute;
+  z-index: 44;
+  left: 50%;
+  bottom: calc(132px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+}
+.zv-trust-bar:empty {
+  display: none;
+}
+
 .zv-trust {
   margin: 6px 0;
   font: 500 12px/1.4 var(--zv-mono, ui-monospace, monospace);

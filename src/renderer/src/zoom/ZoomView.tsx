@@ -676,14 +676,14 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
             <MachineNode
               key={m.id}
               machine={m}
-              say={machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform() })}
+              say={machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), block: cookrew().machineWhy?.(m.id) ?? null })}
               bind={bind}
               onOpen={() => {
                 // A machine this one can read is gone into, here (RemoteMachineView.tsx); one it cannot says the one thing to do.
                 const enter = (): void => {
                   setWhy(null)
                   // Entered in place: its view opens from where its frame stands (remote-entry.ts).
-                  const frame = [...(root.current?.querySelectorAll<HTMLElement>('.zv-machinecard') ?? [])].find((el) => el.dataset.machine === m.id)?.getBoundingClientRect()
+                  const frame = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
                   remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(frame ? { from: { x: frame.left, y: frame.top, w: frame.width, h: frame.height } } : {}) })
                 }
                 if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
@@ -696,7 +696,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               }}
             />
           ))}
-          <MachineTrustRow others={model.machines.filter((m) => !m.local).length} trust={trust} />
           <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
@@ -825,18 +824,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       )}
       <RemoteMachineView />
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
+      {/* This machine's one proof, at the foot of the devices stop and outside the camera: inside it the
+          button lay under this machine's own frame, where it could be neither seen nor pressed. */}
+      {whyShows && <div className="zv-trust-bar"><MachineTrustRow others={model.machines.filter((m) => !m.local).length} trust={trust} /></div>}
       {!error && why && whyShows && <div role="status" className="zv-error">{why}<button type="button" onClick={() => setWhy(null)} aria-label="Dismiss">×</button></div>}
     </div>
   )
 }
 
+/** Where this view runs, for what it can say about another machine (machine-why.ts). */
+const machineSurface = (): 'desktop' | 'page' | 'none' => (!canEnterMachines() ? 'none' : isRemoteMode() ? 'page' : 'desktop')
+
 /**
  * What stands between this view and another machine, as the one thing to do
  * (machine-why.ts); null when asking it now found it answers, and it can be gone into.
  */
-/** Where this view runs, for what it can say about another machine (machine-why.ts). */
-const machineSurface = (): 'desktop' | 'page' | 'none' => (!canEnterMachines() ? 'none' : isRemoteMode() ? 'page' : 'desktop')
-
 async function whyNot(m: MachineView): Promise<string | null> {
   const api = cookrew()
   const surface = machineSurface()

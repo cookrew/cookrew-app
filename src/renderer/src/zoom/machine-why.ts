@@ -37,7 +37,7 @@ export function machineWhyWords(machine: { readonly name: string; readonly onlin
   if (!machine.online) return `${name} is offline. It opens here once it is back.`
   if (ctx.surface === 'none') return `Open console.cookrew.dev to go into ${name} from here.`
   if (ctx.surface === 'desktop' && ctx.trusted === false) {
-    return `Press “${machineCopy('Sign this Mac in again to see your other machines', ctx.platform ?? 'darwin')}” above, and ${name} opens here.`
+    return `Press “${machineCopy('Sign this Mac in again to see your other machines', ctx.platform ?? 'darwin')}” below, and ${name} opens here.`
   }
   switch (ctx.block?.kind) {
     case 'needs-proof':
@@ -61,13 +61,23 @@ export function machineWhyWords(machine: { readonly name: string; readonly onlin
  */
 export function machineSays(
   machine: { readonly name: string; readonly online: boolean; readonly detail: 'live' | 'connecting' | 'listed' },
-  ctx: Pick<WhyContext, 'surface' | 'trusted' | 'platform'>
+  ctx: Pick<WhyContext, 'surface' | 'trusted' | 'platform'> & { readonly block?: MachineBlock | null }
 ): string | null {
   if (!machine.online) return `Open Cookrew on ${machine.name}.`
   if (machine.detail === 'live') return null
   if (machine.detail === 'connecting') return 'Reading…'
-  if (ctx.surface === 'desktop' && ctx.trusted === false) return machineCopy('Sign this Mac in again, above, to read it.', ctx.platform ?? 'darwin')
+  // The button is at the foot of the view (ZoomView · zv-trust-bar), under the machines.
+  if (ctx.surface === 'desktop' && ctx.trusted === false) return machineCopy('Sign this Mac in again, below, to read it.', ctx.platform ?? 'darwin')
   if (ctx.surface === 'none') return 'Open console.cookrew.dev to read it.'
-  return 'Not answering yet.'
+  // A page that enters machines with the account's pass knows what stood in the way the last time it asked.
+  switch (ctx.block?.kind) {
+    case 'needs-proof':
+      return 'Prove it’s you on the console to read it.'
+    case 'no-device':
+      return 'Sign this browser in on the console to read it.'
+    case 'refused':
+      return `${machine.name} says: ${ctx.block.message.slice(0, 120)}`
+    default:
+      return 'Not answering yet.'
+  }
 }
-

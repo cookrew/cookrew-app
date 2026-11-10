@@ -152,17 +152,27 @@ describe('another machine of the account, on the devices stop', () => {
     expect(html).toContain('Mac mini')
     expect(html).toContain('Home lab')
     expect(html).toContain('1 workspace · 3 agents · 1 waiting')
+    expect(html).toContain('data-read="true"')
+  })
+
+  it('one that is read and has no workspaces is still read: a lit, empty screen, not a dark one with nothing to do', () => {
+    const empty: MachineView = { ...live, workspaces: [], agents: null, waiting: null }
+    const html = renderToStaticMarkup(<MachineNode machine={empty} say={null} bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('data-read="true"')
+    expect(html).toContain('no workspaces')
+    expect(html).toContain('0 workspaces')
   })
 
   it('one that cannot be read says the one thing to do, and never “listed only” or a zero it does not know', () => {
     const unread: MachineView = { ...live, detail: 'listed', agents: null, waiting: null }
-    const html = renderToStaticMarkup(<MachineNode machine={unread} say="Sign this Mac in again, above, to read it." bind={bind} onOpen={() => undefined} />)
-    expect(html).toContain('Sign this Mac in again, above, to read it.')
+    const html = renderToStaticMarkup(<MachineNode machine={unread} say="Sign this Mac in again, below, to read it." bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('Sign this Mac in again, below, to read it.')
     expect(html).not.toContain('listed only')
     expect(html).not.toContain('0 agents')
     expect(html).not.toContain('listed')
-    // Its screen is dark: nothing of it is known to draw.
+    // Its screen is dark: nothing of it is known to draw, not even what the registry last listed.
     expect(html).toContain('data-read="false"')
+    expect(html).not.toContain('Home lab')
   })
 
   it('an offline one is dimmed and says so', () => {

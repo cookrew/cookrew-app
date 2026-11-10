@@ -39,13 +39,7 @@ export function RemoteMachineView(): React.JSX.Element | null {
     const box = el.getBoundingClientRect()
     const first = entryFrom(from, { x: box.left, y: box.top, w: box.width, h: box.height })
     if (first === null) return
-    el.animate(
-      [
-        { transform: first.transform, transformOrigin: first.origin, opacity: 0.5 },
-        { transform: 'none', transformOrigin: first.origin, opacity: 1 }
-      ],
-      { duration: ENTRY_MS, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' }
-    )
+    el.animate([{ clipPath: first.from, opacity: 0.6 }, { clipPath: first.to, opacity: 1 }], { duration: ENTRY_MS, easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)' })
     // `from` is where the frame stood at the moment of entry: read once, with the machine.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enteredId])

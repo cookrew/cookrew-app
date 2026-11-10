@@ -288,11 +288,12 @@ export function LocalMachine({ name, detail, bind, onOpen, onShare }: { name: st
  * does not know.
  */
 export function MachineNode({ machine, say, bind, onOpen }: { machine: MachineView; say: string | null; bind: Bind; onOpen: () => void }): React.JSX.Element {
-  const read = say === null && machine.agents !== null
+  // Read is "nothing stands in the way". A machine with no workspaces is read: its screen is lit and empty.
+  const read = say === null
   const counts = `${countOf(machine.workspaces.length, 'workspace')}${machine.agents !== null ? ` · ${countOf(machine.agents, 'agent')}` : ''}${machine.waiting ? ` · ${machine.waiting} waiting` : ''}`
   const line = say ?? counts
   return (
-    <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machinecard${machine.online ? '' : ' off'}`} data-read={read} data-machine={machine.id}
+    <div ref={bind(`machinecard:${machine.id}`)} className={`zv-machinecard${machine.online ? '' : ' off'}`} data-read={read}
       title={`${machine.name} · ${line}`}
       {...press(onOpen, `${machine.name}, ${line}`)}>
       <div className="zv-machinecard-screen">

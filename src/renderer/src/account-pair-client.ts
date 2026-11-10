@@ -231,7 +231,7 @@ export async function enterWithGrant(deps: PairClientDeps, desktopId: string): P
     const transcript = pairTranscript({ desktopId, challengeId: challenge.challengeId, nonce: challenge.nonce, deviceId: device.id })
     sig = b64u(await device.sign(encoder.encode(transcript)))
   } catch {
-    return { kind: 'failed', message: 'This browser could not sign with its cookrew.dev key. Sign in at cookrew.dev/me again.' }
+    return { kind: 'failed', message: 'This browser could not sign with its Cookrew key. Sign out and in again.' }
   }
   const finished = await deps.machine.post(PAIR_PATHS.finish, { challengeId: challenge.challengeId, device: asking, grant: grant.grant, sig })
   const answer = finished.body as PairAnswer | null
