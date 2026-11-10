@@ -4,6 +4,7 @@ import type { ConsoleMachine } from './console-devices'
 import type { ConsoleView } from './console-navigator'
 import type { GateState } from './console-gate'
 import { consoleRoutePath } from './console-route'
+import type { PathWord } from './machine-paths'
 
 /**
  * THE ACCOUNT'S MACHINES. Each is drawn as a machine: a frame, a screen, its
@@ -19,7 +20,13 @@ const underName = (machine: ConsoleMachine): string => [PLATFORM[machine.os ?? '
 
 const countOf = (n: number, one: string): string => `${n} ${one}${n === 1 ? '' : 's'}`
 
-function MachineTile({ machine, opening, onOpen }: { machine: ConsoleMachine; opening: boolean; onOpen: (workspace?: string) => void }): React.JSX.Element {
+const PATH_SAYS: Record<PathWord, string> = {
+  LAN: 'Reached directly over this network',
+  TAILNET: 'Reached over your tailnet',
+  RELAY: 'Reached through the Cookrew relay'
+}
+
+function MachineTile({ machine, path, opening, onOpen }: { machine: ConsoleMachine; path: PathWord; opening: boolean; onOpen: (workspace?: string) => void }): React.JSX.Element {
   const canOpen = machine.standing === 'locked' || machine.standing === 'reading' || machine.standing === 'live'
   const waiting = machine.counts?.waiting ?? 0
   return (
@@ -48,7 +55,15 @@ function MachineTile({ machine, opening, onOpen }: { machine: ConsoleMachine; op
         <span className="cd-deck" aria-hidden="true" />
       </div>
       <div className="cd-label">
-        <b>{machine.name}</b>
+        <b>
+          {machine.name}
+          {/* How this page reaches it now. Only for a machine it does reach: one that cannot be read has no path to name. */}
+          {(machine.standing === 'live' || machine.standing === 'reading') && (
+            <span className="cd-path" data-path={path} title={PATH_SAYS[path]} aria-label={PATH_SAYS[path]}>
+              {path}
+            </span>
+          )}
+        </b>
         <small>
           {underName(machine)}
           {machine.counts ? ` · ${countOf(machine.workspaces.length, 'workspace')} · ${countOf(machine.counts.agents, 'agent')}` : ''}
@@ -93,7 +108,8 @@ function Gate({ gate, state, wants, returnTo }: { gate: ConsoleParts['gate']; st
 }
 
 export function ConsoleDevicesView({ parts, view, notice, username }: { parts: ConsoleParts; view: Extract<ConsoleView, { kind: 'devices' | 'entering' }>; notice: string | null; username: string }): React.JSX.Element {
-  const { devices, gate, runtime, router, config } = parts
+  const { devices, gate, runtime, router, config, paths } = parts
+  useSyncExternalStore(paths.subscribe, paths.version, paths.version)
   const list = useSyncExternalStore(devices.subscribe, devices.get, devices.get)
   const gateState = useSyncExternalStore(gate.subscribe, gate.get, gate.get)
   // On screen: each readable machine is asked for its own summary, and asked again, until this is gone.
@@ -134,7 +150,7 @@ export function ConsoleDevicesView({ parts, view, notice, username }: { parts: C
       {list.status === 'ready' && list.machines.length === 0 && <p className="cd-empty">No machines yet. Install Cookrew on a computer and sign in to this account there.</p>}
       <ul className="cd-grid">
         {list.machines.map((machine) => (
-          <MachineTile key={machine.id} machine={machine} opening={machine.id === openingId} onOpen={(workspace) => runtime.open(machine.id, workspace ?? null)} />
+          <MachineTile key={machine.id} machine={machine} path={paths.of(machine.id)} opening={machine.id === openingId} onOpen={(workspace) => runtime.open(machine.id, workspace ?? null)} />
         ))}
       </ul>
       {openingId !== null && (

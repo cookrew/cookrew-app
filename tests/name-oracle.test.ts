@@ -46,3 +46,23 @@ describe('nameLive', () => {
     expect(Date.now() - started).toBeLessThan(NAME_TIMEOUT_MS)
   })
 })
+
+describe('on the console', () => {
+  it('asks the registry at its API host, which is another origin: no cookie, and no credential (the zone is no secret)', async () => {
+    const { configureMachineScope, resetMachineScopeForTests } = await import('../src/renderer/src/machine-scope')
+    configureMachineScope({ relay: { origin: 'https://api.cookrew.dev', session: () => 'account-session' } })
+    const asked: { url: string; init: RequestInit }[] = []
+    const verdict = await nameLive('https://192-168-1-7.11111111-1111-4111-8111-111111111111.d.cookrew.dev:8643', {
+      fetch: (async (url: string, init: RequestInit) => {
+        asked.push({ url, init })
+        return new Response(JSON.stringify({ live: true }))
+      }) as never
+    })
+    resetMachineScopeForTests()
+    expect(verdict).toBe('live')
+    expect(asked[0].url).toBe('https://api.cookrew.dev/v2/names/192-168-1-7.11111111-1111-4111-8111-111111111111.d.cookrew.dev')
+    expect(asked[0].init).toMatchObject({ mode: 'cors', credentials: 'omit' })
+    expect(asked[0].init.headers).toBeUndefined()
+  })
+})
+

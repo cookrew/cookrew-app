@@ -19,6 +19,9 @@
  * (plane-race.ts · settleNames).
  */
 
+import { CROSS_ORIGIN_NO_COOKIE } from '../data-plane'
+import { machineScope } from '../machine-scope'
+
 export type NameVerdict = 'live' | 'dead' | 'unknown'
 
 /** A registry that has not answered in this long is not going to settle anything. */
@@ -41,8 +44,11 @@ export const nameLive = async (origin: string, deps: NameOracleDeps = {}): Promi
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), deps.timeoutMs ?? NAME_TIMEOUT_MS)
   try {
-    const response = await call(`/v2/names/${encodeURIComponent(host)}`, {
-      credentials: 'same-origin',
+    // The registry: this page's own origin on a page a machine serves itself; on the console its
+    // API host, another origin, asked with no cookie (and no credential: the zone is no secret).
+    const registry = machineScope().relay
+    const response = await call(`${registry?.origin ?? ''}/v2/names/${encodeURIComponent(host)}`, {
+      ...(registry === null ? { credentials: 'same-origin' as const } : CROSS_ORIGIN_NO_COOKIE),
       cache: 'no-store',
       signal: abort.signal
     })
