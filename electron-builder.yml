@@ -72,6 +72,9 @@ extraResources:
     to: orch-line.mjs
   - from: resources/orch-mirror.mjs
     to: orch-mirror.mjs
+  # Both of them load it from beside themselves: what another machine may print into a pane.
+  - from: resources/line-guard.mjs
+    to: line-guard.mjs
   # The dock icon main sets at launch.
   - from: resources/icon.png
     to: icon.png

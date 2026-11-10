@@ -29,3 +29,12 @@ export function normaliseJoinCode(raw: string): string | null {
 
 /** Is this a code at all? The field's own answer, before anything is sent. */
 export const isJoinCode = (raw: string): boolean => normaliseJoinCode(raw) !== null
+
+/**
+ * THE LINK A JOIN CODE IS SHOWN WITH, and what its QR holds: the SITE's /join
+ * page with the code in the fragment, so no server is sent it. Since 0.6.0
+ * that page is static and only says where the code is typed (the app); the
+ * registry is the API host now and has no page at all, so the link never
+ * names it.
+ */
+export const joinLink = (site: string, code: string): string => `${site.replace(/\/+$/, '')}/join#${code}`

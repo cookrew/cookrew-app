@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { BridgeDialer } from '../src/main/canvas-bridge'
 import { createSealTerminus, type SealTerminus, type SealTerminusDeps } from '../src/main/canvas-seal-terminus'
 import { openSeal, SealRefusedError, type SealClient } from '../src/renderer/src/path/seal-client'
-import { connectCodeId, newConnectCode } from '../src/shared/canvas-seal'
+import { connectCodeId, newConnectCode, proveReplaced, replacedKeyOf, startHandshake } from '../src/shared/canvas-seal'
 
 const encoded = (code: Uint8Array): string => Buffer.from(code).toString('base64url')
 
@@ -93,6 +93,29 @@ describe('openSeal', () => {
   it('a code the Mac does not hold is refused by name, so the page can ask for a new one', async () => {
     const { url } = await bed()
     await expect(open(url, newConnectCode())).rejects.toBeInstanceOf(SealRefusedError)
+  })
+
+  it('a code the Mac replaced is refused by that name, when the Mac proves it', async () => {
+    const old = newConnectCode()
+    const oldId = await connectCodeId(old)
+    const key = await replacedKeyOf(old)
+    const { url } = await bed({ replacedKeyFor: (asked) => (asked === oldId ? key : null) })
+    const refused = await open(url, old).catch((error: unknown) => error)
+    expect(refused).toBeInstanceOf(SealRefusedError)
+    expect((refused as SealRefusedError).why).toBe('replaced')
+    expect((refused as SealRefusedError).message).toMatch(/changed/)
+    // A relay that only SAYS so is not believed: it is the ordinary refusal.
+    const lying = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      String(input).endsWith('/~seal/hello') ? new Response(JSON.stringify({ error: 'code replaced', replaced: 'AAAA' }), { status: 403 }) : fetch(input, init)
+    const plain = await openSeal({ url, code: encoded(old), fetchFn: lying }).catch((error: unknown) => error)
+    expect((plain as SealRefusedError).why).toBe('code')
+    // Nor one that plays back a REAL proof, made for another hello of the same old code.
+    const earlier = await startHandshake(old)
+    const real = await proveReplaced(key, earlier.hello)
+    const replaying = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      String(input).endsWith('/~seal/hello') ? new Response(JSON.stringify({ error: 'code replaced', replaced: real }), { status: 403 }) : fetch(input, init)
+    const replayed = await openSeal({ url, code: encoded(old), fetchFn: replaying }).catch((error: unknown) => error)
+    expect((replayed as SealRefusedError).why).toBe('code')
   })
 
   it('an answer that cannot prove the code is refused too: nothing is sent to it', async () => {

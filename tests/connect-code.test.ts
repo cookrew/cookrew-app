@@ -6,7 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createConnectCodes } from '../src/main/connect-code'
 import { ownerSecretPaths } from '../src/main/owner-secrets'
-import { connectCodeId, SEAL_CODE_BYTES } from '../src/shared/canvas-seal'
+import { checkReplaced, connectCodeId, proveReplaced, SEAL_CODE_BYTES, startHandshake } from '../src/shared/canvas-seal'
 
 let dir = ''
 let file = ''
@@ -65,8 +65,49 @@ describe('createConnectCodes', () => {
     expect(bytes(next)).toHaveLength(SEAL_CODE_BYTES)
   })
 
+  it('remembers of a replaced code only what proves it was replaced, across a restart, and of the last few', async () => {
+    const codes = createConnectCodes(file)
+    const old = bytes(codes.encoded())
+    const oldId = await connectCodeId(old)
+    expect(codes.replacedKeyFor(oldId)).toBeNull()
+    codes.rotate()
+    const { hello } = await startHandshake(old)
+    for (const holder of [codes, createConnectCodes(file)]) {
+      const key = holder.replacedKeyFor(oldId)
+      expect(key).not.toBeNull()
+      expect(await checkReplaced(old, hello, await proveReplaced(key as Uint8Array, hello))).toBe(true)
+      expect(holder.replacedKeyFor(await connectCodeId(bytes(holder.encoded())))).toBeNull()
+    }
+    expect(statSync(`${file}.was`).mode & 0o777).toBe(0o600)
+    expect(readFileSync(`${file}.was`, 'utf8')).not.toContain(Buffer.from(old).toString('base64url'))
+    for (let turn = 0; turn < 5; turn++) codes.rotate()
+    expect(codes.replacedKeyFor(oldId)).toBeNull()
+    expect(JSON.parse(readFileSync(`${file}.was`, 'utf8'))).toHaveLength(4)
+  })
+
+  it('reads nothing out of a damaged list of replaced codes, and lists a code once', async () => {
+    const codes = createConnectCodes(file)
+    const good = { id: 'A'.repeat(22), key: Buffer.alloc(32, 7).toString('base64url') }
+    writeFileSync(`${file}.was`, JSON.stringify([{ id: 'B'.repeat(22), key: '' }, { id: 'short', key: good.key }, { id: 'C'.repeat(22), key: 'AAAA' }, 7, null, good]))
+    const read = createConnectCodes(file)
+    expect(read.replacedKeyFor('B'.repeat(22))).toBeNull()
+    expect(read.replacedKeyFor('C'.repeat(22))).toBeNull()
+    expect(read.replacedKeyFor('short')).toBeNull()
+    expect(read.replacedKeyFor(good.id)).toHaveLength(32)
+    writeFileSync(`${file}.was`, 'not json')
+    expect(createConnectCodes(file).replacedKeyFor(good.id)).toBeNull()
+    // The same code listed twice (a rotation whose new code could not be saved, then another) takes one place.
+    const id = await connectCodeId(bytes(codes.encoded()))
+    writeFileSync(`${file}.was`, JSON.stringify([{ id, key: good.key }]))
+    const again = createConnectCodes(file)
+    again.rotate()
+    expect((JSON.parse(readFileSync(`${file}.was`, 'utf8')) as { id: string }[]).filter((entry) => entry.id === id)).toHaveLength(1)
+  })
+
   it('a served seat cannot read it, nor catch it on its way to disk', () => {
     const denied = ownerSecretPaths('/Users/me/.cookrew', '/Users/me', 'cookrew', {})
+    expect(denied).toContain('/Users/me/.cookrew/connect-code.was')
+    expect(denied).toContain('/Users/me/.cookrew/connect-code.was.tmp')
     expect(denied).toContain('/Users/me/.cookrew/connect-code')
     expect(denied).toContain('/Users/me/.cookrew/connect-code.tmp')
     expect(denied).toContain('/Users/me/.cookrew/unlock-key.json.tmp')

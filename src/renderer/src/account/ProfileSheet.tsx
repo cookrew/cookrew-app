@@ -614,9 +614,9 @@ export function ProfileSheet({
                     <p className="cr-acct-joincode">{minted.code}</p>
                     {/* THE QR IS THE LINK, NOT THE CODE. A camera that reads
                         eight characters has nowhere to put them; the link
-                        opens cookrew.dev/join, which hands the code to the
-                        app through `cookrew://join#…` — the fragment, so the
-                        code never reaches the site's server. */}
+                        opens the site's /join page, which says the code is
+                        typed into Cookrew on the machine that is joining. The
+                        code rides the fragment, so no server is sent it. */}
                     <QrCode rows={qrRows(minted.url)} label={addDeviceSentence(adding)} />
                     <p className="cr-acct-addlink">{minted.url}</p>
                     <p className="gs-hint">{codeExpirySentence(minted.expiresAt)}</p>

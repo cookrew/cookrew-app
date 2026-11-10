@@ -24,6 +24,8 @@ export interface UnlockSheetViewProps {
   needsCode: boolean
   /** It had one, and it is out of date. */
   stale: boolean
+  /** Out of date because the machine changed its code, and proved so (seal-client.ts · 'replaced'). */
+  changed?: boolean
   /** Only on a page the Mac served itself: a saved password needs no typing to be read. */
   canRemember: boolean
   onCode: (pasted: string) => void
@@ -91,12 +93,12 @@ function PasswordForm(props: UnlockSheetViewProps): React.JSX.Element {
   )
 }
 
-function NeedsCode({ stale, onCode, onClose }: Pick<UnlockSheetViewProps, 'stale' | 'onCode' | 'onClose'>): React.JSX.Element {
+function NeedsCode({ stale, changed, onCode, onClose }: Pick<UnlockSheetViewProps, 'stale' | 'changed' | 'onCode' | 'onClose'>): React.JSX.Element {
   const [pasted, setPasted] = useState('')
   return (
     <>
       <h3>Unlock this Mac</h3>
-      {stale && <p>The pairing code on this device is out of date.</p>}
+      {stale && <p>{changed ? 'The pairing code of this Mac was changed.' : 'The pairing code on this device is out of date.'}</p>}
       <p>To unlock from any network, this device needs the pairing code, once. At the Mac, open Pair a phone, then scan it in this browser or paste the link here.</p>
       <input className="rp-unlock-input" aria-label="Pairing link" autoComplete="off" spellCheck={false} value={pasted} onChange={(event) => setPasted(event.target.value)} />
       <div className="rp-actions">
@@ -108,7 +110,7 @@ function NeedsCode({ stale, onCode, onClose }: Pick<UnlockSheetViewProps, 'stale
 }
 
 function SheetBody(props: UnlockSheetViewProps): React.JSX.Element {
-  if (props.needsCode) return <NeedsCode stale={props.stale} onCode={props.onCode} onClose={props.onClose} />
+  if (props.needsCode) return <NeedsCode stale={props.stale} changed={props.changed} onCode={props.onCode} onClose={props.onClose} />
   return props.trust === 'changed' ? <ChangedKey words={props.words} onTrustNew={props.onTrustNew} onClose={props.onClose} /> : <PasswordForm {...props} />
 }
 
@@ -136,7 +138,7 @@ const directFlow = (): UnlockFlowDeps | null => {
 type Way =
   | { readonly kind: 'opening' }
   | { readonly kind: 'ready'; readonly deps: UnlockFlowDeps }
-  | { readonly kind: 'needs-code'; readonly stale: boolean }
+  | { readonly kind: 'needs-code'; readonly stale: boolean; readonly changed?: boolean }
   | { readonly kind: 'failed'; readonly message: string }
 
 /** How this device reaches the door. `attempt` asks again, after a new code. */
@@ -166,15 +168,10 @@ function useUnlockWay(attempt: number): Way {
       })
       .catch((failure: unknown) => {
         if (!alive) return
-        const stale = failure instanceof SealRefusedError && failure.why === 'code'
-        // The machine does not know the code held. One that was handed since and waited beside it
-        // (pairing-scope.ts) is the machine's new one if anything is: it takes its place, and is tried.
-        const waited = stale ? takeNextCode(window.localStorage, codeKeyForBase(base)) : null
-        if (waited !== null) {
-          authStore().saveConnectCode(waited)
-          return setRetry((n) => n + 1)
-        }
-        setWay(stale ? { kind: 'needs-code', stale } : { kind: 'failed', message: messageOf(failure) })
+        const next = afterRefusal(failure, () => takeNextCode(window.localStorage, codeKeyForBase(base)))
+        if (next.kind !== 'try') return setWay(next)
+        authStore().saveConnectCode(next.code)
+        setRetry((n) => n + 1)
       })
     return () => {
       alive = false
@@ -185,6 +182,28 @@ function useUnlockWay(attempt: number): Way {
 }
 
 const messageOf = (failure: unknown): string => (failure instanceof Error ? failure.message : String(failure))
+
+export type AfterRefusal =
+  | { readonly kind: 'try'; readonly code: string }
+  | { readonly kind: 'needs-code'; readonly stale: true; readonly changed: boolean }
+  | { readonly kind: 'failed'; readonly message: string }
+
+/**
+ * WHAT FOLLOWS A SESSION THAT DID NOT OPEN. The machine does not know the code
+ * held, or proved that it replaced it: either way the code is out of date. One
+ * that was handed since and waited beside it (pairing-scope.ts) is the
+ * machine's new one if anything is: it takes its place and is tried. With none
+ * waiting, the sheet asks for it. Scanning again is the way back in both
+ * cases, so both have to end here: a "replaced" that only showed a sentence
+ * left the scanned code waiting for ever. Anything else is said as it is, and
+ * spends no waiting code.
+ */
+export function afterRefusal(failure: unknown, takeWaited: () => string | null): AfterRefusal {
+  const why = failure instanceof SealRefusedError ? failure.why : null
+  if (why !== 'code' && why !== 'replaced') return { kind: 'failed', message: messageOf(failure) }
+  const waited = takeWaited()
+  return waited !== null ? { kind: 'try', code: waited } : { kind: 'needs-code', stale: true, changed: why === 'replaced' }
+}
 
 function UnlockSheetBody(): React.JSX.Element {
   const [attempt, setAttempt] = useState(0)
@@ -246,6 +265,7 @@ function UnlockSheetBody(): React.JSX.Element {
     <UnlockSheetView
       needsCode={way.kind === 'needs-code'}
       stale={way.kind === 'needs-code' && way.stale}
+      changed={way.kind === 'needs-code' && way.changed === true}
       canRemember={onTheMacsOwnPage()}
       onCode={useCode}
       trust={shown?.trust ?? null}
