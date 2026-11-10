@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { registryMismatchSentence } from '../../../shared/account-v2'
+import { registryMismatchSentence, signInAgainSentence } from '../../../shared/account-v2'
 import type { AccountProfile, AccountStatus, AdmittedPhone } from '../../../shared/account-v2'
 import type { WorkspaceMeta } from '../../../shared/model'
 import { cookrew } from '../api'
@@ -372,6 +372,14 @@ export function ProfileSheet({
         {status.registryMismatch && (
           <p className="gs-paste-error" role="alert">
             {registryMismatchSentence(status.registryMismatch)}
+          </p>
+        )}
+
+        {/* WHY IT MUST SIGN IN AGAIN, when that is not an ordinary ended session (0.6.0 moved the
+            registry): said above the field that takes the password, so the two read as one thing. */}
+        {status.sessionExpired && status.signInAgainBecause && (
+          <p className="gs-paste-error" role="alert">
+            {signInAgainSentence(status.signInAgainBecause)}
           </p>
         )}
 

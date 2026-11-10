@@ -14,11 +14,11 @@ import type { DataPlane } from '../data-plane'
 
 export type PathWord = 'LAN' | 'TAILNET' | 'RELAY'
 
-export const pathWordOf = (plane: Pick<DataPlane, 'kind'>): PathWord => (plane.kind === 'lan' ? 'LAN' : plane.kind === 'tailnet' ? 'TAILNET' : 'RELAY')
+export const pathWordOf = (plane: DataPlane): PathWord => (plane.kind === 'lan' ? 'LAN' : plane.kind === 'tailnet' ? 'TAILNET' : 'RELAY')
 
 export interface MachinePaths {
   of(machineId: string): PathWord
-  note(machineId: string, plane: Pick<DataPlane, 'kind'>): void
+  note(machineId: string, plane: DataPlane): void
   forget(): void
   subscribe(listener: () => void): () => void
   /** Changes with every change: a view keyed on it redraws. */

@@ -997,6 +997,7 @@ export function createRemoteApi(): CookrewApi {
         // and the desktop's screen; a phone reading the companion cannot know
         // it and must not guess.
         registryMismatch: null,
+        signInAgainBecause: null,
         envUsername: null,
         sessionExpired: false,
         workspacesReachable: true,

@@ -148,6 +148,13 @@ export interface AccountStatus {
    * rather than leaving the owner with an account that answers nothing.
    */
   registryMismatch: { signedInAt: string; pointedAt: string } | null
+  /**
+   * Why this machine must sign in again, when the reason is not an ordinary
+   * ended session. `registry-moved`: 0.6.0 moved the registry's API to a host
+   * of its own and keeps no compatibility, so a machine signed in before it
+   * signs in again. Null otherwise.
+   */
+  signInAgainBecause: SignInAgainReason | null
   /** Workspaces of THIS Mac may be offered to the account's other devices. */
   workspacesReachable: boolean
   /**
@@ -481,6 +488,12 @@ export interface AdmittedPhone {
   admittedAt: number
   lastSeenAt: number
 }
+
+export type SignInAgainReason = 'registry-moved'
+
+/** The one sentence for a machine that must sign in again, said the same way in the app and in the terminal. */
+export const signInAgainSentence = (reason: SignInAgainReason, platform: string | undefined = hostPlatform()): string =>
+  reason === 'registry-moved' ? machineCopy('Cookrew 0.6.0 moved its registry to api.cookrew.dev. Sign in again on this Mac.', platform) : ''
 
 /**
  * The one sentence for a registry mismatch, said the same way wherever it is
