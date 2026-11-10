@@ -23,6 +23,8 @@ import { clipboardGuard } from './line-guard.mjs'
 
 /** What the other machine's bytes pass on their way into this pane (line-guard.mjs). One for the pane's life. */
 const shown = clipboardGuard()
+/** And what is typed back: an answer about the clipboard is not forwarded, whoever gave it. */
+const typedBack = clipboardGuard({ typed: true })
 
 // TLS trust for the localhost self-signed cert is per-request via the Agent
 // below (rejectUnauthorized:false) — NOT the global NODE_TLS_REJECT_UNAUTHORIZED
@@ -168,7 +170,8 @@ function wireInput() {
       cleanup()
       process.exit(0)
     }
-    void post('raw', { data })
+    const sent = typedBack(data)
+    if (sent) void post('raw', { data: sent })
   })
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { clipboardGuard } from '../resources/line-guard.mjs'
+import { clipboardGuard, plainText } from '../resources/line-guard.mjs'
 
 /**
  * WHAT SOMEONE ELSE'S SESSION MAY PRINT INTO A PANE OF MINE (resources/line-guard.mjs).
@@ -25,9 +25,10 @@ const pass = (...chunks: string[]): string => {
 }
 /** What a terminal that reads strings as tmux does would be asked, given what was let through. */
 const asked = (shown: string): boolean => {
-  // Controls are ignored inside a string and run (not counted) between ESC and ].
-  const plain = shown.replace(/[\x00-\x06\x08-\x17\x19\x1c-\x1f\x7f]/g, '')
-  return /\x1b\]0*52;[^;\x07\x1b\x18\x1a]*;\?(?:[\x07\x1b\x18\x1a]|$)/.test(plain)
+  // Controls are ignored inside a string; between ESC and ] they are run and bytes from DEL up are skipped.
+  const plain = shown.replace(/[\x00-\x06\x08-\x17\x19\x1c-\x1f\x7f]/g, '').replace(/\x1b[^\x00-\x7e]+\]/g, '\x1b]')
+  // The number is counted in 32 bits, so it wraps.
+  return [...plain.matchAll(/\x1b\](\d+);[^;\x07\x1b\x18\x1a]*;\?(?:[\x07\x1b\x18\x1a]|$)/g)].some(([, digits]) => BigInt(digits) % 2n ** 32n === 52n)
 }
 
 describe('a query for the clipboard never reaches the pane', () => {
@@ -56,6 +57,29 @@ describe('a query for the clipboard never reaches the pane', () => {
     for (const bent of ['\x1b]5\x012;c;?\x07', '\x1b\x01]52;c;?\x07', '\x1b]52;c;\x02?\x07', '\x1b]\x7f52;c;?\x07', '\x1b\r\n]52;c;?\x07', '\x1b\x1b]52;c;?\x07']) {
       expect(asked(pass(bent)), JSON.stringify(bent)).toBe(false)
     }
+  })
+
+  it('is dropped under a number that only counts to 52 once it has wrapped', () => {
+    // tmux counts the number in 32 bits (found in review, typed the clipboard back in a real pane).
+    for (const wrapped of ['\x1b]4294967348;c;?\x07', '\x1b]8589934644;;?\x1b\\', '\x1b]65588;c;?\x07', '\x1b]18446744073709551668;c;?\x07']) {
+      expect(pass(wrapped).includes('?'), JSON.stringify(wrapped)).toBe(false)
+    }
+    expect(asked('\x1b]4294967348;c;?\x07')).toBe(true)
+  })
+
+  it('is dropped with letters the terminal skips put between the ESC and the bracket', () => {
+    // tmux skips every byte from DEL up while it waits to learn what an ESC began (found in review, same proof).
+    for (const pieces of [['\x1b\u00e9]52;c;?\x07'], ['\x1b\u00a0]52;c;?\x07'], ['\x1b\u{1F600}]52;c;?\x07'], ['\x1b\x01\x7f\u00e9\x02]52;c;?\x18'], ['\x1b', '\u00e9', ']52;c;', '?', '\x07'], ['\x1b\ud800]52;c;?\x07']]) {
+      const shown = pass(...pieces)
+      expect(asked(shown), JSON.stringify(pieces)).toBe(false)
+      expect(shown.includes('52;'), JSON.stringify(pieces)).toBe(false)
+    }
+    expect(asked('\x1b\u00e9]52;c;?\x07')).toBe(true)
+  })
+
+  it('takes the other clipboard protocol out whole: nothing over there has a use for it here', () => {
+    expect(pass('a\x1b]5522;type=read;mime=text/plain\x1b\\b')).toBe('a\x1b\\b')
+    expect(pass('\x1b]5522;type=write\x07')).toBe('')
   })
 
   it('is dropped when another string, or a wait, was put in front of it', () => {
@@ -130,4 +154,65 @@ describe('both mirrors print through the guard, and the app ships it beside them
       for (const name of beside) expect(builder, name).toMatch(new RegExp(`from: resources/${name.replace(/\./g, '\\.')}\\n\\s+to: ${name.replace(/\./g, '\\.')}\\n`))
     })
   }
+})
+
+/**
+ * THE OTHER HALF: WHAT IS TYPED BACK. Whatever terminal hosts the pane, an
+ * answer about the clipboard reaches the other machine only as bytes typed
+ * into the pane, which the program forwards. So what is typed passes a guard
+ * too, and that one takes out every clipboard string: a person does not type
+ * one. It holds whether or not the first half read the question as this
+ * pane's terminal did.
+ */
+describe('a clipboard answer typed into the pane is not forwarded', () => {
+  const typed = (...chunks: string[]): string => {
+    const guard = clipboardGuard({ typed: true })
+    return chunks.map((chunk) => guard(chunk)).join('')
+  }
+
+  it('in tmux’s shape, the other terminals’ shape, whole or cut', () => {
+    expect(typed('\x1b]52;;U0VDUkVU\x07')).toBe('')
+    expect(typed('ls\r\x1b]52;c;U0VDUkVU\x1b\\pwd\r')).toBe('ls\r\x1b\\pwd\r')
+    expect(typed('\x1b]5522;type=read:status=OK\x1b\\')).toBe('\x1b\\')
+    const answer = '\x1b]52;;U0VDUkVU\x07'
+    for (let cut = 1; cut < answer.length; cut++) expect(typed(answer.slice(0, cut), answer.slice(cut)).includes('U0VD'), String(cut)).toBe(false)
+    expect(typed(...[...answer]).includes('U0VD')).toBe(false)
+  })
+
+  it('keys are forwarded as they are pressed: an Escape does not wait for the next key', () => {
+    const guard = clipboardGuard({ typed: true })
+    expect(guard('\x1b')).toBe('\x1b')
+    expect(guard('x')).toBe('x')
+    expect(guard('\x1b[A')).toBe('\x1b[A')
+    expect(guard('\x1b\x1b[A')).toBe('\x1b\x1b[A')
+    expect(guard('\x1bOP\x03\x1d\r')).toBe('\x1bOP\x03\x1d\r')
+    expect(guard('caf\u00e9 \u0085')).toBe('caf\u00e9 \u0085')
+    // An answer cut right after its ESC: the ESC is already gone, the rest is still taken out.
+    expect(guard('\x1b')).toBe('\x1b')
+    expect(guard(']52;;U0VDUkVU\x07')).toBe('')
+  })
+
+  it('both programs forward what is typed through it', () => {
+    const root = path.resolve(__dirname, '..')
+    for (const [script, call] of [['orch-line.mjs', "post('/line/raw', { data: sent })"], ['orch-mirror.mjs', 'data: sent']] as const) {
+      const source = readFileSync(path.join(root, 'resources', script), 'utf8')
+      expect(source, script).toContain('clipboardGuard({ typed: true })')
+      expect(source, script).toContain(call)
+    }
+  })
+})
+
+describe('words the other machine sends for this program to say', () => {
+  it('are said as words: no control survives, and no more than a line of them', () => {
+    expect(plainText('\x1b]52;c;?\x07 budget\r\n\x9d')).toBe(']52;c;? budget')
+    expect(plainText('x'.repeat(5000))).toHaveLength(200)
+    expect(plainText({ toString: () => '\x1b[2J' })).toBe('[2J')
+    expect(plainText(undefined)).toBe('')
+  })
+
+  it('the line program says a refusal’s words through it', () => {
+    const source = readFileSync(path.resolve(__dirname, '..', 'resources', 'orch-line.mjs'), 'utf8')
+    expect(source).not.toMatch(/\$\{body\??\.error/)
+    expect(source.match(/plainText\(body\??\.error\)/g)?.length).toBeGreaterThanOrEqual(2)
+  })
 })
