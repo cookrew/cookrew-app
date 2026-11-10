@@ -2158,17 +2158,14 @@ async function handleServedSlug(
                 sub: input.sub,
                 slug: input.slug,
                 successUrl: input.successUrl,
-                ...(input.returnUrl === undefined ? {} : { returnUrl: input.returnUrl }),
                 ...(input.team === undefined ? {} : { team: input.team })
               }
             )
             return result.ok ? result.url : null
           },
       successUrl: (t) => servedPaymentReturn(t.slug),
-      // A buyer paying FROM the team's page at cookrew.dev is sent back to it
-      // — that page, at that origin, and nowhere else (returnUrlFor).
-      doorName: (t) => relayServing?.addressFor(t.slug)?.name ?? null,
-      registryOrigin: () => registryOrigin()
+      // The published name is for the words on the receipt, nothing more.
+      doorName: (t) => relayServing?.addressFor(t.slug)?.name ?? null
     },
     template,
     method,

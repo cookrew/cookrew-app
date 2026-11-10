@@ -136,13 +136,6 @@ export interface StripeCheckoutInput {
   slug: string
   /** A full override for callers that already resolved the served crew face. */
   successUrl?: string
-  /**
-   * The team's page at cookrew.dev, already validated by the door
-   * (served-pay-route.ts `returnUrlFor`). When present it wins over
-   * `successUrl`: Stripe sends the buyer back to it with the session id, and
-   * `cancel_url` is the same page, so backing out lands where the buyer left.
-   */
-  returnUrl?: string
   /** `@handle/team` — the words on the receipt; absent at an unlisted door. */
   team?: string
 }
@@ -196,7 +189,6 @@ export async function stripeCreateCheckout(
   form.set('metadata[sub]', input.sub)
   form.set('metadata[slug]', input.slug)
   form.set('success_url', successUrl)
-  if (input.returnUrl !== undefined) form.set('cancel_url', input.returnUrl)
   // Tax, not guesswork. Hong Kong levies no VAT/GST, so a domestic sale is
   // simply untaxed — but a cross-border sale can create an obligation in the
   // CUSTOMER's country, and only Stripe Tax tracks which. It needs three
@@ -256,19 +248,14 @@ export function seatName(input: Pick<StripeCheckoutInput, 'slug' | 'team'>): str
 }
 
 /**
- * Where Stripe sends the buyer afterwards.
- *
- * A RETURN PAGE gets the session id: `?paid={CHECKOUT_SESSION_ID}`, with the
- * placeholder written RAW. Stripe substitutes it only when it reads the
- * braces as themselves; URLSearchParams would percent-encode them and the
- * buyer would land on a page carrying the literal words. The door's own face
- * keeps its `?payment=received` marker, as before.
+ * Where Stripe sends the buyer afterwards: the door's own face, with its
+ * `?payment=received` marker. Nothing reads a session id off that return —
+ * the app that started the Checkout already holds it (it is in the URL the
+ * door handed back) and asks the door itself whether it was paid.
  */
 const digest = (body: string): string => createHash('sha256').update(body).digest('hex').slice(0, 12)
 
 function resolveSuccessUrl(config: StripeConfig, input: StripeCheckoutInput): string | null {
-  const returnTo = input.returnUrl?.trim()
-  if (returnTo) return withPaidSession(returnTo)
   const candidate = input.successUrl?.trim()
   if (candidate) return validHttpUrl(candidate) ? withPaymentReceived(candidate) : null
   const base = config.successBaseUrl?.trim()
@@ -277,17 +264,6 @@ function resolveSuccessUrl(config: StripeConfig, input: StripeCheckoutInput): st
     const url = new URL(base)
     url.pathname = `${url.pathname.replace(/\/$/, '')}/${encodeURIComponent(input.slug)}`
     return withPaymentReceived(url.toString())
-  } catch {
-    return null
-  }
-}
-
-function withPaidSession(raw: string): string | null {
-  try {
-    const url = new URL(raw)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
-    if (url.hash !== '') return null
-    return `${url.toString()}${url.search === '' ? '?' : '&'}paid={CHECKOUT_SESSION_ID}`
   } catch {
     return null
   }

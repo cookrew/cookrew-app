@@ -104,9 +104,9 @@ describe('Checkout creation', () => {
     await stripeCreateCheckout({ config: CONFIG, post, now: () => 3_000_000 }, input)
     expect(calls[2].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
     expect(calls[2].form.get('expires_at')).not.toBe(calls[0].form.get('expires_at'))
-    // And a different return page inside the SAME window is a different body,
-    // so it must be a different key too, or Stripe refuses it outright.
-    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, { ...input, returnUrl: 'https://cookrew.dev/drej/alpha' })
+    // And a different body inside the SAME window — the receipt names a
+    // published team — must be a different key too, or Stripe refuses it outright.
+    await stripeCreateCheckout({ config: CONFIG, post, now: () => 1_000_000 }, { ...input, team: '@drej/alpha' })
     expect(calls[3].headers['idempotency-key']).not.toBe(calls[0].headers['idempotency-key'])
   })
 
@@ -191,7 +191,7 @@ describe('Checkout creation', () => {
     expect(success).toBe('http://127.0.0.1:8639/crew-one?source=checkout&payment=received')
   })
 
-  it('sends the buyer back to the team page with the session id, raw placeholder and all', async () => {
+  it('a listed door’s Checkout names the seat at the team and returns to the door’s own face, nowhere else', async () => {
     let form = new URLSearchParams()
     const post: StripePost = async (_url, request) => {
       form = new URLSearchParams(request.body)
@@ -204,17 +204,16 @@ describe('Checkout creation', () => {
         serviceId: 'svc-1',
         sub: 'acct-lin',
         slug: 'crew-one',
-        successUrl: 'https://crews.example.test/crew-one?payment=received',
-        returnUrl: 'https://cookrew.dev/drej/alpha',
+        successUrl: 'https://crews.example.test/crew-one',
         team: '@drej/alpha'
       }
     )
-    // The placeholder is Stripe's to fill: it must reach the wire as braces,
-    // form-encoded ONCE by the body encoding and never percent-encoded into
-    // the URL itself (which Stripe would not substitute).
-    expect(form.get('success_url')).toBe('https://cookrew.dev/drej/alpha?paid={CHECKOUT_SESSION_ID}')
-    expect(form.toString()).toContain('success_url=https%3A%2F%2Fcookrew.dev%2Fdrej%2Falpha%3Fpaid%3D%7BCHECKOUT_SESSION_ID%7D')
-    expect(form.get('cancel_url')).toBe('https://cookrew.dev/drej/alpha')
+    // 0.6.0: there is no team page to go back to. The buyer pays from the app,
+    // which reads the session off the Checkout URL, so Stripe's way back is the
+    // door's face with its marker — no session placeholder, no cancel page.
+    expect(form.get('success_url')).toBe('https://crews.example.test/crew-one?payment=received')
+    expect(form.toString()).not.toContain('CHECKOUT_SESSION_ID')
+    expect(form.has('cancel_url')).toBe(false)
     // The receipt names the seat at the published door.
     expect(form.get('line_items[0][price_data][product_data][name]')).toBe('A seat at @drej/alpha')
   })
@@ -233,7 +232,7 @@ describe('Checkout creation', () => {
       { ...base, serviceId: '' },
       { ...base, sub: '' },
       { ...base, slug: '' },
-      { ...base, returnUrl: 'javascript:alert(1)' }
+      { ...base, successUrl: 'javascript:alert(1)' }
     ]) {
       expect(await stripeCreateCheckout({ config: CONFIG, post }, input)).toEqual({
         ok: false,
