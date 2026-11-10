@@ -249,3 +249,54 @@ describe('an Esc queued behind other keys', () => {
       .then(() => expect(sent.map((s) => s.data)).toEqual(['a', 'b', '\x1b', 'c']))
   })
 })
+
+describe('dropping the queue (another machine was entered)', () => {
+  it('sends nothing that was still waiting, and stops what was on its way', async () => {
+    const sent: string[] = []
+    const signals: AbortSignal[] = []
+    const queue = createRawInputQueue((_id, data, signal) => {
+      sent.push(data)
+      signals.push(signal)
+      return new Promise(() => undefined)
+    })
+    queue('t1', 'a')
+    queue('t1', 'b')
+    queue('t2', 'x')
+    expect(sent).toEqual(['a', 'x'])
+    queue.drop()
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
+    await tick()
+    // 'b' was typed for the machine that was left: it is never sent to the next one.
+    expect(sent).toEqual(['a', 'x'])
+  })
+
+  it('makes no retry of a batch from before the drop, however it ends', async () => {
+    const sent: string[] = []
+    const rejecters: Array<(error: unknown) => void> = []
+    const queue = createRawInputQueue(
+      (_id, data) =>
+        new Promise<void>((_resolve, reject) => {
+          sent.push(data)
+          rejecters.push(reject)
+        }),
+      { retryable: () => true, deadlineMs: 20 }
+    )
+    queue('t1', 'a')
+    queue.drop()
+    rejecters[0](new Error('no answer'))
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(sent).toEqual(['a'])
+  })
+
+  it('takes typing again afterwards, as a queue that was never used', async () => {
+    const h = harness()
+    h.push('t1', 'old')
+    ;(h.push as ReturnType<typeof createRawInputQueue>).drop()
+    h.push('t1', 'n')
+    h.push('t1', 'ew')
+    expect(h.sent.map((one) => one.data)).toEqual(['old', 'n'])
+    h.settle(1)
+    await tick()
+    expect(h.sent.map((one) => one.data)).toEqual(['old', 'n', 'ew'])
+  })
+})

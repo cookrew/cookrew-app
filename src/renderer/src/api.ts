@@ -1141,9 +1141,17 @@ export type AccessSaveAnswer = { ok: true; state: AccessState; moved?: boolean }
 
 import { createDemoApi } from "./demo-api";
 import { createRemoteApi } from "./remote-api";
+import { registerScopeState } from "./machine-scope";
 
 let demoApi: CookrewApi | null = null;
 let remoteApi: CookrewApi | null = null;
+
+// The remote api is made for the machine in scope: making it asks that machine
+// whether this browser is paired. Entering another machine drops it, so the
+// next one asked for is made, and asks, for the new machine.
+registerScopeState("remote api", () => {
+  remoteApi = null;
+});
 
 function bridge(): CookrewApi | undefined {
   return (window as unknown as { cookrew?: CookrewApi }).cookrew;

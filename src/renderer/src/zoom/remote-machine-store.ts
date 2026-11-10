@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 
 /**
@@ -80,6 +81,11 @@ export const remotePlace = {
     if (place !== OUTSIDE) set(OUTSIDE)
   }
 }
+
+// "Inside another machine" was said from the machine in scope: from the next
+// one it may be the very machine it stands on. The words typed for a machine
+// are kept by that machine's own id and stay.
+registerScopeState('inside another machine', () => remotePlace.leave())
 
 const drafts = new Map<string, string>()
 const draftKeyOf = (machineId: string, box: string): string => `${machineId}\u0000${box}`

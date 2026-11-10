@@ -7,6 +7,7 @@
  *   agent, item  who holds the focus: the open card / full view on each side
  *   full         set by the view once it has handed over to the real full view
  */
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import { clampTo, type ZoomDir } from './zoom-path'
 
@@ -92,6 +93,14 @@ export const zoomStore = {
     emit()
   }
 }
+
+// WHO holds the focus is an agent or an item of ONE machine. Where the view
+// stands (dir, v) is the person's place in the app and stays.
+registerScopeState('zoom focus', () => {
+  if (state.agent === null && state.item === null && state.full === null) return
+  state = { ...state, agent: null, item: null, full: null }
+  emit()
+})
 
 export function useZoom(): ZoomState {
   return useSyncExternalStore(zoomStore.subscribe, zoomStore.get)

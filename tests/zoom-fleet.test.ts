@@ -191,6 +191,51 @@ describe('the zoom fleet store', () => {
     expect(seen).toHaveBeenCalled()
   })
 
+  it('lets go of the machine it read as "this one" when another is entered, and reads the next', async () => {
+    let asked = 0
+    const { api, feed } = fakeApi({
+      machines: async () => {
+        asked += 1
+        return { ok: true, machines: [machine(ME, 'Studio', asked === 1), machine(OTHER, 'Laptop', asked !== 1)] }
+      }
+    })
+    const store = createZoomFleetStore(() => api)
+    const seen = vi.fn()
+    store.subscribe(seen)
+    await vi.advanceTimersByTimeAsync(0)
+    feed.cb?.({ type: 'snapshot', snapshot: snapshot(1) })
+    expect(store.get().machines[0]).toMatchObject({ name: 'Studio', local: true, detail: 'live' })
+    const opened = feed.opens
+
+    store.turn()
+    // The feed is closed, not left feeding the page the last machine's deltas.
+    expect(feed.releases).toBe(1)
+    expect(feed.cb).toBeNull()
+    expect(store.get().machines.some((m) => m.local && m.detail === 'live')).toBe(false)
+    expect(seen).toHaveBeenCalled()
+
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(feed.opens).toBe(opened + 1)
+    // The account is asked again: which row is "this one" has changed.
+    expect(asked).toBe(2)
+    // The next machine's own feed says who it is.
+    const first = snapshot(1)
+    feed.cb?.({ type: 'snapshot', snapshot: { ...first, machine: { ...first.machine, name: 'Laptop' } } })
+    expect(store.get().machines[0]).toMatchObject({ id: OTHER, name: 'Laptop', local: true, detail: 'live' })
+    // And the one that was "this machine" is now one of the account's others.
+    expect(store.get().machines.slice(1).map((m) => [m.id, m.local])).toEqual([[ME, false]])
+  })
+
+  it('reads nothing on resume while nobody is looking', async () => {
+    const { api, feed } = fakeApi()
+    const store = createZoomFleetStore(() => api)
+    store.turn()
+    store.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(feed.opens).toBe(0)
+  })
+
   it('folds deltas, and reopens on a gap so the next frame is a snapshot', async () => {
     const { api, feed } = fakeApi()
     const store = createZoomFleetStore(() => api)

@@ -22,6 +22,7 @@
 //
 // A store, not component state: the app picks from outside the stage too (a
 // card asked for by the command box or a toast lands here).
+import { registerScopeState } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import type { AgentRow } from '../agent-rows'
 import type { AttachmentIndex, TerminalAttachment } from '../terminal-attachments'
@@ -33,6 +34,9 @@ let selection: StageSelection = AUTO
 const listeners = new Set<() => void>()
 
 const same = (a: StageSelection, b: StageSelection): boolean => a.kind === b.kind && (a.kind === 'auto' || a.id === (b as { id: string }).id)
+
+// What the stage was told to show is an agent or an item of ONE machine.
+registerScopeState('stage selection', () => stageSelect.clear())
 
 export const stageSelect = {
   get: (): StageSelection => selection,

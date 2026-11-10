@@ -18,6 +18,7 @@
  * feed closes (an open stream holds the board's sampler on main) and the
  * account is not asked; in sight again, both come back.
  */
+import { registerScopeState, scopeNeedsMachine, subscribeMachineScope } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import type { WorkspaceList } from '../../../shared/model'
 import type { FleetAgent, FleetAttachment, FleetEvent, FleetSnapshot, FleetWorkspace, MachineDisplay, MachineProfile, WorkspaceTrait } from '../../../shared/fleet'
@@ -293,6 +294,15 @@ export interface FleetStoreOptions {
 export interface ZoomFleetStore {
   subscribe: (listener: () => void) => () => void
   get: () => ZoomFleet
+  /**
+   * The machine this page talks to is another one now (machine-scope.ts).
+   * What was read of the last one as "this machine" (its feed, its workspace
+   * list, its name) is let go of, and the feed closed; `resume` reads the one
+   * now in scope. The account's machines, and what each said of itself by its
+   * own id, are the same account's and stay.
+   */
+  turn: () => void
+  resume: () => void
 }
 
 interface State extends FleetParts {
@@ -520,7 +530,22 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
         if (listeners.size === 0) stop()
       }
     },
-    get: () => fleet
+    get: () => fleet,
+    turn: () => {
+      closeFeed()
+      retries = 0
+      // The account is asked again: which row is "this one" has changed.
+      accountKey = ''
+      set({ snapshot: null, link: 'connecting', list: null, name: null, listFailed: false })
+    },
+    resume: () => {
+      if (!running) return
+      void askLocal()
+      if (!sight?.hidden()) {
+        openFeed()
+        refresh()
+      }
+    }
   }
 }
 
@@ -535,6 +560,12 @@ export const documentSight: Sight = {
 }
 
 let shared: ZoomFleetStore | null = null
+// Let go of while the old machine is in scope; read again once the new one is.
+registerScopeState('zoom fleet', () => shared?.turn())
+// On the console with no machine in scope there is no "this machine" to read.
+subscribeMachineScope((scope) => {
+  if (!scopeNeedsMachine(scope) || scope.machineId !== null) shared?.resume()
+})
 const fleetStore = (): ZoomFleetStore => {
   shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight })
   return shared

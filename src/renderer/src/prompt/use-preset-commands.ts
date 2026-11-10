@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { useEffect, useState } from 'react'
 import { cookrew } from '../api'
 import { launchOffer, type LaunchOffer } from '../../../shared/launch-tune'
@@ -11,6 +12,11 @@ import { launchOffer, type LaunchOffer } from '../../../shared/launch-tune'
  */
 
 let asked: Promise<ReadonlyMap<string, LaunchOffer | null>> | null = null
+
+// The presets are the machine's own: asked again of the next one.
+registerScopeState('preset offers', () => {
+  asked = null
+})
 
 function presetOffers(): Promise<ReadonlyMap<string, LaunchOffer | null>> {
   if (asked === null) {

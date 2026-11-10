@@ -1,3 +1,4 @@
+import { registerScopeState } from './machine-scope'
 import { clientBase } from './api-base'
 import { dataPlane } from './data-plane'
 import {
@@ -101,6 +102,14 @@ export const subscribePathLink = (listener: (next: PathLinkState) => void): (() 
   listeners.add(listener)
   return () => void listeners.delete(listener)
 }
+
+// The badge's facts are ONE machine's: whether its stream is up, how long it
+// takes to answer, what it is called. Whoever draws the badge keeps listening.
+registerScopeState('path link', () => {
+  state = IDLE
+  registryOrigin = null
+  announce()
+})
 
 /** Test seam: the module is a singleton, and a test needs a clean one. */
 export const resetPathLink = (): void => {

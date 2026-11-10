@@ -350,6 +350,47 @@ describe('the phone asking its Mac', () => {
   })
 })
 
+describe('the machine in scope becomes another one', () => {
+  it('ends a loop that asked "this machine", so the next machine’s numbers are never filed under the last one’s id', async () => {
+    const ask = vi.fn(async (_id: string, local: boolean) => reading(local ? 1 : 2))
+    const store = createGaugeStore({ ask })
+    store.watch('machine-a', true)
+    store.watch('machine-c', false)
+    await flush()
+    expect(store.get('machine-a')).toEqual(reading(1))
+    expect(store.get('machine-c')).toEqual(reading(2))
+    const told = vi.fn()
+    store.subscribe('machine-a', told)
+
+    store.turn()
+    expect(store.get('machine-a')).toBeUndefined()
+    expect(told).toHaveBeenCalled()
+    ask.mockClear()
+    await vi.advanceTimersByTimeAsync(GAUGE_POLL_MS * 4 + GAUGE_REMOTE_POLL_MS * 2)
+    // Asked by its own id, a machine is the same machine whoever is in scope: that loop goes on.
+    expect(ask.mock.calls.every(([id, local]) => id === 'machine-c' && local === false)).toBe(true)
+    expect(ask.mock.calls.length).toBeGreaterThan(0)
+    expect(store.get('machine-c')).toEqual(reading(2))
+  })
+
+  it('lets a leaf that held the ended loop go without taking its successor with it', async () => {
+    const ask = vi.fn(async () => reading(1))
+    const store = createGaugeStore({ ask })
+    const releaseOld = store.watch('machine-a', true)
+    await flush()
+    store.turn()
+    // The same machine, watched again from the new scope by its id.
+    store.watch('machine-a', false)
+    await flush()
+    expect(store.get('machine-a')).toEqual(reading(1))
+    releaseOld()
+    ask.mockClear()
+    await vi.advanceTimersByTimeAsync(GAUGE_REMOTE_POLL_MS * 2)
+    expect(ask).toHaveBeenCalled()
+    expect(store.get('machine-a')).toEqual(reading(1))
+  })
+})
+
 describe('the console asking another machine, through the relay', () => {
   const ME = '0f8f1c2e-1111-4222-8333-944445555666'
   const OTHER = '1a2b3c4d-aaaa-4bbb-8ccc-ddddeeeeffff'

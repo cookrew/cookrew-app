@@ -1,3 +1,4 @@
+import { registerScopeState } from '../machine-scope'
 import { apiPath, clientBase } from '../api-base'
 import { cookrew, isRemoteMode } from '../api'
 import { authHeaders, authStore } from '../auth-gate'
@@ -235,14 +236,16 @@ const settledPlane = (): 'LAN' | 'TAILNET' | 'RELAY' => {
  * points it at the current plane — relay or direct — like every other request
  * the companion makes; there is no second transport for diagnostics.
  */
-const tellTheDesktop = createPathReporter({
-  post: (report) =>
-    postPathReport(report, {
-      url: apiPath(PATH_REPORT_ROUTE),
-      headers: authHeaders(),
-      fetch: planeFetch
-    })
-})
+const pathReporter = (): ReturnType<typeof createPathReporter> =>
+  createPathReporter({
+    post: (report) =>
+      postPathReport(report, {
+        url: apiPath(PATH_REPORT_ROUTE),
+        headers: authHeaders(),
+        fetch: planeFetch
+      })
+  })
+let tellTheDesktop = pathReporter()
 
 /** One WebRTC attempt per this long at most: each one opens a peer on the Mac. */
 const RTC_EVERY_MS = 2 * 60 * 1000
@@ -253,6 +256,18 @@ let lastRtcAt = 0
 let lastEnd: RtcRow | null = null
 /** When an ended link let the next knock skip the gap, within HOLD_REPEAT_WINDOW_MS. */
 let quickKnocks: readonly number[] = []
+
+// All of the above is ONE machine's: the id its card proved, the last report
+// sent to it (and so what the next one may leave out), and when it was last
+// knocked on. Kept across a change of machine, the last knock would hold the
+// next machine's direct link back for two minutes it never earned.
+registerScopeState('path switch memory', () => {
+  lastDeviceId = null
+  tellTheDesktop = pathReporter()
+  lastRtcAt = 0
+  lastEnd = null
+  quickKnocks = []
+})
 
 /**
  * THE DIRECT LINK BY WEBRTC (path/rtc-adopt.ts), tried on the relay only and

@@ -17,6 +17,7 @@
  * on a clock of their own: a question still out is exactly what a stalled Mac
  * looks like, and calm numbers then are the worst thing this panel could show.
  */
+import { registerScopeState } from '../machine-scope'
 import { parseMachineGauges, type MachineGauges } from '../../../shared/machine-gauges'
 import { cookrew } from '../api'
 import { documentSight, type Sight } from './use-zoom-fleet'
@@ -44,6 +45,13 @@ export interface GaugeStore {
   watch: (machineId: string, local: boolean) => () => void
   subscribe: (machineId: string, listener: () => void) => () => void
   get: (machineId: string) => GaugeReading
+  /**
+   * The machine in scope is another one now. A loop that asked "this machine"
+   * would go on asking, and file the next machine's numbers under the last
+   * one's id: those loops end here and their readings go. A loop for a machine
+   * by its own id is unaffected.
+   */
+  turn: () => void
 }
 
 interface Loop {
@@ -165,7 +173,21 @@ export function createGaugeStore(options: GaugeStoreOptions): GaugeStore {
         if (released) return
         released = true
         loop.holds -= 1
-        if (loop.holds === 0) forget(machineId, loop)
+        // Only the loop still holding this machine: one ended by `turn` must not take its successor with it.
+        if (loop.holds === 0 && loops.get(machineId) === loop) forget(machineId, loop)
+      }
+    },
+    turn: () => {
+      for (const [machineId, loop] of [...loops]) {
+        if (!loop.local) continue
+        loop.live = false
+        stopClocks(loop)
+        loops.delete(machineId)
+        drop(machineId)
+      }
+      if (loops.size === 0) {
+        unwatch?.()
+        unwatch = null
       }
     },
     subscribe: (machineId, listener) => {
@@ -187,6 +209,8 @@ const askCookrew: GaugeAsk = async (machineId, local) => {
 }
 
 let shared: GaugeStore | null = null
+
+registerScopeState('machine gauges', () => shared?.turn())
 
 /** The page's one store. */
 export const gaugeStore = (): GaugeStore => {

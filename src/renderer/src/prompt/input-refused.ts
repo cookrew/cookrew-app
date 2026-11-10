@@ -5,6 +5,8 @@
  * them back and says why, live-line.ts forgets what it thought it had typed.
  */
 
+import { registerScopeState } from '../machine-scope'
+
 type Listener = (terminalId: string, data: string) => void
 
 const listeners = new Set<Listener>()
@@ -45,6 +47,11 @@ export function wordsToRestore(sent: SentWords | null, terminalId: string, data:
 }
 
 let lastSent: SentWords | null = null
+
+// The words that could be given back were sent to a terminal of ONE machine.
+registerScopeState('refused input', () => {
+  lastSent = null
+})
 
 /** Words left the box by the keys (the box, a card's reply box). */
 export function noteSent(sent: SentWords): void {

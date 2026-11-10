@@ -9,9 +9,8 @@ import './zoom/root-theme.css'
 import './phone-type.css'
 import { authStore } from './auth-gate'
 import { startPhoneBeacon } from './phone-beacon'
-import { startCompanionPathSwitch } from './path/companion'
-import { cookrew, isRemoteMode } from './api'
-import { watchBuild } from './build-watch'
+import { startMachineSession } from './machine-session'
+import { isRemoteMode } from './api'
 import { reloadForNewBuildNow } from './crash-report'
 import { scheduleWebglWarmup } from './gpu-warmup'
 import { applyColorScheme, applyTheme, storedTheme } from './color-scheme'
@@ -48,24 +47,12 @@ authStore()
 // inspection channel survives contact with this device (see phone-beacon.ts).
 startPhoneBeacon()
 
-// A companion on the relay or the tailnet keeps looking for the Mac on the
-// nearer network, and moves the session there without asking. A no-op on the
-// desktop and on a phone already on the LAN (see path/companion.ts).
-startCompanionPathSwitch()
-
-// A resident Home Screen app reloads itself when the Mac serves another
-// build, at the next switch away or back — never under a finger (build-watch.ts).
-const onBuild = isRemoteMode() ? cookrew().onBuild : undefined
-if (onBuild) {
-  watchBuild({
-    onBuild,
-    reload: () => window.location.reload(),
-    onVisibility: (cb) => {
-      document.addEventListener('visibilitychange', cb)
-      return () => document.removeEventListener('visibilitychange', cb)
-    }
-  })
-}
+// For as long as one machine is in scope (machine-session.ts): a companion on
+// the relay or the tailnet keeps looking for the Mac on the nearer network and
+// moves the session there without asking, and a resident Home Screen app
+// reloads itself when the Mac serves another build, at the next switch away
+// or back — never under a finger. A no-op on the desktop.
+startMachineSession()
 
 // Before anything can be clicked: a terminal opened by a click takes its pane's size (pane-size.ts · openedAt).
 watchUserInput()
