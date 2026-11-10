@@ -12,7 +12,7 @@ import { followDrafts } from '../prompt/draft-follow'
 import { useFirstRunStage } from '../first-run/first-run-state'
 import { InkTie } from './InkAvatar'
 import { buildZoomModel, itemViewOf, type MachineView } from './zoom-model'
-import { machineWhyShows, machineWhyWords, machineSays } from './machine-why'
+import { machineTooOld, machineWhyShows, machineWhyWords, machineSays } from './machine-why'
 import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
@@ -842,6 +842,8 @@ const machineSurface = (): 'desktop' | 'page' | 'none' => (!canEnterMachines() ?
 async function whyNot(m: MachineView): Promise<string | null> {
   const api = cookrew()
   const surface = machineSurface()
+  // Too old for the console: a tap asks it nothing either, and says to update it.
+  if (machineTooOld(m, surface)) return machineWhyWords(m, { surface, trusted: null, block: null, platform: hostPlatform() })
   // Not read yet (a page just opened, a key just made): asked now, so a tap is not a wait for the next round.
   if (surface !== 'none' && m.online && (await api.machineFleetOf?.(m.id).catch(() => null)) != null) return null
   const trusted = surface === 'desktop' ? ((await api.machineTrust?.().catch(() => null)) ?? null)?.trusted ?? null : null

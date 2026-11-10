@@ -17,6 +17,7 @@
  * off its line, on a build older than this console speaks to, or refusing
  * this browser in its own words.
  */
+import { MIN_MACHINE_VERSION, machineOutdated } from '../../../shared/machine-version'
 import type { AccountMachine, AccountMachines } from '../../../shared/zoom-fleet'
 import type { FleetSnapshot } from '../../../shared/fleet'
 import { composeFleet, snapshotOf, type ZoomCounts } from '../zoom/fleet-compose'
@@ -26,7 +27,7 @@ import type { MachineBlock } from '../relay-machine-call'
 const MACHINE_WORDS_MAX = 160
 
 /** The first build that answers at api.cookrew.dev/api/m and lets the console's origin in. */
-export const MIN_MACHINE_VERSION = '0.6.0'
+export { MIN_MACHINE_VERSION }
 export const ACCOUNT_EVERY_MS = 60_000
 export const SUMMARY_EVERY_MS = 5_000
 /** The registry said the session was over: the session renews, and the list is asked for again this soon. */
@@ -105,21 +106,7 @@ export interface ConsoleDevices {
   gateChanged(): void
 }
 
-const triple = (version: string | null): readonly [number, number, number] | null => {
-  // A pre-release or build suffix does not change which protocol a build speaks.
-  const parts = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/.exec(version ?? '')
-  return parts === null ? null : [Number(parts[1]), Number(parts[2]), Number(parts[3])]
-}
-
-const MIN_TRIPLE = triple(MIN_MACHINE_VERSION) ?? [0, 0, 0]
-
-/** Older than the first build this console speaks to. A version it cannot read is not taken for a new one. */
-const outdated = (version: string | null): boolean => {
-  const have = triple(version)
-  if (have === null) return true
-  for (let at = 0; at < 3; at += 1) if (have[at] !== MIN_TRIPLE[at]) return have[at] < MIN_TRIPLE[at]
-  return false
-}
+const outdated = machineOutdated
 
 /** Where one machine stands, and what it says about itself when it cannot be read. */
 export function standingOf(row: AccountMachine, at: { open: boolean; read: boolean; block: MachineBlock | null }): { standing: MachineStanding; say: string | null } {

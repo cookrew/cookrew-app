@@ -21,8 +21,9 @@
 import { registerScopeState, scopeNeedsMachine, subscribeMachineScope } from '../machine-scope'
 import { useSyncExternalStore } from 'react'
 import type { FleetEvent, FleetSnapshot, MachineDisplay } from '../../../shared/fleet'
-import type { AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
+import type { AccountMachine, AccountMachines, AccountMachinesRefusal } from '../../../shared/zoom-fleet'
 import { foldFleet } from '../../../shared/fleet-fold'
+import { machineOutdated } from '../../../shared/machine-version'
 import { cookrew, type CookrewApi } from '../api'
 import { composeFleet, deckOf, snapshotOf, type FleetParts, type ZoomCounts, type ZoomFleet, type ZoomMachineDetail } from './fleet-compose'
 
@@ -63,6 +64,13 @@ export interface FleetStoreOptions {
   /** The first retry after a refused feed; each next one doubles, up to RETRY_MAX_MS. */
   retryMs?: number
   sight?: Sight | null
+  /**
+   * Which of the account's other machines may be asked for their fleet. Absent
+   * = every one that is online. The console passes its version floor
+   * (shared/machine-version.ts): a machine too old is drawn by name and asked
+   * nothing, here as on the console's own Devices level.
+   */
+  readable?: (row: AccountMachine) => boolean
 }
 
 export interface ZoomFleetStore {
@@ -230,7 +238,8 @@ export function createZoomFleetStore(api: () => FleetApi, options: FleetStoreOpt
   /** The account's other machines, each read through the key this desktop holds for it. */
   const askRemote = async (): Promise<void> => {
     const read = api().machineFleetOf
-    const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online) : []
+    const mayRead = options.readable ?? ((): boolean => true)
+    const rows = state.account?.ok ? state.account.machines.filter((row) => !row.current && row.online && mayRead(row)) : []
     if (!read || readingRemote || rows.length === 0) return
     const mine = turns
     readingRemote = true
@@ -389,7 +398,8 @@ subscribeMachineScope((scope) => {
 })
 /** The page's one fleet store, made when somebody first reads it. */
 export const sharedZoomFleet = (): ZoomFleetStore => {
-  shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight })
+  // On the console, a machine below the floor is asked nothing (shared/machine-version.ts).
+  shared ??= createZoomFleetStore(() => cookrew(), { sight: documentSight, readable: (row) => !scopeNeedsMachine() || !machineOutdated(row.appVersion) })
   return shared
 }
 const subscribe = (listener: () => void): (() => void) => sharedZoomFleet().subscribe(listener)
@@ -416,6 +426,8 @@ export interface ZoomFleetView {
     local: boolean
     online: boolean
     detail: ZoomMachineDetail
+    /** The build it runs: what the console's floor is judged by on the devices stop (machine-why.ts). */
+    appVersion: string | null
     os: string | null
     display: MachineDisplay | null
     workspaces: { id: string; name: string; icon: string | null; agents: { harness: string; phase: string }[]; counts: ZoomCounts | null; deck: { id: string; kind: 'browser' | 'note'; title: string; host: string | null }[] }[]
@@ -430,6 +442,7 @@ export function fleetViewOf(fleet: ZoomFleet): ZoomFleetView {
       local: m.local,
       online: m.online,
       detail: m.detail,
+      appVersion: m.appVersion,
       os: m.profile?.os ?? null,
       display: m.display ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, icon: w.icon, agents: w.agents.map((a) => ({ harness: a.harness, phase: a.phase })), counts: w.counts, deck: deckOf(w).map((d) => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? null })) }))

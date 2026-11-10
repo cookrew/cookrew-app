@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { machineWhyShows, machineWhyWords, machineSays } from '../src/renderer/src/zoom/machine-why'
 
@@ -65,6 +67,32 @@ describe('machineWhyShows', () => {
 
 describe('under a machine’s name on the devices stop', () => {
   const m = (over: object = {}) => ({ name: 'Solis-Core', online: true, detail: 'listed' as const, ...over })
+  it('on the console, a machine too old to be read says to update it, before anything else it could be asked', () => {
+    for (const block of [null, { kind: 'needs-proof' }, { kind: 'no-device' }] as const) {
+      expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'page', trusted: null, block })).toBe('Update Cookrew on Solis-Core.')
+    }
+    expect(machineSays(m({ appVersion: null }), { surface: 'page', trusted: null })).toBe('Update Cookrew on Solis-Core.')
+    expect(machineSays(m({ appVersion: '0.6.0' }), { surface: 'page', trusted: null })).toBe('Not answering yet.')
+    // Offline comes first: an update cannot be asked of a machine that is not there.
+    expect(machineSays(m({ appVersion: '0.5.8', online: false }), { surface: 'page', trusted: null })).toBe('Open Cookrew on Solis-Core.')
+    // A caller that does not know the version is not told to update.
+    expect(machineSays(m(), { surface: 'page', trusted: null })).toBe('Not answering yet.')
+    // The desktop app reaches machines with a machine key, not the pass: the floor is not its rule.
+    expect(machineSays(m({ appVersion: '0.5.8' }), { surface: 'desktop', trusted: true })).toBe('Not answering yet.')
+    expect(machineSays(m({ appVersion: '0.5.8', detail: 'live' }), { surface: 'desktop', trusted: true })).toBeNull()
+    // The view's own machine carries the version, or none of this would ever be said.
+    const model = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'zoom-model.ts'), 'utf8')
+    expect(model).toContain('appVersion: m.appVersion ?? null,')
+    const fleet = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'use-zoom-fleet.ts'), 'utf8')
+    expect(fleet.slice(fleet.indexOf('export function fleetViewOf('))).toContain('appVersion: m.appVersion,')
+    // And a tap on it asks it nothing: the view decides that before it asks (ZoomView · whyNot).
+    const view = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'src', 'zoom', 'ZoomView.tsx'), 'utf8')
+    const tap = view.slice(view.indexOf('async function whyNot('))
+    expect(tap.indexOf('machineTooOld(m, surface)')).toBeGreaterThan(-1)
+    expect(tap.indexOf('machineTooOld(m, surface)')).toBeLessThan(tap.indexOf('api.machineFleetOf?.(m.id)'))
+    expect(machineWhyWords({ name: 'Solis-Core', online: true, appVersion: '0.5.8' }, { surface: 'page', trusted: null, block: null })).toBe('Update Cookrew on Solis-Core, and it opens here.')
+  })
+
   it('says nothing for a machine that is read', () => {
     expect(machineSays(m({ detail: 'live' }), { surface: 'desktop', trusted: true })).toBeNull()
   })
