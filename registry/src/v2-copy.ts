@@ -52,6 +52,8 @@ export type V2Error =
   | 'bad_seat'
   | 'malformed'
   | 'method_not_allowed'
+  /** A console session asked for something only the auth host or a machine's own session does (console-scope.ts). */
+  | 'console_scope'
   | 'busy'
   /**
    * OURS, NOT THEIRS. A handler that raised owes the caller a status code all
@@ -92,6 +94,7 @@ const SENTENCES: Record<V2Error, string> = {
   bad_seat: 'A seat names a username, and a receipt is one short line of text.',
   malformed: 'That request was not something this registry could read.',
   method_not_allowed: 'That address does not answer to this method.',
+  console_scope: 'That is not done from the console. Account and security changes are made at auth.cookrew.dev.',
   busy: 'cookrew.dev is checking more passwords than it can right now. Try again in a few seconds.',
   server_error: 'Something went wrong at cookrew.dev, not on your machine. Try again in a moment.'
 }

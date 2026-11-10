@@ -61,7 +61,7 @@ export interface FleetMachine {
   /** Null for a desktop older than the probe: drawn as `unknown`. */
   profile: MachineProfile | null
   /**
-   * Same-origin base the shell reaches this desktop under: '/relay/@<user>/desktop/<deviceId>/'.
+   * Where this desktop's API is reached down the relay, on the API host: '/api/m/<deviceId>' (machine-relay.ts).
    * The registry admits the account cookie; the desktop admits its own pairing
    * token, which this browser keeps as localStorage 'cr_token:<deviceId>' (absent
    * = unpaired). The shell sends it as Authorization: Bearer on every request,

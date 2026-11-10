@@ -32,6 +32,8 @@ import { createCanvasRelay, type CanvasRelay } from './v2-canvas-relay'
 import { createFunnelRoute, type FunnelMount } from './funnel-routes'
 import { authHostOf, handleAuthHost } from './auth-host'
 import { apiHostOf, enterApiHost } from './api-host'
+import { consoleScopeRefuses } from './console-scope'
+import { v2Error } from './v2-copy'
 import { completeWeb } from './v2-auth-routes'
 import type { V2Context } from './v2-http'
 
@@ -452,6 +454,15 @@ export function createRegistry(deps: RegistryDeps): Server {
         return
       }
       if (enterApiHost(deps.v2, request, response, url)) return
+    }
+
+    // ── A CONSOLE SESSION IS FOR THE CONSOLE'S FEW ROUTES ─────────────────
+    //
+    // Ahead of every route, the relay's included: a token a page holds must
+    // open nothing a page was not given (console-scope.ts).
+    if (deps.v2 && consoleScopeRefuses(request, method, url.pathname)) {
+      json(response, 403, v2Error('console_scope'), { 'cache-control': 'private, no-store' })
+      return
     }
 
     // ── THE RELAY, first ──────────────────────────────────────────────────

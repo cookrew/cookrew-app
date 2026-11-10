@@ -374,13 +374,14 @@ export class AuthRequests {
    * a wrong verifier is somebody who caught the link and not the client, and
    * the real client can start again where a thief must not get a second go.
    */
-  redeem(code: unknown, client: AuthClient, verifier: unknown): { request: AuthRequest; result: AuthResult } | null {
+  redeem(code: unknown, client: AuthClient | readonly AuthClient[], verifier: unknown): { request: AuthRequest; result: AuthResult } | null {
     if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(code)) return null
     const id = this.byCode.get(digest(code))
     const request = id === undefined ? undefined : this.held.get(id)
     if (request === undefined || request.result === null) return null
     this.drop(request)
-    if (this.now() >= request.codeExpiresAt || request.client !== client) return null
+    const clients: readonly AuthClient[] = typeof client === 'string' ? [client] : client
+    if (this.now() >= request.codeExpiresAt || !clients.includes(request.client)) return null
     if (!verifierMatches(request.challenge, verifier)) return null
     return { request, result: request.result }
   }

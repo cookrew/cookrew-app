@@ -51,7 +51,8 @@ const SAID = {
   wrongPassword: 'That is not the account password.',
   wrongPasskey: 'That passkey did not answer for this account.',
   proof: 'Prove it is you: the account password or a passkey.',
-  badDevice: 'This device’s key cannot be named. Sign in again on this browser.'
+  badDevice: 'This device’s key cannot be named. Sign in again on this browser.',
+  passwordElsewhere: 'The account password is typed at auth.cookrew.dev, never on this page. Use a passkey here, or go there to type it.'
 } as const
 
 type Rest = { wrong: number; until: number }
@@ -102,6 +103,8 @@ export function grantOptions(ctx: V2Context, signed: Signed): void {
   const { rpId } = relyingParty(ctx)
   v2Json(ctx.response, 200, {
     methods: { password, passkey: passkeys.length > 0 },
+    // The console's page never takes the password itself (issueGrant): it sends the person to the auth host.
+    ...(signed.claims.via === 'console' ? { passwordAt: 'auth' } : {}),
     needsPassword: !password && passkeys.length === 0,
     passkey:
       passkeys.length === 0
@@ -176,6 +179,13 @@ export async function issueGrant(ctx: V2Context, signed: Signed): Promise<void> 
   const body = await readJsonBody(ctx.request, BODY_MAX)
   const value: Record<string, unknown> = body.ok ? body.value : {}
   if (ctx.v2.factors.store.mustChangePassword(account.username)) return said(ctx, 403, 'locked', SAID.locked)
+  // THE CONSOLE'S PAGE NEVER HANDLES THE PASSWORD (owner 2026-11-10): it is the
+  // page that draws what machines send and keeps its tokens where a script
+  // could read them, so a password typed there is one an injected script takes
+  // for good. Refused before it is looked at: right or wrong, it costs no try
+  // and opens nothing. A passkey is touched in place; the password is typed on
+  // the auth host and comes back as a code (auth-grant.ts).
+  if (claims.via === 'console' && value.password !== undefined) return said(ctx, 403, 'password_elsewhere', SAID.passwordElsewhere)
   const passkeys = passkeysOf(ctx, account.username)
   if (account.passwordless === true && passkeys.length === 0) return said(ctx, 409, 'password_required', SAID.needsPassword)
   const key = restKey(signed)

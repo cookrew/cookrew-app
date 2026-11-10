@@ -147,9 +147,12 @@ export function verifyDeviceSignature(jwk: Record<string, string>, message: stri
     const key = createPublicKey({ key: jwk as never, format: 'jwk' })
     const data = Buffer.from(message, 'utf8')
     const signature = Buffer.from(sig, 'base64url')
-    return jwk.kty === 'OKP'
-      ? verify(null, data, key, signature)
-      : verify('sha256', data, key, signature)
+    if (jwk.kty === 'OKP') return verify(null, data, key, signature)
+    // A browser's P-256 key signs r‖s, sixty-four bytes (WebCrypto); a key held
+    // elsewhere may sign DER. Told apart by length, as the machine's door does
+    // (main/device-signature.ts): the console renews its session with such a key.
+    const dsaEncoding = signature.byteLength === 64 ? 'ieee-p1363' : 'der'
+    return verify('sha256', data, { key, dsaEncoding }, signature)
   } catch {
     return false
   }

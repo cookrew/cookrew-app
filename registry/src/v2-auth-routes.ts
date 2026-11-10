@@ -91,8 +91,11 @@ function readBack(value: unknown): OAuthBack | null {
 
 /** The kinds of device each client may bind. A terminal is the machine it runs on. */
 function kindFits(client: AuthClient, kind: string): boolean {
-  return client === 'web' ? kind === 'browser' || kind === 'phone' : kind === 'desktop'
+  return client === 'web' || client === 'console' ? kind === 'browser' || kind === 'phone' : kind === 'desktop'
 }
+
+/** What the console's page may open a request for: a way in, and nothing a signed-in client does. */
+const CONSOLE_INTENTS: readonly AuthRequest['intent'][] = ['sign-in', 'create', 'github', 'google']
 
 // ── the product origin ──────────────────────────────────────────────────────
 
@@ -144,6 +147,12 @@ function parse(ctx: V2Context, body: Record<string, unknown>): Parsed | null {
   const client = body.client
   const intent = body.intent === undefined ? 'sign-in' : body.intent
   if (!isAuthClient(client) || !isAuthIntent(intent)) {
+    refuseAuth(ctx.response, 400, 'bad_flow')
+    return null
+  }
+  // THE CONSOLE needs somewhere to come back to (its configured origin), and
+  // opens only a sign-in: linking, passkeys and step-ups belong to the auth host.
+  if (client === 'console' && (ctx.v2.consoleOrigin === null || !CONSOLE_INTENTS.includes(intent))) {
     refuseAuth(ctx.response, 400, 'bad_flow')
     return null
   }
@@ -224,6 +233,15 @@ async function openRequest(ctx: V2Context): Promise<void> {
     if (client === 'desktop') {
       back = readBack(body.back)
       if (typeof body.state !== 'string' || !CLIENT_STATE.test(body.state) || back === null) {
+        refuseAuth(response, 400, 'bad_flow')
+        return
+      }
+      clientState = body.state
+    }
+    // The console's page keeps its own verifier and state, as the app does; its
+    // way back is fixed (auth-finish.ts · handoffFor), so it names none.
+    if (client === 'console') {
+      if (typeof body.state !== 'string' || !CLIENT_STATE.test(body.state)) {
         refuseAuth(response, 400, 'bad_flow')
         return
       }
@@ -382,7 +400,7 @@ async function spend(ctx: V2Context): Promise<void> {
       refuse(response, 429, 'rate_limited', undefined, { 'retry-after': '60' })
       return
     }
-    const spent = auth.requests.redeem(body.code, 'desktop', body.verifier)
+    const spent = auth.requests.redeem(body.code, ['desktop', 'console'], body.verifier)
     if (spent === null) {
       refuse(response, 401, 'bad_credentials')
       return
@@ -581,7 +599,12 @@ export function summaryOf(v2: V2Identity, request: AuthRequest): AuthRequestSumm
     provider: request.provider,
     username: request.usernameHint,
     userCode: request.userCode,
-    returnHost: request.client === 'web' ? new URL(productOrigin(v2)).host : null,
+    returnHost:
+      request.client === 'web'
+        ? new URL(productOrigin(v2)).host
+        : request.client === 'console' && v2.consoleOrigin !== null
+          ? new URL(v2.consoleOrigin).host
+          : null,
     createdAt: request.createdAt,
     expiresAt: request.expiresAt,
     providers: [...v2.oauth.providers.values()].map((p) => ({ id: p.id, label: PROVIDER_LABEL[p.id] })),

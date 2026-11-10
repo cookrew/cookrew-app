@@ -3,6 +3,7 @@ import { generateKeyPairSync, type KeyObject } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { createServer } from 'node:net'
+import { request as httpRequest } from 'node:http'
 import { createRequire } from 'node:module'
 import { networkInterfaces, tmpdir } from 'node:os'
 import path from 'node:path'
@@ -367,9 +368,18 @@ describe('the registry binary', () => {
     })
 
   function launch(data: string, port: number, extra: string[]): { child: ChildProcess; up: Promise<void>; exited: Promise<number | null>; stderr: () => string } {
-    const env = { ...process.env }
+    const env: NodeJS.ProcessEnv = { ...process.env }
     delete env.COOKREW_REGISTRY
-    const child = spawn(process.execPath, [bundle, '--port', String(port), '--data', data, ...extra], {
+    delete env.AUTH_ORIGIN
+    delete env.API_ORIGIN
+    delete env.CONSOLE_ORIGIN
+    // A real registry answers on its API and auth hosts and is started with all three origins.
+    if (!extra.includes('--dev') && !extra.includes('--no-origins')) {
+      env.AUTH_ORIGIN = `http://auth.localhost:${port}`
+      env.API_ORIGIN = `http://api.localhost:${port}`
+      env.CONSOLE_ORIGIN = `http://console.localhost:${port}`
+    }
+    const child = spawn(process.execPath, [bundle, '--port', String(port), '--data', data, ...extra.filter((flag) => flag !== '--no-origins')], {
       cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe']
     })
     running.push(child)
@@ -394,6 +404,32 @@ describe('the registry binary', () => {
     return { child, up, exited, stderr: () => err }
   }
 
+  type Ask = (pathname: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ status: number; json: () => Promise<unknown> }>
+
+  /** A dev binary is one host: asked by its address. */
+  const byAddress = (origin: string): Ask => async (pathname, init = {}) => {
+    const res = await fetch(`${origin}${pathname}`, init)
+    return { status: res.status, json: () => res.json() as Promise<unknown> }
+  }
+
+  /**
+   * A real registry answers only on its API host: named in Host, dialled on
+   * loopback (a name under .localhost is not resolved on every machine).
+   */
+  const onApiHost = (port: number): Ask => (pathname, init = {}) =>
+    new Promise((resolve, reject) => {
+      const asked = httpRequest(
+        { host: '127.0.0.1', port, path: pathname, method: init.method ?? 'GET', headers: { host: `api.localhost:${port}`, ...init.headers } },
+        (answer) => {
+          const chunks: Buffer[] = []
+          answer.on('data', (chunk: Buffer) => chunks.push(chunk))
+          answer.on('end', () => resolve({ status: answer.statusCode ?? 0, json: async () => JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown }))
+        }
+      )
+      asked.on('error', reject)
+      asked.end(init.body)
+    })
+
   /** A data dir holding one priced preset and one enrolled buyer, written before the binary starts. */
   async function pricedRegistry(name: string, extra: string[]) {
     const port = await freePort()
@@ -409,13 +445,14 @@ describe('the registry binary', () => {
     new IdentityService(data, { ...CONFIG, origin }).register(buyer.credentialId, buyer.jwk)
     const booted = launch(data, port, extra)
     await booted.up
-    const challenge = (await (await fetch(`${origin}/v1/identity/challenge`, { method: 'POST' })).json()) as { challenge: string }
-    const minted = await fetch(`${origin}/v1/identity/assert`, {
+    const ask = extra.includes('--dev') ? byAddress(origin) : onApiHost(port)
+    const challenge = (await (await ask('/v1/identity/challenge', { method: 'POST' })).json()) as { challenge: string }
+    const minted = await ask('/v1/identity/assert', {
       method: 'POST',
       body: JSON.stringify({ ...buyer.assert(challenge.challenge), scope: 'download' })
     })
     const { token } = (await minted.json()) as { token: string }
-    return { origin, data, id: m.manifest.id, authorization: `Bearer ${token}` }
+    return { origin, data, id: m.manifest.id, authorization: `Bearer ${token}`, ask, port }
   }
 
   beforeAll(() => {
@@ -431,12 +468,22 @@ describe('the registry binary', () => {
 
   it('in production mode never settles a made-up tx', async () => {
     const r = await pricedRegistry('production', [])
-    const res = await gate(r.origin, r.id, { authorization: r.authorization, 'x-payment': MADE_UP })
+    const manifest = `/v1/presets/${encodeURIComponent(r.id)}/manifest`
+    const res = await r.ask(manifest, { headers: { authorization: r.authorization, 'x-payment': MADE_UP } })
     expect(res.status).toBe(503)
     expect(await res.json()).toEqual({ reason: 'payment_unavailable' })
-    const plain = await gate(r.origin, r.id, { authorization: r.authorization })
+    const plain = await r.ask(manifest, { headers: { authorization: r.authorization } })
     expect(plain.status).toBe(503)
     expect(existsSync(path.join(r.data, 'receipts.jsonl'))).toBe(false)
+    // And on no other name: the address alone, with no API host named, is nobody's.
+    expect((await fetch(`http://127.0.0.1:${r.port}/v1/health`)).status).toBe(404)
+  }, 30_000)
+
+  it('in production mode refuses to start as one host: the API, the console and the sign-in page are named or it does not run', async () => {
+    const booted = launch(path.join(dir, 'one-host'), await freePort(), ['--no-origins'])
+    booted.up.catch(() => undefined)
+    expect(await booted.exited).toBe(1)
+    expect(booted.stderr()).toContain('API_ORIGIN')
   }, 30_000)
 
   it('under --dev still runs the whole handshake', async () => {

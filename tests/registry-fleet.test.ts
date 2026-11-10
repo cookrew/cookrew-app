@@ -87,14 +87,14 @@ describe('a FleetMachine row', () => {
   const desktop = { deviceId: 'd1', name: 'Invented Mac', workspaces: [], reach: null, updatedAt: 1_000 }
 
   it('is online now, or last seen at the later of the line and the record', () => {
-    expect(fleetRow('mira', desktop, { online: true, lastSeenAt: 500 }, 9_000)).toMatchObject({ online: true, lastSeenAt: 9_000 })
-    expect(fleetRow('mira', desktop, { online: false, lastSeenAt: 5_000 }, 9_000)).toMatchObject({ online: false, lastSeenAt: 5_000 })
-    expect(fleetRow('mira', desktop, undefined, 9_000)).toMatchObject({ online: false, lastSeenAt: 1_000 })
+    expect(fleetRow(desktop, { online: true, lastSeenAt: 500 }, 9_000)).toMatchObject({ online: true, lastSeenAt: 9_000 })
+    expect(fleetRow(desktop, { online: false, lastSeenAt: 5_000 }, 9_000)).toMatchObject({ online: false, lastSeenAt: 5_000 })
+    expect(fleetRow(desktop, undefined, 9_000)).toMatchObject({ online: false, lastSeenAt: 1_000 })
   })
 
   it('draws an older desktop as unknown and names its base', () => {
-    const row = fleetRow('mira', desktop, undefined, 9_000)
-    expect(row).toEqual({ id: 'd1', name: 'Invented Mac', online: false, lastSeenAt: 1_000, appVersion: null, profile: null, base: '/relay/@mira/desktop/d1/' })
+    const row = fleetRow(desktop, undefined, 9_000)
+    expect(row).toEqual({ id: 'd1', name: 'Invented Mac', online: false, lastSeenAt: 1_000, appVersion: null, profile: null, base: '/api/m/d1' })
   })
 })
 
@@ -113,7 +113,7 @@ describe('a presence row means what its list row means', () => {
     const presence = fleetPresence(desktops, lines, 8, now)
     expect(presence).toMatchObject({ at: now, cap: 8, online: 1 })
     for (const desktop of desktops) {
-      const row = fleetRow('mira', desktop, lines.get(desktop.deviceId), now)
+      const row = fleetRow(desktop, lines.get(desktop.deviceId), now)
       expect(presence.desktops.find((d) => d.id === desktop.deviceId)).toEqual({ id: row.id, online: row.online, lastSeenAt: row.lastSeenAt })
     }
     expect(presence.desktops.map((d) => d.lastSeenAt)).toEqual([9_000, 7_000, 8_000, 2_000, null])
@@ -254,7 +254,7 @@ describe('the desktop record carries profile and appVersion', () => {
     expect((await put(site.origin, mac, { profile: PROFILE, appVersion: '0.3.0' })).status).toBe(204)
     let [row] = await desktops(site.origin, mac.token)
     for (const key of FLEET_KEYS) expect(row).toHaveProperty(key)
-    expect(row).toMatchObject({ id: mac.id, name: 'Invented Mac', online: false, appVersion: '0.3.0', profile: PROFILE, base: `/relay/@mira/desktop/${mac.id}/` })
+    expect(row).toMatchObject({ id: mac.id, name: 'Invented Mac', online: false, appVersion: '0.3.0', profile: PROFILE, base: `/api/m/${mac.id}` })
     // Every member a client read before is still on the row.
     expect(row).toMatchObject({ deviceId: mac.id, workspaces: [{ id: 'w1', name: 'Alpha' }], doors: [], reach: null })
     expect(typeof row.lastSeenAt).toBe('number')

@@ -726,12 +726,17 @@ async function mine(ctx: V2Context, rest: string[]): Promise<void> {
     // Additive: every member a client read before is still there.
     const presence = ctx.presence?.(account.username) ?? new Map()
     const now = Date.now()
+    // THE CONSOLE'S PAGE READS THEM FROM OUTSIDE: the name, the platform it
+    // reported, whether it holds its line. Nothing from inside a machine before
+    // its gate (owner: workspace names too), and that rule is kept here rather
+    // than left to the page, so what the page is never sent it cannot show.
+    const outside = signed.claims.via === 'console'
     v2Json(
       response,
       200,
       account.desktops.map((desktop) => ({
-        ...desktopBody(desktop, hasNames(ctx)(desktop.deviceId)),
-        ...fleetRow(account.username, desktop, presence.get(desktop.deviceId), now)
+        ...(outside ? {} : desktopBody(desktop, hasNames(ctx)(desktop.deviceId))),
+        ...fleetRow(desktop, presence.get(desktop.deviceId), now)
       }))
     )
     return
