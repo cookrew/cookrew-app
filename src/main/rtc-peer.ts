@@ -21,7 +21,6 @@ import { RTCPeerConnection, type RTCDataChannel } from 'werift'
 import { createCanvasBridge, loopbackDialer, RELAY_MARKER, type BridgeDialer } from './canvas-bridge'
 import { dialLoopbackSocket, type LoopbackSocket, type LoopbackSocketDeps } from './ws-client'
 import { createJoiner, socketPathOf, splitMessage } from '../shared/rtc-socket-chunks'
-import { RELAY_BASE_HEADER } from './relay-base'
 import { RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER } from './relay-device'
 import { decodeFrame, encodeFrame } from '../shared/relay-frame'
 import { createRtcOutbox, type RtcOutbox } from './rtc-outbox'
@@ -155,12 +154,12 @@ export const createRtcHost = (deps: RtcHostDeps): RtcHost => {
 
   /**
    * What the registry would have vouched for on the relay, it cannot here: the
-   * base and the caller's name are its headers, so a phone's copy is dropped.
-   * The pairing token is still the one credential, checked as on any request.
+   * caller's id and name are its headers, so a phone's copy is dropped. The
+   * pairing token is still the one credential, checked as on any request.
    */
   const dial: BridgeDialer = (() => {
     const inner = deps.dial ?? loopbackDialer(8639)
-    const vouched = new Set([RELAY_BASE_HEADER, RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER])
+    const vouched = new Set([RELAY_DEVICE_HEADER, RELAY_DEVICE_NAME_HEADER])
     return (input, ...rest) =>
       inner(
         {

@@ -18,9 +18,9 @@ import { handle, handleUpgrade, type MobileServerDeps } from '../src/main/mobile
  * route: a wrong Host is refused; an unauthenticated stream is refused; the
  * pairing token is required exactly as it is on ordinary routes; a stream that
  * came down the relay bridge is allowed; and a forged relay marker from a
- * non-loopback peer is not. Both planes are covered — the direct origin (the
- * Mac's own name) and the relay prefix (`x-cookrew-base`, which the registry
- * sets after stripping it from the path).
+ * non-loopback peer is not. Both planes are covered: the direct origin (the
+ * Mac's own name) and the relay's bridge, which dials loopback and marks what
+ * it carried.
  */
 
 const TOKEN = 'pairing-token-for-the-stream'
@@ -29,7 +29,6 @@ const STREAM = '/api/terminal/t1/stream'
 const OURS = 'localhost:8639'
 /** What the bridge writes over whatever the caller sent (canvas-bridge). */
 const BRIDGE = '127.0.0.1:8639'
-const RELAY_PREFIX = '/relay/@ada/desktop/3f2b9c14-7a55-4d2e-9d0f-1c8e6b4a7f30'
 
 class FakePty extends EventEmitter {
   geometry(): { cols: number; rows: number } {
@@ -191,7 +190,7 @@ describe('an event stream on a Host we do answer for', () => {
 })
 
 describe('an event stream that came down the relay bridge', () => {
-  const relayHeaders = { 'x-cookrew-relay': '1', 'x-cookrew-base': RELAY_PREFIX }
+  const relayHeaders = { 'x-cookrew-relay': '1' }
 
   it('is allowed: the bridge dials 127.0.0.1 here and writes the Host itself', async () => {
     const { captured } = await openStream({
@@ -280,7 +279,7 @@ describe('the WebSocket upgrade, which never reaches handle()', () => {
   })
 
   it('hands a relayed socket on, and refuses a forged marker from the LAN', () => {
-    const relayHeaders = { 'x-cookrew-relay': '1', 'x-cookrew-base': RELAY_PREFIX }
+    const relayHeaders = { 'x-cookrew-relay': '1' }
     expect(upgrade({ host: BRIDGE, peer: '127.0.0.1', headers: relayHeaders }).reached).toBe(true)
     const forged = upgrade({ host: 'evil.example', peer: '192.168.2.77', headers: relayHeaders })
     expect(forged.reached).toBe(false)

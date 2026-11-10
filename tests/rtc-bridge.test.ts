@@ -80,7 +80,6 @@ describe('the bridge channel', () => {
         path: '/api/ping',
         headers: {
           authorization: 'Bearer pairing',
-          'x-cookrew-base': '/relay/@someone/desktop/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
           'x-cookrew-device': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
           'x-cookrew-device-name': 'Not this phone'
         }
