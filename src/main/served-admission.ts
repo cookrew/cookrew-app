@@ -409,6 +409,14 @@ export interface AccountAdmission {
   /** The username the token names, when the registry answered. */
   account: string | null
   seat: string | null
+  /**
+   * WHAT COOKREW.DEV SAID TO THE MINT — kept because the phase alone cannot
+   * tell two refusals apart. `denied/no_seat` is the registry refusing to mint
+   * (`no_seat`) AND a door turning a minted token away (`token`); only the
+   * first is "the seat has not been recorded yet", and only that one may be
+   * answered by a Bearer a purchase was admitted on (door-bearer.ts).
+   */
+  minted: CallTokenAnswer['kind']
 }
 
 /**
@@ -423,35 +431,33 @@ export async function admitWithAccount(
 ): Promise<AccountAdmission> {
   const username = account.account()?.username ?? null
   const minted = await mintCallToken(account, team, options)
+  const refusedAtMint = (phase: AdmissionPhase): AccountAdmission => ({
+    phase,
+    token: null,
+    account: username,
+    seat: null,
+    minted: minted.kind
+  })
   switch (minted.kind) {
     case 'identify':
-      return { phase: { kind: 'identify' }, token: null, account: username, seat: null }
+      return refusedAtMint({ kind: 'identify' })
     case 'offline':
-      return { phase: { kind: 'error', status: 0 }, token: null, account: username, seat: null }
+      return refusedAtMint({ kind: 'error', status: 0 })
     case 'refused':
-      return { phase: { kind: 'error', status: minted.status }, token: null, account: username, seat: null }
+      return refusedAtMint({ kind: 'error', status: minted.status })
     case 'no_seat':
-      return {
-        phase: { kind: 'denied', reason: 'no_seat', retryable: false },
-        token: null,
-        account: username,
-        seat: null
-      }
+      return refusedAtMint({ kind: 'denied', reason: 'no_seat', retryable: false })
     case 'token':
       break
   }
+  const atDoor = { account: minted.account, seat: minted.seat, minted: minted.kind }
 
   // The token is the whole body — a token beside a key is two claims about
   // who is knocking, and the door refuses both (served-endpoints v2Assert).
   const asserted = await api(target, '/api/call/assert', { body: { v2Token: minted.token } })
   const said = asserted.body as { token?: unknown; reason?: unknown } | null
   if (asserted.status === 200 && typeof said?.token === 'string') {
-    return {
-      phase: await openAdmission(target, said.token),
-      token: said.token,
-      account: minted.account,
-      seat: minted.seat
-    }
+    return { phase: await openAdmission(target, said.token), token: said.token, ...atDoor }
   }
   if (asserted.status === 403) {
     // The door's own seat rung — it re-reads the token's seat claim rather
@@ -459,11 +465,10 @@ export async function admitWithAccount(
     return {
       phase: { kind: 'denied', reason: typeof said?.reason === 'string' ? said.reason : 'no_seat', retryable: false },
       token: null,
-      account: minted.account,
-      seat: minted.seat
+      ...atDoor
     }
   }
   // 401 here is a door whose app predates accounts (no v2 verifier wired), or
   // one the registry does not know: nothing this Mac can do about either.
-  return { phase: { kind: 'error', status: asserted.status }, token: null, account: minted.account, seat: minted.seat }
+  return { phase: { kind: 'error', status: asserted.status }, token: null, ...atDoor }
 }

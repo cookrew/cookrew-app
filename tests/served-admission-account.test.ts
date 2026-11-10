@@ -162,7 +162,8 @@ describe('admitWithAccount — the account at a listed door', () => {
       phase: { kind: 'open' },
       token: 'door-bearer',
       account: 'jkim',
-      seat: 'seat-7'
+      seat: 'seat-7',
+      minted: 'token'
     })
   })
 
@@ -180,7 +181,7 @@ describe('admitWithAccount — the account at a listed door', () => {
   it('no account on this Mac stops at identify and never reaches the door', async () => {
     asserted.length = 0
     const out = await admitWithAccount(target(), TEAM, registry(0, null, null))
-    expect(out).toEqual({ phase: { kind: 'identify' }, token: null, account: null, seat: null })
+    expect(out).toEqual({ phase: { kind: 'identify' }, token: null, account: null, seat: null, minted: 'identify' })
     expect(asserted).toEqual([])
   })
 
@@ -191,6 +192,8 @@ describe('admitWithAccount — the account at a listed door', () => {
     expect(out.account).toBe('jkim')
     expect(out.token).toBeNull()
     expect(asserted).toEqual([])
+    // WHO said no is kept: it was cookrew.dev, at the mint.
+    expect(out.minted).toBe('no_seat')
   })
 
   it('with BUY the unseated token is asserted at the door, and the door’s 402 is the pay phase with its terms', async () => {
@@ -228,6 +231,19 @@ describe('admitWithAccount — the account at a listed door', () => {
     )
     expect(out.phase).toEqual({ kind: 'denied', reason: 'no_seat', retryable: false })
     expect(out.token).toBeNull()
+    // The same words, from the other side: cookrew.dev minted, the DOOR refused.
+    expect(out.minted).toBe('token')
+  })
+
+  it('a door’s bare 403 defaults to no_seat in the phase, and is still the door’s refusal (L2)', async () => {
+    assertAnswer = { status: 403, body: {} }
+    const out = await admitWithAccount(
+      target(),
+      TEAM,
+      registry(201, { token: 't.v2', account: 'jkim', seat: null })
+    )
+    expect(out.phase).toEqual({ kind: 'denied', reason: 'no_seat', retryable: false })
+    expect(out.minted).toBe('token')
   })
 
   it('a door that cannot read account tokens is an error with its status, not a key attempt', async () => {

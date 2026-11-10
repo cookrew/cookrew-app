@@ -1051,6 +1051,12 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
  * app boots, works and serves nothing, and every call below answers rather
  * than throws. Nothing here is on the serving path.
  */
+/**
+ * Set once the import gate exists (it is built from `accounts`, below). A
+ * holder rather than a direct call because the account can announce a change
+ * before the rest of this file has been evaluated.
+ */
+let gateAccountChanged: (() => void) | null = null
 const accounts = new Accounts({
   // "<model> · <host>" (v3, D12): two Macs of one model are told apart by
   // host, and a name already on the account gets a counter — decided here,
@@ -1068,6 +1074,9 @@ const accounts = new Accounts({
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
   onChange: () => {
+    // A different person at this Mac must find none of the last one's door
+    // Bearers, shown quotes or bought-seat stand-ins (serve-gate.ts).
+    gateAccountChanged?.()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:changed')
     }
@@ -2557,6 +2566,7 @@ const serveGate = createServeGate({
   wallet: () => deviceWallet(),
   buildX402Payment: (requirements) => buildX402Payment(requirements)
 })
+gateAccountChanged = () => serveGate.accountChanged()
 
 /**
  * The port the two post-import calls are asked through. `accounts` is this

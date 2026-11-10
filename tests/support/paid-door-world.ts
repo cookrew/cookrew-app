@@ -43,6 +43,8 @@ export const OWNER = 'drej'
 export const TEAM = 'alpha'
 export const DOOR = `@${OWNER}/${TEAM}`
 export const PRICE = '1.00'
+/** A second paid team the registry lists and nobody here serves: somewhere else to hold no seat. */
+export const OTHER_DOOR = `@${OWNER}/beta`
 
 export const template: ServedTemplate = Object.freeze({
   serviceId: 'svc-alpha',
@@ -112,8 +114,15 @@ export interface PaidDoorWorld {
   lastReport(): Promise<boolean>
   registeredMachine(name: string, username: string): Promise<Mac>
   sessionToken(base: string): string
-  /** `usdc` is the envelope this Mac's wallet would sign; without one it has no wallet. */
-  appOn(accounts: Accounts | null, options?: { usdc?: string }): AppOn
+  /**
+   * `usdc` is the envelope this Mac's wallet would sign; without one it has no
+   * wallet. Pass a FUNCTION for the account to stand for one Mac whose
+   * signed-in person changes; `now` is that Mac's clock.
+   */
+  appOn(
+    accounts: Accounts | null | (() => Accounts | null),
+    options?: { usdc?: string; now?: () => number }
+  ): AppOn
   close(): Promise<void>
 }
 
@@ -154,6 +163,19 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
     transport: 'relay',
     sealKey: 'MCowBQYDK2VuAyEApz6yO0AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab',
     address: `https://cookrew.dev/@${OWNER}/${TEAM}`,
+    access: 'paid',
+    priceUsd: '1',
+    rails: ['stripe']
+  })
+  doors.register(OWNER, {
+    handle: OWNER,
+    door: 'Pilot',
+    name: 'beta',
+    title: 'COOKREW Beta',
+    agents: 1,
+    transport: 'relay',
+    sealKey: 'MCowBQYDK2VuAyEApz6yO0AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab',
+    address: `https://cookrew.dev/@${OWNER}/beta`,
     access: 'paid',
     priceUsd: '1',
     rails: ['stripe']
@@ -299,13 +321,18 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
   await new Promise<void>((resolve) => plane.listen(0, '127.0.0.1', resolve))
   planeOrigin = `http://127.0.0.1:${(plane.address() as AddressInfo).port}`
 
-  const appOn = (accounts: Accounts | null, options: { usdc?: string } = {}): AppOn => {
+  const appOn = (
+    who: Accounts | null | (() => Accounts | null),
+    options: { usdc?: string; now?: () => number } = {}
+  ): AppOn => {
     const minted: unknown[] = []
     const signed: unknown[] = []
+    const current = (): Accounts | null => (typeof who === 'function' ? who() : who)
     const spied: AccountForDoors = {
-      account: () => accounts?.account() ?? null,
+      account: () => current()?.account() ?? null,
       authedResponse: async (pathname, init) => {
         if (pathname.endsWith('/call-token')) minted.push(init?.body === undefined ? undefined : JSON.parse(init.body))
+        const accounts = current()
         if (accounts === null) return { ok: false, reason: 'no_account' }
         return accounts.authedResponse(pathname, init)
       }
@@ -316,6 +343,7 @@ export async function startPaidDoorWorld(): Promise<PaidDoorWorld> {
       reachable: async (target) =>
         target.door ? { at: { origin: planeOrigin, slug: target.door, door: target.door }, listed: true, live: true } : null,
       accounts: spied,
+      ...(options.now ? { now: options.now } : {}),
       signInWithKey: () => Promise.reject(new Error('a listed door is never entered with a key')),
       wallet: () => (usdc === undefined ? null : { address: WALLET }),
       buildX402Payment: (requirements) => {

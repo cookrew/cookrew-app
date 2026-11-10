@@ -1,4 +1,4 @@
-import { gateDoorFor } from '../shared/gate-walk'
+import { gateDoorFor, type GateDoor } from '../shared/gate-walk'
 import { MKT_PAY } from '../shared/marketplace-copy'
 import { isStripeCheckoutUrl } from '../shared/stripe-checkout'
 import { withPaidBearer } from './door-bearer'
@@ -55,6 +55,8 @@ export interface ServeGateDeps {
   /** The wallet this device would sign a USDC payment with, or null. */
   wallet(): { address: string } | null
   buildX402Payment(requirements: PaymentRequirements): Promise<string>
+  /** This Mac's clock. Injected so a test does not wait ten minutes for a stand-in to end. */
+  now?(): number
 }
 
 export type ServeGate = ReturnType<typeof createServeGate>
@@ -118,16 +120,59 @@ function targetKey(target: ServeTarget): string {
   return target.door ?? `${target.origin}/${target.slug}`
 }
 
+/**
+ * How long the Bearer a seat was bought on may stand in for the card: the
+ * life of a call token. A seat's owner can END it, and the registry stops
+ * minting from that moment; a stand-in must not outlive what an ordinary
+ * sign-in would have been good for.
+ */
+export const STAND_IN_TTL_MS = 10 * 60 * 1000
+
+/** What the gate holds for one person at one door, while an import is decided. */
+interface Held {
+  /** The door's Bearer for this person. */
+  token: string
+  /** Which walk it was got on — a seat can only follow the INSTALL walk. */
+  walk: GateDoor
+  /** The wallet terms the pay step showed, or null when it showed none. */
+  shown: PaymentRequirements | null
+}
+
 export function createServeGate(deps: ServeGateDeps) {
-  /**
-   * Bearers held for doors this app has signed in to, while an import is being
-   * decided. Keyed by `targetKey`; a token outlives the sheet only until the
-   * app quits (they expire on their own at the door).
-   */
-  const callerTokens = new Map<string, string>()
+  const now = (): number => deps.now?.() ?? Date.now()
 
   /**
-   * THE BEARER A SEAT WAS BOUGHT ON, by listed team, until cookrew.dev knows.
+   * WHO IS AT THIS MAC, as half of every key below.
+   *
+   * Everything this gate remembers is a credential or a promise about money,
+   * and a Mac changes hands: A signs out, B signs in. Keyed by door alone,
+   * B's sheet would pay on A's Bearer and B's card would open as A. So each
+   * entry is filed under the account that was signed in when it was stored
+   * and looked up under the account signed in NOW — a different person finds
+   * nothing, whether or not anybody remembered to call `forget`.
+   */
+  const who = (): string => deps.accounts.account()?.username ?? ''
+  /** Who was here the last time anybody looked — what `accountChanged` compares with. */
+  let seenAs = who()
+  const fileKey = (account: string, door: string): string => `${account}\n${door}`
+
+  /**
+   * Bearers held for doors this app has signed in to, with the walk they were
+   * got on and the terms that walk showed. An entry outlives the sheet only
+   * until the app quits or the account changes (the Bearer expires on its own
+   * at the door).
+   *
+   * THE WALLET TERMS ARE HERE BECAUSE THE PRESS RE-ASKS. The x402 rail has to
+   * ask for a quote again when PAY is pressed (a quote expires), and what
+   * comes back is the DOOR's word a second time: 1 USDC on the sheet and 1000
+   * at the press is one hostile line of code. The press signs only a quote
+   * that matches what was shown in every signed field (`sameSignedTerms`).
+   */
+  const held = new Map<string, Held>()
+
+  /**
+   * THE BEARER A SEAT WAS BOUGHT ON, by account and listed team, until
+   * cookrew.dev knows — and for ten minutes at most.
    *
    * The door takes the money and admits the buyer at once; its report to
    * cookrew.dev is a queue that runs AFTER (seat-settle.ts — a slow registry
@@ -135,37 +180,30 @@ export function createServeGate(deps: ServeGateDeps) {
    * an ordinary mint, and until that report lands the registry still answers
    * no_seat: a person who just paid would be handed a card that says it was
    * refused. So the Bearer the door itself admitted is kept for exactly that
-   * gap — offered only when the registry says no_seat, and dropped the first
-   * time an ordinary sign-in succeeds. It is the door's own credential for
-   * this account; nothing here mints, extends or widens one.
+   * gap — offered only when the registry's mint says no_seat, to the same
+   * account at the same team, and dropped the first time an ordinary sign-in
+   * succeeds. It is the door's own credential for this account; nothing here
+   * mints, extends or widens one.
    */
-  const boughtBearers = new Map<string, string>()
+  const standIns = new Map<string, { token: string; at: number }>()
 
-  /**
-   * THE WALLET TERMS THE PAY STEP SHOWED, by door — or null when it showed
-   * none. The x402 rail has to ask for a quote again at the press (a quote
-   * expires), and what comes back is the DOOR's word a second time: 1 USDC on
-   * the sheet and 1000 at the press is one hostile line of code. So the terms
-   * the person actually looked at are kept here, in main, and the press signs
-   * only a quote that matches them in every signed field (`sameSignedTerms`).
-   */
-  const shownTerms = new Map<string, PaymentRequirements | null>()
-
-  /** Keep what a `pay` phase showed; any other answer shows no terms at all. */
-  const show = (target: ServeTarget, phase: AdmissionPhase): AdmissionPhase => {
-    const key = targetKey(target)
-    if (phase.kind !== 'pay') {
-      shownTerms.delete(key)
-      return phase
-    }
+  /** What a `pay` phase showed for the wallet rail; any other answer shows nothing. */
+  const shownBy = (phase: AdmissionPhase): PaymentRequirements | null => {
+    if (phase.kind !== 'pay') return null
     const wallet = phase.rails.find((entry) => entry.rail === 'x402')
-    shownTerms.set(key, wallet?.rail === 'x402' ? wallet.requirements : null)
-    return phase
+    return wallet?.rail === 'x402' ? wallet.requirements : null
   }
 
-  /** The door opened a line on this Bearer: at a listed team, the card may need it. */
-  const remember = (target: ServeTarget, token: string, phase: AdmissionPhase): AdmissionPhase => {
-    if (phase.kind === 'open' && typeof target.door === 'string') boughtBearers.set(target.door, token)
+  /**
+   * The door opened a line on this Bearer. On the install walk — a listed
+   * team, where a seat exists to be reported — the card may need it for the
+   * moment before cookrew.dev records the seat. An unlisted door seats nobody:
+   * the Bearer there belongs to this Mac's key, never to an account.
+   */
+  const remember = (key: string, entry: Held, phase: AdmissionPhase): AdmissionPhase => {
+    if (phase.kind === 'open' && entry.walk === 'install') {
+      standIns.set(key, { token: entry.token, at: now() })
+    }
     return phase
   }
 
@@ -174,6 +212,7 @@ export function createServeGate(deps: ServeGateDeps) {
     gate: async (link: string, intent?: 'buy') => {
       const target = deps.parse(link)
       if (!target) return { ok: false as const, reason: 'bad-address' as const }
+      const key = fileKey(who(), targetKey(target))
       try {
         const reached = await deps.reachable(target)
         if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
@@ -183,23 +222,24 @@ export function createServeGate(deps: ServeGateDeps) {
           // No registry seats anybody at an unlisted door, so there is nothing
           // to buy before its 402: the intent is not read on this walk.
           const token = await deps.signInWithKey(at)
-          callerTokens.set(targetKey(target), token)
-          const phase = show(target, await openAdmission(at, token))
+          const phase = await openAdmission(at, token)
+          held.set(key, { token, walk: door, shown: shownBy(phase) })
           return { ok: true as const, door, phase, wallet: deps.wallet() }
         }
         const team = target.door as string
         const admitted = await admitWithAccount(at, team, deps.accounts, intent === 'buy' ? { intent } : {})
         if (admitted.token !== null) {
-          callerTokens.set(targetKey(target), admitted.token)
+          const entry: Held = { token: admitted.token, walk: door, shown: shownBy(admitted.phase) }
+          held.set(key, entry)
           // Admitted with no payment on a token that carried no seat: the door
           // itself says this account already paid here (a purchase cookrew.dev
           // has not recorded yet). The card that follows opens the same way.
-          if (intent === 'buy') remember(target, admitted.token, admitted.phase)
+          if (intent === 'buy') remember(key, entry, admitted.phase)
         }
         return {
           ok: true as const,
           door,
-          phase: show(target, admitted.phase),
+          phase: admitted.phase,
           wallet: deps.wallet(),
           // The facts the sheet's sentences name: the team, who can say yes,
           // and who this Mac is (the usual cause of a no_seat is being signed
@@ -220,12 +260,12 @@ export function createServeGate(deps: ServeGateDeps) {
 
     checkout: async (link: string) => {
       const target = deps.parse(link)
-      const token = target ? callerTokens.get(targetKey(target)) : undefined
-      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+      const entry = target ? held.get(fileKey(who(), targetKey(target))) : undefined
+      if (!target || !entry) return { ok: false as const, reason: 'not-signed-in' as const }
       try {
         const reached = await deps.reachable(target)
         if (!reached) return { ok: false as const, reason: 'unavailable' as const }
-        const checkout = await startStripeCheckout(reached.at, token)
+        const checkout = await startStripeCheckout(reached.at, entry.token)
         // The URL comes back too: a hand-off that silently failed to raise a
         // browser would otherwise leave the person waiting on a page they never
         // saw, with no way to reach it. It is a capability — the sheet keeps it
@@ -242,8 +282,10 @@ export function createServeGate(deps: ServeGateDeps) {
 
     settle: async (link: string, rail: 'x402' | 'stripe', session?: string) => {
       const target = deps.parse(link)
-      const token = target ? callerTokens.get(targetKey(target)) : undefined
-      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
+      const key = target ? fileKey(who(), targetKey(target)) : ''
+      const entry = target ? held.get(key) : undefined
+      if (!target || !entry) return { ok: false as const, reason: 'not-signed-in' as const }
+      const { token } = entry
       try {
         const reached = await deps.reachable(target)
         if (!reached) return { ok: false as const, reason: 'refused' as const }
@@ -255,16 +297,15 @@ export function createServeGate(deps: ServeGateDeps) {
         } else {
           const quoted = await openAdmission(at, token)
           const terms =
-            quoted.kind === 'pay' ? quoted.rails.find((entry) => entry.rail === 'x402') : undefined
+            quoted.kind === 'pay' ? quoted.rails.find((item) => item.rail === 'x402') : undefined
           if (!terms || terms.rail !== 'x402') {
             // Already open, or this door stopped quoting USDC. Either way there
             // is nothing to sign, and signing a stale quote is money gone.
-            return { ok: true as const, phase: remember(target, token, quoted) }
+            return { ok: true as const, phase: remember(key, entry, quoted) }
           }
           // SIGN WHAT WAS SHOWN, OR NOTHING. This quote is fresh from the door;
           // the one the person approved is the one the pay step was built from.
-          const shown = shownTerms.get(targetKey(target)) ?? null
-          if (shown === null || !sameSignedTerms(shown, terms.requirements)) {
+          if (entry.shown === null || !sameSignedTerms(entry.shown, terms.requirements)) {
             return {
               ok: false as const,
               reason: 'terms-changed' as const,
@@ -275,7 +316,7 @@ export function createServeGate(deps: ServeGateDeps) {
         }
         return {
           ok: true as const,
-          phase: remember(target, token, await openAdmission(at, token, payment))
+          phase: remember(key, entry, await openAdmission(at, token, payment))
         }
       } catch (error) {
         return {
@@ -289,17 +330,40 @@ export function createServeGate(deps: ServeGateDeps) {
     /**
      * THE CARD'S SIGN-IN at a listed door — and its transcript reads and END,
      * which are the same caller (door-bearer.ts). An ordinary mint, always:
-     * the card never says BUY. Only when cookrew.dev answers no_seat for a
-     * team this Mac just paid at does the Bearer the door admitted stand in.
+     * the card never says BUY. Only when cookrew.dev's own mint answers
+     * no_seat, for a team THIS account paid at in the last ten minutes, does
+     * the Bearer the door admitted stand in.
      */
     admitCard: async (target: ServeTargetRef, team: string): Promise<AccountAdmission> => {
+      const key = fileKey(who(), team)
       const admitted = await admitWithAccount(target, team, deps.accounts)
-      if (admitted.token !== null) {
-        // cookrew.dev has the seat now; the stand-in has done its job.
-        boughtBearers.delete(team)
+      const standIn = standIns.get(key)
+      if (admitted.token !== null || (standIn !== undefined && now() - standIn.at >= STAND_IN_TTL_MS)) {
+        // cookrew.dev has the seat now, or the stand-in has run out its time:
+        // either way it is finished, and gone rather than merely unused.
+        standIns.delete(key)
         return admitted
       }
-      return withPaidBearer(admitted, boughtBearers.get(team) ?? null)
+      return withPaidBearer(admitted, standIn?.token ?? null)
+    },
+
+    /**
+     * SOMETHING ABOUT THE ACCOUNT CHANGED. When it is the PERSON that changed
+     * — signed out, switched — every Bearer, every shown quote and every
+     * stand-in goes: they were one person's, and the keys above only stop the
+     * next person FINDING them.
+     *
+     * When the person is the same, nothing goes. The account announces many
+     * things that are not a change of hands (a device revoked elsewhere, a
+     * session renewed), and a card payment may be in flight: forgetting the
+     * Bearer then would leave a paid Checkout session nobody can present.
+     */
+    accountChanged: (): void => {
+      const as = who()
+      if (as === seenAs) return
+      seenAs = as
+      held.clear()
+      standIns.clear()
     }
   }
 }

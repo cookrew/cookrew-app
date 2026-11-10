@@ -1,11 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import type { Accounts } from '../src/main/account-v2'
 import { doorBearer } from '../src/main/door-bearer'
-import { createServeGate } from '../src/main/serve-gate'
-import type { AdmissionPhase } from '../src/main/served-admission'
+import { STAND_IN_TTL_MS, createServeGate } from '../src/main/serve-gate'
+import { signInToDoor, type AdmissionPhase } from '../src/main/served-admission'
 import {
   BAD_USDC,
   DOOR,
   GOOD_USDC,
+  OTHER_DOOR,
   OWNER,
   PAID,
   TEAM,
@@ -48,12 +53,22 @@ type Gated = {
 }
 
 /** The placed card's sign-in — and its transcript reads and END, which are the same caller. */
-const cardSignIn = (app: AppOn): Promise<string> =>
+const cardSignIn = (app: AppOn, door = DOOR): Promise<string> =>
   doorBearer(
     { admit: (target, team) => app.ops.admitCard(target, team), withKey: () => Promise.reject(new Error('no key')) },
-    { origin: world.planeOrigin, slug: DOOR },
-    DOOR
+    { origin: world.planeOrigin, slug: door },
+    door
   )
+
+/** Buy a seat by card as whoever `app` is, with the door's report to cookrew.dev held back. */
+async function buyWithReportHeld(app: AppOn): Promise<() => void> {
+  expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
+  world.checkoutNext(PAID)
+  await app.ops.checkout(DOOR)
+  const release = world.holdReports()
+  expect(await app.ops.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' } })
+  return release
+}
 
 beforeAll(async () => {
   world = await startPaidDoorWorld()
@@ -166,6 +181,121 @@ describe('buying a seat at a listed paid team, in the app', () => {
     expect(((await app.ops.gate(DOOR, 'buy')) as Gated).phase.kind).toBe('pay')
     // The gate holds a Bearer for the pay sheet; the card may not borrow it.
     await expect(cardSignIn(app)).rejects.toThrow(`${DOOR} did not admit this account (denied)`)
+  }, SLOW)
+})
+
+describe('what a purchase leaves in memory belongs to one account at one team (M1, L1–L3)', () => {
+  /**
+   * The gate keeps three things per purchase: the Bearer it pays on, the
+   * wallet terms it showed, and — for the gap before cookrew.dev records the
+   * seat — the Bearer the door admitted the purchase on. Each is a credential
+   * or a promise about money, and a Mac changes hands: A signs out, B signs
+   * in. None of them may follow the Mac instead of the person.
+   */
+  it('A buys, B signs in on the same Mac: B’s card is refused and never handed A’s Bearer', async () => {
+    const a = await world.registeredMachine('m1-a', 'm1a')
+    const b = await world.registeredMachine('m1-b', 'm1b')
+    let signedIn: Accounts | null = a.accounts
+    const app = world.appOn(() => signedIn)
+    const release = await buyWithReportHeld(app)
+    try {
+      const mine = await cardSignIn(app)
+
+      // ── the Mac changes hands, and nothing told the gate (the key alone must hold) ──
+      signedIn = b.accounts
+      await expect(cardSignIn(app)).rejects.toThrow(`${DOOR} did not admit this account (denied)`)
+      // B cannot pay on A's Bearer or present on it either.
+      expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: false, reason: 'not-signed-in' })
+      expect(await app.ops.settle(DOOR, 'stripe', PAID)).toMatchObject({ ok: false, reason: 'not-signed-in' })
+      expect(world.openedBy.filter((sub) => sub === 'acct-m1b')).toEqual([])
+
+      // ── A is back: the purchase is still A's ──
+      signedIn = a.accounts
+      expect(await cardSignIn(app)).toBe(mine)
+
+      // ── an account EVENT that is not a change of person forgets nothing: a
+      //    payment in flight must not be stranded by a password prompt ──
+      app.ops.accountChanged()
+      expect(await cardSignIn(app)).toBe(mine)
+      expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: true, session: PAID })
+
+      // ── a change of person that IS announced forgets everything at once,
+      //    and coming back does not bring it home ──
+      signedIn = b.accounts
+      app.ops.accountChanged()
+      signedIn = a.accounts
+      app.ops.accountChanged()
+      await expect(cardSignIn(app)).rejects.toThrow('did not admit this account (denied)')
+      expect(await app.ops.checkout(DOOR)).toMatchObject({ ok: false, reason: 'not-signed-in' })
+    } finally {
+      release()
+      await world.lastReport()
+    }
+  }, SLOW)
+
+  it('a purchase at one team stands in at that team only', async () => {
+    const guest = await world.registeredMachine('m1-team', 'm1team')
+    const app = world.appOn(guest.accounts)
+    const release = await buyWithReportHeld(app)
+    try {
+      await expect(cardSignIn(app, OTHER_DOOR)).rejects.toThrow(`${OTHER_DOOR} did not admit this account (denied)`)
+      await expect(cardSignIn(app)).resolves.toEqual(expect.any(String))
+    } finally {
+      release()
+      await world.lastReport()
+    }
+  }, SLOW)
+
+  it('the stand-in lasts as long as a call token and no longer (L1)', async () => {
+    const guest = await world.registeredMachine('m1-ttl', 'm1ttl')
+    let clock = 1_700_000_000_000
+    const app = world.appOn(guest.accounts, { now: () => clock })
+    const release = await buyWithReportHeld(app)
+    try {
+      expect(STAND_IN_TTL_MS).toBe(10 * 60 * 1000)
+      clock += STAND_IN_TTL_MS - 1
+      await expect(cardSignIn(app)).resolves.toEqual(expect.any(String))
+      clock += 1
+      await expect(cardSignIn(app)).rejects.toThrow('did not admit this account (denied)')
+      // Gone for good, not merely hidden: winding the clock back does not bring it home.
+      clock -= STAND_IN_TTL_MS
+      await expect(cardSignIn(app)).rejects.toThrow('did not admit this account (denied)')
+    } finally {
+      release()
+      await world.lastReport()
+    }
+  }, SLOW)
+
+  it('an UNLISTED door is never remembered: a purchase with this Mac’s key stands in for no account (L3)', async () => {
+    const guest = await world.registeredMachine('m1-direct', 'm1direct')
+    const keys = mkdtempSync(path.join(tmpdir(), 'buy-direct-key-'))
+    try {
+      // The same door, DIALLED: the directory does not list what was typed, so
+      // the walk is the key's. Its name is carried only to prove it is not used.
+      const direct = createServeGate({
+        parse: () => ({ origin: world.planeOrigin, slug: DOOR, door: DOOR }),
+        reachable: async (target) => ({ at: target, listed: false, live: true }),
+        accounts: guest.accounts,
+        signInWithKey: (at) =>
+          signInToDoor(at, { sub: 'm1keyholder', candidates: () => [path.join(keys, 'k.json')], canonical: () => path.join(keys, 'k.json') }),
+        wallet: () => null,
+        buildX402Payment: () => Promise.reject(new Error('no wallet'))
+      })
+      expect(await direct.gate(DOOR)).toMatchObject({ ok: true, door: 'direct', phase: { kind: 'pay' } })
+      world.checkoutNext(PAID)
+      await direct.checkout(DOOR)
+      expect(await direct.settle(DOOR, 'stripe', PAID)).toEqual({ ok: true, phase: { kind: 'open' } })
+      // The key-holder paid. The ACCOUNT on this Mac holds no seat, and gets no Bearer.
+      await expect(
+        doorBearer(
+          { admit: (target, team) => direct.admitCard(target, team), withKey: () => Promise.reject(new Error('no key')) },
+          { origin: world.planeOrigin, slug: DOOR },
+          DOOR
+        )
+      ).rejects.toThrow('did not admit this account (denied)')
+    } finally {
+      rmSync(keys, { recursive: true, force: true })
+    }
   }, SLOW)
 })
 
