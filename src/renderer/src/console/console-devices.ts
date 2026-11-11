@@ -18,6 +18,7 @@
  * this browser in its own words.
  */
 import { MIN_MACHINE_VERSION, machineOutdated } from '../../../shared/machine-version'
+import { signedOutWords } from '../../../shared/machine-words'
 import type { AccountMachine, AccountMachines } from '../../../shared/zoom-fleet'
 import type { FleetSnapshot } from '../../../shared/fleet'
 import { composeFleet, snapshotOf, type ZoomCounts } from '../zoom/fleet-compose'
@@ -110,7 +111,8 @@ const outdated = machineOutdated
 
 /** Where one machine stands, and what it says about itself when it cannot be read. */
 export function standingOf(row: AccountMachine, at: { open: boolean; read: boolean; block: MachineBlock | null }): { standing: MachineStanding; say: string | null } {
-  if (!row.online) return { standing: 'offline', say: DEVICES_COPY.offline(row.name) }
+  // Signed out is not off (owner 2026-11-11): the registry says which, and each asks for a different thing.
+  if (!row.online) return { standing: 'offline', say: row.signedIn === false ? signedOutWords(row.name, row.profile?.os) : DEVICES_COPY.offline(row.name) }
   if (outdated(row.appVersion)) return { standing: 'outdated', say: DEVICES_COPY.outdated(row.name) }
   if (!at.open) return { standing: 'locked', say: null }
   if (at.read) return { standing: 'live', say: null }

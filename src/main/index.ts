@@ -161,6 +161,7 @@ import { OwnerGrant, isOwnerPage, isOwnerSender } from './owner-grant'
 import { Accounts, DEFAULT_LOCK_AFTER_MS, registryOrigin, signWithDevice } from './account-v2'
 import { consoleOrigin } from './registry-origin'
 import { createMachineKeyStore, createRefusedMachines, enterMachines } from './machine-keys'
+import { createMachineTrust } from './machine-trust-state'
 import { parseAccountMachines } from '../shared/zoom-fleet'
 import { GRANT_PATHS } from '../shared/account-pair'
 import { relayHandle } from './legacy-identity'
@@ -1058,6 +1059,8 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
  * before the rest of this file has been evaluated.
  */
 let gateAccountChanged: (() => void) | null = null
+/** Set once the trust state exists, further down: the account's change listener is declared before it. */
+let machineTrustLearn: (() => Promise<unknown>) | null = null
 const accounts = new Accounts({
   // "<model> · <host>" (v3, D12): two Macs of one model are told apart by
   // host, and a name already on the account gets a counter — decided here,
@@ -1078,6 +1081,8 @@ const accounts = new Accounts({
     // A different person at this Mac must find none of the last one's door
     // Bearers, shown quotes or bought-seat stand-ins (serve-gate.ts).
     gateAccountChanged?.()
+    // A sign-in is when the registry decides whether this machine is trusted: asked now, not at the next key round.
+    void machineTrustLearn?.()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:changed')
     }
@@ -1357,9 +1362,41 @@ async function trustThisMachine(password: string): Promise<void> {
   if (existsSync(MACHINE_TRUSTED_FILE)) return
   const answer = await accounts.authed<{ grant?: unknown }>(GRANT_PATHS.machine, { method: 'POST', body: JSON.stringify({ password }) })
   if (!answer.ok) return
-  writeFileSync(MACHINE_TRUSTED_FILE, `${new Date().toISOString()}\n`, { mode: 0o600 })
+  machineTrust.heard(201)
   void collectMachineKeys().catch(() => undefined)
 }
+
+/** The machine grant asked with no proof in it: what the registry answered, read once. */
+async function askMachineGrant(): Promise<{ status: number; error?: string; grant?: string } | null> {
+  const sent = await accounts.authedResponse(GRANT_PATHS.machine, { method: 'POST', body: '{}' })
+  if (!sent.ok) return null
+  const body = (await sent.response.json().catch(() => null)) as { grant?: unknown; error?: unknown } | null
+  return {
+    status: sent.response.status,
+    ...(typeof body?.error === 'string' ? { error: body.error } : {}),
+    ...(typeof body?.grant === 'string' ? { grant: body.grant } : {})
+  }
+}
+
+/**
+ * WHAT THIS MACHINE KNOWS OF ITS OWN STANDING (machine-trust-state.ts): asked
+ * of the registry once per sign-in, whoever else is online. "Not asked" is not
+ * "not trusted", and the zoom view says nothing until it knows.
+ */
+const machineTrust = createMachineTrust({
+  marker: {
+    exists: () => existsSync(MACHINE_TRUSTED_FILE),
+    write: () => writeFileSync(MACHINE_TRUSTED_FILE, `${new Date().toISOString()}\n`, { mode: 0o600 }),
+    remove: () => rmSync(MACHINE_TRUSTED_FILE, { force: true })
+  },
+  ask: askMachineGrant,
+  // The sign-in, by who and until when: another account, or this one signed in again, is another question.
+  who: () => {
+    const account = accounts.account()
+    return account?.session ? `${account.username}|${account.deviceId}|${account.session.exp}` : null
+  }
+})
+machineTrustLearn = () => machineTrust.learn()
 
 async function collectMachineKeys(): Promise<void> {
   await enterMachines({
@@ -1373,17 +1410,14 @@ async function collectMachineKeys(): Promise<void> {
       return (parseAccountMachines(answer.value, accounts.account()?.deviceId ?? null) ?? []).map((m) => ({ id: m.id, name: m.name, online: m.online }))
     },
     grant: async () => {
-      // Asked every round: a desktop signed in with a proof on it is trusted from that sign-in, with nothing to do here.
-      const sent = await accounts.authedResponse(GRANT_PATHS.machine, { method: 'POST', body: '{}' })
-      if (!sent.ok) return null
-      const body = (await sent.response.json().catch(() => null)) as { grant?: unknown; error?: unknown } | null
-      if (sent.response.status === 201 && typeof body?.grant === 'string') {
-        if (!existsSync(MACHINE_TRUSTED_FILE)) writeFileSync(MACHINE_TRUSTED_FILE, `${new Date().toISOString()}\n`, { mode: 0o600 })
-        return body.grant
-      }
-      // Not proved here (signed in before machines trusted each other, or by a code): the zoom view offers the one proof.
-      if (sent.response.status === 401 && body?.error === 'proof_required') rmSync(MACHINE_TRUSTED_FILE, { force: true })
-      return null
+      // Asked every round there is a machine to enter: a desktop signed in with a proof on it is trusted from that
+      // sign-in, with nothing to do here. Whatever is answered is also what this machine knows of its standing.
+      const answer = await askMachineGrant()
+      if (answer === null) return null
+      // A 201 with no grant in it is no verdict.
+      if (answer.status !== 201 || answer.grant !== undefined) machineTrust.heard(answer.status, answer.error)
+      // Not proved here (signed in by a provider alone, or by a code): the zoom view offers the one proof.
+      return answer.status === 201 ? (answer.grant ?? null) : null
     },
     relay: async (desktopId, route, body) => {
       const sent = await accounts.relayed(desktopId, route, { method: 'POST', body: JSON.stringify(body) })
@@ -1450,8 +1484,11 @@ async function proveThisMachine(): Promise<boolean> {
   // would not be, and the direct provider path refuses an account with a second step (security review).
   const signedIn = await accounts.browserResume()
   if (!signedIn.ok || ownerLock.locked) return false
+  // Asked for itself, now: the key round asks only while another machine is online and unentered, so a proof
+  // given with none in reach used to come back "try again".
+  const standing = await machineTrust.learn({ now: true })
   await collectMachineKeys().catch(() => undefined)
-  return existsSync(MACHINE_TRUSTED_FILE)
+  return standing === 'trusted'
 }
 
 setTimeout(() => {
@@ -9134,7 +9171,11 @@ function registerIpc(handlers: RestoreHandlers): void {
   ipcMain.handle('zoom-fleet:call', ownerOnly((machineId: unknown, method: unknown, route: unknown, body: unknown) =>
     ownerLock.locked ? NO_ANSWER : callMachine({ callOf: callAccountMachine }, machineId, method, route, body)
   ))
-  ipcMain.handle('zoom-fleet:trust-state', ownerOnly(() => ({ trusted: existsSync(MACHINE_TRUSTED_FILE) })))
+  // Null while the registry has not answered for this sign-in: the view says nothing about a thing nobody asked.
+  ipcMain.handle('zoom-fleet:trust-state', ownerOnly(async () => {
+    const standing = await machineTrust.learn()
+    return standing === 'unknown' ? null : { trusted: standing === 'trusted' }
+  }))
   ipcMain.handle('zoom-fleet:trust-prove', ownerOnly(() => proveThisMachine()))
   ipcMain.handle('agent:recover', (_e, id: string) => recoverAgent(id))
   // Endpoint restore channels live alongside the executor (M10).

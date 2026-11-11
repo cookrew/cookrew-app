@@ -827,7 +827,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       {error && <div role="alert" className="zv-error">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
       {/* This machine's one proof, at the foot of the devices stop and outside the camera: inside it the
           button lay under this machine's own frame, where it could be neither seen nor pressed. */}
-      {whyShows && <div className="zv-trust-bar"><MachineTrustRow others={model.machines.filter((m) => !m.local).length} trust={trust} /></div>}
+      {whyShows && <div className="zv-trust-bar"><MachineTrustRow machines={model.machines} trust={trust} /></div>}
       {!error && why && whyShows && <div role="status" className="zv-error">{why}<button type="button" onClick={() => setWhy(null)} aria-label="Dismiss">×</button></div>}
     </div>
   )

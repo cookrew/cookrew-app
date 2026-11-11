@@ -61,6 +61,12 @@ export interface FleetMachine {
   /** Null for a desktop older than the probe: drawn as `unknown`. */
   profile: MachineProfile | null
   /**
+   * Is anybody signed in on it, as the registry knows (v2-fleet.ts · desktopSignedIn). False for a
+   * machine that holds no line because it is signed out, which is not a machine that is off. Absent
+   * from a registry older than 0.6.1: nothing is claimed either way.
+   */
+  signedIn?: boolean
+  /**
    * Where this desktop's API is reached down the relay, on the API host: '/api/m/<deviceId>' (machine-relay.ts).
    * The registry admits the account session, sent in its own header; the desktop admits its own pairing
    * token, which this browser keeps as localStorage 'cr_token:<deviceId>' (absent

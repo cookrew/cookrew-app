@@ -165,8 +165,8 @@ describe('another machine of the account, on the devices stop', () => {
 
   it('one that cannot be read says the one thing to do, and never “listed only” or a zero it does not know', () => {
     const unread: MachineView = { ...live, detail: 'listed', agents: null, waiting: null }
-    const html = renderToStaticMarkup(<MachineNode machine={unread} say="Sign this Mac in again, below, to read it." bind={bind} onOpen={() => undefined} />)
-    expect(html).toContain('Sign this Mac in again, below, to read it.')
+    const html = renderToStaticMarkup(<MachineNode machine={unread} say="Prove it’s you on this Mac, below, to read it." bind={bind} onOpen={() => undefined} />)
+    expect(html).toContain('Prove it’s you on this Mac, below, to read it.')
     expect(html).not.toContain('listed only')
     expect(html).not.toContain('0 agents')
     expect(html).not.toContain('listed')

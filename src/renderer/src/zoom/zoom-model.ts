@@ -96,6 +96,8 @@ export interface MachineView {
   detail: 'live' | 'connecting' | 'listed'
   /** The build it runs, as the account's list says; null when unknown. What the console's floor is judged by (machine-why.ts). */
   appVersion?: string | null
+  /** False when the registry says nobody is signed in on it: signed out, not off (machine-why.ts). */
+  signedIn?: boolean
   /** Its platform as its profile says it; null or absent when it publishes none. */
   os?: string | null
   workspaces: { id: string; name: string; presets: string[]; waiting: boolean }[]
@@ -199,6 +201,8 @@ export interface ZoomInput {
     detail: 'live' | 'connecting' | 'listed'
     /** The build it runs, when the fleet says. */
     appVersion?: string | null
+    /** False when the registry says nobody is signed in on it. */
+    signedIn?: boolean
     /** Its platform (darwin, win32, linux…): what to call it. */
     os?: string | null
     /** Its display in points, as its own feed tells it: the screen it is drawn with. */
@@ -358,6 +362,7 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       online: m.online,
       detail: m.detail,
       appVersion: m.appVersion ?? null,
+      ...(m.signedIn === undefined ? {} : { signedIn: m.signedIn }),
       os: m.os ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, presets: w.agents.map((a) => a.harness), waiting: w.agents.some((a) => a.phase === 'waiting') })),
       agents: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.agents ?? 0), 0) : null,
