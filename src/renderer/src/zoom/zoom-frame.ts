@@ -9,7 +9,7 @@
  * device IS its group, and the device view IS the machine's screen.
  */
 import { clamp01, derive, ease, lerp, ramp, type ZoomDir } from './zoom-path'
-import { crewOf, deviceOf, fitScale, machinesAt, MACHINE_CARD, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
+import { BEZEL, crewOf, deviceOf, fitScale, machinesAt, SCREEN_SCALE, shelfPage, stackOf, thumbsOf, DECK_POSE, SHELF_FACE, type Box, type Pos, NEW_POSE } from './zoom-layout'
 import { near, pinned, SCENE_CSS, SCENE_TYPE, sceneWords, SHELF_NAME_S, UNDER_FACE, type RestScales, type SceneWords } from './scene-words'
 import { fullPoses } from './full-poses'
 /* The cameras, the card stop's label and the words' scales: zoom-camera.ts. */
@@ -209,7 +209,7 @@ const COIN_PX = 22
 const BADGE_PX = 8
 
 /** The machine's screen holds the device view at this scale. */
-const SDEV = 0.5
+const SDEV = SCREEN_SCALE
 const WASH = { w: 1200, h: 540 }
 
 
@@ -217,18 +217,16 @@ export function layoutOf(model: FrameModel, narrow: boolean): Layout {
   // A tree under the leads, by the cables between agents (zoom-layout.ts · crewRows).
   const crew = crewOf(model.agents, narrow, model.crewCols, model.ties)
   const device = deviceOf(model.workspaces, narrow, model.screenAspect, model.deviceCols)
-  const screen = { w: device.screen.w * SDEV + 28, h: device.screen.h * SDEV + 28 }
-  const machines = machinesAt(model.otherMachines, device.screen, narrow)
-  // The other machines are part of the devices stop: the camera must frame them too, as wide as they stand.
-  const mBottom = machines.rows ? machines.top + machines.rows * (MACHINE_CARD.h + MACHINE_CARD.rowGap) : -Infinity
-  const half = Math.max(screen.h / 2 + 60, mBottom)
+  const screen = { w: device.screen.w * SDEV + BEZEL, h: device.screen.h * SDEV + BEZEL }
+  // Every machine of the account in one row, this one first: the devices stop frames them all (zoom-layout.ts · machinesAt).
+  const machines = machinesAt(model.otherMachines, screen, narrow)
   return {
     stack: stackOf(model.agents),
     crew,
     cardBox: { ...crew.box, w: crew.box.w + 240, h: crew.box.h + 252, cy: crew.box.cy + 60 },
     thumbs: thumbsOf(model.items, model.agents, narrow),
     device,
-    devicesBox: { w: Math.max(screen.w + 200, machines.rows ? machines.perRow * (MACHINE_CARD.w + MACHINE_CARD.gap) + 200 : 0), h: half * 2 + 200, cy: 40 }
+    devicesBox: machines.box
   }
 }
 
@@ -263,7 +261,8 @@ export function paint(model: FrameModel, L: Layout, els: FrameEls, st: FrameStat
     const camDD = fit(L.devicesBox)
     const s0 = camDD * SDEV
     dS = Math.exp(lerp(Math.log(s0), Math.log(camD), k))
-    dOx = w / 2
+    // The row's centre at the view's, this machine's screen at the view's centre once inside it.
+    dOx = lerp(w / 2 - camDD * L.devicesBox.cx, w / 2, k)
     dOy = lerp(h / 2 - camDD * L.devicesBox.cy - s0 * L.device.box.cy, dc.Oy, k)
     aS = dS * SWS
     aOx = dOx + dS * slot.x

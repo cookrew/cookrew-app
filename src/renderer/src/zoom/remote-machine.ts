@@ -233,6 +233,18 @@ export interface Crumb {
   readonly remote: boolean
 }
 
+/** A workspace's browsers and notes on that machine, each once, under the first agent that wears it. */
+export function artifactsOf(cards: readonly RemoteCard[]): { item: RemoteItem; card: RemoteCard }[] {
+  const seen = new Set<string>()
+  return cards.flatMap((card) =>
+    card.items.flatMap((item) => {
+      if (seen.has(item.id)) return []
+      seen.add(item.id)
+      return [{ item, card }]
+    })
+  )
+}
+
 /** The breadcrumb: Devices, then the machine, then each stop inside it. */
 export function crumbsOf(
   machine: { readonly name: string },

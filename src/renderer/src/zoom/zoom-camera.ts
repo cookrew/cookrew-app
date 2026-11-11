@@ -18,7 +18,7 @@ export interface Layout {
   cardBox: Box
   thumbs: ReturnType<typeof thumbsOf>
   device: ReturnType<typeof deviceOf>
-  devicesBox: Box
+  devicesBox: Box & { cx: number }
 }
 
 /** The scene's framing box at agent zoom z: the group, the crew, the card's room. */

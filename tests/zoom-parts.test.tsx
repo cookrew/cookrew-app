@@ -5,7 +5,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AgentNode, ItemNode, LinkNode, MachineNode, type Bind } from '../src/renderer/src/zoom/ZoomParts'
+import { AgentNode, ItemNode, LinkNode, type Bind } from '../src/renderer/src/zoom/ZoomParts'
+import { MachineFrame } from '../src/renderer/src/zoom/MachineFrame'
 import type { AgentView, ItemView, MachineView, MarkView } from '../src/renderer/src/zoom/zoom-model'
 
 const bind: Bind = () => () => undefined
@@ -143,42 +144,43 @@ describe('a link and an item', () => {
 
 // A workspace's tile: zoom-workspace-tile.test.tsx.
 describe('another machine of the account, on the devices stop', () => {
-  const live: MachineView = { id: 'm2', name: 'Mac mini', local: false, online: true, detail: 'live', workspaces: [{ id: 'z', name: 'Home lab', presets: [], waiting: true }], agents: 3, waiting: 1 }
+  const tile: MarkView = { id: 'z', name: 'Home lab', presets: ['claude', 'codex'], waiting: true, waitingCount: 1, browsers: 2, notes: 1, deck: [] }
+  const live: MachineView = { id: 'm2', name: 'Mac mini', local: false, online: true, detail: 'live', workspaces: [{ id: 'z', name: 'Home lab', presets: [], waiting: true }], marks: [tile], agents: 3, waiting: 1 }
+  const draw = (machine: MachineView, say: string | null, caption = '1 workspace · 3 agents · 1 waiting'): string =>
+    renderToStaticMarkup(<MachineFrame machine={machine} frame={{ w: 520, h: 330 }} narrow={false} wordK={1.2} titleK={1.4} say={say} caption={caption} gauge={null} bind={bind} onOpen={() => undefined} onOpenWorkspace={() => undefined} />)
 
-  it('is drawn as a machine, the way this one is: a frame, a screen with its workspaces on it, a base, its name under it', () => {
-    const html = renderToStaticMarkup(<MachineNode machine={live} say={null} bind={bind} onOpen={() => undefined} />)
-    expect(html).toContain('zv-machinecard-screen')
-    expect(html).toContain('zv-machinecard-deck')
-    expect(html).toContain('Mac mini')
+  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11, screenshot 5): the same frame as this machine's,
+  // its own workspace tiles on its screen, in the same tile this machine's are drawn with.
+  it('is this machine’s frame, its screen holding its own workspace tiles, its name under it', () => {
+    const html = draw(live, null)
+    expect(html).toContain('zv-machine zv-other')
+    expect(html).toContain('zv-machine-deck')
+    expect(html).toContain('zv-mark')
     expect(html).toContain('Home lab')
+    expect(html).toContain('Mac mini')
     expect(html).toContain('1 workspace · 3 agents · 1 waiting')
     expect(html).toContain('data-read="true"')
+    expect(html).toContain('width:520px')
   })
 
   it('one that is read and has no workspaces is still read: a lit, empty screen, not a dark one with nothing to do', () => {
-    const empty: MachineView = { ...live, workspaces: [], agents: null, waiting: null }
-    const html = renderToStaticMarkup(<MachineNode machine={empty} say={null} bind={bind} onOpen={() => undefined} />)
+    const html = draw({ ...live, workspaces: [], marks: [], agents: null, waiting: null }, null, '0 workspaces')
     expect(html).toContain('data-read="true"')
     expect(html).toContain('no workspaces')
-    expect(html).toContain('0 workspaces')
   })
 
-  it('one that cannot be read says the one thing to do, and never “listed only” or a zero it does not know', () => {
-    const unread: MachineView = { ...live, detail: 'listed', agents: null, waiting: null }
-    const html = renderToStaticMarkup(<MachineNode machine={unread} say="Prove it’s you on this Mac, below, to read it." bind={bind} onOpen={() => undefined} />)
+  it('one that cannot be read keeps its shape, a blank screen saying the one thing to do, and nothing of it drawn', () => {
+    const html = draw({ ...live, detail: 'listed', agents: null, waiting: null }, 'Prove it’s you on this Mac, below, to read it.', 'Prove it’s you on this Mac, below, to read it.')
     expect(html).toContain('Prove it’s you on this Mac, below, to read it.')
     expect(html).not.toContain('listed only')
-    expect(html).not.toContain('0 agents')
-    expect(html).not.toContain('listed')
-    // Its screen is dark: nothing of it is known to draw, not even what the registry last listed.
     expect(html).toContain('data-read="false"')
     expect(html).not.toContain('Home lab')
+    expect(html).toContain('zv-machine-deck')
   })
 
   it('an offline one is dimmed and says so', () => {
-    const off: MachineView = { ...live, online: false, detail: 'listed', agents: null, waiting: null }
-    const html = renderToStaticMarkup(<MachineNode machine={off} say="Open Cookrew on Mac mini." bind={bind} onOpen={() => undefined} />)
-    expect(html).toContain('zv-machinecard off')
+    const html = draw({ ...live, online: false, detail: 'listed', agents: null, waiting: null }, 'Open Cookrew on Mac mini.', 'Open Cookrew on Mac mini.')
+    expect(html).toContain('zv-other off')
     expect(html).toContain('Open Cookrew on Mac mini.')
   })
 })

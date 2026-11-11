@@ -31,9 +31,16 @@ export interface RemotePlace {
   readonly workspace: { readonly id: string; readonly name: string } | null
   readonly agent: { readonly id: string; readonly name: string } | null
   readonly item: RemoteItemRef | null
+  /** In a workspace: its agents, or its artifacts (the bar's two sides, as on this machine). */
+  readonly side: RemoteSide
 }
 
-const OUTSIDE: RemotePlace = { machine: null, workspace: null, agent: null, item: null }
+export type RemoteSide = 'agents' | 'items'
+
+const OUTSIDE: RemotePlace = { machine: null, workspace: null, agent: null, item: null, side: 'agents' }
+
+/** The workspace in front on that machine, as it last said: where AGENTS and ARTIFACTS go from its workspaces. */
+let front: { readonly id: string; readonly name: string } | null = null
 
 let place: RemotePlace = OUTSIDE
 const listeners = new Set<() => void>()
@@ -48,7 +55,8 @@ const cut = (at: RemotePlace, depth: number): RemotePlace => ({
   machine: depth >= 1 ? at.machine : null,
   workspace: depth >= 2 ? at.workspace : null,
   agent: depth >= 3 ? at.agent : null,
-  item: depth >= 4 ? at.item : null
+  item: depth >= 4 ? at.item : null,
+  side: depth >= 2 ? at.side : 'agents'
 })
 
 const depthOf = (at: RemotePlace): number => (at.item ? 4 : at.agent ? 3 : at.workspace ? 2 : at.machine ? 1 : 0)
@@ -59,9 +67,21 @@ export const remotePlace = {
     listeners.add(listener)
     return () => listeners.delete(listener)
   },
-  enter: (machine: RemoteMachineRef): void => set({ ...OUTSIDE, machine }),
+  enter: (machine: RemoteMachineRef): void => {
+    front = null
+    set({ ...OUTSIDE, machine })
+  },
   workspace: (workspace: { id: string; name: string }): void => {
-    if (place.machine) set({ ...cut(place, 1), workspace })
+    if (place.machine) set({ ...cut(place, 1), workspace, side: 'agents' })
+  },
+  /** The bar's AGENTS or ARTIFACTS: of the workspace stood in, else of the one in front there. */
+  side: (side: RemoteSide): void => {
+    if (place.workspace) set({ ...cut(place, 2), side })
+    else if (place.machine && front) set({ ...cut(place, 1), workspace: front, side })
+  },
+  /** Which workspace is in front on that machine: said by its own tiles (RemoteMachineView.tsx). */
+  noteFront: (workspace: { id: string; name: string } | null): void => {
+    front = workspace
   },
   agent: (agent: { id: string; name: string }): void => {
     if (place.workspace) set({ ...cut(place, 2), agent })
@@ -81,8 +101,17 @@ export const remotePlace = {
     return true
   },
   leave: (): void => {
+    front = null
     if (place !== OUTSIDE) set(OUTSIDE)
   }
+}
+
+/** The bar's stop inside another machine; null outside every machine, where the zoom's own stops are. */
+export function remoteStop(at: RemotePlace): 'workspaces' | RemoteSide | null {
+  if (!at.machine) return null
+  if (!at.workspace) return 'workspaces'
+  // An agent's card is the agents' side; an artifact keeps the side it was opened from.
+  return at.agent && !at.item ? 'agents' : at.side
 }
 
 // "Inside another machine" was said from the machine in scope: from the next

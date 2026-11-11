@@ -249,3 +249,23 @@ describe('the cost of a rebuild (a workspace holds hundreds of browsers and note
   })
 })
 
+
+// EVERY DEVICE ON ONE CANVAS (owner 2026-11-11): another machine's screen holds its own
+// workspace tiles, in the same form as this machine's (WorkspaceTile · MarkView).
+describe('another machine drawn with its own tiles', () => {
+  it('a tile per workspace: its faces, who waits, its browsers and notes, its deck', () => {
+    const m = buildZoomModel({
+      nodes: [], connections: [], rows: [], crew: [], attachIndex: new Map(), workspaces: [], activeId: 'w1', name: 'w1',
+      machines: [
+        { id: 'solis', name: 'Solis-Core', local: false, online: true, detail: 'live', workspaces: [
+          { id: 'box', name: 'Box Lab', agents: [{ harness: 'claude', phase: 'waiting' }, { harness: 'codex', phase: 'idle' }], counts: { agents: 2, waiting: 1, browsers: 3, notes: 1 }, deck: [{ id: 'b1', kind: 'browser', title: 'Grafana', host: 'grafana.local' }] },
+          { id: 'named', name: 'Named only', agents: [], counts: null }
+        ] }
+      ]
+    })
+    const [box, named] = m.machines[0]!.marks
+    expect(box).toMatchObject({ id: 'box', name: 'Box Lab', presets: ['claude', 'codex'], waiting: true, waitingCount: 1, browsers: 3, notes: 1 })
+    expect(box!.deck.map((d) => d.title)).toEqual(['Grafana'])
+    expect(named).toMatchObject({ id: 'named', presets: [], waitingCount: 0, browsers: null, notes: null, deck: [] })
+  })
+})

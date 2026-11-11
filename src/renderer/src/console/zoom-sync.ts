@@ -13,6 +13,8 @@
 import type { ConsoleRoute } from './console-route'
 import { routeOfZoom, zoomOfRoute, type ZoomPlace } from './console-router'
 
+const DEVICES_STOP = -2
+
 export interface ZoomSyncDeps {
   readonly machine: string
   readonly router: { get(): ConsoleRoute; go(route: ConsoleRoute): void }
@@ -29,6 +31,8 @@ export interface ZoomSyncDeps {
 /** Put the view on the level the address names. Done before the app first draws. */
 export function applyRouteToZoom(deps: ZoomSyncDeps): void {
   const route = deps.router.get()
+  // At the machines: this machine's own devices stop, every other machine beside it (owner 2026-11-11).
+  if (route.kind === 'devices') return deps.zoom.go(DEVICES_STOP, 'agents')
   if (route.kind !== 'machine' || route.machine !== deps.machine) return
   const place = zoomOfRoute(route)
   deps.zoom.go(place.v, place.dir)
@@ -38,10 +42,13 @@ export function applyRouteToZoom(deps: ZoomSyncDeps): void {
 /** Write every step the view takes back into the address. Returns its stop. */
 export function followZoom(deps: ZoomSyncDeps): () => void {
   const write = (): void => {
+    const here = deps.router.get()
+    // Another machine was chosen on this one's canvas: the address is its now, and this view, on its way
+    // out, writes nothing over it (review 2026-11-11).
+    if (here.kind === 'machine' && here.machine !== deps.machine) return
     const workspace = deps.workspace.current()
     const zoom = deps.zoom.get()
     // Until the machine says which workspace the view is on, the address it was entered at stands.
-    const here = deps.router.get()
     if (workspace === null && here.kind === 'machine' && here.workspace !== null && zoom.v > -1.5) return
     deps.router.go(routeOfZoom(zoom, deps.machine, workspace))
   }
