@@ -1,9 +1,9 @@
 /**
  * IDENTITY v3 — account:changed, THE ROSTER'S OWN FEED.
  *
- * The account carries a requests[] list and a stream of things that happened
- * to it: a device joined, one was revoked, the password changed, a door moved,
- * "not me" was pressed, a request arrived. Every device is entitled to know,
+ * The account carries a stream of things that happened to it: a device
+ * joined, one was revoked, the password changed, a door moved, "not me" was
+ * pressed, a provider was linked. Every device is entitled to know,
  * so the model's word for it is one payload — {kind, device, at, address} —
  * fanned out two ways: pushed down a desktop's canvas link when it holds one
  * (V3-13/14 wire that), and readable by a poll for the web and a phone that
@@ -23,14 +23,16 @@
  * never derived from `at`.
  */
 
-/** The kinds the model lists. `request` covers a new join/seat/reach arriving. */
+/**
+ * The kinds the model lists. EVERY ONE IS CAUSED BY THE ACCOUNT ITSELF: its
+ * own ceremonies, or one of its own Macs. See `trimmed` for why that matters.
+ */
 export type EventKind =
   | 'joined'
   | 'revoked'
   | 'password-changed'
   | 'door-moved'
   | 'not-me'
-  | 'request'
   /** A provider identity joined or left the account. `device` names which provider. */
   | 'linked'
   | 'unlinked'
@@ -58,28 +60,6 @@ export type EventListener = (username: string, event: AccountEvent) => void
 
 /** More than a device catches up on in one poll; older ones fall off the tail. */
 export const PER_ACCOUNT = 100
-
-/**
- * WHICH KINDS A FULL TAIL MAY DROP — one, and it is the only one a party
- * OUTSIDE the account can cause (H5).
- *
- * The tail is bounded, so anything appendable at will is a way to push the
- * owner's real security events out of it. And this feed is the only channel
- * the design has for telling an owner that something happened to their
- * account — there is no email — so a feed a stranger can flush is a feed that
- * stops working at exactly the moment it matters, which is while somebody is
- * attacking the account.
- *
- * `joined`, `revoked`, `password-changed` and `not-me` are caused only by the
- * account's own ceremonies; `door-moved` by one of its own Macs. A `request`
- * is the one a stranger can cause — a guest asking for a seat — so it is the
- * one that gives way when the tail is full.
- *
- * RESERVED BY DEFAULT, and that direction is deliberate: a kind added later is
- * protected unless somebody consciously writes it down here, so the next
- * stranger-causable kind cannot quietly become a way to flush this feed.
- */
-const EVICTABLE: ReadonlySet<EventKind> = new Set<EventKind>(['request'])
 
 export class V2Events {
   private readonly now: () => number
@@ -146,27 +126,18 @@ export class V2Events {
 }
 
 /**
- * The tail, at its cap, with the evictable kinds giving way first.
+ * The tail, at its cap: the oldest fall off.
  *
- * ONE LIST, NOT TWO. Partitioning the log would mean merging on every read and
- * a second place for the cursor to be got wrong; this drops from the same
- * ordered list and leaves `since` untouched. It walks oldest-first taking
- * evictable events until it has enough, and only then takes reserved ones —
- * so a tail that is ALL security events still drops its oldest rather than
- * growing without bound, which is the one case where there is nothing better
- * to do.
+ * NOBODY OUTSIDE THE ACCOUNT CAN APPEND HERE, and that is what makes oldest
+ * first safe (H5). This feed is the only channel the design has for telling
+ * an owner that something happened to their account (there is no email), so
+ * a feed a stranger could fill would stop working at exactly the moment it
+ * matters, which is while somebody is attacking the account. One kind a
+ * stranger could cause did exist (`request`: a guest asking for a seat) and
+ * it gave way first when the tail was full; the ask is gone (0.6.0) and the
+ * kind with it. WHOEVER ADDS A KIND A STRANGER CAN CAUSE must bring that rule
+ * back with it: such a kind gives way before any of the account's own.
  */
 function trimmed(held: readonly AccountEvent[]): AccountEvent[] {
-  if (held.length <= PER_ACCOUNT) return [...held]
-  const over = held.length - PER_ACCOUNT
-  const drop = new Set<number>()
-  for (const event of held) {
-    if (drop.size === over) break
-    if (EVICTABLE.has(event.kind)) drop.add(event.seq)
-  }
-  for (const event of held) {
-    if (drop.size === over) break
-    drop.add(event.seq)
-  }
-  return held.filter((event) => !drop.has(event.seq))
+  return held.length <= PER_ACCOUNT ? [...held] : held.slice(held.length - PER_ACCOUNT)
 }

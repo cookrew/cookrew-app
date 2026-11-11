@@ -186,7 +186,7 @@ const asQueueRow = (value: unknown): QueueRow | null => {
 const asEvent = (value: unknown): AccountEvent | null => {
   if (typeof value !== 'object' || value === null) return null
   const event = value as Record<string, unknown>
-  const kinds = ['joined', 'revoked', 'password-changed', 'door-moved', 'not-me', 'request']
+  const kinds = ['joined', 'revoked', 'password-changed', 'door-moved', 'not-me']
   if (typeof event.seq !== 'number' || typeof event.at !== 'number') return null
   if (typeof event.kind !== 'string' || !kinds.includes(event.kind)) return null
   return {
@@ -330,9 +330,10 @@ export class Requests {
     const username = this.deps.accounts.account()?.username ?? ''
     for (const raw of body.events) {
       const event = asEvent(raw)
-      // `request` is the arrival a ROW announces, with the kind in its
-      // sentence. Saying it twice in two vaguer words is how both get ignored.
-      if (event === null || event.kind === 'request') continue
+      // A kind this build has no sentence for is not announced. That includes
+      // `request`, which an older registry sent when a row arrived: the ROW
+      // announces itself, and saying it twice is how both get ignored.
+      if (event === null) continue
       const body = eventNotice(event, username)
       this.deps.notify({ title: 'Cookrew', body, requestId: null })
       this.deps.onEvent?.(event, body)

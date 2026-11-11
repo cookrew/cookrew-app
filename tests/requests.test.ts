@@ -262,7 +262,7 @@ describe('what is announced', () => {
     expect(h.notes).toHaveLength(1)
   })
 
-  it('announces every account:changed kind — except the one a row already said', async () => {
+  it('announces every account:changed kind, and says nothing for one this build does not have', async () => {
     const h = harness()
     h.setFeed([
       { seq: 1, kind: 'joined', device: 'Mac Studio', at: NOW },
@@ -270,8 +270,8 @@ describe('what is announced', () => {
       { seq: 3, kind: 'password-changed', at: NOW },
       { seq: 4, kind: 'door-moved', device: 'Mac Studio', address: 'alpha', at: NOW },
       { seq: 5, kind: 'not-me', at: NOW },
-      // The arrival a row announces with its kind in the sentence. Saying it
-      // twice in two vaguer words is how both get ignored.
+      // What an older registry sent when a row arrived (a seat ask). The row
+      // announces itself; this build has no such kind and says nothing for it.
       { seq: 6, kind: 'request', at: NOW },
     ])
     await h.requests.refresh()

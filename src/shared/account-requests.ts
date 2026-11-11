@@ -48,7 +48,7 @@ export interface QueueRow {
 /** account:changed, as GET /v2/me/events?since= lists it. */
 export interface AccountEvent {
   seq: number
-  kind: 'joined' | 'revoked' | 'password-changed' | 'door-moved' | 'not-me' | 'request'
+  kind: 'joined' | 'revoked' | 'password-changed' | 'door-moved' | 'not-me'
   device?: string
   address?: string
   at: number
@@ -128,19 +128,16 @@ export const ACCOUNT_EVENT_PLAIN = {
   passwordChanged: 'The password changed. Every other device was signed out.',
   anotherDevice: 'another device',
   someDoor: 'A door',
-  request: 'Something is waiting in Requests.',
 } as const
 
 /**
  * What an account:changed is ANNOUNCED as.
  *
- * Every kind has a sentence, and five of the six borrow one the table already
+ * Every kind has a sentence, and all but one borrow one the table already
  * owns — a revoke, a move and a disowned sign-in are moments a person has read
  * about elsewhere in this product, and reading them differently here would be
- * two accounts of the same event. `request` is the exception and is deliberately
- * the vaguest: a row arriving is announced by the ROW (rowNotice), which knows
- * what kind it is, so this sentence is only ever the fallback for an event with
- * no row behind it yet.
+ * two accounts of the same event. A row arriving is not an event here: it is
+ * announced by the ROW (rowNotice).
  */
 export function eventNotice(event: AccountEvent, username: string): string {
   const device = event.device ?? ACCOUNT_EVENT_PLAIN.anotherDevice
@@ -158,8 +155,6 @@ export function eventNotice(event: AccountEvent, username: string): string {
       return accountCopy('d14.moved', { door: event.address ?? ACCOUNT_EVENT_PLAIN.someDoor, device })
     case 'not-me':
       return accountCopy('d11.denied', { handle: username, device })
-    case 'request':
-      return ACCOUNT_EVENT_PLAIN.request
   }
 }
 

@@ -185,7 +185,7 @@ describe('what a device is told', () => {
     ...over,
   })
 
-  it('has a sentence for every kind, and borrows five of the six', () => {
+  it('has a sentence for every kind, and borrows all but one from the table', () => {
     expect(eventNotice(event({}), 'drej')).toBe('Mac Studio joined @drej')
     const revoke = eventNotice(event({ kind: 'revoked', device: 'iPhone' }), 'drej')
     // The LEAD of the table's revoke sentence, asserted by identity rather
@@ -203,7 +203,6 @@ describe('what a device is told', () => {
     expect(eventNotice(event({ kind: 'not-me', device: undefined }), 'drej')).toBe(
       `A sign-in as @drej was denied on ${ACCOUNT_EVENT_PLAIN.anotherDevice}`,
     )
-    expect(eventNotice(event({ kind: 'request' }), 'drej')).toBe(ACCOUNT_EVENT_PLAIN.request)
   })
 
   it('announces an arriving row as the row itself reads', () => {
