@@ -127,14 +127,29 @@ const settle = async (): Promise<void> => {
 }
 
 describe('opening the page', () => {
-  it('signed in at the machines: the gate is checked, the machines are read, nothing is in scope', async () => {
+  // EVERY DEVICE ON ONE CANVAS (owner 2026-11-11): past the gate the machines are a machine's own
+  // devices stop, so the first that can be read is asked at its door; nothing is in scope until it opens.
+  it('signed in at the machines: the gate is checked, the machines are read, a readable one’s door is asked', async () => {
     const w = world()
     const runtime = createConsoleRuntime(w.deps)
     await runtime.boot()
-    expect(runtime.get().view).toEqual({ kind: 'devices', wants: null })
     expect(w.log).toEqual(['boot', 'gate-check', 'devices-start'])
     expect(w.scope).toEqual([])
-    expect(w.doors).toEqual([])
+    expect(w.doors.map((door) => door.machine)).toEqual([M])
+    expect(runtime.get().view).toEqual({ kind: 'entering', machine: M })
+  })
+
+  it('“Back to your machines” is the page’s own list, opening nothing by itself', async () => {
+    const w = world({ route: at(M) })
+    const runtime = createConsoleRuntime(w.deps)
+    await runtime.boot()
+    w.doors[0].answer({ kind: 'open' })
+    await settle()
+    runtime.leave()
+    await settle()
+    expect(w.scope).toEqual([M, null])
+    expect(runtime.get().view).toEqual({ kind: 'devices', wants: null })
+    expect(w.doors).toHaveLength(1)
   })
 
   it('signed out: the way in, and nothing asked of the registry about machines', async () => {
@@ -392,11 +407,12 @@ describe('what the app does while its machine is being left', () => {
     await runtime.boot()
     w.doors[0].answer({ kind: 'open' })
     await settle()
-    // Entered, then (decided afterwards) left again for the machines: never both at once.
+    // Entered, and the change decided afterwards, never inside: stepping out to the machines keeps
+    // the machine in scope, whose own devices stop they now are (owner 2026-11-11).
     expect(order[0]).toBe(`scope ${M}`)
     expect(order[1]).toBe('view during: entering')
-    expect(w.scope).toEqual([M, null])
-    expect(runtime.get().view).toEqual({ kind: 'devices', wants: null })
+    expect(w.scope).toEqual([M])
+    expect(runtime.get().view).toEqual({ kind: 'machine', machine: M })
   })
 
   it('a key refused again long after a re-entry is asked for again, not given up on', async () => {

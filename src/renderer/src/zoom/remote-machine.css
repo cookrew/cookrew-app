@@ -18,66 +18,28 @@
   background-size: 3px 3px;
 }
 
-.rm-bar {
+/* Where you are, said in the machine's colour; the bar at the foot moves you (owner 2026-11-11). */
+.rm-where {
   flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: calc(12px + env(safe-area-inset-top, 0px)) 18px 10px;
-  border-bottom: 1px solid var(--zv-hair-2);
-  background: var(--zv-card);
-}
-
-.rm-crumb {
-  appearance: none;
-  max-width: 220px;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) 22px 8px;
+  font: 600 13px/1.4 var(--zv-mono);
+  letter-spacing: 0.02em;
+  color: var(--zv-seal-text);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 4px 11px;
-  border: 1px solid var(--zv-hair-2);
-  border-radius: 999px;
-  background: var(--zv-paper);
-  color: var(--zv-ink);
-  font: 600 12px/1.4 var(--zv-mono);
-  cursor: pointer;
 }
 
-.rm-crumb.remote {
-  border-color: var(--zv-seal);
+.rm-where b {
+  font: 600 18px/1.2 var(--zv-serif);
+  color: var(--zv-seal-text);
 }
 
-.rm-crumb[aria-current='location'] {
-  background: var(--zv-ink);
-  color: var(--zv-paper);
-  cursor: default;
-}
-
-.rm-crumb.remote[aria-current='location'] {
-  background: var(--zv-seal-fill);
-  border-color: var(--zv-seal-fill);
-  color: var(--zv-on-seal);
-}
-
-.rm-crumb:focus-visible,
 .rm-face:focus-visible,
 .rm-thumb:focus-visible,
 .rm-cell:focus-visible {
   outline: 2px solid var(--zv-seal);
   outline-offset: 2px;
-}
-
-.rm-sep {
-  color: var(--zv-muted);
-  font: 12px var(--zv-mono);
-}
-
-.rm-on {
-  margin-left: auto;
-  font: 600 11px/1.4 var(--zv-mono);
-  letter-spacing: 0.04em;
-  color: var(--zv-seal-text);
 }
 
 .rm-quiet {
@@ -113,10 +75,11 @@
 /* ── the workspaces: the zoom's own tiles (WorkspaceTile.tsx), at a fixed size ── */
 .rm-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, var(--rm-tile-w));
-  gap: 18px;
-  --rm-tile-w: 258px;
-  --rm-tile-s: calc(258 / 430);
+  grid-template-columns: repeat(auto-fit, var(--rm-tile-w));
+  justify-content: center;
+  gap: 24px;
+  --rm-tile-w: 290px;
+  --rm-tile-s: calc(290 / 430);
 }
 
 .rm-cell {
@@ -133,7 +96,7 @@
   transform: translate(calc(112px * var(--rm-tile-s)), calc(174px * var(--rm-tile-s))) scale(var(--rm-tile-s));
   transform-origin: 0 0;
   /* The words are drawn 1:1 on screen, as the painter keeps them (zoom-frame.ts · paintDeviceWords). */
-  --zv-k: calc(430 / 258);
+  --zv-k: calc(430 / 290);
 }
 
 .rm-cell .zv-tw {
@@ -472,4 +435,47 @@
     grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
     gap: 10px;
   }
+}
+
+/* Another machine's workspaces stop, drawn as this machine's is: its name and count, the tiles in the middle. */
+.rm-ws-stop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.rm-ws-block {
+  display: grid;
+  gap: 14px;
+  max-width: 100%;
+}
+
+.rm-ws-block .rm-tiles {
+  grid-template-columns: repeat(var(--rm-cols, 3), var(--rm-tile-w));
+  justify-content: start;
+}
+
+@media (max-width: 700px) {
+  .rm-ws-block .rm-tiles {
+    grid-template-columns: repeat(min(var(--rm-cols, 2), 2), var(--rm-tile-w));
+  }
+}
+
+.rm-ws-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.rm-ws-title b {
+  font: 600 22px/1.1 var(--zv-serif);
+  color: var(--zv-ink);
+}
+
+.rm-ws-title span {
+  font: 11px/1 var(--zv-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--zv-ink-soft);
 }

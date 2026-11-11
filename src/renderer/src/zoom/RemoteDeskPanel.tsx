@@ -24,6 +24,8 @@ import './remote-desk.css'
  */
 
 const DEVICE_STOP_INDEX = 1
+/** How often the remote-desktop state is read again while the panel is up and in sight. */
+export const REMOTE_ACCESS_EVERY_MS = 15_000
 
 const onDevicePage = (zoom: Pick<ZoomState, 'dir' | 'v' | 'full'>): boolean => zoom.full === null && barStop(zoom.dir, zoom.v) === BAR_STOPS[zoom.dir][DEVICE_STOP_INDEX]
 const onTheStop = (): boolean => onDevicePage(zoomStore.get())
@@ -33,9 +35,19 @@ function Panel(): React.JSX.Element | null {
   const { access, read } = useRemoteAccess(true)
   const settable = typeof cookrew().setRemoteSwitch === 'function'
   const { error, flip } = useRemoteSwitch(settable, () => void read())
+  // Not while the window is out of sight (bytes 0.6.2), and at once when it is back.
   useEffect(() => {
-    const timer = setInterval(() => void read(), 15_000)
-    return () => clearInterval(timer)
+    const timer = setInterval(() => {
+      if (!document.hidden) void read()
+    }, REMOTE_ACCESS_EVERY_MS)
+    const shown = (): void => {
+      if (!document.hidden) void read()
+    }
+    document.addEventListener('visibilitychange', shown)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', shown)
+    }
   }, [read])
   const acts = useRemoteActs({ state: access?.state ?? null, onCheck: read, onOpened: read })
   if (!access) return null

@@ -14,9 +14,18 @@ import { callRemote } from './use-remote-machine'
 /** A tile's refs go nowhere: the painter does not draw these. */
 const NO_BIND = (): ((el: HTMLElement | null) => void) => () => undefined
 
-export function RemoteWorkspaces({ tiles, onOpen }: { tiles: readonly RemoteTile[]; onOpen: (tile: RemoteTile) => void }): React.JSX.Element {
+export function RemoteWorkspaces({ machine, tiles, onOpen }: { machine?: string; tiles: readonly RemoteTile[]; onOpen: (tile: RemoteTile) => void }): React.JSX.Element {
   if (tiles.length === 0) return <p className="rm-empty">No workspaces here.</p>
+  // As this machine's workspaces stop draws its own: its name and count over the tiles, the grid in the middle.
   return (
+    <div className="rm-ws-stop">
+      <div className="rm-ws-block" style={{ ['--rm-cols' as string]: Math.min(tiles.length, 3) }}>
+      {machine && (
+        <div className="rm-ws-title">
+          <b>{machine}</b>
+          <span>{tiles.length} {tiles.length === 1 ? 'workspace' : 'workspaces'}</span>
+        </div>
+      )}
     <div className="rm-tiles">
       {tiles.map((tile) => (
         <div key={tile.id} className="rm-cell" data-front={tile.active || undefined} title={tile.active ? `In front on that machine` : undefined}>
@@ -25,6 +34,8 @@ export function RemoteWorkspaces({ tiles, onOpen }: { tiles: readonly RemoteTile
           </div>
         </div>
       ))}
+    </div>
+    </div>
     </div>
   )
 }

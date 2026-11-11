@@ -1,11 +1,13 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { WorkspaceList, WorkspaceState } from '../../../shared/model'
 import { countOf } from '../../../shared/workspace-door'
 import type { AttachmentIndex } from '../terminal-attachments'
 import { cookrew, isDemoMode, isRemoteMode } from '../api'
 import type { Crew } from '../stage/crew-rows'
 import { thumbWants } from '../pets/thumb-wants'
-import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, MachineNode, type Bind, NewestThumb } from './ZoomParts'
+import { zoomThumbClaim } from './thumb-claim'
+import { Counts, AgentNode, ItemNode, LinkNode, LocalMachine, type Bind, NewestThumb } from './ZoomParts'
+import { MachineFrame } from './MachineFrame'
 import { openSourcePicker } from '../use/source-picker-store'
 import { WorkspaceTile } from './WorkspaceTile'
 import { followDrafts } from '../prompt/draft-follow'
@@ -18,7 +20,7 @@ import { hostPlatform } from '../../../shared/machine-words'
 import { MachineTrustRow, useMachineTrust } from './MachineTrustRow'
 import { ShelfCard } from './ShelfCard'
 import { draftKey, getDraft } from '../prompt/prompt-draft'
-import { defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, MACHINE_CARD, shelfPage } from './zoom-layout'
+import { BEZEL, defaultCrewCols, defaultDeviceCols, deviceOf, machinesAt, SCREEN_SCALE, shelfPage } from './zoom-layout'
 import { useCrewCols, usePerRow } from './crew-cols'
 import { PerRowPill } from './PerRowPill'
 import { deviceWords, layoutOf, SWS, thumbsCamera, wordsOf, type FrameEls } from './zoom-frame'
@@ -32,10 +34,12 @@ import { CrIcon } from '../icons'
 import { promptFold, takeBack } from '../prompt/prompt-fold'
 import { backHolder } from '../prompt/back-guard'
 import { useZoomFleetView } from './use-zoom-fleet'
-import { GaugePanel } from './MachineGauges'
+import { MachineGaugeLine } from './MachineGauges'
+import { gaugedMachines } from './gauged-machines'
 import { RemoteDeskPanel } from './RemoteDeskPanel'
 import { RemoteMachineView } from './RemoteMachineView'
-import { remotePlace } from './remote-machine-store'
+import { remotePlace, remoteStop } from './remote-machine-store'
+import { machineOpener } from './machine-open'
 import { canEnterMachines } from './use-remote-machine'
 import './zoom.css'
 // The full view's head, for the crisp ghost the way in arrives at (zv-fv-ghost).
@@ -527,14 +531,21 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const moved = useRef(false)
   const swallowClick = useRef(false)
   const deckBrowsers = model.openMark.deck.filter((i) => i.kind === 'browser').map((i) => i.id).join(' ')
-  const onTiles = zoom.v < -0.5
+  // Only what is drawn where the zoom is (thumb-claim.ts): the open tile's deck on the tiles, the grid in
+  // view at the artifacts, the crew's coins past the tiles. Keyed on that answer, so the zoom moving within
+  // one stretch claims nothing again.
+  // The crew's own pictures: the browsers its coins wear, and the newest one when it is drawn on its own.
+  const crewBrowsers = useMemo(() => {
+    const items = new Map([...model.items, ...model.coinItems].map((i) => [i.id, i]))
+    const worn = model.frame.links.map((l) => items.get(l.item)).filter((i) => i?.kind === 'browser').map((i) => i!.id)
+    const alone = model.frame.newest === null && model.newestItem?.kind === 'browser' ? [model.newestItem.id] : []
+    return [...worn, ...alone].join(' ')
+  }, [model.items, model.coinItems, model.frame.links, model.frame.newest, model.newestItem])
+  const claimed = zoomThumbClaim({ dir: zoom.dir, v: zoom.v, deck: deckBrowsers.split(' '), seen: seenBrowsers.split(' '), crew: crewBrowsers.split(' ') }).join(' ')
   useEffect(() => {
-    // The open tile's deck wears real pictures too, before the grid they deal into.
-    // First where they are what is seen: the wants are capped, and the grid's come first at the grid.
-    const lists = onTiles ? [deckBrowsers, seenBrowsers] : [seenBrowsers, deckBrowsers]
-    thumbWants.claim('zoom', [...new Set(lists.flatMap((l) => l.split(' ')))].filter(Boolean))
+    thumbWants.claim('zoom', claimed === '' ? [] : claimed.split(' '))
     return () => thumbWants.release('zoom')
-  }, [seenBrowsers, deckBrowsers, onTiles])
+  }, [claimed])
   const agentOf = useMemo(() => new Map(model.agents.map((a) => [a.id, a])), [model.agents])
   const markOf = useMemo(() => new Map(model.marks.map((m) => [m.id, m])), [model.marks])
   // One names list per item, so a row scrolled into view does not draw every mounted thumbnail again (ItemNode is memo'd).
@@ -543,6 +554,9 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const itemOf = useMemo(() => new Map([...model.items, ...model.coinItems].map((i) => [i.id, i])), [model.items, model.coinItems])
   const device = useMemo(() => deviceOf(model.frame.workspaces, narrow, model.frame.screenAspect, deviceCols ?? undefined), [model.frame.workspaces, model.frame.screenAspect, narrow, deviceCols])
   const activeSlot = device.at[model.frame.active] ?? { x: 0, y: 0 }
+  // This machine's frame on the devices stop: every other machine is drawn the same size (MachineFrame.tsx).
+  const frameOf = useMemo(() => ({ w: device.screen.w * SCREEN_SCALE + BEZEL, h: device.screen.h * SCREEN_SCALE + BEZEL }), [device])
+  const gauged = useMemo(() => new Set(gaugedMachines(model.machines, scopeNeedsMachine()).map((m) => m.id)), [model.machines])
   // The device stop's words grow to be read at the size the device is seen (zoom-frame.ts · deviceWords).
   const words = useMemo(() => deviceWords(device, size.w, size.h, size.w < 760), [device, size])
   // Static placement on the device: the real active workspace is rendered by the scene layer.
@@ -563,17 +577,17 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       machineEl.style.height = `${sh + 28}px`
       machineEl.style.transform = `translate(${-sw / 2 - 14}px, ${-sh / 2 - 14}px)`
     }
-    // The account's other machines: rows under this Mac's screen, inside the devices camera.
+    // The account's other machines: in this one's row, each the same frame (zoom-layout.ts · machinesAt).
     const others = model.machines.filter((m) => !m.local)
-    const places = machinesAt(others.length, device.screen, narrow)
+    const places = machinesAt(others.length, frameOf, narrow)
     others.forEach((m, i) => {
       const el = registry.current.get(`machinecard:${m.id}`)
       const at = places.at[i]
-      if (el && at) el.style.transform = `translate(${at.x - MACHINE_CARD.w / 2}px, ${at.y - MACHINE_CARD.h / 2}px)`
+      if (el && at) el.style.transform = `translate(${at.x - frameOf.w / 2}px, ${at.y - frameOf.h / 2}px)`
     })
     // Back on a desk, the words a phone's painter held at one size go back to their sheet.
     if (!narrow) {
-      for (const el of root.current?.querySelectorAll<HTMLElement & { _t?: string; _o?: number }>('.zv-machine-label, .zv-machinecard-label') ?? []) {
+      for (const el of root.current?.querySelectorAll<HTMLElement & { _t?: string; _o?: number }>('.zv-machine-label') ?? []) {
         el.style.transform = ''
         el.style.opacity = ''
         el.style.visibility = ''
@@ -582,7 +596,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       }
     }
     motion.wake()
-  }, [device, words, model.marks, model.machines, narrow, motion.wake])
+  }, [device, frameOf, words, model.marks, model.machines, narrow, motion.wake])
   const switchWorkspace = useCallback(async (id: string, side: 'agents' | 'items' = 'agents') => {
     setError(null)
     try {
@@ -601,6 +615,8 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   const stops = BAR_STOPS[zoom.dir].slice(0, -1)
   const names = BAR_NAMES[zoom.dir]
   const selectedStop = barStop(zoom.dir, zoom.v)
+  // Inside another machine the bar moves through its stops, not this one's (owner 2026-11-11).
+  const inside = remoteStop(useSyncExternalStore(remotePlace.subscribe, remotePlace.get, remotePlace.get))
   const side = barSide(zoom.dir, zoom.v)
   // Pinch only changes the scene; the full terminal keeps its own native scroll.
   const pointers = useRef(new Map<number, { x: number; y: number }>())
@@ -615,7 +631,6 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
         {/* Its own boundary: the real full view is a lazy chunk, and waiting for it must never blank the navigator. */}
         <Suspense fallback={null}>{zoom.full ? children : null}</Suspense>
       </div>
-      <GaugePanel localName={machine} />
       <RemoteDeskPanel />
       <div className="zv-overview" ref={overview}
         onPointerDown={(e) => {
@@ -669,35 +684,49 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
           if (swallowClick.current) { swallowClick.current = false; return }
           if (moved.current || pinch.current !== null) return
           // A node, a card, a button, a field: its own click, which zooms in.
-          if ((e.target as Element).closest('button, input, textarea, form, a, [role="button"], .zv-m, .zv-card, .zv-ip, .zv-lk, .zv-mark, .zv-machine, .zv-machinecard')) return
+          if ((e.target as Element).closest('button, input, textarea, form, a, [role="button"], .zv-m, .zv-card, .zv-ip, .zv-lk, .zv-mark, .zv-machine')) return
           stepBack()
         }}>
         <div className="zv-devices" ref={bind('devices')}>
-          {model.machines.filter((m) => !m.local).map((m) => (
-            <MachineNode
-              key={m.id}
-              machine={m}
-              say={machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null })}
-              bind={bind}
-              onOpen={() => {
-                // A machine this one can read is gone into, here (RemoteMachineView.tsx); one it cannot says the one thing to do.
-                const enter = (): void => {
-                  setWhy(null)
-                  // Entered in place: its view opens from where its frame stands (remote-entry.ts).
-                  const frame = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
-                  remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(frame ? { from: { x: frame.left, y: frame.top, w: frame.width, h: frame.height } } : {}) })
-                }
-                if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
-                // Asked over the network: a view gone elsewhere meanwhile neither hears the answer nor is carried into the machine.
-                else void whyNot(m).then((words) => {
-                  if (!whyShowsNow.current) return
-                  if (words === null) enter()
-                  else setWhy(words)
-                })
-              }}
-            />
-          ))}
-          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
+          {model.machines.filter((m) => !m.local).map((m) => {
+            const say = machineSays(m, { surface: machineSurface(), trusted: trust[0]?.trusted ?? null, platform: hostPlatform(), floor: scopeNeedsMachine(), block: cookrew().machineWhy?.(m.id) ?? null })
+            // Into another machine, in place (RemoteMachineView.tsx), or the console's whole app for it (machine-open.ts).
+            const open = (workspace: { id: string; name: string } | null): void => {
+              const enter = (): void => {
+                setWhy(null)
+                const elsewhere = machineOpener()
+                if (elsewhere) return elsewhere(m.id, workspace?.id ?? null)
+                // Entered in place: its view opens from where its frame stands (remote-entry.ts).
+                const frame = registry.current.get(`machinecard:${m.id}`)?.getBoundingClientRect()
+                remotePlace.enter({ id: m.id, name: m.name, os: m.os ?? null, ...(frame ? { from: { x: frame.left, y: frame.top, w: frame.width, h: frame.height } } : {}) })
+                if (workspace) remotePlace.workspace(workspace)
+              }
+              if (m.online && m.detail !== 'listed' && canEnterMachines()) enter()
+              // Asked over the network: a view gone elsewhere meanwhile neither hears the answer nor is carried into the machine.
+              else void whyNot(m).then((words) => {
+                if (!whyShowsNow.current) return
+                if (words === null) enter()
+                else setWhy(words)
+              })
+            }
+            return (
+              <MachineFrame
+                key={m.id}
+                machine={m}
+                frame={frameOf}
+                narrow={narrow}
+                wordK={words.markK}
+                titleK={words.titleK}
+                say={say}
+                caption={say ?? machineCaption(m)}
+                gauge={gauged.has(m.id) && say === null ? <MachineGaugeLine machineId={m.id} online={m.online} /> : null}
+                bind={bind}
+                onOpen={() => open(null)}
+                onOpenWorkspace={(id) => open({ id, name: m.marks.find((one) => one.id === id)?.name ?? id })}
+              />
+            )
+          })}
+          <LocalMachine name={machine} detail={`${countOf(model.frame.workspaces.length, 'workspace')} · ${countOf(model.deviceAgents, 'agent')}`} gauge={<MachineGaugeLine machineId="local" local />} bind={bind} onOpen={() => motion.go(-1)} onShare={cookrew().useSources ? () => openSourcePicker({ remoteDesktop: true }) : null} />
         </div>
         <div className="zv-device" ref={bind('device')} data-density={words.density} style={{ '--zv-k': words.markK.toFixed(3), '--zv-tile-top': `${Math.round(device.tile.top)}px`, '--zv-tile-h': `${Math.round(device.tile.h)}px` } as React.CSSProperties}>
           {/* Placed and sized by the painter (zoom-frame.ts · paintDeviceWords): on a phone it keeps one size as the device zooms. */}
@@ -772,6 +801,27 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
       <nav className="zv-controls" aria-label="Semantic zoom">
         <button type="button" className="zv-back" onClick={stepBack} aria-label="Zoom out">‹</button>
         <div className="zv-zoom-control">
+          {inside !== null ? (
+            <div className="zv-stops" data-machine="other">
+              <button type="button" aria-label={names[0]} onClick={() => remotePlace.leave()}>
+                <CrIcon name="device" className="zv-stop-ic" />
+                <span className="zv-stop-word">{names[0]}</span>
+              </button>
+              <button type="button" aria-current={inside === 'workspaces' ? 'step' : undefined} aria-label={names[1]} onClick={() => remotePlace.backTo(1)}>
+                <CrIcon name="canvas" className="zv-stop-ic" />
+                <span className="zv-stop-word">{names[1]}</span>
+              </button>
+              <div className="zv-groups" role="group" aria-label="Artifacts or agents">
+                {(['items', 'agents'] as const).map((one) => (
+                  <div key={one} className={`zv-group ${one}${inside === one ? ' lit' : ''} empty`}>
+                    <button type="button" className="zv-group-stop" aria-current={inside === one ? 'step' : undefined} aria-label={one === 'items' ? 'artifacts' : 'agents'} onClick={() => remotePlace.side(one)}>
+                      <span className="zv-group-word">{one === 'items' ? 'artifacts' : 'agents'}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
           <div className="zv-stops">
             {/* Narrow, the stops you are not on wear the header's own marks and give the face its room (zoom.css). */}
             {stops.map((v, i) => (
@@ -796,6 +846,7 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
               onOutside={pressedOutside}
             />
           </div>
+          )}
         </div>
         <span className="zv-location">{zoom.dir === 'agents' ? 'agents' : 'artifacts'}</span>
         {/* The prompt's face, folded: the send key at the bar's end (prompt/face-slot.ts). */}
@@ -833,6 +884,11 @@ export function ZoomView({ workspace, workspaceId, attachIndex, crew, onDelete, 
   )
 }
 
+/** Under another machine's name: how many workspaces and agents, and how many wait. */
+function machineCaption(m: MachineView): string {
+  return `${countOf(m.workspaces.length, 'workspace')}${m.agents !== null ? ` · ${countOf(m.agents, 'agent')}` : ''}${m.waiting ? ` · ${m.waiting} waiting` : ''}`
+}
+
 /** Where this view runs, for what it can say about another machine (machine-why.ts). */
 const machineSurface = (): 'desktop' | 'page' | 'none' => (!canEnterMachines() ? 'none' : isRemoteMode() ? 'page' : 'desktop')
 
@@ -856,7 +912,7 @@ function deviceWordEls(title: HTMLElement | null, marks: HTMLElement[], devices:
   return {
     deviceLabel: title,
     markLabels: marks.flatMap((m) => [...m.querySelectorAll<HTMLElement>('.zv-tw')]),
-    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label, .zv-machinecard-label')],
+    machineWords: [...devices.querySelectorAll<HTMLElement>('.zv-machine-label')],
     machineShare: devices.querySelector<HTMLElement>('.zv-machine-share')
   }
 }

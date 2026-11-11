@@ -190,6 +190,20 @@ describe('respondJson', () => {
     expect(plain.headers.get('content-encoding')).toBeNull()
     // fetch decodes transparently — the payload must survive the round trip.
     expect(await packed.json()).toEqual(body)
+
+    // A page that keeps its own tag (`?etag=`, bytes 0.6.2): a 304 for it, and an answer the browser
+    // does not keep as well (review); its own If-None-Match decides when it sends one.
+    const tag = packed.headers.get('etag') as string
+    const byAddress = await fetch(`http://127.0.0.1:${port}/x?etag=${encodeURIComponent(tag)}`)
+    expect(byAddress.status).toBe(304)
+    const stale = await fetch(`http://127.0.0.1:${port}/x?etag=${encodeURIComponent('W/"other"')}`)
+    expect(stale.status).toBe(200)
+    expect(stale.headers.get('cache-control')).toBe('no-store')
+    await stale.arrayBuffer()
+    const headerWins = await fetch(`http://127.0.0.1:${port}/x?etag=${encodeURIComponent(tag)}`, { headers: { 'if-none-match': 'W/"other"' } })
+    expect(headerWins.status).toBe(200)
+    await headerWins.arrayBuffer()
+    expect(plain.headers.get('cache-control')).toBeNull()
     expect(Number(packed.headers.get('content-length'))).toBeLessThan(
       Number(plain.headers.get('content-length')) / 3
     )

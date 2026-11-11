@@ -85,8 +85,21 @@ export interface RemoteCardsState {
   readonly refresh: () => void
 }
 
-/** The machine's tiles (no workspace), or one workspace's whole crew. */
-export function useRemoteCards(machineId: string | null, workspaceId: string | null): RemoteCardsState {
+/**
+ * WHAT TO ASK FOR, AS THE ZOOM DRAWS IT (bytes 0.6.2; watch-routes.ts ·
+ * cardsShapeOf): the tiles alone at its workspaces stop, and a crew in which
+ * only the open card carries its whole reply. The grid draws each card's
+ * short words; the whole reply was four fifths of a busy crew (85 KB every 3 s
+ * of the owner's Mac). A machine before 0.6.2 ignores both and answers whole,
+ * which this reads as before.
+ */
+export function cardsRoute(workspaceId: string | null, openCard: string | null): string {
+  if (!workspaceId) return 'api/watch/cards?cards=0'
+  return `api/watch/cards?workspace=${encodeURIComponent(workspaceId)}&full=${openCard ? encodeURIComponent(openCard) : 'none'}`
+}
+
+/** The machine's tiles (no workspace), or one workspace's whole crew, with the open card's whole reply. */
+export function useRemoteCards(machineId: string | null, workspaceId: string | null, openCard: string | null = null): RemoteCardsState {
   const key = machineId ? seenKey(machineId, workspaceId) : null
   const [cards, setCards] = useState<RemoteCards | null>(() => (key ? (lastSeen.get(key) ?? null) : null))
   const [answering, setAnswering] = useState(true)
@@ -96,15 +109,14 @@ export function useRemoteCards(machineId: string | null, workspaceId: string | n
   }, [key])
   const read = useCallback(async (): Promise<void> => {
     if (!machineId || !key) return
-    const route = workspaceId ? `api/watch/cards?workspace=${encodeURIComponent(workspaceId)}` : 'api/watch/cards'
-    const answer = await callRemote(machineId, 'GET', route)
+    const answer = await callRemote(machineId, 'GET', cardsRoute(workspaceId, openCard))
     const read = answer.status === 200 && 'body' in answer ? parseRemoteCards(answer.body) : null
     if (read) {
       lastSeen.set(key, read)
       setCards(read)
     }
     setAnswering(read !== null || (answered(answer) && answer.status !== 401))
-  }, [machineId, workspaceId, key])
+  }, [machineId, workspaceId, openCard, key])
   const refresh = usePoll(machineId ? read : null, REMOTE_CARDS_MS)
   return { cards, answering, refresh }
 }

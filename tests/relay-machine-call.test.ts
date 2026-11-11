@@ -51,6 +51,68 @@ describe('createRelayMachines', () => {
     expect(w.deps.enter).toHaveBeenCalledTimes(1)
   })
 
+  it('asks a read again with the tag it holds IN THE ADDRESS, never as a header, and a 304 is the answer it held (bytes 0.6.2)', async () => {
+    const w = world()
+    const tagged = (body: unknown, tag: string): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', etag: tag } })
+    w.answers.push(tagged({ rev: 1 }, 'W/"r1"'), new Response(null, { status: 304, headers: { etag: 'W/"r1"' } }), tagged({ rev: 2 }, 'W/"r2"'))
+    expect(await w.machines.fleetOf(SOLIS)).toEqual({ rev: 1 })
+    expect(await w.machines.fleetOf(SOLIS)).toEqual({ rev: 1 })
+    expect(await w.machines.fleetOf(SOLIS)).toEqual({ rev: 2 })
+    expect(w.calls.map((c) => c.url)).toEqual([`${SOLIS_BASE}/api/fleet`, `${SOLIS_BASE}/api/fleet?etag=${encodeURIComponent('W/"r1"')}`, `${SOLIS_BASE}/api/fleet?etag=${encodeURIComponent('W/"r1"')}`])
+    // A header the page sets itself would send Chrome past its preflight cache on every call.
+    for (const call of w.calls) expect(Object.keys(call.init.headers as Record<string, string>).map((k) => k.toLowerCase())).not.toContain('if-none-match')
+    // Joined to a route that already has a query, and the same for a card read.
+    w.answers.push(tagged({ cards: [] }, 'W/"c1"'))
+    await w.machines.call(SOLIS, 'GET', 'api/watch/cards?workspace=w-1&full=none')
+    await w.machines.call(SOLIS, 'GET', 'api/watch/cards?workspace=w-1&full=none')
+    expect(w.calls.at(-1)?.url).toBe(`${SOLIS_BASE}/api/watch/cards?workspace=w-1&full=none&etag=${encodeURIComponent('W/"c1"')}`)
+  })
+
+  it('a 304 hands back the answer whose tag was sent, even when a newer one landed meanwhile (review, bytes 0.6.2)', async () => {
+    const w = world()
+    let release: ((response: Response) => void) | null = null
+    let round = 0
+    ;(w.deps as { fetch: RelayMachineDeps['fetch'] }).fetch = vi.fn(async (url: string, init: RequestInit) => {
+      w.calls.push({ url, init })
+      round += 1
+      if (round === 1) return new Response('{"rev":1}', { status: 200, headers: { etag: 'W/"r1"' } })
+      // The second read is held until the third has stored a newer answer.
+      if (round === 2) return new Promise<Response>((resolve) => void (release = resolve))
+      return new Response('{"rev":2}', { status: 200, headers: { etag: 'W/"r2"' } })
+    })
+    const machines = createRelayMachines(w.deps)
+    await machines.fleetOf(SOLIS)
+    const slow = machines.fleetOf(SOLIS)
+    await vi.waitFor(() => expect(release).not.toBeNull())
+    expect(await machines.fleetOf(SOLIS)).toEqual({ rev: 2 })
+    release!(new Response(null, { status: 304, headers: { etag: 'W/"r1"' } }))
+    // The machine vouched for r1, the tag that read sent: r1 is what it says.
+    expect(await slow).toEqual({ rev: 1 })
+    // And the newer answer is still the one held.
+    ;(w.deps as { fetch: RelayMachineDeps['fetch'] }).fetch = vi.fn(async (url: string, init: RequestInit) => (w.calls.push({ url, init }), new Response(null, { status: 304 })))
+    expect(await createRelayMachines(w.deps).fleetOf(SOLIS)).toBeNull()
+    expect(await machines.fleetOf(SOLIS)).toEqual({ rev: 2 })
+  })
+
+  it('a 304 to a read that named no tag is asked once more, whole', async () => {
+    const w = world()
+    w.answers.push(new Response(null, { status: 304 }), new Response('{"rev":5}', { status: 200, headers: { etag: 'W/"r5"' } }))
+    expect(await w.machines.fleetOf(SOLIS)).toEqual({ rev: 5 })
+    expect(w.calls.map((c) => c.url)).toEqual([`${SOLIS_BASE}/api/fleet`, `${SOLIS_BASE}/api/fleet`])
+  })
+
+  it('reuses nothing held under a key it no longer holds, and nothing for a write', async () => {
+    const w = world()
+    w.store.set(`cr_token:${SOLIS}`, 'first')
+    w.answers.push(new Response('{"rev":1}', { status: 200, headers: { etag: 'W/"r1"' } }))
+    await w.machines.fleetOf(SOLIS)
+    w.store.set(`cr_token:${SOLIS}`, 'second')
+    await w.machines.fleetOf(SOLIS)
+    expect(w.calls[1]?.url).toBe(`${SOLIS_BASE}/api/fleet`)
+    await w.machines.call(SOLIS, 'POST', 'api/watch/new', { text: 'go' })
+    expect(w.calls.at(-1)?.url).toBe(`${SOLIS_BASE}/api/watch/new`)
+  })
+
   it('a key that machine no longer takes is dropped and the door asked again, once', async () => {
     const w = world()
     w.store.set(`cr_token:${SOLIS}`, 'old')

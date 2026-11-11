@@ -20,6 +20,8 @@ import { hasLatestPush, subscribeLatestChanged } from '../latest-changed-bus'
 import { cookrew, isRemoteMode } from '../api'
 import { pickStreamTransport } from './use-stream'
 import { readEach } from './read-each'
+import { createTailSchedule, tailVersionOf, type TailSchedule } from './tail-schedule'
+import type { TerminalActivity } from '../../../shared/turn'
 import type { StreamTransport } from './stream-transport'
 import { closingMessage } from '../../../shared/trace-blocks'
 import type { LatestCheckpoint } from '../turn-view-model'
@@ -129,10 +131,21 @@ export function useStreamTail(terminalId: string, active: boolean): LatestCheckp
  * times a second while an agent works.
  */
 export function useStreamTails(
-  ids: readonly string[]
+  ids: readonly string[],
+  /**
+   * Each agent's activity, by id: where nothing pushes, a preview is read again
+   * when this says its agent changed, and otherwise once a minute (tail-schedule.ts).
+   * Read through a ref, so a new object every render tears nothing down.
+   */
+  activities: Readonly<Record<string, TerminalActivity | undefined>> = {}
 ): Record<string, LatestCheckpoint | null> {
   const [checkpoints, setCheckpoints] = useState<Record<string, LatestCheckpoint | null>>({})
   const key = ids.join('\n')
+  const activitiesRef = useRef(activities)
+  activitiesRef.current = activities
+  // One plan for the hook's life: a change of who is quiet keeps what is known of the rest
+  // (`due` forgets the ids that left), rather than reading the whole board again (review).
+  const planRef = useRef<TailSchedule | null>(null)
 
   useEffect(() => {
     const wanted = key.length === 0 ? [] : key.split('\n')
@@ -148,6 +161,12 @@ export function useStreamTails(
     const transport = pickStreamTransport()
     const bridge = cookrew() as unknown as WatchBridge
     let cancelled = false
+    const push = hasLatestPush()
+    // WITHOUT A PUSH (the console, the phone) a preview is read when its agent
+    // changed and at most a minute apart, not every agent every 3 s
+    // (tail-schedule.ts, bytes 0.6.2). With one (the desktop) every push reads
+    // its card at once and the sweep is the backstop, over IPC, as before.
+    const plan = push ? null : (planRef.current ??= createTailSchedule())
     const readOne = async (id: string): Promise<void> => {
       if (document.hidden) return
       try {
@@ -156,7 +175,8 @@ export function useStreamTails(
         // Rows compare by reference; only re-render when one actually moved.
         setCheckpoints((prior) => (same(prior[id], preview) ? prior : { ...prior, [id]: preview }))
       } catch {
-        // A transient miss keeps the last good value until the next tick.
+        // A transient miss keeps the last good value; the plan asks again soon.
+        plan?.missed(id, Date.now())
       }
     }
     // One sweep at a time: a sweep still running when the timer fires is
@@ -165,14 +185,21 @@ export function useStreamTails(
     let sweeping = false
     const readAll = (): void => {
       if (sweeping || document.hidden) return
+      let due = wanted
+      if (plan !== null) {
+        const now = Date.now()
+        const versions = Object.fromEntries(wanted.map((id) => [id, tailVersionOf(activitiesRef.current[id])]))
+        due = plan.due(wanted, versions, now)
+        if (due.length === 0) return
+        for (const id of due) plan.read(id, versions[id] ?? '', now)
+      }
       sweeping = true
-      void readEach(wanted, readOne, isRemoteMode() ? REMOTE_READS_AT_ONCE : wanted.length).finally(() => {
+      void readEach(due, readOne, isRemoteMode() ? REMOTE_READS_AT_ONCE : due.length).finally(() => {
         sweeping = false
       })
     }
     readAll()
 
-    const push = hasLatestPush()
     const offPush: (() => void)[] = []
     if (push) {
       for (const id of wanted) {

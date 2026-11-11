@@ -101,6 +101,10 @@ export interface MachineView {
   /** Its platform as its profile says it; null or absent when it publishes none. */
   os?: string | null
   workspaces: { id: string; name: string; presets: string[]; waiting: boolean }[]
+  /** Its workspaces as tiles, in the same form as this machine's (WorkspaceTile): what its screen holds on the devices stop. */
+  marks: MarkView[]
+  /** Its display's proportions, from its own feed: the screen it is drawn with. */
+  display?: { w: number; h: number } | null
   agents: number | null
   waiting: number | null
 }
@@ -207,7 +211,7 @@ export interface ZoomInput {
     os?: string | null
     /** Its display in points, as its own feed tells it: the screen it is drawn with. */
     display?: { w: number; h: number } | null
-    workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number } | null }[]
+    workspaces: readonly { id: string; name: string; agents: readonly { harness: string; phase: string }[]; counts: { agents: number; waiting: number; browsers?: number; notes?: number } | null; deck?: readonly DeckSource[] }[]
   }[]
 }
 
@@ -227,6 +231,21 @@ export interface DeckSource {
 }
 /** How many things a tile's deck shows by name; the rest is its depth. */
 export { DECK_SHOWN }
+/** A workspace of another machine as a tile (owner 2026-11-11): from its own feed, never a made-up zero. */
+const machineMarkOf = (w: NonNullable<ZoomInput['machines']>[number]['workspaces'][number]): MarkView => {
+  const waitingCount = w.counts?.waiting ?? w.agents.filter((a) => a.phase === 'waiting').length
+  return {
+    id: w.id,
+    name: w.name,
+    presets: w.agents.map((a) => a.harness),
+    waiting: waitingCount > 0,
+    waitingCount,
+    browsers: w.counts?.browsers ?? null,
+    notes: w.counts?.notes ?? null,
+    deck: (w.deck ?? []).map(deckView)
+  }
+}
+
 const deckView = (d: DeckSource): ItemView => ({ id: d.id, kind: d.kind, title: d.title, host: d.host ?? '', tint: tintOf(d.id), initial: itemInitial(d.title), line: '', owners: [] })
 
 /** The word over a card that is not resting but stuck. */
@@ -365,6 +384,8 @@ export function buildZoomModel(input: ZoomInput): ZoomModel {
       ...(m.signedIn === undefined ? {} : { signedIn: m.signedIn }),
       os: m.os ?? null,
       workspaces: m.workspaces.map((w) => ({ id: w.id, name: w.name, presets: w.agents.map((a) => a.harness), waiting: w.agents.some((a) => a.phase === 'waiting') })),
+      marks: m.workspaces.map((w) => machineMarkOf(w)),
+      display: m.display ?? null,
       agents: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.agents ?? 0), 0) : null,
       waiting: m.workspaces.length && m.workspaces.every((w) => w.counts) ? m.workspaces.reduce((a, w) => a + (w.counts?.waiting ?? 0), 0) : null
     })),

@@ -300,6 +300,14 @@
   :root:root :is(.zv-machine-label, .zv-machinecard-label) small {
     font-size: calc(var(--ph-caption) / var(--zv-k-devices, 1));
   }
+  /* Each machine's gauges, under its name (owner 2026-11-11): held as its caption is. */
+  :root:root .zv-machine-label .zv-gauge-line {
+    font-size: calc(var(--ph-caption) / var(--zv-k-devices, 1));
+  }
+  /* Another machine's tile words, as this machine's are at the devices stop: not drawn (zoom-frame.ts fades them). */
+  :root:root .zv-other :is(.zv-om-title, .zv-om-tile .zv-tw) {
+    visibility: hidden;
+  }
 
   /* The workspaces stop: a tile's name reads as an agent's does, its counts at caption. */
   :root:root .zv-tile-name {

@@ -423,30 +423,51 @@ export function deviceOf(
   return { at, box, screen: screenOf(box, aspect), titleBottom, dx, gridTop, gridH, rowH: dy, left, tile }
 }
 
-/** The account's other machines: a row (wrapping) under this Mac's screen (deviceOf · screen), inside the devices camera. */
-/** `rowGap`: under each frame stands its base, so rows stand a little further apart than columns. */
-export const MACHINE_CARD = { w: 380, h: 220, gap: 40, rowGap: 56 }
 /**
- * Room under the machine's screen, in scene units, before the other machines
- * start: its name and its "Remote desktop" pill are drawn there at a thumb's
- * size whatever the camera's scale (zoom-frame.ts · paintDeviceWords), and
- * stood over the first machine without it, on a phone and on a desk alike
- * (owner screenshot, 2026-11-10). A phone's camera draws smaller: more units.
+ * EVERY DEVICE ON ONE CANVAS (owner 2026-11-11: "所有device统一用图5形式"). Every
+ * machine of the account is the same frame as this one, its own workspace tiles
+ * on its screen (ZoomParts · MachineFrame), standing in one row with this machine
+ * first; a desk wraps after MACHINES_PER_ROW, a phone stacks them one a row. In
+ * the devices layer's units, this machine's frame centred on the origin.
  */
-export const LABEL_ROOM = { narrow: 220, desk: 110 } as const
+export const MACHINES_PER_ROW = 4
+/** A machine's screen holds its device view at this share on the devices stop; the bezel round it, in the devices layer's units. One pair for the painter and every frame. */
+export const SCREEN_SCALE = 0.5
+export const BEZEL = 28
+/** Between two frames in a row: the base's overhang and a breath. */
+export const MACHINE_GAP = 180
+/**
+ * Room under a frame for its base, name, line, gauges and "Remote desktop" pill.
+ * A phone holds those words larger against the camera (zoom-frame.ts ·
+ * paintDeviceWords), so it needs more (owner screenshot, 2026-11-10).
+ */
+export const LABEL_ROOM = { narrow: 280, desk: 170 } as const
 
-/** The other machines under this one's screen: two a row on a phone, three on a desk. */
-export function machinesAt(count: number, screen: Box, narrow: boolean): { at: Pos[]; rows: number; perRow: number; top: number } {
-  const perRow = narrow ? 2 : 3
-  const rows = Math.ceil(count / perRow)
-  const top = screen.h / 2 + 120 + LABEL_ROOM[narrow ? 'narrow' : 'desk']
+export interface MachinesPlace {
+  /** The other machines' frame centres, in order; this one is at the origin. */
+  at: Pos[]
+  rows: number
+  perRow: number
+  /** Everything the devices stop frames: every frame with its words, centred on (cx, cy). */
+  box: Box & { cx: number }
+}
+
+/** Where the account's other machines stand beside this one, `frame` this machine's frame. */
+export function machinesAt(count: number, frame: { w: number; h: number }, narrow: boolean): MachinesPlace {
+  const total = count + 1
+  const perRow = narrow ? 1 : Math.min(total, MACHINES_PER_ROW)
+  const rows = Math.ceil(total / perRow)
+  const cols = Math.min(total, perRow)
+  const room = LABEL_ROOM[narrow ? 'narrow' : 'desk']
+  const colStep = frame.w + MACHINE_GAP
+  const rowStep = frame.h + room + 40
   const at: Pos[] = []
-  for (let i = 0; i < count; i++) {
-    const row = Math.floor(i / perRow)
-    const inRow = Math.min(perRow, count - row * perRow)
-    at.push({ x: ((i % perRow) - (inRow - 1) / 2) * (MACHINE_CARD.w + MACHINE_CARD.gap), y: top + row * (MACHINE_CARD.h + MACHINE_CARD.rowGap) })
-  }
-  return { at, rows, perRow, top }
+  for (let i = 1; i < total; i++) at.push({ x: (i % perRow) * colStep, y: Math.floor(i / perRow) * rowStep })
+  const left = -frame.w / 2 - 80
+  const right = (cols - 1) * colStep + frame.w / 2 + 80
+  const top = -frame.h / 2 - 40
+  const bottom = (rows - 1) * rowStep + frame.h / 2 + room
+  return { at, rows, perRow, box: { w: right - left, h: bottom - top, cx: (left + right) / 2, cy: (top + bottom) / 2 } }
 }
 
 /** Fit a box into the view, never above natural size. */

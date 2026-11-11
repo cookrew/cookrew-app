@@ -75,15 +75,16 @@ describe('the other machine’s stops', () => {
 })
 
 describe('the stage', () => {
-  it('nothing outside a machine; inside, the crumbs say whose it is', async () => {
+  // The bar at the foot moves through its stops (owner 2026-11-11): no breadcrumb strip; the top line says whose it is.
+  it('nothing outside a machine; inside, the line at the top says whose it is', async () => {
     const { RemoteMachineView } = await import('../src/renderer/src/zoom/RemoteMachineView')
     const { remotePlace } = await import('../src/renderer/src/zoom/remote-machine-store')
     expect(renderToStaticMarkup(createElement(RemoteMachineView))).toBe('')
     remotePlace.enter(SOLIS)
     const html = renderToStaticMarkup(createElement(RemoteMachineView))
-    expect(html).toContain('Devices')
-    expect(html).toContain('rm-crumb remote')
-    expect(html).toContain('on Solis-Core')
+    expect(html).toContain('rm-where')
+    expect(html).toContain('<b>Solis-Core</b>')
+    expect(html).not.toContain('rm-crumb')
     expect(html).toContain('Asking Solis-Core')
     remotePlace.leave()
   })

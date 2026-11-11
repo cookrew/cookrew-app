@@ -163,7 +163,15 @@ function build(config: ConsoleConfig, win: Window): ConsoleParts {
     // It looks; it does not let go. One machine's word never takes the pass from the others.
     onReproof: () => void gate.check(),
     // The registry refused a token the page thought good: the device key says whether the sign-in still stands.
-    onSignedOut: () => session.refused()
+    onSignedOut: () => session.refused(),
+    // A hidden tab asks nobody anything (bytes 0.6.2).
+    sight: {
+      hidden: () => win.document.visibilityState === 'hidden',
+      watch: (changed) => {
+        win.document.addEventListener('visibilitychange', changed)
+        return () => win.document.removeEventListener('visibilitychange', changed)
+      }
+    }
   })
 
   const openDoor = async (machineId: string): Promise<DoorAnswer> => {

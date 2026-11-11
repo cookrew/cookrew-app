@@ -167,6 +167,18 @@ describe('GET /api/fleet', () => {
     expect(((await changed.json()) as FleetSnapshot).rev).toBe(2)
   })
 
+  it('takes the tag in the address as well as the header: a browser page sends it there, so it is not preflighted each time (bytes 0.6.2)', async () => {
+    const desk = fakeDesktop()
+    const base = await serve(desk.service)
+    const first = await fetch(`${base}/api/fleet`, { headers: auth })
+    const etag = first.headers.get('etag')!
+    const viaQuery = await fetch(`${base}/api/fleet?etag=${encodeURIComponent(etag)}`, { headers: auth })
+    expect(viaQuery.status).toBe(304)
+    expect(await viaQuery.text()).toBe('')
+    const stale = await fetch(`${base}/api/fleet?etag=${encodeURIComponent('"not-this-one"')}`, { headers: auth })
+    expect(stale.status).toBe(200)
+  })
+
   it('reads the dials once per refresh window, and takes a bus change at once', async () => {
     const desk = fakeDesktop()
     const base = await serve(desk.service)

@@ -53,6 +53,7 @@ describe('the board sweep', () => {
   it('reads one tail at a time on the companion, and never starts a sweep over a running one', () => {
     expect(src).toMatch(/REMOTE_READS_AT_ONCE = 1\b/)
     expect(src).toMatch(/if \(sweeping \|\| document\.hidden\) return/)
-    expect(src).toMatch(/isRemoteMode\(\) \? REMOTE_READS_AT_ONCE : wanted\.length/)
+    // Only what is due is read (tail-schedule.ts, bytes 0.6.2), still one at a time on the companion.
+    expect(src).toMatch(/isRemoteMode\(\) \? REMOTE_READS_AT_ONCE : due\.length/)
   })
 })

@@ -13,6 +13,15 @@ describe('the calls one machine may make on another', () => {
     expect(remoteMachineCall('GET', 'api/watch/cards?workspace=w-1')?.route).toBe('api/watch/cards?workspace=w-1')
   })
 
+  it('reads them lean, as the zoom view draws them: tiles alone, or a crew with one card’s whole reply (bytes 0.6.2)', () => {
+    for (const route of ['api/watch/cards?cards=0', 'api/watch/cards?workspace=w-1&full=none', 'api/watch/cards?workspace=w-1&full=t-1']) {
+      expect(remoteMachineCall('GET', route)?.route, route).toBe(route)
+    }
+    for (const route of ['api/watch/cards?cards=1', 'api/watch/cards?full=none', 'api/watch/cards?workspace=w-1&full=', 'api/watch/cards?workspace=w-1&full=../x', 'api/watch/cards?cards=0&workspace=w-1']) {
+      expect(remoteMachineCall('GET', route), route).toBeNull()
+    }
+  })
+
   it('answers, replies, stops and starts agents on it', () => {
     for (const route of ['api/terminal/abc-1/input', 'api/terminal/abc-1/menu', 'api/terminal/abc-1/seen', 'api/watch/card/abc-1/stop', 'api/watch/new', 'api/watch/new?seat=w-1', 'api/watch/item/b1/input']) {
       expect(remoteMachineCall('POST', route), route).not.toBeNull()
@@ -47,6 +56,18 @@ describe('the calls one machine may make on another', () => {
       ['GET', 'https://evil.example/api/watch/cards']
     ] as const) {
       expect(remoteMachineCall(method, route), `${method} ${route}`).toBeNull()
+    }
+  })
+})
+
+describe('what the zoom view asks another machine for (bytes 0.6.2)', () => {
+  it('asks in the shapes the allow-list takes: tiles alone, a crew with no whole reply, or with the open card’s', async () => {
+    const { cardsRoute } = await import('../src/renderer/src/zoom/use-remote-machine')
+    expect(cardsRoute(null, null)).toBe('api/watch/cards?cards=0')
+    expect(cardsRoute('w-1', null)).toBe('api/watch/cards?workspace=w-1&full=none')
+    expect(cardsRoute('w-1', 't-9')).toBe('api/watch/cards?workspace=w-1&full=t-9')
+    for (const route of [cardsRoute(null, null), cardsRoute('w-1', null), cardsRoute('w-1', 't-9')]) {
+      expect(remoteMachineCall('GET', route)?.route, route).toBe(route)
     }
   })
 })

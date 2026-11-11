@@ -192,7 +192,8 @@ export function RosterPanel({
   // (trace-perf T1) and so does its row here, or the Board says QUIET about
   // a crew the canvas shows mid-sentence.
   const idle = useMemo(() => checkpointWanted(roster, activities), [roster, activities])
-  const checkpoints = useStreamTails(idle)
+  // Read again when an agent's activity says it changed, else once a minute (tail-schedule.ts).
+  const checkpoints = useStreamTails(idle, activities)
   // The brief lives on the card (TerminalNodeData.brief), not in the registry.
   const briefs = useMemo(() => {
     const out: Record<string, string> = {}
