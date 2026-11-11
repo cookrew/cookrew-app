@@ -376,7 +376,6 @@ import { serviceGrants } from './service-grants-store'
 import { requestHarnessCompletion, servedGrantPreflight } from './served-grant-preflight'
 import { servedSessionProvisioner } from './served-onboarding'
 import {
-  doorOwnerOf,
   gateCaller,
   handleServedRoute,
   identifyCaller,
@@ -392,16 +391,11 @@ import {
   type ImportFace,
   type ServeTarget
 } from './import-session'
-import {
-  admitWithAccount,
-  openAdmission,
-  signInToDoor,
-  startStripeCheckout,
-  stripePaymentHeader
-} from './served-admission'
+import { signInToDoor } from './served-admission'
+import { createServeGate, handOffCheckout } from './serve-gate'
+import { PendingCheckouts } from './pending-checkout'
 import { doorBearer, type DoorBearerPort } from './door-bearer'
 import { expiryWarningDue } from '../shared/session-renew'
-import { gateDoorFor } from '../shared/gate-walk'
 import { buildX402Payment, deviceWallet } from './x402-caller'
 import { servedTurnReply } from './served-turn-reply'
 import { handleServedPayRoute } from './served-pay-route'
@@ -1058,6 +1052,12 @@ const ENV_HANDLE = process.env.COOKREW_HANDLE ?? ''
  * app boots, works and serves nothing, and every call below answers rather
  * than throws. Nothing here is on the serving path.
  */
+/**
+ * Set once the import gate exists (it is built from `accounts`, below). A
+ * holder rather than a direct call because the account can announce a change
+ * before the rest of this file has been evaluated.
+ */
+let gateAccountChanged: (() => void) | null = null
 const accounts = new Accounts({
   // "<model> · <host>" (v3, D12): two Macs of one model are told apart by
   // host, and a name already on the account gets a counter — decided here,
@@ -1075,6 +1075,9 @@ const accounts = new Accounts({
   // web ends this session; nothing local would ever notice. Pushing the status
   // is what turns that into a password prompt the owner can actually answer.
   onChange: () => {
+    // A different person at this Mac must find none of the last one's door
+    // Bearers, shown quotes or bought-seat stand-ins (serve-gate.ts).
+    gateAccountChanged?.()
     if (mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send('account:changed')
     }
@@ -2160,17 +2163,14 @@ async function handleServedSlug(
                 sub: input.sub,
                 slug: input.slug,
                 successUrl: input.successUrl,
-                ...(input.returnUrl === undefined ? {} : { returnUrl: input.returnUrl }),
                 ...(input.team === undefined ? {} : { team: input.team })
               }
             )
             return result.ok ? result.url : null
           },
       successUrl: (t) => servedPaymentReturn(t.slug),
-      // A buyer paying FROM the team's page at cookrew.dev is sent back to it
-      // — that page, at that origin, and nowhere else (returnUrlFor).
-      doorName: (t) => relayServing?.addressFor(t.slug)?.name ?? null,
-      registryOrigin: () => registryOrigin()
+      // The published name is for the words on the receipt, nothing more.
+      doorName: (t) => relayServing?.addressFor(t.slug)?.name ?? null
     },
     template,
     method,
@@ -2550,15 +2550,42 @@ const streamIpcDeps: StreamIpcDeps = {
  * second card type; the owner reverted it. This is one seam and no new card.)
  */
 /**
+ * The import gate's verbs, and the Bearers they hold. MAIN-ONLY BY
+ * CONSTRUCTION: the gate sheet drives the ceremony over IPC by naming the
+ * door, never by holding its credential, so a renderer bug cannot leak one.
+ */
+const serveGate = createServeGate({
+  parse: (link) => parseServeAddress(link),
+  reachable: (target) => reachable(target),
+  accounts,
+  signInWithKey: (at) => signInToDoor(at),
+  wallet: () => deviceWallet(),
+  buildX402Payment: (requirements) => buildX402Payment(requirements),
+  // Card payments in flight, per account and door, on disk: a closed sheet or
+  // a restart must not forget a Checkout page that can still take a card.
+  pending: new PendingCheckouts()
+})
+
+/**
  * The port the two post-import calls are asked through. `accounts` is this
  * Mac's session on cookrew.dev; the key store is the door's own file.
  */
 const doorPort: DoorBearerPort = {
-  admit: (target, team) => admitWithAccount(target, team, accounts),
+  // An ordinary sign-in as the account — and, for the moment after a seat is
+  // bought here, the Bearer the door admitted the purchase on (serve-gate.ts).
+  admit: (target, team) => serveGate.admitCard(target, team),
   withKey: (target) => signInToDoor(target)
 }
 
 const doorTranscripts = new Map<string, Promise<DoorTranscript | null>>()
+
+// A DIFFERENT PERSON AT THIS MAC finds none of the last one's door Bearers:
+// not the gate's (serve-gate.ts), and not the ones the cached transcripts
+// signed in with — a card on the canvas would otherwise go on reading its
+// door as the person who left, for as long as that Bearer lived.
+gateAccountChanged = () => {
+  if (serveGate.accountChanged()) doorTranscripts.clear()
+}
 
 function doorTranscriptFor(terminalId: string): Promise<DoorTranscript | null> {
   const hit = store.nodeAcrossWorkspaces(terminalId)
@@ -6090,111 +6117,14 @@ const serveOps = {
     }
   },
   /**
-   * THE GATE — which walk, and what the door said (identity v3, G1/G3).
-   *
-   * One decision splits it, `gateDoorFor`: a LISTED team (a published name the
-   * directory answers for) is entered as the ACCOUNT — cookrew.dev mints a
-   * call token for this Mac's session and the door seats `acct-<username>`,
-   * the same person the web seated, so a seat bought there admits here with
-   * no second payment. With no account on this Mac the answer is the
-   * `identify` phase and the sheet opens the account sheet in place. The
-   * caller key is offered at UNLISTED doors only — the DIRECT walk — because
-   * a key-holder sub can never be the person a seat names. The phone's gate
-   * verb (mobile-api /api/serve/gate) runs this same function.
+   * THE GATE — which walk, what the door said, and the two verbs that pay
+   * (serve-gate.ts). `intent` is the sheet's BUY A SEAT press and nothing
+   * else; the phone's verbs (mobile-api /api/serve/*) run these same functions.
    */
-  gate: async (link: string) => {
-    const target = parseServeAddress(link)
-    if (!target) return { ok: false as const, reason: 'bad-address' as const }
-    try {
-      const reached = await reachable(target)
-      if (!reached) return { ok: false as const, reason: 'sign-in' as const, detail: 'not serving' }
-      const at = reached.at
-      const door = gateDoorFor(target, reached)
-      if (door === 'direct') {
-        const token = await signInToDoor(at)
-        callerTokens.set(targetKey(target), token)
-        const phase = await openAdmission(at, token)
-        return { ok: true as const, door, phase, wallet: deviceWallet() }
-      }
-      const team = target.door as string
-      const admitted = await admitWithAccount(at, team, accounts)
-      if (admitted.token !== null) callerTokens.set(targetKey(target), admitted.token)
-      return {
-        ok: true as const,
-        door,
-        phase: admitted.phase,
-        wallet: deviceWallet(),
-        // The facts the sheet's sentences name: the team, who can say yes,
-        // and who this Mac is (the usual cause of a no_seat is being signed
-        // in as somebody else).
-        team,
-        owner: doorOwnerOf(team),
-        account: admitted.account,
-        seat: admitted.seat
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        reason: 'sign-in' as const,
-        detail: error instanceof Error ? error.message : String(error)
-      }
-    }
-  },
-  checkout: async (link: string) => {
-    const target = parseServeAddress(link)
-    const token = target ? callerTokens.get(targetKey(target)) : undefined
-    if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
-    try {
-      const reached = await reachable(target)
-      if (!reached) return { ok: false as const, reason: 'unavailable' as const }
-      const checkout = await startStripeCheckout(reached.at, token)
-      // The URL comes back too: a hand-off that silently failed to raise a
-      // browser would otherwise leave the person waiting on a page they never
-      // saw, with no way to reach it. It is a capability — the sheet keeps it
-      // to re-open, and never prints it.
-      return { ok: true as const, session: checkout.session, url: checkout.url }
-    } catch (error) {
-      return {
-        ok: false as const,
-        reason: 'unavailable' as const,
-        detail: error instanceof Error ? error.message : String(error)
-      }
-    }
-  },
-  settle: async (link: string, rail: 'x402' | 'stripe', session?: string) => {
-      const target = parseServeAddress(link)
-      const token = target ? callerTokens.get(targetKey(target)) : undefined
-      if (!target || !token) return { ok: false as const, reason: 'not-signed-in' as const }
-      try {
-        const reached = await reachable(target)
-        if (!reached) return { ok: false as const, reason: 'refused' as const }
-        const at = reached.at
-        let payment: string
-        if (rail === 'stripe') {
-          if (!session) return { ok: false as const, reason: 'no-session' as const }
-          payment = stripePaymentHeader(session)
-        } else {
-          const quoted = await openAdmission(at, token)
-          const terms =
-            quoted.kind === 'pay'
-              ? quoted.rails.find((entry) => entry.rail === 'x402')
-              : undefined
-          if (!terms || terms.rail !== 'x402') {
-            // Already open, or this door stopped quoting USDC. Either way there
-            // is nothing to sign, and signing a stale quote is money gone.
-            return { ok: true as const, phase: quoted }
-          }
-          payment = await buildX402Payment(terms.requirements)
-        }
-        return { ok: true as const, phase: await openAdmission(at, token, payment) }
-      } catch (error) {
-        return {
-          ok: false as const,
-          reason: 'refused' as const,
-          detail: error instanceof Error ? error.message : String(error)
-        }
-      }
-  },
+  gate: (link: string, intent?: 'buy') => serveGate.gate(link, intent),
+  checkout: (link: string) => serveGate.checkout(link),
+  settle: (link: string, rail: 'x402' | 'stripe', session?: string, shown?: string) =>
+    serveGate.settle(link, rail, session, shown),
   import: async (
     link: string,
     position?: { x: number; y: number },
@@ -6243,27 +6173,6 @@ function orchLineScript(): string {
 
 /** A public face is small; anything larger is not a face we should parse. */
 const MAX_FACE_BYTES = 64 * 1024
-
-/**
- * Bearers held for doors this app has signed in to, while an import is being
- * decided. MAIN-ONLY BY CONSTRUCTION: the gate sheet drives the ceremony over
- * IPC by naming the door, never by holding its credential, so a renderer bug
- * cannot leak one. Keyed by origin+slug; a token outlives the sheet only until
- * the app quits (they expire on their own at the door).
- */
-const callerTokens = new Map<string, string>()
-
-/**
- * One key per door, and NOT its wire address.
- *
- * A relayed door is reached through a loopback port that changes with every
- * restart, so keying a token by where it was reached would lose it the moment
- * the app came back. A published name is the durable identity; a dialled
- * door's address is its own.
- */
-function targetKey(target: ServeTarget): string {
-  return target.door ?? `${target.origin}/${target.slug}`
-}
 
 /** One team, as a directory listing describes it. Validated, like any face. */
 interface BrowsedTeam {
@@ -7305,6 +7214,11 @@ app.whenReady().then(() => {
         if (settled > 0) console.error(`[cookrew] recorded ${settled} seat(s) at cookrew.dev`)
       })
       .catch(() => undefined)
+    // AND ANY CARD PAYMENT THIS ACCOUNT LEFT IN FLIGHT as a buyer. A Checkout
+    // page paid after the app was closed has charged a card and seated nobody:
+    // the door only learns of it when the session is presented, so it is
+    // presented now rather than whenever the sheet is next opened.
+    void serveGate.resumePending().catch(() => undefined)
     // Whatever the last run left queued for the funnel; off, it stays home.
     void resumeTelemetry()
   }, 5_000)
@@ -8575,7 +8489,7 @@ function registerIpc(handlers: RestoreHandlers): void {
     },
     // Seats & Teams (phase 5). The door is wired even with no account on this
     // Mac — `Accounts.authed` answers `no_account` and the tab says so.
-    seats: { door: doorSeats, serving: servedTeamRefs, origin: registryOrigin() }
+    seats: { door: doorSeats, serving: servedTeamRefs }
   })
 
   ipcMain.handle(
@@ -8824,7 +8738,10 @@ function registerIpc(handlers: RestoreHandlers): void {
    * The Bearer never leaves the main process — the renderer drives the sheet,
    * it does not hold the credential.
    */
-  ipcMain.handle('serve:gate', (_e, link: string) => serveOps.gate(link))
+  // BUY is the exact word or it is not said: an import is never quietly a purchase.
+  ipcMain.handle('serve:gate', (_e, link: string, intent?: unknown) =>
+    serveOps.gate(link, intent === 'buy' ? 'buy' : undefined)
+  )
 
   /**
    * Start a card payment: the door mints a hosted Checkout session and we open
@@ -8832,13 +8749,12 @@ function registerIpc(handlers: RestoreHandlers): void {
    * embedded page has no wallet and no autofill — and a hosted page is where
    * Stripe wants the card, so the hand-off is the honest move.
    */
-  ipcMain.handle('serve:checkout', async (_e, link: string) => {
-    const checkout = await serveOps.checkout(link)
+  ipcMain.handle('serve:checkout', async (_e, link: string) =>
     // The desktop opens the hosted page in the user's REAL browser itself; a
-    // phone opens the URL it is handed, in its own.
-    if (checkout.ok) await shell.openExternal(checkout.url)
-    return checkout
-  })
+    // phone opens the URL it is handed, in its own. Only Stripe's Checkout is
+    // ever opened — the address is a door's word (serve-gate.ts handOffCheckout).
+    handOffCheckout(await serveOps.checkout(link), (url) => shell.openExternal(url))
+  )
 
   /**
    * Present a payment and be admitted. For a card that is the Checkout session
@@ -8848,8 +8764,11 @@ function registerIpc(handlers: RestoreHandlers): void {
    * On success the session is open at the author's app, so the card placed
    * next opens its line into it and never meets the money.
    */
-  ipcMain.handle('serve:settle', (_e, link: string, rail: 'x402' | 'stripe', session?: string) =>
-    serveOps.settle(link, rail, session)
+  ipcMain.handle(
+    'serve:settle',
+    (_e, link: string, rail: 'x402' | 'stripe', session?: string, shown?: unknown) =>
+      // `shown` is what the sheet displayed for the wallet rail: text, or not said.
+      serveOps.settle(link, rail, session, typeof shown === 'string' ? shown : undefined)
   )
   /**
    * Place the imported team's interface: ONE orch card on the caller's own

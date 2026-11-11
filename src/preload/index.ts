@@ -381,10 +381,10 @@ const api = {
   // ── import a served team (caller side) ──
   serveInspect: (link: string) => ipcRenderer.invoke('serve:inspect', link),
   serveBrowse: (link: string) => ipcRenderer.invoke('serve:browse', link),
-  serveGate: (link: string) => ipcRenderer.invoke('serve:gate', link),
+  serveGate: (link: string, intent?: 'buy') => ipcRenderer.invoke('serve:gate', link, intent),
   serveCheckout: (link: string) => ipcRenderer.invoke('serve:checkout', link),
-  serveSettle: (link: string, rail: 'x402' | 'stripe', session?: string) =>
-    ipcRenderer.invoke('serve:settle', link, rail, session),
+  serveSettle: (link: string, rail: 'x402' | 'stripe', session?: string, shown?: string) =>
+    ipcRenderer.invoke('serve:settle', link, rail, session, shown),
   serveImport: (
     link: string,
     position?: { x: number; y: number },

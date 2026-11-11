@@ -178,6 +178,10 @@ export function ownerSecretPaths(
     // What the owner's browser cards saved (browser-downloads.ts): chat files
     // from logged-in sites, as private as the profiles they came out of.
     path.join(base, 'downloads'),
+    // Card payments in flight (pending-checkout.ts): which doors the owner is
+    // buying a seat at, and the Checkout page for each.
+    path.join(base, 'checkout-pending.json'),
+    path.join(base, 'checkout-pending.json.tmp'),
     // Stop's hold and who is waiting to hear (remote-desk.ts).
     path.join(base, 'remote-control.json'),
     // The sealed switch (remote-switch-memory.ts): a copy could be put back after it is off.

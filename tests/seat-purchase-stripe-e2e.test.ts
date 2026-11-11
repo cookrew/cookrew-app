@@ -46,9 +46,13 @@ import { launchChrome, connectPage } from '../scripts/perf-dom-probe.mjs'
  * Stripe rail with the owner's test key, and a real browser filling Stripe's
  * hosted Checkout with the 4242 card. Every assertion is the previous ring's
  * output consumed by the next: the registry mints a buying token, the door
- * quotes, Stripe takes the card and sends the browser back to the team page
- * with the session id, the door settles that id, the seat lands at the
- * registry, and the next token carries it.
+ * quotes, Stripe takes the card and sends the browser back to the door's own
+ * face, the door settles the session id the buyer's app read off the Checkout
+ * URL, the seat lands at the registry, and the next token carries it.
+ *
+ * 0.6.0: there is no team page to return to. The buyer pays from the app,
+ * which sends the door no return and already holds the session id (it is in
+ * the URL the door hands back — served-admission.ts startStripeCheckout).
  *
  * GATED. This talks to api.stripe.com and drives a browser, so it runs only
  * when asked (COOKREW_STRIPE_E2E=1) and only on a TEST key read the one way
@@ -177,15 +181,13 @@ async function ownerApp(config: StripeConfig): Promise<string> {
                 sub: input.sub,
                 slug: input.slug,
                 successUrl: input.successUrl,
-                ...(input.returnUrl === undefined ? {} : { returnUrl: input.returnUrl }),
                 ...(input.team === undefined ? {} : { team: input.team })
               }
             )
             return result.ok ? result.url : null
           },
           successUrl: (t) => `${door}/${t.slug}?payment=received`,
-          doorName: () => DOOR,
-          registryOrigin: () => registry
+          doorName: () => DOOR
         },
         template,
         method,
@@ -368,7 +370,7 @@ const formState = (page: Page): Promise<unknown> =>
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-suite('a seat is bought on Stripe test mode, from the team page, and admits the buyer', () => {
+suite('a seat is bought on Stripe test mode, at the door, and admits the buyer', () => {
   let chrome: { port: number; kill: () => Promise<void> } | null = null
   let checkoutUrl = ''
   let session = ''
@@ -441,12 +443,14 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
     expect(body.terms.accepts.find((a) => a.scheme === 'stripe-checkout')?.amountUsd).toBe(PRICE)
   })
 
-  it('starts a Checkout that returns to the team page — and only to that page', async () => {
-    const wrong = await atDoor('POST', '/api/call/pay', { returnUrl: `${registry}/${OWNER}/other` }, { authorization: `Bearer ${buyerDoorToken}` })
+  it('starts a Checkout the way the app does — no return page — and refuses anybody who asks for one', async () => {
+    // The team page a buyer used to be sent back to is gone: asking for it is
+    // refused before Stripe is touched, so nobody pays towards a dead page.
+    const wrong = await atDoor('POST', '/api/call/pay', { returnUrl: `${registry}/${OWNER}/${TEAM}` }, { authorization: `Bearer ${buyerDoorToken}` })
     expect(wrong.status).toBe(400)
     expect(await wrong.json()).toEqual({ error: 'bad_return' })
 
-    const res = await atDoor('POST', '/api/call/pay', { returnUrl: `${registry}/${OWNER}/${TEAM}` }, { authorization: `Bearer ${buyerDoorToken}` })
+    const res = await atDoor('POST', '/api/call/pay', undefined, { authorization: `Bearer ${buyerDoorToken}` })
     const body = (await res.json()) as { url?: string; error?: string }
     expect(res.status, JSON.stringify(body)).toBe(200)
     checkoutUrl = body.url ?? ''
@@ -454,7 +458,7 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
     session = /\/(cs_test_[A-Za-z0-9_]+)/.exec(checkoutUrl)?.[1] ?? ''
     expect(session).toMatch(/^cs_test_/)
 
-    // The receipt names the seat at the published door, and the return carries the placeholder.
+    // The receipt names the seat at the published door, and the way back is the door's own face.
     const items = await stripeGet(`https://api.stripe.com/v1/checkout/sessions/${session}/line_items`, {
       headers: { authorization: `Bearer ${secret}`, 'stripe-version': '2025-08-27.basil' }
     })
@@ -464,11 +468,11 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
     const detail = await stripeGet(`https://api.stripe.com/v1/checkout/sessions/${session}`, {
       headers: { authorization: `Bearer ${secret}`, 'stripe-version': '2025-08-27.basil' }
     })
-    expect((detail.json as { success_url: string }).success_url).toBe(`${registry}/${OWNER}/${TEAM}?paid={CHECKOUT_SESSION_ID}`)
-    expect((detail.json as { cancel_url: string }).cancel_url).toBe(`${registry}/${OWNER}/${TEAM}`)
+    expect((detail.json as { success_url: string }).success_url).toBe(`${door}/${TEAM}?payment=received`)
+    expect((detail.json as { cancel_url: string | null }).cancel_url ?? null).toBeNull()
   }, 30_000)
 
-  it('is paid with the 4242 card in a real browser, which is sent back to the team’s address with the session', async () => {
+  it('is paid with the 4242 card in a real browser, which is sent back to the door’s own face', async () => {
     chrome = await launchChrome({ width: 1280, height: 1000 })
     const page = await connectPage(chrome.port)
     await page.send('Page.enable')
@@ -601,12 +605,12 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
     const said = async (): Promise<string> =>
       String(await page.evaluate(`Array.from(document.querySelectorAll('[role="alert"], .FieldError, [class*="Error"]')).map((e) => e.textContent.trim()).filter(Boolean).join(' | ')`))
 
-    // Stripe confirms the card, then sends this tab back to the team page.
+    // Stripe confirms the card, then sends this tab back to the door's own face.
     const back = Date.now() + 45_000
     let landed = ''
     const seen: string[] = []
     while (Date.now() < back) {
-      landed = navigations.find((u) => u.startsWith(`${registry}/${OWNER}/${TEAM}`)) ?? ''
+      landed = navigations.find((u) => u.startsWith(`${door}/${TEAM}`)) ?? ''
       if (landed) break
       await sleep(500)
       // What Stripe thinks of the session while we wait — the diagnosis
@@ -624,7 +628,7 @@ suite('a seat is bought on Stripe test mode, from the team page, and admits the 
       const { writeFileSync } = await import('node:fs')
       writeFileSync('/tmp/stripe-e2e-stuck.png', Buffer.from(shot.data, 'base64'))
     }
-    expect(landed, `navigations: ${navigations.join(' | ')} · pressed: ${clicked} · after: ${JSON.stringify(afterPress)} · wire: ${wire.join(' ; ')} · console: ${logs.slice(0, 12).join(' ; ')} · stripe: ${seen.slice(0, 2).join(', ')} · said: ${landed ? '' : await said()}`).toBe(`${registry}/${OWNER}/${TEAM}?paid=${session}`)
+    expect(landed, `navigations: ${navigations.join(' | ')} · pressed: ${clicked} · after: ${JSON.stringify(afterPress)} · wire: ${wire.join(' ; ')} · console: ${logs.slice(0, 12).join(' ; ')} · stripe: ${seen.slice(0, 2).join(', ')} · said: ${landed ? '' : await said()}`).toBe(`${door}/${TEAM}?payment=received`)
     page.close()
   }, 200_000)
 

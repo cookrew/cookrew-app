@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { CHECKOUT_TTL_SECONDS, isStripeCheckoutUrl } from '../shared/stripe-checkout'
 import type { Settle } from './x402-rail'
 
 const STRIPE_API = 'https://api.stripe.com/v1'
@@ -29,7 +30,6 @@ const AI_SERVICE_TAX_CODE = 'txcd_10105002'
  * 7-character prefix (COOKREW) that leaves 13; this is 10.
  */
 const STATEMENT_SUFFIX = 'AI SESSION'
-const CHECKOUT_TTL_SECONDS = 30 * 60
 const HTTP_TIMEOUT_MS = 10_000
 
 export interface StripeConfig {
@@ -136,13 +136,6 @@ export interface StripeCheckoutInput {
   slug: string
   /** A full override for callers that already resolved the served crew face. */
   successUrl?: string
-  /**
-   * The team's page at cookrew.dev, already validated by the door
-   * (served-pay-route.ts `returnUrlFor`). When present it wins over
-   * `successUrl`: Stripe sends the buyer back to it with the session id, and
-   * `cancel_url` is the same page, so backing out lands where the buyer left.
-   */
-  returnUrl?: string
   /** `@handle/team` — the words on the receipt; absent at an unlisted door. */
   team?: string
 }
@@ -196,7 +189,6 @@ export async function stripeCreateCheckout(
   form.set('metadata[sub]', input.sub)
   form.set('metadata[slug]', input.slug)
   form.set('success_url', successUrl)
-  if (input.returnUrl !== undefined) form.set('cancel_url', input.returnUrl)
   // Tax, not guesswork. Hong Kong levies no VAT/GST, so a domestic sale is
   // simply untaxed — but a cross-border sale can create an obligation in the
   // CUSTOMER's country, and only Stripe Tax tracks which. It needs three
@@ -256,19 +248,14 @@ export function seatName(input: Pick<StripeCheckoutInput, 'slug' | 'team'>): str
 }
 
 /**
- * Where Stripe sends the buyer afterwards.
- *
- * A RETURN PAGE gets the session id: `?paid={CHECKOUT_SESSION_ID}`, with the
- * placeholder written RAW. Stripe substitutes it only when it reads the
- * braces as themselves; URLSearchParams would percent-encode them and the
- * buyer would land on a page carrying the literal words. The door's own face
- * keeps its `?payment=received` marker, as before.
+ * Where Stripe sends the buyer afterwards: the door's own face, with its
+ * `?payment=received` marker. Nothing reads a session id off that return —
+ * the app that started the Checkout already holds it (it is in the URL the
+ * door handed back) and asks the door itself whether it was paid.
  */
 const digest = (body: string): string => createHash('sha256').update(body).digest('hex').slice(0, 12)
 
 function resolveSuccessUrl(config: StripeConfig, input: StripeCheckoutInput): string | null {
-  const returnTo = input.returnUrl?.trim()
-  if (returnTo) return withPaidSession(returnTo)
   const candidate = input.successUrl?.trim()
   if (candidate) return validHttpUrl(candidate) ? withPaymentReceived(candidate) : null
   const base = config.successBaseUrl?.trim()
@@ -277,17 +264,6 @@ function resolveSuccessUrl(config: StripeConfig, input: StripeCheckoutInput): st
     const url = new URL(base)
     url.pathname = `${url.pathname.replace(/\/$/, '')}/${encodeURIComponent(input.slug)}`
     return withPaymentReceived(url.toString())
-  } catch {
-    return null
-  }
-}
-
-function withPaidSession(raw: string): string | null {
-  try {
-    const url = new URL(raw)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
-    if (url.hash !== '') return null
-    return `${url.toString()}${url.search === '' ? '?' : '&'}paid={CHECKOUT_SESSION_ID}`
   } catch {
     return null
   }
@@ -308,14 +284,8 @@ function validHttpUrl(raw: string): boolean {
   return withPaymentReceived(raw) !== null
 }
 
-function validCheckoutUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw)
-    return url.protocol === 'https:' && url.hostname === 'checkout.stripe.com'
-  } catch {
-    return false
-  }
-}
+/** The one rule for a Checkout address, shared with whoever opens it (shared/stripe-checkout.ts). */
+const validCheckoutUrl = (raw: string): boolean => isStripeCheckoutUrl(raw)
 
 export interface StripePaymentEnvelope {
   rail: 'stripe'
@@ -429,7 +399,7 @@ export async function stripeSettle(
   if (
     session.id !== payment.session ||
     session.payment_status !== 'paid' ||
-    session.amount_total !== amount ||
+    !paidOurPrice(session, amount) ||
     session.currency !== 'usd' ||
     !isRecord(metadata) ||
     metadata.serviceId !== expected.serviceId ||
@@ -443,6 +413,39 @@ export async function stripeSettle(
   } catch {
     return 'unverifiable'
   }
+}
+
+/**
+ * DID THIS SESSION CHARGE OUR PRICE?
+ *
+ * Checkout is created with automatic tax on (see `automatic_tax` above), so
+ * Stripe may add tax to what the buyer pays. On the session, `amount_subtotal`
+ * is the items before discounts and taxes and `amount_total` is after — and
+ * the rule here used to be `amount_total === price`, which is true only when
+ * no tax was added. Every buyer who owed tax on a tax-exclusive price was
+ * charged, then refused, and told nothing had been charged.
+ *
+ * Two shapes are accepted, and nothing else:
+ *   • the total IS the price — no tax, or tax the owner included in it;
+ *   • the SUBTOTAL is the price and the total is exactly that plus Stripe's
+ *     own tax figure, with no discount — the buyer paid our price and the tax
+ *     on top of it.
+ * A session that adds up to anything else was not sold at this price.
+ */
+function paidOurPrice(session: Record<string, unknown>, amount: number): boolean {
+  if (session.amount_total === amount) return true
+  const details = session.total_details
+  if (!isRecord(details)) return false
+  const tax = details.amount_tax
+  const discount = details.amount_discount
+  return (
+    session.amount_subtotal === amount &&
+    typeof tax === 'number' &&
+    Number.isInteger(tax) &&
+    tax > 0 &&
+    (discount === 0 || discount === undefined || discount === null) &&
+    session.amount_total === amount + tax
+  )
 }
 
 function stripeHeaders(
