@@ -12,7 +12,9 @@
  * This stands between the wire and the pane: a clipboard string that asks is
  * dropped whole, and everything else goes through byte for byte. A clipboard
  * string that SETS is let through: selecting in the other side's tmux is
- * copying, and that is how the copy arrives.
+ * copying, and that is how the copy arrives. That the other side can so put
+ * text on this clipboard unasked is an ACCEPTED RISK (owner, 2026-11-11;
+ * renderer/src/terminal-osc52.ts says why). It can never read it.
  *
  * IT READS A STRING THE WAY THE MOST WILLING TERMINAL DOES, tmux (input.c, 3.6a):
  *   - the string starts at ESC ]; controls between the two are run and every
