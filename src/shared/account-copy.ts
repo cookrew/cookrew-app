@@ -243,9 +243,6 @@ export const V3_COPY = machineTable({
    */
   'g1.identify':
     'Sign in with your Cookrew account — @username and your password, or a code from your phone. Seats and sessions follow the account.',
-  /** G1, a paid team. Both doors, and what happens on the asking one. */
-  'g1.seat':
-    '@{handle}’s team charges {price} a seat. Buy one here, or ask — @{handle} sees the request on every device and you are seated the moment they say yes.',
 
   /** G2, no seat. Two next steps, and the reason to prefer neither. */
   'g2.no-seat':
