@@ -238,9 +238,10 @@ describeWithChrome('BUY A SEAT, pressed', () => {
     }
   }, 120_000)
 
-  it('a payment the door will not take is said on the pay step, and the step stays alive: the card is paid instead', async () => {
+  it('a payment the door will not take is said on the pay step, and the step stays alive: the card is paid once the signed wallet payment has lapsed', async () => {
     const guest = await world.registeredMachine('click-usdc', 'quin')
-    const app = world.appOn(guest.accounts, { usdc: BAD_USDC })
+    let clock = Date.now()
+    const app = world.appOn(guest.accounts, { usdc: BAD_USDC, now: () => clock })
     serve = app.ops
     world.quote(['stripe', 'x402'])
     const { page, errors } = await openGate()
@@ -269,6 +270,15 @@ describeWithChrome('BUY A SEAT, pressed', () => {
       await primaryReads(page, 'PAY 1.00 USD')
       // Choosing another way to pay clears the accusation about the last one.
       expect(await page.evaluate<number>("document.querySelectorAll('.gk-err').length")).toBe(0)
+      // NOT BESIDE A SIGNED WALLET PAYMENT. The door refused it, but it holds the signed transfer and
+      // could still submit it: until that lapses, main makes no card page, and the sheet says why.
+      const made = world.checkoutsMade()
+      await click(page, PRIMARY)
+      const held = await sheetSays(page, MKT_PAY['mkt.pay.wallet.unconfirmed.body'])
+      expect(held).toContain('Terms — what the gate quoted')
+      expect(world.checkoutsMade()).toBe(made)
+      // Once it can no longer be collected, the same press pays by card.
+      clock += 306_000
       world.checkoutNext(PAID)
       await click(page, PRIMARY)
       await primaryReads(page, MKT_GATE['mkt.gate.open.action'], 30_000)
